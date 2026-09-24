@@ -34,8 +34,8 @@ use crate::validate::move_check::{emptied_by, is_move_only};
 
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
 pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
-    let liveness = liveness::analyze(cfg);
     let loans = Loans::build(cfg);
+    let liveness = liveness::analyze_with(cfg, &loans);
 
     // Build label -> block index mapping.
     let label_to_block: FxHashMap<Label, usize> = cfg

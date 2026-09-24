@@ -521,7 +521,78 @@ impl Region {
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Regions {
     positions: Vec<Region>,
-    via: Vec<ValueId>,
+    via: Via,
+}
+
+/// The references a value was built through: a set, kept sorted and free of
+/// duplicates.
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct Via(Vec<ValueId>);
+
+impl Via {
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn contains(&self, value: &ValueId) -> bool {
+        self.0.binary_search(value).is_ok()
+    }
+
+    /// This set with `value` added.
+    pub fn with(&self, value: ValueId) -> Self {
+        let mut out = self.clone();
+        out.insert(value);
+        out
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &ValueId> {
+        self.0.iter()
+    }
+
+    fn insert(&mut self, value: ValueId) {
+        if let Err(at) = self.0.binary_search(&value) {
+            self.0.insert(at, value);
+        }
+    }
+
+    /// Adds every member of `other`; true when one was new.
+    fn join_mut(&mut self, other: &Via) -> bool {
+        let added = other.0.iter().filter(|value| !self.contains(value)).count();
+        if added == 0 {
+            return false;
+        }
+        let mut merged = Vec::with_capacity(self.0.len() + added);
+        let mut mine = self.0.iter().copied().peekable();
+        let mut theirs = other.0.iter().copied().peekable();
+        loop {
+            let next = match (mine.peek(), theirs.peek()) {
+                (Some(m), Some(t)) if m < t => mine.next(),
+                (Some(m), Some(t)) if m > t => theirs.next(),
+                (Some(_), Some(_)) => {
+                    theirs.next();
+                    mine.next()
+                }
+                (Some(_), None) => mine.next(),
+                (None, Some(_)) => theirs.next(),
+                (None, None) => break,
+            };
+            merged.extend(next);
+        }
+        self.0 = merged;
+        true
+    }
+}
+
+impl FromIterator<ValueId> for Via {
+    fn from_iter<I>(values: I) -> Self
+    where
+        I: IntoIterator<Item = ValueId>,
+    {
+        let mut values: Vec<ValueId> = values.into_iter().collect();
+        values.sort_unstable();
+        values.dedup();
+        Self(values)
+    }
 }
 
 impl Regions {
@@ -539,7 +610,7 @@ impl Regions {
         self.positions.iter().any(|region| !region.loans.is_empty())
     }
 
-    pub fn via(&self) -> &[ValueId] {
+    pub fn via(&self) -> &Via {
         &self.via
     }
 
@@ -560,16 +631,14 @@ impl Regions {
     /// holder — read out of it, stored into it, passed on, projected — is
     /// that holder's own reference, not a second holder beside it.
     fn through(mut self, from: ValueId) -> Self {
-        if !self.via.contains(&from) {
-            self.via.push(from);
-        }
+        self.via.insert(from);
         self
     }
 
-    fn with_via(positions: Vec<Region>, via: &[ValueId]) -> Self {
+    fn with_via(positions: Vec<Region>, via: &Via) -> Self {
         Self {
             positions,
-            via: via.to_vec(),
+            via: via.clone(),
         }
     }
 }
@@ -587,12 +656,7 @@ impl SemiLattice for Regions {
         for (mine, theirs) in self.positions.iter_mut().zip(&other.positions) {
             changed |= mine.join_mut(theirs);
         }
-        for v in &other.via {
-            if !self.via.contains(v) {
-                self.via.push(*v);
-                changed = true;
-            }
-        }
+        changed |= self.via.join_mut(&other.via);
         changed
     }
 }
@@ -696,7 +760,7 @@ struct Placed {
 #[derive(Default)]
 struct Reach {
     loans: Region,
-    via: Vec<ValueId>,
+    via: Via,
     storages: Vec<LoanStorage>,
 }
 
@@ -716,12 +780,9 @@ impl Reach {
 /// The values a transfer gave new regions.
 type Changed = Vec<ValueId>;
 
-fn add_via(via: &mut Vec<ValueId>, held: &Regions, from: ValueId) {
-    for v in held.via.iter().chain([&from]) {
-        if !via.contains(v) {
-            via.push(*v);
-        }
-    }
+fn add_via(via: &mut Via, held: &Regions, from: ValueId) {
+    via.join_mut(&held.via);
+    via.insert(from);
 }
 
 impl RegionAnalysis<'_> {
@@ -910,7 +971,7 @@ impl RegionAnalysis<'_> {
     /// Every position of `dst` holds every loan any of `uses` holds.
     fn gather(&self, state: &mut State, dst: ValueId, uses: &[ValueId], changed: &mut Changed) {
         let mut all = Region::default();
-        let mut via: Vec<ValueId> = Vec::new();
+        let mut via = Via::new();
         for u in uses {
             let held = state.get(*u);
             all.join_mut(&held.folded());
@@ -925,7 +986,7 @@ impl RegionAnalysis<'_> {
     fn build_from(&self, state: &mut State, dst: ValueId, parts: &[Placed], changed: &mut Changed) {
         let ty = self.val_types.get(&dst);
         let mut out = fill(self.width(dst), Region::default());
-        let mut via: Vec<ValueId> = Vec::new();
+        let mut via = Via::new();
         for Placed { seg, value } in parts {
             let held = state.get(*value);
             add_via(&mut via, &held, *value);
@@ -1031,7 +1092,7 @@ impl RegionAnalysis<'_> {
             FlowEnd::Param(index) => match call.args.get(index) {
                 Some(arg) => CallInput {
                     positions: self.current(state, *arg),
-                    via: vec![*arg],
+                    via: Via::from_iter([*arg]),
                 },
                 // A validated call has an argument for every parameter; a
                 // flow past them stands for every argument.
@@ -1043,7 +1104,7 @@ impl RegionAnalysis<'_> {
                             .flat_map(|arg| self.current(state, *arg))
                             .collect::<Vec<_>>(),
                     )],
-                    via: call.args.clone(),
+                    via: call.args.iter().copied().collect(),
                 },
             },
             FlowEnd::Captures => match callee_value(call.callee) {
@@ -1056,7 +1117,7 @@ impl RegionAnalysis<'_> {
                 }
                 None => CallInput {
                     positions: Vec::new(),
-                    via: Vec::new(),
+                    via: Via::new(),
                 },
             },
             FlowEnd::Result => unreachable!("a call's result is no input"),
@@ -1069,10 +1130,10 @@ impl RegionAnalysis<'_> {
     fn flowed(&self, state: &mut State, call: &Call, flows: &Flows, width: usize, changed: &mut Changed) -> Regions {
         let arity = call.args.len();
         let mut out = fill(width, Region::default());
-        let mut via: Vec<ValueId> = Vec::new();
+        let mut via = Via::new();
         for Source { from, alignment } in flows.into_end(FlowEnd::Result, arity) {
             let input = self.call_input(state, call, from);
-            for v in &input.via {
+            for v in input.via.iter() {
                 add_via(&mut via, &state.get(*v), *v);
             }
             match alignment == Alignment::Aligned && input.positions.len() == width {
@@ -1150,7 +1211,7 @@ impl RegionAnalysis<'_> {
     }
 
     /// A reference: what it names, then the positions of what it points at.
-    fn reference(&self, names: Region, pointee: Vec<Region>, via: &[ValueId]) -> Regions {
+    fn reference(&self, names: Region, pointee: Vec<Region>, via: &Via) -> Regions {
         Regions::with_via(std::iter::once(names).chain(pointee).collect(), via)
     }
 
@@ -1517,7 +1578,7 @@ struct Call<'i> {
 /// An input of a call: its positions, and the values it was read from.
 struct CallInput {
     positions: Vec<Region>,
-    via: Vec<ValueId>,
+    via: Via,
 }
 
 /// An output of a call and the join of the inputs it takes.
@@ -1680,7 +1741,7 @@ pub struct HeldInput {
 
 static NOTHING: Regions = Regions {
     positions: Vec::new(),
-    via: Vec::new(),
+    via: Via::new(),
 };
 
 impl Loans {
@@ -1979,7 +2040,7 @@ fn entry_regions(storage: &EntryStorage, value: ValueId, ty: &Ty) -> Regions {
         .collect();
     Regions {
         positions,
-        via: Vec::new(),
+        via: Via::new(),
     }
 }
 

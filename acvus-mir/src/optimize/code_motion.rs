@@ -134,8 +134,8 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
     let postdom = PostDomTree::build(cfg);
     let depth = LoopDepth::of(cfg, &domtree);
-    let writes = StorageWrites::of(cfg);
     let loans = Loans::build(cfg);
+    let writes = StorageWrites::of(cfg, &loans);
     let mut def_block = build_def_block(cfg);
 
     // -- Collect hoists ---------------------------------------------
@@ -324,7 +324,7 @@ impl At {
 fn dedup_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
     let loans = Loans::build(cfg);
-    let writes = StorageWrites::of(cfg);
+    let writes = StorageWrites::of(cfg, &loans);
 
     let named: Vec<At> = cfg
         .blocks
@@ -507,9 +507,8 @@ struct StorageWrites {
 }
 
 impl StorageWrites {
-    fn of(cfg: &CfgBody) -> Self {
-        let loans = Loans::build(cfg);
-        let live = crate::analysis::liveness::analyze(cfg);
+    fn of(cfg: &CfgBody, loans: &Loans) -> Self {
+        let live = crate::analysis::liveness::analyze_with(cfg, loans);
         let held_mutably = |value: ValueId| {
             loans
                 .holds(value)

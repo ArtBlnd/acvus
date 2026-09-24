@@ -9,7 +9,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{Held, HeldInput, Loan, Loans, RegionsAt, held_positions, positions};
+use crate::analysis::loans::{Held, HeldInput, Loan, Loans, RegionsAt, Via, held_positions, positions};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
@@ -374,7 +374,7 @@ fn conflicts(live: &Loan, touch: &Touch) -> bool {
 /// it.
 struct Reached {
     storage: Vec<Loan>,
-    via: Vec<ValueId>,
+    via: Via,
 }
 
 fn reached(touched: &Touched, loans: &Loans, regions: &RegionsAt<'_>) -> Reached {
@@ -384,20 +384,20 @@ fn reached(touched: &Touched, loans: &Loans, regions: &RegionsAt<'_>) -> Reached
                 storage: loans.storage_of(*s),
                 mutability: Mutability::Mut,
             }],
-            via: vec![],
+            via: Via::new(),
         },
         Touched::Place(RefTarget::Through(r)) => {
             let held = regions.regions(*r);
             Reached {
                 storage: held.names().to_vec(),
-                via: held.via().iter().copied().chain([*r]).collect(),
+                via: held.via().with(*r),
             }
         }
         Touched::Held { slot, position } => {
             let held = regions.regions(*slot);
             Reached {
                 storage: held.position(*position).to_vec(),
-                via: held.via().iter().copied().chain([*slot]).collect(),
+                via: held.via().with(*slot),
             }
         }
     }
@@ -600,7 +600,7 @@ impl Checking {
         if holders.is_empty() {
             return;
         }
-        let live = liveness::analyze(&self.cfg);
+        let live = liveness::analyze_with(&self.cfg, &self.loans);
 
         let mut found: Vec<Conflict> = Vec::new();
         for (bi, block) in self.cfg.blocks.iter().enumerate() {
