@@ -26,6 +26,7 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -36,6 +37,7 @@ fn int_to_int(i: &Interner) -> Ty {
         ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     }
 }
 

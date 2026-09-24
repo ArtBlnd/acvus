@@ -20,7 +20,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::{Loans, Summaries};
+use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::ty::Ty;
@@ -393,7 +393,7 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
 /// to observable behavior (Return, Store, Eval, effectful calls).
 pub fn run(cfg: &mut CfgBody) {
     let def_map = build_def_map(cfg);
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
     let stores = Stores::of(cfg, &loans);
 
     // Live instruction set.
@@ -702,6 +702,7 @@ mod tests {
                 ret: Box::new(ret),
                 captures: vec![],
                 effect: effect.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
             args: vec![],
             order: None,

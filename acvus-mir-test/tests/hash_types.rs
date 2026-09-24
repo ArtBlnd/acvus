@@ -119,6 +119,7 @@ fn fn_of(i: &Interner, params: &[(&str, PolyTy)], ret: PolyTy) -> PolyTy {
         ret: Box::new(ret),
         captures: vec![],
         effect: Effect::PURE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     }
 }
 
@@ -261,6 +262,7 @@ fn script_fn(i: &Interner, source: &str) -> Function {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

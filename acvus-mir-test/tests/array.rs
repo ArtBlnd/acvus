@@ -20,6 +20,7 @@ fn local_fn(i: &Interner, name: &str, source: &str) -> Function {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

@@ -1,0 +1,3 @@
+// expect 7
+// A lambda returning Option<&T>: its result holds a loan on its parameter, which rule 9 admits.
+let v = [7]; let f = |r| -> get(r, 0u64); match f(&v) { Some(p) => *p, None => 0, }

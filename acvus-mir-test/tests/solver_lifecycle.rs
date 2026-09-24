@@ -65,6 +65,7 @@ fn fn_of(i: &Interner, params: &[(&str, PolyTy)], ret: PolyTy) -> PolyTy {
         ret: Box::new(ret),
         captures: vec![],
         effect: Effect::PURE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     }
 }
 
@@ -174,6 +175,7 @@ fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let qref = script.qref;
@@ -405,6 +407,7 @@ fn s6_a_field_store_grows_the_object_for_every_use() {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let qref = script.qref;

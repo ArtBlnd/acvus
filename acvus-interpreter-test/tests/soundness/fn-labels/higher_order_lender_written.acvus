@@ -1,0 +1,3 @@
+// refuse
+// A lambda handed a closure it calls with a reference: the result holds that reference's lender.
+let v = [7, 8]; let h = |k, r| -> k(r); let id = |x| -> x; let x = h(id, &v); v = [1, 2]; len(x)

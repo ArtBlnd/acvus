@@ -157,6 +157,7 @@ mod tests {
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),

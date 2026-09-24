@@ -125,6 +125,7 @@ fn iterator_over_fn_is_not_data() {
         ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::PURE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     assert!(!iter_ty(&i, fn_ty).is_data());
 }

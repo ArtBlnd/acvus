@@ -25,6 +25,7 @@ fn document(interner: &Interner, name: &str) -> Document {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

@@ -9,141 +9,97 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{
-    Loan, Loans, RegionsAt, Summaries, Summary, held_positions,
-};
+use crate::analysis::loans::{Held, HeldInput, Loan, Loans, RegionsAt, held_positions, positions};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
-use crate::ty::{Mutability, Ty};
+use crate::ty::{Alignment, FlowEnd, Flows, Mutability, Ty};
 use crate::validate::move_check::is_move_only;
 use crate::validate::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
 use acvus_ast::Span;
 use acvus_ast::report::Label;
 
-pub struct Checked {
-    pub errors: Vec<ValidationError>,
-    pub summary: Summary,
-}
-
 /// The exclusion rule alone, which holds of a module at any point in the
 /// pipeline.
 pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    for checking in Bodies::of(module, Summaries::NONE).all() {
+    for checking in Bodies::of(module).all() {
         checking.check_exclusion(&mut errors);
     }
     errors
 }
 
-/// The exclusion rule and RFC-0064's result rule together, with the summary
-/// the module's own body leaves with.
+/// The exclusion rule and the output rule (RFC-0079 rules 5 and 9)
+/// together, on the shape the source wrote: every loan a body's result
+/// holds, and every loan it writes into what an input names, is a position
+/// of an input its function type's flows name.
 ///
-/// The result rule is not repeated by `check_borrows` because it cannot be:
-/// what a call's result borrows is the callee's summary, so the answer
-/// depends on every callee having been checked first, and pass 0 of
-/// `graph::optimize` is the only place that order exists. Asking the same
-/// question anywhere else would answer it from `Summaries::NONE` and refuse
-/// programs pass 0 admitted.
-pub fn check_borrows_in_order(module: &MirModule, summaries: Summaries<'_>) -> Checked {
+/// The output rule is checked here, in pass 0, and not by `check_borrows`,
+/// and that is a decision: the flows are the checker's inference from the
+/// source, and a pass that splices a callee into its caller leaves a body
+/// whose outputs the inference never saw.
+pub fn check_outputs_and_borrows(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    let mut closures: FxHashMap<ClosureLabel, Summary> = FxHashMap::default();
-    for label in inner_closures_first(module) {
-        let body = &module.closures[&label];
-        let Some(checking) = Checking::of(
-            format!("closure({label:?})"),
-            body,
-            summaries.with_closures(&closures),
-        ) else {
-            continue;
-        };
-        let summary = checking.check_result(&mut errors);
+    let bodies = Bodies::of(module);
+    let made = closure_flows(module);
+    for (label, checking) in &bodies.closures {
+        for flows in made.get(label).into_iter().flatten() {
+            checking.check_outputs(flows, &mut errors);
+        }
         checking.check_exclusion(&mut errors);
-        closures.insert(label, summary);
     }
-    let summary = match Checking::of(
-        "main".to_string(),
-        &module.main,
-        summaries.with_closures(&closures),
-    ) {
-        Some(main) => {
-            let summary = main.check_result(&mut errors);
-            main.check_exclusion(&mut errors);
-            summary
-        }
-        None => Summary::default(),
-    };
-    Checked { errors, summary }
-}
-
-/// Every closure of the module, each before the body that makes it.
-///
-/// A lambda's call summary is read at the call, and a lambda is called in
-/// the body that lexically contains it — main, or another lambda.
-fn inner_closures_first(module: &MirModule) -> Vec<ClosureLabel> {
-    let mut order = Vec::new();
-    let mut seen: FxHashSet<ClosureLabel> = FxHashSet::default();
-    visit_makers_first(module, &made_by(&module.main), &mut seen, &mut order);
-    let mut unreached: Vec<ClosureLabel> = module
-        .closures
-        .keys()
-        .copied()
-        .filter(|label| !seen.contains(label))
-        .collect();
-    unreached.sort_unstable_by_key(|label| label.0);
-    order.extend(unreached);
-    order
-}
-
-fn visit_makers_first(
-    module: &MirModule,
-    labels: &[ClosureLabel],
-    seen: &mut FxHashSet<ClosureLabel>,
-    order: &mut Vec<ClosureLabel>,
-) {
-    for label in labels {
-        if !seen.insert(*label) {
-            continue;
-        }
-        let Some(body) = module.closures.get(label) else {
-            continue;
-        };
-        visit_makers_first(module, &made_by(body), seen, order);
-        order.push(*label);
+    if let Some(main) = &bodies.main {
+        main.check_outputs(&module.flows, &mut errors);
+        main.check_exclusion(&mut errors);
     }
+    errors
 }
 
-fn made_by(body: &MirBody) -> Vec<ClosureLabel> {
-    body.insts
-        .iter()
-        .filter_map(|inst| match &inst.kind {
-            InstKind::MakeClosure { body, .. } => Some(*body),
-            _ => None,
-        })
-        .collect()
+/// The flows of each closure body, off the function type of every
+/// `MakeClosure` that makes it. A body nothing makes is never called and has
+/// none to be checked against.
+fn closure_flows(module: &MirModule) -> FxHashMap<ClosureLabel, Vec<Flows>> {
+    let mut made: FxHashMap<ClosureLabel, Vec<Flows>> = FxHashMap::default();
+    for body in std::iter::once(&module.main).chain(module.closures.values()) {
+        for inst in &body.insts {
+            let InstKind::MakeClosure { dst, body: label, .. } = &inst.kind else {
+                continue;
+            };
+            let flows = match body.val_types.get(dst) {
+                Some(Ty::Fn { flows, .. }) => flows.get().clone(),
+                // A closure the validator finds untyped is refused there;
+                // the union is what it is checked against here.
+                Some(_) | None => Flows::Every,
+            };
+            made.entry(*label).or_default().push(flows);
+        }
+    }
+    made
 }
 
 struct Bodies {
     main: Option<Checking>,
-    closures: Vec<Checking>,
+    closures: Vec<(ClosureLabel, Checking)>,
 }
 
 impl Bodies {
-    fn of(module: &MirModule, summaries: Summaries<'_>) -> Self {
+    fn of(module: &MirModule) -> Self {
         Self {
-            main: Checking::of("main".to_string(), &module.main, summaries),
+            main: Checking::of("main".to_string(), &module.main),
             closures: module
                 .closures
                 .iter()
                 .filter_map(|(label, closure)| {
-                    Checking::of(format!("closure({label:?})"), closure, summaries)
+                    Some((*label, Checking::of(format!("closure({label:?})"), closure)?))
                 })
                 .collect(),
         }
     }
 
     fn all(&self) -> impl Iterator<Item = &Checking> {
-        self.main.iter().chain(&self.closures)
+        self.main
+            .iter()
+            .chain(self.closures.iter().map(|(_, checking)| checking))
     }
 }
 
@@ -155,13 +111,29 @@ struct Checking {
     sites: HolderSites,
 }
 
+/// Why an output's loan is refused, each reported once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Refused {
+    Local(ValueId),
+    NotStated { to: FlowEnd, from: FlowEnd },
+}
+
+/// An output of a body and where it was found to hold a loan.
+struct Output {
+    end: FlowEnd,
+    /// The output's position the loan is at, where the output is the result.
+    position: Option<usize>,
+    loan: Loan,
+    at: ValueId,
+}
+
 impl Checking {
-    fn of(scope: String, body: &MirBody, summaries: Summaries<'_>) -> Option<Self> {
+    fn of(scope: String, body: &MirBody) -> Option<Self> {
         let cfg = promote(body.clone());
         if cfg.blocks.is_empty() {
             return None;
         }
-        let loans = Loans::build(&cfg, summaries);
+        let loans = Loans::build(&cfg);
         let sites = HolderSites::of(&cfg, &loans);
         Some(Self {
             scope,
@@ -171,33 +143,129 @@ impl Checking {
         })
     }
 
-    /// RFC-0064 rules 2 and 5: what the body's result borrows from its
-    /// parameters is the body's summary, and a local's loan in the result is
-    /// refused.
-    fn check_result(&self, errors: &mut Vec<ValidationError>) -> Summary {
-        let mut summary = Summary::default();
+    /// Every loan in the body's outputs: its result's positions, and what it
+    /// wrote into the storage a parameter or a capture names from outside.
+    fn outputs(&self) -> Vec<Output> {
+        let mut outputs = Vec::new();
         for block in &self.cfg.blocks {
             let Terminator::Return { value, .. } = block.terminator else {
                 continue;
             };
-            let leaving = self.loans.leaving(value, &self.cfg.val_types);
-            for loan in leaving.summary.loans {
-                if !summary.loans.contains(&loan) {
-                    summary.loans.push(loan);
+            let regions = self.loans.regions(value);
+            let width = self.cfg.val_types.get(&value).map_or(0, positions);
+            for position in 0..width {
+                for loan in regions.position(position) {
+                    outputs.push(Output {
+                        end: FlowEnd::Result,
+                        position: Some(position),
+                        loan: *loan,
+                        at: value,
+                    });
                 }
             }
-            for local in leaving.locals {
-                errors.push(ValidationError {
-                    scope: self.scope.clone(),
-                    inst_index: block.insts.len(),
-                    span: self.sites.borrowed_at(value),
-                    kind: ValidationErrorKind::ReferenceToLocalLeavesBody {
-                        storage: self.cfg.debug.get(local).cloned(),
-                    },
+        }
+        let entries = self
+            .cfg
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, (_, value))| (FlowEnd::Param(index), *value))
+            .chain(self.cfg.captures.iter().map(|(_, value)| (FlowEnd::Captures, *value)));
+        for (end, entry) in entries {
+            for loan in self.loans.written_into(entry) {
+                outputs.push(Output {
+                    end,
+                    position: None,
+                    loan,
+                    at: entry,
                 });
             }
         }
-        summary
+        outputs
+    }
+
+    /// RFC-0079 rules 5 and 9: an output holds only loans on the body's
+    /// inputs, each one its flows name. A loan on the body's own storage in
+    /// an output outlives the storage: `ReferenceToLocalLeavesBody`.
+    fn check_outputs(&self, flows: &Flows, errors: &mut Vec<ValidationError>) {
+        let result_width = self
+            .cfg
+            .blocks
+            .iter()
+            .find_map(|block| match block.terminator {
+                Terminator::Return { value, .. } => {
+                    Some(self.cfg.val_types.get(&value).map_or(0, positions))
+                }
+                _ => None,
+            });
+        let mut refused: Vec<Refused> = Vec::new();
+        for Output {
+            end,
+            position,
+            loan,
+            at,
+        } in self.outputs()
+        {
+            let found = match self.loans.held(&loan, &self.cfg.val_types) {
+                Held::Local(local) => Refused::Local(local),
+                Held::Input(input) if self.admits(flows, end, position, input, result_width) => {
+                    continue;
+                }
+                Held::Input(input) => Refused::NotStated {
+                    to: end,
+                    from: input.end,
+                },
+            };
+            if refused.contains(&found) {
+                continue;
+            }
+            refused.push(found);
+            let kind = match found {
+                Refused::Local(local) => ValidationErrorKind::ReferenceToLocalLeavesBody {
+                    storage: self.cfg.debug.get(local).cloned(),
+                },
+                Refused::NotStated { to, from } => ValidationErrorKind::FlowNotStated { to, from },
+            };
+            errors.push(ValidationError {
+                scope: self.scope.clone(),
+                inst_index: 0,
+                span: self.sites.borrowed_at(at),
+                kind,
+            });
+        }
+    }
+
+    /// Whether `flows` let output `to` hold `input`: an `Any` flow between
+    /// the two ends, or an `Aligned` one where the positions agree or the
+    /// shapes differ, which a call reads as `Any`.
+    fn admits(
+        &self,
+        flows: &Flows,
+        to: FlowEnd,
+        position: Option<usize>,
+        input: HeldInput,
+        result_width: Option<usize>,
+    ) -> bool {
+        if flows.admits(to, input.end, Alignment::Any) {
+            return true;
+        }
+        if !flows.admits(to, input.end, Alignment::Aligned) {
+            return false;
+        }
+        let input_width = match input.end {
+            FlowEnd::Param(index) => self
+                .cfg
+                .params
+                .get(index)
+                .and_then(|(_, value)| self.cfg.val_types.get(value))
+                .map(positions),
+            FlowEnd::Captures => Some(1),
+            FlowEnd::Result => None,
+        };
+        match position {
+            Some(position) => position == input.position || input_width != result_width,
+            None => true,
+        }
     }
 }
 
@@ -737,6 +805,7 @@ mod tests {
             main,
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
+            flows: crate::ty::Flows::Every,
         }
     }
 
@@ -1039,54 +1108,6 @@ mod tests {
             types,
         );
         assert_eq!(conflict_count(&errors(m)), 1);
-    }
-
-    // -- The order the summaries are read in ---------------------------
-
-    fn makes(label: u32) -> InstKind {
-        InstKind::MakeClosure {
-            dst: v(20 + label as usize),
-            body: Label(label),
-            captures: vec![],
-        }
-    }
-
-    /// Main makes `L1`, `L1` makes `L2`, and `L3` is reached from neither.
-    fn nested_closures() -> MirModule {
-        let mut module = module(body(vec![makes(1), ret(0)], string_slot()));
-        module
-            .closures
-            .insert(Label(1), body(vec![makes(2), ret(0)], string_slot()));
-        module
-            .closures
-            .insert(Label(2), body(vec![ret(0)], string_slot()));
-        module
-            .closures
-            .insert(Label(3), body(vec![ret(0)], string_slot()));
-        module
-    }
-
-    #[test]
-    fn every_closure_is_checked_before_the_body_that_makes_it() {
-        let module = nested_closures();
-        let order = inner_closures_first(&module);
-        let at = |label: u32| {
-            order
-                .iter()
-                .position(|l| *l == Label(label))
-                .unwrap_or_else(|| panic!("{label} is missing from {order:?}"))
-        };
-        assert!(at(2) < at(1), "{order:?}");
-    }
-
-    #[test]
-    fn the_order_names_every_closure_once_reached_or_not() {
-        let module = nested_closures();
-        let mut order = inner_closures_first(&module);
-        assert_eq!(order.len(), module.closures.len(), "{order:?}");
-        order.sort_unstable_by_key(|label| label.0);
-        order.dedup();
-        assert_eq!(order.len(), module.closures.len(), "{order:?}");
     }
 
     #[test]

@@ -43,6 +43,7 @@ fn the_resolved_type_of_a_borrowed_source_carries_the_count() {
             ret: Box::new(PolyBuilder::new().fresh_ty_var()),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     });
     let graph = CompilationGraph {

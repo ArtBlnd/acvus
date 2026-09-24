@@ -88,7 +88,7 @@ use crate::analysis::loops::{LoopDepth, NaturalLoop, natural_loops_innermost_fir
 use std::mem::{Discriminant, discriminant};
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::{Loan, Loans, Summaries};
+use crate::analysis::loans::{Loan, Loans};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::*;
 use crate::optimize::const_dedup::{remap_uses, remap_val, remap_vec};
@@ -135,7 +135,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     let postdom = PostDomTree::build(cfg);
     let depth = LoopDepth::of(cfg, &domtree);
     let writes = StorageWrites::of(cfg);
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
     let mut def_block = build_def_block(cfg);
 
     // -- Collect hoists ---------------------------------------------
@@ -323,7 +323,7 @@ impl At {
 /// chain - the `Index`, then the `Ref` through it - resolves a link a pass.
 fn dedup_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
     let writes = StorageWrites::of(cfg);
 
     let named: Vec<At> = cfg
@@ -508,7 +508,7 @@ struct StorageWrites {
 
 impl StorageWrites {
     fn of(cfg: &CfgBody) -> Self {
-        let loans = Loans::build(cfg, Summaries::NONE);
+        let loans = Loans::build(cfg);
         let live = crate::analysis::liveness::analyze(cfg);
         let held_mutably = |value: ValueId| {
             loans
@@ -814,7 +814,7 @@ fn every_touch_goes_through(
     storage: ValueId,
     pairs: &[SliceOfStorage],
 ) -> bool {
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
     let slices: Vec<ValueId> = pairs
         .iter()
         .map(|p| {
@@ -948,7 +948,7 @@ impl<'a> BorrowKey<'a> {
 /// are exactly what runs between them: the question needs no dominance and
 /// no reachability, only a walk.
 fn merge_pass(cfg: &mut CfgBody) -> bool {
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
     let CfgBody {
         blocks, val_types, ..
     } = cfg;
@@ -1162,7 +1162,7 @@ fn sink_pass(cfg: &mut CfgBody) {
 
 /// Try to sink ONE Eval. Returns true if something moved.
 fn sink_one(cfg: &mut CfgBody) -> bool {
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
     for bi in 0..cfg.blocks.len() {
         for ii in 0..cfg.blocks[bi].insts.len() {
             let kind = &cfg.blocks[bi].insts[ii].kind;
@@ -1270,6 +1270,7 @@ mod tests {
                 ret: Box::new(Ty::I64),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         )
     }
@@ -1441,7 +1442,7 @@ mod tests {
     fn classified(insts: Vec<InstKind>) -> Hoistable {
         let last = insts.last().expect("a body to classify").clone();
         let cfg = make_cfg(insts, 8);
-        hoistable(&Loans::build(&cfg, Summaries::NONE), &last)
+        hoistable(&Loans::build(&cfg), &last)
     }
 
     fn as_slice_of(container: ValueId, mutability: Mutability) -> InstKind {

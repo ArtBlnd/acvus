@@ -21,6 +21,7 @@ fn fn_ty(i: &Interner, params: &[(&str, PolyTy)], ret: PolyTy, effect: EffectTer
         ret: Box::new(ret),
         captures: vec![],
         effect,
+        flows: acvus_mir::ty::Flows::Every.into(),
     }
 }
 
@@ -57,6 +58,7 @@ fn local_fn(i: &Interner, name: &str, source: &str) -> Function {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

@@ -26,6 +26,7 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -43,6 +44,7 @@ fn closure_taking(i: &Interner, param: Ty, ret: Ty) -> Ty {
         ret: Box::new(ret),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     }
 }
 

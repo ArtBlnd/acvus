@@ -278,6 +278,7 @@ where
             ret: Box::new(R::poly_ty(i, vars)),
             captures: vec![],
             effect: E::poly(vars),
+            flows: acvus_mir::ty::Flows::Every.into(),
         }
     }
 }

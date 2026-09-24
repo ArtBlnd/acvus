@@ -1,0 +1,3 @@
+// expect 2
+// A call through a function value reads the flows off its type, as a direct call does.
+let v = [7, 8]; let w = [9]; let f = |r, s| -> r; let g = f; let x = g(&v, &w); w = [1]; len(x)

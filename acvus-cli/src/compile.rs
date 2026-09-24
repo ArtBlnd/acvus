@@ -227,6 +227,7 @@ pub fn entry_ty() -> PolyTy {
         ret: Box::new(lift_declaration(&Ty::Never, &mut PolyBuilder::new())),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     }
 }
 

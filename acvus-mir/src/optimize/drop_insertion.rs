@@ -25,7 +25,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{Loans, Summaries};
+use crate::analysis::loans::Loans;
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId};
@@ -35,7 +35,7 @@ use crate::validate::move_check::{emptied_by, is_move_only};
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
 pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
     let liveness = liveness::analyze(cfg);
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
 
     // Build label -> block index mapping.
     let label_to_block: FxHashMap<Label, usize> = cfg

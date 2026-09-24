@@ -17,9 +17,8 @@ use crate::analysis::dataflow::{DataflowAnalysis, DataflowState, forward_analysi
 use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::graph::QualifiedRef;
-use crate::ir::{Callee, ForSource, IndexMode, Inst, InstKind, Label, PathSeg, RefTarget, ValueId};
-use crate::ty::{Mutability, Ty};
+use crate::ir::{Callee, ForSource, IndexMode, Inst, InstKind, PathSeg, RefTarget, ValueId};
+use crate::ty::{Alignment, FlowEnd, Flows, Mutability, Source, Ty};
 
 // -- Positions (RFC-0079 rule 2) ------------------------------------
 
@@ -66,6 +65,28 @@ pub fn positions(ty: &Ty) -> usize {
         | Ty::Error(_)
         | Ty::Var(_) => 0,
     }
+}
+
+/// Whether a value of `ty` reads, through one of its positions, what a
+/// storage holds when it is read: a reference whose pointee has positions,
+/// or a function value's captures.
+pub fn reads_through(ty: &Ty) -> bool {
+    layout(ty).into_iter().enumerate().any(|(k, kind)| match kind {
+        PositionKind::Ref(_) => pointee_at(ty, k).is_some_and(|pointee| positions(&pointee) > 0),
+        PositionKind::Captures(_) => true,
+        PositionKind::RegionParam | PositionKind::InFlight => false,
+    })
+}
+
+/// Whether a callee handed a value of `ty` can write through it: a `&mut`
+/// position, or a function value that captured mutably.
+pub fn writes_through(ty: &Ty) -> bool {
+    layout(ty).into_iter().any(|kind| {
+        matches!(
+            kind,
+            PositionKind::Ref(Mutability::Mut) | PositionKind::Captures(Some(Mutability::Mut))
+        )
+    })
 }
 
 /// The kind of each of `ty`'s positions, in order.
@@ -400,8 +421,8 @@ impl LoanStorage {
     }
 }
 
-/// The parameters of one body, and so the only entry definitions whose loan a
-/// summary can name.
+/// The parameters of one body, and so the only entry definitions whose loan
+/// an output of the body can hold as a parameter's (`Loans::held`).
 ///
 /// `EntryStorage::loan` is the only place a `Local` or `Param` storage is
 /// built, which is how step 1 of RFC-0064 settled the question of which
@@ -412,9 +433,10 @@ impl LoanStorage {
 /// `machine::bind_captures` points the register at the word the closure owns,
 /// so a reference derived from a capture of an owned value names the closure's
 /// own storage and dies with the closure: `LoanStorage::Local`, which the
-/// result rule already refuses. A capture of a reference is read one level
-/// through the register instead, and what the body then holds is the caller's
-/// reference, whose loans are the register's `Outside` positions.
+/// output rule refuses. A capture of a reference is read one level through
+/// the register instead, and what the body then holds is the caller's
+/// reference, whose loans are the register's `Outside` positions: the
+/// closure's `Captures` input.
 struct EntryStorage {
     params: FxHashMap<ValueId, usize>,
 }
@@ -450,79 +472,6 @@ impl EntryStorage {
 pub struct Loan {
     pub storage: LoanStorage,
     pub mutability: Mutability,
-}
-
-/// Which of a parameter's positions a summary loan stands for: one position,
-/// or every position of a by-value parameter a reference to its own slot
-/// names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ParamPosition {
-    At(usize),
-    Whole,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ParamLoan {
-    pub index: usize,
-    pub position: ParamPosition,
-    pub mutability: Mutability,
-}
-
-/// A loan the body's result holds at result position `at`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ResultLoan {
-    pub at: usize,
-    pub loan: ParamLoan,
-}
-
-/// What a body's result borrows from the body's parameters, position by
-/// position: the object RFC-0064 rule 2 calls a body's summary.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Summary {
-    pub loans: Vec<ResultLoan>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Leaving {
-    pub summary: Summary,
-    pub locals: Vec<ValueId>,
-}
-
-/// The summaries of the callees a body calls: the named functions and the
-/// closure bodies of the module being checked.
-///
-/// Most consumers pass `NONE`, and that is a decision rather than an
-/// omission. Without a summary a call's result takes the union of every
-/// argument's region, which is a superset of what substitution yields, so
-/// the only cost is refusing a program a summary would have admitted — no
-/// pass can be made unsound by it. Threading a table through every
-/// optimization pass to buy precision no pass spends would be the whole
-/// pipeline's signature for nothing.
-#[derive(Clone, Copy)]
-pub struct Summaries<'a> {
-    named: Option<&'a FxHashMap<QualifiedRef, Summary>>,
-    closures: Option<&'a FxHashMap<Label, Summary>>,
-}
-
-impl<'a> Summaries<'a> {
-    pub const NONE: Self = Self {
-        named: None,
-        closures: None,
-    };
-
-    pub fn of(table: &'a FxHashMap<QualifiedRef, Summary>) -> Self {
-        Self {
-            named: Some(table),
-            closures: None,
-        }
-    }
-
-    pub fn with_closures(self, closures: &'a FxHashMap<Label, Summary>) -> Self {
-        Self {
-            closures: Some(closures),
-            ..self
-        }
-    }
 }
 
 /// One position's loans.
@@ -694,109 +643,6 @@ impl StorageEffect {
     }
 }
 
-// -- Which closure a value is ---------------------------------------
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct MadeBy {
-    body: Label,
-    closure: ValueId,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Made {
-    By(MadeBy),
-    ByMoreThanOne,
-}
-
-impl Made {
-    fn joined(self, other: Made) -> Option<Made> {
-        match self == other {
-            true => None,
-            false => Some(Made::ByMoreThanOne),
-        }
-    }
-}
-
-struct Carried {
-    dst: ValueId,
-    src: ValueId,
-}
-
-/// Which closure body each value of a body is.
-///
-/// A lambda bound by `let` and then called reaches this pass as a
-/// `MakeClosure`, an `Assign` into the binding's slot and a `Ref` of that
-/// slot at the call, which is the shape `lower.rs` emits and the shape this
-/// walk follows. A value no `MakeClosure` reaches has no entry, and its
-/// calls take the conservative union of the arguments rather than a
-/// summary.
-struct ClosureOrigins(FxHashMap<ValueId, Made>);
-
-impl ClosureOrigins {
-    fn of(cfg: &CfgBody) -> Self {
-        let mut origins: FxHashMap<ValueId, Made> = FxHashMap::default();
-        for block in &cfg.blocks {
-            for inst in &block.insts {
-                if let InstKind::MakeClosure { dst, body, .. } = &inst.kind {
-                    origins.insert(
-                        *dst,
-                        Made::By(MadeBy {
-                            body: *body,
-                            closure: *dst,
-                        }),
-                    );
-                }
-            }
-        }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in &cfg.blocks {
-                for inst in &block.insts {
-                    let Some(Carried { dst, src }) = carried(&inst.kind) else {
-                        continue;
-                    };
-                    let Some(made) = origins.get(&src).copied() else {
-                        continue;
-                    };
-                    let next = match origins.get(&dst) {
-                        None => made,
-                        Some(held) => match held.joined(made) {
-                            Some(next) => next,
-                            None => continue,
-                        },
-                    };
-                    origins.insert(dst, next);
-                    changed = true;
-                }
-            }
-        }
-        Self(origins)
-    }
-
-    fn made_by(&self, value: ValueId) -> Option<MadeBy> {
-        match self.0.get(&value)? {
-            Made::By(made) => Some(*made),
-            Made::ByMoreThanOne => None,
-        }
-    }
-}
-
-fn carried(kind: &InstKind) -> Option<Carried> {
-    match kind {
-        InstKind::Assign { target, value, .. } => Some(Carried {
-            dst: inst_info::storage(target)?,
-            src: *value,
-        }),
-        InstKind::Take { dst, target, .. } | InstKind::Ref { dst, target, .. } => match target {
-            RefTarget::Var(s) | RefTarget::Param(s) | RefTarget::Through(s) => {
-                Some(Carried { dst: *dst, src: *s })
-            }
-        },
-        _ => None,
-    }
-}
-
 // -- The dataflow ---------------------------------------------------
 
 type State = DataflowState<ValueId, Regions>;
@@ -805,8 +651,6 @@ struct RegionAnalysis<'a> {
     val_types: &'a FxHashMap<ValueId, Ty>,
     cfg: &'a CfgBody,
     entry: EntryStorage,
-    closures: ClosureOrigins,
-    summaries: Summaries<'a>,
 }
 
 /// A value with no type entry is read as one position holding every loan
@@ -1096,52 +940,6 @@ impl RegionAnalysis<'_> {
         self.put(state, dst, Regions::with_via(out, &via), changed);
     }
 
-    /// An extern declares its summary in its signature, and reading it is
-    /// RFC-0064 rule 6; until then an extern call takes the union of its
-    /// arguments like any callee with no summary.
-    fn summary_of(&self, callee: &Callee) -> Option<&Summary> {
-        match callee {
-            Callee::Direct(id) => self.summaries.named?.get(id),
-            Callee::Indirect(f) => self
-                .summaries
-                .closures?
-                .get(&self.closures.made_by(*f)?.body),
-            Callee::Extern { .. } => None,
-        }
-    }
-
-    /// RFC-0064 rule 3, position by position: each result position is the
-    /// argument positions its summary names, as the argument holds them now,
-    /// and a lambda's call adds what the closure reaches through its
-    /// captures. `None` is a callee with no summary, or a summary naming an
-    /// argument or position the call does not have.
-    fn substituted(&self, state: &State, callee: &Callee, args: &[ValueId], width: usize) -> Option<Regions> {
-        let summary = self.summary_of(callee)?;
-        let mut out = fill(width, Region::default());
-        let mut via: Vec<ValueId> = Vec::new();
-        for ResultLoan { at, loan } in &summary.loans {
-            let arg = *args.get(loan.index)?;
-            let current = self.current(state, arg);
-            let mut borrowed = match loan.position {
-                ParamPosition::At(k) => current.get(k)?.clone(),
-                ParamPosition::Whole => fold(&current),
-            };
-            if loan.mutability == Mutability::Mut {
-                for held in &mut borrowed.loans {
-                    held.mutability = Mutability::Mut;
-                }
-            }
-            out.get_mut(*at)?.join_mut(&borrowed);
-            add_via(&mut via, &state.get(arg), arg);
-        }
-        if let Callee::Indirect(f) = callee
-            && let Some(made) = self.closures.made_by(*f)
-        {
-            join_part(&mut out, &[], &[self.reach(state, &[made.closure]).loans]);
-        }
-        Some(Regions::with_via(out, &via))
-    }
-
     /// `v`'s positions with what each of its references points at read from
     /// the storage it names now (RFC-0079 rule 3).
     fn current(&self, state: &State, v: ValueId) -> Vec<Region> {
@@ -1178,6 +976,36 @@ impl RegionAnalysis<'_> {
                 reach.take(kind, region);
             }
         }
+        self.deepen(state, &mut reach);
+        reach
+    }
+
+    /// What a closure reaches through its captures: every loan at its
+    /// captures' position, and what the storages those name hold now, to any
+    /// depth. A closure called through a reference to the storage holding
+    /// it reaches its captures as they are held there, not the storage.
+    fn captures_reach(&self, state: &State, callee: ValueId) -> Reach {
+        let mut reach = Reach::default();
+        let held = self.current(state, callee);
+        add_via(&mut reach.via, &state.get(callee), callee);
+        let Some(ty) = self.val_types.get(&callee) else {
+            for region in &held {
+                reach.take(None, region);
+            }
+            self.deepen(state, &mut reach);
+            return reach;
+        };
+        for (kind, region) in layout(ty).into_iter().zip(&held) {
+            if let PositionKind::Captures(_) = kind {
+                reach.take(Some(kind), region);
+            }
+        }
+        self.deepen(state, &mut reach);
+        reach
+    }
+
+    /// `reach` taken on through what every storage it names holds now.
+    fn deepen(&self, state: &State, reach: &mut Reach) {
         let mut at = 0;
         while at < reach.storages.len() {
             let storage = reach.storages[at];
@@ -1192,7 +1020,6 @@ impl RegionAnalysis<'_> {
             }
             at += 1;
         }
-        reach
     }
 
     /// The call's outputs besides its result (RFC-0079 rule 5, in this step's
@@ -1224,16 +1051,150 @@ impl RegionAnalysis<'_> {
         }
     }
 
-    /// A call's result, and every loan the call hands its callee.
-    fn call(&self, state: &mut State, callee: &Callee, args: &[ValueId], width: usize, changed: &mut Changed) -> (Regions, Reach) {
-        let values: Vec<ValueId> = args.iter().chain(callee_value(callee)).copied().collect();
+    /// A call's result and writes (RFC-0079 rule 5), and every loan the call
+    /// hands its callee. An extern's flows are the union of its arguments
+    /// until its lifetimes are read (rule 6); every other callee's are the
+    /// ones its function type states, for a direct call and a call through a
+    /// function value alike.
+    fn call(&self, state: &mut State, call: &Call, width: usize, changed: &mut Changed) -> (Regions, Reach) {
+        let values: Vec<ValueId> = call.args.iter().chain(callee_value(call.callee)).copied().collect();
         let reach = self.reach(state, &values);
-        let result = match self.substituted(state, callee, args, width) {
-            Some(substituted) => substituted,
-            None => Regions::with_via(fill(width, reach.loans.clone()), &reach.via),
+        let result = match call.callee {
+            Callee::Extern { .. } => {
+                let result = Regions::with_via(fill(width, reach.loans.clone()), &reach.via);
+                self.write_outputs(state, &values, &reach, changed);
+                result
+            }
+            Callee::Direct(_) | Callee::Indirect(_) => {
+                self.flowed(state, call, &flows_of(call.callee_ty), width, changed)
+            }
         };
-        self.write_outputs(state, &values, &reach, changed);
         (result, reach)
+    }
+
+    /// What input `from` of a call holds now: an argument's positions, or
+    /// everything the callee reaches through its captures in one position.
+    fn call_input(&self, state: &State, call: &Call, from: FlowEnd) -> CallInput {
+        match from {
+            FlowEnd::Param(index) => match call.args.get(index) {
+                Some(arg) => CallInput {
+                    positions: self.current(state, *arg),
+                    via: vec![*arg],
+                },
+                // A validated call has an argument for every parameter; a
+                // flow past them stands for every argument.
+                None => CallInput {
+                    positions: vec![fold(
+                        &call
+                            .args
+                            .iter()
+                            .flat_map(|arg| self.current(state, *arg))
+                            .collect::<Vec<_>>(),
+                    )],
+                    via: call.args.clone(),
+                },
+            },
+            FlowEnd::Captures => match callee_value(call.callee) {
+                Some(callee) => {
+                    let reach = self.captures_reach(state, *callee);
+                    CallInput {
+                        positions: vec![reach.loans],
+                        via: reach.via,
+                    }
+                }
+                None => CallInput {
+                    positions: Vec::new(),
+                    via: Vec::new(),
+                },
+            },
+            FlowEnd::Result => unreachable!("a call's result is no input"),
+        }
+    }
+
+    /// RFC-0079 rule 5: each output of the call is the join of the inputs
+    /// its callee's flows name, as the call's arguments hold them now. The
+    /// result is read before anything is written.
+    fn flowed(&self, state: &mut State, call: &Call, flows: &Flows, width: usize, changed: &mut Changed) -> Regions {
+        let arity = call.args.len();
+        let mut out = fill(width, Region::default());
+        let mut via: Vec<ValueId> = Vec::new();
+        for Source { from, alignment } in flows.into_end(FlowEnd::Result, arity) {
+            let input = self.call_input(state, call, from);
+            for v in &input.via {
+                add_via(&mut via, &state.get(*v), *v);
+            }
+            match alignment == Alignment::Aligned && input.positions.len() == width {
+                true => join_part(&mut out, &[0], &input.positions),
+                false => join_part(&mut out, &[], &input.positions),
+            }
+        }
+        let written: Vec<Written> = (0..arity)
+            .map(FlowEnd::Param)
+            .chain(callee_value(call.callee).map(|_| FlowEnd::Captures))
+            .filter_map(|to| {
+                let sources = flows.into_end(to, arity);
+                if sources.is_empty() {
+                    return None;
+                }
+                let mut region = Region::default();
+                for Source { from, .. } in sources {
+                    region.join_mut(&fold(&self.call_input(state, call, from).positions));
+                }
+                Some(Written { to, region })
+            })
+            .collect();
+        for Written { to, region } in written {
+            let into = match to {
+                FlowEnd::Param(index) => call.args[index],
+                FlowEnd::Captures => *callee_value(call.callee).expect("only a callee value captures"),
+                FlowEnd::Result => unreachable!("the result is not written into"),
+            };
+            self.write_into(state, into, &region, changed);
+        }
+        Regions::with_via(out, &via)
+    }
+
+    /// `region` written through every `&mut` position of `v` and into what
+    /// its captures name mutably, and joined into the pointee positions `v`
+    /// itself carries.
+    fn write_into(&self, state: &mut State, v: ValueId, region: &Region, changed: &mut Changed) {
+        let unknown_place = WrittenPart {
+            pointee_width: 0,
+            at: &[],
+            values: std::slice::from_ref(region),
+        };
+        let held = self.current(state, v);
+        let Some(ty) = self.val_types.get(&v) else {
+            for storage in held.iter().flat_map(|position| &position.loans).map(|loan| loan.storage) {
+                self.storage_write(state, storage, &unknown_place, changed);
+            }
+            return;
+        };
+        for (k, kind) in layout(ty).into_iter().enumerate() {
+            let writable = match kind {
+                PositionKind::Ref(Mutability::Mut) | PositionKind::Captures(_) => true,
+                PositionKind::Ref(Mutability::Shared)
+                | PositionKind::RegionParam
+                | PositionKind::InFlight => false,
+            };
+            if !writable {
+                continue;
+            }
+            let named: Vec<LoanStorage> = held[k]
+                .loans
+                .iter()
+                .filter(|loan| loan.mutability == Mutability::Mut)
+                .map(|loan| loan.storage)
+                .collect();
+            for storage in named {
+                self.storage_write(state, storage, &unknown_place, changed);
+            }
+            if let (PositionKind::Ref(Mutability::Mut), Some(pointee)) = (kind, pointee_at(ty, k)) {
+                for position in k + 1..k + 1 + positions(&pointee) {
+                    self.join_at(state, v, position, region, changed);
+                }
+            }
+        }
     }
 
     /// A reference: what it names, then the positions of what it points at.
@@ -1352,18 +1313,32 @@ impl RegionAnalysis<'_> {
             InstKind::Spawn {
                 dst,
                 callee,
+                callee_ty,
                 args,
                 ..
             } => {
-                let (result, reach) =
-                    self.call(state, callee, args, self.handled_width(*dst), changed);
+                let call = Call {
+                    callee,
+                    callee_ty,
+                    args: args.clone(),
+                };
+                let (result, reach) = self.call(state, &call, self.handled_width(*dst), changed);
                 let positions = std::iter::once(reach.loans).chain(result.positions).collect();
                 self.put(state, *dst, Regions::with_via(positions, &reach.via), changed);
             }
             InstKind::FunctionCall {
-                dst, callee, args, ..
+                dst,
+                callee,
+                callee_ty,
+                args,
+                ..
             } => {
-                let (result, _) = self.call(state, callee, args, self.width(*dst), changed);
+                let call = Call {
+                    callee,
+                    callee_ty,
+                    args: args.clone(),
+                };
+                let (result, _) = self.call(state, &call, self.width(*dst), changed);
                 self.put(state, *dst, result, changed);
             }
             // RFC-0064 rule 5: a lambda that captures a reference is a
@@ -1580,6 +1555,40 @@ impl RegionAnalysis<'_> {
     }
 }
 
+/// A call as the analysis reads it.
+struct Call<'i> {
+    callee: &'i Callee,
+    callee_ty: &'i Ty,
+    args: Vec<ValueId>,
+}
+
+/// An input of a call: its positions, and the values it was read from.
+struct CallInput {
+    positions: Vec<Region>,
+    via: Vec<ValueId>,
+}
+
+/// An output of a call and the join of the inputs it takes.
+struct Written {
+    to: FlowEnd,
+    region: Region,
+}
+
+/// The flows a call reads off its callee's type. A callee value reached
+/// through a reference is called as the function it points at; a callee
+/// with no function type is an error type the validator refuses, and the
+/// union stands for it.
+fn flows_of(callee_ty: &Ty) -> Flows {
+    match callee_ty {
+        Ty::Fn { flows, .. } => flows.get().clone(),
+        Ty::Ref(_, inner) => match inner.ty().as_ref() {
+            Ty::Fn { flows, .. } => flows.get().clone(),
+            _ => Flows::Every,
+        },
+        _ => Flows::Every,
+    }
+}
+
 fn callee_value(callee: &Callee) -> Option<&ValueId> {
     match callee {
         Callee::Indirect(f) => Some(f),
@@ -1703,19 +1712,31 @@ struct Given {
     regions: Regions,
 }
 
+/// What a loan an output holds is, from inside the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Held {
+    Local(ValueId),
+    Input(HeldInput),
+}
+
+/// A position of one of the body's inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldInput {
+    pub end: FlowEnd,
+    pub position: usize,
+}
+
 static NOTHING: Regions = Regions {
     positions: Vec::new(),
     via: Vec::new(),
 };
 
 impl Loans {
-    pub fn build(cfg: &CfgBody, summaries: Summaries<'_>) -> Self {
+    pub fn build(cfg: &CfgBody) -> Self {
         let analysis = RegionAnalysis {
             val_types: &cfg.val_types,
             cfg,
             entry: EntryStorage::of(cfg),
-            closures: ClosureOrigins::of(cfg),
-            summaries,
         };
         let mut entry = DataflowState::new();
         for value in cfg.entry_defs() {
@@ -1791,51 +1812,47 @@ impl Loans {
         self.storage.storage(slot)
     }
 
-    /// RFC-0064 rules 2 and 5: a body's summary is its result's `Param`
-    /// loans, position by position, and a local loan in the result is
-    /// refused. A loan on what a capture names is the closure's own, which
-    /// its caller joins from the closure value.
-    pub fn leaving(&self, value: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> Leaving {
-        let mut leaving = Leaving::default();
-        let regions = self.regions(value);
-        for (at, region) in regions.positions.iter().enumerate() {
-            for loan in &region.loans {
-                let param_loan = match loan.storage {
-                    LoanStorage::Local(local) => {
-                        if !leaving.locals.contains(&local) {
-                            leaving.locals.push(local);
-                        }
-                        continue;
-                    }
-                    LoanStorage::Param { index, value } => ParamLoan {
-                        index,
-                        position: match val_types.get(&value) {
-                            Some(Ty::Ref(..) | Ty::Fn { .. }) => ParamPosition::At(0),
-                            _ => ParamPosition::Whole,
-                        },
-                        mutability: loan.mutability,
-                    },
-                    LoanStorage::Outside(Outside { entry, position }) => {
-                        let Some(index) = self.storage.params.get(&entry) else {
-                            continue;
-                        };
-                        ParamLoan {
-                            index: *index,
-                            position: ParamPosition::At(position),
-                            mutability: loan.mutability,
-                        }
-                    }
-                };
-                let result_loan = ResultLoan {
-                    at,
-                    loan: param_loan,
-                };
-                if !leaving.summary.loans.contains(&result_loan) {
-                    leaving.summary.loans.push(result_loan);
-                }
+    /// What a loan an output of the body holds is, as the body's inputs
+    /// name it (RFC-0079 rule 9). A loan on a parameter's own slot, which a
+    /// by-value parameter's reference names, is the body's storage: the
+    /// slot is gone once the body returns.
+    pub fn held(&self, loan: &Loan, val_types: &FxHashMap<ValueId, Ty>) -> Held {
+        match loan.storage {
+            LoanStorage::Local(value) => Held::Local(value),
+            LoanStorage::Param { index, value } => match val_types.get(&value) {
+                Some(Ty::Ref(..) | Ty::Fn { .. }) => Held::Input(HeldInput {
+                    end: FlowEnd::Param(index),
+                    position: 0,
+                }),
+                Some(_) | None => Held::Local(value),
+            },
+            LoanStorage::Outside(Outside { entry, position }) => match self.storage.params.get(&entry) {
+                Some(index) => Held::Input(HeldInput {
+                    end: FlowEnd::Param(*index),
+                    position,
+                }),
+                None => Held::Input(HeldInput {
+                    end: FlowEnd::Captures,
+                    position: 0,
+                }),
+            },
+        }
+    }
+
+    /// The loans the body wrote into what an entry definition names from
+    /// outside the body: every loan its positions hold anywhere in the body
+    /// that it did not start with (RFC-0079 rule 4).
+    pub fn written_into(&self, entry: ValueId) -> Vec<Loan> {
+        let own = self.storage.storage(entry);
+        let mut written: Vec<Loan> = Vec::new();
+        for loan in self.holds(entry) {
+            let started = loan.storage == own
+                || matches!(loan.storage, LoanStorage::Outside(Outside { entry: at, .. }) if at == entry);
+            if !started && !written.contains(loan) {
+                written.push(*loan);
             }
         }
-        leaving
+        written
     }
 
     fn add_holds(&self, effect: &mut StorageEffect, value: ValueId) {
@@ -2125,7 +2142,7 @@ mod tests {
     #[test]
     fn a_param_loan_names_the_parameter_at_its_index() {
         let cfg = two_parameters();
-        let loans = Loans::build(&cfg, Summaries::NONE);
+        let loans = Loans::build(&cfg);
         let mut seen = 0;
         for value in cfg.val_types.keys() {
             for loan in loans.holds(*value) {
@@ -2140,27 +2157,25 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_names_the_parameter_the_result_reborrows() {
+    fn the_result_holds_the_parameter_it_reborrows() {
         let cfg = two_parameters();
-        let loans = Loans::build(&cfg, Summaries::NONE);
+        let loans = Loans::build(&cfg);
         let returned = cfg.params[1].1;
         let dst = *cfg
             .val_types
             .keys()
             .find(|v| **v != cfg.params[0].1 && **v != returned)
             .expect("the reborrow");
-        let leaving = loans.leaving(dst, &cfg.val_types);
-        assert_eq!(leaving.locals, []);
+        let held: Vec<Held> = loans
+            .holds(dst)
+            .map(|loan| loans.held(loan, &cfg.val_types))
+            .collect();
         assert_eq!(
-            leaving.summary.loans,
-            [ResultLoan {
-                at: 0,
-                loan: ParamLoan {
-                    index: 1,
-                    position: ParamPosition::At(0),
-                    mutability: Mutability::Shared,
-                },
-            }]
+            held,
+            [Held::Input(HeldInput {
+                end: FlowEnd::Param(1),
+                position: 0,
+            })]
         );
     }
 }

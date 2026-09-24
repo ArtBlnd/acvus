@@ -27,6 +27,7 @@ fn errors(i: &Interner, source: &str) -> Vec<String> {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     });
     let graph = CompilationGraph {

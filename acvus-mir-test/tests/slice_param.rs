@@ -27,6 +27,7 @@ fn takes_slice(i: &Interner, name: &str, mutability: Mutability) -> Function {
         ret: Box::new(lift_to_poly(&Ty::I64)),
         captures: vec![],
         effect: EffectTerm::<Poly>::Known(Effect::PURE),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     Function {
         qref: QualifiedRef::root(i.intern(name)),
@@ -55,6 +56,7 @@ fn two_slices(i: &Interner, name: &str) -> Function {
         ret: Box::new(lift_to_poly(&Ty::I64)),
         captures: vec![],
         effect: EffectTerm::<Poly>::Known(Effect::PURE),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     Function {
         qref: QualifiedRef::root(i.intern(name)),

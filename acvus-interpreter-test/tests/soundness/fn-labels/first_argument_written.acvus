@@ -1,0 +1,3 @@
+// refuse
+// The lender the result names is written while the result is live.
+let v = [7, 8]; let w = [9]; let f = |r, s| -> r; let x = f(&v, &w); v = [1, 2]; len(x)

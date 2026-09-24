@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::fmt;
 
+pub use crate::flows::{Alignment, Flow, FlowEnd, FlowTerm, Flows, Source};
 use crate::graph::types::QualifiedRef;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -560,6 +561,7 @@ impl Scheme {
             &mut EffectTerm::Var,
             &mut LenTerm::Var,
             &mut Repr::Var,
+            &mut no_flow_var,
         );
         debug_assert_eq!(&visited, pattern, "the identity map rebuilds the pattern");
         found
@@ -573,6 +575,7 @@ fn substitute_var(pattern: &PolyTy, var: u32, by: &PolyTy) -> PolyTy {
         &mut EffectTerm::Var,
         &mut LenTerm::Var,
         &mut Repr::Var,
+        &mut no_flow_var,
     )
 }
 
@@ -641,6 +644,7 @@ pub fn bind_chosen(pattern: &PolyTy, ty: &PolyTy, chosen: &[u32]) -> PolyTy {
             Some(repr) => repr.clone(),
             None => Repr::Var(r),
         },
+        &mut no_flow_var,
     )
 }
 
@@ -659,6 +663,7 @@ impl ChosenSlot {
             &mut |v| EffectTerm::Var(v + by.effect),
             &mut |v| LenTerm::Var(v + by.len),
             &mut |v| Repr::Var(v + by.repr),
+            &mut no_flow_var,
         );
         Self { arg, ..self }
     }
@@ -1091,6 +1096,7 @@ fn var_span(pattern: &PolyTy) -> VarSpan {
             span.repr = span.repr.max(v + 1);
             Repr::Var(v)
         },
+        &mut no_flow_var,
     );
     span
 }
@@ -1102,6 +1108,7 @@ fn shift_vars(pattern: &PolyTy, by: VarSpan) -> PolyTy {
         &mut |v| EffectTerm::Var(v + by.effect),
         &mut |v| LenTerm::Var(v + by.len),
         &mut |v| Repr::Var(v + by.repr),
+        &mut no_flow_var,
     )
 }
 
@@ -1138,6 +1145,7 @@ impl PatternSubst {
             &mut EffectTerm::Var,
             &mut LenTerm::Var,
             &mut Repr::Var,
+            &mut no_flow_var,
         );
         found
     }
@@ -1283,12 +1291,14 @@ impl PatternSubst {
                     ret: ra,
                     captures: ca,
                     effect: ea,
+                    flows: _,
                 },
                 TyTerm::Fn {
                     params: pb,
                     ret: rb,
                     captures: cb,
                     effect: eb,
+                    flows: _,
                 },
             ) => {
                 pa.len() == pb.len()
@@ -1362,6 +1372,7 @@ impl PatternSubst {
             &mut |v| self.effect.get(&v).cloned().unwrap_or(EffectTerm::Var(v)),
             &mut |v| self.len.get(&v).copied().unwrap_or(LenTerm::Var(v)),
             &mut |v| self.apply_repr(v),
+            &mut no_flow_var,
         )
     }
 
@@ -1397,6 +1408,7 @@ impl PatternSubst {
             &mut |v| self.effect.get(&v).cloned().unwrap_or(EffectTerm::Var(v)),
             &mut |v| self.len.get(&v).copied().unwrap_or(LenTerm::Var(v)),
             &mut |v| self.apply_repr(v),
+            &mut no_flow_var,
         )
     }
 }
@@ -2483,6 +2495,7 @@ where
                 ret,
                 captures: _,
                 effect,
+                flows: _,
             } => {
                 write!(f, "Fn(")?;
                 for (i, p) in params.iter().enumerate() {
@@ -2838,6 +2851,9 @@ pub trait Phase: 'static + Clone {
     /// Representation variable: the `ρ` of a type variable's binding
     /// (hash-types.md). `Infallible` for concrete (uninhabitable).
     type ReprVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
+    /// A function type's flows (RFC-0079 rule 5). `Infallible` wherever the
+    /// flows are known: a declaration states them, a frozen type holds them.
+    type FlowVar: fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash + Copy;
 
     /// How a shown type spells a type variable of this phase, so that two
     /// occurrences of one variable read as one.
@@ -2860,6 +2876,7 @@ impl Phase for Concrete {
     type LenVar = Infallible;
     type IdentityVar = Infallible;
     type ReprVar = Infallible;
+    type FlowVar = Infallible;
 
     fn spell_ty_var(var: &Infallible, _: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *var {}
@@ -2890,6 +2907,7 @@ impl Phase for Poly {
     type LenVar = u32;
     type IdentityVar = u32;
     type ReprVar = u32;
+    type FlowVar = Infallible;
 
     /// A placeholder is spelled as a declaration would name it, `T` and
     /// `N` and `E`, so `Fn(Array<T, N>) -> Vec<T>` reads as the shape it
@@ -2939,6 +2957,7 @@ impl Phase for Infer {
     type LenVar = LenVarId;
     type IdentityVar = IdentityVarId;
     type ReprVar = ReprVarId;
+    type FlowVar = FlowVarId;
 
     fn spell_ty_var(var: &TypeBoundId, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "'{}", var.0)
@@ -2983,6 +3002,10 @@ pub struct IdentityVarId(pub u32);
 /// Index into `Solver::repr_vars`. Identifies a representation variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReprVarId(pub u32);
+
+/// Index into `Solver::flow_vars`. Identifies a function type's flows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FlowVarId(pub u32);
 
 // Re-export solver types - these were historically in ty.rs.
 pub use crate::solver::{FreezeError, Solver, Sources, TypeBound};
@@ -3158,18 +3181,24 @@ impl<V: Phase> TypeArg<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
         on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
     ) -> TypeArg<W> {
         match self {
             TypeArg::Uniform(ty) => {
-                TypeArg::Uniform(ty.map(on_var, on_identity, on_effect, on_len, on_repr))
+                TypeArg::Uniform(ty.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow))
             }
             TypeArg::Open(v, ty) => {
-                let ty = ty.map(on_var, on_identity, on_effect, on_len, on_repr);
+                let ty = ty.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow);
                 on_repr(*v).at(ty)
             }
-            TypeArg::Specialized(held) => {
-                TypeArg::Specialized(held.map(on_var, on_identity, on_effect, on_len, on_repr))
-            }
+            TypeArg::Specialized(held) => TypeArg::Specialized(held.map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+                on_repr,
+                on_flow,
+            )),
         }
     }
 
@@ -3180,13 +3209,19 @@ impl<V: Phase> TypeArg<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
         on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> Result<FlowTerm<W>, E>,
     ) -> Result<TypeArg<W>, E> {
         Ok(match self {
-            TypeArg::Uniform(ty) => {
-                TypeArg::Uniform(ty.try_map(on_var, on_identity, on_effect, on_len, on_repr)?)
-            }
+            TypeArg::Uniform(ty) => TypeArg::Uniform(ty.try_map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+                on_repr,
+                on_flow,
+            )?),
             TypeArg::Open(v, ty) => {
-                let ty = ty.try_map(on_var, on_identity, on_effect, on_len, on_repr)?;
+                let ty = ty.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)?;
                 on_repr(*v)?.at(ty)
             }
             TypeArg::Specialized(held) => TypeArg::Specialized(held.try_map(
@@ -3195,6 +3230,7 @@ impl<V: Phase> TypeArg<V> {
                 on_effect,
                 on_len,
                 on_repr,
+                on_flow,
             )?),
         })
     }
@@ -3347,8 +3383,10 @@ impl<V: Phase> HeldTy<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
         on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
     ) -> HeldTy<W> {
-        let mut part = |p: &TypeArg<V>| p.map(on_var, on_identity, on_effect, on_len, on_repr);
+        let mut part =
+            |p: &TypeArg<V>| p.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow);
         match self {
             HeldTy::Tuple(parts) => HeldTy::Tuple(parts.iter().map(&mut part).collect()),
             HeldTy::Option(p) => HeldTy::Option(Box::new(part(p))),
@@ -3362,7 +3400,10 @@ impl<V: Phase> HeldTy<V> {
             }
             HeldTy::RustArray(p, len) => HeldTy::RustArray(Box::new(part(p)), *len),
             HeldTy::Leaf(leaf) => {
-                HeldTy::of(leaf.0.map(on_var, on_identity, on_effect, on_len, on_repr))
+                HeldTy::of(
+                    leaf.0
+                        .map(on_var, on_identity, on_effect, on_len, on_repr, on_flow),
+                )
             }
             HeldTy::Held(v) => HeldTy::of(on_var(*v)),
         }
@@ -3375,8 +3416,10 @@ impl<V: Phase> HeldTy<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
         on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> Result<FlowTerm<W>, E>,
     ) -> Result<HeldTy<W>, E> {
-        let mut part = |p: &TypeArg<V>| p.try_map(on_var, on_identity, on_effect, on_len, on_repr);
+        let mut part =
+            |p: &TypeArg<V>| p.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow);
         Ok(match self {
             HeldTy::Tuple(parts) => {
                 HeldTy::Tuple(parts.iter().map(&mut part).collect::<Result<_, _>>()?)
@@ -3391,12 +3434,14 @@ impl<V: Phase> HeldTy<V> {
                 HeldTy::Array(Box::new(p), len.try_map(on_len)?)
             }
             HeldTy::RustArray(p, len) => HeldTy::RustArray(Box::new(part(p)?), *len),
-            HeldTy::Leaf(leaf) => {
-                HeldTy::of(
-                    leaf.0
-                        .try_map(on_var, on_identity, on_effect, on_len, on_repr)?,
-                )
-            }
+            HeldTy::Leaf(leaf) => HeldTy::of(leaf.0.try_map(
+                on_var,
+                on_identity,
+                on_effect,
+                on_len,
+                on_repr,
+                on_flow,
+            )?),
             HeldTy::Held(v) => HeldTy::of(on_var(*v)?),
         })
     }
@@ -3799,6 +3844,7 @@ pub enum TyTerm<V: Phase> {
         ret: Box<TyTerm<V>>,
         captures: Vec<TyTerm<V>>,
         effect: EffectTerm<V>,
+        flows: FlowTerm<V>,
     },
     // Nominal
     UserDefined {
@@ -4230,15 +4276,18 @@ impl<V: Phase> TyTerm<V> {
                     ret: a_ret,
                     captures: a_caps,
                     effect: a_effect,
+                    flows: a_flows,
                 },
                 TyTerm::Fn {
                     params: b_params,
                     ret: b_ret,
                     captures: b_caps,
                     effect: b_effect,
+                    flows: b_flows,
                 },
             ) => {
                 a_effect == b_effect
+                    && a_flows == b_flows
                     && a_ret.same_erased(b_ret)
                     && a_params.len() == b_params.len()
                     && a_params
@@ -4309,6 +4358,7 @@ impl<V: Phase> TyTerm<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
         on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
     ) -> TyTerm<W> {
         match self {
             TyTerm::Int(k) => TyTerm::Int(*k),
@@ -4320,7 +4370,7 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Never => TyTerm::Never,
             TyTerm::Order => TyTerm::Order,
             TyTerm::Array(inner, len) => TyTerm::Array(
-                Box::new(inner.map(on_var, on_identity, on_effect, on_len, on_repr)),
+                Box::new(inner.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)),
                 len.map(on_len),
             ),
             TyTerm::Slice(elem) => TyTerm::Slice(Box::new(elem.map(
@@ -4329,20 +4379,26 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
                 on_repr,
+                on_flow,
             ))),
             TyTerm::Str => TyTerm::Str,
             TyTerm::Object(object) => TyTerm::Object(
                 object.with_fields(
                     object
                         .iter()
-                        .map(|(k, v)| (*k, v.map(on_var, on_identity, on_effect, on_len, on_repr)))
+                        .map(|(k, v)| {
+                            (
+                                *k,
+                                v.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow),
+                            )
+                        })
                         .collect(),
                 ),
             ),
             TyTerm::Tuple(elems) => TyTerm::Tuple(
                 elems
                     .iter()
-                    .map(|e| e.map(on_var, on_identity, on_effect, on_len, on_repr))
+                    .map(|e| e.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow))
                     .collect(),
             ),
             TyTerm::Option(inner) => TyTerm::Option(Box::new(inner.map(
@@ -4351,27 +4407,39 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
                 on_repr,
+                on_flow,
             ))),
             TyTerm::Result(ok, err) => TyTerm::Result(
-                Box::new(ok.map(on_var, on_identity, on_effect, on_len, on_repr)),
-                Box::new(err.map(on_var, on_identity, on_effect, on_len, on_repr)),
+                Box::new(ok.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)),
+                Box::new(err.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)),
             ),
             TyTerm::Fn {
                 params,
                 ret,
                 captures,
                 effect,
+                flows,
             } => TyTerm::Fn {
                 params: params
                     .iter()
-                    .map(|p| p.retyped(p.ty.map(on_var, on_identity, on_effect, on_len, on_repr)))
+                    .map(|p| {
+                        p.retyped(p.ty.map(
+                            on_var,
+                            on_identity,
+                            on_effect,
+                            on_len,
+                            on_repr,
+                            on_flow,
+                        ))
+                    })
                     .collect(),
-                ret: Box::new(ret.map(on_var, on_identity, on_effect, on_len, on_repr)),
+                ret: Box::new(ret.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)),
                 captures: captures
                     .iter()
-                    .map(|c| c.map(on_var, on_identity, on_effect, on_len, on_repr))
+                    .map(|c| c.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow))
                     .collect(),
                 effect: effect.map(on_effect),
+                flows: flows.map(on_flow),
             },
             TyTerm::UserDefined {
                 id,
@@ -4383,7 +4451,7 @@ impl<V: Phase> TyTerm<V> {
                 id: *id,
                 type_args: type_args
                     .iter()
-                    .map(|t| t.map(on_var, on_identity, on_effect, on_len, on_repr))
+                    .map(|t| t.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow))
                     .collect(),
                 effect_args: effect_args.iter().map(|e| e.map(on_effect)).collect(),
                 identity_args: identity_args.iter().map(|i| i.map(on_identity)).collect(),
@@ -4397,7 +4465,14 @@ impl<V: Phase> TyTerm<V> {
                         (
                             *tag,
                             payload.as_ref().map(|ty| {
-                                Box::new(ty.map(on_var, on_identity, on_effect, on_len, on_repr))
+                                Box::new(ty.map(
+                                    on_var,
+                                    on_identity,
+                                    on_effect,
+                                    on_len,
+                                    on_repr,
+                                    on_flow,
+                                ))
                             }),
                         )
                     })
@@ -4410,10 +4485,11 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
                 on_repr,
+                on_flow,
             ))),
             TyTerm::Ref(m, inner) => TyTerm::Ref(
                 *m,
-                Box::new(inner.map(on_var, on_identity, on_effect, on_len, on_repr)),
+                Box::new(inner.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)),
             ),
             TyTerm::Error(token) => TyTerm::Error(*token),
             TyTerm::Var(v) => on_var(*v),
@@ -4428,6 +4504,7 @@ impl<V: Phase> TyTerm<V> {
         on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
         on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
         on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> Result<FlowTerm<W>, E>,
     ) -> Result<TyTerm<W>, E> {
         match self {
             TyTerm::Int(k) => Ok(TyTerm::Int(*k)),
@@ -4439,7 +4516,14 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Never => Ok(TyTerm::Never),
             TyTerm::Order => Ok(TyTerm::Order),
             TyTerm::Array(inner, len) => Ok(TyTerm::Array(
-                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len, on_repr)?),
+                Box::new(inner.try_map(
+                    on_var,
+                    on_identity,
+                    on_effect,
+                    on_len,
+                    on_repr,
+                    on_flow,
+                )?),
                 len.try_map(on_len)?,
             )),
             TyTerm::Slice(elem) => Ok(TyTerm::Slice(Box::new(elem.try_map(
@@ -4448,13 +4532,14 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
                 on_repr,
+                on_flow,
             )?))),
             TyTerm::Str => Ok(TyTerm::Str),
             TyTerm::Object(object) => {
                 let mapped: Result<FxHashMap<_, _>, E> = object
                     .iter()
                     .map(|(k, v)| {
-                        v.try_map(on_var, on_identity, on_effect, on_len, on_repr)
+                        v.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
                             .map(|mv| (*k, mv))
                     })
                     .collect();
@@ -4463,7 +4548,7 @@ impl<V: Phase> TyTerm<V> {
             TyTerm::Tuple(elems) => Ok(TyTerm::Tuple(
                 elems
                     .iter()
-                    .map(|e| e.try_map(on_var, on_identity, on_effect, on_len, on_repr))
+                    .map(|e| e.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow))
                     .collect::<Result<_, _>>()?,
             )),
             TyTerm::Option(inner) => Ok(TyTerm::Option(Box::new(inner.try_map(
@@ -4472,30 +4557,40 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
                 on_repr,
+                on_flow,
             )?))),
             TyTerm::Result(ok, err) => Ok(TyTerm::Result(
-                Box::new(ok.try_map(on_var, on_identity, on_effect, on_len, on_repr)?),
-                Box::new(err.try_map(on_var, on_identity, on_effect, on_len, on_repr)?),
+                Box::new(ok.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)?),
+                Box::new(err.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)?),
             )),
             TyTerm::Fn {
                 params,
                 ret,
                 captures,
                 effect,
+                flows,
             } => Ok(TyTerm::Fn {
                 params: params
                     .iter()
                     .map(|p| {
-                        p.ty.try_map(on_var, on_identity, on_effect, on_len, on_repr)
+                        p.ty.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
                             .map(|ty| p.retyped(ty))
                     })
                     .collect::<Result<_, _>>()?,
-                ret: Box::new(ret.try_map(on_var, on_identity, on_effect, on_len, on_repr)?),
+                ret: Box::new(ret.try_map(
+                    on_var,
+                    on_identity,
+                    on_effect,
+                    on_len,
+                    on_repr,
+                    on_flow,
+                )?),
                 captures: captures
                     .iter()
-                    .map(|c| c.try_map(on_var, on_identity, on_effect, on_len, on_repr))
+                    .map(|c| c.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow))
                     .collect::<Result<_, _>>()?,
                 effect: effect.try_map(on_effect)?,
+                flows: flows.try_map(on_flow)?,
             }),
             TyTerm::UserDefined {
                 id,
@@ -4508,7 +4603,7 @@ impl<V: Phase> TyTerm<V> {
                 id: *id,
                 type_args: type_args
                     .iter()
-                    .map(|t| t.try_map(on_var, on_identity, on_effect, on_len, on_repr))
+                    .map(|t| t.try_map(on_var, on_identity, on_effect, on_len, on_repr, on_flow))
                     .collect::<Result<_, _>>()?,
                 effect_args: effect_args
                     .iter()
@@ -4530,6 +4625,7 @@ impl<V: Phase> TyTerm<V> {
                                 on_effect,
                                 on_len,
                                 on_repr,
+                                on_flow,
                             )?)),
                             None => None,
                         };
@@ -4548,10 +4644,18 @@ impl<V: Phase> TyTerm<V> {
                 on_effect,
                 on_len,
                 on_repr,
+                on_flow,
             )?))),
             TyTerm::Ref(m, inner) => Ok(TyTerm::Ref(
                 *m,
-                Box::new(inner.try_map(on_var, on_identity, on_effect, on_len, on_repr)?),
+                Box::new(inner.try_map(
+                    on_var,
+                    on_identity,
+                    on_effect,
+                    on_len,
+                    on_repr,
+                    on_flow,
+                )?),
             )),
             TyTerm::Error(token) => Ok(TyTerm::Error(*token)),
             TyTerm::Var(v) => on_var(*v),
@@ -4560,6 +4664,11 @@ impl<V: Phase> TyTerm<V> {
 }
 
 // -- Lift: Concrete -> any Phase --------------------------------------
+
+/// The flow variable of a phase whose flows are always known.
+pub fn no_flow_var<W: Phase>(v: Infallible) -> FlowTerm<W> {
+    match v {}
+}
 
 /// Lift a concrete `Ty` into any phase (mechanical, zero information change).
 /// Infallible because `Concrete` has `TyVar = Infallible` (uninhabitable).
@@ -4570,6 +4679,7 @@ pub fn lift_ty<W: Phase>(ty: &Ty) -> TyTerm<W> {
         &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},
+        &mut no_flow_var,
     )
 }
 
@@ -4581,6 +4691,7 @@ pub fn lift_arg<W: Phase>(arg: &TypeArg<Concrete>) -> TypeArg<W> {
         &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},
         &mut |v: Infallible| match v {},
+        &mut no_flow_var,
     )
 }
 
@@ -4645,6 +4756,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
                 ret,
                 captures,
                 effect,
+                flows,
             } => TyTerm::Fn {
                 params: params
                     .iter()
@@ -4656,6 +4768,7 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
                 ret: Box::new(go(ret, builder)),
                 captures: captures.iter().map(|c| go(c, builder)).collect(),
                 effect: lift_ty_effect(effect),
+                flows: FlowTerm::Known(flows.get().clone()),
             },
             Ty::UserDefined {
                 id,
@@ -4707,6 +4820,7 @@ pub fn try_freeze_poly(ty: &PolyTy) -> Option<Ty> {
         &mut |_: u32| Err(()),
         &mut |_: u32| Err(()),
         &mut |_: u32| Err(()),
+        &mut |v: Infallible| match v {},
     )
     .ok()
 }
@@ -5936,6 +6050,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: crate::ty::Flows::Every.into(),
         };
         let Ty::UserDefined {
             id,
@@ -5963,6 +6078,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: crate::ty::Flows::Every.into(),
         };
         assert!(!fn_ty.is_data());
         assert!(!Ty::Handle(Box::new(Ty::I64)).is_data());
@@ -5978,6 +6094,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: crate::ty::Flows::Every.into(),
         };
         assert!(!arr(fn_ty.clone(), 3).is_data());
         assert!(!Ty::Option(Box::new(fn_ty.clone())).is_data());

@@ -704,6 +704,7 @@ fn generate_extern_fn(
                 ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
                 captures: vec![],
                 effect: #effect,
+                flows: ::acvus_extern::Flows::Every.into(),
             }
         }
     };
@@ -3903,6 +3904,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                         ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
                         captures: vec![],
                         effect: #effect,
+                        flows: ::acvus_extern::Flows::Every.into(),
                     },
                     bounds: vec![#(#bounds),*],
                     chosen: vec![#(#chosen),*],
@@ -3992,6 +3994,7 @@ fn requirement_of(ident: &Ident, vars: &Vars, marker_params: &[Ident]) -> proc_m
                             *__reprs.entry(__r).or_insert_with(|| __vars.fresh_repr()),
                         )
                     },
+                    &mut ::acvus_extern::no_flow_var,
                 )
             }
         }

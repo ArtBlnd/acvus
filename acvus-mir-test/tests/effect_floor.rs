@@ -36,6 +36,7 @@ fn fn_ty(i: &Interner, params: &[(&str, PolyTy)], effect: EffectTerm<Poly>) -> P
         ret: Box::new(lift_to_poly(&Ty::I64)),
         captures: vec![],
         effect,
+        flows: acvus_mir::ty::Flows::Every.into(),
     }
 }
 

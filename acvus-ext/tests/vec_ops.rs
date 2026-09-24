@@ -41,6 +41,7 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
                 effect: acvus_mir::ty::Effect::OPAQUE.into(),
+                flows: acvus_mir::ty::Flows::Every.into(),
             },
         });
     }

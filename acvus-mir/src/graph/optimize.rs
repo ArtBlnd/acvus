@@ -6,7 +6,6 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::{ResultLoan, Summaries, Summary, positions};
 use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
 use crate::graph::{ContextInfo, QualifiedRef};
@@ -49,17 +48,15 @@ pub fn optimize(
     // them (RFC-0029, RFC-0051) --
 
     let mut all_errors = Vec::new();
-    let mut summaries: FxHashMap<QualifiedRef, Summary> = FxHashMap::default();
     let mut recursive: FxHashSet<QualifiedRef> = FxHashSet::default();
     for members in call_graph_sccs(&modules) {
-        let component = Component::of(&members, &modules);
-        if component.is_cyclic() {
+        if Component::of(&members, &modules).is_cyclic() {
             recursive.extend(&members);
         }
-        for (qref, borrows) in component.settle(&mut summaries) {
+        for qref in members {
             let module = &modules[&qref];
             let mut errors = validate::move_check::check_moves(module);
-            errors.extend(borrows);
+            errors.extend(validate::borrow_check::check_outputs_and_borrows(module));
             // A `match` is exhaustive (RFC-0051). Like the move check, it reads
             // the shape the source wrote, before any pass has moved it.
             errors.extend(validate::exhaustive::check_exhaustive(module));
@@ -166,10 +163,7 @@ fn named_callees(module: &MirModule) -> Vec<QualifiedRef> {
     callees
 }
 
-/// The order every callee's summary exists in before its callers are
-/// checked. Components, not a flat topological order, because a cycle has no
-/// such order: RFC-0064 rule 4 answers a cycle with a fixpoint, which
-/// [`Component::settle`] computes.
+/// The call graph's strongly connected components.
 fn call_graph_sccs(modules: &FxHashMap<QualifiedRef, MirModule>) -> Vec<Vec<QualifiedRef>> {
     let mut ids: Vec<QualifiedRef> = modules.keys().copied().collect();
     ids.sort_unstable();
@@ -186,30 +180,17 @@ fn call_graph_sccs(modules: &FxHashMap<QualifiedRef, MirModule>) -> Vec<Vec<Qual
     crate::graph::infer::tarjan_scc(&ids, &edges)
 }
 
-/// A summary's loans are distinct `ResultLoan`s: a result position, a
-/// parameter index, one of the parameter's positions or the whole of it, and
-/// a `Mutability`. Give `Mutability` a third value and this factor moves with
-/// it, or the fixpoint's bound below stops being one.
-const LOANS_PER_PARAM_POSITION: usize = 2;
-
-/// One strongly connected component of the call graph, and the least fixpoint
-/// of the borrow check over its summaries (RFC-0064 rule 4).
-///
-/// Every member starts at the bottom — the empty summary, written into the
-/// table rather than left absent. Absent is not bottom here: a call whose
-/// callee has no entry takes the union of every argument's region, which is
-/// larger than any summary, so seeding by omission would make the iteration
-/// descend from the top instead of climbing from the bottom, and it would
-/// stop at whatever it first reached rather than at the least fixpoint.
-struct Component<'a> {
-    members: &'a [QualifiedRef],
-    /// For each member, by its index in `members`, the members that call it.
+/// One strongly connected component of the call graph: whether its members
+/// call one another is what the inliner is told, so a call inside its own
+/// callee is left standing.
+struct Component {
+    /// For each member, by its index in the component, the members that
+    /// call it.
     callers: Vec<Vec<usize>>,
-    modules: &'a FxHashMap<QualifiedRef, MirModule>,
 }
 
-impl<'a> Component<'a> {
-    fn of(members: &'a [QualifiedRef], modules: &'a FxHashMap<QualifiedRef, MirModule>) -> Self {
+impl Component {
+    fn of(members: &[QualifiedRef], modules: &FxHashMap<QualifiedRef, MirModule>) -> Self {
         let mut callers = vec![Vec::new(); members.len()];
         for (at, caller) in members.iter().enumerate() {
             for callee in named_callees(&modules[caller]) {
@@ -218,11 +199,7 @@ impl<'a> Component<'a> {
                 }
             }
         }
-        Self {
-            members,
-            callers,
-            modules,
-        }
+        Self { callers }
     }
 
     fn is_cyclic(&self) -> bool {
@@ -230,73 +207,6 @@ impl<'a> Component<'a> {
             [only] => only.contains(&0),
             _ => true,
         }
-    }
-
-    fn capacity(&self) -> usize {
-        self.members
-            .iter()
-            .map(|qref| {
-                let module = &self.modules[qref];
-                let param_positions: usize = module
-                    .main
-                    .params
-                    .iter()
-                    .map(|(_, value)| module.main.val_types.get(value).map_or(0, positions) + 1)
-                    .sum();
-                positions(&module.ret) * param_positions * LOANS_PER_PARAM_POSITION
-            })
-            .sum()
-    }
-
-    fn settle(
-        &self,
-        summaries: &mut FxHashMap<QualifiedRef, Summary>,
-    ) -> Vec<(QualifiedRef, Vec<ValidationError>)> {
-        for qref in self.members {
-            summaries.insert(*qref, Summary::default());
-        }
-        let capacity = self.capacity();
-        let mut settled: Vec<(QualifiedRef, Vec<ValidationError>)> = self
-            .members
-            .iter()
-            .map(|qref| (*qref, Vec::new()))
-            .collect();
-        let mut work: Vec<usize> = (0..self.members.len()).collect();
-        let mut grown = 0;
-        while let Some(at) = work.pop() {
-            let qref = self.members[at];
-            let checked = validate::borrow_check::check_borrows_in_order(
-                &self.modules[&qref],
-                Summaries::of(summaries),
-            );
-            settled[at].1 = checked.errors;
-            let held = &summaries[&qref];
-            let lost: Vec<ResultLoan> = held
-                .loans
-                .iter()
-                .copied()
-                .filter(|loan| !checked.summary.loans.contains(loan))
-                .collect();
-            assert!(
-                lost.is_empty(),
-                "the summary of {qref:?} lost {lost:?} when a callee's grew, \
-                 so the substitution at a call is not monotone in the summary it reads"
-            );
-            let gained = checked.summary.loans.len() - held.loans.len();
-            if gained == 0 {
-                continue;
-            }
-            grown += gained;
-            assert!(
-                grown <= capacity,
-                "{grown} loans entered the summaries of a component of {} bodies \
-                 whose parameters admit {capacity}",
-                self.members.len()
-            );
-            summaries.insert(qref, checked.summary);
-            work.extend(&self.callers[at]);
-        }
-        settled
     }
 }
 

@@ -20,7 +20,7 @@ use crate::ir::Intrinsic;
 use crate::structural::{Component, StructuralSignature, components};
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarBound, EffectVarId,
-    ErrorToken, FieldSet, HeldTy, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy,
+    ErrorToken, FieldSet, FlowTerm, FlowVarId, Flows, HeldTy, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy,
     Instances, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly,
     PolyTy, Repr, ReprVarId, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
     TypeBoundId, TypeRegistry, View, Viewed, could_match_pattern, effect_bound_at, matches_pattern,
@@ -250,6 +250,29 @@ struct Terms {
     len_vars: Vec<LenBound>,
     identity_vars: Vec<IdentityBound>,
     repr_vars: Vec<ReprBound>,
+    flow_vars: Vec<FlowBound>,
+}
+
+/// A function type's flows during the solve (RFC-0079 rule 5). Two
+/// function types that meet forward one variable to the other, and the
+/// root holds the union of what both carried: a value of either type may
+/// be called through the other.
+#[derive(Debug, Clone)]
+enum FlowBound {
+    Root(Flows),
+    Forward(FlowVarId),
+}
+
+/// Two function types met whose flows are both fixed and differ: neither
+/// can take the other's.
+#[derive(Debug, Clone, Copy)]
+pub struct FixedFlowsDiffer;
+
+/// Whether raising a function type's flows changed them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Raised {
+    Grew,
+    Held,
 }
 
 impl Terms {
@@ -261,7 +284,93 @@ impl Terms {
             len_vars: Vec::new(),
             identity_vars: Vec::new(),
             repr_vars: Vec::new(),
+            flow_vars: Vec::new(),
         }
+    }
+
+    // -- Flow variables ----------------------------------------------
+
+    fn alloc_flow_var(&mut self, seed: Flows) -> FlowVarId {
+        alloc_flow_var(&mut self.flow_vars, seed)
+    }
+
+    fn find_flow_root(&self, id: FlowVarId) -> FlowVarId {
+        match &self.flow_vars[id.0 as usize] {
+            FlowBound::Forward(next) => self.find_flow_root(*next),
+            FlowBound::Root(_) => id,
+        }
+    }
+
+    fn flows_at(&self, id: FlowVarId) -> &Flows {
+        match &self.flow_vars[self.find_flow_root(id).0 as usize] {
+            FlowBound::Root(flows) => flows,
+            FlowBound::Forward(_) => unreachable!("find_flow_root resolves forwards"),
+        }
+    }
+
+    fn resolve_flows(&self, term: &FlowTerm<Infer>) -> FlowTerm<Infer> {
+        match term {
+            FlowTerm::Known(flows) => FlowTerm::Known(flows.clone()),
+            FlowTerm::Var(id) => FlowTerm::Var(self.find_flow_root(*id)),
+        }
+    }
+
+    fn freeze_flows(&self, term: &FlowTerm<Infer>) -> Flows {
+        match term {
+            FlowTerm::Known(flows) => flows.clone(),
+            FlowTerm::Var(id) => self.flows_at(*id).clone(),
+        }
+    }
+
+    fn raise_flows(&mut self, id: FlowVarId, flows: &Flows) -> Raised {
+        let root = self.find_flow_root(id);
+        let FlowBound::Root(held) = &self.flow_vars[root.0 as usize] else {
+            unreachable!("find_flow_root resolves forwards")
+        };
+        let joined = held.join(flows);
+        let raised = match joined == *held {
+            true => Raised::Held,
+            false => Raised::Grew,
+        };
+        self.flow_vars[root.0 as usize] = FlowBound::Root(joined);
+        raised
+    }
+
+    /// Where two function types meet, their flows join by union.
+    fn meet_flows(&mut self, a: &FlowTerm<Infer>, b: &FlowTerm<Infer>) -> Result<(), FixedFlowsDiffer> {
+        match (a, b) {
+            (FlowTerm::Var(x), FlowTerm::Var(y)) => {
+                let (x, y) = (self.find_flow_root(*x), self.find_flow_root(*y));
+                if x == y {
+                    return Ok(());
+                }
+                let from = self.flows_at(x).clone();
+                self.raise_flows(y, &from);
+                self.flow_vars[x.0 as usize] = FlowBound::Forward(y);
+                Ok(())
+            }
+            (FlowTerm::Var(var), FlowTerm::Known(flows))
+            | (FlowTerm::Known(flows), FlowTerm::Var(var)) => {
+                self.raise_flows(*var, flows);
+                Ok(())
+            }
+            (FlowTerm::Known(a), FlowTerm::Known(b)) => match a == b {
+                true => Ok(()),
+                false => Err(FixedFlowsDiffer),
+            },
+        }
+    }
+
+    /// Every function type in `ty` given a flow variable of its own, seeded
+    /// with the flows it states: an instantiated signature meets the types
+    /// at its call, and a fixed term could not take theirs.
+    fn open_flows(&mut self, ty: &mut InferTy) {
+        if let TyTerm::Fn { flows, .. } = ty
+            && let FlowTerm::Known(known) = flows
+        {
+            *flows = FlowTerm::Var(self.alloc_flow_var(known.clone()));
+        }
+        ty.rewrite_children(&mut |child| self.open_flows(child));
     }
 
     // -- Type variables ----------------------------------------------
@@ -380,6 +489,7 @@ impl Terms {
             &mut |id: EffectVarId| self.resolve_effect(&EffectTerm::Var(id)),
             &mut |id: LenVarId| self.resolve_len(&LenTerm::Var(id)),
             &mut |id: ReprVarId| self.resolve_repr(id),
+            &mut |id: FlowVarId| self.resolve_flows(&FlowTerm::Var(id)),
         )
     }
 
@@ -815,6 +925,7 @@ impl Terms {
             &mut |id: EffectVarId| self.resolve_effect(&EffectTerm::Var(id)),
             &mut |id: LenVarId| self.resolve_len(&LenTerm::Var(id)),
             &mut |id: ReprVarId| self.resolve_repr(id),
+            &mut |id: FlowVarId| self.resolve_flows(&FlowTerm::Var(id)),
         )
     }
 
@@ -1156,12 +1267,14 @@ impl Terms {
                     params: pa,
                     ret: ret_a,
                     effect: ea,
+                    flows: fa,
                     ..
                 },
                 TyTerm::Fn {
                     params: pb,
                     ret: ret_b,
                     effect: eb,
+                    flows: fb,
                     ..
                 },
             ) => {
@@ -1174,6 +1287,9 @@ impl Terms {
                 self.join(ret_a, ret_b, Position::Argument, kind, registry)?;
                 if let Err(conflict) = self.unify_effect(ea, eb, EffectRelation::AtMost) {
                     return Err(mismatch_for(self, task_reason(&conflict)));
+                }
+                if self.meet_flows(fa, fb).is_err() {
+                    return Err(mismatch(self));
                 }
                 Ok(())
             }
@@ -1501,10 +1617,15 @@ impl Terms {
                     )
                 },
                 &mut |_: u32| Repr::Uniform,
+                &mut crate::ty::no_flow_var,
             )
         };
-        let instance = instantiate(ty);
-        let beside: Vec<InferTy> = beside.iter().map(|poly| instantiate(poly)).collect();
+        let mut instance = instantiate(ty);
+        let mut beside: Vec<InferTy> = beside.iter().map(|poly| instantiate(poly)).collect();
+        self.open_flows(&mut instance);
+        for poly in &mut beside {
+            self.open_flows(poly);
+        }
         OpenInstance {
             ty: uniform_slots(instance, registry),
             beside: beside
@@ -1647,6 +1768,12 @@ fn alloc_effect_var(effect_vars: &mut Vec<EffectBound>, bound: EffectVarBound) -
     id
 }
 
+fn alloc_flow_var(flow_vars: &mut Vec<FlowBound>, seed: Flows) -> FlowVarId {
+    let id = FlowVarId(flow_vars.len() as u32);
+    flow_vars.push(FlowBound::Root(seed));
+    id
+}
+
 fn alloc_repr_var(repr_vars: &mut Vec<ReprBound>, owner: ReprOwner) -> ReprVarId {
     let id = ReprVarId(repr_vars.len() as u32);
     repr_vars.push(ReprBound::Unbound(owner));
@@ -1723,6 +1850,7 @@ impl ComponentOffer {
             ret: Box::new(ret),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: Flows::Every.into(),
         }
     }
 }
@@ -1832,11 +1960,13 @@ fn called_at(call: InferTy, calls: Task) -> InferTy {
             ret,
             captures,
             effect: EffectTerm::Known(effect),
+            flows,
         } => TyTerm::Fn {
             params,
             ret,
             captures,
             effect: EffectTerm::Known(effect.at_task(calls)),
+            flows,
         },
         other => other,
     }
@@ -2107,12 +2237,13 @@ pub struct CallShape {
 }
 
 impl CallShape {
-    fn at_effect(&self, effect: EffectTerm<Infer>) -> InferTy {
+    fn at_effect(&self, effect: EffectTerm<Infer>, flows: FlowTerm<Infer>) -> InferTy {
         TyTerm::Fn {
             params: self.params.clone(),
             ret: Box::new(self.ret.clone()),
             captures: vec![],
             effect,
+            flows,
         }
     }
 }
@@ -2450,6 +2581,19 @@ pub struct Solver<'src> {
     signatures: &'src FxHashMap<QualifiedRef, Instances>,
 }
 
+/// What `Solver::snapshot` took.
+#[derive(Clone)]
+pub struct SolverSnapshot {
+    terms: Terms,
+    decisions: Vec<DecisionSlot>,
+    begun_by_decisions: Vec<BegunSource>,
+    children: FxHashMap<DecisionId, Vec<RequiredDecision>>,
+    structural: FxHashMap<DecisionId, SettledStructural>,
+    opened_children: Vec<OpenedChild>,
+    instance_bounds: Vec<InstanceBound>,
+    sources: Sources,
+}
+
 impl<'src> Solver<'src> {
     pub fn new(
         sources: &'src mut Sources,
@@ -2472,6 +2616,43 @@ impl<'src> Solver<'src> {
 
     pub fn registry(&self) -> &'src TypeRegistry {
         self.registry
+    }
+
+    /// Everything the solve has recorded, to go back to: a component of
+    /// the call graph is checked again from here when its members' flows
+    /// grew (RFC-0079 rule 5), and the round before leaves nothing behind.
+    pub fn snapshot(&self) -> SolverSnapshot {
+        SolverSnapshot {
+            terms: self.terms.clone(),
+            decisions: self.decisions.clone(),
+            begun_by_decisions: self.begun_by_decisions.clone(),
+            children: self.children.clone(),
+            structural: self.structural.clone(),
+            opened_children: self.opened_children.clone(),
+            instance_bounds: self.instance_bounds.clone(),
+            sources: self.sources.clone(),
+        }
+    }
+
+    pub fn restore(&mut self, snapshot: SolverSnapshot) {
+        let SolverSnapshot {
+            terms,
+            decisions,
+            begun_by_decisions,
+            children,
+            structural,
+            opened_children,
+            instance_bounds,
+            sources,
+        } = snapshot;
+        self.terms = terms;
+        self.decisions = decisions;
+        self.begun_by_decisions = begun_by_decisions;
+        self.children = children;
+        self.structural = structural;
+        self.opened_children = opened_children;
+        self.instance_bounds = instance_bounds;
+        *self.sources = sources;
     }
 
     pub fn trial<F, R>(&self, f: F) -> R
@@ -2554,6 +2735,30 @@ impl<'src> Solver<'src> {
 
     pub fn fresh_effect_var(&mut self) -> EffectTerm<Infer> {
         EffectTerm::Var(self.terms.alloc_effect_var())
+    }
+
+    /// The flows of a function type the checker writes, which the types it
+    /// meets and the body it is inferred from add to.
+    pub fn fresh_flow_var(&mut self) -> FlowTerm<Infer> {
+        FlowTerm::Var(self.terms.alloc_flow_var(Flows::none()))
+    }
+
+    /// What a function type's flows are now.
+    pub fn flows_of(&self, term: &FlowTerm<Infer>) -> Flows {
+        self.terms.freeze_flows(term)
+    }
+
+    /// `flows` joined into the flows `term` names. A known term is a
+    /// declaration's and never grows, so it already covers what it is met
+    /// with; `Err` is a body whose flows it does not cover.
+    pub fn raise_flows(&mut self, term: &FlowTerm<Infer>, flows: &Flows) -> Result<Raised, FixedFlowsDiffer> {
+        match term {
+            FlowTerm::Var(var) => Ok(self.terms.raise_flows(*var, flows)),
+            FlowTerm::Known(known) => match known.covers(flows) {
+                true => Ok(Raised::Held),
+                false => Err(FixedFlowsDiffer),
+            },
+        }
     }
 
     pub fn decide_signature(&mut self, call: UndecidedCall) -> DecisionId {
@@ -3254,8 +3459,9 @@ impl<'src> Solver<'src> {
                         conflict,
                     });
                 }
+                let flows = self.flows_of_instance(&ty);
                 let candidate = only.candidate.clone();
-                match self.settle_join(&call.at_effect(effect), &ty) {
+                match self.settle_join(&call.at_effect(effect, flows), &ty) {
                     Ok(()) => {
                         if let Err(Mismatch { expected, got, .. }) =
                             self.join_unjoined(call, &candidate, awaiting_head)
@@ -3369,6 +3575,13 @@ impl<'src> Solver<'src> {
     /// read. The variable made here is that binding's own: `settle_join`
     /// below gives an unbound instance this very call type, which is how
     /// the binding comes to carry this term.
+    fn flows_of_instance(&mut self, instance: &InferTy) -> FlowTerm<Infer> {
+        match self.terms.shallow_resolve_ty(instance) {
+            TyTerm::Fn { flows, .. } => flows,
+            _ => FlowTerm::Var(self.terms.alloc_flow_var(Flows::none())),
+        }
+    }
+
     fn effect_of_instance(&mut self, instance: &InferTy) -> EffectTerm<Infer> {
         match self.terms.shallow_resolve_ty(instance) {
             TyTerm::Fn { effect, .. } => effect,
@@ -3388,7 +3601,10 @@ impl<'src> Solver<'src> {
     ) -> bool {
         let converted = option.converted.as_slice();
         let mut trial = self.terms.clone();
-        let call_ty = call.at_effect(EffectTerm::Var(trial.alloc_effect_var()));
+        let call_ty = call.at_effect(
+            EffectTerm::Var(trial.alloc_effect_var()),
+            FlowTerm::Var(trial.alloc_flow_var(Flows::none())),
+        );
         let scheme = match &option.candidate {
             SignatureCandidate::Named { scheme, .. } => scheme,
             SignatureCandidate::Local { ty } => {
@@ -4205,6 +4421,7 @@ impl<'src> Solver<'src> {
             &mut |id: EffectVarId| Ok(EffectTerm::Known(self.freeze_effect(&EffectTerm::Var(id)))),
             &mut |id: LenVarId| self.freeze_len(id),
             &mut |id: ReprVarId| self.freeze_repr(id, open),
+            &mut |id: FlowVarId| Ok(FlowTerm::Known(self.terms.freeze_flows(&FlowTerm::Var(id)))),
         )
     }
 
@@ -4261,6 +4478,9 @@ impl<'src> Solver<'src> {
                     },
                     &mut |id: LenVarId| self.freeze_len(id),
                     &mut |id: ReprVarId| self.freeze_repr(id, open),
+                    &mut |id: FlowVarId| {
+                        Ok(FlowTerm::Known(self.terms.freeze_flows(&FlowTerm::Var(id))))
+                    },
                 )
                 .map(Repr::Specialized),
             // A report runs before `solve` has taken the least
@@ -4644,10 +4864,15 @@ impl<'src> Solver<'src> {
                             .or_insert_with(|| alloc_repr_var(repr_vars, ReprOwner::Signature)),
                     ),
                 },
+                &mut crate::ty::no_flow_var,
             )
         };
-        let instance = instantiate(ty);
-        let beside: Vec<InferTy> = beside.iter().map(|poly| instantiate(poly)).collect();
+        let mut instance = instantiate(ty);
+        let mut beside: Vec<InferTy> = beside.iter().map(|poly| instantiate(poly)).collect();
+        self.terms.open_flows(&mut instance);
+        for poly in &mut beside {
+            self.terms.open_flows(poly);
+        }
         let registry = self.registry;
         (
             uniform_slots(instance, registry),
@@ -4716,6 +4941,7 @@ impl<'src> Solver<'src> {
             &mut on_effect,
             &mut on_len,
             &mut on_repr,
+            &mut crate::ty::no_flow_var,
         );
         let mut on_identity_b = |id: u32| {
             *maps
@@ -4729,7 +4955,11 @@ impl<'src> Solver<'src> {
             &mut on_effect,
             &mut on_len,
             &mut on_repr,
+            &mut crate::ty::no_flow_var,
         );
+        let (mut ia, mut ib) = (ia, ib);
+        self.terms.open_flows(&mut ia);
+        self.terms.open_flows(&mut ib);
         (
             uniform_slots(ia, self.registry),
             uniform_slots(ib, self.registry),
@@ -4802,6 +5032,9 @@ impl<'src> Solver<'src> {
                         .or_insert_with(|| alloc_repr_var(repr_vars, owner)),
                 )
             },
+            // A use of a let-bound function type calls the one body the
+            // binding holds, so it keeps that body's flows.
+            &mut |root: FlowVarId| FlowTerm::Var(root),
         )
     }
 }
@@ -4848,6 +5081,7 @@ fn identity_vars_bound_by_params(ty: &PolyTy) -> FxHashSet<u32> {
                 &mut |v: u32| EffectTerm::<Poly>::Var(v),
                 &mut |v: u32| LenTerm::<Poly>::Var(v),
                 &mut |v: u32| Repr::<Poly>::Var(v),
+                &mut crate::ty::no_flow_var::<Poly>,
             );
         }
     }
@@ -5038,7 +5272,9 @@ fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
             ret,
             captures,
             effect,
+            flows,
         } => TyTerm::Fn {
+            flows,
             params: params
                 .into_iter()
                 .map(|p| {
@@ -5161,6 +5397,7 @@ mod requirement_tests {
             ret: Box::new(ret),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: crate::ty::Flows::Every.into(),
         }
     }
 
@@ -5275,6 +5512,9 @@ mod requirement_tests {
             panic!("the requirement reaches no instance: {unsettled:?}")
         };
         assert_eq!(*required, Some(inner));
-        assert_eq!(*call, signature_of(name, TyTerm::I64, TyTerm::I64));
+        assert_eq!(
+            solver.freeze_ty(call).expect("the call type is closed"),
+            signature_of(name, TyTerm::I64, TyTerm::I64)
+        );
     }
 }

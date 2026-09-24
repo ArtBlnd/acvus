@@ -36,6 +36,7 @@ fn io_extern(i: &Interner, name: &str, params: &[(&str, Ty)], ret: Ty) -> Functi
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

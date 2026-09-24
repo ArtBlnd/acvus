@@ -22,6 +22,7 @@ fn extern_fn(i: &Interner, name: &str, effect: Effect) -> Function {
             ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: effect.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -38,6 +39,7 @@ fn local_fn(i: &Interner, name: &str, source: &str) -> Function {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

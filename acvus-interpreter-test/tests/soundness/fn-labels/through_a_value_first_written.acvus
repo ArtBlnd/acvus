@@ -1,0 +1,3 @@
+// refuse
+// The same call through a function value, its first lender written while the result is live.
+let v = [7, 8]; let w = [9]; let f = |r, s| -> r; let g = f; let x = g(&v, &w); v = [1, 2]; len(x)

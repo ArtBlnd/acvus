@@ -18,8 +18,8 @@ use crate::graph::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
 use crate::ty::{
-    Concrete, Effect, EffectArg, EffectTerm, FieldSet, HeldTy, IdentityId, IdentityTerm, IntTy,
-    LenTerm, ObjectTy, Reissue, Task, Ty, TypeArg,
+    Concrete, Effect, EffectArg, EffectTerm, FieldSet, Flows, HeldTy, IdentityId, IdentityTerm,
+    IntTy, LenTerm, ObjectTy, Reissue, Task, Ty, TypeArg,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -272,6 +272,10 @@ pub enum SerTy {
         params: Vec<SerParam>,
         ret: Box<SerTy>,
         effect: SerEffect,
+        /// A type serialized before function types carried flows reads as
+        /// stating none, which is the union (RFC-0079 rule 5).
+        #[serde(default)]
+        flows: Flows,
     },
     UserDefined {
         id: SerQualifiedRef,
@@ -334,8 +338,10 @@ impl Ty {
                 params,
                 ret,
                 effect,
+                flows,
                 ..
             } => SerTy::Fn {
+                flows: flows.get().clone(),
                 params: params
                     .iter()
                     .map(|p| SerParam {
@@ -431,7 +437,9 @@ impl SerTy {
                 params,
                 ret,
                 effect,
+                flows,
             } => Ty::Fn {
+                flows: flows.clone().into(),
                 params: params
                     .iter()
                     .map(|p| crate::ty::Param::new(interner.intern("_"), p.ty.to_ty(interner)))
@@ -500,6 +508,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: Effect::IDEMPOTENT.into(),
+            flows: crate::ty::Flows::Every.into(),
         };
         assert_eq!(
             fn_ty.to_ser(&i).to_ty(&i).effect(),

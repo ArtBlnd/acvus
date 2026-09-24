@@ -1580,6 +1580,7 @@ impl<'a> Lowerer<'a> {
             main: self.body,
             closures: self.closures,
             ret: self.ret,
+            flows: self.resolution.flows.clone(),
         }
     }
 

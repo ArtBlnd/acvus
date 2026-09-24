@@ -60,6 +60,7 @@ fn script_reading_int_x(interner: &Interner, name: &str) -> Document {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -74,6 +75,7 @@ fn document(interner: &Interner, name: &str, mode: Mode) -> Document {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

@@ -181,6 +181,19 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                     .unwrap_or_else(|| "a local".to_string());
                 write!(f, "a reference to {named} cannot leave the body")
             }
+            ValidationErrorKind::FlowNotStated { to, from } => {
+                let end = |end: &crate::ty::FlowEnd| match end {
+                    crate::ty::FlowEnd::Result => "the result".to_string(),
+                    crate::ty::FlowEnd::Param(index) => format!("parameter {index}"),
+                    crate::ty::FlowEnd::Captures => "what the lambda captured".to_string(),
+                };
+                write!(
+                    f,
+                    "{} takes a loan of {}, which the function's type does not state",
+                    end(to),
+                    end(from)
+                )
+            }
             ValidationErrorKind::NotAParameter { value_id } => write!(
                 f,
                 "Val({value_id}) is named as a parameter's storage and is not a parameter of the body"

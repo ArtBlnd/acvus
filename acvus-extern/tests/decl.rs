@@ -1740,6 +1740,7 @@ fn a_closure_type_is_its_parameter_tuple_in_order() {
             ret: Box::new(<String as TyArg>::poly_ty(&i, &vars)),
             captures: vec![],
             effect: <Pure as acvus_extern::Term<kind::Effect>>::poly(&vars),
+            flows: acvus_extern::Flows::Every.into(),
         }
     );
 
@@ -1750,6 +1751,7 @@ fn a_closure_type_is_its_parameter_tuple_in_order() {
             ret: Box::new(<i64 as TyArg>::poly_ty(&i, &vars)),
             captures: vec![],
             effect: <Pure as acvus_extern::Term<kind::Effect>>::poly(&vars),
+            flows: acvus_extern::Flows::Every.into(),
         }
     );
 }
@@ -1972,6 +1974,7 @@ fn call_type(
         ret: Box::new(ret),
         captures: vec![],
         effect: EffectTerm::Known(Effect::PURE),
+        flows: acvus_extern::Flows::Every.into(),
     }
 }
 
@@ -2687,6 +2690,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                         ret: Box::new(PolyTy::I64),
                         captures: Vec::new(),
                         effect: EffectTerm::Known(Effect::PURE),
+                        flows: acvus_extern::Flows::Every.into(),
                     },
                     bounds: Vec::new(),
                     effect_bounds: vec![],

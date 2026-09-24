@@ -91,6 +91,7 @@ fn reissue_of(source: &str) -> Reissue {
             ret: Box::new(lift_declaration(&Ty::String, &mut pb)),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }];
     functions.extend(extern_fns);

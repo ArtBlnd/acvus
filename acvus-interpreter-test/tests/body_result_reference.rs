@@ -184,3 +184,92 @@ fn a_result_borrowing_a_local_is_refused_at_the_local() {
         "{refused}"
     );
 }
+
+// -- A named function in a cycle of the call graph (RFC-0079 rule 5) ------
+
+fn lends_and_stops(i: &Interner, names: &[&str]) -> Vec<PolyParam> {
+    let lent = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(numbers())));
+    names
+        .iter()
+        .map(|name| ParamTerm::<Poly>::new(i.intern(name), lift_to_poly(&lent)))
+        .chain([ParamTerm::<Poly>::new(
+            i.intern("stop"),
+            lift_to_poly(&Ty::Bool),
+        )])
+        .collect()
+}
+
+/// A body whose result is its parameter's element in one arm and its own
+/// recursive call in the other.
+fn deep(i: &Interner) -> Helper<'_> {
+    Helper {
+        name: "deep",
+        source: "if $stop { &$xs[0] } else { deep(&$xs, true) }\n",
+        params: lends_and_stops(i, &["xs"]),
+    }
+}
+
+/// A body that passes both parameters to itself and returns only the
+/// first's element: the least fixpoint of its flows names `a` alone.
+fn keep_first(i: &Interner) -> Helper<'_> {
+    Helper {
+        name: "keep",
+        source: "if $stop { &$a[0] } else { keep(&$a, &$b, true) }\n",
+        params: lends_and_stops(i, &["a", "b"]),
+    }
+}
+
+#[test]
+fn a_recursive_result_borrowing_its_parameter_runs() {
+    let i = Interner::new();
+    let value = integer_at_both_levels(&i, deep, "let v = [10, 20, 30];\n*deep(&v, false) + 1\n");
+    assert_eq!(value, 11);
+}
+
+#[test]
+fn a_recursive_result_holds_its_lender() {
+    let i = Interner::new();
+    let refused = refusal(
+        &i,
+        deep(&i),
+        "let v = [10, 20, 30];\nlet r = deep(&v, false);\nv = [4, 5, 6];\n*r\n",
+    );
+    assert!(
+        refused.contains("`v` is written here while a reference to it is live"),
+        "{refused}"
+    );
+}
+
+/// The flows start at none and climb through the recursive call, so the
+/// argument the recursion only passes along is not among them: the second
+/// lender is free once the call returns.
+#[test]
+fn a_recursive_call_passing_a_parameter_along_leaves_its_lender_free() {
+    let i = Interner::new();
+    let value = integer_at_both_levels(
+        &i,
+        keep_first,
+        "let v = [10, 20, 30];\nlet w = [1, 2, 3];\nlet r = keep(&v, &w, false);\n\
+         w = [4, 5, 6];\n*r + w[0]\n",
+    );
+    assert_eq!(value, 14);
+}
+
+#[test]
+fn a_recursive_result_that_could_hold_a_local_is_refused() {
+    let i = Interner::new();
+    let refused = refusal(
+        &i,
+        Helper {
+            name: "deep",
+            source: "let l = [$xs[0], $xs[1], $xs[2]];\n\
+                     if $stop { &l[0] } else { deep(&$xs, true) }\n",
+            params: lends_and_stops(&i, &["xs"]),
+        },
+        "let v = [10, 20, 30];\n*deep(&v, false)\n",
+    );
+    assert!(
+        refused.contains("a reference to `l` cannot leave the body"),
+        "{refused}"
+    );
+}

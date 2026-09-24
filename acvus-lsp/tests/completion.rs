@@ -58,6 +58,7 @@ fn document(interner: &Interner, name: &str, mode: Mode, params: Vec<PolyParam>)
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -327,6 +328,7 @@ fn half(interner: &Interner) -> Function {
             ret: Box::new(t),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

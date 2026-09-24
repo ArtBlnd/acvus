@@ -99,6 +99,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
             ret: Box::new(iter_poly(&i, pb.fresh_identity_var())),
             captures: vec![],
             effect: acvus_mir::ty::Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let mut pb = PolyBuilder::new();
@@ -119,6 +120,7 @@ fn a_source_returned_across_sccs_stays_distinct_from_new_ones() {
             ret: Box::new(TyTerm::I64),
             captures: vec![],
             effect: acvus_mir::ty::Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let get = inferred_function(

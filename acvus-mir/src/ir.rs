@@ -1074,4 +1074,8 @@ pub struct MirModule {
     /// The `ret` of the graph `Function` this module is the body of; for the
     /// entry, what the host declared (RFC-0054).
     pub ret: Ty,
+    /// What `main` joins into its outputs, as the checker inferred it from
+    /// the body (RFC-0079 rule 5); a closure's are on the function type of
+    /// the `MakeClosure` that makes it.
+    pub flows: crate::ty::Flows,
 }

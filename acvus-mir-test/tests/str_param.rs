@@ -21,6 +21,7 @@ fn takes_str(i: &Interner, name: &str) -> Function {
         ret: Box::new(lift_to_poly(&Ty::U64)),
         captures: vec![],
         effect: EffectTerm::<Poly>::Known(Effect::PURE),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     Function {
         qref: QualifiedRef::root(i.intern(name)),

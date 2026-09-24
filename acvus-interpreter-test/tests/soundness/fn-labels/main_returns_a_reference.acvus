@@ -1,0 +1,3 @@
+// refuse
+// The host reads main's result after the run: it holds no loan (RFC-0079 rule 9).
+let x = [1]; &x

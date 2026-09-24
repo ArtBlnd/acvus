@@ -4,7 +4,7 @@
 use acvus_mir::analysis::affine::AffineValues;
 use acvus_mir::analysis::carried::CarriedState;
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loans::{Loans, Summaries};
+use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loops::{
     Invariants, LoopNest, for_headers, natural_loops_innermost_first,
 };
@@ -218,7 +218,7 @@ fn iterations_run_apart_when_nothing_crosses_the_latch() {
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
         let loop_ = nest.get(nest.by_header(header).expect("the header heads a loop"));
         let affine = AffineValues::of(&cfg, loop_, &invariants);
-        let loans = Loans::build(&cfg, Summaries::NONE);
+        let loans = Loans::build(&cfg);
         let state = CarriedState::of(&cfg, loop_, &affine, &loans, &lowered.laws);
         assert_eq!(state.runs_apart(), apart, "{source}");
     }

@@ -24,6 +24,7 @@ fn commutative_io(i: &Interner, name: &str) -> Function {
             captures: vec![],
             effect: Effect::with_contexts(Reissue::Opaque, true, BTreeSet::new(), BTreeSet::new())
                 .into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -65,6 +66,7 @@ fn a_chain_of_calls_is_one_line() {
             ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let ir = compile_script_ir_with(
@@ -98,6 +100,7 @@ fn anyorder_in_a_script_merges_its_calls() {
             ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let ir = compile_script_ir_with(

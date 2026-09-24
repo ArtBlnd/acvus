@@ -233,6 +233,7 @@ where
             ret: Box::new(lift_declaration(&ret, &mut pb)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     });
 
@@ -254,6 +255,7 @@ where
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
                 effect: acvus_mir::ty::Effect::OPAQUE.into(),
+                flows: acvus_mir::ty::Flows::Every.into(),
             },
         });
     }

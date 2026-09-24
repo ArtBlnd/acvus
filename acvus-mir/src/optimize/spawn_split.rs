@@ -132,6 +132,7 @@ mod tests {
                 captures: vec![],
 
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         );
 
@@ -202,6 +203,7 @@ mod tests {
                 captures: vec![],
 
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         );
 
@@ -230,6 +232,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: effect.into(),
+            flows: crate::ty::Flows::Every.into(),
         }
     }
 
@@ -321,6 +324,7 @@ mod tests {
                     captures: vec![],
 
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             );
         }

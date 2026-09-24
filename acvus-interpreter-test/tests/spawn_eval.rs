@@ -91,6 +91,7 @@ async fn spawn_eval_basic() {
             },
             closures: FxHashMap::default(),
             ret: Ty::I64,
+            flows: acvus_mir::ty::Flows::Every,
         }
     };
 
@@ -140,6 +141,7 @@ async fn spawn_eval_basic() {
             },
             closures: FxHashMap::default(),
             ret: Ty::I64,
+            flows: acvus_mir::ty::Flows::Every,
         }
     };
 
@@ -215,6 +217,7 @@ async fn spawn_eval_multi_args() {
             },
             closures: FxHashMap::default(),
             ret: Ty::I64,
+            flows: acvus_mir::ty::Flows::Every,
         }
     };
 
@@ -269,6 +272,7 @@ async fn spawn_eval_multi_args() {
             },
             closures: FxHashMap::default(),
             ret: Ty::I64,
+            flows: acvus_mir::ty::Flows::Every,
         }
     };
 

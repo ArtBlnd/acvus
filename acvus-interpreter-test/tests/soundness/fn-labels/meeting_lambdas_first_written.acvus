@@ -1,0 +1,3 @@
+// refuse
+// Two lambdas met in one if: the lender only f returns is held.
+let v = [7, 8]; let w = [9, 10]; let c = len(&v) > 1; let f = |a, b| -> a; let g = |a, b| -> b; let h = if c { f } else { g }; let x = h(&v, &w); v = [1, 2]; len(x)

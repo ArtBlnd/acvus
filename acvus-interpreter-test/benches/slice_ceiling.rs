@@ -490,6 +490,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
         main: body_of(&interner, shape),
         closures: FxHashMap::default(),
         ret: Ty::Float,
+        flows: acvus_mir::ty::Flows::Every,
     };
     let mut prepared = prepare_module(
         &module,

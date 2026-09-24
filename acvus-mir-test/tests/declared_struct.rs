@@ -38,6 +38,7 @@ fn extern_fn(
             ret: Box::new(ret),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

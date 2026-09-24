@@ -230,22 +230,30 @@ Status: Proposed
    storage `m`'s loans name, so a write never shrinks a region there. An
    assign of a whole local slot replaces its positions: nothing names the
    slot while it is assigned (RFC-0029).
-5. **A function type labels its positions.** Each parameter and result
-   position carries a label: a region the signature names, or the k-th
-   position of a type variable, `(T, k)`. The *outputs* are the result's
-   positions, the positions a `&mut` parameter points at, and the parameter
-   positions of a function-typed parameter, which the callee may pass
-   values into; the inputs are every parameter position, a `&mut` pointee's
-   included, since a write joins (rule 4), and a function-typed parameter's
-   result positions. At a call each output position becomes the join of the
-   input positions that share its label. A value of type `T` is opaque to
-   the callee, so its k-th position reaches only a k-th position of `T`. A
-   lambda's labels are inferred by the type checker from its body; a named
-   function's are a label variable per member of its call-graph component,
-   solved to the least fixpoint as its effect is (RFC-0064). Where two
-   function types meet, their labels join by union. A call through a value
-   of function type reads the labels from that type, as a direct call
-   does.
+5. **A function type states its flows.** A flow joins an *output* of a
+   call from an *input*. The outputs are the result, what a parameter's
+   `&mut` positions and captures name, which the callee may write into, a
+   closure parameter's captures among them, and what the callee's own
+   captures name mutably; the inputs are each argument, its references
+   read from the storage they name at the call, and the callee's captures,
+   its one position. A flow is `Aligned`, position `k` from position `k`,
+   or `Any`, every position from every position; an `Aligned` flow between
+   two ends of a type variable `T` is the label `(T, k)`, so a value of `T`
+   is opaque to the callee. At a call each output becomes the join of the
+   inputs its flows name. A lambda's flows are inferred by the type checker
+   from its body once the body's types are solved; until then a function
+   type carries a flow variable, and where two function types meet their
+   variables become one carrying the union of both. A named function's
+   flows are a variable per member of its call-graph component: the
+   component is checked again from the same solver state while a member's
+   flows grow, which climbs from none to the least fixpoint, since a body's
+   flows only grow with what its calls read and are a finite set. A
+   function-typed parameter's flows are read off its type where the body
+   calls it, so the body's own flows compose them. Writes are inferred as
+   the union, every input into every output the callee may write: a call's
+   precision is spent on its result. A call through a value of function
+   type reads the flows from that type, as a direct call does; an extern's
+   are the union until rule 6 reads them.
 6. **An extern's labels are its Rust signature.** `#[extern_fn]` and
    `#[derive(ExternType)]` take lifetime parameters. A position written
    with `'a` is labelled `'a`, an elided lifetime is labelled by Rust's
@@ -270,10 +278,15 @@ Status: Proposed
    its values at the call's brand, as a carrier, so Rust refuses keeping
    them past the call. Where the brand cannot be carried, a lent variable
    is asserted not kept with `unsafe` (RFC-0080).
-9. **A value crossing out of the body holds no loan.** A body's result to
-   the host, a context write and a spawn's argument are refused where any
-   of their positions may hold a loan; a lambda or named function's result
-   holds only `Param` loans (RFC-0064 rule 5).
+9. **A value crossing out of the body holds no loan.** A body's result
+   to the host, a context write and a spawn's argument are refused where
+   any of their positions may hold a loan. A lambda's or named function's
+   outputs, its result and what it writes through a parameter or a
+   capture, hold only loans on its inputs that its flows name (rule 5); a
+   loan on the body's own storage there is refused, a by-value
+   parameter's slot included. Its result's type may hold a reference
+   anywhere, and a view stays refused where one value is read and inside
+   data (RFC-0047 rule 6).
 10. **The check is RFC-0064's.** A loan in any position of a live value is
     held; invalidating it is a conflict. An option, result or enum payload
     holds a reference or a lambda that holds one, since its positions are
@@ -293,7 +306,9 @@ rule; a write through an extern's `&mut` (`push_back(&mut d, &s)`) is an
 output like a result. Loans stay sets joined by union, so no outlives
 constraint is solved.
 **Cost.** Every value's region becomes a vector; a function type carries
-its labels, and meeting two function types joins them. A container extern
+its flows, meeting two function types joins them, and a component of the
+call graph that calls itself is checked once more per round its flows
+grow. A container extern
 declares its type variables lent. Extern authors write
 lifetimes where a result borrows from more than one parameter, and an
 extension that holds a carrier declares a region parameter.

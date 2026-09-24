@@ -121,6 +121,7 @@ async fn run_with(
         main: body,
         closures: FxHashMap::default(),
         ret,
+        flows: acvus_mir::ty::Flows::Every,
     };
     let prepared = prepare_module(
         &module,
@@ -540,6 +541,7 @@ fn refusals(body: MirBody, ret: Ty) -> Vec<ValidationErrorKind> {
         main: body,
         closures: FxHashMap::default(),
         ret,
+        flows: acvus_mir::ty::Flows::Every,
     };
     validate(&module).into_iter().map(|e| e.kind).collect()
 }

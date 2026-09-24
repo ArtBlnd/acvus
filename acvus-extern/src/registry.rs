@@ -173,6 +173,7 @@ where
         ret: Box::new(to),
         captures: vec![],
         effect: EffectTerm::Known(Effect::PURE),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     let cast = |name: &str, generic: PolyTy, instance: PolyTy, handler| ExternFn {
         decl: FnDecl {
@@ -303,6 +304,7 @@ where
                 ret: Box::new(written.patterns.uniform),
                 captures: vec![],
                 effect: written.effect,
+                flows: acvus_mir::ty::Flows::Every.into(),
             },
             bounds: vec![TyVarBound::Any; written.patterns.ty_vars],
             effect_bounds: vec![],

@@ -43,6 +43,7 @@ pub(crate) fn make_graph(
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             },
             to_string(interner),
@@ -80,6 +81,7 @@ fn to_string(interner: &Interner) -> Function {
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
             effect: crate::ty::Effect::PURE.into(),
+            flows: crate::ty::Flows::Every.into(),
         },
     }
 }

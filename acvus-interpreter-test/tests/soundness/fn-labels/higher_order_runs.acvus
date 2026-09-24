@@ -1,0 +1,3 @@
+// expect 2
+// The higher-order call without the write.
+let v = [7, 8]; let h = |k, r| -> k(r); let id = |x| -> x; let x = h(id, &v); len(x)

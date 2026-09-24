@@ -10,8 +10,8 @@ use acvus_utils::{Astr, Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ty::{
-    EffectTerm, Infer, InferTy, MachineCoercion, Param, ParamTerm, PolyTy, Scheme, Solver, Sources,
-    Ty, TyTerm, TyVarBound, TypeRegistry, lift_to_poly, lift_ty,
+    EffectTerm, Flows, Infer, InferTy, MachineCoercion, Param, ParamTerm, PolyTy, Scheme, Solver,
+    Sources, Ty, TyTerm, TyVarBound, TypeRegistry, lift_to_poly, lift_ty,
 };
 
 use super::extract::{ExtractResult, ParsedSource};
@@ -139,19 +139,51 @@ impl InferResult {
 
 /// Extract call edges for a single function from its parsed AST.
 /// Returns the list of QualifiedRefs that this function references.
-pub fn extract_call_edges(
-    parsed: &ParsedSource,
-    name_to_fn: &FxHashMap<Astr, QualifiedRef>,
-    self_id: QualifiedRef,
-) -> Vec<QualifiedRef> {
-    let names: Vec<Astr> = match parsed {
+fn value_refs(parsed: &ParsedSource) -> Vec<Astr> {
+    match parsed {
         ParsedSource::Script(script) => collect_value_refs_script(script),
         ParsedSource::Template(template) => collect_value_refs_template(template),
         ParsedSource::Recovered(RecoveredAst::Script(script)) => collect_value_refs_script(script),
         ParsedSource::Recovered(RecoveredAst::Template(template)) => {
             collect_value_refs_template(template)
         }
-    };
+    }
+}
+
+/// Whether a component's members name one another: more than one member,
+/// or one whose body names itself, which the call graph's edges leave out.
+fn is_cyclic(scc: &[QualifiedRef], parsed: &FxHashMap<QualifiedRef, &ParsedSource>) -> bool {
+    match scc {
+        [only] => parsed
+            .get(only)
+            .is_some_and(|body| value_refs(body).contains(&only.name)),
+        _ => true,
+    }
+}
+
+/// Each member's flows joined with what its body was checked to join.
+fn grown_flows(
+    scc: &[QualifiedRef],
+    stated: &FxHashMap<QualifiedRef, Flows>,
+    checked: &FxHashMap<QualifiedRef, Checked>,
+) -> FxHashMap<QualifiedRef, Flows> {
+    scc.iter()
+        .map(|fid| {
+            let joined = match checked.get(fid).map(|checked| &checked.resolution) {
+                Some(Ok(resolution)) => stated[fid].join(&resolution.flows),
+                Some(Err(_)) | None => stated[fid].clone(),
+            };
+            (*fid, joined)
+        })
+        .collect()
+}
+
+pub fn extract_call_edges(
+    parsed: &ParsedSource,
+    name_to_fn: &FxHashMap<Astr, QualifiedRef>,
+    self_id: QualifiedRef,
+) -> Vec<QualifiedRef> {
+    let names: Vec<Astr> = value_refs(parsed);
     let mut callees = Vec::new();
     for name in names {
         if let Some(&callee_id) = name_to_fn.get(&name)
@@ -739,118 +771,138 @@ pub fn infer_scc(
     let mut fn_checked: FxHashMap<QualifiedRef, Checked> = FxHashMap::default();
     let mut probed: Option<ProbeProduct> = None;
 
-    // Build PolyTy::Fn templates for functions in this SCC.
-    // Solver ret vars are kept separately for unification.
-    let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
-
-    for &fid in scc {
-        let func = fn_by_id[&fid];
-
-        // Destructure func.ty - must be Fn for local functions.
-        let TyTerm::Fn {
-            params: ref fn_params,
-            ret: ref fn_ret,
-            effect: ref fn_effect,
-            ..
-        } = func.ty
-        else {
-            unreachable!("local function ty must be Fn");
-        };
-
-        // Solver vars for unification (InferTy).
-        let ret_var: InferTy = solver.instantiate_poly(fn_ret);
-        fn_ret_vars.insert(fid, ret_var.clone());
-        let effect_var = solver.fresh_effect_var();
-        fn_effect_vars.insert(fid, effect_var);
-        fn_declared_params.insert(fid, instantiate_params(&mut solver, fn_params));
-
-        let fn_ty: PolyTy = TyTerm::Fn {
-            params: fn_params.clone(),
-            ret: fn_ret.clone(),
-            captures: vec![],
-            effect: fn_effect.clone(),
-        };
-        scc_fn_types.insert(func.qref, fn_ty);
-    }
-
-    let machine_signatures = machine_signatures(registry, resolved_fn_types, declared);
-    let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
+    // As in `infer`: a component whose members name one another is
+    // checked again while a member's flows grow.
+    let parsed: FxHashMap<QualifiedRef, &ParsedSource> = scc
         .iter()
-        .filter(|(qref, _)| registry.machine_view(**qref).is_none())
-        .map(|(&k, v)| (k, declared_scheme(&declared, k, v.clone())))
+        .filter_map(|fid| Some((*fid, *extract_parsed.get(fid)?)))
         .collect();
-    env_functions.extend(
-        scc_fn_types
-            .into_iter()
-            .map(|(k, v)| (k, Scheme::unbounded(v))),
-    );
+    let before = is_cyclic(scc, &parsed).then(|| solver.snapshot());
+    let mut member_flows: FxHashMap<QualifiedRef, Flows> =
+        scc.iter().map(|fid| (*fid, Flows::none())).collect();
+    loop {
+        // Build PolyTy::Fn templates for functions in this SCC.
+        // Solver ret vars are kept separately for unification.
+        let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
 
-    // Typecheck each function in this SCC.
-    for &fid in scc {
-        let func = fn_by_id[&fid];
-        let Some(parsed) = extract_parsed.get(&fid) else {
-            continue;
-        };
+        for &fid in scc {
+            let func = fn_by_id[&fid];
 
-        let env = crate::ty::TypeEnv {
-            contexts: known_ctx_infer.clone(),
-            functions: env_functions.clone(),
-            machine: machine_signatures.clone(),
-        };
+            // Destructure func.ty - must be Fn for local functions.
+            let TyTerm::Fn {
+                params: ref fn_params,
+                ret: ref fn_ret,
+                effect: ref fn_effect,
+                ..
+            } = func.ty
+            else {
+                unreachable!("local function ty must be Fn");
+            };
 
-        let TyTerm::Fn {
-            ret: ref fn_ret, ..
-        } = func.ty
-        else {
-            unreachable!("local function ty must be Fn");
-        };
+            // Solver vars for unification (InferTy).
+            let ret_var: InferTy = solver.instantiate_poly(fn_ret);
+            fn_ret_vars.insert(fid, ret_var.clone());
+            let effect_var = solver.fresh_effect_var();
+            fn_effect_vars.insert(fid, effect_var);
+            fn_declared_params.insert(fid, instantiate_params(&mut solver, fn_params));
 
-        let expected_tail_ty: Option<Ty> = {
-            let infer = solver.instantiate_poly(fn_ret);
-            solver.freeze_ty(&infer).ok()
-        };
-        let mut checked = BodyCheck {
-            interner,
-            env: &env,
-            declared_params: fn_declared_params[&fid].clone(),
-            bound_inputs: bound_inputs(bindings),
-            effect: fn_effect_vars[&fid].clone(),
-            probe: probe
-                .filter(|probe| probe.body == fid)
-                .map(|probe| probe.marker),
-            expected_tail: expected_tail_ty.as_ref(),
-            crossing: crossing_of(entry, fid),
+            let fn_ty: PolyTy = TyTerm::Fn {
+                params: fn_params.clone(),
+                ret: fn_ret.clone(),
+                captures: vec![],
+                effect: fn_effect.clone(),
+                flows: member_flows[&fid].clone().into(),
+            };
+            scc_fn_types.insert(func.qref, fn_ty);
         }
-        .check(&mut solver, parsed);
 
-        if let Ok(unchecked) = &checked.resolution {
-            // Unify ret var with tail ty (for inferred return types).
-            if expected_tail_ty.is_none() {
-                if let Some(ret_var) = fn_ret_vars.get(&fid) {
-                    let tail_infer = lift_ty(&unchecked.tail_ty);
-                    let _ = solver.unify(ret_var, &tail_infer);
-                }
+        let machine_signatures = machine_signatures(registry, resolved_fn_types, declared);
+        let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
+            .iter()
+            .filter(|(qref, _)| registry.machine_view(**qref).is_none())
+            .map(|(&k, v)| (k, declared_scheme(&declared, k, v.clone())))
+            .collect();
+        env_functions.extend(
+            scc_fn_types
+                .into_iter()
+                .map(|(k, v)| (k, Scheme::unbounded(v))),
+        );
+
+        // Typecheck each function in this SCC.
+        for &fid in scc {
+            let func = fn_by_id[&fid];
+            let Some(parsed) = extract_parsed.get(&fid) else {
+                continue;
+            };
+
+            let env = crate::ty::TypeEnv {
+                contexts: known_ctx_infer.clone(),
+                functions: env_functions.clone(),
+                machine: machine_signatures.clone(),
+            };
+
+            let TyTerm::Fn {
+                ret: ref fn_ret, ..
+            } = func.ty
+            else {
+                unreachable!("local function ty must be Fn");
+            };
+
+            let expected_tail_ty: Option<Ty> = {
+                let infer = solver.instantiate_poly(fn_ret);
+                solver.freeze_ty(&infer).ok()
+            };
+            let mut checked = BodyCheck {
+                interner,
+                env: &env,
+                declared_params: fn_declared_params[&fid].clone(),
+                bound_inputs: bound_inputs(bindings),
+                effect: fn_effect_vars[&fid].clone(),
+                probe: probe
+                    .filter(|probe| probe.body == fid)
+                    .map(|probe| probe.marker),
+                expected_tail: expected_tail_ty.as_ref(),
+                crossing: crossing_of(entry, fid),
             }
-            let closed = EffectTerm::Known(unchecked.effect.clone());
-            solver
-                .unify_effect(
-                    &fn_effect_vars[&fid],
-                    &closed,
-                    crate::solver::EffectRelation::Equal,
-                )
-                .expect("the closed effect is the variable's own lower bound");
+            .check(&mut solver, parsed);
 
-            let bind: Vec<Param> = unchecked
-                .extern_params
-                .iter()
-                .map(|(name, ty)| Param::new(*name, ty.clone()))
-                .collect();
-            fn_bind_params.insert(fid, bind);
+            if let Ok(unchecked) = &checked.resolution {
+                // Unify ret var with tail ty (for inferred return types).
+                if expected_tail_ty.is_none() {
+                    if let Some(ret_var) = fn_ret_vars.get(&fid) {
+                        let tail_infer = lift_ty(&unchecked.tail_ty);
+                        let _ = solver.unify(ret_var, &tail_infer);
+                    }
+                }
+                let closed = EffectTerm::Known(unchecked.effect.clone());
+                solver
+                    .unify_effect(
+                        &fn_effect_vars[&fid],
+                        &closed,
+                        crate::solver::EffectRelation::Equal,
+                    )
+                    .expect("the closed effect is the variable's own lower bound");
+
+                let bind: Vec<Param> = unchecked
+                    .extern_params
+                    .iter()
+                    .map(|(name, ty)| Param::new(*name, ty.clone()))
+                    .collect();
+                fn_bind_params.insert(fid, bind);
+            }
+            if let Some(product) = checked.probe.take() {
+                probed = Some(product);
+            }
+            fn_checked.insert(fid, checked);
         }
-        if let Some(product) = checked.probe.take() {
-            probed = Some(product);
+
+        let grown = grown_flows(scc, &member_flows, &fn_checked);
+        let settled = grown == member_flows;
+        member_flows = grown;
+        match &before {
+            Some(before) if !settled => solver.restore(before.clone()),
+            Some(_) | None => break,
         }
-        fn_checked.insert(fid, checked);
     }
 
     // Resolve all functions in this SCC - freeze InferTy -> Ty at the boundary.
@@ -875,6 +927,7 @@ pub fn infer_scc(
             ret: Box::new(ret),
             captures: vec![],
             effect,
+            flows: member_flows[&fid].clone().into(),
         };
         resolved_types.insert(func.qref, fn_ty.clone());
         let meta = FunctionMeta {
@@ -978,122 +1031,148 @@ pub fn infer(
     // -- STEP 2: Typecheck + resolve per SCC -------------------------
 
     for scc in &sccs {
-        // 2a. Build PolyTy::Fn templates for SCC members.
-        // Solver ret vars are kept separately for unification.
-        let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
+        // A component whose members call one another states each member's
+        // flows at the calls between them, so it is checked again from the
+        // same solver state while a member's flows grow: the least
+        // fixpoint RFC-0079 rule 5 names. A member's flows are what its
+        // body joins, which only grows with what its calls read, so the
+        // rounds climb from none and stop.
+        let parsed: FxHashMap<QualifiedRef, &ParsedSource> = scc
+            .iter()
+            .filter_map(|fid| Some((*fid, extract.parsed.get(fid)?)))
+            .collect();
+        let cyclic = is_cyclic(scc, &parsed);
+        let before = cyclic.then(|| solver.snapshot());
+        let mut member_flows: FxHashMap<QualifiedRef, Flows> =
+            scc.iter().map(|fid| (*fid, Flows::none())).collect();
         let mut scc_ret_vars: FxHashMap<QualifiedRef, InferTy> = FxHashMap::default();
         let mut scc_effect_vars: FxHashMap<QualifiedRef, EffectTerm<Infer>> = FxHashMap::default();
         let mut scc_declared_params: FxHashMap<QualifiedRef, Vec<ParamTerm<Infer>>> =
             FxHashMap::default();
+        loop {
+            // 2a. Build PolyTy::Fn templates for SCC members.
+            // Solver ret vars are kept separately for unification.
+            let mut scc_fn_types: FxHashMap<QualifiedRef, PolyTy> = FxHashMap::default();
 
-        for &fid in scc {
-            let func = fn_by_id[&fid];
+            for &fid in scc {
+                let func = fn_by_id[&fid];
 
-            // Destructure func.ty - must be Fn for local functions.
-            let TyTerm::Fn {
-                params: ref fn_params,
-                ret: ref fn_ret,
-                effect: ref fn_effect,
-                ..
-            } = func.ty
-            else {
-                unreachable!("local function ty must be Fn");
-            };
+                // Destructure func.ty - must be Fn for local functions.
+                let TyTerm::Fn {
+                    params: ref fn_params,
+                    ret: ref fn_ret,
+                    effect: ref fn_effect,
+                    ..
+                } = func.ty
+                else {
+                    unreachable!("local function ty must be Fn");
+                };
 
-            // Solver vars for unification (InferTy).
-            // If ret is concrete (no Poly Vars) -> instantiate_poly gives concrete InferTy.
-            // If ret has Vars -> instantiate_poly maps each Var to a fresh solver var.
-            let ret_var: InferTy = solver.instantiate_poly(fn_ret);
-            scc_ret_vars.insert(fid, ret_var.clone());
-            scc_effect_vars.insert(fid, solver.fresh_effect_var());
-            scc_declared_params.insert(fid, instantiate_params(&mut solver, fn_params));
+                // Solver vars for unification (InferTy).
+                // If ret is concrete (no Poly Vars) -> instantiate_poly gives concrete InferTy.
+                // If ret has Vars -> instantiate_poly maps each Var to a fresh solver var.
+                let ret_var: InferTy = solver.instantiate_poly(fn_ret);
+                scc_ret_vars.insert(fid, ret_var.clone());
+                scc_effect_vars.insert(fid, solver.fresh_effect_var());
+                scc_declared_params.insert(fid, instantiate_params(&mut solver, fn_params));
 
-            scc_fn_types.insert(
-                func.qref,
-                TyTerm::Fn {
-                    params: fn_params.clone(),
-                    ret: fn_ret.clone(),
-                    captures: vec![],
-                    effect: fn_effect.clone(),
-                },
+                scc_fn_types.insert(
+                    func.qref,
+                    TyTerm::Fn {
+                        params: fn_params.clone(),
+                        ret: fn_ret.clone(),
+                        captures: vec![],
+                        effect: fn_effect.clone(),
+                        flows: member_flows[&fid].clone().into(),
+                    },
+                );
+            }
+
+            let machine_signatures =
+                machine_signatures(&graph.types, &resolved_fn_types, &declared);
+            let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
+                .iter()
+                .filter(|(qref, _)| graph.types.machine_view(**qref).is_none())
+                .map(|(&k, v)| (k, declared_scheme(&declared, k, v.clone())))
+                .collect();
+            env_functions.extend(
+                scc_fn_types
+                    .into_iter()
+                    .map(|(k, v)| (k, Scheme::unbounded(v))),
             );
-        }
 
-        let machine_signatures = machine_signatures(&graph.types, &resolved_fn_types, &declared);
-        let mut env_functions: FxHashMap<QualifiedRef, Scheme> = resolved_fn_types
-            .iter()
-            .filter(|(qref, _)| graph.types.machine_view(**qref).is_none())
-            .map(|(&k, v)| (k, declared_scheme(&declared, k, v.clone())))
-            .collect();
-        env_functions.extend(
-            scc_fn_types
-                .into_iter()
-                .map(|(k, v)| (k, Scheme::unbounded(v))),
-        );
+            for &fid in scc {
+                let func = fn_by_id[&fid];
+                let Some(parsed) = extract.parsed.get(&fid) else {
+                    continue;
+                };
 
-        for &fid in scc {
-            let func = fn_by_id[&fid];
-            let Some(parsed) = extract.parsed.get(&fid) else {
-                continue;
-            };
+                let env = crate::ty::TypeEnv {
+                    contexts: known_ctx.clone(),
+                    functions: env_functions.clone(),
+                    machine: machine_signatures.clone(),
+                };
 
-            let env = crate::ty::TypeEnv {
-                contexts: known_ctx.clone(),
-                functions: env_functions.clone(),
-                machine: machine_signatures.clone(),
-            };
+                let TyTerm::Fn {
+                    ret: ref fn_ret, ..
+                } = func.ty
+                else {
+                    unreachable!("local function ty must be Fn");
+                };
 
-            let TyTerm::Fn {
-                ret: ref fn_ret, ..
-            } = func.ty
-            else {
-                unreachable!("local function ty must be Fn");
-            };
+                // For expected_tail: if ret is fully concrete (no Poly Vars), freeze to Ty.
+                // If ret has Vars (inferred), freeze fails -> None -> typechecker infers freely.
+                let expected_tail_ty: Option<Ty> = {
+                    let infer = solver.instantiate_poly(fn_ret);
+                    solver.freeze_ty(&infer).ok()
+                };
 
-            // For expected_tail: if ret is fully concrete (no Poly Vars), freeze to Ty.
-            // If ret has Vars (inferred), freeze fails -> None -> typechecker infers freely.
-            let expected_tail_ty: Option<Ty> = {
-                let infer = solver.instantiate_poly(fn_ret);
-                solver.freeze_ty(&infer).ok()
-            };
-
-            let checked = BodyCheck {
-                interner,
-                env: &env,
-                declared_params: scc_declared_params[&fid].clone(),
-                bound_inputs: bound_inputs(&graph.bindings),
-                effect: scc_effect_vars[&fid].clone(),
-                probe: None,
-                expected_tail: expected_tail_ty.as_ref(),
-                crossing: crossing_of(graph.entry, fid),
-            }
-            .check(&mut solver, parsed);
-
-            if let Ok(unchecked) = &checked.resolution {
-                // Unify ret var with tail ty (for inferred return types).
-                if expected_tail_ty.is_none() {
-                    if let Some(ret_var) = scc_ret_vars.get(&fid) {
-                        let tail_infer = lift_ty(&unchecked.tail_ty);
-                        let _ = solver.unify(ret_var, &tail_infer);
-                    }
+                let checked = BodyCheck {
+                    interner,
+                    env: &env,
+                    declared_params: scc_declared_params[&fid].clone(),
+                    bound_inputs: bound_inputs(&graph.bindings),
+                    effect: scc_effect_vars[&fid].clone(),
+                    probe: None,
+                    expected_tail: expected_tail_ty.as_ref(),
+                    crossing: crossing_of(graph.entry, fid),
                 }
-                let closed = EffectTerm::Known(unchecked.effect.clone());
-                solver
-                    .unify_effect(
-                        &scc_effect_vars[&fid],
-                        &closed,
-                        crate::solver::EffectRelation::Equal,
-                    )
-                    .expect("the closed effect is the variable's own lower bound");
+                .check(&mut solver, parsed);
 
-                let bind: Vec<Param> = unchecked
-                    .extern_params
-                    .iter()
-                    .map(|(name, ty)| Param::new(*name, ty.clone()))
-                    .collect();
-                fn_bind_params.insert(fid, bind);
+                if let Ok(unchecked) = &checked.resolution {
+                    // Unify ret var with tail ty (for inferred return types).
+                    if expected_tail_ty.is_none() {
+                        if let Some(ret_var) = scc_ret_vars.get(&fid) {
+                            let tail_infer = lift_ty(&unchecked.tail_ty);
+                            let _ = solver.unify(ret_var, &tail_infer);
+                        }
+                    }
+                    let closed = EffectTerm::Known(unchecked.effect.clone());
+                    solver
+                        .unify_effect(
+                            &scc_effect_vars[&fid],
+                            &closed,
+                            crate::solver::EffectRelation::Equal,
+                        )
+                        .expect("the closed effect is the variable's own lower bound");
+
+                    let bind: Vec<Param> = unchecked
+                        .extern_params
+                        .iter()
+                        .map(|(name, ty)| Param::new(*name, ty.clone()))
+                        .collect();
+                    fn_bind_params.insert(fid, bind);
+                }
+                fn_checked.insert(fid, checked);
             }
-            fn_checked.insert(fid, checked);
+
+            let grown = grown_flows(scc, &member_flows, &fn_checked);
+            let settled = grown == member_flows;
+            member_flows = grown;
+            match &before {
+                Some(before) if !settled => solver.restore(before.clone()),
+                Some(_) | None => break,
+            }
         }
 
         // 2c. Resolve SCC: freeze InferTy -> Ty, build resolved fn types + fn_metas.
@@ -1114,6 +1193,7 @@ pub fn infer(
                 ret: Box::new(ret),
                 captures: vec![],
                 effect,
+                flows: member_flows[&fid].clone().into(),
             };
             resolved_fn_types.insert(fid, lift_to_poly(&fn_ty));
             fn_metas.insert(
@@ -1222,6 +1302,7 @@ mod tests {
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             }]),
             contexts: Freeze::new(vec![]),
@@ -1256,6 +1337,7 @@ mod tests {
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),
@@ -1349,6 +1431,7 @@ mod tests {
                 ret: Box::new(pb.fresh_ty_var()),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         });
         CompilationGraph {
@@ -1429,6 +1512,7 @@ mod tests {
                     ret: Box::new(ret),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             });
         }
@@ -1502,6 +1586,7 @@ mod tests {
                 ret: Box::new(lift_to_poly(&ret)),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         }
     }
@@ -2605,6 +2690,7 @@ mod tests {
                     ret: Box::new(pb.fresh_ty_var()),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             }]),
             contexts: Freeze::new(contexts),

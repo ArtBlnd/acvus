@@ -36,7 +36,7 @@ use crate::analysis::affine::{AffineValues, Derivation, for_body};
 use crate::analysis::carried::{Carried, CarriedParam, CarriedState, Strength};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::loans::{Loans, Summaries};
+use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, ExitTrip, ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
@@ -52,7 +52,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
             continue;
         };
         let affine = AffineValues::of(cfg, loop_, &Invariants::of(cfg));
-        let loans = Loans::build(cfg, Summaries::NONE);
+        let loans = Loans::build(cfg);
         let state = CarriedState::of(cfg, loop_, &affine, &loans, laws);
         if state.strength() != Strength::Weak {
             continue;

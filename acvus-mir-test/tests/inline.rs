@@ -458,6 +458,7 @@ fn inline_io_extern_inside() {
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let ir = compile_inline_ir_with(

@@ -81,7 +81,7 @@ use crate::analysis::affine::{Affine, AffineValues, Derivation, Operand};
 use crate::analysis::carried::{CarriedState, Strength};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::loans::{Loans, Summaries};
+use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Invariant, Invariants, LoopNest, NaturalLoop, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValOrigin, ValueId};
@@ -92,7 +92,7 @@ use crate::ty::Ty;
 pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
     let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
-    let loans = Loans::build(cfg, Summaries::NONE);
+    let loans = Loans::build(cfg);
     for (_, loop_) in nest.iter() {
         let Some(frame) = Frame::of(cfg, &loop_.natural) else {
             continue;

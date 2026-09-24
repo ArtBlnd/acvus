@@ -31,6 +31,7 @@ fn bump(i: &Interner, effect: Effect) -> Function {
             ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: effect.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -118,6 +119,7 @@ fn peek(i: &Interner) -> Function {
             ))),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

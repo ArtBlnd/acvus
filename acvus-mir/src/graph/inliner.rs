@@ -65,6 +65,7 @@ fn inline_module(
         main: body,
         closures,
         ret: module.ret.clone(),
+        flows: module.flows.clone(),
     }
 }
 
@@ -1250,6 +1251,7 @@ mod tests {
             main: body,
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
+            flows: crate::ty::Flows::Every,
         }
     }
 
@@ -1575,6 +1577,7 @@ mod tests {
             main,
             closures: [(Label(0), closure)].into_iter().collect(),
             ret: crate::ty::Ty::Unit,
+            flows: crate::ty::Flows::Every,
         }
     }
 

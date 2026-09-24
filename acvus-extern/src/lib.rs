@@ -93,7 +93,8 @@ pub use acvus_mir::laws::{
     BinaryLaws, FoldLaw, Identity, Laws, PostTerm, Postcondition, Relation, Subject,
 };
 pub use acvus_mir::ty::{
-    CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, HeldTy, Home, IdentityTerm, LenTerm,
+    CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, Flows, HeldTy, Home, IdentityTerm,
+    LenTerm, no_flow_var,
     Mutability, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty,
     TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };

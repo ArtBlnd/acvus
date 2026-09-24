@@ -479,6 +479,7 @@ fn opaque(i: &Interner) -> Vec<Function> {
             ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: EffectTerm::<Poly>::Known(Effect::OPAQUE),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }]
 }

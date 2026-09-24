@@ -11,7 +11,7 @@ use acvus_mir::ir::BinOp;
 use acvus_mir::analysis::affine::{AffineValues, for_body};
 use acvus_mir::analysis::carried::{Carried, CarriedState, MergeOp, Strength};
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loans::{Loans, Summaries};
+use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
@@ -52,7 +52,7 @@ impl Compiled {
         let cfg = promote(module.main);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
-        let loans = Loans::build(&cfg, Summaries::NONE);
+        let loans = Loans::build(&cfg);
         Self {
             interner,
             listing,
@@ -557,6 +557,7 @@ fn hand_built(trip_ty: Ty, entries: ExitEntries) -> MirModule {
         },
         closures: FxHashMap::default(),
         ret: Ty::U64,
+        flows: acvus_mir::ty::Flows::Every,
     }
 }
 

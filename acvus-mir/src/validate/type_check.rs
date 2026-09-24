@@ -181,10 +181,18 @@ pub enum ValidationErrorKind {
     ContextMovedOut {
         context: Astr,
     },
-    /// The body's result holds a loan on a local, whose storage the run is
-    /// about to leave (RFC-0064 rule 5).
+    /// The body's result, or what it wrote into storage outside it, holds a
+    /// loan on a local, whose storage the run is about to leave (RFC-0079
+    /// rule 9).
     ReferenceToLocalLeavesBody {
         storage: Option<ValOrigin>,
+    },
+    /// An output of the body holds a loan on an input its function type's
+    /// flows do not name (RFC-0079 rule 5): the checker's inference of the
+    /// flows missed what the body does.
+    FlowNotStated {
+        to: crate::ty::FlowEnd,
+        from: crate::ty::FlowEnd,
     },
     /// A parameter's register is storage the call fills before the body's
     /// first instruction. Any other register is a definition, and
@@ -2388,6 +2396,7 @@ mod tests {
             },
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
+            flows: crate::ty::Flows::Every,
         }
     }
 
@@ -2406,6 +2415,7 @@ mod tests {
                 ret: Box::new(declared),
                 captures: Vec::new(),
                 effect: crate::ty::Effect::PURE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         );
         let mut module = make_module(

@@ -1,0 +1,3 @@
+// expect 2
+// A lambda whose result names its first parameter only: its type says so, every pass reads it (RFC-0079 rule 5), and the second lender is free.
+let v = [7, 8]; let w = [9]; let f = |r, s| -> r; let x = f(&v, &w); w = [1]; len(x)

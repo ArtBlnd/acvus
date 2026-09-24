@@ -1159,6 +1159,7 @@ mod tests {
             },
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
+            flows: crate::ty::Flows::Every,
         }
     }
 
@@ -1239,6 +1240,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![test_user_defined()],
             effect: crate::ty::Effect::OPAQUE.into(),
+            flows: crate::ty::Flows::Every.into(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }
@@ -1250,6 +1252,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![Ty::I64, Ty::String],
             effect: crate::ty::Effect::OPAQUE.into(),
+            flows: crate::ty::Flows::Every.into(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }

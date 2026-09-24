@@ -6,7 +6,7 @@ use acvus_ast::Literal;
 use acvus_mir::analysis::affine::{Affine, AffineValues, Derivation, for_body};
 use acvus_mir::analysis::carried::{Carried, CarriedState, Dependence, MergeOp, Strength};
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loans::{Loans, Summaries};
+use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loops::{
     Invariants, Loop, LoopId, LoopKind, LoopNest, Nesting, Term, Trip,
 };
@@ -49,7 +49,7 @@ impl Analyzed {
         dce::run(&mut cfg);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
-        let loans = Loans::build(&cfg, Summaries::NONE);
+        let loans = Loans::build(&cfg);
         Self {
             cfg,
             nest,
@@ -224,6 +224,7 @@ fn emit(i: &Interner) -> Function {
             ret: Box::new(lift_to_poly(&Ty::I64)),
             captures: vec![],
             effect: Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

@@ -7323,6 +7323,7 @@ mod recognizer_tests {
                         effect: acvus_mir::ty::EffectTerm::Known(
                             acvus_mir::ty::Effect::OPAQUE.at_task(task),
                         ),
+                        flows: acvus_mir::ty::Flows::Every.into(),
                     },
                     args: Vec::new(),
                     order: None,

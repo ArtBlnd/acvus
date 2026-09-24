@@ -30,6 +30,7 @@ fn add_fn(i: &Interner) -> Function {
             ret: Box::new(t),
             captures: vec![],
             effect: acvus_mir::ty::Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -77,6 +78,7 @@ fn advance_fn(i: &Interner) -> Function {
             ret: Box::new(ty),
             captures: vec![],
             effect: acvus_mir::ty::Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
         admits: Task::Sync,
         task: Task::Sync,
@@ -108,6 +110,7 @@ fn advance_fn(i: &Interner) -> Function {
             ret: Box::new(s),
             captures: vec![],
             effect: acvus_mir::ty::Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -122,6 +125,7 @@ fn drain_fn(i: &Interner) -> Function {
         ret: Box::new(ty),
         captures: vec![],
         effect: acvus_mir::ty::Effect::PURE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     Function {
         qref: QualifiedRef::root(i.intern("drain")),
@@ -157,6 +161,7 @@ fn wrap_fn(i: &Interner) -> Function {
             ret: Box::new(user(i, "Doubled", vec![t])),
             captures: vec![],
             effect: acvus_mir::ty::Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -173,6 +178,7 @@ fn script_fn(i: &Interner, source: &str) -> Function {
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: pb.fresh_effect_var(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }

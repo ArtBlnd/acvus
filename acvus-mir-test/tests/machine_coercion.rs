@@ -27,6 +27,7 @@ fn shaped_like_the_str_view(i: &Interner, ns: &str, name: &str) -> Function {
         ))),
         captures: vec![],
         effect: EffectTerm::<Poly>::Known(Effect::PURE),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     Function {
         qref: QualifiedRef::qualified(i.intern(ns), i.intern(name)),

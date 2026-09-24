@@ -54,6 +54,7 @@ fn compile_analysis(
             ret: Box::new(pb.fresh_ty_var()),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }];
     let externs = acvus_extern::Externs::combine(
@@ -376,6 +377,7 @@ fn extern_fn(i: &Interner, name: &str, params: &[Ty], ret: Ty) -> Function {
             ret: Box::new(lift_to_poly(&ret)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
@@ -399,6 +401,7 @@ fn extern_async_call() {
             ret: Box::new(lift_to_poly(&Ty::String)),
             captures: vec![],
             effect: acvus_mir::ty::Effect::OPAQUE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     };
     let ir = compile_to_ir_with(
@@ -2937,6 +2940,7 @@ fn projection_soundness_reject_fn_in_context() {
         ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "@f = @f; @f", &context);
@@ -2952,6 +2956,7 @@ fn projection_soundness_reject_list_fn_in_context() {
         ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     let context = ctx(
         &i,
@@ -3139,6 +3144,7 @@ fn sroa_soundness_reject_fn_in_context() {
         ret: Box::new(Ty::I64),
         captures: vec![],
         effect: acvus_mir::ty::Effect::OPAQUE.into(),
+        flows: acvus_mir::ty::Flows::Every.into(),
     };
     let context = ctx(&i, &[("f", fn_ty)]);
     let result = compile_script_ir(&i, "@f = @f; @f", &context);

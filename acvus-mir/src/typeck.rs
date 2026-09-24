@@ -27,14 +27,16 @@ use crate::solver::{
 use crate::structural::{StructuralSignature, structural_leaves};
 use crate::ty::generalize_patterns;
 use crate::ty::{
-    CastTy, Effect, EffectTerm, HeldTy, Infer, InferTy, IntTy, LenTerm, Mutability, ObjectTy,
-    ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View, Viewed,
-    lift_ty,
+    CastTy, Effect, EffectTerm, Flows, HeldTy, Infer, InferTy, IntTy, LenTerm, Mutability,
+    ObjectTy, ParamTerm, Phase, Solver, Task, Ty, TyTerm, TyVarBound, TypeArg, TypeEnv, View,
+    Viewed, lift_ty,
 };
 use crate::variant::VariantPayload;
 
 /// Maps each AST node id to its inferred type.
 pub type TypeMap = FxHashMap<AstId, Ty>;
+
+mod body_flows;
 
 /// Maps expression AST ids to the coercion needed at that point.
 /// Produced by the type checker, consumed by the lowerer.
@@ -733,15 +735,9 @@ pub struct StructuralCall {
 
 pub type CallMap = FxHashMap<AstId, CallTarget>;
 
-/// The reference a body's result names, itself or inside the data it holds.
-///
-/// A payload holds a reference whether the body built it or an extern
-/// returned it, and `nope::len(&xs)` returns one whose referent the body
-/// releases before it returns, so reading the result then reads freed
-/// storage. A reference inside a result's data is refused, whatever it
-/// names, until a function type labels which parameter its result borrows
-/// (RFC-0079 rules 5 and 9). A function type is not searched: its
-/// parameters and return are a signature, not storage this run holds.
+/// The reference inside the data a result to the host holds. A function
+/// type is not searched: its parameters and return are a signature, not
+/// storage this run holds.
 fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
     match ty {
         TyTerm::Ref(..) => Some(ty),
@@ -796,20 +792,49 @@ enum Unreturnable<'t> {
 }
 
 impl ResultCrossing {
+    /// A lambda's or a named function's result may hold references: the
+    /// borrow check admits only loans on the body's inputs there, each one
+    /// its flows name (RFC-0079 rules 5 and 9). What stays refused is
+    /// representation: a view where one value is read, or a view inside
+    /// data (RFC-0062 rules 5 and 6, RFC-0047 rule 6). The host's result
+    /// outlives the run and holds no loan and no closure.
     fn unreturnable<'t>(self, ty: &'t InferTy) -> Option<Unreturnable<'t>> {
-        let reference = match (self, ty) {
-            (Self::Registers, _) if is_pair(ty) => None,
-            (_, TyTerm::Ref(_, target)) => is_view(&target.ty()).then_some(ty),
-            // The crossing governs the top level only: below it a reference
-            // inside data is RFC-0062 rule 5's refusal whatever its
-            // shape, so no branch separates the two here.
-            _ => reference_in_result(ty),
-        };
-        match (reference, self) {
-            (Some(reference), _) => Some(Unreturnable::Reference(reference)),
-            (None, Self::Host) => closure_in_result(ty).map(Unreturnable::ClosureToTheHost),
-            (None, Self::Registers | Self::OneValue) => None,
+        match self {
+            Self::Host => {
+                let reference = match ty {
+                    TyTerm::Ref(_, target) => is_view(&target.ty()).then_some(ty),
+                    _ => reference_in_result(ty),
+                };
+                match reference {
+                    Some(reference) => Some(Unreturnable::Reference(reference)),
+                    None => closure_in_result(ty).map(Unreturnable::ClosureToTheHost),
+                }
+            }
+            Self::Registers if is_pair(ty) => None,
+            Self::Registers | Self::OneValue => match ty {
+                TyTerm::Ref(_, target) => is_view(&target.ty()).then_some(ty),
+                _ => view_in_result(ty),
+            }
+            .map(Unreturnable::Reference),
         }
+    }
+}
+
+/// A view inside a result's data, walked as `reference_in_result` walks it.
+fn view_in_result(ty: &InferTy) -> Option<&InferTy> {
+    match ty {
+        TyTerm::Ref(_, target) => is_view(&target.ty()).then_some(ty),
+        TyTerm::Array(inner, _) | TyTerm::Slice(inner) | TyTerm::Option(inner) => {
+            view_in_result(inner)
+        }
+        TyTerm::Result(ok, err) => view_in_result(ok).or_else(|| view_in_result(err)),
+        TyTerm::Tuple(elems) => elems.iter().find_map(view_in_result),
+        TyTerm::Object(object) => object.iter().find_map(|(_, field)| view_in_result(field)),
+        TyTerm::Enum { variants, .. } => variants
+            .iter()
+            .filter_map(|(_, payload)| payload.as_ref())
+            .find_map(|payload| view_in_result(payload)),
+        _ => None,
     }
 }
 
@@ -1064,6 +1089,9 @@ pub struct TypeResolution {
     /// Join of the effects of every call in the body.
     pub effect: Effect,
     pub context_types: FxHashMap<QualifiedRef, Ty>,
+    /// The body's flows as a named function's (RFC-0079 rule 5), what its
+    /// type states once its call-graph component settles.
+    pub flows: Flows,
 }
 
 /// A name a closure captures and the reading its body was checked at, so
@@ -1141,6 +1169,7 @@ pub trait Checks: Slot {
         checker: TypeChecker<'_, '_, '_, Self>,
         body: Span,
         tail: BodyTail,
+        flows: Flows,
     ) -> Checked<Self::Resolution>;
 }
 
@@ -1156,6 +1185,7 @@ impl Checks for Clean {
         mut checker: TypeChecker<'_, '_, '_, Self>,
         body: Span,
         tail: BodyTail,
+        flows: Flows,
     ) -> Checked<Self::Resolution> {
         if !checker.errors.is_empty() {
             return checker.refused(Err);
@@ -1167,7 +1197,7 @@ impl Checks for Clean {
                 checker.closed_or_refused(&resolved, at)
             }
         };
-        checker.into_resolution(body, tail_ty)
+        checker.into_resolution(body, tail_ty, flows)
     }
 }
 
@@ -1178,6 +1208,7 @@ impl Checks for ErrorNode {
         checker: TypeChecker<'_, '_, '_, Self>,
         _: Span,
         _: BodyTail,
+        _: Flows,
     ) -> Checked<Unresolved> {
         checker.refused(|refusals| Unresolved { refusals })
     }
@@ -1706,7 +1737,7 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
 
 impl TypeChecker<'_, '_, '_, Clean> {
     /// What the lowering reads of a checked body.
-    fn into_resolution(mut self, body: Span, tail_ty: Ty) -> Checked {
+    fn into_resolution(mut self, body: Span, tail_ty: Ty, flows: Flows) -> Checked {
         // A `$` input nothing typed is refused here, in its own words, so it
         // is refused before the freezes below take every type as closed.
         let extern_params = self.frozen_extern_params(body);
@@ -1748,6 +1779,7 @@ impl TypeChecker<'_, '_, '_, Clean> {
             lambda_captures,
             effect,
             context_types,
+            flows,
         });
         Checked {
             resolution: Ok(resolution),
@@ -1963,7 +1995,11 @@ where
         self.check_moves_out_of_captures();
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
-        S::conclude(self, template.span, BodyTail::Text)
+        let flows = self.infer_flows(body_flows::Body {
+            stmts: &template.body,
+            tail: None,
+        });
+        S::conclude(self, template.span, BodyTail::Text, flows)
     }
 
     /// Type check a script. Consumes self, returns TypeResolution.
@@ -2031,8 +2067,17 @@ where
         self.check_moves_out_of_captures();
         self.check_context_binds_under_open_head();
         self.check_contexts_are_data();
+        let flows = self.infer_flows(body_flows::Body {
+            stmts: &script.stmts,
+            tail: script.tail.as_deref(),
+        });
         let at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
-        S::conclude(self, script.span, BodyTail::Value { ty: tail_ty, at })
+        S::conclude(
+            self,
+            script.span,
+            BodyTail::Value { ty: tail_ty, at },
+            flows,
+        )
     }
 
     fn refused<R, F>(mut self, resolution: F) -> Checked<R>
@@ -3506,6 +3551,7 @@ where
             ret: Box::new(ret),
             captures: capture_types,
             effect: lambda_effect,
+            flows: self.solver.fresh_flow_var(),
         };
         self.record_ret(*id, ty)
     }
@@ -4221,6 +4267,7 @@ where
                 ret: Box::new(ret),
                 captures: vec![],
                 effect: Effect::PURE.into(),
+                flows: Flows::Every.into(),
             },
             bounds,
             effect_bounds: vec![],
@@ -4317,6 +4364,7 @@ where
                         ret: Box::new(ret),
                         captures: vec![],
                         effect: Effect::PURE.into(),
+                        flows: Flows::Every.into(),
                     },
                     admits: Task::Heavy,
                     effect_bounds: Vec::new(),
@@ -4405,6 +4453,7 @@ where
                     ret: Box::new(word),
                     captures: vec![],
                     effect: Effect::PURE.into(),
+                    flows: Flows::Every.into(),
                 },
                 admits: Task::Heavy,
                 effect_bounds: Vec::new(),
@@ -4435,6 +4484,7 @@ where
                 ret: Box::new(TyTerm::String),
                 captures: vec![],
                 effect: Effect::PURE.into(),
+                flows: Flows::Every.into(),
             },
             admits: Task::Heavy,
         }]
@@ -5828,6 +5878,7 @@ where
                     ret: Box::new(ret.clone()),
                     captures: vec![],
                     effect: effect.clone(),
+                    flows: self.solver.fresh_flow_var(),
                 };
                 if self.solver.unify(&lent, &fn_ty).is_err() {
                     return Err(Uncallable::NotCallable(self.type_as_written(&lent)));
@@ -6555,6 +6606,7 @@ where
             ret: Box::new(self.type_as_written(&call.ret)),
             captures: vec![],
             effect: EffectTerm::Known(Effect::PURE),
+            flows: Flows::Every.into(),
         }
     }
 
@@ -9455,6 +9507,7 @@ mod tests {
 
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         )]);
         let src = "% let x = fetch_user(1)\n{{ x }}";
@@ -9553,6 +9606,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         )])
     }
@@ -9572,6 +9626,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: crate::ty::Effect::PURE.into(),
+            flows: crate::ty::Flows::Every.into(),
         };
         let fns = FxHashMap::from_iter([
             (
@@ -9581,6 +9636,7 @@ mod tests {
                     ret: Box::new(Ty::String),
                     captures: vec![],
                     effect: crate::ty::Effect::PURE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             ),
             (
@@ -9590,6 +9646,7 @@ mod tests {
                     ret: Box::new(Ty::I64),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 },
             ),
         ]);
@@ -9616,6 +9673,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         )]);
         let src = r#"{{ "hello" | my_fn(42) }}"#;
@@ -9692,6 +9750,7 @@ mod tests {
                     ret: Box::new(Ty::I64),
                     captures: vec![],
                     effect: crate::ty::Effect::OPAQUE.into(),
+                    flows: crate::ty::Flows::Every.into(),
                 }),
                 LenTerm::Known(3),
             ),
@@ -9736,6 +9795,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
+                flows: crate::ty::Flows::Every.into(),
             },
         )]);
         let src = "{{ handler(@conn) }}";

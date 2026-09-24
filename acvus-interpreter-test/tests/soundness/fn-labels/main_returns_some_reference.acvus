@@ -1,0 +1,3 @@
+// refuse
+// The host reads main's result after the run: no position of it holds a loan.
+let x = [1]; Some(&x)

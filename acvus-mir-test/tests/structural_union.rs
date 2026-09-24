@@ -24,6 +24,7 @@ fn extern_taking(i: &Interner, name: &str, param: TyTerm<Poly>) -> Function {
             ret: Box::new(TyTerm::I64),
             captures: vec![],
             effect: Effect::PURE.into(),
+            flows: acvus_mir::ty::Flows::Every.into(),
         },
     }
 }
