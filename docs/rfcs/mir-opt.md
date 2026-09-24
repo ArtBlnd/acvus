@@ -717,49 +717,39 @@ lowerer's (RFC-0066 rule 1, RFC-0066 rule 10).
    - The trap a run as written raises is the least in the order
      (iteration, part). A run apart reports that one and releases the
      partials not joined, in chunk order.
-   - The form admits an `Array` source. Split, the elements it has not yet
-     yielded are scattered over the chunks, which RFC-0057 rule 6's release
-     does not cover. Until the machine's release covers them, the lowerer
-     runs an `Array` source's loop in place.
+   - An `Array` source's unyielded elements scatter over split chunks,
+     which RFC-0057 rule 6's release does not cover, so until it does the
+     lowerer runs such a loop in place.
 
-**Why.** RFC-0066 rule 1 admits stating a merge's join apart from the body
-as a normal form, since it holds on every target. The partition is a fact
-of the program. Fission, fusion and chunking are choices about a target, so
-MIR states the fact and the lowerer chooses, and a strong loop still runs
-its independent parts apart. Naming each law in the terminator ends
-"what joins these" there, as `Diamond` ended "where do these arms meet"
-(RFC-0063). A monoid action is the most general join a chunk can compute
-without its predecessor's result.
-**Cost.** One terminator arm in every reader of `Terminator`. A validator
-rule that restates the partition and the laws over the form. `carried`
-gains rule 6's exception. An instruction two parts would share merges them.
+**Why.** The partition holds on every target, so it is a normal form
+(RFC-0066 rule 1); fission, fusion and chunking are choices about a target,
+and a strong loop still runs its independent parts apart. Naming each law
+in the terminator ends "what joins these" there, as `Diamond` ended "where
+do these arms meet" (RFC-0063). A monoid action is the most general join a
+chunk can compute without its predecessor's result.
+**Cost.** A terminator arm in every reader, a validator restating the
+partition and laws, and rule 6's exception in `carried`.
 **Rejected.**
 - A `For` with optional parts or join — RFC-0063's reason: a terminator
   that is the shape has no optional part.
-- Parts as arms that fork and all run — every pass reads a block's
-  successors as alternatives, so a move or an exclusive borrow in two arms
-  would be admitted. The chain keeps each pass sound as it stands, and the
-  terminator states the independence.
+- Parts as arms that fork and all run — every pass reads successors as
+  alternatives, so a move or an exclusive borrow in two arms would pass.
 - Combine and identity as blocks of the body — the CFG is flat, and every
   pass would learn a nesting whose boundary holds by convention.
 - Distributing the parts into loops in MIR — whether fission pays depends on
   the target (RFC-0066 rule 1).
-- Duplicating an instruction two parts share — recomputation against
-  running apart is a cost, and cost is the lowerer's.
-- A reduction-only form — independent recurrences and joins over another
-  type would each need a second form.
+- Duplicating an instruction two parts share — that trade is a cost, and
+  cost is the lowerer's.
+- A reduction-only form — independent recurrences would need a second.
 
 **Open.**
-- A part that reads another part's per-iteration value: a pipeline, which
-  needs a buffer or a channel to run apart.
-- An early exit as a law that keeps the first, which requires cancelling
-  chunks past it.
+- A part reading another's per-iteration value: a pipeline.
+- An early exit as a law keeping the first, which cancels later chunks.
 - Keeping the last value.
 - A merge under a branch whose other arm passes the accumulator through.
 - The element's binding as the element: today its storage joins every part
   that reads it.
-- An affine recurrence `x' = a·x + b`, whose maps compose, as a law, with
-  a scan's two passes when the body reads it.
+- An affine recurrence `x' = a·x + b` as a law, with a scan's two passes.
 - Parts of a `while`.
 
 ## RFC-0081: a `while` that counts by one to an invariant bound is a range `for`
