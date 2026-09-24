@@ -4,7 +4,8 @@
 //! in-place read itself, `Loan::borrow`, `Ref::with`, and each `Restore*`
 //! position a shared signature's glue restores.
 use acvus_extern::{
-    Borrowable, ByRef, Loan, Mut, Ref, RestoreExclusive, RestoreShared, Runtime, Shared, Uniform,
+    Borrowable, ByRef, Crossing, Loan, Mut, Ref, RestoreExclusive, RestoreShared, Runtime, Shared,
+    Uniform,
 };
 
 unsafe fn read_in_place<Rt>(rt: &Rt, reference: &Rt::Value) -> usize
@@ -28,7 +29,7 @@ where
     r.with(rt, |xs| xs.len())
 }
 
-unsafe fn restore_shared<Rt>(rt: &Rt, at: &mut Rt::Value, crossed: &Rt::Value) -> usize
+unsafe fn restore_shared<Rt>(rt: Crossing<'_, Rt>, at: &mut Rt::Value, crossed: &Rt::Value) -> usize
 where
     Rt: Runtime,
 {
@@ -38,7 +39,7 @@ where
     .len()
 }
 
-unsafe fn restore_exclusive<Rt>(rt: &Rt, at: &mut Rt::Value, crossed: &mut Rt::Value)
+unsafe fn restore_exclusive<Rt>(rt: Crossing<'_, Rt>, at: &mut Rt::Value, crossed: &mut Rt::Value)
 where
     Rt: Runtime,
 {

@@ -210,7 +210,7 @@ where
     type Of<'a> = &'a [T];
     type Form = crate::obj::Pair;
 
-    fn into_run(value: &[T], rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(value: &[T], rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         let words = Words {
             ptr: value.as_ptr() as u64,
             len: value.len() as u64,
@@ -227,7 +227,7 @@ where
     type Of<'a> = &'a mut [T];
     type Form = crate::obj::Pair;
 
-    fn into_run(value: &mut [T], rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(value: &mut [T], rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         let words = Words {
             ptr: value.as_mut_ptr() as u64,
             len: value.len() as u64,
@@ -260,7 +260,7 @@ where
     type Out = &'a [T];
     type Form = crate::obj::Pair;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a [T] {
+    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> &'a [T] {
         // SAFETY: the caller's contract: `run` is this parameter's pair, and
         // the container it names is live for `'a` (RFC-0018); `T:
         // TransparentOver<Rt>` is the layout.
@@ -277,7 +277,7 @@ where
     type Out = &'a mut [T];
     type Form = crate::obj::Pair;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a mut [T] {
+    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> &'a mut [T] {
         // SAFETY: as the shared form's, and a `&mut [T]` argument is the
         // only live name of its run (RFC-0047 rule 2).
         let words = unsafe { rt.slice_from_run(run) };
@@ -305,7 +305,7 @@ where
     type Form = crate::obj::Pair;
     type ReturnForm = crate::obj::Pair;
 
-    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+    unsafe fn from_run(rt: crate::Crossing<'_, Rt>, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract: `run` is the pair a slice was written
         // into, and the elements it names are live.
         Self(
@@ -314,11 +314,11 @@ where
         )
     }
 
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         rt.slice_into_run(self.0.words(), out)
     }
 
-    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_return_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         rt.slice_into_run(self.0.words(), out)
     }
 }

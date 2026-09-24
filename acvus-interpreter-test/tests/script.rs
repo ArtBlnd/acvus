@@ -93,7 +93,7 @@ fn ints_value(xs: &[i64]) -> Value {
     Value::array(
         xs.iter()
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            .map(|&x| unsafe { Owned::from_value(Value::int(x)) })
+            .map(|&x| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(x)) })
             .collect(),
     )
 }
@@ -137,9 +137,9 @@ async fn iter_nested() {
         Ty::Array(Box::new(ints_ty(2)), LenTerm::Known(2)),
         Value::array(vec![
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            unsafe { Owned::from_value(ints_value(&[1, 2])) },
+            unsafe { Owned::from_value(acvus_extern::Holding::new(), ints_value(&[1, 2])) },
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            unsafe { Owned::from_value(ints_value(&[3, 4])) },
+            unsafe { Owned::from_value(acvus_extern::Holding::new(), ints_value(&[3, 4])) },
         ]),
     );
     let c = ctx(&i, vec![("matrix", matrix), ("sum", int(0))]);
@@ -233,7 +233,7 @@ async fn iter_field_then_loop() {
             ints_ty(2),
         )]))),
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        Value::object_by_name(&i, [(items, unsafe { Owned::from_value(ints_value(&[10, 20])) })]),
+        Value::object_by_name(&i, [(items, unsafe { Owned::from_value(acvus_extern::Holding::new(), ints_value(&[10, 20])) })]),
     );
     let c = ctx(&i, vec![("data", data), ("sum", int(0))]);
     let result = run_script_mode(
@@ -370,9 +370,9 @@ async fn a_store_into_a_context_place_writes_the_context() {
                 &i,
                 [
                     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                    (f, unsafe { Owned::from_value(Value::int(1)) }),
+                    (f, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(1)) }),
                     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                    (g, unsafe { Owned::from_value(ints_value(&[1, 2])) }),
+                    (g, unsafe { Owned::from_value(acvus_extern::Holding::new(), ints_value(&[1, 2])) }),
                 ],
             ),
         );

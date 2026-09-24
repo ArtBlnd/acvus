@@ -105,17 +105,17 @@ where
     type Form = Pair;
     type ReturnForm = Pair;
 
-    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+    unsafe fn from_run(rt: crate::Crossing<'_, Rt>, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract: `run` is the pair a view was
         // written into, and the bytes it names are live.
         unsafe { Self::from_words(rt.slice_from_run(run)) }
     }
 
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         rt.slice_into_run(self.words(), out)
     }
 
-    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_return_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         rt.slice_into_run(self.words(), out)
     }
 }
@@ -131,7 +131,7 @@ where
     type Of<'a> = &'a str;
     type Form = Pair;
 
-    fn into_run(value: &str, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(value: &str, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         // SAFETY: the result is a borrow of a parameter the caller lent
         // for this call (RFC-0047 rule 3), which outlives the pair.
         rt.slice_into_run(unsafe { StrView::of(value) }.words(), out)
@@ -160,7 +160,7 @@ where
     type Out = &'a str;
     type Form = Pair;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> &'a str {
+    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> &'a str {
         // SAFETY: the caller's contract: `run` is this parameter's pair and
         // the bytes it names are live for `'a`.
         unsafe { StrView::from_run(rt, run).as_str() }

@@ -21,9 +21,9 @@ async fn a_context_string_rebuilt_from_itself_through_temporaries() {
             &i,
             [
                 // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                (name, unsafe { Owned::from_value(Value::string("alice")) }),
+                (name, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::string("alice")) }),
                 // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                (age, unsafe { Owned::from_value(Value::int(30)) }),
+                (age, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(30)) }),
             ],
         ),
     );

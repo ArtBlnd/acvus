@@ -1,0 +1,21 @@
+error[E0614]: type `Erased<Rt, std::string::String>` cannot be dereferenced
+  --> tests/compile_fail/handler_derefs_an_erased_to_the_word.rs:11:30
+   |
+11 |     let _word: &Rt::Value = &**s;
+   |                              ^^^ can't be dereferenced
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+  --> tests/compile_fail/handler_derefs_an_erased_to_the_word.rs:19:5
+   |
+19 |     <Erased<Rt, String> as InPlaceElement<Rt>>::in_place(words)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ----- argument #1 of type `Holding<'_, Rt>` is missing
+   |
+note: associated function defined here
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   |     fn in_place<'v>(holding: crate::Holding<'_, Rt>, values: &'v Vec<Owned<Rt>>) -> &'v Vec<Self>;
+   |        ^^^^^^^^
+help: provide the argument
+   |
+19 |     <Erased<Rt, String> as InPlaceElement<Rt>>::in_place(/* Holding<'_, Rt> */, words)
+   |                                                          ++++++++++++++++++++++

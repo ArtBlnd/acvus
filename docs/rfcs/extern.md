@@ -730,15 +730,15 @@ type is `Stored` at its payload. `Vec<Erased<R, T>>` is the runtime's
 `fn() -> !` until `never_type` stabilizes and then written `!`. Nothing
 implements a trait on it. The language's `!` and the uninhabited field of
 the compile-time stand-ins is `Bottom`. `Owned` alone is made from a bare
-value (`vacant`, `unsafe` `from_value`) and written through (`unsafe`
-`value_mut`) as inherent methods, so no safe code breaks an
-`Erased`'s `T`.
+value (`vacant`, `from_value`) and written through (`value_mut`) as
+inherent methods, so no safe code breaks an `Erased`'s `T`.
 
 1. At a runtime that makes values, `Erased<R, T>` has no trait impl whose
-   existence or items depend on `T`, with one exception: `Branded`'s impl
+   existence or items depend on `T`, with two exceptions: `Branded`'s impl
    exists only where `T` is `Unbranded` or is `Never`, and its `At<'a>` is
-   `Self`. A carrier, and a type that holds one, has no brand there, so
-   an `Erased` at it reaches no handler (RFC-0079 rule 6). An impl of a
+   `Self`; and `Owned`'s `Deref` (RFC-0068 rule 2). A carrier, and a type
+   that holds one, has no brand there, so an `Erased` at it reaches no
+   handler (RFC-0079 rule 6). An impl of a
    trait that requires `Branded`
    (`OneValue`, `Cross`, `Stored`, …) states `Self: Branded` or
    `Self: Unbranded` and bounds `T` by nothing else, so it exists where
@@ -931,10 +931,10 @@ Status: Accepted
    and `Owned::value_mut` are `unsafe`: the runtime's word is `Copy`, so a
    word read out of a live holder and made an `Owned`, or written into
    one, is released twice, and one kept past the call it was lent to
-   comes back holding a loan that ended. A value erased by its own
-   `OneValue::erase` is held safely through `Owned::erased`, and the
-   space's `Decode` and `Visit` hand over and lend `Owned` holders, not
-   words.
+   comes back holding a loan that ended. Both also take the runtime's
+   `Holding`, as `Owned::erased` takes the glue's `Crossing` (RFC-0068
+   rule 1), and the space's `Decode` and `Visit` hand over and lend `Owned`
+   holders, not words.
 3. **A lent type variable is asserted.** `unsafe(lent(T))` on
    `#[extern_fn]` or `#[extern_type]`, or `NotKept::asserted()`, which is
    `unsafe`, in a declaration written by hand, asserts `NotKept`'s

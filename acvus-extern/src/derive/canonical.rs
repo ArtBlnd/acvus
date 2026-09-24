@@ -7,7 +7,7 @@ use crate::canonical::{Canonical, same_layout};
 use crate::runtime::Runtime;
 use crate::ty_arg::kind;
 
-pub fn erase<T, Rt>(rt: &Rt, value: T) -> Rt::Value
+pub fn erase<T, Rt>(rt: crate::Crossing<'_, Rt>, value: T) -> Rt::Value
 where
     T: Canonical<kind::Type>,
     Rt: Runtime,
@@ -23,7 +23,7 @@ where
 
 /// # Safety
 /// `value` is what `erase::<T>` wrote.
-pub unsafe fn materialize<T, Rt>(rt: &Rt, value: Rt::Value) -> T
+pub unsafe fn materialize<T, Rt>(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> T
 where
     T: Canonical<kind::Type>,
     Rt: Runtime,
@@ -63,9 +63,10 @@ where
 
 /// The canonical form's bytes named as `T`: `Stored::from_payload` of a
 /// type stored as itself.
-pub fn from_canon<T>(canon: &T::Canon) -> &T
+pub fn from_canon<'c, T, Rt>(_: crate::Holding<'_, Rt>, canon: &'c T::Canon) -> &'c T
 where
     T: Canonical<kind::Type>,
+    Rt: Runtime,
 {
     same_layout!(T, T::Canon);
     // SAFETY: `Canonical`'s contract, with the layout checked above.
@@ -73,9 +74,10 @@ where
 }
 
 /// As `from_canon`, exclusively.
-pub fn from_canon_mut<T>(canon: &mut T::Canon) -> &mut T
+pub fn from_canon_mut<'c, T, Rt>(_: crate::Holding<'_, Rt>, canon: &'c mut T::Canon) -> &'c mut T
 where
     T: Canonical<kind::Type>,
+    Rt: Runtime,
 {
     same_layout!(T, T::Canon);
     // SAFETY: as `from_canon`'s; `&mut T::Canon` is the exclusive name.

@@ -514,7 +514,7 @@ impl Space {
         if args.iter().any(layout::holds_extension) {
             (hooks.children)(rt, value, &args, &mut |child_ty, child| {
                 // SAFETY: `commit_nested` writes no word into the child.
-                self.commit_nested(rt, child_ty, unsafe { child.value_mut() }, &mut children_moved)
+                self.commit_nested(rt, child_ty, unsafe { child.value_mut(acvus_extern::Holding::new()) }, &mut children_moved)
             })?;
         }
         let encode = |t: &Ty, v: &Value, out: &mut Vec<u8>| layout::encode(rt, self, t, v, out);
@@ -587,14 +587,14 @@ impl Space {
                 // of the value's shape.
                 for v in unsafe { value.as_array_mut() }.0.iter_mut() {
                     // SAFETY: `commit_nested` writes no word into the part.
-                    self.commit_nested(rt, elem, unsafe { v.value_mut() }, moved)?;
+                    self.commit_nested(rt, elem, unsafe { v.value_mut(acvus_extern::Holding::new()) }, moved)?;
                 }
                 Ok(())
             }
             Ty::Tuple(elems) => {
                 for (v, t) in unsafe { value.as_tuple_mut() }.0.iter_mut().zip(elems) {
                     // SAFETY: as the array's.
-                    self.commit_nested(rt, t, unsafe { v.value_mut() }, moved)?;
+                    self.commit_nested(rt, t, unsafe { v.value_mut(acvus_extern::Holding::new()) }, moved)?;
                 }
                 Ok(())
             }
@@ -604,7 +604,7 @@ impl Space {
                 let values = unsafe { value.as_object_mut() };
                 for (t, v) in types.iter().zip(values.iter_mut()) {
                     // SAFETY: as the array's.
-                    self.commit_nested(rt, t, unsafe { v.value_mut() }, moved)?;
+                    self.commit_nested(rt, t, unsafe { v.value_mut(acvus_extern::Holding::new()) }, moved)?;
                 }
                 Ok(())
             }
@@ -620,7 +620,7 @@ impl Space {
                 let tag = unsafe { variant.tag().as_tag() };
                 let (_, held) = layout::result_side(rt, tag, ok, err)?;
                 // SAFETY: as the array's.
-                self.commit_nested(rt, held, unsafe { variant.payload_mut().value_mut() }, moved)
+                self.commit_nested(rt, held, unsafe { variant.payload_mut().value_mut(acvus_extern::Holding::new()) }, moved)
             }
             Ty::Enum { variants, .. } => {
                 let variant = unsafe { value.as_variant_mut() };
@@ -629,7 +629,7 @@ impl Space {
                 if let Some(Some(t)) = variants.get(&tag) {
                     let t = t.as_ref().clone();
                     // SAFETY: as the array's.
-                    self.commit_nested(rt, &t, unsafe { variant.payload_mut().value_mut() }, moved)?;
+                    self.commit_nested(rt, &t, unsafe { variant.payload_mut().value_mut(acvus_extern::Holding::new()) }, moved)?;
                 }
                 Ok(())
             }
@@ -733,7 +733,7 @@ impl SpacePage {
             let mut value = held.remove(&id).expect("listed");
             // SAFETY: `commit` edits the value in place as `commit_nested`
             // does and writes no word into it.
-            let head = self.space.commit(rt, &id, ty, unsafe { value.value_mut() })?;
+            let head = self.space.commit(rt, &id, ty, unsafe { value.value_mut(acvus_extern::Holding::new()) })?;
             out.push((id, head));
         }
         Ok(out)
@@ -751,7 +751,7 @@ impl crate::journal::RuntimeContext for SpacePage {
             .unwrap_or_else(|e| panic!("context fetch: @{key}: {e}"))
             // SAFETY: `load` decodes a fresh word, which no other holder
             // owns.
-            .map(|value| unsafe { Owned::from_value(value) })
+            .map(|value| unsafe { Owned::from_value(acvus_extern::Holding::new(), value) })
     }
 
     fn set(&self, key: &str, value: Owned<AcvusRuntime>) {

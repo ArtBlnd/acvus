@@ -1,7 +1,7 @@
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
-  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:14:15
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:15:15
    |
-14 |     unsafe { <Vec<i64> as Borrowable<Rt>>::deref(rt, reference) }.len()
+15 |     unsafe { <Vec<i64> as Borrowable<Rt>>::deref(rt, reference) }.len()
    |               ^^^^^^^^ this parameter borrows a container of `i64`
    |
    = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
@@ -19,9 +19,9 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
-  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:21:51
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:22:51
    |
-21 |     unsafe { <Shared as Loan>::borrow::<Vec<i64>, Uniform, Rt>(rt, reference) }.len()
+22 |     unsafe { <Shared as Loan>::borrow::<Vec<i64>, Uniform, Rt>(rt, reference) }.len()
    |                                                   ^^^^^^^ this parameter borrows a container of `i64`
    |
    = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
@@ -48,9 +48,9 @@ note: required by a bound in `acvus_extern::Loan::borrow`
    |              ^^^^^^^^^^^^ required by this bound in `Loan::borrow`
 
 error[E0599]: the method `with` exists for reference `&acvus_extern::Ref<'_, Vec<i64>, acvus_extern::Shared, Rt>`, but its trait bounds were not satisfied
-  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:28:7
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:29:7
    |
-28 |     r.with(rt, |xs| xs.len())
+29 |     r.with(rt, |xs| xs.len())
    |       ^^^^ method cannot be called due to unsatisfied trait bounds
    |
   ::: $RUST/alloc/src/vec/mod.rs
@@ -63,9 +63,9 @@ error[E0599]: the method `with` exists for reference `&acvus_extern::Ref<'_, Vec
            which is required by `Vec<i64>: Borrowable<Rt>`
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
-  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:36:9
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:37:9
    |
-36 |         <ByRef<Vec<i64>, Shared, Uniform> as RestoreShared<Rt>>::restore_shared(rt, at, crossed)
+37 |         <ByRef<Vec<i64>, Shared, Uniform> as RestoreShared<Rt>>::restore_shared(rt, at, crossed)
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter borrows a container of `i64`
    |
    = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
@@ -85,9 +85,9 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    = note: required for `ByRef<Vec<i64>, acvus_extern::Shared>` to implement `RestoreShared<Rt>`
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
-  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:46:9
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:47:9
    |
-46 |         <ByRef<Vec<i64>, Mut, Uniform> as RestoreExclusive<Rt>>::restore_exclusive(rt, at, crossed)
+47 |         <ByRef<Vec<i64>, Mut, Uniform> as RestoreExclusive<Rt>>::restore_exclusive(rt, at, crossed)
    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter borrows a container of `i64`
    |
    = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`

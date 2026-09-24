@@ -52,7 +52,7 @@ pub fn split_context(
     for (name, TypedValue { ty, value }) in context {
         types.insert(name, ty);
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        snapshot.insert(interner.resolve(name).to_string(), unsafe { Owned::from_value(value) });
+        snapshot.insert(interner.resolve(name).to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), value) });
     }
     (types, snapshot)
 }
@@ -583,7 +583,7 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
                     items
                         .into_iter()
                         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                        .map(|t| unsafe { Owned::from_value(t.value) })
+                        .map(|t| unsafe { Owned::from_value(acvus_extern::Holding::new(), t.value) })
                         .collect(),
                 ),
             )
@@ -596,7 +596,7 @@ pub fn value_from_json(interner: &Interner, v: &serde_json::Value) -> TypedValue
                 let TypedValue { ty, value } = value_from_json(interner, v);
                 tys.insert(key, ty);
                 // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                values.push((key, unsafe { Owned::from_value(value) }));
+                values.push((key, unsafe { Owned::from_value(acvus_extern::Holding::new(), value) }));
             }
             typed(
                 Ty::Object(ObjectTy::written(tys)),
@@ -635,11 +635,11 @@ pub fn user_context(interner: &Interner) -> Context {
                 interner,
                 [
                     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                    (name, unsafe { Owned::from_value(Value::string("alice")) }),
+                    (name, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::string("alice")) }),
                     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                    (age, unsafe { Owned::from_value(Value::int(30)) }),
+                    (age, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(30)) }),
                     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                    (email, unsafe { Owned::from_value(Value::string("alice@example.com")) }),
+                    (email, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::string("alice@example.com")) }),
                 ],
             ),
         ),
@@ -656,7 +656,7 @@ pub fn items_context(interner: &Interner, items: Vec<i64>) -> Context {
                 items
                     .into_iter()
                     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                    .map(|n| unsafe { Owned::from_value(Value::int(n)) })
+                    .map(|n| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(n)) })
                     .collect(),
             ),
         ),

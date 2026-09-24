@@ -175,15 +175,16 @@ holder that took ownership. Everything else copies.
 
 1. **Two types, one bit pattern, one trait.** The extern crate defines
    `trait Release: Copy { fn release(self); }` and `Runtime::Value: Release`.
-   `Owned<R>` is `#[repr(transparent)] struct Owned<R: Runtime>(ManuallyDrop<
-   R::Value>)` whose `Drop` calls `release`: the one owning type, defined once
-   for every runtime, held wherever Rust owns a runtime value — a container's
-   elements, an `Erased`, a closure carrier's value, an iterator stage's
-   function. The ABI — handler signatures, `Ref`, `Elements`, the window — is
-   `R::Value`. `Owned::from_value` is the identity, `into_value` is
-   `ManuallyDrop::take`, and the glue does both. The interpreter's `Value`
-   implements `Release`: a `Large` drops through its header, a word does
-   nothing.
+   `Owned<R>` is `Erased<R, Never>`, `#[repr(transparent)]` over
+   `ManuallyDrop<R::Value>`, whose `Drop` calls `release`: the one owning
+   type, defined once for every runtime, held wherever Rust owns a runtime
+   value — a container's elements, an `Erased`, a closure carrier's value, an
+   iterator stage's function. The ABI — handler signatures, `Ref`,
+   `Elements`, the window — is `R::Value`. `Owned::from_value` is the
+   identity and `into_value` is `ManuallyDrop::take`; each takes the
+   runtime's `Holding` (RFC-0068 rule 1), so the glue and the runtime do both
+   and a handler does neither. The interpreter's `Value` implements
+   `Release`: a `Large` drops through its header, a word does nothing.
 2. **The header keeps one thing the machine cannot know: the drop.** A `Large`
    erased from an extension type carries `drop_slot::<T>` in its header,
    because a Rust holder releases values whose language type erased their Rust

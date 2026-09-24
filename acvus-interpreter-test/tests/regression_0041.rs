@@ -5,10 +5,9 @@
 //! `contains` over an `Erased` element, and the representation a `Copy`
 //! extension type takes. A test that fails is a finding, kept as it fails.
 
-use std::any::{TypeId, type_name};
 use std::sync::Arc;
 
-use acvus_extern::{Erased, Monomorphize, OneValue, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{Erased, Monomorphize, OneValue, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -168,16 +167,21 @@ fn runtime(i: &Interner) -> AcvusRuntime {
 }
 
 #[test]
-fn a_copy_struct_that_fits_the_word_but_is_not_inline_crosses_as_large_with_its_type_recorded() {
+fn a_copy_struct_that_fits_the_word_but_is_not_inline_crosses_as_large_and_reads_back() {
     let rt = runtime(&Interner::new());
     let pixel = Pixel { x: 1, y: 2 };
     let erased = Erased::<AcvusRuntime, Pixel>::new(&rt, pixel);
     assert_eq!(*erased.as_ref(&rt), pixel);
-    let value = OneValue::<AcvusRuntime>::erase(erased, &rt);
+    // SAFETY: this test is the runtime, crossing the value at the type it
+    // was erased from and back.
+    let crossing = unsafe { acvus_extern::Crossing::new(&rt) };
+    let value = OneValue::<AcvusRuntime>::erase(erased, crossing);
     assert!(
         value.kind() == acvus_interpreter::Kind::Large,
         "a Copy type outside the Inline set is a Large box: {value:?}"
     );
-    assert_eq!(rt.type_of(&value), Some(TypeId::of::<Pixel>()));
-    assert_eq!(rt.type_name_of(&value), Some(type_name::<Pixel>()));
+    // SAFETY: as above.
+    let back =
+        unsafe { <Erased<AcvusRuntime, Pixel> as OneValue<AcvusRuntime>>::materialize(crossing, value) };
+    assert_eq!(*back.as_ref(&rt), pixel);
 }

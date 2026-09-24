@@ -1,7 +1,31 @@
-error[E0133]: call to unsafe function `acvus_extern::owned::<impl Erased<R, <fn() -> ! as acvus_extern::owned::never::HasOutput>::Output>>::from_value` is unsafe and requires unsafe block
-  --> tests/compile_fail/raw_word_released_by_safe_code.rs:12:10
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+  --> tests/compile_fail/raw_word_released_by_safe_code.rs:16:19
    |
-12 |     drop(Owned::<Rt>::from_value(**s));
-   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+16 |     drop(unsafe { Owned::<Rt>::from_value(**it) });
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^ ---- argument #1 of type `Holding<'_, Rt>` is missing
    |
-   = note: consult the function's documentation for information on how to avoid undefined behavior
+note: associated function defined here
+  --> $WORKSPACE/acvus-extern/src/owned.rs
+   |
+   |     pub unsafe fn from_value(_: Holding<'_, R>, value: R::Value) -> Self {
+   |                   ^^^^^^^^^^
+help: provide the argument
+   |
+16 |     drop(unsafe { Owned::<Rt>::from_value(/* Holding<'_, Rt> */, **it) });
+   |                                           ++++++++++++++++++++++
+
+error[E0061]: this function takes 1 argument but 0 arguments were supplied
+  --> tests/compile_fail/raw_word_released_by_safe_code.rs:17:10
+   |
+17 |     drop(Owned::<Rt>::vacant());
+   |          ^^^^^^^^^^^^^^^^^^^-- argument #1 of type `Holding<'_, Rt>` is missing
+   |
+note: associated function defined here
+  --> $WORKSPACE/acvus-extern/src/owned.rs
+   |
+   |     pub fn vacant(_: Holding<'_, R>) -> Self {
+   |            ^^^^^^
+help: provide the argument
+   |
+17 |     drop(Owned::<Rt>::vacant(/* Holding<'_, Rt> */));
+   |                              +++++++++++++++++++++

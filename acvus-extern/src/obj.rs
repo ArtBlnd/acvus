@@ -8,7 +8,6 @@
 
 use std::any::TypeId;
 use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use acvus_utils::{Astr, Interner};
@@ -622,10 +621,10 @@ where
     ///
     /// # Safety
     /// `run` is `WIDTH` long and holds what `into_run` wrote.
-    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self;
+    unsafe fn from_run(rt: crate::Crossing<'_, Rt>, run: &[Rt::Value]) -> Self;
 
     /// `Self` written into a run of `WIDTH` values.
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]);
+    fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]);
 
     /// `Self` written into the destination run at `ReturnForm`'s width, and
     /// the verdict that form's call returns beside it.
@@ -636,7 +635,7 @@ where
     /// crossing forgot to state its own.
     fn into_return_run(
         self,
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         out: &mut [Rt::Value],
     ) -> <Self::ReturnForm as Returned>::Verdict;
 }
@@ -669,23 +668,23 @@ where
     /// a container of `Self` is a container of values in place.
     const STORED_AS_VALUE: bool = false;
 
-    fn erase(self, rt: &Rt) -> Rt::Value;
+    fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value;
 
     /// # Safety
     /// `value` holds the box `Self::erase` writes. A type stored as its
     /// payload or as its canonical form keys that box by that type, so the
     /// runtime's `erase::<Self>` need not write it.
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self;
+    unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self;
 
     /// # Safety
     /// As `Cross::from_run`.
-    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+    unsafe fn from_run(rt: crate::Crossing<'_, Rt>, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract, at one value.
         unsafe { Self::materialize(rt, run[0]) }
     }
 
     /// As `Cross::into_run`.
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         out[0] = self.erase(rt);
     }
 }
@@ -701,16 +700,16 @@ macro_rules! cross_one_value {
             type Form = $crate::One;
             type ReturnForm = $crate::One;
 
-            unsafe fn from_run(rt: &$rt, run: &[<$rt as $crate::Runtime>::Value]) -> Self {
+            unsafe fn from_run(rt: $crate::Crossing<'_, $rt>, run: &[<$rt as $crate::Runtime>::Value]) -> Self {
                 // SAFETY: the caller's contract, at one value.
                 unsafe { <Self as $crate::OneValue<$rt>>::from_run(rt, run) }
             }
 
-            fn into_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
+            fn into_run(self, rt: $crate::Crossing<'_, $rt>, out: &mut [<$rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
             }
 
-            fn into_return_run(self, rt: &$rt, out: &mut [<$rt as $crate::Runtime>::Value]) {
+            fn into_return_run(self, rt: $crate::Crossing<'_, $rt>, out: &mut [<$rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
             }
         }
@@ -727,18 +726,18 @@ macro_rules! cross_one_value {
             type ReturnForm = $crate::One;
 
             unsafe fn from_run(
-                rt: &__Rt,
+                rt: $crate::Crossing<'_, __Rt>,
                 run: &[<__Rt as $crate::Runtime>::Value],
             ) -> Self {
                 // SAFETY: the caller's contract, at one value.
                 unsafe { <Self as $crate::OneValue<__Rt>>::from_run(rt, run) }
             }
 
-            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+            fn into_run(self, rt: $crate::Crossing<'_, __Rt>, out: &mut [<__Rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
             }
 
-            fn into_return_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+            fn into_return_run(self, rt: $crate::Crossing<'_, __Rt>, out: &mut [<__Rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
             }
         }
@@ -754,23 +753,60 @@ macro_rules! cross_one_value {
             type ReturnForm = $crate::One;
 
             unsafe fn from_run(
-                rt: &__Rt,
+                rt: $crate::Crossing<'_, __Rt>,
                 run: &[<__Rt as $crate::Runtime>::Value],
             ) -> Self {
                 // SAFETY: the caller's contract, at one value.
                 unsafe { <Self as $crate::OneValue<__Rt>>::from_run(rt, run) }
             }
 
-            fn into_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+            fn into_run(self, rt: $crate::Crossing<'_, __Rt>, out: &mut [<__Rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
             }
 
-            fn into_return_run(self, rt: &__Rt, out: &mut [<__Rt as $crate::Runtime>::Value]) {
+            fn into_return_run(self, rt: $crate::Crossing<'_, __Rt>, out: &mut [<__Rt as $crate::Runtime>::Value]) {
                 <Self as $crate::OneValue<__Rt>>::into_run(self, rt, out)
             }
         }
 
         $crate::passed_as_one_value!($t $(, $($g)*)?);
+    };
+}
+
+/// The `Cross` half of `cross_one_value!` alone, at the runtime the type
+/// itself names, for a type that writes its `OneValue` impls by hand and
+/// takes no `Passed` impl from here.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! cross_as_one_value {
+    ($t:ty, [$($g:tt)*] at $rt:ident where $($w:tt)+) => {
+        impl<$($g)*> $crate::Cross<$rt> for $t
+        where
+            $($w)+
+        {
+            type Form = $crate::One;
+            type ReturnForm = $crate::One;
+
+            unsafe fn from_run(
+                rt: $crate::Crossing<'_, $rt>,
+                run: &[<$rt as $crate::Runtime>::Value],
+            ) -> Self {
+                // SAFETY: the caller's contract, at one value.
+                unsafe { <Self as $crate::OneValue<$rt>>::from_run(rt, run) }
+            }
+
+            fn into_run(self, rt: $crate::Crossing<'_, $rt>, out: &mut [<$rt as $crate::Runtime>::Value]) {
+                <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
+            }
+
+            fn into_return_run(
+                self,
+                rt: $crate::Crossing<'_, $rt>,
+                out: &mut [<$rt as $crate::Runtime>::Value],
+            ) {
+                <Self as $crate::OneValue<$rt>>::into_run(self, rt, out)
+            }
+        }
     };
 }
 
@@ -785,11 +821,11 @@ macro_rules! passed_as_one_value {
         impl $crate::Passed<$rt> for $t {
             type As<'a> = Self;
 
-            fn cross(rt: &$rt, passed: Self) -> <$rt as $crate::Runtime>::Value {
+            fn cross(rt: $crate::Crossing<'_, $rt>, passed: Self) -> <$rt as $crate::Runtime>::Value {
                 <Self as $crate::OneValue<$rt>>::erase(passed, rt)
             }
 
-            unsafe fn restore<'a>(rt: &$rt, word: <$rt as $crate::Runtime>::Value) -> Self::As<'a> {
+            unsafe fn restore<'a>(rt: $crate::Crossing<'_, $rt>, word: <$rt as $crate::Runtime>::Value) -> Self::As<'a> {
                 // SAFETY: the caller's contract, which is `materialize`'s.
                 unsafe { <Self as $crate::OneValue<$rt>>::materialize(rt, word) }
             }
@@ -803,12 +839,12 @@ macro_rules! passed_as_one_value {
         {
             type As<'a> = Self;
 
-            fn cross(rt: &__Rt, passed: Self) -> <__Rt as $crate::Runtime>::Value {
+            fn cross(rt: $crate::Crossing<'_, __Rt>, passed: Self) -> <__Rt as $crate::Runtime>::Value {
                 <Self as $crate::OneValue<__Rt>>::erase(passed, rt)
             }
 
             unsafe fn restore<'a>(
-                rt: &__Rt,
+                rt: $crate::Crossing<'_, __Rt>,
                 word: <__Rt as $crate::Runtime>::Value,
             ) -> Self::As<'a> {
                 // SAFETY: the caller's contract, which is `materialize`'s.
@@ -823,12 +859,12 @@ macro_rules! passed_as_one_value {
         {
             type As<'a> = Self;
 
-            fn cross(rt: &__Rt, passed: Self) -> <__Rt as $crate::Runtime>::Value {
+            fn cross(rt: $crate::Crossing<'_, __Rt>, passed: Self) -> <__Rt as $crate::Runtime>::Value {
                 <Self as $crate::OneValue<__Rt>>::erase(passed, rt)
             }
 
             unsafe fn restore<'a>(
-                rt: &__Rt,
+                rt: $crate::Crossing<'_, __Rt>,
                 word: <__Rt as $crate::Runtime>::Value,
             ) -> Self::As<'a> {
                 // SAFETY: the caller's contract, which is `materialize`'s.
@@ -859,24 +895,33 @@ where
     /// The Rust type `erase` hands the runtime.
     type Payload: Send + Sync + 'static;
 
-    fn from_payload(payload: &Self::Payload) -> &Self;
+    fn from_payload<'p>(holding: crate::Holding<'_, Rt>, payload: &'p Self::Payload) -> &'p Self;
 
-    fn from_payload_mut(payload: &mut Self::Payload) -> &mut Self;
+    fn from_payload_mut<'p>(
+        holding: crate::Holding<'_, Rt>,
+        payload: &'p mut Self::Payload,
+    ) -> &'p mut Self;
 }
 
 /// The body of a `Stored` impl for a type the runtime stores as itself.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! stored_as_canonical {
-    () => {
+    ($rt:ty) => {
         type Payload = <Self as $crate::Canonical<$crate::kind::Type>>::Canon;
 
-        fn from_payload(payload: &Self::Payload) -> &Self {
-            $crate::derive::canonical::from_canon::<Self>(payload)
+        fn from_payload<'p>(
+            holding: $crate::Holding<'_, $rt>,
+            payload: &'p Self::Payload,
+        ) -> &'p Self {
+            $crate::derive::canonical::from_canon::<Self, $rt>(holding, payload)
         }
 
-        fn from_payload_mut(payload: &mut Self::Payload) -> &mut Self {
-            $crate::derive::canonical::from_canon_mut::<Self>(payload)
+        fn from_payload_mut<'p>(
+            holding: $crate::Holding<'_, $rt>,
+            payload: &'p mut Self::Payload,
+        ) -> &'p mut Self {
+            $crate::derive::canonical::from_canon_mut::<Self, $rt>(holding, payload)
         }
     };
 }
@@ -899,79 +944,8 @@ where
 {
 }
 
-/// The `Value -> Self` step a body takes outside the glue: identity for the
-/// runtime's own value, otherwise a recursion that ends in
-/// `Runtime::materialize`. There is no impl for a bare scalar: a scalar comes
-/// out as `Erased<Rt, T>`, whose `from_value` is the crossing for it like any
-/// other.
-///
-/// This is `OneValue::materialize`'s sibling for the recursion a body drives,
-/// and it carries the same contract: the crossing is the door. The impl for
-/// the runtime's own value is the identity — there is no Rust type a raw value
-/// disagrees with — and the impl for `Vec<E>` materializes the buffer and then
-/// takes its own element step.
-///
-/// # Safety
-/// `value` was erased from `Self` at a site the checker matched to this
-/// parameter's type: the handler's declared parameter type is what `combine`
-/// unified the argument against, so the `erase::<Self>` that made this value
-/// and this `from_value` name one Rust type. A debug build restates the fact
-/// with `debug_assert_erased_from!`; a release build does not look.
-pub unsafe trait FromValue<Rt>: Sized
-where
-    Rt: Runtime,
-{
-    /// # Safety
-    /// The trait's contract.
-    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self;
-}
-
-/// Whether `value` records the `erase::<T>` a crossing's contract names.
-///
-/// Only `debug_assert_erased_from!` calls this, so the comparison exists on no
-/// release path.
-#[doc(hidden)]
-pub fn is_erased_from<T, Rt>(rt: &Rt, value: &Rt::Value) -> bool
-where
-    T: 'static,
-    Rt: Runtime,
-{
-    rt.type_of(value) == Some(TypeId::of::<T>())
-}
-
-/// States a crossing's contract where a debug build can afford to read it:
-/// `$value` was erased from `$t`. It expands to `debug_assert!` and to nothing
-/// else, so no release path compares a `TypeId`.
-#[macro_export]
-macro_rules! debug_assert_erased_from {
-    ($rt:expr, $value:expr, $t:ty) => {
-        ::core::debug_assert!(
-            $crate::is_erased_from::<$t, _>($rt, $value),
-            "expected a value erased from `{}`, found {}",
-            ::core::any::type_name::<$t>(),
-            $crate::erased_description($rt, $value)
-        )
-    };
-}
-
-/// The phrase `debug_assert_erased_from!` puts after "found".
-///
-/// Only that macro's message calls this, and only when the contract was
-/// already broken.
-#[doc(hidden)]
-pub fn erased_description<Rt>(rt: &Rt, value: &Rt::Value) -> String
-where
-    Rt: Runtime,
-{
-    match (rt.type_of(value), rt.type_name_of(value)) {
-        (Some(_), Some(name)) => format!("one erased from `{name}`"),
-        (Some(found), None) => format!("a payload of {found:?}"),
-        (None, _) => "a value no Rust type was erased into".to_owned(),
-    }
-}
-
 /// A `Stored` type that lives in the runtime's value word itself, so
-/// `Erased<R, T>` derefs to it with no runtime in hand.
+/// `Erased<R, T>` reads it (`get`, `get_ref`) with no runtime in hand.
 ///
 /// `Runtime::inline_ref` reads the word as `T` on the strength of this
 /// bound, so the bound is sealed: `Listed` is unnameable outside this
@@ -1028,7 +1002,7 @@ macro_rules! cross_as_stored {
         where
             __Rt: $crate::Runtime,
         {
-            $crate::stored_as_canonical!();
+            $crate::stored_as_canonical!(__Rt);
         }
 
         impl<__Rt> $crate::Borrowable<__Rt> for $t
@@ -1074,11 +1048,11 @@ macro_rules! cross_whole {
 #[macro_export]
 macro_rules! whole_box {
     ($t:ty, $rt:ident) => {
-        fn erase(self, rt: &$rt) -> <$rt as $crate::Runtime>::Value {
+        fn erase(self, rt: $crate::Crossing<'_, $rt>) -> <$rt as $crate::Runtime>::Value {
             $crate::derive::canonical::erase::<$t, $rt>(rt, self)
         }
 
-        unsafe fn materialize(rt: &$rt, value: <$rt as $crate::Runtime>::Value) -> Self {
+        unsafe fn materialize(rt: $crate::Crossing<'_, $rt>, value: <$rt as $crate::Runtime>::Value) -> Self {
             // SAFETY: the caller's contract, and `erase` is `canonical::erase`.
             unsafe { $crate::derive::canonical::materialize::<$t, $rt>(rt, value) }
         }
@@ -1127,11 +1101,11 @@ impl<Rep, Rt> OneValue<Rt, Rep> for Bottom
 where
     Rt: Runtime,
 {
-    fn erase(self, _: &Rt) -> Rt::Value {
+    fn erase(self, _: crate::Crossing<'_, Rt>) -> Rt::Value {
         match self {}
     }
 
-    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
+    unsafe fn materialize(_: crate::Crossing<'_, Rt>, _: Rt::Value) -> Self {
         panic!("a value of type `!` was materialized")
     }
 }
@@ -1174,10 +1148,13 @@ where
 {
     /// The runtime's storage of a `Vec` or an array, as a `Vec<Self>`.
     #[allow(clippy::ptr_arg)]
-    fn in_place(values: &Vec<Owned<Rt>>) -> &Vec<Self>;
+    fn in_place<'v>(holding: crate::Holding<'_, Rt>, values: &'v Vec<Owned<Rt>>) -> &'v Vec<Self>;
 
     /// As `in_place`, exclusively.
-    fn in_place_mut(values: &mut Vec<Owned<Rt>>) -> &mut Vec<Self>;
+    fn in_place_mut<'v>(
+        holding: crate::Holding<'_, Rt>,
+        values: &'v mut Vec<Owned<Rt>>,
+    ) -> &'v mut Vec<Self>;
 }
 
 pub(crate) mod sealed {
@@ -1204,16 +1181,16 @@ where
     type Form = One;
     type ReturnForm = OptionOf<One>;
 
-    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+    unsafe fn from_run(rt: crate::Crossing<'_, Rt>, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract, at one value.
         unsafe { <Self as OneValue<Rt>>::from_run(rt, run) }
     }
 
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         <Self as OneValue<Rt>>::into_run(self, rt, out)
     }
 
-    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) -> bool {
+    fn into_return_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) -> bool {
         let Some(value) = self else {
             return false;
         };
@@ -1227,14 +1204,14 @@ where
     T: OneValue<Rt, Rep>,
     Rt: Runtime,
 {
-    fn erase(self, rt: &Rt) -> Rt::Value {
+    fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value {
         match self {
             Some(v) => rt.some(v.erase(rt)),
             None => rt.none(),
         }
     }
 
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self {
         if rt.is_none(&value) {
             return None;
         }
@@ -1262,9 +1239,9 @@ crate::cross_one_value!(Result<T, E>, T: OneValue<__Rt>, E: OneValue<__Rt>);
 /// instead (RFC-0038, RFC-0048 rule 7, RFC-0050 rule 8).
 fn erase_result<T, E, Rt>(
     value: Result<T, E>,
-    rt: &Rt,
-    erase_ok: fn(T, &Rt) -> Rt::Value,
-    erase_err: fn(E, &Rt) -> Rt::Value,
+    rt: crate::Crossing<'_, Rt>,
+    erase_ok: fn(T, crate::Crossing<'_, Rt>) -> Rt::Value,
+    erase_err: fn(E, crate::Crossing<'_, Rt>) -> Rt::Value,
 ) -> Rt::Value
 where
     Rt: Runtime,
@@ -1272,8 +1249,8 @@ where
     let inner: Result<Owned<Rt>, Owned<Rt>> = value
         // SAFETY: each word is the fresh result of erasing the value it
         // came from, which the erase consumed, so no other holder owns it.
-        .map(|v| unsafe { Owned::from_value(erase_ok(v, rt)) })
-        .map_err(|e| unsafe { Owned::from_value(erase_err(e, rt)) });
+        .map(|v| unsafe { Owned::from_value(rt.holding(), erase_ok(v, rt)) })
+        .map_err(|e| unsafe { Owned::from_value(rt.holding(), erase_err(e, rt)) });
     // SAFETY: the language's Result is the runtime's
     // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 rule 7).
     unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
@@ -1283,10 +1260,10 @@ where
 /// `value` was erased by `erase_result`, and the two payload steps undo the
 /// two it was given.
 unsafe fn materialize_result<T, E, Rt>(
-    rt: &Rt,
+    rt: crate::Crossing<'_, Rt>,
     value: Rt::Value,
-    materialize_ok: unsafe fn(&Rt, Rt::Value) -> T,
-    materialize_err: unsafe fn(&Rt, Rt::Value) -> E,
+    materialize_ok: unsafe fn(crate::Crossing<'_, Rt>, Rt::Value) -> T,
+    materialize_err: unsafe fn(crate::Crossing<'_, Rt>, Rt::Value) -> E,
 ) -> Result<T, E>
 where
     Rt: Runtime,
@@ -1298,8 +1275,8 @@ where
     // by the step this one undoes.
     unsafe {
         inner
-            .map(|v| materialize_ok(rt, v.into_value()))
-            .map_err(|e| materialize_err(rt, e.into_value()))
+            .map(|v| materialize_ok(rt, v.into_value(rt.holding())))
+            .map_err(|e| materialize_err(rt, e.into_value(rt.holding())))
     }
 }
 
@@ -1309,7 +1286,7 @@ where
     E: OneValue<Rt, Rep>,
     Rt: Runtime,
 {
-    fn erase(self, rt: &Rt) -> Rt::Value {
+    fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value {
         erase_result(
             self,
             rt,
@@ -1318,7 +1295,7 @@ where
         )
     }
 
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self {
         // SAFETY: the caller's contract, and the two steps are the inverses of
         // the ones `erase` gave.
         unsafe {
@@ -1356,7 +1333,7 @@ where
     N: Var<kind::Length>,
     Rt: Runtime,
 {
-    fn erase(self, rt: &Rt) -> Rt::Value {
+    fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value {
         let items: Vec<Owned<Rt>> = self
             .0
             .into_iter()
@@ -1367,7 +1344,7 @@ where
         unsafe { rt.erase::<Arr<Owned<Rt>, ()>>(Arr::new(items)) }
     }
 
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self {
         // SAFETY: the caller's contract, and `erase` boxes an
         // `Arr<Owned<Rt>, ()>`.
         let items = unsafe { rt.materialize::<Arr<Owned<Rt>, ()>>(value) };
@@ -1377,7 +1354,7 @@ where
             items
                 .0
                 .into_iter()
-                .map(|v| unsafe { T::materialize(rt, v.into_value()) })
+                .map(|v| unsafe { T::materialize(rt, v.into_value(rt.holding())) })
                 .collect(),
         )
     }
@@ -1393,7 +1370,9 @@ where
         // SAFETY: the caller's contract, and `erase` boxes an
         // `Arr<Owned<Rt>, ()>`.
         let stored = unsafe { rt.deref::<Arr<Owned<Rt>, ()>>(reference) };
-        let items = T::in_place(&stored.0);
+        // SAFETY: the caller's contract names the storage a crossing wrote
+        // at this type.
+        let items = T::in_place(unsafe { crate::Holding::new() }, &stored.0);
         // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
         unsafe { &*(items as *const Vec<T> as *const Self) }
     }
@@ -1402,64 +1381,9 @@ where
         // SAFETY: the caller's contract, exclusively, and `erase` boxes an
         // `Arr<Owned<Rt>, ()>`.
         let stored = unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(reference) };
-        let items = T::in_place_mut(&mut stored.0);
+        // SAFETY: as `deref`'s.
+        let items = T::in_place_mut(unsafe { crate::Holding::new() }, &mut stored.0);
         // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
         unsafe { &mut *(items as *mut Vec<T> as *mut Self) }
-    }
-}
-
-/// The elements of a container box, each taken by its own `FromValue`; the
-/// buffer itself is reused when the element is the value.
-///
-/// # Safety
-/// Each element of `items` was erased from `E`, which is `FromValue`'s
-/// contract element by element: the container the checker matched carries one
-/// element type.
-unsafe fn elements_from_values<E, Rt>(rt: &Rt, items: Vec<Owned<Rt>>) -> Vec<E>
-where
-    E: FromValue<Rt> + 'static,
-    Rt: Runtime,
-{
-    if TypeId::of::<E>() == TypeId::of::<Rt::Value>() {
-        let mut items = ManuallyDrop::new(items);
-        // SAFETY: `E` is `Rt::Value` and `Owned<Rt>` is `repr(transparent)`
-        // over it: one element layout, one allocator.
-        return unsafe {
-            Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity())
-        };
-    }
-    items
-        .into_iter()
-        // SAFETY: this function's contract, one element at a time.
-        .map(|item| unsafe { E::from_value(rt, item.into_value()) })
-        .collect()
-}
-
-unsafe impl<E, Rt> FromValue<Rt> for Vec<E>
-where
-    E: FromValue<Rt> + Send + Sync + 'static,
-    Rt: Runtime,
-{
-    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        debug_assert_erased_from!(rt, &value, Vec<Owned<Rt>>);
-        // SAFETY: the trait's contract. A language list crosses as a
-        // `Vec<Owned<Rt>>` box whose elements were each erased from `E`.
-        unsafe { elements_from_values(rt, rt.materialize::<Vec<Owned<Rt>>>(value)) }
-    }
-}
-
-unsafe impl<E, N, Rt> FromValue<Rt> for Arr<E, N>
-where
-    E: FromValue<Rt> + Send + Sync + 'static,
-    N: Var<kind::Length>,
-    Rt: Runtime,
-{
-    unsafe fn from_value(rt: &Rt, value: Rt::Value) -> Self {
-        debug_assert_erased_from!(rt, &value, Arr<Owned<Rt>, ()>);
-        // SAFETY: the trait's contract, as `Vec<E>`'s impl states it; a
-        // language array crosses as an `Arr<Owned<Rt>, ()>` box.
-        let items = unsafe { rt.materialize::<Arr<Owned<Rt>, ()>>(value) };
-        // SAFETY: as above, element by element.
-        Arr::new(unsafe { elements_from_values(rt, items.0) })
     }
 }

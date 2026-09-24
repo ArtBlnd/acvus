@@ -89,7 +89,7 @@ mod tests {
         let data: HashMap<String, Owned<AcvusRuntime>> = pairs
             .into_iter()
             // SAFETY: each value is moved in by the caller and held nowhere else.
-            .map(|(k, v)| (k.to_string(), unsafe { Owned::from_value(v) }))
+            .map(|(k, v)| (k.to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), v) }))
             .collect();
         InMemoryContext::new(data)
     }
@@ -135,7 +135,7 @@ mod tests {
         let ctx = make_ctx(vec![("x", Value::int(1))]);
         assert!(is_int(ctx.take(&run(), "x"), 1));
         // SAFETY: an integer word owns nothing.
-        ctx.set("x", unsafe { Owned::from_value(Value::int(2)) });
+        ctx.set("x", unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(2)) });
         assert!(is_int(ctx.take(&run(), "x"), 2));
     }
 
@@ -143,9 +143,9 @@ mod tests {
     fn take_writes_hands_out_final_values() {
         let ctx = make_ctx(vec![("x", Value::int(1)), ("y", Value::int(9))]);
         // SAFETY: an integer word owns nothing.
-        ctx.set("x", unsafe { Owned::from_value(Value::int(2)) });
+        ctx.set("x", unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(2)) });
         // SAFETY: an integer word owns nothing.
-        ctx.set("x", unsafe { Owned::from_value(Value::int(3)) });
+        ctx.set("x", unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(3)) });
         let writes = ctx.take_writes();
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].key, "x");
@@ -166,7 +166,7 @@ mod tests {
                 let ctx_ref = Arc::clone(&ctx);
                 std::thread::spawn(move || {
                     // SAFETY: an integer word owns nothing.
-                    ctx_ref.set("counter", unsafe { Owned::from_value(Value::int(i)) });
+                    ctx_ref.set("counter", unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(i)) });
                     let _ = ctx_ref.take(&run(), "counter");
                 })
             })

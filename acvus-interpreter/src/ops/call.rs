@@ -1555,10 +1555,10 @@ where
         }
         RunDest::Heap { dst, shape, width } => {
             let mut values: Box<[Owned<AcvusRuntime>]> =
-                (0..*width).map(|_| Owned::vacant()).collect();
-            // SAFETY: every slot is `Owned::vacant()`, which owns nothing, and
+                (0..*width).map(|_| Owned::vacant(unsafe { acvus_extern::Holding::new() })).collect();
+            // SAFETY: every slot is `Owned::vacant(unsafe { acvus_extern::Holding::new() })`, which owns nothing, and
             // the handler writes each at most once.
-            let out = unsafe { acvus_extern::lend_run(&mut values) };
+            let out = unsafe { acvus_extern::lend_run(acvus_extern::Holding::new(), &mut values) };
             call(&mut m.ctx, out);
             let object = Value::object(Arc::clone(shape), values);
             m.regs().define::<true>(*dst, object);
@@ -1765,9 +1765,9 @@ where
             }
             RunDest::Heap { dst, shape, width } => {
                 let mut values: Box<[Owned<AcvusRuntime>]> =
-                    (0..*width).map(|_| Owned::vacant()).collect();
-                // SAFETY: every slot is `Owned::vacant()`, which owns nothing.
-                let out = unsafe { acvus_extern::lend_run(&mut values) };
+                    (0..*width).map(|_| Owned::vacant(unsafe { acvus_extern::Holding::new() })).collect();
+                // SAFETY: every slot is `Owned::vacant(unsafe { acvus_extern::Holding::new() })`, which owns nothing.
+                let out = unsafe { acvus_extern::lend_run(acvus_extern::Holding::new(), &mut values) };
                 let Lent { run, ctx } = m.lend_and_window(self.window.at, self.window.arity);
                 // SAFETY: as `CallRun0`'s; the run is the window `prepare` laid.
                 let () = unsafe { self.f.call(ctx, run, <H::Ret as Returned>::from_slice(out)) };
@@ -2376,7 +2376,7 @@ impl Op for MakeClosure {
                 // `take_mask` clears below, so its word moves here; the others
                 // hold words that own nothing (`prepare` builds the mask from the
                 // operands that own).
-                .map(|slot| unsafe { Owned::from_value(regs.read(*slot)) });
+                .map(|slot| unsafe { Owned::from_value(acvus_extern::Holding::new(), regs.read(*slot)) });
             let closure = Value::closure(self.code, &mut captures);
             regs.take_mask(self.takes);
             closure

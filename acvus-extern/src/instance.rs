@@ -15,6 +15,7 @@ use std::ops::Deref;
 use acvus_mir::ty::{PolyTy, Task};
 use acvus_utils::Interner;
 
+use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::handler::{ByRef, ByValue, Lends};
 use crate::loan::{Loan, Mut, Shared};
@@ -143,9 +144,8 @@ where
     /// `value` was made by `Runtime::instance_value` from an entry of an
     /// instance of `S` standing at the type `I` is filled with, and the
     /// entry is live for `'r`.
-    #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn at(value: Rt::Value) -> Self {
+    pub(crate) unsafe fn at(value: Rt::Value) -> Self {
         let () = Self::ONE_VALUE;
         Instance {
             value,
@@ -172,13 +172,17 @@ where
     #[inline(always)]
     pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: S::Recv<'r>, rest: S::Rest<'r>) -> S::Ret<'r>
     where
+        S: CrossesRest<Rt>,
         S::Recv<'r>: Receiver<Rt>,
     {
         recv.name_in(ctx);
+        // SAFETY: the rest crosses at the signature's own types, which the
+        // checker unified with the instance's (RFC-0068 rule 6).
+        let words = S::cross_rest(unsafe { Crossing::new(ctx.rt) }, rest);
         // SAFETY: `at`'s contract: the word addresses an entry of an
         // instance of `S` at the type `I` is filled with, and `recv` is at
         // `I` through `S::Recv`.
-        unsafe { S::call_now(self.value, ctx, rest) }
+        unsafe { S::call_now(self.value, ctx, words) }
     }
 }
 
@@ -193,6 +197,7 @@ where
     #[inline(always)]
     pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: S::Recv<'r>, rest: S::Rest<'r>) -> S::Ret<'r>
     where
+        S: CrossesRest<Rt>,
         S::Recv<'r>: Receiver<Rt>,
     {
         debug_assert_eq!(
@@ -202,8 +207,10 @@ where
             "a sync twin was handed an instance that suspends"
         );
         recv.name_in(ctx);
+        // SAFETY: as `Instance::<_, _, _, Now>::call`'s.
+        let words = S::cross_rest(unsafe { Crossing::new(ctx.rt) }, rest);
         // SAFETY: as `Instance::<_, _, _, Now>::call`'s, and the task above.
-        unsafe { S::call_now(self.value, ctx, rest) }
+        unsafe { S::call_now(self.value, ctx, words) }
     }
 
     #[inline(always)]
@@ -214,12 +221,15 @@ where
         rest: S::Rest<'a>,
     ) -> impl Future<Output = S::Ret<'a>> + Send + 'a
     where
+        S: CrossesRest<Rt>,
         S::Recv<'a>: Receiver<Rt>,
         S::Ret<'a>: Send,
     {
         recv.name_in(ctx);
         // SAFETY: as `call`'s.
-        unsafe { S::call_later(self.value, ctx, rest) }
+        let words = S::cross_rest(unsafe { Crossing::new(ctx.rt) }, rest);
+        // SAFETY: as `call`'s.
+        unsafe { S::call_later(self.value, ctx, words) }
     }
 }
 
@@ -248,9 +258,11 @@ where
     /// so the handler's own `Instance::call` is where a wrong mode is
     /// refused.
     type Recv<'a>;
-    /// The arguments after the first, a position at one of the
-    /// signature's own type variables as the caller's own value.
-    type Rest<'a>;
+    /// The arguments after the first as the instance's glue takes them: a
+    /// position at one of the signature's own type variables as the
+    /// runtime's value, since one `fn` type serves every instance
+    /// (RFC-0068 rule 6).
+    type Words<'a>;
     /// The result as the requirer receives it: a value as itself; a result
     /// standing at a `Ref<T, M, Rt>` marker as `&'r T` / `&'r mut T`, for
     /// the `'r` of the receiver the call lent (RFC-0068 rule 6).
@@ -271,7 +283,7 @@ where
     unsafe fn call_now<'r>(
         value: Rt::Value,
         ctx: &mut Ctx<'_, Rt>,
-        rest: Self::Rest<'r>,
+        rest: Self::Words<'r>,
     ) -> Self::Ret<'r>;
 
     /// # Safety
@@ -279,10 +291,27 @@ where
     unsafe fn call_later<'a>(
         value: Rt::Value,
         ctx: &'a mut Ctx<'_, Rt>,
-        rest: Self::Rest<'a>,
+        rest: Self::Words<'a>,
     ) -> impl Future<Output = Self::Ret<'a>> + Send + 'a
     where
         Self::Ret<'a>: Send;
+}
+
+/// The crossing of a signature's rest from the requirer's types to the
+/// runtime's values: the glue's, written by `extern_signature!` beside the
+/// `Signature` impl. It is its own trait because the crossing of a position
+/// at a variable asks a bound of that variable, which a signature a
+/// requirer only names, and never calls at such a position, must not ask.
+pub trait CrossesRest<Rt>: Signature<Rt>
+where
+    Rt: Runtime,
+{
+    /// The arguments after the first as the requirer passes them: a
+    /// position at one of the signature's own type variables at that
+    /// variable, borrowed as the signature takes it.
+    type Rest<'a>;
+
+    fn cross_rest<'a>(rt: Crossing<'_, Rt>, rest: Self::Rest<'a>) -> Self::Words<'a>;
 }
 
 #[diagnostic::on_unimplemented(
@@ -352,7 +381,7 @@ where
     /// `crossed` is the caller's own value, live for `'b`, and holds what
     /// the instance stands at; `at` is dead.
     unsafe fn restore_shared<'b>(
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b Rt::Value,
     ) -> Self::Out<'b>;
@@ -371,7 +400,7 @@ where
     /// As `RestoreShared::restore_shared`'s, and no other name of the
     /// storage is live.
     unsafe fn restore_exclusive<'b>(
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
     ) -> Self::Out<'b>;
@@ -387,7 +416,7 @@ where
     /// # Safety
     /// `crossed` was erased from what the instance stands at, and what it
     /// names is live for `'b`.
-    unsafe fn restore_by_value<'b>(rt: &Rt, crossed: Owned<Rt>) -> Self::Out<'b>;
+    unsafe fn restore_by_value<'b>(rt: crate::Crossing<'_, Rt>, crossed: Owned<Rt>) -> Self::Out<'b>;
 }
 
 impl<T, C, Rt> RestoreShared<Rt> for ByRef<T, Shared, C>
@@ -403,7 +432,7 @@ where
 
     #[inline(always)]
     unsafe fn restore_shared<'b>(
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b Rt::Value,
     ) -> &'b T::At<'b> {
@@ -411,7 +440,7 @@ where
         *at = unsafe { rt.reference(crossed) };
         // SAFETY: the reference names the storage the caller lent, and what
         // that storage holds is live for `'b`.
-        unsafe { <Shared as Loan>::brand::<T>(<Shared as Loan>::borrow::<T, C, Rt>(rt, at)) }
+        unsafe { <Shared as Loan>::brand::<T>(<Shared as Loan>::borrow::<T, C, Rt>(rt.rt(), at)) }
     }
 }
 
@@ -428,7 +457,7 @@ where
 
     #[inline(always)]
     unsafe fn restore_shared<'b>(
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         _: &'b mut Rt::Value,
         crossed: &'b Rt::Value,
     ) -> Ref<'b, T, M, Rt> {
@@ -454,14 +483,14 @@ where
 
     #[inline(always)]
     unsafe fn restore_exclusive<'b>(
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         at: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
     ) -> &'b mut T::At<'b> {
         // SAFETY: as `RestoreShared`'s, exclusively.
         *at = unsafe { rt.reference(crossed) };
         // SAFETY: as `RestoreShared`'s, exclusively.
-        unsafe { <Mut as Loan>::brand::<T>(<Mut as Loan>::borrow::<T, C, Rt>(rt, at)) }
+        unsafe { <Mut as Loan>::brand::<T>(<Mut as Loan>::borrow::<T, C, Rt>(rt.rt(), at)) }
     }
 }
 
@@ -478,7 +507,7 @@ where
 
     #[inline(always)]
     unsafe fn restore_exclusive<'b>(
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         _: &'b mut Rt::Value,
         crossed: &'b mut Rt::Value,
     ) -> Ref<'b, T, M, Rt> {
@@ -497,8 +526,8 @@ where
     type Out<'b> = T::At<'b>;
 
     #[inline(always)]
-    unsafe fn restore_by_value<'b>(rt: &Rt, crossed: Owned<Rt>) -> T::At<'b> {
+    unsafe fn restore_by_value<'b>(rt: crate::Crossing<'_, Rt>, crossed: Owned<Rt>) -> T::At<'b> {
         // SAFETY: the caller's contract, at the one value an `Owned` holds.
-        unsafe { crate::brand::<T>(<T as OneValue<Rt, C>>::materialize(rt, crossed.into_value())) }
+        unsafe { crate::brand::<T>(<T as OneValue<Rt, C>>::materialize(rt, crossed.into_value(rt.holding()))) }
     }
 }

@@ -81,7 +81,7 @@ impl<const LARGE: bool> Op for MakeVariant<LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         // SAFETY: `take` moved the word out of its register.
-        let payload = unsafe { Owned::from_value(regs.take::<LARGE>(self.slots.src)) };
+        let payload = unsafe { Owned::from_value(acvus_extern::Holding::new(), regs.take::<LARGE>(self.slots.src)) };
         let value = Value::variant_of(self.tag, payload);
         regs.define::<true>(self.slots.dst, value);
         self.next.run(m, r0)
@@ -99,7 +99,7 @@ impl Op for MakeUnitVariant {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         // SAFETY: `UNDEF` owns nothing.
-        let value = Value::variant_of(self.tag, unsafe { Owned::from_value(Value::UNDEF) });
+        let value = Value::variant_of(self.tag, unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF) });
         m.regs().define::<true>(self.dst, value);
         self.next.run(m, r0)
     }
@@ -178,7 +178,8 @@ impl<const LARGE: bool> Op for UnwrapVariant<LARGE> {
         // SAFETY: the preparation read an enum from the source's type.
         let payload = unsafe { variant.materialize::<VariantValue>() }
             .into_payload()
-            .into_value();
+            // SAFETY: the runtime moves the payload word into a register.
+            .into_value(unsafe { acvus_extern::Holding::new() });
         let value = match payload.kind() {
             Kind::Undef => Value::unit(),
             _ => payload,

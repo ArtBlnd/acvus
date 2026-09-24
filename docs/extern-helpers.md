@@ -98,7 +98,8 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Stored` | a type the runtime reads back as itself in place | atom — the runtime's box holds `Payload`, the Rust value itself or an extension type's `repr(transparent)` payload, which is what makes `value_as_ref::<T::Payload>` and `from_payload` sound |
 | `TransparentOver` | a name for the runtime's value with its layout | atom — the unsafe promise that a run of values is a run of `Self` in place |
 | `Inline` | a stored type that lives in the value word | atom — read with no runtime in hand |
-| `FromValue` | the `Value -> Self` step a body takes outside the glue | atom — the recursion through a container, ending in a checked materialize |
+| `Crossing` | the glue's and the runtime's right to cross a value at the type the checker settled | atom — its constructor is `unsafe`, and every crossing takes it where it took the runtime (RFC-0068 rule 1) |
+| `Holding` | the runtime's right to hold, empty or retype a holder of a bare value | derived from `Crossing` — the same right where no runtime is at hand |
 | `Owned` | the one holder that owes a release | atom — every Rust store that owns a runtime value is one of these |
 | `Release` | what a value owes when its holder drops | atom — the obligation itself |
 | `Transparent` | an extension type stored as its payload | atom — it licenses the `repr(transparent)` pointer cast, and only the derive implements it |
@@ -107,8 +108,6 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Variant` | a variant as the runtime holds it: a tag register and a payload register | atom — unlike an object it carries no shape, because a tag word carries the name it stands for |
 | `FieldAt` | which of a type's fields, in rule 8's order | derived from `ObjectShape` — named so that a field position and a frame register stay two spaces of small numbers |
 | `Erased` | a runtime value with the Rust type it was erased from remembered | derived from `Stored` — named because it reads and edits that type in place, which a bare value cannot |
-| `expect_type` | the refusal when a value was erased from another type | derived from `Runtime::type_of` — the panic names both types |
-| `materialize_checked` | a materialize that checks first | derived from `expect_type` + `Runtime::materialize` |
 | `lend_run` | the runtime's values behind a run of holders | derived from `Owned`'s `repr(transparent)` — for a caller filling a destination it owns (RFC-0050 rule 5) |
 
 ## Axis 2 — borrowing
@@ -379,15 +378,11 @@ repository root at `0d308c5e`.
    storage an object does not have. An aggregate without a projection has
    no `Borrowable` at all.
    `acvus-extern/src/projection.rs:460` (why), `:479` (the trait).
-6. **`Stored` and `FromValue` each carry a fact `OneValue` lacks.**
+6. **`Stored` carries a fact `OneValue` lacks.**
    `Stored` says the runtime's box holds `T::Payload` — the Rust value
    itself, or an extension type's `repr(transparent)` payload — which is
    what makes `Runtime::value_as_ref::<T::Payload>` sound and is exactly
-   what `OneValue` does not say. `FromValue` is not `materialize_checked` under
-   another name: its impl for the runtime's own value is the identity, and
-   its impl for `Vec<E>` calls the checked materialize for the buffer and
-   then its own element step. `acvus-extern/src/obj.rs:424` and `:428`;
-   `:452` and `:460`.
+   what `OneValue` does not say.
 
 7. **`core::to_string` at `str` waits on a two-word receiver.** A receiver
    is one word in the context — `Ctx::recv` is a `*mut Rt::Value`

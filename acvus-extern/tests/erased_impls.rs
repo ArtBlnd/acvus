@@ -1,8 +1,9 @@
-//! RFC-0076 rule 1 and its one exception: at a runtime that makes values,
-//! `Branded` is the only trait whose impl on `Erased<R, T>` depends on `T`.
-//! An impl of a trait that requires `Branded` states `Self: Branded` or
-//! `Self: Unbranded`, and so exists where `Branded`'s does, and bounds `T`
-//! by nothing else.
+//! RFC-0076 rule 1 and its two exceptions: at a runtime that makes values,
+//! `Branded` is the only trait whose impl on `Erased<R, T>` depends on `T`,
+//! and `Deref` to the runtime's value is the only trait implemented on
+//! `Owned` alone. An impl of a trait that requires `Branded` states
+//! `Self: Branded` or `Self: Unbranded`, and so exists where `Branded`'s
+//! does, and bounds `T` by nothing else.
 //!
 //! Rust has no bound that forbids a bound, so this reads every trait impl on
 //! `Erased` or `Owned` the workspace writes: each `impl` item, and each
@@ -155,6 +156,14 @@ fn judge(imp: Impl<'_>) -> Option<String> {
         return None;
     }
     if segment.ident == "Owned" {
+        let reads_the_word = trait_name == "Deref"
+            && runtime.is_some_and(|rt| {
+                let target: TokenStream = syn::parse_quote! { type Target = #rt::Value; };
+                items.to_string().starts_with(&target.to_string())
+            });
+        if reads_the_word {
+            return None;
+        }
         return Some("an impl on `Owned` exists at one `T`, `Never`".into());
     }
     let declared = |ident: &Ident| {
@@ -496,6 +505,14 @@ fn a_bound_on_t_is_refused() {
             refused_for: "an impl on `Owned`",
         },
         Case {
+            source: "impl<R> DerefMut for Owned<R> where R: Runtime { fn deref_mut(&mut self) -> &mut R::Value { todo!() } }",
+            refused_for: "an impl on `Owned`",
+        },
+        Case {
+            source: "impl<R> Deref for Owned<R> where R: Runtime { type Target = String; fn deref(&self) -> &String { todo!() } }",
+            refused_for: "an impl on `Owned`",
+        },
+        Case {
             source: "impl<R> Foo for Erased<R, i64> where R: Runtime {}",
             refused_for: "an impl at one `T`",
         },
@@ -524,6 +541,7 @@ fn a_bound_on_t_is_refused() {
         "impl<R, T> Stored<R> for Erased<R, T> where R: Runtime, T: 'static, Self: crate::Unbranded {}",
         "cross_one_value!(Erased<__Rt, T>, [T: 'static] where Self: crate::Branded,);",
         "impl<R, T> TyArg for Erased<R, T> where R: HoldsNoValues, T: TyArg + Unbranded {}",
+        "impl<R> Deref for Owned<R> where R: Runtime { type Target = R::Value; fn deref(&self) -> &R::Value { self.word() } }",
     ];
     for source in admitted {
         let refused = refusals(&read(Path::new("case.rs"), source));

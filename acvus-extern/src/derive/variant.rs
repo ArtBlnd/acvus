@@ -19,17 +19,17 @@ where
     pub payload: Option<Owned<Rt>>,
 }
 
-pub fn words<Rt>(rt: &Rt, tag: &str, payload: Option<Owned<Rt>>) -> Variant<Owned<Rt>>
+pub fn words<Rt>(rt: crate::Crossing<'_, Rt>, tag: &str, payload: Option<Owned<Rt>>) -> Variant<Owned<Rt>>
 where
     Rt: Runtime,
 {
     // SAFETY: `undef` and `variant_tag` make fresh words no holder owns.
-    let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(rt.undef()) });
+    let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(rt.holding(), rt.undef()) });
     // SAFETY: as above.
-    Variant::of(unsafe { Owned::from_value(rt.variant_tag(tag)) }, payload)
+    Variant::of(unsafe { Owned::from_value(rt.holding(), rt.variant_tag(tag)) }, payload)
 }
 
-pub fn erase<Rt>(rt: &Rt, tag: &str, payload: Option<Owned<Rt>>) -> Rt::Value
+pub fn erase<Rt>(rt: crate::Crossing<'_, Rt>, tag: &str, payload: Option<Owned<Rt>>) -> Rt::Value
 where
     Rt: Runtime,
 {
@@ -65,7 +65,7 @@ pub fn arm_of<const K: usize>(tag: Astr, tags: &[u64; K], name: &str) -> usize {
 /// # Panics
 /// The tag is none of `tags`: the checker admits only variants of the
 /// declared enum.
-pub unsafe fn opened<Rt>(rt: &Rt, value: Rt::Value, name: &str, tags: &[&str]) -> Opened<Rt>
+pub unsafe fn opened<Rt>(rt: crate::Crossing<'_, Rt>, value: Rt::Value, name: &str, tags: &[&str]) -> Opened<Rt>
 where
     Rt: Runtime,
 {

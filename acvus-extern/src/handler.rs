@@ -14,6 +14,7 @@ use acvus_mir::ty::{EffectVarBound, PolyTy, RequirementSig, Task, Ty};
 use acvus_utils::{Interner, QualifiedRef};
 use futures::future::BoxFuture;
 
+use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::instance::InstanceRun;
 use crate::instance::{Instance, Signature};
@@ -192,7 +193,7 @@ where
     /// run, and any storage a reference it yields names is live and unmoved
     /// for `'a` — exclusively so for an exclusive reference (RFC-0018).
     unsafe fn take<'s>(
-        rt: &'a Rt,
+        rt: crate::Crossing<'a, Rt>,
         run: &'a [Rt::Value],
         site: &'s <Self as Sited<Rt>>::Site,
     ) -> Self::Out;
@@ -282,7 +283,7 @@ where
     type Form = Nothing;
 
     unsafe fn take<'s>(
-        _: &'a Rt,
+        _: crate::Crossing<'a, Rt>,
         _: &'a [Rt::Value],
         site: &'s Instance<'static, S, I, Rt, T>,
     ) -> Instance<'w, S, I, Rt, T> {
@@ -298,7 +299,7 @@ where
     type Out = T::At<'a>;
     type Form = <T as Cross<Rt>>::Form;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
+    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
         // SAFETY: the caller's contract, which is `Cross::from_run`'s, and
         // what the value names is live for the call (RFC-0018).
         unsafe { crate::brand::<T>(<T as Cross<Rt>>::from_run(rt, run)) }
@@ -313,7 +314,7 @@ where
     type Out = T::At<'a>;
     type Form = One;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
+    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> T::At<'a> {
         // SAFETY: as the uniform impl's.
         unsafe { crate::brand::<T>(<T as OneValue<Rt, Specialized>>::from_run(rt, run)) }
     }
@@ -328,10 +329,10 @@ where
     type Out = M::Of<'a, T::At<'a>>;
     type Form = One;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
+    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
         // SAFETY: the caller's contract: a live storage of `T`, exclusively
         // named at a `Mut` loan (RFC-0018).
-        unsafe { M::brand::<T>(M::borrow::<T, Uniform, Rt>(rt, &run[0])) }
+        unsafe { M::brand::<T>(M::borrow::<T, Uniform, Rt>(rt.rt(), &run[0])) }
     }
 }
 
@@ -344,9 +345,9 @@ where
     type Out = M::Of<'a, T::At<'a>>;
     type Form = One;
 
-    unsafe fn take<'s>(rt: &'a Rt, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
+    unsafe fn take<'s>(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &'s ()) -> M::Of<'a, T::At<'a>> {
         // SAFETY: as the uniform impl's, at the specialized representation.
-        unsafe { M::brand::<T>(M::borrow::<T, Specialized, Rt>(rt, &run[0])) }
+        unsafe { M::brand::<T>(M::borrow::<T, Specialized, Rt>(rt.rt(), &run[0])) }
     }
 }
 
@@ -475,7 +476,7 @@ where
 
     fn into_run(
         value: Self::Of<'_>,
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         out: Out<'_, Rt>,
     ) -> <Self::Form as Returned>::Verdict;
 }
@@ -489,7 +490,7 @@ where
 {
     const WIDTH: usize;
 
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]);
+    fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]);
 }
 
 impl<Rt> IntoRun<Rt> for ()
@@ -498,7 +499,7 @@ where
 {
     const WIDTH: usize = 0;
 
-    fn into_run(self, _: &Rt, _: &mut [Rt::Value]) {}
+    fn into_run(self, _: crate::Crossing<'_, Rt>, _: &mut [Rt::Value]) {}
 }
 
 macro_rules! into_run_tuple {
@@ -510,7 +511,7 @@ macro_rules! into_run_tuple {
         {
             const WIDTH: usize = 0 $(+ <<$A as Cross<Rt>>::Form as Form>::WIDTH)*;
 
-            fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+            fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
                 let mut _at = 0usize;
                 $(
                     let _width = <<$A as Cross<Rt>>::Form as Form>::WIDTH;
@@ -544,7 +545,7 @@ where
 
     fn into_run(
         value: Self::Of<'_>,
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         out: Out<'_, Rt>,
     ) -> <Self::Form as Returned>::Verdict;
 }
@@ -557,7 +558,7 @@ where
     type Of<'a> = Option<L::Of<'a>>;
     type Form = OptionOf<One>;
 
-    fn into_run(value: Option<L::Of<'_>>, rt: &Rt, out: Out<'_, Rt>) -> bool {
+    fn into_run(value: Option<L::Of<'_>>, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) -> bool {
         let Some(lent) = value else {
             return false;
         };
@@ -578,7 +579,7 @@ where
     type Of<'a> = L::Of<'a>;
     type Form = L::Form;
 
-    fn into_run(value: L::Of<'_>, rt: &Rt, out: Out<'_, Rt>) -> <L::Form as Returned>::Verdict {
+    fn into_run(value: L::Of<'_>, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) -> <L::Form as Returned>::Verdict {
         L::into_run(value, rt, out)
     }
 }
@@ -596,7 +597,7 @@ where
 
     fn into_run(
         value: T::At<'_>,
-        rt: &Rt,
+        rt: crate::Crossing<'_, Rt>,
         out: Out<'_, Rt>,
     ) -> <<T as Cross<Rt>>::ReturnForm as Returned>::Verdict {
         // SAFETY: the value is erased here, before safe code sees it again.
@@ -615,7 +616,7 @@ where
     /// (RFC-0041).
     type Form = One;
 
-    fn into_run(value: T::At<'_>, rt: &Rt, out: Out<'_, Rt>) {
+    fn into_run(value: T::At<'_>, rt: crate::Crossing<'_, Rt>, out: Out<'_, Rt>) {
         // SAFETY: as the uniform impl's.
         <T as OneValue<Rt, Specialized>>::into_run(unsafe { crate::unbrand::<T>(value) }, rt, out)
     }
@@ -880,7 +881,7 @@ where
     /// # Safety
     /// As `Arg::take`, for each parameter over its own values of `run`.
     unsafe fn take<'a, 'w>(
-        rt: &'a Rt,
+        rt: crate::Crossing<'a, Rt>,
         run: &'a [Rt::Value],
         sites: &Self::Sites,
     ) -> <Self as Parameters<Rt>>::Out<'a, 'w>;
@@ -1158,7 +1159,7 @@ macro_rules! parameters {
             #[inline(always)]
             #[allow(unused_variables, unused_mut, unused_assignments)]
             unsafe fn take<'a, 'w>(
-                rt: &'a Rt,
+                rt: crate::Crossing<'a, Rt>,
                 run: &'a [Rt::Value],
                 sites: &Self::Sites,
             ) -> <Self as Parameters<Rt>>::Out<'a, 'w> {
@@ -1296,7 +1297,9 @@ where
         run: <<A as Parameters<Rt>>::Run as ArgRun>::Run<'_, Rt>,
         out: <<R as Ret<Rt>>::Form as Returned>::Out<'_, Rt>,
     ) -> <<R as Ret<Rt>>::Form as Returned>::Verdict {
-        let rt = ctx.rt;
+        // SAFETY: this is the glue, crossing each parameter and the result
+        // at the declaration's own types.
+        let rt = unsafe { Crossing::new(ctx.rt) };
         let run = <<A as Parameters<Rt>>::Run as ArgRun>::as_slice::<Rt>(run);
         // SAFETY: the caller's contract, which is `Parameters::take`'s.
         let args = unsafe { <A as Parameters<Rt>>::take(rt, run, &self.sites) };
@@ -1412,7 +1415,9 @@ where
             // `ctx_of`, `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
             let ctx = unsafe { Rt::ctx_of(&mut rooted) };
             // SAFETY: as the synchronous impl's, over the run the future owns.
-            let args = unsafe { <A as Parameters<Rt>>::take(ctx.rt, &held, &sites) };
+            let args = unsafe {
+                <A as Parameters<Rt>>::take(Crossing::new(ctx.rt), &held, &sites)
+            };
             f(ctx, args).await
         })
     }

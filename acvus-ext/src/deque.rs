@@ -148,7 +148,7 @@ where
     T: Var<kind::Type> + Unbranded,
     Rt: Runtime,
 {
-    acvus_extern::stored_as_canonical!();
+    acvus_extern::stored_as_canonical!(Rt);
 }
 
 impl<T, Rt> acvus_extern::Borrowable<Rt> for Deque<T>

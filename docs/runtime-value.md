@@ -12,14 +12,11 @@ kovac is another, signing the same trait with its own representation.
 
 ```rust
 trait Runtime: Sized + Send + Sync + 'static {
-    type Value: Cross<Self> + FromValue<Self> + Release + Copy + Default;
+    type Value: Cross<Self> + Borrowable<Self> + Release + Copy + Default;
     type Frame: Send + Sync;
     type CallFuture<'a>: Future<Output = Self::Value> + Send + 'a where Self: 'a;
 
     fn frame(&self) -> Self::Frame;
-
-    fn type_of(&self, v: &Self::Value) -> Option<TypeId>;
-    fn type_name_of(&self, v: &Self::Value) -> Option<&'static str>;
 
     unsafe fn materialize<T>(&self, v: Self::Value) -> T;
     unsafe fn erase<T>(&self, t: T) -> Self::Value;

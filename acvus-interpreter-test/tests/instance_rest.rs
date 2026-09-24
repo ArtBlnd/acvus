@@ -4,15 +4,16 @@
 //! `eq(a: &T, b: &T)` is the shape the iterator spike never reached — its
 //! `next` has an empty rest — and it is the shape where the instance's own
 //! Rust types and the requiring handler's stand-in for `T` differ. The
-//! position crosses as the runtime's value and the mono glue materializes
-//! the instance's type back out of it, so `same` reads what the script
-//! wrote rather than the stand-in's bytes.
+//! requirer passes the position at `T`, the glue crosses it as the runtime's
+//! value, and the mono glue materializes the instance's type back out of
+//! it, so `same` reads what the script wrote rather than the stand-in's
+//! bytes.
 
 use std::ops::Deref;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Ctx, Instance, Owned, Registry, Runtime, Var, extern_fn, extern_registry, kind,
+    Ctx, Instance, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -67,10 +68,7 @@ where
     Rt: Runtime,
 {
     let mut a = a;
-    // SAFETY: `Externs::combine` met this parameter's requirement with the
-    // instance of `rest::eq` at the ground type `T` was filled with, and
-    // both `a` and `b` are values of that type.
-    eq.call(ctx, &mut a, (&*b,))
+    eq.call(ctx, &mut a, (&b,))
 }
 
 /// The same crossing where the rest position is a pattern over the
@@ -83,18 +81,11 @@ fn tally_of<T, Rt>(
     tally: Instance<'_, sig::tally<T, Rt>, T, Rt>,
 ) -> i64
 where
-    T: Var<kind::Type> + Deref<Target = Rt::Value> + Into<Owned<Rt>>,
+    T: Var<kind::Type> + Deref<Target = Rt::Value> + OneValue<Rt>,
     Rt: Runtime,
 {
     let mut a = a;
-    let rest = match b {
-        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        Some(x) => unsafe { Owned::from_value(ctx.rt.some(x.into().into_value())) },
-        // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        None => unsafe { Owned::from_value(ctx.rt.none()) },
-    };
-    // SAFETY: as `same`'s, at the option the signature writes there.
-    tally.call(ctx, &mut a, (rest,))
+    tally.call(ctx, &mut a, (b,))
 }
 
 fn rest_registry<R>() -> Registry<R>

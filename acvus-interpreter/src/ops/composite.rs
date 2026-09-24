@@ -27,7 +27,7 @@ impl Elements {
             // `take_mask` clears below, so its word moves here; the others
             // hold words that own nothing (`prepare` builds the mask from the
             // operands that own).
-            .map(|slot| unsafe { Owned::from_value(regs.read(*slot)) })
+            .map(|slot| unsafe { Owned::from_value(acvus_extern::Holding::new(), regs.read(*slot)) })
             .collect();
         regs.take_mask(self.owns_large);
         items
@@ -92,7 +92,7 @@ impl Op for MakeObject {
             };
             // SAFETY: as `Elements::take`'s, with `owns_large`; `UNDEF` owns
             // nothing.
-            unsafe { Owned::from_value(word) }
+            unsafe { Owned::from_value(acvus_extern::Holding::new(), word) }
         });
         regs.take_mask(self.owns_large);
         m.regs().define::<true>(self.dst, object);

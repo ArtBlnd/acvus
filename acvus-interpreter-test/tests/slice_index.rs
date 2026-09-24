@@ -280,7 +280,7 @@ fn stored_vec(items: &[i64]) -> Value {
         .iter()
         .copied()
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        .map(|n| unsafe { Owned::from_value(Value::int(n)) })
+        .map(|n| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(n)) })
         .collect();
     // SAFETY: read back only as this same `Vec<Owned<AcvusRuntime>>`, which
     // is what `vec::as_slice`'s glue derefs.
@@ -289,7 +289,7 @@ fn stored_vec(items: &[i64]) -> Value {
 
 fn page_with(items: &[i64]) -> HashMap<String, Owned<AcvusRuntime>> {
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    [(CONTAINER.to_string(), unsafe { Owned::from_value(stored_vec(items)) })]
+    [(CONTAINER.to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), stored_vec(items)) })]
         .into_iter()
         .collect()
 }
@@ -390,11 +390,11 @@ fn counted_page(len: usize) -> HashMap<String, Owned<AcvusRuntime>> {
     // derefs.
     let values: Vec<Owned<AcvusRuntime>> = (0..len)
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        .map(|_| unsafe { Owned::from_value(Value::erase(Counted)) })
+        .map(|_| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::erase(Counted)) })
         .collect();
     let stored = unsafe { Value::erase(values) };
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    [(CONTAINER.to_string(), unsafe { Owned::from_value(stored) })]
+    [(CONTAINER.to_string(), unsafe { Owned::from_value(acvus_extern::Holding::new(), stored) })]
         .into_iter()
         .collect()
 }
@@ -462,7 +462,7 @@ async fn index_set_drops_the_element_it_replaces() {
     page.insert(
         REPLACEMENT.to_string(),
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        unsafe { Owned::from_value(Value::erase(Counted)) },
+        unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::erase(Counted)) },
     );
 
     ELEMENTS_DROPPED.store(0, Ordering::Relaxed);

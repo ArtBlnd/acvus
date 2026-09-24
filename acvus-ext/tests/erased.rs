@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{iterator_registry, string_registry, vec_registry};
 use acvus_extern::{
-    DirectOp, Erased, ExternHandler, Externs, Interner, Owned, PolyTy, QualifiedRef, Registry,
-    Release, Runtime, TyTerm, TypeArg, Words, extern_fn, extern_registry,
+    DirectOp, Erased, ExternHandler, Externs, Interner, OneValue, Owned, PolyTy, QualifiedRef,
+    Registry, Release, Runtime, TyTerm, TypeArg, Words, extern_fn, extern_registry,
 };
 
 // -- A counting runtime -----------------------------------------------
@@ -114,11 +114,11 @@ static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interne
 acvus_extern::cross_one_value!(V, at Counting);
 
 impl acvus_extern::OneValue<Counting> for V {
-    fn erase(self, _: &Counting) -> V {
+    fn erase(self, _: acvus_extern::Crossing<'_, Counting>) -> V {
         self
     }
 
-    unsafe fn materialize(_: &Counting, value: V) -> Self {
+    unsafe fn materialize(_: acvus_extern::Crossing<'_, Counting>, value: V) -> Self {
         value
     }
 }
@@ -141,11 +141,12 @@ impl acvus_extern::Borrowable<Counting> for V {
     }
 }
 
-// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
-unsafe impl acvus_extern::FromValue<Counting> for V {
-    unsafe fn from_value(_: &Counting, value: V) -> V {
-        value
-    }
+
+/// This test plays the runtime, which holds the crossing capability.
+fn runtime_crossing(rt: &Counting) -> acvus_extern::Crossing<'_, Counting> {
+    // SAFETY: the test is the runtime, and it crosses each value at the
+    // type it was erased from.
+    unsafe { acvus_extern::Crossing::new(rt) }
 }
 
 impl Runtime for Counting {
@@ -165,16 +166,6 @@ impl Runtime for Counting {
 
     acvus_extern::direct_call_forms!();
 
-    fn type_of(&self, value: &V) -> Option<TypeId> {
-        let V::Boxed(cell) = value else {
-            return None;
-        };
-        // SAFETY: the value is live, so its cell is.
-        Some(unsafe { &**cell }.type_id())
-    }
-    fn type_name_of(&self, _: &V) -> Option<&'static str> {
-        None
-    }
     unsafe fn inline_ref<T>(value: &V) -> &T
     where
         T: acvus_extern::Inline,
@@ -489,26 +480,18 @@ fn vec_of(elem: PolyTy, interner: &Interner) -> PolyTy {
 
 // -- The checked exit ---------------------------------------------------
 
-/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
-/// what a debug build shows and a release build does not look for.
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "expected a value erased from `alloc::string::String`")]
-fn from_value_on_a_value_of_another_type_panics_naming_the_expected_type() {
-    let rt = Counting::default();
-    // SAFETY: stored as itself.
-    let holds_an_i64 = unsafe { rt.erase::<i64>(7) };
-    // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<Counting, String>::from_value_of(&rt, holds_an_i64) };
-}
-
-#[test]
-fn from_value_on_a_value_of_the_type_is_the_value() {
+fn a_value_materialized_at_its_type_reads_back() {
     let rt = Counting::default();
     // SAFETY: stored as itself.
     let holds_a_string = unsafe { rt.erase::<String>("s".to_owned()) };
     // SAFETY: `holds_a_string` was just erased from a `String`.
-    let erased = unsafe { Erased::<Counting, String>::from_value_of(&rt, holds_a_string) };
+    let erased = unsafe {
+        <Erased<Counting, String> as OneValue<Counting>>::materialize(
+            runtime_crossing(&rt),
+            holds_a_string,
+        )
+    };
     assert_eq!(erased.as_ref(&rt), "s");
 }
 

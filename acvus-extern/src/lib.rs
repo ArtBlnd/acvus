@@ -21,6 +21,7 @@ extern crate self as acvus_extern;
 mod brand;
 mod canonical;
 pub mod core;
+mod crossing;
 mod ctx;
 pub mod derive;
 mod effect;
@@ -48,6 +49,7 @@ mod vec;
 
 pub use brand::{Branded, Unbranded, brand, brand_mut, brand_ref, unbrand};
 pub use canonical::Canonical;
+pub use crossing::{Crossing, Holding};
 pub use ctx::Ctx;
 pub use derive::transparent::Transparent;
 pub use effect::{Idempotent, Opaque, Pure, Suspends};
@@ -63,16 +65,16 @@ pub use handler::{
     glue_at_instance,
 };
 pub use instance::{
-    CalledAt, Instance, InstanceEntry, InstanceRun, Later, Now, Receiver, RequirementOf, RestRun,
+    CalledAt, CrossesRest, Instance, InstanceEntry, InstanceRun, Later, Now, Receiver, RequirementOf, RestRun,
     RestoreByValue, RestoreExclusive, RestoreShared, Signature,
 };
 pub use len::Arr;
 pub use loan::{Loan, Mut, Shared};
 pub use name::{DeclarationForm, DeclaredType, NameKind, Named};
 pub use obj::{
-    Cross, FieldAt, Form, FormKind, FromValue, InPlaceElement, Inline, Nothing, Obj, ObjectShape,
-    One, OneRegister, OneValue, OptionOf, Pair, RetForms, Returned, Run, Stored,
-    SurvivesSuspension, TransparentOver, Variant, erased_description, is_erased_from,
+    Cross, FieldAt, Form, FormKind, InPlaceElement, Inline, Nothing, Obj, ObjectShape, One,
+    OneRegister, OneValue, OptionOf, Pair, RetForms, Returned, Run, Stored, SurvivesSuspension,
+    TransparentOver, Variant,
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{

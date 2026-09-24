@@ -445,7 +445,7 @@ where
         return false;
     }
     for (x, y) in a.iter().zip(b) {
-        if !elem.call(ctx, x, (&**y,)) {
+        if !elem.call(ctx, x, (y,)) {
             return false;
         }
     }
@@ -485,7 +485,7 @@ where
     Rt: Runtime,
 {
     for (x, y) in a.iter().zip(b) {
-        let element = elem.call(ctx, x, (&**y,));
+        let element = elem.call(ctx, x, (y,));
         if element != 0 {
             return element;
         }

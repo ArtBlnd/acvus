@@ -316,45 +316,31 @@ adaptor_instances!(step_2, cut_2, [A, B], (A, (B, ())));
 
 macro_rules! total_instance {
     ($name:ident, $now:ident, [$($v:ident),*], $($ts:tt)+) => {
-        fn $now<$($v,)* O, E, I, Rt>(
+        fn $now<$($v,)* E, I, Rt>(
             ctx: &mut Ctx<'_, Rt>,
-            it: Pipe<'_, $($ts)+, O, E, I, Rt>,
+            it: Pipe<'_, $($ts)+, Erased<Rt, i64>, E, I, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
-            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
             Rt: Runtime,
         {
-            let rt = ctx.rt;
-            it.drain(ctx)
-                .into_iter()
-                // SAFETY: the pipe's element type is the `i64` the checker
-                // matched at this handler's parameter.
-                .map(|x| *unsafe { Erased::<Rt, i64>::from_value_of(rt, x.erase(rt)) }.as_ref(rt))
-                .sum()
+            it.drain(ctx).into_iter().map(|x| x.get()).sum()
         }
 
         #[extern_fn(instance_of = sig::total, effect = E, sync = $now)]
-        async fn $name<$($v,)* O, E, I, Rt>(
+        async fn $name<$($v,)* E, I, Rt>(
             ctx: &mut Ctx<'_, Rt>,
-            it: Pipe<'_, $($ts)+, O, E, I, Rt>,
+            it: Pipe<'_, $($ts)+, Erased<Rt, i64>, E, I, Rt>,
         ) -> i64
         where
             $($v: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,)*
-            O: Var<kind::Type> + OneValue<Rt> + Cross<Rt> + PassedByValue<Rt>,
             E: Var<kind::Effect>,
             I: Var<kind::Identity>,
             Rt: Runtime,
         {
-            let rt = ctx.rt;
-            it.drain(ctx)
-                .into_iter()
-                // SAFETY: the pipe's element type is the `i64` the checker
-                // matched at this handler's parameter.
-                .map(|x| *unsafe { Erased::<Rt, i64>::from_value_of(rt, x.erase(rt)) }.as_ref(rt))
-                .sum()
+            it.drain(ctx).into_iter().map(|x| x.get()).sum()
         }
     };
 }

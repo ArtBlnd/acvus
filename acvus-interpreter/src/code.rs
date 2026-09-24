@@ -411,7 +411,7 @@ impl Konst {
                     .iter()
                     // SAFETY: `value` makes a fresh word, which no other
                     // holder owns.
-                    .map(|item| unsafe { Owned::from_value(item.value()) })
+                    .map(|item| unsafe { Owned::from_value(acvus_extern::Holding::new(), item.value()) })
                     .collect(),
             ),
         }

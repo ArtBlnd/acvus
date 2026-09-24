@@ -17,9 +17,9 @@ use std::future::Ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_ext::{Deque, vec_registry};
+use acvus_ext::vec_registry;
 use acvus_extern::{
-    Arr, Erased, Externs, FnKind, FromValue, Interner, Monomorphize, OneValue, Owned, QualifiedRef,
+    Arr, Erased, Externs, FnKind, Interner, Monomorphize, OneValue, Owned, QualifiedRef,
     Registry, Release, Runtime, extern_fn, extern_registry,
 };
 
@@ -126,11 +126,11 @@ static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interne
 acvus_extern::cross_one_value!(V, at Counting);
 
 impl acvus_extern::OneValue<Counting> for V {
-    fn erase(self, _: &Counting) -> V {
+    fn erase(self, _: acvus_extern::Crossing<'_, Counting>) -> V {
         self
     }
 
-    unsafe fn materialize(_: &Counting, value: V) -> Self {
+    unsafe fn materialize(_: acvus_extern::Crossing<'_, Counting>, value: V) -> Self {
         value
     }
 }
@@ -153,11 +153,18 @@ impl acvus_extern::Borrowable<Counting> for V {
     }
 }
 
-// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
-unsafe impl acvus_extern::FromValue<Counting> for V {
-    unsafe fn from_value(_: &Counting, value: V) -> V {
-        value
-    }
+
+/// This test plays the runtime, which holds the crossing capability.
+fn runtime_crossing(rt: &Counting) -> acvus_extern::Crossing<'_, Counting> {
+    // SAFETY: the test is the runtime, and it crosses each value at the
+    // type it was erased from.
+    unsafe { acvus_extern::Crossing::new(rt) }
+}
+
+/// As `runtime_crossing`, for a holder of a bare value.
+fn runtime_holding() -> acvus_extern::Holding<'static, Counting> {
+    // SAFETY: as `runtime_crossing`'s.
+    unsafe { acvus_extern::Holding::new() }
 }
 
 impl Runtime for Counting {
@@ -195,16 +202,6 @@ impl Runtime for Counting {
         rooted
     }
 
-    fn type_of(&self, value: &V) -> Option<TypeId> {
-        let V::Boxed(cell) = value else {
-            return None;
-        };
-        // SAFETY: the value is live, so its cell is.
-        Some(unsafe { &**cell }.type_id())
-    }
-    fn type_name_of(&self, _: &V) -> Option<&'static str> {
-        None
-    }
     unsafe fn inline_ref<T>(value: &V) -> &T
     where
         T: acvus_extern::Inline,
@@ -401,21 +398,17 @@ macro_rules! inline_round_trip {
         let value: $t = $v;
         let erased = Erased::<Counting, $t>::new(&$rt, value);
         assert_eq!(erased.get(), value, "{} reads back by get", type_name::<$t>());
-        let raw = OneValue::<Counting>::erase(erased, &$rt);
-        assert_eq!(
-            $rt.type_of(&raw),
-            Some(TypeId::of::<$t>()),
-            "{} records its TypeId",
-            type_name::<$t>()
-        );
+        let raw = OneValue::<Counting>::erase(erased, runtime_crossing(&$rt));
         // SAFETY: `raw` was just erased from a `$t`.
-        let back = unsafe { Erased::<Counting, $t>::from_value_of(&$rt, raw) };
+        let back = unsafe {
+            <Erased<Counting, $t> as OneValue<Counting>>::materialize(runtime_crossing(&$rt), raw)
+        };
         assert_eq!(back.into_inner(&$rt), value, "{} materializes", type_name::<$t>());
     } )* };
 }
 
 #[test]
-fn every_inline_type_erased_records_its_type_id_and_materializes_back() {
+fn every_inline_type_erased_materializes_back() {
     let rt = Counting::default();
     inline_round_trip!(rt;
         i8 = -8, i16 = -16, i32 = -32, i64 = -64,
@@ -432,47 +425,24 @@ fn every_inline_type_erased_records_its_type_id_and_materializes_back() {
     );
 }
 
-// -- R2: the checked exit names both types -------------------------------
-
-/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
-/// what a debug build shows and a release build does not look for.
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "expected a value erased from `i64`, found a payload of TypeId")]
-fn from_value_on_a_bool_as_an_i64_panics_naming_both() {
-    let rt = Counting::default();
-    let holds_a_bool = erased_from(&rt, true);
-    // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<Counting, i64>::from_value_of(&rt, holds_a_bool) };
-}
-
-// -- R3: container downcasts ---------------------------------------------
-
-/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
-/// what a debug build shows and a release build does not look for.
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "expected a value erased from `alloc::vec::Vec<")]
-fn vec_from_value_refuses_a_deque() {
-    let rt = Counting::default();
-    let deque = erased_from(&rt, Deque::<Owned<Counting>>::default());
-    // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Vec::<Erased<Counting, String>>::from_value(&rt, deque) };
-}
+// -- R3: a container of erased values is opened once ---------------------
 
 #[test]
-fn vec_from_value_takes_a_vec_of_values_with_no_per_element_unbox() {
+fn a_vec_of_erased_materializes_with_no_per_element_unbox() {
     let rt = Counting::default();
     let strings = OneValue::<_>::erase(
         vec![
             erased_from(&rt, "a".to_owned()),
             erased_from(&rt, "b".to_owned()),
-        ],
-        &rt,
-    );
+        ], runtime_crossing(&rt));
     let start = rt.counts();
     // SAFETY: `strings` is a `Vec` of values each erased from a `String`.
-    let parts = unsafe { Vec::<Erased<Counting, String>>::from_value(&rt, strings) };
+    let parts = unsafe {
+        <Vec<Erased<Counting, String>> as OneValue<Counting>>::materialize(
+            runtime_crossing(&rt),
+            strings,
+        )
+    };
     assert_eq!(
         rt.since(start),
         Counts {
@@ -485,33 +455,26 @@ fn vec_from_value_takes_a_vec_of_values_with_no_per_element_unbox() {
     assert_eq!(read, ["a", "b"]);
 }
 
-/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
-/// what a debug build shows and a release build does not look for.
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "expected a value erased from `acvus_extern::len::Arr<")]
-fn arr_from_value_refuses_a_deque() {
-    let rt = Counting::default();
-    let deque = erased_from(&rt, Deque::<Owned<Counting>>::default());
-    // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Arr::<Erased<Counting, String>, ()>::from_value(&rt, deque) };
-}
-
-#[test]
-fn arr_from_value_takes_an_array_of_values_with_no_per_element_unbox() {
+fn an_array_of_erased_materializes_with_no_per_element_unbox() {
     let rt = Counting::default();
     let strings = OneValue::<Counting>::erase(
         Arr::<Owned<Counting>, ()>::new(vec![
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            unsafe { Owned::from_value(erased_from(&rt, "a".to_owned())) },
+            unsafe { Owned::from_value(runtime_holding(), erased_from(&rt, "a".to_owned())) },
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            unsafe { Owned::from_value(erased_from(&rt, "b".to_owned())) },
+            unsafe { Owned::from_value(runtime_holding(), erased_from(&rt, "b".to_owned())) },
         ]),
-        &rt,
+        runtime_crossing(&rt),
     );
     let start = rt.counts();
     // SAFETY: `strings` is an `Arr` of values each erased from a `String`.
-    let parts = unsafe { Arr::<Erased<Counting, String>, ()>::from_value(&rt, strings) };
+    let parts = unsafe {
+        <Arr<Erased<Counting, String>, ()> as OneValue<Counting>>::materialize(
+            runtime_crossing(&rt),
+            strings,
+        )
+    };
     assert_eq!(
         rt.since(start),
         Counts {
@@ -675,6 +638,8 @@ where
     A: acvus_extern::IntoRun<Rt>,
 {
     let mut run = vec![Rt::Value::default(); A::WIDTH];
-    args.into_run(rt, &mut run);
+    // SAFETY: the test is the runtime, and the arguments cross at the types
+    // `A` names.
+    args.into_run(unsafe { acvus_extern::Crossing::new(rt) }, &mut run);
     run
 }

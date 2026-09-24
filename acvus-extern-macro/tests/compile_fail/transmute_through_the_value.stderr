@@ -1,0 +1,66 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/transmute_through_the_value.rs:11:24
+   |
+11 |     let word = x.erase(rt);
+   |                  ----- ^^ expected `Crossing<'_, _>`, found `&Rt`
+   |                  |
+   |                  arguments to this method are incorrect
+   |
+   = note: expected struct `Crossing<'_, _>`
+           found reference `&Rt`
+note: method defined here
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   |     fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value;
+   |        ^^^^^
+
+error[E0308]: mismatched types
+  --> tests/compile_fail/transmute_through_the_value.rs:12:55
+   |
+ 7 | fn through_the_crossing<Rt>(rt: &Rt, x: i64) -> Erased<Rt, String>
+   |                                                 ------------------ this return type influences the call expression's return type
+...
+12 |     <Erased<Rt, String> as OneValue<Rt>>::materialize(rt, word)
+   |     ------------------------------------------------- ^^ expected `Crossing<'_, Rt>`, found `&Rt`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected struct `Crossing<'_, Rt>`
+           found reference `&Rt`
+note: associated function defined here
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   |     unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self;
+   |               ^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/compile_fail/transmute_through_the_value.rs:19:41
+   |
+19 |     let held: Owned<Rt> = Owned::erased(rt, x);
+   |                           ------------- ^^ expected `Crossing<'_, Rt>`, found `&Rt`
+   |                           |
+   |                           arguments to this function are incorrect
+   |
+   = note: expected struct `Crossing<'_, Rt>`
+           found reference `&Rt`
+note: associated function defined here
+  --> $WORKSPACE/acvus-extern/src/owned.rs
+   |
+   |     pub fn erased<T, Rep>(rt: Crossing<'_, R>, value: T) -> Self
+   |            ^^^^^^
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+  --> tests/compile_fail/transmute_through_the_value.rs:20:19
+   |
+20 |     let retyped = <Erased<Rt, String> as Stored<Rt>>::from_payload(&held);
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ----- argument #1 of type `Holding<'_, Rt>` is missing
+   |
+note: associated function defined here
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   |     fn from_payload<'p>(holding: crate::Holding<'_, Rt>, payload: &'p Self::Payload) -> &'p Self;
+   |        ^^^^^^^^^^^^
+help: provide the argument
+   |
+20 |     let retyped = <Erased<Rt, String> as Stored<Rt>>::from_payload(/* Holding<'_, Rt> */, &held);
+   |                                                                    ++++++++++++++++++++++

@@ -47,7 +47,7 @@ fn deque_of(rt: &AcvusRuntime, items: impl IntoIterator<Item = Value>) -> Value 
     let mut d = ValueDeque::default();
     for v in items {
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        d.push_back(unsafe { Owned::from_value(v) });
+        d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), v) });
     }
     // SAFETY: a `ValueDeque` erased as itself; the space's hooks read it back as that.
     unsafe { rt.erase::<ValueDeque>(d) }
@@ -87,19 +87,19 @@ fn a_value_of_a_language_shape_comes_back_equal() {
         &i,
         [
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            (i.intern("name"), unsafe { Owned::from_value(Value::string("acvus")) }),
+            (i.intern("name"), unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::string("acvus")) }),
             (
                 i.intern("scores"),
                 // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                unsafe { Owned::from_value(Value::array(vec![
-                    Owned::from_value(Value::int(7)),
-                    Owned::from_value(Value::int(-3)),
+                unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::array(vec![
+                    Owned::from_value(acvus_extern::Holding::new(), Value::int(7)),
+                    Owned::from_value(acvus_extern::Holding::new(), Value::int(-3)),
                 ])) },
             ),
             (
                 i.intern("tag"),
                 // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                unsafe { Owned::from_value(Value::some(Value::bool_(true))) },
+                unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::some(Value::bool_(true))) },
             ),
         ],
     );
@@ -137,10 +137,10 @@ fn a_deque_s_commit_is_its_ops_replayed_from_the_last_checkpoint() {
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
     with_deque(&rt, &loaded, |d| {
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        d.push_back(unsafe { Owned::from_value(Value::int(3)) });
+        d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(3)) });
         assert_eq!(d.pop_front().map(|v| v.as_int()), Some(1));
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        d.push_front(unsafe { Owned::from_value(Value::int(0)) });
+        d.push_front(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(0)) });
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     assert_eq!(space.node_count(), 4, "one state and three ops");
@@ -163,7 +163,7 @@ fn a_checkpoint_is_written_every_n_ops_and_loading_starts_there() {
     with_deque(&rt, &loaded, |d| {
         for n in 1..=5 {
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            d.push_back(unsafe { Owned::from_value(Value::int(n)) });
+            d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(n)) });
         }
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
@@ -172,7 +172,7 @@ fn a_checkpoint_is_written_every_n_ops_and_loading_starts_there() {
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
     with_deque(&rt, &loaded, |d| {
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        d.push_back(unsafe { Owned::from_value(Value::int(6)) })
+        d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(6)) })
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     assert_eq!(
@@ -195,7 +195,7 @@ fn in_plain_mode_a_commit_is_one_state_node() {
     let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
     with_deque(&rt, &loaded, |d| {
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        d.push_back(unsafe { Owned::from_value(Value::int(2)) })
+        d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(2)) })
     });
     space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     assert_eq!(space.node_count(), 2);
@@ -229,7 +229,7 @@ fn a_deque_nested_in_a_deque_has_its_own_log() {
         let first = outer.get_mut(0).expect("two inner deques");
         with_deque(&rt, first, |inner| {
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            inner.push_back(unsafe { Owned::from_value(Value::int(2)) })
+            inner.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(2)) })
         });
     });
     space.commit(&rt, "dd", &ty, &mut loaded).unwrap();
@@ -259,9 +259,9 @@ fn a_head_that_moved_refuses_the_commit() {
     let mut a = space.load(&rt, "d", &ty).unwrap().unwrap();
     let mut b = space.load(&rt, "d", &ty).unwrap().unwrap();
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    with_deque(&rt, &a, |d| d.push_back(unsafe { Owned::from_value(Value::int(2)) }));
+    with_deque(&rt, &a, |d| d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(2)) }));
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    with_deque(&rt, &b, |d| d.push_back(unsafe { Owned::from_value(Value::int(3)) }));
+    with_deque(&rt, &b, |d| d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(3)) }));
     space.commit(&rt, "d", &ty, &mut a).unwrap();
     let err = space
         .commit(&rt, "d", &ty, &mut b)
@@ -303,7 +303,7 @@ async fn a_script_s_change_to_a_deque_context_is_committed_as_its_ops() {
         .expect("d was written")
         .value;
     // SAFETY: `commit` edits the value in place and writes no word into it.
-    space.commit(&rt, "d", &ty, unsafe { written.value_mut() }).unwrap();
+    space.commit(&rt, "d", &ty, unsafe { written.value_mut(acvus_extern::Holding::new()) }).unwrap();
     assert_eq!(space.node_count(), 3, "the state and two ops");
     assert_eq!(
         ints(&rt, &space.load(&rt, "d", &ty).unwrap().unwrap()),
@@ -330,7 +330,7 @@ fn a_directory_store_holds_nodes_and_heads_across_openings() {
         let mut loaded = space.load(&rt, "d", &ty).unwrap().unwrap();
         with_deque(&rt, &loaded, |d| {
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            d.push_back(unsafe { Owned::from_value(Value::int(2)) })
+            d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(2)) })
         });
         space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     }
@@ -443,11 +443,11 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
         &i,
         [
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            (i.intern("name"), unsafe { Owned::from_value(Value::string("a")) }),
+            (i.intern("name"), unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::string("a")) }),
             (
                 i.intern("log"),
                 // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                unsafe { Owned::from_value(deque_of(&rt, [Value::int(1)])) },
+                unsafe { Owned::from_value(acvus_extern::Holding::new(), deque_of(&rt, [Value::int(1)])) },
             ),
         ],
     );
@@ -462,10 +462,10 @@ fn a_deque_inside_an_object_inside_a_deque_has_its_own_log() {
     let mut loaded = space.load(&rt, "o", &ty).unwrap().unwrap();
     with_deque(&rt, &loaded, |outer| {
         let obj = outer.get_mut(0).unwrap();
-        let log = unsafe { obj.value_mut().field_by_name_mut(i.intern("log")) }.unwrap();
+        let log = unsafe { obj.value_mut(acvus_extern::Holding::new()).field_by_name_mut(i.intern("log")) }.unwrap();
         with_deque(&rt, log, |inner| {
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            inner.push_back(unsafe { Owned::from_value(Value::int(2)) })
+            inner.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(2)) })
         });
     });
     space.commit(&rt, "o", &ty, &mut loaded).unwrap();
@@ -511,7 +511,7 @@ fn a_host_s_mode_decides_the_nodes_and_the_history_reads_back() {
         let mut loaded = space.load(&rt, "d", &ty).unwrap().expect("held");
         with_deque(&rt, &loaded, |d| {
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            d.push_back(unsafe { Owned::from_value(Value::int(n)) })
+            d.push_back(unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(n)) })
         });
         space.commit(&rt, "d", &ty, &mut loaded).unwrap();
     }
@@ -714,14 +714,14 @@ fn tally_of(rt: &AcvusRuntime, items: impl IntoIterator<Item = i64>) -> Value {
             items: items
                 .into_iter()
                 // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-                .map(|n| unsafe { Owned::from_value(Value::int(n)) })
+                .map(|n| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(n)) })
                 .collect(),
             settled: 0,
             head: None,
         },
         PhantomData,
     );
-    <HeldTally as OneValue<AcvusRuntime>>::erase(t, rt)
+    <HeldTally as OneValue<AcvusRuntime>>::erase(t, unsafe { acvus_extern::Crossing::new(rt) })
 }
 
 fn tally_ints(rt: &AcvusRuntime, value: &Value) -> Vec<i64> {
@@ -748,7 +748,9 @@ async fn push_in_a_script(i: &Interner, ty: &Ty, loaded: Value, source: &str) ->
         .find(|w| w.key == "t")
         .expect("t was written")
         .value
-        .into_value()
+        // SAFETY: this test is the runtime, reading the committed word out
+        // of the write that holds it.
+        .into_value(unsafe { acvus_extern::Holding::new() })
 }
 
 /// A derived context type round-trips through a directory space: its

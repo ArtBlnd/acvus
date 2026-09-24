@@ -385,11 +385,11 @@ impl<const N: usize, Rt> crate::OneValue<Rt> for Nth<kind::Type, N>
 where
     Rt: crate::Runtime,
 {
-    fn erase(self, _: &Rt) -> Rt::Value {
+    fn erase(self, _: crate::Crossing<'_, Rt>) -> Rt::Value {
         match self {}
     }
 
-    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
+    unsafe fn materialize(_: crate::Crossing<'_, Rt>, _: Rt::Value) -> Self {
         panic!("a value of a compile-time stand-in type was materialized")
     }
 }
@@ -398,7 +398,7 @@ impl<const N: usize, Rt> crate::Stored<Rt> for Nth<kind::Type, N>
 where
     Rt: crate::Runtime,
 {
-    crate::stored_as_canonical!();
+    crate::stored_as_canonical!(Rt);
 }
 
 impl<const N: usize, Rt> crate::Borrowable<Rt> for Nth<kind::Type, N>
@@ -430,11 +430,11 @@ where
     T: Send + Sync + 'static,
     Rt: crate::Runtime,
 {
-    fn erase(self, _: &Rt) -> Rt::Value {
+    fn erase(self, _: crate::Crossing<'_, Rt>) -> Rt::Value {
         match self.1 {}
     }
 
-    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
+    unsafe fn materialize(_: crate::Crossing<'_, Rt>, _: Rt::Value) -> Self {
         panic!("a value of a compile-time stand-in type was materialized")
     }
 }
@@ -444,7 +444,7 @@ where
     T: Var<kind::Type>,
     Rt: crate::Runtime,
 {
-    crate::stored_as_canonical!();
+    crate::stored_as_canonical!(Rt);
 }
 
 impl<T, Rt> crate::Borrowable<Rt> for Spec<T>
@@ -470,11 +470,11 @@ impl<const N: usize, Rt> crate::OneValue<Rt> for ChosenNth<N>
 where
     Rt: crate::Runtime,
 {
-    fn erase(self, _: &Rt) -> Rt::Value {
+    fn erase(self, _: crate::Crossing<'_, Rt>) -> Rt::Value {
         match self.0 {}
     }
 
-    unsafe fn materialize(_: &Rt, _: Rt::Value) -> Self {
+    unsafe fn materialize(_: crate::Crossing<'_, Rt>, _: Rt::Value) -> Self {
         panic!("a value of a compile-time stand-in type was materialized")
     }
 }
@@ -483,7 +483,7 @@ impl<const N: usize, Rt> crate::Stored<Rt> for ChosenNth<N>
 where
     Rt: crate::Runtime,
 {
-    crate::stored_as_canonical!();
+    crate::stored_as_canonical!(Rt);
 }
 
 impl<const N: usize, Rt> crate::Borrowable<Rt> for ChosenNth<N>

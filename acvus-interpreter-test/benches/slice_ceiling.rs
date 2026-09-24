@@ -425,7 +425,7 @@ fn page(n: usize) -> HashMap<String, Owned<AcvusRuntime>> {
     ]
     .into_iter()
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    .map(|(name, value)| (name, unsafe { Owned::from_value(value) }))
+    .map(|(name, value)| (name, unsafe { Owned::from_value(acvus_extern::Holding::new(), value) }))
     .collect()
 }
 

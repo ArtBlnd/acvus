@@ -125,11 +125,11 @@ static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interne
 acvus_extern::cross_one_value!(V, at Counting);
 
 impl acvus_extern::OneValue<Counting> for V {
-    fn erase(self, _: &Counting) -> V {
+    fn erase(self, _: acvus_extern::Crossing<'_, Counting>) -> V {
         self
     }
 
-    unsafe fn materialize(_: &Counting, value: V) -> Self {
+    unsafe fn materialize(_: acvus_extern::Crossing<'_, Counting>, value: V) -> Self {
         value
     }
 }
@@ -152,11 +152,12 @@ impl acvus_extern::Borrowable<Counting> for V {
     }
 }
 
-// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
-unsafe impl acvus_extern::FromValue<Counting> for V {
-    unsafe fn from_value(_: &Counting, value: V) -> V {
-        value
-    }
+
+/// This test plays the runtime, which holds the crossing capability.
+fn runtime_crossing(rt: &Counting) -> acvus_extern::Crossing<'_, Counting> {
+    // SAFETY: the test is the runtime, and it crosses each value at the
+    // type it was erased from.
+    unsafe { acvus_extern::Crossing::new(rt) }
 }
 
 impl Runtime for Counting {
@@ -192,17 +193,6 @@ impl Runtime for Counting {
         'a: 'r,
     {
         rooted
-    }
-
-    fn type_of(&self, value: &V) -> Option<TypeId> {
-        let (V::Boxed(cell) | V::Word(cell)) = value else {
-            return None;
-        };
-        // SAFETY: the value is live, so its cell is.
-        Some(unsafe { &**cell }.type_id())
-    }
-    fn type_name_of(&self, _: &V) -> Option<&'static str> {
-        None
     }
 
     unsafe fn materialize<T>(&self, value: V) -> T
@@ -498,7 +488,7 @@ impl World {
             // SAFETY: stored as itself.
             .map(|x| unsafe { self.rt.erase::<f64>(*x) })
             .collect();
-        acvus_extern::OneValue::<_>::erase(words, &self.rt)
+        acvus_extern::OneValue::<_>::erase(words, runtime_crossing(&self.rt))
     }
 
     fn float(&self, value: V) -> f64 {
@@ -693,7 +683,7 @@ fn s10_a_specialized_result_is_erased_once_for_a_generic_consumer() {
         }
     );
     // SAFETY: `reverse` returns the uniform `Vec<V>` it was given.
-    let items = unsafe { <Vec<V> as OneValue<Counting>>::materialize(&w.rt, reversed) };
+    let items = unsafe { <Vec<V> as OneValue<Counting>>::materialize(runtime_crossing(&w.rt), reversed) };
     assert_eq!(items.len(), 3);
 }
 

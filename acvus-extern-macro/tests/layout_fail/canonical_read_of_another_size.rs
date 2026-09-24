@@ -13,5 +13,6 @@ unsafe impl Canonical<kind::Type> for Wide {
 }
 
 fn main() {
-    let _erase: fn(&TypesOnly, Wide) -> () = canonical::erase::<Wide, TypesOnly>;
+    let _erase: fn(acvus_extern::Crossing<'_, TypesOnly>, Wide) -> () =
+        canonical::erase::<Wide, TypesOnly>;
 }

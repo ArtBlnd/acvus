@@ -30,7 +30,7 @@ note: erroneous constant encountered
   = note: this note originates in the macro `same_layout` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 note: the above error was encountered while instantiating `fn acvus_extern::derive::canonical::erase::<Wide, TypesOnly>`
-  --> tests/layout_fail/canonical_read_of_another_size.rs:16:46
+  --> tests/layout_fail/canonical_read_of_another_size.rs:17:9
    |
-16 |     let _erase: fn(&TypesOnly, Wide) -> () = canonical::erase::<Wide, TypesOnly>;
-   |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+17 |         canonical::erase::<Wide, TypesOnly>;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

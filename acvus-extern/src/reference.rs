@@ -145,16 +145,16 @@ where
     type Form = crate::One;
     type ReturnForm = crate::One;
 
-    unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
+    unsafe fn from_run(rt: crate::Crossing<'_, Rt>, run: &[Rt::Value]) -> Self {
         // SAFETY: the caller's contract, at one value.
         unsafe { <Self as crate::OneValue<Rt>>::from_run(rt, run) }
     }
 
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         <Self as crate::OneValue<Rt>>::into_run(self, rt, out)
     }
 
-    fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_return_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         <Self as crate::OneValue<Rt>>::into_run(self, rt, out)
     }
 }
@@ -170,19 +170,19 @@ where
 {
     type As<'a> = &'a T;
 
-    fn cross(rt: &Rt, passed: &T) -> Rt::Value {
+    fn cross(rt: crate::Crossing<'_, Rt>, passed: &T) -> Rt::Value {
         // SAFETY: `passed` is live for the call, and the closure keeps the
         // reference no longer than that.
         unsafe { rt.reference(value_of(passed)) }
     }
 
-    unsafe fn restore<'a>(rt: &Rt, word: Rt::Value) -> &'a T {
+    unsafe fn restore<'a>(rt: crate::Crossing<'_, Rt>, word: Rt::Value) -> &'a T {
         // SAFETY: the caller's contract: the storage the word names is live
         // for `'a`, which the caller took from the receiver it lent, and it
         // holds a `T`, which `TransparentOver` lays out as the runtime's
         // value. The word itself is a copy and does not bound `'a`.
         unsafe {
-            &*(<Rt::Value as Borrowable<Rt>>::deref(rt, &word) as *const Rt::Value).cast::<T>()
+            &*(<Rt::Value as Borrowable<Rt>>::deref(rt.rt(), &word) as *const Rt::Value).cast::<T>()
         }
     }
 }
@@ -194,16 +194,16 @@ where
 {
     type As<'a> = &'a mut T;
 
-    fn cross(rt: &Rt, passed: &mut T) -> Rt::Value {
+    fn cross(rt: crate::Crossing<'_, Rt>, passed: &mut T) -> Rt::Value {
         // SAFETY: as the shared form's, and `&mut T` is the only live name.
         unsafe { rt.reference(value_of(passed)) }
     }
 
-    unsafe fn restore<'a>(rt: &Rt, word: Rt::Value) -> &'a mut T {
+    unsafe fn restore<'a>(rt: crate::Crossing<'_, Rt>, word: Rt::Value) -> &'a mut T {
         // SAFETY: as the shared form's, and the receiver was lent
         // exclusively for `'a`.
         unsafe {
-            &mut *(<Rt::Value as Borrowable<Rt>>::deref_mut(rt, &word) as *mut Rt::Value)
+            &mut *(<Rt::Value as Borrowable<Rt>>::deref_mut(rt.rt(), &word) as *mut Rt::Value)
                 .cast::<T>()
         }
     }
@@ -220,7 +220,7 @@ where
     type Of<'a> = &'a T;
     type Form = crate::One;
 
-    fn into_run(value: &T, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(value: &T, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         // SAFETY: the storage is the caller's, lent for this call and
         // outliving it; RFC-0018 keeps the reference within the caller.
         out[0] = unsafe { rt.reference(value_of(value)) };
@@ -235,7 +235,7 @@ where
     type Of<'a> = &'a mut T;
     type Form = crate::One;
 
-    fn into_run(value: &mut T, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(value: &mut T, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         // SAFETY: as the shared form's, exclusively.
         out[0] = unsafe { rt.reference(value_of(value)) };
     }
@@ -258,11 +258,11 @@ where
     M: Loan,
     Rt: Runtime,
 {
-    fn erase(self, _: &Rt) -> Rt::Value {
+    fn erase(self, _: crate::Crossing<'_, Rt>) -> Rt::Value {
         self.0
     }
 
-    unsafe fn materialize(_: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(_: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self {
         Self(value, PhantomData)
     }
 }

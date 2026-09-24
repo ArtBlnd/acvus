@@ -37,7 +37,7 @@ use std::ops::Deref;
 
 use acvus_extern::{
     Borrowable, BorrowableSpecialized, Closure, ClosureFn, Cross, Ctx, ExternType, ExternTypeDecl,
-    FxHashMap, Interner, One, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
+    FxHashMap, Interner, OneValue, PassedByValue, PolyTy, PolyVars, QualifiedRef, Ref,
     Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg, TyVarBound,
     UniformPayload, UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry, kind,
 };
@@ -98,14 +98,14 @@ where
     fn same_now(&self, ctx: &mut Ctx<'_, Rt>, a: &K, b: &K) -> bool {
         match self {
             Keying::Closures { eq, .. } => eq.call_now(ctx, (a, b)),
-            Keying::Instances { eq, .. } => eq.call(ctx, a, (&**b,)),
+            Keying::Instances { eq, .. } => eq.call(ctx, a, (b,)),
         }
     }
 
     async fn same(&self, ctx: &mut Ctx<'_, Rt>, a: &K, b: &K) -> bool {
         match self {
             Keying::Closures { eq, .. } => eq.call(ctx, (a, b)).await,
-            Keying::Instances { eq, .. } => eq.call(ctx, a, (&**b,)),
+            Keying::Instances { eq, .. } => eq.call(ctx, a, (b,)),
         }
     }
 }
@@ -463,28 +463,13 @@ macro_rules! stored_extern_type {
             acvus_extern::whole_box_in_place!($t<'static, $($k,)+ E, Rt>, Rt);
         }
 
-        impl<$($k,)+ E, Rt> Cross<Rt> for $t<'static, $($k,)+ E, Rt>
-        where
-            $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
-            E: Var<kind::Effect>,
-            Rt: Runtime,
-        {
-            type Form = One;
-            type ReturnForm = One;
-
-            unsafe fn from_run(rt: &Rt, run: &[Rt::Value]) -> Self {
-                // SAFETY: the caller's contract, at one value.
-                unsafe { <Self as OneValue<Rt>>::from_run(rt, run) }
-            }
-
-            fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
-                <Self as OneValue<Rt>>::into_run(self, rt, out)
-            }
-
-            fn into_return_run(self, rt: &Rt, out: &mut [Rt::Value]) {
-                <Self as OneValue<Rt>>::into_run(self, rt, out)
-            }
-        }
+        acvus_extern::cross_as_one_value!(
+            $t<'static, $($k,)+ E, Rt>, [$($k,)+ E, Rt] at Rt
+            where
+                $($k: Var<kind::Type> + acvus_extern::Unbranded,)+
+                E: Var<kind::Effect>,
+                Rt: Runtime,
+        );
 
         impl<$($k,)+ E, Rt> OneValue<Rt> for $t<'static, $($k,)+ E, Rt>
         where

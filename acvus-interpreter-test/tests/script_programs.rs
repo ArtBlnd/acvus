@@ -68,9 +68,9 @@ fn student(i: &Interner, name: &str, score: i64) -> Value {
         i,
         [
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            (i.intern("name"), unsafe { Owned::from_value(Value::string(name)) }),
+            (i.intern("name"), unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::string(name)) }),
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            (i.intern("score"), unsafe { Owned::from_value(Value::int(score)) }),
+            (i.intern("score"), unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::int(score)) }),
         ],
     )
 }
@@ -87,7 +87,7 @@ fn students(i: &Interner, items: Vec<Value>) -> TypedValue {
     typed(
         Ty::Array(Box::new(student_ty(i)), LenTerm::Known(len)),
         // SAFETY: each word is moved in from `items`, and no other holder owns it.
-        Value::array(items.into_iter().map(|item| unsafe { Owned::from_value(item) }).collect()),
+        Value::array(items.into_iter().map(|item| unsafe { Owned::from_value(acvus_extern::Holding::new(), item) }).collect()),
     )
 }
 

@@ -60,8 +60,8 @@ impl Shape {
                 Shape::Text => a.as_str() == b.as_str(),
                 Shape::Leaf { instance_entry } => {
                     let eq: Instance<core::eq<Owned<Rt>, Rt>, Owned<Rt>, Rt> =
-                        Instance::at(*instance_entry);
-                    eq.call(ctx, owned(a), (b,))
+                        acvus_extern::Crossing::new(ctx.rt).instance(*instance_entry);
+                    eq.call(ctx, owned(a), (owned(b),))
                 }
                 Shape::Never => unreachable!("no value of type `!` exists to compare"),
                 Shape::Array(element) => {
@@ -107,7 +107,7 @@ impl Shape {
         let mut copied = |shape: &Shape, part: &Owned<Rt>| {
             // SAFETY: the caller's contract, at the part's own type; `copy`
             // makes a fresh word, which no other holder owns.
-            unsafe { Owned::from_value(shape.copy(ctx, part)) }
+            unsafe { Owned::from_value(acvus_extern::Holding::new(), shape.copy(ctx, part)) }
         };
         // SAFETY for every `as_*` below: the caller's contract names the
         // composite each arm reads.
@@ -117,8 +117,8 @@ impl Shape {
                 Shape::Text => Value::string(value.as_str()),
                 Shape::Leaf { instance_entry } => {
                     let clone: Instance<core::clone<Owned<Rt>, Rt>, Owned<Rt>, Rt> =
-                        Instance::at(*instance_entry);
-                    clone.call(ctx, owned(value), ()).into_value()
+                        acvus_extern::Crossing::new(ctx.rt).instance(*instance_entry);
+                    clone.call(ctx, owned(value), ()).into_value(acvus_extern::Holding::new())
                 }
                 Shape::Never => unreachable!("no value of type `!` exists to copy"),
                 Shape::Array(element) => Value::array(
@@ -149,7 +149,7 @@ impl Shape {
                         Some(shape) => copied(shape, held.payload()),
                         // SAFETY (`from_value`, inside the block above):
                         // `UNDEF` owns nothing.
-                        None => Owned::from_value(Value::UNDEF),
+                        None => Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF),
                     };
                     Value::variant_of(**held.tag(), payload)
                 }

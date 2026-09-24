@@ -364,8 +364,9 @@ where
                  distinct positions"
             )
         };
-        // SAFETY: this function's contract carries `value_mut`'s.
-        fields.map(|field| unsafe { field.value_mut() })
+        // SAFETY: this function's contract carries `value_mut`'s, and its
+        // caller is the derive's projection glue.
+        fields.map(|field| unsafe { field.value_mut(crate::Holding::new()) })
     }
 }
 
@@ -448,14 +449,14 @@ where
     type Form = One;
 
     unsafe fn take<'s>(
-        rt: &'a Rt,
+        rt: crate::Crossing<'a, Rt>,
         run: &'a [Rt::Value],
         site: &'s <Self as Sited<Rt>>::Site,
     ) -> Self::Out {
         // SAFETY: the caller's contract: `run[0]` is this parameter's own
         // value, a reference to a live object storage, exclusively named
         // where the projection is a `Mut` (RFC-0018).
-        unsafe { <P as Projected<Rt>>::of(rt, &run[0], site) }
+        unsafe { <P as Projected<Rt>>::of(rt.rt(), &run[0], site) }
     }
 }
 
@@ -518,7 +519,7 @@ macro_rules! borrowed_as_self {
             ) -> &'__a Self {
                 // SAFETY: the caller's contract, and a `Stored` type's value
                 // was erased at its `Payload`.
-                <Self as $crate::Stored<__Rt>>::from_payload(unsafe {
+                <Self as $crate::Stored<__Rt>>::from_payload(unsafe { $crate::Holding::new() }, unsafe {
                     __rt.value_as_ref::<<Self as $crate::Stored<__Rt>>::Payload>(__value)
                 })
             }
@@ -529,7 +530,7 @@ macro_rules! borrowed_as_self {
                 _: &(),
             ) -> &'__a mut Self {
                 // SAFETY: as `project`, with the caller's exclusive loan.
-                <Self as $crate::Stored<__Rt>>::from_payload_mut(unsafe {
+                <Self as $crate::Stored<__Rt>>::from_payload_mut(unsafe { $crate::Holding::new() }, unsafe {
                     __rt.value_as_mut::<<Self as $crate::Stored<__Rt>>::Payload>(__value)
                 })
             }

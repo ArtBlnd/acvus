@@ -68,7 +68,7 @@ mod sig {
 
     extern_signature! {
         ns: "q",
-        fn step<S, R, T, U, E, Rt>(it: S, f: Closure<(T,), U, E, Rt>) -> R
+        fn step<S, R, T, U, E, Rt>(it: S, f: Closure<'_, (T,), U, E, Rt>) -> R
         where
             S: Var<kind::Type>,
             R: Var<kind::Type>,
@@ -81,7 +81,7 @@ mod sig {
     extern_signature! {
         ns: "q",
         effect = E,
-        fn drain<S, T, U, E, I, Rt>(it: S, f: Closure<(T,), U, E, Rt>) -> i64
+        fn drain<S, T, U, E, I, Rt>(it: S, f: Closure<'_, (T,), U, E, Rt>) -> i64
         where
             S: Var<kind::Type>,
             T: Var<kind::Type>,

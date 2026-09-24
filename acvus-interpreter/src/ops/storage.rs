@@ -48,7 +48,7 @@ impl Segment for Field {
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY: the preparation read `Object` from the type; the field's
         // word is written as `Segment::at_mut` states.
-        PlaceMut::At(unsafe { value.as_object_mut()[self.0.index()].value_mut() })
+        PlaceMut::At(unsafe { value.as_object_mut()[self.0.index()].value_mut(acvus_extern::Holding::new()) })
     }
 }
 
@@ -73,8 +73,8 @@ impl<const ARRAY: bool> Segment for Index<ARRAY> {
         // SAFETY (both arms): the preparation read the shape off the type;
         // the element's word is written as `Segment::at_mut` states.
         PlaceMut::At(match ARRAY {
-            true => unsafe { value.as_array_mut().0[self.0].value_mut() },
-            false => unsafe { value.as_tuple_mut().0[self.0].value_mut() },
+            true => unsafe { value.as_array_mut().0[self.0].value_mut(acvus_extern::Holding::new()) },
+            false => unsafe { value.as_tuple_mut().0[self.0].value_mut(acvus_extern::Holding::new()) },
         })
     }
 }
@@ -114,7 +114,7 @@ impl Segment for VariantPayload {
     fn at_mut<'v>(&self, value: &'v mut Value) -> PlaceMut<'v> {
         // SAFETY: the preparation read an enum from the type; the payload's
         // word is written as `Segment::at_mut` states.
-        let held: &mut Value = unsafe { value.as_variant_mut().payload_mut().value_mut() };
+        let held: &mut Value = unsafe { value.as_variant_mut().payload_mut().value_mut(acvus_extern::Holding::new()) };
         debug_assert!(
             held.kind() != Kind::Undef,
             "{PAYLOAD_OF_A_TAG_THAT_CARRIES_NONE}"
@@ -695,7 +695,8 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
             .page
             .take(rt, key)
             .unwrap_or_else(|| panic!("context fetch: '{key}' holds no value"));
-        m.regs().define::<LARGE>(self.dst, held.into_value());
+        // SAFETY: the runtime moves the context's word into a register.
+        m.regs().define::<LARGE>(self.dst, held.into_value(unsafe { acvus_extern::Holding::new() }));
         self.next.run(m, r0)
     }
 }
@@ -712,7 +713,7 @@ impl<const LARGE: bool> Op for Commit<LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let value = m.regs().take::<LARGE>(self.src);
         // SAFETY: `take` moved the word out of its register.
-        m.ctx.rt.page.set(&self.key, unsafe { Owned::from_value(value) });
+        m.ctx.rt.page.set(&self.key, unsafe { Owned::from_value(acvus_extern::Holding::new(), value) });
         self.next.run(m, r0)
     }
 }

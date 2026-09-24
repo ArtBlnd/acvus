@@ -559,9 +559,11 @@ impl<const LARGE: bool, const WORD: bool> Array<LARGE, WORD> {
         // SAFETY: as `bound`; `at` is below the length that read.
         let slot = unsafe { &mut regs.peek_mut(self.array).as_array_mut().0[at as usize] };
         // SAFETY: `UNDEF` owns nothing.
-        let vacant = unsafe { Owned::from_value(Value::UNDEF) };
+        let vacant = unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF) };
         let taken: Owned<AcvusRuntime> = std::mem::replace(slot, vacant);
-        regs.store::<LARGE, WORD>(self.elem, taken.into_value());
+        // SAFETY: the runtime moves the word out of the array's slot into a
+        // register, which owns it from here.
+        regs.store::<LARGE, WORD>(self.elem, taken.into_value(unsafe { acvus_extern::Holding::new() }));
         regs.set_word(self.index, at);
     }
 }

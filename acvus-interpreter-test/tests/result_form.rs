@@ -112,17 +112,17 @@ fn a_crossed_result_is_a_variant_holding_the_tag_the_side_names() {
     let i = Interner::new();
     let rt = runtime(&i);
 
-    let ok = <Result<i64, String> as OneValue<AcvusRuntime>>::erase(Ok(7), &rt);
+    let ok = <Result<i64, String> as OneValue<AcvusRuntime>>::erase(Ok(7), unsafe { acvus_extern::Crossing::new(&rt) });
     assert_eq!(tag_of(&ok), i.intern("Ok"));
     assert_eq!(
-        unsafe { <Result<i64, String> as OneValue<AcvusRuntime>>::materialize(&rt, ok) },
+        unsafe { <Result<i64, String> as OneValue<AcvusRuntime>>::materialize(acvus_extern::Crossing::new(&rt), ok) },
         Ok(7)
     );
 
-    let err = <Result<i64, String> as OneValue<AcvusRuntime>>::erase(Err("bad".to_owned()), &rt);
+    let err = <Result<i64, String> as OneValue<AcvusRuntime>>::erase(Err("bad".to_owned()), unsafe { acvus_extern::Crossing::new(&rt) });
     assert_eq!(tag_of(&err), i.intern("Err"));
     assert_eq!(
-        unsafe { <Result<i64, String> as OneValue<AcvusRuntime>>::materialize(&rt, err) },
+        unsafe { <Result<i64, String> as OneValue<AcvusRuntime>>::materialize(acvus_extern::Crossing::new(&rt), err) },
         Err("bad".to_owned())
     );
 }

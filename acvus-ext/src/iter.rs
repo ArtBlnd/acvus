@@ -884,7 +884,7 @@ where
             }
             (Held::Drawn(last), None) => Step::Yield(last),
             (Held::Drawn(last), Some(item)) => {
-                if self.eq.call(ctx, &last, (&*item,)) {
+                if self.eq.call(ctx, &last, (&item,)) {
                     self.held = Held::Drawn(last);
                     Step::DrawAgain
                 } else {

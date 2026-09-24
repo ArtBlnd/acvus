@@ -138,11 +138,17 @@ written by the macro from the type the checker settled at the site. Every
 other reading back is cut.
 
 1. **Three rules, held by review, not at run time.**
-   - Only `T → Value` is a public operation of `acvus-extern`; `Value → T`
-     exists only in code `#[extern_fn]` and `extern_signature!` write. No
-     extension body writes `erase`, `materialize`, `Owned::from_value` or a
-     `Lent`; `Rt::Value` enters a body only as the fill of a
-     `Var<kind::Type>` parameter.
+   - `T → Value` and `Value → T` exist only through the glue's and the
+     runtime's capability. Every function that crosses between a Rust type
+     and the runtime's value (`OneValue`, `Cross`, `Passed`, `Arg::take`,
+     `IntoRun`, the derive's helpers) takes a `Crossing`, and every one that
+     makes, empties or retypes a holder of a bare value (`Owned::from_value`,
+     `vacant`, `value_mut`, `erased`, `lend_run`, `Erased::into_value`,
+     `InPlaceElement`, `Stored::from_payload`) takes a `Crossing` or a
+     `Holding`. Both constructors are `unsafe`; the glue `#[extern_fn]` and
+     `extern_signature!` write makes a `Crossing` from its `Ctx`'s runtime,
+     and the runtime makes its own. A handler is called with its parameters
+     and a `Ctx`, neither of which holds one.
    - A handler's type variable is stored and passed at the variable: a
      payload holding a value at `I` holds it as `I`, and an `Instance` or
      `Closure` beside it is typed at the same `I` and `E`. The glue fills
@@ -155,13 +161,20 @@ other reading back is cut.
    Every check inside the crossing is a `debug_assert!`; the machine restates
    none of the checker's proofs in release.
 
-2. **`Instance` is closed.** `Instance::at` is `#[doc(hidden)] pub unsafe`;
-   its contract is that the word was made by `Runtime::instance_value` from an
-   entry of an instance of `S` at the type `I` is filled with. Its callers are
-   `Required::site` and the glue the macro writes. `InstanceRun`'s fields are
-   private and its one constructor, `from_glue`, is `#[doc(hidden)] pub
-   unsafe`, called by the macro with the typed glue. `Instance::call` and
-   `call_await` are safe. `into_value` stays: it is the forgetting direction.
+2. **`Instance` is closed.** `Instance::at` is crate-private; its contract
+   is that the word was made by `Runtime::instance_value` from an entry of an
+   instance of `S` at the type `I` is filled with. `Required::site` calls it,
+   and the glue and the runtime reach it through `Crossing::instance`.
+   `InstanceRun`'s fields are private and its one constructor, `from_glue`, is
+   `#[doc(hidden)] pub unsafe`, called by the macro with the typed glue.
+   `Instance::call` and `call_await` are safe. Their receiver is `&I` or
+   `&mut I` with `I: Deref<Target = Rt::Value>`; the far side's mono glue
+   reads that value as the instance's literal receiver type, which is the
+   same crossing as any other parameter's. A later argument standing at a
+   signature variable is passed at that variable, `&T` where the receiver is
+   `&T`, and the glue crosses it (`CrossesRest`) under the same bound.
+   `into_value` stays, behind the runtime's `Holding`: it is the forgetting
+   direction.
 
 3. **A payload names its variables.** A derived `ExternType` payload may
    be or mention a type variable. What that once guarded is kept by the
@@ -173,8 +186,8 @@ other reading back is cut.
 
 4. **The crossing is the only reader.** `Runtime::materialize`,
    `value_as_ref/mut`, `inline_ref/mut`, `deref/mut`, `OneValue::materialize`,
-   `FromValue::from_value`, `Loan::borrow`, `Ctx::receiver` and the `Restore*`
-   traits are `unsafe`, `#[doc(hidden)]`, and called only by generated code.
+   `Loan::borrow`, `Ctx::receiver` and the `Restore*` traits are `unsafe`,
+   `#[doc(hidden)]`, and called only by generated code.
    A handler has a value at a type from its parameters, its payload, or an
    instance's typed return.
 
@@ -197,6 +210,10 @@ other reading back is cut.
    returned and `restore` materializes at the requirer's own result type,
    which the checker unified with the instance's. A concrete result crosses as
    typed. `Signature::call_later` returns `impl Future`, adding no box.
+
+7. **`T` stays `T`.** What a handler may do with a `T` is what its bounds
+   enable; nothing is stored at the type and nothing is asserted about a
+   value.
 
 8. **`X<#T>` reaches `X<T>` only through the family's declared cast.**
    Under a constructor the two representations are invariant in the slot, and

@@ -59,7 +59,7 @@ impl AcvusRuntime {
             values: [tag, payload],
         } = held;
         // SAFETY: the first register of a variant this runtime wrote is its tag.
-        let tag = unsafe { tag.into_value().as_tag() };
+        let tag = unsafe { tag.into_value(acvus_extern::Holding::new()).as_tag() };
         if tag == self.shared.interner.intern("Ok") {
             return Ok(payload);
         }
@@ -145,19 +145,6 @@ impl Runtime for AcvusRuntime {
         call::async_extern_op(handler, shape)
     }
 
-    fn type_of(&self, value: &Value) -> Option<TypeId> {
-        match value.kind() {
-            Kind::Large => Some(value.vtable().type_id),
-            kind => kind.type_id(),
-        }
-    }
-
-    fn type_name_of(&self, value: &Value) -> Option<&'static str> {
-        match value.kind() {
-            Kind::Large => Some((value.vtable().name)()),
-            kind => kind.name(),
-        }
-    }
 
     unsafe fn materialize<T>(&self, value: Value) -> T
     where
@@ -319,7 +306,9 @@ impl Runtime for AcvusRuntime {
         // SAFETY: the frame is read and written in place, never moved out
         // or replaced.
         let frame = unsafe { ctx.frame_mut() };
-        args.into_run(self, frame.run_mut(A::WIDTH));
+        // SAFETY: the runtime crosses a closure's arguments at the types its
+        // declaration names, which `IntoRun` carries.
+        args.into_run(unsafe { acvus_extern::Crossing::new(self) }, frame.run_mut(A::WIDTH));
         // SAFETY: the type checker admits only a closure value here, so its
         // code word names the `Code` this enters and the captures the entry
         // reads.
@@ -390,25 +379,16 @@ impl AcvusRuntime {
     }
 }
 
-// SAFETY: the contract is about the Rust type a value was erased from, and
-// `Value` is the runtime's own value: there is no Rust type a raw value
-// disagrees with, so the identity satisfies it for every value.
-unsafe impl acvus_extern::FromValue<AcvusRuntime> for Value {
-    unsafe fn from_value(_: &AcvusRuntime, value: Value) -> Value {
-        value
-    }
-}
-
 acvus_extern::cross_one_value!(Value, at AcvusRuntime);
 
 /// The runtime's own value crosses as itself: nothing to convert, and a
 /// reference to one is read through the word that names it (RFC-0039).
 impl acvus_extern::OneValue<AcvusRuntime> for Value {
-    fn erase(self, _: &AcvusRuntime) -> Value {
+    fn erase(self, _: acvus_extern::Crossing<'_, AcvusRuntime>) -> Value {
         self
     }
 
-    unsafe fn materialize(_: &AcvusRuntime, value: Value) -> Self {
+    unsafe fn materialize(_: acvus_extern::Crossing<'_, AcvusRuntime>, value: Value) -> Self {
         value
     }
 }

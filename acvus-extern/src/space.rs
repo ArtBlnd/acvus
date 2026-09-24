@@ -154,7 +154,7 @@ where
             }),
             decode_state: Box::new(|rt, args, elem, input| {
                 let j = J::decode_state(rt, args, elem, input)?;
-                Ok(<J as crate::OneValue<Rt>>::erase(j, rt))
+                Ok(<J as crate::OneValue<Rt>>::erase(j, unsafe { crate::Crossing::new(rt) }))
             }),
             take_ops: Box::new(|rt, value, args, elem| {
                 let reference = unsafe { rt.reference(value) };

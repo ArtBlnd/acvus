@@ -28,6 +28,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{ParamTerm, Poly, PolyTy};
 use acvus_utils::Interner;
 
+use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::obj::OneValue;
 use crate::owned::Owned;
@@ -46,14 +47,14 @@ where
     type As<'a>: Send;
 
     /// The one value the parameter crosses as, for the call being made.
-    fn cross(rt: &Rt, passed: Self::As<'_>) -> Rt::Value;
+    fn cross(rt: Crossing<'_, Rt>, passed: Self::As<'_>) -> Rt::Value;
 
     /// The value back at this type, for `'a` of the storage it came out of.
     ///
     /// # Safety
     /// `word` was made by `cross` (or by the crossing) from a value of
     /// this type, and what it names is live and unmoved for `'a`.
-    unsafe fn restore<'a>(rt: &Rt, word: Rt::Value) -> Self::As<'a>;
+    unsafe fn restore<'a>(rt: Crossing<'_, Rt>, word: Rt::Value) -> Self::As<'a>;
 }
 
 /// A closure parameter that is passed as the value itself, and a closure
@@ -86,7 +87,7 @@ where
     const WIDTH: usize;
 
     /// The run the call is made with.
-    fn cross_into(rt: &Rt, passed: Self::Passed<'_>, out: &mut [Rt::Value]);
+    fn cross_into(rt: Crossing<'_, Rt>, passed: Self::Passed<'_>, out: &mut [Rt::Value]);
 
     /// The awaited call: the runtime entry that takes this many arguments.
     ///
@@ -95,25 +96,25 @@ where
     /// this tuple is the argument list its declaration names.
     unsafe fn awaited<'a>(
         passed: Self::Passed<'a>,
-        rt: &'a Rt,
+        rt: Crossing<'a, Rt>,
         f: &'a Rt::Value,
     ) -> impl Future<Output = Rt::Value> + Send + 'a;
 }
 
 /// A tuple of passed forms on its way into the runtime's run.
-struct Crossing<'p, A, Rt>(A::Passed<'p>)
+struct PassedRun<'p, A, Rt>(A::Passed<'p>)
 where
     A: CallArgs<Rt>,
     Rt: Runtime;
 
-impl<'p, A, Rt> crate::IntoRun<Rt> for Crossing<'p, A, Rt>
+impl<'p, A, Rt> crate::IntoRun<Rt> for PassedRun<'p, A, Rt>
 where
     A: CallArgs<Rt>,
     Rt: Runtime,
 {
     const WIDTH: usize = A::WIDTH;
 
-    fn into_run(self, rt: &Rt, out: &mut [Rt::Value]) {
+    fn into_run(self, rt: Crossing<'_, Rt>, out: &mut [Rt::Value]) {
         A::cross_into(rt, self.0, out)
     }
 }
@@ -193,18 +194,21 @@ where
         args: A::Passed<'c>,
     ) -> impl Future<Output = R::At<'a>> + Send + 'c {
         async move {
+            // SAFETY: the arguments and the result cross at the types this
+            // `Closure` was materialized at, which the checker settled.
+            let crossing = unsafe { Crossing::new(rt) };
             if self.1 {
                 let mut rooted = rt.rooted();
                 // SAFETY: the `Ctx` is lent to `call_now` alone and never
                 // leaves this block.
                 let ctx = unsafe { Rt::ctx_of(&mut rooted) };
                 // SAFETY: as `ClosureFn::call_now`'s.
-                return returned::<R, Rt>(rt, unsafe {
-                    rt.call_now(&self.0, ctx, Crossing::<A, Rt>(args))
+                return returned::<R, Rt>(crossing, unsafe {
+                    rt.call_now(&self.0, ctx, PassedRun::<A, Rt>(args))
                 });
             }
             // SAFETY: as `ClosureFn::call_now`'s.
-            returned::<R, Rt>(rt, unsafe { A::awaited(args, rt, &self.0) }.await)
+            returned::<R, Rt>(crossing, unsafe { A::awaited(args, crossing, &self.0) }.await)
         }
     }
 }
@@ -221,14 +225,14 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    fn erase(self, _: &Rt) -> Rt::Value {
-        self.0.into_value()
+    fn erase(self, rt: Crossing<'_, Rt>) -> Rt::Value {
+        self.0.into_value(rt.holding())
     }
 
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(rt: Crossing<'_, Rt>, value: Rt::Value) -> Self {
         let sync = rt.call_is_sync(&value);
         // SAFETY: `materialize`'s caller hands over the word it owned.
-        Self(unsafe { Owned::from_value(value) }, sync, PhantomData)
+        Self(unsafe { Owned::from_value(rt.holding(), value) }, sync, PhantomData)
     }
 }
 
@@ -299,11 +303,13 @@ where
             self.is_sync(),
             "a closure value whose effect's task is Sync suspends at run time (RFC-0046)"
         );
+        let rt = ctx.rt;
+        // SAFETY: as `call_rooted`'s.
+        let crossing = unsafe { Crossing::new(rt) };
         // SAFETY: `self.0` is the closure value this `Closure` was built
         // over, and `A` is the argument list its declaration names.
-        let rt = ctx.rt;
-        returned::<R, Rt>(rt, unsafe {
-            rt.call_now(&self.0, ctx, Crossing::<A, Rt>(args))
+        returned::<R, Rt>(crossing, unsafe {
+            rt.call_now(&self.0, ctx, PassedRun::<A, Rt>(args))
         })
     }
 
@@ -314,20 +320,22 @@ where
     ) -> impl Future<Output = R::At<'a>> + Send + 'c {
         async move {
             let rt = ctx.rt;
+            // SAFETY: as `call_rooted`'s.
+            let crossing = unsafe { Crossing::new(rt) };
             if self.1 {
                 // SAFETY: as `call_now`'s.
-                return returned::<R, Rt>(rt, unsafe {
-                    rt.call_now(&self.0, ctx, Crossing::<A, Rt>(args))
+                return returned::<R, Rt>(crossing, unsafe {
+                    rt.call_now(&self.0, ctx, PassedRun::<A, Rt>(args))
                 });
             }
             // SAFETY: as `call_now`'s.
-            returned::<R, Rt>(rt, unsafe { A::awaited(args, rt, &self.0) }.await)
+            returned::<R, Rt>(crossing, unsafe { A::awaited(args, crossing, &self.0) }.await)
         }
     }
 }
 
 /// The value a call produced, read at the closure's declared return type.
-fn returned<'a, R, Rt>(rt: &Rt, out: Rt::Value) -> R::At<'a>
+fn returned<'a, R, Rt>(rt: Crossing<'_, Rt>, out: Rt::Value) -> R::At<'a>
 where
     R: OneValue<Rt>,
     Rt: Runtime,
@@ -347,15 +355,15 @@ where
 
     const WIDTH: usize = 0;
 
-    fn cross_into(_: &Rt, _: (), _: &mut [Rt::Value]) {}
+    fn cross_into(_: Crossing<'_, Rt>, _: (), _: &mut [Rt::Value]) {}
 
     unsafe fn awaited<'a>(
         _: (),
-        rt: &'a Rt,
+        rt: Crossing<'a, Rt>,
         f: &'a Rt::Value,
     ) -> impl Future<Output = Rt::Value> + Send + 'a {
         // SAFETY: the caller's contract.
-        unsafe { rt.call_0(f) }
+        unsafe { rt.rt().call_0(f) }
     }
 }
 
@@ -377,18 +385,18 @@ where
 
     const WIDTH: usize = 1;
 
-    fn cross_into(rt: &Rt, passed: Self::Passed<'_>, out: &mut [Rt::Value]) {
+    fn cross_into(rt: Crossing<'_, Rt>, passed: Self::Passed<'_>, out: &mut [Rt::Value]) {
         out[0] = A0::cross(rt, passed.0);
     }
 
     unsafe fn awaited<'a>(
         passed: Self::Passed<'a>,
-        rt: &'a Rt,
+        rt: Crossing<'a, Rt>,
         f: &'a Rt::Value,
     ) -> impl Future<Output = Rt::Value> + Send + 'a {
         let a = A0::cross(rt, passed.0);
         // SAFETY: the caller's contract.
-        unsafe { rt.call_1(f, a) }
+        unsafe { rt.rt().call_1(f, a) }
     }
 }
 
@@ -411,19 +419,19 @@ macro_rules! args_of {
 
             const WIDTH: usize = 0 $(+ { let _ = $at; 1 })+;
 
-            fn cross_into(rt: &Rt, passed: Self::Passed<'_>, out: &mut [Rt::Value]) {
+            fn cross_into(rt: Crossing<'_, Rt>, passed: Self::Passed<'_>, out: &mut [Rt::Value]) {
                 $(out[$at] = $A::cross(rt, passed.$at);)+
             }
 
             unsafe fn awaited<'a>(
                 passed: Self::Passed<'a>,
-                rt: &'a Rt,
+                rt: Crossing<'a, Rt>,
                 f: &'a Rt::Value,
             ) -> impl Future<Output = Rt::Value> + Send + 'a {
                 let mut run = [$($A::cross(rt, passed.$at)),+];
                 async move {
                     // SAFETY: the caller's contract.
-                    unsafe { rt.call_n(f, &mut run) }.await
+                    unsafe { rt.rt().call_n(f, &mut run) }.await
                 }
             }
         }

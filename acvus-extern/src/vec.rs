@@ -57,7 +57,7 @@ where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    fn erase(self, rt: &Rt) -> Rt::Value {
+    fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value {
         let items: Vec<Owned<Rt>> = if stored_as_container_of::<T, Rt>() {
             // SAFETY: the branch condition is `into_values`'s contract.
             unsafe { into_values::<T, Rt>(self) }
@@ -69,7 +69,7 @@ where
         unsafe { rt.erase::<Vec<Owned<Rt>>>(items) }
     }
 
-    unsafe fn materialize(rt: &Rt, value: Rt::Value) -> Self {
+    unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self {
         // SAFETY: the caller's contract, and `erase` boxes a `Vec<Owned<Rt>>`.
         let items = unsafe { rt.materialize::<Vec<Owned<Rt>>>(value) };
         if stored_as_container_of::<T, Rt>() {
@@ -80,7 +80,7 @@ where
             // element from a `T`.
             items
                 .into_iter()
-                .map(|v| unsafe { T::materialize(rt, v.into_value()) })
+                .map(|v| unsafe { T::materialize(rt, v.into_value(rt.holding())) })
                 .collect()
         }
     }
@@ -93,13 +93,20 @@ where
 {
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
         // SAFETY: the caller's contract, and `erase` boxes a `Vec<Owned<Rt>>`.
-        T::in_place(unsafe { rt.deref::<Vec<Owned<Rt>>>(reference) })
+        // SAFETY: the caller's contract names the storage a crossing wrote
+        // at this type.
+        T::in_place(unsafe { crate::Holding::new() }, unsafe {
+            rt.deref::<Vec<Owned<Rt>>>(reference)
+        })
     }
 
     unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
         // SAFETY: the caller's contract, exclusively, and `erase` boxes a
         // `Vec<Owned<Rt>>`.
-        T::in_place_mut(unsafe { rt.deref_mut::<Vec<Owned<Rt>>>(reference) })
+        // SAFETY: as `deref`'s.
+        T::in_place_mut(unsafe { crate::Holding::new() }, unsafe {
+            rt.deref_mut::<Vec<Owned<Rt>>>(reference)
+        })
     }
 }
 

@@ -6,6 +6,6 @@ use acvus_extern::derive::canonical;
 use acvus_extern::{Erased, TypesOnly};
 
 fn main() {
-    let _erase: fn(&TypesOnly, Vec<Erased<TypesOnly, i64>>) -> () =
+    let _erase: fn(acvus_extern::Crossing<'_, TypesOnly>, Vec<Erased<TypesOnly, i64>>) -> () =
         canonical::erase::<Vec<Erased<TypesOnly, i64>>, TypesOnly>;
 }

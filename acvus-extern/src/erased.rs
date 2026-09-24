@@ -4,13 +4,13 @@
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
-use std::ops::Deref;
 
 use acvus_mir::ty::{Poly, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
 use crate::canonical::{Canonical, same_layout};
-use crate::obj::{FromValue, InPlaceElement, Inline, OneValue, Stored, TransparentOver};
+use crate::crossing::{Crossing, Holding};
+use crate::obj::{InPlaceElement, Inline, OneValue, Stored, TransparentOver};
 use crate::owned::{Owned, Release};
 use crate::runtime::{HoldsNoValues, Runtime};
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
@@ -42,42 +42,37 @@ where
         &mut self.0
     }
 
-    /// As `Owned::from_value`'s.
-    #[doc(hidden)]
-    #[inline(always)]
-    pub fn into_value(self) -> R::Value {
+    pub(crate) fn word(&self) -> &R::Value {
+        &self.0
+    }
+
+    pub(crate) fn take(self) -> R::Value {
         let mut held = ManuallyDrop::new(self);
         // SAFETY: `held` is a `ManuallyDrop`, so `Erased::drop` does not
         // run, and this is the only read of the inner value.
         unsafe { ManuallyDrop::take(&mut held.0) }
     }
 
+    /// The held value, moved out of its holder, which owes its release to
+    /// the caller from then on.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn into_value(self, _: Holding<'_, R>) -> R::Value {
+        self.take()
+    }
+
     #[inline(always)]
     pub fn release(self) {
-        self.into_value().release();
+        self.take().release();
     }
 
     pub fn new(rt: &R, value: T) -> Self
     where
         T: Stored<R>,
     {
-        Self::holding(value.erase(rt))
-    }
-
-    /// `FromValue::from_value` at a named `T`, with the debug check that
-    /// `value` records `erase::<T::Payload>`. Inherent, not that trait's
-    /// impl: the check reads `T` through `T: Stored<R>`, and a trait impl on
-    /// `Erased` bounded on `T` is what RFC-0076 rule 1 forbids, so the impl
-    /// holds for every `T` and does not look.
-    ///
-    /// # Safety
-    /// `FromValue`'s contract: `value` was erased from `T`.
-    pub unsafe fn from_value_of(rt: &R, value: R::Value) -> Self
-    where
-        T: Stored<R>,
-    {
-        crate::debug_assert_erased_from!(rt, &value, <T as Stored<R>>::Payload);
-        Self::holding(value)
+        // SAFETY: `T` is the type this holder names, so the value crosses at
+        // the type it was erased from.
+        Self::holding(value.erase(unsafe { Crossing::new(rt) }))
     }
 
     /// The bound is `Stored`, not `Cross`, and there is no check here: a
@@ -90,8 +85,11 @@ where
         T: Stored<R>,
     {
         // SAFETY: `new` erased the value from a `T`, and `T: Stored<R>`
-        // makes that the runtime's own `erase::<T::Payload>`.
-        T::from_payload(unsafe { rt.value_as_ref::<T::Payload>(&self.0) })
+        // makes that the runtime's own `erase::<T::Payload>`; the payload is
+        // named as the `T` this holder names.
+        T::from_payload(unsafe { Holding::new() }, unsafe {
+            rt.value_as_ref::<T::Payload>(&self.0)
+        })
     }
 
     pub fn as_mut<'a>(&'a mut self, rt: &'a R) -> &'a mut T
@@ -99,15 +97,18 @@ where
         T: Stored<R>,
     {
         // SAFETY: as in `as_ref`; `&mut self` is the exclusive name.
-        T::from_payload_mut(unsafe { rt.value_as_mut::<T::Payload>(&mut self.0) })
+        T::from_payload_mut(unsafe { Holding::new() }, unsafe {
+            rt.value_as_mut::<T::Payload>(&mut self.0)
+        })
     }
 
     pub fn into_inner(self, rt: &R) -> T
     where
         T: Stored<R>,
     {
-        // SAFETY: `new` erased the value from a `T`.
-        unsafe { T::materialize(rt, self.into_value()) }
+        // SAFETY: `new` erased the value from a `T`, and it crosses back at
+        // that `T`.
+        unsafe { T::materialize(Crossing::new(rt), self.take()) }
     }
 
     pub fn get(&self) -> T
@@ -141,21 +142,9 @@ where
 {
     #[inline(always)]
     fn drop(&mut self) {
-        // SAFETY: `drop` runs once, and `into_value` — the only other
-        // reader — forgets the holder before reading.
+        // SAFETY: `drop` runs once, and `take` — the only other reader —
+        // forgets the holder before reading.
         unsafe { ManuallyDrop::take(&mut self.0) }.release();
-    }
-}
-
-impl<R, T> Deref for Erased<R, T>
-where
-    R: Runtime,
-{
-    type Target = R::Value;
-
-    #[inline(always)]
-    fn deref(&self) -> &R::Value {
-        &self.0
     }
 }
 
@@ -216,11 +205,11 @@ where
 {
     const STORED_AS_VALUE: bool = true;
 
-    fn erase(self, _: &R) -> R::Value {
-        self.into_value()
+    fn erase(self, _: crate::Crossing<'_, R>) -> R::Value {
+        self.take()
     }
 
-    unsafe fn materialize(_: &R, value: R::Value) -> Self {
+    unsafe fn materialize(_: crate::Crossing<'_, R>, value: R::Value) -> Self {
         Self::holding(value)
     }
 }
@@ -231,7 +220,7 @@ where
     T: 'static,
     Self: crate::Unbranded,
 {
-    crate::stored_as_canonical!();
+    crate::stored_as_canonical!(R);
 }
 
 impl<R, T> crate::Borrowable<R> for Erased<R, T>
@@ -266,7 +255,7 @@ where
     T: 'static,
     Self: crate::Branded,
 {
-    fn in_place(values: &Vec<Owned<R>>) -> &Vec<Self> {
+    fn in_place<'v>(_: Holding<'_, R>, values: &'v Vec<Owned<R>>) -> &'v Vec<Self> {
         same_layout!(Vec<Owned<R>>, Vec<Self>);
         // SAFETY: `Owned<R>` is this type's canonical form, and the two
         // `Vec`s differ in nothing else (`Canonical`), with the layout
@@ -274,7 +263,7 @@ where
         unsafe { &*(values as *const Vec<Owned<R>>).cast::<Vec<Self>>() }
     }
 
-    fn in_place_mut(values: &mut Vec<Owned<R>>) -> &mut Vec<Self> {
+    fn in_place_mut<'v>(_: Holding<'_, R>, values: &'v mut Vec<Owned<R>>) -> &'v mut Vec<Self> {
         same_layout!(Vec<Owned<R>>, Vec<Self>);
         // SAFETY: as `in_place`; `&mut` is the exclusive name.
         unsafe { &mut *(values as *mut Vec<Owned<R>>).cast::<Vec<Self>>() }
@@ -290,17 +279,6 @@ where
     T: 'static,
     Self: crate::Unbranded,
 {
-}
-
-// SAFETY: the contract is `from_value`'s caller's, who names `T` the type
-// the value was erased from; the holder reads nothing of it.
-unsafe impl<R, T> FromValue<R> for Erased<R, T>
-where
-    R: Runtime,
-{
-    unsafe fn from_value(_: &R, value: R::Value) -> Self {
-        Self::holding(value)
-    }
 }
 
 impl<R, T> Var<kind::Type> for Erased<R, T>

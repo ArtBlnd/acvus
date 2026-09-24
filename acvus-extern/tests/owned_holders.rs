@@ -9,13 +9,13 @@
 //! is exactly 1; where the holder gives the value back, the count is 0
 //! while it is out and 1 when its receiver drops it.
 
-use std::any::{Any, TypeId, type_name};
+use std::any::{Any, type_name};
 use std::future::Ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::{
-    Arr, Astr, Canonical, Closure, Erased, FromValue, Interner, OneValue, Opaque, Owned, Ref,
+    Arr, Astr, Canonical, Closure, Erased, Interner, OneValue, Opaque, Owned, Ref,
     Release, Runtime, Shared, Var, cross_as_stored, kind,
 };
 
@@ -129,11 +129,11 @@ where
 acvus_extern::cross_one_value!(V, at Counted);
 
 impl acvus_extern::OneValue<Counted> for V {
-    fn erase(self, _: &Counted) -> V {
+    fn erase(self, _: acvus_extern::Crossing<'_, Counted>) -> V {
         self
     }
 
-    unsafe fn materialize(_: &Counted, value: V) -> Self {
+    unsafe fn materialize(_: acvus_extern::Crossing<'_, Counted>, value: V) -> Self {
         value
     }
 }
@@ -156,11 +156,18 @@ impl acvus_extern::Borrowable<Counted> for V {
     }
 }
 
-// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
-unsafe impl FromValue<Counted> for V {
-    unsafe fn from_value(_: &Counted, value: V) -> V {
-        value
-    }
+
+/// This test plays the runtime, which holds the crossing capability.
+fn runtime_crossing(rt: &Counted) -> acvus_extern::Crossing<'_, Counted> {
+    // SAFETY: the test is the runtime, and it crosses each value at the
+    // type it was erased from.
+    unsafe { acvus_extern::Crossing::new(rt) }
+}
+
+/// As `crossing`, for a holder of a bare value.
+fn runtime_holding() -> acvus_extern::Holding<'static, Counted> {
+    // SAFETY: as `crossing`'s.
+    unsafe { acvus_extern::Holding::new() }
 }
 
 impl Runtime for Counted {
@@ -201,17 +208,6 @@ impl Runtime for Counted {
         'a: 'r,
     {
         rooted
-    }
-
-    fn type_of(&self, value: &V) -> Option<TypeId> {
-        match value {
-            V::Boxed(_) => Some(cell_ref(value).type_id()),
-            V::None | V::Undef | V::Tag(_) | V::Some(_) | V::Reference(_) | V::Instance(_) => None,
-        }
-    }
-
-    fn type_name_of(&self, _: &V) -> Option<&'static str> {
-        None
     }
 
     unsafe fn materialize<T>(&self, value: V) -> T
@@ -413,7 +409,7 @@ fn an_owned_releases_its_value_once() {
     let drops = Drops::default();
     {
         // SAFETY: the word is made here, and no other holder owns it.
-        let _held = unsafe { Owned::<Counted>::from_value(tracked_value(&rt, &drops)) };
+        let _held = unsafe { Owned::<Counted>::from_value(runtime_holding(), tracked_value(&rt, &drops)) };
         assert_eq!(drops.count(), 0, "the holder has not been let go of yet");
     }
     assert_eq!(drops.count(), 1, "the holder released its value once");
@@ -424,7 +420,7 @@ fn an_owned_that_gave_its_value_back_releases_nothing() {
     let rt = Counted;
     let drops = Drops::default();
     // SAFETY: the word is made here, and no other holder owns it.
-    let value = unsafe { Owned::<Counted>::from_value(tracked_value(&rt, &drops)) }.into_value();
+    let value = unsafe { Owned::<Counted>::from_value(runtime_holding(), tracked_value(&rt, &drops)) }.into_value(runtime_holding());
     assert_eq!(drops.count(), 0, "the value is out of the holder");
     value.release();
     assert_eq!(drops.count(), 1, "its new owner released it once");
@@ -464,7 +460,7 @@ fn a_closure_carrier_releases_its_closure_once() {
         // of `Counted`'s.
         let _held = unsafe {
             <Closure<(V,), V, Opaque, Counted> as OneValue<Counted>>::materialize(
-                &rt,
+                runtime_crossing(&rt),
                 closure_owning_a_tracked_capture(&rt, &drops),
             )
         };
@@ -479,7 +475,7 @@ fn a_closure_carrier_releases_its_closure_once() {
 fn a_vec_releases_its_elements_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = OneValue::<_>::erase(vec![drops.payload(), drops.payload(), drops.payload()], &rt);
+    let stored = OneValue::<_>::erase(vec![drops.payload(), drops.payload(), drops.payload()], runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the elements are in the store");
     stored.release();
     assert_eq!(drops.count(), 3, "each element was released once");
@@ -489,9 +485,9 @@ fn a_vec_releases_its_elements_once() {
 fn a_vec_materialized_back_is_released_by_its_receiver() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], &rt);
+    let stored = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], runtime_crossing(&rt));
     // SAFETY: `stored` was erased from this same `Vec<Tracked>`.
-    let items = unsafe { <Vec<Tracked> as OneValue<Counted>>::materialize(&rt, stored) };
+    let items = unsafe { <Vec<Tracked> as OneValue<Counted>>::materialize(runtime_crossing(&rt), stored) };
     assert_eq!(drops.count(), 0, "the elements are out of the store");
     drop(items);
     assert_eq!(drops.count(), 2, "the receiver dropped each element once");
@@ -504,9 +500,7 @@ fn an_array_releases_its_elements_once() {
     let rt = Counted;
     let drops = Drops::default();
     let stored = OneValue::<_>::erase(
-        Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]),
-        &rt,
-    );
+        Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the elements are in the store");
     stored.release();
     assert_eq!(drops.count(), 2, "each element was released once");
@@ -517,11 +511,9 @@ fn an_array_materialized_back_is_released_by_its_receiver() {
     let rt = Counted;
     let drops = Drops::default();
     let stored = OneValue::<_>::erase(
-        Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]),
-        &rt,
-    );
+        Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]), runtime_crossing(&rt));
     // SAFETY: `stored` was erased from this same `Arr<Tracked, ()>`.
-    let items = unsafe { <Arr<Tracked, ()> as OneValue<Counted>>::materialize(&rt, stored) };
+    let items = unsafe { <Arr<Tracked, ()> as OneValue<Counted>>::materialize(runtime_crossing(&rt), stored) };
     assert_eq!(drops.count(), 0, "the elements are out of the store");
     drop(items);
     assert_eq!(drops.count(), 2, "the receiver dropped each element once");
@@ -533,7 +525,7 @@ fn an_array_materialized_back_is_released_by_its_receiver() {
 fn a_result_releases_its_ok_payload_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = OneValue::<_>::erase(Ok::<Tracked, Tracked>(drops.payload()), &rt);
+    let stored = OneValue::<_>::erase(Ok::<Tracked, Tracked>(drops.payload()), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the payload is in the store");
     stored.release();
     assert_eq!(drops.count(), 1, "the ok payload was released once");
@@ -543,7 +535,7 @@ fn a_result_releases_its_ok_payload_once() {
 fn a_result_releases_its_err_payload_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = OneValue::<_>::erase(Err::<Tracked, Tracked>(drops.payload()), &rt);
+    let stored = OneValue::<_>::erase(Err::<Tracked, Tracked>(drops.payload()), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the payload is in the store");
     stored.release();
     assert_eq!(drops.count(), 1, "the err payload was released once");
@@ -555,7 +547,7 @@ fn a_result_releases_its_err_payload_once() {
 fn an_option_releases_its_payload_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let stored = OneValue::<_>::erase(Some(drops.payload()), &rt);
+    let stored = OneValue::<_>::erase(Some(drops.payload()), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the payload is in the store");
     stored.release();
     assert_eq!(drops.count(), 1, "the payload was released once");
@@ -567,7 +559,7 @@ fn one_field(rt: &Counted, drops: &Drops) -> acvus_extern::Obj<Owned<Counted>> {
     acvus_extern::Obj::new(
         acvus_extern::ObjectShape::of(&SYMBOLS, [rt.symbol("payload")]),
         // SAFETY: the word is made here, and no other holder owns it.
-        Box::new([unsafe { Owned::from_value(tracked_value(rt, drops)) }]),
+        Box::new([unsafe { Owned::from_value(runtime_holding(), tracked_value(rt, drops)) }]),
     )
 }
 
@@ -592,7 +584,7 @@ fn an_object_field_taken_out_is_released_by_its_receiver() {
             .expect("one field");
     // SAFETY: the field was erased from a `Tracked`.
     let taken =
-        unsafe { acvus_extern::derive::materialize_field::<Tracked, Counted>(&rt, payload) };
+        unsafe { acvus_extern::derive::materialize_field::<Tracked, Counted>(runtime_crossing(&rt), payload) };
     assert_eq!(drops.count(), 0, "the field is out of the object");
     drop(taken);
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
@@ -603,9 +595,9 @@ fn an_object_field_taken_out_is_released_by_its_receiver() {
 fn carrying(rt: &Counted, drops: &Drops) -> acvus_extern::Variant<Owned<Counted>> {
     acvus_extern::Variant::of(
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(rt.variant_tag("Held")) },
+        unsafe { Owned::from_value(runtime_holding(), rt.variant_tag("Held")) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(tracked_value(rt, drops)) },
+        unsafe { Owned::from_value(runtime_holding(), tracked_value(rt, drops)) },
     )
 }
 
@@ -631,7 +623,7 @@ fn a_variants_payload_taken_out_is_released_by_its_receiver() {
     assert_eq!(drops.count(), 0, "the payload is out of the variant");
     // SAFETY: the payload was erased from a `Tracked`.
     let taken =
-        unsafe { acvus_extern::derive::materialize_field::<Tracked, Counted>(&rt, payload) };
+        unsafe { acvus_extern::derive::materialize_field::<Tracked, Counted>(runtime_crossing(&rt), payload) };
     assert_eq!(drops.count(), 0, "the payload is in its receiver");
     drop(taken);
     assert_eq!(drops.count(), 1, "its receiver dropped it once");
@@ -645,9 +637,9 @@ fn a_unit_variants_registers_release_nothing() {
     let drops = Drops::default();
     let unit = acvus_extern::Variant::of(
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Counted>::from_value(rt.variant_tag("Bare")) },
+        unsafe { Owned::<Counted>::from_value(runtime_holding(), rt.variant_tag("Bare")) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(rt.undef()) },
+        unsafe { Owned::from_value(runtime_holding(), rt.undef()) },
     );
     drop(unit);
     assert_eq!(drops.count(), 0, "a unit variant holds nothing to release");
@@ -666,7 +658,7 @@ struct OutOfOrder {
 #[test]
 fn a_derived_structs_field_table_is_the_shape_order() {
     let rt = Counted;
-    let value = OutOfOrder { zed: 1, alpha: 2 }.erase(&rt);
+    let value = OutOfOrder { zed: 1, alpha: 2 }.erase(runtime_crossing(&rt));
     // SAFETY: the derive's `erase` wrote an `Obj<Owned<Counted>>`.
     let obj = unsafe { rt.materialize::<acvus_extern::Obj<Owned<Counted>>>(value) };
     let table: Vec<&str> = obj
@@ -688,8 +680,8 @@ fn a_derived_structs_field_table_is_the_shape_order() {
     // SAFETY: the derive erased each field from its declared `i64`.
     let (alpha, zed) = unsafe {
         (
-            acvus_extern::derive::materialize_field::<i64, Counted>(&rt, alpha),
-            acvus_extern::derive::materialize_field::<i64, Counted>(&rt, zed),
+            acvus_extern::derive::materialize_field::<i64, Counted>(runtime_crossing(&rt), alpha),
+            acvus_extern::derive::materialize_field::<i64, Counted>(runtime_crossing(&rt), zed),
         )
     };
     assert_eq!((alpha, zed), (2, 1), "each value at its own field's offset");
@@ -699,7 +691,7 @@ fn a_derived_structs_field_table_is_the_shape_order() {
 
 fn one_payload(rt: &Counted, drops: &Drops) -> Option<Owned<Counted>> {
     // SAFETY: the word is made here, and no other holder owns it.
-    Some(unsafe { Owned::from_value(tracked_value(rt, drops)) })
+    Some(unsafe { Owned::from_value(runtime_holding(), tracked_value(rt, drops)) })
 }
 
 #[test]
@@ -720,7 +712,7 @@ fn a_variant_payload_taken_out_is_released_by_its_receiver() {
     let payload = one_payload(&rt, &drops);
     // SAFETY: the payload was erased from a `Tracked`.
     let taken = unsafe {
-        acvus_extern::derive::materialize_payload::<Tracked, Counted>(&rt, payload, "Tag")
+        acvus_extern::derive::materialize_payload::<Tracked, Counted>(runtime_crossing(&rt), payload, "Tag")
     };
     assert_eq!(drops.count(), 0, "the payload is out of the variant");
     drop(taken);
@@ -733,13 +725,13 @@ fn a_variant_payload_taken_out_is_released_by_its_receiver() {
 fn a_borrow_releases_nothing_and_its_storage_still_releases_once() {
     let rt = Counted;
     let drops = Drops::default();
-    let storage = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], &rt);
+    let storage = OneValue::<_>::erase(vec![drops.payload(), drops.payload()], runtime_crossing(&rt));
     {
         // SAFETY: the test is the crossing here: `storage` is a value the
         // language would type `&Vec<Tracked>`, live for this block.
         let lent = unsafe {
             <Ref<Vec<Owned<Counted>>, Shared, Counted> as OneValue<Counted>>::materialize(
-                &rt,
+                runtime_crossing(&rt),
                 rt.reference(&storage),
             )
         };
@@ -766,7 +758,9 @@ where
     A: acvus_extern::IntoRun<Rt>,
 {
     let mut run = vec![Rt::Value::default(); A::WIDTH];
-    args.into_run(rt, &mut run);
+    // SAFETY: the test is the runtime, and the arguments cross at the types
+    // `A` names.
+    args.into_run(unsafe { acvus_extern::Crossing::new(rt) }, &mut run);
     run
 }
 
@@ -821,7 +815,7 @@ fn a_point(rt: &Counted) -> V {
         x: 7,
         label: "seven".to_owned(),
     }
-    .erase(rt)
+    .erase(runtime_crossing(rt))
 }
 
 #[test]
@@ -879,7 +873,7 @@ fn an_exclusive_projection_writes_through_to_the_object() {
     }
 
     // SAFETY: the derive's `erase` wrote this object and nothing moved it.
-    let read = unsafe { Point::materialize(&rt, object) };
+    let read = unsafe { Point::materialize(runtime_crossing(&rt), object) };
     assert_eq!((read.x, read.label.as_str()), (9, "seventeen"));
 }
 
@@ -1076,8 +1070,8 @@ fn a_shared_enum_projection_names_the_arm_its_tag_names() {
     let rt = Counted;
     let table = shape_table();
     for (value, expected) in [
-        (Shape::Empty.erase(&rt), "Empty"),
-        (Shape::Count(7).erase(&rt), "Count(7)"),
+        (Shape::Empty.erase(runtime_crossing(&rt)), "Empty"),
+        (Shape::Count(7).erase(runtime_crossing(&rt)), "Count(7)"),
     ] {
         // SAFETY: `value` is live for the borrow below.
         let reference = unsafe { rt.reference(&value) };
@@ -1104,7 +1098,7 @@ fn an_enum_projections_nested_payload_borrows_the_objects_own_value() {
         x: 7,
         label: "seven".to_owned(),
     })
-    .erase(&rt);
+    .erase(runtime_crossing(&rt));
     // SAFETY: `value` is live for the borrow below.
     let reference = unsafe { rt.reference(&value) };
     // SAFETY: `reference` names the live variant `erase` just wrote.
@@ -1132,7 +1126,7 @@ fn an_enum_projections_nested_payload_borrows_the_objects_own_value() {
 fn an_exclusive_enum_projection_writes_through_its_arm() {
     let rt = Counted;
     let table = shape_table();
-    let value = Shape::Count(7).erase(&rt);
+    let value = Shape::Count(7).erase(runtime_crossing(&rt));
     {
         // SAFETY: `value` is live and named by nothing else for the borrow.
         let reference = unsafe { rt.reference(&value) };
@@ -1148,7 +1142,7 @@ fn an_exclusive_enum_projection_writes_through_its_arm() {
         *n = 9;
     }
     // SAFETY: `erase` wrote this variant and nothing moved it.
-    let read = unsafe { Shape::materialize(&rt, value) };
+    let read = unsafe { Shape::materialize(runtime_crossing(&rt), value) };
     let Shape::Count(n) = read else {
         panic!("the tag still names the `Count` arm")
     };
@@ -1159,7 +1153,7 @@ fn an_exclusive_enum_projection_writes_through_its_arm() {
 fn set_rewrites_both_words_of_the_variant_it_was_lent() {
     let rt = Counted;
     let table = shape_table();
-    let value = Shape::Count(7).erase(&rt);
+    let value = Shape::Count(7).erase(runtime_crossing(&rt));
     {
         // SAFETY: `value` is live and named by nothing else for the borrow.
         let reference = unsafe { rt.reference(&value) };
@@ -1172,7 +1166,7 @@ fn set_rewrites_both_words_of_the_variant_it_was_lent() {
         shape.set(Shape::Empty);
     }
     // SAFETY: as above; `set` wrote a variant of the same enum.
-    let read = unsafe { Shape::materialize(&rt, value) };
+    let read = unsafe { Shape::materialize(runtime_crossing(&rt), value) };
     assert!(matches!(read, Shape::Empty), "the tag word moved too");
 }
 
@@ -1182,10 +1176,10 @@ fn set_releases_the_payload_it_writes_over() {
     let drops = Drops::default();
     let table = shape_table();
     let value = acvus_extern::derive::variant::erase(
-        &rt,
+        runtime_crossing(&rt),
         "Count",
         // SAFETY: the word is made here, and no other holder owns it.
-        Some(unsafe { Owned::from_value(tracked_value(&rt, &drops)) }),
+        Some(unsafe { Owned::from_value(runtime_holding(), tracked_value(&rt, &drops)) }),
     );
     {
         // SAFETY: `value` is live and named by nothing else for the borrow.
@@ -1214,7 +1208,7 @@ fn an_enum_projection_allocates_nothing_and_a_by_value_crossing_does() {
         x: 7,
         label: "seven".to_owned(),
     })
-    .erase(&rt);
+    .erase(runtime_crossing(&rt));
     // SAFETY: `value` is live for both crossings below.
     let reference = unsafe { rt.reference(&value) };
 

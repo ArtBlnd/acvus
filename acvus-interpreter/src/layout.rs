@@ -208,7 +208,7 @@ pub(crate) fn decode_owned(
 ) -> SpaceResult<Owned<AcvusRuntime>> {
     let value = decode(rt, nested, ty, input)?;
     // SAFETY: `decode` made the word, and no other holder owns it.
-    Ok(unsafe { Owned::from_value(value) })
+    Ok(unsafe { Owned::from_value(acvus_extern::Holding::new(), value) })
 }
 
 pub fn decode(

@@ -10,14 +10,14 @@
 //! uses, repeated here because a test target cannot import another
 //! crate's test target.
 
-use std::any::{Any, TypeId, type_name};
+use std::any::{Any, type_name};
 use std::future::Ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_ext::{Deque, Items};
 use acvus_extern::{
-    Astr, Canonical, FromValue, Interner, Owned, Release, Runtime, Var, cross_as_stored, kind,
+    Astr, Canonical, Interner, Owned, Release, Runtime, Var, cross_as_stored, kind,
 };
 
 /// No registry these tests combine declares a sliceable container, so the
@@ -131,11 +131,11 @@ where
 acvus_extern::cross_one_value!(V, at Counted);
 
 impl acvus_extern::OneValue<Counted> for V {
-    fn erase(self, _: &Counted) -> V {
+    fn erase(self, _: acvus_extern::Crossing<'_, Counted>) -> V {
         self
     }
 
-    unsafe fn materialize(_: &Counted, value: V) -> Self {
+    unsafe fn materialize(_: acvus_extern::Crossing<'_, Counted>, value: V) -> Self {
         value
     }
 }
@@ -158,11 +158,12 @@ impl acvus_extern::Borrowable<Counted> for V {
     }
 }
 
-// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
-unsafe impl FromValue<Counted> for V {
-    unsafe fn from_value(_: &Counted, value: V) -> V {
-        value
-    }
+
+/// This test plays the runtime, which holds a bare value in an `Owned`.
+fn runtime_holding() -> acvus_extern::Holding<'static, Counted> {
+    // SAFETY: the test is the runtime, and each word it holds was made for
+    // the holder it moves into.
+    unsafe { acvus_extern::Holding::new() }
 }
 
 impl Runtime for Counted {
@@ -198,17 +199,6 @@ impl Runtime for Counted {
         'a: 'r,
     {
         rooted
-    }
-
-    fn type_of(&self, value: &V) -> Option<TypeId> {
-        match value {
-            V::Boxed(_) => Some(cell_ref(value).type_id()),
-            V::None | V::Some(_) | V::Reference(_) => None,
-        }
-    }
-
-    fn type_name_of(&self, _: &V) -> Option<&'static str> {
-        None
     }
 
     unsafe fn materialize<T>(&self, value: V) -> T
@@ -398,7 +388,7 @@ fn a_deque_releases_its_elements_once() {
         let mut deque = Deque::<Owned<Counted>>::default();
         for _ in 0..3 {
             // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-            deque.push_back(unsafe { Owned::from_value(tracked_value(&rt, &drops)) });
+            deque.push_back(unsafe { Owned::from_value(runtime_holding(), tracked_value(&rt, &drops)) });
         }
         assert_eq!(drops.count(), 0, "the elements are in the deque");
     }
@@ -411,7 +401,7 @@ fn a_deque_element_popped_is_released_by_its_receiver() {
     let drops = Drops::default();
     let mut deque = Deque::<Owned<Counted>>::default();
     // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-    deque.push_front(unsafe { Owned::from_value(tracked_value(&rt, &drops)) });
+    deque.push_front(unsafe { Owned::from_value(runtime_holding(), tracked_value(&rt, &drops)) });
     let popped = deque
         .pop_front()
         .expect("the element just pushed is the front");
@@ -429,7 +419,7 @@ fn an_abandoned_source_releases_the_elements_it_did_not_yield() {
     let drops = Drops::default();
     let items = (0..3)
         // SAFETY: the word was made for this holder and moved in; no other holder owns it.
-        .map(|_| unsafe { Owned::from_value(tracked_value(&rt, &drops)) })
+        .map(|_| unsafe { Owned::from_value(runtime_holding(), tracked_value(&rt, &drops)) })
         .collect();
     {
         let _abandoned = Items::<Owned<Counted>, (), Counted>::of(items);
@@ -446,6 +436,8 @@ where
     A: acvus_extern::IntoRun<Rt>,
 {
     let mut run = vec![Rt::Value::default(); A::WIDTH];
-    args.into_run(rt, &mut run);
+    // SAFETY: the test is the runtime, and the arguments cross at the types
+    // `A` names.
+    args.into_run(unsafe { acvus_extern::Crossing::new(rt) }, &mut run);
     run
 }

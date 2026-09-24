@@ -4,7 +4,6 @@
 //! opens one shape of value; a shape that is not there is the runtime's
 //! own error.
 
-use std::any::TypeId;
 use std::future::{Future, Ready};
 
 /// The contract a host signs to run declared ExternFns. A `Value` is opaque;
@@ -13,7 +12,6 @@ use std::future::{Future, Ready};
 pub trait Runtime: Sized + Send + Sync + 'static {
     type Value: crate::Cross<Self, Form = crate::One>
         + crate::Borrowable<Self>
-        + crate::FromValue<Self>
         + crate::Release
         + Copy
         + Default;
@@ -94,14 +92,6 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     fn async_extern_op<H>(handler: H, shape: Self::AsyncShape) -> Self::Op
     where
         H: crate::handler::AsyncCall<Self>;
-
-    /// The `T` of the `erase::<T>` that made this value, when the value
-    /// records it. `downcast` and `Erased::from_value_of` trust this answer
-    /// with a `materialize::<T>`, so a runtime answers only from the record.
-    fn type_of(&self, value: &Self::Value) -> Option<TypeId>;
-    /// The runtime's name for the type `type_of` reports, for a panic
-    /// message; a runtime that keeps no name answers `None`.
-    fn type_name_of(&self, value: &Self::Value) -> Option<&'static str>;
 
     /// # Safety
     /// `T` must be the type the value was `erase`d from.
@@ -302,14 +292,6 @@ fn no_values() -> ! {
     panic!("TypesOnly runtime holds no values")
 }
 
-// SAFETY: `TypesOnly::Value` is `()`, the one value it has, and `()` is the
-// only type it can have been erased from.
-unsafe impl crate::FromValue<TypesOnly> for () {
-    unsafe fn from_value(_: &TypesOnly, value: ()) {
-        value
-    }
-}
-
 impl Runtime for TypesOnly {
     type Value = ();
     type Frame<'a> = ();
@@ -344,12 +326,6 @@ impl Runtime for TypesOnly {
 
     crate::direct_call_forms!();
 
-    fn type_of(&self, _: &()) -> Option<TypeId> {
-        None
-    }
-    fn type_name_of(&self, _: &()) -> Option<&'static str> {
-        None
-    }
     unsafe fn materialize<T>(&self, _: ()) -> T
     where
         T: Send + Sync + 'static,

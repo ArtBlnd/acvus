@@ -21,7 +21,7 @@ use crate::runtime::Runtime;
 /// `unsafe(uniform_payload)` asserts it.
 pub unsafe trait Transparent<P>: Sized {}
 
-pub fn erase<T, P, Rt>(value: T, rt: &Rt) -> Rt::Value
+pub fn erase<T, P, Rt>(value: T, rt: crate::Crossing<'_, Rt>) -> Rt::Value
 where
     T: Transparent<P>,
     P: Send + Sync + 'static,
@@ -39,7 +39,7 @@ where
 
 /// # Safety
 /// `value` is what `erase` wrote.
-pub unsafe fn materialize<T, P, Rt>(rt: &Rt, value: Rt::Value) -> T
+pub unsafe fn materialize<T, P, Rt>(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> T
 where
     T: Transparent<P>,
     P: Send + Sync + 'static,

@@ -864,7 +864,7 @@ fn generate_extern_fn(
                     // `prepare` chose for this requirement, and that entry
                     // lives as long as the one this glue runs.
                     let #ident: ::acvus_extern::Instance<'__w, #sig, #var, __R, #task> =
-                        unsafe { ::acvus_extern::Instance::at(__entry.requires[#at]) };
+                        unsafe { __rt.instance(__entry.requires[#at]) };
                 }
             })
             .collect();
@@ -882,12 +882,12 @@ fn generate_extern_fn(
             match p.mode {
                 Mode::BorrowMut | Mode::Borrow => quote! {
                     let __recv_at = unsafe {
-                        <__R as ::acvus_extern::Runtime>::reference(__rt, &*__ctx.receiver())
+                        <__R as ::acvus_extern::Runtime>::reference(__rt.rt(), &*__ctx.receiver())
                     };
                     let #at = unsafe {
                         <#loan as ::acvus_extern::Loan>::brand::<#ty>(
                             <#loan as ::acvus_extern::Loan>::borrow::<#ty, #c, __R>(
-                                __rt, &__recv_at,
+                                __rt.rt(), &__recv_at,
                             ),
                         )
                     };
@@ -1008,7 +1008,9 @@ fn generate_extern_fn(
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    let __rt = __ctx.rt;
+                    // SAFETY: this is the glue `#[extern_fn]` wrote, and it crosses
+                    // each value at the declaration's own types.
+                    let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                     ::std::boxed::Box::pin(async move {
                         // SAFETY: an `Instance::call` named the receiver
                         // for this call, and this glue is the body of an
@@ -1052,7 +1054,9 @@ fn generate_extern_fn(
                         (#(#arg_markers,)* #(#inst_markers,)*),
                         #entry_ty,
                     >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| {
-                        let __rt = __ctx.rt;
+                        // SAFETY: this is the glue `#[extern_fn]` wrote, and it crosses
+                    // each value at the declaration's own types.
+                    let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                         ::std::boxed::Box::pin(async move {
                             let __r = (#call).await;
                             // SAFETY: the result is erased here.
@@ -1069,7 +1073,9 @@ fn generate_extern_fn(
                     ::acvus_extern::async_glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)*)>(
                         move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| {
                             #capture_state
-                            let __rt = __ctx.rt;
+                            // SAFETY: this is the glue `#[extern_fn]` wrote, and it crosses
+                    // each value at the declaration's own types.
+                    let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                             ::std::boxed::Box::pin(async move {
                                 let __r = (#call).await;
                                 // SAFETY: the result is erased here.
@@ -1096,7 +1102,9 @@ fn generate_extern_fn(
                 where
                     __R: ::acvus_extern::Runtime,
                 {
-                    let __rt = __ctx.rt;
+                    // SAFETY: this is the glue `#[extern_fn]` wrote, and it crosses
+                    // each value at the declaration's own types.
+                    let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                     // SAFETY: an `Instance::call` named the receiver for
                     // this call, and this glue is the body of an instance
                     // standing at the type the value it named holds.
@@ -1898,11 +1906,11 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     };
     let one_value_run = one_value_run(returned_as_one_value());
     let payload_crossing = quote! {
-        fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
+        fn erase(self, __rt: ::acvus_extern::Crossing<'_, __R>) -> <__R as ::acvus_extern::Runtime>::Value {
             ::acvus_extern::derive::transparent::erase::<Self, #key_ty, __R>(self, __rt)
         }
 
-        unsafe fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+        unsafe fn materialize(__rt: ::acvus_extern::Crossing<'_, __R>, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
             // SAFETY: the caller's contract, and `erase` is `transparent::erase`.
             unsafe {
                 ::acvus_extern::derive::transparent::materialize::<Self, #key_ty, __R>(__rt, __value)
@@ -1937,11 +1945,17 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         {
             type Payload = #key_ty;
 
-            fn from_payload<'__p>(__payload: &'__p #key_ty) -> &'__p Self {
+            fn from_payload<'__p>(
+                _: ::acvus_extern::Holding<'_, __R>,
+                __payload: &'__p #key_ty,
+            ) -> &'__p Self {
                 ::acvus_extern::derive::transparent::from_payload::<Self, #key_ty>(__payload)
             }
 
-            fn from_payload_mut<'__p>(__payload: &'__p mut #key_ty) -> &'__p mut Self {
+            fn from_payload_mut<'__p>(
+                _: ::acvus_extern::Holding<'_, __R>,
+                __payload: &'__p mut #key_ty,
+            ) -> &'__p mut Self {
                 ::acvus_extern::derive::transparent::from_payload_mut::<Self, #key_ty>(__payload)
             }
         }
@@ -1950,12 +1964,12 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         0 => quote! {
             type As<'__a> = Self;
 
-            fn cross(__rt: &__R, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
+            fn cross(__rt: ::acvus_extern::Crossing<'_, __R>, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
                 <Self as ::acvus_extern::OneValue<__R>>::erase(__passed, __rt)
             }
 
             unsafe fn restore<'__a>(
-                __rt: &__R,
+                __rt: ::acvus_extern::Crossing<'_, __R>,
                 __word: <__R as ::acvus_extern::Runtime>::Value,
             ) -> Self::As<'__a> {
                 // SAFETY: the caller's contract, which is `materialize`'s.
@@ -1966,7 +1980,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             type As<'__a> = <Self as ::acvus_extern::Branded>::At<'__a>;
 
             fn cross(
-                __rt: &__R,
+                __rt: ::acvus_extern::Crossing<'_, __R>,
                 __passed: Self::As<'_>,
             ) -> <__R as ::acvus_extern::Runtime>::Value {
                 // SAFETY: the value is erased here.
@@ -1975,7 +1989,7 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
 
             unsafe fn restore<'__a>(
-                __rt: &__R,
+                __rt: ::acvus_extern::Crossing<'_, __R>,
                 __word: <__R as ::acvus_extern::Runtime>::Value,
             ) -> Self::As<'__a> {
                 // SAFETY: the caller's contract, which is `materialize`'s,
@@ -2666,11 +2680,11 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
         where
             __R: ::acvus_extern::Runtime,
         {
-            fn erase(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
+            fn erase(self, __rt: ::acvus_extern::Crossing<'_, __R>) -> <__R as ::acvus_extern::Runtime>::Value {
                 #erase
             }
 
-            unsafe fn materialize(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+            unsafe fn materialize(__rt: ::acvus_extern::Crossing<'_, __R>, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
                 #materialize
             }
         }
@@ -2681,12 +2695,12 @@ fn cross_impl(ident: &Ident, crossing: Crossing) -> proc_macro2::TokenStream {
         {
             type As<'__a> = Self;
 
-            fn cross(__rt: &__R, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
+            fn cross(__rt: ::acvus_extern::Crossing<'_, __R>, __passed: Self) -> <__R as ::acvus_extern::Runtime>::Value {
                 <Self as ::acvus_extern::OneValue<__R>>::erase(__passed, __rt)
             }
 
             unsafe fn restore<'__a>(
-                __rt: &__R,
+                __rt: ::acvus_extern::Crossing<'_, __R>,
                 __word: <__R as ::acvus_extern::Runtime>::Value,
             ) -> Self::As<'__a> {
                 // SAFETY: the caller's contract, which is `materialize`'s.
@@ -2705,14 +2719,14 @@ fn one_value_run(returns: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
         type Form = ::acvus_extern::One;
 
         unsafe fn from_run(
-            __rt: &__R,
+            __rt: ::acvus_extern::Crossing<'_, __R>,
             __run: &[<__R as ::acvus_extern::Runtime>::Value],
         ) -> Self {
             // SAFETY: the caller's contract, at one value.
             unsafe { <Self as ::acvus_extern::OneValue<__R>>::from_run(__rt, __run) }
         }
 
-        fn into_run(self, __rt: &__R, __out: &mut [<__R as ::acvus_extern::Runtime>::Value]) {
+        fn into_run(self, __rt: ::acvus_extern::Crossing<'_, __R>, __out: &mut [<__R as ::acvus_extern::Runtime>::Value]) {
             <Self as ::acvus_extern::OneValue<__R>>::into_run(self, __rt, __out)
         }
 
@@ -2729,7 +2743,7 @@ fn returned_as_one_value() -> proc_macro2::TokenStream {
 
         fn into_return_run(
             self,
-            __rt: &__R,
+            __rt: ::acvus_extern::Crossing<'_, __R>,
             __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
         ) {
             <Self as ::acvus_extern::OneValue<__R>>::into_run(self, __rt, __out)
@@ -2835,10 +2849,11 @@ impl<'a> ObjectShape<'a> {
 
             fn into_return_run(
                 self,
-                __rt: &__R,
+                __rt: ::acvus_extern::Crossing<'_, __R>,
                 __out: &mut [<__R as ::acvus_extern::Runtime>::Value],
             ) {
                 ::acvus_extern::derive::object::fields_into_run::<__R, #width>(
+                    __rt.holding(),
                     [#(::acvus_extern::derive::erase_field::<#tys, __R>(__rt, self.#idents)),*],
                     __out,
                 )
@@ -3254,7 +3269,9 @@ fn generate_enum_ty_arg(
                 let ty = shape.written_poly_ty();
                 let erase = shape.erase_bound();
                 let materialize = shape.materialize(
-                    quote! { ::acvus_extern::derive::take_payload(__payload, #tag).into_value() },
+                    quote! {
+                        ::acvus_extern::derive::take_payload(__payload, #tag).into_value(__rt.holding())
+                    },
                     quote! { Self::#v },
                 );
                 variant_tys.push(quote! {
@@ -3267,7 +3284,7 @@ fn generate_enum_ty_arg(
                             // SAFETY: the object word is built here from
                             // fields the arm moved out, so no other holder
                             // owns it.
-                            unsafe { ::acvus_extern::Owned::from_value(#erase) },
+                            unsafe { ::acvus_extern::Owned::from_value(__rt.holding(), #erase) },
                         ),
                     )
                 });
@@ -3517,7 +3534,9 @@ fn enum_projection(
                 let __at = ::acvus_extern::derive::variant::arm_of(__tag, &__table.tags, #name);
                 // SAFETY: the payload word is only handed to its arm's
                 // `project_mut`, whose contract is what is written through it.
-                let __payload = unsafe { __variant.payload_mut().value_mut() };
+                let __payload = unsafe {
+                    __variant.payload_mut().value_mut(::acvus_extern::Holding::new())
+                };
                 match __at {
                     #(#write_arms,)*
                 }
@@ -3546,7 +3565,10 @@ fn enum_projection(
             }
 
             pub fn set(&mut self, __value: #owner) {
-                let __rt = self.rt;
+                // SAFETY: `over`'s contract: the variant holds what the
+                // owner's crossing wrote, and the value is erased at the
+                // owner's own type.
+                let __rt = unsafe { ::acvus_extern::Crossing::new(self.rt) };
                 let (__tag, __payload) = match __value { #(#erase_arms,)* };
                 *self.variant = ::acvus_extern::derive::variant::words(__rt, __tag, __payload);
             }
@@ -4214,6 +4236,60 @@ impl RestAt {
         !matches!(self, Self::Itself(_))
     }
 
+    /// The type this position has in the rest a requirer passes: a position
+    /// at a variable borrowed as the signature takes it, or passed as
+    /// `Passed::As` names it, and every other position as `crossed` spells
+    /// it. A lifetime the signature wrote is `'static` here, as in every
+    /// bound the impl states.
+    fn required(self, ty: &Type, runtime: &Ident) -> proc_macro2::TokenStream {
+        let ty = at_static(ty);
+        match self {
+            Self::VariableShared => quote! { &'__a #ty },
+            Self::VariableExclusive => quote! { &'__a mut #ty },
+            Self::VariableValue => {
+                quote! { <#ty as ::acvus_extern::Passed<#runtime>>::As<'__a> }
+            }
+            Self::Itself(_) => self.crossed(&ty, runtime),
+        }
+    }
+
+    /// What `required`'s type must be for the glue to cross it into
+    /// `crossed`'s: a borrowed variable names storage holding one of the
+    /// runtime's values, as a receiver does (RFC-0068 rule 2), and a
+    /// position taken by value is one a closure could be passed.
+    fn required_bound(self, ty: &Type, runtime: &Ident) -> Option<proc_macro2::TokenStream> {
+        let ty = at_static(ty);
+        let value = quote! { <#runtime as ::acvus_extern::Runtime>::Value };
+        match self {
+            Self::VariableShared => Some(quote! { #ty: ::core::ops::Deref<Target = #value> }),
+            Self::VariableExclusive => {
+                Some(quote! { #ty: ::core::ops::DerefMut<Target = #value> })
+            }
+            Self::VariableValue => Some(quote! { #ty: ::acvus_extern::Passed<#runtime> }),
+            Self::Itself(_) => None,
+        }
+    }
+
+    /// `arg`, of `required`'s type, crossed into `crossed`'s by the glue.
+    fn cross_required(self, ty: &Type, runtime: &Ident, arg: &Ident) -> proc_macro2::TokenStream {
+        let ty = at_static(ty);
+        match self {
+            Self::VariableShared => quote! { &**#arg },
+            Self::VariableExclusive => quote! { &mut **#arg },
+            Self::VariableValue => quote! {
+                // SAFETY: `Passed::cross` erased the value it consumed, so no
+                // other holder owns the word.
+                unsafe {
+                    ::acvus_extern::Owned::from_value(
+                        __rt.holding(),
+                        <#ty as ::acvus_extern::Passed<#runtime>>::cross(__rt, #arg),
+                    )
+                }
+            },
+            Self::Itself(_) => quote! { #arg },
+        }
+    }
+
     /// Whether the position is one a `Signature` impl can name: a borrow
     /// stands at the signature's own variable or nowhere, because nothing
     /// else has a uniform form a requiring handler could hold.
@@ -4260,7 +4336,7 @@ fn signature_module(
                 #runtime: ::acvus_extern::Runtime,
             {
                 #[inline(always)]
-                fn cross(_: &#runtime, __r: Self) -> Ret<#runtime> {
+                fn cross(_: ::acvus_extern::Crossing<'_, #runtime>, __r: Self) -> Ret<#runtime> {
                     __r
                 }
             }
@@ -4275,7 +4351,7 @@ fn signature_module(
                 __T: ::acvus_extern::OneValue<#runtime>,
             {
                 #[inline(always)]
-                fn cross(__rt: &#runtime, __r: Self) -> Ret<#runtime> {
+                fn cross(__rt: ::acvus_extern::Crossing<'_, #runtime>, __r: Self) -> Ret<#runtime> {
                     __r.map(|__v| <__T as ::acvus_extern::OneValue<#runtime>>::erase(__v, __rt))
                 }
             }
@@ -4289,7 +4365,7 @@ fn signature_module(
                 __T: ::acvus_extern::OneValue<#runtime>,
             {
                 #[inline(always)]
-                fn cross(__rt: &#runtime, __r: Self) -> Ret<#runtime> {
+                fn cross(__rt: ::acvus_extern::Crossing<'_, #runtime>, __r: Self) -> Ret<#runtime> {
                     <__T as ::acvus_extern::OneValue<#runtime>>::erase(__r, __rt)
                 }
             }
@@ -4390,7 +4466,7 @@ fn signature_module(
             where
                 #runtime: ::acvus_extern::Runtime,
             {
-                fn cross(rt: &#runtime, r: Self) -> Ret<#runtime>;
+                fn cross(rt: ::acvus_extern::Crossing<'_, #runtime>, r: Self) -> Ret<#runtime>;
             }
 
             #returned
@@ -4414,7 +4490,7 @@ fn signature_module(
             #[allow(clippy::needless_lifetimes, unused_variables)]
             #[inline(always)]
             pub unsafe fn restore<'__a, '__b, #runtime #(, #markers)*>(
-                __rt: &#runtime,
+                __rt: ::acvus_extern::Crossing<'_, #runtime>,
                 __rest: Rest<'__a, #runtime>,
                 __lent: &'__b mut Lent<#runtime>,
             ) -> (#(#restored,)*)
@@ -4577,6 +4653,23 @@ fn signature_call(
     });
     let module = signature_module_ident(ident);
     let kinds = vars.kind_predicates();
+    let required = rest
+        .iter()
+        .zip(&rest_tys)
+        .map(|(at, ty)| at.required(ty, runtime));
+    let required_bounds: Vec<proc_macro2::TokenStream> = rest
+        .iter()
+        .zip(&rest_tys)
+        .filter_map(|(at, ty)| at.required_bound(ty, runtime))
+        .collect();
+    let rest_args: Vec<Ident> = (0..rest.len()).map(|at| format_ident!("__x{at}")).collect();
+    let crossed_args = rest
+        .iter()
+        .zip(&rest_tys)
+        .zip(&rest_args)
+        .map(|((at, ty), arg)| at.cross_required(ty, runtime, arg));
+    let kinds_again = vars.kind_predicates();
+    let rest_crossings: Vec<proc_macro2::TokenStream> = rest_crossings.collect();
     let Received {
         ty: received,
         bound: restore_bound,
@@ -4594,7 +4687,7 @@ fn signature_call(
         {
             type This = #first;
             type Recv<'__a> = #recv;
-            type Rest<'__a> = #module::Rest<'__a, #runtime>;
+            type Words<'__a> = #module::Rest<'__a, #runtime>;
             type Ret<'__r> = #received;
             type Now = #module::Now<#runtime>;
             type Later = #module::Later<#runtime>;
@@ -4602,7 +4695,7 @@ fn signature_call(
             unsafe fn call_now<'__r>(
                 __value: <#runtime as ::acvus_extern::Runtime>::Value,
                 __ctx: &mut ::acvus_extern::Ctx<'_, #runtime>,
-                __rest: <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__r>,
+                __rest: <Self as ::acvus_extern::Signature<#runtime>>::Words<'__r>,
             ) -> <Self as ::acvus_extern::Signature<#runtime>>::Ret<'__r> {
                 // SAFETY: the caller's contract: the word addresses the
                 // entry of an instance of this signature.
@@ -4614,7 +4707,11 @@ fn signature_call(
                 // this type and at no other.
                 let __f: <Self as ::acvus_extern::Signature<#runtime>>::Now =
                     unsafe { ::core::mem::transmute(__entry.run.at()) };
-                let __rt = __ctx.rt;
+                // SAFETY: this is the requirer's half of the crossing
+                // `extern_signature!` wrote, and it reads the result at the
+                // requirer's type, which the checker unified with the
+                // instance's (RFC-0068 rule 6).
+                let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                 // SAFETY: the caller's contract, which is the glue's own.
                 let __r = unsafe { __f(__entry, __ctx, __rest) };
                 #restore
@@ -4623,7 +4720,7 @@ fn signature_call(
             unsafe fn call_later<'__r>(
                 __value: <#runtime as ::acvus_extern::Runtime>::Value,
                 __ctx: &'__r mut ::acvus_extern::Ctx<'_, #runtime>,
-                __rest: <Self as ::acvus_extern::Signature<#runtime>>::Rest<'__r>,
+                __rest: <Self as ::acvus_extern::Signature<#runtime>>::Words<'__r>,
             ) -> impl ::core::future::Future<
                 Output = <Self as ::acvus_extern::Signature<#runtime>>::Ret<'__r>,
             > + ::core::marker::Send + '__r
@@ -4652,11 +4749,34 @@ fn signature_call(
                     // task above named.
                     let __f: <Self as ::acvus_extern::Signature<#runtime>>::Later =
                         unsafe { ::core::mem::transmute(__entry.run.at()) };
-                    let __rt = __ctx.rt;
+                    // SAFETY: as `call_now`'s.
+                    let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                     // SAFETY: as `call_now`'s.
                     let __r = unsafe { __f(__entry, __ctx, __rest) }.await;
                     #restore
                 })
+            }
+        }
+
+        impl<#(#marker_params,)*> ::acvus_extern::CrossesRest<#runtime>
+            for #ident<#(#marker_params,)*>
+        where
+            #runtime: ::acvus_extern::Runtime,
+            #restore_bound,
+            #(#marker_params: 'static,)*
+            #(#kinds_again,)*
+            #(#rest_crossings,)*
+            #(#required_bounds,)*
+        {
+            type Rest<'__a> = (#(#required,)*);
+
+            #[inline(always)]
+            fn cross_rest<'__a>(
+                __rt: ::acvus_extern::Crossing<'_, #runtime>,
+                __rest: <Self as ::acvus_extern::CrossesRest<#runtime>>::Rest<'__a>,
+            ) -> <Self as ::acvus_extern::Signature<#runtime>>::Words<'__a> {
+                let (#(#rest_args,)*) = __rest;
+                (#(#crossed_args,)*)
             }
         }
     }

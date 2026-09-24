@@ -246,11 +246,11 @@ static SYMBOLS: std::sync::LazyLock<Interner> = std::sync::LazyLock::new(Interne
 acvus_extern::cross_one_value!(V, at Tiny);
 
 impl acvus_extern::OneValue<Tiny> for V {
-    fn erase(self, _: &Tiny) -> V {
+    fn erase(self, _: acvus_extern::Crossing<'_, Tiny>) -> V {
         self
     }
 
-    unsafe fn materialize(_: &Tiny, value: V) -> Self {
+    unsafe fn materialize(_: acvus_extern::Crossing<'_, Tiny>, value: V) -> Self {
         value
     }
 }
@@ -269,11 +269,18 @@ impl acvus_extern::Borrowable<Tiny> for V {
     }
 }
 
-// SAFETY: `V` is this runtime's own value, which no Rust type disagrees with.
-unsafe impl acvus_extern::FromValue<Tiny> for V {
-    unsafe fn from_value(_: &Tiny, value: V) -> V {
-        value
-    }
+
+/// This test plays the runtime, which holds the crossing capability.
+fn runtime_crossing(rt: &Tiny) -> acvus_extern::Crossing<'_, Tiny> {
+    // SAFETY: the test is the runtime, and it crosses each value at the
+    // type it was erased from.
+    unsafe { acvus_extern::Crossing::new(rt) }
+}
+
+/// As `crossing`, for a holder of a bare value.
+fn runtime_holding() -> acvus_extern::Holding<'static, Tiny> {
+    // SAFETY: as `crossing`'s.
+    unsafe { acvus_extern::Holding::new() }
 }
 
 impl Runtime for Tiny {
@@ -285,15 +292,6 @@ impl Runtime for Tiny {
 
     acvus_extern::direct_call_forms!();
 
-    fn type_of(&self, value: &V) -> Option<std::any::TypeId> {
-        let V::Erased(any) = value else {
-            return None;
-        };
-        Some(unsafe { &**any }.type_id())
-    }
-    fn type_name_of(&self, _: &V) -> Option<&'static str> {
-        None
-    }
     unsafe fn inline_ref<T>(value: &V) -> &T
     where
         T: acvus_extern::Inline,
@@ -723,7 +721,7 @@ where
     T: Var<kind::Type> + Borrowable<Rt> + std::ops::Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
-    eq_at.call(ctx, a, (&**b,))
+    eq_at.call(ctx, a, (b,))
 }
 
 extern_signature! { ns: "t", fn advance<I>(it: &mut I) -> i64 where I: Var<kind::Type>; }
@@ -943,7 +941,7 @@ fn call_instance<'r, S, R>(
     read: impl FnOnce(S::Ret<'r>) -> R,
 ) -> R
 where
-    S: acvus_extern::Signature<Tiny>,
+    S: acvus_extern::CrossesRest<Tiny>,
     S::Recv<'r>: acvus_extern::Receiver<Tiny>,
 {
     type Site<S> = acvus_extern::Required<S, Place, acvus_extern::Now, 0>;
@@ -1054,7 +1052,7 @@ fn a_mono_glue_runs_the_instance_the_glue_runs() {
     assert!(call_instance::<eq<Place, Tiny>, _>(
         &at,
         &recv,
-        (&other,),
+        (&Place(other),),
         |same| same
     ));
 }
@@ -1315,11 +1313,11 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
     );
     let storage = erased(vec![
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(1i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(1i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(2i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(2i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(3i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(3i64)) },
     ]);
     // SAFETY: `storage` outlives every run taken from it here (RFC-0018).
     let container = || unsafe { Tiny.reference(&storage) };
@@ -1468,16 +1466,16 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
 
     let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(erased(1i64)) },
+        unsafe { Owned::from_value(runtime_holding(), erased(1i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(erased(2i64)) },
+        unsafe { Owned::from_value(runtime_holding(), erased(2i64)) },
     ]));
     let boxed = call_sync(handler(&reg, &i, "boxed"), vec![arr]);
     // SAFETY: `boxed`'s glue erased its return from a `Boxed<T, Pure, Rt>`.
     let Boxed::<Owned<Tiny>, Pure, Tiny>(items, _) =
-        unsafe { OneValue::<Tiny>::materialize(&Tiny, boxed) };
+        unsafe { OneValue::<Tiny>::materialize(runtime_crossing(&Tiny), boxed) };
     assert_eq!(items.len(), 2);
-    let boxed = OneValue::<Tiny>::erase(Boxed::<Owned<Tiny>, (), Tiny>(items, PhantomData), &Tiny);
+    let boxed = OneValue::<Tiny>::erase(Boxed::<Owned<Tiny>, (), Tiny>(items, PhantomData), runtime_crossing(&Tiny));
 
     let double = V::Closure(Closure::new(|args| {
         let [n] = <[V; 1]>::try_from(args)
@@ -1487,10 +1485,10 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     let out = call_async(handler(&reg, &i, "apply"), vec![boxed, double]).await;
     // SAFETY: `apply`'s glue erased its return from a `Boxed<U, E, Rt>`.
     let Boxed::<Owned<Tiny>, (), Tiny>(items, _) =
-        unsafe { OneValue::<Tiny>::materialize(&Tiny, out) };
+        unsafe { OneValue::<Tiny>::materialize(runtime_crossing(&Tiny), out) };
     let doubled: Vec<i64> = items
         .into_iter()
-        .map(|item| open::<i64>(item.into_value()))
+        .map(|item| open::<i64>(item.into_value(runtime_holding())))
         .collect();
     assert_eq!(doubled, vec![2, 4]);
 
@@ -1502,9 +1500,9 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
         acvus_extern::ObjectShape::of(&SYMBOLS, [Tiny.symbol("x"), Tiny.symbol("label")]),
         Box::new([
             // SAFETY: the word is made here, and no other holder owns it.
-            unsafe { Owned::<Tiny>::from_value(erased("p".to_owned())) },
+            unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased("p".to_owned())) },
             // SAFETY: the word is made here, and no other holder owns it.
-            unsafe { Owned::from_value(erased(21i64)) },
+            unsafe { Owned::from_value(runtime_holding(), erased(21i64)) },
         ]),
     ));
     let out = call_async(handler(&reg, &i, "fetch"), vec![point]).await;
@@ -1518,8 +1516,8 @@ async fn handlers_run_the_rust_body_on_the_test_runtime() {
     assert_eq!(names, vec!["label", "x"]);
     let [label, x] = *<Box<[Owned<Tiny>]> as TryInto<Box<[Owned<Tiny>; 2]>>>::try_into(obj.values)
         .expect("two fields");
-    assert_eq!(open::<i64>(x.into_value()), 42);
-    assert_eq!(open::<String>(label.into_value()), "p");
+    assert_eq!(open::<i64>(x.into_value(runtime_holding())), 42);
+    assert_eq!(open::<String>(label.into_value(runtime_holding())), "p");
 }
 
 /// A lent result (RFC-0068 rule 4): `at` returns Rust's `Option<&T>` of the
@@ -1530,9 +1528,9 @@ fn a_lent_element_names_the_containers_own_storage() {
     let (i, reg) = combined::<Tiny>();
     let storage = erased(vec![
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(10i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(10i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(20i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(20i64)) },
     ]);
     // SAFETY: `storage` outlives every reference taken from it here.
     let container = || unsafe { Tiny.reference(&storage) };
@@ -1560,9 +1558,9 @@ fn a_lent_yield_reaches_the_requirer_as_a_borrow_of_its_receiver() {
         handler(&reg, &i, "held"),
         vec![erased(vec![
             // SAFETY: the word is made here, and no other holder owns it.
-            unsafe { Owned::<Tiny>::from_value(erased(41i64)) },
+            unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(41i64)) },
             // SAFETY: the word is made here, and no other holder owns it.
-            unsafe { Owned::<Tiny>::from_value(erased(5i64)) },
+            unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(5i64)) },
         ])],
     );
     let held_ty = acvus_extern::Ty::UserDefined {
@@ -1645,11 +1643,11 @@ fn a_borrowed_closure_argument_is_a_reference_into_the_handlers_borrow() {
     let (i, reg) = combined::<Tiny>();
     let storage = erased(vec![
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(1i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(1i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(5i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(5i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::<Tiny>::from_value(erased(9i64)) },
+        unsafe { Owned::<Tiny>::from_value(runtime_holding(), erased(9i64)) },
     ]);
     // SAFETY: `storage` outlives every reference taken from it here.
     let container = unsafe { Tiny.reference(&storage) };
@@ -1957,7 +1955,7 @@ fn crossing<A>(r: Result<A, String>) -> V
 where
     A: acvus_extern::OneValue<Tiny, acvus_extern::Specialized>,
 {
-    <Result<A, String> as acvus_extern::OneValue<Tiny, acvus_extern::Specialized>>::erase(r, &Tiny)
+    <Result<A, String> as acvus_extern::OneValue<Tiny, acvus_extern::Specialized>>::erase(r, runtime_crossing(&Tiny))
 }
 
 /// The `Result` a member wrote into its result slot.
@@ -1969,7 +1967,7 @@ where
     // crossing.
     unsafe {
         <Result<A, String> as acvus_extern::OneValue<Tiny, acvus_extern::Specialized>>::materialize(
-            &Tiny, value,
+            runtime_crossing(&Tiny), value,
         )
     }
 }
@@ -2039,9 +2037,7 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
     );
     let h = instance_for(&reg, &i, "box_count", &ty).unwrap();
     let payload = OneValue::<Tiny>::erase(
-        Boxed::<String, Pure, Tiny>(vec![String::from("a"), String::from("b")], PhantomData),
-        &Tiny,
-    );
+        Boxed::<String, Pure, Tiny>(vec![String::from("a"), String::from("b")], PhantomData), runtime_crossing(&Tiny));
     assert_eq!(open::<i64>(call_sync(h, vec![payload])), 2);
     let ty = call_type(
         vec![boxed_of(TypeArg::uniform(acvus_extern::Ty::Float))],
@@ -2053,16 +2049,14 @@ fn the_instances_the_compiler_sees_are_the_handlers_in_that_order() {
         Boxed::<Owned<Tiny>, Pure, Tiny>(
             vec![
                 // SAFETY: the word is made here, and no other holder owns it.
-                unsafe { Owned::from_value(erased(1.5f64)) },
+                unsafe { Owned::from_value(runtime_holding(), erased(1.5f64)) },
                 // SAFETY: the word is made here, and no other holder owns it.
-                unsafe { Owned::from_value(erased(2.5f64)) },
+                unsafe { Owned::from_value(runtime_holding(), erased(2.5f64)) },
                 // SAFETY: the word is made here, and no other holder owns it.
-                unsafe { Owned::from_value(erased(3.5f64)) },
+                unsafe { Owned::from_value(runtime_holding(), erased(3.5f64)) },
             ],
             PhantomData,
-        ),
-        &Tiny,
-    );
+        ), runtime_crossing(&Tiny));
     assert_eq!(open::<i64>(call_sync(fallback, vec![payload])), 3);
 }
 
@@ -2089,9 +2083,7 @@ fn a_derived_type_is_read_through_a_reference_at_a_monomorphized_member() {
     );
     let h = instance_for(&reg, &i, "box_width", &ty).expect("an instance on i64");
     let place = OneValue::<Tiny>::erase(
-        Boxed::<i64, Pure, Tiny>(vec![1i64, 2i64, 3i64], PhantomData),
-        &Tiny,
-    );
+        Boxed::<i64, Pure, Tiny>(vec![1i64, 2i64, 3i64], PhantomData), runtime_crossing(&Tiny));
     // SAFETY: `place` outlives the call.
     let r = call_sync(h, vec![unsafe { Tiny.reference(&place) }]);
     assert_eq!(open::<i64>(r), 3);
@@ -2181,9 +2173,9 @@ fn a_polymorphic_instance_is_selected_by_the_argument_s_shape() {
     );
     let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(erased(7i64)) },
+        unsafe { Owned::from_value(runtime_holding(), erased(7i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(erased(8i64)) },
+        unsafe { Owned::from_value(runtime_holding(), erased(8i64)) },
     ]));
     let h = instance_for(&reg, &i, "first", &on_array).unwrap();
     assert_eq!(open::<i64>(call_sync(h, vec![arr])), 7);
@@ -2343,9 +2335,9 @@ fn an_effect_variable_signature_admits_an_effect_instance_and_a_pure_one() {
     );
     let arr = erased(Arr::<Owned<Tiny>, ()>::new(vec![
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(erased(7i64)) },
+        unsafe { Owned::from_value(runtime_holding(), erased(7i64)) },
         // SAFETY: the word is made here, and no other holder owns it.
-        unsafe { Owned::from_value(erased(8i64)) },
+        unsafe { Owned::from_value(runtime_holding(), erased(8i64)) },
     ]));
     let h = instance_for(&reg, &i, "drain", &on_array).expect("the array instance");
     assert_eq!(open::<i64>(call_sync(h, vec![arr])), 2);
@@ -2624,15 +2616,15 @@ fn a_host_some_is_never_none_and_opens_back_to_its_payload() {
 #[test]
 fn an_option_crosses_as_the_host_shaped_it() {
     let rt = Tiny;
-    let erased_option = <Option<i64> as acvus_extern::OneValue<Tiny>>::erase(Some(4), &rt);
+    let erased_option = <Option<i64> as acvus_extern::OneValue<Tiny>>::erase(Some(4), runtime_crossing(&rt));
     assert!(matches!(erased_option, V::Some(_)));
     assert_eq!(
-        unsafe { <Option<i64> as acvus_extern::OneValue<Tiny>>::materialize(&rt, erased_option) },
+        unsafe { <Option<i64> as acvus_extern::OneValue<Tiny>>::materialize(runtime_crossing(&rt), erased_option) },
         Some(4)
     );
-    let nested = <Option<Option<i64>> as acvus_extern::OneValue<Tiny>>::erase(Some(None), &rt);
+    let nested = <Option<Option<i64>> as acvus_extern::OneValue<Tiny>>::erase(Some(None), runtime_crossing(&rt));
     assert_eq!(
-        unsafe { <Option<Option<i64>> as acvus_extern::OneValue<Tiny>>::materialize(&rt, nested) },
+        unsafe { <Option<Option<i64>> as acvus_extern::OneValue<Tiny>>::materialize(runtime_crossing(&rt), nested) },
         Some(None)
     );
 }
@@ -3012,7 +3004,9 @@ where
     A: acvus_extern::IntoRun<Rt>,
 {
     let mut run = vec![Rt::Value::default(); A::WIDTH];
-    args.into_run(rt, &mut run);
+    // SAFETY: the test is the runtime, and the arguments cross at the types
+    // `A` names.
+    args.into_run(unsafe { acvus_extern::Crossing::new(rt) }, &mut run);
     run
 }
 

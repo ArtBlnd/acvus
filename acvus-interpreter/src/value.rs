@@ -59,34 +59,6 @@ macro_rules! kind {
                 None
             }
 
-            pub fn type_id(self) -> Option<TypeId> {
-                match self {
-                    $(Kind::$name => Some(TypeId::of::<$t>()),)*
-                    Kind::Undef
-                    | Kind::Ref
-                    | Kind::Large
-                    | Kind::LargeRef
-                    | Kind::None
-                    | Kind::Instance
-                    | Kind::InstanceAwait
-                    | Kind::Code => None,
-                }
-            }
-
-            pub fn name(self) -> Option<&'static str> {
-                match self {
-                    $(Kind::$name => Some(stringify!($t)),)*
-                    Kind::Undef
-                    | Kind::Ref
-                    | Kind::Large
-                    | Kind::LargeRef
-                    | Kind::None
-                    | Kind::Instance
-                    | Kind::InstanceAwait
-                    | Kind::Code => None,
-                }
-            }
-
             pub fn is_inline(self) -> bool {
                 match self {
                     $(Kind::$name)|* => true,
@@ -797,13 +769,13 @@ impl Value {
     /// `Undef` where the tag carries none.
     pub fn variant(tag: Astr, payload: Option<Owned<AcvusRuntime>>) -> Self {
         // SAFETY: `UNDEF` owns nothing.
-        let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(Value::UNDEF) });
+        let payload = payload.unwrap_or_else(|| unsafe { Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF) });
         Value::variant_of(Value::tag(tag), payload)
     }
 
     pub fn variant_of(tag: Value, payload: Owned<AcvusRuntime>) -> Self {
         // SAFETY: a tag is a word that owns nothing.
-        large(&VARIANT, VariantValue::of(unsafe { Owned::from_value(tag) }, payload))
+        large(&VARIANT, VariantValue::of(unsafe { Owned::from_value(acvus_extern::Holding::new(), tag) }, payload))
     }
 
     /// The word a tag register holds: the one number a run of the program gives
@@ -1107,16 +1079,14 @@ mod tests {
 
     #[test]
     fn every_inline_kind_names_its_type() {
-        assert_eq!(Kind::I64.type_id(), Some(TypeId::of::<i64>()));
         assert_eq!(Kind::of::<i64>(), Some(Kind::I64));
-        assert_eq!(Kind::I64.name(), Some("i64"));
-        assert_eq!(Kind::Unit.name(), Some("()"));
+        assert_eq!(Kind::of::<()>(), Some(Kind::Unit));
         assert_eq!(Kind::int(IntTy::U16), Kind::U16);
         assert_eq!(Kind::of::<u16>(), Some(Kind::U16));
     }
 
     #[test]
-    fn the_kinds_that_no_rust_type_was_erased_into_name_none() {
+    fn the_kinds_that_no_rust_type_was_erased_into_are_not_inline() {
         for kind in [
             Kind::Undef,
             Kind::Ref,
@@ -1124,8 +1094,6 @@ mod tests {
             Kind::LargeRef,
             Kind::None,
         ] {
-            assert_eq!(kind.type_id(), None, "{kind:?}");
-            assert_eq!(kind.name(), None, "{kind:?}");
             assert!(!kind.is_inline(), "{kind:?}");
         }
     }
@@ -1177,7 +1145,7 @@ mod tests {
                 };
                 // SAFETY: `erase` made a fresh word, which no other holder
                 // owns.
-                unsafe { Owned::from_value(word) }
+                unsafe { Owned::from_value(acvus_extern::Holding::new(), word) }
             })
             .collect();
         assert_eq!(Arc::strong_count(&alive), 4);

@@ -25,7 +25,7 @@ use crate::runtime::Runtime;
 /// which is rule 8's — `acvus-extern-macro` sorts its field table by the field
 /// names as string literals at expansion.
 pub fn object_in_order<Rt, const N: usize>(
-    rt: &Rt,
+    rt: crate::Crossing<'_, Rt>,
     names: [&str; N],
     values: [Owned<Rt>; N],
 ) -> Rt::Value
@@ -51,7 +51,7 @@ where
 ///
 /// # Panics
 /// When the object's width is not `N`, which RFC-0042 rule 1 admits no value of.
-pub unsafe fn open_in_order<Rt, const N: usize>(rt: &Rt, value: Rt::Value) -> [Owned<Rt>; N]
+pub unsafe fn open_in_order<Rt, const N: usize>(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> [Owned<Rt>; N]
 where
     Rt: Runtime,
 {
@@ -71,7 +71,11 @@ where
 /// caller lent (RFC-0050 rules 5, 6 and 8). The order is the one
 /// `object_in_order` writes and `open_in_order` reads, which is rule 8's, so
 /// the destination needs no names.
-pub fn fields_into_run<Rt, const N: usize>(values: [Owned<Rt>; N], out: &mut [Rt::Value])
+pub fn fields_into_run<Rt, const N: usize>(
+    holding: crate::Holding<'_, Rt>,
+    values: [Owned<Rt>; N],
+    out: &mut [Rt::Value],
+)
 where
     Rt: Runtime,
 {
@@ -82,6 +86,6 @@ where
         out.len()
     );
     for (slot, value) in out.iter_mut().zip(values) {
-        *slot = value.into_value();
+        *slot = value.into_value(holding);
     }
 }

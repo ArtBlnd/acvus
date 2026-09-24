@@ -24,7 +24,7 @@ where
 {
 }
 
-pub fn erase_field<T, Rt>(rt: &Rt, value: T) -> Owned<Rt>
+pub fn erase_field<T, Rt>(rt: crate::Crossing<'_, Rt>, value: T) -> Owned<Rt>
 where
     T: OneValue<Rt>,
     Rt: Runtime,
@@ -34,13 +34,13 @@ where
 
 /// # Safety
 /// The value held at that field was erased from a `T`.
-pub unsafe fn materialize_field<T, Rt>(rt: &Rt, field: Owned<Rt>) -> T
+pub unsafe fn materialize_field<T, Rt>(rt: crate::Crossing<'_, Rt>, field: Owned<Rt>) -> T
 where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
     // SAFETY: the caller's contract.
-    unsafe { T::materialize(rt, field.into_value()) }
+    unsafe { T::materialize(rt, field.into_value(rt.holding())) }
 }
 
 pub fn take_payload<V>(payload: Option<V>, tag: &str) -> V {
@@ -54,11 +54,11 @@ pub fn take_payload<V>(payload: Option<V>, tag: &str) -> V {
 
 /// # Safety
 /// The payload of variant `tag` was erased from a `T`.
-pub unsafe fn materialize_payload<T, Rt>(rt: &Rt, payload: Option<Owned<Rt>>, tag: &str) -> T
+pub unsafe fn materialize_payload<T, Rt>(rt: crate::Crossing<'_, Rt>, payload: Option<Owned<Rt>>, tag: &str) -> T
 where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
     // SAFETY: the caller's contract.
-    unsafe { T::materialize(rt, take_payload(payload, tag).into_value()) }
+    unsafe { T::materialize(rt, take_payload(payload, tag).into_value(rt.holding())) }
 }

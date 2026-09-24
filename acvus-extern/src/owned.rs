@@ -5,6 +5,9 @@
 //! owes a release, and the conversion between the two happens at the
 //! glue the macro emits, never inside a handler body.
 
+use std::ops::Deref;
+
+use crate::crossing::{Crossing, Holding};
 use crate::erased::Erased;
 use crate::runtime::Runtime;
 
@@ -39,25 +42,24 @@ where
 {
     /// The runtime's and the glue's: a handler never names an `Owned`
     /// (RFC-0068 rule 4). `Owned` names no type its value was erased from,
-    /// so this claims less than `FromValue::from_value`: only that the
-    /// holder owns the word.
+    /// so this claims only that the holder owns the word.
     ///
     /// # Safety
     /// No other holder owns `value`: it was moved out of the one that did,
     /// or it owns nothing. `R::Value` is `Copy`, so a word read out of a
-    /// live holder (`Erased`'s `Deref`) and made an `Owned` here would be
+    /// live holder (`Owned`'s `Deref`) and made an `Owned` here would be
     /// released twice, and a word kept past the call it was lent to would
     /// come back as a value holding a loan that ended (RFC-0079 rule 8).
     #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn from_value(value: R::Value) -> Self {
+    pub unsafe fn from_value(_: Holding<'_, R>, value: R::Value) -> Self {
         Self::holding(value)
     }
 
     /// `value` erased into a holder of its own: `erase` consumes it, so no
     /// other holder owns the word.
     #[inline(always)]
-    pub fn erased<T, Rep>(rt: &R, value: T) -> Self
+    pub fn erased<T, Rep>(rt: Crossing<'_, R>, value: T) -> Self
     where
         T: crate::OneValue<R, Rep>,
     {
@@ -69,7 +71,7 @@ where
     /// type its value was erased from, and a default value was erased from
     /// none.
     #[inline(always)]
-    pub fn vacant() -> Self {
+    pub fn vacant(_: Holding<'_, R>) -> Self {
         Self::holding(R::Value::default())
     }
 
@@ -82,8 +84,26 @@ where
     /// `from_value`'s, and the word it replaces is released or moved out
     /// by the caller.
     #[inline(always)]
-    pub unsafe fn value_mut(&mut self) -> &mut R::Value {
+    pub unsafe fn value_mut(&mut self, _: Holding<'_, R>) -> &mut R::Value {
         self.held_mut()
+    }
+}
+
+/// The word an `Owned` holds, read in place. `Owned` is what the glue fills
+/// a handler's type variable with, and a receiver bound
+/// `I: Deref<Target = Rt::Value>` is how a handler names that the storage
+/// it lends an instance call holds one word (RFC-0068 rule 2). Only `Owned`
+/// has it: an `Erased<R, T>` is read as its `T`, by `as_ref`, `get` and
+/// `get_ref`.
+impl<R> Deref for Owned<R>
+where
+    R: Runtime,
+{
+    type Target = R::Value;
+
+    #[inline(always)]
+    fn deref(&self) -> &R::Value {
+        self.word()
     }
 }
 
@@ -95,7 +115,7 @@ where
 /// # Safety
 /// Every slot of `values` owns nothing — it is `Owned::vacant()` or was
 /// taken out — so a write through the result releases no live value.
-pub unsafe fn lend_run<R>(values: &mut [Owned<R>]) -> &mut [R::Value]
+pub unsafe fn lend_run<'v, R>(_: Holding<'_, R>, values: &'v mut [Owned<R>]) -> &'v mut [R::Value]
 where
     R: Runtime,
 {

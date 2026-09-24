@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use acvus_extern::Ctx;
-use acvus_extern::{Erased, Registry, Runtime, extern_fn, extern_registry};
+use acvus_extern::{Crossing, Erased, OneValue, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
 use acvus_interpreter_test::*;
 use acvus_mir::ty::Ty;
@@ -129,50 +129,15 @@ fn runtime(i: &Interner) -> AcvusRuntime {
 }
 
 #[test]
-fn type_of_reports_the_tag_of_a_small_value() {
-    use std::any::TypeId;
+fn an_int_materialized_as_an_int_is_the_value() {
     let rt = runtime(&Interner::new());
-    assert_eq!(rt.type_of(&Value::int(1)), Some(TypeId::of::<i64>()));
-    assert_eq!(rt.type_of(&Value::float(1.0)), Some(TypeId::of::<f64>()));
-    assert_eq!(rt.type_of(&Value::bool_(true)), Some(TypeId::of::<bool>()));
-    assert_eq!(rt.type_of(&Value::unit()), Some(TypeId::of::<()>()));
-    assert_eq!(
-        rt.type_of(&Value::string("s")),
-        Some(TypeId::of::<String>())
-    );
-    assert_eq!(rt.type_of(&Value::NONE), None);
-    assert_eq!(rt.type_of(&Value::UNDEF), None);
-    let target = Value::int(1);
-    assert_eq!(rt.type_of(&Value::reference(&target)), None);
-}
-
-/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
-/// what a debug build shows and a release build does not look for.
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "expected a value erased from `f64`, found one erased from `i64`")]
-fn from_value_on_an_int_as_a_float_panics_naming_both_types() {
-    let rt = runtime(&Interner::new());
-    // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<AcvusRuntime, f64>::from_value_of(&rt, Value::int(2)) };
-}
-
-#[test]
-fn from_value_on_an_int_as_an_int_is_the_value() {
-    let rt = runtime(&Interner::new());
-    // SAFETY: `Value::int` is the runtime's erasure of an `i64`.
-    let erased = unsafe { Erased::<AcvusRuntime, i64>::from_value_of(&rt, Value::int(2)) };
+    // SAFETY: `Value::int` is the runtime's erasure of an `i64`, and this
+    // test is the runtime crossing it back at that type.
+    let erased = unsafe {
+        <Erased<AcvusRuntime, i64> as OneValue<AcvusRuntime>>::materialize(
+            Crossing::new(&rt),
+            Value::int(2),
+        )
+    };
     assert_eq!(erased.get(), 2);
-}
-
-/// The broken contract is a `debug_assert!` (`FromValue`'s door), so this is
-/// what a debug build shows and a release build does not look for.
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "found a value no Rust type was erased into")]
-fn from_value_on_a_reference_panics_as_a_value_erased_from_no_type() {
-    let rt = runtime(&Interner::new());
-    let target = Value::int(2);
-    // SAFETY: deliberately broken — this test is what the door refuses.
-    unsafe { Erased::<AcvusRuntime, i64>::from_value_of(&rt, Value::reference(&target)) };
 }

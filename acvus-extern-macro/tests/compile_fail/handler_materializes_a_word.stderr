@@ -1,0 +1,18 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/handler_materializes_a_word.rs:16:49
+   |
+11 | fn read_back<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &I) -> i64
+   |                                                       --- this return type influences the call expression's return type
+...
+16 |     unsafe { <i64 as OneValue<Rt>>::materialize(ctx.rt, **it) }
+   |              ---------------------------------- ^^^^^^ expected `Crossing<'_, Rt>`, found `&Rt`
+   |              |
+   |              arguments to this function are incorrect
+   |
+   = note: expected struct `Crossing<'_, Rt>`
+           found reference `&Rt`
+note: associated function defined here
+  --> $WORKSPACE/acvus-extern/src/obj.rs
+   |
+   |     unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self;
+   |               ^^^^^^^^^^^
