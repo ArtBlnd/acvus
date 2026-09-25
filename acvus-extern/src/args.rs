@@ -113,6 +113,8 @@ members!(6: A0, A1, A2, A3, A4, A5);
 members!(7: A0, A1, A2, A3, A4, A5, A6);
 members!(8: A0, A1, A2, A3, A4, A5, A6, A7);
 
+pub const MOST_MEMBERS: usize = <(u8, u8, u8, u8, u8, u8, u8, u8) as Members>::LEN;
+
 /// The run an `Args` takes: one word per member.
 pub struct Positions<P>(PhantomData<fn() -> P>);
 
@@ -142,6 +144,16 @@ pub struct ByArgs<P>(PhantomData<fn() -> P>);
 pub struct ArgsSite {
     interner: Interner,
     tys: Arc<[Ty]>,
+}
+
+impl ArgsSite {
+    pub(crate) fn new(interner: Interner, tys: Arc<[Ty]>) -> Self {
+        ArgsSite { interner, tys }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.tys.len()
+    }
 }
 
 impl<P, Rt> Arg<Rt> for ByArgs<P>

@@ -355,6 +355,10 @@ impl Runtime for AcvusRuntime {
         unsafe { acvus_extern::Words::from_pair([run[0].bits(), run[1].bits()]) }
     }
 
+    fn rust_fn(&self, body: acvus_extern::RustBody<Self>) -> Value {
+        crate::code::rust_fn(body.settled_under(&self.shared.interner))
+    }
+
     fn call_is_sync(&self, f: &Value) -> bool {
         // SAFETY: the type checker admits only a closure value here.
         !unsafe { f.code_of() }.code().may_suspend()

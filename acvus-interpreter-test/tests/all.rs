@@ -99,6 +99,7 @@ mod reused_frame_drop;
 mod row_slice_hoist;
 mod run_arity;
 mod run_shape;
+mod rust_fn;
 mod scalar_word;
 mod script;
 mod script_programs;

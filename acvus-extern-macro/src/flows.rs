@@ -475,6 +475,7 @@ impl Walker<'_> {
             ("Ref" | "Slice", [brand], [pointee, loan, rest @ ..]) => {
                 self.carrier(brand, pointee, loan, rest, cx)
             }
+            ("RustFn", [], [_, _, _]) => self.unread(ty, cx),
             (_, lifetimes, types) if self.laying_out && only_written => {
                 match self.laid_out(ty, lifetimes, types)? {
                     Some(candidate) => self.extension(candidate, lifetimes, types, cx),

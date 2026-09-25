@@ -1433,11 +1433,19 @@ call site, with every mismatch an explicit `None`.
    `acvus_extern::lend`). No method returns a value, a
    `Ty` or a word. `len()` counts the arguments; `encode()` lays them out by
    their types (RFC-0033) as `Encoded` bytes, owned and `'static`.
-2. **A Rust closure as a function value.** An extern may return a closure
-   `Fn(Args<'call>, Output<'call>) -> Finished<'call>` as a script function
-   value. Its state is `Send + Sync + 'static`; its arguments arrive per call
-   as rule 1's view and its result is built through rule 3. The function
-   type is the one its call site settles.
+2. **A Rust closure as a function value.** An extern may return
+   `RustFn<P, R, Rt>`, a script function value of type `Fn(P…) -> R`
+   whose body is a Rust closure `Fn(&mut Ctx, Args<'call, P, Rt>) -> R`,
+   `R` crossing as an extern's result does. `P` holds concrete types
+   only: a call of a function value settles no type for its callee, so a
+   variable in `P` would have nothing to lend its argument at; arguments
+   typed per call site come with rule 3. Its state is
+   `Send + Sync + 'static` and released with the value. The call site
+   calls it as any function value; its arguments arrive per call as rule
+   1's view. With rule 3 the closure may instead return `Finished<'call>`
+   through an `Output<'call>` for a site-settled result. A body that
+   suspends is a later step.
+
 3. **A result the site types.** An extern declared `dynamic` returns
    `Finished<'call>`, and its script type is `Option<τ>`, `τ` settled at the
    call site by its use and refused when still open at the freeze. The

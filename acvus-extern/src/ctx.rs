@@ -49,6 +49,11 @@ where
     }
 
     #[inline(always)]
+    pub fn into_frame(self) -> Rt::Frame<'a> {
+        self.frame
+    }
+
+    #[inline(always)]
     pub(crate) fn name_receiver(&mut self, at: &Rt::Value) {
         self.recv = at;
     }

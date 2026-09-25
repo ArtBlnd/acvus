@@ -640,6 +640,7 @@ pub struct Code {
 pub enum CodeBody {
     Body(Arc<Body>),
     Expr(Arc<Expr>),
+    Rust,
 }
 
 impl CodeBody {
@@ -668,11 +669,11 @@ impl CodeBody {
 /// A closure's code, named by address (RFC-0069 rule 2): one word, nothing
 /// counted.
 ///
-/// Obligation across artifacts: the `Code` is owned by a `Prepared`, which
-/// the run's `InterpreterContext` owns, and a closure value does not outlive
-/// its run — a space refuses a `Fn` (`layout.rs`), a spawned run shares the
-/// context, and the checker refuses a closure in the entry's result
-/// (`MirErrorKind::ClosureReturnedToTheHost`).
+/// Obligation across artifacts: the `Code` is `RUST`, a `static`, or owned by
+/// a `Prepared`, which the run's `InterpreterContext` owns, and a closure
+/// value does not outlive its run — a space refuses a `Fn` (`layout.rs`), a
+/// spawned run shares the context, and the checker refuses a closure in the
+/// entry's result (`MirErrorKind::ClosureReturnedToTheHost`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CodeRef(std::ptr::NonNull<Code>);
 
@@ -717,6 +718,22 @@ impl CodeRef {
     }
 }
 
+static RUST: Code = Code {
+    entry: crate::machine::entry_rust,
+    body: CodeBody::Rust,
+};
+
+/// The one closure over `RUST`: its one capture is `callee`, which
+/// `entry_rust` reads.
+pub(crate) fn rust_fn(callee: acvus_extern::RustCallee<AcvusRuntime>) -> Value {
+    // SAFETY: the one reader of this value is `entry_rust`, which reads it
+    // as the `RustCallee<AcvusRuntime>` it was erased from.
+    let erased = unsafe { Value::erase(callee) };
+    // SAFETY: `erase` made the word just now, and nothing else holds it.
+    let state = unsafe { Owned::from_value(acvus_extern::Holding::new(), erased) };
+    Value::closure(CodeRef(std::ptr::NonNull::from(&RUST)), &mut std::iter::once(state))
+}
+
 impl Code {
     /// A framed body: the entry binds a frame in the caller's window.
     pub fn body(body: Arc<Body>) -> Code {
@@ -755,7 +772,7 @@ impl Code {
     pub fn may_suspend(&self) -> bool {
         match &self.body {
             CodeBody::Body(body) => body.may_suspend,
-            CodeBody::Expr(_) => false,
+            CodeBody::Expr(_) | CodeBody::Rust => false,
         }
     }
 }

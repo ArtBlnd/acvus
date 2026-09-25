@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
 
-use acvus_extern::{Ctx, Words};
+use acvus_extern::{Ctx, MOST_MEMBERS, RustCallee, Words};
 use acvus_mir::graph::QualifiedRef;
 use acvus_utils::Interner;
 use futures::future::BoxFuture;
@@ -501,25 +501,78 @@ pub(crate) unsafe fn entry_argument(
     window.laid(arity)[usize::from(at)]
 }
 
+/// # Safety
+/// As `Entry`, and `code` is `code::RUST`.
+pub(crate) unsafe fn entry_rust(
+    _code: &Code,
+    f: Value,
+    rt: &AcvusRuntime,
+    window: &mut FrameState,
+    arity: u16,
+) -> Value {
+    // SAFETY: `code::rust_fn` is the one writer of a closure over `RUST`, and
+    // its one capture is the `RustCallee<AcvusRuntime>` it erased.
+    let callee = unsafe { f.captures_of()[0].peek::<RustCallee<AcvusRuntime>>() };
+    let mut moved = [Value::UNDEF; MOST_MEMBERS];
+    let run = &mut moved[..usize::from(arity)];
+    run.copy_from_slice(window.laid(arity));
+    let mut lent = LentWindow::lend(window, rt);
+    // SAFETY: the caller laid `arity` arguments, which the checker typed at
+    // the callee's parameters, and moved them to it; they are copied out of
+    // the window, so the `Ctx`'s frame names no cell `run` is read from.
+    unsafe { callee.call(lent.ctx(), run) }
+}
+
+struct LentWindow<'w, 'r> {
+    window: &'w mut FrameState,
+    ctx: std::mem::ManuallyDrop<Ctx<'r, AcvusRuntime>>,
+}
+
+impl<'w, 'r> LentWindow<'w, 'r> {
+    fn lend(window: &'w mut FrameState, rt: &'r AcvusRuntime) -> Self {
+        let frame = std::mem::replace(window, FrameState::UNBOUND);
+        LentWindow {
+            window,
+            // SAFETY: the window's state moved into this `Ctx`, and the
+            // caller keeps its cells live for the call, which this guard does
+            // not outlive.
+            ctx: std::mem::ManuallyDrop::new(unsafe { Ctx::new(rt, frame) }),
+        }
+    }
+
+    fn ctx(&mut self) -> &mut Ctx<'r, AcvusRuntime> {
+        &mut self.ctx
+    }
+}
+
+impl Drop for LentWindow<'_, '_> {
+    fn drop(&mut self) {
+        // SAFETY: `drop` runs once, and nothing else takes the `Ctx`.
+        let ctx = unsafe { std::mem::ManuallyDrop::take(&mut self.ctx) };
+        *self.window = ctx.into_frame();
+    }
+}
+
 impl Code {
     /// The arguments read into the callee's frame before the future exists,
     /// so the caller may lend registers that die at the call.
     ///
-    /// An `Expr` has no frame to read them into and no suspension to wait
-    /// for, so it runs here, through the same entry a synchronous call
-    /// reaches — on a window of its own, because the arguments arrive as
-    /// values rather than as a run of the caller's registers.
+    /// An `Expr` and a Rust body have no frame to read them into and no
+    /// suspension to wait for, so they run here, through the same entry a
+    /// synchronous call reaches — on a window of their own, because the
+    /// arguments arrive as values rather than as a run of the caller's
+    /// registers.
     pub fn start<'c>(&'c self, f: Value, rt: &AcvusRuntime, args: &mut [Value]) -> Resume<'c> {
         match &self.body {
             CodeBody::Body(body) => body.start(&f, args),
-            CodeBody::Expr(_) => Resume::Done(self.expr_now(f, rt, args)),
+            CodeBody::Expr(_) | CodeBody::Rust => Resume::Done(self.frameless_now(f, rt, args)),
         }
     }
 
-    /// The `Expr` entry, on a window of this call's own: `start`'s caller
-    /// hands its arguments as values, and every entry reads them out of a
-    /// window.
-    fn expr_now(&self, f: Value, rt: &AcvusRuntime, args: &[Value]) -> Value {
+    /// The entry of a frameless body, on a window of this call's own:
+    /// `start`'s caller hands its arguments as values, and every entry reads
+    /// them out of a window.
+    fn frameless_now(&self, f: Value, rt: &AcvusRuntime, args: &[Value]) -> Value {
         let arity = u16::try_from(args.len()).expect("an argument run is at most one cell wide");
         let RootFrame { mut state, cells } = RootFrame::new();
         for (at, arg) in args.iter().enumerate() {
@@ -535,8 +588,8 @@ impl Code {
 }
 
 /// What a closure call has to do after its arguments are read: run a body on a
-/// frame, or — for an `Expr` — nothing, because the chain has already produced
-/// the value.
+/// frame, or — for an `Expr` or a Rust body — nothing, because the value is
+/// already produced.
 pub enum Resume<'c> {
     Frame { body: &'c Body, store: Store },
     Done(Value),
