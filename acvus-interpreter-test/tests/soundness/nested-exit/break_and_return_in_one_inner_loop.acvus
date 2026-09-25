@@ -1,0 +1,12 @@
+// expect 2021
+let find = |m| -> {
+    let skipped = 0;
+    for i in 0u64..m.len() {
+        for j in 0u64..m[i].len() {
+            if m[i][j] < 0 { skipped = skipped + 1; break; };
+            if m[i][j] == 7 { return i * 10 + j + skipped * 1000; };
+        }
+    }
+    99u64 + skipped * 1000
+};
+find(vec([vec([1, -1, 7]), vec([-2]), vec([3, 7])]))

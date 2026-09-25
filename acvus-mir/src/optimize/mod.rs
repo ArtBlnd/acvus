@@ -14,6 +14,7 @@ pub mod forward;
 pub mod gvn;
 pub mod iv_canon;
 pub mod lsr;
+pub mod nested_exit;
 pub mod reborrow;
 pub mod rejoin;
 pub mod reorder;

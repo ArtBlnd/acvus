@@ -1,0 +1,9 @@
+let find = |m| -> {
+    for i in 0u64..m.len() {
+        for j in 0u64..m[i].len() {
+            if 100 / m[i][j] == 50 { return (i, j); };
+        }
+    }
+    (99u64, 99u64)
+};
+find(vec([vec([1, 0]), vec([2])]))

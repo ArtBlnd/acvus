@@ -1,6 +1,6 @@
 for range(0 (r2)..5 (r3)) -> L1 else L2 stages [L1, L7]
 // L1: free {const}
-// L7: cycle Carried(r1) in_order {+, jump, jump}
+// L7: cycle Carried(r1) any_order law(Op(Add) exact commutative) {+, jump, jump}
 // control upfront
 // cost in place: W=0
 for range(0 (r6)..r4) -> L4 else L5 stages [L4, L6]

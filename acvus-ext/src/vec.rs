@@ -97,7 +97,9 @@ filled_of!(
     filled_str: String,
 );
 
-#[extern_fn(effect = pure, ensures(ret = len(c)))]
+/// `returns`: `Vec::len` reads the length the vector holds, and widening a
+/// `usize` to `u64` neither fails nor panics on any target Rust supports.
+#[extern_fn(effect = pure, returns, ensures(ret = len(c)))]
 fn len<T>(c: &Vec<T>) -> u64
 where
     T: Var<kind::Type>,

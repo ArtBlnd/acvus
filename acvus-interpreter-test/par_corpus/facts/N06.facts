@@ -1,6 +1,6 @@
 for range(0 (r13)..r9) -> L1 else L2 stages [L1, L9]
 // L1: free {const, +}
-// L9: cycle Carried(r12) in_order {const, +, jump, branch, jump, jump}
+// L9: cycle Carried(r12) any_order law(Op(Add) exact commutative) {const, +, jump, branch, jump, jump}
 // control upfront
 // cost W=1 O=18281 split when n > 584992, n = max(r9 - 0 (r13), 0)
 for range(r15..r9) -> L4 else L5 stages [L4, L8]

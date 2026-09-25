@@ -1,0 +1,11 @@
+// expect [1,1,15]
+let find = |m| -> {
+    for i in 0u64..m.len() {
+        for j in 0u64..m[i].len() {
+            let x = m[i][j] * 3;
+            if x > 10 { return (i, j, x); };
+        }
+    }
+    (99u64, 99u64, 0)
+};
+find(vec([vec([1, 2, 3]), vec([2, 5, 1])]))

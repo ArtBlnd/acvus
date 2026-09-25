@@ -2250,6 +2250,12 @@ impl<'a> Form<'a> {
     }
 }
 
+/// What a law reading finds: the step and the values that read the state.
+struct Update<'a> {
+    step: Step<'a>,
+    reading_state: FxHashSet<ValueId>,
+}
+
 /// The state a cycle's law is read over: a header parameter, or a storage
 /// the body loads and stores whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2283,17 +2289,19 @@ struct Select {
 /// its state is the state combined through one law with values that read
 /// nothing of it, and that nothing else of the iteration reads the state or
 /// a partial of it.
-struct LawReading<'a, 'cfg> {
+struct LawReading<'a, 's, 'cfg> {
     cfg: &'cfg CfgBody,
     loans: &'a Loans<'cfg>,
     laws: &'a LawTable,
-    slots: &'a TargetSlots,
+    slots: &'s TargetSlots,
     header: BlockIdx,
     /// The header and the body: every block an iteration runs.
     blocks: Vec<BlockIdx>,
     defs: FxHashMap<ValueId, Def>,
     deciders: FxHashMap<BlockIdx, Vec<BlockIdx>>,
     domtree: DomTree,
+    /// The natural loops of the body the loop lies in, innermost first.
+    loops: Vec<NaturalLoop>,
     state: State,
     /// Every value of the iteration that reads the state, and every storage
     /// the iteration defines and drops that holds such a value.
@@ -2304,11 +2312,11 @@ struct LawReading<'a, 'cfg> {
     forms: FxHashMap<ValueId, Option<Form<'a>>>,
 }
 
-impl<'a, 'cfg> LawReading<'a, 'cfg> {
+impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     fn of(
         loans: &'a Loans<'cfg>,
         laws: &'a LawTable,
-        slots: &'a TargetSlots,
+        slots: &'s TargetSlots,
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
         state: State,
@@ -2339,6 +2347,8 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
                 }
             }
         }
+        let domtree = DomTree::build(cfg);
+        let loops = natural_loops_innermost_first(cfg, &domtree);
         let mut reading = LawReading {
             cfg,
             loans,
@@ -2348,7 +2358,8 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
             blocks,
             defs,
             deciders,
-            domtree: DomTree::build(cfg),
+            domtree,
+            loops,
             state,
             dependent: FxHashSet::default(),
             chain: FxHashSet::default(),
@@ -2394,6 +2405,9 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
         match term {
             Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
             Terminator::Switch { tag, .. } => vec![*tag],
+            // A traversal takes its body or its exit by its counter against
+            // its source; the values its exit edge passes decide nothing.
+            Terminator::For { source, .. } => source.uses().into_iter().collect(),
             other => inst_info::terminator_uses(other).into_iter().collect(),
         }
     }
@@ -2498,11 +2512,20 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
     /// The law the state is updated through, where the update reads the
     /// state only through it and nothing else of the iteration reads the
     /// state or a partial of it.
-    fn law(mut self) -> Option<Accumulator> {
+    fn law(self) -> Option<Accumulator> {
+        self.update().map(|Update { step, .. }| step.accumulator())
+    }
+
+    /// The step every iteration combines the state through, and every value
+    /// of the iteration that reads the state, each of which the update
+    /// accounts for.
+    fn update(mut self) -> Option<Update<'a>> {
         let next = match self.state {
             State::Param { index, .. } => {
-                let loops = natural_loops_innermost_first(self.cfg, &self.domtree);
-                let loop_ = loops.iter().find(|loop_| loop_.header == self.header)?;
+                let loop_ = self
+                    .loops
+                    .iter()
+                    .find(|loop_| loop_.header == self.header)?;
                 let next = loop_.back_arg(self.cfg, index)?;
                 self.form(next)?
             }
@@ -2534,7 +2557,10 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
                     })
                 })
         });
-        (!partial_read_elsewhere && !other_header_args_read_state).then(|| step.accumulator())
+        (!partial_read_elsewhere && !other_header_args_read_state).then_some(Update {
+            step,
+            reading_state: self.dependent,
+        })
     }
 
     /// The form of the value the storage holds when the iteration ends:
@@ -2669,10 +2695,94 @@ impl<'a, 'cfg> LawReading<'a, 'cfg> {
         if matches!(self.state, State::Param { param, .. } if param == value) {
             return Some(Form::State);
         }
-        match *self.defs.get(&value)? {
+        let def = *self.defs.get(&value)?;
+        let block = match def {
+            Def::Inst(at) => at.block,
+            Def::Param { block, .. } => block,
+        };
+        if let State::Param { .. } = self.state {
+            match self.nested_loops_holding(block)[..] {
+                [] => {}
+                // A header parameter of a loop nested one level down, read
+                // where the nested loop has handed it back.
+                [nested] if self.loops[nested].header == block => {
+                    let Def::Param { index, .. } = def else {
+                        return None;
+                    };
+                    return self.through_nested_loop(nested, index);
+                }
+                // A value of a nested loop's iteration is none of this
+                // iteration's: the nested loop runs it many times.
+                _ => return None,
+            }
+        }
+        match def {
             Def::Inst(at) => self.inst_form(at),
             Def::Param { block, index } => self.param_form(block, index),
         }
+    }
+
+    /// The loops nested in this one whose blocks hold `block`.
+    fn nested_loops_holding(&self, block: BlockIdx) -> Vec<usize> {
+        (0..self.loops.len())
+            .filter(|at| {
+                let loop_ = &self.loops[*at];
+                loop_.header != self.header
+                    && self.blocks.contains(&loop_.header)
+                    && loop_.contains(block)
+            })
+            .collect()
+    }
+
+    /// RFC-0089 rule 4, through a nested loop: header parameter `index` of
+    /// `nested`, a `for` that leaves only by its header's exit, entered with
+    /// a value of this iteration and read once the nested loop has handed
+    /// it back. When that parameter's cycle in the nested loop has law `L`
+    /// and nothing else there reads it, the value handed back is the entry
+    /// value combined through `L` with the nested loop's run from `L`'s
+    /// identity: `((e ⊕ y₁) ⊕ y₂) … = e ⊕ (y₁ ⊕ y₂ …)` by associativity,
+    /// and `e` itself where the run is empty.
+    fn through_nested_loop(&mut self, nested: usize, index: usize) -> Option<Form<'a>> {
+        let cfg = self.cfg;
+        let nested = &self.loops[nested];
+        let header = nested.header;
+        let Terminator::For { source, .. } = &cfg.blocks[header.0].terminator else {
+            return None;
+        };
+        let nested_blocks: Vec<BlockIdx> = nested.blocks().collect();
+        let leaves_elsewhere = nested_blocks
+            .iter()
+            .filter(|block| **block != header)
+            .any(|block| {
+                cfg.successors(*block)
+                    .into_iter()
+                    .any(|succ| !nested.contains(succ))
+                    || matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
+            });
+        let entry = nested.entry_arg(cfg, index);
+        if leaves_elsewhere {
+            return None;
+        }
+        let entry = self.form(entry?)?;
+        let param = cfg.blocks[header.0].params[index];
+        let slots = TargetSlots::of(self.loans, *source, &nested_blocks);
+        let Update {
+            step,
+            reading_state,
+        } = LawReading::of(
+            self.loans,
+            self.laws,
+            &slots,
+            header,
+            &nested_blocks,
+            State::Param { param, index },
+        )
+        .update()?;
+        let combined = entry.then(step)?;
+        // What the nested loop computes of the state is its update, which
+        // the reading there accounts for; this reading reads it as a whole.
+        self.chain.extend(reading_state);
+        Some(combined)
     }
 
     fn inst_form(&mut self, at: InstAt) -> Option<Form<'a>> {

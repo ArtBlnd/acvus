@@ -429,6 +429,11 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // schedules within a block.
     optimize::forward::run(cfg);
     optimize::reorder::run(cfg);
+    // RFC-0066 rule 1: an exit that leaves a nested loop's parent moves into
+    // the nested loop's own exit, so the parent is cut around an exit of its
+    // own (RFC-0089 rule 5); before the cut, which reads the exits, and
+    // after `forward`, which would take the exit block's plain jump for it.
+    optimize::nested_exit::run(interner, cfg);
     // RFC-0089 rule 6: after every pass that moves or merges a body's
     // instructions -- `code_motion` and `forward` across blocks, `gvn`
     // merging, `reorder` within one block -- since a stage is a set of

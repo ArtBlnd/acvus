@@ -1,0 +1,10 @@
+let find = |m| -> {
+    for i in 0u64..m.len() {
+        for j in 0u64..m[i].len() {
+            io::print(&m[i][j].to_string());
+            if m[i][j] == 7 { return i * 10 + j; };
+        }
+    }
+    99u64
+};
+find(vec([vec([1, 2]), vec([7, 8])]))

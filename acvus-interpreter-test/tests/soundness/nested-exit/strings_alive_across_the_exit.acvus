@@ -1,0 +1,15 @@
+// expect 23
+let find = |m| -> {
+    let tag = "found at ".to_string();
+    for i in 0u64..m.len() {
+        let row = "row".to_string();
+        for j in 0u64..m[i].len() {
+            let cell = "cell".to_string();
+            if m[i][j] == 7 && cell.len() == 4 {
+                return tag.len() + row.len() + i * 10 + j;
+            };
+        }
+    }
+    tag.len()
+};
+find(vec([vec([1, 2, 3]), vec([4, 7, 7])]))

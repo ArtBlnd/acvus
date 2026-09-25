@@ -1,0 +1,10 @@
+// expect 1
+let row_of = |m| -> {
+    for i in 0u64..m.len() {
+        for j in 0u64..m[i].len() {
+            if m[i][j] < 0 { return i; };
+        }
+    }
+    99u64
+};
+row_of(vec([vec([1, 2]), vec([3, -4]), vec([-5])]))

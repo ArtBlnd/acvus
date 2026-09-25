@@ -225,3 +225,30 @@ fn every_corpus_case_gives_its_expected_result_and_prints_its_recorded_facts() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// S06's `return` leaves both loops; with the full pipeline it moves into
+/// the inner loop's own exit (RFC-0066 rule 1), and with none it stays where
+/// the source wrote it. The program means one value either way.
+#[test]
+fn the_nested_search_runs_to_its_value_at_both_levels() {
+    let scratch = sandbox::tempdir();
+    let config = scratch.path().join("config");
+    let case = cases()
+        .into_iter()
+        .find(|case| case.id == "S06")
+        .expect("INDEX.md lists S06");
+    let path = case.path.to_str().expect("a UTF-8 path");
+    for level in ["full", "none"] {
+        let run = sandbox::with_config(&config)
+            .current_dir(scratch.path())
+            .args(["run", path, "--opt", level])
+            .output()
+            .expect("the binary runs");
+        assert_eq!(
+            (run.status.code(), text(&run.stdout).trim_end().to_string()),
+            (Some(0), case.expected.clone()),
+            "--opt {level}: {}",
+            text(&run.stderr)
+        );
+    }
+}

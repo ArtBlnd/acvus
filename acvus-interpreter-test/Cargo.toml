@@ -40,6 +40,10 @@ name = "aggregate_result_allocates_nothing"
 path = "tests/aggregate_result_allocates_nothing.rs"
 
 [[test]]
+name = "nested_exit_drops"
+path = "tests/nested_exit_drops.rs"
+
+[[test]]
 name = "run_allocations"
 path = "tests/run_allocations.rs"
 

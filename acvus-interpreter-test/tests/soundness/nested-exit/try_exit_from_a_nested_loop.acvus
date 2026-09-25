@@ -1,0 +1,13 @@
+// expect 3299
+let total_of = |rows| -> {
+    let total = 0;
+    for row in &rows {
+        for s in &row {
+            total = total + i64::from_str(s)?;
+        }
+    }
+    Ok(total)
+};
+let good = total_of(vec([vec(["1".to_string(), "2".to_string()]), vec(["30".to_string()])]));
+let bad = total_of(vec([vec(["1".to_string()]), vec(["x".to_string(), "5".to_string()])]));
+good.unwrap() * 100 + match bad { Ok(v) => v, Err(e) => -1 }

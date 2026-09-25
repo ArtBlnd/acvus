@@ -8,7 +8,7 @@ use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loop_deps::{
     Control, Law, LawOp, LoopDeps, Member, Order, StageMembership, Storage, Token,
 };
-use acvus_mir::analysis::loops::{Invariants, LoopNest};
+use acvus_mir::analysis::loops::{Invariants, LoopNest, natural_loops_innermost_first};
 use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
@@ -80,8 +80,23 @@ impl Compiled {
         }
     }
 
+    /// The `for` whose loop holds every other `for`.
+    fn outer_header(&self) -> BlockIdx {
+        let loops = natural_loops_innermost_first(&self.cfg, &DomTree::build(&self.cfg));
+        loops
+            .iter()
+            .filter(|loop_| matches!(self.cfg.blocks[loop_.header.0].terminator, Terminator::For { .. }))
+            .max_by_key(|loop_| loop_.block_count())
+            .map(|loop_| loop_.header)
+            .unwrap_or_else(|| panic!("a `for`:\n{}", self.listing))
+    }
+
     fn deps(&self) -> LoopDeps {
-        LoopDeps::of(&self.cfg, &self.laws, self.only_header())
+        self.deps_of(self.only_header())
+    }
+
+    fn deps_of(&self, header: BlockIdx) -> LoopDeps {
+        LoopDeps::of(&self.cfg, &self.laws, header)
             .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), self.listing))
     }
 
@@ -177,7 +192,11 @@ impl Compiled {
 
     /// Each stage as `loop_deps` computes it.
     fn shapes(&self) -> Vec<Shape> {
-        let deps = self.deps();
+        self.shapes_of(self.only_header())
+    }
+
+    fn shapes_of(&self, header: BlockIdx) -> Vec<Shape> {
+        let deps = self.deps_of(header);
         let judged = deps.judge(&self.cfg, &self.laws);
         assert_eq!(
             deps.crossing().count(),
@@ -1425,4 +1444,130 @@ fn returns_is_read_by_the_instance_a_call_names() {
     assert_eq!(int.exiting_stage(), 1, "{}", int.for_lines());
     let float = loop_over("1.5, 2.5");
     assert_eq!(float.stages_running(is_call), [float.exiting_stage()], "{}", float.for_lines());
+}
+
+/// RFC-0089 rule 4, through a nested loop: `total` enters the inner loop as
+/// its header parameter's entry value and the inner loop's exit hands it
+/// back, the inner cycle on it is `+` and nothing else there reads it, so
+/// the outer cycle on `total` is `+` too.
+#[test]
+fn a_total_an_inner_loop_sums_into_has_the_add_law_in_the_outer_loop() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 0; \
+         for row in &m { for x in &row { total = total + *x; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Add))
+        )],
+        "{}",
+        c.listing
+    );
+}
+
+/// The inner loop reads `total` besides its `+`: `total % 2` reads a
+/// partial, so neither loop has a law.
+#[test]
+fn an_inner_loop_that_also_reads_the_total_gives_the_outer_loop_no_law() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 1; \
+         for row in &m { for x in &row { total = total + *x + total % 2; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(vec![TokenKind::Carried], Order::InOrder, None)],
+        "{}",
+        c.listing
+    );
+}
+
+/// The inner loop multiplies `total` and the outer loop adds to it: one
+/// iteration of the outer loop combines through two laws, which is none.
+#[test]
+fn an_inner_product_under_an_outer_sum_gives_the_outer_loop_no_law() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 1; \
+         for row in &m { total = total + 1; for x in &row { total = total * *x; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(vec![TokenKind::Carried], Order::InOrder, None)],
+        "{}",
+        c.listing
+    );
+}
+
+/// A float sum through an inner loop keeps its inexact law, and is joined
+/// in order: a regrouping changes the rounding.
+#[test]
+fn a_float_total_an_inner_loop_sums_into_is_in_order_in_the_outer_loop() {
+    let c = Compiled::of(
+        "let m = vec([vec([1.5, 2.5]), vec([3.0, 0.25])]); let total = 0.0; \
+         for row in &m { for x in &row { total = total + *x; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(
+            vec![TokenKind::Carried],
+            Order::InOrder,
+            Some(LawShape {
+                law: LawKind::Op(LawOp::Add),
+                exact: false
+            })
+        )],
+        "{}",
+        c.listing
+    );
+}
+
+/// RFC-0066 rule 1: the `return` inside the inner loop moves into the inner
+/// loop's own exit, so the outer loop leaves from its own body. The inner
+/// search finishes, so it runs ahead in a free stage, and the exit is the
+/// control token's cycle after it (RFC-0089 rule 5).
+#[test]
+fn a_return_from_a_nested_loop_lets_the_outer_loop_run_the_inner_search_ahead() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2]), vec([3, 7])]); \
+         for i in 0u64..m.len() { for j in 0u64..m[i].len() { \
+         if m[i][j] == 7 { return i * 10 + j; }; } } 99u64",
+    );
+    let outer = c.outer_header();
+    assert_eq!(
+        c.shapes_of(outer),
+        [
+            Shape::Free,
+            one(vec![TokenKind::Control], Order::InOrder, None)
+        ],
+        "{}",
+        c.listing
+    );
+    let deps = c.deps_of(outer);
+    let inner_header_stage = (0..c.cfg.blocks.len())
+        .map(BlockIdx)
+        .filter(|block| *block != outer)
+        .find(|block| matches!(c.cfg.blocks[block.0].terminator, Terminator::For { .. }))
+        .and_then(|block| deps.membership.stage_of(block));
+    assert_eq!(inner_header_stage, Some(0), "{}", c.listing);
+    assert_eq!(deps.ahead_of_exit(), [], "{}", c.listing);
+}
+
+/// A nested loop over an `Array` keeps its `return`: the array's release on a
+/// moved edge would be a drop block of its own, which runs the loop as joints
+/// where the `return` leaves it one region (RFC-0057 rules 6 and 7).
+#[test]
+fn a_return_from_a_nested_loop_over_an_array_stays_where_it_is() {
+    let c = Compiled::of(
+        "let m = vec([1, 2]); \
+         for i in 0u64..m.len() { for t in [\"x\".to_string(), \"yz\".to_string()] { \
+         if len(&t) == 2 { return i; }; } } 99u64",
+    );
+    assert_eq!(
+        c.shapes_of(c.outer_header()).len(),
+        1,
+        "the exit is not moved, and the outer loop is one stage:\n{}",
+        c.listing
+    );
 }
