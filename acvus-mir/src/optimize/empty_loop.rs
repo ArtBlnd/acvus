@@ -35,7 +35,7 @@ use crate::analysis::affine::for_body;
 use crate::analysis::domtree::DomTree;
 use crate::analysis::interval::InstAt;
 use crate::analysis::loops::{NaturalLoop, natural_loops_innermost_first};
-use crate::analysis::raise::{Raising, UntrappingFunctions};
+use crate::analysis::raise::{FunctionSummary, Removal};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{
     BinOp, Checked, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId,
@@ -44,7 +44,7 @@ use crate::laws::LawTable;
 use crate::optimize::dce;
 use crate::ty::{CastTy, IntTy, LenTerm, Ty};
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &UntrappingFunctions) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
     while let Some(empty) = first_empty(cfg, laws, functions) {
         remove(cfg, empty);
         let alive = reachable(cfg);
@@ -83,16 +83,16 @@ struct Stepped {
     right: ValueId,
 }
 
-fn first_empty(cfg: &CfgBody, laws: &LawTable, functions: &UntrappingFunctions) -> Option<Empty> {
+fn first_empty(cfg: &CfgBody, laws: &LawTable, functions: &FunctionSummary) -> Option<Empty> {
     let domtree = DomTree::build(cfg);
-    let raising = Raising::of(cfg, laws, functions);
+    let removal = Removal::of(cfg, laws, functions);
     natural_loops_innermost_first(cfg, &domtree)
         .iter()
-        .find_map(|loop_| Empty::of(cfg, loop_, &raising))
+        .find_map(|loop_| Empty::of(cfg, loop_, &removal))
 }
 
 impl Empty {
-    fn of(cfg: &CfgBody, loop_: &NaturalLoop, raising: &Raising<'_>) -> Option<Empty> {
+    fn of(cfg: &CfgBody, loop_: &NaturalLoop, removal: &Removal<'_>) -> Option<Empty> {
         let header = &cfg.blocks[loop_.header.0];
         let Terminator::For {
             source,
@@ -124,7 +124,7 @@ impl Empty {
         if !body.iter().all(|block| only_jumps_within(*block)) {
             return None;
         }
-        let slopes = Slopes::of(cfg, loop_, source, &body, raising)?;
+        let slopes = Slopes::of(cfg, loop_, source, &body, removal)?;
         let checks = slopes.checks()?;
         let defs = slopes
             .defs
@@ -184,7 +184,7 @@ impl<'a> Slopes<'a> {
         loop_: &NaturalLoop,
         source: ForSource,
         body: &[BlockIdx],
-        raising: &Raising<'_>,
+        removal: &Removal<'_>,
     ) -> Option<Slopes<'a>> {
         let counter = cfg.blocks[for_body(cfg, loop_.header).0].params[source.counter_param()];
         let mut defs = FxHashMap::default();
@@ -194,21 +194,21 @@ impl<'a> Slopes<'a> {
             let held = &cfg.blocks[block.0];
             params.extend(held.params.iter().copied());
             for (at, inst) in held.insts.iter().enumerate() {
-                let raises = raising.can_raise(InstAt { block: *block, at }, &inst.kind);
+                let stays = removal.stays_unused(InstAt { block: *block, at }, &inst.kind);
                 match &inst.kind {
                     InstKind::Check {
                         op: Checked::Add,
                         left,
                         right,
                     } => checks.push((inst.span, *left, *right)),
-                    InstKind::Const { dst, .. } if !raises => {
+                    InstKind::Const { dst, .. } if !stays => {
                         defs.insert(*dst, &inst.kind);
                     }
                     InstKind::Cast {
                         dst,
                         to: CastTy::Int(_),
                         ..
-                    } if !raises && matches!(cfg.val_types[dst], Ty::Int(_)) => {
+                    } if !stays && matches!(cfg.val_types[dst], Ty::Int(_)) => {
                         defs.insert(*dst, &inst.kind);
                     }
                     InstKind::BinOp {
@@ -218,7 +218,7 @@ impl<'a> Slopes<'a> {
                             | BinOp::Sub(Overflow::Wrap)
                             | BinOp::Mul(Overflow::Wrap),
                         ..
-                    } if !raises && matches!(cfg.val_types[dst], Ty::Int(_)) => {
+                    } if !stays && matches!(cfg.val_types[dst], Ty::Int(_)) => {
                         defs.insert(*dst, &inst.kind);
                     }
                     _ => return None,

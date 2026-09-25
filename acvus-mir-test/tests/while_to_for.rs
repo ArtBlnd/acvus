@@ -9,13 +9,13 @@ use acvus_mir::analysis::affine::{AffineValues, Derivation};
 use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::inst_info;
 use acvus_mir::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
-use acvus_mir::analysis::raise::UntrappingFunctions;
+use acvus_mir::analysis::raise::FunctionSummary;
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ir::{ForSource, ValueId};
+use acvus_mir::laws::LawTable;
 use acvus_mir::optimize::{dce, fold, reborrow, ssa_pass, while_to_for};
 use acvus_mir::ty::{Effect, EffectTerm, Instances, ParamTerm, Poly, PolyTy, Ty, lift_to_poly};
-use acvus_mir::laws::LawTable;
 use acvus_mir_test::{LoweredScript, lowered_script};
 use acvus_utils::Interner;
 
@@ -40,7 +40,7 @@ impl Promoted {
         fold::run(&mut cfg);
         reborrow::run(&mut cfg);
         while_to_for::run(&mut cfg, &laws);
-        dce::run(&mut cfg, &laws, &UntrappingFunctions::unknown());
+        dce::run(&mut cfg, &laws, &FunctionSummary::unknown());
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
         Self {
@@ -268,7 +268,7 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
         lowered_script(&i, source, &[], vec![]).unwrap_or_else(|e| panic!("{e}"));
     let mut cfg = promote(module.main);
     ssa_pass::run(&mut cfg);
-    dce::run(&mut cfg, &laws, &UntrappingFunctions::unknown());
+    dce::run(&mut cfg, &laws, &FunctionSummary::unknown());
     let before = snapshot(&cfg);
     let header = {
         let invariants = Invariants::of(&cfg);

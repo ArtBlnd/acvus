@@ -20,6 +20,7 @@ use crate::analysis::loans::Loans;
 use crate::analysis::loops::{
     Invariants, LoopNest, NaturalLoop, Term, natural_loops_innermost_first,
 };
+use crate::analysis::raise::{self, FunctionSummary};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
@@ -748,12 +749,7 @@ impl<'a> RunAhead<'a> {
         let in_while = loops
             .iter()
             .filter(|inner| inner.header != header && ours.contains(&inner.header))
-            .filter(|inner| {
-                !matches!(
-                    cfg.blocks[inner.header.0].terminator,
-                    Terminator::For { .. }
-                )
-            })
+            .filter(|inner| inner.is_while(cfg))
             .flat_map(NaturalLoop::blocks)
             .collect();
         Self {
@@ -775,14 +771,7 @@ impl<'a> RunAhead<'a> {
             return Some(HeldBack::Effect);
         }
         let finishes = !self.in_while.contains(&at.block)
-            && match kind {
-                InstKind::FunctionCall { callee, .. } | InstKind::Spawn { callee, .. } => {
-                    matches!(callee, Callee::Extern { .. })
-                        && self.laws.returns_of(callee).returns_or_traps()
-                }
-                InstKind::Eval { .. } => false,
-                _ => true,
-            };
+            && raise::finishes(kind, self.laws, &FunctionSummary::unknown());
         (!finishes).then_some(HeldBack::MayNotFinish)
     }
 }

@@ -77,8 +77,8 @@ use crate::analysis::affine::{Affine, AffineValues, Derivation, for_body};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::interval;
-use crate::analysis::raise::{Raising, UntrappingFunctions};
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, Term, edge_args};
+use crate::analysis::raise::{FunctionSummary, Removal};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
     BinOp, Callee, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Inst, InstKind, Label,
@@ -88,7 +88,7 @@ use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, LenTerm, Mutability, Ty};
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &UntrappingFunctions) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
     let domtree = DomTree::build(cfg);
     let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
     for (_, loop_) in nest.iter() {
@@ -554,7 +554,7 @@ fn read_lengths_from_entry(
     shape: &Shape,
     domtree: &DomTree,
     laws: &LawTable,
-    functions: &UntrappingFunctions,
+    functions: &FunctionSummary,
 ) {
     let [entering] = loop_.natural.entering[..] else {
         return;
@@ -596,9 +596,9 @@ impl LengthRead {
         loop_: &Loop,
         shape: &Shape,
         laws: &LawTable,
-        functions: &UntrappingFunctions,
+        functions: &FunctionSummary,
     ) -> Vec<LengthRead> {
-        let raising = Raising::of(cfg, laws, functions);
+        let removal = Removal::of(cfg, laws, functions);
         let natural = &loop_.natural;
         let invariants = Invariants::of(cfg);
         let affine = AffineValues::of(cfg, loop_, &invariants, laws);
@@ -628,7 +628,7 @@ impl LengthRead {
                 else {
                     continue;
                 };
-                if raising.can_raise(interval::InstAt { block, at }, &inst.kind) {
+                if removal.stays_unused(interval::InstAt { block, at }, &inst.kind) {
                     continue;
                 }
                 let Some(Affine {

@@ -22,7 +22,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::analysis::interval::InstAt;
 use crate::analysis::loans::Loans;
-use crate::analysis::raise::{Raising, UntrappingFunctions};
+use crate::analysis::raise::{FunctionSummary, Removal};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::laws::LawTable;
@@ -291,7 +291,7 @@ fn storage_reached(
 ///
 /// A store `Stores::conditional` holds is asked of its readers instead, and
 /// this answer does not apply to it.
-fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, raising: &Raising<'_>) -> bool {
+fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, removal: &Removal<'_>) -> bool {
     let val_types = &loans.cfg().val_types;
     if !loans.storage_effect(kind).writes.is_empty() {
         return true;
@@ -300,7 +300,7 @@ fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, raising: &Raising<'_>)
         block: BlockIdx(at.block),
         at: at.inst,
     };
-    if raising.can_raise(at, kind) {
+    if removal.stays_unused(at, kind) {
         return true;
     }
     // A call handed a `&mut` may write what it names, wherever that storage
@@ -398,10 +398,10 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
 /// to observable behavior (Return, Store, Eval, effectful calls).
-pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &UntrappingFunctions) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
     let def_map = build_def_map(cfg);
     let loans = Loans::build(cfg);
-    let raising = Raising::of(cfg, laws, functions);
+    let removal = Removal::of(cfg, laws, functions);
     let stores = Stores::of(&loans);
 
     // Live instruction set.
@@ -418,7 +418,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &UntrappingFunctions) 
                 block: bi,
                 inst: ii,
             };
-            if !stores.conditional.contains(&at) && is_root(at, &inst.kind, &loans, &raising) {
+            if !stores.conditional.contains(&at) && is_root(at, &inst.kind, &loans, &removal) {
                 live_insts.insert(at);
                 worklist.extend(inst_info::uses(&inst.kind));
             }
@@ -810,7 +810,7 @@ mod tests {
     fn a_store_no_one_reads_is_dead_and_its_producer_stays() {
         let i = Interner::new();
         let mut cfg = opaque_store_never_read(&i, Vec::new());
-        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
         assert_eq!(stored(&cfg), Vec::new(), "a store with no reader is dead");
         assert_eq!(
             calls(&cfg),
@@ -831,7 +831,7 @@ mod tests {
                 mutability: crate::ty::Mutability::Shared,
             }],
         );
-        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
         assert_eq!(refs(&cfg), 0, "a reference no one reads is dead");
         assert_eq!(
             stored(&cfg),
@@ -860,7 +860,7 @@ mod tests {
             ],
             &[Ty::String, Ty::String, Ty::String, Ty::I64],
         );
-        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
         assert_eq!(
             stored(&cfg),
             vec![v(1)],
@@ -890,7 +890,7 @@ mod tests {
             ],
             4,
         );
-        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
         assert_eq!(
             stored(&cfg),
             Vec::new(),
@@ -933,7 +933,7 @@ mod tests {
             1,
         ));
         let functions =
-            UntrappingFunctions::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
+            FunctionSummary::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
         let mut cfg = unused_pure_call_body(&i);
         run(&mut cfg, &laws, &functions);
         assert_eq!(calls(&cfg), 0);
@@ -945,7 +945,7 @@ mod tests {
         let laws = LawTable::default();
         let callee = cfg::demote(unused_pure_call_body(&i));
         let functions =
-            UntrappingFunctions::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
+            FunctionSummary::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
         let mut cfg = unused_pure_call_body(&i);
         run(&mut cfg, &laws, &functions);
         assert_eq!(calls(&cfg), 1);
@@ -955,7 +955,7 @@ mod tests {
     fn an_unused_pure_call_of_a_callee_that_may_raise_stays() {
         let i = Interner::new();
         let mut cfg = unused_pure_call_body(&i);
-        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
         assert_eq!(calls(&cfg), 1);
     }
 
@@ -977,7 +977,7 @@ mod tests {
                 ],
                 2,
             );
-            run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+            run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
             assert_eq!(
                 calls(&cfg),
                 1,

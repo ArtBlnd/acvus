@@ -1063,7 +1063,9 @@ Status: Proposed
    call of `f` returns a value and never traps, which states `returns`
    too, so `#[extern_fn]` refuses the two written together. The call is
    all `f` runs, a call it makes of a function value it was handed
-   included, so an `f` that calls one cannot state it. It is the author's
+   included, so an `f` that calls one cannot state it: combining the
+   registries refuses `total` on an instance a parameter of which holds a
+   function type, at any depth. It is the author's
    promise (rule 5), sampled by tests that call each declared handler over
    its width's edges and a fixed sample of words. `analysis::raise` reads
    it, by the instance a call names, so a call whose value nothing reads

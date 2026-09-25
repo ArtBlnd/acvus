@@ -552,6 +552,12 @@ pub enum CombineError {
         declared: Task,
         handler: Task,
     },
+    /// `total` on an instance with a parameter holding a function value,
+    /// whose calls the declaration cannot promise (RFC-0082 rule 9).
+    TotalOverFunctionArgument {
+        function: String,
+        ty: PolyTy,
+    },
 }
 
 impl fmt::Display for CombineError {
@@ -650,6 +656,12 @@ impl fmt::Display for CombineError {
                 f,
                 "{function} is declared at Task::{declared}, so its handler \
                  may not run at Task::{handler}"
+            ),
+            Self::TotalOverFunctionArgument { function, ty } => write!(
+                f,
+                "{function} declares `total` at {ty:?}, which takes a function value: a call \
+                 of it runs that function too, and no declaration of {function} can promise \
+                 that function never traps. Declare `returns` instead, or nothing."
             ),
         }
     }
@@ -1068,9 +1080,21 @@ impl<R: Runtime> Externs<R> {
             let FnKind::Extern { instances, .. } = &function.kind else {
                 continue;
             };
-            let concrete = instances.concrete.iter().map(|at| (&at.ty, &at.laws));
-            let generic = instances.generic.as_ref().map(|at| (&function.ty, &at.laws));
-            for (ty, laws) in concrete.chain(generic) {
+            let concrete = instances
+                .concrete
+                .iter()
+                .map(|at| (&at.ty, &at.laws, at.returns));
+            let generic = instances
+                .generic
+                .as_ref()
+                .map(|at| (&function.ty, &at.laws, at.returns));
+            for (ty, laws, returns) in concrete.chain(generic) {
+                if returns == Returns::Total && takes_a_function_value(ty) {
+                    return Err(CombineError::TotalOverFunctionArgument {
+                        function: written(interner, function.qref),
+                        ty: ty.clone(),
+                    });
+                }
                 LawSite {
                     interner,
                     declared: &declared,
@@ -1088,6 +1112,16 @@ impl<R: Runtime> Externs<R> {
             instances: instance_table,
         })
     }
+}
+
+fn takes_a_function_value(ty: &PolyTy) -> bool {
+    fn holds_one(ty: &PolyTy) -> bool {
+        matches!(ty, TyTerm::Fn { .. }) || ty.children().iter().any(|child| holds_one(child))
+    }
+    let PolyTy::Fn { params, .. } = ty else {
+        return false;
+    };
+    params.iter().any(|param| holds_one(&param.ty))
 }
 
 struct LawSite<'a> {

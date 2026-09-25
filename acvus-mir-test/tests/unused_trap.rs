@@ -1,7 +1,8 @@
-//! An operation whose value nothing reads stays where it can trap and goes
-//! where `analysis::raise` shows it cannot (RFC-0048 rule 8): a checked
-//! index, a call of a local function, a call of an extern by whether its
-//! instance is declared `total` (RFC-0082 rule 9).
+//! An operation whose value nothing reads stays where it can trap or may
+//! not finish, and goes where `analysis::raise` shows it can do neither
+//! (RFC-0048 rule 8, RFC-0088 Rejected): a checked index, a call of a local
+//! function, a call of an extern by whether its instance is declared
+//! `total` (RFC-0082 rule 9).
 
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{BinOp, Callee, InstKind, MirModule};
@@ -56,14 +57,15 @@ fn is_local_call(kind: &InstKind) -> bool {
 }
 
 fn is_call_or_inlined_division(kind: &InstKind) -> bool {
-    is_local_call(kind)
-        || matches!(
-            kind,
-            InstKind::BinOp {
-                op: BinOp::Div,
-                ..
-            }
-        )
+    is_call_or_inlined(kind, BinOp::Div)
+}
+
+fn is_call_or_inlined_remainder(kind: &InstKind) -> bool {
+    is_call_or_inlined(kind, BinOp::Mod)
+}
+
+fn is_call_or_inlined(kind: &InstKind, inlined: BinOp) -> bool {
+    is_local_call(kind) || matches!(kind, InstKind::BinOp { op, .. } if *op == inlined)
 }
 
 #[test]
@@ -138,6 +140,63 @@ fn an_unused_call_of_an_extern_declared_total_is_gone() {
     let i = Interner::new();
     for opt in LEVELS {
         let module = script(&i, "let d = @x.wrapping_add(3); 5", opt);
-        assert_eq!(count(&module, is_extern_call), 0, "at {opt:?}\n{}", dump_with(&i, &module));
+        assert_eq!(
+            count(&module, is_extern_call),
+            0,
+            "at {opt:?}\n{}",
+            dump_with(&i, &module)
+        );
+    }
+}
+
+const WHILE_ENDING_ONLY_WHERE_N_IS_AT_MOST_SEVEN: &str =
+    "let i = 0; while i < $n { i = i % 7 + 1; } i";
+
+const FOR_TO_N: &str = "let i = 0; for k in 0..$n { i = i % 7 + 1; } i";
+
+#[test]
+fn an_unused_call_of_a_local_function_whose_while_may_not_end_stays() {
+    let i = Interner::new();
+    for opt in LEVELS {
+        let module = with_helper(
+            &i,
+            "let d = h(10); 5",
+            WHILE_ENDING_ONLY_WHERE_N_IS_AT_MOST_SEVEN,
+            opt,
+        );
+        assert_eq!(
+            count(&module, is_call_or_inlined_remainder),
+            1,
+            "at {opt:?}\n{}",
+            dump_with(&i, &module)
+        );
+    }
+}
+
+#[test]
+fn an_unused_call_of_a_local_function_whose_loop_is_a_for_is_gone() {
+    let i = Interner::new();
+    for opt in LEVELS {
+        let module = with_helper(&i, "let d = h(10); 5", FOR_TO_N, opt);
+        assert_eq!(
+            count(&module, is_call_or_inlined_remainder),
+            0,
+            "at {opt:?}\n{}",
+            dump_with(&i, &module)
+        );
+    }
+}
+
+#[test]
+fn an_unused_call_of_a_local_function_calling_an_extern_that_states_no_return_stays() {
+    let i = Interner::new();
+    for opt in LEVELS {
+        let module = with_helper(&i, "let d = h(1); 5", "$n.wrapping_div(3)", opt);
+        assert_eq!(
+            count(&module, |kind| is_local_call(kind) || is_extern_call(kind)),
+            1,
+            "at {opt:?}\n{}",
+            dump_with(&i, &module)
+        );
     }
 }

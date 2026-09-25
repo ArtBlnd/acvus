@@ -682,7 +682,11 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    effect is issued ahead of an exit; one without an effect may run ahead
    and be discarded when it finishes on every run: it holds no `while`
    and no call of a local function, a `for` in it finishes when its body
-   does, and every extern it calls states `returns` (RFC-0082 rule 8). A
+   does, and every extern it calls states `returns` (RFC-0082 rule 8).
+   `analysis::raise::finishes` is that test, and the removal of an unused
+   call reads it too (RFC-0048 rule 8) with what the call graph shows of
+   each local function; run-ahead reads it knowing no callee, since rule 3
+   checks this rule from one body. A
    trap it raises in an iteration past the exit is discarded with it.
    Such a loop's trip count is only a bound, and its cost (RFC-0066 rule
    8) says `n ≤` that bound: work past the exit is spent and discarded.
@@ -1137,4 +1141,5 @@ runs its iterations.
 - Assuming a loop with no effect ends, so any such loop may go — the
   analysis that finds "no effect" is the one that errs, and a wrong answer
   deletes a loop that does not end; such loops are rare, so it gains little.
-  Only a `for`, which states its count, is removed.
+  Only a `for`, which states its count, is removed, and an unused call of a
+  local function holding a `while` stays (RFC-0048 rule 8).

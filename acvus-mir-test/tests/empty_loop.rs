@@ -8,7 +8,7 @@
 
 use acvus_ast::{Literal, Span};
 use acvus_mir::analysis::inst_info;
-use acvus_mir::analysis::raise::UntrappingFunctions;
+use acvus_mir::analysis::raise::FunctionSummary;
 use acvus_mir::cfg::{Block, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{
@@ -483,7 +483,7 @@ fn built(shape: Shape) -> Built {
     hand.returns(done);
 
     let mut cfg = hand.cfg(&interner, 4);
-    empty_loop::run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+    empty_loop::run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
     Built {
         cfg,
         bounds: parts.bounds,

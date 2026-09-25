@@ -6,7 +6,7 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
-use crate::analysis::raise::UntrappingFunctions;
+use crate::analysis::raise::FunctionSummary;
 use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
 use crate::graph::{ContextInfo, QualifiedRef};
@@ -69,7 +69,7 @@ pub fn optimize(
     }
 
     let called: FxHashSet<QualifiedRef> = modules.values().flat_map(named_callees).collect();
-    let functions = UntrappingFunctions::of(
+    let functions = FunctionSummary::of(
         sccs.iter()
             .flatten()
             .filter(|qref| called.contains(qref))
@@ -221,11 +221,7 @@ impl Component {
     }
 }
 
-fn run_pass1_body(
-    laws: &LawTable,
-    functions: &UntrappingFunctions,
-    body: &mut crate::ir::MirBody,
-) {
+fn run_pass1_body(laws: &LawTable, functions: &FunctionSummary, body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
     optimize::string_copy::run(&mut cfg);
@@ -248,7 +244,7 @@ impl Undropped {
     fn optimized(
         interner: &Interner,
         laws: &LawTable,
-        functions: &UntrappingFunctions,
+        functions: &FunctionSummary,
         qref: QualifiedRef,
         mut module: MirModule,
         opt: Opt,
@@ -309,7 +305,7 @@ impl Undropped {
 /// so a parameter removed here is removed from every call to the module, and
 /// a value a caller read only to pass it is unread in turn: the removal
 /// repeats until no module loses one.
-fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable, functions: &UntrappingFunctions) {
+fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable, functions: &FunctionSummary) {
     loop {
         let mut removed: FxHashMap<QualifiedRef, Vec<usize>> = FxHashMap::default();
         for module in undropped.iter_mut() {
@@ -394,7 +390,7 @@ fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usiz
 fn run_pass2_required(
     interner: &Interner,
     laws: &LawTable,
-    functions: &UntrappingFunctions,
+    functions: &FunctionSummary,
     cfg: &mut CfgBody,
 ) {
     optimize::ssa_pass::run(cfg);
@@ -407,12 +403,7 @@ fn run_pass2_required(
     optimize::dce::run(cfg, laws, functions);
 }
 
-fn run_pass2(
-    interner: &Interner,
-    laws: &LawTable,
-    functions: &UntrappingFunctions,
-    cfg: &mut CfgBody,
-) {
+fn run_pass2(interner: &Interner, laws: &LawTable, functions: &FunctionSummary, cfg: &mut CfgBody) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
     // RFC-0050: an aggregate no use lets out of the body never exists.

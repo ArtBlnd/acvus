@@ -229,15 +229,22 @@ holder that took ownership. Everything else copies.
    and stage, RFC-0089 rule 5). A trap stays where control puts it: an
    operation that can trap moves only to where it runs on exactly the
    paths it ran on, and a pass removes one whose value nothing reads only
-   where `analysis::raise` shows it cannot trap, the one predicate every
-   pass that removes an instruction asks. An integer `/` or `%` and a
-   checked index cannot trap where the interval domain (RFC-0047 rule 7)
-   clears them. A call of an extern cannot trap where the instance it
-   names is declared `total` (RFC-0082 rule 9). A call of a local function
-   cannot trap where none of the callee's instructions can, decided
-   callees first over the call graph, so a call inside a cycle of it can
-   trap; a call through a function value can trap. An overflow is removed
-   as RFC-0037 rule 3 says.
+   where `analysis::raise` shows it cannot trap and finishes on every run,
+   the one predicate every pass that removes an instruction asks: no
+   effect-free loop is assumed to end (RFC-0088, Rejected), and a removed
+   call that would not have finished changes what the run does as a lost
+   trap does. An integer `/` or `%` and a checked index cannot trap where
+   the interval domain (RFC-0047 rule 7) clears them. A call of an extern
+   cannot trap where the instance it names is declared `total` (RFC-0082
+   rule 9), which states `returns`. A call of a local function cannot trap
+   where none of the callee's instructions can, and finishes where none of
+   the callee's loops is a `while` and each of its instructions finishes
+   (a `for` runs its body the count its terminator states); both are
+   decided callees first over the call graph, so a call inside a cycle of
+   it can trap and may not finish. A call through a function value can
+   trap. What finishes is the one test RFC-0089 rule 5 reads, which knows
+   no callee's body and so admits no call of a local function. An overflow
+   is removed as RFC-0037 rule 3 says.
 
 **Why.** A droppable `Value` needs an address wherever it may drop, which puts
 unwind landing pads in handlers and keeps values in memory; it forces a second
@@ -251,9 +258,10 @@ boundary, free at run time. `mem::drop(v)` on a `Copy` value is a no-op that
 reads like a release, which is why the method is `release`. One bit test per
 `Large` define or assign, one mask clear per batched take, one bit iteration
 per frame exit. An unused call of an extern not declared `total`, of a local
-function that may trap, or through a function value still runs, as does an
-unused checked index the interval domain cannot clear; each local function a
-call names is put through SSA once more to decide whether it can trap.
+function that may trap or may not finish, or through a function value still
+runs, as does an unused checked index the interval domain cannot clear; each
+local function a call names is put through SSA once more, and its natural
+loops found, to decide whether it can trap and whether it finishes.
 
 **Rejected.**
 - Changing `Value`'s layout to make the second store cheap — it fixes a store
