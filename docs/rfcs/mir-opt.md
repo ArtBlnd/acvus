@@ -596,7 +596,8 @@ RFC-0064's analyses become inputs whose promises must stay stable.
   the normal form removes.
 - A `while` trip count derived from its recurrence — the door to general
   scalar evolution. A `while` is promoted to `for` only by a recognizer that
-  is exact, or it stays undivided.
+  is exact (RFC-0081, RFC-0094), or it is a pull loop (RFC-0089 rule 1), or
+  it stays undivided.
 - An explicit `par for` — the facts the split needs are the checker's.
 - A reassociable float reduction — it fixes a rounding every later lowering
   would have to keep.
@@ -623,6 +624,13 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    program; running in place is the loop as written, the chain being the
    body of the region RFC-0057 rule 3 builds. A value reaches a later
    stage by dominance.
+   A pull loop — a `while` whose header calls an extern `next(&mut it)`,
+   tests its `Option` and leaves only there — ends its header in
+   `Terminator::While { cond, body, exit, exit_args, stages }`: the header,
+   its call and its test are the first stage and the control token's
+   cycle, in order (rule 5), and the payload reaches later stages by
+   dominance. Its count is unknown on entry, so its cost (RFC-0066 rule 8)
+   is in place until a declaration bounds its pulls.
 
 2. **Tokens.** One iteration orders another only through:
    - an `Order` value (RFC-0007);
@@ -777,6 +785,42 @@ fails when it is removed.
 **Rejected.**
 - Keeping the readings in RFC-0089 — they grow with every law, and RFC-0089
   states what a stage is.
+
+## RFC-0094: a `while` whose exit is a linear bound on one counter of a constant step is a range `for`
+
+Status: Proposed
+
+RFC-0081 converts the `while` that counts by one up to `n`. The same
+conversion is exact for a few more spellings of a counted loop, where no
+bound needs rounding beyond one constant division and nothing can leave
+the width. Every condition of RFC-0081 rule 1 other than the comparison and
+the step holds; its rules 2 and 3 apply unchanged.
+
+1. **Up to and including.** `c` is `i <= n` and the interval domain
+   (RFC-0047 rule 7) shows `n` below the width's maximum: the range is
+   `b..n + 1`, the `+ 1` the pass's own and exact.
+2. **Counting down by one.** `c` is `i > n` (or `n < i`) and every back edge
+   sends `i − 1`: the header becomes `For { source: Range { at: n, hi: b } }`,
+   which counts the iterations and computes no bound. The loop's `i` stays
+   its own header parameter; on the `k`-th visit it is `b − k`, which IV
+   canonicalization reads from the counter.
+3. **A constant step.** Every back edge sends `i + s` for a word constant
+   `s ≠ 1` and `c` compares `i` against `n` in the direction `s` moves:
+   the trip count is `⌈(n − b) / |s|⌉` where `i` has not already passed
+   `n`, else zero, computed above the header from the difference at the
+   width read unsigned and one constant division, so it neither traps nor
+   wraps. The header becomes a range over that count; `i` is read from the
+   counter as `b + k·s`.
+
+**Why.** Each form is a counted loop the script wrote without the `for`
+that states it; the conversion is exact because the bound is a word the
+pass can compute with no rounding it cannot state and no overflow.
+**Cost.** Three recognizer cases and one computed trip count.
+**Rejected.**
+- A step that is not a word constant — the division's divisor and sign
+  are unknown, which is scalar evolution.
+- A quadratic or otherwise non-linear exit condition — its count is a
+  root, not a quotient.
 
 ## RFC-0092: a lowerer runs a loop's stages as a token pipeline, and the executor decides how to wait
 

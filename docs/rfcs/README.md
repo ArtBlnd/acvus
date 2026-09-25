@@ -118,6 +118,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0089: a `for` is a chain of stages no dependence cycle crosses, and what each stage is the IR already says (Proposed)
 - RFC-0092: a lowerer runs a loop's stages as a token pipeline, and the executor decides how to wait (Proposed)
 - RFC-0093: a cycle's law is read from what it computes (Proposed)
+- RFC-0094: a `while` whose exit is a linear bound on one counter of a constant step is a range `for` (Proposed)
 
 ### [ownership.md](ownership.md)
 
