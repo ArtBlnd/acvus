@@ -22,7 +22,7 @@ use crate::code::{
 };
 use crate::flight::FrameCells;
 use crate::interpreter::{InterpreterContext, lookup_module};
-use crate::regs::{FrameState, Regs, RootFrame, Store};
+use crate::regs::{FrameSlot, FrameState, Regs, RootFrame, Store};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -280,9 +280,9 @@ where
     let mut store = Store::new();
     let (mut regs, _) = store.bind(callee);
     open_frame(callee, &mut regs);
-    for (at, arg) in window.laid(arity).iter().enumerate() {
-        let slot = u16::try_from(at).expect("an argument run is at most one cell wide");
-        regs.open(Off::of(slot), *arg);
+    let laid = window.laid(arity);
+    for (slot, arg) in FrameSlot::first(laid.len()).zip(laid) {
+        regs.open(Off::bounded(slot), *arg);
     }
     run_frame(callee, named, regs, rt, true, fill)
 }
@@ -361,7 +361,7 @@ where
                 let value = fut.await;
                 match owns_large {
                     true => machine.regs.define::<true>(dst, value),
-                    false => machine.regs.put(dst.at, value),
+                    false => machine.regs.put(dst.at(), value),
                 }
             }
             Pending::Pair { dst, fut } => {
@@ -575,9 +575,8 @@ impl Code {
     fn frameless_now(&self, f: Value, rt: &AcvusRuntime, args: &[Value]) -> Value {
         let arity = u16::try_from(args.len()).expect("an argument run is at most one cell wide");
         let RootFrame { mut state, cells } = RootFrame::new();
-        for (at, arg) in args.iter().enumerate() {
-            let slot = u16::try_from(at).expect("an argument run is at most one cell wide");
-            state.lay(Off::of(slot), *arg);
+        for (slot, arg) in FrameSlot::first(args.len()).zip(args) {
+            state.lay(Off::bounded(slot), *arg);
         }
         // SAFETY: the contract `fn_value_call` carries — `f` is a closure of
         // this `Code` — and the arguments are laid where an entry reads them.

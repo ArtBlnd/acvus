@@ -32,7 +32,7 @@ impl<const THROUGH: bool> Op for CloneString<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
+        let source = place::<THROUGH>(regs.peek(self.slots.src.at()));
         // SAFETY: the type checker admits only a `String` here.
         let text = unsafe { source.as_str() }.to_string();
         regs.define::<true>(self.slots.dst, Value::string(text));

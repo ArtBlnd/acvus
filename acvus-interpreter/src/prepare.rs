@@ -45,6 +45,7 @@ use crate::ops::{
     call, cast, composite, constant, control, index, pattern, run as run_ops, select, storage,
     string, structural, switch, variant,
 };
+use crate::regs::{FrameSlot, MarkWords};
 use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
 
@@ -600,7 +601,7 @@ fn framed(
         frame_len,
         frame_cells: u16::try_from(crate::regs::cells_for(frame_len))
             .expect("the cells of the widest frame fit a u16"),
-        mark_words: crate::regs::mark_words(frame_len),
+        mark_words: MarkWords::of(frame_len),
         entry_konsts,
         literals: Arc::clone(literals),
         slot_kinds,
@@ -1615,13 +1616,17 @@ impl<'a> Prepare<'a> {
     /// The byte displacement of `id`'s register: what every operation holds
     /// (RFC-0052 rule 5). `slot` is the index, and it stays inside `prepare`.
     fn off(&self, id: ValueId) -> Off {
-        Off::of(self.slot(id))
+        Off::bounded(self.frame_slot(id))
+    }
+
+    fn frame_slot(&self, id: ValueId) -> FrameSlot {
+        FrameSlot::of(self.slot(id))
     }
 
     /// The register and the frame's claim on it, for the operations that
     /// define, take or assign a whole `Value` (RFC-0050 rule 2).
     fn marked(&self, id: ValueId) -> Marked {
-        Marked::of(self.off(id))
+        Marked::of(self.frame_slot(id))
     }
 
     /// The run a place reaches: the one the storage it names is a member of,
@@ -1641,7 +1646,7 @@ impl<'a> Prepare<'a> {
             [PathSeg::Field(name)] => run.layout.field(*name)?,
             _ => return None,
         };
-        Some(Marked::of(Off::of(run.base + at)))
+        Some(Marked::of(FrameSlot::of(run.base + at)))
     }
 
     /// The register a dispatch reads its tag from, where the value it names
@@ -1653,7 +1658,7 @@ impl<'a> Prepare<'a> {
     /// The two registers a slice-typed value occupies, both fixed here so no
     /// `run` computes the second (RFC-0047 rule 6).
     fn pair(&self, id: ValueId) -> SlicePair {
-        SlicePair::at(self.off(id))
+        SlicePair::at(self.frame_slot(id))
     }
 
     /// The register `order_moves` breaks a cycle through.
@@ -1904,7 +1909,7 @@ impl<'a> Prepare<'a> {
             .filter_map(|(slot, kind)| {
                 let slot = Slot::try_from(slot).expect("a frame's registers fit a Slot");
                 kind.map(|kind| SlotKind {
-                    slot: Off::of(slot),
+                    slot: Off::bounded(FrameSlot::of(slot)),
                     kind,
                 })
             })
@@ -1920,8 +1925,7 @@ impl<'a> Prepare<'a> {
     fn laid(&mut self, args: &[ValueId], ops: &mut Vec<Node>) -> Laid {
         let mut arity: Slot = 0;
         for id in args {
-            let src = self.off(*id);
-            let at = Off::of(arity);
+            let (src, at) = (self.frame_slot(*id), FrameSlot::of(arity));
             let class = SlotClass::of(self.ty(*id));
             ops.push(match class {
                 SlotClass::Slice => node(move |next| call::LayPair {
@@ -1929,9 +1933,11 @@ impl<'a> Prepare<'a> {
                     src: SlicePair::at(src),
                     next,
                 }),
-                SlotClass::Word(_) | SlotClass::Whole => {
-                    node(move |next| call::LayArg { at, src, next })
-                }
+                SlotClass::Word(_) | SlotClass::Whole => node(move |next| call::LayArg {
+                    at: Off::bounded(at),
+                    src: Off::bounded(src),
+                    next,
+                }),
             });
             arity += u16::try_from(class.width()).expect("a register class is two wide at most");
             assert!(
@@ -2160,9 +2166,12 @@ impl<'a> Prepare<'a> {
         default: Option<&(Label, Vec<ValueId>)>,
     ) -> Box<dyn Op> {
         let form = self.dispatch_form_of(tag, arms);
-        let placed_run = self
-            .run_tag(tag)
-            .map(|run| (Off::of(run.base), run.layout.tags().clone()));
+        let placed_run = self.run_tag(tag).map(|run| {
+            (
+                Off::bounded(FrameSlot::of(run.base)),
+                run.layout.tags().clone(),
+            )
+        });
         let src = self.off(tag);
         let through = self.is_ref(tag);
         let (tested, default) = match default {
@@ -2304,9 +2313,12 @@ impl<'a> Prepare<'a> {
         let (tag, arms, default) = (*tag, arms.clone(), default.clone());
 
         let form = self.dispatch_form_of(tag, &arms);
-        let placed_run = self
-            .run_tag(tag)
-            .map(|run| (Off::of(run.base), run.layout.tags().clone()));
+        let placed_run = self.run_tag(tag).map(|run| {
+            (
+                Off::bounded(FrameSlot::of(run.base)),
+                run.layout.tags().clone(),
+            )
+        });
         let src = self.off(tag);
         let through = self.is_ref(tag);
         let (tested, fallback) = match &default {
@@ -3670,7 +3682,7 @@ impl<'a> Prepare<'a> {
             "a loop head's call takes the reference its own `Ref` made, which owns no `Large`"
         );
         Some(CallHead {
-            it: self.walked_under(target, path).base.at,
+            it: self.walked_under(target, path).base.at(),
             call: call_at,
             reference: *reference,
             x,
@@ -4466,11 +4478,11 @@ impl<'a> Prepare<'a> {
             InstKind::Ref {
                 dst, target, path, ..
             } if path.is_empty() && self.reached_run(target).is_some() => {
-                let at = Off::of(
+                let at = Off::bounded(FrameSlot::of(
                     self.reached_run(target)
                         .expect("the guard read the same run")
                         .base,
-                );
+                ));
                 let dst = self.off(*dst);
                 node(move |next| run_ops::Project { dst, at, next })
             }
@@ -4986,7 +4998,7 @@ impl<'a> Prepare<'a> {
             InstKind::MakeVariant { dst, tag, payload } => self.make_variant(*dst, *tag, *payload),
             InstKind::TestVariant { dst, src, tag } if self.run_tag(*src).is_some() => {
                 let run = self.run_tag(*src).expect("the guard read the same run");
-                let src = Off::of(run.base);
+                let src = Off::bounded(FrameSlot::of(run.base));
                 let word = member_of(run.layout.tags(), *tag).word();
                 let dst = self.off(*dst);
                 node(move |next| run_ops::TestRun {
@@ -5023,7 +5035,7 @@ impl<'a> Prepare<'a> {
             }
             InstKind::UnwrapVariant { dst, src } if self.run_tag(*src).is_some() => {
                 let run = self.run_tag(*src).expect("the guard read the same run");
-                let src = Marked::of(Off::of(run.base + run.layout.payload()));
+                let src = Marked::of(FrameSlot::of(run.base + run.layout.payload()));
                 let owns = self.owns(*dst);
                 let dst = self.marked(*dst);
                 match owns {
@@ -5056,7 +5068,7 @@ impl<'a> Prepare<'a> {
                 let slot = self.off(*dst);
                 match SlotClass::of(self.ty(*dst)) {
                     SlotClass::Slice => {
-                        let dst = SlicePair::at(slot);
+                        let dst = self.pair(*dst);
                         node(move |next| control::UndefWide { dst, next })
                     }
                     SlotClass::Word(_) => {
@@ -5072,7 +5084,7 @@ impl<'a> Prepare<'a> {
                 let registers: Box<[Marked]> = run
                     .layout
                     .releases()
-                    .map(|at| Marked::of(Off::of(run.base + at)))
+                    .map(|at| Marked::of(FrameSlot::of(run.base + at)))
                     .collect();
                 made(move |next| run_ops::drop_run(registers, next))
             }
@@ -5493,12 +5505,12 @@ impl<'a> Prepare<'a> {
                 run.base
             );
             return call::RunDest::Frame(call::RunAt {
-                at: Off::of(run.base),
+                at: Off::bounded(FrameSlot::of(run.base)),
                 width: run.layout.len(),
                 releases: run
                     .layout
                     .releases()
-                    .map(|at| Marked::of(Off::of(run.base + at)))
+                    .map(|at| Marked::of(FrameSlot::of(run.base + at)))
                     .collect(),
             });
         }
@@ -5662,7 +5674,7 @@ impl<'a> Prepare<'a> {
 
         ops.extend(ordered.moves.iter().map(mov_op));
         Windowed {
-            at: Off::of(base),
+            at: Off::bounded(FrameSlot::of(base)),
             arity,
             takes: self.window_take_mask(base, args),
         }
@@ -5677,7 +5689,7 @@ impl<'a> Prepare<'a> {
             let width = u16::try_from(SlotClass::of(self.ty(*id)).width())
                 .expect("a register class is two wide at most");
             if self.owns(*id) {
-                owned.push(Marked::of(Off::of(slot)));
+                owned.push(Marked::of(FrameSlot::of(slot)));
             }
             slot = slot
                 .checked_add(width)
@@ -5751,7 +5763,7 @@ impl<'a> Prepare<'a> {
             }
         };
         node(move |next| constant::Const {
-            dst: out.at,
+            dst: out.at(),
             word,
             next,
         })
@@ -5792,7 +5804,7 @@ impl<'a> Prepare<'a> {
                 let want = s.clone();
                 match SlotClass::of(self.ty(src)) {
                     SlotClass::Slice => {
-                        let (dst, src) = (slots.dst.at, self.lent_text(src));
+                        let (dst, src) = (slots.dst.at(), self.lent_text(src));
                         node(move |next| string::TestLentText {
                             dst,
                             src,
@@ -5809,7 +5821,7 @@ impl<'a> Prepare<'a> {
                 }
             }
             Literal::Unit => node(move |next| pattern::TestUnit {
-                dst: slots.dst.at,
+                dst: slots.dst.at(),
                 next,
             }),
             Literal::List(_) => panic!("TestLiteral on a list literal"),
@@ -5829,10 +5841,10 @@ impl<'a> Prepare<'a> {
         let run = self.plan.of(dst).expect("the arm read the same run");
         let (base, at) = (run.base, run.layout.payload());
         let konsts = Box::new([LaidKonst {
-            at: Marked::of(Off::of(base)),
+            at: Marked::of(FrameSlot::of(base)),
             value: member_of(run.layout.tags(), tag).register(),
         }]);
-        let register = Marked::of(Off::of(base + at));
+        let register = Marked::of(FrameSlot::of(base + at));
         let moved: Box<[LaidMove]> = match payload {
             Some(src) => Box::new([LaidMove {
                 at: register,
@@ -5885,7 +5897,7 @@ impl<'a> Prepare<'a> {
         let mut moved: Vec<LaidMove> = Vec::new();
         let mut konsts: Vec<LaidKonst> = Vec::new();
         for (offset, name) in run.layout.fields().collect::<Vec<(u16, Astr)>>() {
-            let at = Marked::of(Off::of(base + offset));
+            let at = Marked::of(FrameSlot::of(base + offset));
             match written.get(&name) {
                 Some(src) => moved.push(LaidMove {
                     at,
@@ -6022,12 +6034,12 @@ struct Carried {
 /// The ordered move as the operation of a block (RFC-0052 rule 1): what it
 /// carries is its type, not a field a `run` reads.
 fn mov_op(carried: &Carried) -> Node {
-    let dst = Marked::of(Off::of(carried.at.to));
-    let src = Marked::of(Off::of(carried.at.from));
+    let dst = Marked::of(FrameSlot::of(carried.at.to));
+    let src = Marked::of(FrameSlot::of(carried.at.from));
     match carried.moved {
         Moved::Word => node(move |next| control::Mov::<false, true> { dst, src, next }),
         Moved::Pair => {
-            let (dst, src) = (SlicePair::at(dst.at), SlicePair::at(src.at));
+            let (dst, src) = (dst.pair(), src.pair());
             node(move |next| control::MovWide { dst, src, next })
         }
         Moved::Large => node(move |next| control::Mov::<true, false> { dst, src, next }),
@@ -6817,13 +6829,13 @@ mod call_form_tests {
         let op = factory
             .at_site(&acvus_extern::CallSite::of_args(&site.args(arity)))
             .into_op(call::CallShape::Registers2 {
-                dst: Marked::of(Off::of(2)),
-                a: Off::of(0),
-                b: Off::of(1),
+                dst: Marked::of(FrameSlot::of(2)),
+                a: Off::bounded(FrameSlot::of(0)),
+                b: Off::bounded(FrameSlot::of(1)),
                 takes: 0,
                 large: false,
                 next: Box::new(crate::ops::control::Return::<false, false> {
-                    slot: Marked::of(Off::of(2)),
+                    slot: Marked::of(FrameSlot::of(2)),
                 }),
             });
         let built = crate::listing::last_path_segment(&*op);
@@ -8776,9 +8788,9 @@ impl Prepare<'_> {
             .value_at
             .iter()
             .map(|(slot, value)| EntryKonst {
-                slot: Off::of(Slot::try_from(*slot).unwrap_or_else(|_| {
+                slot: Off::bounded(FrameSlot::of(Slot::try_from(*slot).unwrap_or_else(|_| {
                     panic!("an entry constant sits in register {slot}, past a frame")
-                })),
+                }))),
                 value: *value,
             })
             .collect();
@@ -9275,7 +9287,7 @@ impl Prepare<'_> {
                 }
             };
             let at = u16::try_from(at).expect("a body reads at most u16::MAX operands");
-            in_space.insert(*slot, Off::of(at));
+            in_space.insert(*slot, Off::bounded(FrameSlot::of(at)));
         }
         if body.params.len() + konsts.len() > ExprChain::MAX_OPERANDS {
             return None;

@@ -8,13 +8,13 @@
 use std::sync::Arc;
 
 use acvus_ast::Span;
-use acvus_extern::{FieldAt, Owned, Words};
+use acvus_extern::{FieldAt, Owned, Words, repr};
 use acvus_mir::ir::Label;
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
 
 use crate::machine::Machine;
-use crate::regs::FrameState;
+use crate::regs::{FrameSlot, FrameState, MarkWords};
 use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 
@@ -53,16 +53,30 @@ pub type Off = acvus_extern::repr::Disp<Value>;
 pub struct Marked {
     mask: u64,
     word_byte: u32,
-    pub at: Off,
+    at: Off,
 }
 
 impl Marked {
-    pub const fn of(at: Off) -> Marked {
-        let index = at.index();
+    pub fn of(slot: FrameSlot) -> Marked {
+        let index = usize::from(slot.get());
         Marked {
             mask: 1u64 << (index % crate::regs::MARK_WORD_SLOTS as usize),
             word_byte: (index / crate::regs::MARK_WORD_SLOTS as usize * size_of::<u64>()) as u32,
-            at,
+            at: Off::bounded(slot),
+        }
+    }
+
+    #[inline(always)]
+    pub const fn at(self) -> Off {
+        self.at
+    }
+
+    /// The slice pair whose `ptr` is this register.
+    #[inline(always)]
+    pub fn pair(self) -> SlicePair {
+        SlicePair {
+            ptr: self.at,
+            len: Off::after(self),
         }
     }
 
@@ -76,6 +90,17 @@ impl Marked {
     #[inline(always)]
     pub const fn mask(self) -> u64 {
         self.mask
+    }
+}
+
+// SAFETY: `Marked::of` is the one constructor and takes `at` from a
+// `FrameSlot`, and no method changes it.
+unsafe impl repr::Bounded for Marked {
+    const BOUND: u16 = crate::regs::MAX_FRAME_SLOTS;
+
+    #[inline(always)]
+    fn slot(self) -> u16 {
+        self.at.index() as u16
     }
 }
 
@@ -100,8 +125,8 @@ const _: () = assert!(
 );
 
 /// The two registers a slice occupies: `ptr` then `len`, adjacent
-/// (RFC-0047 rule 6). Both are decided in `prepare`, so a `run`
-/// holds the second as a field and adds nothing.
+/// (RFC-0047 rule 6). An operation that holds one adds nothing to reach
+/// `len`; one whose destination is a `Marked` derives it by `Marked::pair`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SlicePair {
     pub ptr: Off,
@@ -109,12 +134,10 @@ pub struct SlicePair {
 }
 
 impl SlicePair {
-    /// # Panics
-    /// As `Disp::of`, for the register after `ptr`.
-    pub const fn at(ptr: Off) -> SlicePair {
+    pub fn at(ptr: FrameSlot) -> SlicePair {
         SlicePair {
-            ptr,
-            len: Off::of(ptr.index() as Slot + 1),
+            ptr: Off::bounded(ptr),
+            len: Off::after(ptr),
         }
     }
 }
@@ -809,7 +832,7 @@ pub struct Body {
     /// per element. A bind, a window's `fits` and a sweep are the readers, and
     /// all three run per call.
     pub frame_cells: u16,
-    pub mark_words: u16,
+    pub mark_words: MarkWords,
     pub entry_konsts: Box<[EntryKonst]>,
     /// The module's literals, held here because an operation of this body
     /// names their bytes by address.

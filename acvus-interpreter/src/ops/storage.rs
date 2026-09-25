@@ -301,7 +301,7 @@ impl<const THROUGH: bool> Reads for Copied<THROUGH> {
 
     #[inline]
     fn define(regs: &mut Regs, dst: Marked, value: Value) {
-        regs.put(dst.at, value);
+        regs.put(dst.at(), value);
     }
 }
 
@@ -404,8 +404,8 @@ impl<const THROUGH: bool> Op for MakeRef<THROUGH> {
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let reference = Value::reference(scrutinee::<THROUGH>(regs.peek(self.slots.src.at)));
-        regs.put(self.slots.dst.at, reference);
+        let reference = Value::reference(scrutinee::<THROUGH>(regs.peek(self.slots.src.at())));
+        regs.put(self.slots.dst.at(), reference);
         self.next.run(m, r0)
     }
 }
@@ -427,9 +427,9 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at()));
         let reference = reference_to(self.step.at(base));
-        regs.put(self.slots.dst.at, reference);
+        regs.put(self.slots.dst.at(), reference);
         self.next.run(m, r0)
     }
 }
@@ -445,9 +445,9 @@ impl<const THROUGH: bool> Op for MakeRefPath<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
+        let base = scrutinee::<THROUGH>(regs.peek(self.slots.src.at()));
         let reference = reference_to(walk(base, &self.steps));
-        regs.put(self.slots.dst.at, reference);
+        regs.put(self.slots.dst.at(), reference);
         self.next.run(m, r0)
     }
 }
@@ -486,8 +486,8 @@ impl Op for TakeThrough {
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let value = deref_word::<false>(regs.peek(self.slots.src.at));
-        regs.put(self.slots.dst.at, value);
+        let value = deref_word::<false>(regs.peek(self.slots.src.at()));
+        regs.put(self.slots.dst.at(), value);
         self.next.run(m, r0)
     }
 }
@@ -512,7 +512,7 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let value = M::at(regs.peek_mut(self.slots.src.at), &self.step);
+        let value = M::at(regs.peek_mut(self.slots.src.at()), &self.step);
         M::define(regs, self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -536,7 +536,7 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let value = M::walked(regs.peek_mut(self.slots.src.at), &self.steps);
+        let value = M::walked(regs.peek_mut(self.slots.src.at()), &self.steps);
         M::define(regs, self.slots.dst, value);
         self.next.run(m, r0)
     }
@@ -580,7 +580,7 @@ impl<const LARGE: bool> Op for AssignThrough<LARGE> {
         let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
         overwrite::<LARGE>(
-            write_base::<true>(regs.peek_mut(self.slots.target.at)),
+            write_base::<true>(regs.peek_mut(self.slots.target.at())),
             value,
         );
         self.next.run(m, r0)
@@ -605,7 +605,7 @@ where
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
-        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at()));
         overwrite::<LARGE>(place_mut(self.step.at_mut(base)), value);
         self.next.run(m, r0)
     }
@@ -623,7 +623,7 @@ impl<const THROUGH: bool, const LARGE: bool> Op for AssignPath<THROUGH, LARGE> {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
         let value = regs.take::<LARGE>(self.slots.value);
-        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at));
+        let base = write_base::<THROUGH>(regs.peek_mut(self.slots.target.at()));
         overwrite::<LARGE>(place_mut(walk_mut(base, &self.steps)), value);
         self.next.run(m, r0)
     }

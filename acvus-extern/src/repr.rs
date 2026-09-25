@@ -429,13 +429,23 @@ impl Words {
 
 // -- A slot's place in a run ------------------------------------------------
 
+/// An index its type holds below `BOUND`, from which `Disp::bounded` and
+/// `Disp::after` make a displacement without a run-time check.
+///
+/// # Safety
+/// `slot` returns a value below `BOUND` for every value of `Self`.
+pub unsafe trait Bounded: Copy {
+    const BOUND: u16;
+
+    fn slot(self) -> u16;
+}
+
 /// The place of one slot of a run of `S`s: its byte displacement from the
 /// run's first byte, `i * size_of::<S>()` for slot `i` (RFC-0080 rule 5).
 ///
 /// It is multiplied once, where it is made, so a read at it adds and scales
-/// nothing (RFC-0052 rule 5). It is a `u16`, and `of` refuses a slot whose
-/// displacement a `u16` does not hold, so every `Disp<S>` is a whole number
-/// of `S`s that fits one and no reader checks it again.
+/// nothing (RFC-0052 rule 5). It is a `u16`, and every `Disp<S>` is a whole
+/// number of `S`s that fits one, so no reader checks it again.
 #[repr(transparent)]
 pub struct Disp<S>(u16, PhantomData<fn() -> S>);
 
@@ -498,6 +508,36 @@ impl<S> Disp<S> {
             panic!("Disp::of: the slot's displacement does not fit the u16 a Disp holds")
         };
         Disp(byte, PhantomData)
+    }
+
+    /// Slot `index` of a run of `S`s.
+    #[inline(always)]
+    pub fn bounded<I>(index: I) -> Disp<S>
+    where
+        I: Bounded,
+    {
+        const { Self::fits::<I>() };
+        Disp(index.slot() * Self::SLOT, PhantomData)
+    }
+
+    /// The slot after `index`.
+    #[inline(always)]
+    pub fn after<I>(index: I) -> Disp<S>
+    where
+        I: Bounded,
+    {
+        const { Self::fits::<I>() };
+        Disp((index.slot() + 1) * Self::SLOT, PhantomData)
+    }
+
+    const fn fits<I>()
+    where
+        I: Bounded,
+    {
+        assert!(
+            I::BOUND as usize * mem::size_of::<S>() <= u16::MAX as usize,
+            "Disp: the displacement of a Bounded index's bound does not fit the u16 a Disp holds"
+        );
     }
 
     const SLOT: u16 = {
@@ -1130,6 +1170,25 @@ mod tests {
         // SAFETY: byte 24 is the second word of slot 1, inside `run` and
         // aligned to a `u64`.
         assert_eq!(unsafe { word_at(base, 24).read() }, 4);
+    }
+
+    #[derive(Clone, Copy)]
+    struct BelowFour(u16);
+
+    // SAFETY: the test builds a `BelowFour` from 0 and 3 only.
+    unsafe impl Bounded for BelowFour {
+        const BOUND: u16 = 4;
+
+        fn slot(self) -> u16 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_bounded_index_and_the_slot_after_it_are_their_slots_times_the_slot_width() {
+        assert_eq!(Disp::<[u64; 2]>::bounded(BelowFour(3)), Disp::of(3));
+        assert_eq!(Disp::<[u64; 2]>::after(BelowFour(3)), Disp::of(4));
+        assert_eq!(Disp::<[u64; 2]>::after(BelowFour(0)).byte(), 16);
     }
 
     #[test]

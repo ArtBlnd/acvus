@@ -1020,7 +1020,12 @@ Status: Accepted
    `TypeId` shows equal is repr's too, checked there. A lifetime erased
    for a value the runtime keeps is repr's, with the fact that bounds it.
    A register's place in a frame is repr's `Disp<S>`, the byte offset of a
-   slot of a run of `S`, bounded when made; a read at a displacement or at
+   slot of a run of `S`, bounded when made. `Disp::of` checks a constant.
+   Any other index is a `Bounded`, an `unsafe` trait whose type holds the
+   index below a bound and is made by a check where the index is assigned,
+   and `Disp::bounded` and `Disp::after` make a displacement from it with
+   no check, since a constant assertion fits the bound's displacement in
+   the `u16`. A read at a displacement or at
    a mark word is repr's `at` or `word_at`. No `transmute`, `transmute_copy` or pointer cast between types is
    written outside repr.
 

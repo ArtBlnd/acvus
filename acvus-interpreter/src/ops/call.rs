@@ -2130,7 +2130,7 @@ impl<const LARGE: bool, const WORD: bool, const PAIR: bool> Op for CallDirect<LA
         match PAIR {
             true => {
                 let out: Words = call_module_sync(m, &prepared, self.callee, self.arity);
-                land_words(m, SlicePair::at(self.dst.at), out);
+                land_words(m, self.dst.pair(), out);
             }
             false => {
                 let value: Value = call_module_sync(m, &prepared, self.callee, self.arity);
@@ -2165,7 +2165,7 @@ impl<const LARGE: bool, const PAIR: bool> Op for CallDirectAsync<LARGE, PAIR> {
         match PAIR {
             true => {
                 let fut = Box::pin(call_module::<Words>(rt, self.callee, args));
-                m.suspend_pair(SlicePair::at(self.dst.at), self.next, fut);
+                m.suspend_pair(self.dst.pair(), self.next, fut);
             }
             false => {
                 let fut = Box::pin(call_module::<Value>(rt, self.callee, args));
@@ -2197,7 +2197,7 @@ unsafe fn call_closure<const THROUGH: bool>(
             // SAFETY: the caller's contract: under `THROUGH` the register is a
             // live reference to a closure whose register is not written during
             // the call.
-            let closure: &Value = unsafe { m.regs().peek(callee.at).target() };
+            let closure: &Value = unsafe { m.regs().peek(callee.at()).target() };
             // SAFETY: the caller's contract: the register holds a closure, so
             // its code word names the `Code` this enters and the captures the
             // entry reads.
@@ -2263,7 +2263,7 @@ impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THR
             // SAFETY: the type checker admits only a live reference to a
             // closure here, and the register it names is not written during
             // the call.
-            true => unsafe { *m.regs().peek(self.callee.at).target() },
+            true => unsafe { *m.regs().peek(self.callee.at()).target() },
             false => m.regs().take::<true>(self.callee),
         };
         let fut: BoxFuture<'static, Value> = Box::pin(async move {
