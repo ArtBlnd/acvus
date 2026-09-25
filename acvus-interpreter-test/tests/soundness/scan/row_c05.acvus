@@ -1,0 +1,9 @@
+// expect -4
+let xs = vec([3, -5, -2, 6, -1]);
+let bal = 0;
+let low = 0;
+for x in &xs {
+    bal = bal + *x;
+    low = min(low, bal);
+}
+low
