@@ -1,5 +1,5 @@
 //! `#[extern_fn(law(..))]`: the algebraic laws a declaration states
-//! (RFC-0082 rules 2 and 3).
+//! (RFC-0082 rules 2, 3 and 10).
 
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
@@ -7,14 +7,16 @@ use syn::{Ident, Lit, Path, Token, Type};
 
 use crate::{ExternParam, Mode, Returning};
 
-/// `law(associative, commutative, identity = e)` or
-/// `law(fold(combine = g, identity = e), commutative)`.
+/// `law(associative, commutative, identity = e)`,
+/// `law(fold(combine = g, identity = e), commutative)` or
+/// `law(total_order)`.
 pub(crate) struct LawAttr {
     first_word: Ident,
     associative: Option<Ident>,
     commutative: Option<Ident>,
     identity: Option<IdentityAttr>,
     fold: Option<FoldAttr>,
+    total_order: Option<Ident>,
 }
 
 enum IdentityAttr {
@@ -42,6 +44,7 @@ impl LawAttr {
         let mut commutative = None;
         let mut identity = None;
         let mut fold = None;
+        let mut total_order = None;
         while !content.is_empty() {
             let word: Ident = content.parse()?;
             let stated_twice = match word.to_string().as_str() {
@@ -56,12 +59,14 @@ impl LawAttr {
                     let stated = FoldAttr::parse_after(word.clone(), &content)?;
                     fold.replace(stated).is_some()
                 }
+                "total_order" => total_order.replace(word.clone()).is_some(),
                 other => {
                     return Err(syn::Error::new(
                         word.span(),
                         format!(
                             "unknown law `{other}`: a law is `associative`, `commutative`, \
-                             `identity = e`, or `fold(combine = g, identity = e)` (RFC-0082)"
+                             `identity = e`, `fold(combine = g, identity = e)`, or \
+                             `total_order` (RFC-0082)"
                         ),
                     ));
                 }
@@ -89,12 +94,23 @@ impl LawAttr {
                  binary function's: a declaration states one form (RFC-0082)",
             ));
         }
+        if let Some(order) = &total_order
+            && (associative.is_some() || commutative.is_some() || identity.is_some() || fold.is_some())
+        {
+            return Err(syn::Error::new(
+                order.span(),
+                "the law `total_order` is a comparison's, and `associative`, `commutative`, \
+                 `identity` and `fold` are a combining function's: a declaration states one \
+                 form (RFC-0082)",
+            ));
+        }
         Ok(LawAttr {
             first_word,
             associative,
             commutative,
             identity,
             fold,
+            total_order,
         })
     }
 
@@ -106,6 +122,29 @@ impl LawAttr {
         returning: &Returning,
     ) -> syn::Result<proc_macro2::TokenStream> {
         let commutative = self.commutative.is_some();
+        if let Some(order) = &self.total_order {
+            let compares = match params {
+                [a, b] => {
+                    matches!(
+                        (a.mode, b.mode),
+                        (Mode::Borrow, Mode::Borrow) | (Mode::Str, Mode::Str)
+                    ) && same_type(&a.ty, &b.ty)
+                }
+                _ => false,
+            };
+            let signed_word = matches!(returning, Returning::Value)
+                && matches!(ret, Type::Path(path) if path.path.is_ident("i64"));
+            if !compares || !signed_word {
+                return Err(syn::Error::new(
+                    order.span(),
+                    format!(
+                        "the law `total_order` is stated over `f(a: &T, b: &T) -> i64`, and \
+                         `{fn_ident}` is not of that shape"
+                    ),
+                ));
+            }
+            return Ok(quote! { ::acvus_extern::Laws::TotalOrder });
+        }
         if let Some(fold) = &self.fold {
             let over_storage = match params {
                 [state, _] => state.mode == Mode::BorrowMut && is_unit(ret),
@@ -131,13 +170,13 @@ impl LawAttr {
             });
         }
         let binary = match params {
-            [a, b] => {
-                a.mode == Mode::Value
-                    && b.mode == Mode::Value
-                    && matches!(returning, Returning::Value)
-                    && same_type(&a.ty, &b.ty)
-                    && same_type(&a.ty, ret)
-            }
+            [a, b] if matches!(returning, Returning::Value) => match (a.mode, b.mode) {
+                (Mode::Value, Mode::Value) => same_type(&a.ty, &b.ty) && same_type(&a.ty, ret),
+                (Mode::Str, Mode::Str) => {
+                    matches!(ret, Type::Path(path) if path.path.is_ident("String"))
+                }
+                _ => false,
+            },
             _ => false,
         };
         if !binary {
@@ -145,8 +184,8 @@ impl LawAttr {
             return Err(syn::Error::new(
                 word.span(),
                 format!(
-                    "the law `{word}` is stated over `f(a: T, b: T) -> T`, and `{fn_ident}` \
-                     is not of that shape"
+                    "the law `{word}` is stated over `f(a: T, b: T) -> T` or \
+                     `f(a: &str, b: &str) -> String`, and `{fn_ident}` is not of that shape"
                 ),
             ));
         }

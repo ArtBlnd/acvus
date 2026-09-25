@@ -9,7 +9,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_mir::laws::{Laws, Postcondition, Reaches, Returns};
+use acvus_mir::laws::{Copies, Laws, Postcondition, Reaches, Returns};
 use acvus_mir::ty::{EffectVarBound, PolyTy, RequirementSig, Task, Ty};
 use acvus_utils::{Interner, QualifiedRef};
 use futures::future::BoxFuture;
@@ -1727,6 +1727,7 @@ where
         ensures: Vec<Postcondition>,
         reaches: Reaches,
         returns: Returns,
+        copies: Option<Copies>,
         cost: Option<u64>,
     ) -> acvus_mir::ty::InstanceSig {
         acvus_mir::ty::InstanceSig {
@@ -1739,6 +1740,7 @@ where
             ensures,
             reaches,
             returns,
+            copies,
             cost,
         }
     }
@@ -1781,6 +1783,7 @@ impl<R: Runtime> Instances<R> {
         ensures: &[Postcondition],
         reaches: &Reaches,
         returns: Returns,
+        copies: Option<Copies>,
         cost: Option<u64>,
     ) -> acvus_mir::ty::Instances {
         acvus_mir::ty::Instances {
@@ -1788,7 +1791,14 @@ impl<R: Runtime> Instances<R> {
                 .concrete
                 .iter()
                 .map(|i| {
-                    i.signature_under(laws.clone(), ensures.to_vec(), reaches.clone(), returns, cost)
+                    i.signature_under(
+                        laws.clone(),
+                        ensures.to_vec(),
+                        reaches.clone(),
+                        returns,
+                        copies,
+                        cost,
+                    )
                 })
                 .collect(),
             generic: self.generic.as_ref().map(|_| acvus_mir::ty::GenericSig {
@@ -1796,6 +1806,7 @@ impl<R: Runtime> Instances<R> {
                 ensures: ensures.to_vec(),
                 reaches: reaches.clone(),
                 returns,
+                copies,
                 cost,
             }),
         }

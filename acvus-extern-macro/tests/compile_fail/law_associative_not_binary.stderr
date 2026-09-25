@@ -1,4 +1,4 @@
-error: the law `associative` is stated over `f(a: T, b: T) -> T`, and `scale` is not of that shape
+error: the law `associative` is stated over `f(a: T, b: T) -> T` or `f(a: &str, b: &str) -> String`, and `scale` is not of that shape
  --> tests/compile_fail/law_associative_not_binary.rs:5:32
   |
 5 | #[extern_fn(effect = pure, law(associative))]

@@ -1,6 +1,6 @@
 // id: M08
 // family: map-filter
-// desc: map into a deque by `push_back`, which declares no fold law
+// desc: map into a deque by `push_back`, whose fold law combines by `append`
 // expect: 3
 let xs = vec([5, 3, 8]);
 let d = deque();

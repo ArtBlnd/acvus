@@ -2747,6 +2747,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     ensures: Vec::new(),
                     reaches: acvus_extern::Reaches::Lent,
                     returns: acvus_extern::Returns::Unstated,
+                    copies: None,
                     cost: None,
                 }],
             },
@@ -2779,6 +2780,114 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
     assert!(
         format!("{err}").contains("blocking"),
         "the refusal names the extern: {err}"
+    );
+}
+
+// -- `copies` and `total_order` are refused on an unfit type (RFC-0082) ---
+
+/// Built by hand: `#[extern_fn]` refuses both declarations before a
+/// registry exists.
+fn a_nullary_declaration_stating(
+    laws: acvus_extern::Laws,
+    copies: Option<acvus_extern::Copies>,
+) -> Registry<Tiny> {
+    Registry::new(move |i: &Interner| {
+        let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("stated"));
+        let sync = ExternHandler::sync(acvus_extern::glue::<Tiny, _, (), acvus_extern::Val<V>>(
+            |_, (), ret| ret.put::<V>(V::Taken),
+        ));
+        acvus_extern::Contribution {
+            manifest: acvus_extern::Manifest {
+                types: Vec::new(),
+                signatures: Vec::new(),
+                fns: vec![acvus_extern::FnDecl {
+                    qref,
+                    ty: PolyTy::Fn {
+                        params: Vec::new(),
+                        ret: Box::new(PolyTy::I64),
+                        captures: Vec::new(),
+                        effect: EffectTerm::Known(Effect::PURE),
+                        flows: acvus_extern::Flows::Every.into(),
+                    },
+                    bounds: Vec::new(),
+                    effect_bounds: vec![],
+                    coercion: None,
+                    instance_of: None,
+                    requires: Vec::new(),
+                    names: Vec::new(),
+                    laws: laws.clone(),
+                    ensures: Vec::new(),
+                    reaches: acvus_extern::Reaches::Lent,
+                    returns: acvus_extern::Returns::Unstated,
+                    copies,
+                    cost: None,
+                }],
+            },
+            instances: acvus_extern::FxHashMap::from_iter([(
+                qref,
+                acvus_extern::Instances::generic(sync),
+            )]),
+            space: acvus_extern::FxHashMap::default(),
+        }
+    })
+}
+
+#[test]
+fn copies_naming_no_reference_parameter_is_refused() {
+    let i = Interner::new();
+    let registry = a_nullary_declaration_stating(
+        acvus_extern::Laws::None,
+        Some(acvus_extern::Copies { param: 0 }),
+    );
+    let err = Externs::combine(vec![registry], &i)
+        .err()
+        .expect("`() -> i64` has no parameter to copy");
+    assert!(
+        matches!(
+            err,
+            acvus_extern::CombineError::LawOnUnfitSignature { law: "copies", .. }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn total_order_on_no_comparison_is_refused() {
+    let i = Interner::new();
+    let registry = a_nullary_declaration_stating(acvus_extern::Laws::TotalOrder, None);
+    let err = Externs::combine(vec![registry], &i)
+        .err()
+        .expect("`() -> i64` compares nothing");
+    assert!(
+        matches!(
+            err,
+            acvus_extern::CombineError::LawOnUnfitSignature { law: "total_order", .. }
+        ),
+        "{err}"
+    );
+}
+
+/// RFC-0082 rule 2.
+#[test]
+fn a_binary_law_on_no_binary_signature_is_refused() {
+    let i = Interner::new();
+    let registry = a_nullary_declaration_stating(
+        acvus_extern::Laws::Binary(acvus_extern::BinaryLaws {
+            associative: true,
+            commutative: false,
+            identity: None,
+        }),
+        None,
+    );
+    let err = Externs::combine(vec![registry], &i)
+        .err()
+        .expect("`() -> i64` combines nothing");
+    assert!(
+        matches!(
+            err,
+            acvus_extern::CombineError::LawOnUnfitSignature { law: "law", .. }
+        ),
+        "{err}"
     );
 }
 

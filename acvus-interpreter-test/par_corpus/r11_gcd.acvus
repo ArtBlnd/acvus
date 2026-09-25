@@ -1,0 +1,10 @@
+// id: R11
+// family: reduction
+// desc: gcd of the elements through `num::gcd`, which states law(associative, commutative, identity = 0) at the unsigned widths
+// expect: 6
+let xs = vec([12u64, 18u64, 24u64, 30u64]);
+let g = 0u64;
+for x in &xs {
+    g = num::gcd(g, *x);
+}
+g

@@ -61,7 +61,9 @@ fn is_empty(s: &str) -> bool {
     s.is_empty()
 }
 
-#[extern_fn(effect = pure)]
+/// The law's proof: both groupings of three are the bytes of `a`, `b` and
+/// `c` in turn, and `""` adds no byte on either side.
+#[extern_fn(effect = pure, law(associative, identity = ""))]
 fn concat(a: &str, b: &str) -> String {
     let mut s = String::with_capacity(a.len() + b.len());
     s.push_str(a);
@@ -258,7 +260,7 @@ fn char_at(s: &str, i: i64) -> char {
 
 /// Rust's `Ord for str`: the bytes compared lexicographically, `-1`, `0` or
 /// `1` as `a` is before, equal to, or after `b`.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, law(total_order))]
 fn cmp(a: &str, b: &str) -> i64 {
     match a.cmp(b) {
         Ordering::Less => -1,
@@ -561,6 +563,92 @@ where
 mod tests {
     use super::*;
     use acvus_extern::{Externs, Interner, TypesOnly};
+
+    /// RFC-0082 rule 10 sampled: the sign of `cmp` is antisymmetric,
+    /// transitive and total, and `0` exactly where the bytes are the same.
+    #[test]
+    fn total_order_holds_over_cmp() {
+        let words: Vec<String> = ["", "a", "ab", "b", "é", "a\0", "\u{10FFFF}"]
+            .into_iter()
+            .map(str::to_string)
+            .chain((0u64..48).map(|at| format!("{:x}", at.wrapping_mul(0x9e37_79b9) % 4096)))
+            .collect();
+        for a in &words {
+            for b in &words {
+                let ab = cmp(a, b);
+                assert!([-1, 0, 1].contains(&ab), "the sign at {a:?}, {b:?}");
+                assert_eq!(ab, -cmp(b, a), "antisymmetric at {a:?}, {b:?}");
+                assert_eq!(ab == 0, a == b, "equal values are one value at {a:?}, {b:?}");
+                for c in words.iter().take(16) {
+                    if ab <= 0 && cmp(b, c) <= 0 {
+                        assert!(cmp(a, c) <= 0, "transitive at {a:?}, {b:?}, {c:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// RFC-0082 rule 5 sampled: `concat` is associative with `""` as its
+    /// identity, and it does not commute, which it does not declare.
+    #[test]
+    fn concat_is_associative_with_the_empty_identity_and_does_not_commute() {
+        let words: Vec<String> = ["", "a", "ab", "é", "\u{10FFFF}", "a\0"]
+            .into_iter()
+            .map(str::to_string)
+            .chain((0u64..12).map(|at| format!("{:x}", at.wrapping_mul(0x9e37_79b9) % 4096)))
+            .collect();
+        for a in &words {
+            assert_eq!(concat("", a), *a, "left identity at {a:?}");
+            assert_eq!(concat(a, ""), *a, "right identity at {a:?}");
+            for b in &words {
+                for c in &words {
+                    assert_eq!(
+                        concat(&concat(a, b), c),
+                        concat(a, &concat(b, c)),
+                        "associative at {a:?}, {b:?}, {c:?}"
+                    );
+                }
+            }
+        }
+        assert_ne!(concat("a", "b"), concat("b", "a"));
+    }
+
+    /// The law is `concat`'s own over the `str` a `String` lends, and it
+    /// states no commutation.
+    #[test]
+    fn concat_declares_an_associative_law_with_the_empty_identity() {
+        let i = Interner::new();
+        let reg = Externs::combine(
+            vec![
+                crate::iterator_registry::<TypesOnly>(),
+                string_registry::<TypesOnly>(),
+            ],
+            &i,
+        )
+        .expect("registry combines");
+        let qref = acvus_extern::QualifiedRef::qualified(i.intern("string"), i.intern("concat"));
+        let function = reg
+            .functions
+            .iter()
+            .find(|f| f.qref == qref)
+            .expect("concat is declared");
+        let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
+            panic!("concat is an extern")
+        };
+        let generic = instances.generic.as_ref().map(|generic| &generic.laws);
+        let concrete = instances.concrete.iter().map(|instance| &instance.laws);
+        let declared: Vec<&acvus_extern::Laws> = concrete.chain(generic).collect();
+        assert_eq!(
+            declared,
+            vec![&acvus_extern::Laws::Binary(acvus_extern::BinaryLaws {
+                associative: true,
+                commutative: false,
+                identity: Some(acvus_extern::Identity::Const(acvus_extern::Literal::String(
+                    String::new()
+                ))),
+            })]
+        );
+    }
 
     #[test]
     fn registry_produces_functions() {

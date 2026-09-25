@@ -1,0 +1,5 @@
+error: the law `total_order` is stated over `f(a: &T, b: &T) -> i64`, and `order` is not of that shape
+ --> tests/compile_fail/law_total_order_not_a_comparison.rs:6:32
+  |
+6 | #[extern_fn(effect = pure, law(total_order))]
+  |                                ^^^^^^^^^^^

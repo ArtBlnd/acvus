@@ -395,12 +395,28 @@ where
     d.push_front(item);
 }
 
-#[extern_fn(effect = pure)]
+/// The fold law's proof: a run of `push_back` over `d` pushes each item at
+/// the back in the run's order, and `append` of the parts, each pushed from
+/// `deque()`, pushes the same items at the back in the same order, so both
+/// reach one items sequence and one record.
+#[extern_fn(effect = pure, law(fold(combine = append, identity = deque)))]
 fn push_back<T>(d: &mut Deque<T>, item: T)
 where
     T: Var<kind::Type>,
 {
     d.push_back(item);
+}
+
+/// `part`'s items pushed at `d`'s back, front to back, as `push_back` pushes
+/// each.
+#[extern_fn(effect = pure)]
+fn append<T>(d: &mut Deque<T>, part: Deque<T>)
+where
+    T: Var<kind::Type>,
+{
+    for item in part.items {
+        d.push_back(item);
+    }
 }
 
 #[extern_fn(effect = pure)]
@@ -537,7 +553,7 @@ where
         ns: "deque",
         types: [Deque<_>],
         fns: [
-            deque, push_front, push_back, pop_front, pop_back,
+            deque, push_front, push_back, append, pop_front, pop_back,
             vec_deque, into_iter_deque, as_iter_deque, next_refs_deque,
             len, is_empty, get, get_mut, first, last,
         ],
@@ -629,6 +645,38 @@ mod tests {
         assert_eq!(d.pop_back(), Some(2));
         assert_eq!(d.pop_back(), None);
         assert_eq!(taken(&d), change(1, 0, &[], &[]));
+    }
+
+    /// RFC-0082 rule 5 sampled: a run of `push_back` over `d` reaches the
+    /// deque, record and all, that `append` of its parts reaches, each part
+    /// pushed from `deque()`, at every split of the run and from deques
+    /// holding a record of every kind.
+    #[test]
+    fn push_back_folds_by_append_from_the_empty_deque() {
+        let mut popped = settled([7, 8, 9]);
+        assert_eq!(popped.pop_back(), Some(9));
+        popped.push_front(6);
+        let starts = [Deque::default(), settled([1, 2]), popped];
+        let run = [10, 11, 12, 13];
+        for start in &starts {
+            let mut whole = start.clone();
+            for x in run {
+                push_back(&mut whole, x);
+            }
+            for cut in 0..=run.len() {
+                for second_cut in cut..=run.len() {
+                    let mut combined = start.clone();
+                    for part_items in [&run[..cut], &run[cut..second_cut], &run[second_cut..]] {
+                        let mut part = deque();
+                        for &x in part_items {
+                            push_back(&mut part, x);
+                        }
+                        append(&mut combined, part);
+                    }
+                    assert_eq!(combined, whole, "{start:?} cut at {cut} and {second_cut}");
+                }
+            }
+        }
     }
 
     #[test]

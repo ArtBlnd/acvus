@@ -312,6 +312,9 @@ enum LawKind {
     Extremum(LawOp),
     OptionLifted(Box<LawKind>),
     Product(Vec<LawKind>),
+    Ordered(LawOp),
+    First,
+    Reset(Box<LawKind>),
 }
 
 impl LawKind {
@@ -327,6 +330,9 @@ impl LawKind {
             Law::Product(parts) => {
                 LawKind::Product(parts.iter().map(|(_, acc)| LawKind::of(&acc.law)).collect())
             }
+            Law::Ordered { op, .. } => LawKind::Ordered(*op),
+            Law::First { .. } => LawKind::First,
+            Law::Reset(inner) => LawKind::Reset(Box::new(LawKind::of(inner))),
         }
     }
 }
@@ -1984,4 +1990,376 @@ fn a_header_parameter_kept_under_a_branch_on_another_value_stays_a_token() {
          for x in &v { if *x > 4 { flag = false; }; } flag";
     let (tokens, lines) = all_tokens(source);
     assert_eq!(tokens, [TokenKind::Carried], "{lines}");
+}
+
+// -- `first`, the first-iteration reset, and a total order (RFC-0089 rule 4,
+// RFC-0082 rule 10) ------------------------------------------------------
+
+const FIRST_INDEX: &str = "let v = vec([5, 9, 1, 9]); let at = 99u64; let found = false; \
+     for i in 0u64..v.len() { if !found && v[i] == 9 { at = i; found = true; }; } at";
+
+#[test]
+fn a_flag_its_arm_sets_guarding_that_arm_is_first() {
+    let (held, lines) = the_cycle(FIRST_INDEX);
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried, TokenKind::Carried],
+            Order::InOrder,
+            exact(LawKind::First)
+        ),
+        "{lines}"
+    );
+}
+
+/// The arm runs where `found` already holds, so a later hit replaces the
+/// earlier one.
+#[test]
+fn an_arm_the_flag_it_sets_does_not_guard_is_not_first() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 9, 1, 9]); let at = 99u64; let found = false; \
+         for i in 0u64..v.len() { if found || v[i] == 9 { at = i; found = true; }; } at",
+    );
+    assert_ne!(law_of(&held), Some(&LawKind::First), "{lines}");
+}
+
+/// A chunk run from the unset flag computes the test where the program
+/// skips it, so a test that can raise keeps the cycle without a law.
+#[test]
+fn a_guarded_test_that_can_raise_is_not_first() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 9, 1, 9]); let at = 99u64; let found = false; \
+         for i in 0u64..v.len() { if !found && 18 / v[i] == 2 { at = i; found = true; }; } at",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// A print in the arm is an effect a chunk run from the unset flag would
+/// issue where the program does not.
+#[test]
+fn a_guarded_arm_that_prints_is_not_first() {
+    let c = Compiled::with_io(
+        "let v = vec([5, 9, 1, 9]); let at = 99u64; let found = false; \
+         for i in 0u64..v.len() { if !found && v[i] == 9 { at = i; found = true; \
+         io::print(\"hit\"); }; } at",
+    );
+    assert!(!every_law(&c).contains(&LawKind::First), "{}", c.for_lines());
+}
+
+/// RFC-0093 rule 7: `pivot` is compared with `6`, which no write sends (the
+/// counter is below `6`), so `pivot == 6` is its own `||` guard.
+const SENTINEL_FIRST: &str = "let part = [2, 1, 1, 0, 1, 2]; let pivot = 6u64; \
+     for v in 0u64..6u64 { if pivot == 6u64 && part[v] == 1 { pivot = v; }; } pivot";
+
+#[test]
+fn a_token_compared_with_a_constant_no_write_sends_is_its_own_first_guard() {
+    let (held, lines) = the_cycle(SENTINEL_FIRST);
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::InOrder,
+            exact(LawKind::First)
+        ),
+        "{lines}"
+    );
+}
+
+/// `!=` with the sentinel is unset where it fails.
+#[test]
+fn a_sentinel_tested_by_inequality_is_its_own_first_guard_too() {
+    let (held, lines) = the_cycle(
+        "let part = [2, 1, 1, 0, 1, 2]; let pivot = 6u64; \
+         for v in 0u64..6u64 { if !(pivot != 6u64) && part[v] == 1 { pivot = v; }; } pivot",
+    );
+    assert_eq!(law_of(&held), Some(&LawKind::First), "{lines}");
+}
+
+/// The counter reaches `6`, so an arm can send the sentinel and leave the
+/// token unset after a hit.
+#[test]
+fn a_sentinel_a_write_can_send_is_no_first_guard() {
+    let (held, lines) = the_cycle(
+        "let part = [2, 1, 1, 0, 1, 2, 1]; let pivot = 6u64; \
+         for v in 0u64..7u64 { if pivot == 6u64 && part[v] == 1 { pivot = v; }; } pivot",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// The arm runs where `pivot` is already set, so a later hit replaces the
+/// earlier one.
+#[test]
+fn an_arm_the_sentinel_does_not_guard_is_not_first() {
+    let (held, lines) = the_cycle(
+        "let part = [2, 1, 1, 0, 1, 2]; let pivot = 6u64; \
+         for v in 0u64..6u64 { if pivot != 6u64 || part[v] == 1 { pivot = v; }; } pivot",
+    );
+    assert_ne!(law_of(&held), Some(&LawKind::First), "{lines}");
+}
+
+/// Compared with two constants, the token has no one sentinel.
+#[test]
+fn a_token_compared_with_two_constants_has_no_sentinel() {
+    let (held, lines) = the_cycle(
+        "let part = [2, 1, 1, 0, 1, 2]; let pivot = 6u64; \
+         for v in 0u64..6u64 { if pivot == 6u64 && pivot != 7u64 && part[v] == 1 \
+         { pivot = v; }; } pivot",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `pivot < n` after the search assumes `n ≤ pivot` on its false side, and
+/// that bound on `n` is joined away around the outer loop; `n` is still the
+/// constant its `Const` defines, so the counter below it never sends `n`.
+#[test]
+fn a_sentinel_a_later_test_bounds_is_still_the_constant_its_definition_is() {
+    let c = Compiled::of(
+        "let n = 6u64; let total = 0u64; \
+         for round in 0u64..2u64 { let pivot = n; \
+         for v in 0u64..n { if pivot == n && v >= 2u64 { pivot = v; }; } \
+         if pivot < n { total = total + pivot + round; }; } total",
+    );
+    let inner = c
+        .listing
+        .lines()
+        .find(|line| line.contains("cycle Carried") && line.contains("in_order"))
+        .unwrap_or_else(|| panic!("the search's cycle:\n{}", c.listing));
+    assert!(inner.contains("law(First("), "{}", c.listing);
+}
+
+/// App 02:98's shape: `part[v]` into a vec whose length the interval
+/// domain does not know can trap, and a chunk run from the unset sentinel
+/// computes it where the program skips it.
+#[test]
+fn a_sentinel_guarding_a_test_that_can_trap_is_no_first_guard() {
+    let (held, lines) = the_cycle(
+        "let part = vec([2, 1, 1, 0, 1, 2]); let pivot = 6u64; \
+         for v in 0u64..6u64 { if pivot == 6u64 && part[v] == 1 { pivot = v; }; } pivot",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// The law of each cycle of the one loop that has one.
+fn every_law(c: &Compiled) -> Vec<LawKind> {
+    c.shapes()
+        .into_iter()
+        .flat_map(|shape| match shape {
+            Shape::Free => Vec::new(),
+            Shape::Cycles(cycles) => cycles,
+        })
+        .filter_map(|held| held.law.map(|shape| shape.law))
+        .collect()
+}
+
+const JOIN_WITH_SEPARATOR: &str = "let xs = vec([\"a\".to_string(), \"b\".to_string()]); \
+     let s = \"\".to_string(); let first = true; \
+     for x in &xs { if first { s = x.to_string(); first = false; } \
+     else { s = s + \", \" + x; }; } s";
+
+#[test]
+fn an_arm_taken_only_at_the_first_iteration_resets_the_law() {
+    let (held, lines) = the_cycle(JOIN_WITH_SEPARATOR);
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::InOrder,
+            exact(LawKind::Reset(Box::new(LawKind::Op(LawOp::Concat))))
+        ),
+        "{lines}"
+    );
+}
+
+/// A flag entering `false` never takes the arm, so the join needs the
+/// entry value.
+#[test]
+fn an_arm_on_a_flag_that_enters_unset_is_no_reset() {
+    let (held, lines) = the_cycle(&JOIN_WITH_SEPARATOR.replace("first = true;", "first = false;"));
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// The branch on the flag runs only where the element passes a test, so
+/// the first iteration may skip the arm and the join needs the entry value.
+#[test]
+fn an_arm_under_a_flag_branch_that_not_every_iteration_runs_is_no_reset() {
+    let c = Compiled::of(
+        "let xs = vec([\"a\".to_string(), \"bc\".to_string()]); \
+         let s = \"\".to_string(); let first = true; \
+         for x in &xs { if len(x) > 1u64 { if first { s = x.to_string(); } \
+         else { s = s + \", \" + x; }; }; first = false; } s",
+    );
+    assert_eq!(every_law(&c), [], "{}", c.for_lines());
+}
+
+#[test]
+fn a_select_on_the_sign_of_a_total_order_is_its_maximum() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"pear\".to_string()]); \
+         let best = \"\".to_string(); \
+         for x in &xs { if string::cmp(x, &best) > 0 { best = x.to_string(); }; } best",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::AnyOrder,
+            exact(LawKind::Ordered(LawOp::Max))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_select_on_a_negative_sign_with_the_state_on_the_left_is_its_maximum_too() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"pear\".to_string()]); \
+         let best = \"\".to_string(); \
+         for x in &xs { if string::cmp(&best, x) < 0 { best = x.to_string(); }; } best",
+    );
+    assert_eq!(law_of(&held), Some(&LawKind::Ordered(LawOp::Max)), "{lines}");
+}
+
+#[test]
+fn a_select_on_the_sign_of_a_word_s_total_order_is_its_minimum() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 3, 8]); let best = 100; \
+         for x in &v { if cmp(x, &best) < 0 { best = *x; }; } best",
+    );
+    assert_eq!(law_of(&held), Some(&LawKind::Ordered(LawOp::Min)), "{lines}");
+}
+
+/// `total_cmp` orders every `f64`, `-0.0` below `0.0` and each NaN by its
+/// bits, and its `Equal` is the bit equality `==` is on a `Float`.
+#[test]
+fn a_select_on_the_sign_of_the_float_total_order_is_its_maximum() {
+    let (held, lines) = the_cycle(
+        "let v = vec([1.5, 2.5]); let best = 0.0; \
+         for x in &v { if cmp(x, &best) > 0 { best = *x; }; } best",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::AnyOrder,
+            exact(LawKind::Ordered(LawOp::Max))
+        ),
+        "{lines}"
+    );
+}
+
+/// RFC-0082 rule 2: `string::concat` takes the `str` views of its operands
+/// and states its law over `String`, so a call on the view the state lends
+/// is read as that law, in order since it does not commute.
+#[test]
+fn a_call_on_the_view_the_state_lends_is_read_by_the_law_over_its_type() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"a\".to_string(), \"b\".to_string()]); let text = \"\".to_string(); \
+         for x in &xs { text = text.concat(x).concat(\";\"); } text",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::InOrder,
+            exact(LawKind::Call)
+        ),
+        "{lines}"
+    );
+}
+
+/// The state is `concat`'s right operand, and `concat` does not commute.
+#[test]
+fn a_call_on_the_view_the_state_lends_as_the_right_operand_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"a\".to_string(), \"b\".to_string()]); let text = \"\".to_string(); \
+         for x in &xs { text = string::concat(x, &text); } text",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `by_magnitude` compares `-3` and `3` equal, two values, and states no
+/// `total_order`; the chosen `*x` is the compared value itself.
+#[test]
+fn a_select_on_the_sign_of_a_comparison_stating_no_total_order_has_no_law() {
+    let c = Compiled::with_registries(
+        "let v = vec([-3, 3]); let best = 0; \
+         for x in &v { if magnitude::by_magnitude(x, &best) > 0 { best = *x; }; } best",
+        vec![magnitude_fx::registry()],
+    );
+    let lines = c.for_lines();
+    let cycles: Vec<CycleShape> = c
+        .shapes()
+        .into_iter()
+        .flat_map(|shape| match shape {
+            Shape::Free => Vec::new(),
+            Shape::Cycles(cycles) => cycles,
+        })
+        .collect();
+    let [held] = &cycles[..] else {
+        panic!("the loop holds one cycle:\n{lines}")
+    };
+    assert_eq!(law_of(held), None, "{lines}");
+}
+
+mod magnitude_fx {
+    use acvus_extern::{Registry, TypesOnly, extern_fn, extern_registry};
+
+    #[extern_fn(effect = pure, total)]
+    fn by_magnitude(a: &i64, b: &i64) -> i64 {
+        let _ = (a, b);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "magnitude",
+            fns: [by_magnitude],
+        }
+    }
+}
+
+/// `string::concat(x, "")` holds the bytes `x` lends, but declares no
+/// `copies`.
+#[test]
+fn a_select_choosing_a_value_no_declaration_makes_the_compared_one_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"pear\".to_string()]); \
+         let best = \"\".to_string(); \
+         for x in &xs { let t = string::concat(x, \"\"); \
+         if string::cmp(x, &best) > 0 { best = t; }; } best",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// The first element is copied before the branch, and the select compares
+/// each element but chooses that copy.
+#[test]
+fn a_select_choosing_a_copy_of_another_value_than_the_compared_one_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"pear\".to_string()]); \
+         let best = \"\".to_string(); let head = &xs[0u64]; \
+         for x in &xs { let t = head.to_string(); \
+         if string::cmp(x, &best) > 0 { best = t; }; } best",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+#[test]
+fn a_copy_of_the_state_is_read_as_the_state() {
+    let (held, lines) = the_cycle(
+        "let v = [5, 3, 8]; let s = 0; for x in &v { let t = s.clone(); s = t + *x; } s",
+    );
+    assert_eq!(law_of(&held), Some(&LawKind::Op(LawOp::Add)), "{lines}");
+}
+
+/// `x.clone()` of a `String` is the language's own clone, which copies the
+/// bytes `x` lends.
+#[test]
+fn a_select_choosing_the_clone_of_the_compared_string_is_its_minimum() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"pear\".to_string()]); \
+         let least = \"zzz\".to_string(); \
+         for x in &xs { if string::cmp(&least, x) > 0 { least = x.clone(); }; } least",
+    );
+    assert_eq!(law_of(&held), Some(&LawKind::Ordered(LawOp::Min)), "{lines}");
 }

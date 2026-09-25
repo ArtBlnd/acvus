@@ -457,24 +457,46 @@ pub fn untrapping(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
     untrapping
 }
 
+/// The constant bounds the interval domain proves of a value, `None` at an
+/// end it leaves unbounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConstantBounds {
+    pub lo: Option<i128>,
+    pub hi: Option<i128>,
+}
+
+impl ConstantBounds {
+    pub fn excludes(self, n: i128) -> bool {
+        self.lo.is_some_and(|lo| lo > n) || self.hi.is_some_and(|hi| hi < n)
+    }
+}
+
 /// The constant bounds the interval domain proves of each of `values` where
-/// `block` begins, `None` at an end it leaves unbounded; `block` unreached
-/// proves none.
+/// `block` begins; `block` unreached proves none. A value a `Const` defines
+/// is its literal there whatever a test assumed of it.
 pub fn constant_bounds_on_entry(
     cfg: &CfgBody,
     laws: &LawTable,
     block: BlockIdx,
     values: &[ValueId],
-) -> Vec<(Option<i128>, Option<i128>)> {
-    let entries = Domain::new(cfg, laws).fixpoint();
-    let facts = entries[block.0].clone().unwrap_or_default();
+) -> Vec<ConstantBounds> {
+    let domain = Domain::new(cfg, laws);
+    let entries = domain.fixpoint();
+    let Some(mut facts) = entries[block.0].clone() else {
+        return vec![ConstantBounds::default(); values.len()];
+    };
+    for inst in cfg.blocks.iter().flat_map(|block| &block.insts) {
+        if let InstKind::Const { dst, value } = &inst.kind
+            && let Some(constant) = domain.int_constant(*dst, value)
+        {
+            facts.set(*dst, Interval::exactly(Endpoint::Const(constant)));
+        }
+    }
     values
         .iter()
-        .map(|value| {
-            (
-                facts.constant_lower_bound(*value),
-                facts.constant_upper_bound(*value),
-            )
+        .map(|value| ConstantBounds {
+            lo: facts.constant_lower_bound(*value),
+            hi: facts.constant_upper_bound(*value),
         })
         .collect()
 }
@@ -619,6 +641,16 @@ impl<'a> Domain<'a> {
             Some(named) => *named,
             None => reference,
         }
+    }
+
+    /// The integer a `Const` of an integer type defines `dst` as.
+    fn int_constant(&self, dst: ValueId, value: &Literal) -> Option<i128> {
+        let constant = match value {
+            Literal::Int(v) => *v,
+            Literal::IntOf(suffixed) => suffixed.value,
+            _ => return None,
+        };
+        self.int_ty(dst).map(|_| constant)
     }
 
     fn int_ty(&self, value: ValueId) -> Option<IntTy> {
@@ -851,14 +883,7 @@ impl<'a> Domain<'a> {
                 facts.set_slice_of(self.storage(*container), *dst);
             }
             InstKind::Const { dst, value } => {
-                let constant = match value {
-                    Literal::Int(v) => Some(*v),
-                    Literal::IntOf(suffixed) => Some(suffixed.value),
-                    _ => None,
-                };
-                if let Some(v) = constant
-                    && self.int_ty(*dst).is_some()
-                {
+                if let Some(v) = self.int_constant(*dst, value) {
                     facts.set(*dst, Interval::exactly(Endpoint::Const(v)));
                 }
             }

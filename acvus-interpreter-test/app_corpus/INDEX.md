@@ -6,12 +6,12 @@ Every app is `<nn>_<name>.acvus`. Its header states `app`, `desc` and `expect` (
 
 A row's class is `matches` (the facts state the expected grain, or the expected sequential structure), `under-claim` (the facts state less parallelism than the expected structure; the missing rule, declaration or decision is named), or `OVER-CLAIM` (the facts state more than is sound). A stage the facts print as `disjoint` or with a law runs apart (RFC-0092 rules 1 and 2), whatever else its region holds; a `While` or an iterator pipeline prints no stages and runs in place.
 
-The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so.
+The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved; and again with a token compared with a constant no write sends as its own `first` guard, `string::concat`'s law over the views of a `String`, `deque::push_back`'s fold law and `total_order` on `f64`'s `cmp`, where 03:49 (`queue` gains `Fold`) and 12:16 moved.
 
 ## Summary
 
 - Apps: 12; all run to their expected output at `--opt full` and `--opt none` (24 of 24 runs).
-- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 46, `under-claim` 29, `OVER-CLAIM` 0.
+- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 47, `under-claim` 28, `OVER-CLAIM` 0.
 - No over-claim was found. Every `disjoint` stage was checked against every place its storage is read or written in the loop, every `any_order` law against whether the combined value's order is observed, and every free stage against the tokens it reads (the reading is in each row).
 
 | missing rule, declaration or decision | under-claims |
@@ -21,8 +21,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | scan law (RFC-0089 Open), alone or per key | 6 |
 | affine analysis one loop deep (RFC-0066 rule 4): a row loop over an inner column range | 2 |
 | `or_insert`'s fold law on an `Equiv` map (D8, decided, not declared) | 2 |
-| first-hit select `if x == none && p { x = k }` read as `min`: RFC-0089 rule 4 as amended states no `first` reading, and `min` needs `k ≠ none` on every hit | 1 |
-| `string::concat` declares no law | 1 |
+| first-hit select `if x == none && p { x = k }` read as `first` (RFC-0093 rule 7): its guarded test can trap where the program skips it, and no rule discards a trap a chunk raises behind a guard an earlier chunk set | 1 |
 
 ## Loops
 
@@ -48,7 +47,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | 02 | 69 | trimmed: in-edges count | Carried AnyOrder `+` | `stages [L11, L19]`; L19 Carried any_order Op(Add) | matches |
 | 02 | 86 | worklist `while let Some(p) = work.pop()` | runs in place; partitions not claimed apart (label counter and worklist are tokens) | no `For` | matches |
 | 02 | 88 | apply the trim | `label`, `part` Disjoint | `stages [L4, L45]`; L45 Storage disjoint ×2 | matches |
-| 02 | 98 | pivot: `if pivot == n && part[v] == p { pivot = v }` | Carried AnyOrder, law `min`, identity `n` | `stages [L9, L48]`; L48 Carried in_order no law | under-claim: first-hit select as `min` (no reading in RFC-0089 rule 4 as amended) |
+| 02 | 98 | pivot: `if pivot == n && part[v] == p { pivot = v }` | Carried InOrder, law `first`, `pivot` its own guard unset at `n` | `stages [L9, L48]`; L48 Carried in_order no law | under-claim: the guarded test `part[v]` can trap where the program skips it (the interval domain does not put `v` below `len(part)`), and no rule discards that trap behind a guard an earlier chunk set |
 | 02 | 106 | relabel around the pivot | `label`, `part` Disjoint | `stages [L19, L49]`; L49 Storage disjoint ×2 | matches |
 | 02 | 128 | count components | Carried AnyOrder `+` | `stages [L36, L46]`; L46 Storage any_order Op(Add) | matches |
 | 02 | 134 | render | as 01:102 | `stages [L41, L47]`; L47 Storage in_order Op(Concat) | matches |
@@ -56,7 +55,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | 03 | 23 | walls of a row `wall[r·w + c] = …` | Disjoint | `stages [L4, L13]`; L13 Storage disjoint | matches |
 | 03 | 26 | find `S`, `G` in a row | Carried InOrder, last-set law | `stages [L7, L14, L15, L16]`; L14 Carried in_order Last; L16 Carried in_order Last | matches |
 | 03 | 46 | BFS `while let Some(cell) = queue.pop_front()` | runs in place | no `For` | matches |
-| 03 | 49 | neighbours `for d in 0..4` | free coordinates and bounds; `dist`, `queue` InOrder | `stages [L4, L22]`; L4 free; L22 Storage(dist) in_order; L22 Storage(queue) in_order no law | matches |
+| 03 | 49 | neighbours `for d in 0..4` | free coordinates and bounds; `dist` InOrder; `queue` InOrder Fold(`append`) | `stages [L4, L22]`; L4 free; L22 Storage(dist) in_order; L22 Storage(queue) in_order Fold | matches |
 | 03 | 69 | summary | `+`, `+`, `max` AnyOrder | `stages [L1, L5, L6]`; L5 Storage any_order Op(Add) ×2; L6 Storage any_order Call(max) | matches |
 | [04](04_kmeans_step.acvus) | 16 | assign `for p`, nearest-centroid loop inside | inner loop whole in the free stage; `assign[p]` Disjoint | `stages [L1, L27]`; L1 free (holds the inner loop); L27 Storage disjoint | matches |
 | 04 | 19 | nearest centroid `if d < best_d { best_d = d; best = c }` | Carried pair InOrder, left-biased argmin | `stages [L4, L25]`; L4 free; L25 Carried+Carried in_order Extremum(Min, best_d, carrying best) | matches (expected corrected from AnyOrder, as par-corpus R14) |
@@ -104,7 +103,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | [11](11_strip_log_segments.acvus) | 17 | cut segments `while let Some(start) = rest.find("<Log>")` | runs in place | no `For` | matches |
 | 11 | 35 | clean each message: `strip(m)` | the call (with its `while`) in the free stage; `+` AnyOrder; Fold(push) | `stages [L1, L3, L4, L5]`; L1 free {call indirect, …}; L3 Storage any_order Op(Add); L4 free; L5 Storage in_order Fold | matches |
 | 11 | 40 | `into_iter() \| join` | Stream, Concat InOrder | no `For` | under-claim: pipeline |
-| [12](12_transcript_concat.acvus) | 16 | `text = text.concat(label).concat(…)` | Concat InOrder through `string::concat`; `+` AnyOrder | `stages [L1, L8]`; L8 Storage(text) in_order no law; L8 Storage any_order Op(Add) | under-claim: `string::concat` declares no law |
+| [12](12_transcript_concat.acvus) | 16 | `text = text.concat(label).concat(…)` | Concat InOrder through `string::concat`; `+` AnyOrder | `stages [L1, L8]`; L8 Storage(text) in_order Call(concat); L8 Storage any_order Op(Add) | matches: `string::concat` states its law over the `str` views of a `String` (RFC-0082 rule 2); the label lies in the stage its arm shares with both cycles |
 
 ## Found while building
 

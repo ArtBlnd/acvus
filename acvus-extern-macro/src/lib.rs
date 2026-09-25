@@ -59,6 +59,9 @@ struct ExternFnAttr {
     /// `returns` or `total` (RFC-0082 rules 8 and 9). Either is the
     /// author's promise, which nothing here checks.
     returns: Option<StatedReturn>,
+    /// `copies(x)`: the result is a value equal to what reference parameter
+    /// `x` lends (RFC-0082 rule 10), the author's promise.
+    copies: Option<Ident>,
     /// `cost = N`: one call weighs `N` ticks of the backend's table
     /// (RFC-0066 rule 8), in place of its family's row.
     cost: Option<LitInt>,
@@ -92,6 +95,7 @@ impl Parse for ExternFnAttr {
             ensures: None,
             reaches: None,
             returns: None,
+            copies: None,
             cost: None,
         };
         while !input.is_empty() {
@@ -155,6 +159,24 @@ impl Parse for ExternFnAttr {
                 }
                 continue;
             }
+            if key == "copies" {
+                if out.copies.is_some() {
+                    return Err(syn::Error::new(key.span(), "`copies(..)` is stated twice"));
+                }
+                let content;
+                syn::parenthesized!(content in input);
+                out.copies = Some(content.parse()?);
+                if !content.is_empty() {
+                    return Err(syn::Error::new(
+                        content.span(),
+                        "`copies(x)` names one reference parameter",
+                    ));
+                }
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             if key == "reaches" {
                 if out.reaches.is_some() {
                     return Err(syn::Error::new(
@@ -193,7 +215,7 @@ impl Parse for ExternFnAttr {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     `ensures`, `reaches`, `returns`, `total` or `cost`",
+                     `ensures`, `reaches`, `copies`, `returns`, `total` or `cost`",
                 ));
             }
             if !input.is_empty() {
@@ -1366,6 +1388,33 @@ fn generate_extern_fn(
         Some(stated) => stated.declared(fn_ident, &params)?,
         None => quote! { ::acvus_extern::Reaches::Lent },
     };
+    let copies = match &attr.copies {
+        Some(named) => {
+            let Some(at) = params.iter().position(|param| *named == param.name) else {
+                return Err(syn::Error::new(
+                    named.span(),
+                    format!("`{named}` names no parameter of `{fn_ident}` (RFC-0082 rule 10)"),
+                ));
+            };
+            let lends_the_result = params[at].mode == Mode::Borrow
+                && matches!(returning, Returning::Value)
+                && quote::ToTokens::to_token_stream(&params[at].ty).to_string()
+                    == quote::ToTokens::to_token_stream(&ret).to_string();
+            if !lends_the_result {
+                return Err(syn::Error::new(
+                    named.span(),
+                    format!(
+                        "`copies({named})` is stated over `f(.., {named}: &T, ..) -> T`, and \
+                         `{fn_ident}` is not of that shape (RFC-0082 rule 10)"
+                    ),
+                ));
+            }
+            quote! {
+                ::core::option::Option::Some(::acvus_extern::Copies { param: #at })
+            }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
     let returns = match attr.returns {
         Some(StatedReturn::ReturnsOrTraps) => quote! { ::acvus_extern::Returns::Stated },
         Some(StatedReturn::Total) => quote! { ::acvus_extern::Returns::Total },
@@ -1434,6 +1483,7 @@ fn generate_extern_fn(
                     ensures: #ensures,
                     reaches: #reaches,
                     returns: #returns,
+                    copies: #copies,
                     cost: #cost,
                 },
                 instances: __instances,

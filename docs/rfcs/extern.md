@@ -996,6 +996,10 @@ Status: Proposed
    A law is a declaration's, so each instance of a shared signature states
    its own: `num::min` over an integer width is associative and commutative
    with that width's `MAX` as identity, and over `f64` it states none.
+   A law may also be stated on `f(a: &V, b: &V) -> T` where `V` is `T`'s
+   borrowed view (`&str` of `String`, a slice of a `Vec`): the law is
+   `f`'s over `T`, and a reader reads a call on a state it lends as that
+   view.
 3. **Laws of a storage write.** `#[extern_fn(law(fold(combine = g,
    identity = e)))]` on `f(s: &mut S, x: X)` returning nothing states that
    a run of `f` over `s` equals `g` applied to the states that runs over
@@ -1007,7 +1011,7 @@ Status: Proposed
    binary function's. `#[extern_fn(law(inverse = g))]` on `f(s: &mut S) ->
    Option<X>` states that after `g(s, x)`, `f(s)` gives `Some(x)` and
    leaves `s` as before `g`, and that `g(s, x)` after `f(s)` gave `Some(x)`
-   leaves `s` as before `f`: the two are one cell, which RFC-0089 rule 4
+   leaves `s` as before `f`: the two are one cell, which RFC-0093 rule 6
    promotes across a loop.
 4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2, ..))]` relates two
    terms by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
@@ -1074,6 +1078,13 @@ Status: Proposed
    is removed only where its instance states it (RFC-0048 rule 8); the
    declaration is an instance's, so `num::pow` states it over an unsigned
    width and not over a signed one, where a negative exponent traps.
+10. **Copies and orders.** `#[extern_fn(copies(x))]` states that `ret` is
+   a value equal to what reference parameter `x` lends, so a reader may
+   read it as that value (RFC-0093). `law(total_order)` on
+   `f(a: &T, b: &T) -> i64` states that `f`'s sign is a total order's
+   comparison under which equal values are one value; a select on its
+   sign reads as that order's maximum or minimum. Both are the author's
+   promise (rule 5), sampled by tests, and name their extern by instance.
 
 **Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
 extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no

@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::cost::{CostTable, Costs, InPlace, LoopCost, TripCount};
 use crate::analysis::loop_deps::{
-    Accumulator, BodyDeps, CallIdentity, Control, Cycle, Law, LawOp, LoopDeps, Member,
+    Accumulator, BodyDeps, CallIdentity, Control, Cycle, Guard, Law, LawOp, LoopDeps, Member,
     Order, Placement, Storage, Token,
 };
 use crate::analysis::loops::{Term, Trip};
@@ -79,6 +79,9 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 /// `Fold(r3, #1) exact`, `Order exact commutative`, `Last exact`,
 /// `Extremum(Max, Carried(r3), carrying Carried(r4)) exact`,
 /// `Option(Call(#1, identity)) exact commutative`,
+/// `Ordered(Max, #2) exact commutative`,
+/// `First(Carried(r3), guarding Carried(r4)) exact`,
+/// `Reset(Op(Concat)) exact`,
 /// `Product(Carried(r3): Op(Add) exact commutative, Carried(r4): Op(Add)
 /// exact commutative) exact commutative`.
 fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
@@ -144,6 +147,26 @@ fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
                 .collect();
             format!("Product({})", parts.join(", "))
         }
+        Law::Ordered { op, order } => {
+            format!("Ordered({}, {})", fmt_law_op(*op), ctx.fmt_fn_id(order.id))
+        }
+        Law::First { guard, carried } => {
+            let guard = match guard {
+                Guard::Flag(token) => fmt_token(token, ctx, vn),
+                Guard::Sentinel { token, sentinel } => {
+                    format!("{} != {}", fmt_token(token, ctx, vn), vn.fmt_val(*sentinel))
+                }
+            };
+            let carried: Vec<String> = carried
+                .iter()
+                .map(|token| fmt_token(token, ctx, vn))
+                .collect();
+            match carried.is_empty() {
+                true => format!("First({guard})"),
+                false => format!("First({guard}, guarding {})", carried.join(" and ")),
+            }
+        }
+        Law::Reset(inner) => format!("Reset({})", fmt_law(inner, ctx, vn)),
     }
 }
 

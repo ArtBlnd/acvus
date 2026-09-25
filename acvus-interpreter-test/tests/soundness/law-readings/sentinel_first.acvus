@@ -1,0 +1,27 @@
+// expect 1636
+let part = [2, 1, 1, 0, 1, 2];
+let hit = 6u64;
+for v in 0u64..6u64 {
+    if hit == 6u64 && part[v] == 1 {
+        hit = v;
+    };
+}
+let never = 6u64;
+for v in 0u64..6u64 {
+    if never == 6u64 && part[v] == 7 {
+        never = v;
+    };
+}
+let entered = 3u64;
+for v in 0u64..6u64 {
+    if entered == 6u64 && part[v] == 1 {
+        entered = v;
+    };
+}
+let empty = 6u64;
+for v in 0u64..0u64 {
+    if empty == 6u64 && part[v] == 1 {
+        empty = v;
+    };
+}
+hit * 1000u64 + never * 100u64 + entered * 10u64 + empty

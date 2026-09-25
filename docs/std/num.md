@@ -1,7 +1,7 @@
 # `num`: numbers under Rust's names
 
-Every name in this module is the `std` method of the same name, with the
-same result. A script writes `x.checked_add(y)`, `x.abs()`,
+Every name in this module but `gcd` is the `std` method of the same name,
+with the same result. A script writes `x.checked_add(y)`, `x.abs()`,
 `sqrt(x)`, `i64::MAX()` — no `_int`/`_float` suffix, no hand-rolled
 `if a < b { a } else { b }`.
 
@@ -10,6 +10,10 @@ A method Rust writes over many integer widths is a shared signature
 method Rust puts only on `f64` is a plain function. Below, `int` is the
 eight widths `i8 i16 i32 i64 u8 u16 u32 u64`, `signed` is `i8 i16 i32
 i64`, and `unsigned` is `u8 u16 u32 u64`.
+
+`gcd` is the one name `std` has no method for: it is the greatest common
+divisor by Euclid's algorithm, at the unsigned widths only, and states
+`law(associative, commutative, identity = 0)` (RFC-0082 rule 2).
 
 `from_str_radix` is in the table because it is a number's `std` method,
 but it is declared beside `from_str` under each integer namespace, where
@@ -96,6 +100,7 @@ difference column carries behaviour only.
 | `isqrt` | `isqrt(a: T) -> T`, T ∈ int | `T::isqrt` | none |
 | `is_power_of_two` | `is_power_of_two(a: T) -> bool`, T ∈ unsigned | `T::is_power_of_two` | none |
 | `next_power_of_two` | `next_power_of_two(a: T) -> T`, T ∈ unsigned | `T::next_power_of_two` | overflow traps at every build profile; Rust panics only in a debug build and wraps to `0` in a release one |
+| `gcd` | `gcd(a: T, b: T) -> T`, T ∈ unsigned | Euclid's algorithm | `gcd(0, 0)` is `0`; no signed instance |
 | `abs_diff` | `abs_diff(a: T, b: T) -> u64`, T ∈ int | `T::abs_diff` | the result is `u64` at every width, not the unsigned counterpart of `T`; the value is Rust's |
 | `to_hex` | `to_hex(a: T) -> String`, T ∈ int | `format!("{:x}", a)` | none |
 | `to_binary` | `to_binary(a: T) -> String`, T ∈ int | `format!("{:b}", a)` | none |
