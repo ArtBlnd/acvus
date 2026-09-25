@@ -1,7 +1,7 @@
 error[E0133]: call to unsafe function `CallSite::<'a, Rt>::new` is unsafe and requires unsafe block
-  --> tests/compile_fail/instance_site_built_without_unsafe.rs:25:16
+  --> tests/compile_fail/instance_site_built_without_unsafe.rs:16:16
    |
-25 |     let site = CallSite::<Rt>::new(&[], words);
+16 |     let site = CallSite::<Rt>::new(&[], words);
    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
    |
    = note: consult the function's documentation for information on how to avoid undefined behavior

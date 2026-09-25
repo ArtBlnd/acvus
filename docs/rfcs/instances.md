@@ -7,7 +7,7 @@ document decides what that word is, where it lives, how a handler
 declares and calls it, which crossings may read a value back at a type,
 and which signatures `core` holds.
 
-## RFC-0067: The machine holds no generics; a required instance is one word beside the value
+## RFC-0067: The machine holds no generics; an instance that steps a value owns it
 
 Status: Accepted
 
@@ -15,19 +15,36 @@ Every type at a call is ground. Whatever a type variable ranges over is
 settled by the checker and arrives at the machine as a word; no function
 type crosses the extern boundary as a type-level list, and no position in
 the machine computes a type. The runtime shape is a value with a function
-pointer beside it; the checker picks the pointer, the loans analysis
+pointer with it; the checker picks the pointer, the loans analysis
 governs the borrow, the effect system says whether the call may suspend.
 
-1. **A requirement is declared by taking it, and it is one value.**
-   A handler requires signature `S` at its own type variable `I` by taking a
-   parameter `Instance<S, I, Rt, T>`; `#[extern_fn]` refuses an `I` that is not
-   one of the declaration's own `Var<kind::Type>` parameters and records the
-   requirement on `FnDecl::requires` (its form is RFC-0068 rule 5). `Instance` is
-   exactly one of the runtime's values (`ONE_VALUE`). A handler requiring two
-   signatures takes two `Instance` parameters: one value per signature, never
-   a bundle, so a requirer of `A` and `B` calling a requirer of `A` passes the
-   word and converts nothing. An instance is not a stamp in the value's header
-   or vtable. What the word addresses is RFC-0070 rule 2.
+1. **A requirement is declared by taking it, in one of two forms the
+   signature's receiver decides.** `#[extern_fn]` records either form on
+   `FnDecl::requires` (its form is RFC-0068 rule 5) and refuses a variable
+   that is not one of the declaration's own `Var<kind::Type>` parameters.
+   What the word addresses is RFC-0070 rule 2.
+   - **A receiver the call steps or consumes: `Instance<S, I, Rt, T>` owns
+     it.** A signature whose first parameter takes its receiver `&mut I` or
+     `I` (`iter::next`) is required by taking the receiver and its instance
+     as one parameter, `it: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>`.
+     It holds the receiver and the word, both private. Only the glue makes
+     one, from the argument and the word the checker chose for its type at
+     that site (rule 3). Nothing hands out the word apart from its receiver,
+     and `into_inner` drops the word with it. A requirer lent its receiver
+     `&mut` takes `Instance<S, &mut I, …>`, which owns that loan.
+   - **A function of a type's values: `InstanceOf<S, I, Rt, T>` stands at
+     the type**, `S`'s receiver type being `I` by a bound of the type. A signature whose receiver is `&I` (`core::eq`,
+     `core::hash`, `core::cmp`, `core::clone`, `core::to_string`) is required
+     by an `InstanceOf`, exactly one of the runtime's values (`ONE_VALUE`).
+     Its call takes the receiver, since a requirer applies it to many values
+     of the type (a map's keys, both sides of `==`). Its ground is RFC-0068
+     rule 1: an instance is resolved at the ground type.
+   - The other pairing is a type error of the glue's crossing, naming this
+     rule: an `Instance` at a signature whose receiver is `&I`, and an
+     `InstanceOf` at one whose receiver is `&mut I` or `I`.
+   - Two signatures take two parameters. Two `Instance`s cannot own one
+     receiver, so two receiver-owning requirements at one variable are
+     refused; no declaration asks for it.
 
 2. **An instance is matched by the signature's argument.** An
    instance may stand at a pattern type (`next` at `Map<I, U>`). The type an
@@ -47,17 +64,19 @@ governs the borrow, the effect system says whether the call may suspend.
 
 3. **The word lives in the site table.** `prepare` places the
    chosen word in the call site's table once per site; `Required<S, I, T, N>`
-   has `ARGUMENTS = 0` and copies it out. A requirement costs zero ABI words,
-   no move before the call, and nothing rebuilt per call.
+   has `ARGUMENTS = 0` and copies it out: into an `InstanceOf` as it stands,
+   and into an `Instance` together with the argument it owns. A requirement
+   costs zero ABI words, no move before the call, and nothing rebuilt per
+   call.
 
-4. **Rust pairs an instance with its variable.** `I` is the
-   requiring handler's own variable, so `call` compiles only with a receiver
-   at `I`, and a mispairing is a Rust type error. A value that must reach its
-   own `S` later stores the inner value and its `Instance` side by side,
-   typed at the same `I` and `E` (RFC-0068 rule 1), laid once at
-   construction: a stage `Map<I, F>` holds `inner: I` and `next` at `I`. An
-   instance's own requirements are its declaration's, not its value's
-   (RFC-0070 rule 1).
+4. **The pairing is built where the checker chose it, not asserted by a
+   type.** An `Instance` calls its own receiver and no other, so no Rust
+   code can hand one value to the instance chosen for another. A stage keeps
+   the pipeline below it as one `Instance`: `Map<I, F>` holds
+   `inner: Instance<sig::next<I, T, E, Rt>, I, Rt, Later>` and the closure.
+   The pairing is a fact of construction, and no premise that one Rust type
+   at `I` has one implementation is needed. An instance's own requirements
+   are its declaration's, not its value's (RFC-0070 rule 1).
 
 5. **`Now` and `Later`.** `Instance::into_async` retypes `Now` to
    `Later`, one way; there is nothing the other way, since a sync caller has
@@ -66,7 +85,9 @@ governs the borrow, the effect system says whether the call may suspend.
    settled on an instance that returns.
 
 6. **The call.** The receiver does not cross as an argument:
-   `Instance::call` names it in `Ctx` and the mono glue reads it back at the
+   `Instance::call` names its own receiver in `Ctx`, lent at the signature's
+   mode (`&mut self` for `&mut I`, `self` for `I`), and `InstanceOf::call`
+   names the receiver it is given (`&I`). The mono glue reads it back at the
    signature's declared mode (RFC-0070 rule 4). A rest parameter concrete in the
    signature crosses as typed; one at a signature type variable crosses as
    the caller's own value (`&Rt::Value`, `&mut Rt::Value`, `Owned<Rt>` by
@@ -91,17 +112,27 @@ governs the borrow, the effect system says whether the call may suspend.
 **Why.** A handler generic over `I` needs something to call at `I`, and the
 checker already knows which instance that is. A word the checker chose is
 the cheapest carrier of that knowledge and keeps generics out of the
-machine.
+machine. The word and the value it was chosen for are one fact, so they
+travel as one: kept apart, they are safe only while every value at a Rust
+`I` has the word's implementation, which no local code holds, since the
+glue fills every `I` with `Owned<Rt>` (RFC-0068 rule 1).
 **Cost.** One store of the receiver into `ctx`, one load of the word, one
 indirect call, one load on the far side; a parameter at a signature
-variable adds one reference value and one borrow on the far side.
+variable adds one reference value and one borrow on the far side. An
+`Instance` is its receiver and one word.
 **Rejected.**
 - Entry tree carried in the value (a node arena, a carrier struct per
   bounded variable) — rebuilds per element what frame and site already
   hold; measured 1.2–1.8× slower than the `dyn` chain it was to replace.
-- Stamp in spare bytes, or a bound bundle — a requirement becomes a
-  position in a type-level list, so `A + B → A` needs a coercion; scalars
-  have nowhere to hold a stamp.
+- Stamp in spare bytes — scalars have nowhere to hold one.
+- The receiver and its `Instance` side by side, typed at one `I` (this
+  rule's former form) — a Rust type error refuses a mispairing only while
+  one Rust type at `I` has one implementation, so nothing local refuses
+  a value handed to another value's instance.
+- One bundle of several signatures at one receiver — `A + B → A` needs a
+  coercion no declaration needs.
+- Every requirement as an owning `Instance` — a container would hold a
+  word per element, the carrier measured slower above.
 - Interfaces in the `Large` header's vtable — scalars have no header,
   several acvus types share one Rust payload, and a `&'static` table cannot
   take another crate's registration.
@@ -150,8 +181,8 @@ other reading back is cut.
      and the runtime makes its own. A handler is called with its parameters
      and a `Ctx`, neither of which holds one.
    - A handler's type variable is stored and passed at the variable: a
-     payload holding a value at `I` holds it as `I`, and an `Instance` or
-     `Closure` beside it is typed at the same `I` and `E`. The glue fills
+     payload holding a value at `I` holds it as `I` or inside the `Instance`
+     that owns it, and a `Closure` beside it is typed at the same `E`. The glue fills
      every such `I` with `Owned<Rt>` and every `E` with `()`, so a
      declaration is one Rust type however its payload is spelled.
    - `#T → T` always exists. An instance is resolved at the ground type
@@ -161,14 +192,19 @@ other reading back is cut.
    Every check inside the crossing is a `debug_assert!`; the machine restates
    none of the checker's proofs in release.
 
-2. **`Instance` is closed.** `Instance::at` is crate-private; its contract
-   is that the word was made by `Runtime::instance_value` from an entry of an
-   instance of `S` at the type `I` is filled with. `Required::site` calls it,
-   and the glue and the runtime reach it through `Crossing::instance`.
+2. **`Instance` and `InstanceOf` are closed.** Their constructors are
+   crate-private: `InstanceOf::at(word)` and `Instance::own(receiver, word)`,
+   whose contract is that the word was made by `Runtime::instance_value` from
+   an entry of an instance of `S` at the type of that receiver, as the
+   checker chose it at the site the receiver was passed to. The glue and the
+   runtime reach them through `Crossing::instance` and
+   `Crossing::instance_owning`, from `Required::site` and an `Owning`
+   parameter's site.
    `InstanceRun`'s fields are private and its one constructor, `from_glue`, is
    `#[doc(hidden)] pub unsafe`, called by the macro with the typed glue.
-   `Instance::call` and `call_await` are safe. Their receiver is `&I` or
-   `&mut I` with `I: Deref<Target = Rt::Value>`; the far side's mono glue
+   `call` and `call_await` are safe. The receiver is the `Instance`'s own
+   `I`, or the `&I` an `InstanceOf` is given, with
+   `I: Deref<Target = Rt::Value>`; the far side's mono glue
    reads that value as the instance's literal receiver type, which is the
    same crossing as any other parameter's. A later argument standing at a
    signature variable is passed at that variable, `&T` where the receiver is
@@ -240,10 +276,8 @@ checks, so it belongs to generated code alone.
   fact.
 - A `Value`-typed payload with a runtime tag — moves the checker's decision
   into the machine.
-- A bundle per handler naming several signatures (`InstanceOf<S>` for
-  receiver-less functions such as `clone`, `eq`, `hash` at `T`) — one value
-  per signature holds (RFC-0067 rule 1); a receiver-less requirement is
-  an `Instance` like any other (RFC-0070 rule 4).
+- A bundle per handler naming several signatures — one value per
+  signature holds (RFC-0067 rule 1).
 
 ## RFC-0070: An instance requires what its own declaration says
 
@@ -252,14 +286,15 @@ Status: Accepted
 1. **An instance declaration takes what it requires.** Beside the
    signature's parameters, an instance declaration may take `Required`
    parameters (zero-width, `ARGUMENTS = 0`) naming what the instance itself
-   requires: `clone_vec<T>(a: &Vec<T>, elem: Instance<core::clone<T, Rt>, T,
+   requires: `clone_vec<T>(a: &Vec<T>, elem: InstanceOf<core::clone<T, Rt>, T,
    Rt>)` is `impl<T: Clone> Clone for Vec<T>`. The requirement belongs to the
    instance, not to the value. The checker settles a requirement's variable by
    unifying its pattern with the declaration's type, so `T` settles from
    inside `&Vec<T>`, and `hash_map()`'s `K` from its return type at the first
    `insert`; no parameter has to stand at the variable itself.
 
-2. **The word addresses an entry.** `Instance` stays one `Rt::Value`. The
+2. **The word addresses an entry.** An `InstanceOf` is one `Rt::Value`, and
+   an `Instance` is its receiver and one. The
    word addresses an `InstanceEntry { run, requires }` owned by `Prepared`:
    `run` is the glue and its task, `requires` one word per `Required`
    parameter of the instance's declaration, in declaration order, each
@@ -283,12 +318,11 @@ Status: Accepted
    the tree: `Callee::Extern { id, instance, required: Vec<Chosen> }`, with
    `Chosen { signature, instance, required }` self-describing.
 
-4. **`Instance::call` takes the receiver the signature declared.** The
-   receiver is `S::Recv`: `&I` or `&mut I` by the signature's first
-   parameter, checked where the call is written through `Receiver<Rt>`, a
-   bound on the method rather than on the `Signature` impl. A signature
-   taking its receiver by value has no impl, and the missing impl is the
-   refusal. `Ctx::recv` is a `*const Rt::Value`; the glue opens what it names
+4. **The call takes the receiver the signature declared.** An `Instance`
+   lends its own receiver at the signature's first parameter's mode:
+   `call(&mut self)` for `&mut I`, `Consume::call(self)` for `I`. An
+   `InstanceOf` takes `&I`. The mode is `Signature::Mode` (`Shared`, `Mut`,
+   `Moved`), read as a bound on the method where the call is written. `Ctx::recv` is a `*const Rt::Value`; the glue opens what it names
    at the declared loan, and no `&mut` to the receiver word is made.
 
 5. **The core signatures.** `core` holds the signatures the compiler
@@ -331,8 +365,10 @@ requirements.
   structural equality by accident.
 - `T::clone` as a static call in the handler — a uniform handler is one
   Rust body for every `T`; a `#T` member already has Rust's `Clone`.
-- Storing a container's requirement beside the value — right for a stage
-  (RFC-0067 rule 4), wrong for a container.
+- Storing a container's requirement with the value — right for a stage,
+  whose `Instance` owns the pipeline below it (RFC-0067 rule 4), and wrong
+  for a container, whose elements' functions stand at the type
+  (`InstanceOf`).
 - `prepare` re-resolving inner requirements from settled types — the
   machine checks nothing the compiler proved.
 - A single overload position over the tree — a cyclic requirement graph

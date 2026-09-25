@@ -7,7 +7,7 @@ use std::ops::Deref;
 
 use acvus_extern::Ctx;
 use acvus_extern::{
-    Arr, Borrowable, Closure, ClosureFn, Instance, PassedByValue, Ref, Registry, Runtime, Shared,
+    Arr, Borrowable, Closure, ClosureFn, InstanceOf, PassedByValue, Ref, Registry, Runtime, Shared,
     TransparentOver, Var, core, extern_fn, extern_registry, extern_signature, kind,
 };
 
@@ -441,7 +441,7 @@ fn eq_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
     b: &Vec<T>,
-    elem: Instance<'_, core::eq<T, Rt>, T, Rt>,
+    elem: InstanceOf<'_, core::eq<T, Rt>, T, Rt>,
 ) -> bool
 where
     T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -462,7 +462,7 @@ where
 fn clone_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
-    elem: Instance<'_, core::clone<T, Rt>, T, Rt>,
+    elem: InstanceOf<'_, core::clone<T, Rt>, T, Rt>,
 ) -> Vec<T>
 where
     T: Var<kind::Type>
@@ -484,7 +484,7 @@ fn cmp_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
     b: &Vec<T>,
-    elem: Instance<'_, core::cmp<T, Rt>, T, Rt>,
+    elem: InstanceOf<'_, core::cmp<T, Rt>, T, Rt>,
 ) -> i64
 where
     T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -503,7 +503,7 @@ where
 fn hash_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,
-    elem: Instance<'_, core::hash<T, Rt>, T, Rt>,
+    elem: InstanceOf<'_, core::hash<T, Rt>, T, Rt>,
 ) -> u64
 where
     T: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,

@@ -13,13 +13,12 @@ extern_signature! { ns: "g", fn advance<I>(it: &mut I) -> i64 where I: Var<kind:
 static KEPT: Mutex<Option<Box<dyn Any + Send + Sync>>> = Mutex::new(None);
 
 #[extern_fn(effect = opaque)]
-fn keep<I, Rt>(it: I, step: Instance<'_, advance<I, Rt>, I, Rt>) -> i64
+fn keep<I, Rt>(it: Instance<'_, advance<I, Rt>, I, Rt>) -> i64
 where
     I: Var<kind::Type>,
     Rt: Runtime,
 {
-    let _ = it;
-    *KEPT.lock().unwrap() = Some(Box::new(step));
+    *KEPT.lock().unwrap() = Some(Box::new(it));
     0
 }
 

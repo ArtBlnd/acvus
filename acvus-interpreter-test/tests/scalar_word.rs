@@ -149,14 +149,14 @@ fn overwrite_i8(place: &mut i8) {
 
 /// Calls the `overwrite` of its `T` on its own copy of `a`, and returns it.
 #[extern_fn(effect = pure)]
-fn overwritten<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: T, overwrite: Instance<'_, sig::overwrite<T, Rt>, T, Rt>) -> T
+fn overwritten<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: Instance<'_, sig::overwrite<T, Rt>, T, Rt>) -> T
 where
     T: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
     let mut a = a;
-    overwrite.call(ctx, &mut a, ());
-    a
+    a.call(ctx, ());
+    a.into_inner()
 }
 
 /// The identity alias: a payload written through it names the parameter

@@ -1,0 +1,25 @@
+error: `back` and `forward` are two `Instance`s at `I`, and two `Instance`s cannot own one receiver: a declaration takes one receiver-owning requirement per variable (RFC-0067 rule 1)
+  --> tests/compile_fail/two_instances_own_one_receiver.rs:15:39
+   |
+15 |     back: Instance<'_, rewind<I, Rt>, I, Rt>,
+   |                                       ^
+
+warning: unused import: `std::ops::Deref`
+ --> tests/compile_fail/two_instances_own_one_receiver.rs:4:5
+  |
+4 | use std::ops::Deref;
+  |     ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `Ctx`, `Instance`, `Var`, and `kind`
+ --> tests/compile_fail/two_instances_own_one_receiver.rs:6:20
+  |
+6 | use acvus_extern::{Ctx, Instance, Runtime, Var, extern_fn, extern_signature, kind};
+  |                    ^^^  ^^^^^^^^           ^^^                               ^^^^
+
+warning: unused import: `Runtime`
+ --> tests/compile_fail/two_instances_own_one_receiver.rs:6:35
+  |
+6 | use acvus_extern::{Ctx, Instance, Runtime, Var, extern_fn, extern_signature, kind};
+  |                                   ^^^^^^^

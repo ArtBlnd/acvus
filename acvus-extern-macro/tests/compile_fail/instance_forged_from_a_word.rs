@@ -1,26 +1,17 @@
-//! A `Required` parameter's site makes an `Instance` out of the word its
+//! A `Required` parameter's site makes an `InstanceOf` out of the word its
 //! call site holds, and calling the instance runs whatever that word
 //! addresses. The words are `prepare`'s, so safe code builds no call site
 //! that holds them, whether a bare word or one `instance_value` made from an
 //! entry of its own (RFC-0080 rule 2).
 #![forbid(unsafe_code)]
 use acvus_extern::{
-    CallSite, InstanceEntry, InstanceRun, Now, Owned, Pure, Required, Runtime, Arg,
+    CallSite, InstanceEntry, InstanceRun, Now, Owned, Required, Runtime, Arg,
     extern_signature,
 };
 
-extern_signature! {
-    ns: "q",
-    effect = E,
-    fn next<I, T, E, Rt>(it: &mut I) -> Option<T>
-    where
-        I: Var<kind::Type>,
-        T: Var<kind::Type>,
-        E: Var<kind::Effect>,
-        Rt: Runtime;
-}
+extern_signature! { ns: "q", fn eq<T>(a: &T, b: &T) -> bool where T: Var<kind::Type>; }
 
-type Forge<Rt> = Required<next<Owned<Rt>, i64, Pure, Rt>, Owned<Rt>, Now, 0>;
+type Forge<Rt> = Required<eq<Owned<Rt>, Rt>, Owned<Rt>, Now, 0>;
 
 fn from_a_word<Rt>(words: &[Rt::Value])
 where

@@ -17,7 +17,7 @@ use futures::future::BoxFuture;
 use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::instance::InstanceRun;
-use crate::instance::{Instance, Signature};
+use crate::instance::{Holds, Instance, InstanceOf, ReadsItsReceiver, Signature, StepsItsReceiver};
 use crate::loan::Loan;
 use crate::obj::{
     Cross, Form, FormKind, Nothing, One, OneRegister, OneValue, OptionOf, Returned,
@@ -62,9 +62,10 @@ pub struct ArgAt<'a> {
 /// each argument, and the word of the entry `prepare` chose for each
 /// requirement the callee states, in the declaration's order (RFC-0070 rule 2).
 ///
-/// The fields are private because `Required::site` makes a callable
-/// `Instance` out of a `requires` word: only `new`, which is `unsafe`,
-/// puts a word there, and `of_args` puts none.
+/// The fields are private because `Required::site` and `Owning`'s `take`
+/// make a callable `InstanceOf` or `Instance` out of a `requires` word:
+/// only `new`, which is `unsafe`, puts a word there, and `of_args` puts
+/// none.
 pub struct CallSite<'a, Rt>
 where
     Rt: Runtime,
@@ -321,30 +322,32 @@ where
     }
 }
 
-/// A parameter that is the declaration's `NTH` required instance: the call
-/// site holds the checker's answer for it, and the run carries nothing.
+/// A parameter that is the declaration's `NTH` required instance, standing
+/// at its type (`InstanceOf`): the call site holds the checker's answer for
+/// it, and the run carries nothing.
 pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
 
 impl<S, I, T, Rt, const NTH: usize> Arg<Rt> for Required<S, I, T, NTH>
 where
-    S: Signature<Rt> + 'static,
+    S: Signature<Rt, This = I> + 'static,
+    S::Mode: ReadsItsReceiver,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
     Rt: Runtime,
 {
-    type Site = Instance<'static, S, I, Rt, T>;
+    type Site = InstanceOf<'static, S, I, Rt, T>;
     type Form = Nothing;
 
     const ARGUMENTS: usize = 0;
     const LENDS_A_WORD: bool = false;
 
-    fn site(site: &CallSite<'_, Rt>, _: usize) -> Instance<'static, S, I, Rt, T> {
+    fn site(site: &CallSite<'_, Rt>, _: usize) -> InstanceOf<'static, S, I, Rt, T> {
         // SAFETY: `CallSite::new`'s contract, the one way a word reaches
         // `requires`: the word is the entry chosen for this site's `NTH`
         // requirement, whose signature is `S` and whose type is what the
         // requirement's variable is filled with here, and the entry
         // outlives every handler sited here.
-        unsafe { Instance::at(site.requires[NTH]) }
+        unsafe { InstanceOf::at(site.requires[NTH]) }
     }
 
     #[inline(always)]
@@ -353,9 +356,10 @@ where
 
 // SAFETY: the instance is the site table's; the capability is not used.
 unsafe impl<'a, 'w, S, I, T, Rt, const NTH: usize> Takes<'a, 'w, Required<S, I, T, NTH>, Rt>
-    for Instance<'w, S, I, Rt, T>
+    for InstanceOf<'w, S, I, Rt, T>
 where
-    S: Signature<Rt> + 'static,
+    S: Signature<Rt, This = I> + 'static,
+    S::Mode: ReadsItsReceiver,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
     Rt: Runtime,
@@ -363,9 +367,98 @@ where
     unsafe fn take(
         _: crate::Crossing<'a, Rt>,
         _: &'a [Rt::Value],
-        site: &Instance<'static, S, I, Rt, T>,
-    ) -> Instance<'w, S, I, Rt, T> {
+        site: &InstanceOf<'static, S, I, Rt, T>,
+    ) -> InstanceOf<'w, S, I, Rt, T> {
         *site
+    }
+}
+
+/// A parameter that is an acvus parameter taken as `A` takes it and the
+/// declaration's `NTH` required instance, which owns it (`Instance`): the
+/// run carries the argument, and the call site the checker's answer for its
+/// type.
+pub struct Owning<A, S, T, const NTH: usize>(PhantomData<fn() -> (A, S, T)>);
+
+/// The site of an `Owning` parameter: its argument's own, and the word the
+/// checker chose for the argument's type.
+pub struct OwningSite<A, Rt>
+where
+    A: Arg<Rt>,
+    Rt: Runtime,
+{
+    argument: A::Site,
+    word: Rt::Value,
+}
+
+impl<A, Rt> Clone for OwningSite<A, Rt>
+where
+    A: Arg<Rt>,
+    Rt: Runtime,
+{
+    fn clone(&self) -> Self {
+        OwningSite {
+            argument: self.argument.clone(),
+            word: self.word,
+        }
+    }
+}
+
+impl<A, S, T, Rt, const NTH: usize> Arg<Rt> for Owning<A, S, T, NTH>
+where
+    A: Arg<Rt> + 'static,
+    S: Signature<Rt> + 'static,
+    S::Mode: StepsItsReceiver,
+    T: Send + Sync + 'static,
+    Rt: Runtime,
+{
+    type Site = OwningSite<A, Rt>;
+    type Form = A::Form;
+
+    const ARGUMENTS: usize = A::ARGUMENTS;
+    const WIDTH: usize = A::WIDTH;
+    const LENDS_A_WORD: bool = A::LENDS_A_WORD;
+
+    fn site(site: &CallSite<'_, Rt>, at: usize) -> OwningSite<A, Rt> {
+        OwningSite {
+            argument: A::site(site, at),
+            word: site.requires[NTH],
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], site: &Self::Site) {
+        // SAFETY: the caller's contract, which is the argument's own.
+        unsafe { A::loan_ended(rt, run, &site.argument) }
+    }
+}
+
+// SAFETY: the receiver is `R`'s own `Takes` of this parameter's run, and
+// the word is the site table's; nothing else crosses, and the capability is
+// not kept.
+unsafe impl<'a, 'w, A, S, T, R, Rt, const NTH: usize> Takes<'a, 'w, Owning<A, S, T, NTH>, Rt>
+    for Instance<'w, S, R, Rt, T>
+where
+    A: Arg<Rt> + 'static,
+    S: Signature<Rt> + 'static,
+    S::Mode: StepsItsReceiver,
+    T: Send + Sync + 'static,
+    R: Takes<'a, 'w, A, Rt> + Holds<Rt, S::This>,
+    Rt: Runtime,
+{
+    #[inline(always)]
+    unsafe fn take(
+        rt: crate::Crossing<'a, Rt>,
+        run: &'a [Rt::Value],
+        site: &OwningSite<A, Rt>,
+    ) -> Instance<'w, S, R, Rt, T> {
+        // SAFETY: the caller's contract, which is the argument's own.
+        let recv = unsafe { R::take(rt, run, &site.argument) };
+        // SAFETY: `CallSite::new`'s contract, the one way a word reaches
+        // `requires`: the word is the entry chosen for this site's `NTH`
+        // requirement, whose signature is `S` and whose type is what this
+        // argument's type is settled to here, and the entry outlives every
+        // handler sited here.
+        unsafe { Instance::own(recv, site.word) }
     }
 }
 

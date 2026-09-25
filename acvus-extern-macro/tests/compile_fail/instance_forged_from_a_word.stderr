@@ -1,19 +1,19 @@
 error[E0451]: fields `args` and `requires` of struct `CallSite` are private
-  --> tests/compile_fail/instance_forged_from_a_word.rs:30:9
+  --> tests/compile_fail/instance_forged_from_a_word.rs:21:9
    |
-29 |     let site = CallSite::<Rt> {
+20 |     let site = CallSite::<Rt> {
    |                -------------- in this type
-30 |         args: &[],
+21 |         args: &[],
    |         ^^^^ private field
-31 |         requires: words,
+22 |         requires: words,
    |         ^^^^^^^^ private field
 
 error[E0451]: fields `args` and `requires` of struct `CallSite` are private
-  --> tests/compile_fail/instance_forged_from_a_word.rs:46:9
+  --> tests/compile_fail/instance_forged_from_a_word.rs:37:9
    |
-45 |     let site = CallSite::<Rt> {
+36 |     let site = CallSite::<Rt> {
    |                -------------- in this type
-46 |         args: &[],
+37 |         args: &[],
    |         ^^^^ private field
-47 |         requires: &words,
+38 |         requires: &words,
    |         ^^^^^^^^ private field

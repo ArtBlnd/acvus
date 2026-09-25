@@ -1,0 +1,5 @@
+error[E0616]: field `recv` of struct `Instance` is private
+  --> tests/compile_fail/stage_inner_moved_to_another_instance.rs:36:11
+   |
+36 |     inner.recv = moved;
+   |           ^^^^ private field

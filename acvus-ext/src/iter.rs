@@ -3,9 +3,9 @@
 //!
 //! There is no `Iterator` type. A pipeline's type is the nesting of its
 //! stages, `Filter<Map<Items<i64, _>, ..>, ..>`, and a stage reaches the one
-//! below it through the `next` instance its constructor required, which it
-//! holds beside the stage it names. Per element a stage is one function
-//! pointer call.
+//! below it through the `next` instance its constructor required, which
+//! owns the stage it names. Per element a stage is one function pointer
+//! call.
 //!
 //! **Task.** A stage holds its inner instance at `Later`, and its own `next`
 //! is an `async fn` with a `sync =` twin at the effect variable it shares
@@ -17,9 +17,9 @@
 //! **Identity.** A source names the identity variable of what it came from.
 //! An adaptor names none: its source's is inside its first type argument.
 //!
-//! **Instances.** An `Instance` stands beside the receiver it is a method
-//! of, so a stage holds one per pipeline it reads: `Chain` holds two
-//! pipelines of two types and the `next` of each. A stage that flattens
+//! **Instances.** An `Instance` owns the receiver it is a method of, so a
+//! stage holds one per pipeline it reads: `Chain` holds two pipelines of
+//! two types, each inside its own `next`. A stage that flattens
 //! (`Flatten`, `FlatMap`) buffers the container it last drew and needs no
 //! instance for it. An element never leaves the type it was declared at:
 //! what an instance returns is a `T`, not a runtime value read back.
@@ -30,7 +30,8 @@ use std::ops::Deref;
 
 use acvus_extern::{Arr, InPlaceElement, PassedByValue};
 use acvus_extern::{
-    Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, Payload, Ref, Runtime,
+    Borrowable, Closure, ClosureFn, Cross, Ctx, ExternType, Instance, InstanceOf, Later, Payload,
+    Ref, Runtime,
     Shared, Stored, Suspends, TransparentOver, Var, core, extern_fn, kind,
 };
 
@@ -270,8 +271,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) f: Closure<'a, (T,), U, E, Rt>,
 }
 
@@ -294,7 +294,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+    let x = it.0.inner.call(ctx, ())?;
     Some(it.0.f.call_now(ctx, (x,)))
 }
 
@@ -310,7 +310,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+    let x = it.0.inner.call_await(ctx, ()).await?;
     Some(it.0.f.call(ctx, (x,)).await)
 }
 
@@ -329,8 +329,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) f: Closure<'a, (T,), U, E, Rt>,
     pub(crate) draw: UnorderedDraw<U>,
 }
@@ -389,7 +388,7 @@ where
     Rt: Runtime,
 {
     let mut xs = Vec::new();
-    while let Some(x) = body.next.call_await(ctx, &mut body.inner, ()).await {
+    while let Some(x) = body.inner.call_await(ctx, ()).await {
         xs.push(x);
     }
     let rt = ctx.rt;
@@ -406,8 +405,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
 }
 
@@ -429,7 +427,7 @@ where
     Rt: Runtime,
 {
     loop {
-        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        let x = it.0.inner.call(ctx, ())?;
         if it.0.f.call_now(ctx, (&x,)) {
             return Some(x);
         }
@@ -448,7 +446,7 @@ where
     Rt: Runtime,
 {
     loop {
-        let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        let x = it.0.inner.call_await(ctx, ()).await?;
         if it.0.f.call(ctx, (&x,)).await {
             return Some(x);
         }
@@ -463,8 +461,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) remaining: u64,
 }
 
@@ -487,7 +484,7 @@ where
     Rt: Runtime,
 {
     it.0.remaining = it.0.remaining.checked_sub(1)?;
-    it.0.next.call(ctx, &mut it.0.inner, ())
+    it.0.inner.call(ctx, ())
 }
 
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_take_now)]
@@ -502,7 +499,7 @@ where
     Rt: Runtime,
 {
     it.0.remaining = it.0.remaining.checked_sub(1)?;
-    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
+    it.0.inner.call_await(ctx, ()).await
 }
 
 #[derive(Payload)]
@@ -513,8 +510,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) remaining: u64,
 }
 
@@ -539,9 +535,9 @@ where
 {
     while it.0.remaining > 0 {
         it.0.remaining -= 1;
-        it.0.next.call(ctx, &mut it.0.inner, ())?;
+        it.0.inner.call(ctx, ())?;
     }
-    it.0.next.call(ctx, &mut it.0.inner, ())
+    it.0.inner.call(ctx, ())
 }
 
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_now)]
@@ -557,9 +553,9 @@ where
 {
     while it.0.remaining > 0 {
         it.0.remaining -= 1;
-        it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        it.0.inner.call_await(ctx, ()).await?;
     }
-    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
+    it.0.inner.call_await(ctx, ()).await
 }
 
 #[derive(Payload)]
@@ -570,8 +566,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) step: u64,
     pub(crate) started: bool,
 }
@@ -597,11 +592,11 @@ where
 {
     if it.0.started {
         for _ in 1..it.0.step {
-            it.0.next.call(ctx, &mut it.0.inner, ())?;
+            it.0.inner.call(ctx, ())?;
         }
     }
     it.0.started = true;
-    it.0.next.call(ctx, &mut it.0.inner, ())
+    it.0.inner.call(ctx, ())
 }
 
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_step_by_now)]
@@ -617,11 +612,11 @@ where
 {
     if it.0.started {
         for _ in 1..it.0.step {
-            it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+            it.0.inner.call_await(ctx, ()).await?;
         }
     }
     it.0.started = true;
-    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
+    it.0.inner.call_await(ctx, ()).await
 }
 
 #[derive(Payload)]
@@ -632,8 +627,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     pub(crate) done: bool,
 }
@@ -664,7 +658,7 @@ where
     if it.0.done {
         return None;
     }
-    let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+    let x = it.0.inner.call(ctx, ())?;
     if it.0.f.call_now(ctx, (&x,)) {
         return Some(x);
     }
@@ -686,7 +680,7 @@ where
     if it.0.done {
         return None;
     }
-    let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+    let x = it.0.inner.call_await(ctx, ()).await?;
     if it.0.f.call(ctx, (&x,)).await {
         return Some(x);
     }
@@ -702,8 +696,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     pub(crate) skipping: bool,
 }
@@ -731,13 +724,13 @@ where
     Rt: Runtime,
 {
     while it.0.skipping {
-        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        let x = it.0.inner.call(ctx, ())?;
         if !it.0.f.call_now(ctx, (&x,)) {
             it.0.skipping = false;
             return Some(x);
         }
     }
-    it.0.next.call(ctx, &mut it.0.inner, ())
+    it.0.inner.call(ctx, ())
 }
 
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_skip_while_now)]
@@ -752,13 +745,13 @@ where
     Rt: Runtime,
 {
     while it.0.skipping {
-        let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        let x = it.0.inner.call_await(ctx, ()).await?;
         if !it.0.f.call(ctx, (&x,)).await {
             it.0.skipping = false;
             return Some(x);
         }
     }
-    it.0.next.call_await(ctx, &mut it.0.inner, ()).await
+    it.0.inner.call_await(ctx, ()).await
 }
 
 #[derive(Payload)]
@@ -769,8 +762,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) size: u64,
 }
 
@@ -799,7 +791,7 @@ where
 {
     let mut chunk: Vec<T> = Vec::new();
     while (chunk.len() as u64) < it.0.size {
-        let Some(x) = it.0.next.call(ctx, &mut it.0.inner, ()) else {
+        let Some(x) = it.0.inner.call(ctx, ()) else {
             break;
         };
         chunk.push(x);
@@ -820,7 +812,7 @@ where
 {
     let mut chunk: Vec<T> = Vec::new();
     while (chunk.len() as u64) < it.0.size {
-        let Some(x) = it.0.next.call_await(ctx, &mut it.0.inner, ()).await else {
+        let Some(x) = it.0.inner.call_await(ctx, ()).await else {
             break;
         };
         chunk.push(x);
@@ -853,9 +845,8 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
-    pub(crate) eq: Instance<'a, core::eq<T, Rt>, T, Rt>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) eq: InstanceOf<'a, core::eq<T, Rt>, T, Rt>,
     pub(crate) held: Held<T>,
 }
 
@@ -911,13 +902,11 @@ where
     Rt: Runtime,
 {
     pub(crate) fn drawing(
-        inner: I,
-        next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
-        eq: Instance<'a, core::eq<T, Rt>, T, Rt>,
+        inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+        eq: InstanceOf<'a, core::eq<T, Rt>, T, Rt>,
     ) -> Self {
         Dedup(DedupBody {
             inner,
-            next,
             eq,
             held: Held::NothingDrawn,
         })
@@ -932,7 +921,7 @@ where
     Rt: Runtime,
 {
     while it.0.has_source() {
-        let drawn = it.0.next.call(ctx, &mut it.0.inner, ());
+        let drawn = it.0.inner.call(ctx, ());
         match it.0.absorb(ctx, drawn) {
             Step::DrawAgain => {}
             Step::Yield(item) => return Some(item),
@@ -954,7 +943,7 @@ where
     Rt: Runtime,
 {
     while it.0.has_source() {
-        let drawn = it.0.next.call_await(ctx, &mut it.0.inner, ()).await;
+        let drawn = it.0.inner.call_await(ctx, ()).await;
         match it.0.absorb(ctx, drawn) {
             Step::DrawAgain => {}
             Step::Yield(item) => return Some(item),
@@ -973,15 +962,13 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) first: A,
-    pub(crate) next_first: Instance<'a, sig::next<A, T, E, Rt>, A, Rt, Later>,
-    pub(crate) second: B,
-    pub(crate) next_second: Instance<'a, sig::next<B, T, E, Rt>, B, Rt, Later>,
+    pub(crate) first: Instance<'a, sig::next<A, T, E, Rt>, A, Rt, Later>,
+    pub(crate) second: Instance<'a, sig::next<B, T, E, Rt>, B, Rt, Later>,
     pub(crate) on_first: bool,
 }
 
 /// The first pipeline, then the second. The two may be of different types;
-/// each stands beside its own `next`.
+/// each is owned by its own `next`.
 #[derive(ExternType)]
 #[extern_type(name = "Chain")]
 #[repr(transparent)]
@@ -1005,12 +992,12 @@ where
     Rt: Runtime,
 {
     if it.0.on_first {
-        if let Some(x) = it.0.next_first.call(ctx, &mut it.0.first, ()) {
+        if let Some(x) = it.0.first.call(ctx, ()) {
             return Some(x);
         }
         it.0.on_first = false;
     }
-    it.0.next_second.call(ctx, &mut it.0.second, ())
+    it.0.second.call(ctx, ())
 }
 
 #[extern_fn(instance_of = sig::next, effect = E, sync = next_chain_now)]
@@ -1026,12 +1013,12 @@ where
     Rt: Runtime,
 {
     if it.0.on_first {
-        if let Some(x) = it.0.next_first.call_await(ctx, &mut it.0.first, ()).await {
+        if let Some(x) = it.0.first.call_await(ctx, ()).await {
             return Some(x);
         }
         it.0.on_first = false;
     }
-    it.0.next_second.call_await(ctx, &mut it.0.second, ()).await
+    it.0.second.call_await(ctx, ()).await
 }
 
 #[derive(Payload)]
@@ -1043,8 +1030,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, C, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, C, E, Rt>, I, Rt, Later>,
     pub(crate) pending: std::vec::IntoIter<T>,
 }
 
@@ -1080,7 +1066,7 @@ where
         if let Some(x) = it.0.pending.next() {
             return Some(x);
         }
-        let batch = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        let batch = it.0.inner.call(ctx, ())?;
         it.0.pending = batch.into_iter();
     }
 }
@@ -1103,7 +1089,7 @@ where
         if let Some(x) = it.0.pending.next() {
             return Some(x);
         }
-        let batch = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        let batch = it.0.inner.call_await(ctx, ()).await?;
         it.0.pending = batch.into_iter();
     }
 }
@@ -1173,8 +1159,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    pub(crate) inner: I,
-    pub(crate) next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    pub(crate) inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     pub(crate) f: Closure<'a, (T,), Vec<U>, E, Rt>,
     pub(crate) pending: std::vec::IntoIter<U>,
 }
@@ -1208,7 +1193,7 @@ where
         if let Some(y) = it.0.pending.next() {
             return Some(y);
         }
-        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        let x = it.0.inner.call(ctx, ())?;
         it.0.pending = it.0.f.call_now(ctx, (x,)).into_iter();
     }
 }
@@ -1229,7 +1214,7 @@ where
         if let Some(y) = it.0.pending.next() {
             return Some(y);
         }
-        let x = it.0.next.call_await(ctx, &mut it.0.inner, ()).await?;
+        let x = it.0.inner.call_await(ctx, ()).await?;
         it.0.pending = it.0.f.call(ctx, (x,)).await.into_iter();
     }
 }

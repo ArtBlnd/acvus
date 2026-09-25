@@ -13,7 +13,7 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-use crate::instance::{Instance, Signature};
+use crate::instance::{Holds, Instance, InstanceOf, ReadsItsReceiver, Signature, StepsItsReceiver};
 use crate::runtime::Runtime;
 
 pub struct Crossing<'a, Rt>
@@ -63,12 +63,33 @@ where
     /// entry is live for `'r`.
     #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn instance<'r, S, I, T>(self, value: Rt::Value) -> Instance<'r, S, I, Rt, T>
+    pub unsafe fn instance<'r, S, I, T>(self, value: Rt::Value) -> InstanceOf<'r, S, I, Rt, T>
     where
-        S: Signature<Rt>,
+        S: Signature<Rt, This = I>,
+        S::Mode: ReadsItsReceiver,
     {
         // SAFETY: the caller's contract.
-        unsafe { Instance::at(value) }
+        unsafe { InstanceOf::at(value) }
+    }
+
+    /// # Safety
+    /// `value` was made by `Runtime::instance_value` from an entry of an
+    /// instance of `S` standing at the type of `recv`, as the checker chose
+    /// it at the site `recv` was passed to, and the entry is live for `'r`.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub unsafe fn instance_owning<'r, S, R, T>(
+        self,
+        recv: R,
+        value: Rt::Value,
+    ) -> Instance<'r, S, R, Rt, T>
+    where
+        S: Signature<Rt>,
+        S::Mode: StepsItsReceiver,
+        R: Holds<Rt, S::This>,
+    {
+        // SAFETY: the caller's contract.
+        unsafe { Instance::own(recv, value) }
     }
 }
 
