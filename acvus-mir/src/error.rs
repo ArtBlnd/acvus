@@ -380,6 +380,12 @@ pub enum MirErrorKind {
         signature: OperatorSignature,
         ty: Ty,
     },
+    /// A template's `{{ x }}` of a type that is not text and at which
+    /// `core::display` stands no instance: an `Object`, an `Enum`, a
+    /// closure (RFC-0071 rule 3, RFC-0070 rule 5).
+    NoDisplayInstance {
+        ty: Ty,
+    },
     /// A comparison operator on a language-owned type whose representation
     /// carries no order. An extension type reaches `core::cmp` instead of
     /// this refusal (RFC-0070 rule 5). Both operands are text often enough that
@@ -973,6 +979,13 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(
                     f,
                     "`{op}` has no instance of {signature} for {}",
+                    ty.shown(interner)
+                )
+            }
+            MirErrorKind::NoDisplayInstance { ty } => {
+                write!(
+                    f,
+                    "`{{{{ }}}}` has no instance of core::display for {}",
                     ty.shown(interner)
                 )
             }

@@ -30,7 +30,11 @@ extern_signature! { ns: "core", fn neg<T, O>(a: &T) -> O where T: crate::Var<cra
 
 extern_signature! { ns: "core", fn hash<T>(a: &T) -> u64 where T: crate::Var<crate::kind::Type>; }
 
-extern_signature! { ns: "core", fn to_string<T>(a: &T) -> String where T: crate::Var<crate::kind::Type>; }
+// An obligation across artifacts: an instance appends `a`'s text to `out`
+// and touches nothing else of it, and `acvus-mir` lowers a template's
+// `{{ x }}` whose `x` is not a `String` or a `&str` to a call of this with
+// the template's text as `out` (RFC-0070 rule 5, RFC-0071 rule 3).
+extern_signature! { ns: "core", fn display<T>(a: &T, out: &mut String) where T: crate::Var<crate::kind::Type>; }
 
 /// An obligation across artifacts. `acvus-mir`'s `slice_coercion` takes
 /// this declaration out of the environment's machine set to lower a
@@ -50,7 +54,7 @@ where
 {
     extern_registry! {
         ns: "core",
-        signatures: [clone, eq, cmp, add, sub, mul, div, rem, neg, hash, to_string],
+        signatures: [clone, eq, cmp, add, sub, mul, div, rem, neg, hash, display],
         fns: [as_str],
     }
 }

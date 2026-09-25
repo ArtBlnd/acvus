@@ -125,6 +125,7 @@ async fn regex_match_via_extern() {
         acvus_ext::iterator_registry(),
         acvus_ext::regex_registry(),
         acvus_ext::conversion_registry(),
+        acvus_ext::string_registry(),
     ];
     let c = ctx(&i, vec![("text", string("hello world 42"))]);
     let result = run_script_mode_with_externs(
@@ -147,6 +148,7 @@ async fn regex_find_via_extern() {
         acvus_ext::iterator_registry(),
         acvus_ext::regex_registry(),
         acvus_ext::conversion_registry(),
+        acvus_ext::string_registry(),
     ];
     let c = ctx(&i, vec![("text", string("price is 42 dollars"))]);
     let result = run_script_mode_with_externs(

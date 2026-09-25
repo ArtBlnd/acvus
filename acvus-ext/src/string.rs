@@ -30,6 +30,15 @@ use acvus_extern::{Erased, Registry, Runtime, TyArg, Var, extern_fn, extern_regi
 
 use crate::iter::Items;
 
+/// The owned copy of a `&str`, written `"…".to_string()` (RFC-0062 rule 2):
+/// a conversion, not a text, so it is no instance of `core::display`, which
+/// stands at no `str` (RFC-0070 rule 5). A `&str` reaches a `String`
+/// parameter only through this.
+#[extern_fn(effect = pure)]
+fn to_string(a: &str) -> String {
+    a.to_owned()
+}
+
 fn padding(fill: &str, count: usize) -> String {
     fill.chars().cycle().take(count).collect()
 }
@@ -542,7 +551,7 @@ where
     extern_registry! {
         ns: "string",
         fns: [
-            len, is_empty, concat, trim, trim_start, trim_end,
+            to_string, len, is_empty, concat, trim, trim_start, trim_end,
             trim_matches, trim_start_matches, trim_end_matches,
             upper, lower, to_ascii_uppercase, to_ascii_lowercase, is_ascii,
             contains, starts_with, ends_with, replace, replacen, repeat,
@@ -663,7 +672,7 @@ mod tests {
         .expect("registry combines");
         let core = Externs::combine(vec![crate::iterator_registry::<TypesOnly>()], &i)
             .expect("the baseline combines");
-        assert_eq!(reg.functions.len() - core.functions.len(), 53);
-        assert_eq!(reg.handlers.len() - core.handlers.len(), 53);
+        assert_eq!(reg.functions.len() - core.functions.len(), 54);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 54);
     }
 }

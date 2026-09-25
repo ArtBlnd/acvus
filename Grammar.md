@@ -64,9 +64,11 @@ whitespace rule:
 - A line beginning with `%%` is appended with one `%` in its place.
 - A line ending in `\` is appended without its newline.
 
-`{{ expr }}` inside a text line is the format string of RFC-0058 rule 6. The
-expression is a `String` or a `&str`; nothing is converted to text
-implicitly, so a number takes `| to_string` or `.to_string()`. The tag's
+`{{ expr }}` inside a text line is the format string of RFC-0058 rule 6. A
+`String` or a `&str` is appended as it is; any other type is appended by its
+`core::display` instance, into the template's text (RFC-0071 rule 3). A type
+with no instance, an `Object` or an `Enum` among them, is refused at the
+tag. The tag's
 content is tokenized as an expression, so a string literal inside it may
 hold `{{` or `}}`: `{{ "{{" }}` writes a literal `{{`. A tag does not span
 lines.

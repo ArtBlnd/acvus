@@ -4982,19 +4982,16 @@ impl RestAt {
         }
     }
 
-    /// Whether the position is one a `Signature` impl can name: a borrow
-    /// stands at the signature's own variable or nowhere, because nothing
-    /// else has a uniform form a requiring handler could hold.
+    /// Whether the position is one a `Signature` impl can name. A borrow at
+    /// the signature's own variable crosses as the caller's value; a borrow
+    /// of a concrete type crosses as the Rust reference the requirer holds,
+    /// which is the type the instance's handler takes there (RFC-0067 rule
+    /// 6: `core::display`'s `out: &mut String`). A pair of words or a
+    /// projection has no one-word form a requiring handler could hold
+    /// (RFC-0067 rule 8).
     fn is_signature_shaped(self) -> bool {
         match self {
-            Self::Itself(
-                Mode::Borrow
-                | Mode::BorrowMut
-                | Mode::Str
-                | Mode::Slice
-                | Mode::SliceMut
-                | Mode::Projection,
-            ) => false,
+            Self::Itself(Mode::Str | Mode::Slice | Mode::SliceMut | Mode::Projection) => false,
             Self::VariableShared
             | Self::VariableExclusive
             | Self::VariableValue
@@ -5388,8 +5385,10 @@ fn signature_call(
     // The crossing of a position that is not at a variable is the type the
     // signature wrote there, so the signature's own types fill the run.
     let rest_tys: Vec<&Type> = tail.iter().map(|p| &p.ty).collect();
+    // A concrete borrow crosses as the Rust reference itself and asks no
+    // crossing of the type it names.
     let rest_crossings = rest.iter().zip(&rest_tys).filter_map(|(at, ty)| {
-        (!at.at_variable()).then(|| {
+        matches!(at, RestAt::Itself(Mode::Value)).then(|| {
             quote! { #ty: ::acvus_extern::Cross<#runtime, Form = ::acvus_extern::One> }
         })
     });

@@ -916,7 +916,7 @@ impl<'a> Lowerer<'a> {
             }
             Stmt::Break { span, .. } => self.leave_loop(Leave::Break, *span),
             Stmt::Continue { span, .. } => self.leave_loop(Leave::Continue, *span),
-            Stmt::Append { expr, span, .. } => self.lower_append(expr, *span),
+            Stmt::Append { id, expr, span } => self.lower_append(*id, expr, *span),
             Stmt::Error(clean) => match *clean {},
         }
     }
@@ -925,7 +925,28 @@ impl<'a> Lowerer<'a> {
     /// append rather than once above the block: a borrow held across a
     /// loop's back edge would refuse every other name of the accumulator
     /// in the body.
-    fn lower_append(&mut self, expr: &Expr, span: Span) {
+    ///
+    /// A tag of text is appended as it is; any other type is lent to the
+    /// `core::display` instance the checker chose, with the template's text
+    /// lent `&mut` as the buffer it appends to (RFC-0071 rule 3).
+    fn lower_append(&mut self, id: AstId, expr: &Expr, span: Span) {
+        if let Some(display) = self.resolution.displays.get(&id).cloned() {
+            let lent = self.lend_operand(expr);
+            let Some(slot) = self.result else {
+                return;
+            };
+            let target = self.emit_ref(
+                span,
+                RefTarget::Var(slot),
+                vec![],
+                Mutability::Mut,
+                Ty::String,
+            );
+            let dst = self.alloc_val();
+            self.set_val_type(dst, Ty::Unit);
+            self.emit_call(span, dst, display.callee, display.ty, vec![lent, target]);
+            return;
+        }
         let part = self.lower_expr(expr);
         let Some(slot) = self.result else {
             return;

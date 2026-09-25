@@ -384,16 +384,18 @@ repository root at `0d308c5e`.
    what makes `Runtime::value_as_ref::<T::Payload>` sound and is exactly
    what `OneValue` does not say.
 
-7. **`core::to_string` at `str` waits on a two-word receiver.** A receiver
-   is one word in the context — `Ctx::recv` is a `*mut Rt::Value`
+7. **`core::display` stands at no `str`.** A receiver is one word in the
+   context — `Ctx::recv` is a `*mut Rt::Value`
    (`acvus-extern/src/ctx.rs:12`) — and the language's `&str` is the pair
    a view occupies (RFC-0047 rule 6, `acvus-extern/src/str.rs`), so
    `#[extern_fn]` writes no mono glue for a declaration with a `&str`
-   parameter (`acvus-extern-macro/src/lib.rs:555`). That instance is the
-   one exception `acvus-interpreter-test/tests/instance_entry.rs:66` names,
-   and nothing requires `core::to_string` today; a requirement on it would
-   be refused at `Externs::combine`
-   (`CombineError::RequiredInstanceWithoutGlue`).
+   parameter, and `Externs::combine` refuses a requirement that reaches
+   one (`CombineError::RequiredInstanceWithoutGlue`, RFC-0067 rule 8). The
+   standard `to_string<T>` requires `display` at `T`, so no `display`
+   instance is declared at `str`; the owned copy of a `&str` is
+   `string::to_string(a: &str) -> String`, a conversion (RFC-0070 rule 5).
+   `acvus-interpreter-test/tests/instance_entry.rs` pins that every
+   synchronous instance of a shared signature has a mono glue.
 
 Nothing in the export list is unplaced: every name on it stands for a
 concept the language already has a phrase for, and every name is an atom or

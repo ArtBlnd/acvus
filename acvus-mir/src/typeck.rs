@@ -691,6 +691,17 @@ pub struct OperatorCall<C, T> {
     pub at: Span,
 }
 
+/// A template's `{{ x }}` of a type that is not text: a call of
+/// `core::display` at the instance the checker chose, lent `x` and the
+/// template's text (RFC-0071 rule 3, RFC-0070 rule 5). Keyed by the
+/// statement's own id.
+#[derive(Debug, Clone)]
+pub struct DisplayCall<C, T> {
+    pub callee: C,
+    pub ty: T,
+    pub at: Span,
+}
+
 /// The operator a decision was opened for, as its refusal names it.
 #[derive(Clone, Copy)]
 struct OperatorSite {
@@ -1094,6 +1105,9 @@ pub struct TypeResolution {
     pub type_map: TypeMap,
     pub coercion_map: CoercionMap,
     pub calls: CallMap,
+    /// Each `{{ x }}` that appends through `core::display`, keyed by the
+    /// statement's own id; a tag of text is absent and appends as it is.
+    pub displays: FxHashMap<AstId, DisplayCall<Callee, Ty>>,
     /// How each `a[i]` reaches its element (RFC-0047). The checker decided
     /// it from the container's evidence and the element type; the lowering
     /// reads it and decides nothing.
@@ -1754,6 +1768,12 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     /// The operator each of its call's instance decisions was opened for:
     /// a failure of one is that operator's refusal.
     operator_decisions: FxHashMap<DecisionId, OperatorSite>,
+    /// Each `{{ x }}` that appends through `core::display`, keyed by the
+    /// statement's own id.
+    displays: FxHashMap<AstId, DisplayCall<ResolvedCallee, InferTy>>,
+    /// The instance decision of each such tag: a failure of one is that
+    /// tag's refusal.
+    display_decisions: FxHashSet<DecisionId>,
     /// The operator each of its operands' head decisions was opened for:
     /// a failure of one is that operator's mismatch.
     operand_decisions: FxHashMap<DecisionId, &'static str>,
@@ -1792,6 +1812,7 @@ impl TypeChecker<'_, '_, '_, Clean> {
         let effect = self.close_body_effect();
         let context_types = self.named_context_types();
         let calls = self.frozen_calls();
+        let displays = self.frozen_displays();
         let coercion_map = self.frozen_coercions();
         let lambda_captures = self.frozen_lambda_captures();
         let place_bases = self.frozen_place_bases(&type_map);
@@ -1811,6 +1832,7 @@ impl TypeChecker<'_, '_, '_, Clean> {
             type_map,
             coercion_map,
             calls,
+            displays,
             index_access: self.index_access,
             for_kinds: self.for_kinds,
             passing,
@@ -1904,6 +1926,8 @@ where
             held_arguments: Vec::new(),
             decision_sites: FxHashMap::default(),
             operator_decisions: FxHashMap::default(),
+            displays: FxHashMap::default(),
+            display_decisions: FxHashSet::default(),
             operand_decisions: FxHashMap::default(),
             requirer_of: FxHashMap::default(),
             decision_callees: FxHashMap::default(),
@@ -4276,6 +4300,32 @@ where
         })
     }
 
+    /// A tag whose instance did not settle is absent: the solve reported
+    /// it, and the body is refused before it is lowered.
+    fn frozen_displays(&mut self) -> FxHashMap<AstId, DisplayCall<Callee, Ty>> {
+        let displays: Vec<(AstId, DisplayCall<ResolvedCallee, InferTy>)> = self
+            .displays
+            .iter()
+            .map(|(id, call)| (*id, call.clone()))
+            .collect();
+        displays
+            .into_iter()
+            .filter_map(|(id, call)| {
+                let callee = self.callee_of(&call.callee)?;
+                let resolved = self.solver.resolve_ty(&call.ty);
+                let ty = self.closed_or_refused(&resolved, call.at);
+                Some((
+                    id,
+                    DisplayCall {
+                        callee,
+                        ty,
+                        at: call.at,
+                    },
+                ))
+            })
+            .collect()
+    }
+
     fn frozen_calls(&mut self) -> CallMap {
         let calls: Vec<(AstId, CallChoice)> = self
             .calls
@@ -5172,6 +5222,16 @@ where
                     MirErrorKind::NoOperatorInstance {
                         op,
                         signature,
+                        ty: referent_shown(self.type_as_written(&first.ty)),
+                    }
+                }
+                Unsettled::NoInstance {
+                    call: TyTerm::Fn { ref params, .. },
+                    ..
+                } if self.display_decisions.contains(&decision)
+                    && let Some(first) = params.first() =>
+                {
+                    MirErrorKind::NoDisplayInstance {
                         ty: referent_shown(self.type_as_written(&first.ty)),
                     }
                 }
@@ -7075,7 +7135,7 @@ where
     /// Type-check a single script statement.
     fn check_stmt(&mut self, stmt: &acvus_ast::Stmt<S>) {
         match stmt {
-            acvus_ast::Stmt::Append { expr, span, .. } => self.check_append(expr, *span),
+            acvus_ast::Stmt::Append { id, expr, span } => self.check_append(*id, expr, *span),
             acvus_ast::Stmt::Store {
                 id,
                 place,
@@ -7442,9 +7502,13 @@ where
         }
     }
 
-    /// A template's append reads a `String` or a `&str`; nothing is
-    /// converted to text implicitly (RFC-0071 rule 3).
-    fn check_append(&mut self, expr: &Expr<S>, span: Span) {
+    /// A template's append reads a `String` or a `&str` as it is; any other
+    /// type is appended by `core::display` at that type, and a type with no
+    /// instance is refused here (RFC-0071 rule 3). A type still open at the
+    /// tag whose bound admits text is read as text, as every open type was
+    /// before any other type was admitted; one whose bound admits none, an
+    /// integer literal's, is appended by `display`.
+    fn check_append(&mut self, id: AstId, expr: &Expr<S>, span: Span) {
         let ty = self.check_expr(expr);
         let resolved = self.solver.resolve_ty(&ty);
         let site = ConversionSite {
@@ -7456,22 +7520,95 @@ where
             TyTerm::String | TyTerm::Error(_) => {}
             TyTerm::Ref(_, inner) => match self.solver.resolve_ty(&inner.ty()) {
                 TyTerm::String | TyTerm::Str | TyTerm::Error(_) => {}
-                TyTerm::Var(_) => self.convert_at(&inner.ty(), &TyTerm::String, site),
-                _ => self.error(
-                    MirErrorKind::EmitNotString {
-                        actual: self.type_as_written(&resolved),
-                    },
-                    span,
-                ),
+                TyTerm::Var(var) if self.lent_may_be_text(var) => {
+                    self.convert_at(&inner.ty(), &TyTerm::String, site)
+                }
+                referent => self.check_display(id, expr, &referent, span),
             },
-            TyTerm::Var(_) => self.convert_at(&ty, &TyTerm::String, site),
-            _ => self.error(
-                MirErrorKind::EmitNotString {
-                    actual: self.type_as_written(&resolved),
-                },
-                span,
-            ),
+            TyTerm::Var(var) if self.held_may_be_text(*var) => {
+                self.convert_at(&ty, &TyTerm::String, site)
+            }
+            _ => self.check_display(id, expr, &resolved, span),
         }
+    }
+
+    /// Whether a tag's open type may still settle to text held by value: a
+    /// `String`, or a reference that may be a `&str` or a `&String`.
+    fn held_may_be_text(&self, var: crate::ty::TypeBoundId) -> bool {
+        let bound = self.solver.bound_of_var(var);
+        bound.admits(&TyTerm::String) || bound.admits_a_reference()
+    }
+
+    /// Whether what a tag's reference names, still open, may settle to text.
+    fn lent_may_be_text(&self, var: crate::ty::TypeBoundId) -> bool {
+        let bound = self.solver.bound_of_var(var);
+        bound.admits(&TyTerm::String) || bound.admits(&TyTerm::Str)
+    }
+
+    /// `{{ x }}` of a type that is not text: a call of `core::display` lent
+    /// `x`, or what a reference `x` names, and the template's text. The
+    /// instance is decided as a named call of the signature decides it.
+    fn check_display(&mut self, id: AstId, expr: &Expr<S>, referent: &InferTy, span: Span) {
+        let refuse = |this: &mut Self| {
+            let ty = this.type_as_written(referent);
+            this.error(MirErrorKind::NoDisplayInstance { ty }, span);
+        };
+        let qref =
+            QualifiedRef::qualified(self.interner.intern("core"), self.interner.intern("display"));
+        let Some(scheme) = self.env.functions.get(&qref).cloned() else {
+            refuse(self);
+            return;
+        };
+        let site = SchemeUse {
+            at: span,
+            source_begins: span,
+        };
+        let compiler = self.compiler_offer(qref, &scheme);
+        let (call_type, callee) = self.instantiate_call_with(qref, &scheme, site, compiler);
+        if let Some(InstanceChoice::Decided(decision)) = callee.instance {
+            self.display_decisions.insert(decision);
+        }
+        let [lent, text] = call_type.params.as_slice() else {
+            refuse(self);
+            return;
+        };
+        let borrowed = TyTerm::Ref(
+            Mutability::Shared,
+            Box::new(TypeArg::uniform(referent.clone())),
+        );
+        let argument = ConversionSite {
+            id: expr.id(),
+            span,
+            report: ConversionReport::Value,
+        };
+        if self.flow(&borrowed, lent, argument).is_err() {
+            refuse(self);
+            return;
+        }
+        let accumulator = TyTerm::Ref(
+            Mutability::Mut,
+            Box::new(TypeArg::uniform(TyTerm::String)),
+        );
+        if self.solver.unify(&accumulator, text).is_err() {
+            refuse(self);
+            return;
+        }
+        self.note_call_effect(&call_type.effect, span);
+        // `x` is lent to the call, not read by value.
+        self.note_place(expr);
+        self.value_reads.remove(&expr.id());
+        self.lent_places.push(LentWhole {
+            place: expr.id(),
+            mutability: Mutability::Shared,
+        });
+        self.displays.insert(
+            id,
+            DisplayCall {
+                callee,
+                ty: call_type.ty,
+                at: span,
+            },
+        );
     }
 
     /// A demand reaches a place and the places it projects from; any other

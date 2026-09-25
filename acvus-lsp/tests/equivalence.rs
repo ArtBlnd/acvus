@@ -293,18 +293,19 @@ fn incremental_update_fixes_error() {
     let i = Interner::new();
     let mut session = LspSession::new(&i, with_std(&i, root_contexts(&i, &[("x", Ty::I64)])));
 
-    // Start with emit type error: Int not emittable in template.
+    // Start with an emit type error: an array has no `core::display`
+    // instance, so a template cannot append it.
     let doc = session
-        .open(template_document(&i, "test"), "{{ @x }}")
+        .open(template_document(&i, "test"), "{{ [@x] }}")
         .expect("the session opens no other document");
     let errs = session.diagnostics(doc);
     assert!(
         !errs.is_empty(),
-        "should have emit error for Int in template"
+        "should have emit error for an array in template"
     );
 
-    // Fix: call to_string on it.
-    session.update_source(doc, "{{ @x.to_string() }}");
+    // Fix: append the element, which has one.
+    session.update_source(doc, "{{ @x }}");
     let errs = session.diagnostics(doc);
     assert!(
         errs.is_empty(),

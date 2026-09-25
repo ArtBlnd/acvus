@@ -605,3 +605,100 @@ async fn a_conversion_through_a_reference_leaves_nothing_behind() {
         }
     }
 }
+
+// -- A template's `{{ x }}` through `core::display` (RFC-0070 rule 5) ---
+
+/// What running a template allocates, its compile excluded.
+async fn template_run_allocations(source: &str, opt: Opt) -> usize {
+    let interner = Interner::new();
+    let (context_types, snapshot) = split_context(&interner, int_context(&interner, "n", 7));
+    let ast = ParsedAst::Template(acvus_ast::parse(&interner, source).expect("parse error"));
+    let compiled = acvus_interpreter_test::check_source(
+        &interner,
+        ast,
+        &context_types,
+        std_registries(),
+        Ty::String,
+        opt,
+        |_| {},
+    )
+    .unwrap_or_else(|refusal| panic!("at {opt:?}: {}", refusal.messages.join("\n")));
+    let (_shared, mut interp) =
+        execute_compiled(&interner, compiled, snapshot, Arc::new(SequentialExecutor));
+    let allocated = ALLOCATIONS.load(Ordering::Relaxed);
+    let answer = interp.execute().await.expect("the seeds hold every context the run fetches");
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed) - allocated;
+    std::hint::black_box(answer);
+    allocations
+}
+
+/// Allocations per tag, as the difference between two tag counts, of a
+/// template holding `tag` that many times.
+async fn per_tag(tag: &str, opt: Opt) -> f64 {
+    let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
+    let (few, many) = (100usize, 1_100usize);
+    let template = |k: usize| format!("% let n = @n\n{}", tag.repeat(k));
+    let low = template_run_allocations(&template(few), opt).await;
+    let high = template_run_allocations(&template(many), opt).await;
+    drop(measuring);
+    (high as f64 - low as f64) / (many - few) as f64
+}
+
+/// A template of integer tags grows its one text buffer: no tag builds a
+/// `String` of its own, so what a tag allocates is the buffer's amortized
+/// growth. `.to_string()` at the same tag is the control that the count
+/// sees a string per tag.
+#[tokio::test]
+async fn a_template_of_integer_tags_grows_one_buffer() {
+    for opt in [Opt::None, Opt::Full] {
+        let displayed = per_tag("{{ n }}", opt).await;
+        let converted = per_tag("{{ n.to_string() }}", opt).await;
+        println!("at {opt:?}: per tag, displayed {displayed:.3}, converted {converted:.3}");
+        assert!(
+            displayed < 0.05,
+            "at {opt:?}, an integer tag allocates {displayed}"
+        );
+        assert!(
+            converted >= 1.0,
+            "at {opt:?}, `.to_string()` at a tag allocates {converted}"
+        );
+    }
+}
+
+/// `.to_string()` at a `String` allocates what the owned copy of a `&str`
+/// allocates, a new `String` and nothing more: the generic `to_string`
+/// starts from an empty `String`, and `display` at `String` copies the bytes
+/// into it once.
+fn owned_text_per_iteration(owned: &str) -> String {
+    format!(
+        "let s = \"abc\".to_string(); let acc = 0; let i = 0; while i < @n {{ \
+         let t = {owned}; acc = acc + t.len(); i = i + 1; }} acc"
+    )
+}
+
+async fn allocations_per_iteration(source: &str, opt: Opt) -> f64 {
+    let measuring = ONE_AT_A_TIME.lock().expect("no measurement panicked");
+    let (few, many) = (1_000i64, 5_000i64);
+    let low = balance(source, no_helpers, few, opt, std_registries).await;
+    let high = balance(source, no_helpers, many, opt, std_registries).await;
+    drop(measuring);
+    assert_eq!(high.answer, 3 * many as u64, "at {opt:?}: {source}");
+    (high.allocations as f64 - low.allocations as f64) / (many - few) as f64
+}
+
+#[tokio::test]
+async fn to_string_at_a_string_allocates_what_the_copy_of_a_str_allocates() {
+    for opt in [Opt::None, Opt::Full] {
+        let displayed =
+            allocations_per_iteration(&owned_text_per_iteration("s.to_string()"), opt).await;
+        let copied =
+            allocations_per_iteration(&owned_text_per_iteration("\"abc\".to_string()"), opt)
+                .await;
+        println!("at {opt:?}: per iteration, `String` {displayed:.3}, `&str` {copied:.3}");
+        assert!(
+            (displayed - copied).abs() < 0.01,
+            "at {opt:?}, a `String`'s `to_string` allocates {displayed} where a copy allocates \
+             {copied}"
+        );
+    }
+}

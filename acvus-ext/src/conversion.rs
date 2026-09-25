@@ -1,8 +1,10 @@
 //! Type conversions. All pure.
 //!
-//! `core::to_int` is a shared signature (RFC-0019); `core::to_string` is
+//! `core::to_int` is a shared signature (RFC-0019); `core::display` is
 //! declared beside the other core signatures in `acvus_extern::core` and
-//! its instances at the language's own types are here.
+//! its instances at the language's own types are here, with the one
+//! generic `to_string` that requires it (RFC-0070 rule 5). `display` has no
+//! instance at `str`: the owned copy of a `&str` is `string::to_string`.
 //! `to_int` converts a `Bool` and nothing else: every number-to-number
 //! conversion is `expr as T` in the language (RFC-0049), which is total,
 //! reaches every width in both directions, and is a chain leaf rather than
@@ -16,7 +18,12 @@
 
 use std::num::IntErrorKind;
 
-use acvus_extern::{Registry, Runtime, TyArg, extern_fn, extern_registry};
+use std::ops::Deref;
+
+use acvus_extern::{
+    Borrowable, Ctx, InstanceOf, Registry, Runtime, TyArg, Var, core, extern_fn, extern_registry,
+    kind,
+};
 
 pub mod sig {
     use acvus_extern::extern_signature;
@@ -29,48 +36,71 @@ pub mod sig {
     }
 }
 
-// -- to_string ----------------------------------------------------------
+// -- display ------------------------------------------------------------
 
-macro_rules! to_string_ints {
+/// Appends `a`'s `Display` text to `out` in place, so a text built of many
+/// parts grows the one buffer it is written into (RFC-0070 rule 5).
+fn append(out: &mut String, a: &dyn std::fmt::Display) {
+    use std::fmt::Write;
+    // `String`'s `write_str` returns `Ok` on every path, and none of the
+    // `Display` impls this module reaches returns an error of its own, so
+    // the one failure `write!` can report does not arise here.
+    write!(out, "{a}").expect("a String's fmt::Write does not fail");
+}
+
+macro_rules! display_ints {
     ($($name:ident: $t:ty),* $(,)?) => {$(
-        #[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
-        fn $name(a: &$t) -> String {
-            a.to_string()
+        #[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+        fn $name(a: &$t, out: &mut String) {
+            append(out, a);
         }
     )*};
 }
 
-to_string_ints! {
-    to_string_i8: i8, to_string_i16: i16, to_string_i32: i32, to_string_int: i64,
-    to_string_u8: u8, to_string_u16: u16, to_string_u32: u32, to_string_u64: u64,
+display_ints! {
+    display_i8: i8, display_i16: i16, display_i32: i32, display_int: i64,
+    display_u8: u8, display_u16: u16, display_u32: u32, display_u64: u64,
 }
 
-#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
-fn to_string_float(a: &f64) -> String {
-    a.to_string()
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+fn display_float(a: &f64, out: &mut String) {
+    append(out, a);
 }
 
-#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
-fn to_string_char(a: &char) -> String {
-    a.to_string()
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+fn display_char(a: &char, out: &mut String) {
+    out.push(*a);
 }
 
-#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
-fn to_string_bool(a: &bool) -> String {
-    a.to_string()
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+fn display_bool(a: &bool, out: &mut String) {
+    append(out, a);
 }
 
-#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure, copies(a))]
-fn to_string_string(a: &String) -> String {
-    a.clone()
+/// A `String`'s text is its bytes: they are copied once, into `out`.
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+fn display_string(a: &String, out: &mut String) {
+    out.push_str(a);
 }
 
-/// The copy RFC-0062 rule 3 names: a `&str` reaches a `String`
-/// parameter only through this, and `"x".to_string()` is how a literal is
-/// written where an owned string is wanted.
-#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
-fn to_string_str(a: &str) -> String {
-    a.to_owned()
+/// The standard registry's one `to_string`: the text `display` appends at
+/// `T`, into an empty `String`. Every type with a `display` instance has it,
+/// and a type's text has one source (RFC-0070 rule 5). Its `T` ranges over
+/// the types `display` stands at, which hold no `str`, so `"…".to_string()`
+/// reaches `string::to_string` alone (RFC-0043).
+#[extern_fn(effect = pure)]
+fn to_string<T, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    a: &T,
+    display: InstanceOf<'_, core::display<T, Rt>, T, Rt>,
+) -> String
+where
+    T: Var<kind::Type> + Borrowable<Rt> + Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    let mut out = String::new();
+    display.call(ctx, a, (&mut out,));
+    out
 }
 
 // -- to_int -------------------------------------------------------------
@@ -190,10 +220,10 @@ pub fn conversion_registry<R: Runtime>() -> Registry<R> {
         ns: "std",
         signatures: [sig::to_int],
         fns: [
-            to_string_i8, to_string_i16, to_string_i32, to_string_int,
-            to_string_u8, to_string_u16, to_string_u32, to_string_u64,
-            to_string_float, to_string_char, to_string_bool, to_string_string,
-            to_string_str,
+            display_i8, display_i16, display_i32, display_int,
+            display_u8, display_u16, display_u32, display_u64,
+            display_float, display_char, display_bool, display_string,
+            to_string,
             to_int_bool,
             int_to_char,
         ],
@@ -212,7 +242,7 @@ mod tests {
             .expect("registry combines");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
         let signatures = 1;
-        let plain_fns = 1;
+        let plain_fns = 2;
         assert_eq!(
             reg.functions.len() - core.functions.len(),
             signatures + plain_fns
@@ -223,41 +253,56 @@ mod tests {
         );
     }
 
-    /// RFC-0082 rule 10: the text of a `String` is a copy of it, sampled;
-    /// the text of a `&str` states no `copies`, since its result is of
-    /// another type than the value it lends.
+    /// Each instance appends to what `out` already holds, and its text is
+    /// the text Rust's `to_string` gives the same value.
     #[test]
-    fn copies_holds_over_the_text_of_a_string_alone() {
-        for text in ["", "a", "é\0", "\u{10FFFF}"] {
-            let text = text.to_string();
-            assert_eq!(to_string_string(&text), text);
-        }
+    fn display_appends_the_text_to_string_gives() {
+        let mut out = String::from(">");
+        display_i8(&-1, &mut out);
+        display_int(&42, &mut out);
+        display_u64(&u64::MAX, &mut out);
+        display_float(&1.5, &mut out);
+        display_char(&'c', &mut out);
+        display_bool(&true, &mut out);
+        display_string(&"é\0".to_string(), &mut out);
+        let expected = [
+            ">".to_string(),
+            (-1i8).to_string(),
+            42i64.to_string(),
+            u64::MAX.to_string(),
+            1.5f64.to_string(),
+            'c'.to_string(),
+            true.to_string(),
+            "é\0".to_string(),
+        ]
+        .concat();
+        assert_eq!(out, expected);
+    }
+
+    /// RFC-0070 rule 5: `display` stands at no `str`; the owned copy of a
+    /// `&str` is `string::to_string`, and `std::to_string` is generic.
+    #[test]
+    fn display_stands_at_no_str() {
         let i = Interner::new();
         let reg = Externs::combine(vec![conversion_registry::<TypesOnly>()], &i)
             .expect("registry combines");
-        let qref = acvus_extern::QualifiedRef::qualified(i.intern("core"), i.intern("to_string"));
+        let qref = acvus_extern::QualifiedRef::qualified(i.intern("core"), i.intern("display"));
         let function = reg
             .functions
             .iter()
             .find(|f| f.qref == qref)
             .expect("the signature is declared");
         let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
-            panic!("to_string is an extern")
+            panic!("display is an extern")
         };
-        let copying: Vec<&acvus_extern::PolyTy> = instances
-            .concrete
-            .iter()
-            .filter(|instance| instance.copies.is_some())
-            .map(|instance| &instance.ty)
-            .collect();
-        assert_eq!(copying.len(), 1, "{copying:?}");
-        let acvus_extern::PolyTy::Fn { params, .. } = copying[0] else {
-            panic!("an instance is a function")
-        };
-        assert!(
-            matches!(&params[0].ty, acvus_extern::PolyTy::Ref(_, lent) if *lent.ty() == acvus_extern::PolyTy::String),
-            "{copying:?}"
-        );
+        let at_str = instances.concrete.iter().filter(|instance| {
+            let acvus_extern::PolyTy::Fn { params, .. } = &instance.ty else {
+                panic!("an instance is a function")
+            };
+            matches!(&params[0].ty, acvus_extern::PolyTy::Ref(_, lent) if *lent.ty() == acvus_extern::PolyTy::Str)
+        });
+        assert_eq!(at_str.count(), 0);
+        assert_eq!(instances.concrete.len(), 12);
     }
 
     #[test]
