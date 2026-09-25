@@ -11,7 +11,7 @@ expression: ir
      2 |   r2 = undef
      3 |   r3 = fetch @items
      5 |   assign <template> = T0
-     7 |   r4 = list []
+     7 |   r4 = array_begin capacity=0
      8 |   r5 = call #0(r4)
      9 |   r6 = call #1(r3)
     10 |   r7 = closure L0 [5 (r8)]

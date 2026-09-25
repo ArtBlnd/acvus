@@ -85,7 +85,7 @@ Forty-three variants (`ir.rs`).
 | String | `StringConcat`, `StringEq`, `StringClone` | the language-owned string operators (RFC-0020, RFC-0018 rule 2); a template body is one `StringConcat` |
 | Functions | `LoadFunction`, `FunctionCall` | `FunctionCall { callee: Direct \| Indirect, callee_ty, args, order: Option<OrderEdge> }` |
 | Async | `Spawn`, `Eval`, `Merge` | `Spawn` takes the order before, `Eval` yields the order after, `Merge` joins orders |
-| Construction | `MakeArray`, `MakeObject`, `MakeTuple`, `MakeVariant`, `MakeClosure` | all pure |
+| Construction | `ArrayBegin`, `ArrayPush`, `MakeObject`, `MakeTuple`, `MakeVariant`, `MakeClosure` | all pure; an array literal is `ArrayBegin` and one `ArrayPush` per element, each moving an `Array<T, k>` into an `Array<T, k + 1>` (RFC-0048 rule 9) |
 | Access | `TupleIndex`, `ArrayIndex`, `ObjectGet`, `UnwrapVariant` | `ArrayIndex` is a constant position in an owned scrutinee — pattern destructuring, not indexing a container |
 | Tests | `TestLiteral`, `TestObjectKey`, `TestVariant` | `Bool`, read by `JumpIf` |
 | Control flow | `BlockLabel`, `Jump`, `JumpIf`, `Switch`, `Return`, `Diverge` | become blocks and terminators in `CfgBody` |
@@ -563,8 +563,8 @@ Control equivalence is "executes iff", not "executes as often", which is
 why the loop-depth condition stands beside it. The set of instructions that
 may move is decided by `hoistable`, an enumeration over `InstKind` whose
 default is `No`: a new instruction kind never becomes movable silently.
-`Spawn`'s `No` is RFC-0007; `MakeObject`/`MakeArray`/`MakeVariant`/
-`MakeClosure` and a heap `Const` are built where they are used;
+`Spawn`'s `No` is RFC-0007; `ArrayBegin`/`ArrayPush`/`MakeObject`/
+`MakeVariant`/`MakeClosure` and a heap `Const` are built where they are used;
 `UnwrapVariant` and a checked `Index` each assume a test that a block
 before them established.
 

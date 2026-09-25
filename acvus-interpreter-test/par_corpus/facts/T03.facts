@@ -1,5 +1,5 @@
-for slice(r7) -> L1 else L2 stages [L1, L5]
+for slice(r11) -> L1 else L2 stages [L1, L5]
 // L1: free {const_str, take, assign, ref, call to_string, assign, ref, concat, drop, assign, take, const, %, const, ==, ref, as_slice}
-// L5: cycle Order(r9) any_order law(Order exact commutative) {merge, jump, jump}
+// L5: cycle Order(r13) any_order law(Order exact commutative) {merge, jump, jump}
 // control upfront
-// cost W=51 O=18281 split when n > 11471, n = len(r7)
+// cost W=51 O=18281 split when n > 11471, n = len(r11)

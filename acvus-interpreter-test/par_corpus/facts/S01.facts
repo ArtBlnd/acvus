@@ -1,5 +1,5 @@
-for range(0 (r11)..r9) -> L1 else L6 stages [L1, L5]
+for range(0 (r16)..r14) -> L1 else L6 stages [L1, L5]
 // L1: free {index, const, ==}
 // L5: cycle Control in_order {branch}
 // control chained through L5
-// cost W=4 O=18281 split when n > 146248, n ≤ max(r9 - 0 (r11), 0)
+// cost W=4 O=18281 split when n > 146248, n ≤ max(r14 - 0 (r16), 0)

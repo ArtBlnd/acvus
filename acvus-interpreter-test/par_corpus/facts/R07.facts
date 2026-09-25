@@ -1,5 +1,5 @@
-for slice(r6) -> L1 else L2 stages [L1, L3]
+for slice(r9) -> L1 else L2 stages [L1, L3]
 // L1: free {take}
-// L3: cycle Carried(r8) in_order law(Op(Add) inexact commutative) {+}
+// L3: cycle Carried(r11) in_order law(Op(Add) inexact commutative) {+}
 // control upfront
-// cost W=3 O=18281 split when n > 194998, n = len(r6)
+// cost W=3 O=18281 split when n > 194998, n = len(r9)

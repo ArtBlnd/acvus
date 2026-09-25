@@ -411,7 +411,8 @@ fn mnemonic(kind: &InstKind, ctx: &PrintCtx<'_>) -> String {
         InstKind::LoadFunction { .. } => "load_function",
         InstKind::Eval { .. } => "eval",
         InstKind::Merge { .. } => "merge",
-        InstKind::MakeArray { .. } => "make_array",
+        InstKind::ArrayBegin { .. } => "array_begin",
+        InstKind::ArrayPush { .. } => "array_push",
         InstKind::MakeObject { .. } => "make_object",
         InstKind::MakeTuple { .. } => "make_tuple",
         InstKind::TupleIndex { .. } => "tuple_index",
@@ -981,11 +982,15 @@ fn write_body(
                 vn.fmt_use(*target, &consts, &texts),
                 vn.fmt_use(*part, &consts, &texts)
             )?,
-            InstKind::MakeArray { dst, elements } => writeln!(
+            InstKind::ArrayBegin { dst, capacity } => {
+                writeln!(f, "{} = array_begin capacity={capacity}", vn.fmt_val(*dst))?
+            }
+            InstKind::ArrayPush { dst, array, value } => writeln!(
                 f,
-                "{} = list [{}]",
+                "{} = array_push {} {}",
                 vn.fmt_val(*dst),
-                vn.fmt_uses(elements, &consts, &texts)
+                vn.fmt_use(*array, &consts, &texts),
+                vn.fmt_use(*value, &consts, &texts)
             )?,
             InstKind::MakeObject { dst, fields } => {
                 let fields_str: String = fields

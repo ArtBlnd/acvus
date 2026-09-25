@@ -2447,7 +2447,8 @@ impl<'a> Prepare<'a> {
             | InstKind::Cast { .. }
             | InstKind::Spawn { .. }
             | InstKind::Merge { .. }
-            | InstKind::MakeArray { .. }
+            | InstKind::ArrayBegin { .. }
+            | InstKind::ArrayPush { .. }
             | InstKind::MakeObject { .. }
             | InstKind::MakeTuple { .. }
             | InstKind::TupleIndex { .. }
@@ -4612,19 +4613,26 @@ impl<'a> Prepare<'a> {
                 node(move |next| control::Merge { dst, next })
             }
 
-            InstKind::MakeArray { dst, elements } => {
-                let Operands {
-                    slots,
-                    takes: owns_large,
-                } = self.taken(elements);
-                {
-                    let dst = self.marked(*dst);
-                    owns_large.node(move |owns_large, next| composite::MakeArray {
-                        dst,
-                        elements: composite::Elements { slots, owns_large },
-                        next,
-                    })
-                }
+            InstKind::ArrayBegin { dst, capacity } => {
+                let dst = self.marked(*dst);
+                let capacity = *capacity;
+                node(move |next| composite::ArrayBegin {
+                    dst,
+                    capacity,
+                    next,
+                })
+            }
+            InstKind::ArrayPush { dst, array, value } => {
+                let dst = self.marked(*dst);
+                let (array, value, takes) =
+                    (self.off(*array), self.off(*value), self.take_mask(&[*array, *value]));
+                takes.node(move |owns_large, next| composite::ArrayPush {
+                    dst,
+                    array,
+                    value,
+                    owns_large,
+                    next,
+                })
             }
             InstKind::MakeTuple { dst, elements } => {
                 let Operands {

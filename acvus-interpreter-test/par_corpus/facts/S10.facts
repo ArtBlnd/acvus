@@ -1,4 +1,4 @@
-for range(0 (r14)..r8) -> L1 else L2 stages [L1]
-// L1: cycle Carried(r12)+Carried(r13) in_order law(First(Carried(r13), guarding Carried(r12)) exact) {!, index, const, ==, const, const, branch, jump, jump, branch, jump}
+for range(0 (r19)..r13) -> L1 else L2 stages [L1]
+// L1: cycle Carried(r17)+Carried(r18) in_order law(First(Carried(r18), guarding Carried(r17)) exact) {!, index, const, ==, const, const, branch, jump, jump, branch, jump}
 // control upfront
 // cost in place: no stage runs apart

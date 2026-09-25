@@ -3,15 +3,19 @@ source: acvus-mir-test/tests/inline.rs
 expression: ir
 ---
 === main ===
-     2 |   r0 = list [1 (r1), 2 (r2)]
-     3 |   r3 = call #0(r0)
-     4 |   r4 = call #1(r3)
-     5 |   r5 = call #2(r4)
-     6 |   return r5
+     0 |   r0 = array_begin capacity=2
+     2 |   r1 = array_push r0 1 (r2)
+     4 |   r3 = array_push r1 2 (r4)
+     5 |   r5 = call #0(r3)
+     6 |   r6 = call #1(r5)
+     7 |   r7 = call #2(r6)
+     8 |   return r7
 
-    ; r0 (v3) : Array<i64, 2>
-    ; r1 (v1) : i64
+    ; r0 (v1) : Array<i64, 0>
+    ; r1 (v3) : Array<i64, 1>
     ; r2 (v2) : i64
-    ; r3 (v4) : Vec<i64>
-    ; r4 (transform(...)) : Map<Items<i64>, i64, i64, Pure>
-    ; r5 (collect(...)) : Vec<i64>
+    ; r3 (v5) : Array<i64, 2>
+    ; r4 (v4) : i64
+    ; r5 (v6) : Vec<i64>
+    ; r6 (transform(...)) : Map<Items<i64>, i64, i64, Pure>
+    ; r7 (collect(...)) : Vec<i64>

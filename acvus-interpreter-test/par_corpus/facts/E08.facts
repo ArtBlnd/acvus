@@ -1,5 +1,5 @@
-for slice(r13) -> L1 else L2 stages [L1, L3]
+for slice(r16) -> L1 else L2 stages [L1, L3]
 // L1: free {as_slice, call captures, call unwrap, assign, ref, const_str, call named, drop, call unwrap, field_get, drop, const, string_clone, drop, const}
-// L3: cycle Storage(r15) in_order {ref, call or_insert, take, +, assign}
+// L3: cycle Storage(r18) in_order {ref, call or_insert, take, +, assign}
 // control upfront
-// cost W=37 O=18281 split when n > 15811, n = len(r13)
+// cost W=37 O=18281 split when n > 15811, n = len(r16)

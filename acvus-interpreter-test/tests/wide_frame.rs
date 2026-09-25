@@ -34,25 +34,49 @@ fn value(source: &str) -> String {
 
 fn int_literal(n: usize) -> String {
     let elements: Vec<String> = (1..=n).map(|i| i.to_string()).collect();
-    format!("let v = vec([{}]); v.len()", elements.join(", "))
+    format!("let v = vec([{}]); v.len() as i64", elements.join(", "))
 }
 
 fn string_literal(n: usize) -> String {
     let elements: Vec<String> = (0..n).map(|i| format!("\"s{i}\".to_string()")).collect();
-    format!("let v = [{}]; v.len()", elements.join(", "))
+    format!("let v = [{}]; v.len() as i64", elements.join(", "))
 }
 
+/// An array literal is built one element at a time (`ArrayBegin`,
+/// `ArrayPush`), so no two of its elements are live at once: a literal of
+/// 1000 takes a frame of a few registers, and its listing pushes each
+/// element right after the one operation that makes it.
 #[test]
-fn a_vec_literal_as_wide_as_the_frame_runs() {
-    for n in WIDTHS {
-        assert_eq!(value(&int_literal(n)), n.to_string(), "{n} elements");
+fn a_literal_of_any_width_takes_a_few_registers() {
+    for n in WIDTHS.into_iter().chain([1000]) {
+        for source in [int_literal(n), string_literal(n)] {
+            assert_eq!(value(&source), n.to_string(), "{n} elements");
+            let len = frame_len(&source);
+            assert!(len <= 8, "{n} elements: a frame of {len}");
+        }
     }
-}
-
-#[test]
-fn owned_strings_across_mark_words_are_taken_once() {
-    for n in WIDTHS {
-        assert_eq!(value(&string_literal(n)), n.to_string(), "{n} strings");
+    let i = Interner::new();
+    for (source, made_by) in [
+        (int_literal(1000), "Const"),
+        (string_literal(1000), "CallExtern"),
+    ] {
+        let blocks = script_listing_with_externs(&i, &source, Context::default(), regs(), Ty::I64);
+        let ops = ops_of_anywhere(&blocks);
+        let pushes: Vec<usize> = ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| *op == "ArrayPush")
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(pushes.len(), 1000, "{ops:?}");
+        assert_eq!(
+            ops.first().map(String::as_str),
+            Some("ArrayBegin"),
+            "{ops:?}"
+        );
+        for at in pushes {
+            assert!(ops[at - 1].starts_with(made_by), "{:?}", &ops[at - 2..=at]);
+        }
     }
 }
 
@@ -198,8 +222,8 @@ fn run_tracked(source: &str, opt: Opt) -> Value {
         .expect("the run fetches no context")
 }
 
-/// Each value here holds two registers for the whole body, so `n` values
-/// make a frame of about `2 * n`.
+/// Every value here is live from its `let` to its `rank`, all of them at
+/// once, so `n` values make a frame of about `n`.
 fn ranked(n: usize) -> String {
     let lets: Vec<String> = (0..n).map(|i| format!("let t{i} = tracked(1);")).collect();
     let ranks: Vec<String> = (0..n)
@@ -212,9 +236,11 @@ fn ranked(n: usize) -> String {
     )
 }
 
+/// A tuple takes every part in its one `MakeTuple`, so `n` parts are live
+/// together; the array around it makes it a value that escapes its web.
 fn gathered(n: usize) -> String {
     let elements: Vec<&str> = (0..n).map(|_| "tracked(1)").collect();
-    format!("let all = [{}]; all.len() as i64", elements.join(", "))
+    format!("let all = [({})]; all.len() as i64", elements.join(", "))
 }
 
 #[test]
@@ -227,7 +253,7 @@ fn each_owned_register_is_released_once() {
             drop(measured);
 
             let measured = Measured::start();
-            assert_eq!(run_tracked(&gathered(n / 2), opt).as_int(), (n / 2) as i64);
+            assert_eq!(run_tracked(&gathered(n / 2), opt).as_int(), 1);
             assert_eq!(measured.count(), n / 2, "{} gathered at {opt:?}", n / 2);
         }
     }
@@ -246,7 +272,7 @@ fn a_take_above_word_zero_is_disowned_before_its_operation() {
         .iter()
         .position(|op| op == "Disown")
         .unwrap_or_else(|| panic!("a take above word 0 is disowned: {wide:?}"));
-    assert_eq!(wide[disown + 1], "MakeArray", "{wide:?}");
+    assert_eq!(wide[disown + 1], "MakeTuple", "{wide:?}");
     let narrow = at(8);
     assert!(
         !narrow.iter().any(|op| op == "Disown"),
@@ -292,6 +318,44 @@ fn a_storage_past_its_last_read_shares_its_register() {
     assert!(len <= 8, "a frame of {len}");
 }
 
+fn gives_at_both_levels(source: &str, expected: &str) {
+    for opt in [Opt::None, Opt::Full] {
+        assert_eq!(
+            corpus::attempt(source, opt, Stage::Run),
+            Outcome::Value(expected.to_string()),
+            "{source} at {opt:?}"
+        );
+    }
+}
+
+/// A storage of a word has no `Drop`, so past the `Ref` that lends it only the
+/// loans keep it live; without them a value made after the `Ref` takes its
+/// register, the lowest free one, and the reference reads that value.
+#[test]
+fn a_word_a_live_reference_points_into_keeps_its_register() {
+    let held_in_a_let = "let a = opaque(7); let r = &a; \
+        let b = opaque(11); let c = opaque(13); \
+        *r * 100 + b + c";
+    let held_by_a_call = "let a = opaque(7); let r = pass(&a); \
+        let b = opaque(11); let c = opaque(13); \
+        *r * 100 + b + c";
+    gives_at_both_levels(held_in_a_let, "724");
+    gives_at_both_levels(held_by_a_call, "724");
+}
+
+#[test]
+fn a_word_a_reference_holds_across_a_loop_keeps_its_register() {
+    let source = "let a = opaque(7); let r = &a; let total = 0; \
+        for i in 0..3 { total = total + opaque(11) + i; } \
+        *r * 100 + total";
+    gives_at_both_levels(source, "736");
+}
+
+/// An owned storage's `Drop` is placed after the last instruction
+/// `Loans::uses_with_storage` names it at (`optimize::drop_insertion`), and
+/// the `Drop` reads the storage, so its live range reaches the reference's
+/// last read by the `Drop` alone; this pins the value read and the single
+/// release rather than the loan rule.
 #[test]
 fn a_storage_a_live_reference_points_into_keeps_its_register() {
     let held_in_a_let = "let a = tracked(2); let r = &a; \
@@ -353,6 +417,25 @@ fn a_call_past_the_argument_cell_is_refused() {
             ),
             other => panic!("{opt:?}: {other:?}"),
         }
+    }
+}
+
+// -- A literal left part way -----------------------------------------------
+
+/// The drop on the `return` edge is of the array so far, which owns each
+/// element pushed before it (RFC-0048 rule 9).
+#[test]
+fn a_return_out_of_an_element_releases_each_pushed_element_once() {
+    let source = "let one = tracked(1); let n = rank(&one); \
+        let all = [tracked(1), tracked(1), if n == 1 { return 7 } else { tracked(1) }, tracked(1)]; \
+        all.len() as i64";
+    for opt in [Opt::None, Opt::Full] {
+        let measured = Measured::start();
+        let made_before = MADE.load(Ordering::SeqCst);
+        assert_eq!(run_tracked(source, opt).as_int(), 7, "{opt:?}");
+        let made = MADE.load(Ordering::SeqCst) - made_before;
+        assert_eq!(made, 3, "{opt:?}");
+        assert_eq!(measured.count(), made, "{opt:?}");
     }
 }
 

@@ -1,5 +1,5 @@
-for slice(r8) -> L1 else L6 stages [L1, L5]
+for slice(r13) -> L1 else L6 stages [L1, L5]
 // L1: free {take, const, >}
 // L5: cycle Control in_order {branch}
 // control chained through L5
-// cost W=4 O=18281 split when n > 146248, n ≤ len(r8)
+// cost W=4 O=18281 split when n > 146248, n ≤ len(r13)

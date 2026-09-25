@@ -1,10 +1,10 @@
-for slice(r17) -> L1 else L2 stages [L1, L7]
-// L1: free {make_array, call vec, assign, const, call len, as_slice, const, index, const, *, take, call into_iter, make_closure, call map, const_str, call to_string, call join, ref, call insert}
-// L7: cycle Storage(r18) in_order law(Fold(r18, #7) exact) {ref, call push}
+for slice(r26) -> L1 else L2 stages [L1, L7]
+// L1: free {array_begin, call vec, assign, const, call len, as_slice, const, index, const, *, take, call into_iter, make_closure, call map, const_str, call to_string, call join, ref, call insert}
+// L7: cycle Storage(r27) in_order law(Fold(r27, #7) exact) {ref, call push}
 // control upfront
-// cost W=58 O=18281 split when n > 10087, n = len(r17)
-for range(0 (r25)..r23) -> L4 else L5 stages [L4, L6]
+// cost W=58 O=18281 split when n > 10087, n = len(r26)
+for range(0 (r34)..r32) -> L4 else L5 stages [L4, L6]
 // L4: free {const, index, const, *}
-// L6: cycle Storage(r26) in_order {ref, call insert}
+// L6: cycle Storage(r35) in_order {ref, call insert}
 // control upfront
-// cost W=4 O=18281 split when n > 146248, n = max(r23 - 0 (r25), 0)
+// cost W=4 O=18281 split when n > 146248, n = max(r32 - 0 (r34), 0)

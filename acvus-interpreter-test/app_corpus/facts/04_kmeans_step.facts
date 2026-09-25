@@ -1,33 +1,33 @@
-for range(0 (r52)..r39) -> L1 else L2 stages [L1, L27]
+for range(0 (r82)..r69) -> L1 else L2 stages [L1, L27]
 // L1: free {const, call MAX, const, index, index, -, index, index, -, *, *, +, <, cast}
-// L27: cycle Storage(r53) disjoint {index_set}
+// L27: cycle Storage(r83) disjoint {index_set}
 // control upfront
-// cost W=5 O=18281 split when n > 116999, n = max(r39 - 0 (r52), 0)
-for range(0 (r59)..r41) -> L4 else L5 stages [L4, L25]
+// cost W=5 O=18281 split when n > 116999, n = max(r69 - 0 (r82), 0)
+for range(0 (r89)..r71) -> L4 else L5 stages [L4, L25]
 // L4: free {index, index, -, index, index, -, *, *, +}
-// L25: cycle Carried(r57)+Carried(r58) in_order law(Extremum(Min, Carried(r58), carrying Carried(r57)) exact) {<, cast, branch, jump}
+// L25: cycle Carried(r87)+Carried(r88) in_order law(Extremum(Min, Carried(r88), carrying Carried(r87)) exact) {<, cast, branch, jump}
 // control upfront
-// cost W=17 O=18281 split when n > 34412, n = max(r41 - 0 (r59), 0)
-for range(0 (r88)..r39) -> L9 else L10 stages [L9, L19, L20, L21, L22, L23]
+// cost W=17 O=18281 split when n > 34412, n = max(r71 - 0 (r89), 0)
+for range(0 (r118)..r69) -> L9 else L10 stages [L9, L19, L20, L21, L22, L23]
 // L9: free {index, cast, index}
-// L19: cycle Storage(r89) in_order {index, +, index_set}
+// L19: cycle Storage(r119) in_order {index, +, index_set}
 // L20: free {index}
-// L21: cycle Storage(r90) in_order {index, +, index_set}
+// L21: cycle Storage(r120) in_order {index, +, index_set}
 // L22: free {const}
-// L23: cycle Storage(r91) in_order {index, +, index_set}
+// L23: cycle Storage(r121) in_order {index, +, index_set}
 // control upfront
-// cost W=10 O=18305 split when n > 58576, n = max(r39 - 0 (r88), 0)
-for range(0 (r114)..r41) -> L12 else L13 stages [L12, L26]
+// cost W=10 O=18305 split when n > 58576, n = max(r69 - 0 (r118), 0)
+for range(0 (r144)..r71) -> L12 else L13 stages [L12, L26]
 // L12: free {index, const, >}
-// L26: cycle Storage(r115) disjoint {index_set}
-// L26: cycle Storage(r116) disjoint {index_set}
+// L26: cycle Storage(r145) disjoint {index_set}
+// L26: cycle Storage(r146) disjoint {index_set}
 // control upfront
-// cost W=4 O=18281 split when n > 146248, n = max(r41 - 0 (r114), 0)
-for range(0 (r133)..r39) -> L17 else L18 stages [L17, L24]
+// cost W=4 O=18281 split when n > 146248, n = max(r71 - 0 (r144), 0)
+for range(0 (r163)..r69) -> L17 else L18 stages [L17, L24]
 // L17: free {index, cast, index, index, -, index, index, -, *, *}
-// L24: cycle Carried(r132) any_order law(Op(Add) exact commutative) {+, +}
+// L24: cycle Carried(r162) any_order law(Op(Add) exact commutative) {+, +}
 // control upfront
-// cost W=20 O=18281 split when n > 29250, n = max(r39 - 0 (r133), 0)
+// cost W=20 O=18281 split when n > 29250, n = max(r69 - 0 (r163), 0)
 for range(0 (r11)..r3) -> L1 else L2 stages [L1, L8]
 // L1: free {const_str, index, call to_string, assign, ref, const_str, index, call to_string, assign, ref, const_str}
 // L8: cycle Storage(r12) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}

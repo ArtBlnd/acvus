@@ -125,6 +125,7 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
         // No uses
         InstKind::Const { .. }
         | InstKind::ConstStr { .. }
+        | InstKind::ArrayBegin { .. }
         | InstKind::Diverge
         | InstKind::Fetch { .. }
         | InstKind::BlockLabel { .. }
@@ -214,8 +215,10 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
 
         InstKind::Merge { orders, .. } => remap_vec(orders, remap),
 
-        InstKind::MakeArray { elements, .. } | InstKind::MakeTuple { elements, .. } => {
-            remap_vec(elements, remap);
+        InstKind::MakeTuple { elements, .. } => remap_vec(elements, remap),
+        InstKind::ArrayPush { array, value, .. } => {
+            remap_val(array, remap);
+            remap_val(value, remap);
         }
         InstKind::StringConcat { parts, .. } => remap_vec(parts, remap),
         InstKind::StringAppend { target, part } => {

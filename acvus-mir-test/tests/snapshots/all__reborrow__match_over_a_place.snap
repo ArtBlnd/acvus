@@ -3,84 +3,90 @@ source: acvus-mir-test/tests/reborrow.rs
 expression: listing
 ---
 === main ===
-     3 |   r0 = list [1 (r1), 2 (r2), 3 (r3)]
-     4 |   assign prog = r0
-     5 |   r4 = ref &prog
-     6 |   r5 = call #0(r4)
-     7 |   r6 = r5 / r5
-     9 |   r7 = r5 - r5
-    10 |   r8 = as_slice &r4
-    11 |   jump L0(0 (r9), r7)
-    12 | L0(r10: i64, r11: u64):
-    13 |   r12 = r11 < r5
-    14 |   jump_if r12 then L1 else L2
-    15 | L1:
-    16 |   r13 = &r8[r11] proven
-    17 |   r14 = take (*r13)
-    18 |   r15 = r11 + r6
-    19 |   switch r14 { 1 -> L4, 2 -> L5, _ -> L3(r10) }
-    20 | L4:
-    22 |   r16 = r10 + 1 (r17)
-    23 |   jump L3(r16)
-    24 | L5:
-    26 |   r18 = r10 - 1 (r19)
-    27 |   jump L3(r18)
-    28 | L3(r20: i64):
-    29 |   jump L0(r20, r15)
-    30 | L2:
-    31 |   drop r21
-    32 |   return r10
+     0 |   r0 = array_begin capacity=3
+     2 |   r1 = array_push r0 1 (r2)
+     4 |   r3 = array_push r1 2 (r4)
+     6 |   r5 = array_push r3 3 (r6)
+     7 |   assign prog = r5
+     8 |   r7 = ref &prog
+     9 |   r8 = call #0(r7)
+    10 |   r9 = r8 / r8
+    12 |   r10 = r8 - r8
+    13 |   r11 = as_slice &r7
+    14 |   jump L0(0 (r12), r10)
+    15 | L0(r13: i64, r14: u64):
+    16 |   r15 = r14 < r8
+    17 |   jump_if r15 then L1 else L2
+    18 | L1:
+    19 |   r16 = &r11[r14] proven
+    20 |   r17 = take (*r16)
+    21 |   r18 = r14 + r9
+    22 |   switch r17 { 1 -> L4, 2 -> L5, _ -> L3(r13) }
+    23 | L4:
+    25 |   r19 = r13 + 1 (r20)
+    26 |   jump L3(r19)
+    27 | L5:
+    29 |   r21 = r13 - 1 (r22)
+    30 |   jump L3(r21)
+    31 | L3(r23: i64):
+    32 |   jump L0(r23, r18)
+    33 | L2:
+    34 |   drop r24
+    35 |   return r13
 
-    ; r0 (v4) : Array<i64, 3>
-    ; r1 (v1) : i64
+    ; r0 (v1) : Array<i64, 0>
+    ; r1 (v3) : Array<i64, 1>
     ; r2 (v2) : i64
-    ; r3 (v3) : i64
-    ; r4 (prog.) : &Array<i64, 3>
-    ; r5 (len(...)) : u64
-    ; r6 (v11) : u64
-    ; r7 (v17) : u64
-    ; r8 (v23) : &[i64]
-    ; r9 (v13) : i64
-    ; r10 (v49) : i64
-    ; r11 (v47) : u64
-    ; r12 (v21) : Bool
-    ; r13 (v25) : &i64
-    ; r14 (v27) : i64
-    ; r15 (v41) : u64
-    ; r16 (v30) : i64
-    ; r17 (v29) : i64
-    ; r18 (v34) : i64
+    ; r3 (v5) : Array<i64, 2>
+    ; r4 (v4) : i64
+    ; r5 (v7) : Array<i64, 3>
+    ; r6 (v6) : i64
+    ; r7 (prog.) : &Array<i64, 3>
+    ; r8 (len(...)) : u64
+    ; r9 (v14) : u64
+    ; r10 (v20) : u64
+    ; r11 (v26) : &[i64]
+    ; r12 (v16) : i64
+    ; r13 (v52) : i64
+    ; r14 (v50) : u64
+    ; r15 (v24) : Bool
+    ; r16 (v28) : &i64
+    ; r17 (v30) : i64
+    ; r18 (v44) : u64
     ; r19 (v33) : i64
-    ; r20 (v54) : i64
-    ; r21 (prog) : Array<i64, 3>
-    ; r22 (v44) : u64
-    ; r23 (prog.) : &Array<i64, 3>
-    ; r24 (v50) : u64
-    ; r25 (acc) : i64
-    ; r26 (one) : u64
-    ; r27 (v43) : u64
-    ; r28 (v46) : u64
-    ; r29 (pc) : u64
+    ; r20 (v32) : i64
+    ; r21 (v37) : i64
+    ; r22 (v36) : i64
+    ; r23 (v57) : i64
+    ; r24 (prog) : Array<i64, 3>
+    ; r25 (prog.) : &Array<i64, 3>
+    ; r26 (plen) : u64
+    ; r27 (acc) : i64
+    ; r28 (v56) : u64
+    ; r29 (acc) : i64
     ; r30 (plen) : u64
-    ; r31 (v31) : Unit
-    ; r32 (v53) : u64
-    ; r33 (one) : u64
+    ; r31 (pc) : u64
+    ; r32 (v48) : i64
+    ; r33 (v54) : u64
     ; r34 (plen) : u64
-    ; r35 (v37) : Unit
-    ; r36 (pc) : u64
+    ; r35 (one) : u64
+    ; r36 (v49) : u64
     ; r37 (plen) : u64
-    ; r38 (v52) : u64
+    ; r38 (v55) : u64
     ; r39 (acc) : i64
-    ; r40 (acc) : i64
+    ; r40 (v41) : Unit
     ; r41 (pc) : u64
-    ; r42 (acc) : i64
-    ; r43 (plen) : u64
-    ; r44 (v45) : i64
-    ; r45 (v51) : u64
-    ; r46 (acc) : i64
-    ; r47 (plen) : u64
-    ; r48 (plen) : u64
-    ; r49 (v35) : Unit
-    ; r50 (v48) : u64
-    ; r51 (v38) : Unit
-    ; r52 (pc) : u64
+    ; r42 (v47) : u64
+    ; r43 (v34) : Unit
+    ; r44 (v53) : u64
+    ; r45 (v40) : Unit
+    ; r46 (one) : u64
+    ; r47 (pc) : u64
+    ; r48 (pc) : u64
+    ; r49 (v46) : u64
+    ; r50 (acc) : i64
+    ; r51 (acc) : i64
+    ; r52 (v51) : u64
+    ; r53 (plen) : u64
+    ; r54 (v38) : Unit
+    ; r55 (plen) : u64

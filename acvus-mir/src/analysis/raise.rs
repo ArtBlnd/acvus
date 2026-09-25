@@ -73,6 +73,9 @@ impl<'a> Removal<'a> {
             | InstKind::Fetch { .. }
             | InstKind::Commit { .. }
             | InstKind::Eval { .. } => true,
+            // A push writes into the capacity its `ArrayBegin` allocated, or
+            // grows it, and neither traps.
+            InstKind::ArrayBegin { .. } | InstKind::ArrayPush { .. } => false,
             _ => false,
         }
     }

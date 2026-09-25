@@ -153,7 +153,7 @@ async fn run(interner: &Interner, body: MirBody, ret: Ty) -> Value {
 
 // -- The containers -------------------------------------------------
 
-/// `Array<i64, 2>` built in the body itself: `MakeArray` leaves the
+/// `Array<i64, 2>` built in the body itself: `ArrayPush` leaves the
 /// runtime's own `Arr<Value, ()>` in a register, which is the storage the
 /// `Ref` names.
 fn array_body(interner: &Interner, mode: IndexMode, index: u64, dst_ty: Ty) -> MirBody {
@@ -164,21 +164,33 @@ fn array_body(interner: &Interner, mode: IndexMode, index: u64, dst_ty: Ty) -> M
         .typed(v(1), elem.clone())
         .typed(v(2), array.clone())
         .typed(v(3), reference(Mutability::Shared, array))
-        .typed(v(4), slice(Mutability::Shared, elem))
+        .typed(v(4), slice(Mutability::Shared, elem.clone()))
         .typed(v(5), Ty::U64)
         .typed(v(6), dst_ty)
         .typed(v(7), Ty::I64)
+        .typed(v(8), Ty::Array(Box::new(elem.clone()), LenTerm::Known(0)))
+        .typed(v(9), Ty::Array(Box::new(elem), LenTerm::Known(1)))
+        .inst(InstKind::ArrayBegin {
+            dst: v(8),
+            capacity: 2,
+        })
         .inst(InstKind::Const {
             dst: v(0),
             value: acvus_ast::Literal::Int(10),
+        })
+        .inst(InstKind::ArrayPush {
+            dst: v(9),
+            array: v(8),
+            value: v(0),
         })
         .inst(InstKind::Const {
             dst: v(1),
             value: acvus_ast::Literal::Int(20),
         })
-        .inst(InstKind::MakeArray {
+        .inst(InstKind::ArrayPush {
             dst: v(2),
-            elements: vec![v(0), v(1)],
+            array: v(9),
+            value: v(1),
         })
         .inst(InstKind::Ref {
             dst: v(3),

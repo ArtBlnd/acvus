@@ -1,5 +1,5 @@
-for range(0 (r9)..r6) -> L1 else L2 stages [L1, L3]
+for range(0 (r12)..r9) -> L1 else L2 stages [L1, L3]
 // L1: free {index, const, *, const, +}
-// L3: cycle Storage(r10) disjoint {index_set}
+// L3: cycle Storage(r13) disjoint {index_set}
 // control upfront
-// cost W=8 O=18281 split when n > 73124, n = max(r6 - 0 (r9), 0)
+// cost W=8 O=18281 split when n > 73124, n = max(r9 - 0 (r12), 0)

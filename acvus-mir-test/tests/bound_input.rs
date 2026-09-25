@@ -471,7 +471,7 @@ fn a_bound_array_is_traversed() {
         let interner = Interner::new();
         let names = BoundValue::Array(vec![text("a"), text("b")]);
         let ir = compiles(&interner, source, &[("names", names)], opt);
-        assert!(ir.contains("list ["), "no array constant at {opt:?}:\n{ir}");
+        assert!(ir.contains("= array_begin capacity=2"), "no array constant at {opt:?}:\n{ir}");
     }
 }
 

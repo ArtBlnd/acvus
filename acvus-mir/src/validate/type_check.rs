@@ -1101,44 +1101,45 @@ impl CheckCtx {
                     });
                 }
             }
-            InstKind::MakeArray { dst, elements } => {
+            InstKind::ArrayBegin { dst, .. } => {
                 let dst_ty = ty!(*dst);
-                if let Ty::Array(inner, len) = dst_ty {
-                    if len.get() != elements.len() {
-                        errors.push(ValidationError {
-                            scope: self.scope_name.clone(),
-                            inst_index: pc,
-                            span,
-                            kind: ValidationErrorKind::InvalidConstructor {
-                                inst_name: "MakeArray".to_string(),
-                                expected_constructor: format!("Array of length {}", elements.len()),
-                                actual: dst_ty.clone(),
-                            },
-                        });
-                    }
-                    for (i, elem) in elements.iter().enumerate() {
-                        let elem_ty = ty!(*elem);
-                        self.assert_match(
-                            pc,
-                            span,
-                            "MakeArray",
-                            &format!("element[{i}]"),
-                            inner,
-                            elem_ty,
-                            errors,
-                        );
-                    }
-                } else if !dst_ty.is_error() {
-                    errors.push(ValidationError {
+                match dst_ty {
+                    Ty::Array(_, len) if len.get() == 0 => {}
+                    _ if dst_ty.is_error() => {}
+                    _ => errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "MakeArray".to_string(),
-                            expected_constructor: "Array".to_string(),
+                            inst_name: "ArrayBegin".to_string(),
+                            expected_constructor: "Array of length 0".to_string(),
                             actual: dst_ty.clone(),
                         },
-                    });
+                    }),
+                }
+            }
+            InstKind::ArrayPush { dst, array, value } => {
+                let dst_ty = ty!(*dst);
+                let array_ty = ty!(*array);
+                let value_ty = ty!(*value);
+                match (dst_ty, array_ty) {
+                    (Ty::Array(inner, len), Ty::Array(held, held_len))
+                        if len.get() == held_len.get() + 1 =>
+                    {
+                        self.assert_match(pc, span, "ArrayPush", "array", inner, held, errors);
+                        self.assert_match(pc, span, "ArrayPush", "value", inner, value_ty, errors);
+                    }
+                    _ if dst_ty.is_error() || array_ty.is_error() => {}
+                    _ => errors.push(ValidationError {
+                        scope: self.scope_name.clone(),
+                        inst_index: pc,
+                        span,
+                        kind: ValidationErrorKind::InvalidConstructor {
+                            inst_name: "ArrayPush".to_string(),
+                            expected_constructor: format!("Array one longer than {array_ty:?}"),
+                            actual: dst_ty.clone(),
+                        },
+                    }),
                 }
             }
 

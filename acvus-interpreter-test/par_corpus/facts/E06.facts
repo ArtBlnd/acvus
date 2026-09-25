@@ -1,5 +1,5 @@
-for slice(r12) -> L1 else L2 stages [L1, L3]
+for slice(r15) -> L1 else L2 stages [L1, L3]
 // L1: free {as_slice, const_str, call replace_all, assign, ref, as_slice, spawn print, eval, drop}
-// L3: cycle Order(r15) any_order law(Order exact commutative) {merge}
+// L3: cycle Order(r18) any_order law(Order exact commutative) {merge}
 // control upfront
-// cost W=18288 O=18281 split when n > 32, n = len(r12)
+// cost W=18288 O=18281 split when n > 32, n = len(r15)

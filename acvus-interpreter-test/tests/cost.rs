@@ -219,7 +219,7 @@ fn a_loop_whose_only_stage_is_disjoint_is_given_a_cost() {
     assert_eq!(
         facts,
         [
-            "L1: cycle Storage(r9) disjoint {index_set}",
+            "L1: cycle Storage(r12) disjoint {index_set}",
             "control upfront"
         ],
         "{}",
@@ -277,7 +277,7 @@ fn a_float_sum_keeps_its_stages_and_weighs_only_its_free_stage() {
     assert!(
         summed
             .with_costs
-            .contains("cycle Carried(r8) in_order law(Op(Add) inexact commutative) {+}"),
+            .contains("cycle Carried(r11) in_order law(Op(Add) inexact commutative) {+}"),
         "{}",
         summed.with_costs
     );

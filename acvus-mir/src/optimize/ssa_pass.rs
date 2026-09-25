@@ -89,6 +89,7 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
     match kind {
         InstKind::Const { .. }
         | InstKind::ConstStr { .. }
+        | InstKind::ArrayBegin { .. }
         | InstKind::Fetch { .. }
         | InstKind::Nop
         | InstKind::Diverge
@@ -156,7 +157,10 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             s(src);
         }
         InstKind::Merge { orders, .. } => orders.iter_mut().for_each(|v| s(v)),
-        InstKind::MakeArray { elements, .. } => elements.iter_mut().for_each(|v| s(v)),
+        InstKind::ArrayPush { array, value, .. } => {
+            s(array);
+            s(value);
+        }
         InstKind::StringConcat { parts, .. } => parts.iter_mut().for_each(|v| s(v)),
         InstKind::StringAppend { target, part } => {
             s(target);

@@ -1423,15 +1423,19 @@ impl RegionAnalysis<'_> {
                 }];
                 self.build_from(state, *dst, &parts, changed);
             }
-            InstKind::MakeArray { dst, elements } => {
-                let parts: Vec<Placed> = elements
-                    .iter()
-                    .map(|value| Placed {
-                        seg: PathSeg::Index(0),
-                        value: *value,
-                    })
-                    .collect();
-                self.build_from(state, *dst, &parts, changed);
+            InstKind::ArrayBegin { dst, .. } => self.build_from(state, *dst, &[], changed),
+            InstKind::ArrayPush { dst, array, value } => {
+                let array_held = state.get(*array).through(*array);
+                let value_held = state.get(*value).through(*value);
+                let value_width = self.width(*value);
+                let mut positions = reshape(&array_held.positions, self.width(*dst));
+                let at = self.val_types.get(dst).map_or(Vec::new(), |ty| {
+                    offsets(ty, &[PathSeg::Index(0)], value_width)
+                });
+                join_part(&mut positions, &at, &padded(value_held.positions.clone(), value_width));
+                let mut regions = Regions::with_via(positions, &array_held.via);
+                regions.join_mut(&Regions::with_via(Vec::new(), &value_held.via));
+                self.put(state, *dst, regions, changed);
             }
             InstKind::MakeTuple { dst, elements } => {
                 let parts: Vec<Placed> = elements

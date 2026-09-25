@@ -630,7 +630,8 @@ fn hoistable(loans: &Loans<'_>, kind: &InstKind) -> Hoistable {
                 false => Hoistable::ControlEquivalent,
             }
         }
-        InstKind::MakeArray { .. }
+        InstKind::ArrayBegin { .. }
+        | InstKind::ArrayPush { .. }
         | InstKind::MakeObject { .. }
         | InstKind::MakeTuple { .. }
         | InstKind::MakeVariant { .. }
@@ -1613,9 +1614,9 @@ mod tests {
             Hoistable::ControlEquivalent
         ));
         assert!(matches!(
-            classified(vec![InstKind::MakeArray {
+            classified(vec![InstKind::ArrayBegin {
                 dst: v(1),
-                elements: vec![],
+                capacity: 0,
             }]),
             Hoistable::No
         ));

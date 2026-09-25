@@ -298,7 +298,7 @@ fn mir_prints_the_stage_facts_and_the_cost_under_each_for() {
     assert_eq!(
         facts,
         [
-            "L1: cycle Carried(r5) any_order law(Op(Add) exact commutative) {+}",
+            "L1: cycle Carried(r8) any_order law(Op(Add) exact commutative) {+}",
             "control upfront",
             "cost in place: no stage runs apart",
         ],

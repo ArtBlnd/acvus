@@ -1,10 +1,10 @@
-for range(0 (r13)..r9) -> L1 else L2 stages [L1, L9]
+for range(0 (r19)..r15) -> L1 else L2 stages [L1, L9]
 // L1: free {const, +}
-// L9: cycle Carried(r12) any_order law(Op(Add) exact commutative) {const, +, jump, branch, jump, jump}
+// L9: cycle Carried(r18) any_order law(Op(Add) exact commutative) {const, +, jump, branch, jump, jump}
 // control upfront
-// cost W=1 O=18281 split when n > 584992, n = max(r9 - 0 (r13), 0)
-for range(r15..r9) -> L4 else L5 stages [L4, L8]
+// cost W=1 O=18281 split when n > 584992, n = max(r15 - 0 (r19), 0)
+for range(r21..r15) -> L4 else L5 stages [L4, L8]
 // L4: free {index, index, +, const, ==}
-// L8: cycle Carried(r17) any_order law(Op(Add) exact commutative) {const, +, branch, jump}
+// L8: cycle Carried(r23) any_order law(Op(Add) exact commutative) {const, +, branch, jump}
 // control upfront
-// cost W=8 O=18281 split when n > 73124, n = max(r9 - r15, 0)
+// cost W=8 O=18281 split when n > 73124, n = max(r15 - r21, 0)

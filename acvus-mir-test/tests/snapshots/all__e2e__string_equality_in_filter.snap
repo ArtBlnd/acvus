@@ -13,53 +13,59 @@ expression: ir
      2 |   r2 = undef
      3 |   r3 = fetch @names
      5 |   assign <template> = T0
-     6 |   r4 = const_str T0
-     7 |   r5 = call #0(r4)
-     8 |   r6 = const_str T0
-     9 |   r7 = call #0(r6)
+     6 |   r4 = array_begin capacity=3
+     7 |   r5 = const_str T0
+     8 |   r6 = call #0(r5)
+     9 |   r7 = array_push r4 r6
     10 |   r8 = const_str T0
     11 |   r9 = call #0(r8)
-    12 |   r10 = list [r5, r7, r9]
-    13 |   r11 = call #1(r3)
-    14 |   r12 = closure L0 []
-    15 |   r13 = call #2(r11, r12)
-    16 |   r14 = const_str T1
-    17 |   r15 = call #0(r14)
-    18 |   r16 = call #3(r13, r15)
-    19 |   r17 = ref &mut <template>
-    20 |   append r17 r16
-    21 |   r18 = take <template>
-    22 |   commit @names = r10
-    23 |   return r18
+    12 |   r10 = array_push r7 r9
+    13 |   r11 = const_str T0
+    14 |   r12 = call #0(r11)
+    15 |   r13 = array_push r10 r12
+    16 |   r14 = call #1(r3)
+    17 |   r15 = closure L0 []
+    18 |   r16 = call #2(r14, r15)
+    19 |   r17 = const_str T1
+    20 |   r18 = call #0(r17)
+    21 |   r19 = call #3(r16, r18)
+    22 |   r20 = ref &mut <template>
+    23 |   append r20 r19
+    24 |   r21 = take <template>
+    25 |   commit @names = r13
+    26 |   return r21
 
-    ; r0 (v26) : Array<String, 3>
-    ; r1 (v27) : Array<String, 3>
-    ; r2 (v28) : Filter<Items<String>, String, Pure>
+    ; r0 (v29) : Array<String, 3>
+    ; r1 (v30) : Array<String, 3>
+    ; r2 (v31) : Filter<Items<String>, String, Pure>
     ; r3 (@names) : Array<String, 3>
-    ; r4 (v7) : &str
-    ; r5 (to_string(...)) : String
-    ; r6 (v9) : &str
-    ; r7 (to_string(...)) : String
+    ; r4 (v7) : Array<String, 0>
+    ; r5 (v8) : &str
+    ; r6 (to_string(...)) : String
+    ; r7 (v10) : Array<String, 1>
     ; r8 (v11) : &str
     ; r9 (to_string(...)) : String
-    ; r10 (v13) : Array<String, 3>
-    ; r11 (into_iter(...)) : Items<String>
-    ; r12 (v16) : Fn(&String) -> Bool
-    ; r13 (filter(...)) : Filter<Items<String>, String, Pure>
-    ; r14 (v20) : &str
-    ; r15 (to_string(...)) : String
-    ; r16 (join(...)) : String
-    ; r17 (<template>.) : &mut String
-    ; r18 (v24) : String
-    ; r19 (v3) : String
-    ; r20 (names) : Array<String, 3>
-    ; r21 (v25) : Array<String, 3>
-    ; r22 (names) : Array<String, 3>
+    ; r10 (v13) : Array<String, 2>
+    ; r11 (v14) : &str
+    ; r12 (to_string(...)) : String
+    ; r13 (v16) : Array<String, 3>
+    ; r14 (into_iter(...)) : Items<String>
+    ; r15 (v19) : Fn(&String) -> Bool
+    ; r16 (filter(...)) : Filter<Items<String>, String, Pure>
+    ; r17 (v23) : &str
+    ; r18 (to_string(...)) : String
+    ; r19 (join(...)) : String
+    ; r20 (<template>.) : &mut String
+    ; r21 (v27) : String
+    ; r22 (v3) : String
     ; r23 (x) : Filter<Items<String>, String, Pure>
-    ; r24 (@names) : Array<String, 3>
-    ; r25 (<template>) : String
-    ; r26 (@names) : Array<String, 3>
-    ; r27 (x) : Filter<Items<String>, String, Pure>
+    ; r24 (names) : Array<String, 3>
+    ; r25 (v28) : Array<String, 3>
+    ; r26 (names) : Array<String, 3>
+    ; r27 (@names) : Array<String, 3>
+    ; r28 (x) : Filter<Items<String>, String, Pure>
+    ; r29 (@names) : Array<String, 3>
+    ; r30 (<template>) : String
 
 === closure L0 (ValueId(0)) ===
      0 |   r0 = undef

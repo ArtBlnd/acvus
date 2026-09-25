@@ -26,7 +26,8 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::FieldGet { dst, .. }
         | InstKind::FieldSet { dst, .. }
         | InstKind::LoadFunction { dst, .. }
-        | InstKind::MakeArray { dst, .. }
+        | InstKind::ArrayBegin { dst, .. }
+        | InstKind::ArrayPush { dst, .. }
         | InstKind::StringConcat { dst, .. }
         | InstKind::StringEq { dst, .. }
         | InstKind::StringClone { dst, .. }
@@ -164,7 +165,8 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         } => smallvec![*slice, *index, *value],
 
         // Composite constructors
-        InstKind::MakeArray { elements, .. } => elements.iter().copied().collect(),
+        InstKind::ArrayBegin { .. } => smallvec![],
+        InstKind::ArrayPush { array, value, .. } => smallvec![*array, *value],
         InstKind::StringConcat { parts, .. } => parts.iter().copied().collect(),
         InstKind::StringAppend { target, part } => smallvec![*target, *part],
         InstKind::StringEq { a, b, .. } => smallvec![*a, *b],

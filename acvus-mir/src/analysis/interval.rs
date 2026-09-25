@@ -712,7 +712,8 @@ impl<'a> Domain<'a> {
             | InstKind::CheckSteps { .. }
             | InstKind::Cast { .. }
             | InstKind::LoadFunction { .. }
-            | InstKind::MakeArray { .. }
+            | InstKind::ArrayBegin { .. }
+            | InstKind::ArrayPush { .. }
             | InstKind::MakeObject { .. }
             | InstKind::MakeTuple { .. }
             | InstKind::TupleIndex { .. }

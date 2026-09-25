@@ -1,5 +1,5 @@
-for range(0 (r21)..r17) -> L1 else L2 stages [L1, L3]
+for range(0 (r31)..r27) -> L1 else L2 stages [L1, L3]
 // L1: free {index, call as_iter, make_closure, call map, call collect, assign, ref, make_closure, call sort_by, ref, as_slice, const, index, drop}
-// L3: cycle Storage(r22) disjoint {index_set}
+// L3: cycle Storage(r32) disjoint {index_set}
 // control upfront
-// cost W=67 O=18281 split when n > 8732, n = max(r17 - 0 (r21), 0)
+// cost W=67 O=18281 split when n > 8732, n = max(r27 - 0 (r31), 0)

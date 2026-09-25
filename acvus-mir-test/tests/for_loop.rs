@@ -251,14 +251,16 @@ fn a_range_of_two_widths_is_refused() {
     assert!(found.contains("u64") && found.contains("u32"), "{found}");
 }
 
-/// How many `Drop`s of the array the entry's `for` traverses stand in it.
+/// How many `Drop`s of the array the entry's `for` traverses stand in it: the
+/// value its last `array_push` writes.
 fn array_drops(ir: &str) -> usize {
     let body = main_body(ir);
     let array = body
         .lines()
         .filter_map(|line| line.split('|').nth(1))
-        .find_map(|inst| inst.trim().split_once(" = list ["))
+        .filter_map(|inst| inst.trim().split_once(" = array_push "))
         .map(|(array, _)| array)
+        .last()
         .expect("the entry builds the array");
     count(body, &format!("drop {array}\n"))
 }

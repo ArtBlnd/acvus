@@ -34,18 +34,48 @@ impl Elements {
     }
 }
 
-pub struct MakeArray {
+pub struct ArrayBegin {
     pub dst: Marked,
-    pub elements: Elements,
+    pub capacity: usize,
     pub next: Box<dyn Op>,
 }
 
-impl Op for MakeArray {
+impl Op for ArrayBegin {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let value = Value::array_with(|| self.elements.take(m));
+        let value = Value::array(Vec::with_capacity(self.capacity));
         m.regs().define::<true>(self.dst, value);
+        self.next.run(m, r0)
+    }
+}
+
+pub struct ArrayPush {
+    pub dst: Marked,
+    pub array: Off,
+    pub value: Off,
+    /// The claims of `array` and of `value` where it owns a `Large`, as
+    /// `Elements::owns_large` (RFC-0048 rule 5).
+    pub owns_large: u64,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for ArrayPush {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let mut array = regs.read(self.array);
+        let value = regs.read(self.value);
+        regs.take_mask(self.owns_large);
+        // SAFETY: `validate::type_check` holds `array` to an array type, so
+        // its register holds an `Array`, whose claim this operation took
+        // above; `value` moves in as `Elements::take`'s operands do.
+        unsafe {
+            let value = Owned::from_value(acvus_extern::Holding::new(), value);
+            array.as_array_mut().0.push(value);
+        }
+        m.regs().define::<true>(self.dst, array);
         self.next.run(m, r0)
     }
 }

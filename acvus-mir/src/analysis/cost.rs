@@ -407,11 +407,12 @@ impl<'a> Costs<'a> {
             | InstKind::IndexSet { .. }
             | InstKind::Commit { .. }
             | InstKind::StringAppend { .. }
+            | InstKind::ArrayPush { .. }
             | InstKind::FieldSet { .. } => table.store,
             InstKind::StringConcat { .. }
             | InstKind::StringClone { .. }
             | InstKind::StructuralClone { .. }
-            | InstKind::MakeArray { .. }
+            | InstKind::ArrayBegin { .. }
             | InstKind::MakeObject { .. }
             | InstKind::MakeTuple { .. }
             | InstKind::MakeClosure { .. }

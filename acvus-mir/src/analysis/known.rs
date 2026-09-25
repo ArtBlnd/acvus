@@ -271,7 +271,15 @@ impl KnownValues {
                 Some(Known::Object(fields))
             }
             InstKind::MakeTuple { elements, .. } => Some(Known::Tuple(self.all(elements)?)),
-            InstKind::MakeArray { elements, .. } => Some(Known::Array(self.all(elements)?)),
+            InstKind::ArrayBegin { .. } => Some(Known::Array(Vec::new())),
+            InstKind::ArrayPush { array, value, .. } => match known(array)? {
+                Known::Array(parts) => {
+                    let mut parts = parts.clone();
+                    parts.push(known(value)?.clone());
+                    Some(Known::Array(parts))
+                }
+                _ => None,
+            },
 
             InstKind::Ref {
                 dst, target, path, ..

@@ -840,6 +840,9 @@ pub fn has_effect(kind: &InstKind) -> bool {
         InstKind::FunctionCall { order, .. } => order.is_some(),
         InstKind::Spawn { order, .. } | InstKind::Eval { order, .. } => order.is_some(),
         InstKind::Commit { .. } => true,
+        // An array literal's element carries its own `Order`; building the
+        // array around it has none.
+        InstKind::ArrayBegin { .. } | InstKind::ArrayPush { .. } => false,
         _ => false,
     }
 }

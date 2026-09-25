@@ -13,7 +13,7 @@ expression: ir
      2 |   r2 = undef
      3 |   r3 = fetch @names
      5 |   assign <template> = T0
-     6 |   r4 = list []
+     6 |   r4 = array_begin capacity=0
      7 |   r5 = call #0(r4)
      8 |   r6 = call #1(r3)
      9 |   r7 = closure L0 []

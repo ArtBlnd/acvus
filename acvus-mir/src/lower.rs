@@ -18,7 +18,7 @@ use crate::ir::{
 use crate::place::{Element, PlaceBase, Projected, Storage, projected, projected_store};
 use crate::solver::{CaptureRead, MatchMode};
 use crate::structural::StructuralSignature;
-use crate::ty::{CastTy, Effect, InputParam, Mutability, Param, Task, Ty, TypeArg};
+use crate::ty::{CastTy, Effect, InputParam, LenTerm, Mutability, Param, Task, Ty, TypeArg};
 use crate::typeck::{
     CallTarget, Captured, CapturedName, ParamOrigin, Passing, StructuralCall, TypeResolution,
 };
@@ -3074,14 +3074,34 @@ impl<'a> Lowerer<'a> {
                 tail,
                 span,
             } => {
-                let elements: Vec<ValueId> = head
-                    .iter()
-                    .chain(tail.iter())
-                    .map(|e| self.lower_expr(e))
-                    .collect();
-                let dst = self.alloc_typed(*id);
-                self.emit_inst(*span, InstKind::MakeArray { dst, elements });
-                dst
+                // The last value takes the literal's own type, so
+                // `validate::type_check` compares the checker's length with
+                // the pushes; a type that is no array is left to it too.
+                let ty = self.type_of_id(*id);
+                let count = head.len() + tail.len();
+                let at_len = |len: usize| match &ty {
+                    Ty::Array(element, _) if len < count => {
+                        Ty::Array(element.clone(), LenTerm::Known(len))
+                    }
+                    whole => whole.clone(),
+                };
+                let mut array = self.alloc_val();
+                self.set_val_type(array, at_len(0));
+                self.emit_inst(
+                    *span,
+                    InstKind::ArrayBegin {
+                        dst: array,
+                        capacity: count,
+                    },
+                );
+                for (at, element) in head.iter().chain(tail.iter()).enumerate() {
+                    let value = self.lower_expr(element);
+                    let dst = self.alloc_val();
+                    self.set_val_type(dst, at_len(at + 1));
+                    self.emit_inst(*span, InstKind::ArrayPush { dst, array, value });
+                    array = dst;
+                }
+                array
             }
 
             Expr::Object { id, fields, span } => {

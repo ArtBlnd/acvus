@@ -1,5 +1,5 @@
-for slice(r9) -> L1 else L2 stages [L1, L3]
+for slice(r12) -> L1 else L2 stages [L1, L3]
 // L1: free {take}
-// L3: cycle Carried(r10) in_order {call max}
+// L3: cycle Carried(r13) in_order {call max}
 // control upfront
-// cost W=3 O=18281 split when n > 194998, n = len(r9)
+// cost W=3 O=18281 split when n > 194998, n = len(r12)

@@ -1,5 +1,5 @@
-for slice(r13) -> L1 else L2 stages [L1, L3]
-// L1: cycle Storage(r14) in_order {ref, concat, assign, ref, call to_string}
-// L3: cycle Storage(r15) in_order law(Fold(r15, #2) exact) {ref, call push}
+for slice(r16) -> L1 else L2 stages [L1, L3]
+// L1: cycle Storage(r17) in_order {ref, concat, assign, ref, call to_string}
+// L3: cycle Storage(r18) in_order law(Fold(r18, #2) exact) {ref, call push}
 // control upfront
 // cost in place: no stage runs apart

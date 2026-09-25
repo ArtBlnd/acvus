@@ -1,7 +1,7 @@
-for slice(r10) -> L1 else L2 stages [L1, L7, L8, L9]
+for slice(r15) -> L1 else L2 stages [L1, L7, L8, L9]
 // L1: free {take}
-// L7: cycle Carried(r11) any_order law(Op(Min) exact commutative) {<, take, branch, jump}
+// L7: cycle Carried(r16) any_order law(Op(Min) exact commutative) {<, take, branch, jump}
 // L8: free {take}
-// L9: cycle Carried(r12) any_order law(Op(Max) exact commutative) {>, take, branch, jump}
+// L9: cycle Carried(r17) any_order law(Op(Max) exact commutative) {>, take, branch, jump}
 // control upfront
-// cost W=6 O=18293 split when n > 97563, n = len(r10)
+// cost W=6 O=18293 split when n > 97563, n = len(r15)

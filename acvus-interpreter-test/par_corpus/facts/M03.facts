@@ -1,5 +1,5 @@
-for slice(r8) -> L1 else L2 stages [L1, L3]
-// L1: free {take, take, make_array, call vec}
-// L3: cycle Storage(r9) in_order law(Fold(r9, #1) exact) {ref, call extend}
+for slice(r11) -> L1 else L2 stages [L1, L3]
+// L1: free {array_begin, take, array_push, take, array_push, call vec}
+// L3: cycle Storage(r12) in_order law(Fold(r12, #1) exact) {ref, call extend}
 // control upfront
-// cost W=28 O=18281 split when n > 20893, n = len(r8)
+// cost W=34 O=18281 split when n > 17206, n = len(r11)

@@ -1,10 +1,10 @@
-for range(0 (r28)..2 (r29)) -> L1 else L2 stages [L1, L7]
+for range(0 (r45)..2 (r46)) -> L1 else L2 stages [L1, L7]
 // L1: free {const, const}
-// L7: cycle Storage(r30) disjoint {ref, as_slice, index, as_slice, index_set}
+// L7: cycle Storage(r47) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
-// cost W=76 O=18281 split when n > 7698, n = max(2 (r29) - 0 (r28), 0)
-for range(0 (r32)..3 (r33)) -> L4 else L5 stages [L4, L6]
+// cost W=76 O=18281 split when n > 7698, n = max(2 (r46) - 0 (r45), 0)
+for range(0 (r49)..3 (r50)) -> L4 else L5 stages [L4, L6]
 // L4: free {index, as_slice, index}
-// L6: cycle Storage(r30) disjoint {ref, as_slice, index, as_slice, index_set}
+// L6: cycle Storage(r47) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
-// cost W=24 O=18281 split when n > 24375, n = max(3 (r33) - 0 (r32), 0)
+// cost W=24 O=18281 split when n > 24375, n = max(3 (r50) - 0 (r49), 0)

@@ -806,9 +806,21 @@ pub enum InstKind {
     },
 
     // Composite constructors
-    MakeArray {
+    /// An array of no elements, `Array<T, 0>`, its storage allocated for
+    /// `capacity` elements. An array is built from it by `ArrayPush`, one
+    /// element at a time as each is computed, so an element's value is
+    /// live only from its definition to its push.
+    ArrayBegin {
         dst: ValueId,
-        elements: Vec<ValueId>,
+        capacity: usize,
+    },
+    /// `array`, an `Array<T, k>`, moved in with `value` moved onto its end:
+    /// `dst` is the `Array<T, k + 1>`. Every value either writes is a whole
+    /// array of the length its type states.
+    ArrayPush {
+        dst: ValueId,
+        array: ValueId,
+        value: ValueId,
     },
     MakeObject {
         dst: ValueId,

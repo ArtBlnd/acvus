@@ -110,8 +110,10 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         }
         InstKind::MakeClosure { captures, .. } => captures.iter().copied().for_each(out),
         InstKind::Return { value, .. } => out(*value),
-        InstKind::MakeArray { elements, .. } | InstKind::MakeTuple { elements, .. } => {
-            elements.iter().copied().for_each(out)
+        InstKind::MakeTuple { elements, .. } => elements.iter().copied().for_each(out),
+        InstKind::ArrayPush { array, value, .. } => {
+            out(*array);
+            out(*value);
         }
         InstKind::StringConcat { parts, .. } => parts.iter().copied().for_each(out),
         InstKind::StringAppend { target, part } => {
@@ -143,6 +145,7 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         // block argument stays inside the body.
         InstKind::Const { .. }
         | InstKind::ConstStr { .. }
+        | InstKind::ArrayBegin { .. }
         | InstKind::Undef { .. }
         | InstKind::Poison { .. }
         | InstKind::Nop

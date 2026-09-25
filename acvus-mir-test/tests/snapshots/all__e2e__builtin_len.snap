@@ -10,7 +10,7 @@ expression: ir
      1 |   r1 = fetch @items
      3 |   assign <template> = T0
      4 |   assign items = r1
-     5 |   r2 = list []
+     5 |   r2 = array_begin capacity=0
      6 |   r3 = call #0(r2)
      7 |   r4 = ref &items
      8 |   r5 = call #1(r4)

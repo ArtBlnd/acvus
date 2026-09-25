@@ -1,9 +1,9 @@
-for slice(r7) -> L1 else L10 stages [L1, L5, L6, L7, L8, L9]
+for slice(r11) -> L1 else L10 stages [L1, L5, L6, L7, L8, L9]
 // L1: free {take, const, <}
 // L5: cycle Control in_order {branch}
 // L6: free {take, assign, ref, call to_string, assign, ref, as_slice}
-// L7: cycle Order(r10) in_order {spawn print, eval}
+// L7: cycle Order(r14) in_order {spawn print, eval}
 // L8: free {const}
-// L9: cycle Carried(r11) any_order law(Op(Add) exact commutative) {+}
+// L9: cycle Carried(r15) any_order law(Op(Add) exact commutative) {+}
 // control chained through L5
-// cost W=23 O=18305 split when n > 25468, n ≤ len(r7)
+// cost W=23 O=18305 split when n > 25468, n ≤ len(r11)

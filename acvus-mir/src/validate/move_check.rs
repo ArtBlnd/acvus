@@ -962,9 +962,12 @@ fn process_inst(
             }
             state.set_value(*dst, Liveness::Alive);
         }
-        InstKind::MakeArray { dst, elements } => {
-            for e in elements {
-                try_consume_value(scope, inst_idx, plain, *e, val_types, debug, state, errors);
+        InstKind::ArrayBegin { dst, .. } => state.set_value(*dst, Liveness::Alive),
+        InstKind::ArrayPush { dst, array, value } => {
+            for moved in [array, value] {
+                try_consume_value(
+                    scope, inst_idx, plain, *moved, val_types, debug, state, errors,
+                );
             }
             state.set_value(*dst, Liveness::Alive);
         }

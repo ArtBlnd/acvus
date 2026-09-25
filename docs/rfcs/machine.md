@@ -70,8 +70,9 @@ Status: Accepted
      window slot, and one live past the call is copied there.
    - Everything else takes the lowest slot free over its live range.
 
-   A storage a place names directly keeps one slot for the whole body, because
-   a reference holds a pointer into its register.
+   A storage a place names is coloured by its live range read through the
+   loans, because a reference holds a pointer into its register (RFC-0050
+   rule 2).
 
 3. **A synchronous handler takes its arguments by value, up to three.** A
    `Value` is a scalar pair, so up to three arguments cross in registers and
@@ -246,6 +247,15 @@ holder that took ownership. Everything else copies.
    trap. What finishes is the one test RFC-0089 rule 5 reads, which knows
    no callee's body and so admits no call of a local function. An overflow
    is removed as RFC-0037 rule 3 says.
+9. **An array literal owns each element from its push.** `[e1, …, en]` is
+   `ArrayBegin` (an `Array<T, 0>` allocated for `n`) and, after each
+   element in source order, `ArrayPush`, which moves the array so far and
+   the element into an array one longer. Each value either writes is a whole
+   `Array<T, k>`, so no partly built array is typed as the whole. An element
+   is live from its definition to its push, so a literal holds a few
+   registers at any length. A `?` or `return` out of an element drops the
+   array so far, releasing each pushed element once; a trap releases
+   nothing (rule 8).
 
 **Why.** A droppable `Value` needs an address wherever it may drop, which puts
 unwind landing pads in handlers and keeps values in memory; it forces a second
@@ -276,6 +286,10 @@ loops found, to decide whether it can trap and whether it finishes.
   unwritable.
 - The drop function in the operation instead of the header — no instruction
   stands at the release a Rust holder makes under an erased type.
+- One `MakeArray` of every element — each element is live at it, so a
+  literal of 1000 needs 1000 registers.
+- A builder typed as the whole array — a partly built value its type
+  misdescribes, kept from readers by a check rather than by its type.
 - Lazy drop (a define releases a still-marked slot) and drop fusion
   (`drop_mask`) — not refused; later stages, each to be measured alone.
 - Removing a Pure call whose value nothing reads, whatever its callee does —

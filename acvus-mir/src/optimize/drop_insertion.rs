@@ -728,7 +728,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => *value == val,
         // Cast consumes src (transforms it).
         // Container constructors consume their elements.
-        InstKind::MakeArray { elements, .. } => elements.contains(&val),
+        InstKind::ArrayPush { array, value, .. } => *array == val || *value == val,
         InstKind::StringConcat { parts, .. } => parts.contains(&val),
         InstKind::StringAppend { part, .. } => *part == val,
         InstKind::StringEq { .. }
@@ -773,6 +773,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         // place goes through.
         InstKind::Const { .. }
         | InstKind::ConstStr { .. }
+        | InstKind::ArrayBegin { .. }
         | InstKind::Ref { .. }
         | InstKind::Fetch { .. }
         | InstKind::LoadFunction { .. }

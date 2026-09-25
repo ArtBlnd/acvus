@@ -1035,9 +1035,14 @@ fn remap_inst(
         },
 
         // Composite constructors
-        InstKind::MakeArray { dst, elements } => InstKind::MakeArray {
+        InstKind::ArrayBegin { dst, capacity } => InstKind::ArrayBegin {
             dst: r(*dst),
-            elements: rv(elements),
+            capacity: *capacity,
+        },
+        InstKind::ArrayPush { dst, array, value } => InstKind::ArrayPush {
+            dst: r(*dst),
+            array: r(*array),
+            value: r(*value),
         },
         InstKind::StringConcat { dst, parts } => InstKind::StringConcat {
             dst: r(*dst),

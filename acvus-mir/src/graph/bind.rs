@@ -639,11 +639,7 @@ fn constant(
         (Ty::Array(element, LenTerm::Known(len)), BoundValue::Array(held))
             if *len == held.len() =>
         {
-            let elements = held
-                .iter()
-                .map(|held| constant(interner, body, element, held, insts))
-                .collect::<Result<_, _>>()?;
-            ConstKind::Array(elements)
+            return bound_array(interner, body, element, held, insts);
         }
         (Ty::Tuple(types), BoundValue::Tuple(held)) if types.len() == held.len() => {
             let elements = types
@@ -714,7 +710,6 @@ fn constant(
             dst,
             parts: vec![part],
         },
-        ConstKind::Array(elements) => InstKind::MakeArray { dst, elements },
         ConstKind::Tuple(elements) => InstKind::MakeTuple { dst, elements },
         ConstKind::Object(fields) => InstKind::MakeObject { dst, fields },
         ConstKind::Variant { tag, payload } => InstKind::MakeVariant { dst, tag, payload },
@@ -723,12 +718,48 @@ fn constant(
     Ok(dst)
 }
 
+/// An array of the bound elements, each written and pushed before the next
+/// is written, as the lowering builds an array literal.
+fn bound_array(
+    interner: &Interner,
+    body: &mut MirBody,
+    element: &Ty,
+    held: &[BoundValue],
+    insts: &mut Vec<Inst>,
+) -> Result<ValueId, Mismatch> {
+    let mut array = body.val_factory.next();
+    body.val_types.insert(
+        array,
+        Ty::Array(Box::new(element.clone()), LenTerm::Known(0)),
+    );
+    insts.push(Inst {
+        span: Span::ZERO,
+        kind: InstKind::ArrayBegin {
+            dst: array,
+            capacity: held.len(),
+        },
+    });
+    for (at, held) in held.iter().enumerate() {
+        let value = constant(interner, body, element, held, insts)?;
+        let dst = body.val_factory.next();
+        body.val_types.insert(
+            dst,
+            Ty::Array(Box::new(element.clone()), LenTerm::Known(at + 1)),
+        );
+        insts.push(Inst {
+            span: Span::ZERO,
+            kind: InstKind::ArrayPush { dst, array, value },
+        });
+        array = dst;
+    }
+    Ok(array)
+}
+
 /// The instruction that writes one part, its own parts already written.
 enum ConstKind {
     Scalar(Literal),
     Str(String),
     Owned(ValueId),
-    Array(Vec<ValueId>),
     Tuple(Vec<ValueId>),
     Object(Vec<(Astr, ValueId)>),
     Variant { tag: Astr, payload: Option<ValueId> },

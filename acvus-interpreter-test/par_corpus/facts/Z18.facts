@@ -1,5 +1,5 @@
-for range(0 (r23)..r19) -> L1 else L2 stages [L1, L3]
+for range(0 (r29)..r25) -> L1 else L2 stages [L1, L3]
 // L1: free {index, as_slice, call regex, call unwrap, assign, ref, index, as_slice}
-// L3: cycle Storage(r24) in_order {ref, as_slice, call replace_all, assign}
+// L3: cycle Storage(r30) in_order {ref, as_slice, call replace_all, assign}
 // control upfront
-// cost W=20 O=18281 split when n > 29250, n = max(r19 - 0 (r23), 0)
+// cost W=20 O=18281 split when n > 29250, n = max(r25 - 0 (r29), 0)

@@ -83,9 +83,9 @@ fn a_receiver_temporary_is_built_before_an_argument_temporary() {
 #[test]
 fn a_method_receiver_that_must_be_lent_is_bound_to_a_temporary() {
     let ir = check("[1, 2].len()").expect("the array is bound for the call that borrows it");
-    assert!(ir.contains("assign v4 = r0"), "{ir}");
-    assert!(ir.contains("ref &v4"), "{ir}");
-    assert!(ir.contains("drop r5"), "{ir}");
+    assert!(ir.contains("assign v6 = r3"), "{ir}");
+    assert!(ir.contains("ref &v6"), "{ir}");
+    assert!(ir.contains("drop r7"), "{ir}");
 }
 
 #[test]

@@ -1,7 +1,7 @@
-for slice(r7) -> L1 else L2 stages [L1, L3, L4, L5]
+for slice(r9) -> L1 else L2 stages [L1, L3, L4, L5]
 // L1: free {take, assign, ref, call to_string, assign, ref, as_slice, spawn print, take, const, *}
-// L3: cycle Storage(r10) in_order law(Fold(r10, #3) exact) {ref, call push}
+// L3: cycle Storage(r12) in_order law(Fold(r12, #3) exact) {ref, call push}
 // L4: free {eval, drop}
-// L5: cycle Order(r9) any_order law(Order exact commutative) {merge}
+// L5: cycle Order(r11) any_order law(Order exact commutative) {merge}
 // control upfront
-// cost W=18298 O=18293 split when n > 32, n = len(r7)
+// cost W=18298 O=18293 split when n > 32, n = len(r9)
