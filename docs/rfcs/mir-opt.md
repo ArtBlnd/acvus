@@ -518,9 +518,7 @@ iteration hands the next.
 5. **Carried state.** Each header parameter is exactly one of `Iv`, affine
    by rule 4, or state, anything else. A state's law, when it has one, is
    what RFC-0089 rule 4 reads in `analysis::loop_deps`, the one reader of
-   laws; `analysis::carried` classifies and reads none. `&&` and `||`
-   reach MIR as a short-circuit `Diamond`, and reading a law through one
-   is open.
+   laws; `analysis::carried` classifies and reads none.
 
 6. **Order is per target, not per loop.** What a loop changes and how the
    change is ordered is stated per target by the stages of RFC-0089: pure
@@ -637,7 +635,9 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
      otherwise receives it from the stage its predecessor could leave from.
 
    A slot an iteration defines and drops within itself carries nothing to
-   the next one and is no token.
+   the next one and is no token; nor is a header parameter every back
+   edge sends one constant: past the first iteration it holds that
+   constant.
 
 3. **No cycle crosses a boundary.** A dependence cycle through a token lies
    inside one stage. A stage that holds one is that token's join; a stage
@@ -645,7 +645,7 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    shape from the IR alone.
 
 4. **What a stage is, is read.** `analysis::loop_deps` is the one place
-   that computes, per stage, its cycles and, per cycle, its token, order
+   that computes, per stage, its cycles and, per cycle, its tokens, order
    and law; the validator, the passes and the lowerer read it.
    - Order is `Disjoint` when every place the cycle writes in its storage,
      and every place the loop reads there, lies under one path component
@@ -672,7 +672,20 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
      through a nested loop: a token that enters one as a header
      parameter's entry value and that its exit hands back, whose cycle
      there has law `L` and nothing else there reads, is combined through
-     `L` with the nested loop's run from `L`'s identity.
+     `L` with the nested loop's run from `L`'s identity. A branch is also
+     a switch; an assignment is read as the chain of all the iteration's
+     assignments to the token.
+   - `||`, `&&` and `!=` over `Bool` are the language's laws, with
+     identities `false`, `true`, `false`; an arm that fixes the token to
+     one of them reads as that law.
+   - A cycle of several tokens whose steps read no other token has the
+     product of their laws, `AnyOrder` when each commutes.
+   - A switch on an `Option` token whose `None` arm sends `Some(y)` and
+     whose `Some(b)` arm sends `Some(b ⊕ y)` is `⊕` lifted over `Option`.
+   - An arm that sends a token a value reading none of it, the other arm
+     leaving it, is `last`; a compare and select by a strict order that
+     also carries other tokens is the left-biased maximum or minimum;
+     both are associative, not commutative, `InOrder`.
 
 5. **Exits and effects.** An exit other than the header's is the control
    token's cycle: the stage it leaves from passes the control token to the
