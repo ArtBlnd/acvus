@@ -165,8 +165,9 @@ Status: Accepted
 `X → T` is one function and sound; `T → X` has as many candidates as there
 are `X` and is sound only where something outside Rust chose. The one
 ground for `Rt::Value → T` is the crossing from the machine into a handler,
-written by the macro from the type the checker settled at the site. Every
-other reading back is cut.
+written by the macro from the type the checker settled at the site. The
+one reading back the checker did not decide is RFC-0097's gate, checked in
+full at its site's type. Every other reading back is cut.
 
 1. **Three rules, held by review, not at run time.**
    - `T → Value` and `Value → T` exist only through the glue's and the
