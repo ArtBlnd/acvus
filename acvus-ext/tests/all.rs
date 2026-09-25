@@ -3,6 +3,7 @@
 mod e2e;
 mod erased;
 mod hash_instances;
+mod labelled_flows;
 mod owned_in_scripts;
 mod owned_stage_holders;
 mod region_params;

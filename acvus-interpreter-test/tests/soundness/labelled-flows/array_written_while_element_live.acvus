@@ -1,0 +1,3 @@
+// refuse
+// The element holds the array's loan: an assignment while it is live is refused.
+let v = [5, 3]; let it = as_iter(&v); let a = next(&mut it); v = [1, 2]; *a.unwrap()

@@ -1,0 +1,3 @@
+// refuse
+// The iterator holds the vector's loan: handing the vector away by value while the iterator is used after is refused.
+let v = vec([5, 3]); let it = as_iter(&v); let n = into_iter(v) | count; let a = next(&mut it); *a.unwrap() + n

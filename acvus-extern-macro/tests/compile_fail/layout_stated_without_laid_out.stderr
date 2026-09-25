@@ -1,0 +1,19 @@
+error[E0277]: the trait bound `Mine: LaidOut` is not satisfied
+ --> tests/compile_fail/layout_stated_without_laid_out.rs:8:28
+  |
+8 | const MINE: Layout<Mine> = Layout::laid_out();
+  |                            ^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `LaidOut` is not implemented for `Mine`
+ --> tests/compile_fail/layout_stated_without_laid_out.rs:6:1
+  |
+6 | struct Mine;
+  | ^^^^^^^^^^^
+note: required by a bound in `acvus_extern::Layout::<T>::laid_out`
+ --> $WORKSPACE/acvus-extern/src/laid.rs
+  |
+  |     pub const fn laid_out() -> Self
+  |                  -------- required by a bound in this associated function
+  |     where
+  |         T: LaidOut,
+  |            ^^^^^^^ required by this bound in `Layout::<T>::laid_out`

@@ -639,7 +639,7 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime;
 
-impl<K, V, E, I, Rt> Keys<'_, K, V, E, I, Rt>
+impl<'r, K, V, E, I, Rt> Keys<'r, K, V, E, I, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -648,12 +648,19 @@ where
     Rt: Runtime,
 {
     /// The key at this step's position, and the step.
-    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a K> {
+    fn step(&mut self, ctx: &Ctx<'_, Rt>) -> Option<&'r K> {
         let index = self.0.at;
         self.0.at += 1;
-        self.0
+        let key: Option<*const K> = self
+            .0
             .map
-            .with(ctx.rt, |m| m.0.entries.get(index).map(|e| &e.binding.key))
+            .with(ctx.rt, |m| m.0.entries.get(index).map(|e| std::ptr::from_ref(&e.binding.key)));
+        // SAFETY: `map` is a shared loan on the map for `'r`, the one `keys`
+        // built this from, and `with` reads the map in its own storage,
+        // which stays live and unwritten while that loan is held. The key
+        // is a part of that storage, so it lives as long as the loan, not as
+        // long as this `&mut self`.
+        key.map(|key| unsafe { &*key })
     }
 }
 
@@ -682,7 +689,7 @@ where
     I: Var<kind::Identity>,
     Rt: Runtime;
 
-impl<K, V, E, I, Rt> Values<'_, K, V, E, I, Rt>
+impl<'r, K, V, E, I, Rt> Values<'r, K, V, E, I, Rt>
 where
     K: Var<kind::Type>,
     V: Var<kind::Type>,
@@ -691,12 +698,19 @@ where
     Rt: Runtime,
 {
     /// The value at this step's position, and the step.
-    fn step<'a>(&'a mut self, ctx: &Ctx<'_, Rt>) -> Option<&'a V> {
+    fn step(&mut self, ctx: &Ctx<'_, Rt>) -> Option<&'r V> {
         let index = self.0.at;
         self.0.at += 1;
-        self.0
+        let value: Option<*const V> = self
+            .0
             .map
-            .with(ctx.rt, |m| m.0.entries.get(index).map(|e| &e.binding.value))
+            .with(ctx.rt, |m| m.0.entries.get(index).map(|e| std::ptr::from_ref(&e.binding.value)));
+        // SAFETY: `map` is a shared loan on the map for `'r`, the one
+        // `values` built this from, and `with` reads the map in its own
+        // storage, which stays live and unwritten while that loan is held.
+        // The value is a part of that storage, so it lives as long as the
+        // loan, not as long as this `&mut self`.
+        value.map(|value| unsafe { &*value })
     }
 }
 
@@ -715,7 +729,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_keys<'a, K, V, E, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Keys<'_, K, V, E, I, Rt>,
+    it: &mut Keys<'a, K, V, E, I, Rt>,
 ) -> Option<&'a K>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,
@@ -742,7 +756,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_values<'a, K, V, E, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Values<'_, K, V, E, I, Rt>,
+    it: &mut Values<'a, K, V, E, I, Rt>,
 ) -> Option<&'a V>
 where
     K: Var<kind::Type>,
@@ -1123,7 +1137,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_refs_set<'a, K, E, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Refs<'_, HashSet<'_, K, E, Rt>, I, Rt>,
+    it: &mut Refs<'a, HashSet<'_, K, E, Rt>, I, Rt>,
 ) -> Option<&'a K>
 where
     K: Var<kind::Type> + TransparentOver<Rt>,

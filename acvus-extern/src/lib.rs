@@ -32,6 +32,7 @@ mod func;
 mod handler;
 mod identity;
 mod instance;
+pub mod laid;
 mod len;
 mod lend;
 mod loan;
@@ -106,6 +107,7 @@ pub use ty_arg::{
 pub use uniform::UniformPayload;
 pub use vec::vec_ty;
 pub use within::Within;
+pub use laid::{LaidOut, Layout};
 
 pub use acvus_extern_macro::{
     ExternType, Payload, TyArg, Within, extern_fn, extern_registry, extern_signature,
@@ -118,7 +120,7 @@ pub use acvus_mir::laws::{
 };
 pub use acvus_mir::ty::{
     Alignment, CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, Flow, FlowEnd, Flows, HeldTy, Home, IdentityTerm,
-    LenTerm, no_flow_var,
+    Labelled, Laid, LenTerm, Take, no_flow_var,
     Mutability, ObjectTy, ParamTerm, Poly, PolyBuilder, PolyTy, Repr, RequirementSig, Task, Ty,
     TyTerm, TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, lift_to_poly, try_freeze_poly,
 };

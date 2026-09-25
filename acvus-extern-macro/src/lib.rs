@@ -1035,7 +1035,7 @@ fn generate_extern_fn(
         sig: flow_sig,
         roles: flow_roles,
     } = flow_inputs(&func.sig, &roles)?;
-    let declared_flows = flows::derive(&flow_sig, &flow_roles, &vars, &ret)?;
+    let derived_flows = flows::derive(&flow_sig, &flow_roles, &vars, &ret)?;
     if returning.lends() {
         if !params.iter().any(|p| p.mode.lends_its_storage()) {
             return Err(syn::Error::new_spanned(
@@ -1216,6 +1216,8 @@ fn generate_extern_fn(
         let comp_ret = vars.to_compile_time_instance(&returning.filled(&ret), member);
         let comp_ret =
             returning.acvus_ty(&quote! { #comp_ret }, &quote! { ::acvus_extern::TypesOnly });
+        let declared_flows =
+            derived_flows.tokens(|named| vars.to_compile_time_instance(named, member));
         quote! {
             ::acvus_extern::PolyTy::Fn {
                 params: vec![#(#param_terms),*],
@@ -2466,6 +2468,14 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             quote! { #ident }
         }
     });
+    let laid_params = input.generics.params.iter().map(|param| match param {
+        GenericParam::Lifetime(_) => quote! { ::acvus_extern::laid::ParamKind::Region },
+        GenericParam::Type(tp) => match vars.lookup(&tp.ident) {
+            Some((VarKind::Ty, _)) => quote! { ::acvus_extern::laid::ParamKind::Type },
+            _ => quote! { ::acvus_extern::laid::ParamKind::Other },
+        },
+        GenericParam::Const(_) => quote! { ::acvus_extern::laid::ParamKind::Other },
+    });
     let type_arg_exprs = vars.type_arg_exprs();
     let effect_arg_exprs = vars.effect_arg_exprs();
     let identity_arg_exprs = vars.identity_arg_exprs();
@@ -2756,6 +2766,8 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         where
             #static_where
         {
+            const LAYOUT: ::acvus_extern::Layout<Self> = ::acvus_extern::Layout::laid_out();
+
             fn poly_ty(
                 __i: &::acvus_extern::Interner,
                 __vars: &::acvus_extern::PolyVars,
@@ -2843,6 +2855,16 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         #projected
 
         #declared
+
+        // SAFETY: `laid_params` names each generic parameter in declaration
+        // order; `poly_ty` above counts the lifetimes as `region_params` and
+        // lists the type variables as `type_args` in that order.
+        unsafe impl #arg_impl_generics ::acvus_extern::LaidOut for #static_self
+        where
+            #static_where
+        {
+            const PARAMS: &'static [::acvus_extern::laid::ParamKind] = &[#(#laid_params),*];
+        }
 
         impl<#static_params> ::acvus_extern::ExternTypeDecl for #static_self
         where
