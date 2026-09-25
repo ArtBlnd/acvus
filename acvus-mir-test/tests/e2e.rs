@@ -527,9 +527,9 @@ fn error_tuple_arity_mismatch() {
 // -- Error cases --------------------------------------------------
 
 #[test]
-fn error_emit_non_string() {
+fn error_emit_without_a_display_instance() {
     let i = Interner::new();
-    let result = compile_simple(&i, "{{ 42 }}");
+    let result = compile_simple(&i, "{{ [1, 2] }}");
     assert!(result.is_err());
     insta::assert_snapshot!(result.unwrap_err());
 }
@@ -2924,13 +2924,40 @@ fn projection_param_read() {
     assert!(ir.contains("return"), "should compile and return: {ir}");
 }
 
-/// `to_string` is declared for more than one type, so a `$param` only it
+/// RFC-0071 rule 3: a tag of a word is a call of `core::display` lent the
+/// word and the template's text, and allocates no string of its own; a tag
+/// of text is appended as it is.
+#[test]
+fn a_tag_of_a_word_lends_the_template_s_text_to_display() {
+    let i = Interner::new();
+    let ir = compile_to_ir(&i, "{{ 42 }}", &FxHashMap::default()).expect("the tag compiles");
+    let body: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.contains(" | "))
+        .map(|line| line.split(" | ").nth(1).expect("an instruction line").trim())
+        .collect();
+    let call = body
+        .iter()
+        .position(|inst| inst.contains("= call #"))
+        .unwrap_or_else(|| panic!("{ir}"));
+    assert!(body[call - 1].contains("ref &mut <template>"), "{ir}");
+    assert!(body[call - 2].starts_with("r") && body[call - 2].contains("= ref &"), "{ir}");
+    assert!(
+        !body.iter().any(|inst| inst.starts_with("append")),
+        "{ir}"
+    );
+    let text = compile_to_ir(&i, "{{ \"a\" }}", &FxHashMap::default()).expect("the tag compiles");
+    assert!(text.contains("append"), "{text}");
+    assert!(!text.contains("call #"), "{text}");
+}
+
+/// `hash` is declared for more than one type, so a `$param` only it
 /// reads has no type the resolution can close, and the refusal says so
 /// rather than carrying an error type into lowering.
 #[test]
 fn a_param_no_use_gives_a_type_is_refused() {
     let i = Interner::new();
-    let err = compile_to_ir(&i, "{{ $count.to_string() }}", &FxHashMap::default())
+    let err = compile_to_ir(&i, "{{ $count.hash() }}", &FxHashMap::default())
         .expect_err("a param whose type does not close is refused");
     assert!(err.contains("cannot infer type"), "{err}");
 }
@@ -3264,10 +3291,10 @@ fn a_field_whose_type_nothing_decides_is_refused_before_lowering() {
     let i = Interner::new();
     let result = compile_script_ir(
         &i,
-        "let a = { x: 0, }; a.y.to_string()",
+        "let a = { x: 0, }; a.y.hash()",
         &FxHashMap::default(),
     );
-    let err = result.expect_err("no instance of `to_string` is chosen for `a.y`");
+    let err = result.expect_err("no instance of `hash` is chosen for `a.y`");
     assert!(err.contains("cannot infer type"), "{err}");
 }
 

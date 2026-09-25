@@ -1,12 +1,11 @@
 //! An extension type is stored as its payload's canonical form and read
 //! back through it (RFC-0039, RFC-0076). These six functions are the whole
-//! crossing, and the pointer cast each of them makes is licensed by
-//! `Transparent`, which the derive implements only for a
+//! crossing. Each casts through `repr::SameLayout`, whose witness `layout`
+//! makes from `Transparent`, which the derive implements only for a
 //! `#[repr(transparent)]` struct.
 
-use std::mem::ManuallyDrop;
-
 use crate::canonical::same_layout;
+use crate::repr::SameLayout;
 use crate::runtime::Runtime;
 
 /// `Self` is stored as a `P`.
@@ -21,18 +20,28 @@ use crate::runtime::Runtime;
 /// `unsafe(uniform_payload)` asserts it.
 pub unsafe trait Transparent<P>: Sized {}
 
+/// The layout `Transparent<P>` proves.
+#[inline(always)]
+fn layout<T, P>() -> SameLayout<T, P>
+where
+    T: Transparent<P>,
+{
+    // SAFETY: `Transparent<P>`'s contract: `T` is `repr(transparent)` over
+    // `P`'s field, which differs from `P` only as `Canonical` lets a type
+    // and its canonical form differ, under its three layers.
+    unsafe { same_layout!(T, P) }
+}
+
 pub fn erase<T, P, Rt>(value: T, rt: crate::Crossing<'_, Rt>) -> Rt::Value
 where
     T: Transparent<P>,
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    same_layout!(T, P);
-    let held = ManuallyDrop::new(value);
-    // SAFETY: `Transparent<P>` licenses the cast, with the layout checked
-    // above; `held` is never read again, so the payload moves out exactly
-    // once.
-    let payload = unsafe { std::ptr::read((&raw const *held).cast::<P>()) };
+    // SAFETY: a `P` a derive stores is released as the `T` it came from
+    // would be (`Canonical`'s release layer), and nothing reads it at `P`
+    // but the runtime's box.
+    let payload = unsafe { layout::<T, P>().cast(value) };
     // SAFETY: an extension type is stored as its payload's canonical form.
     unsafe { rt.erase::<P>(payload) }
 }
@@ -45,11 +54,11 @@ where
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    same_layout!(T, P);
     // SAFETY: the caller's contract, and `erase` is `erase::<P>`.
-    let payload = ManuallyDrop::new(unsafe { rt.materialize::<P>(value) });
-    // SAFETY: as `erase`'s, read back the other way.
-    unsafe { std::ptr::read((&raw const payload).cast::<T>()) }
+    let payload = unsafe { rt.materialize::<P>(value) };
+    // SAFETY: the caller's contract: the `P` was erased from a `T`, which it
+    // is again.
+    unsafe { layout::<T, P>().flip().cast(payload) }
 }
 
 /// # Safety
@@ -60,10 +69,9 @@ where
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    same_layout!(T, P);
-    // SAFETY: the caller's contract, and `Transparent<P>` licenses the cast,
-    // with the layout checked above.
-    unsafe { &*(rt.deref::<P>(reference) as *const P).cast::<T>() }
+    // SAFETY: the caller's contract, and the `P` was erased from a `T`,
+    // which it is again for the loan.
+    unsafe { layout::<T, P>().flip().cast_ref(rt.deref::<P>(reference)) }
 }
 
 /// # Safety
@@ -75,9 +83,9 @@ where
     P: Send + Sync + 'static,
     Rt: Runtime,
 {
-    same_layout!(T, P);
-    // SAFETY: as `deref`, with the caller's exclusive loan.
-    unsafe { &mut *(rt.deref_mut::<P>(reference) as *mut P).cast::<T>() }
+    // SAFETY: as `deref`, with the caller's exclusive loan; what is
+    // written as a `T` is a `P` erased from a `T` again.
+    unsafe { layout::<T, P>().flip().cast_mut(rt.deref_mut::<P>(reference)) }
 }
 
 /// The payload's bytes named as the `T` they were erased from: the derive's
@@ -86,10 +94,8 @@ pub fn from_payload<T, P>(payload: &P) -> &T
 where
     T: Transparent<P>,
 {
-    same_layout!(T, P);
-    // SAFETY: `Transparent<P>` licenses the cast, with the layout checked
-    // above.
-    unsafe { &*(payload as *const P).cast::<T>() }
+    // SAFETY: `Transparent<P>` licenses naming a `P` as a `T`.
+    unsafe { layout::<T, P>().flip().cast_ref(payload) }
 }
 
 /// As `from_payload`, exclusively.
@@ -97,7 +103,6 @@ pub fn from_payload_mut<T, P>(payload: &mut P) -> &mut T
 where
     T: Transparent<P>,
 {
-    same_layout!(T, P);
     // SAFETY: as `from_payload`'s; `&mut P` is the exclusive name.
-    unsafe { &mut *(payload as *mut P).cast::<T>() }
+    unsafe { layout::<T, P>().flip().cast_mut(payload) }
 }

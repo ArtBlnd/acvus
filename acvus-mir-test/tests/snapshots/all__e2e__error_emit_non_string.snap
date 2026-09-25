@@ -1,5 +1,0 @@
----
-source: acvus-mir-test/tests/e2e.rs
-expression: result.unwrap_err()
----
-[infer:test] [0..8] emit requires String, got i64

@@ -1,0 +1,11 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/witness_same_type_literal.rs:9:36
+  |
+9 |     let _: SameType<u64, String> = SameType(PhantomData);
+  |                                    ^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> $WORKSPACE/acvus-extern/src/repr.rs
+  |
+  | pub struct SameType<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private field

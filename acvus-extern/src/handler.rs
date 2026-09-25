@@ -1046,9 +1046,8 @@ macro_rules! in_registers {
                 Rt: Runtime + 'a,
             {
                 debug_assert_eq!(run.len(), $n, "an argument run is this form's own width");
-                // SAFETY: the caller's contract: `run` is `$n` long, and a
-                // `[T; N]` is `N` `T`s with no other requirement.
-                unsafe { &*(run.as_ptr() as *const [Rt::Value; $n]) }
+                // SAFETY: the caller's contract: `run` is `$n` long.
+                unsafe { $crate::repr::array::<Rt::Value, $n>(run) }
             }
 
             fn select<Rt, F, H>(forms: F, f: H) -> F::Out

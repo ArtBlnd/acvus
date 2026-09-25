@@ -47,16 +47,13 @@ where
     type Canon: Var<K> + Canonical<K, Canon = Self::Canon> + 'static;
 }
 
+/// The witness `repr::SameLayout<$a, $b>`, whose constructor checks at each
+/// instantiation that the two are of one size and alignment. The macro is
+/// the only caller of that constructor; its caller writes the `unsafe` and
+/// names the fact that gives the rest of one layout.
 macro_rules! same_layout {
     ($a:ty, $b:ty) => {
-        const {
-            ::core::assert!(
-                ::core::alloc::Layout::new::<$a>().size() == ::core::alloc::Layout::new::<$b>().size()
-                    && ::core::alloc::Layout::new::<$a>().align()
-                        == ::core::alloc::Layout::new::<$b>().align(),
-                "a box is read only between two types of one size and alignment"
-            )
-        }
+        $crate::repr::SameLayout::<$a, $b>::vouched()
     };
 }
 

@@ -2250,7 +2250,7 @@ fn a_select_on_the_sign_of_a_total_order_is_its_maximum() {
     let (held, lines) = the_cycle(
         "let xs = vec([\"fig\".to_string(), \"pear\".to_string()]); \
          let best = \"\".to_string(); \
-         for x in &xs { if string::cmp(x, &best) > 0 { best = x.to_string(); }; } best",
+         for x in &xs { if string::cmp(x, &best) > 0 { best = x.clone(); }; } best",
     );
     assert_eq!(
         held,
@@ -2268,7 +2268,7 @@ fn a_select_on_a_negative_sign_with_the_state_on_the_left_is_its_maximum_too() {
     let (held, lines) = the_cycle(
         "let xs = vec([\"fig\".to_string(), \"pear\".to_string()]); \
          let best = \"\".to_string(); \
-         for x in &xs { if string::cmp(&best, x) < 0 { best = x.to_string(); }; } best",
+         for x in &xs { if string::cmp(&best, x) < 0 { best = x.clone(); }; } best",
     );
     assert_eq!(law_of(&held), Some(&LawKind::Ordered(LawOp::Max)), "{lines}");
 }

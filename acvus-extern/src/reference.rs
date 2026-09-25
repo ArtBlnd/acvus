@@ -40,9 +40,11 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{PolyTy, TypeArg};
 use acvus_utils::Interner;
 
+use crate::canonical::same_layout;
 use crate::handler::Borrowable;
 use crate::loan::{Loan, Mut, Shared};
 use crate::obj::TransparentOver;
+use crate::repr::SameLayout;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
@@ -186,9 +188,12 @@ where
         // for `'a`, which the caller took from the receiver it lent, and it
         // holds a `T`, which `TransparentOver` lays out as the runtime's
         // value. The word itself is a copy and does not bound `'a`.
-        unsafe {
-            &*(<Rt::Value as Borrowable<Rt>>::deref(rt.rt(), &word) as *const Rt::Value).cast::<T>()
-        }
+        let value = unsafe {
+            crate::repr::unbounded_ref(<Rt::Value as Borrowable<Rt>>::deref(rt.rt(), &word))
+        };
+        // SAFETY: a shared name of the held value as the `T` it was lent as,
+        // which is read and never dropped, so it releases nothing.
+        unsafe { over_value::<T, Rt>().flip().cast_ref(value) }
     }
 }
 
@@ -208,10 +213,12 @@ where
     unsafe fn restore(rt: crate::Crossing<'_, Rt>, word: Rt::Value) -> &'a mut T {
         // SAFETY: as the shared form's, and the receiver was lent
         // exclusively for `'a`.
-        unsafe {
-            &mut *(<Rt::Value as Borrowable<Rt>>::deref_mut(rt.rt(), &word) as *mut Rt::Value)
-                .cast::<T>()
-        }
+        let value = unsafe {
+            crate::repr::unbounded_mut(<Rt::Value as Borrowable<Rt>>::deref_mut(rt.rt(), &word))
+        };
+        // SAFETY: as the shared form's; what is written through the `T` is a
+        // `T` again, which `TransparentOver` lays out as the value.
+        unsafe { over_value::<T, Rt>().flip().cast_mut(value) }
     }
 }
 
@@ -257,15 +264,27 @@ where
     }
 }
 
-/// `T: TransparentOver<Rt>` is the promise that a `T` is one `Rt::Value` in
-/// its layout, so its address is the value's.
+/// The layout `TransparentOver` proves: a `T` is one `Rt::Value`.
+#[inline(always)]
+fn over_value<T, Rt>() -> SameLayout<T, Rt::Value>
+where
+    T: TransparentOver<Rt>,
+    Rt: Runtime,
+{
+    // SAFETY: `TransparentOver`'s contract: `T` is `repr(transparent)` with
+    // `Rt::Value` as its one non-zero-sized field.
+    unsafe { same_layout!(T, Rt::Value) }
+}
+
+/// A `T`'s place is the value's, so its address is the value's.
 fn value_of<T, Rt>(item: &T) -> &Rt::Value
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
 {
-    // SAFETY: `TransparentOver`'s contract.
-    unsafe { &*(item as *const T).cast::<Rt::Value>() }
+    // SAFETY: a shared name of the held value, which the reference word it
+    // is made into reads and does not release.
+    unsafe { over_value::<T, Rt>().cast_ref(item) }
 }
 
 // SAFETY: a `Ref` holds its reference word, so `erase` hands it back and

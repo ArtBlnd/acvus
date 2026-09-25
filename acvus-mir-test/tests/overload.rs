@@ -478,7 +478,7 @@ fn a_candidate_that_takes_the_argument_directly_drops_one_that_would_view_it() {
     let c = checked(&i, "let s = \"ab\".to_string(); peek(&s)");
     assert_eq!(
         c.callees,
-        vec!["core::to_string".to_string(), "fx_a::peek".to_string()]
+        vec!["fx_a::peek".to_string(), "string::to_string".to_string()]
     );
 }
 
@@ -525,9 +525,80 @@ fn an_element_still_a_variable_defers_its_admission_until_the_head_resolves() {
         c.callees,
         vec![
             "array::as_slice".to_string(),
-            "core::to_string".to_string(),
-            "core::to_string".to_string(),
-            "string::len".to_string()
+            "string::len".to_string(),
+            "string::to_string".to_string(),
+            "string::to_string".to_string()
+        ]
+    );
+}
+
+// -- `to_string` (RFC-0070 rule 5) ------------------------------------------
+
+/// A `&str` receiver leaves the generic `to_string`, whose `T` ranges over
+/// the types `core::display` stands at, which hold no `str`; the owned copy
+/// is `string::to_string` alone, with no `AmbiguousFunction`.
+#[test]
+fn a_str_receiver_reaches_the_owned_copy_alone() {
+    let i = Interner::new();
+    let c = checked(&i, "\"x\".to_string()");
+    assert_eq!(c.ret, Ty::String);
+    assert_eq!(c.callees, vec!["string::to_string".to_string()]);
+}
+
+/// Every type `core::display` stands at reaches the generic `to_string`,
+/// which requires that instance. `display` stands at no `String`, so a
+/// `String` receiver leaves the generic and reaches `string::to_string` as
+/// a view, the copy (RFC-0070 rule 5).
+#[test]
+fn a_type_with_a_display_instance_reaches_the_generic_to_string() {
+    let i = Interner::new();
+    for (source, callees) in [
+        ("1.to_string()", vec!["std::to_string"]),
+        ("(-1i8).to_string()", vec!["std::to_string"]),
+        ("1.5.to_string()", vec!["std::to_string"]),
+        ("'c'.to_string()", vec!["std::to_string"]),
+        ("true.to_string()", vec!["std::to_string"]),
+        (
+            "let s = \"x\".to_string(); s.to_string()",
+            vec!["string::to_string", "string::to_string"],
+        ),
+    ] {
+        let c = checked(&i, source);
+        assert_eq!(c.ret, Ty::String, "{source}");
+        assert_eq!(c.callees, callees, "{source}");
+    }
+}
+
+/// A type `core::display` stands no instance at has no `to_string`: the
+/// generic's bound refuses it and `string::to_string` takes no view of it,
+/// so the set empties at the receiver (RFC-0043).
+#[test]
+fn a_type_with_no_display_instance_has_no_to_string() {
+    let i = Interner::new();
+    for source in [
+        "[1, 2].to_string()",
+        "let o = { a: 1, }; o.to_string()",
+        "let f = |x| -> x; f.to_string()",
+    ] {
+        let errors = errors_of(&i, source);
+        assert!(
+            errors.iter().any(|e| e.starts_with("no `to_string` takes a call of type")),
+            "{source}: {errors:#?}"
+        );
+    }
+}
+
+/// RFC-0043: the refusal names, for the candidate that left only by its
+/// required instance, the instance it lacked.
+#[test]
+fn a_refusal_names_the_display_instance_the_generic_to_string_lacked() {
+    let i = Interner::new();
+    assert_eq!(
+        errors_of(&i, "let o = { a: 1, }; o.to_string()"),
+        vec![
+            "no `to_string` takes a call of type Fn({a: i64}) -> _; std::to_string requires \
+             core::display, which has no instance for {a: i64}"
+                .to_string()
         ]
     );
 }

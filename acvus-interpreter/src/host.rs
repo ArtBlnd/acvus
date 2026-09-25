@@ -51,10 +51,10 @@
 //!     async fn load(&mut self, _: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
 //!         Ok(None)
 //!     }
-//!     async fn store(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!     fn store(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
 //!         Ok(())
 //!     }
-//!     async fn restore(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!     fn restore(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
 //!         Ok(())
 //!     }
 //!     async fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
@@ -73,10 +73,10 @@
 //!     async fn load(&mut self, _: &str, _: &Codec<'_>) -> Result<Option<Held>, StorageError> {
 //!         Ok(None)
 //!     }
-//!     async fn store(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!     fn store(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
 //!         Ok(())
 //!     }
-//!     async fn restore(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
+//!     fn restore(&mut self, _: &str, _: Held) -> Result<(), StorageError> {
 //!         Ok(())
 //!     }
 //!     async fn commit(&mut self, _: &Codec<'_>) -> Result<(), StorageError> {
@@ -464,14 +464,20 @@ pub trait Storage: Send {
 
 /// A storage whose access can wait. A program compiled with
 /// `Host::async_access` opens one; every synchronous `Storage` is one.
+/// Only a load and a commit wait: handing a holder back is synchronous, so
+/// no future a caller drops holds one (RFC-0090 rule 3).
 pub trait AsyncStorage: Send {
+    /// Move `key`'s holder out when the future completes. A future dropped
+    /// before it completes moves nothing out.
     fn load(
         &mut self,
         key: &str,
         codec: &Codec<'_>,
     ) -> impl Future<Output = Result<Option<Held>, StorageError>> + Send;
-    fn store(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send;
-    fn restore(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send;
+    /// As `Storage::store`.
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError>;
+    /// As `Storage::restore`.
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError>;
     fn commit(&mut self, codec: &Codec<'_>) -> impl Future<Output = Result<(), StorageError>> + Send;
 }
 
@@ -487,12 +493,12 @@ where
         std::future::ready(Storage::load(self, key, codec))
     }
 
-    fn store(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send {
-        std::future::ready(Storage::store(self, key, held))
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        Storage::store(self, key, held)
     }
 
-    fn restore(&mut self, key: &str, held: Held) -> impl Future<Output = Result<(), StorageError>> + Send {
-        std::future::ready(Storage::restore(self, key, held))
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
+        Storage::restore(self, key, held)
     }
 
     fn commit(&mut self, codec: &Codec<'_>) -> impl Future<Output = Result<(), StorageError>> + Send {
@@ -2050,7 +2056,7 @@ where
         }
     }
 
-    async fn lent<Q, F, O>(&mut self, key: &str, held: Held, f: F) -> Result<O, HostError>
+    fn lent<Q, F, O>(&mut self, key: &str, held: Held, f: F) -> Result<O, HostError>
     where
         F: Borrows<AcvusRuntime, Q, O>,
         F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
@@ -2059,10 +2065,9 @@ where
         self.lent_back(key, held, Back::Restore, |held| {
             held.lend(&program.rt, program.interner(), f)
         })
-        .await
     }
 
-    async fn lent_mut<Q, F, O>(&mut self, key: &str, held: Held, f: F) -> Result<O, HostError>
+    fn lent_mut<Q, F, O>(&mut self, key: &str, held: Held, f: F) -> Result<O, HostError>
     where
         F: Borrows<AcvusRuntime, Q, O>,
     {
@@ -2070,14 +2075,14 @@ where
         self.lent_back(key, held, Back::Store, |held| {
             held.lend_mut(&program.rt, program.interner(), f)
         })
-        .await
     }
 
     /// Lend `held` through `lend` and hand it back on every path (RFC-0090
     /// rule 5): by `lent` where the closure returned, by `restore` where the
     /// types did not match or the closure panicked, and then the panic
-    /// resumes.
-    async fn lent_back<O>(
+    /// resumes. It never waits, so a caller that drops its future drops it
+    /// before the load that gave `held` or after the holder went back.
+    fn lent_back<O>(
         &mut self,
         key: &str,
         mut held: Held,
@@ -2095,8 +2100,8 @@ where
             Ok(Err(_)) | Err(_) => Back::Restore,
         };
         let handed = match back {
-            Back::Store => AsyncStorage::store(&mut *self.storage, key, held).await,
-            Back::Restore => AsyncStorage::restore(&mut *self.storage, key, held).await,
+            Back::Store => AsyncStorage::store(&mut *self.storage, key, held),
+            Back::Restore => AsyncStorage::restore(&mut *self.storage, key, held),
         };
         match ended {
             Ok(ended) => {
@@ -2107,6 +2112,8 @@ where
         }
     }
 
+    /// Store `value` at `key`. The store is synchronous, so the future
+    /// completes at its first poll and none dropped holds the holder.
     pub async fn insert<T>(&mut self, key: &str, value: T) -> Result<(), HostError>
     where
         T: Declared + OneValue<AcvusRuntime>,
@@ -2120,7 +2127,7 @@ where
         // SAFETY: `value` crosses at `T`, the type the page holds `key` at.
         let value = Owned::erased(unsafe { Crossing::new(&program.rt) }, value);
         let held = Held::new(value, Arc::clone(solved), program.shared.compilation);
-        AsyncStorage::store(&mut *self.storage, key, held).await?;
+        AsyncStorage::store(&mut *self.storage, key, held)?;
         Ok(())
     }
 
@@ -2164,7 +2171,7 @@ where
         F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
     {
         let held = self.loaded(key)?;
-        self.lent(key, held, f).await
+        self.lent(key, held, f)
     }
 
     /// Lend `key`'s value to `f` exclusively, whose parameter crosses as a
@@ -2174,7 +2181,7 @@ where
         F: Borrows<AcvusRuntime, Q, O>,
     {
         let held = self.loaded(key)?;
-        self.lent_mut(key, held, f).await
+        self.lent_mut(key, held, f)
     }
 
     fn loaded(&mut self, key: &str) -> Result<Held, HostError> {
@@ -2218,7 +2225,7 @@ where
         F::Marker: Lendable<AcvusRuntime, Loan = Shared>,
     {
         let held = self.loaded(key).await?;
-        self.lent(key, held, f).await
+        self.lent(key, held, f)
     }
 
     /// Lend `key`'s value to `f` exclusively, whose parameter crosses as a
@@ -2228,7 +2235,7 @@ where
         F: Borrows<AcvusRuntime, Q, O>,
     {
         let held = self.loaded(key).await?;
-        self.lent_mut(key, held, f).await
+        self.lent_mut(key, held, f)
     }
 
     async fn loaded(&mut self, key: &str) -> Result<Held, HostError> {

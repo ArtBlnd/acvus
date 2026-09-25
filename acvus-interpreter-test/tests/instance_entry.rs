@@ -27,7 +27,7 @@ const SIGNATURES: &[Signature] = &[
     Signature::new("core", "eq"),
     Signature::new("core", "cmp"),
     Signature::new("core", "hash"),
-    Signature::new("core", "to_string"),
+    Signature::new("core", "display"),
     Signature::new("core", "to_int"),
     Signature::new("iter", "into_iter"),
     Signature::new("iter", "as_iter"),
@@ -65,8 +65,9 @@ fn every_synchronous_instance_of_a_shared_signature_has_a_mono_glue() {
     let i = Interner::new();
     assert_eq!(
         instances_without_a_mono_glue(&i),
-        // A receiver is one value in `ctx` and the language's `&str` is two.
-        vec!["core::to_string#12".to_owned()],
+        // `core::display` stands at no `str`, whose receiver would be two
+        // words where `ctx` holds one (RFC-0070 rule 5, RFC-0067 rule 8).
+        Vec::<String>::new(),
         "these instances hold a site table or a state, so they are no plain \
          function and a requirement cannot be resolved to one"
     );

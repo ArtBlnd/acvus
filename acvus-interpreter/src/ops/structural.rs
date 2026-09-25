@@ -36,8 +36,9 @@ pub struct VariantArm {
 }
 
 fn owned(value: &Value) -> &Owned<Rt> {
-    // SAFETY: `Owned<Rt>` is `repr(transparent)` over `Value`.
-    unsafe { &*(value as *const Value).cast::<Owned<Rt>>() }
+    // SAFETY: a shared name of the value as its holder, which is read and
+    // never dropped, so it releases nothing.
+    unsafe { Owned::<Rt>::over_value().cast_ref(value) }
 }
 
 impl Shape {
