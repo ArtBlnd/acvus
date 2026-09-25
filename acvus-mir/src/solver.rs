@@ -22,7 +22,7 @@ use crate::structural::{Component, StructuralSignature, components};
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarBound, EffectVarId,
     ErrorToken, FieldSet, FlowTerm, FlowVarId, Flows, HeldTy, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy,
-    Instances, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly,
+    Instances, Instancing, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly,
     PolyTy, Repr, ReprVarId, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
     TypeBoundId, TypeRegistry, View, Viewed, could_match_pattern, effect_bound_at, matches_pattern,
 };
@@ -3738,7 +3738,10 @@ impl<'src> Solver<'src> {
                 });
             }
         };
-        let instance = trial.instantiate_open(&scheme.ty, self.registry);
+        let instance = match &scheme.instancing {
+            Instancing::Fresh => trial.instantiate_open(&scheme.ty, self.registry),
+            Instancing::Member(own) => own.clone(),
+        };
         if trial
             .join(
                 &call_ty,
@@ -4886,6 +4889,15 @@ impl<'src> Solver<'src> {
         scheme: &Scheme,
         compiler: CompilerInstances,
     ) -> Instantiated {
+        if let Instancing::Member(own) = &scheme.instancing {
+            return Instantiated {
+                ty: own.clone(),
+                bounded: Vec::new(),
+                bounded_effects: Vec::new(),
+                instance: None,
+                requirements: Vec::new(),
+            };
+        }
         let CompilerInstances {
             candidates: compiler_instances,
             withholds,

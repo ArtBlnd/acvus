@@ -511,6 +511,18 @@ pub struct Scheme {
     pub effect_bounds: Vec<EffectVarBound>,
     pub instances: Option<Instances>,
     pub requires: Vec<Requirement>,
+    pub instancing: Instancing,
+}
+
+/// The type a use of a scheme is typed at.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Instancing {
+    /// Fresh variables for every placeholder of `Scheme::ty`.
+    Fresh,
+    /// The one type a member of the call-graph component being checked is
+    /// checked at, an instance of `Scheme::ty` that every use within the
+    /// component shares (RFC-0042 rule 5).
+    Member(InferTy),
 }
 
 /// A `RequirementSig` with the instances of the signature it names, so
@@ -531,6 +543,15 @@ impl Scheme {
             effect_bounds: Vec::new(),
             instances: None,
             requires: Vec::new(),
+            instancing: Instancing::Fresh,
+        }
+    }
+
+    /// `declared` typed at `own` wherever it is used.
+    pub fn member(declared: PolyTy, own: InferTy) -> Self {
+        Self {
+            instancing: Instancing::Member(own),
+            ..Self::unbounded(declared)
         }
     }
 
