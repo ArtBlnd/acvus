@@ -231,7 +231,7 @@ use acvus_mir::graph::{
 };
 use acvus_mir::ir::{MirModule, ValueId};
 use acvus_mir::ty::{
-    Effect, Flows, ParamTerm, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration,
+    Effect, Flows, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration,
     try_freeze_poly,
 };
 use acvus_utils::{Astr, Freeze, Interner};
@@ -302,10 +302,13 @@ pub enum Cause {
     /// bare name, which reaches these extern functions, each written with
     /// its namespace (RFC-0043).
     Shadows { externs: Vec<String> },
+    /// The exposures of a host graph hold this cycle of hosts, each calling
+    /// the next and the last calling the first (RFC-0095 rule 3).
+    Cycle { hosts: Vec<String> },
 }
 
 impl Refusal {
-    fn of(origin: Option<Origin>, message: String) -> Self {
+    pub(crate) fn of(origin: Option<Origin>, message: String) -> Self {
         Refusal {
             origin,
             message,
@@ -713,8 +716,9 @@ impl fmt::Debug for InputShape {
     }
 }
 
-struct ResolvedShape {
-    fields: Vec<(Astr, PolyTy)>,
+#[derive(Clone)]
+pub(crate) struct ResolvedShape {
+    pub(crate) fields: Vec<(Astr, PolyTy)>,
 }
 
 impl ResolvedShape {
@@ -831,45 +835,71 @@ impl fmt::Debug for Inputs {
     }
 }
 
-enum EntryDeclaration {
+pub(crate) enum EntryDeclaration {
     Typed { inputs: ResolvedShape, declared: PolyTy },
     Untyped,
     /// A body scripts call and no host runs: its return is what its body
     /// settles, and its `$` inputs are the ones it reads (RFC-0071 rule 4).
     Function,
+    Positional { params: Vec<ParamTerm<Poly>>, ret: PolyTy },
 }
 
-struct EntryDecl {
-    name: String,
-    ast: ParsedAst,
-    declaration: EntryDeclaration,
+#[derive(Clone)]
+pub(crate) enum Namespace {
+    Root,
+    Host(String),
+}
+
+impl Namespace {
+    pub(crate) fn key(&self, name: &str) -> String {
+        match self {
+            Namespace::Root => name.to_owned(),
+            Namespace::Host(host) => format!("{host}/{name}"),
+        }
+    }
+}
+
+pub(crate) struct EntryDecl {
+    pub(crate) name: String,
+    pub(crate) bare_name: Option<String>,
+    pub(crate) inputs_under: Namespace,
+    pub(crate) ast: ParsedAst,
+    pub(crate) declaration: EntryDeclaration,
 }
 
 /// The entries, inits and bindings of one compilation graph, so a context's
 /// type is solved from every body that stores, reads or initializes it
 /// (RFC-0090 rule 1).
 pub struct Host<A = SyncAccess> {
-    parts: HostParts,
+    pub(crate) parts: HostParts,
     access: PhantomData<fn() -> A>,
 }
 
-struct HostParts {
-    interner: Interner,
-    registries: Vec<Registry<AcvusRuntime>>,
-    bindings: Bindings,
-    entries: Vec<EntryDecl>,
-    inits: Vec<InitSource>,
-    parse_refusals: Vec<Refusal>,
-    refusals: Vec<Refusal>,
-    opt: Opt,
-    parse: Duration,
+pub(crate) struct HostParts {
+    pub(crate) interner: Interner,
+    pub(crate) registries: Vec<Registry<AcvusRuntime>>,
+    pub(crate) bindings: Bindings,
+    pub(crate) entries: Vec<EntryDecl>,
+    pub(crate) inits: Vec<InitSource>,
+    pub(crate) parse_refusals: Vec<Refusal>,
+    pub(crate) refusals: Vec<Refusal>,
+    pub(crate) opt: Opt,
+    pub(crate) parse: Duration,
 }
 
 impl Host<SyncAccess> {
     pub fn new(registries: Vec<Registry<AcvusRuntime>>) -> Self {
+        Host::over(Interner::new(), registries)
+    }
+
+    pub(crate) fn in_graph(interner: &Interner) -> Self {
+        Host::over(interner.clone(), Vec::new())
+    }
+
+    fn over(interner: Interner, registries: Vec<Registry<AcvusRuntime>>) -> Self {
         Host {
             parts: HostParts {
-                interner: Interner::new(),
+                interner,
                 registries,
                 bindings: Bindings::default(),
                 entries: Vec::new(),
@@ -979,6 +1009,8 @@ where
         let ast = self.parsed(origin, source);
         self.parts.entries.push(EntryDecl {
             name: name.to_owned(),
+            bare_name: Some(name.to_owned()),
+            inputs_under: Namespace::Root,
             ast,
             declaration,
         });
@@ -1017,11 +1049,8 @@ where
     where
         E: Executor + 'static,
     {
-        compile(self.parts, A::GRAPH, Arc::new(executor))
-            .map(|compiled| Program {
-                compiled,
-                access: PhantomData,
-            })
+        compile(self.parts, A::GRAPH, Arc::new(executor), &[])
+            .map(Program::of)
             .map_err(HostError::Refused)
     }
 }
@@ -1072,11 +1101,20 @@ struct EntryInputs {
 }
 
 impl EntryInputs {
-    fn of(interner: &Interner, shape: ResolvedShape, params: &[(Astr, ValueId)]) -> EntryInputs {
-        let param_of: Vec<usize> = shape
+    fn of(
+        interner: &Interner,
+        shape: ResolvedShape,
+        under: &Namespace,
+        params: &[(Astr, ValueId)],
+    ) -> EntryInputs {
+        let fields: Vec<Astr> = shape
             .fields
             .iter()
-            .map(|(field, _)| {
+            .map(|(field, _)| interner.intern(&under.key(interner.resolve(*field))))
+            .collect();
+        let param_of: Vec<usize> = fields
+            .iter()
+            .map(|field| {
                 params.iter().position(|(param, _)| param == field).unwrap_or_else(|| {
                     panic!(
                         "the entry's declared input `${}` is no parameter of its module: a typed \
@@ -1086,9 +1124,7 @@ impl EntryInputs {
                 })
             })
             .collect();
-        if let Some((param, _)) = params
-            .iter()
-            .find(|(param, _)| shape.fields.iter().all(|(field, _)| field != param))
+        if let Some((param, _)) = params.iter().find(|(param, _)| !fields.contains(param))
         {
             panic!(
                 "the entry's module takes `${}`, which its declared inputs lack: a typed entry's \
@@ -1176,6 +1212,7 @@ impl FieldValue for Given {
 struct Declaration {
     name: String,
     shape: EntryShape,
+    inputs_under: Namespace,
 }
 
 struct LocalFunction {
@@ -1221,7 +1258,12 @@ impl CompileTimes {
     }
 }
 
-fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) -> Result<Compiled, Vec<Refusal>> {
+pub(crate) fn compile(
+    host: HostParts,
+    access: GraphAccess,
+    executor: Arc<dyn Executor>,
+    exposed: &[crate::host_graph::Exposed],
+) -> Result<Compiled, Vec<Refusal>> {
     let HostParts {
         interner,
         registries,
@@ -1265,21 +1307,26 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
     let mut functions: Vec<Function> = Vec::with_capacity(entries.len() + extern_fns.len());
     for EntryDecl {
         name,
+        bare_name,
+        inputs_under,
         ast,
         declaration,
     } in entries
     {
         let qref = QualifiedRef::root(interner.intern(&name));
         let origin = Some(Origin::Entry(name.clone()));
-        let shadowed = bare_callable(interner, &extern_fns, &types, qref);
-        if !shadowed.is_empty() {
+        let shadowed = match &bare_name {
+            Some(bare) => bare_callable(interner, &extern_fns, &types, QualifiedRef::root(interner.intern(bare))),
+            None => Vec::new(),
+        };
+        if let (Some(bare), false) = (&bare_name, shadowed.is_empty()) {
             let listed: Vec<String> = shadowed.iter().map(|name| format!("`{name}`")).collect();
             let what = match declaration {
-                EntryDeclaration::Function => "function",
+                EntryDeclaration::Function | EntryDeclaration::Positional { .. } => "function",
                 EntryDeclaration::Typed { .. } | EntryDeclaration::Untyped => "entry",
             };
             let message = format!(
-                "the {what} `{name}` would shadow {}, which a script calls as `{name}`",
+                "the {what} `{name}` would shadow {}, which a script calls as `{bare}`",
                 listed.join(", ")
             );
             refusals.push(Refusal {
@@ -1297,12 +1344,18 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
                     );
                     Refusal::of(origin.clone(), message)
                 }));
+                let params: Vec<Astr> = inputs
+                    .fields
+                    .iter()
+                    .map(|(field, _)| interner.intern(&inputs_under.key(interner.resolve(*field))))
+                    .collect();
                 refusals.extend(
                     inputs
                         .fields
                         .iter()
-                        .filter(|(field, _)| bindings.get(*field).is_some())
-                        .map(|(field, _)| {
+                        .zip(&params)
+                        .filter(|(_, param)| bindings.get(**param).is_some())
+                        .map(|((field, _), _)| {
                             let message = format!(
                                 "the input `${}` of the entry `{name}` is already fixed by a binding",
                                 interner.resolve(*field)
@@ -1313,7 +1366,8 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
                 let params = inputs
                     .fields
                     .iter()
-                    .map(|(field, ty)| ParamTerm::new(*field, ty.clone()))
+                    .zip(params)
+                    .map(|((_, ty), param)| ParamTerm::new(param, ty.clone()))
                     .collect();
                 let ty = TyTerm::Fn {
                     params,
@@ -1334,6 +1388,17 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
                 ty: untyped_entry_ty(),
                 shape: Some(EntryShape::Untyped),
             },
+            EntryDeclaration::Positional { params, ret } => LocalFunction {
+                kind: FnKind::Local(ast, GraphInputs::Declared),
+                ty: TyTerm::Fn {
+                    params,
+                    ret: Box::new(ret),
+                    captures: vec![],
+                    effect: Effect::OPAQUE.into(),
+                    flows: Flows::Every.into(),
+                },
+                shape: None,
+            },
             EntryDeclaration::Function => LocalFunction {
                 kind: FnKind::Local(ast, GraphInputs::FromReads),
                 ty: TyTerm::Fn {
@@ -1349,7 +1414,14 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         let LocalFunction { kind, ty, shape } = local;
         scripts.insert(qref, name.clone());
         if let Some(shape) = shape {
-            declared.insert(qref, Declaration { name, shape });
+            declared.insert(
+                qref,
+                Declaration {
+                    name,
+                    shape,
+                    inputs_under,
+                },
+            );
         }
         functions.push(Function { qref, kind, ty });
     }
@@ -1404,6 +1476,7 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(interner, &graph, &ext);
     let typeck = started.elapsed();
+    refusals.extend(crate::host_graph::crossing_refusals(interner, &graph.types, &inf, exposed));
     refusals.extend(inf.errors().into_iter().flat_map(|(qref, errs)| {
         let origin = origin_of(&qref);
         errs.iter().map(move |e| Refusal {
@@ -1492,13 +1565,13 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
     let mut required = optimized.inputs;
     let compiled_entries: HashMap<String, CompiledEntry> = declared
         .into_iter()
-        .map(|(qref, Declaration { name, shape })| {
+        .map(|(qref, Declaration { name, shape, inputs_under })| {
             let (Some(module), Some(required)) = (modules.remove(&qref), required.remove(&qref)) else {
                 panic!("`optimize` keeps a module and its inputs for an entry no stage refused")
             };
             let shape = match shape {
                 EntryShape::Typed { inputs, declared } => CompiledShape::Typed {
-                    inputs: EntryInputs::of(interner, inputs, &module.main.params),
+                    inputs: EntryInputs::of(interner, inputs, &inputs_under, &module.main.params),
                     declared,
                 },
                 EntryShape::Untyped => CompiledShape::Untyped,
@@ -1604,7 +1677,7 @@ fn bare_callable(
 // -- Program -------------------------------------------------------------
 
 /// What one compilation made, whatever access it was compiled for.
-struct Compiled {
+pub(crate) struct Compiled {
     shared: InterpreterContext,
     rt: AcvusRuntime,
     entries: HashMap<String, CompiledEntry>,
@@ -1618,6 +1691,11 @@ struct Compiled {
 impl Compiled {
     fn interner(&self) -> &Interner {
         &self.shared.interner
+    }
+
+    pub(crate) fn running(mut self, runs: &FxHashSet<String>) -> Self {
+        self.entries.retain(|name, _| runs.contains(name));
+        self
     }
 
     fn codec(&self) -> Codec<'_> {
@@ -1660,6 +1738,13 @@ impl<A> Program<A>
 where
     A: Access,
 {
+    pub(crate) fn of(compiled: Compiled) -> Self {
+        Program {
+            compiled,
+            access: PhantomData,
+        }
+    }
+
     /// Every context of the compilation, in key order.
     pub fn contexts(&self) -> impl Iterator<Item = &str> {
         self.compiled.solved.keys().map(String::as_str)

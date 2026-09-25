@@ -160,6 +160,7 @@ fn instantiate_pair_shares_params() {
         identity_params: 0,
         region_params: 0,
         specializable: vec![false],
+        may_hold_a_function: true,
     })
     .expect("one declaration per name");
     let mut builder = PolyBuilder::new();

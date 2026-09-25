@@ -28,6 +28,11 @@ pub struct UserDefinedDecl {
     /// argument, so the argument is a specializing position
     /// (hash-types.md, R1). One entry per `type_params` entry.
     pub specializable: Vec<bool>,
+    /// Whether a value of the type may hold a function beside what its
+    /// type arguments name, which a reader walks itself (RFC-0095 rule 4).
+    /// It is `false` only where a fact of the type rules a function out,
+    /// so a declaration that knows no such fact answers `true`.
+    pub may_hold_a_function: bool,
 }
 
 /// A declaration under a name the registry already has a type for.
@@ -5460,6 +5465,7 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5480,6 +5486,7 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5503,6 +5510,7 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5529,6 +5537,7 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5570,6 +5579,7 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5593,6 +5603,7 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5616,6 +5627,7 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5647,6 +5659,7 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
+            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         let decl = reg.get(id);
@@ -5665,6 +5678,7 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![],
+            may_hold_a_function: true,
         };
         reg.register(decl()).expect("one declaration per name");
         assert_eq!(reg.register(decl()), Err(DuplicateType(id)));
@@ -5713,6 +5727,7 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false; type_param_count],
+            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         reg.register_cast(CastRule {
@@ -5921,6 +5936,7 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
+            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         reg.from_rules.entry(id).or_default().push(rule_a);
@@ -5958,6 +5974,7 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
+            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         reg.register_cast(CastRule {
@@ -6002,6 +6019,7 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
+            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         let mut builder1 = PolyBuilder::new();
