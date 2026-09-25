@@ -1,0 +1,35 @@
+// app: 10 lru_cache
+// desc: a least-recently-used cache of capacity 3 over a request trace:
+// a hit moves the key to the most-recent end, a miss evicts the least
+// recent key when full; prints hits, misses, the eviction log and the
+// final contents from least to most recent
+// expect: hits 6, misses 9, evicted c,d,e,a,b,c; final d,a,b
+let trace = "a b c a b d a b e a b c d a b".split_whitespace() | collect;
+let capacity = 3u64;
+
+let cache = vec([]);
+let hits = 0;
+let misses = 0;
+let evicted = vec([]);
+for key in &trace {
+    // Where the key sits in recency order, or the length when absent.
+    let at = cache.len();
+    for i in 0u64..cache.len() {
+        if &cache[i] == key {
+            at = i;
+            break;
+        };
+    }
+    if at < cache.len() {
+        hits = hits + 1;
+        let k = cache.remove(at);
+        cache.push(k);
+    } else {
+        misses = misses + 1;
+        if cache.len() == capacity {
+            evicted.push(cache.remove(0u64));
+        };
+        cache.push(key.to_string());
+    };
+}
+"hits " + hits.to_string() + ", misses " + misses.to_string() + ", evicted " + (evicted.into_iter() | join(",".to_string())) + "; final " + (cache.into_iter() | join(",".to_string()))

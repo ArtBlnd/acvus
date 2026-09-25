@@ -1,0 +1,50 @@
+// app: 05 word_freq_topk
+// desc: word frequencies of a paragraph, case-folded and stripped of
+// punctuation, then the top four by count (ties by the word) and the share
+// of the text they cover
+// expect: 32 words, 17 distinct; the=6 a=4 and=3 dog=3; top covers 16/32
+let text = "The quick brown fox jumps over the lazy dog. The dog sleeps, and the fox runs;
+a fox, a dog and a cat: the end of the story of a day, and";
+
+let tokens = text.split_whitespace() | collect;
+
+// Each token lower-cased with its trailing punctuation removed.
+let words = vec([]);
+for t in &tokens {
+    let w = t.lower().trim_end_matches(".").trim_end_matches(",").trim_end_matches(";").trim_end_matches(":").to_string();
+    if !w.is_empty() {
+        words.push(w);
+    };
+}
+
+let counts = hash_map();
+for w in &words {
+    let c = or_insert(&mut counts, w.to_string(), 0);
+    *c = *c + 1;
+}
+
+// One row per distinct word, sorted by count descending, then by the word.
+let distinct = keys(&counts) | map(|k| -> k.to_string()) | collect;
+let rows = vec([]);
+for word in &distinct {
+    rows.push({ word: word.to_string(), count: *get(&counts, word).unwrap(), });
+}
+rows.sort_by(|a, b| -> {
+    if a.count != b.count {
+        b.count - a.count
+    } else {
+        string::cmp(&a.word, &b.word)
+    }
+});
+
+let top = min(4u64, rows.len());
+let shown = "".to_string();
+let covered = 0;
+for i in 0u64..top {
+    if i > 0u64 {
+        shown = shown + " ";
+    };
+    shown = shown + rows[i].word + "=" + rows[i].count.to_string();
+    covered = covered + rows[i].count;
+}
+words.len().to_string() + " words, " + rows.len().to_string() + " distinct; " + shown + "; top covers " + covered.to_string() + "/" + words.len().to_string()

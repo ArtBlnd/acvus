@@ -1,0 +1,40 @@
+// app: 11 strip_log_segments
+// desc: a chat app's display filter: every `<Log>...</Log>` segment is cut
+// out of each message by a `find`-driven `while let`; an unclosed segment
+// runs to the end of the message
+// expect: 3 messages, 5 segments removed: [hi there!] [ok ] [done. bye]
+let messages = vec([
+    "hi <Log>tool call 1</Log>there!".to_string(),
+    "ok <Log>a</Log><Log>b</Log>".to_string(),
+    "done.<Log>trace</Log> bye<Log>unclosed".to_string(),
+]);
+
+// The message without its log segments, and how many it had.
+let strip = |text| -> {
+    let kept = "".to_string();
+    let rest = text.to_string();
+    let removed = 0;
+    while let Some(start) = rest.find("<Log>") {
+        kept = kept + rest.substring(0u64, start as u64);
+        removed = removed + 1;
+        let after = rest.substring((start as u64) + 5u64, rest.len()).to_string();
+        match after.find("</Log>") {
+            Some(end) => {
+                rest = after.substring((end as u64) + 6u64, after.len()).to_string();
+            },
+            None => {
+                rest = "".to_string();
+            },
+        };
+    }
+    { text: kept + rest, removed: removed, }
+};
+
+let shown = vec([]);
+let removed = 0;
+for m in &messages {
+    let s = strip(m);
+    removed = removed + s.removed;
+    shown.push("[" + s.text + "]");
+}
+messages.len().to_string() + " messages, " + removed.to_string() + " segments removed: " + (shown.into_iter() | join(" ".to_string()))

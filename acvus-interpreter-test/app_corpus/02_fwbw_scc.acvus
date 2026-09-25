@@ -1,0 +1,140 @@
+// app: 02 fwbw_scc
+// desc: strongly connected components by forward-backward partitioning: a
+// worklist of partitions, each trimmed of nodes with no in- or out-edge
+// inside it, split around a pivot by a forward and a backward BFS; each
+// node is labelled by the least node of its component
+// expect: 6 components: 0,0,0,3,3,5,6,6,5,5,10,11
+let n = 12u64;
+// Edges: 0->1 1->2 2->0 2->3 3->4 4->3 5->6 6->7 7->6 5->8 8->9 9->5 7->4
+// 10->0 (10 has no in-edge) 9->11 (11 has no out-edge)
+let edges_from = vec([0u64, 1u64, 2u64, 2u64, 3u64, 4u64, 5u64, 6u64, 7u64, 5u64, 8u64, 9u64, 7u64, 10u64, 9u64]);
+let edges_to = vec([1u64, 2u64, 0u64, 3u64, 4u64, 3u64, 6u64, 7u64, 6u64, 8u64, 9u64, 5u64, 4u64, 0u64, 11u64]);
+
+// Compressed rows of the edges `from -> to`.
+let csr = |n, from, to| -> {
+    let degree = filled(n, 0);
+    for e in &from {
+        degree[*e] = degree[*e] + 1;
+    }
+    let offs = vec([0u64]);
+    let run = 0u64;
+    for v in 0u64..n {
+        run = run + (degree[v] as u64);
+        offs.push(run);
+    }
+    let fill = filled(n, 0);
+    let targets = filled(to.len(), 0);
+    for e in 0u64..from.len() {
+        let v = from[e];
+        let at = offs[v] + (fill[v] as u64);
+        targets[at] = to[e] as i64;
+        fill[v] = fill[v] + 1;
+    }
+    { offs: offs, targets: targets, }
+};
+
+// Level-synchronous BFS from `start` over the nodes of partition `p`.
+let reach = |n, start, offs, targets, part, p| -> {
+    let seen = filled(n, false);
+    seen[start] = true;
+    let frontier = vec([start]);
+    while frontier.len() > 0u64 {
+        let next = vec([]);
+        for u in &frontier {
+            for k in offs[*u]..offs[*u + 1u64] {
+                let w = targets[k] as u64;
+                if part[w] == p && !seen[w] {
+                    seen[w] = true;
+                    next.push(w);
+                };
+            }
+        }
+        frontier = next;
+    }
+    seen
+};
+
+// Nodes of partition `p` with no in-edge or no out-edge inside it.
+let trimmed = |n, offs, targets, roffs, rtargets, part, p| -> {
+    let dead = filled(n, false);
+    for v in 0u64..n {
+        if part[v] == p {
+            let outs = 0;
+            for k in offs[v]..offs[v + 1u64] {
+                if part[targets[k] as u64] == p {
+                    outs = outs + 1;
+                };
+            }
+            let ins = 0;
+            for k in roffs[v]..roffs[v + 1u64] {
+                if part[rtargets[k] as u64] == p {
+                    ins = ins + 1;
+                };
+            }
+            dead[v] = outs == 0 || ins == 0;
+        };
+    }
+    dead
+};
+
+let fwd = csr(n, &edges_from, &edges_to);
+let bwd = csr(n, &edges_to, &edges_from);
+let part = filled(n, 0);
+let label = filled(n, -1);
+let work = vec([0]);
+let next_part = 1;
+while let Some(p) = work.pop() {
+    let dead = trimmed(n, &fwd.offs, &fwd.targets, &bwd.offs, &bwd.targets, &part, p);
+    for v in 0u64..n {
+        if dead[v] {
+            label[v] = v as i64;
+            part[v] = -1;
+        };
+    }
+    // The pivot is the partition's least node. A `break` here gives the
+    // wrong pivot inside the worklist loop (see INDEX.md, "Found while
+    // building"), so the search runs to the end and keeps the first hit.
+    let pivot = n;
+    for v in 0u64..n {
+        if pivot == n && part[v] == p {
+            pivot = v;
+        };
+    }
+    if pivot < n {
+        let f = reach(n, pivot, &fwd.offs, &fwd.targets, &part, p);
+        let b = reach(n, pivot, &bwd.offs, &bwd.targets, &part, p);
+        for v in 0u64..n {
+            if part[v] == p {
+                if f[v] && b[v] {
+                    label[v] = pivot as i64;
+                    part[v] = -1;
+                } else if f[v] {
+                    part[v] = next_part;
+                } else if b[v] {
+                    part[v] = next_part + 1;
+                } else {
+                    part[v] = next_part + 2;
+                };
+            };
+        }
+        work.push(next_part);
+        work.push(next_part + 1);
+        work.push(next_part + 2);
+        next_part = next_part + 3;
+    };
+}
+
+let comps = 0;
+for v in 0u64..n {
+    if label[v] == v as i64 {
+        comps = comps + 1;
+    };
+}
+let out = comps.to_string() + " components: ";
+for v in 0u64..n {
+    if v > 0u64 {
+        out = out + ",";
+    };
+    out = out + label[v].to_string();
+}
+out

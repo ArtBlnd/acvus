@@ -1,0 +1,31 @@
+for range(0 (r36)..r33) -> L1 else L2 stages [L1, L5, L6]
+// L1: free {index, const, >=}
+// L5: cycle Storage(r37) any_order law(Op(Add) exact commutative) {take, +, assign}
+// L5: cycle Storage(r38) any_order law(Op(Add) exact commutative) {take, +, assign}
+// L6: cycle Storage(r39) any_order law(Call(#4, identity) exact commutative) {take, call max, assign}
+// control upfront
+// cost W=4 O=18287 split when n > 146296, n = max(r33 - 0 (r36), 0)
+for range(0 (r13)..r1) -> L1 else L2 stages [L1, L17, L18]
+// L1: free {index, as_slice, call chars, call collect, assign, const, ref, as_slice, const}
+// L17: cycle Storage(r14) in_order {index_set}
+// L18: cycle Carried(r11)+Carried(r12) in_order {*, +, *, +, jump, branch, jump, branch, jump, jump}
+// control upfront
+// cost W=17 O=18287 split when n > 34423, n = max(r1 - 0 (r13), 0)
+for range(0 (r22)..r2) -> L4 else L5 stages [L4, L13]
+// L4: free {index, const, ==, *, +}
+// L13: cycle Storage(r14) disjoint {index_set}
+// control upfront
+// cost W=9 O=18281 split when n > 65000, n = max(r2 - 0 (r22), 0)
+for range(0 (r31)..r2) -> L7 else L8 stages [L7, L14, L15, L16]
+// L7: free {index, const, ==, const}
+// L14: cycle Carried(r29) in_order {*, +, branch, jump}
+// L15: free {index, ==}
+// L16: cycle Carried(r30) in_order {*, +, branch, jump}
+// control upfront
+// cost W=8 O=18293 split when n > 73172, n = max(r2 - 0 (r31), 0)
+for range(0 (r40)..4 (r41)) -> L4 else L5 stages [L4, L22]
+// L4: free {index, +, index, +, const, >=, cast, <, const, const, >=, const, cast, <, const}
+// L22: cycle Storage(r42) in_order {index, <, index, const, +, index_set, jump, branch}
+// L22: cycle Storage(r43) in_order {ref, call push_back}
+// control upfront
+// cost W=9 O=18281 split when n > 65000, n = max(4 (r41) - 0 (r40), 0)
