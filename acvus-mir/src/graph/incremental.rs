@@ -4,7 +4,7 @@
 //! On source change: re-extract -> diff call edges -> re-SCC if needed ->
 //! re-infer dirty SCCs (with early cutoff), then lower and optimize.
 
-use acvus_utils::{Astr, Freeze, Interner};
+use acvus_utils::{Freeze, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::error::Refusal;
@@ -15,8 +15,8 @@ use crate::typeck::ProbeProduct;
 
 use super::extract::{ParsedSource, extract, extract_one};
 use super::infer::{
-    FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc, solve_contexts,
-    tarjan_scc,
+    CallTargets, FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc,
+    solve_contexts, tarjan_scc,
 };
 use super::lower::{inputs_of, lower_one};
 use super::optimize::{Opt, optimize};
@@ -420,12 +420,13 @@ impl IncrementalGraph {
 
     // TODO: qualified call edges once AST supports ns:func() syntax.
     // For now, only unqualified (root) names are resolved.
-    fn root_fn_names(&self) -> FxHashMap<Astr, QualifiedRef> {
-        self.functions
-            .iter()
-            .filter(|(q, f)| q.namespace.is_none() && matches!(f.kind, FnKind::Local(..)))
-            .map(|(&q, _)| (q.name, q))
-            .collect()
+    fn root_fn_names(&self) -> CallTargets {
+        CallTargets::of(
+            self.functions
+                .iter()
+                .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
+                .map(|(q, _)| q),
+        )
     }
 
     /// Every function's call edges against the functions the graph holds

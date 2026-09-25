@@ -26,12 +26,15 @@ use crate::ty::{
 pub struct SerQualifiedRef {
     pub namespace: Option<String>,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 fn qref_to_ser(r: &QualifiedRef, interner: &Interner) -> SerQualifiedRef {
     SerQualifiedRef {
         namespace: r.namespace.map(|ns| interner.resolve(ns).to_string()),
         name: interner.resolve(r.name).to_string(),
+        host: r.host.map(|host| interner.resolve(host).to_string()),
     }
 }
 
@@ -39,6 +42,7 @@ fn ser_to_qref(r: &SerQualifiedRef, interner: &Interner) -> QualifiedRef {
     QualifiedRef {
         namespace: r.namespace.as_ref().map(|ns| interner.intern(ns)),
         name: interner.intern(&r.name),
+        host: r.host.as_ref().map(|host| interner.intern(host)),
     }
 }
 
@@ -425,6 +429,7 @@ impl SerTy {
                         QualifiedRef {
                             namespace: namespace.as_deref().map(|ns| interner.intern(ns)),
                             name: interner.intern(name),
+                            host: None,
                         },
                         fields,
                     ),
@@ -479,6 +484,7 @@ impl SerTy {
                 name: QualifiedRef {
                     namespace: namespace.as_deref().map(|ns| interner.intern(ns)),
                     name: interner.intern(name),
+                    host: None,
                 },
                 variants: variants
                     .iter()
