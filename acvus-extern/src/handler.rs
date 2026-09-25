@@ -1726,6 +1726,7 @@ where
         laws: Laws,
         ensures: Vec<Postcondition>,
         reaches: Reaches,
+        cost: Option<u64>,
     ) -> acvus_mir::ty::InstanceSig {
         acvus_mir::ty::InstanceSig {
             ty: self.signature.clone(),
@@ -1736,6 +1737,7 @@ where
             laws,
             ensures,
             reaches,
+            cost,
         }
     }
 }
@@ -1776,17 +1778,19 @@ impl<R: Runtime> Instances<R> {
         laws: &Laws,
         ensures: &[Postcondition],
         reaches: &Reaches,
+        cost: Option<u64>,
     ) -> acvus_mir::ty::Instances {
         acvus_mir::ty::Instances {
             concrete: self
                 .concrete
                 .iter()
-                .map(|i| i.signature_under(laws.clone(), ensures.to_vec(), reaches.clone()))
+                .map(|i| i.signature_under(laws.clone(), ensures.to_vec(), reaches.clone(), cost))
                 .collect(),
             generic: self.generic.as_ref().map(|_| acvus_mir::ty::GenericSig {
                 laws: laws.clone(),
                 ensures: ensures.to_vec(),
                 reaches: reaches.clone(),
+                cost,
             }),
         }
     }

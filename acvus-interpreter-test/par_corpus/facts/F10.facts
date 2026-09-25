@@ -2,3 +2,4 @@ for slice(r3) -> L1 else L2 stages [L1, L3]
 // L1: free {take}
 // L3: cycle Order(r6) in_order {call indirect}
 // control upfront
+// cost W=3 O=18281 split when n > 194998, n = len(r3)

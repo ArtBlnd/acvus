@@ -2,3 +2,4 @@ for slice(r20) -> L1 else L2 stages [L1, L6]
 // L1: free {ref, ref, call to_string, take}
 // L6: cycle Storage(r21) in_order {ref, call get, unwrap_variant, take, const, ref, +, call insert, switch, jump, jump}
 // control upfront
+// cost W=10 O=18281 split when n > 58500, n = len(r20)

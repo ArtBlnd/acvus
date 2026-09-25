@@ -1,9 +1,10 @@
 //! The parallel-loop corpus (`acvus-interpreter-test/par_corpus`) at the
 //! CLI's contract: every case runs to the value its row of `INDEX.md` states,
-//! and `acvus mir` prints, for each of its `For`s, the stages line and the
-//! facts `analysis::loop_deps` computes of each stage exactly as the case's
-//! `facts/<id>.facts` holds them. A change in any row's stages, cycles,
-//! orders or laws shows here as that row's difference.
+//! and `acvus mir` prints, for each of its `For`s, the stages line, the
+//! facts `analysis::loop_deps` computes of each stage and the cost
+//! `analysis::cost` computes against the interpreter's table exactly as the
+//! case's `facts/<id>.facts` holds them. A change in any row's stages,
+//! cycles, orders, laws or cost shows here as that row's difference.
 //!
 //! A case whose header states `contexts` runs in a space holding the script
 //! and the inits under `inits/<id>/`, as `INDEX.md` says.

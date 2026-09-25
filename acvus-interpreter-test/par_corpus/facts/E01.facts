@@ -2,7 +2,9 @@ for slice(r11) -> L1 else L2 stages [L1, L7]
 // L1: free {as_slice}
 // L7: cycle Order(r13) in_order {merge, jump, jump}
 // control upfront
+// cost W=3 O=18281 split when n > 194998, n = len(r11)
 for slice(r16) -> L4 else L5 stages [L4, L6]
 // L4: free {take, assign, ref, call to_string, assign, ref, as_slice, spawn print, eval, drop}
 // L6: cycle Order(r17) any_order law(Order exact commutative) {merge}
 // control upfront
+// cost W=18294 O=18281 split when n > 32, n = len(r16)

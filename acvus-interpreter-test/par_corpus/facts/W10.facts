@@ -2,3 +2,4 @@ for range(0 (r10)..r8) -> L1 else L2 stages [L1, L3]
 // L1: free {const, *, const, +}
 // L3: cycle Storage(r11) disjoint {ref, call swap}
 // control upfront
+// cost W=2 O=18281 split when n > 292496, n = max(r8 - 0 (r10), 0)

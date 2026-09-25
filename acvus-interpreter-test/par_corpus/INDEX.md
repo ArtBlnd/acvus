@@ -1,6 +1,6 @@
 # Parallel-loop corpus
 
-Loops a sound compiler could run apart and the compiler at 5a01a67e did not, each with its ideal shape, its current shape from `acvus mir`, and the gap between them; plus negative controls that must stay sequential. A row whose gap class is `reached` prints its ideal's stages, cycles, orders and laws with the current binary. `facts/<id>.facts` holds what `acvus mir` prints of each case's `For`s, and `acvus-cli`'s `par_corpus` test runs every case against its expected value and those facts.
+Loops a sound compiler could run apart and the compiler at 5a01a67e did not, each with its ideal shape, its current shape from `acvus mir`, and the gap between them; plus negative controls that must stay sequential. A row whose gap class is `reached` prints its ideal's stages, cycles, orders and laws with the current binary. `facts/<id>.facts` holds what `acvus mir` prints of each case's `For`s, its cost line against the interpreter's table (RFC-0066 rule 8) among them, and `acvus-cli`'s `par_corpus` test runs every case against its expected value and those facts.
 
 Every case is one `.acvus` in this directory. Its header states `id`, `family`, `desc` and `expect` (the run's stdout, `\n` between lines); a case that reads contexts states `contexts` and takes its inits from `inits/<id>/`, run in a space holding that script and those inits (`acvus ctl space add-script`, `acvus ctl space init`, `acvus run <name> --space <space>`). Every other case runs as `acvus run <file>`.
 

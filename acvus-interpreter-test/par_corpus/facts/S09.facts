@@ -2,3 +2,4 @@ for range(0 (r12)..r8) -> L1 else L2 stages [L1, L5]
 // L1: free {index, const, ==}
 // L5: cycle Carried(r11) in_order {branch}
 // control upfront
+// cost W=4 O=18281 split when n > 146248, n = max(r8 - 0 (r12), 0)

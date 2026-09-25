@@ -25,6 +25,7 @@ macro_rules! tooling_vis {
 pub mod code;
 #[cfg(not(feature = "tooling"))]
 mod code;
+pub mod cost;
 pub mod executor;
 mod flight;
 mod host;

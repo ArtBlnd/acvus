@@ -23,6 +23,7 @@ mod container_read;
 mod conversion;
 mod core_arithmetic;
 mod core_instances;
+mod cost;
 mod deque;
 mod diamond;
 mod differential;

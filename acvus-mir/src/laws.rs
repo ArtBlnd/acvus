@@ -1,5 +1,7 @@
 //! The algebraic laws and the postconditions an extern declares (RFC-0082
-//! rules 2 to 4), read by a MIR pass through a call's callee.
+//! rules 2 to 4), read by a MIR pass through a call's callee, and the
+//! weight it states (RFC-0066 rule 8), which only `analysis::cost` reads
+//! and no pass does.
 //!
 //! A law or a postcondition is the author's promise, trusted as an effect
 //! is. Nothing here checks that a function is associative or that its
@@ -302,6 +304,7 @@ struct DeclaredAt<'a> {
     laws: &'a Laws,
     ensures: &'a [Postcondition],
     reaches: &'a Reaches,
+    cost: Option<u64>,
 }
 
 /// What one instance of an extern declares.
@@ -310,6 +313,7 @@ struct Declared {
     laws: ResolvedLaws,
     ensures: Vec<Postcondition>,
     reaches: Reaches,
+    cost: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -341,12 +345,14 @@ impl LawTable {
                         laws: &instance.laws,
                         ensures: &instance.ensures,
                         reaches: &instance.reaches,
+                        cost: instance.cost,
                     })
                     .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
                         ty: &function.ty,
                         laws: &generic.laws,
                         ensures: &generic.ensures,
                         reaches: &generic.reaches,
+                        cost: generic.cost,
                     }));
                 let mut declared: Vec<Declared> = declared_at
                     .map(|DeclaredAt {
@@ -354,6 +360,7 @@ impl LawTable {
                              laws,
                              ensures,
                              reaches,
+                             cost,
                          }| Declared {
                         laws: resolve(laws, ty, |named| functions.get(&named).copied())
                             .unwrap_or_else(|unresolved| {
@@ -365,6 +372,7 @@ impl LawTable {
                             }),
                         ensures: ensures.to_vec(),
                         reaches: reaches.clone(),
+                        cost,
                     })
                     .collect();
                 if declared.is_empty() {
@@ -402,6 +410,14 @@ impl LawTable {
             Some(declared) => &declared.reaches,
             None => &LENT,
         }
+    }
+
+    /// The weight in ticks the instance a call names states of one call
+    /// (`cost = N`, RFC-0066 rule 8), read by instance as a law is; `None`
+    /// where it states none, and for a call of a local function or through
+    /// a value, which no declaration weighs.
+    pub fn cost_of(&self, callee: &Callee) -> Option<u64> {
+        self.declared(callee).and_then(|declared| declared.cost)
     }
 
     fn declared(&self, callee: &Callee) -> Option<&Declared> {

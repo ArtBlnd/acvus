@@ -2,3 +2,4 @@ for range(1 (r5)..4 (r6)) -> L1 else L2 stages [L1, L3]
 // L1: free {const, -, assign, ref, const}
 // L3: cycle Storage(r7) in_order {ref, call get, call unwrap, take, ref, *, +, -, call insert}
 // control upfront
+// cost W=7 O=18281 split when n > 83571, n = max(4 (r6) - 1 (r5), 0)

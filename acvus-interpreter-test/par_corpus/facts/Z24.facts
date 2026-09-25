@@ -4,3 +4,4 @@ for slice(r8) -> L1 else L2 stages [L1, L3, L4, L5]
 // L4: free {assign, ref, concat, drop, assign, ref, concat, drop, assign, ref, as_slice}
 // L5: cycle Order(r10) in_order {spawn print, eval}
 // control upfront
+// cost W=63 O=18293 split when n > 9292, n = len(r8)

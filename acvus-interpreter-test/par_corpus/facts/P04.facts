@@ -2,3 +2,4 @@ for slice(r4) -> L1 else L2 stages [L1, L10]
 // L1: free {const, ==, take, const, ==, !, const, -%, index, const, ==, !, !, const}
 // L10: cycle Carried(r6) any_order law(Op(Add) exact commutative) {const, +, branch, jump}
 // control upfront
+// cost W=6 O=18281 split when n > 97499, n = len(r4)

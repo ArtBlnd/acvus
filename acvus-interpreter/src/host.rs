@@ -1729,7 +1729,12 @@ where
             .collect();
         Ok(Listing {
             inputs,
-            mir: acvus_mir::printer::dump_with_facts(interner, &compiled.module, &program.listing_laws),
+            mir: acvus_mir::printer::dump_with_costs(
+                interner,
+                &compiled.module,
+                &program.listing_laws,
+                &crate::cost::INTERPRETER_COSTS,
+            ),
             prepared: lookup_module(&program.shared, &compiled.qref),
         })
     }

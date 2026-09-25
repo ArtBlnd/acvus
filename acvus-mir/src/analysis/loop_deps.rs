@@ -62,6 +62,7 @@ impl ShapeFault {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageBlocks {
     pub entry: Label,
+    pub entry_block: BlockIdx,
     pub blocks: Vec<BlockIdx>,
     ends_toward_next_or_header: Vec<BlockIdx>,
 }
@@ -151,6 +152,7 @@ impl StageMembership {
             }
             found.push(StageBlocks {
                 entry: labels[index],
+                entry_block: entry,
                 blocks,
                 ends_toward_next_or_header: ends,
             });

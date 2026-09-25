@@ -44,6 +44,10 @@ pub struct FnDecl {
     /// The places a call reaches through its reference arguments (RFC-0082
     /// rule 7).
     pub reaches: Reaches,
+    /// The weight in ticks of one call, when the declaration states it
+    /// (`cost = N`, RFC-0066 rule 8); a declaration that states none weighs
+    /// its family's row of the backend's table.
+    pub cost: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +195,7 @@ where
             laws: Laws::None,
             ensures: Vec::new(),
             reaches: Reaches::Lent,
+            cost: None,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -319,6 +324,7 @@ where
             laws: decl.laws,
             ensures: decl.ensures,
             reaches: decl.reaches,
+            cost: decl.cost,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -820,6 +826,7 @@ struct LawfulInstance<R: Runtime> {
     laws: Laws,
     ensures: Vec<Postcondition>,
     reaches: Reaches,
+    cost: Option<u64>,
 }
 
 impl<R: Runtime> Externs<R> {
@@ -968,7 +975,12 @@ impl<R: Runtime> Externs<R> {
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
                     effect_bounds: decl.effect_bounds,
-                    instances: instances.signatures(&decl.laws, &decl.ensures, &decl.reaches),
+                    instances: instances.signatures(
+                        &decl.laws,
+                        &decl.ensures,
+                        &decl.reaches,
+                        decl.cost,
+                    ),
                     requires: decl
                         .requires
                         .iter()
@@ -1020,6 +1032,7 @@ impl<R: Runtime> Externs<R> {
                                 arm.laws.clone(),
                                 arm.ensures.clone(),
                                 arm.reaches.clone(),
+                                arm.cost,
                             )
                     })
                     .collect(),
@@ -1252,6 +1265,7 @@ fn add_instance<R: Runtime>(
             laws: decl.laws.clone(),
             ensures: decl.ensures.clone(),
             reaches: decl.reaches.clone(),
+            cost: decl.cost,
         }));
     Ok(())
 }

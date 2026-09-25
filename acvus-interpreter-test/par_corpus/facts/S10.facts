@@ -1,3 +1,4 @@
 for range(0 (r14)..r8) -> L1 else L2 stages [L1]
 // L1: cycle Carried(r12)+Carried(r13) in_order {!, index, const, ==, const, const, branch, jump, jump, branch, jump}
 // control upfront
+// cost in place: no free stage

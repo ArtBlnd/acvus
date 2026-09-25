@@ -2,3 +2,4 @@ for slice(r6) -> L1 else L2 stages [L1, L6]
 // L1: free {take, const, %, const, ==}
 // L6: cycle Order(r8) in_order {spawn print, eval, spawn print, eval, jump, jump}
 // control upfront
+// cost W=5 O=18281 split when n > 116999, n = len(r6)

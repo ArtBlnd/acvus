@@ -1,5 +1,6 @@
 pub mod affine;
 pub mod carried;
+pub mod cost;
 pub mod dataflow;
 pub mod domain;
 pub mod domtree;

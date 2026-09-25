@@ -3,3 +3,4 @@ for slice(r11) -> L1 else L2 stages [L1, L3, L4]
 // L3: free {take, +}
 // L4: cycle Storage(r13) in_order law(Fold(r13, #3) exact) {ref, call push}
 // control upfront
+// cost W=4 O=18287 split when n > 146296, n = len(r11)

@@ -2,3 +2,4 @@ for slice(r10) -> L1 else L2 stages [L1, L3]
 // L1: free {take, assign, ref, call to_string, assign, ref}
 // L3: cycle Storage(r11) in_order law(Op(Concat) exact) {ref, concat, assign}
 // control upfront
+// cost W=16 O=18281 split when n > 36562, n = len(r10)

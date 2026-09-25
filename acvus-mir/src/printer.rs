@@ -6,10 +6,12 @@ use crate::ir::{BinOp, Overflow, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
+use crate::analysis::cost::{CostTable, Costs, InPlace, LoopCost};
 use crate::analysis::loop_deps::{
     Accumulator, BodyDeps, CallIdentity, Control, Cycle, Law, LawOp, LoopDeps, Member,
     Order, Placement, Storage, Token,
 };
+use crate::analysis::loops::{Term, Trip};
 use crate::cfg::{CfgBody, Terminator, promote};
 use crate::ir::{
     Callee, ExitTrip, ForSource, IndexBound, IndexMode, InstKind, Label, MirBody, MirModule,
@@ -103,11 +105,15 @@ fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer
 
 /// What the listing shows of each `For`'s stages: the boundaries the
 /// terminator states, or those and what `analysis::loop_deps` computes of
-/// each stage, which needs the law table.
+/// each stage, which needs the law table, and with a backend's table what
+/// `analysis::cost` computes of the loop.
 #[derive(Clone, Copy)]
 pub enum StageFacts<'a> {
     Boundaries,
-    Computed(&'a LawTable),
+    Computed {
+        laws: &'a LawTable,
+        costs: Option<&'a CostTable>,
+    },
 }
 
 /// The comment lines under one `For`: per stage, `free` or its cycles, each
@@ -168,6 +174,56 @@ fn fmt_loop_facts(
         },
     });
     lines
+}
+
+/// `cost W=4 O=4096 split when n > 32768, n = len(r3)` (RFC-0066 rule 8),
+/// or `cost in place: no free stage`.
+fn fmt_cost(cost: LoopCost, trip: Option<String>) -> String {
+    match cost {
+        LoopCost::Split {
+            work,
+            overhead,
+            threshold,
+        } => {
+            let named = match trip {
+                Some(term) => format!(", n = {term}"),
+                None => String::new(),
+            };
+            format!("cost W={work} O={overhead} split when n > {threshold}{named}")
+        }
+        LoopCost::InPlace(InPlace::NoFreeStage) => "cost in place: no free stage".to_string(),
+        LoopCost::InPlace(InPlace::NoWork) => "cost in place: W=0".to_string(),
+    }
+}
+
+/// A trip count as RFC-0066 rule 3 writes it: `max(r7 - 0 (r3), 0)`.
+fn fmt_term(
+    term: &Term,
+    vn: &mut ValNormalizer,
+    consts: &FxHashMap<ValueId, &Literal>,
+    texts: &FxHashMap<ValueId, usize>,
+) -> String {
+    let operand = |term: &Term, vn: &mut ValNormalizer| match term {
+        Term::Add(..) | Term::Sub(..) | Term::Mul(..) => {
+            format!("({})", fmt_term(term, vn, consts, texts))
+        }
+        Term::Const(_) | Term::Value(_) | Term::Len(_) | Term::Max(..) => {
+            fmt_term(term, vn, consts, texts)
+        }
+    };
+    match term {
+        Term::Const(literal) => fmt_literal(literal),
+        Term::Value(value) => vn.fmt_use(*value, consts, texts),
+        Term::Len(source) => format!("len({})", vn.fmt_use(*source, consts, texts)),
+        Term::Add(a, b) => format!("{} + {}", operand(a, vn), operand(b, vn)),
+        Term::Sub(a, b) => format!("{} - {}", operand(a, vn), operand(b, vn)),
+        Term::Mul(a, b) => format!("{} * {}", operand(a, vn), operand(b, vn)),
+        Term::Max(a, b) => format!(
+            "max({}, {})",
+            fmt_term(a, vn, consts, texts),
+            fmt_term(b, vn, consts, texts)
+        ),
+    }
 }
 
 /// `cycle Carried(r3) any_order law(Op(Add) exact commutative) {+}`.
@@ -486,6 +542,7 @@ struct Computed<'a> {
     cfg: CfgBody,
     deps: BodyDeps,
     laws: &'a LawTable,
+    costs: Option<&'a CostTable>,
 }
 
 fn write_body(
@@ -497,15 +554,21 @@ fn write_body(
     let mut vn = ValNormalizer::new();
     let computed = match ctx.facts {
         StageFacts::Boundaries => None,
-        StageFacts::Computed(laws) => {
+        StageFacts::Computed { laws, costs } => {
             let cfg = promote(body.clone());
             Some(Computed {
                 deps: BodyDeps::of(&cfg, laws),
                 cfg,
                 laws,
+                costs,
             })
         }
     };
+    let costs = computed.as_ref().and_then(|computed| {
+        computed
+            .costs
+            .map(|table| Costs::of(&computed.cfg, computed.laws, table))
+    });
     let mut block = crate::cfg::ENTRY_LABEL;
 
     // A constant is shown at its use sites only while its ValueId names that
@@ -1073,7 +1136,20 @@ fn write_body(
                         .find(|found| computed.cfg.blocks[found.header.0].label == block)
                         .expect("promoting a body keeps each `For` at the end of its block");
                     let lines = match &found.deps {
-                        Ok(deps) => fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, &mut vn),
+                        Ok(deps) => {
+                            let mut lines =
+                                fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, &mut vn);
+                            if let Some(costs) = &costs {
+                                let trip = costs.trip(found.header).and_then(|trip| match trip {
+                                    Trip::Known(term) => {
+                                        Some(fmt_term(term, &mut vn, &consts, &texts))
+                                    }
+                                    Trip::Unknown => None,
+                                });
+                                lines.push(fmt_cost(costs.of_loop(deps), trip));
+                            }
+                            lines
+                        }
                         Err(fault) => vec![format!("stages refused: {}", fault.shown())],
                     };
                     for line in lines {
@@ -1306,7 +1382,25 @@ impl MirModule {
         MirModuleDisplay {
             module: self,
             interner,
-            facts: StageFacts::Computed(laws),
+            facts: StageFacts::Computed { laws, costs: None },
+        }
+    }
+
+    /// As [`Self::display_with_facts`], with what `analysis::cost` computes
+    /// of each `For` against a backend's `table` (RFC-0066 rule 8).
+    pub fn display_with_costs<'a>(
+        &'a self,
+        interner: &'a Interner,
+        laws: &'a LawTable,
+        table: &'a CostTable,
+    ) -> MirModuleDisplay<'a> {
+        MirModuleDisplay {
+            module: self,
+            interner,
+            facts: StageFacts::Computed {
+                laws,
+                costs: Some(table),
+            },
         }
     }
 }
@@ -1510,6 +1604,16 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 /// `dump`, with each `For`'s computed stage facts.
 pub fn dump_with_facts(interner: &Interner, module: &MirModule, laws: &LawTable) -> String {
     format!("{}", module.display_with_facts(interner, laws))
+}
+
+/// `dump_with_facts`, with each `For`'s cost against `table`.
+pub fn dump_with_costs(
+    interner: &Interner,
+    module: &MirModule,
+    laws: &LawTable,
+    table: &CostTable,
+) -> String {
+    format!("{}", module.display_with_costs(interner, laws, table))
 }
 
 #[cfg(test)]

@@ -233,7 +233,7 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `Encode` | writing one element as canonical bytes | atom — the space provides it, and it turns a nested journaled value into its head hash, which the type cannot do |
 | `Decode` | reading one element back | atom — the space's half again, in the other direction |
 | `Visit` | visiting a nested value the space commits before its parent | atom |
-| `extern_fn` | a Rust function declares an ExternFn | atom — `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync` |
+| `extern_fn` | a Rust function declares an ExternFn | atom — `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, `ensures`, `reaches`, `cost` |
 | `ExternType` | a `repr(transparent)` Rust struct declares an extension type | atom — the helper attribute `extern_type` takes `name` and `ns` |
 | `TyArg` (derive) | a Rust struct declares an object type, a Rust enum the language's enum of the same name | atom — the helper attribute `projection` is a bare presence test and adds the borrow types beside the aggregate |
 | `extern_signature` | a shared signature with no body | atom — it declares the marker type a declaration's `instance_of` names |

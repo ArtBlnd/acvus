@@ -12,7 +12,7 @@ use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
-    Attribute, DeriveInput, FnArg, GenericParam, Ident, ItemFn, LitStr, Pat, Path, ReturnType,
+    Attribute, DeriveInput, FnArg, GenericParam, Ident, ItemFn, LitInt, LitStr, Pat, Path, ReturnType,
     Token, Type, TypeParamBound, parse_macro_input,
 };
 
@@ -56,6 +56,9 @@ struct ExternFnAttr {
     law: Option<law::LawAttr>,
     ensures: Option<ensures::EnsuresAttr>,
     reaches: Option<reaches::ReachesAttr>,
+    /// `cost = N`: one call weighs `N` ticks of the backend's table
+    /// (RFC-0066 rule 8), in place of its family's row.
+    cost: Option<LitInt>,
 }
 
 impl Parse for ExternFnAttr {
@@ -70,6 +73,7 @@ impl Parse for ExternFnAttr {
             law: None,
             ensures: None,
             reaches: None,
+            cost: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -132,11 +136,23 @@ impl Parse for ExternFnAttr {
                 out.effect = Some(input.parse()?);
             } else if key == "sync" {
                 out.sync = Some(input.parse()?);
+            } else if key == "cost" {
+                if out.cost.is_some() {
+                    return Err(syn::Error::new(key.span(), "`cost` is stated twice"));
+                }
+                let weight: LitInt = input.parse()?;
+                weight.base10_parse::<u64>().map_err(|_| {
+                    syn::Error::new(
+                        weight.span(),
+                        "`cost` is a whole number of ticks that fits a `u64`",
+                    )
+                })?;
+                out.cost = Some(weight);
             } else {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     `ensures` or `reaches`",
+                     `ensures`, `reaches` or `cost`",
                 ));
             }
             if !input.is_empty() {
@@ -1303,6 +1319,13 @@ fn generate_extern_fn(
         Some(stated) => stated.declared(fn_ident, &params)?,
         None => quote! { ::acvus_extern::Reaches::Lent },
     };
+    let cost = match &attr.cost {
+        Some(weight) => {
+            let weight: u64 = weight.base10_parse()?;
+            quote! { ::core::option::Option::Some(#weight) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
 
     let fresh_vars = vars.fresh_vars_expr();
     let rt_bounds = quote! { __R: ::acvus_extern::Runtime, };
@@ -1358,6 +1381,7 @@ fn generate_extern_fn(
                     laws: #laws,
                     ensures: #ensures,
                     reaches: #reaches,
+                    cost: #cost,
                 },
                 instances: __instances,
             };

@@ -196,6 +196,7 @@ fn sync_or_async(i: &Interner) -> Function {
                         laws: Default::default(),
                         ensures: Vec::new(),
                         reaches: Default::default(),
+                        cost: None,
                     },
                     InstanceSig {
                         ty: ty.clone(),
@@ -206,6 +207,7 @@ fn sync_or_async(i: &Interner) -> Function {
                         laws: Default::default(),
                         ensures: Vec::new(),
                         reaches: Default::default(),
+                        cost: None,
                     },
                 ],
                 generic: None,

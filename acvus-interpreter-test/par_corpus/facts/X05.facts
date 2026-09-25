@@ -2,3 +2,4 @@ for slice(r3) -> L1 else L2 stages [L1, L3]
 // L1: free {call to_string, assign, ref, take, assign, ref, call to_string, assign, ref, concat, drop, drop, assign, ref, as_slice, spawn print, eval, drop}
 // L3: cycle Order(r6) any_order law(Order exact commutative) {merge}
 // control upfront
+// cost W=18328 O=18281 split when n > 32, n = len(r3)
