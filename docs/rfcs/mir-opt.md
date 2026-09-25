@@ -811,6 +811,12 @@ the step holds; its rules 2 and 3 apply unchanged.
    width read unsigned and one constant division, so it neither traps nor
    wraps. The header becomes a range over that count; `i` is read from the
    counter as `b + k·s`.
+4. **An offset compare.** `c` is `i + c₀ < n` for a word constant `c₀`:
+   the range is `b + c₀ .. n`, whose start is the header's first visit's
+   own step moved to the entry (RFC-0081 rule 3).
+5. **A borrow in the header.** A `Ref` the header makes of a slot that no
+   instruction of the loop writes, lends `&mut`, or lends to a call that
+   reaches it (RFC-0082 rule 7) is a deterministic step of RFC-0081 rule 3.
 
 **Why.** Each form is a counted loop the script wrote without the `for`
 that states it; the conversion is exact because the bound is a word the
