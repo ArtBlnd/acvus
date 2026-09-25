@@ -190,6 +190,11 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             remap_val(left, remap);
             remap_val(right, remap);
         }
+        InstKind::CheckSteps { from, step, count } => {
+            remap_val(from, remap);
+            remap_val(step, remap);
+            remap_val(count, remap);
+        }
 
         // Vec uses
         InstKind::FunctionCall {

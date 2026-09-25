@@ -68,6 +68,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         InstKind::Commit { .. }
         | InstKind::Drop { .. }
         | InstKind::Check { .. }
+        | InstKind::CheckSteps { .. }
         | InstKind::IndexSet { .. }
         | InstKind::StringAppend { .. }
         | InstKind::Jump { .. }
@@ -148,6 +149,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::BinOp { left, right, .. } | InstKind::Check { left, right, .. } => {
             smallvec![*left, *right]
         }
+        InstKind::CheckSteps { from, step, count } => smallvec![*from, *step, *count],
         InstKind::TestObjectKey { src, .. } => smallvec![*src],
         InstKind::ArrayIndex { array: list, .. } => smallvec![*list],
 

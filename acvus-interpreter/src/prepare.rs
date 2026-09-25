@@ -2288,6 +2288,7 @@ impl<'a> Prepare<'a> {
             | InstKind::BinOp { .. }
             | InstKind::UnaryOp { .. }
             | InstKind::Check { .. }
+            | InstKind::CheckSteps { .. }
             | InstKind::Cast { .. }
             | InstKind::Spawn { .. }
             | InstKind::Merge { .. }
@@ -3543,9 +3544,12 @@ impl<'a> Prepare<'a> {
     /// a join of one word parameter.
     ///
     /// Every refusal below is a soundness statement, because the node runs on
-    /// both paths once this answers `Some`. An integer operation that can
-    /// trap is refused, since its trap would end a run on the path the
-    /// program does not take (RFC-0048 rule 8). An arm of more than one
+    /// both paths once this answers `Some`. `/` and `%` are refused: their
+    /// traps are not a flag beside a wrapped result, and running one on the
+    /// path the program does not take would end a run it defines (RFC-0048
+    /// rule 8). A trapping `+`, `-` or `*` is admitted, because `Select`
+    /// runs it as its overflowing form and traps only where the computing
+    /// side is taken (RFC-0074 rule 2). An arm of more than one
     /// operation is refused because its intermediate
     /// value would reach a register on a path the program does not take, and
     /// `assign_slots` — which runs before this recognizer — may have given
@@ -3610,9 +3614,6 @@ impl<'a> Prepare<'a> {
             return None;
         };
         if computed != handed || self.use_count(*computed) != 1 {
-            return None;
-        }
-        if op.can_trap_on_integers() && matches!(self.ty(*left), Ty::Int(_)) {
             return None;
         }
         let root = match (arith_of(*op), compare_of(*op)) {
@@ -4334,6 +4335,17 @@ impl<'a> Prepare<'a> {
                 };
                 let (op, l, r) = (*op, self.off(*left), self.off(*right));
                 made(move |next| arith::int_check(op, k, l, r, next))
+            }
+            InstKind::CheckSteps { from, step, count } => {
+                let Ty::Int(k) = *self.ty(*from) else {
+                    panic!("a check reads integers, not {:?}", self.ty(*from))
+                };
+                let steps = arith::Steps {
+                    from: self.off(*from),
+                    step: self.off(*step),
+                    count: self.off(*count),
+                };
+                made(move |next| arith::int_check_steps(k, steps, next))
             }
             InstKind::UnaryOp { dst, op, operand } => {
                 let places = place::Unary {

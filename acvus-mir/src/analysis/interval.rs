@@ -570,6 +570,7 @@ impl<'a> Domain<'a> {
             | InstKind::BinOp { .. }
             | InstKind::UnaryOp { .. }
             | InstKind::Check { .. }
+            | InstKind::CheckSteps { .. }
             | InstKind::Cast { .. }
             | InstKind::LoadFunction { .. }
             | InstKind::MakeArray { .. }

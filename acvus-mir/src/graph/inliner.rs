@@ -967,6 +967,11 @@ fn remap_inst(
             left: r(*left),
             right: r(*right),
         },
+        InstKind::CheckSteps { from, step, count } => InstKind::CheckSteps {
+            from: r(*from),
+            step: r(*step),
+            count: r(*count),
+        },
         InstKind::Cast { dst, src, to } => InstKind::Cast {
             dst: r(*dst),
             src: r(*src),

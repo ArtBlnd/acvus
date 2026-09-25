@@ -1000,13 +1000,17 @@ without the loop, and so needs an integer maximum the MIR did not have.
 3. **What qualifies.** A natural loop (RFC-0056) is removed when all
    of these hold:
    - its header ends in `For`, has no parameter, and holds no instruction;
-   - every other block of the loop holds no instruction and ends in a jump
-     to a block of the loop, so the loop has no edge out but the header's
-     exit, and no block of it returns or diverges;
+   - every other block of the loop ends in a jump to a block of the loop,
+     so the loop has no edge out but the header's exit, and no block of it
+     returns or diverges;
+   - those blocks hold no instruction but constants, integer casts,
+     wrapping `+`, `-` and `*`, and `Check`s of a `+` whose checked value
+     advances by the added step on each iteration (rule 8);
    - its source is a range or an array.
 
    Every other loop stays exactly as written: one whose body holds any
-   instruction, whose header carries any value, or whose body leaves it.
+   other instruction or a check rule 8 does not close, whose header carries
+   any value, or whose body leaves it.
 
 4. **The rewrite.** The header's `For` becomes a jump to its exit, with the
    exit's arguments, and the body's blocks, which no path reaches any more,
@@ -1044,10 +1048,35 @@ without the loop, and so needs an integer maximum the MIR did not have.
    they remove, so no loop qualifies earlier. `forward` then collapses a
    header the removal left holding nothing but its jump.
 
+8. **A step's check is closed at the header.** IV canonicalization leaves
+   a `Check` of each step that can overflow (RFC-0066 rule 7), so the loop
+   of `for i in 0..@n { s = s + 3 } s` holds that check and the arithmetic
+   from the counter it reads. A check `v + c` qualifies where `v` is a value
+   of the body that gains `c` modulo `2^w` each time the counter gains one,
+   read off the constants, casts of the counter and wrapping `+`, `-` and
+   `*` the body holds. It then becomes, at the end of the header,
+   `CheckSteps { from: v₀, step: c, count: n }`: `v₀` is the body's
+   computation of `v` copied with the counter at its first value, and `n`
+   the count of rule 4. `CheckSteps` ends the run with `+`'s trap where
+   `v₀ + n·c`, computed exactly, does not fit the width.
+   - **Exact.** `v₀` is a value of the width. On a run whose checks below
+     iteration `k` passed, `v₀ + k·c` fits, so `v` there is that integer
+     and the check at `k` traps exactly where `v₀ + (k+1)·c` does not fit.
+     That is monotone in `k` and `v₀` fits, so some iteration below `n`
+     traps exactly where `v₀ + n·c` does not fit.
+   - **The same trap.** Nothing else in the body can end the run or be
+     observed, so no other trap or effect precedes the check inside the
+     loop, and every qualifying check traps with `+`'s text: which of two
+     traps first does not show. The trap is at the loop's place.
+   - The machine computes `v₀ + n·c` in `i128`; a product that leaves
+     `i128` has magnitude at least `2^127`, and no width holds the sum.
+
 **Why.** A body that holds no instruction writes nothing, calls nothing and
 defines nothing a later block reads, and a header that holds none and
 carries nothing runs nothing on each test. Running the loop is only
-counting, and the count is one `max`, two casts and a subtraction.
+counting, and the count is one `max`, two casts and a subtraction. A body
+of step checks is counting too: its one observable is the trap, and rule 8
+keeps that trap.
 **Cost.** A dominator tree and the natural loops per removal and one more
 `dce` for each loop removed. A slice loop whose body does nothing still
 runs its iterations.
@@ -1061,6 +1090,11 @@ runs its iterations.
   as rule 5 shows.
 - The count in a wider type — the MIR has no integer wider than 64 bits, and
   no 64-bit type holds every difference of two `i64` or two `u64` values.
+- Keeping a loop whose body is a step's check — it runs `n` iterations of
+  arithmetic to find a trap one exact sum decides.
+- The closed check as MIR arithmetic — the MIR has no integer wider than 64
+  bits, and a sign-dispatched division bounding `n` is several operations
+  and branches for what one instruction states.
 - Assuming a loop with no effect ends, so any such loop may go — the
   analysis that finds "no effect" is the one that errs, and a wrong answer
   deletes a loop that does not end; such loops are rare, so it gains little.

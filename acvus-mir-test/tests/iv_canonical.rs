@@ -438,10 +438,13 @@ impl Compiled {
     }
 }
 
-const STEP_CAN_OVERFLOW: &str = "let j = 250u8; for i in 0..@n { j = j + 1u8; } j";
+const STEP_CAN_OVERFLOW: &str =
+    "let j = 250u8; let s = 0; for i in 0..@n { s = s * 2 + (j as i64); j = j + 1u8; } s";
 
 /// `j`'s step can leave `u8`, so after `j` is computed from the counter the
-/// step's trap stays as one `Check`, and the loop still carries nothing.
+/// step's trap stays as one `Check`, and the loop carries `s` alone. `s`
+/// keeps the loop, which would otherwise go with its check closed at the
+/// header (RFC-0088 rule 8).
 #[test]
 fn a_step_that_can_overflow_keeps_its_trap_in_a_check() {
     let full = Compiled::of(STEP_CAN_OVERFLOW, Opt::Full);

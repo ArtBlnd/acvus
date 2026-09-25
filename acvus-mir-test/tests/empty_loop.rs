@@ -11,8 +11,8 @@ use acvus_mir::analysis::inst_info;
 use acvus_mir::cfg::{Block, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{
-    BinOp, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Overflow, Stages,
-    ValueId,
+    BinOp, Checked, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Overflow,
+    Stages, ValueId,
 };
 use acvus_mir::optimize::{empty_loop, fold, gvn};
 use acvus_mir::printer::dump_with;
@@ -333,8 +333,15 @@ enum Source {
 
 enum BodyHolds {
     Nothing,
+    /// A trapping `+` of the counter, which can end the run.
     AnInstruction,
     AnEdgeOut,
+    /// `v = counter *% advance` and `check v + checked`: the value checked
+    /// advances by `advance` per iteration.
+    AStepCheck {
+        advance: i128,
+        checked: i128,
+    },
 }
 
 struct Shape {
@@ -417,7 +424,7 @@ fn built(shape: Shape) -> Built {
     });
     hand.push(InstKind::BlockLabel {
         label: BODY,
-        params: supplied,
+        params: supplied.clone(),
     });
     match shape.body {
         BodyHolds::Nothing => hand.push(InstKind::Jump {
@@ -425,7 +432,23 @@ fn built(shape: Shape) -> Built {
             args: body_carried,
         }),
         BodyHolds::AnInstruction => {
-            hand.constant(Ty::I64, 1);
+            let one = hand.constant(parts.element.clone(), 1);
+            hand.binop(BinOp::Add(Overflow::Trap), supplied[0], one);
+            hand.push(InstKind::Jump {
+                label: HEADER,
+                args: body_carried,
+            });
+        }
+        BodyHolds::AStepCheck { advance, checked } => {
+            let counter = supplied[parts.source.counter_param()];
+            let advance = hand.constant(parts.element.clone(), advance);
+            let checked = hand.constant(parts.element.clone(), checked);
+            let v = hand.binop(BinOp::Mul(Overflow::Wrap), counter, advance);
+            hand.push(InstKind::Check {
+                op: Checked::Add,
+                left: v,
+                right: checked,
+            });
             hand.push(InstKind::Jump {
                 label: HEADER,
                 args: body_carried,
@@ -621,6 +644,81 @@ fn a_body_that_holds_an_instruction_stays() {
     assert_eq!(fors(&cfg), 1);
 }
 
+/// `v` advances by the step its check adds, so the loop goes and the check
+/// is one `CheckSteps` from `v`'s first value, `at ·% 3`, by the count.
+#[test]
+fn a_body_whose_check_is_its_step_is_one_check_of_the_last_step() {
+    let Built { cfg, bounds } = built(Shape {
+        source: Source::Range(IntTy::I64),
+        exit_trip: ExitTrip::Absent,
+        body: BodyHolds::AStepCheck {
+            advance: 3,
+            checked: 3,
+        },
+        header_carries: false,
+    });
+    let Some(Bounds { at, .. }) = bounds else {
+        panic!("a range has bounds")
+    };
+    assert_eq!(fors(&cfg), 0);
+    let insts = &header(&cfg).insts;
+    let Some(InstKind::CheckSteps { from, step, count }) = insts.last().map(|inst| &inst.kind)
+    else {
+        panic!("the header ends in a `CheckSteps`: {insts:?}")
+    };
+    let InstKind::BinOp {
+        op: BinOp::Mul(Overflow::Wrap),
+        left,
+        right,
+        ..
+    } = defining(&cfg, *from)
+    else {
+        panic!("`from` is the body's `*%` at the first counter")
+    };
+    assert_eq!(*left, at);
+    assert!(matches!(
+        defining(&cfg, *right),
+        InstKind::Const {
+            value: Literal::Int(3),
+            ..
+        }
+    ));
+    assert!(matches!(
+        defining(&cfg, *step),
+        InstKind::Const {
+            value: Literal::Int(3),
+            ..
+        }
+    ));
+    assert!(matches!(
+        defining(&cfg, *count),
+        InstKind::BinOp {
+            op: BinOp::Sub(Overflow::Wrap),
+            ..
+        }
+    ));
+    let Terminator::Jump { args, .. } = &header(&cfg).terminator else {
+        panic!("the header jumps to the exit")
+    };
+    assert!(args.is_empty(), "an exit that takes no count gets none");
+}
+
+/// `v` advances by 3 and its check adds 4: its trap is not the last
+/// step's, and the loop stays.
+#[test]
+fn a_body_whose_check_is_not_its_step_stays() {
+    let Built { cfg, .. } = built(Shape {
+        source: Source::Range(IntTy::I64),
+        exit_trip: ExitTrip::Defined,
+        body: BodyHolds::AStepCheck {
+            advance: 3,
+            checked: 4,
+        },
+        header_carries: false,
+    });
+    assert_eq!(fors(&cfg), 1);
+}
+
 #[test]
 fn a_body_with_an_edge_out_stays() {
     let Built { cfg, .. } = built(Shape {
@@ -689,18 +787,55 @@ fn a_range_whose_accumulator_is_its_count_loses_its_loop() {
     assert!(listing.contains("= max("), "{listing}");
 }
 
-/// Over `0..@n` the accumulator's step can overflow, and the `Check` that
-/// keeps its trap is work the body does (RFC-0037 rule 3).
+/// Over `0..@n` the accumulator's step can overflow. The body's only work
+/// is that step's `Check`, so the loop goes, and the check becomes one
+/// `CheckSteps` of the last value at the header: the step is monotone, so
+/// it traps on exactly the runs the loop did (RFC-0088 rule 8).
 #[test]
-fn a_range_whose_accumulator_can_overflow_keeps_its_loop() {
+fn a_range_whose_accumulator_can_overflow_loses_its_loop_and_keeps_its_trap() {
     let compiled = Compiled::of("let s = 0; for i in 0..@n { s = s + 3; } s");
     let listing = &compiled.listing;
-    assert_eq!(fors(&compiled.cfg), 1, "{listing}");
-    let checks = compiled
-        .insts()
+    assert_eq!(fors(&compiled.cfg), 0, "{listing}");
+    let kinds: Vec<&InstKind> = compiled.insts().collect();
+    let checks = kinds
+        .iter()
         .filter(|kind| matches!(kind, InstKind::Check { .. }))
         .count();
-    assert_eq!(checks, 1, "{listing}");
+    let steps = kinds
+        .iter()
+        .filter(|kind| matches!(kind, InstKind::CheckSteps { .. }))
+        .count();
+    assert_eq!((checks, steps), (0, 1), "{listing}");
+}
+
+/// Two accumulators whose steps can overflow: one `CheckSteps` each.
+#[test]
+fn two_accumulators_that_can_overflow_keep_one_check_each() {
+    let compiled =
+        Compiled::of("let s = 0; let t = 5; for i in 0..@n { s = s + 3; t = t + 7; } s + t");
+    let listing = &compiled.listing;
+    assert_eq!(fors(&compiled.cfg), 0, "{listing}");
+    let steps = compiled
+        .insts()
+        .filter(|kind| matches!(kind, InstKind::CheckSteps { .. }))
+        .count();
+    assert_eq!(steps, 2, "{listing}");
+}
+
+/// A body that also branches keeps its loop: `s` is carried, and nothing
+/// is closed at the header.
+#[test]
+fn a_body_with_other_work_keeps_its_loop_and_its_check() {
+    let compiled =
+        Compiled::of("let s = 0; for i in 0..@n { s = s + 3; if i == @n { s = s + 1; }; } s");
+    let listing = &compiled.listing;
+    assert_eq!(fors(&compiled.cfg), 1, "{listing}");
+    assert!(
+        !compiled
+            .insts()
+            .any(|kind| matches!(kind, InstKind::CheckSteps { .. })),
+        "{listing}"
+    );
 }
 
 #[test]

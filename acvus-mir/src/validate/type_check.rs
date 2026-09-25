@@ -1400,6 +1400,27 @@ impl CheckCtx {
                 );
             }
 
+            InstKind::CheckSteps { from, step, count } => {
+                let from_ty = ty!(*from);
+                let step_ty = ty!(*step);
+                let count_ty = ty!(*count);
+                if !matches!(from_ty, Ty::Int(_)) {
+                    self.invalid(pc, span, "CheckSteps", "Int", from_ty, errors);
+                }
+                self.assert_match(
+                    pc,
+                    span,
+                    "CheckSteps",
+                    "from == step",
+                    from_ty,
+                    step_ty,
+                    errors,
+                );
+                if *count_ty != Ty::U64 {
+                    self.invalid(pc, span, "CheckSteps", "U64", count_ty, errors);
+                }
+            }
+
             // === UnaryOp ===
             InstKind::UnaryOp { dst, op, operand } => {
                 let operand_ty = ty!(*operand);

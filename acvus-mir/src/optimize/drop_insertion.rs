@@ -753,6 +753,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::BinOp { .. }
         | InstKind::UnaryOp { .. }
         | InstKind::Check { .. }
+        | InstKind::CheckSteps { .. }
         | InstKind::Cast { .. }
         | InstKind::TestLiteral { .. }
         | InstKind::TestVariant { .. }

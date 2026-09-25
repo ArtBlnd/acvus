@@ -250,6 +250,7 @@ fn mnemonic(kind: &InstKind, ctx: &PrintCtx<'_>) -> String {
         }
         InstKind::UnaryOp { op, .. } => return fmt_unaryop(*op).to_string(),
         InstKind::Check { .. } => "check",
+        InstKind::CheckSteps { .. } => "check_steps",
         InstKind::FunctionCall { callee, .. } => return format!("call {}", callee_name(callee)),
         InstKind::Spawn { callee, .. } => return format!("spawn {}", callee_name(callee)),
         InstKind::Const { .. } => "const",
@@ -702,6 +703,13 @@ fn write_body(
                     vn.fmt_use(*right, &consts, &texts)
                 )?
             }
+            InstKind::CheckSteps { from, step, count } => writeln!(
+                f,
+                "check {} + {} * {}",
+                vn.fmt_use(*from, &consts, &texts),
+                vn.fmt_use(*count, &consts, &texts),
+                vn.fmt_use(*step, &consts, &texts)
+            )?,
             InstKind::Cast { dst, src, to } => writeln!(
                 f,
                 "{} = {} as {}",

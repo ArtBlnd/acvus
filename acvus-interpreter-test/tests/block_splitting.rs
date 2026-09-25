@@ -33,8 +33,8 @@ const TAIL_ABOVE_THE_BRANCH: &str = "let acc = 0.0; let n = 0; \
      while n <= 5 { if n % 2 == 0 { acc = acc + 1.5; }; n = n + 1; } acc";
 
 /// The same shape with the program's integer `+` in the arm, which traps
-/// where it overflows, so it runs only on the path the program takes
-/// (RFC-0048 rule 8).
+/// where it overflows: the select runs it as its overflowing form and traps
+/// only on the path the program takes (RFC-0074 rule 2).
 const TRAPPING_ARM: &str =
     "let acc = 0; let n = 0; while n <= 5 { if n % 2 == 0 { acc = acc + n; }; n = n + 1; } acc";
 
@@ -105,7 +105,7 @@ async fn a_tail_that_reads_neither_arm_sits_before_the_select() {
 }
 
 #[tokio::test]
-async fn an_arm_that_can_trap_stays_a_diamond() {
+async fn an_arm_that_can_trap_is_a_select() {
     let blocks = loop_of(TRAPPING_ARM, Ty::I64);
     let body = part_of(one_loop(&blocks), "body");
     assert_eq!(
@@ -113,11 +113,11 @@ async fn an_arm_that_can_trap_stays_a_diamond() {
         [
             "Chain2<i64, Slot, 0, 0>",
             "Add<i64, Slot, Slot, Slot>",
-            "Diamond<Slot, Rejoins>",
+            "Select<i64, Slot, Slot, 1, true>",
             "Mov<false, true>"
         ],
-        "`acc + n` traps where it overflows, and a `Select` would run it on the \
-         path that skips the arm"
+        "`acc + n` traps where it overflows, and the `Select` defers that trap \
+         to the side it takes, so the branch is one operation"
     );
 }
 

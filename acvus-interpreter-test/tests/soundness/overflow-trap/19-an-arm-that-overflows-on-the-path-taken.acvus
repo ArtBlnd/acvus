@@ -1,0 +1,2 @@
+// expect attempt to add with overflow
+let x = 250u8; let s = 0; for i in 0..8 { let y = if i > 5 { x + 6u8 } else { x }; s = s + (y as i64); } s

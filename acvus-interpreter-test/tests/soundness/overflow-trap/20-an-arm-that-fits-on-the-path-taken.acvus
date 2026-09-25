@@ -1,0 +1,2 @@
+// expect -514
+let x = @y; let s = 0; for i in 0..6 { let z = if i > 3 { x + 127i8 } else { x }; s = s + (z as i64); } s

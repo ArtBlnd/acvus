@@ -728,6 +728,19 @@ pub enum InstKind {
         left: ValueId,
         right: ValueId,
     },
+    /// Ends the run with `+`'s trap where `from + count·step`, over the
+    /// integers, does not fit the width `from` and `step` share; `count` is
+    /// a `u64`. It is, once, the `Check { op: Add }` of a value that starts
+    /// at `from` and advances by `step` on each of `count` iterations: that
+    /// value is monotone, so every step fits exactly where the last one
+    /// does. The removal of a loop whose only work was such checks writes
+    /// it at the loop's place, so their trap stays on exactly the runs that
+    /// had it (RFC-0088 rule 8).
+    CheckSteps {
+        from: ValueId,
+        step: ValueId,
+        count: ValueId,
+    },
     /// `src as to` (RFC-0049), total, with Rust's `as` values.
     ///
     /// It carries no source type, and that is a decision: `src`'s own type

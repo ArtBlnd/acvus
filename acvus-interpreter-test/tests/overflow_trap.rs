@@ -152,6 +152,61 @@ fn an_operator_inside_a_chain_traps() {
     traps_with("@n - 3 + 1", &[bind("n", "1u16")], SUB);
 }
 
+// -- A select and a removed loop ------------------------------------
+
+/// A `Select` runs its arm's `+`, `-` or `*` whichever way the test goes, as
+/// the overflowing form, and traps only where the computing side is taken
+/// (RFC-0074 rule 2): the arm's overflow traps where the program takes the
+/// arm, and not where it skips it.
+#[test]
+fn a_select_traps_only_on_the_side_it_takes() {
+    for (op, text, start) in [
+        ("+", ADD, "9223372036854775807"),
+        ("-", SUB, "-9223372036854775807 - 1"),
+        ("*", MUL, "9223372036854775807"),
+    ] {
+        let source = format!("let acc = @s; if @z != 0 {{ acc = acc {op} 2; }}; acc");
+        traps_with(&source, &[bind("s", start), bind("z", "1")], text);
+        let skipped = outcome(&source, &[bind("s", start), bind("z", "0")], Opt::None);
+        let Outcome::Value(value) = skipped else {
+            panic!("the skipped arm runs to a value: {skipped:?}")
+        };
+        runs_to(&source, &[bind("s", start), bind("z", "0")], &value);
+    }
+    let taken_else = "let acc = @s; if @z == 0 { } else { acc = acc + 1u8; }; acc";
+    traps_with(taken_else, &[bind("s", "255u8"), bind("z", "1")], ADD);
+    runs_to(taken_else, &[bind("s", "255u8"), bind("z", "0")], "255");
+    runs_to(taken_else, &[bind("s", "254u8"), bind("z", "1")], "255");
+}
+
+/// A loop whose only work is a step that can overflow is removed, and its
+/// trap is one exact check of the last step at the loop's place
+/// (RFC-0088 rule 8): at both ends of the width, on both sides.
+#[test]
+fn a_removed_loop_keeps_its_step_trap() {
+    let up = "let s = 0u8; for i in 0..@n { s = s + 3u8; } s";
+    runs_to(up, &[bind("n", "85")], "255");
+    traps_with(up, &[bind("n", "86")], ADD);
+    runs_to(up, &[bind("n", "0")], "0");
+    runs_to(up, &[bind("n", "-4")], "0");
+    let down = "let s = -120i8; for i in 7..@n { s = s + @k; } s";
+    runs_to(down, &[bind("n", "15"), bind("k", "-1i8")], "-128");
+    traps_with(down, &[bind("n", "16"), bind("k", "-1i8")], ADD);
+    runs_to(down, &[bind("n", "1000"), bind("k", "0i8")], "-120");
+    runs_to(down, &[bind("n", "31"), bind("k", "10i8")], "120");
+    traps_with(down, &[bind("n", "32"), bind("k", "10i8")], ADD);
+    traps_with(
+        "let s = 250u8; for x in [1, 2, 3] { s = s + 2u8; } s",
+        &[],
+        ADD,
+    );
+    runs_to(
+        "let s = 249u8; for x in [1, 2, 3] { s = s + 2u8; } s",
+        &[],
+        "255",
+    );
+}
+
 // -- The fold ---------------------------------------------------------
 
 #[test]

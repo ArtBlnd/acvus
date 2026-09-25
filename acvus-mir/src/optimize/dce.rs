@@ -322,7 +322,7 @@ fn is_root(kind: &InstKind, loans: &Loans<'_>) -> bool {
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
 
-        InstKind::Check { .. } => true,
+        InstKind::Check { .. } | InstKind::CheckSteps { .. } => true,
 
         // A call typed `!` ends the run (RFC-0038): observable whatever its
         // effect says.

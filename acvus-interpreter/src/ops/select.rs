@@ -4,9 +4,11 @@
 //! Obligation across artifacts: the node runs whichever way the condition
 //! goes, and what makes that sound is the shape `prepare::select_shape`
 //! admits — one arithmetic or comparison node whose operator is neither `/`
-//! nor `%`, which RFC-0037 names as the only integer operations that can
-//! raise, and a join of one word register, which is the only register this
-//! operation writes.
+//! nor `%`, whose traps are not a flag beside a wrapped result, and a join
+//! of one word register, which is the only register this operation writes.
+//! A trapping `+`, `-` or `*` runs as its overflowing form, and its trap
+//! ends the run only where the computing side is the one taken, so the run
+//! traps exactly where the diamond's arm would have (RFC-0074 rule 2).
 
 use std::marker::PhantomData;
 
@@ -14,8 +16,8 @@ use acvus_mir::ty::IntTy;
 
 use crate::code::{Exit, Off, Op, Where, successor};
 use crate::machine::Machine;
-use crate::ops::arith::for_int_ty;
-use crate::ops::chain::{ChainTy, Node, Num, Operands, Plan, Rooted, pick_root, tree1};
+use crate::ops::arith::{for_int_ty, trapping};
+use crate::ops::chain::{ChainTy, Node, Num, Operands, Plan, Rooted, pick_root, tree1_deferred};
 use crate::ops::place::{self, Place};
 
 /// `prepare` read off the lowering which side of the test computes, so this
@@ -46,9 +48,14 @@ where
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let taken = C::read(m.regs(), self.cond, r0) != 0;
-        let computed = tree1::<T, R, true>(&self.plan, Operands::of_frame(m.regs()));
+        let (computed, overflowed) =
+            tree1_deferred::<T, R>(&self.plan, Operands::of_frame(m.regs()));
+        let computes = taken == COMPUTES_ON_TRUE;
+        if let (true, Some(text)) = (computes, overflowed) {
+            trapping::trap(text);
+        }
         let passed = m.regs().word(self.passed);
-        let bits = chosen(taken == COMPUTES_ON_TRUE, computed, passed);
+        let bits = chosen(computes, computed, passed);
         let carried = D::write(m.regs(), self.dst, bits);
         self.next.run(m, carried)
     }

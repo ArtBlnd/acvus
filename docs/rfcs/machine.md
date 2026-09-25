@@ -440,11 +440,14 @@ pub struct Select<T: Num, C: Place, D: Place, const R: u8, const COMPUTES_ON_TRU
    parameter owning no `Large`, and the computed value's one use is the join
    edge. `prepare::select_shape` holds the list; nothing is tested at run time.
 2. **Every other diamond stays a `Diamond`.** Refused:
-   - An integer operation that can raise — `/`, `%`, and the program's `+`,
-     `-` and `*`, which trap where they overflow (RFC-0037 rules 2 and 3):
-     the node runs on both paths, and its trap would end a run on the path
-     the program does not take (RFC-0048 rule 8). A float `/` and `%` are
-     refused too. A `+`, `-` or `*` a pass wrote wraps and is admitted.
+   - `/` and `%` — the node runs on both paths, and their traps (RFC-0037
+     rule 2) would end a run on the path the program does not take
+     (RFC-0048 rule 8). Their trap is no flag of a wrapped result: the
+     machine's division faults on a divisor of zero and on `MIN / -1`
+     before any flag exists. A flag form would test the divisor first and
+     divide by a substituted one; that is a compare and a substitution
+     added to every such select, for a shape no measured body has, and it
+     is not built. A float `/` and `%` are refused too.
    - An arm of more than one operation — its intermediate would reach a
      register on the path not taken, and `assign_slots`, which runs first, may
      have given that register to a value live outside the arm.
@@ -455,10 +458,24 @@ pub struct Select<T: Num, C: Place, D: Place, const R: u8, const COMPUTES_ON_TRU
      write, an indexed read.
    - Operands outside a chain's types (the integer widths and `f64`).
 
+   The program's `+`, `-` and `*` are admitted. They trap where they
+   overflow (RFC-0037 rule 3), and the select runs the node as its
+   overflowing form: the wrapped value and a flag, which traps nothing.
+   The run then ends with the operation's trap text exactly where the flag
+   is set and the computing side is the one the test chose; the wrapped
+   value reaches no register. That is every run, and only the runs, on
+   which the arm's operation trapped, at the same place, since nothing
+   stands between the test and the arm's one operation. A `+`, `-` or `*` a
+   pass wrote wraps and has no flag to test.
+
 **Why.** One node is the cost rule: a second needs its shape in the type or a
 `match` inside `run`, which gives back the branch the select removes.
 
 **Rejected.**
+- Refusing the program's `+`, `-` and `*` — the arm becomes a `Diamond`,
+  which costs a branch and two arm dispatches in the body that has the most
+  selects (`accum`'s `branch while` ran 78 % slower), while the flag keeps
+  the trap exact.
 - Speculating a raising arm behind a divisor proof — buys one shape and puts a
   numeric proof in the recognizer.
 - A select of arbitrary arm width — two arm chains is a loss against a

@@ -40,6 +40,12 @@ pub trait Num: Copy + 'static {
     fn rem(self, other: Self) -> Self;
     fn neg(self) -> Self;
     fn wrapping_neg(self) -> Self;
+    /// `add`, `sub` and `mul` with the trap deferred: the wrapped value, and
+    /// the trap text where an integer result does not fit. At `f64` the
+    /// IEEE operation and no trap.
+    fn deferred_add(self, other: Self) -> trapping::Deferred<Self>;
+    fn deferred_sub(self, other: Self) -> trapping::Deferred<Self>;
+    fn deferred_mul(self, other: Self) -> trapping::Deferred<Self>;
     fn compare(self, other: Self, how: Compare) -> bool;
 
     fn of_i8(v: i8) -> Self;
@@ -158,6 +164,18 @@ macro_rules! impl_num_for_int {
                 <$t as Int>::wrapping_neg(self)
             }
             #[inline(always)]
+            fn deferred_add(self, other: Self) -> trapping::Deferred<Self> {
+                trapping::deferred_add(self, other)
+            }
+            #[inline(always)]
+            fn deferred_sub(self, other: Self) -> trapping::Deferred<Self> {
+                trapping::deferred_sub(self, other)
+            }
+            #[inline(always)]
+            fn deferred_mul(self, other: Self) -> trapping::Deferred<Self> {
+                trapping::deferred_mul(self, other)
+            }
+            #[inline(always)]
             fn compare(self, other: Self, how: Compare) -> bool {
                 match how {
                     Compare::Lt => self < other,
@@ -224,6 +242,18 @@ impl Num for f64 {
     #[inline(always)]
     fn wrapping_neg(self) -> Self {
         -self
+    }
+    #[inline(always)]
+    fn deferred_add(self, other: Self) -> trapping::Deferred<Self> {
+        (self + other, None)
+    }
+    #[inline(always)]
+    fn deferred_sub(self, other: Self) -> trapping::Deferred<Self> {
+        (self - other, None)
+    }
+    #[inline(always)]
+    fn deferred_mul(self, other: Self) -> trapping::Deferred<Self> {
+        (self * other, None)
     }
 
     /// The same total order the one-operator form uses, so a chain and the
@@ -454,6 +484,35 @@ where
     }
 }
 
+/// One node computed with its trap deferred (`Num::deferred_add`): a
+/// trapping `+`, `-` or `*` gives its wrapped value and, where it
+/// overflowed, its trap text; every other operator gives its value and no
+/// trap. `/` and `%` still trap here, which is why a caller that runs the
+/// node on a path the program may not take admits neither
+/// (`prepare::select_shape`, RFC-0074 rule 2).
+#[inline(always)]
+fn deferred<T>(root: Root, left: T, right: T) -> (u64, Option<&'static str>)
+where
+    T: Num,
+{
+    let word = |(value, trap): trapping::Deferred<T>| (value.word(), trap);
+    match root {
+        Root::Num(Arith::Add) => word(left.deferred_add(right)),
+        Root::Num(Arith::Sub) => word(left.deferred_sub(right)),
+        Root::Num(Arith::Mul) => word(left.deferred_mul(right)),
+        Root::Num(
+            op @ (Arith::WrappingAdd
+            | Arith::WrappingSub
+            | Arith::WrappingMul
+            | Arith::Div
+            | Arith::Rem
+            | Arith::Neg
+            | Arith::WrappingNeg),
+        ) => (any(op, left, right).word(), None),
+        Root::Cmp(how) => (left.compare(right, how) as u64, None),
+    }
+}
+
 pub struct Nodes {
     pub ops: [Node; ChainBounds::MAX_INTERIOR],
     pub root: Node,
@@ -535,6 +594,26 @@ macro_rules! instances {
                         "a chain instance ran a root whose operator is not its own"
                     );
                     left.$m(right).word()
+                })*
+            }
+        }
+
+        /// `finish` with the trap deferred (`deferred`), the root fixed by
+        /// the instance where it names one.
+        #[inline(always)]
+        fn finish_deferred<T, const R: u8>(root: Root, left: T, right: T) -> (u64, Option<&'static str>)
+        where
+            T: Num,
+        {
+            match Node::read(R) {
+                Node::Any => deferred(root, left, right),
+                $(Node::$v => {
+                    debug_assert_eq!(
+                        root,
+                        Root::Num(Arith::$v),
+                        "a chain instance ran a root whose operator is not its own"
+                    );
+                    deferred(Root::Num(Arith::$v), left, right)
                 })*
             }
         }
@@ -640,12 +719,27 @@ fn wrong_shape(shape: Shape, nodes: usize) -> ! {
 }
 
 #[inline(always)]
-pub(crate) fn tree1<T, const R: u8, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> u64
+fn tree1<T, const R: u8, const PLAIN: bool>(plan: &Plan, operands: Operands<'_>) -> u64
 where
     T: Num,
 {
     let (a, b) = pair::<T, PLAIN>(plan, operands);
     finish::<T, R>(plan.root, a, b)
+}
+
+/// `tree1` with the root's trap deferred (`deferred`): a select runs its
+/// node whichever way its test goes and traps only where the computing
+/// side is taken (RFC-0074 rule 2).
+#[inline(always)]
+pub(crate) fn tree1_deferred<T, const R: u8>(
+    plan: &Plan,
+    operands: Operands<'_>,
+) -> (u64, Option<&'static str>)
+where
+    T: Num,
+{
+    let (a, b) = pair::<T, true>(plan, operands);
+    finish_deferred::<T, R>(plan.root, a, b)
 }
 
 #[inline(always)]

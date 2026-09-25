@@ -4,7 +4,9 @@
 //! same Rust operator in a debug build, at the operand's width, panic
 //! messages included: `+`, `-`, `*` and negation trap where the exact result
 //! does not fit, and a shift where its amount is not below the width
-//! (RFC-0037 rule 3). Each is Rust's `checked_*` and one branch to the trap.
+//! (RFC-0037 rule 3). Each is one branch to the trap: `+`, `-` and `*` are
+//! Rust's `overflowing_*`, their wrapped result stored and the flag tested
+//! after the store (`int_trapping_ops`); negation and the shifts test before.
 //! A wrapping one, which only a pass writes, is Rust's `wrapping_*`. `/` and
 //! `%` trap as Rust's do at every build profile. Every operand and every
 //! result here is a word, so a run is two `word` loads and one `set_word`
@@ -80,6 +82,9 @@ pub trait Int: Copy + PartialOrd + 'static {
     fn checked_sub(self, other: Self) -> Option<Self>;
     fn checked_mul(self, other: Self) -> Option<Self>;
     fn checked_neg(self) -> Option<Self>;
+    fn overflowing_add(self, other: Self) -> (Self, bool);
+    fn overflowing_sub(self, other: Self) -> (Self, bool);
+    fn overflowing_mul(self, other: Self) -> (Self, bool);
     fn wrapping_add(self, other: Self) -> Self;
     fn wrapping_sub(self, other: Self) -> Self;
     fn wrapping_mul(self, other: Self) -> Self;
@@ -121,6 +126,15 @@ macro_rules! impl_int {
             }
             fn checked_neg(self) -> Option<Self> {
                 <$t>::checked_neg(self)
+            }
+            fn overflowing_add(self, other: Self) -> (Self, bool) {
+                <$t>::overflowing_add(self, other)
+            }
+            fn overflowing_sub(self, other: Self) -> (Self, bool) {
+                <$t>::overflowing_sub(self, other)
+            }
+            fn overflowing_mul(self, other: Self) -> (Self, bool) {
+                <$t>::overflowing_mul(self, other)
             }
             fn wrapping_add(self, other: Self) -> Self {
                 <$t>::wrapping_add(self, other)
@@ -235,6 +249,46 @@ pub(crate) mod trapping {
     {
         or_trap(a.checked_neg(), NEG_OVERFLOW)
     }
+
+    /// A trapping `+`, `-` or `*` whose trap is deferred to the caller: the
+    /// wrapped value, and the operation's trap text where the exact result
+    /// does not fit. A caller that runs the operation on a path the program
+    /// may not take ends the run with `trap` only where the path is taken
+    /// (RFC-0074 rule 2).
+    pub(crate) type Deferred<T> = (T, Option<&'static str>);
+
+    #[inline(always)]
+    pub(crate) fn deferred_add<T>(a: T, b: T) -> Deferred<T>
+    where
+        T: Int,
+    {
+        let (value, overflowed) = a.overflowing_add(b);
+        (value, overflowed.then_some(ADD_OVERFLOW))
+    }
+
+    #[inline(always)]
+    pub(crate) fn deferred_sub<T>(a: T, b: T) -> Deferred<T>
+    where
+        T: Int,
+    {
+        let (value, overflowed) = a.overflowing_sub(b);
+        (value, overflowed.then_some(SUB_OVERFLOW))
+    }
+
+    #[inline(always)]
+    pub(crate) fn deferred_mul<T>(a: T, b: T) -> Deferred<T>
+    where
+        T: Int,
+    {
+        let (value, overflowed) = a.overflowing_mul(b);
+        (value, overflowed.then_some(MUL_OVERFLOW))
+    }
+
+    /// The trap a deferred operation named, at the place the caller runs it.
+    #[inline(always)]
+    pub(crate) fn trap(text: &'static str) -> ! {
+        overflowed(text)
+    }
 }
 
 /// Rust's `wrapping_shl` and `wrapping_shr` take the amount modulo the
@@ -300,9 +354,6 @@ pub mod word {
     }
 
     int_words! {
-        add(a, b) { trapping::add(a, b).word() }
-        sub(a, b) { trapping::sub(a, b).word() }
-        mul(a, b) { trapping::mul(a, b).word() }
         wrapping_add(a, b) { a.wrapping_add(b).word() }
         wrapping_sub(a, b) { a.wrapping_sub(b).word() }
         wrapping_mul(a, b) { a.wrapping_mul(b).word() }
@@ -505,10 +556,78 @@ fn as_bool_word(held: bool) -> u64 {
     held as u64
 }
 
+/// The trapping `+`, `-` and `*` of one operation per operator: the wrapped
+/// result is written, and then the run ends with the operation's text where
+/// it overflowed, before any operation reads the register (RFC-0037 rule
+/// 3). The flag is tested after the store, next to the dispatch, and not
+/// between the arithmetic and the store: with the test in between, one
+/// never-taken branch cost `accum`'s `for range break` 19 % and `programs`'s
+/// `bf table` 8.6 % on this machine; after the store it costs neither.
+macro_rules! int_trapping_ops {
+    ($( $op:ident = $f:ident ),* $(,)?) => {
+        $(
+            pub struct $op<T, L, R, D>
+            where
+                T: Int,
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                l: L::At,
+                r: R::At,
+                dst: D::At,
+                next: Box<dyn Op>,
+                at: PhantomData<fn() -> (T, L, R, D)>,
+            }
+
+            impl<T, L, R, D> $op<T, L, R, D>
+            where
+                T: Int,
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                pub fn new(at: BinaryAt<L, R, D>, next: Box<dyn Op>) -> $op<T, L, R, D> {
+                    $op {
+                        l: at.l,
+                        r: at.r,
+                        dst: at.dst,
+                        next,
+                        at: PhantomData,
+                    }
+                }
+            }
+
+            impl<T, L, R, D> Op for $op<T, L, R, D>
+            where
+                T: Int,
+                L: Place,
+                R: Place,
+                D: Place,
+            {
+                successor!();
+
+                #[inline]
+                fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+                    let regs = m.regs();
+                    let (value, trap) = trapping::$f(
+                        T::read(L::read(regs, self.l, r0)),
+                        T::read(R::read(regs, self.r, r0)),
+                    );
+                    let carried = D::write(regs, self.dst, value.word());
+                    if let Some(text) = trap {
+                        trapping::trap(text);
+                    }
+                    self.next.run(m, carried)
+                }
+            }
+        )*
+    };
+}
+
+int_trapping_ops!(Add = deferred_add, Sub = deferred_sub, Mul = deferred_mul);
+
 int_ops!(
-    Add = add -> as_word,
-    Sub = sub -> as_word,
-    Mul = mul -> as_word,
     WrappingAdd = wrapping_add -> as_word,
     WrappingSub = wrapping_sub -> as_word,
     WrappingMul = wrapping_mul -> as_word,
@@ -968,6 +1087,49 @@ macro_rules! int_checks {
 
 int_checks!(CheckAdd = add, CheckSub = sub, CheckMul = mul);
 
+/// The three frame slots a `CheckSteps` reads: `from` and `step` at the
+/// check's width, `count` a `u64`.
+#[derive(Clone, Copy)]
+pub struct Steps {
+    pub from: Off,
+    pub step: Off,
+    pub count: Off,
+}
+
+/// Reads its operands from the frame, as `int_check`'s ops do.
+pub fn int_check_steps(k: IntTy, steps: Steps, next: Box<dyn Op>) -> Box<dyn Op> {
+    Box::new(CheckSteps { k, steps, next })
+}
+
+/// `from + count·step` over the integers: a width's values and a `u64`
+/// count are below `2^64` in magnitude, so the product is below `2^128`
+/// and is exact in `i128` wherever it does not overflow `i128`. Where it
+/// does, its magnitude is at least `2^127`, and the sum, off by less than
+/// `2^64`, fits no width: that is a trap too.
+pub struct CheckSteps {
+    k: IntTy,
+    steps: Steps,
+    next: Box<dyn Op>,
+}
+
+impl Op for CheckSteps {
+    successor!();
+
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        let from = self.k.read(regs.word(self.steps.from));
+        let step = self.k.read(regs.word(self.steps.step));
+        let count = i128::from(regs.word(self.steps.count));
+        let last = step
+            .checked_mul(count)
+            .and_then(|advanced| from.checked_add(advanced));
+        if !last.is_some_and(|last| self.k.holds(last)) {
+            overflowed(ADD_OVERFLOW);
+        }
+        self.next.run(m, r0)
+    }
+}
+
 /// The operation a unary operator at `Float` prepares to. Both `Overflow`s
 /// are the IEEE negation.
 pub fn float_unaryop(op: UnaryOp, places: place::Unary, next: Box<dyn Op>) -> Box<dyn Op> {
@@ -998,9 +1160,27 @@ mod primitive_operator_tests {
         f(a as u64, b as u64) as i64
     }
 
+    /// What `Add`, `Sub` and `Mul` run on two words: the deferred operation,
+    /// and its trap where it overflowed.
+    fn trapping_word<T>(f: fn(T, T) -> trapping::Deferred<T>) -> impl FnOnce(u64, u64) -> u64
+    where
+        T: Int,
+    {
+        move |a, b| {
+            let (value, trap) = f(T::read(a), T::read(b));
+            if let Some(text) = trap {
+                trapping::trap(text);
+            }
+            value.word()
+        }
+    }
+
     #[test]
     fn a_subtraction_within_the_width_is_the_difference() {
-        assert_eq!(i64_op(word::sub::<i64>, 1, 2), -1);
+        assert_eq!(
+            i64_op(trapping_word::<i64>(trapping::deferred_sub), 1, 2),
+            -1
+        );
     }
 
     #[test]
@@ -1017,9 +1197,30 @@ mod primitive_operator_tests {
 
     #[test]
     fn trapping_arithmetic_within_the_width_is_the_result() {
-        assert_eq!(i64_op(word::add::<i64>, i64::MAX - 1, 1), i64::MAX);
-        assert_eq!(i64_op(word::sub::<i64>, i64::MIN + 1, 1), i64::MIN);
-        assert_eq!(i64_op(word::mul::<i64>, i64::MIN / 2, 2), i64::MIN);
+        assert_eq!(
+            i64_op(
+                trapping_word::<i64>(trapping::deferred_add),
+                i64::MAX - 1,
+                1
+            ),
+            i64::MAX
+        );
+        assert_eq!(
+            i64_op(
+                trapping_word::<i64>(trapping::deferred_sub),
+                i64::MIN + 1,
+                1
+            ),
+            i64::MIN
+        );
+        assert_eq!(
+            i64_op(
+                trapping_word::<i64>(trapping::deferred_mul),
+                i64::MIN / 2,
+                2
+            ),
+            i64::MIN
+        );
         assert_eq!(word::neg::<i64>((i64::MIN + 1) as u64) as i64, i64::MAX);
         assert_eq!(i64_op(word::shl::<u8>, 1, 7), 128);
         assert_eq!(i64_op(word::shr::<i64>, -8, 63), -1);
@@ -1028,19 +1229,19 @@ mod primitive_operator_tests {
     #[test]
     #[should_panic(expected = "attempt to add with overflow")]
     fn a_trapping_addition_past_the_width_traps() {
-        i64_op(word::add::<u8>, 255, 1);
+        i64_op(trapping_word::<u8>(trapping::deferred_add), 255, 1);
     }
 
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
     fn a_trapping_subtraction_past_the_width_traps() {
-        i64_op(word::sub::<i64>, i64::MIN, 1);
+        i64_op(trapping_word::<i64>(trapping::deferred_sub), i64::MIN, 1);
     }
 
     #[test]
     #[should_panic(expected = "attempt to multiply with overflow")]
     fn a_trapping_multiplication_past_the_width_traps() {
-        i64_op(word::mul::<i64>, i64::MIN, -1);
+        i64_op(trapping_word::<i64>(trapping::deferred_mul), i64::MIN, -1);
     }
 
     #[test]
@@ -1115,7 +1316,10 @@ mod primitive_operator_tests {
 
     #[test]
     fn an_integer_is_read_at_its_width() {
-        assert_eq!(i64_op(word::add::<u8>, 200, 55), 255);
+        assert_eq!(
+            i64_op(trapping_word::<u8>(trapping::deferred_add), 200, 55),
+            255
+        );
         assert_eq!(<i8 as Int>::read(0xFF), -1);
     }
 
@@ -1128,6 +1332,6 @@ mod primitive_operator_tests {
     #[test]
     #[should_panic(expected = "attempt to add with overflow")]
     fn a_trapping_addition_past_the_narrow_width_traps() {
-        i64_op(word::add::<u8>, 200, 56);
+        i64_op(trapping_word::<u8>(trapping::deferred_add), 200, 56);
     }
 }

@@ -33,16 +33,17 @@ fn count_on_page(source: &str, family: &str, page: fn(&Interner) -> Context) -> 
 }
 
 /// Tested with `<=` so that it stays a `while`: RFC-0081 turns `i < 6` into
-/// a range `for`. The arm adds floats, which cannot trap.
-const ADDS_WHEN_EVEN: &str = "let acc = 0.0; let i = 0; \
-     while i <= 5 { if i % 2 == 0 { acc = acc + 1.5; }; i = i + 1; } (acc * 2.0) as i64";
+/// a range `for`. The arm's `+` is the program's, which traps where it
+/// overflows; the select runs it as its overflowing form (RFC-0074 rule 2).
+const ADDS_WHEN_EVEN: &str =
+    "let acc = 0; let i = 0; while i <= 5 { if i % 2 == 0 { acc = acc + i; }; i = i + 1; } acc";
 
 #[tokio::test]
 async fn one_node_against_a_pass_through_arm_is_a_select() {
     assert_eq!(count_of(ADDS_WHEN_EVEN, "Diamond"), 0);
     assert_eq!(
         named(ADDS_WHEN_EVEN, "Select"),
-        vec!["Select<f64, Slot, Slot, 1, true>"],
+        vec!["Select<i64, Slot, Slot, 1, true>"],
         "the node's operator is in the type and the `then` side is the one that computes"
     );
 }
@@ -51,22 +52,23 @@ async fn one_node_against_a_pass_through_arm_is_a_select() {
 async fn a_select_carries_the_word_of_the_side_the_condition_picked() {
     let i = Interner::new();
     let v = run_script(&i, ADDS_WHEN_EVEN, Context::default(), Ty::I64).await;
-    assert_eq!(v.as_int(), 9);
+    assert_eq!(v.as_int(), 0 + 2 + 4);
 }
 
-/// The sabotage: were the program's `+` admitted, the arm would run on the
-/// path the program does not take and trap where it overflows (RFC-0037
-/// rule 3, RFC-0048 rule 8).
+/// The sabotage: the arm's `+` overflows, and the select runs it whichever
+/// way the test goes. On the path the program does not take its flag is
+/// set and the run goes on with the passed word; `overflow_trap` has the
+/// run that takes the arm, which traps (RFC-0037 rule 3, RFC-0048 rule 8).
 #[tokio::test]
-async fn an_overflowing_arm_stays_a_diamond() {
+async fn an_overflowing_arm_is_a_select_that_traps_only_when_taken() {
     let source = "let acc = 9223372036854775807; if @z != 0 { acc = acc + 1; }; acc";
     assert_eq!(
         count_on_page(source, "Select", |i| int_context(i, "z", 0)),
-        0
+        1
     );
     assert_eq!(
         count_on_page(source, "Diamond", |i| int_context(i, "z", 0)),
-        1
+        0
     );
 
     let i = Interner::new();

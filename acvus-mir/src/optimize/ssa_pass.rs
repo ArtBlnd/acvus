@@ -111,6 +111,11 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             s(left);
             s(right);
         }
+        InstKind::CheckSteps { from, step, count } => {
+            s(from);
+            s(step);
+            s(count);
+        }
         InstKind::UnaryOp { operand, .. } => s(operand),
         InstKind::Cast { src, .. } => s(src),
         InstKind::FieldGet { object, .. } => s(object),
