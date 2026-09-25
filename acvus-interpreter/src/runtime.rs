@@ -4,10 +4,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_extern::{Ctx, Owned, Runtime, Variant, repr};
+use acvus_extern::{Ctx, NodeHash, Owned, Runtime, SpaceError, SpaceResult, Variant, repr};
+use acvus_mir::ty::Ty;
 
 use crate::flight::{Flight, Tally};
 use crate::interpreter::InterpreterContext;
+use crate::layout::{Nested, ZeroWidth};
 use crate::ops::call;
 use crate::regs::{FrameState, RootCells, RootFrame};
 use crate::value::{Kind, Value, VariantValue};
@@ -265,6 +267,10 @@ impl Runtime for AcvusRuntime {
         Value::reference(target)
     }
 
+    unsafe fn encode(&self, ty: &Ty, value: &Value, out: &mut Vec<u8>) -> SpaceResult<()> {
+        crate::layout::encode(self, &NoSpace, ty, value, out)
+    }
+
     fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send + use<> {
         self.shared.executor.sleep(d)
     }
@@ -462,5 +468,26 @@ impl acvus_extern::Borrowable<AcvusRuntime> for Value {
     unsafe fn deref_mut<'a>(_: &AcvusRuntime, reference: &'a Value) -> &'a mut Value {
         // SAFETY: the caller's contract: a live, exclusively named target.
         unsafe { reference.target_mut() }
+    }
+}
+
+/// The layout of values outside any space: an extension value is laid out
+/// as the head of a log its space keeps, and `Runtime::encode` runs where no
+/// space is.
+struct NoSpace;
+
+impl Nested for NoSpace {
+    fn commit(&self, rt: &AcvusRuntime, ty: &Ty, _: &Value) -> SpaceResult<NodeHash> {
+        Err(SpaceError::new(format!(
+            "{} is an extension type, laid out only in a space",
+            ty.display(&rt.shared.interner)
+        )))
+    }
+
+    fn load(&self, rt: &AcvusRuntime, ty: &Ty, _: NodeHash, _: &ZeroWidth) -> SpaceResult<Value> {
+        Err(SpaceError::new(format!(
+            "{} is an extension type, laid out only in a space",
+            ty.display(&rt.shared.interner)
+        )))
     }
 }

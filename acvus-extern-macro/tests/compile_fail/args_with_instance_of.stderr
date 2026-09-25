@@ -1,0 +1,13 @@
+error: an instance of a shared signature is reached through its mono glue, which crosses each position at the signature's own types and builds no `Args` (RFC-0067 rule 8, RFC-0097 rule 1)
+ --> tests/compile_fail/args_with_instance_of.rs:5:27
+  |
+5 | #[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Args`, `Runtime`, `Var`, and `kind`
+ --> tests/compile_fail/args_with_instance_of.rs:3:20
+  |
+3 | use acvus_extern::{Args, Runtime, Var, extern_fn, kind};
+  |                    ^^^^  ^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

@@ -20,6 +20,14 @@ const PLACES: &str = "a place is `x`, a reference parameter, or `x[i]`, its elem
                       `u64` parameter `i` (RFC-0082 rule 7)";
 
 impl ReachesAttr {
+    /// The name in a stated place that is `param`, as written.
+    pub(crate) fn naming(&self, param: &Ident) -> Option<&Ident> {
+        self.places
+            .iter()
+            .flat_map(|place| std::iter::once(&place.of).chain(&place.element))
+            .find(|named| *named == param)
+    }
+
     pub(crate) fn parse_after(keyword: &Ident, input: ParseStream) -> syn::Result<Self> {
         let content;
         syn::parenthesized!(content in input);

@@ -1,0 +1,9 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/compile_fail/args_borrow_escapes.rs:10:31
+   |
+ 9 |     let mut kept = None;
+   |         -------- `kept` declared here, outside of the closure body
+10 |     args.with(0, |s: &String| kept = Some(s));
+   |                   -           ^^^^^^^^^^^^^^ `s` escapes the closure body here
+   |                   |
+   |                   `s` is a reference that is only valid in the closure body

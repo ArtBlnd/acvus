@@ -11,6 +11,11 @@ help: the following other types implement trait `SurvivesSuspension`
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Nothing`
   | impl SurvivesSuspension for One {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `One`
+  |
+ ::: $WORKSPACE/acvus-extern/src/args.rs
+  |
+  | impl<P> SurvivesSuspension for Positions<P> where P: Members {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Positions<P>`
   = note: required for `(ByValue<acvus_extern::Slice<'_, Erased<__R, !>, acvus_extern::Shared, __R>>,)` to implement `ValueParameters<__R>`
   = note: required for `Glue<__R, {closure@$DIR/tests/compile_fail/slice_param_on_heavy.rs:6:1: 6:35}, (ByValue<acvus_extern::Slice<'_, Erased<__R, !>, acvus_extern::Shared, __R>>,), Val<u64>>` to implement `ValuesOnly<__R>`
 note: required by a bound in `ExternHandler::<R>::heavy`

@@ -1,0 +1,13 @@
+error: the law `associative` is stated over a declaration's typed parameters, and `args` is an `Args`, whose members the body never names at a type (RFC-0082, RFC-0097 rule 1)
+ --> tests/compile_fail/args_with_a_law.rs:6:32
+  |
+6 | #[extern_fn(effect = pure, law(associative))]
+  |                                ^^^^^^^^^^^
+
+warning: unused imports: `Args`, `Runtime`, `Var`, and `kind`
+ --> tests/compile_fail/args_with_a_law.rs:4:20
+  |
+4 | use acvus_extern::{Args, Runtime, Var, extern_fn, kind};
+  |                    ^^^^  ^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

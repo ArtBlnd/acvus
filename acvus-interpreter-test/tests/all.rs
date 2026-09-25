@@ -1,6 +1,7 @@
 //! One binary: `cargo test -p acvus-interpreter-test --test all <file>::<test>`.
 
 mod anyorder_closure;
+mod args_view;
 mod arith_chain;
 mod attention_loop_shape;
 mod attention_shape;

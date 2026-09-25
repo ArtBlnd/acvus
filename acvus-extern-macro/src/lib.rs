@@ -523,6 +523,77 @@ enum RustParam {
         param: ExternParam,
         required: RequiredParam,
     },
+    /// `Args<'_, (A, ..), Rt>`: one acvus parameter per member, each taken
+    /// by value, held together by one view (RFC-0097 rule 1).
+    Args(ArgsParam),
+}
+
+struct ArgsParam {
+    ident: Ident,
+    written: Type,
+    runtime: Type,
+    members: Vec<ExternParam>,
+}
+
+/// An `Args<'_, (..), Rt>` type's members and runtime, as written.
+struct ArgsWritten {
+    members: Vec<Type>,
+    runtime: Type,
+}
+
+impl RustParam {
+    /// The acvus parameters this Rust parameter takes, in run order.
+    fn acvus(&self) -> &[ExternParam] {
+        match self {
+            RustParam::Acvus(param) | RustParam::Owning { param, .. } => std::slice::from_ref(param),
+            RustParam::Args(args) => &args.members,
+            RustParam::State(_) | RustParam::Required(_) => &[],
+        }
+    }
+}
+
+const ARGS_SHAPE: &str = "an `Args` parameter is written `Args<'_, (A, B, ..), Rt>`: the call's \
+     lifetime, a tuple of this declaration's own `Var<kind::Type>` parameters, and its runtime \
+     (RFC-0097 rule 1)";
+
+/// What an `Args<'_, (..), Rt>` type names, or `None` for any other type.
+fn args_written(ty: &Type) -> syn::Result<Option<ArgsWritten>> {
+    let Type::Path(p) = ty else {
+        return Ok(None);
+    };
+    let Some(seg) = p.path.segments.last() else {
+        return Ok(None);
+    };
+    if seg.ident != "Args" {
+        return Ok(None);
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return Err(syn::Error::new_spanned(seg, ARGS_SHAPE));
+    };
+    let written: Vec<&syn::GenericArgument> = args.args.iter().collect();
+    let [
+        syn::GenericArgument::Lifetime(_),
+        syn::GenericArgument::Type(members),
+        syn::GenericArgument::Type(runtime),
+    ] = written.as_slice()
+    else {
+        return Err(syn::Error::new_spanned(seg, ARGS_SHAPE));
+    };
+    let members: Vec<Type> = match members {
+        Type::Tuple(tuple) => tuple.elems.iter().cloned().collect(),
+        other => return Err(syn::Error::new_spanned(other, ARGS_SHAPE)),
+    };
+    if members.is_empty() {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "an `Args` of no member views no argument: a declaration that takes none takes no `Args` \
+             (RFC-0097 rule 1)",
+        ));
+    }
+    Ok(Some(ArgsWritten {
+        members,
+        runtime: runtime.clone(),
+    }))
 }
 
 /// What an `Instance` or `InstanceOf` parameter's type says.
@@ -612,10 +683,146 @@ fn requirement_param(ty: &Type) -> syn::Result<Option<Requirement>> {
     }))
 }
 
+/// What an `Args` parameter stands beside, refused (RFC-0097 rule 1).
+fn refuse_args_beside(
+    rust_params: &[RustParam],
+    vars: &Vars,
+    attr: &ExternFnAttr,
+    is_coercion: bool,
+) -> syn::Result<()> {
+    let mut views = rust_params.iter().filter_map(|p| match p {
+        RustParam::Args(args) => Some(args),
+        RustParam::Acvus(_) | RustParam::State(_) | RustParam::Required(_) | RustParam::Owning { .. } => None,
+    });
+    let Some(view) = views.next() else {
+        return Ok(());
+    };
+    if let Some(second) = views.next() {
+        return Err(syn::Error::new_spanned(
+            &second.written,
+            format!(
+                "`{}` is a second `Args` beside `{}`: one view holds every position this \
+                 declaration names only by a variable (RFC-0097 rule 1)",
+                second.ident, view.ident
+            ),
+        ));
+    }
+    let runtime = &view.runtime;
+    let names_the_runtime = matches!(runtime, Type::Path(p)
+        if p.qself.is_none() && vars.runtime_ident().is_some_and(|rt| p.path.is_ident(rt)));
+    if !names_the_runtime {
+        return Err(syn::Error::new_spanned(runtime, ARGS_SHAPE));
+    }
+    for member in &view.members {
+        let ty = &member.ty;
+        let variable = matches!(ty, Type::Path(p)
+            if p.qself.is_none()
+                && p.path.get_ident().is_some_and(|id| matches!(vars.lookup(id), Some((VarKind::Ty, _)))));
+        if !variable {
+            return Err(syn::Error::new_spanned(
+                ty,
+                format!(
+                    "`{}` is a concrete member of `Args`: a position whose type Rust names is an \
+                     ordinary parameter, taken as `x: {}` (RFC-0097 rule 1)",
+                    quote! { #ty },
+                    quote! { #ty },
+                ),
+            ));
+        }
+        if vars.mentions_mono(ty) {
+            return Err(syn::Error::new_spanned(
+                ty,
+                format!(
+                    "`{}` is a `Monomorphize` variable, which a member instance crosses \
+                     specialized, and `Args` holds each position uniform (RFC-0041, RFC-0097 rule 1)",
+                    quote! { #ty },
+                ),
+            ));
+        }
+    }
+    if let Some(signature) = &attr.instance_of {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "an instance of a shared signature is reached through its mono glue, which crosses \
+             each position at the signature's own types and builds no `Args` (RFC-0067 rule 8, \
+             RFC-0097 rule 1)",
+        ));
+    }
+    if is_coercion {
+        return Err(syn::Error::new_spanned(
+            &view.written,
+            "an extern_cast or extern_view converts a value of the one type its parameter \
+             names, and an `Args` member names none (RFC-0023 rule 8, RFC-0097 rule 1)",
+        ));
+    }
+    if let Some(named) = &attr.copies
+        && *named == view.ident
+    {
+        return Err(syn::Error::new(
+            named.span(),
+            format!(
+                "`copies({named})` names an `Args`, which lends no reference the result could \
+                 copy: its members are taken by value (RFC-0082 rule 10, RFC-0097 rule 1)"
+            ),
+        ));
+    }
+    if let Some(named) = attr.reaches.as_ref().and_then(|reaches| reaches.naming(&view.ident)) {
+        return Err(syn::Error::new(
+            named.span(),
+            format!(
+                "`reaches` names `{named}`, an `Args`: a call reaches a place only through a \
+                 reference parameter, and an `Args` takes its members by value (RFC-0082 rule 7, \
+                 RFC-0097 rule 1)"
+            ),
+        ));
+    }
+    if let Some(law) = &attr.law {
+        let word = law.first_word();
+        return Err(syn::Error::new(
+            word.span(),
+            format!(
+                "the law `{word}` is stated over a declaration's typed parameters, and `{}` is \
+                 an `Args`, whose members the body never names at a type (RFC-0082, RFC-0097 rule 1)",
+                view.ident
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// A Rust parameter that takes a run of the call's arguments, by the
+/// acvus parameters it covers, as positions in the declaration's list.
+enum Taker {
+    One(usize),
+    Args(std::ops::Range<usize>),
+}
+
+impl Taker {
+    fn of(rust_params: &[RustParam]) -> Vec<Taker> {
+        let mut at = 0;
+        let mut takers = Vec::new();
+        for p in rust_params {
+            match p {
+                RustParam::Acvus(_) | RustParam::Owning { .. } => {
+                    takers.push(Taker::One(at));
+                    at += 1;
+                }
+                RustParam::Args(args) => {
+                    takers.push(Taker::Args(at..at + args.members.len()));
+                    at += args.members.len();
+                }
+                RustParam::State(_) | RustParam::Required(_) => {}
+            }
+        }
+        takers
+    }
+}
+
 /// The index in `FnDecl::requires` each requirement a declaration states
 /// takes, read off its Rust parameters in order.
 struct RequirementIndex {
-    /// Per acvus parameter: the requirement whose `Instance` owns it.
+    /// Per Rust parameter that takes a run of the call's arguments: the
+    /// requirement whose `Instance` owns it.
     owning: Vec<Option<usize>>,
     /// Per `InstanceOf` parameter, in order.
     standing: Vec<usize>,
@@ -630,7 +837,7 @@ impl RequirementIndex {
         let mut nth = 0;
         for p in rust_params {
             match p {
-                RustParam::Acvus(_) => index.owning.push(None),
+                RustParam::Acvus(_) | RustParam::Args(_) => index.owning.push(None),
                 RustParam::Owning { .. } => {
                     index.owning.push(Some(nth));
                     nth += 1;
@@ -689,14 +896,24 @@ struct FlowInputs {
 /// Each `Instance` parameter read twice: as the receiver it owns, which is
 /// the acvus parameter, and as the requirement at its variable, whose
 /// signature ties that variable to the signature's other ones, as it did
-/// when the requirement was a parameter of its own.
-fn flow_inputs(sig: &syn::Signature, roles: &[flows::Role]) -> FlowInputs {
+/// when the requirement was a parameter of its own. Each `Args` parameter
+/// read as its members, each an input taken by value.
+fn flow_inputs(sig: &syn::Signature, roles: &[flows::Role]) -> syn::Result<FlowInputs> {
     let mut inputs = FlowInputs {
         sig: sig.clone(),
         roles: Vec::new(),
     };
     inputs.sig.inputs.clear();
     for (arg, role) in sig.inputs.iter().zip(roles) {
+        if let (FnArg::Typed(pat_type), flows::Role::Acvus(first)) = (arg, role)
+            && let Some(ArgsWritten { members, .. }) = args_written(&pat_type.ty)?
+        {
+            for (at, member) in members.into_iter().enumerate() {
+                inputs.sig.inputs.push(syn::parse_quote! { _: #member });
+                inputs.roles.push(flows::Role::Acvus(first + at));
+            }
+            continue;
+        }
         inputs.sig.inputs.push(arg.clone());
         inputs.roles.push(*role);
         let FnArg::Typed(pat_type) = arg else {
@@ -713,7 +930,7 @@ fn flow_inputs(sig: &syn::Signature, roles: &[flows::Role]) -> FlowInputs {
         inputs.sig.inputs.push(FnArg::Typed(requirement));
         inputs.roles.push(flows::Role::Other);
     }
-    inputs
+    Ok(inputs)
 }
 
 /// `Instance<S, R, ..>` with `R` replaced by the variable it holds.
@@ -780,18 +997,13 @@ fn generate_extern_fn(
         takes_ctx,
         params: rust_params,
     } = parse_params(&mut func.sig, vars.runtime_ident())?;
-    let params: Vec<&ExternParam> = rust_params
-        .iter()
-        .filter_map(|p| match p {
-            RustParam::Acvus(a) | RustParam::Owning { param: a, .. } => Some(a),
-            RustParam::State(_) | RustParam::Required(_) => None,
-        })
-        .collect();
+    let params: Vec<&ExternParam> = rust_params.iter().flat_map(RustParam::acvus).collect();
+    refuse_args_beside(&rust_params, &vars, &attr, is_cast || is_view)?;
     let states: Vec<&StateParam> = rust_params
         .iter()
         .filter_map(|p| match p {
             RustParam::State(st) => Some(st),
-            RustParam::Acvus(_) | RustParam::Required(_) | RustParam::Owning { .. } => None,
+            RustParam::Acvus(_) | RustParam::Required(_) | RustParam::Owning { .. } | RustParam::Args(_) => None,
         })
         .collect();
     // Every requirement in the order of the Rust parameters that state it,
@@ -800,7 +1012,7 @@ fn generate_extern_fn(
         .iter()
         .filter_map(|p| match p {
             RustParam::Required(r) | RustParam::Owning { required: r, .. } => Some(r),
-            RustParam::Acvus(_) | RustParam::State(_) => None,
+            RustParam::Acvus(_) | RustParam::State(_) | RustParam::Args(_) => None,
         })
         .collect();
     let at_requirement = RequirementIndex::of(&rust_params);
@@ -812,9 +1024,9 @@ fn generate_extern_fn(
     let mut acvus_index = 0;
     for p in &rust_params {
         match p {
-            RustParam::Acvus(_) | RustParam::Owning { .. } => {
+            RustParam::Acvus(_) | RustParam::Owning { .. } | RustParam::Args(_) => {
                 roles.push(flows::Role::Acvus(acvus_index));
-                acvus_index += 1;
+                acvus_index += p.acvus().len();
             }
             RustParam::State(_) | RustParam::Required(_) => roles.push(flows::Role::Other),
         }
@@ -822,7 +1034,7 @@ fn generate_extern_fn(
     let FlowInputs {
         sig: flow_sig,
         roles: flow_roles,
-    } = flow_inputs(&func.sig, &roles);
+    } = flow_inputs(&func.sig, &roles)?;
     let declared_flows = flows::derive(&flow_sig, &flow_roles, &vars, &ret)?;
     if returning.lends() {
         if !params.iter().any(|p| p.mode.lends_its_storage()) {
@@ -1015,7 +1227,8 @@ fn generate_extern_fn(
         }
     };
 
-    let arg_idents: Vec<Ident> = (0..params.len()).map(|i| format_ident!("__a{i}")).collect();
+    let takers = Taker::of(&rust_params);
+    let arg_idents: Vec<Ident> = (0..takers.len()).map(|i| format_ident!("__a{i}")).collect();
     let inst_idents: Vec<Ident> = (0..at_requirement.standing.len())
         .map(|i| format_ident!("__q{i}"))
         .collect();
@@ -1056,10 +1269,18 @@ fn generate_extern_fn(
                 &quote! { __R },
             )
         };
-        let base_markers: Vec<proc_macro2::TokenStream> = params
+        let base_markers: Vec<proc_macro2::TokenStream> = takers
             .iter()
-            .zip(&rt_tys)
-            .map(|(p, ty)| {
+            .map(|taker| {
+                let at = match taker {
+                    Taker::One(at) => *at,
+                    Taker::Args(members) => {
+                        let tys = &rt_tys[members.clone()];
+                        return quote! { ::acvus_extern::ByArgs<(#(#tys,)*)> };
+                    }
+                };
+                let p = params[at];
+                let ty = &rt_tys[at];
                 let c = crossing(&p.ty, member);
                 match p.mode {
                     Mode::Value => quote! { ::acvus_extern::ByValue<#ty, #c> },
@@ -1221,7 +1442,7 @@ fn generate_extern_fn(
         let passed: Vec<proc_macro2::TokenStream> = rust_params
             .iter()
             .map(|p| match p {
-                RustParam::Acvus(_) | RustParam::Owning { .. } => {
+                RustParam::Acvus(_) | RustParam::Owning { .. } | RustParam::Args(_) => {
                     let at = &arg_idents[acvus_at];
                     acvus_at += 1;
                     quote! { #at }
@@ -1786,6 +2007,24 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             continue;
         }
         refuse_static_argument(pat_type.ty.as_ref())?;
+        if let Some(ArgsWritten { members, runtime }) = args_written(pat_type.ty.as_ref())? {
+            let members = members
+                .into_iter()
+                .enumerate()
+                .map(|(at, ty)| ExternParam {
+                    name: format!("{ident}.{at}"),
+                    ty,
+                    mode: Mode::Value,
+                })
+                .collect();
+            params.push(RustParam::Args(ArgsParam {
+                ident,
+                written: (*pat_type.ty).clone(),
+                runtime,
+                members,
+            }));
+            continue;
+        }
         match requirement_param(pat_type.ty.as_ref())? {
             Some(Requirement::Of(required)) => {
                 params.push(RustParam::Required(required));
@@ -4644,6 +4883,13 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                 return Err(syn::Error::new_spanned(
                     signature,
                     "a signature requires no instance of its own",
+                ));
+            }
+            RustParam::Args(args) => {
+                return Err(syn::Error::new_spanned(
+                    &args.written,
+                    "a signature declares no `Args`: its instances are called through their mono \
+                     glue, which builds none (RFC-0067 rule 8, RFC-0097 rule 1)",
                 ));
             }
         }

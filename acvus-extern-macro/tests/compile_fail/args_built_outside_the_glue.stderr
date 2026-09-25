@@ -1,0 +1,10 @@
+error[E0624]: associated function `moved_in` is private
+  --> tests/compile_fail/args_built_outside_the_glue.rs:11:20
+   |
+11 |     unsafe { Args::moved_in(rt, run, site) }
+   |                    ^^^^^^^^ private associated function
+   |
+  ::: $WORKSPACE/acvus-extern/src/args.rs
+   |
+   |     pub(crate) unsafe fn moved_in(rt: Crossing<'call, Rt>, run: &[Rt::Value], site: &'call ArgsSite) -> Self {
+   |     -------------------------------------------------------------------------------------------------------- private associated function defined here
