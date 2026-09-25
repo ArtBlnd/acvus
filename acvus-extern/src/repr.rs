@@ -209,6 +209,26 @@ where
     *word = value.into_word();
 }
 
+// -- Whether a type can lie in the word -------------------------------------
+
+/// Whether a value of `T` can be one a runtime keeps in its value word.
+///
+/// It is `false` only where `T`'s own layout rules the word out: `T` is
+/// wider than 8 bytes, aligned to more than 8, or has drop glue. It is
+/// `true` of every other type, and of every `Word` type among them, which
+/// `obj::inline!` asserts of each type `for_each_inline!` lists — the list a
+/// runtime's `is_inline` reads.
+///
+/// It reads the type and not how the type is written: a constant that asks
+/// it of a type parameter, an alias or a macro type is evaluated at the type
+/// they are filled with. A `true` of a type a runtime keeps behind the word
+/// costs one re-encode that changes nothing; a `false` is never a type a
+/// runtime keeps in it.
+#[inline(always)]
+pub const fn may_lie_in_the_word<T>() -> bool {
+    mem::size_of::<T>() <= 8 && mem::align_of::<T>() <= 8 && !mem::needs_drop::<T>()
+}
+
 // -- Lengths --------------------------------------------------------------
 
 /// A length or an index read as a `u64` that this target's `usize` cannot
@@ -301,6 +321,42 @@ mod tests {
         assert_eq!(true.into_word(), 1);
         assert_eq!('\u{10FFFF}'.into_word(), 0x10FFFF);
         assert_eq!(().into_word(), 0);
+    }
+
+    #[test]
+    fn only_a_layout_that_rules_the_word_out_answers_false() {
+        macro_rules! in_the_word {
+            ($($name:ident: $t:ty),*) => {
+                $(assert!(may_lie_in_the_word::<$t>(), "{} is Inline", stringify!($t));)*
+            };
+        }
+        crate::for_each_inline!(in_the_word);
+
+        // A parameter, an alias of one and a macro type are answered at what
+        // fills them.
+        type Id<T> = T;
+        macro_rules! same {
+            ($t:ty) => {
+                $t
+            };
+        }
+        const fn through_a_parameter<T>() -> bool {
+            may_lie_in_the_word::<Id<T>>()
+        }
+        assert!(through_a_parameter::<i8>());
+        assert!(may_lie_in_the_word::<same!(i8)>());
+        assert!(!through_a_parameter::<String>());
+
+        // What the layout cannot rule out answers `true`, at the cost of a
+        // re-encode that changes nothing.
+        assert!(may_lie_in_the_word::<Option<i8>>());
+        assert!(may_lie_in_the_word::<(i8,)>());
+
+        assert!(!may_lie_in_the_word::<String>());
+        assert!(!may_lie_in_the_word::<Vec<i8>>());
+        assert!(!may_lie_in_the_word::<Box<i8>>());
+        assert!(!may_lie_in_the_word::<[u64; 2]>());
+        assert!(!may_lie_in_the_word::<std::vec::IntoIter<i64>>());
     }
 
     #[test]

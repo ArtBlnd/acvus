@@ -86,6 +86,8 @@ where
     T: InPlaceElement<Rt>,
     Rt: Runtime,
 {
+    const LENDS_A_WORD: bool = false;
+
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
         // SAFETY: the caller's contract, and `erase` boxes a `Vec<Owned<Rt>>`.
         // SAFETY: the caller's contract names the storage a crossing wrote

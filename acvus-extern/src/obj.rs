@@ -1027,9 +1027,7 @@ macro_rules! for_each_inline {
 macro_rules! inline {
     ($($name:ident: $t:ty),*) => { $(
         const _: () = assert!(
-            std::mem::size_of::<$t>() <= 8
-                && std::mem::align_of::<$t>() <= 8
-                && !std::mem::needs_drop::<$t>(),
+            crate::repr::may_lie_in_the_word::<$t>(),
             "an Inline type fits the runtime's value word"
         );
         impl inline_sealed::Listed for $t {}
@@ -1131,6 +1129,11 @@ macro_rules! whole_box {
 #[macro_export]
 macro_rules! whole_box_in_place {
     ($t:ty, $rt:ident) => {
+        // The runtime keeps the canonical form, which `deref_mut` lends.
+        const LENDS_A_WORD: bool = $crate::repr::may_lie_in_the_word::<
+            <$t as $crate::Canonical<$crate::kind::Type>>::Canon,
+        >();
+
         unsafe fn deref<'a>(rt: &$rt, reference: &'a <$rt as $crate::Runtime>::Value) -> &'a Self {
             // SAFETY: the caller's contract.
             unsafe { $crate::derive::canonical::deref::<$t, $rt>(rt, reference) }
@@ -1507,6 +1510,8 @@ where
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    const LENDS_A_WORD: bool = false;
+
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
         // SAFETY: the caller's contract, and `erase` boxes an
         // `Arr<Owned<Rt>, ()>`.

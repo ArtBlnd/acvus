@@ -478,6 +478,8 @@ where
     type Site = <T as Project<Rt>>::Table;
     type Form = One;
 
+    const LENDS_A_WORD: bool = M::EXCLUSIVE && <T as Project<Rt>>::LENDS_A_WORD;
+
     /// # Panics
     /// The argument is not a reference to a whole type. `lend` builds it as
     /// `reference_to` the settled type.
@@ -501,9 +503,11 @@ where
     /// loan_ended`).
     #[inline(always)]
     unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], site: &Self::Site) {
-        // SAFETY: the caller's contract: `run[0]` is the reference `take`
-        // projected with this table, and the projection over it has ended.
-        unsafe { M::projection_ended::<T, Rt>(rt, &run[0], site) }
+        if <Self as Arg<Rt>>::LENDS_A_WORD {
+            // SAFETY: the caller's contract: `run[0]` is the reference `take`
+            // projected with this table, and the projection over it has ended.
+            unsafe { M::projection_ended::<T, Rt>(rt, &run[0], site) }
+        }
     }
 }
 
@@ -756,13 +760,17 @@ where
         // SAFETY: the value crosses at the parameter's own marker, whose type
         // the caller compared with the storage's settled one.
         let crossing = unsafe { Crossing::new(rt) };
-        // SAFETY: the caller's contract: `run` is this parameter's own run,
-        // whose storage outlives the call, and the closure the borrow goes to
-        // returns before `_loans` drops.
-        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run, sites) };
         // SAFETY: the caller's contract: `run` is this parameter's own run.
         let (lent,) = unsafe { <(Q::Marker,) as Parameters<Rt>>::take(crossing, run, sites) };
-        self(lent.take::<Q::At<'_>>())
+        if <(Q::Marker,) as Parameters<Rt>>::LENDS_A_WORD {
+            // SAFETY: the caller's contract: `run` is this parameter's own
+            // run, whose storage outlives the call, and the closure the
+            // borrow goes to returns before `_loans` drops.
+            let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run, sites) };
+            self(lent.take::<Q::At<'_>>())
+        } else {
+            self(lent.take::<Q::At<'_>>())
+        }
     }
 }
 
@@ -785,14 +793,18 @@ where
         // SAFETY: as the one-parameter form's.
         let crossing = unsafe { Crossing::new(rt) };
         // SAFETY: as the one-parameter form's.
-        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run, sites) };
-        // SAFETY: as the one-parameter form's.
         let (lent,) = unsafe { <(Q::Marker,) as Parameters<Rt>>::take(crossing, run, sites) };
         let mut rooted = rt.rooted();
         // SAFETY: the `Ctx` is lent to the closure alone, as a handler's is,
         // and safe code reaches no second one to exchange it with.
         let ctx = unsafe { Rt::ctx_of(&mut rooted) };
-        self(ctx, lent.take::<Q::At<'_>>())
+        if <(Q::Marker,) as Parameters<Rt>>::LENDS_A_WORD {
+            // SAFETY: as the one-parameter form's.
+            let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run, sites) };
+            self(ctx, lent.take::<Q::At<'_>>())
+        } else {
+            self(ctx, lent.take::<Q::At<'_>>())
+        }
     }
 }
 

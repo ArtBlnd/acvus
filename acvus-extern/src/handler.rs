@@ -166,6 +166,10 @@ where
     const ARGUMENTS: usize = 1;
     /// How many of the run's values this parameter consumes.
     const WIDTH: usize = <Self::Form as Form>::WIDTH;
+    /// Whether `take` lends a storage exclusively in the runtime's value
+    /// word, so that `loan_ended` has a word to re-encode. A glue none of
+    /// whose parameters does holds no loan guard.
+    const LENDS_A_WORD: bool;
 
     fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site;
 
@@ -247,6 +251,8 @@ where
     type Site = ();
     type Form = <T as Cross<Rt>>::Form;
 
+    const LENDS_A_WORD: bool = false;
+
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]
@@ -260,6 +266,8 @@ where
 {
     type Site = ();
     type Form = One;
+
+    const LENDS_A_WORD: bool = false;
 
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
@@ -276,13 +284,17 @@ where
     type Site = ();
     type Form = One;
 
+    const LENDS_A_WORD: bool = M::EXCLUSIVE && <T as Borrowable<Rt>>::LENDS_A_WORD;
+
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]
     unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], _: &()) {
-        // SAFETY: the caller's contract: `run[0]` is the reference `take`
-        // lent the storage through, and that borrow has ended.
-        unsafe { M::loan_ended(rt, &run[0]) }
+        if <Self as Arg<Rt>>::LENDS_A_WORD {
+            // SAFETY: the caller's contract: `run[0]` is the reference `take`
+            // lent the storage through, and that borrow has ended.
+            unsafe { M::loan_ended(rt, &run[0]) }
+        }
     }
 }
 
@@ -295,13 +307,17 @@ where
     type Site = ();
     type Form = One;
 
+    const LENDS_A_WORD: bool = M::EXCLUSIVE && <T as BorrowableSpecialized<Rt>>::LENDS_A_WORD;
+
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]
     unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], _: &()) {
-        // SAFETY: the caller's contract: `run[0]` is the reference `take`
-        // lent the storage through, and that borrow has ended.
-        unsafe { M::loan_ended(rt, &run[0]) }
+        if <Self as Arg<Rt>>::LENDS_A_WORD {
+            // SAFETY: the caller's contract: `run[0]` is the reference `take`
+            // lent the storage through, and that borrow has ended.
+            unsafe { M::loan_ended(rt, &run[0]) }
+        }
     }
 }
 
@@ -320,6 +336,7 @@ where
     type Form = Nothing;
 
     const ARGUMENTS: usize = 0;
+    const LENDS_A_WORD: bool = false;
 
     fn site(site: &CallSite<'_, Rt>, _: usize) -> Instance<'static, S, I, Rt, T> {
         // SAFETY: `CallSite::new`'s contract, the one way a word reaches
@@ -431,6 +448,14 @@ pub trait Borrowable<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
 {
+    /// Whether `deref_mut` can lend the runtime's value word itself, which a
+    /// write leaves to be re-encoded when the loan ends. An impl states
+    /// `false` only where a fact of the type rules the word out — its
+    /// storage is another value it names, or `repr::may_lie_in_the_word` of
+    /// the type the runtime keeps is `false` — and `true` wherever it does
+    /// not know: a wrong `true` costs a re-encode that changes nothing.
+    const LENDS_A_WORD: bool;
+
     /// # Safety
     /// `reference` names a live storage of `Self`.
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self;
@@ -454,6 +479,9 @@ pub trait BorrowableSpecialized<Rt>: OneValue<Rt, Specialized>
 where
     Rt: Runtime,
 {
+    /// As `Borrowable::LENDS_A_WORD`, at the specialized representation.
+    const LENDS_A_WORD: bool;
+
     /// # Safety
     /// As `Borrowable::deref`, at the specialized representation.
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self;
@@ -473,6 +501,9 @@ pub trait Lends<T, Rt>
 where
     Rt: Runtime,
 {
+    /// As `Borrowable::LENDS_A_WORD`, at this representation.
+    const LENDS_A_WORD: bool;
+
     /// # Safety
     /// As `Borrowable::deref`.
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a T;
@@ -488,6 +519,8 @@ where
     T: Borrowable<Rt>,
     Rt: Runtime,
 {
+    const LENDS_A_WORD: bool = <T as Borrowable<Rt>>::LENDS_A_WORD;
+
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a T {
         // SAFETY: the caller's contract.
         unsafe { <T as Borrowable<Rt>>::deref(rt, reference) }
@@ -504,6 +537,8 @@ where
     T: BorrowableSpecialized<Rt>,
     Rt: Runtime,
 {
+    const LENDS_A_WORD: bool = <T as BorrowableSpecialized<Rt>>::LENDS_A_WORD;
+
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a T {
         // SAFETY: the caller's contract.
         unsafe { <T as BorrowableSpecialized<Rt>>::deref(rt, reference) }
@@ -1004,6 +1039,8 @@ where
     const ARITY: usize;
     /// How many of the runtime's values the whole argument run is.
     const WIDTH: usize;
+    /// Whether any parameter's `Arg::LENDS_A_WORD` holds.
+    const LENDS_A_WORD: bool;
 
     fn sites(site: &CallSite<'_, Rt>) -> Self::Sites;
 
@@ -1309,6 +1346,7 @@ macro_rules! parameters {
 
             const ARITY: usize = 0 $(+ <$arg as Arg<Rt>>::ARGUMENTS)*;
             const WIDTH: usize = 0 $(+ <$arg as Arg<Rt>>::WIDTH)*;
+            const LENDS_A_WORD: bool = false $(|| <$arg as Arg<Rt>>::LENDS_A_WORD)*;
 
             #[allow(unused_variables, unused_mut, unused_assignments)]
             fn sites(site: &CallSite<'_, Rt>) -> Self::Sites {
@@ -1503,10 +1541,6 @@ where
         // at the declaration's own types.
         let rt = unsafe { Crossing::new(ctx.rt) };
         let run = <<A as Parameters<Rt>>::Run as ArgRun>::as_slice::<Rt>(run);
-        // SAFETY: the run is the one `take` reads below, the caller keeps its
-        // storages live for the call, and the body the borrows go to returns
-        // before `_loans` drops.
-        let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, run, &self.sites) };
         // SAFETY: the caller's contract, which is `Parameters::take`'s.
         let args = unsafe { <A as Parameters<Rt>>::take(rt, run, &self.sites) };
         let out = <<R as Ret<Rt>>::Form as Returned>::as_mut_slice::<Rt>(out);
@@ -1515,7 +1549,15 @@ where
             out,
             ret: PhantomData,
         };
-        (self.f)(ctx, args, returning)
+        if <A as Parameters<Rt>>::LENDS_A_WORD {
+            // SAFETY: the run and sites are the ones `take` read, the caller
+            // keeps their storages live for the call, and the body the
+            // borrows went to returns before `_loans` drops.
+            let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, run, &self.sites) };
+            (self.f)(ctx, args, returning)
+        } else {
+            (self.f)(ctx, args, returning)
+        }
     }
 }
 
@@ -1637,14 +1679,18 @@ where
             // safe code reaches no second `Ctx` to exchange it with:
             // `ctx_of`, `Ctx::new` and `Ctx::frame_mut` are `unsafe`.
             let ctx = unsafe { Rt::ctx_of(&mut rooted) };
-            // SAFETY: as the synchronous impl's, over the run the future owns;
-            // the body's future completes before `_loans` drops.
-            let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, &held, &sites) };
             // SAFETY: as the synchronous impl's, over the run the future owns.
             let args = unsafe {
                 <A as Parameters<Rt>>::take(Crossing::new(ctx.rt), &held, &sites)
             };
-            f(ctx, args).await
+            if <A as Parameters<Rt>>::LENDS_A_WORD {
+                // SAFETY: as the synchronous impl's, over the run the future
+                // owns; the body's future completes before `_loans` drops.
+                let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, &held, &sites) };
+                f(ctx, args).await
+            } else {
+                f(ctx, args).await
+            }
         })
     }
 }

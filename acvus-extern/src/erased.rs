@@ -313,6 +313,11 @@ impl<R, T> crate::Borrowable<R> for Erased<R, T>
 where
     R: Runtime,
 {
+    /// The borrow is the runtime's value itself, which a write replaces
+    /// whole; `get_mut` and `as_mut`, which view the held `T` in place, end
+    /// their own loans.
+    const LENDS_A_WORD: bool = false;
+
     unsafe fn deref<'a>(rt: &R, reference: &'a R::Value) -> &'a Self {
         // SAFETY: the caller's contract. The storage a reference names is
         // read by the host's own `R::Value` reading of it and not by

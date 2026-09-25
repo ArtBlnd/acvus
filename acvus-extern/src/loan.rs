@@ -20,6 +20,7 @@ use crate::runtime::Runtime;
 #[doc(hidden)]
 pub trait Loan: Send + Sync + 'static {
     const MUTABILITY: Mutability;
+    const EXCLUSIVE: bool = matches!(Self::MUTABILITY, Mutability::Mut);
 
     /// A Rust borrow of `T` at this strength.
     type Of<'a, T>
@@ -246,36 +247,72 @@ impl Loan for Mut {
     }
 }
 
+/// What a `Lending` lent, as far as the end of its loan needs it.
+#[doc(hidden)]
+pub trait Ending<Rt>
+where
+    Rt: Runtime,
+{
+    /// As `Borrowable::LENDS_A_WORD`.
+    const LENDS_A_WORD: bool;
+}
+
+/// A `D` lent through representation `C`'s `Lends`.
+#[doc(hidden)]
+pub struct Through<C, D>(PhantomData<fn() -> (C, D)>);
+
+impl<C, D, Rt> Ending<Rt> for Through<C, D>
+where
+    C: Lends<D, Rt>,
+    Rt: Runtime,
+{
+    const LENDS_A_WORD: bool = <C as Lends<D, Rt>>::LENDS_A_WORD;
+}
+
+/// A storage whose type the lender does not name, which may be a word.
+#[doc(hidden)]
+pub struct Unnamed;
+
+impl<Rt> Ending<Rt> for Unnamed
+where
+    Rt: Runtime,
+{
+    const LENDS_A_WORD: bool = true;
+}
+
 /// A borrow lent in place through the reference word this holds, and the
 /// end of that loan: dropping it hands the storage to `M::loan_ended`, after
-/// the borrow's user returns and while a panic in it unwinds.
+/// the borrow's user returns and while a panic in it unwinds, where `W`
+/// lends a word.
 ///
 /// The borrow is read through `reference`, whose result lives no longer than
 /// the borrow of this value, so no borrow made through it outlives the drop
 /// that ends it. The glue a macro writes lends a receiver and each exclusive
 /// position of a signature's rest through one, and `Ref::with` its storage.
 #[doc(hidden)]
-pub struct Lending<'r, M, Rt>
+pub struct Lending<'r, M, Rt, W = Unnamed>
 where
     M: Loan,
     Rt: Runtime,
+    W: Ending<Rt>,
 {
     rt: &'r Rt,
     reference: Rt::Value,
-    loan: PhantomData<fn() -> M>,
+    loan: PhantomData<fn() -> (M, W)>,
 }
 
-impl<'r, M, Rt> Lending<'r, M, Rt>
+impl<'r, M, Rt, W> Lending<'r, M, Rt, W>
 where
     M: Loan,
     Rt: Runtime,
+    W: Ending<Rt>,
 {
     /// # Safety
     /// `reference` is a reference word naming a live storage that outlives
     /// this value, named by nothing else while a borrow made through it at
     /// `Mut` lives.
     #[inline(always)]
-    pub unsafe fn of(rt: &'r Rt, reference: Rt::Value) -> Lending<'r, M, Rt> {
+    pub unsafe fn of(rt: &'r Rt, reference: Rt::Value) -> Lending<'r, M, Rt, W> {
         Lending {
             rt,
             reference,
@@ -290,15 +327,18 @@ where
     }
 }
 
-impl<M, Rt> Drop for Lending<'_, M, Rt>
+impl<M, Rt, W> Drop for Lending<'_, M, Rt, W>
 where
     M: Loan,
     Rt: Runtime,
+    W: Ending<Rt>,
 {
     #[inline(always)]
     fn drop(&mut self) {
-        // SAFETY: `of`'s contract: the storage is live, and every borrow read
-        // through `reference` borrowed `self`, so none is live here.
-        unsafe { M::loan_ended(self.rt, &self.reference) }
+        if W::LENDS_A_WORD {
+            // SAFETY: `of`'s contract: the storage is live, and every borrow
+            // read through `reference` borrowed `self`, so none is live here.
+            unsafe { M::loan_ended(self.rt, &self.reference) }
+        }
     }
 }

@@ -127,6 +127,8 @@ unsafe impl acvus_extern::OneValue<Counting> for V {
 }
 
 impl acvus_extern::Borrowable<Counting> for V {
+    const LENDS_A_WORD: bool = false;
+
     unsafe fn deref<'a>(_: &Counting, reference: &'a V) -> &'a V {
         let V::Reference(p) = reference else {
             panic!("deref: not a reference: {reference:?}")

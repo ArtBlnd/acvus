@@ -1,4 +1,32 @@
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:44:75
+   |
+44 | ..., at: &mut Option<Lending<'r, Mut, Rt, Through<Uniform, Vec<i64>>>>, crossed: &mut Rt::Value)
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this parameter borrows a container of `i64`
+   |
+   = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
+   = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).
+   = note: a `Vec<i64>` taken by value materializes each element, and an `async` declaration may take one, which it may not a slice.
+help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
+  --> $WORKSPACE/acvus-extern/src/erased.rs
+   |
+   | / unsafe impl<R, T> InPlaceElement<R> for Erased<R, T>
+   | | where
+   | |     R: Runtime,
+   | |_______________^
+   = note: required for `Vec<i64>` to implement `Borrowable<Rt>`
+   = note: required for `acvus_extern::Uniform` to implement `Lends<Vec<i64>, Rt>`
+   = note: required for `acvus_extern::Through<acvus_extern::Uniform, Vec<i64>>` to implement `acvus_extern::Ending<Rt>`
+note: required by a bound in `acvus_extern::Lending`
+  --> $WORKSPACE/acvus-extern/src/loan.rs
+   |
+   | pub struct Lending<'r, M, Rt, W = Unnamed>
+   |            ------- required by a bound in this struct
+...
+   |     W: Ending<Rt>,
+   |        ^^^^^^^^^^ required by this bound in `Lending`
+
+error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
   --> tests/compile_fail/in_place_read_of_a_converted_element.rs:15:15
    |
 15 |     unsafe { <Vec<i64> as Borrowable<Rt>>::deref(rt, reference) }.len()
@@ -79,10 +107,12 @@ help: the trait `InPlaceElement<R>` is implemented for `Erased<R, T>`
    = note: required for `&Vec<i64>` to implement `RestoreShared<'_, ByRef<Vec<i64>, acvus_extern::Shared>, Rt>`
 
 error[E0277]: a borrowed container of `i64` has no storage of its own type: the container's storage holds the runtime's values, not `i64`s
-  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:49:10
+  --> tests/compile_fail/in_place_read_of_a_converted_element.rs:49:9
    |
-49 |         <&mut Vec<i64> as RestoreExclusive<'_, ByRef<Vec<i64>, Mut, Uniform>, Rt>>::restore_exclusive(
-   |          ^^^^^^^^^^^^^ this parameter borrows a container of `i64`
+49 | /         <&mut Vec<i64> as RestoreExclusive<'_, ByRef<Vec<i64>, Mut, Uniform>, Rt>>::restore_exclusive(
+50 | |             rt, at, crossed,
+51 | |         )
+   | |_________^ this parameter borrows a container of `i64`
    |
    = help: the trait `InPlaceElement<Rt>` is not implemented for `i64`
    = note: borrow the elements as a slice: the language's `&[i64]` and `&mut [i64]` are taken as `Slice<Erased<Rt, i64>, Shared, Rt>` and `Slice<Erased<Rt, i64>, Mut, Rt>`, whose elements read in place as `i64` by `as_ref(rt)` and `as_mut(rt)` where `i64: Stored<Rt>`; a `i64` that is itself `TransparentOver<Rt>`, as an `Erased<Rt, X>` is, is taken as `Slice<i64, Shared, Rt>` and `Slice<i64, Mut, Rt>` (RFC-0047).

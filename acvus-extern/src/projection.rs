@@ -46,6 +46,11 @@ where
 {
     type Table: Clone + Send + Sync + 'static;
 
+    /// Whether `project_mut` can lend a storage in the runtime's value word,
+    /// which a write leaves to `loan_ended` to re-encode: `false` only where
+    /// a fact of the type rules it out, as `Borrowable::LENDS_A_WORD`.
+    const LENDS_A_WORD: bool;
+
     fn table(at: ArgAt<'_>) -> Self::Table;
 
     /// # Safety
@@ -110,6 +115,9 @@ where
 {
     type Loan: Loan;
     type Table: Clone + Send + Sync + 'static;
+
+    /// As `Project::LENDS_A_WORD`, for the projection `of` builds.
+    const LENDS_A_WORD: bool;
 
     fn table(at: ArgAt<'_>) -> Self::Table;
 
@@ -426,6 +434,8 @@ where
 {
     type Table = <T as Project<Rt>>::Table;
 
+    const LENDS_A_WORD: bool = <T as Project<Rt>>::LENDS_A_WORD;
+
     fn table(at: ArgAt<'_>) -> Self::Table {
         let payload = match at.ty {
             Ty::Option(inner) => &**inner,
@@ -457,6 +467,9 @@ where
     }
 
     unsafe fn loan_ended(rt: &Rt, value: &mut Rt::Value, table: &Self::Table) {
+        if !<Self as Project<Rt>>::LENDS_A_WORD {
+            return;
+        }
         // SAFETY: as `project_mut`'s: the payload `project_mut` lent, where
         // there is one.
         if let Some(payload) = unsafe { rt.some_at_mut(value) } {
@@ -488,6 +501,8 @@ where
     Rt: Runtime,
 {
     type Table = (<T as Project<Rt>>::Table, <E as Project<Rt>>::Table);
+
+    const LENDS_A_WORD: bool = <T as Project<Rt>>::LENDS_A_WORD || <E as Project<Rt>>::LENDS_A_WORD;
 
     /// # Panics
     /// The settled type is not a `Result`. The checker settles a `Result`
@@ -537,6 +552,9 @@ where
     }
 
     unsafe fn loan_ended(rt: &Rt, value: &mut Rt::Value, table: &Self::Table) {
+        if !<Self as Project<Rt>>::LENDS_A_WORD {
+            return;
+        }
         // SAFETY: as `project_mut`'s: the payload of the arm `project_mut`
         // lent.
         match unsafe { rt.result_at_mut(value) } {
@@ -563,6 +581,8 @@ where
     type Site = <P as Projected<'static, Rt>>::Table;
     type Form = One;
 
+    const LENDS_A_WORD: bool = <P as Projected<'static, Rt>>::LENDS_A_WORD;
+
     fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site {
         <P as Projected<'static, Rt>>::table(site.args[at])
     }
@@ -572,10 +592,12 @@ where
     /// loan_ended`).
     #[inline(always)]
     unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], site: &Self::Site) {
-        // SAFETY: the caller's contract: `run[0]` is the reference `take`
-        // built the projection over with this table, and the projection has
-        // ended.
-        unsafe { <P as Projected<'static, Rt>>::loan_ended(rt, &run[0], site) }
+        if <Self as Arg<Rt>>::LENDS_A_WORD {
+            // SAFETY: the caller's contract: `run[0]` is the reference `take`
+            // built the projection over with this table, and the projection
+            // has ended.
+            unsafe { <P as Projected<'static, Rt>>::loan_ended(rt, &run[0], site) }
+        }
     }
 }
 
@@ -651,6 +673,10 @@ macro_rules! borrowed_as_self {
         {
             type Table = ();
 
+            // The payload `project_mut` lends.
+            const LENDS_A_WORD: bool =
+                $crate::repr::may_lie_in_the_word::<<Self as $crate::Stored<__Rt>>::Payload>();
+
             fn table(_: $crate::ArgAt<'_>) {}
 
             unsafe fn project<'__a>(
@@ -681,8 +707,10 @@ macro_rules! borrowed_as_self {
                 __value: &mut <__Rt as $crate::Runtime>::Value,
                 _: &(),
             ) {
-                // `project_mut` lent the value itself.
-                <__Rt as $crate::Runtime>::loan_ended(__value)
+                if <Self as $crate::Project<__Rt>>::LENDS_A_WORD {
+                    // `project_mut` lent the value itself.
+                    <__Rt as $crate::Runtime>::loan_ended(__value)
+                }
             }
         }
     };

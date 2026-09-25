@@ -259,6 +259,8 @@ unsafe impl acvus_extern::OneValue<Tiny> for V {
 }
 
 impl acvus_extern::Borrowable<Tiny> for V {
+    const LENDS_A_WORD: bool = false;
+
     unsafe fn deref<'a>(_: &Tiny, reference: &'a V) -> &'a V {
         target(reference)
     }
