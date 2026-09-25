@@ -610,8 +610,7 @@ Status: Proposed
 An iteration waits for another only through a token the IR already holds.
 `For` writes where the body is cut and nothing else; which stage serializes
 what, in which order and by which law, is read from the tokens and the
-operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
-10).
+operations' declarations. How a stage runs is the lowerer's (RFC-0092).
 
 1. **The terminator.** `Terminator::For { source, stages, exit, exit_trip,
    exit_args }`, with `source`, `exit`, `exit_trip` and `exit_args` as
