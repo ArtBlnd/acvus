@@ -76,22 +76,22 @@ macro_rules! instances_of {
     ($(
         $t:ty => eq: $eq:ident, clone: $clone:ident, cmp: $cmp:ident, hash: $hash:ident
     );* $(;)?) => {$(
-        #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure)]
+        #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure, total)]
         fn $eq(a: &$t, b: &$t) -> bool {
             Word::equals(a, b)
         }
 
-        #[extern_fn(instance_of = acvus_extern::core::clone, effect = pure)]
+        #[extern_fn(instance_of = acvus_extern::core::clone, effect = pure, total)]
         fn $clone(a: &$t) -> $t {
             a.clone()
         }
 
-        #[extern_fn(instance_of = acvus_extern::core::cmp, effect = pure)]
+        #[extern_fn(instance_of = acvus_extern::core::cmp, effect = pure, total)]
         fn $cmp(a: &$t, b: &$t) -> i64 {
             verdict(Word::order(a, b))
         }
 
-        #[extern_fn(instance_of = acvus_extern::core::hash, effect = pure)]
+        #[extern_fn(instance_of = acvus_extern::core::hash, effect = pure, total)]
         fn $hash(a: &$t) -> u64 {
             Word::digest(a)
         }
@@ -104,7 +104,28 @@ instances_of! {
     bool => eq: eq_bool, clone: clone_bool, cmp: cmp_bool, hash: hash_bool;
     u8 => eq: eq_byte, clone: clone_byte, cmp: cmp_byte, hash: hash_byte;
     char => eq: eq_char, clone: clone_char, cmp: cmp_char, hash: hash_char;
-    String => eq: eq_string, clone: clone_string, cmp: cmp_string, hash: hash_string;
+}
+
+#[extern_fn(instance_of = acvus_extern::core::eq, effect = pure, total)]
+fn eq_string(a: &String, b: &String) -> bool {
+    Word::equals(a, b)
+}
+
+/// Not `total`: the clone allocates, and an allocation Rust cannot make
+/// ends the process through `handle_alloc_error`.
+#[extern_fn(instance_of = acvus_extern::core::clone, effect = pure)]
+fn clone_string(a: &String) -> String {
+    a.clone()
+}
+
+#[extern_fn(instance_of = acvus_extern::core::cmp, effect = pure, total)]
+fn cmp_string(a: &String, b: &String) -> i64 {
+    verdict(Word::order(a, b))
+}
+
+#[extern_fn(instance_of = acvus_extern::core::hash, effect = pure, total)]
+fn hash_string(a: &String) -> u64 {
+    Word::digest(a)
 }
 
 pub fn word_registry<R>() -> Registry<R>

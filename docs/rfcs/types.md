@@ -232,8 +232,8 @@ Status: Accepted
    where the interval domain (RFC-0047 rule 7) shows its divisor is not
    zero and, at a signed width, that its divisor is not `-1` or its
    dividend not `MIN`; elsewhere it stays and panics where it runs
-   (RFC-0048 rule 8). `analysis::raise` answers this one question for every
-   pass that removes an instruction.
+   (RFC-0048 rule 8, which states the removal of every operation that can
+   trap).
    Negation takes a signed integer or `f64`.
 3. **Overflow is undefined.** A `+`, `-`, `*` or negation whose exact
    result does not fit the width, or a shift by the width or more, gives a

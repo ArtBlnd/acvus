@@ -1,0 +1,2 @@
+// expect 5
+let d = 9223372036854775807.wrapping_add(1); 5

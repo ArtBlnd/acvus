@@ -24,7 +24,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
-use crate::ty::{IntTy, Mutability, Ty};
+use crate::ty::{IntTy, LenTerm, Mutability, Ty};
 
 /// How many endpoints a proof follows from the index to a length. A chain
 /// longer than this is left checked; it is a bound on the work, and a cycle
@@ -435,46 +435,55 @@ pub struct InstAt {
 /// interval domain puts below their slice's length.
 pub fn bounded_indices(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
     let mut bounded = FxHashSet::default();
-    Domain::new(cfg, laws).visit_with_facts_before(|at, kind, facts| {
-        let below = match kind {
-            InstKind::Index { slice, index, .. } | InstKind::IndexSet { slice, index, .. } => {
-                facts.below_len(*index, *slice)
-            }
-            _ => false,
-        };
-        if below {
+    let domain = Domain::new(cfg, laws);
+    domain.visit_with_facts_before(|at, kind, facts| {
+        if domain.index_below_len(kind, facts) {
             bounded.insert(at);
         }
     });
     bounded
 }
 
-/// The integer `/` and `%` of `cfg` that the interval domain shows cannot
-/// panic (RFC-0037 rule 2): the divisor's interval leaves out zero and, at
-/// a signed width, the divisor's leaves out `-1` or the dividend's leaves
-/// out the width's minimum.
-pub fn unfailing_divisions(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
-    let mut unfailing = FxHashSet::default();
-    Domain::new(cfg, laws).visit_with_facts_before(|at, kind, facts| {
-        let InstKind::BinOp {
-            op: BinOp::Div | BinOp::Mod,
-            left,
-            right,
-            ..
-        } = kind
-        else {
-            return;
-        };
-        let Some(Ty::Int(width)) = cfg.val_types.get(left) else {
-            return;
-        };
-        let no_overflow =
-            !width.signed() || facts.excludes(*right, -1) || facts.excludes(*left, width.min());
-        if facts.excludes(*right, 0) && no_overflow {
-            unfailing.insert(at);
+/// The instructions of `cfg` whose trap the interval domain rules out
+/// (RFC-0037 rule 2, RFC-0047 rule 7).
+pub fn untrapping(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
+    let mut untrapping = FxHashSet::default();
+    let domain = Domain::new(cfg, laws);
+    domain.visit_with_facts_before(|at, kind, facts| {
+        if domain.index_below_len(kind, facts) || division_defined(cfg, kind, facts) {
+            untrapping.insert(at);
         }
     });
-    unfailing
+    untrapping
+}
+
+fn division_defined(cfg: &CfgBody, kind: &InstKind, facts: &Facts) -> bool {
+    let InstKind::BinOp {
+        op: BinOp::Div | BinOp::Mod,
+        left,
+        right,
+        ..
+    } = kind
+    else {
+        return false;
+    };
+    let Some(Ty::Int(width)) = cfg.val_types.get(left) else {
+        return false;
+    };
+    let no_overflow =
+        !width.signed() || facts.excludes(*right, -1) || facts.excludes(*left, width.min());
+    facts.excludes(*right, 0) && no_overflow
+}
+
+fn array_len(container: &Ty) -> Option<u64> {
+    let array = match container {
+        Ty::Ref(_, referent) => referent.ty().into_owned(),
+        other => other.clone(),
+    };
+    match array {
+        Ty::Array(_, LenTerm::Known(len)) => u64::try_from(len).ok(),
+        _ => None,
+    }
 }
 
 struct Domain<'a> {
@@ -486,6 +495,7 @@ struct Domain<'a> {
     /// left out, since that reference may name another storage each time
     /// its definition runs.
     same_storage: FxHashMap<ValueId, ValueId>,
+    array_slice_lens: FxHashMap<ValueId, u64>,
 }
 
 /// What a `Ref` names.
@@ -547,11 +557,36 @@ impl<'a> Domain<'a> {
                 same_storage.insert(*dst, named);
             }
         }
+        let array_slice_lens = cfg
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| match &inst.kind {
+                InstKind::AsSlice { dst, container, .. } => {
+                    Some((*dst, array_len(cfg.val_types.get(container)?)?))
+                }
+                _ => None,
+            })
+            .collect();
         Domain {
             cfg,
             laws,
             same_storage,
+            array_slice_lens,
         }
+    }
+
+    fn index_below_len(&self, kind: &InstKind, facts: &Facts) -> bool {
+        let (InstKind::Index { slice, index, .. } | InstKind::IndexSet { slice, index, .. }) =
+            kind
+        else {
+            return false;
+        };
+        let below_array_len = || {
+            let len = self.array_slice_lens.get(slice)?;
+            Some(facts.constant_upper_bound(*index)? < i128::from(*len))
+        };
+        facts.below_len(*index, *slice) || below_array_len() == Some(true)
     }
 
     /// The value that stands for the storage `reference` names: the first

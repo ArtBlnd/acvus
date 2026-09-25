@@ -11,6 +11,7 @@ use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::loop_deps::{
     Accumulator, CallIdentity, CallLaw, FoldAccumulator, Law, LawOp, LoopDeps, Storage, Token,
 };
+use acvus_mir::analysis::raise::UntrappingFunctions;
 use acvus_mir::analysis::loops::{
     Invariance, Invariants, Loop, LoopId, LoopKind, LoopNest, Nesting, Term, Trip,
 };
@@ -46,7 +47,7 @@ impl Analyzed {
         let LoweredScript { module, laws } = lowered.unwrap_or_else(|e| panic!("{source}\n{e}"));
         let mut cfg = promote(module.main);
         ssa_pass::run(&mut cfg);
-        dce::run(&mut cfg, &laws);
+        dce::run(&mut cfg, &laws, &UntrappingFunctions::unknown());
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
         Self {

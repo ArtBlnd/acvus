@@ -573,7 +573,9 @@ where
     new_map(Keying::Closures { hash, eq }, as_capacity(n))
 }
 
-#[extern_fn(effect = pure, ensures(ret = len(m)))]
+/// `total`: `len` reads the length the map holds, and widening a `usize` to
+/// `u64` neither fails nor panics on any target Rust supports.
+#[extern_fn(effect = pure, total, ensures(ret = len(m)))]
 fn len<K, V, E, Rt>(m: &HashMap<'_, K, V, E, Rt>) -> u64
 where
     K: Var<kind::Type>,

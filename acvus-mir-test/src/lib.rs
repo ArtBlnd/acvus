@@ -1187,7 +1187,7 @@ pub fn compile_multi_fn_optimized_with_facts(
     )
 }
 
-fn multi_fn_module_at(
+pub fn multi_fn_module_at(
     interner: &Interner,
     target: (&str, &str),
     helpers: &[(&str, &str, Vec<PolyParam>)],

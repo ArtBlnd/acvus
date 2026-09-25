@@ -76,6 +76,8 @@ use rustc_hash::FxHashMap;
 use crate::analysis::affine::{Affine, AffineValues, Derivation, for_body};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info::{self, Reads};
+use crate::analysis::interval;
+use crate::analysis::raise::{Raising, UntrappingFunctions};
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, Term, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
@@ -86,7 +88,7 @@ use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, LenTerm, Mutability, Ty};
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &UntrappingFunctions) {
     let domtree = DomTree::build(cfg);
     let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
     for (_, loop_) in nest.iter() {
@@ -107,7 +109,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
         if !ivs.is_empty() {
             canonicalize(cfg, loop_, &shape, &domtree, &ivs);
         }
-        read_lengths_from_entry(cfg, loop_, &shape, &domtree, laws);
+        read_lengths_from_entry(cfg, loop_, &shape, &domtree, laws, functions);
     }
     rewrite_neighbours(cfg);
 }
@@ -543,19 +545,21 @@ enum ArgAbove {
 /// header, where the storage holds its length on entry, and writes
 /// `len(s) on entry + k·c` at the head of the body. That arithmetic wraps:
 /// it is the pass's, and its value is the length the call read, which the
-/// width holds (RFC-0037 rule 3). The call has no effect, so removing it
-/// leaves the run as it was.
+/// width holds (RFC-0037 rule 3). The call has no effect and cannot trap
+/// (RFC-0048 rule 8), so removing it, and calling it on an entry that may
+/// run no iteration, leaves the run as it was.
 fn read_lengths_from_entry(
     cfg: &mut CfgBody,
     loop_: &Loop,
     shape: &Shape,
     domtree: &DomTree,
     laws: &LawTable,
+    functions: &UntrappingFunctions,
 ) {
     let [entering] = loop_.natural.entering[..] else {
         return;
     };
-    let reads = LengthRead::all(cfg, loop_, shape, laws);
+    let reads = LengthRead::all(cfg, loop_, shape, laws, functions);
     if reads.is_empty() {
         return;
     }
@@ -587,7 +591,14 @@ fn read_lengths_from_entry(
 }
 
 impl LengthRead {
-    fn all(cfg: &CfgBody, loop_: &Loop, shape: &Shape, laws: &LawTable) -> Vec<LengthRead> {
+    fn all(
+        cfg: &CfgBody,
+        loop_: &Loop,
+        shape: &Shape,
+        laws: &LawTable,
+        functions: &UntrappingFunctions,
+    ) -> Vec<LengthRead> {
+        let raising = Raising::of(cfg, laws, functions);
         let natural = &loop_.natural;
         let invariants = Invariants::of(cfg);
         let affine = AffineValues::of(cfg, loop_, &invariants, laws);
@@ -617,6 +628,9 @@ impl LengthRead {
                 else {
                     continue;
                 };
+                if raising.can_raise(interval::InstAt { block, at }, &inst.kind) {
+                    continue;
+                }
                 let Some(Affine {
                     step,
                     derivation: Derivation::Length { .. },

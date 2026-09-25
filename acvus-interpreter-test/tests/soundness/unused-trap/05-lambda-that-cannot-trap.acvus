@@ -1,0 +1,2 @@
+// expect 5
+let f = |n| -> n / 2; let d = f(1); 5

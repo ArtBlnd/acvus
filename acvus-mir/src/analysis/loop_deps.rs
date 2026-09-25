@@ -28,7 +28,7 @@ use crate::ir::{
 };
 use crate::laws::{
     ExternInstance, LawTable, ReachedPlace, Reaches, ResolvedBinary, ResolvedFold,
-    ResolvedIdentity, ResolvedLaws, Returns,
+    ResolvedIdentity, ResolvedLaws,
 };
 use crate::ty::{Mutability, Ty};
 
@@ -778,7 +778,7 @@ impl<'a> RunAhead<'a> {
             && match kind {
                 InstKind::FunctionCall { callee, .. } | InstKind::Spawn { callee, .. } => {
                     matches!(callee, Callee::Extern { .. })
-                        && self.laws.returns_of(callee) == Returns::Stated
+                        && self.laws.returns_of(callee).returns_or_traps()
                 }
                 InstKind::Eval { .. } => false,
                 _ => true,

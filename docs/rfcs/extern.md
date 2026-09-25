@@ -1059,12 +1059,27 @@ Status: Proposed
    call of `f` returns or traps. It is the author's promise (rule 5).
    RFC-0089 rule 5 reads it, by the instance a call names, to run the call
    ahead of its iteration's control token.
+9. **A call that cannot trap.** `#[extern_fn(total)]` states that every
+   call of `f` returns a value and never traps, which states `returns`
+   too, so `#[extern_fn]` refuses the two written together. The call is
+   all `f` runs, a call it makes of a function value it was handed
+   included, so an `f` that calls one cannot state it. It is the author's
+   promise (rule 5), sampled by tests that call each declared handler over
+   its width's edges and a fixed sample of words. `analysis::raise` reads
+   it, by the instance a call names, so a call whose value nothing reads
+   is removed only where its instance states it (RFC-0048 rule 8); the
+   declaration is an instance's, so `num::pow` states it over an unsigned
+   width and not over a signed one, where a negative exponent traps.
 
 **Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
 extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no
 pass can see. The author of an extension is the one who knows them, as
 with effects. A vocabulary sized to what a pass reads keeps every
 declaration meaningful and keeps the promise small enough to state.
+`total` is read by the removal of a call, not by RFC-0081's promotion: a
+promoted `while` runs its first test where the loop's entry ran it, so the
+trap RFC-0081 considered stays where it was without a declaration, while a
+removed call's trap is lost unless the callee cannot raise one.
 **Cost.** A second kind of trusted promise beside effects, and a debug
 evaluation of postconditions at every return.
 **Rejected.**

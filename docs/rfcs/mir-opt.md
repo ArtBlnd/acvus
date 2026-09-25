@@ -544,7 +544,8 @@ iteration hands the next.
    invariants, holds `f` of the element at `k − 1` from the second
    iteration on and its entry value on the first; the pass reads it so,
    and it carries nothing. A call rule 4 makes `{len(s) on entry, c}` is
-   read as that term from `len(s)` read above the header, and removed. After
+   read as that term from `len(s)` read above the header, and removed,
+   where the call cannot trap (RFC-0048 rule 8). After
    the stages are written, strength reduction (RFC-0056) reduces a counter
    expression whose readers all sit in one `InOrder` join, and its step
    joins that join. A `while` is declined, since it states no count; a later
@@ -801,11 +802,9 @@ trip count, IV canonicalization, the region and the lowerer's split
    when the comparison was their only reader. The pass computes no exit
    value: the exit edge carries `i` as it did, and what `i` is after the
    loop is IV canonicalization's (RFC-0066 rule 7). A bound the header
-   computes is computed again at the end of the entering block from the
-   same operands, because the machine reads a range's bounds on the
-   entering edge (RFC-0057 rule 7). For a word constant, as `while i < 10`
-   lowers, that is RFC-0056's re-emission of a word. The header's own
-   computation loses its reader with the comparison.
+   computes moves to the end of the entering block, because the machine
+   reads a range's bounds on the entering edge (RFC-0057 rule 7) and a
+   `for` header holds no instruction.
 
 3. **A computed bound is the header's first visit, moved to the entry.**
    The header runs on every entry before any body block. A step computed
@@ -820,8 +819,7 @@ trip count, IV canonicalization, the region and the lowerer's split
      with `attempt to calculate the remainder with a divisor of zero`; at a
      signed width `MIN / -1` panics with `attempt to divide with overflow`
      and `MIN % -1` with `attempt to calculate the remainder with
-     overflow`; an unsigned width has no other failure. The copy keeps
-     the operation's kind.
+     overflow`; an unsigned width has no other failure.
    - a call of an extern whose declared effect is `pure` and touches no
      context, the author's promise (RFC-0080 rule 3). Each argument is a
      shared reference defined outside the loop, which the borrow check
@@ -835,8 +833,9 @@ trip count, IV canonicalization, the region and the lowerer's split
    Evaluating the steps once, in the header's order, at the end of the
    entering block is exact when moving them ahead of the header's other
    instructions changes nothing observable. The entering block ends in the
-   jump to the header, so the copy runs on exactly the paths the first
-   visit ran on (RFC-0048 rule 8). A trapping `+`, `-` or `*`, a `/`, a `%`
+   jump to the header, so the moved steps run on exactly the paths the
+   first visit ran on (RFC-0048 rule 8), and every later visit repeated
+   them. A trapping `+`, `-` or `*`, a `/`, a `%`
    and a call can trap, since `pure` does not say that a call returns:
    `unwrap` is `pure` and panics. So when the bound holds one, no
    instruction before its last such step in the header, other than a step
@@ -895,7 +894,8 @@ move than its `while` did.
   `while` where it now sees a `for`.
 - A `no_panic` declaration for promotion — the header's first visit
   already raises the trap the entry raises; a later reader, hoisting from a
-  body, may add it.
+  body, may add it. RFC-0082 rule 9's `total` is one, read by the removal
+  of an unused call and not by promotion.
 
 ## RFC-0083: a pure operation computed on every path to it is the value computed first
 

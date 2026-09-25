@@ -115,15 +115,35 @@ pub enum Reaches {
     Places(Vec<ReachedPlace>),
 }
 
-/// `#[extern_fn(returns)]` (RFC-0082 rule 8): whether the declaration
-/// states that every call returns or traps. It is the author's promise;
-/// RFC-0089 rule 5 reads it, by the instance a call names, to run the call
-/// ahead of its iteration's control token.
+/// How a call of the instance ends, as its declaration states it (RFC-0082
+/// rules 8 and 9): the author's promise, read by the instance a call names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Returns {
     #[default]
     Unstated,
+    /// `#[extern_fn(returns)]`: every call returns or traps. RFC-0089 rule 5
+    /// reads it to run the call ahead of its iteration's control token.
     Stated,
+    /// `#[extern_fn(total)]`: every call returns a value and never traps.
+    /// `analysis::raise` reads it to let a call whose value nothing reads go
+    /// (RFC-0048 rule 8).
+    Total,
+}
+
+impl Returns {
+    pub fn returns_or_traps(self) -> bool {
+        match self {
+            Returns::Unstated => false,
+            Returns::Stated | Returns::Total => true,
+        }
+    }
+
+    pub fn never_traps(self) -> bool {
+        match self {
+            Returns::Unstated | Returns::Stated => false,
+            Returns::Total => true,
+        }
+    }
 }
 
 /// `x`, the whole of what reference parameter `x` lends, or `x[i]`, its

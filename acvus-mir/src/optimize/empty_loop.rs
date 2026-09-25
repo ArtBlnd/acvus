@@ -33,7 +33,9 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::affine::for_body;
 use crate::analysis::domtree::DomTree;
+use crate::analysis::interval::InstAt;
 use crate::analysis::loops::{NaturalLoop, natural_loops_innermost_first};
+use crate::analysis::raise::{Raising, UntrappingFunctions};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{
     BinOp, Checked, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId,
@@ -42,12 +44,12 @@ use crate::laws::LawTable;
 use crate::optimize::dce;
 use crate::ty::{CastTy, IntTy, LenTerm, Ty};
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
-    while let Some(empty) = first_empty(cfg) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &UntrappingFunctions) {
+    while let Some(empty) = first_empty(cfg, laws, functions) {
         remove(cfg, empty);
         let alive = reachable(cfg);
         prune(cfg, &alive);
-        dce::run(cfg, laws);
+        dce::run(cfg, laws, functions);
     }
 }
 
@@ -81,15 +83,16 @@ struct Stepped {
     right: ValueId,
 }
 
-fn first_empty(cfg: &CfgBody) -> Option<Empty> {
+fn first_empty(cfg: &CfgBody, laws: &LawTable, functions: &UntrappingFunctions) -> Option<Empty> {
     let domtree = DomTree::build(cfg);
+    let raising = Raising::of(cfg, laws, functions);
     natural_loops_innermost_first(cfg, &domtree)
         .iter()
-        .find_map(|loop_| Empty::of(cfg, loop_))
+        .find_map(|loop_| Empty::of(cfg, loop_, &raising))
 }
 
 impl Empty {
-    fn of(cfg: &CfgBody, loop_: &NaturalLoop) -> Option<Empty> {
+    fn of(cfg: &CfgBody, loop_: &NaturalLoop, raising: &Raising<'_>) -> Option<Empty> {
         let header = &cfg.blocks[loop_.header.0];
         let Terminator::For {
             source,
@@ -121,7 +124,7 @@ impl Empty {
         if !body.iter().all(|block| only_jumps_within(*block)) {
             return None;
         }
-        let slopes = Slopes::of(cfg, loop_, source, &body)?;
+        let slopes = Slopes::of(cfg, loop_, source, &body, raising)?;
         let checks = slopes.checks()?;
         let defs = slopes
             .defs
@@ -167,9 +170,6 @@ impl Slope {
 }
 
 /// The body's instructions, read as how each value moves with the counter.
-/// The body qualifies only when it holds nothing but constants, integer
-/// casts, wrapping `+`, `-` and `*`, and `Check`s of a `+`: none of them
-/// writes, calls, or ends the run but the checks.
 struct Slopes<'a> {
     cfg: &'a CfgBody,
     counter: ValueId,
@@ -184,6 +184,7 @@ impl<'a> Slopes<'a> {
         loop_: &NaturalLoop,
         source: ForSource,
         body: &[BlockIdx],
+        raising: &Raising<'_>,
     ) -> Option<Slopes<'a>> {
         let counter = cfg.blocks[for_body(cfg, loop_.header).0].params[source.counter_param()];
         let mut defs = FxHashMap::default();
@@ -192,21 +193,22 @@ impl<'a> Slopes<'a> {
         for block in body {
             let held = &cfg.blocks[block.0];
             params.extend(held.params.iter().copied());
-            for inst in &held.insts {
+            for (at, inst) in held.insts.iter().enumerate() {
+                let raises = raising.can_raise(InstAt { block: *block, at }, &inst.kind);
                 match &inst.kind {
                     InstKind::Check {
                         op: Checked::Add,
                         left,
                         right,
                     } => checks.push((inst.span, *left, *right)),
-                    InstKind::Const { dst, .. } => {
+                    InstKind::Const { dst, .. } if !raises => {
                         defs.insert(*dst, &inst.kind);
                     }
                     InstKind::Cast {
                         dst,
                         to: CastTy::Int(_),
                         ..
-                    } if matches!(cfg.val_types[dst], Ty::Int(_)) => {
+                    } if !raises && matches!(cfg.val_types[dst], Ty::Int(_)) => {
                         defs.insert(*dst, &inst.kind);
                     }
                     InstKind::BinOp {
@@ -216,7 +218,7 @@ impl<'a> Slopes<'a> {
                             | BinOp::Sub(Overflow::Wrap)
                             | BinOp::Mul(Overflow::Wrap),
                         ..
-                    } if matches!(cfg.val_types[dst], Ty::Int(_)) => {
+                    } if !raises && matches!(cfg.val_types[dst], Ty::Int(_)) => {
                         defs.insert(*dst, &inst.kind);
                     }
                     _ => return None,

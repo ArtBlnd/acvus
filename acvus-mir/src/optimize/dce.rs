@@ -22,7 +22,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::analysis::interval::InstAt;
 use crate::analysis::loans::Loans;
-use crate::analysis::raise::Raising;
+use crate::analysis::raise::{Raising, UntrappingFunctions};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::laws::LawTable;
@@ -332,8 +332,6 @@ fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, raising: &Raising<'_>)
         // Eval - IO execution point.
         InstKind::Eval { .. } => true,
 
-        InstKind::Check { .. } | InstKind::CheckSteps { .. } => true,
-
         // A Pure call that writes no context has no effect (RFC-0007,
         // RFC-0025 rule 4): dead if its result is unused. A call whose effect is
         // unknown stays.
@@ -400,10 +398,10 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
 /// to observable behavior (Return, Store, Eval, effectful calls).
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &UntrappingFunctions) {
     let def_map = build_def_map(cfg);
     let loans = Loans::build(cfg);
-    let raising = Raising::of(cfg, laws);
+    let raising = Raising::of(cfg, laws, functions);
     let stores = Stores::of(&loans);
 
     // Live instruction set.
@@ -812,7 +810,7 @@ mod tests {
     fn a_store_no_one_reads_is_dead_and_its_producer_stays() {
         let i = Interner::new();
         let mut cfg = opaque_store_never_read(&i, Vec::new());
-        run(&mut cfg, &LawTable::default());
+        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
         assert_eq!(stored(&cfg), Vec::new(), "a store with no reader is dead");
         assert_eq!(
             calls(&cfg),
@@ -833,7 +831,7 @@ mod tests {
                 mutability: crate::ty::Mutability::Shared,
             }],
         );
-        run(&mut cfg, &LawTable::default());
+        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
         assert_eq!(refs(&cfg), 0, "a reference no one reads is dead");
         assert_eq!(
             stored(&cfg),
@@ -862,7 +860,7 @@ mod tests {
             ],
             &[Ty::String, Ty::String, Ty::String, Ty::I64],
         );
-        run(&mut cfg, &LawTable::default());
+        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
         assert_eq!(
             stored(&cfg),
             vec![v(1)],
@@ -892,7 +890,7 @@ mod tests {
             ],
             4,
         );
-        run(&mut cfg, &LawTable::default());
+        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
         assert_eq!(
             stored(&cfg),
             Vec::new(),
@@ -900,29 +898,65 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_unused_pure_call_is_dead() {
-        let i = Interner::new();
-        let mut cfg = body(
+    fn unused_pure_call_body(i: &Interner) -> CfgBody {
+        body(
             vec![
                 InstKind::Const {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(1),
                 },
-                unused_call(&i, "len", Effect::PURE, 1),
+                unused_call(i, "len", Effect::PURE, 1),
                 InstKind::Return {
                     value: v(0),
                     order: None,
                 },
             ],
             2,
-        );
-        run(&mut cfg, &LawTable::default());
-        assert_eq!(
-            calls(&cfg),
-            0,
-            "a Pure call with an unused result is removed"
-        );
+        )
+    }
+
+    #[test]
+    fn an_unused_pure_call_of_a_callee_that_cannot_raise_is_dead() {
+        let i = Interner::new();
+        let laws = LawTable::default();
+        let callee = cfg::demote(body(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Return {
+                    value: v(0),
+                    order: None,
+                },
+            ],
+            1,
+        ));
+        let functions =
+            UntrappingFunctions::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
+        let mut cfg = unused_pure_call_body(&i);
+        run(&mut cfg, &laws, &functions);
+        assert_eq!(calls(&cfg), 0);
+    }
+
+    #[test]
+    fn an_unused_pure_call_of_a_callee_that_calls_itself_stays() {
+        let i = Interner::new();
+        let laws = LawTable::default();
+        let callee = cfg::demote(unused_pure_call_body(&i));
+        let functions =
+            UntrappingFunctions::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
+        let mut cfg = unused_pure_call_body(&i);
+        run(&mut cfg, &laws, &functions);
+        assert_eq!(calls(&cfg), 1);
+    }
+
+    #[test]
+    fn an_unused_pure_call_of_a_callee_that_may_raise_stays() {
+        let i = Interner::new();
+        let mut cfg = unused_pure_call_body(&i);
+        run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
+        assert_eq!(calls(&cfg), 1);
     }
 
     #[test]
@@ -943,7 +977,7 @@ mod tests {
                 ],
                 2,
             );
-            run(&mut cfg, &LawTable::default());
+            run(&mut cfg, &LawTable::default(), &UntrappingFunctions::unknown());
             assert_eq!(
                 calls(&cfg),
                 1,

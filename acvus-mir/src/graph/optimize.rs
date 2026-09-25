@@ -6,6 +6,7 @@ use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
+use crate::analysis::raise::UntrappingFunctions;
 use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
 use crate::graph::{ContextInfo, QualifiedRef};
@@ -49,11 +50,12 @@ pub fn optimize(
 
     let mut all_errors = Vec::new();
     let mut recursive: FxHashSet<QualifiedRef> = FxHashSet::default();
-    for members in call_graph_sccs(&modules) {
-        if Component::of(&members, &modules).is_cyclic() {
-            recursive.extend(&members);
+    let sccs = call_graph_sccs(&modules);
+    for members in &sccs {
+        if Component::of(members, &modules).is_cyclic() {
+            recursive.extend(members);
         }
-        for qref in members {
+        for &qref in members {
             let module = &modules[&qref];
             let mut errors = validate::move_check::check_moves(module);
             errors.extend(validate::borrow_check::check_outputs_and_borrows(module));
@@ -66,6 +68,15 @@ pub fn optimize(
         }
     }
 
+    let called: FxHashSet<QualifiedRef> = modules.values().flat_map(named_callees).collect();
+    let functions = UntrappingFunctions::of(
+        sccs.iter()
+            .flatten()
+            .filter(|qref| called.contains(qref))
+            .map(|qref| (*qref, &modules[qref].main)),
+        laws,
+    );
+
     // -- Pass 1: SSA (per-module) -> Inline (cross-module) -----
 
     let mut ssa_modules = modules;
@@ -75,9 +86,9 @@ pub fn optimize(
         },
         Opt::Full => {
             for module in ssa_modules.values_mut() {
-                run_pass1_body(laws, &mut module.main);
+                run_pass1_body(laws, &functions, &mut module.main);
                 for closure in module.closures.values_mut() {
-                    run_pass1_body(laws, closure);
+                    run_pass1_body(laws, &functions, closure);
                 }
             }
             inliner::inline(&ssa_modules, &recursive)
@@ -93,9 +104,9 @@ pub fn optimize(
     let mut undropped: Vec<Undropped> = inlined
         .modules
         .into_iter()
-        .map(|(qref, module)| Undropped::optimized(interner, laws, qref, module, opt))
+        .map(|(qref, module)| Undropped::optimized(interner, laws, &functions, qref, module, opt))
         .collect();
-    settle_inputs(&mut undropped, laws);
+    settle_inputs(&mut undropped, laws, &functions);
 
     for module in undropped {
         let qref = module.qref;
@@ -210,12 +221,16 @@ impl Component {
     }
 }
 
-fn run_pass1_body(laws: &LawTable, body: &mut crate::ir::MirBody) {
+fn run_pass1_body(
+    laws: &LawTable,
+    functions: &UntrappingFunctions,
+    body: &mut crate::ir::MirBody,
+) {
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
     optimize::string_copy::run(&mut cfg);
     optimize::dse::run(&mut cfg);
-    optimize::dce::run(&mut cfg, laws);
+    optimize::dce::run(&mut cfg, laws, functions);
     *body = cfg::demote(cfg);
 }
 
@@ -233,6 +248,7 @@ impl Undropped {
     fn optimized(
         interner: &Interner,
         laws: &LawTable,
+        functions: &UntrappingFunctions,
         qref: QualifiedRef,
         mut module: MirModule,
         opt: Opt,
@@ -240,8 +256,8 @@ impl Undropped {
         let optimized = |body: MirBody| {
             let mut cfg = cfg::promote(body);
             match opt {
-                Opt::None => run_pass2_required(interner, laws, &mut cfg),
-                Opt::Full => run_pass2(interner, laws, &mut cfg),
+                Opt::None => run_pass2_required(interner, laws, functions, &mut cfg),
+                Opt::Full => run_pass2(interner, laws, functions, &mut cfg),
             }
             cfg
         };
@@ -293,7 +309,7 @@ impl Undropped {
 /// so a parameter removed here is removed from every call to the module, and
 /// a value a caller read only to pass it is unread in turn: the removal
 /// repeats until no module loses one.
-fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable) {
+fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable, functions: &UntrappingFunctions) {
     loop {
         let mut removed: FxHashMap<QualifiedRef, Vec<usize>> = FxHashMap::default();
         for module in undropped.iter_mut() {
@@ -314,7 +330,7 @@ fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable) {
         for module in undropped.iter_mut() {
             for body in module.bodies_mut() {
                 if strip_arguments(body, &removed) {
-                    optimize::dce::run(body, laws);
+                    optimize::dce::run(body, laws, functions);
                     // RFC-0089 rule 6: what `dce` removed may have freed a
                     // stage, and cutting again merges the boundaries it left.
                     optimize::stages::run(body, laws);
@@ -375,7 +391,12 @@ fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usiz
 /// optimization, so the two folds that decide it run at every level: a bound
 /// `$` is a constant here as well, and the arms it decides against are gone
 /// from both bodies alike (RFC-0071 rule 5).
-fn run_pass2_required(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
+fn run_pass2_required(
+    interner: &Interner,
+    laws: &LawTable,
+    functions: &UntrappingFunctions,
+    cfg: &mut CfgBody,
+) {
     optimize::ssa_pass::run(cfg);
     // A `String` copies (RFC-0018), and the copy is emitted here: without
     // it two names own one string and each drops it.
@@ -383,10 +404,15 @@ fn run_pass2_required(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     optimize::reborrow::run(cfg);
     optimize::fold::run(cfg);
     optimize::branch::run(interner, cfg);
-    optimize::dce::run(cfg, laws);
+    optimize::dce::run(cfg, laws, functions);
 }
 
-fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
+fn run_pass2(
+    interner: &Interner,
+    laws: &LawTable,
+    functions: &UntrappingFunctions,
+    cfg: &mut CfgBody,
+) {
     optimize::commute::run(cfg);
     optimize::spawn_split::run(cfg);
     // RFC-0050: an aggregate no use lets out of the body never exists.
@@ -408,23 +434,23 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // parameter, and after the fold, which settles a constant bound; before
     // `dce`, which sweeps the comparison the new terminator leaves unread.
     optimize::while_to_for::run(cfg, laws);
-    optimize::dce::run(cfg, laws);
+    optimize::dce::run(cfg, laws, functions);
     optimize::code_motion::run(cfg);
     // RFC-0066 rule 7: every induction variable of a `for` that anything
     // besides its own step reads is computed from the counter, decided per
     // variable; after the hoist, which leaves each loop's invariants above
     // its header.
-    optimize::iv_canon::run(cfg, laws);
+    optimize::iv_canon::run(cfg, laws, functions);
     // RFC-0083: after IV canonicalization, whose arithmetic it simplifies
     // and merges; before a `dce` of its own, which sweeps what it leaves
     // unread, the header arguments the canonicalization removed included.
     optimize::gvn::run(cfg);
-    optimize::dce::run(cfg, laws);
+    optimize::dce::run(cfg, laws, functions);
     // RFC-0088: after that `dce`, which sweeps the arithmetic the loop passes
     // left in a body that nothing reads, so a body that does nothing holds
     // no instruction; before `forward`, which collapses the header the
     // removal leaves only jumping.
-    optimize::empty_loop::run(cfg, laws);
+    optimize::empty_loop::run(cfg, laws, functions);
     // A block that only jumps is its target; before `reorder`, which
     // schedules within a block.
     optimize::forward::run(cfg);

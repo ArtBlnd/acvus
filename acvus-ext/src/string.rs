@@ -145,10 +145,10 @@ fn is_ascii(s: &str) -> bool {
     s.is_ascii()
 }
 
-/// `returns`: `str::contains` with a `&str` pattern runs the two-way
+/// `total`: `str::contains` with a `&str` pattern runs the two-way
 /// substring search, which ends after a number of steps linear in the two
 /// lengths, and does not panic.
-#[extern_fn(effect = pure, returns)]
+#[extern_fn(effect = pure, total)]
 fn contains(s: &str, pat: &str) -> bool {
     s.contains(pat)
 }

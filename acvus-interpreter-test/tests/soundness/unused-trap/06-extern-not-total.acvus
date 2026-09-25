@@ -1,0 +1,2 @@
+// expect unwrap: called on None
+let d = 9223372036854775807.checked_add(1).unwrap(); 5
