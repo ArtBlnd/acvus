@@ -127,6 +127,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0029: Exclusion is checked as the source wrote it; a reference to a reference is a reborrow
 - RFC-0064: A reference's extent is its loans
 - RFC-0079: A type names its region positions, and a call joins each output from the inputs its callee's signature labels alike (Proposed)
+- RFC-0096: A result position flows from the input positions whose labels reach it (Proposed)
 
 ### [positioning.md](positioning.md)
 

@@ -237,7 +237,7 @@ Status: Proposed
    captures name mutably; the inputs are each argument, its references
    read from the storage they name at the call, and the callee's captures,
    its one position. A flow is `Aligned`, position `k` from position `k`,
-   or `Any`, every position from every position; an `Aligned` flow between
+   `Labelled` (RFC-0096), or `Any`, every position from every position; an `Aligned` flow between
    two ends of a type variable `T` is the label `(T, k)`, so a value of `T`
    is opaque to the callee. At a call each output becomes the join of the
    inputs its flows name. A lambda's flows are inferred by the type checker
@@ -266,8 +266,8 @@ Status: Proposed
    lends, reached from every input. An output (the result; what a `&mut`,
    a `Mut` carrier, a closure or an unread type lets the callee write)
    flows from an input where a label of one reaches a label of the other:
-   `Aligned` where both are laid out by types the macro reads position by
-   position, `Any` otherwise and for every write. A result lifetime only
+   `Aligned` or `Labelled` where both are laid out (RFC-0096), `Any`
+   otherwise and for every write. A result lifetime only
    `ctx` names is refused; one no parameter names is free and names no
    loan. Rust checks the handler against the signature, so these are the
    flows its body performs. The glue takes each parameter at the type the
@@ -337,3 +337,45 @@ region parameter.
   hold `o`, refusing writes to `o` the program never makes through it.
 - Written lifetimes in the language — a script's positions and flows are
   inferred; only an extern states them, and Rust checks the handler.
+
+## RFC-0096: A result position flows from the input positions whose labels reach it
+
+Status: Proposed
+
+RFC-0079 gave a call two flows: `Aligned`, position `k` from position `k`,
+and `Any`, every position from every position. A signature whose result
+borrows through a parameter's inner region, `next(it: &'b mut Refs<'a, C>)
+-> Option<&'a T>`, is neither. `Any` joins the loan on `it` into the
+element, so two pulls of one iterator conflict and a pull loop's payload
+holds its own iterator, which Rust's `slice::Iter` does not.
+
+1. **A labelled flow.** A flow may map each position of an output to the
+   input positions whose label reaches that position's label, by RFC-0079
+   rule 6's reach, and to nothing else. `Aligned` is the map `k → k`;
+   `Any` maps every position to every position. At a call an output
+   position becomes the join of exactly the input positions its map
+   names.
+2. **Extension types are laid out.** The macro reads a
+   `#[derive(ExternType)]` type position by position: its region
+   parameters, then its type arguments, in declaration order, each a
+   label. A type the macro does not read stays unread, its flow `Any`.
+3. **Writes stay the union.** What a callee may write is still every input
+   into every output it may write (RFC-0079 rule 5); a labelled flow
+   narrows only the result.
+4. **The flow is the one Rust checked.** The macro writes a labelled flow
+   only from the handler's Rust signature, which Rust checked the body
+   against. The body returns nothing its signature's lifetimes do not
+   allow. A handler that reaches past them with `unsafe` states the fact
+   it relies on there (RFC-0080), as `Refs::step` does for the element it
+   reads at the collection's lifetime.
+
+**Why.** An element borrowed from a collection is a loan on the collection,
+not on the cursor that found it. With `Any` the analysis refuses programs
+Rust admits and loses pull loops whose payload is read in the body.
+**Cost.** Flows carry a position map; the macro lays out extension types;
+`loans` joins by the map.
+**Rejected.**
+- A pull-loop exception in RFC-0089 — it fixes one reader and leaves the
+  borrow check refusing `let a = it.next(); let b = it.next();`.
+- Laying out by field types instead of declared parameters — a payload's
+  fields are private to its type, while its parameters are its signature.
