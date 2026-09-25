@@ -1,5 +1,6 @@
 //! One binary: `cargo test -p acvus-interpreter-test --test all <file>::<test>`.
 
+mod anyorder_closure;
 mod arith_chain;
 mod attention_loop_shape;
 mod attention_shape;
@@ -123,6 +124,7 @@ mod unread_store_drop;
 mod unused_trap;
 mod weaker_admissions;
 mod while_let_call;
+mod wide_frame;
 
 /// The targets this crate's manifest declares under `[[test]]`, as the paths
 /// of the files that carry them: `path` when it is written, and otherwise the

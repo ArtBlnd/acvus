@@ -32,7 +32,7 @@ use smallvec::SmallVec;
 use crate::code::{
     Arith, BlockId, Body, ChainBounds, Code, Compare, ConcatPart, Deref, EntryKonst, Expr,
     ExprBody, ExprChain, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared, Root, Shape,
-    SlicePair, Slot, SlotKind, Step, Where, chain, made, node,
+    SlicePair, Slot, SlotKind, Step, Where, WordMask, chain, made, node,
 };
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Int, Unary, for_int_ty};
@@ -380,7 +380,7 @@ fn framed(
 
     let frame_len = prep.frame_len();
     let param_ids: Vec<ValueId> = body.params.iter().map(|(_, v)| *v).collect();
-    let param_marks = prep.take_mask(&param_ids);
+    let param_marks = prep.param_marks(&param_ids);
     let params = param_ids.iter().map(|id| prep.off(*id)).collect();
     let captures = body.captures.iter().map(|(_, v)| prep.off(*v)).collect();
     let order_param = body.order_param.map(|id| prep.off(id));
@@ -1313,11 +1313,6 @@ impl<'a> Prepare<'a> {
                 slot < frame,
                 "a run holds register {slot}, which a frame of {frame} does not have"
             );
-            assert_eq!(
-                Marked::of(Off::of(slot)).word_byte(),
-                0,
-                "a run holds register {slot}, whose mark bit is outside mark word 0"
-            );
         }
         self.run_noops = noops(self.body, &self.plan);
     }
@@ -1433,12 +1428,14 @@ impl<'a> Prepare<'a> {
     fn scalar_len(&self) -> u16 {
         let len = self.scratch + self.scratch_used;
         let len = u16::try_from(len)
-            .unwrap_or_else(|_| panic!("a body of {len} registers is past a frame's reach"));
-        assert!(
-            len <= crate::regs::MAX_SCALAR_SLOTS,
-            "a body was coloured into {len} scalar registers, past the {}",
-            crate::regs::MAX_SCALAR_SLOTS
-        );
+            .ok()
+            .filter(|len| *len <= crate::regs::MAX_FRAME_SLOTS)
+            .unwrap_or_else(|| {
+                panic!(
+                    "a body was coloured into {len} scalar registers, past the {} one frame holds",
+                    crate::regs::MAX_FRAME_SLOTS
+                )
+            });
         assert!(
             self.scratch_used <= u32::from(MAX_SCRATCH_SLOTS),
             "a jump's cycle went through {} scratch registers, past the {MAX_SCRATCH_SLOTS} a \
@@ -1706,25 +1703,27 @@ impl<'a> Prepare<'a> {
         }
     }
 
-    /// `Regs::take_mask` reads mark word 0 alone, and the assertion here is what
-    /// makes that read total: no structure in `regs.rs` can check that the
-    /// registers of a mask fall in one word.
-    fn take_mask(&self, ids: &[ValueId]) -> u64 {
-        let mut mask = 0u64;
-        for id in ids {
-            if !self.owns(*id) {
-                continue;
-            }
-            let at = self.marked(*id);
-            assert_eq!(
-                at.word_byte(),
-                0,
-                "value {id:?} is in register {}, whose mark bit is outside mark word 0",
-                at.at.index()
-            );
-            mask |= at.mask();
-        }
-        mask
+    fn take_mask(&self, ids: &[ValueId]) -> Takes {
+        Takes::of(
+            ids.iter()
+                .filter(|id| self.owns(**id))
+                .map(|id| self.marked(*id)),
+        )
+    }
+
+    /// The claims a body's entry hands its frame, written into mark word 0 by
+    /// `Regs::of`.
+    ///
+    /// # Panics
+    /// A parameter lies above mark word 0, which `assign_slots` bounds the
+    /// parameters by.
+    fn param_marks(&self, ids: &[ValueId]) -> u64 {
+        let Takes { word0, above } = self.take_mask(ids);
+        assert!(
+            above.is_empty(),
+            "a parameter's claim lies above mark word 0, the one word `Regs::of` writes"
+        );
+        word0
     }
 
     fn label(&self, label: &Label) -> u32 {
@@ -3345,9 +3344,8 @@ impl<'a> Prepare<'a> {
         if pair {
             return None;
         }
-        assert_eq!(
-            self.take_mask(args),
-            0,
+        assert!(
+            self.take_mask(args).is_empty(),
             "a loop head's call takes the reference its own `Ref` made, which owns no `Large`"
         );
         Some(CallHead {
@@ -4068,7 +4066,7 @@ impl<'a> Prepare<'a> {
                     .collect();
                 {
                     let dst = self.marked(*dst);
-                    node(move |next| string::Concat {
+                    owns_large.node(move |owns_large, next| string::Concat {
                         dst,
                         parts: held,
                         owns_large,
@@ -4084,7 +4082,7 @@ impl<'a> Prepare<'a> {
                     _ => ConcatPart::Owned(self.off(*part)),
                 };
                 let target = self.off(*target);
-                node(move |next| string::Append {
+                owns_large.node(move |owns_large, next| string::Append {
                     target,
                     part: held,
                     owns_large,
@@ -4411,7 +4409,7 @@ impl<'a> Prepare<'a> {
                     Callee::Direct(id) => {
                         let Operands { slots, takes } = self.taken(args);
                         let callee = *id;
-                        node(move |next| call::SpawnModule {
+                        takes.node(move |takes, next| call::SpawnModule {
                             dst,
                             callee,
                             args: slots,
@@ -4442,13 +4440,13 @@ impl<'a> Prepare<'a> {
                         match handler {
                             ExternHandler::Sync(f) | ExternHandler::Heavy(f) => {
                                 let f = f.at_site(&site);
-                                made(move |next| {
+                                window.made(move |window, next| {
                                     f.into_op(call::CallShape::Spawn { dst, window, next })
                                 })
                             }
                             ExternHandler::Async(f) => {
                                 let f = f.at_site(&site);
-                                made(move |next| {
+                                window.made(move |window, next| {
                                     f.into_op(call::AsyncShape::Spawn { dst, window, next })
                                 })
                             }
@@ -4469,7 +4467,7 @@ impl<'a> Prepare<'a> {
                 } = self.taken(elements);
                 {
                     let dst = self.marked(*dst);
-                    node(move |next| composite::MakeArray {
+                    owns_large.node(move |owns_large, next| composite::MakeArray {
                         dst,
                         elements: composite::Elements { slots, owns_large },
                         next,
@@ -4483,7 +4481,7 @@ impl<'a> Prepare<'a> {
                 } = self.taken(elements);
                 {
                     let dst = self.marked(*dst);
-                    node(move |next| composite::MakeTuple {
+                    owns_large.node(move |owns_large, next| composite::MakeTuple {
                         dst,
                         elements: composite::Elements { slots, owns_large },
                         next,
@@ -4571,7 +4569,7 @@ impl<'a> Prepare<'a> {
                     let sites = self.arg_sites(args);
                     f.at_site(&acvus_extern::CallSite::of_args(&sites))
                 };
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Pair1 {
                         dst,
                         a,
@@ -4627,7 +4625,7 @@ impl<'a> Prepare<'a> {
                 let Operands { slots, takes } = self.taken(captures);
                 {
                     let dst = self.marked(*dst);
-                    node(move |next| call::MakeClosure {
+                    takes.node(move |takes, next| call::MakeClosure {
                         dst,
                         code,
                         captures: slots,
@@ -4784,31 +4782,31 @@ impl<'a> Prepare<'a> {
                 }
                 let resume = next.block();
                 let Operands { slots, takes } = self.taken(args);
-                if pair {
-                    return Some(Box::new(call::CallDirectAsync::<false, true> {
-                        dst: slot,
-                        callee: id,
-                        args: slots,
-                        takes,
-                        next: resume,
-                    }));
-                }
-                Some(match large {
-                    true => Box::new(call::CallDirectAsync::<true, false> {
-                        dst: slot,
-                        callee: id,
-                        args: slots,
-                        takes,
-                        next: resume,
-                    }),
-                    false => Box::new(call::CallDirectAsync::<false, false> {
-                        dst: slot,
-                        callee: id,
-                        args: slots,
-                        takes,
-                        next: resume,
-                    }),
-                })
+                Some(takes.ending(|takes| -> Box<dyn Op> {
+                    match (pair, large) {
+                        (true, _) => Box::new(call::CallDirectAsync::<false, true> {
+                            dst: slot,
+                            callee: id,
+                            args: slots,
+                            takes,
+                            next: resume,
+                        }),
+                        (false, true) => Box::new(call::CallDirectAsync::<true, false> {
+                            dst: slot,
+                            callee: id,
+                            args: slots,
+                            takes,
+                            next: resume,
+                        }),
+                        (false, false) => Box::new(call::CallDirectAsync::<false, false> {
+                            dst: slot,
+                            callee: id,
+                            args: slots,
+                            takes,
+                            next: resume,
+                        }),
+                    }
+                }))
             }
             Callee::Indirect(handle) => {
                 let through = self.is_ref(*handle);
@@ -4849,11 +4847,13 @@ impl<'a> Prepare<'a> {
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
-                        Some(f.into_op(call::CallShape::Heavy {
-                            dst: slot,
-                            window,
-                            large,
-                            resume,
+                        Some(window.ending(|window| {
+                            f.into_op(call::CallShape::Heavy {
+                                dst: slot,
+                                window,
+                                large,
+                                resume,
+                            })
                         }))
                     }
                     ExternHandler::Async(f) => {
@@ -4867,11 +4867,13 @@ impl<'a> Prepare<'a> {
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
-                        Some(f.into_op(call::AsyncShape::Await {
-                            dst: slot,
-                            window,
-                            large,
-                            resume,
+                        Some(window.ending(|window| {
+                            f.into_op(call::AsyncShape::Await {
+                                dst: slot,
+                                window,
+                                large,
+                                resume,
+                            })
                         }))
                     }
                 }
@@ -4943,7 +4945,7 @@ impl<'a> Prepare<'a> {
         f: call::Sited,
         form: CallForm,
         slots: Vec<Off>,
-        takes: u64,
+        takes: Takes,
         ops: &mut Vec<Node>,
     ) -> Node {
         let Dest {
@@ -4958,7 +4960,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(1) => {
                 let a = nth(&slots, 0);
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Registers1 {
                         dst,
                         a,
@@ -4971,7 +4973,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(2) => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Registers2 {
                         dst,
                         a,
@@ -4984,7 +4986,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(3) => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Registers3 {
                         dst,
                         a,
@@ -5003,7 +5005,7 @@ impl<'a> Prepare<'a> {
                     nth(&slots, 2),
                     nth(&slots, 3),
                 );
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Registers4 {
                         dst,
                         a,
@@ -5018,7 +5020,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(_) | CallForm::Window => {
                 let window = self.window(at, args, ops);
-                made(move |next| {
+                window.made(move |window, next| {
                     f.into_op(call::CallShape::Window {
                         dst,
                         window,
@@ -5043,7 +5045,7 @@ impl<'a> Prepare<'a> {
         f: call::Sited,
         form: CallForm,
         slots: Vec<Off>,
-        takes: u64,
+        takes: Takes,
         ops: &mut Vec<Node>,
     ) -> Node {
         let dst = self.pair(result);
@@ -5055,7 +5057,7 @@ impl<'a> Prepare<'a> {
             ),
             CallForm::Registers(1) => {
                 let a = nth(&slots, 0);
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Pair1 {
                         dst,
                         a,
@@ -5066,7 +5068,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(2) => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Pair2 {
                         dst,
                         a,
@@ -5078,7 +5080,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(3) => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Pair3 {
                         dst,
                         a,
@@ -5096,7 +5098,7 @@ impl<'a> Prepare<'a> {
                     nth(&slots, 2),
                     nth(&slots, 3),
                 );
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Pair4 {
                         dst,
                         a,
@@ -5110,7 +5112,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(_) | CallForm::Window => {
                 let window = self.window(at, args, ops);
-                made(move |next| f.into_op(call::CallShape::PairWindow { dst, window, next }))
+                window.made(move |window, next| f.into_op(call::CallShape::PairWindow { dst, window, next }))
             }
         }
     }
@@ -5182,7 +5184,7 @@ impl<'a> Prepare<'a> {
         ret: usize,
         form: CallForm,
         slots: Vec<Off>,
-        takes: u64,
+        takes: Takes,
         ops: &mut Vec<Node>,
     ) -> Node {
         let dst = self.run_dest(result, ret);
@@ -5192,7 +5194,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(1) => {
                 let a = nth(&slots, 0);
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Run1 {
                         dst,
                         a,
@@ -5203,7 +5205,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(2) => {
                 let (a, b) = (nth(&slots, 0), nth(&slots, 1));
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Run2 {
                         dst,
                         a,
@@ -5215,7 +5217,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(3) => {
                 let (a, b, c) = (nth(&slots, 0), nth(&slots, 1), nth(&slots, 2));
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Run3 {
                         dst,
                         a,
@@ -5233,7 +5235,7 @@ impl<'a> Prepare<'a> {
                     nth(&slots, 2),
                     nth(&slots, 3),
                 );
-                made(move |next| {
+                takes.made(move |takes, next| {
                     f.into_op(call::CallShape::Run4 {
                         dst,
                         a,
@@ -5247,7 +5249,7 @@ impl<'a> Prepare<'a> {
             }
             CallForm::Registers(_) | CallForm::Window => {
                 let window = self.window(at, args, ops);
-                made(move |next| f.into_op(call::CallShape::RunWindow { dst, window, next }))
+                window.made(move |window, next| f.into_op(call::CallShape::RunWindow { dst, window, next }))
             }
         }
     }
@@ -5270,7 +5272,7 @@ impl<'a> Prepare<'a> {
     /// The argument run `assign_slots` placed for the call at `at`, and the
     /// `Mov` operations that put the arguments in it — which the caller
     /// pushes before the call's own operation (RFC-0052 rule 1).
-    fn window(&mut self, at: usize, args: &[ValueId], ops: &mut Vec<Node>) -> call::ArgWindow {
+    fn window(&mut self, at: usize, args: &[ValueId], ops: &mut Vec<Node>) -> Windowed {
         let plan = self.slots.window(at);
         let (base, arity) = (plan.base, plan.arity);
         let moved: Vec<PendingMove> = plan.moved.clone();
@@ -5305,7 +5307,7 @@ impl<'a> Prepare<'a> {
         self.scratch_used = self.scratch_used.max(ordered.scratch_used);
 
         ops.extend(ordered.moves.iter().map(mov_op));
-        call::ArgWindow {
+        Windowed {
             at: Off::of(base),
             arity,
             takes: self.window_take_mask(base, args),
@@ -5314,24 +5316,20 @@ impl<'a> Prepare<'a> {
 
     /// The claim the frame drops when a handler is lent its run: the run's
     /// own registers, because the moves above put every argument there.
-    fn window_take_mask(&self, base: Slot, args: &[ValueId]) -> u64 {
-        let mut mask = 0u64;
+    fn window_take_mask(&self, base: Slot, args: &[ValueId]) -> Takes {
+        let mut owned = Vec::new();
         let mut slot = base;
         for id in args {
             let width = u16::try_from(SlotClass::of(self.ty(*id)).width())
                 .expect("a register class is two wide at most");
             if self.owns(*id) {
-                assert!(
-                    slot < crate::regs::MARK_WORD_SLOTS,
-                    "an argument run reaches register {slot}, which is outside mark word 0"
-                );
-                mask |= 1u64 << slot;
+                owned.push(Marked::of(Off::of(slot)));
             }
             slot = slot
                 .checked_add(width)
                 .unwrap_or_else(|| panic!("an argument run at register {base} leaves a frame"));
         }
-        mask
+        Takes::of(owned)
     }
 
     /// What a move of this value between two registers the frame opened
@@ -5517,7 +5515,7 @@ impl<'a> Prepare<'a> {
             .map(|name| written.get(name).map(|value| self.off(*value)))
             .collect();
         let dst = self.marked(dst);
-        node(move |next| composite::MakeObject {
+        owns_large.node(move |owns_large, next| composite::MakeObject {
             dst,
             shape,
             fields: held,
@@ -6770,9 +6768,9 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
             .expect("a register class is two registers at most");
         let over = run + width;
         assert!(
-            over <= u32::from(crate::regs::MAX_SCALAR_SLOTS),
-            "the parameters of one body reach register {over}, past the {} a scalar body colours",
-            crate::regs::MAX_SCALAR_SLOTS
+            over <= u32::from(crate::regs::MARK_WORD_SLOTS),
+            "the parameters of one body reach register {over}, past mark word 0, the one word \
+             `Body::param_marks` claims them in"
         );
         occupancy.hold(
             usize::try_from(run).expect("a frame's registers fit a usize"),
@@ -8602,7 +8600,7 @@ impl<'a> Prepare<'a> {
 
         let takes = self.take_mask(&read);
         let (large, at) = (self.owns(dst), self.marked(dst));
-        made(move |next| call::fused(large, at, calls, tail, takes, next))
+        takes.made(move |takes, next| call::fused(large, at, calls, tail, takes, next))
     }
 
     fn def_at(&self, value: ValueId) -> Option<usize> {
@@ -8897,14 +8895,116 @@ impl Prepare<'_> {
 /// the ones it consumes (RFC-0048 rule 5).
 struct Operands {
     slots: Box<[Off]>,
-    takes: u64,
+    takes: Takes,
 }
 
 /// The registers an argument run occupies in the callee's frame, and the mask
 /// of the caller's registers the call takes the frame's claim on.
 struct Laid {
     arity: u16,
-    takes: u64,
+    takes: Takes,
+}
+
+/// The frame's claims one operation drops (RFC-0048 rule 5). The mask over
+/// mark word 0 reaches the operation only through `node`, `made` and `ending`,
+/// which put a `control::Disown` of the words above it just before the
+/// operation, so no operation takes a register above word 0 and leaves its
+/// claim standing.
+struct Takes {
+    word0: u64,
+    above: Vec<WordMask>,
+}
+
+impl Takes {
+    fn of<I>(taken: I) -> Takes
+    where
+        I: IntoIterator<Item = Marked>,
+    {
+        let mut takes = Takes {
+            word0: 0,
+            above: Vec::new(),
+        };
+        for at in taken {
+            let word_byte = u32::try_from(at.word_byte())
+                .expect("a mark word's displacement fits the u32 a Marked carries");
+            match word_byte {
+                0 => takes.word0 |= at.mask(),
+                _ => match takes.above.iter_mut().find(|word| word.word_byte == word_byte) {
+                    Some(word) => word.mask |= at.mask(),
+                    None => takes.above.push(WordMask {
+                        word_byte,
+                        mask: at.mask(),
+                    }),
+                },
+            }
+        }
+        takes
+    }
+
+    fn is_empty(&self) -> bool {
+        self.word0 == 0 && self.above.is_empty()
+    }
+
+    fn node<T, F>(self, make: F) -> Node
+    where
+        F: FnOnce(u64, Box<dyn Op>) -> T + 'static,
+        T: Op + 'static,
+    {
+        self.made(move |word0, next| Box::new(make(word0, next)))
+    }
+
+    fn made<F>(self, make: F) -> Node
+    where
+        F: FnOnce(u64, Box<dyn Op>) -> Box<dyn Op> + 'static,
+    {
+        let Takes { word0, above } = self;
+        made(move |next| disowned_before(above, make(word0, next)))
+    }
+
+    /// The same, for an operation that ends its block.
+    fn ending<F>(self, make: F) -> Box<dyn Op>
+    where
+        F: FnOnce(u64) -> Box<dyn Op>,
+    {
+        let Takes { word0, above } = self;
+        disowned_before(above, make(word0))
+    }
+}
+
+fn disowned_before(above: Vec<WordMask>, op: Box<dyn Op>) -> Box<dyn Op> {
+    match above.is_empty() {
+        true => op,
+        false => Box::new(control::Disown {
+            words: above.into_boxed_slice(),
+            next: op,
+        }),
+    }
+}
+
+/// The argument run `Prepare::window` placed, and the claims the call drops on
+/// it, which reach the call's `ArgWindow` as `Takes` hands them out.
+struct Windowed {
+    at: Off,
+    arity: u16,
+    takes: Takes,
+}
+
+impl Windowed {
+    fn made<F>(self, make: F) -> Node
+    where
+        F: FnOnce(call::ArgWindow, Box<dyn Op>) -> Box<dyn Op> + 'static,
+    {
+        let Windowed { at, arity, takes } = self;
+        takes.made(move |takes, next| make(call::ArgWindow { at, arity, takes }, next))
+    }
+
+    fn ending<F>(self, make: F) -> Box<dyn Op>
+    where
+        F: FnOnce(call::ArgWindow) -> Box<dyn Op>,
+    {
+        let Windowed { at, arity, takes } = self;
+        takes.ending(|takes| make(call::ArgWindow { at, arity, takes }))
+    }
 }
 
 /// The register an operation writes, and whether the frame owns a `Large`
@@ -9302,7 +9402,7 @@ fn direct_call(into: Dest, callee: QualifiedRef, laid: Laid) -> Node {
     } = into;
     let Laid { arity, takes } = laid;
     if pair {
-        return node(move |next| call::CallDirect::<false, false, true> {
+        return takes.node(move |takes, next| call::CallDirect::<false, false, true> {
             dst,
             callee,
             arity,
@@ -9311,21 +9411,21 @@ fn direct_call(into: Dest, callee: QualifiedRef, laid: Laid) -> Node {
         });
     }
     match (large, word) {
-        (true, _) => node(move |next| call::CallDirect::<true, false, false> {
+        (true, _) => takes.node(move |takes, next| call::CallDirect::<true, false, false> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, true) => node(move |next| call::CallDirect::<false, true, false> {
+        (false, true) => takes.node(move |takes, next| call::CallDirect::<false, true, false> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, false) => node(move |next| call::CallDirect::<false, false, false> {
+        (false, false) => takes.node(move |takes, next| call::CallDirect::<false, false, false> {
             dst,
             callee,
             arity,
@@ -9349,42 +9449,42 @@ fn indirect_call(into: Dest, through: bool, callee: Marked, laid: Laid) -> Node 
     );
     let Laid { arity, takes } = laid;
     match (large, word, through) {
-        (true, _, false) => node(move |next| call::CallIndirect::<true, false, false> {
+        (true, _, false) => takes.node(move |takes, next| call::CallIndirect::<true, false, false> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (true, _, true) => node(move |next| call::CallIndirect::<true, false, true> {
+        (true, _, true) => takes.node(move |takes, next| call::CallIndirect::<true, false, true> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, true, false) => node(move |next| call::CallIndirect::<false, true, false> {
+        (false, true, false) => takes.node(move |takes, next| call::CallIndirect::<false, true, false> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, true, true) => node(move |next| call::CallIndirect::<false, true, true> {
+        (false, true, true) => takes.node(move |takes, next| call::CallIndirect::<false, true, true> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, false, false) => node(move |next| call::CallIndirect::<false, false, false> {
+        (false, false, false) => takes.node(move |takes, next| call::CallIndirect::<false, false, false> {
             dst,
             callee,
             arity,
             takes,
             next,
         }),
-        (false, false, true) => node(move |next| call::CallIndirect::<false, false, true> {
+        (false, false, true) => takes.node(move |takes, next| call::CallIndirect::<false, false, true> {
             dst,
             callee,
             arity,
@@ -9413,7 +9513,8 @@ fn indirect_call_async(
          (typeck::ResultCrossing::OneValue)"
     );
     let Operands { slots: args, takes } = operands;
-    match (large, through) {
+    takes.ending(|takes| -> Box<dyn Op> {
+        match (large, through) {
         (false, false) => Box::new(call::CallIndirectAsync::<false, false> {
             dst,
             callee,
@@ -9443,4 +9544,5 @@ fn indirect_call_async(
             next,
         }),
     }
+    })
 }

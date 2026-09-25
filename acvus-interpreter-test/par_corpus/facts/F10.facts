@@ -1,5 +1,5 @@
 for slice(r3) -> L1 else L2 stages [L1, L3]
-// L1: free {take}
-// L3: cycle Order(r6) in_order {call indirect}
+// L1: free {take, call indirect}
+// L3: cycle Order(r6) any_order law(Order exact commutative) {merge}
 // control upfront
-// cost W=3 O=18281 split when n > 194998, n = len(r3)
+// cost W=4 O=18281 split when n > 146248, n = len(r3)

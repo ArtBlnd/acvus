@@ -1,0 +1,41 @@
+// app: 08 prefix_histogram
+// desc: response latencies: an inclusive prefix sum answers range-total
+// queries, a histogram buckets the latencies by 25 ms, and the median
+// bucket is found by walking the histogram's cumulative count
+// expect: total 1041; ranges 169,387,1041,64; buckets 3,5,3,2,1,2; median bucket 1
+let lat = "12 48 33 71 5 96 64 27 55 140 18 81 102 44 29 216".split_whitespace() | map(|t| -> i64::parse(&t).unwrap()) | collect;
+let n = lat.len();
+
+// pre[i] is the total of the first i latencies.
+let pre = filled(n + 1u64, 0);
+for i in 0u64..n {
+    pre[i + 1u64] = pre[i] + lat[i];
+}
+
+// Totals over [lo, hi) for each query.
+let lo = vec([0u64, 4u64, 0u64, 6u64]);
+let hi = vec([5u64, 10u64, 16u64, 7u64]);
+let answer = filled(lo.len(), 0);
+for q in 0u64..lo.len() {
+    answer[q] = pre[hi[q]] - pre[lo[q]];
+}
+
+// Buckets of 25 ms; the last one takes everything above.
+let buckets = 6u64;
+let hist = filled(buckets, 0);
+for x in &lat {
+    let b = min((*x / 25) as u64, buckets - 1u64);
+    hist[b] = hist[b] + 1;
+}
+
+// The first bucket whose cumulative count reaches half the samples.
+let seen = 0;
+let median = buckets;
+for b in 0u64..buckets {
+    seen = seen + hist[b];
+    if median == buckets && seen * 2 >= (n as i64) {
+        median = b;
+    };
+}
+
+"total " + pre[n].to_string() + "; ranges " + answer.as_iter().map(|x| -> (*x).to_string()).join(",".to_string()) + "; buckets " + hist.as_iter().map(|x| -> (*x).to_string()).join(",".to_string()) + "; median bucket " + median.to_string()

@@ -22,7 +22,7 @@ use acvus_extern::{Handler, InRegisters, One, OneRegister, OptionOf, Owned};
 use crate::runtime::AcvusRuntime;
 
 use crate::code::{
-    AGAIN, BlockId, Exit, FALL, LEAVE, Marked, Off, Op, RETURN, SlicePair, successor,
+    AGAIN, BlockId, Exit, FALL, LEAVE, Marked, Off, Op, RETURN, SlicePair, WordMask, successor,
 };
 use crate::machine::Machine;
 use crate::ops::arith::Int;
@@ -1006,6 +1006,29 @@ pub struct Diverge;
 impl Op for Diverge {
     fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         panic!("a call typed `!` returned: its handler must panic")
+    }
+}
+
+/// An operation carries its take over mark word 0 in itself and no more,
+/// because a wider field would push the families at a cache line's edge past
+/// it (`code::tests::no_operation_family_spans_two_cache_lines`). The words
+/// above it are dropped here, just before that operation, which only a frame
+/// wider than one mark word pays.
+pub struct Disown {
+    pub words: Box<[WordMask]>,
+    pub next: Box<dyn Op>,
+}
+
+impl Op for Disown {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let regs = m.regs();
+        for word in &self.words {
+            regs.take_mask_of(*word);
+        }
+        self.next.run(m, r0)
     }
 }
 

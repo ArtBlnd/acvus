@@ -161,8 +161,8 @@ Status: Accepted
    realized (rule 4).
 
 2. **A frame is registers, and an aggregate that needs an address is a run of
-   them.** There is one kind of register. A frame is at most 64 scalar
-   registers and at most 256 run registers above them. A run holds an
+   them.** There is one kind of register. A frame holds as many registers as
+   its body needs, up to 320 in all, scalars below runs. A run holds an
    aggregate's flat layout (rule 8), placed by its own pass after the scalar
    colouring, deepest loop first. When runs would pass the bound, aggregates
    spill to the heap (rule 4), shallowest loop and longest live range first.
