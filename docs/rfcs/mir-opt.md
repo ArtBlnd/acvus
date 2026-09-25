@@ -65,7 +65,9 @@ instances of this rule.
    a `Diamond`. It is an `Escape`, an operation of the body whose arm ends in
    the verdict the enclosing region reads (RFC-0052 rule 3). The loop stays one
    region (`For<S, Escapes>`), and a loop with no such branch is the same
-   region it would otherwise be, with no compare added.
+   region it would otherwise be, with no compare added. The loop's own exit
+   edge is a part (`exit`) the region runs only where its test fails, so it
+   cannot overwrite what a `break` moved.
 
 5. **Aliasing.** `for x in &mut v` holds the container exclusively for the
    loop, and the terminator carries that borrow. Naming `v` in the body is a
