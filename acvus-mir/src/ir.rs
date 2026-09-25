@@ -932,6 +932,15 @@ pub enum InstKind {
         exit_trip: ExitTrip,
         exit_args: Vec<ValueId>,
     },
+    /// A pull loop's header (RFC-0089 rule 1). `acvus_interpreter::prepare`
+    /// runs it as the branch on `cond` to `stages.body()` or `exit` that
+    /// `optimize::while_to_for` promoted it from.
+    While {
+        cond: ValueId,
+        stages: Stages,
+        exit: Label,
+        exit_args: Vec<ValueId>,
+    },
     /// Leave the body with `value`; `order` is the `Order` the body yields
     /// last when its effect is not Pure.
     Return {
@@ -1038,7 +1047,9 @@ fn successor_labels(insts: &[Inst], at: usize) -> Vec<Label> {
                     .chain(default.iter().map(|(label, _)| *label))
                     .collect();
             }
-            InstKind::For { stages, exit, .. } => return vec![stages.body(), *exit],
+            InstKind::For { stages, exit, .. } | InstKind::While { stages, exit, .. } => {
+                return vec![stages.body(), *exit];
+            }
             InstKind::Return { .. } | InstKind::Diverge => return Vec::new(),
             _ => {}
         }

@@ -533,7 +533,8 @@ fn nested_loops_are_each_judged_by_their_own_state() {
 
 // -- Declined --------------------------------------------------------
 
-const WHILE: &str = "let j = 0; let i = 0; while i <= 4 { j = j + 2; i = i + 1; } j";
+/// `!=` is no counted form of RFC-0081 or RFC-0094, so the loop stays a `while`.
+const WHILE: &str = "let j = 0; let i = 0; while i != 5 { j = j + 2; i = i + 1; } j";
 
 #[test]
 fn a_while_is_untouched() {

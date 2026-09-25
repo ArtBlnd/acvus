@@ -232,6 +232,12 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
             source.for_each_use(&mut *s);
             exit_args.iter_mut().for_each(|v| s(v));
         }
+        InstKind::While {
+            cond, exit_args, ..
+        } => {
+            s(cond);
+            exit_args.iter_mut().for_each(|v| s(v));
+        }
         InstKind::Switch { tag, arms, default } => {
             s(tag);
             for (_, _, args) in arms.iter_mut() {
@@ -280,6 +286,12 @@ pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<Va
             source, exit_args, ..
         } => {
             source.for_each_use(|v| s(v));
+            exit_args.iter_mut().for_each(&s);
+        }
+        Terminator::While {
+            cond, exit_args, ..
+        } => {
+            s(cond);
             exit_args.iter_mut().for_each(&s);
         }
         Terminator::Switch { tag, arms, default } => {
@@ -714,6 +726,9 @@ pub(super) fn patch_instructions(cfg: &mut CfgBody, phi_insertions: &[super::ssa
             // the trip count where the edge defines one (RFC-0057 rule 9),
             // and are all its parameters where it does not.
             Terminator::For {
+                exit, exit_args, ..
+            }
+            | Terminator::While {
                 exit, exit_args, ..
             } => {
                 if let Some(extra) = jump_extra_args.get(&(pred_label, *exit)) {

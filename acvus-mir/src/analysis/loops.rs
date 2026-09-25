@@ -470,6 +470,19 @@ pub fn edge_args(term: &Terminator, label: Label) -> Option<&[ValueId]> {
                 edges.push(exit_args);
             }
         }
+        Terminator::While {
+            stages,
+            exit,
+            exit_args,
+            ..
+        } => {
+            if stages.body() == label {
+                edges.push(&[]);
+            }
+            if *exit == label {
+                edges.push(exit_args);
+            }
+        }
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
     }
     match edges[..] {

@@ -43,6 +43,8 @@ pub enum ShapeFault {
     StageEntryEnteredElsewhere,
     StagesOverlap,
     StageDoesNotReachNext,
+    HeaderIsNoPull,
+    PullLeavesElsewhere,
 }
 
 impl ShapeFault {
@@ -57,6 +59,11 @@ impl ShapeFault {
             Self::StageDoesNotReachNext => {
                 "a stage does not end in one jump to the next stage's entry"
             }
+            Self::HeaderIsNoPull => {
+                "its header is not a call lending one storage `&mut`, a test of the `Option` \
+                 it returns and the branch on that test"
+            }
+            Self::PullLeavesElsewhere => "a pull loop leaves other than from its header",
         }
     }
 }
@@ -78,18 +85,51 @@ impl StageBlocks {
     }
 }
 
+/// What ends a loop's header where the loop is cut into stages: a
+/// traversal, or a pull loop's branch on the `Option` its header pulled
+/// (RFC-0089 rule 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Head {
+    For(ForSource),
+    Pull,
+}
+
+impl Head {
+    /// The head and the chain `term` states, where it heads a staged loop.
+    pub fn of(term: &Terminator) -> Option<(Head, &Stages)> {
+        match term {
+            Terminator::For { source, stages, .. } => Some((Head::For(*source), stages)),
+            Terminator::While { stages, .. } => Some((Head::Pull, stages)),
+            _ => None,
+        }
+    }
+
+    pub fn source(self) -> Option<ForSource> {
+        match self {
+            Head::For(source) => Some(source),
+            Head::Pull => None,
+        }
+    }
+
+    fn supplied_params(self) -> usize {
+        self.source().map_or(0, |source| source.supplied_params())
+    }
+}
+
 /// Which blocks each stage holds: what the stage's entry reaches inside the
-/// loop before the next stage's entry or the header.
+/// loop before the next stage's entry or the header. A pull loop's header
+/// is its first stage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageMembership {
     stages: Vec<StageBlocks>,
+    head: Head,
 }
 
 impl StageMembership {
     pub fn of(
         cfg: &CfgBody,
         header: BlockIdx,
-        source: ForSource,
+        head: Head,
         stages: &Stages,
         loop_blocks: &[BlockIdx],
     ) -> Result<StageMembership, ShapeFault> {
@@ -103,13 +143,22 @@ impl StageMembership {
                     .ok_or(ShapeFault::EntryNamesNoBlock)
             })
             .collect::<Result<_, _>>()?;
-        if cfg.blocks[entries[0].0].params.len() != source.supplied_params() {
+        if cfg.blocks[entries[0].0].params.len() != head.supplied_params() {
             return Err(ShapeFault::BodyParams);
         }
         let preds = cfg.predecessors();
         let inside = |block: BlockIdx| loop_blocks.contains(&block);
         let mut claimed: FxHashSet<BlockIdx> = FxHashSet::default();
-        let mut found = Vec::with_capacity(entries.len());
+        let mut found = Vec::with_capacity(entries.len() + 1);
+        if let Head::Pull = head {
+            claimed.insert(header);
+            found.push(StageBlocks {
+                entry: cfg.blocks[header.0].label,
+                entry_block: header,
+                blocks: vec![header],
+                ends_toward_next_or_header: vec![header],
+            });
+        }
         for (index, &entry) in entries.iter().enumerate() {
             let next = entries.get(index + 1).copied();
             let mut blocks = vec![entry];
@@ -162,11 +211,28 @@ impl StageMembership {
         if preds.get(&entries[0]).map(|from| from.as_slice()) != Some(&[header][..]) {
             return Err(ShapeFault::StageEntryEnteredElsewhere);
         }
-        Ok(StageMembership { stages: found })
+        Ok(StageMembership {
+            stages: found,
+            head,
+        })
     }
 
     pub fn stages(&self) -> &[StageBlocks] {
         &self.stages
+    }
+
+    pub fn head(&self) -> Head {
+        self.head
+    }
+
+    /// The stages the terminator's chain names, which a pull loop's header
+    /// stage precedes.
+    pub fn body_stages(&self) -> std::ops::Range<usize> {
+        let first = match self.head {
+            Head::For(_) => 0,
+            Head::Pull => 1,
+        };
+        first..self.stages.len()
     }
 
     pub fn stage_of(&self, block: BlockIdx) -> Option<usize> {
@@ -182,6 +248,85 @@ pub fn loop_blocks_of(loops: &[NaturalLoop], header: BlockIdx) -> Vec<BlockIdx> 
     match loops.iter().find(|loop_| loop_.header == header) {
         Some(loop_) => loop_.blocks().collect(),
         None => vec![header],
+    }
+}
+
+/// RFC-0089 rule 1's pull: the header holds a `Ref` lending one storage
+/// `&mut`, an extern call of that reference alone returning an `Option`, and
+/// the test of that `Option`'s `Some`, which its branch decides by; and no
+/// other block of the loop leaves it. Which externs pull is
+/// `optimize::while_to_for`'s to decide; this is the shape it wrote.
+fn pull_shape(
+    cfg: &CfgBody,
+    loans: &Loans<'_>,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+) -> Result<(), ShapeFault> {
+    let block = &cfg.blocks[header.0];
+    let Terminator::While { cond, .. } = &block.terminator else {
+        return Err(ShapeFault::HeaderIsNoPull);
+    };
+    // `optimize::drop_insertion` releases in the header a value whose last
+    // use is its test, the pulled `Option` whose payload the body does not
+    // read among them; a release is no step of the pull.
+    let pulled: Vec<&InstKind> = block
+        .insts
+        .iter()
+        .map(|inst| &inst.kind)
+        .filter(|kind| !matches!(kind, InstKind::Drop { .. }))
+        .collect();
+    let [lend, pull, test] = pulled[..] else {
+        return Err(ShapeFault::HeaderIsNoPull);
+    };
+    let InstKind::Ref {
+        dst: lent,
+        target,
+        mutability: Mutability::Mut,
+        ..
+    } = lend
+    else {
+        return Err(ShapeFault::HeaderIsNoPull);
+    };
+    let InstKind::FunctionCall {
+        dst: option,
+        callee: Callee::Extern { .. },
+        args,
+        ..
+    } = pull
+    else {
+        return Err(ShapeFault::HeaderIsNoPull);
+    };
+    let InstKind::TestVariant { dst, src, .. } = test else {
+        return Err(ShapeFault::HeaderIsNoPull);
+    };
+    let lends_one_storage = inst_info::storage(target).is_some_and(|slot| {
+        loans
+            .names(*lent)
+            .iter()
+            .all(|loan| loan.storage.slot() == Some(slot))
+    });
+    let pulls = args[..] == [*lent]
+        && matches!(cfg.val_types.get(option), Some(Ty::Option(_)))
+        && src == option
+        && dst == cond;
+    if !lends_one_storage || !pulls {
+        return Err(ShapeFault::HeaderIsNoPull);
+    }
+    let leaves_elsewhere = loop_blocks
+        .iter()
+        .filter(|block| **block != header)
+        .any(|block| {
+            matches!(
+                cfg.blocks[block.0].terminator,
+                Terminator::Return { .. } | Terminator::Diverge
+            ) || cfg
+                .successors(*block)
+                .iter()
+                .any(|succ| !loop_blocks.contains(succ))
+        });
+    match leaves_elsewhere {
+        true => Err(ShapeFault::PullLeavesElsewhere),
+        false => Ok(()),
     }
 }
 
@@ -357,7 +502,7 @@ impl BodyDeps {
         let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
         let found = (0..cfg.blocks.len())
             .map(BlockIdx)
-            .filter(|at| matches!(cfg.blocks[at.0].terminator, Terminator::For { .. }))
+            .filter(|at| Head::of(&cfg.blocks[at.0].terminator).is_some())
             .map(|header| HeaderDeps {
                 header,
                 deps: LoopDeps::with(cfg, &loans, laws, header, &loop_blocks_of(&loops, header)),
@@ -369,7 +514,7 @@ impl BodyDeps {
 
 impl LoopDeps {
     /// # Panics
-    /// If `header` does not end in `For`.
+    /// If `header` ends in neither `For` nor `While`.
     pub fn of(cfg: &CfgBody, laws: &LawTable, header: BlockIdx) -> Result<LoopDeps, ShapeFault> {
         let loans = Loans::build(cfg);
         let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
@@ -383,12 +528,15 @@ impl LoopDeps {
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
     ) -> Result<LoopDeps, ShapeFault> {
-        let Terminator::For { source, stages, .. } = &cfg.blocks[header.0].terminator else {
-            panic!("block {} heads no `For`", header.0)
+        let Some((head, stages)) = Head::of(&cfg.blocks[header.0].terminator) else {
+            panic!("block {} heads no `For` and no `While`", header.0)
         };
-        let membership = StageMembership::of(cfg, header, *source, stages, loop_blocks)?;
-        let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body());
-        let slots = TargetSlots::of(loans, *source, loop_blocks);
+        let membership = StageMembership::of(cfg, header, head, stages, loop_blocks)?;
+        if let Head::Pull = head {
+            pull_shape(cfg, loans, header, loop_blocks)?;
+        }
+        let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body(), head);
+        let slots = TargetSlots::of(loans, head.source(), loop_blocks);
         let disjoint = disjoint_storages(
             loans,
             laws,
@@ -559,11 +707,8 @@ impl LoopDeps {
         };
         let loop_ = nest.get(id);
         let loans = Loans::build(cfg);
-        let Terminator::For { source, .. } = &cfg.blocks[self.header.0].terminator else {
-            panic!("block {} heads the `For` `loop_deps` read", self.header.0)
-        };
         let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
-        let slots = TargetSlots::of(&loans, *source, &loop_blocks);
+        let slots = TargetSlots::of(&loans, self.membership.head().source(), &loop_blocks);
         let reading_of = |state: State| {
             LawReading::of(&loans, laws, &slots, self.header, &loop_blocks, state)
         };
@@ -1748,6 +1893,12 @@ fn edges(term: &Terminator) -> Vec<EdgeArgs<'_>> {
                 fills_from: exit_trip.supplied_params(),
             },
         ],
+        Terminator::While {
+            stages,
+            exit,
+            exit_args,
+            ..
+        } => vec![plain(stages.body(), &[]), plain(*exit, exit_args)],
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }
 }
@@ -1794,12 +1945,16 @@ struct Graph {
 }
 
 impl Graph {
+    /// A pull loop's header is its first stage, so its instructions and its
+    /// branch are members that run before the body's, and the body runs
+    /// only where that branch enters it.
     fn of(
         cfg: &CfgBody,
         loans: &Loans<'_>,
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
         body_label: Label,
+        head: Head,
     ) -> Graph {
         let body: Vec<BlockIdx> = loop_blocks
             .iter()
@@ -1807,14 +1962,24 @@ impl Graph {
             .filter(|block| *block != header)
             .collect();
         let inside = |block: BlockIdx| body.contains(&block);
-        let ranks = run_order(cfg, cfg.label_to_block[&body_label], &inside);
+        let mut ranks = run_order(cfg, cfg.label_to_block[&body_label], &inside);
+        let pulled = match head {
+            Head::Pull => Some(header),
+            Head::For(_) => None,
+        };
+        if let Some(header) = pulled {
+            for rank in ranks.values_mut() {
+                *rank += 1;
+            }
+            ranks.insert(header, 0);
+        }
         let rank = |block: BlockIdx| {
             *ranks
                 .get(&block)
                 .expect("the body block reaches every block of the body without the header")
         };
 
-        let mut blocks = body.clone();
+        let mut blocks: Vec<BlockIdx> = pulled.into_iter().chain(body.iter().copied()).collect();
         blocks.sort_by_key(|block| rank(*block));
         let mut members: Vec<Member> = Vec::new();
         for &block in &blocks {
@@ -1861,7 +2026,19 @@ impl Graph {
             }
         }
 
-        for Controlled { block, deciders } in control_dependence(cfg, &body, &inside) {
+        let mut controlled = control_dependence(cfg, &body, &inside);
+        if let Some(header) = pulled {
+            for &block in &body {
+                match controlled.iter_mut().find(|found| found.block == block) {
+                    Some(found) => found.deciders.push(header),
+                    None => controlled.push(Controlled {
+                        block,
+                        deciders: vec![header],
+                    }),
+                }
+            }
+        }
+        for Controlled { block, deciders } in controlled {
             let dependents: Vec<usize> = (0..cfg.blocks[block.0].insts.len())
                 .map(|at| Member::Inst(InstAt { block, at }))
                 .chain([Member::Term(block)])
@@ -1994,6 +2171,11 @@ impl Graph {
         if !exits.is_empty() {
             let mut members = self.between(&exits, &exits);
             members.extend(exits);
+            // RFC-0089 rule 1: a pull loop's header, its call and its test
+            // are the control token's cycle.
+            if let Some((Head::Pull, _)) = Head::of(&cfg.blocks[header.0].terminator) {
+                members.extend(self.with(|member| member.block() == header));
+            }
             found.push(Held {
                 tokens: vec![Token::Control],
                 members,
@@ -2994,7 +3176,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// The values a branch decides by.
     fn decision(term: &Terminator) -> Vec<ValueId> {
         match term {
-            Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
+            Terminator::JumpIf { cond, .. }
+            | Terminator::Diamond { cond, .. }
+            | Terminator::While { cond, .. } => vec![*cond],
             Terminator::Switch { tag, .. } => vec![*tag],
             // A jump leaves by its one edge whatever it sends.
             Terminator::Jump { .. } => Vec::new(),
@@ -3304,8 +3488,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     }
 
     fn body_label(&self) -> Label {
-        let Terminator::For { stages, .. } = &self.cfg.blocks[self.header.0].terminator else {
-            panic!("block {} heads the `For` a law is read of", self.header.0)
+        let Some((_, stages)) = Head::of(&self.cfg.blocks[self.header.0].terminator) else {
+            panic!("block {} heads the loop a law is read of", self.header.0)
         };
         stages.body()
     }
@@ -3629,7 +3813,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let nested_blocks: Vec<BlockIdx> = nested.blocks().collect();
         let entry = self.form(nested.entry_arg(cfg, index)?)?;
         let param = cfg.blocks[header.0].params[index];
-        let slots = TargetSlots::of(self.loans, *source, &nested_blocks);
+        let slots = TargetSlots::of(self.loans, Some(*source), &nested_blocks);
         let Update {
             step,
             resets,

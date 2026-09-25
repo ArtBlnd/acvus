@@ -28,7 +28,7 @@ impl TargetSlots {
     /// blocks touches it or it is the body's parameter or capture. That is
     /// the decision this makes in place of a liveness query: a slot the body
     /// defines and releases within an iteration is touched only inside.
-    pub fn of(loans: &Loans<'_>, source: ForSource, loop_blocks: &[BlockIdx]) -> Self {
+    pub fn of(loans: &Loans<'_>, source: Option<ForSource>, loop_blocks: &[BlockIdx]) -> Self {
         let cfg = loans.cfg();
         let mut live: FxHashSet<ValueId> = cfg
             .params
@@ -45,13 +45,15 @@ impl TargetSlots {
             }
         }
         let element = match source {
-            ForSource::SliceMut(slice) => loans
+            Some(ForSource::SliceMut(slice)) => loans
                 .names(slice)
                 .iter()
                 .filter(|loan| loan.mutability == Mutability::Mut)
                 .filter_map(|loan| loan.storage.slot())
                 .collect(),
-            ForSource::Slice(_) | ForSource::Array(_) | ForSource::Range { .. } => Vec::new(),
+            Some(ForSource::Slice(_) | ForSource::Array(_) | ForSource::Range { .. }) | None => {
+                Vec::new()
+            }
         };
         Self { element, live }
     }

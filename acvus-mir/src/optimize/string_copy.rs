@@ -155,7 +155,9 @@ fn terminator_args(t: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => then_args.iter().chain(else_args).copied().collect(),
-        Terminator::For { exit_args, .. } => exit_args.clone(),
+        Terminator::For { exit_args, .. } | Terminator::While { exit_args, .. } => {
+            exit_args.clone()
+        }
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .flat_map(|(_, _, args)| args.iter())
@@ -188,6 +190,9 @@ fn edges_mut(t: &mut Terminator) -> Vec<(crate::ir::Label, Vec<&mut ValueId>)> {
             ..
         } => vec![(*then_label, each(then_args)), (*else_label, each(else_args))],
         Terminator::For {
+            exit, exit_args, ..
+        }
+        | Terminator::While {
             exit, exit_args, ..
         } => vec![(*exit, each(exit_args))],
         Terminator::Switch { arms, default, .. } => arms

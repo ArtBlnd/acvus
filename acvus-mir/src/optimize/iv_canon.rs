@@ -177,7 +177,32 @@ struct Iv {
     width: IntTy,
     init: ValueId,
     step: Invariant,
+    direction: Direction,
     read_after: bool,
+}
+
+/// Whether the step is added, `p + c`, or subtracted, `p − 1`
+/// (RFC-0094 rule 2).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Up,
+    Down,
+}
+
+impl Direction {
+    fn op(self) -> BinOp {
+        match self {
+            Self::Up => BinOp::Add(Overflow::Wrap),
+            Self::Down => BinOp::Sub(Overflow::Wrap),
+        }
+    }
+
+    fn sign(self) -> i128 {
+        match self {
+            Self::Up => 1,
+            Self::Down => -1,
+        }
+    }
 }
 
 impl Iv {
@@ -195,8 +220,10 @@ impl Iv {
         header_index: usize,
         param: ValueId,
     ) -> Option<Iv> {
-        let Derivation::Carried { init, step } = &affine.get(param)?.derivation else {
-            return None;
+        let (init, step, direction) = match &affine.get(param)?.derivation {
+            Derivation::Carried { init, step } => (init, step, Direction::Up),
+            Derivation::CountsDown { init, one } => (init, one, Direction::Down),
+            _ => return None,
         };
         // `base + k·step` is written at the head of the body and after the
         // loop, where a standing step is not yet computed, or never is.
@@ -243,6 +270,7 @@ impl Iv {
             width,
             init: *init,
             step: step.clone(),
+            direction,
             read_after,
         })
     }
@@ -256,6 +284,9 @@ impl Iv {
         let ForSource::Range { at, .. } = shape.source else {
             return false;
         };
+        if self.direction == Direction::Down {
+            return false;
+        }
         let one = match &self.step {
             Invariant::Word(literal) => Some(literal),
             Invariant::Outside(value) => invariants.word(*value),
@@ -304,6 +335,7 @@ impl Iv {
         let (Some(base), Some(step), Some(trip)) = (int(self.init), step, trip) else {
             return false;
         };
+        let step = self.direction.sign() * step;
         trip == 0
             || [base + step, base + trip * step]
                 .into_iter()
@@ -361,11 +393,35 @@ fn keep_step_trap(cfg: &mut CfgBody, loop_: &Loop, iv: &Iv) {
     let Some(op) = Checked::of_trapping(op) else {
         return;
     };
+    let kind = InstKind::Check { op, left, right };
+    let written = cfg.blocks[block.0].insts[..at]
+        .iter()
+        .any(|inst| same_check(&inst.kind, &kind));
+    if written {
+        return;
+    }
     let check = Inst {
         span: step.span,
-        kind: InstKind::Check { op, left, right },
+        kind,
     };
     cfg.blocks[block.0].insts.insert(at, check);
+}
+
+/// `optimize::while_to_for` writes the step's `Check` itself where the
+/// conversion leaves the step with no reader (RFC-0094 rule 3), and one
+/// check of one step is enough.
+fn same_check(held: &InstKind, wanted: &InstKind) -> bool {
+    match (held, wanted) {
+        (
+            InstKind::Check { op, left, right },
+            InstKind::Check {
+                op: wanted_op,
+                left: wanted_left,
+                right: wanted_right,
+            },
+        ) => op == wanted_op && left == wanted_left && right == wanted_right,
+        _ => false,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -459,7 +515,7 @@ impl<'a> BlockHead<'a> {
     fn advanced_by(&mut self, iv: &Iv, count: ValueId) -> ValueId {
         let step = self.read(&iv.step, iv.width);
         let advanced = self.arith(BinOp::Mul(Overflow::Wrap), count, step, iv.width);
-        self.arith(BinOp::Add(Overflow::Wrap), iv.init, advanced, iv.width)
+        self.arith(iv.direction.op(), iv.init, advanced, iv.width)
     }
 
     fn prepend_to(self, block: BlockIdx) {
@@ -892,6 +948,12 @@ fn edges_into(term: &mut Terminator, label: Label) -> Vec<EdgeInto<'_>> {
                 supplied_params: exit_trip.supplied_params(),
                 args: exit_args,
             })
+            .into_iter()
+            .collect(),
+        Terminator::While {
+            exit, exit_args, ..
+        } => (*exit == label)
+            .then(|| carried(exit_args))
             .into_iter()
             .collect(),
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => Vec::new(),

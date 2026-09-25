@@ -33,7 +33,9 @@ fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationErr
     for (at, inst) in body.insts.iter().enumerate() {
         match inst.kind {
             InstKind::BlockLabel { label, .. } => block = label,
-            InstKind::For { .. } => stated_at.push(StatedAt { header: block, at }),
+            InstKind::For { .. } | InstKind::While { .. } => {
+                stated_at.push(StatedAt { header: block, at })
+            }
             _ => {}
         }
     }
@@ -47,7 +49,7 @@ fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationErr
         let inst_index = stated_at
             .iter()
             .find(|stated| stated.header == header)
-            .expect("promoting a body keeps each `For` at the end of its block")
+            .expect("promoting a body keeps each loop terminator at the end of its block")
             .at;
         let refusals: Vec<ValidationErrorKind> = match deps {
             Err(fault) => vec![ValidationErrorKind::StageShape { header, fault }],

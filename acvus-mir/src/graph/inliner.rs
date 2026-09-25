@@ -699,6 +699,7 @@ fn starts_or_ends_a_block(kind: &InstKind) -> bool {
             | InstKind::JumpIf { .. }
             | InstKind::Diamond { .. }
             | InstKind::Switch { .. }
+            | InstKind::While { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
     )
@@ -1198,6 +1199,23 @@ fn remap_inst(
                 stages,
                 exit: rl(*exit),
                 exit_trip: *exit_trip,
+                exit_args: rv(exit_args),
+            }
+        }
+        InstKind::While {
+            cond,
+            stages,
+            exit,
+            exit_args,
+        } => {
+            let mut stages = stages.clone();
+            for entry in stages.entries_mut() {
+                *entry = rl(*entry);
+            }
+            InstKind::While {
+                cond: r(*cond),
+                stages,
+                exit: rl(*exit),
                 exit_args: rv(exit_args),
             }
         }

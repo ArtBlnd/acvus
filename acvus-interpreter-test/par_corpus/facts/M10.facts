@@ -1,0 +1,5 @@
+for range(0 (r13)..r11) -> L1 else L2 stages [L1, L3]
+// L1: free {index, const, *}
+// L3: cycle Storage(r14) in_order law(Fold(r14, #2) exact) {ref, call push}
+// control upfront
+// cost W=4 O=18281 split when n > 146248, n = max(r11 - 0 (r13), 0)

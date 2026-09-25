@@ -10,6 +10,7 @@ use acvus_mir::analysis::loop_deps::{
 };
 use acvus_mir::analysis::loops::{Invariants, LoopNest, natural_loops_innermost_first};
 use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
+use acvus_mir::analysis::cost::{CostTable, Costs, InPlace, LoopCost};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
@@ -570,7 +571,7 @@ fn a_counter_the_body_reads_is_a_producer_cycle_first() {
 
 #[test]
 fn a_while_is_not_rewritten() {
-    let c = Compiled::of("let i = 0; let s = 0; while i < 10 { s = s + i; i = i + 2; } s");
+    let c = Compiled::of("let i = 0; let s = 0; while i != 10 { s = s + i; i = i + 2; } s");
     assert!(!c.listing.contains(" stages ["), "{}", c.listing);
 }
 
@@ -1365,12 +1366,14 @@ fn a_predicate_calling_an_extern_that_states_no_returns_stays_in_the_exiting_sta
     assert_eq!(c.stages_running(is_call), [c.exiting_stage()], "{}", c.for_lines());
 }
 
-/// A `while` in the predicate is not known to finish (RFC-0089 rule 5).
+/// A `while` in the predicate is not known to finish (RFC-0089 rule 5). It
+/// compares `c * 1`, which no counted form of RFC-0094 reads, so it stays a
+/// `while`.
 #[test]
 fn a_predicate_holding_a_while_stays_in_the_exiting_stage() {
     let c = Compiled::of(
         "let v = vec([1, 5, 9]); let at = 99u64; \
-         for i in 0u64..v.len() { let n = v[i]; let c = 0; while c < n { c = c + 2; } \
+         for i in 0u64..v.len() { let n = v[i]; let c = 0; while c * 1 < n { c = c + 2; } \
          if c > 4 { at = i; break; }; } at",
     );
     let stepping = |kind: &InstKind| {
@@ -2362,4 +2365,219 @@ fn a_select_choosing_the_clone_of_the_compared_string_is_its_minimum() {
          for x in &xs { if string::cmp(&least, x) > 0 { least = x.clone(); }; } least",
     );
     assert_eq!(law_of(&held), Some(&LawKind::Ordered(LawOp::Min)), "{lines}");
+}
+
+// -- Pull loops (RFC-0089 rule 1) ---------------------------------------
+
+impl Compiled {
+    fn only_pull_header(&self) -> BlockIdx {
+        let found: Vec<BlockIdx> = (0..self.cfg.blocks.len())
+            .map(BlockIdx)
+            .filter(|at| matches!(self.cfg.blocks[at.0].terminator, Terminator::While { .. }))
+            .collect();
+        match found[..] {
+            [header] => header,
+            _ => panic!("one pull loop:\n{}", self.listing),
+        }
+    }
+}
+
+const PULL_PUSH: &str = "let xs = vec([5, 3, 8]); let it = xs.into_iter(); let out = vec([]); \
+     while let Some(x) = it.next() { out.push(x * 2); } out.len()";
+
+#[test]
+fn a_pull_loop_s_header_is_its_first_stage_and_the_control_token_s_cycle() {
+    let c = Compiled::of(PULL_PUSH);
+    let header = c.only_pull_header();
+    let deps = c.deps_of(header);
+    assert_eq!(
+        deps.membership.stages()[0].blocks,
+        [header],
+        "the header alone is the first stage:\n{}",
+        c.listing
+    );
+    let Control::Chained { cycle } = deps.control else {
+        panic!("control is chained through the pull:\n{}", c.listing)
+    };
+    assert_eq!(deps.cycles[cycle].stage(), Some(0));
+    assert!(
+        deps.cycles[cycle].tokens.contains(&Token::Control),
+        "{}",
+        c.listing
+    );
+    let held: Vec<Member> = (0..c.cfg.blocks[header.0].insts.len())
+        .map(|at| Member::Inst(acvus_mir::analysis::loop_deps::InstAt { block: header, at }))
+        .chain([Member::Term(header)])
+        .collect();
+    assert!(
+        held.iter().all(|member| deps.cycles[cycle].members.contains(member)),
+        "the header, its call and its test are the control token's cycle:\n{}",
+        c.listing
+    );
+    assert_eq!(
+        c.shapes_of(header),
+        [
+            one(vec![TokenKind::Storage, TokenKind::Control], Order::InOrder, None),
+            Shape::Free,
+            one(vec![TokenKind::Storage], Order::InOrder, exact(LawKind::Fold)),
+        ],
+        "the pull, the free `x * 2`, the push's fold:\n{}",
+        c.listing
+    );
+    assert!(
+        c.listing.contains("control chained through L0"),
+        "{}",
+        c.listing
+    );
+}
+
+#[test]
+fn a_pull_loop_prints_its_header_first_in_its_stages() {
+    let c = Compiled::of(PULL_PUSH);
+    let line = c
+        .listing
+        .lines()
+        .find(|line| line.contains("while "))
+        .unwrap_or_else(|| panic!("a `while` line:\n{}", c.listing));
+    assert!(line.contains("stages [L0, L1, "), "{line}");
+}
+
+#[test]
+fn a_pull_loop_s_effect_after_the_pull_runs_in_a_free_stage() {
+    let c = Compiled::with_io(
+        "let text = \"a\\nb\".to_string(); let ls = text.lines(); \
+         anyorder { while let Some(l) = ls.next() { let u = l.upper(); io::print(&u); } } 0",
+    );
+    let header = c.only_pull_header();
+    let shapes = c.shapes_of(header);
+    assert_eq!(shapes[1], Shape::Free, "{}", c.listing);
+    assert!(c.deps_of(header).ahead_of_exit().is_empty());
+}
+
+#[test]
+fn a_pull_loop_costs_in_place_for_no_count_is_known_on_entry() {
+    let c = Compiled::of(PULL_PUSH);
+    let table = CostTable {
+        arithmetic: 1,
+        compare: 1,
+        load: 1,
+        store: 1,
+        allocation: 1,
+        local_call: 1,
+        extern_call: 1,
+        heavy: 1,
+        spawn: 1,
+        merge: 1,
+        chunk_dispatch: 1,
+        buffered_element: 1,
+        k: 1,
+    };
+    let costs = Costs::of(&c.cfg, &c.laws, &table);
+    assert_eq!(
+        costs.of_loop(&c.deps_of(c.only_pull_header())),
+        LoopCost::InPlace(InPlace::CountUnknown)
+    );
+}
+
+#[test]
+fn a_pull_loop_s_header_holds_no_drop() {
+    let c = Compiled::of(
+        "let it = vec([\"a\".to_string(), \"bc\".to_string()]).into_iter(); let n = 0u64; \
+         while let Some(s) = it.next() { n = n + s.len(); } n",
+    );
+    let header = c.only_pull_header();
+    assert!(
+        !c.cfg.blocks[header.0]
+            .insts
+            .iter()
+            .any(|inst| matches!(inst.kind, InstKind::Drop { .. })),
+        "a value dying on the body edge is dropped in the body, not at the pull:\n{}",
+        c.listing
+    );
+}
+
+fn refused_shapes(module: &acvus_mir::ir::MirModule, laws: &LawTable) -> Vec<String> {
+    acvus_mir::validate::stages::check(module, laws)
+        .into_iter()
+        .map(|error| format!("{:?}", error.kind))
+        .collect()
+}
+
+#[test]
+fn a_while_whose_header_is_no_pull_is_refused() {
+    let interner = Interner::new();
+    let mut compiled = compile_script_at(&interner, PULL_PUSH, &FxHashMap::default(), Opt::Full)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(refused_shapes(&compiled.module, &compiled.laws), Vec::<String>::new());
+    let mut cfg = promote(compiled.module.main.clone());
+    let header = (0..cfg.blocks.len())
+        .map(BlockIdx)
+        .find(|at| matches!(cfg.blocks[at.0].terminator, Terminator::While { .. }))
+        .expect("the pull loop");
+    cfg.blocks[header.0].insts.remove(0);
+    compiled.module.main = acvus_mir::cfg::demote(cfg);
+    let refused = refused_shapes(&compiled.module, &compiled.laws);
+    assert!(
+        refused.iter().any(|kind| kind.contains("HeaderIsNoPull")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_pull_loop_that_leaves_from_its_body_is_refused() {
+    let interner = Interner::new();
+    let mut compiled = compile_script_at(&interner, PULL_PUSH, &FxHashMap::default(), Opt::Full)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut cfg = promote(compiled.module.main.clone());
+    let header = (0..cfg.blocks.len())
+        .map(BlockIdx)
+        .find(|at| matches!(cfg.blocks[at.0].terminator, Terminator::While { .. }))
+        .expect("the pull loop");
+    let Terminator::While { exit, .. } = cfg.blocks[header.0].terminator.clone() else {
+        panic!("the header ends in `While`")
+    };
+    let loops = natural_loops_innermost_first(&cfg, &DomTree::build(&cfg));
+    let [latch] = loops
+        .iter()
+        .find(|loop_| loop_.header == header)
+        .expect("the pull loop is a natural loop")
+        .latches[..]
+    else {
+        panic!("one latch")
+    };
+    let decided = cfg.blocks[header.0].insts[2].kind.clone();
+    let InstKind::TestVariant { dst: cond, .. } = decided else {
+        panic!("the header tests the pulled option")
+    };
+    cfg.blocks[latch.0].terminator = Terminator::JumpIf {
+        cond,
+        then_label: exit,
+        then_args: Vec::new(),
+        else_label: cfg.blocks[header.0].label,
+        else_args: Vec::new(),
+    };
+    compiled.module.main = acvus_mir::cfg::demote(cfg);
+    let refused = refused_shapes(&compiled.module, &compiled.laws);
+    assert!(
+        refused.iter().any(|kind| kind.contains("PullLeavesElsewhere")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_countdown_by_one_is_read_from_the_counter_and_carries_nothing() {
+    let c = Compiled::of(
+        "let xs = vec([5, 3, 8, 1]); let i = xs.len(); let s = 0; \
+         while i > 0u64 { i = i - 1u64; s = s + xs[i]; } s",
+    );
+    assert_eq!(c.carried_ivs(), Vec::<ValueId>::new(), "{}", c.listing);
+    assert_eq!(
+        c.shapes(),
+        [
+            Shape::Free,
+            one(vec![TokenKind::Carried], Order::AnyOrder, exact(LawKind::Op(LawOp::Add))),
+        ],
+        "{}",
+        c.for_lines()
+    );
 }

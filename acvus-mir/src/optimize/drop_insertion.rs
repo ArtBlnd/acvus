@@ -27,7 +27,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::analysis::loans::Loans;
-use crate::analysis::loop_deps::{BodyDeps, HeaderDeps, Storage, Token};
+use crate::analysis::loop_deps::{BodyDeps, Head, HeaderDeps, Storage, Token};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId};
@@ -263,11 +263,15 @@ fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>, laws: &LawTable) -> StageEntr
         let Ok(deps) = deps else {
             continue;
         };
-        let Terminator::For { source, stages, .. } = &cfg.blocks[header.0].terminator else {
-            panic!("block {} heads the `For` `loop_deps` found there", header.0)
+        let Some((head, stages)) = Head::of(&cfg.blocks[header.0].terminator) else {
+            panic!("block {} heads the loop `loop_deps` found there", header.0)
         };
+        let supplied = head.source().map_or(0, |source| source.supplied_params());
         let body_params = &cfg.blocks[cfg.label_to_block[&stages.body()].0].params;
-        for (stage, blocks) in deps.membership.stages().iter().enumerate() {
+        // A pull loop's header is its first stage and runs before the body
+        // edge, so none of its values is dropped at a stage's head.
+        for stage in deps.membership.body_stages() {
+            let blocks = &deps.membership.stages()[stage];
             let entry = blocks.blocks[0];
             for token in deps.cycles_in(stage).flat_map(|cycle| &cycle.tokens) {
                 let released = match *token {
@@ -303,7 +307,7 @@ fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>, laws: &LawTable) -> StageEntr
                 }
             }
         }
-        for supplied in &body_params[..source.supplied_params()] {
+        for supplied in &body_params[..supplied] {
             shared.insert(*supplied);
         }
     }
@@ -358,7 +362,7 @@ enum EdgeSlot {
     SwitchArm(usize),
     /// A `Switch`'s `default` edge.
     SwitchDefault,
-    /// A `For`'s edge into its body (RFC-0057).
+    /// A staged loop header's edge into its body (RFC-0057, RFC-0089 rule 1).
     ForBody,
     /// A `For`'s edge out of the loop.
     ForExit,
@@ -511,6 +515,14 @@ impl<'a> EdgeRef<'a> {
                     ..
                 },
                 EdgeSlot::Else,
+            )
+            | (
+                Terminator::While {
+                    exit: label,
+                    exit_args: args,
+                    ..
+                },
+                EdgeSlot::Else,
             ) => listed(label, args),
             (
                 Terminator::For {
@@ -588,6 +600,12 @@ fn terminator_use_set(term: &Terminator) -> FxHashSet<ValueId> {
             uses.extend(then_args.iter().copied());
             uses.extend(else_args.iter().copied());
         }
+        Terminator::While {
+            cond, exit_args, ..
+        } => {
+            uses.insert(*cond);
+            uses.extend(exit_args.iter().copied());
+        }
         // The source a `For` traverses, which it reads on every iteration
         // (RFC-0057), and the arguments each edge forwards.
         Terminator::For {
@@ -638,6 +656,20 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
         } => vec![
             edge(EdgeSlot::Then, then_label, then_args),
             edge(EdgeSlot::Else, else_label, else_args),
+        ],
+        Terminator::While {
+            stages,
+            exit,
+            exit_args,
+            ..
+        } => vec![
+            OutEdge {
+                slot: EdgeSlot::ForBody,
+                target: stages.body(),
+                trip: ExitTrip::Absent,
+                forwarded: Vec::new(),
+            },
+            edge(EdgeSlot::Else, exit, exit_args),
         ],
         Terminator::For {
             stages,
@@ -801,6 +833,7 @@ fn consumed_by_inst(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. }
+        | InstKind::While { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge => {}
     }
@@ -825,6 +858,7 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
             else_args,
             ..
         } => then_args.contains(&val) || else_args.contains(&val),
+        Terminator::While { exit_args, .. } => exit_args.contains(&val),
         // A `For`'s edge args are transferred, and an `Array` source is
         // moved into the terminator: the loop takes its elements out
         // (RFC-0057 rule 2). A slice or a range is read-only.

@@ -132,3 +132,22 @@ async fn a_break_out_of_a_call_loop_stays_on_the_joints_path() {
         regions(BREAKS)
     );
 }
+
+/// A pull loop over an owning iterator ends its header in `While` with its
+/// body cut into stages (RFC-0089 rule 1); it runs in place, the stages one
+/// body, and is still the region its call drives.
+const PULLED_AND_CUT: &str = "let it = into_iter(vec([5, 3, 8])); \
+                              let out = vec([]); \
+                              while let Some(x) = next(&mut it) { push(&mut out, x * 2); } \
+                              len(&out) as i64";
+
+#[tokio::test]
+async fn a_pull_loop_cut_into_stages_runs_in_place() {
+    assert_eq!(run(PULLED_AND_CUT).await, 3);
+    assert_eq!(
+        driven_by_a_call(PULLED_AND_CUT).len(),
+        1,
+        "{:?}",
+        regions(PULLED_AND_CUT)
+    );
+}

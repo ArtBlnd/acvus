@@ -1,0 +1,2 @@
+// expect 31
+let c = 0; let i = @min + 3; while i > @min { i = i - 1; c = c + 1; } c * 10 + (if i == @min { 1 } else { 0 })

@@ -482,6 +482,33 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                     }
                 }
             }
+            Terminator::While {
+                stages,
+                exit,
+                exit_args,
+                ..
+            } => {
+                for (label, args) in [(stages.body(), &[][..]), (*exit, &exit_args[..])] {
+                    if let Some(&target_idx) = cfg.label_to_block.get(&label) {
+                        propagate_args(
+                            scope,
+                            &block_exit[idx.0],
+                            args,
+                            &cfg.blocks[target_idx.0].params,
+                            &cfg.val_types,
+                            errors,
+                            &mut block_entry[target_idx.0],
+                        );
+                        if propagate_state(
+                            &block_exit[idx.0],
+                            &cfg.blocks[target_idx.0].params,
+                            &mut block_entry[target_idx.0],
+                        ) {
+                            worklist.push_back(target_idx);
+                        }
+                    }
+                }
+            }
             // Every arm of a `Switch` is an edge that forwards its own
             // arguments, exactly as a `JumpIf`'s two are.
             Terminator::Switch { arms, default, .. } => {
@@ -1116,7 +1143,8 @@ fn process_inst(
         | InstKind::JumpIf { .. }
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
-        | InstKind::For { .. } => {}
+        | InstKind::For { .. }
+        | InstKind::While { .. } => {}
     }
 }
 

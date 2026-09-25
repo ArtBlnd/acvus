@@ -19,7 +19,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::analysis::loop_deps::{self, LoopDeps, RunAhead, Token};
+use crate::analysis::loop_deps::{self, Head, LoopDeps, RunAhead, Token};
 use crate::analysis::loops::{Invariants, Loop, LoopNest};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
@@ -32,7 +32,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     while let Some(header) = innermost_unexamined_for(cfg, &examined) {
         examined.insert(header);
         let at = cfg.label_to_block[&header];
-        let Terminator::For { stages, .. } = &cfg.blocks[at.0].terminator else {
+        let Some((_, stages)) = Head::of(&cfg.blocks[at.0].terminator) else {
             continue;
         };
         match stages.len() {
@@ -48,7 +48,7 @@ fn innermost_unexamined_for(cfg: &CfgBody, examined: &FxHashSet<Label>) -> Optio
     let nest = LoopNest::of(cfg, &domtree, &invariants);
     nest.iter()
         .map(|(_, loop_)| &cfg.blocks[loop_.natural.header.0])
-        .filter(|header| matches!(header.terminator, Terminator::For { .. }))
+        .filter(|header| Head::of(&header.terminator).is_some())
         .map(|header| header.label)
         .find(|label| !examined.contains(label))
 }
@@ -67,19 +67,25 @@ fn merge_boundaries(cfg: &mut CfgBody, laws: &LawTable, header: BlockIdx) {
             .iter()
             .all(|block| cfg.blocks[block.0].insts.is_empty())
     };
+    let mut named = deps.membership.body_stages();
+    let Some(first) = named.next() else {
+        return;
+    };
     let mut kept: Vec<Label> = Vec::new();
-    let mut last_kept_free = deps.is_free(0);
-    for (stage, blocks) in stages.iter().enumerate().skip(1) {
+    let mut last_kept_free = deps.is_free(first);
+    for stage in named {
         let free = deps.is_free(stage);
         if holds_nothing(stage) || (free && last_kept_free) {
             continue;
         }
-        kept.push(blocks.entry);
+        kept.push(stages[stage].entry);
         last_kept_free = free;
     }
-    let body = stages[0].entry;
-    let Terminator::For { stages, .. } = &mut cfg.blocks[header.0].terminator else {
-        panic!("block {} heads the `For` `loop_deps` read", header.0)
+    let body = stages[first].entry;
+    let (Terminator::For { stages, .. } | Terminator::While { stages, .. }) =
+        &mut cfg.blocks[header.0].terminator
+    else {
+        panic!("block {} heads the loop `loop_deps` read", header.0)
     };
     *stages = Stages::new(body, kept);
 }
@@ -101,17 +107,14 @@ fn cut(cfg: &mut CfgBody, laws: &LawTable, header_label: Label) {
 impl Facts {
     fn of(cfg: &CfgBody, header_label: Label) -> Option<Facts> {
         let header = cfg.label_to_block[&header_label];
-        let Terminator::For { source, .. } = &cfg.blocks[header.0].terminator else {
-            return None;
-        };
-        let source = *source;
+        let (head, _) = Head::of(&cfg.blocks[header.0].terminator)?;
         let domtree = DomTree::build(cfg);
         let invariants = Invariants::of(cfg);
         let nest = LoopNest::of(cfg, &domtree, &invariants);
         let loop_ = nest.get(nest.by_header(header)?);
         let loans = Loans::build(cfg);
         let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
-        let slots = TargetSlots::of(&loans, source, &loop_blocks);
+        let slots = TargetSlots::of(&loans, head.source(), &loop_blocks);
         Some(Facts { header, slots })
     }
 }
@@ -126,7 +129,10 @@ struct Planned {
 /// the loop stays one stage.
 fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
     let header = facts.header;
-    if !cfg.blocks[header.0].insts.is_empty() {
+    let (head, _) = Head::of(&cfg.blocks[header.0].terminator)?;
+    // A pull loop's header holds its pull, which is the first stage and
+    // no member of the body this cuts (RFC-0089 rule 1).
+    if head != Head::Pull && !cfg.blocks[header.0].insts.is_empty() {
         return None;
     }
     let domtree = DomTree::build(cfg);
@@ -139,9 +145,7 @@ fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
 
     let mut work = cfg.clone();
     let mut labels = LabelFactory::of(&work);
-    let Terminator::For { stages, .. } = &work.blocks[header.0].terminator else {
-        return None;
-    };
+    let (_, stages) = Head::of(&work.blocks[header.0].terminator)?;
     let body = work.label_to_block[&stages.body()];
     let mut region = Region {
         header,
@@ -471,6 +475,9 @@ fn leaving_uses(cfg: &CfgBody, region: &Region, block: BlockIdx) -> Option<Vec<V
             else_args,
             ..
         } => vec![(then_label, then_args), (else_label, else_args)],
+        Terminator::While {
+            exit, exit_args, ..
+        } => vec![(exit, exit_args)],
         Terminator::Switch { arms, default, .. } => arms
             .iter()
             .map(|(_, label, args)| (label, args))
@@ -1316,6 +1323,9 @@ fn edges_into(term: &mut Terminator, label: Label) -> Vec<EdgeInto<'_>> {
                 push(exit, exit_args);
             }
         }
+        Terminator::While {
+            exit, exit_args, ..
+        } => push(exit, exit_args),
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
     }
     edges
@@ -1636,7 +1646,9 @@ impl UnionFind {
 /// What a branch reads besides its edges' arguments.
 fn branch_reads(cfg: &CfgBody, term: &Terminator) -> Vec<ValueId> {
     match term {
-        Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
+        Terminator::JumpIf { cond, .. }
+        | Terminator::Diamond { cond, .. }
+        | Terminator::While { cond, .. } => vec![*cond],
         Terminator::Switch { tag, .. } => vec![*tag],
         Terminator::For {
             source,
@@ -1715,6 +1727,15 @@ fn incoming(cfg: &CfgBody, region: &Region, label: Label) -> Vec<IncomingEdge> {
             } => {
                 push(stages.body(), &[], source.supplied_params());
                 push(*exit, exit_args, exit_trip.supplied_params());
+            }
+            Terminator::While {
+                stages,
+                exit,
+                exit_args,
+                ..
+            } => {
+                push(stages.body(), &[], 0);
+                push(*exit, exit_args, 0);
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
         }
@@ -1851,7 +1872,9 @@ impl Chain<'_> {
             .map(|(at, block)| (block.label, BlockIdx(at)))
             .collect();
         let header = cfg.label_to_block[&header_label];
-        let Terminator::For { stages, .. } = &mut cfg.blocks[header.0].terminator else {
+        let (Terminator::For { stages, .. } | Terminator::While { stages, .. }) =
+            &mut cfg.blocks[header.0].terminator
+        else {
             return None;
         };
         *stages = stated;
@@ -2204,7 +2227,7 @@ fn retarget_edges(term: &mut Terminator, from: Label, to: Label) {
                 retarget(label);
             }
         }
-        Terminator::For { exit, .. } => retarget(exit),
+        Terminator::For { exit, .. } | Terminator::While { exit, .. } => retarget(exit),
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => {}
     }
 }

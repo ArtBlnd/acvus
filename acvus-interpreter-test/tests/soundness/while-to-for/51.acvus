@@ -1,0 +1,2 @@
+// expect 10
+let i = @n; while i < 5 { i = i + 2; } i

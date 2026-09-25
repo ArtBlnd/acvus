@@ -89,6 +89,13 @@ pub enum Terminator {
         exit_trip: ExitTrip,
         exit_args: Vec<ValueId>,
     },
+    /// See [`crate::ir::InstKind::While`].
+    While {
+        cond: ValueId,
+        stages: Stages,
+        exit: Label,
+        exit_args: Vec<ValueId>,
+    },
     Return {
         value: ValueId,
         order: Option<ValueId>,
@@ -162,7 +169,7 @@ impl CfgBody {
                     }
                 }
             }
-            Terminator::For { stages, exit, .. } => {
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
                 for label in [stages.body(), *exit] {
                     if let Some(&bi) = self.label_to_block.get(&label) {
                         succs.push(bi);
@@ -427,6 +434,21 @@ fn extract_terminator(insts: &mut Vec<Inst>) -> Terminator {
                 insts.pop();
                 return term;
             }
+            InstKind::While {
+                cond,
+                stages,
+                exit,
+                exit_args,
+            } => {
+                let term = Terminator::While {
+                    cond: *cond,
+                    stages: stages.clone(),
+                    exit: *exit,
+                    exit_args: exit_args.clone(),
+                };
+                insts.pop();
+                return term;
+            }
             InstKind::Return { value, order } => {
                 let term = Terminator::Return {
                     value: *value,
@@ -543,6 +565,22 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                     },
                 });
             }
+            Terminator::While {
+                cond,
+                stages,
+                exit,
+                exit_args,
+            } => {
+                insts.push(Inst {
+                    span: acvus_ast::Span::ZERO,
+                    kind: InstKind::While {
+                        cond,
+                        stages,
+                        exit,
+                        exit_args,
+                    },
+                });
+            }
             Terminator::Return { value, order, span } => {
                 insts.push(Inst {
                     span,
@@ -588,7 +626,7 @@ pub fn demote(cfg: CfgBody) -> MirBody {
                 .chain(default.iter().map(|(label, _)| label.0))
                 .max()
                 .map(|l| l + 1),
-            InstKind::For { stages, exit, .. } => stages
+            InstKind::For { stages, exit, .. } | InstKind::While { stages, exit, .. } => stages
                 .entries()
                 .map(|label| label.0)
                 .chain([exit.0])

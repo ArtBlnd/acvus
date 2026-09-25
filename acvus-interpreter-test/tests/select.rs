@@ -32,11 +32,11 @@ fn count_on_page(source: &str, family: &str, page: fn(&Interner) -> Context) -> 
     named_on_page(source, family, page).len()
 }
 
-/// Tested with `<=` so that it stays a `while`: RFC-0081 turns `i < 6` into
-/// a range `for`. The arm's `+` is the program's, which traps where it
+/// Tested with `!=` so that it stays a `while`: RFC-0081 and RFC-0094 turn
+/// `i < 6` and `i <= 5` into a range `for`. The arm's `+` is the program's, which traps where it
 /// overflows; the select runs it as its overflowing form (RFC-0074 rule 2).
 const ADDS_WHEN_EVEN: &str =
-    "let acc = 0; let i = 0; while i <= 5 { if i % 2 == 0 { acc = acc + i; }; i = i + 1; } acc";
+    "let acc = 0; let i = 0; while i != 6 { if i % 2 == 0 { acc = acc + i; }; i = i + 1; } acc";
 
 #[tokio::test]
 async fn one_node_against_a_pass_through_arm_is_a_select() {

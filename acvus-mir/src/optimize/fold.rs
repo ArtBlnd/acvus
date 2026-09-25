@@ -204,6 +204,11 @@ fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
             .into_iter()
             .chain(exit_args.iter().copied())
             .collect(),
+        Terminator::While {
+            cond, exit_args, ..
+        } => std::iter::once(*cond)
+            .chain(exit_args.iter().copied())
+            .collect(),
         Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
         Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }

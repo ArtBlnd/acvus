@@ -136,7 +136,7 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             ),
             ValidationErrorKind::StageShape { header, fault } => write!(
                 f,
-                "the `for` headed at L{} is not the stage chain it states: {}",
+                "the loop headed at L{} is not the stage chain it states: {}",
                 header.0,
                 fault.shown()
             ),
@@ -146,7 +146,7 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 stages,
             } => write!(
                 f,
-                "the dependence cycle through {} of the `for` headed at L{} lies in \
+                "the dependence cycle through {} of the loop headed at L{} lies in \
                  stages {stages:?}, and a cycle lies in one stage",
                 crate::analysis::loop_deps::Token::shown_all(tokens),
                 header.0
@@ -158,7 +158,7 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 cycle_stage,
             } => write!(
                 f,
-                "stage {stage} of the `for` headed at L{} reads the state of {}, \
+                "stage {stage} of the loop headed at L{} reads the state of {}, \
                  whose cycle lies in the later stage {cycle_stage}",
                 header.0,
                 token.shown()
@@ -170,7 +170,7 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 held_back,
             } => write!(
                 f,
-                "stage {stage} of the `for` headed at L{} runs ahead of the exit in stage \
+                "stage {stage} of the loop headed at L{} runs ahead of the exit in stage \
                  {exit_stage} an operation {}",
                 header.0,
                 match held_back {

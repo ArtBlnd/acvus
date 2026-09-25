@@ -1,0 +1,5 @@
+for range(1 (r5)..r0) -> L1 else L2 stages [L1, L3]
+// L1: free {-%, +%, *}
+// L3: cycle Carried(r4) any_order law(Op(Add) exact commutative) {+}
+// control upfront
+// cost W=3 O=18281 split when n > 194998, n = max(r0 - 1 (r5), 0)

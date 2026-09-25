@@ -281,6 +281,9 @@ fn fmt_cost(cost: LoopCost, trip: Option<String>) -> String {
             "cost in place: no stage runs apart".to_string()
         }
         LoopCost::InPlace(InPlace::NoWork) => "cost in place: W=0".to_string(),
+        LoopCost::InPlace(InPlace::CountUnknown) => {
+            "cost in place: no count on entry".to_string()
+        }
     }
 }
 
@@ -362,6 +365,7 @@ fn terminator_mnemonic(term: &Terminator) -> Option<String> {
         Terminator::JumpIf { .. } | Terminator::Diamond { .. } => "branch",
         Terminator::Switch { .. } => "switch",
         Terminator::For { .. } => "for",
+        Terminator::While { .. } => "while",
         Terminator::Return { .. } => "return",
         Terminator::Diverge => "diverge",
         Terminator::Fallthrough => "fallthrough",
@@ -429,6 +433,7 @@ fn mnemonic(kind: &InstKind, ctx: &PrintCtx<'_>) -> String {
         InstKind::JumpIf { .. } | InstKind::Diamond { .. } => "branch",
         InstKind::Switch { .. } => "switch",
         InstKind::For { .. } => "for",
+        InstKind::While { .. } => "while",
         InstKind::Return { .. } => "return",
         InstKind::Diverge => "diverge",
         InstKind::Undef { .. } => "undef",
@@ -624,6 +629,39 @@ struct Computed<'a> {
     deps: BodyDeps,
     laws: &'a LawTable,
     costs: Option<&'a CostTable>,
+}
+
+/// The comment lines under the loop headed at `header`: its stages' facts
+/// and, with a backend's table, its cost.
+fn loop_fact_lines(
+    computed: &Computed<'_>,
+    costs: Option<&Costs<'_>>,
+    header: Label,
+    ctx: &PrintCtx<'_>,
+    vn: &mut ValNormalizer,
+    consts: &FxHashMap<ValueId, &Literal>,
+    texts: &FxHashMap<ValueId, usize>,
+) -> Vec<String> {
+    let found = computed
+        .deps
+        .loops
+        .iter()
+        .find(|found| computed.cfg.blocks[found.header.0].label == header)
+        .expect("promoting a body keeps each loop terminator at the end of its block");
+    match &found.deps {
+        Ok(deps) => {
+            let mut lines = fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, vn);
+            if let Some(costs) = costs {
+                let trip = costs.trip(found.header).and_then(|trip| match trip {
+                    Trip::Known(term) => Some(fmt_term(term, vn, consts, texts)),
+                    Trip::Unknown => None,
+                });
+                lines.push(fmt_cost(costs.of_loop(deps), trip));
+            }
+            lines
+        }
+        Err(fault) => vec![format!("stages refused: {}", fault.shown())],
+    }
 }
 
 fn write_body(
@@ -1214,29 +1252,43 @@ fn write_body(
                     entries.join(", ")
                 )?;
                 if let Some(computed) = &computed {
-                    let found = computed
-                        .deps
-                        .loops
-                        .iter()
-                        .find(|found| computed.cfg.blocks[found.header.0].label == block)
-                        .expect("promoting a body keeps each `For` at the end of its block");
-                    let lines = match &found.deps {
-                        Ok(deps) => {
-                            let mut lines =
-                                fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, &mut vn);
-                            if let Some(costs) = &costs {
-                                let trip = costs.trip(found.header).and_then(|trip| match trip {
-                                    Trip::Known(term) => {
-                                        Some(fmt_term(term, &mut vn, &consts, &texts))
-                                    }
-                                    Trip::Unknown => None,
-                                });
-                                lines.push(fmt_cost(costs.of_loop(deps), trip));
-                            }
-                            lines
-                        }
-                        Err(fault) => vec![format!("stages refused: {}", fault.shown())],
-                    };
+                    let lines =
+                        loop_fact_lines(computed, costs.as_ref(), block, ctx, &mut vn, &consts, &texts);
+                    for line in lines {
+                        writeln!(f, "{indent}     |     // {line}")?;
+                    }
+                }
+            }
+            // `while r4 -> L1 else L2(r3) stages [L0, L1, L3]` (RFC-0089
+            // rule 1): the header is the first stage, so it leads the list.
+            InstKind::While {
+                cond,
+                stages,
+                exit,
+                exit_args,
+            } => {
+                let left = match exit_args.is_empty() {
+                    true => fmt_label(*exit),
+                    false => format!(
+                        "{}({})",
+                        fmt_label(*exit),
+                        vn.fmt_uses(exit_args, &consts, &texts)
+                    ),
+                };
+                let entries: Vec<String> = std::iter::once(block)
+                    .chain(stages.entries())
+                    .map(fmt_label)
+                    .collect();
+                writeln!(
+                    f,
+                    "while {} -> {} else {left} stages [{}]",
+                    vn.fmt_use(*cond, &consts, &texts),
+                    fmt_label(stages.body()),
+                    entries.join(", ")
+                )?;
+                if let Some(computed) = &computed {
+                    let lines =
+                        loop_fact_lines(computed, costs.as_ref(), block, ctx, &mut vn, &consts, &texts);
                     for line in lines {
                         writeln!(f, "{indent}     |     // {line}")?;
                     }

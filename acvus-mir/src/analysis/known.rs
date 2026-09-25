@@ -684,6 +684,15 @@ impl Incoming {
                     incoming.opaque(stages.body());
                     incoming.opaque(*exit);
                 }
+                Terminator::While {
+                    stages,
+                    exit,
+                    exit_args,
+                    ..
+                } => {
+                    incoming.edge(stages.body(), &[]);
+                    incoming.edge(*exit, exit_args);
+                }
                 Terminator::Fallthrough => {
                     if let Some(next) = cfg.blocks.get(at + 1) {
                         incoming.opaque(next.label);

@@ -1,0 +1,6 @@
+while r6 -> L1 else L2 stages [L0, L1, L3]
+// L0: cycle Storage(r7)+Control in_order {ref, call next, test_variant, while}
+// L1: free {unwrap_variant, assign, ref, as_slice, call trim_start, call len, call len, drop, -}
+// L3: cycle Storage(r8) in_order law(Fold(r8, #5) exact) {ref, call push}
+// control chained through L0
+// cost in place: no count on entry

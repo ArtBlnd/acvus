@@ -1,9 +1,9 @@
 //! The app corpus (`acvus-interpreter-test/app_corpus`) at the CLI's
 //! contract: every app runs to the result its `// expect:` header states at
 //! `--opt full` and at `--opt none`, and `acvus mir` prints, for each of its
-//! `For`s, the stages line and the facts under it exactly as the app's
-//! `facts/<stem>.facts` holds them. `INDEX.md` there compares those facts with
-//! each loop's hand-written expected structure; a change in any loop's
+//! `For`s and pull loops' `While`s, the stages line and the facts under it
+//! exactly as the app's `facts/<stem>.facts` holds them. `INDEX.md` there
+//! compares those facts with each loop's hand-written expected structure; a change in any loop's
 //! stages, cycles, orders, laws or cost shows here as that app's difference.
 
 use std::path::{Path, PathBuf};
@@ -71,8 +71,8 @@ fn printed_stage_facts(listing: &str) -> String {
         };
         let gutter = gutter.trim();
         let printed = printed.trim();
-        let stages =
-            !gutter.is_empty() && printed.starts_with("for ") && printed.contains(" stages [");
+        let staged = printed.starts_with("for ") || printed.starts_with("while ");
+        let stages = !gutter.is_empty() && staged && printed.contains(" stages [");
         let fact = gutter.is_empty() && printed.starts_with("// ");
         if stages || fact {
             kept.push_str(printed);
