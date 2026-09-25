@@ -789,6 +789,13 @@ law and runs in its order.
    iteration and not from `y`, has the law of affine maps, which compose
    as `(a₁·a₂, a₂·x₁ + x₂)` with identity `(1, 0)`, at an integer width;
    a float one stays in order.
+   A read that only lends a storage token's value to a call that neither
+   writes nor keeps it (a `ref` then `to_string`) is a reader of its
+   partial, not a member of its cycle; the rescan of RFC-0092 rule 5
+   makes the value it lends. In a cycle of several tokens, a token whose
+   steps read no other token and that has a law is a scan when another
+   token's step reads it; that token's law is then read over the partials
+   it reads (a comma count at the quote parity).
 
 **Why.** A law stated on the loop would be a second statement of what the
 operations already say; read from them, it follows every pass that
