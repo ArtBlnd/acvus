@@ -11,7 +11,9 @@ use crate::value::Value;
 type Rt = AcvusRuntime;
 
 pub enum Shape {
-    /// A word: its bits, which is `f64` bit equality (RFC-0020).
+    /// A word: its bits, which is `f64` bit equality (RFC-0020). Two equal
+    /// scalars have one word because every inline value is written by
+    /// `acvus_extern::repr::Word::into_word`, wherever it came from.
     Word,
     Text,
     Leaf {

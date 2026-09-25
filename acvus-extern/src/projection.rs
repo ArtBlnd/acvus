@@ -524,6 +524,14 @@ where
     fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site {
         <P as Projected<'static, Rt>>::table(site.args[at])
     }
+
+    /// NOTE: a projection's component borrows a field's storage inside the
+    /// object, and nothing here reaches those storages, so a `&mut i8`
+    /// component leaves its field's word as the borrow wrote it. Re-encoding
+    /// each component's storage needs the projection's table to name them;
+    /// it is not built yet.
+    #[inline(always)]
+    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value]) {}
 }
 
 // SAFETY: the projection is `Q::of` over this parameter's own word with the

@@ -1005,8 +1005,8 @@ pub trait Inline: inline_sealed::Listed + Copy + Send + Sync + 'static {}
 
 mod inline_sealed {
     /// A type `for_each_inline!` names, each checked there to fit the
-    /// runtime's value word.
-    pub trait Listed {}
+    /// runtime's value word, with its one encoding in it.
+    pub trait Listed: crate::repr::Word {}
 }
 
 /// Calls `$m! { Name: type, ... }` with every `Inline` type and a name for

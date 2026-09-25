@@ -113,7 +113,7 @@ use acvus_utils::{Interner, QualifiedRef};
 use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::declared::Declared;
-use crate::handler::{Arg, ArgAt, Borrowable, ByRef, CallSite, Gives, Parameters, RetLent, Takes, Uniform};
+use crate::handler::{Arg, ArgAt, Borrowable, ByRef, CallSite, Gives, Loans, Parameters, RetLent, Takes, Uniform};
 use crate::len::Arr;
 use crate::loan::{Loan, Mut, Shared};
 use crate::erased::Erased;
@@ -494,6 +494,13 @@ where
             ty: held,
         })
     }
+
+    #[inline(always)]
+    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value]) {
+        // SAFETY: the caller's contract: `run[0]` is the reference to the
+        // lent storage, and the projection over it has ended.
+        unsafe { M::loan_ended(rt, &run[0]) }
+    }
 }
 
 impl<T, M, Rt> Lendable<Rt> for ByProjected<T, M>
@@ -745,6 +752,10 @@ where
         // SAFETY: the value crosses at the parameter's own marker, whose type
         // the caller compared with the storage's settled one.
         let crossing = unsafe { Crossing::new(rt) };
+        // SAFETY: the caller's contract: `run` is this parameter's own run,
+        // whose storage outlives the call, and the closure the borrow goes to
+        // returns before `_loans` drops.
+        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run) };
         // SAFETY: the caller's contract: `run` is this parameter's own run.
         let (lent,) = unsafe { <(Q::Marker,) as Parameters<Rt>>::take(crossing, run, sites) };
         self(lent.take::<Q::At<'_>>())
@@ -769,6 +780,8 @@ where
     ) -> O {
         // SAFETY: as the one-parameter form's.
         let crossing = unsafe { Crossing::new(rt) };
+        // SAFETY: as the one-parameter form's.
+        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run) };
         // SAFETY: as the one-parameter form's.
         let (lent,) = unsafe { <(Q::Marker,) as Parameters<Rt>>::take(crossing, run, sites) };
         let mut rooted = rt.rooted();

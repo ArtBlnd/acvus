@@ -257,8 +257,16 @@ Status: Accepted
 5. Once the width is known the value is range-checked against it, as a
    compile error at the literal: `literal 300 does not fit u8`.
 6. At run time an integer is a word, its two's-complement bits read at the
-   type's width; a space lays it out in the width's bytes (RFC-0033). A
-   host reading JSON reads a number as `i64`, or `u64` when too large.
+   type's width, and a value has one word wherever it came from: a signed
+   width sign-extended to 64 bits, an unsigned one zero-extended. A literal,
+   an operation and an extern's result write the same word, so `==` over a
+   structure compares words (RFC-0020). `acvus_extern::repr::Word` is that
+   encoding for every inline scalar (an `f64` is its IEEE bits, a `char` its
+   scalar value zero-extended, a `bool` 0 or 1), defined for little-endian
+   targets whose pointers are 32 or 64 bits wide; a build for any other
+   target stops there. A space lays an integer out in the width's bytes
+   (RFC-0033). A host reading JSON reads a number as `i64`, or `u64` when
+   too large.
 7. There is no `f32`.
 
 **Why.** Wire schemas count in `u32`/`u64`, and one struct must state
@@ -290,6 +298,11 @@ removal pass that meets an integer division runs the domain over its body.
   RFC-0058).
 - Range-checking a literal before its width is known — would reject `300`
   as `i64` or accept it as `u8`.
+- A narrow integer's word meaningful only in its width's low bytes, with
+  `==` reading each word at the width — every reader of a whole word would
+  have to know the width, and one that did not would compare `-1i8` from
+  an extern unequal to the literal `-1i8`, as `(f(), 0) == (-1i8, 0)` did
+  when an extern's result was written as its bytes alone.
 
 ## RFC-0040: The compiler chooses an ExternFn's instance, and the IR records it by number
 

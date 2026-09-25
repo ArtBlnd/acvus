@@ -94,6 +94,7 @@ mod reused_frame_drop;
 mod row_slice_hoist;
 mod run_arity;
 mod run_shape;
+mod scalar_word;
 mod script;
 mod script_programs;
 mod select;

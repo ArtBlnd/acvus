@@ -160,6 +160,9 @@ where
     type Form = Pair;
 
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
+
+    #[inline(always)]
+    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value]) {}
 }
 
 // SAFETY: the `&str` is read from this parameter's own pair; nothing else

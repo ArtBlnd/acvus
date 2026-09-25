@@ -114,7 +114,8 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     where
         T: Send + Sync + 'static;
     /// # Safety
-    /// As `value_as_ref`.
+    /// As `value_as_ref`, and `loan_ended` is handed the value once the
+    /// borrow ends.
     unsafe fn value_as_mut<'a, T>(&'a self, value: &'a mut Self::Value) -> &'a mut T
     where
         T: Send + Sync + 'static;
@@ -127,10 +128,19 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     where
         T: crate::obj::Inline;
     /// # Safety
-    /// As `inline_ref`.
+    /// As `inline_ref`, and `loan_ended` is handed the value once the
+    /// borrow ends.
     unsafe fn inline_mut<T>(value: &mut Self::Value) -> &mut T
     where
         T: crate::obj::Inline;
+
+    /// An exclusive borrow of what `storage` holds, lent in place by
+    /// `inline_mut`, `value_as_mut` or `deref_mut`, has ended: the storage
+    /// holds the runtime's own encoding of whatever the borrow wrote. A
+    /// runtime whose borrow is its storage's own Rust value does nothing; one
+    /// that keeps an inline value in a word re-encodes the word
+    /// (`repr::settle`), since a `&mut i8` writes one byte of it.
+    fn loan_ended(storage: &mut Self::Value);
 
     /// Read the storage a reference names (RFC-0018).
     ///
@@ -143,6 +153,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// # Safety
     /// `reference` is a `&mut T` value and its storage holds a `T` erased
     /// from that type; the checker admits no other live name of the storage.
+    /// `loan_ended` is handed the storage once the borrow ends.
     #[allow(clippy::mut_from_ref)]
     unsafe fn deref_mut<'a, T>(&self, reference: &'a Self::Value) -> &'a mut T
     where
@@ -381,6 +392,9 @@ impl Runtime for TypesOnly {
         T: crate::obj::Inline,
     {
         panic!("TypesOnly runtime holds no values")
+    }
+    fn loan_ended(_: &mut ()) {
+        no_values()
     }
     unsafe fn deref<'a, T>(&self, _: &'a ()) -> &'a T
     where

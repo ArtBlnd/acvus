@@ -61,6 +61,15 @@ pub trait Loan: Send + Sync + 'static {
     where
         T: Send + Sync + 'static,
         Rt: Runtime;
+
+    /// A borrow `deref` or `borrow` made of the storage `reference` names
+    /// has ended: at `Mut`, the storage goes to `Runtime::loan_ended`.
+    ///
+    /// # Safety
+    /// `reference` names a live storage, and no borrow of it is live.
+    unsafe fn loan_ended<Rt>(rt: &Rt, reference: &Rt::Value)
+    where
+        Rt: Runtime;
 }
 
 pub struct Shared;
@@ -122,6 +131,13 @@ impl Loan for Shared {
         // SAFETY: the caller's contract.
         unsafe { rt.value_as_ref::<T>(value) }
     }
+
+    #[inline(always)]
+    unsafe fn loan_ended<Rt>(_: &Rt, _: &Rt::Value)
+    where
+        Rt: Runtime,
+    {
+    }
 }
 
 impl Loan for Mut {
@@ -178,5 +194,48 @@ impl Loan for Mut {
     {
         // SAFETY: the caller's contract, exclusive for this loan.
         unsafe { rt.value_as_mut::<T>(value) }
+    }
+
+    #[inline(always)]
+    unsafe fn loan_ended<Rt>(rt: &Rt, reference: &Rt::Value)
+    where
+        Rt: Runtime,
+    {
+        // SAFETY: the caller's contract: the storage is live and no other
+        // name of it is in use.
+        let storage = unsafe { <Rt::Value as Borrowable<Rt>>::deref_mut(rt, reference) };
+        Rt::loan_ended(storage);
+    }
+}
+
+/// An exclusive loan of the storage `reference` names, ended when this is
+/// dropped: after the borrow's user returns, and while a panic in it unwinds.
+pub(crate) struct Ending<'r, Rt>
+where
+    Rt: Runtime,
+{
+    rt: &'r Rt,
+    reference: &'r Rt::Value,
+}
+
+impl<'r, Rt> Ending<'r, Rt>
+where
+    Rt: Runtime,
+{
+    /// # Safety
+    /// `reference` names a live storage that outlives this value, and every
+    /// borrow of it made meanwhile ends before this is dropped.
+    pub(crate) unsafe fn of(rt: &'r Rt, reference: &'r Rt::Value) -> Ending<'r, Rt> {
+        Ending { rt, reference }
+    }
+}
+
+impl<Rt> Drop for Ending<'_, Rt>
+where
+    Rt: Runtime,
+{
+    fn drop(&mut self) {
+        // SAFETY: `of`'s contract.
+        unsafe { <Mut as Loan>::loan_ended(self.rt, self.reference) }
     }
 }
