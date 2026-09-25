@@ -30,17 +30,18 @@ governs the borrow, the effect system says whether the call may suspend.
      It holds the receiver and the word, both private. Only the glue makes
      one, from the argument and the word the checker chose for its type at
      that site (rule 3). Nothing hands out the word apart from its receiver,
-     and `into_inner` drops the word with it.
+     and `into_inner` drops the word with it. A requirer lent its receiver
+     `&mut` takes `Instance<S, &mut I, …>`, which owns that loan.
    - **A function of a type's values: `InstanceOf<S, I, Rt, T>` stands at
-     the type.** A signature whose receiver is `&I` (`core::eq`,
+     the type**, `S`'s receiver type being `I` by a bound of the type. A signature whose receiver is `&I` (`core::eq`,
      `core::hash`, `core::cmp`, `core::clone`, `core::to_string`) is required
      by an `InstanceOf`, exactly one of the runtime's values (`ONE_VALUE`).
      Its call takes the receiver, since a requirer applies it to many values
      of the type (a map's keys, both sides of `==`). Its ground is RFC-0068
      rule 1: an instance is resolved at the ground type.
-   - The macro refuses the other pairing: an `Instance` at a signature whose
-     receiver is `&I`, and an `InstanceOf` at one whose receiver is `&mut I`
-     or `I`.
+   - The other pairing is a type error of the glue's crossing, naming this
+     rule: an `Instance` at a signature whose receiver is `&I`, and an
+     `InstanceOf` at one whose receiver is `&mut I` or `I`.
    - Two signatures take two parameters. Two `Instance`s cannot own one
      receiver, so two receiver-owning requirements at one variable are
      refused; no declaration asks for it.
@@ -197,9 +198,10 @@ other reading back is cut.
    crate-private: `InstanceOf::at(word)` and `Instance::own(receiver, word)`,
    whose contract is that the word was made by `Runtime::instance_value` from
    an entry of an instance of `S` at the type of that receiver, as the
-   checker chose it at the site the receiver was passed to. `Required::site`
-   calls them, and the glue and the runtime reach them through
-   `Crossing::instance`.
+   checker chose it at the site the receiver was passed to. The glue and the
+   runtime reach them through `Crossing::instance` and
+   `Crossing::instance_owning`, from `Required::site` and an `Owning`
+   parameter's site.
    `InstanceRun`'s fields are private and its one constructor, `from_glue`, is
    `#[doc(hidden)] pub unsafe`, called by the macro with the typed glue.
    `call` and `call_await` are safe. The receiver is the `Instance`'s own
@@ -320,9 +322,9 @@ Status: Accepted
 
 4. **The call takes the receiver the signature declared.** An `Instance`
    lends its own receiver at the signature's first parameter's mode:
-   `call(&mut self)` for `&mut I`, `call(self)` for `I`. An `InstanceOf` takes
-   `&I`. The mode is read where the call is written, through `Receiver<Rt>`,
-   a bound on the method rather than on the `Signature` impl. `Ctx::recv` is a `*const Rt::Value`; the glue opens what it names
+   `call(&mut self)` for `&mut I`, `Consume::call(self)` for `I`. An
+   `InstanceOf` takes `&I`. The mode is `Signature::Mode` (`Shared`, `Mut`,
+   `Moved`), read as a bound on the method where the call is written. `Ctx::recv` is a `*const Rt::Value`; the glue opens what it names
    at the declared loan, and no `&mut` to the receiver word is made.
 
 5. **The core signatures.** `core` holds the signatures the compiler
