@@ -1,0 +1,81 @@
+// app: 09 brainfuck
+// desc: a Brainfuck interpreter: strip non-commands, match brackets with a
+// stack, then run the program on a 30-cell tape with a step budget; the
+// program prints "Hello World!"
+// expect: Hello World! (steps 902, cells used 5)
+let source = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.";
+
+// The commands alone, as chars.
+let chars = source.chars() | collect;
+let code = vec([]);
+for c in &chars {
+    if *c == '+' || *c == '-' || *c == '<' || *c == '>' || *c == '[' || *c == ']' || *c == '.' || *c == ',' {
+        code.push(*c);
+    };
+}
+let len = code.len();
+
+// jump[i] is the matching bracket of a bracket at i.
+let jump = filled(len, 0);
+let open = vec([]);
+for i in 0u64..len {
+    if code[i] == '[' {
+        open.push(i);
+    } else if code[i] == ']' {
+        let j = open.pop().unwrap();
+        jump[i] = j as i64;
+        jump[j] = i as i64;
+    };
+}
+
+let run = |code, jump, budget| -> {
+    let tape = filled(30u64, 0);
+    let ptr = 0u64;
+    let pc = 0u64;
+    let steps = 0;
+    let out = "".to_string();
+    while pc < code.len() && steps < budget {
+        let op = code[pc];
+        match op {
+            '+' => {
+                tape[ptr] = (tape[ptr] + 1) % 256;
+            },
+            '-' => {
+                tape[ptr] = (tape[ptr] + 255) % 256;
+            },
+            '>' => {
+                ptr = ptr + 1u64;
+            },
+            '<' => {
+                ptr = ptr - 1u64;
+            },
+            '.' => {
+                out = out + ((tape[ptr] as u8) as char).to_string();
+            },
+            '[' => {
+                if tape[ptr] == 0 {
+                    pc = jump[pc] as u64;
+                };
+            },
+            ']' => {
+                if tape[ptr] != 0 {
+                    pc = jump[pc] as u64;
+                };
+            },
+            _ => {
+                // `,` with no input reads end-of-file as 0.
+                tape[ptr] = 0;
+            },
+        };
+        pc = pc + 1u64;
+        steps = steps + 1;
+    }
+    let used = 0;
+    for x in &tape {
+        if *x != 0 {
+            used = used + 1;
+        };
+    }
+    out + " (steps " + steps.to_string() + ", cells used " + used.to_string() + ")"
+};
+run(&code, &jump, 100000)

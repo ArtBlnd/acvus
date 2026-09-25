@@ -1,0 +1,29 @@
+for range(0 (r52)..10 (r36)) -> L1 else L2 stages [L1, L5]
+// L1: free {const, >, ref, as_slice, index, call to_string, assign, ref}
+// L5: cycle Storage(r53) in_order {ref, concat, assign, ref, concat, assign}
+// control upfront
+// cost W=17 O=18281 split when n > 34412, n = max(10 (r36) - 0 (r52), 0)
+for slice(r3) -> L1 else L2 stages [L1, L9]
+// L1: free {take, const, take}
+// L9: cycle Storage(r9) in_order {index, +, index_set}
+// control upfront
+// cost W=6 O=18281 split when n > 97499, n = len(r3)
+for range(0 (r24)..r1) -> L4 else L5 stages [L4, L10, L11]
+// L4: free {index, cast}
+// L10: cycle Carried(r23) in_order {+}
+// L11: cycle Storage(r25) in_order law(Fold(r25, #3) exact) {ref, call push}
+// control upfront
+// cost W=4 O=18287 split when n > 146296, n = max(r1 - 0 (r24), 0)
+for range(0 (r44)..r37) -> L7 else L8 stages [L7, L12, L13, L14]
+// L7: free {index, index, index, cast, const}
+// L12: cycle Storage(r45) in_order {index, index, +, index_set}
+// L13: free {cast, +}
+// L14: cycle Storage(r46) in_order {index_set}
+// control upfront
+// cost W=12 O=18293 split when n > 48782, n = max(r37 - 0 (r44), 0)
+for range(0 (r31)..r1) -> L1 else L2 stages [L1, L25]
+// L1: free {const}
+// L25: cycle Carried(r29)+Carried(r30)+Storage(r32)+Storage(r33)+Storage(r34)+Storage(r35)+Storage(r36)+Storage(r37) in_order {index, <, index_set, index_set, const, +, ref, call push, const, index_set, ref, call push, ref, index, call push, const, ref, call len, >, ref, call len, const, -, as_slice, index, ref, as_slice, index, const, +, index, <, const, +, ref, as_slice, index_set, index, cast, index, const, <, index_set, index_set, const, +, ref, call push, const, index_set, ref, call push, ref, index, call push, index, index, index, call min, index_set, ref, call pop, ref, call pop, ref, call len, const, >, as_slice, call len, const, -, index, index, index, call min, index_set, index, index, ==, const, const, +, ref, call pop, call unwrap, const, index_set, ==, const, branch, jump, branch, branch, branch, jump, branch, jump, jump, branch, branch, jump, branch, branch, jump, jump, jump, jump, jump, jump}
+// L25: cycle Storage(r38) in_order {index_set}
+// control upfront
+// cost in place: W=0

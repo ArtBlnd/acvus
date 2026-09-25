@@ -1,0 +1,43 @@
+for range(0 (r5)..5 (r6)) -> L1 else L2 stages [L1, L24]
+// L1: free {const, *}
+// L24: cycle Storage(r7) in_order {index_set}
+// control upfront
+// cost W=1 O=18281 split when n > 584992, n = max(5 (r6) - 0 (r5), 0)
+for range(0 (r21)..5 (r6)) -> L4 else L5 stages [L4, L25]
+// L4: free {const, *}
+// L25: cycle Storage(r22) in_order {index_set}
+// control upfront
+// cost W=1 O=18281 split when n > 584992, n = max(5 (r6) - 0 (r21), 0)
+for range(0 (r26)..3 (r27)) -> L7 else L8 stages [L7, L33]
+// L7: free {const, const}
+// L33: cycle Storage(r22)+Storage(r7) in_order {ref, as_slice, ref, as_slice, index, index, +, index, +, index, +, index, +, /, index_set, take, take, assign, assign}
+// control upfront
+// cost in place: W=0
+for range(1 (r31)..4 (r32)) -> L10 else L11 stages [L10, L31]
+// L10: free {const, const}
+// L31: cycle Storage(r22) in_order {index_set}
+// control upfront
+// cost in place: W=0
+for range(1 (r34)..6 (r35)) -> L13 else L14 stages [L13, L26]
+// L13: free {*, +, ref, as_slice, index, const, -, index, +, const, +, index, +, -, index, +, +, index, +, const, /}
+// L26: cycle Storage(r22) disjoint {index_set}
+// control upfront
+// cost W=35 O=18281 split when n > 16715, n = max(6 (r35) - 1 (r34), 0)
+for range(1 (r62)..4 (r63)) -> L16 else L17 stages [L16, L32]
+// L16: free {const, const}
+// L32: cycle Storage(r64) any_order law(Op(Add) exact commutative) {take, +, assign}
+// L32: cycle Storage(r65) any_order law(Call(#1, identity) exact commutative) {take, call max, assign}
+// control upfront
+// cost in place: W=0
+for range(1 (r67)..6 (r68)) -> L19 else L20 stages [L19, L27, L28, L29]
+// L19: free {ref, as_slice, *, +, index}
+// L27: cycle Storage(r64) any_order law(Op(Add) exact commutative) {take, +, assign}
+// L28: free {index}
+// L29: cycle Storage(r65) any_order law(Call(#1, identity) exact commutative) {take, call max, assign}
+// control upfront
+// cost W=14 O=18293 split when n > 41813, n = max(6 (r68) - 1 (r67), 0)
+for range(0 (r82)..7 (r10)) -> L22 else L23 stages [L22, L30]
+// L22: free {const_str, ref, as_slice, const, +, index, call to_string, assign, ref}
+// L30: cycle Storage(r83) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign}
+// control upfront
+// cost W=17 O=18281 split when n > 34412, n = max(7 (r10) - 0 (r82), 0)
