@@ -1,0 +1,16 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/witness_same_layout_literal.rs:8:35
+  |
+8 |     let _: SameLayout<u64, f64> = SameLayout(PhantomData);
+  |                                   ^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> $WORKSPACE/acvus-extern/src/repr.rs
+  |
+  | pub struct SameLayout<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
+  |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+help: you might have meant to use the `vouched` associated function
+  |
+8 -     let _: SameLayout<u64, f64> = SameLayout(PhantomData);
+8 +     let _: SameLayout<u64, f64> = SameLayout::vouched();
+  |

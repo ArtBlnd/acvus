@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use acvus_extern::{Borrows, Holding, Lendable, Owned, Shared};
+use acvus_extern::{Borrows, Holding, Lendable, Owned, Shared, repr};
 use acvus_mir::ty::{PolyTy, Ty};
 use acvus_utils::Interner;
 use futures::channel::{mpsc, oneshot};
@@ -149,6 +149,13 @@ pub(crate) struct Gate {
 
 struct Reach(NonNull<dyn Storage>);
 
+/// `dyn Storage` at each lifetime, for erasing the one a gate cannot carry.
+struct StorageAt;
+
+impl repr::Lifetimed for StorageAt {
+    type At<'a> = dyn Storage + 'a;
+}
+
 // SAFETY: `Storage: Send`, and a `Reach` is dereferenced only under the
 // gate's lock, one access at a time.
 unsafe impl Send for Reach {}
@@ -158,10 +165,10 @@ impl Gate {
     /// `storage` is not touched otherwise, and outlives every access, until
     /// `close` returns.
     pub(crate) unsafe fn open(storage: &mut dyn Storage) -> Gate {
-        let reach: NonNull<dyn Storage + '_> = NonNull::from(storage);
         // SAFETY: the caller's contract bounds every dereference by `close`,
-        // which the erased lifetime does not.
-        let reach: NonNull<dyn Storage + 'static> = unsafe { std::mem::transmute(reach) };
+        // which the erased lifetime does not: `with` dereferences only under
+        // the lock, and `close` empties the reach under the same lock.
+        let reach = unsafe { repr::unbounded::<StorageAt>(NonNull::from(storage)) };
         Gate {
             reach: Mutex::new(Some(Reach(reach))),
         }
@@ -405,59 +412,97 @@ impl Port {
     }
 }
 
-pub(crate) async fn serve<S, F>(storage: &mut S, codec: &Codec<'_>, mut requests: Requests, run: F) -> F::Output
+/// Serve a waited run's requests with the storage the page borrows until the
+/// run returns. Only a load waits: a store or restore is handed over in the
+/// poll that received it, and a holder still queued when the run returns or
+/// this future is dropped is handed over by `Serving`'s drop, so no dropped
+/// future holds one (RFC-0090 rule 3).
+pub(crate) async fn serve<S, F>(storage: &mut S, codec: &Codec<'_>, requests: Requests, run: F) -> F::Output
 where
     S: crate::host::AsyncStorage,
     F: std::future::Future,
 {
     use futures::StreamExt;
     use futures::future::{Either, select};
+    let mut serving = Serving { storage, requests };
+    // Declared after `serving`, so dropped before it: what the run queued
+    // before it was dropped is handed over.
     let mut run = std::pin::pin!(run);
     loop {
-        let request = match select(run.as_mut(), requests.next()).await {
+        let request = match select(run.as_mut(), serving.requests.next()).await {
             Either::Left((done, _)) => return done,
             Either::Right((request, _)) => request,
         };
         let Some(request) = request else {
             return run.await;
         };
-        let (key, unread) = match request {
+        match request {
             Request::Load { key, reply } => {
-                let answer = storage.load(&key, codec).await;
-                (key, reply.send(answer).err().map(Unread::Load))
+                let answer = serving.storage.load(&key, codec).await;
+                if let Err(unread) = reply.send(answer) {
+                    serving.unread(&key, unread);
+                }
             }
-            Request::Store { key, held, reply } => {
-                let answer = storage.store(&key, held).await;
-                (key, reply.send(answer).err().map(Unread::Stored))
-            }
-            Request::Restore { key, held, reply } => {
-                let answer = storage.restore(&key, held).await;
-                (key, reply.send(answer).err().map(Unread::Stored))
-            }
-        };
-        if let Some(unread) = unread {
-            unread.log(&key);
+            handed => serving.hand_over(handed),
         }
     }
 }
 
-/// An answer whose asker was dropped with its run before it arrived.
-enum Unread {
-    Load(Result<Option<Held>, StorageError>),
-    Stored(Result<(), StorageError>),
+/// The storage a waited run reaches, and the queue of its requests.
+struct Serving<'s, S>
+where
+    S: crate::host::AsyncStorage,
+{
+    storage: &'s mut S,
+    requests: Requests,
 }
 
-impl Unread {
-    fn log(self, key: &str) {
-        match self {
-            Unread::Load(Ok(Some(_))) => tracing::warn!(
-                key,
-                "a loaded holder reached no run and was released; the storage no longer holds it"
-            ),
-            Unread::Load(Err(error)) | Unread::Stored(Err(error)) => {
-                tracing::warn!(key, %error, "a storage error reached no run")
+impl<S> Serving<'_, S>
+where
+    S: crate::host::AsyncStorage,
+{
+    /// Hand a queued `Store` or `Restore` to the storage. A `Load` is
+    /// answered by nothing: its asker learns the page is gone.
+    fn hand_over(&mut self, request: Request) {
+        let (key, answer, reply) = match request {
+            Request::Load { .. } => return,
+            Request::Store { key, held, reply } => {
+                let answer = self.storage.store(&key, held);
+                (key, answer, reply)
             }
-            Unread::Load(Ok(None)) | Unread::Stored(Ok(())) => {}
+            Request::Restore { key, held, reply } => {
+                let answer = self.storage.restore(&key, held);
+                (key, answer, reply)
+            }
+        };
+        if let Err(Err(error)) = reply.send(answer) {
+            tracing::warn!(key, %error, "a storage error reached no run");
+        }
+    }
+
+    /// A loaded holder whose asker was dropped before the answer arrived
+    /// goes back unchanged.
+    fn unread(&mut self, key: &str, answer: Result<Option<Held>, StorageError>) {
+        let error = match answer {
+            Ok(None) => return,
+            Ok(Some(held)) => match self.storage.restore(key, held) {
+                Ok(()) => return,
+                Err(error) => error,
+            },
+            Err(error) => error,
+        };
+        tracing::warn!(key, %error, "a storage error reached no run");
+    }
+}
+
+impl<S> Drop for Serving<'_, S>
+where
+    S: crate::host::AsyncStorage,
+{
+    fn drop(&mut self) {
+        self.requests.close();
+        while let Ok(request) = self.requests.try_recv() {
+            self.hand_over(request);
         }
     }
 }

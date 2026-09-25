@@ -23,10 +23,11 @@ unsafe impl Canonical<kind::Length> for () {
 
 /// `Array<T, N>` with N a length variable. Holds the elements at runtime.
 ///
-/// `Cross::deref` in `obj.rs` reads the runtime's `Arr<Value, ()>` as an
-/// `Arr<Value, N>` through this `repr(transparent)`; drop the attribute and
-/// that file still compiles while the read stands on nothing the language
-/// promises.
+/// `Borrowable::deref` in `obj.rs` reads the runtime's `Vec` as an
+/// `Arr<T, N>` through `over_items`, whose witness rests on this
+/// `repr(transparent)`. `same_layout!` checks size and alignment, not the
+/// attribute: drop it and the crate still compiles while the read stands on
+/// nothing the language promises.
 #[repr(transparent)]
 pub struct Arr<T, N>(pub Vec<T>, PhantomData<N>)
 where
@@ -39,6 +40,19 @@ where
 {
     pub fn new(items: Vec<T>) -> Self {
         Self(items, PhantomData)
+    }
+}
+
+impl<T, N> Arr<T, N>
+where
+    N: Var<kind::Length>,
+{
+    /// The layout `repr(transparent)` gives: an `Arr` is its `Vec`.
+    #[inline(always)]
+    pub(crate) fn over_items() -> crate::repr::SameLayout<Vec<T>, Self> {
+        // SAFETY: `Arr<T, N>` is `repr(transparent)` with `Vec<T>` as its one
+        // non-zero-sized field.
+        unsafe { crate::canonical::same_layout!(Vec<T>, Self) }
     }
 }
 
