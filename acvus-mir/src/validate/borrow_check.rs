@@ -275,7 +275,10 @@ impl<'cfg> Checking<'cfg> {
 
     /// Whether `flows` let output `to` hold `input`: an `Any` flow between
     /// the two ends, or an `Aligned` one where the positions agree or the
-    /// shapes differ, which a call reads as `Any`.
+    /// shapes differ, which a call reads as `Any`. A body's own flows are
+    /// `Aligned` or `Any` (`body_flows`); a `Labelled` one, met from an
+    /// extern's type, admits nothing here, and the body's own flows, which
+    /// the met ones are joined with, admit what it holds.
     fn admits(
         &self,
         flows: &Flows,
@@ -284,10 +287,10 @@ impl<'cfg> Checking<'cfg> {
         input: HeldInput,
         result_width: Option<usize>,
     ) -> bool {
-        if flows.admits(to, input.end, Alignment::Any) {
+        if flows.admits(to, input.end, &Alignment::Any) {
             return true;
         }
-        if !flows.admits(to, input.end, Alignment::Aligned) {
+        if !flows.admits(to, input.end, &Alignment::Aligned) {
             return false;
         }
         let input_width = match input.end {

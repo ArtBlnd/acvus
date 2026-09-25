@@ -241,7 +241,7 @@ where
         let mut state = Origins::default();
         loop {
             let before = state.clone();
-            let stored: Origin = state.locals.values().flatten().copied().collect();
+            let stored: Origin = state.locals.values().flatten().cloned().collect();
             let mut walk = Walk {
                 checker: self,
                 frame,
@@ -353,7 +353,7 @@ where
     fn through_storage(&self) -> Origin {
         any(&self.stored)
             .union(&any(&self.state.written))
-            .copied()
+            .cloned()
             .collect()
     }
 
@@ -372,7 +372,7 @@ where
             None => one(FlowEnd::Captures, Alignment::Any),
         };
         if let Some(assigned) = self.state.locals.get(&binder) {
-            origin.extend(assigned.iter().copied());
+            origin.extend(assigned.iter().cloned());
         }
         origin.extend(any(&self.state.written));
         origin
@@ -467,7 +467,7 @@ where
                 let element = match head {
                     ForHead::Value(source) => {
                         let source = any(&self.value(source));
-                        source.union(&self.through_storage()).copied().collect()
+                        source.union(&self.through_storage()).cloned().collect()
                     }
                     ForHead::Range { lo, hi } => {
                         self.value(lo);
@@ -523,7 +523,7 @@ where
     /// reference into the storage the source names.
     fn matched(&mut self, source: &Expr<S>) -> Origin {
         let source = any(&self.place_value(source));
-        source.union(&self.through_storage()).copied().collect()
+        source.union(&self.through_storage()).cloned().collect()
     }
 
     /// What a reference to `place` may hold: the loans its base holds, the
@@ -541,13 +541,13 @@ where
             } => self
                 .place_value(object)
                 .union(&self.through_storage())
-                .copied()
+                .cloned()
                 .collect(),
             Expr::Index { object, index, .. } => {
                 self.value(index);
                 self.place_value(object)
                     .union(&self.through_storage())
-                    .copied()
+                    .cloned()
                     .collect()
             }
             Expr::Ident { .. } => self.value_unfiltered(place),
@@ -658,25 +658,25 @@ where
                 ..
             } => {
                 let pointer = any(&self.value(operand));
-                pointer.union(&self.through_storage()).copied().collect()
+                pointer.union(&self.through_storage()).cloned().collect()
             }
             Expr::UnaryOp { operand, .. } => {
                 let operand = any(&self.value(operand));
-                operand.union(&self.through_storage()).copied().collect()
+                operand.union(&self.through_storage()).cloned().collect()
             }
             Expr::BinaryOp { left, right, .. } => {
                 let mut both = any(&self.value(left));
                 both.extend(any(&self.value(right)));
-                both.union(&self.through_storage()).copied().collect()
+                both.union(&self.through_storage()).cloned().collect()
             }
             Expr::FieldAccess { object, .. } => {
                 let object = any(&self.value(object));
-                object.union(&self.through_storage()).copied().collect()
+                object.union(&self.through_storage()).cloned().collect()
             }
             Expr::Index { object, index, .. } => {
                 let mut both = any(&self.value(object));
                 both.extend(any(&self.value(index)));
-                both.union(&self.through_storage()).copied().collect()
+                both.union(&self.through_storage()).cloned().collect()
             }
             Expr::FuncCall { func, args, .. } => self.func_call(func, None, args),
             Expr::MethodCall {
@@ -922,7 +922,7 @@ where
     }
 
     fn with_storage(&self, origin: Origin) -> Origin {
-        origin.union(&self.through_storage()).copied().collect()
+        origin.union(&self.through_storage()).cloned().collect()
     }
 
     /// A call's result by its callee's flows, and what the callee may write.
@@ -980,7 +980,7 @@ where
         }
         match all.is_empty() {
             true => all,
-            false => all.union(&self.through_storage()).copied().collect(),
+            false => all.union(&self.through_storage()).cloned().collect(),
         }
     }
 }

@@ -4,8 +4,8 @@ error: implementation of `Within` is not general enough
 16 | #[extern_fn(effect = opaque)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation of `Within` is not general enough
    |
-   = note: `Within<'0>` would have to be implemented for the type `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, __R>`, for any lifetime `'0`...
-   = note: ...but `Within<'1>` is actually implemented for the type `acvus_extern::Ref<'1, std::string::String, acvus_extern::Shared, __R>`, for some specific lifetime `'1`
+   = note: `Within<'0>` would have to be implemented for the type `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, TypesOnly>`, for any lifetime `'0`...
+   = note: ...but `Within<'1>` is actually implemented for the type `acvus_extern::Ref<'1, std::string::String, acvus_extern::Shared, TypesOnly>`, for some specific lifetime `'1`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: implementation of `Within` is not general enough
@@ -14,6 +14,6 @@ error: implementation of `Within` is not general enough
 16 | #[extern_fn(effect = opaque)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation of `Within` is not general enough
    |
-   = note: `Within<'0>` would have to be implemented for the type `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, TypesOnly>`, for any lifetime `'0`...
-   = note: ...but `Within<'1>` is actually implemented for the type `acvus_extern::Ref<'1, std::string::String, acvus_extern::Shared, TypesOnly>`, for some specific lifetime `'1`
+   = note: `Within<'0>` would have to be implemented for the type `acvus_extern::Ref<'_, std::string::String, acvus_extern::Shared, __R>`, for any lifetime `'0`...
+   = note: ...but `Within<'1>` is actually implemented for the type `acvus_extern::Ref<'1, std::string::String, acvus_extern::Shared, __R>`, for some specific lifetime `'1`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

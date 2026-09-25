@@ -1171,12 +1171,12 @@ fn a_pull_whose_body_reads_its_payload_by_value_is_a_while_terminator() {
     );
 }
 
-/// `Refs::next` declares its result at the lifetime of the `&mut` it takes,
-/// so the payload holds a loan on the iterator's own storage and reading it
-/// touches the pulled storage outside the header.
+/// `Refs::next` states its result at the collection's lifetime, not the
+/// `&mut` it takes (RFC-0096 rules 1 and 4), so the payload holds the
+/// vector's loan and reading it touches no pulled storage.
 #[test]
-fn a_pull_whose_payload_borrows_the_iterator_stays_a_plain_branch_loop() {
-    assert_a_plain_branch_loop(
+fn a_pull_whose_payload_borrows_the_collection_is_a_while_terminator() {
+    assert_a_pull(
         "let xs = vec([3, 4]); let it = xs.as_iter(); let s = 0; \
          while let Some(x) = it.next() { s = s + *x; } s",
     );

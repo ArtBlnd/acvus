@@ -1774,6 +1774,15 @@ fn alloc_effect_var(effect_vars: &mut PVec<EffectBound>, bound: EffectVarBound) 
     id
 }
 
+/// The flows a declared instance's type states; `None` where the type is no
+/// function type, which no instance of a signature is.
+fn declared_flows(ty: &PolyTy) -> Option<Flows> {
+    match ty {
+        TyTerm::Fn { flows, .. } => Some(flows.get().clone()),
+        _ => None,
+    }
+}
+
 fn alloc_flow_var(flow_vars: &mut PVec<FlowBound>, seed: Flows) -> FlowVarId {
     let id = FlowVarId(flow_vars.len() as u32);
     flow_vars.push(FlowBound::Root(seed));
@@ -2512,6 +2521,10 @@ enum DecisionState {
 struct DecisionSlot {
     decision: Decision,
     state: DecisionState,
+    /// The flows the instance an instance decision settled on declares
+    /// (RFC-0096 rule 4), written where it settles; `None` while it is open
+    /// or failed, and where it settled structurally, on no declared type.
+    instance_flows: Option<Flows>,
 }
 
 /// Every decision of the solve, by id, and the ids of its signature
@@ -2536,6 +2549,7 @@ impl Decisions {
         self.slots.push(DecisionSlot {
             decision,
             state: DecisionState::Open,
+            instance_flows: None,
         });
         id
     }
@@ -2993,6 +3007,19 @@ impl<'src> Solver<'src> {
 
     /// The answer of a settled decision; `None` while it is open or after
     /// it failed.
+    /// RFC-0096 rule 4: the flows the instance decision `id` settled on
+    /// declares, which a call of a shared signature reads as it reads that
+    /// instance's effect. `None` where `id` is open or failed, and where it
+    /// settled structurally: the call's own type's flows, the signature's,
+    /// stand there.
+    pub fn settled_instance_flows(&self, id: DecisionId) -> Option<&Flows> {
+        let slot = &self.decisions[id.0 as usize];
+        match slot.state {
+            DecisionState::Settled(Answer::Instance(_)) => slot.instance_flows.as_ref(),
+            DecisionState::Settled(_) | DecisionState::Open | DecisionState::Failed => None,
+        }
+    }
+
     pub fn answer(&self, id: DecisionId) -> Option<Answer> {
         match &self.decisions[id.0 as usize].state {
             DecisionState::Settled(answer) => Some(answer.clone()),
@@ -4099,6 +4126,7 @@ impl<'src> Solver<'src> {
                     bound,
                 ) {
                     Ok(()) => {
+                        self.decisions[id.0 as usize].instance_flows = declared_flows(&generic.ty);
                         Progress::Settled(Answer::Instance(InstanceKind::Extern(generic.instance)))
                     }
                     Err(refused) => Progress::Failed(refused),
@@ -4126,6 +4154,7 @@ impl<'src> Solver<'src> {
                         );
                         self.begin_unbound_sources(id, &instance);
                         self.require_instances(id, required);
+                        self.decisions[id.0 as usize].instance_flows = declared_flows(&only.ty);
                         Progress::Settled(Answer::Instance(only.instance))
                     }
                     Err(refused) => Progress::Failed(refused),

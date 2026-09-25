@@ -1,0 +1,3 @@
+// expect 5
+// The element names the deque's storage, not the iterator's: it is read after the iterator's block ends.
+let d = deque(); push_back(&mut d, 5); let a = { let it = as_iter(&d); next(&mut it) }; *a.unwrap()

@@ -4185,6 +4185,57 @@ where
         })
     }
 
+    /// RFC-0096 rule 4: the flows a call reads where the checker settled an
+    /// instance at it, the ones that instance declares. `None` where the
+    /// call has no instance decision or it is not settled, and the call's
+    /// own type's flows, the signature's, stand; a fixed instance is the
+    /// generic one, whose type is the signature's own.
+    fn settled_flows(&self, instance: Option<InstanceChoice>) -> Option<Flows> {
+        let Some(InstanceChoice::Decided(decision)) = instance else {
+            return None;
+        };
+        self.solver.settled_instance_flows(decision).cloned()
+    }
+
+    /// Every call the solve settled an instance at is typed with that
+    /// instance's flows (RFC-0096 rule 4), which the body's own flows and
+    /// the lowering then read: the callee's recorded type, or an operator's
+    /// call type. Run once every decision the body opens is settled.
+    fn read_settled_instance_flows(&mut self) {
+        let settled: Vec<(AstId, Flows)> = self
+            .calls
+            .iter()
+            .filter_map(|(id, choice)| {
+                let instance = match choice {
+                    CallChoice::Resolved(resolved) => resolved.instance,
+                    CallChoice::Decided(decision) => match self.solver.answer(*decision) {
+                        Some(Answer::Signature {
+                            settled: SettledSignature::Named { instance, .. },
+                            ..
+                        }) => instance,
+                        _ => None,
+                    },
+                    CallChoice::Operator(call) => call.callee.instance,
+                    CallChoice::Binding | CallChoice::StructuralVariant => None,
+                };
+                Some((*id, self.settled_flows(instance)?))
+            })
+            .collect();
+        for (id, flows) in settled {
+            if let Some(CallChoice::Operator(call)) = self.calls.get(&id) {
+                let ty = at_flows(self.solver.resolve_ty(&call.ty), flows);
+                if let Some(CallChoice::Operator(call)) = self.calls.get_mut(&id) {
+                    call.ty = ty;
+                }
+                continue;
+            }
+            if let Some(ty) = self.type_map.get(&id) {
+                let ty = at_flows(self.solver.resolve_ty(ty), flows);
+                self.record(id, ty);
+            }
+        }
+    }
+
     fn settled_instance(&self, decision: DecisionId) -> Option<usize> {
         match self.solver.answer(decision)? {
             Answer::Instance(InstanceKind::Extern(instance)) => Some(instance),
@@ -4777,6 +4828,7 @@ where
             }
         }
         self.settle_int_literals();
+        self.read_settled_instance_flows();
         self.refuse_open_decisions();
         // An operand no use ever settled is refused only in a body nothing
         // else was refused in: a refused call leaves its arguments' types
@@ -5011,6 +5063,10 @@ where
         self.place_opened_children();
         self.report_unsettled(unsettled);
         let callee_ty = self.closed_or_refused(&self.solver.resolve_ty(&inst), span);
+        let callee_ty = match self.settled_flows(instance) {
+            Some(flows) => at_flows(callee_ty, flows),
+            None => callee_ty,
+        };
         PendingExternCast {
             callee: ResolvedCallee {
                 qref: fn_ref,
@@ -9511,6 +9567,30 @@ fn op_str(op: BinOp) -> &'static str {
     }
 }
 
+/// `ty` with the flows `flows` where it is a function type: a call of a
+/// shared signature at the instance the checker settled (RFC-0096 rule 4).
+fn at_flows<V>(ty: TyTerm<V>, flows: Flows) -> TyTerm<V>
+where
+    V: Phase,
+{
+    match ty {
+        TyTerm::Fn {
+            params,
+            ret,
+            captures,
+            effect,
+            flows: _,
+        } => TyTerm::Fn {
+            params,
+            ret,
+            captures,
+            effect,
+            flows: flows.into(),
+        },
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10013,3 +10093,4 @@ mod tests {
         check_with_interner(src, &ctx, &i).unwrap();
     }
 }
+
