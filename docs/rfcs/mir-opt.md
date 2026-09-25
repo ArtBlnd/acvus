@@ -1336,6 +1336,11 @@ many small cycles, one per key, each with the law its entry's update has.
    the cycle's order is `Keyed(L)`: updates at one key combine by `L`,
    updates at different keys are disjoint. A read of the whole storage in
    the loop (its length, an iteration over it) makes it an ordinary token.
+   Two key values are one key where the program shows them equal: the
+   same value, a copy through one shared reference (whose referent no
+   write reaches while it lives, RFC-0028), or the same language operation
+   over operands that are one key, an operation reading nothing but its
+   operands. A call is none of these.
 2. **A map's keys meet by an equivalence.** A map or set token is keyed
    only where its type carries the `Equiv` marker: its key's `eq`
    declares an equivalence and its `hash` agrees with it. An `Opaque` one
