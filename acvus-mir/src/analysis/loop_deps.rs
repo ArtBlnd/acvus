@@ -28,7 +28,7 @@ use crate::ir::{
 };
 use crate::laws::{
     ExternInstance, LawTable, ReachedPlace, Reaches, ResolvedBinary, ResolvedFold,
-    ResolvedIdentity, ResolvedLaws,
+    ResolvedIdentity, ResolvedLaws, Returns,
 };
 use crate::ty::{Mutability, Ty};
 
@@ -329,9 +329,14 @@ pub struct LoopDeps {
     pub header: BlockIdx,
     pub membership: StageMembership,
     pub cycles: Vec<Cycle>,
+    /// The cycles before those of the exiting stage join the control
+    /// token's. `optimize::stages` cuts from these: where the body is cut
+    /// decides which cycles share the exiting stage.
+    pub unjoined: Vec<Cycle>,
     pub control: Control,
     early_reads: Vec<EarlyRead>,
     effects: Vec<EffectWait>,
+    ahead_of_exit: Vec<AheadOfExit>,
     disjoint: Vec<ValueId>,
 }
 
@@ -399,6 +404,7 @@ impl LoopDeps {
             .into_iter()
             .map(|found| place(found, &stage_of))
             .collect();
+        let unjoined = cycles.clone();
 
         // RFC-0066 rule 10: the control token passes with the exiting
         // stage's tokens, so the cycles lying there are one join with it.
@@ -467,13 +473,36 @@ impl LoopDeps {
             })
             .collect();
 
+        let ahead_of_exit = match control {
+            Control::Upfront => Vec::new(),
+            Control::Chained { cycle } => {
+                let exit_stage = cycles[cycle].earliest_stage();
+                let run_ahead = RunAhead::of(cfg, laws, header);
+                graph
+                    .members
+                    .iter()
+                    .filter(|member| stage_of(**member) < exit_stage)
+                    .filter_map(|&member| {
+                        run_ahead.held_back(member).map(|held_back| AheadOfExit {
+                            member,
+                            stage: stage_of(member),
+                            exit_stage,
+                            held_back,
+                        })
+                    })
+                    .collect()
+            }
+        };
+
         Ok(LoopDeps {
             header,
             membership,
             cycles,
+            unjoined,
             control,
             early_reads,
             effects,
+            ahead_of_exit,
             disjoint,
         })
     }
@@ -506,6 +535,10 @@ impl LoopDeps {
 
     pub fn effects_in_free_stages(&self) -> &[EffectWait] {
         &self.effects
+    }
+
+    pub fn ahead_of_exit(&self) -> &[AheadOfExit] {
+        &self.ahead_of_exit
     }
 
     /// Each cycle's order and law, by the index of [`Self::cycles`].
@@ -690,6 +723,76 @@ pub fn has_effect(kind: &InstKind) -> bool {
         InstKind::Commit { .. } => true,
         _ => false,
     }
+}
+
+/// Why an operation of a loop's body waits for its iteration's control
+/// token (RFC-0089 rule 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldBack {
+    Effect,
+    MayNotFinish,
+}
+
+/// A `for` terminator is never held back: the operations of its body are
+/// members of the same work, and each is asked for itself.
+pub struct RunAhead<'a> {
+    cfg: &'a CfgBody,
+    laws: &'a LawTable,
+    in_while: FxHashSet<BlockIdx>,
+}
+
+impl<'a> RunAhead<'a> {
+    pub fn of(cfg: &'a CfgBody, laws: &'a LawTable, header: BlockIdx) -> Self {
+        let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
+        let ours = loop_blocks_of(&loops, header);
+        let in_while = loops
+            .iter()
+            .filter(|inner| inner.header != header && ours.contains(&inner.header))
+            .filter(|inner| {
+                !matches!(
+                    cfg.blocks[inner.header.0].terminator,
+                    Terminator::For { .. }
+                )
+            })
+            .flat_map(NaturalLoop::blocks)
+            .collect();
+        Self {
+            cfg,
+            laws,
+            in_while,
+        }
+    }
+
+    pub fn held_back(&self, member: Member) -> Option<HeldBack> {
+        let Member::Inst(at) = member else {
+            return self
+                .in_while
+                .contains(&member.block())
+                .then_some(HeldBack::MayNotFinish);
+        };
+        let kind = &self.cfg.blocks[at.block.0].insts[at.at].kind;
+        if has_effect(kind) {
+            return Some(HeldBack::Effect);
+        }
+        let finishes = !self.in_while.contains(&at.block)
+            && match kind {
+                InstKind::FunctionCall { callee, .. } | InstKind::Spawn { callee, .. } => {
+                    matches!(callee, Callee::Extern { .. })
+                        && self.laws.returns_of(callee) == Returns::Stated
+                }
+                InstKind::Eval { .. } => false,
+                _ => true,
+            };
+        (!finishes).then_some(HeldBack::MayNotFinish)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AheadOfExit {
+    pub member: Member,
+    pub stage: usize,
+    pub exit_stage: usize,
+    pub held_back: HeldBack,
 }
 
 // -- Order and law (rule 4) ----------------------------------------------

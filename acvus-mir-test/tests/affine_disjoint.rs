@@ -255,8 +255,10 @@ fn an_index_read_from_a_storage_the_loop_writes_is_no_invariant() {
 
 /// `out.len()` read before the one push every iteration makes is
 /// `{len(out) on entry, 1}` (RFC-0066 rule 4, `push`'s
-/// `len(c) = old(len(c)) + 1`), so a store at it is `Disjoint`; a
-/// conditional push, a second push or a pop leaves it in order.
+/// `len(c) = old(len(c)) + 1`), so a store at it is `Disjoint`, and the
+/// read is `len(out)` above the header `+ k` (rule 7), which leaves the
+/// push's stage after the store's; a conditional push, a second push or a
+/// pop leaves it in order.
 #[test]
 fn a_store_at_the_length_an_unconditional_push_grows_is_disjoint() {
     let orders = |body: &str| {
@@ -268,7 +270,7 @@ fn a_store_at_the_length_an_unconditional_push_grows_is_disjoint() {
     };
     assert_eq!(
         orders("pos[out.len()] = *x; out.push(*x);"),
-        ["in_order", "disjoint"],
+        ["disjoint", "in_order"],
         "`out` in order through its push, `pos` disjoint"
     );
     for body in [

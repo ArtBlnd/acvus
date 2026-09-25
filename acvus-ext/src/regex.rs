@@ -144,7 +144,10 @@ fn escape(text: &str) -> String {
 
 // -- Searching ----------------------------------------------------------
 
-#[extern_fn(effect = pure)]
+/// `returns`: the `regex` crate matches by finite automata in time linear
+/// in the pattern and the text, and `Regex::is_match` does not panic, so
+/// every call returns.
+#[extern_fn(effect = pure, returns)]
 fn is_match(re: &Regex, text: &str) -> bool {
     re.0.is_match(text)
 }

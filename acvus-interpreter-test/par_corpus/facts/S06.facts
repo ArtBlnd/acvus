@@ -2,7 +2,8 @@ for range(0 (r4)..r2) -> L1 else L2 stages [L1]
 // L1: cycle Control in_order {index, const, ==, for, branch}
 // control chained through L1
 // cost in place: no stage runs apart
-for range(0 (r9)..r7) -> L4 else L5 stages [L4]
-// L4: cycle Control in_order {branch}
-// control chained through L4
-// cost in place: no stage runs apart
+for range(0 (r9)..r7) -> L4 else L5 stages [L4, L8]
+// L4: free {index, const, ==}
+// L8: cycle Control in_order {branch}
+// control chained through L8
+// cost W=4 O=18281 split when n > 146248, n = max(r7 - 0 (r9), 0)

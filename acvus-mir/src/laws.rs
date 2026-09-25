@@ -115,6 +115,17 @@ pub enum Reaches {
     Places(Vec<ReachedPlace>),
 }
 
+/// `#[extern_fn(returns)]` (RFC-0082 rule 8): whether the declaration
+/// states that every call returns or traps. It is the author's promise;
+/// RFC-0089 rule 5 reads it, by the instance a call names, to run the call
+/// ahead of its iteration's control token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Returns {
+    #[default]
+    Unstated,
+    Stated,
+}
+
 /// `x`, the whole of what reference parameter `x` lends, or `x[i]`, its
 /// element at the `u64` parameter `i`. A parameter is numbered as
 /// [`PostTerm::Param`] numbers it.
@@ -308,6 +319,7 @@ struct DeclaredAt<'a> {
     laws: &'a Laws,
     ensures: &'a [Postcondition],
     reaches: &'a Reaches,
+    returns: Returns,
     cost: Option<u64>,
 }
 
@@ -317,6 +329,7 @@ struct Declared {
     laws: ResolvedLaws,
     ensures: Vec<Postcondition>,
     reaches: Reaches,
+    returns: Returns,
     cost: Option<u64>,
 }
 
@@ -349,6 +362,7 @@ impl LawTable {
                         laws: &instance.laws,
                         ensures: &instance.ensures,
                         reaches: &instance.reaches,
+                        returns: instance.returns,
                         cost: instance.cost,
                     })
                     .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
@@ -356,6 +370,7 @@ impl LawTable {
                         laws: &generic.laws,
                         ensures: &generic.ensures,
                         reaches: &generic.reaches,
+                        returns: generic.returns,
                         cost: generic.cost,
                     }));
                 let mut declared: Vec<Declared> = declared_at
@@ -364,6 +379,7 @@ impl LawTable {
                              laws,
                              ensures,
                              reaches,
+                             returns,
                              cost,
                          }| Declared {
                         laws: resolve(laws, ty, |named| functions.get(&named).copied())
@@ -376,6 +392,7 @@ impl LawTable {
                             }),
                         ensures: ensures.to_vec(),
                         reaches: reaches.clone(),
+                        returns,
                         cost,
                     })
                     .collect();
@@ -414,6 +431,11 @@ impl LawTable {
             Some(declared) => &declared.reaches,
             None => &LENT,
         }
+    }
+
+    pub fn returns_of(&self, callee: &Callee) -> Returns {
+        self.declared(callee)
+            .map_or(Returns::Unstated, |declared| declared.returns)
     }
 
     /// The weight in ticks the instance a call names states of one call

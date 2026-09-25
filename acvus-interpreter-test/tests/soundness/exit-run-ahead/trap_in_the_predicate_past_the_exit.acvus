@@ -1,0 +1,6 @@
+let xs = vec([2, 0, 0]);
+let at = 99u64;
+for i in 0u64..xs.len() {
+    if 10 / xs[i] > 2 { at = i; break; };
+}
+at

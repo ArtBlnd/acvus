@@ -163,6 +163,22 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 header.0,
                 token.shown()
             ),
+            ValidationErrorKind::WorkAheadOfExit {
+                header,
+                stage,
+                exit_stage,
+                held_back,
+            } => write!(
+                f,
+                "stage {stage} of the `for` headed at L{} runs ahead of the exit in stage \
+                 {exit_stage} an operation {}",
+                header.0,
+                match held_back {
+                    crate::analysis::loop_deps::HeldBack::Effect => "with an effect",
+                    crate::analysis::loop_deps::HeldBack::MayNotFinish =>
+                        "that is not known to finish",
+                }
+            ),
             ValidationErrorKind::DemotedDiamondMeetsAgain { join } => write!(
                 f,
                 "a branch demoted from an `if` has arms that meet again at L{}: \

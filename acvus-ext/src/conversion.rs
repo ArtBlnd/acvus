@@ -97,7 +97,9 @@ fn parse_int_error(text: String, e: &std::num::ParseIntError) -> ParseIntError {
 
 macro_rules! from_str_ints {
     ($($from_str:ident / $parse:ident / $radix:ident: $t:ty as $ns:literal => $registry:ident),* $(,)?) => {$(
-        #[extern_fn(name = "from_str", effect = pure)]
+        /// `returns`: `str::parse` reads each byte of `text` once and
+        /// answers `Ok` or `Err`, and `parse_int_error` only copies `text`.
+        #[extern_fn(name = "from_str", effect = pure, returns)]
         fn $from_str(text: &str) -> Result<$t, ParseIntError> {
             text.parse::<$t>()
                 .map_err(|e| parse_int_error(text.to_owned(), &e))

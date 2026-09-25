@@ -1,4 +1,7 @@
-for slice(r2) -> L1 else L2 stages [L1]
-// L1: cycle Carried(r4)+Control in_order {+, branch}
-// control chained through L1
-// cost in place: no stage runs apart
+for slice(r2) -> L1 else L2 stages [L1, L5, L6, L7]
+// L1: free {as_slice, call from_str, test_variant}
+// L5: cycle Control in_order {branch}
+// L6: free {unwrap_variant}
+// L7: cycle Carried(r4) any_order law(Op(Add) exact commutative) {+}
+// control chained through L5
+// cost W=8 O=18293 split when n > 73172, n = len(r2)

@@ -13,11 +13,12 @@ use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::ir::{BinOp, InstKind, Overflow, ValueId};
-use acvus_mir::laws::LawTable;
+use acvus_mir::ir::{BinOp, Callee, InstKind, Overflow, ValueId};
+use acvus_mir::laws::{LawTable, Returns};
 use acvus_mir::printer::dump_with_facts;
-use acvus_mir::ty::{Effect, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
+use acvus_mir::ty::{Effect, GenericSig, ParamTerm, Poly, Ty, TyTerm, lift_to_poly};
 use acvus_mir_test::{LoweredScript, compile_script_at, optimized_script};
+use acvus_extern::{Registry, TypesOnly};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -469,22 +470,27 @@ fn three_independent_accumulators_are_three_cycles_in_three_stages() {
     );
 }
 
-/// Table row, a loop with `break`: its control is chained. The `break`
-/// leaves from the body, so the loop is one stage, whose cycles are one
-/// `InOrder` join with the exit (RFC-0089 rule 5, RFC-0066 rule 10).
+/// Table row, a loop with `break`: its control is chained through the
+/// stage it leaves from. `y` and the test run ahead in a free stage, the
+/// exit is the control token's cycle in order, and the sum after the exit
+/// is a cycle of its own with its `+` law (RFC-0089 rules 5 and 6).
 #[test]
-fn a_break_chains_the_control_token_through_its_one_in_order_stage() {
+fn a_break_chains_the_control_token_through_the_stage_it_leaves_from() {
     let c = Compiled::of(
         "let v = [1, 2, 3, 4]; let s = 0; \
          for x in &v { let y = *x * 3; if y > 6 { break; } s = s + y; } s",
     );
     assert_eq!(
         c.shapes(),
-        [one(
-            vec![TokenKind::Carried, TokenKind::Control],
-            Order::InOrder,
-            None
-        )],
+        [
+            Shape::Free,
+            one(vec![TokenKind::Control], Order::InOrder, None),
+            one(
+                vec![TokenKind::Carried],
+                Order::AnyOrder,
+                exact(LawKind::Op(LawOp::Add))
+            ),
+        ],
         "{}",
         c.for_lines()
     );
@@ -813,35 +819,33 @@ fn an_anyorder_print_spawns_and_evaluates_in_a_free_stage_and_joins_by_merge() {
     );
 }
 
-/// The same print in a loop that can `break`: the loop leaves from its
-/// body, so the control token is chained, and the spawn and the eval lie in
-/// the stage the loop leaves from, the join of that token (rule 5). No
-/// effect sits in a free stage.
+/// The same print after a `break`: the loop leaves from its body, so the
+/// control token is chained, and the spawn and the eval follow the stage
+/// the loop leaves from, where the iteration has held the control token
+/// (rule 5). No effect lies in a stage before it.
 #[test]
-fn an_anyorder_print_in_a_loop_that_breaks_keeps_its_effects_in_the_exiting_stage() {
+fn an_anyorder_print_after_a_break_issues_its_effects_after_the_exiting_stage() {
     let c = Compiled::with_io(
         "let v = [1, 2, 3]; anyorder { for x in &v { if *x == 2 { break; }; io::print(\"a\"); } } 0",
     );
     let deps = c.deps();
+    let exiting = c.exiting_stage();
+    assert_eq!(deps.ahead_of_exit(), [], "{}", c.for_lines());
     assert!(
-        matches!(deps.control, Control::Chained { .. }),
+        deps.effects_in_free_stages()
+            .iter()
+            .all(|wait| wait.stage > exiting),
         "{}",
         c.for_lines()
     );
-    assert_eq!(deps.effects_in_free_stages(), [], "{}", c.for_lines());
-    let Control::Chained { cycle } = deps.control else {
-        panic!("{}", c.for_lines())
-    };
-    let exiting = deps.cycles[cycle]
-        .stage()
-        .expect("no cycle crosses a boundary");
-    let effects = c.stages_where(|cfg, block| {
-        cfg.blocks[block.0]
-            .insts
-            .iter()
-            .any(|inst| matches!(inst.kind, InstKind::Spawn { .. } | InstKind::Eval { .. }))
+    let effects = c.stages_running(|kind| {
+        matches!(kind, InstKind::Spawn { .. } | InstKind::Eval { .. })
     });
-    assert_eq!(effects, [exiting], "{}", c.for_lines());
+    assert!(
+        !effects.is_empty() && effects.iter().all(|stage| *stage > exiting),
+        "{effects:?}\n{}",
+        c.for_lines()
+    );
 }
 
 /// A write through the element is the element's `Disjoint` cycle; one
@@ -864,10 +868,10 @@ fn a_write_elsewhere_than_the_element_is_an_in_order_cycle_over_its_storage() {
 const BREAK: &str = "let j = 0; let s = 0; \
      for i in 0..@n { if i == 4 { break; }; s = s + j; j = j + 5; } s * 1000 + j";
 
-/// A loop that leaves early is one stage and keeps its carried induction
-/// variable, whose readers lie in the stage its cycle lies in.
+/// A loop that leaves early keeps its carried induction variable, which no
+/// stage reads before the one its cycle lies in.
 #[test]
-fn a_carried_iv_is_read_in_the_stage_its_cycle_lies_in() {
+fn a_carried_iv_is_read_no_earlier_than_the_stage_its_cycle_lies_in() {
     let c = Compiled::reading(BREAK, &["n"]);
     let [iv] = c.carried_ivs()[..] else {
         panic!("one carried induction variable:\n{}", c.listing);
@@ -886,10 +890,12 @@ fn a_carried_iv_is_read_in_the_stage_its_cycle_lies_in() {
         .iter()
         .find(|cycle| cycle.tokens.contains(&Token::Carried(iv)))
         .unwrap_or_else(|| panic!("{iv:?} has a cycle:\n{}", c.for_lines()));
-    assert_eq!(
-        cycle.stage().into_iter().collect::<Vec<_>>(),
-        reading,
-        "{}",
+    let stage = cycle
+        .stage()
+        .unwrap_or_else(|| panic!("no cycle crosses a boundary:\n{}", c.for_lines()));
+    assert!(
+        reading.contains(&stage) && reading.iter().all(|at| *at >= stage),
+        "{reading:?}\n{}",
         c.for_lines()
     );
     assert!(deps.early_reads().is_empty(), "{}", c.for_lines());
@@ -1222,4 +1228,201 @@ fn a_storage_read_again_after_its_store_has_no_law() {
         "let v = [5, 3]; let s = 0; let t = 0; for x in &v { s = s + *x; t = t * 0 + s; } s + t",
     );
     assert_eq!(held.law, None, "{lines}");
+}
+
+// -- A loop the body leaves (RFC-0089 rules 5 and 6) ---------------------
+
+impl Compiled {
+    fn with_registries(source: &str, own: Vec<Registry<TypesOnly>>) -> Self {
+        let interner = Interner::new();
+        let compiled = optimized_script(&interner, source, &[], own)
+            .unwrap_or_else(|e| panic!("{source}\n{e}"));
+        Self::from(&interner, compiled)
+    }
+
+    fn exiting_stage(&self) -> usize {
+        let deps = self.deps();
+        let Control::Chained { cycle } = deps.control else {
+            panic!("the loop leaves from its body:\n{}", self.for_lines())
+        };
+        deps.cycles[cycle]
+            .stage()
+            .unwrap_or_else(|| panic!("no cycle crosses a boundary:\n{}", self.for_lines()))
+    }
+
+    fn stages_running(&self, wanted: impl Fn(&InstKind) -> bool) -> Vec<usize> {
+        self.stages_where(|cfg, block| cfg.blocks[block.0].insts.iter().any(|inst| wanted(&inst.kind)))
+    }
+}
+
+fn is_call(kind: &InstKind) -> bool {
+    matches!(kind, InstKind::FunctionCall { .. })
+}
+
+/// `probe` at `f64`, registered first, states nothing; at `i64` it states
+/// `returns`. Both are one name.
+mod probe_fx {
+    use acvus_extern::{Registry, TypesOnly, extern_fn, extern_registry, extern_signature};
+
+    extern_signature! {
+        ns: "probe",
+        fn probe<T>(x: T) -> bool
+        where
+            T: Var<kind::Type>;
+    }
+
+    #[extern_fn(instance_of = probe, effect = pure)]
+    fn probe_float(x: f64) -> bool {
+        let _ = x;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(instance_of = probe, effect = pure, returns)]
+    fn probe_int(x: i64) -> bool {
+        let _ = x;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "probe",
+            signatures: [probe],
+            fns: [probe_float, probe_int],
+        }
+    }
+}
+
+/// Table row S01: the predicate finishes and has no effect, so it runs
+/// ahead in a free stage, and the exit is the control token's cycle, in
+/// order, in the stage after it.
+#[test]
+fn a_body_exit_runs_its_predicate_ahead_in_a_free_stage() {
+    let c = Compiled::of(
+        "let xs = vec([5, 3, 9, 1]); let at = 99u64; \
+         for i in 0u64..xs.len() { if xs[i] == 9 { at = i; break; }; } at",
+    );
+    assert_eq!(
+        c.shapes(),
+        [
+            Shape::Free,
+            one(vec![TokenKind::Control], Order::InOrder, None)
+        ],
+        "{}",
+        c.for_lines()
+    );
+    assert_eq!(c.exiting_stage(), 1, "{}", c.for_lines());
+}
+
+/// `starts_with` states no `returns`: nothing says a call ends, so it waits
+/// for the control token in the exiting stage.
+#[test]
+fn a_predicate_calling_an_extern_that_states_no_returns_stays_in_the_exiting_stage() {
+    let c = Compiled::of(
+        "let xs = vec([\"alpha\".to_string(), \"beta\".to_string()]); let hit = false; \
+         for s in &xs { if s.starts_with(\"be\") { hit = true; break; }; } hit",
+    );
+    assert_eq!(c.stages_running(is_call), [c.exiting_stage()], "{}", c.for_lines());
+}
+
+/// A `while` in the predicate is not known to finish (RFC-0089 rule 5).
+#[test]
+fn a_predicate_holding_a_while_stays_in_the_exiting_stage() {
+    let c = Compiled::of(
+        "let v = vec([1, 5, 9]); let at = 99u64; \
+         for i in 0u64..v.len() { let n = v[i]; let c = 0; while c < n { c = c + 2; } \
+         if c > 4 { at = i; break; }; } at",
+    );
+    let stepping = |kind: &InstKind| {
+        matches!(kind, InstKind::BinOp { op: BinOp::Add(_), .. })
+    };
+    assert_eq!(c.stages_running(stepping), [c.exiting_stage()], "{}", c.for_lines());
+}
+
+/// A call of a local function is not known to finish (RFC-0089 rule 5).
+#[test]
+fn a_predicate_calling_a_local_function_stays_in_the_exiting_stage() {
+    let c = Compiled::of(
+        "let f = |x| -> { if x > 2 { x * 3 } else { 0 } }; let v = vec([1, 5, 9]); \
+         let at = 99u64; for i in 0u64..v.len() { if f(v[i]) > 4 { at = i; break; }; } at",
+    );
+    let local_call = |kind: &InstKind| {
+        matches!(
+            kind,
+            InstKind::FunctionCall {
+                callee: Callee::Direct(_) | Callee::Indirect(_),
+                ..
+            }
+        )
+    };
+    let calls = c.stages_running(local_call);
+    assert!(!calls.is_empty(), "the call of `f` stays a call:\n{}", c.listing);
+    assert_eq!(calls, [c.exiting_stage()], "{}", c.for_lines());
+}
+
+/// A print before the exit is issued once its iteration holds the control
+/// token: its spawn and eval lie in the exiting stage, and no effect lies in
+/// a stage before it. Under `anyorder` they are free units the exit does not
+/// read; outside it they are the `Order`'s cycle, which the exiting stage
+/// then holds.
+#[test]
+fn an_effect_before_the_exit_stays_in_the_exiting_stage() {
+    for source in [
+        "let v = [1, 2, 3]; anyorder { for x in &v { io::print(\"a\"); if *x == 2 { break; }; } } 0",
+        "let v = [1, 2, 3]; for x in &v { io::print(\"a\"); if *x == 2 { break; }; } 0",
+    ] {
+        let c = Compiled::with_io(source);
+        let effects = c.stages_running(|kind| {
+            matches!(kind, InstKind::Spawn { .. } | InstKind::Eval { .. })
+        });
+        assert_eq!(effects, [c.exiting_stage()], "{}", c.for_lines());
+        assert_eq!(c.deps().ahead_of_exit(), [], "{}", c.for_lines());
+    }
+}
+
+/// `emit` again, stating `returns`: it finishes, and only its effect holds
+/// it behind the exit.
+fn emit_returning(i: &Interner) -> Vec<Function> {
+    let mut functions = emit(i);
+    let FnKind::Extern { instances, .. } = &mut functions[0].kind else {
+        unreachable!("`emit` is an extern")
+    };
+    instances.generic = Some(GenericSig {
+        returns: Returns::Stated,
+        ..GenericSig::default()
+    });
+    functions
+}
+
+/// An effect that finishes is still held back: under `anyorder` the spawn
+/// of `emit_returning` is a free unit before the exit, and it lies in the
+/// exiting stage.
+#[test]
+fn an_effect_that_finishes_before_the_exit_stays_in_the_exiting_stage() {
+    let c = Compiled::with_externs(
+        "let n = 5; anyorder { for k in 0..n { emit(k); if k == 2 { break; }; } } 0",
+        emit_returning,
+    );
+    let spawns = c.stages_running(|kind| matches!(kind, InstKind::Spawn { .. }));
+    assert_eq!(spawns, [c.exiting_stage()], "{}", c.for_lines());
+}
+
+/// `returns` is read off the instance a call names: `probe` at `i64`
+/// states it and runs ahead; at `f64`, one name, it states nothing and
+/// waits in the exiting stage.
+#[test]
+fn returns_is_read_by_the_instance_a_call_names() {
+    let loop_over = |values: &str| {
+        Compiled::with_registries(
+            &format!(
+                "let v = vec([{values}]); let hit = false; \
+                 for x in &v {{ if probe::probe(*x) {{ hit = true; break; }}; }} hit"
+            ),
+            vec![probe_fx::registry()],
+        )
+    };
+    let int = loop_over("1, 2");
+    assert_eq!(int.stages_running(is_call), [0], "{}", int.for_lines());
+    assert_eq!(int.exiting_stage(), 1, "{}", int.for_lines());
+    let float = loop_over("1.5, 2.5");
+    assert_eq!(float.stages_running(is_call), [float.exiting_stage()], "{}", float.for_lines());
 }

@@ -1,0 +1,11 @@
+let parse_all = |xs| -> {
+    let out = vec([]);
+    for s in &xs {
+        out.push(i64::from_str(s)?);
+    }
+    Ok(out)
+};
+match parse_all(vec(["12".to_string(), "x".to_string(), "40".to_string()])) {
+    Ok(v) => v.len() as i64,
+    Err(e) => -1,
+}

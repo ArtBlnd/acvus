@@ -87,6 +87,7 @@ fn advance_fn(i: &Interner) -> Function {
         laws: Default::default(),
         ensures: Vec::new(),
         reaches: Default::default(),
+        returns: Default::default(),
         cost: None,
     };
     let mut inner = PolyBuilder::new();

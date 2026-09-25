@@ -56,6 +56,9 @@ struct ExternFnAttr {
     law: Option<law::LawAttr>,
     ensures: Option<ensures::EnsuresAttr>,
     reaches: Option<reaches::ReachesAttr>,
+    /// `returns`: every call returns or traps (RFC-0082 rule 8). It is the
+    /// author's promise, which nothing here checks.
+    returns: bool,
     /// `cost = N`: one call weighs `N` ticks of the backend's table
     /// (RFC-0066 rule 8), in place of its family's row.
     cost: Option<LitInt>,
@@ -73,12 +76,23 @@ impl Parse for ExternFnAttr {
             law: None,
             ensures: None,
             reaches: None,
+            returns: false,
             cost: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             if key == "commutative" {
                 out.commutative = true;
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
+            if key == "returns" {
+                if out.returns {
+                    return Err(syn::Error::new(key.span(), "`returns` is stated twice"));
+                }
+                out.returns = true;
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -152,7 +166,7 @@ impl Parse for ExternFnAttr {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     `ensures`, `reaches` or `cost`",
+                     `ensures`, `reaches`, `returns` or `cost`",
                 ));
             }
             if !input.is_empty() {
@@ -1325,6 +1339,10 @@ fn generate_extern_fn(
         Some(stated) => stated.declared(fn_ident, &params)?,
         None => quote! { ::acvus_extern::Reaches::Lent },
     };
+    let returns = match attr.returns {
+        true => quote! { ::acvus_extern::Returns::Stated },
+        false => quote! { ::acvus_extern::Returns::Unstated },
+    };
     let cost = match &attr.cost {
         Some(weight) => {
             let weight: u64 = weight.base10_parse()?;
@@ -1387,6 +1405,7 @@ fn generate_extern_fn(
                     laws: #laws,
                     ensures: #ensures,
                     reaches: #reaches,
+                    returns: #returns,
                     cost: #cost,
                 },
                 instances: __instances,

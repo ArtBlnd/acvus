@@ -1,0 +1,7 @@
+let xs = vec([5, 2, 0, 4]);
+let s = 0;
+for i in 0u64..xs.len() {
+    if xs[i] == 0 { break; };
+    s = s + 10 / xs[i];
+}
+s

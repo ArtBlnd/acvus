@@ -1,4 +1,5 @@
-for slice(r2) -> L1 else L2 stages [L1]
-// L1: cycle Control in_order {branch}
-// control chained through L1
-// cost in place: no stage runs apart
+for slice(r2) -> L1 else L2 stages [L1, L5]
+// L1: free {take, const, >}
+// L5: cycle Control in_order {branch}
+// control chained through L5
+// cost W=4 O=18281 split when n > 146248, n = len(r2)

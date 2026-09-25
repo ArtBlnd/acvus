@@ -1,9 +1,10 @@
 //! RFC-0089 rules 1, 3 and 5, asked of every `For` from what
 //! `analysis::loop_deps` computes: the chain's shape, no dependence cycle
-//! through a token crossing a boundary, and no stage reading a header
-//! parameter's state before the stage its cycle lies in.
+//! through a token crossing a boundary, no stage reading a header
+//! parameter's state before the stage its cycle lies in, and no stage
+//! before the exiting one holding an operation rule 5 holds back.
 //!
-//! Rule 5's exits need no check of their own. The exits are the control
+//! The exits themselves need no check of their own. They are the control
 //! token's cycle, which `loop_deps` joins with every cycle of the stage it
 //! lies in, and a cycle through several tokens is `InOrder`; the exits
 //! therefore leave from an `InOrder` stage unless they lie in two stages,
@@ -63,6 +64,14 @@ fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationErr
                         token: read.token,
                         stage: read.stage,
                         cycle_stage: read.cycle_stage,
+                    }
+                }))
+                .chain(deps.ahead_of_exit().iter().map(|ahead| {
+                    ValidationErrorKind::WorkAheadOfExit {
+                        header,
+                        stage: ahead.stage,
+                        exit_stage: ahead.exit_stage,
+                        held_back: ahead.held_back,
                     }
                 }))
                 .collect(),
@@ -485,6 +494,38 @@ mod tests {
             .expect("the exit is a cycle of its own");
         assert_eq!(deps.cycles[control].stage(), Some(0));
         assert_eq!(judged[control].order, Order::InOrder);
+    }
+
+    /// Forcing a handle waits for work nothing states will end, so rule 5
+    /// holds it back: in a stage before the one the loop leaves from, it is
+    /// refused.
+    #[test]
+    fn work_not_known_to_finish_ahead_of_the_exit_is_refused() {
+        let module = body(|insts| {
+            let t = position(insts, defines(T));
+            insts.insert(
+                t + 1,
+                InstKind::Eval {
+                    dst: v(SPARE),
+                    src: v(I),
+                    order: None,
+                },
+            );
+            leave_from(insts, S_JOIN, COND, LEAVE, STAY);
+        });
+        let found = refusals(&module);
+        assert!(
+            matches!(
+                found[..],
+                [ValidationErrorKind::WorkAheadOfExit {
+                    stage: 0,
+                    exit_stage: 1,
+                    held_back: crate::analysis::loop_deps::HeldBack::MayNotFinish,
+                    ..
+                }]
+            ),
+            "{found:?}"
+        );
     }
 
     /// The control token passes with the exiting stage's tokens (RFC-0066

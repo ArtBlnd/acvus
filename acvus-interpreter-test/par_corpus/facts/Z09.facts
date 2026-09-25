@@ -1,5 +1,5 @@
 for slice(r10) -> L1 else L2 stages [L1, L3]
-// L1: free {const, take}
-// L3: cycle Storage(r11) in_order {ref, as_slice, call len, /, index, ref, +, call push}
+// L1: free {+%, const, /, take}
+// L3: cycle Storage(r13) in_order {ref, as_slice, index, ref, +, call push}
 // control upfront
-// cost W=3 O=18281 split when n > 194998, n = len(r10)
+// cost W=5 O=18281 split when n > 116999, n = len(r10)

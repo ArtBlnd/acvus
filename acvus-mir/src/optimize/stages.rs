@@ -3,8 +3,9 @@
 //! whole in one stage, puts the work a cycle reads before it and the work
 //! it does not read after it, and names no token. A branch stays whole in
 //! one stage with its arms, and so does a loop inside the body. A loop the
-//! pass cannot cut is one stage: every loop left other than from its header
-//! and every loop whose header holds an instruction.
+//! body leaves is cut around its exits (RFC-0089 rule 5, `ExitSides`). A
+//! loop the pass cannot cut is one stage: every loop left from a loop nested
+//! in its body, and every loop whose header holds an instruction.
 //!
 //! Run again over a loop already cut, the pass cuts nothing new: it removes
 //! each boundary between two free stages and each boundary before a stage
@@ -18,8 +19,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
-use crate::analysis::loop_deps::{self, LoopDeps, Token};
-use crate::analysis::loops::{Invariants, LoopNest};
+use crate::analysis::loop_deps::{self, LoopDeps, RunAhead, Token};
+use crate::analysis::loops::{Invariants, Loop, LoopNest};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, Stages, ValueId};
@@ -86,7 +87,6 @@ fn merge_boundaries(cfg: &mut CfgBody, laws: &LawTable, header: BlockIdx) {
 struct Facts {
     header: BlockIdx,
     slots: TargetSlots,
-    leaves: bool,
 }
 
 fn cut(cfg: &mut CfgBody, laws: &LawTable, header_label: Label) {
@@ -112,23 +112,7 @@ impl Facts {
         let loans = Loans::build(cfg);
         let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
         let slots = TargetSlots::of(&loans, source, &loop_blocks);
-        // RFC-0089 rule 5: a `break` or a `return` leaves from a block of
-        // the body, and this pass does not cut such a loop.
-        let leaves = loop_blocks
-            .iter()
-            .filter(|block| **block != header)
-            .any(|&block| {
-                matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
-                    || cfg
-                        .successors(block)
-                        .iter()
-                        .any(|succ| !loop_.natural.contains(*succ))
-            });
-        Some(Facts {
-            header,
-            slots,
-            leaves,
-        })
+        Some(Facts { header, slots })
     }
 }
 
@@ -142,13 +126,16 @@ struct Planned {
 /// the loop stays one stage.
 fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
     let header = facts.header;
-    if facts.leaves || !cfg.blocks[header.0].insts.is_empty() {
+    if !cfg.blocks[header.0].insts.is_empty() {
         return None;
     }
     let domtree = DomTree::build(cfg);
     let invariants = Invariants::of(cfg);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
     let loop_ = nest.get(nest.by_header(header)?);
+    if leaves_from_a_nested_loop(cfg, &nest, loop_) {
+        return None;
+    }
 
     let mut work = cfg.clone();
     let mut labels = LabelFactory::of(&work);
@@ -165,6 +152,7 @@ fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
             .filter(|block| *block != header)
             .collect(),
     };
+    region.take_exit_arms(&work)?;
     if region.holds_no_instruction(&work) {
         return None;
     }
@@ -176,9 +164,11 @@ fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
     let stages = {
         let loans = Loans::build(&work);
         let units = Units::of(&work, &region, &shape, &loans, facts)?;
-        let graph = Graph::of(&work, &region, &shape, &units, facts)?;
+        let mut graph = Graph::of(&work, &region, &shape, &units, facts)?;
         let deps = LoopDeps::of(&work, laws, region.header).ok()?;
         let joins = graph.joins(&units, &deps);
+        let run_ahead = RunAhead::of(&work, laws, region.header);
+        let joins = ExitSides::settle(&work, &mut graph, &units, joins, &run_ahead);
         graph.order(&units, &joins)?
     };
     if stages.len() == 1 {
@@ -209,6 +199,8 @@ struct Units {
     units: Vec<Unit>,
     defined_by: FxHashMap<ValueId, UnitId>,
     by_member: FxHashMap<Member, UnitId>,
+    /// Per block the loop leaves from, the unit that decides the leaving.
+    leaving: FxHashMap<BlockIdx, UnitId>,
     /// Per storage the body defines and drops within one iteration, the
     /// members that touch it and whether each writes it.
     local: Vec<Vec<LocalTouch>>,
@@ -329,6 +321,7 @@ impl Units {
             units: Vec::new(),
             defined_by: FxHashMap::default(),
             by_member: FxHashMap::default(),
+            leaving: FxHashMap::default(),
             local: local
                 .into_values()
                 .filter(|touches| touches.iter().any(|touch| touch.writes))
@@ -388,6 +381,15 @@ impl Units {
                     built.defined_by.insert(supplied, id);
                 }
             }
+            if let Some(uses) = leaving_uses(cfg, region, block) {
+                let decider = match shape.is_branch(block) {
+                    true => block,
+                    false => *shape.deciders(block).first()?,
+                };
+                let id = unit_of(&mut sets, &mut built.units, branch_node(decider));
+                built.units[id].uses.extend(uses);
+                built.leaving.insert(block, id);
+            }
         }
         for &block in region.blocks.iter().filter(|block| **block != region.body) {
             for &param in &cfg.blocks[block.0].params {
@@ -420,7 +422,12 @@ impl Units {
                 block: at.block,
                 at: at.at,
             }),
-            loop_deps::Member::Term(block) => Member::Branch(block),
+            loop_deps::Member::Term(block) => match self.leaving.get(&block) {
+                Some(unit) if !self.by_member.contains_key(&Member::Branch(block)) => {
+                    return Some(*unit);
+                }
+                _ => Member::Branch(block),
+            },
         };
         self.by_member.get(&member).copied()
     }
@@ -430,6 +437,74 @@ impl Units {
             .filter(|id| holds(&self.units[*id]))
             .collect()
     }
+}
+
+/// What the edges by which `block` leaves the loop read, where it leaves:
+/// a `return`'s value and order, and the arguments of each edge to a block
+/// outside the loop.
+fn leaving_uses(cfg: &CfgBody, region: &Region, block: BlockIdx) -> Option<Vec<ValueId>> {
+    let term = &cfg.blocks[block.0].terminator;
+    if let Terminator::Return { .. } = term {
+        return Some(inst_info::terminator_uses(term).into_vec());
+    }
+    let header = cfg.blocks[region.header.0].label;
+    let leaves = |label: &Label| {
+        *label != header
+            && cfg
+                .label_to_block
+                .get(label)
+                .is_some_and(|target| !region.contains(*target))
+    };
+    let edges: Vec<(&Label, &Vec<ValueId>)> = match term {
+        Terminator::Jump { label, args } => vec![(label, args)],
+        Terminator::JumpIf {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        }
+        | Terminator::Diamond {
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+            ..
+        } => vec![(then_label, then_args), (else_label, else_args)],
+        Terminator::Switch { arms, default, .. } => arms
+            .iter()
+            .map(|(_, label, args)| (label, args))
+            .chain(default.iter().map(|(label, args)| (label, args)))
+            .collect(),
+        Terminator::For { .. }
+        | Terminator::Return { .. }
+        | Terminator::Diverge
+        | Terminator::Fallthrough => Vec::new(),
+    };
+    let leaving: Vec<&Vec<ValueId>> = edges
+        .into_iter()
+        .filter(|(label, _)| leaves(label))
+        .map(|(_, args)| args)
+        .collect();
+    (!leaving.is_empty()).then(|| leaving.into_iter().flatten().copied().collect())
+}
+
+/// An exit from a loop nested in the body leaves two loops at once; RFC-0089
+/// rule 5 reads an exit of the loop being cut, and such a loop stays one
+/// stage.
+fn leaves_from_a_nested_loop(cfg: &CfgBody, nest: &LoopNest, loop_: &Loop) -> bool {
+    let header = loop_.natural.header;
+    nest.iter()
+        .map(|(_, inner)| &inner.natural)
+        .filter(|inner| inner.header != header && loop_.natural.contains(inner.header))
+        .flat_map(|inner| inner.blocks())
+        .any(|block| {
+            matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
+                || cfg
+                    .successors(block)
+                    .iter()
+                    .any(|succ| !loop_.natural.contains(*succ))
+        })
 }
 
 fn written_slots(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {
@@ -601,7 +676,7 @@ impl Graph {
     /// that reads its state and one of its own.
     fn joins(&self, units: &Units, deps: &LoopDeps) -> Vec<Join> {
         let mut joins: Vec<Join> = deps
-            .cycles
+            .unjoined
             .iter()
             .map(|cycle| Join {
                 tokens: cycle.tokens.clone(),
@@ -760,6 +835,147 @@ impl Graph {
     }
 }
 
+/// Where a unit runs against the exits of a loop the body leaves (RFC-0089
+/// rules 5 and 6), in the order the chain runs the three.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Side {
+    /// In a free stage before the exiting one: run ahead of the control
+    /// token, and discarded in an iteration past the exit.
+    Ahead,
+    Exiting,
+    After,
+}
+
+/// The side of each unit of a body the loop leaves from.
+///
+/// Only a unit in no join goes ahead, and only one rule 5 lets run ahead: a
+/// cycle waits for the control token. A unit the body runs before the first
+/// exit goes after the exits only when the exiting iteration may skip it,
+/// which holds of an instruction that neither traps, nor has an effect, nor
+/// may fail to finish; a unit the body runs after the last exit goes after
+/// them. Every other unit, and every unit between two exits, runs in the
+/// exiting stage, which runs in order and in the body's order, so moving a
+/// unit there is always sound. A join lies on one side whole, and a unit
+/// that must run after another is moved to the exiting stage wherever the
+/// sides would put it first.
+struct ExitSides;
+
+impl ExitSides {
+    /// `joins` with every unit of the exiting side in the control token's
+    /// join, and `graph` with the edges that keep each unit on its side.
+    fn settle(
+        cfg: &CfgBody,
+        graph: &mut Graph,
+        units: &Units,
+        mut joins: Vec<Join>,
+        run_ahead: &RunAhead<'_>,
+    ) -> Vec<Join> {
+        let Some(control) = joins
+            .iter()
+            .position(|join| join.tokens.contains(&Token::Control))
+        else {
+            return joins;
+        };
+        let position = |unit: UnitId| units.units[unit].position;
+        let Some(anchor) = joins[control].units.iter().copied().min_by_key(|unit| position(*unit))
+        else {
+            return joins;
+        };
+        let first = position(anchor);
+        let last = joins[control]
+            .units
+            .iter()
+            .map(|unit| position(*unit))
+            .max()
+            .unwrap_or(first);
+        let join_of: Vec<Option<usize>> = (0..units.len())
+            .map(|unit| joins.iter().position(|join| join.units.contains(&unit)))
+            .collect();
+        let runs_ahead = |unit: UnitId| {
+            units.units[unit]
+                .members
+                .iter()
+                .all(|member| run_ahead.held_back(member.in_loop_deps()).is_none())
+        };
+        let skippable = |unit: UnitId| {
+            units.units[unit]
+                .members
+                .iter()
+                .all(|member| member.skippable(cfg))
+        };
+        let mut sides: Vec<Side> = (0..units.len())
+            .map(|unit| match join_of[unit] {
+                Some(join) if join == control => Side::Exiting,
+                _ if position(unit) > last => Side::After,
+                _ if position(unit) > first => Side::Exiting,
+                None if runs_ahead(unit) => Side::Ahead,
+                Some(_) if skippable(unit) => Side::After,
+                None | Some(_) => Side::Exiting,
+            })
+            .collect();
+
+        let mut precedes: Vec<(UnitId, UnitId)> = graph
+            .succs
+            .iter()
+            .enumerate()
+            .flat_map(|(from, to)| to.iter().map(move |to| (from, *to)))
+            .collect();
+        for join in &joins {
+            for reader in graph.after_state(join) {
+                precedes.extend(join.units.iter().map(|unit| (*unit, reader)));
+            }
+        }
+        loop {
+            let mut changed = false;
+            for join in &joins {
+                let Some(side) = join.units.iter().map(|unit| sides[*unit]).min() else {
+                    continue;
+                };
+                for unit in &join.units {
+                    changed |= std::mem::replace(&mut sides[*unit], side) != side;
+                }
+            }
+            for &(before, after) in &precedes {
+                if sides[before] <= sides[after] {
+                    continue;
+                }
+                let moved = match sides[before] {
+                    Side::After => before,
+                    Side::Ahead | Side::Exiting => after,
+                };
+                sides[moved] = Side::Exiting;
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut kept: Vec<Join> = Vec::with_capacity(joins.len());
+        let mut exiting = joins.remove(control);
+        for join in joins {
+            match join.units.iter().all(|unit| sides[*unit] == Side::Exiting) {
+                true => {
+                    exiting.tokens.extend(join.tokens);
+                    exiting.units.extend(join.units);
+                }
+                false => kept.push(join),
+            }
+        }
+        for unit in 0..units.len() {
+            match sides[unit] {
+                Side::Ahead => graph.edge(unit, anchor),
+                Side::Exiting => {
+                    exiting.units.insert(unit);
+                }
+                Side::After => graph.edge(anchor, unit),
+            }
+        }
+        kept.push(exiting);
+        kept
+    }
+}
+
 struct Overlap {
     keep: usize,
     absorb: usize,
@@ -853,6 +1069,42 @@ struct Region {
 impl Region {
     fn contains(&self, block: BlockIdx) -> bool {
         self.blocks.contains(&block)
+    }
+
+    /// A block outside the natural loop that only the body enters is an arm
+    /// of the branch that enters it, and is written with that branch: left
+    /// where it was, it would follow the chain's back edge, where the
+    /// machine's region reads the exit block. Such arms are taken while each
+    /// returns or jumps on out of the loop, and `None` where one does neither:
+    /// what it reads of the body would order nothing.
+    fn take_exit_arms(&mut self, cfg: &CfgBody) -> Option<()> {
+        let preds = cfg.predecessors();
+        let header = cfg.blocks[self.header.0].label;
+        loop {
+            let entered: Vec<BlockIdx> = (0..cfg.blocks.len())
+                .map(BlockIdx)
+                .filter(|block| *block != self.header && !self.contains(*block))
+                .filter(|block| {
+                    preds.get(block).is_some_and(|from| {
+                        !from.is_empty() && from.iter().all(|at| self.contains(*at))
+                    })
+                })
+                .collect();
+            if entered.is_empty() {
+                return Some(());
+            }
+            for &block in &entered {
+                let leaves = match &cfg.blocks[block.0].terminator {
+                    Terminator::Return { .. } => true,
+                    Terminator::Jump { label, .. } => *label != header,
+                    _ => false,
+                };
+                if !leaves {
+                    return None;
+                }
+            }
+            self.blocks.extend(entered);
+        }
     }
 
     fn holds_no_instruction(&self, cfg: &CfgBody) -> bool {
@@ -1134,7 +1386,9 @@ impl Shape {
                     }
                     latch = Some((block, args.clone()));
                 }
-                _ if inside.is_empty() => return None,
+                _ if inside.is_empty() && leaving_uses(cfg, region, block).is_none() => {
+                    return None;
+                }
                 _ => {}
             }
             succs.insert(block, inside);
@@ -1307,6 +1561,33 @@ struct InstAt {
 enum Member {
     Inst(InstAt),
     Branch(BlockIdx),
+}
+
+impl Member {
+    fn in_loop_deps(self) -> loop_deps::Member {
+        match self {
+            Member::Inst(InstAt { block, at }) => {
+                loop_deps::Member::Inst(loop_deps::InstAt { block, at })
+            }
+            Member::Branch(block) => loop_deps::Member::Term(block),
+        }
+    }
+
+    /// Whether an iteration that leaves before this member may skip it:
+    /// it neither traps, nor has an effect, nor may fail to finish, so
+    /// running it only where the iteration goes on is the same program.
+    fn skippable(self, cfg: &CfgBody) -> bool {
+        let Member::Inst(InstAt { block, at }) = self else {
+            return false;
+        };
+        matches!(
+            cfg.blocks[block.0].insts[at].kind,
+            InstKind::Ref { .. }
+                | InstKind::AsSlice { .. }
+                | InstKind::Const { .. }
+                | InstKind::ConstStr { .. }
+        )
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

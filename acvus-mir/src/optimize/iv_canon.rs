@@ -73,18 +73,18 @@
 use acvus_ast::{Literal, Span};
 use rustc_hash::FxHashMap;
 
-use crate::analysis::affine::{AffineValues, Derivation, for_body};
+use crate::analysis::affine::{Affine, AffineValues, Derivation, for_body};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info::{self, Reads};
-use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, edge_args};
+use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, Term, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
-    BinOp, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Inst, InstKind, Label, Overflow,
-    RefTarget, UnaryOp, ValOrigin, ValueId,
+    BinOp, Callee, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Inst, InstKind, Label,
+    Overflow, PathSeg, RefTarget, UnaryOp, ValOrigin, ValueId,
 };
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::{CastTy, IntTy, LenTerm, Ty};
+use crate::ty::{CastTy, IntTy, LenTerm, Mutability, Ty};
 
 pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
@@ -104,28 +104,32 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
                 Iv::of(cfg, loop_, &shape, &domtree, &affine, &reads, header_index, param)
             })
             .collect();
-        if ivs.is_empty() {
-            continue;
+        if !ivs.is_empty() {
+            canonicalize(cfg, loop_, &shape, &domtree, &ivs);
         }
-        let invariants = Invariants::of(cfg);
-        let can_trap: Vec<&Iv> = ivs
-            .iter()
-            .filter(|iv| {
-                !iv.is_the_counter(cfg, &shape, &invariants)
-                    && !iv.fits_on_every_iteration(cfg, &shape, &invariants)
-            })
-            .collect();
-        for iv in can_trap {
-            keep_step_trap(cfg, loop_, iv);
-        }
-        let replacements = Replacements {
-            inside: rewrite_inside(cfg, &shape, &ivs),
-            after: rewrite_after(cfg, &shape, &ivs),
-        };
-        substitute(cfg, loop_, &shape, &domtree, &replacements);
-        drop_header_params(cfg, &shape, &ivs);
+        read_lengths_from_entry(cfg, loop_, &shape, &domtree, laws);
     }
     rewrite_neighbours(cfg);
+}
+
+fn canonicalize(cfg: &mut CfgBody, loop_: &Loop, shape: &Shape, domtree: &DomTree, ivs: &[Iv]) {
+    let invariants = Invariants::of(cfg);
+    let can_trap: Vec<&Iv> = ivs
+        .iter()
+        .filter(|iv| {
+            !iv.is_the_counter(cfg, shape, &invariants)
+                && !iv.fits_on_every_iteration(cfg, shape, &invariants)
+        })
+        .collect();
+    for iv in can_trap {
+        keep_step_trap(cfg, loop_, iv);
+    }
+    let replacements = Replacements {
+        inside: rewrite_inside(cfg, shape, ivs),
+        after: rewrite_after(cfg, shape, ivs),
+    };
+    substitute(cfg, loop_, shape, domtree, &replacements);
+    drop_header_params(cfg, shape, ivs);
 }
 
 // -- The loop's blocks ------------------------------------------------
@@ -464,32 +468,252 @@ impl<'a> BlockHead<'a> {
 }
 
 fn rewrite_inside(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> FxHashMap<ValueId, ValueId> {
-    let counter = cfg.blocks[shape.body.0].params[shape.source.counter_param()];
     let mut head = BlockHead::of(cfg, shape.body);
-    let mut iteration: FxHashMap<IntTy, ValueId> = FxHashMap::default();
+    let mut iteration = IterationNumber::default();
     let mut inside = FxHashMap::default();
     for iv in ivs {
-        let k = match iteration.get(&iv.width) {
-            Some(k) => *k,
-            None => {
-                let k = match shape.source {
-                    ForSource::Range { at, .. } => {
-                        let counter = head.at_width(counter, iv.width);
-                        let at = head.at_width(at, iv.width);
-                        head.arith(BinOp::Sub(Overflow::Wrap), counter, at, iv.width)
-                    }
-                    ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => {
-                        head.at_width(counter, iv.width)
-                    }
-                };
-                iteration.insert(iv.width, k);
-                k
-            }
-        };
+        let k = iteration.at(&mut head, shape, iv.width);
         inside.insert(iv.param, head.advanced_by(iv, k));
     }
     head.prepend_to(shape.body);
     inside
+}
+
+/// The iteration number `k`, written at the head of the body once per width
+/// it is read at: `counter − at` for a range, and the index for a slice or
+/// an array.
+#[derive(Default)]
+struct IterationNumber {
+    by_width: FxHashMap<IntTy, ValueId>,
+}
+
+impl IterationNumber {
+    fn at(&mut self, head: &mut BlockHead<'_>, shape: &Shape, width: IntTy) -> ValueId {
+        if let Some(k) = self.by_width.get(&width) {
+            return *k;
+        }
+        let counter = head.cfg.blocks[shape.body.0].params[shape.source.counter_param()];
+        let k = match shape.source {
+            ForSource::Range { at, .. } => {
+                let counter = head.at_width(counter, width);
+                let at = head.at_width(at, width);
+                head.arith(BinOp::Sub(Overflow::Wrap), counter, at, width)
+            }
+            ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => {
+                head.at_width(counter, width)
+            }
+        };
+        self.by_width.insert(width, k);
+        k
+    }
+}
+
+/// A call rule 4 makes `{len(s) on entry, c}`, and what the rewrite reads
+/// of it.
+struct LengthRead {
+    dst: ValueId,
+    block: BlockIdx,
+    at: usize,
+    width: IntTy,
+    step: Invariant,
+    call: CallAbove,
+}
+
+/// The call again above the header: the same instance, each argument that
+/// lends a place lent again by a `Ref` of that place.
+struct CallAbove {
+    span: Span,
+    callee: Callee,
+    callee_ty: Ty,
+    args: Vec<ArgAbove>,
+}
+
+enum ArgAbove {
+    Lent {
+        like: ValueId,
+        target: RefTarget,
+        path: Vec<PathSeg>,
+    },
+    Outside(ValueId),
+}
+
+/// RFC-0066 rule 7: a call rule 4 makes `{len(s) on entry, c}` is read as
+/// that term from `len(s)` read above the header, and removed. The pass
+/// calls the same instance at the end of the one block that enters the
+/// header, where the storage holds its length on entry, and writes
+/// `len(s) on entry + k·c` at the head of the body. That arithmetic wraps:
+/// it is the pass's, and its value is the length the call read, which the
+/// width holds (RFC-0037 rule 3). The call has no effect, so removing it
+/// leaves the run as it was.
+fn read_lengths_from_entry(
+    cfg: &mut CfgBody,
+    loop_: &Loop,
+    shape: &Shape,
+    domtree: &DomTree,
+    laws: &LawTable,
+) {
+    let [entering] = loop_.natural.entering[..] else {
+        return;
+    };
+    let reads = LengthRead::all(cfg, loop_, shape, laws);
+    if reads.is_empty() {
+        return;
+    }
+    let on_entry: Vec<ValueId> = reads
+        .iter()
+        .map(|read| read.call_above(cfg, entering))
+        .collect();
+    let mut removed: Vec<(BlockIdx, usize)> = reads.iter().map(|read| (read.block, read.at)).collect();
+    removed.sort_unstable_by(|a, b| b.cmp(a));
+    for (block, at) in removed {
+        cfg.blocks[block.0].insts.remove(at);
+    }
+    let mut head = BlockHead::of(cfg, shape.body);
+    let mut iteration = IterationNumber::default();
+    let mut inside: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+    for (read, len) in reads.iter().zip(on_entry) {
+        let k = iteration.at(&mut head, shape, read.width);
+        let step = head.read(&read.step, read.width);
+        let advanced = head.arith(BinOp::Mul(Overflow::Wrap), k, step, read.width);
+        let value = head.arith(BinOp::Add(Overflow::Wrap), len, advanced, read.width);
+        inside.insert(read.dst, value);
+    }
+    head.prepend_to(shape.body);
+    let replacements = Replacements {
+        inside,
+        after: FxHashMap::default(),
+    };
+    substitute(cfg, loop_, shape, domtree, &replacements);
+}
+
+impl LengthRead {
+    fn all(cfg: &CfgBody, loop_: &Loop, shape: &Shape, laws: &LawTable) -> Vec<LengthRead> {
+        let natural = &loop_.natural;
+        let invariants = Invariants::of(cfg);
+        let affine = AffineValues::of(cfg, loop_, &invariants, laws);
+        let refs: FxHashMap<ValueId, (&RefTarget, &Vec<PathSeg>)> = natural
+            .blocks()
+            .flat_map(|block| &cfg.blocks[block.0].insts)
+            .filter_map(|inst| match &inst.kind {
+                InstKind::Ref {
+                    dst,
+                    target: target @ (RefTarget::Var(_) | RefTarget::Param(_)),
+                    path,
+                    mutability: Mutability::Shared,
+                } => Some((*dst, (target, path))),
+                _ => None,
+            })
+            .collect();
+        let mut found: Vec<LengthRead> = Vec::new();
+        for block in natural.blocks().filter(|block| *block != shape.header) {
+            for (at, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
+                let InstKind::FunctionCall {
+                    dst,
+                    callee,
+                    callee_ty,
+                    args,
+                    order: None,
+                } = &inst.kind
+                else {
+                    continue;
+                };
+                let Some(Affine {
+                    step,
+                    derivation: Derivation::Length { .. },
+                    ..
+                }) = affine.get(*dst)
+                else {
+                    continue;
+                };
+                let Ty::Int(width) = cfg.val_types[dst] else {
+                    continue;
+                };
+                let step = match step {
+                    Term::Const(literal) => Invariant::Word(literal.clone()),
+                    Term::Value(value) => match invariants.above(natural, *value) {
+                        Some(invariant) => invariant,
+                        None => continue,
+                    },
+                    _ => continue,
+                };
+                let args: Option<Vec<ArgAbove>> = args
+                    .iter()
+                    .map(|arg| match (refs.get(arg), invariants.above(natural, *arg)) {
+                        (Some((target, path)), _) => Some(ArgAbove::Lent {
+                            like: *arg,
+                            target: (*target).clone(),
+                            path: (*path).clone(),
+                        }),
+                        (None, Some(Invariant::Outside(value))) => Some(ArgAbove::Outside(value)),
+                        _ => None,
+                    })
+                    .collect();
+                let Some(args) = args else {
+                    continue;
+                };
+                found.push(LengthRead {
+                    dst: *dst,
+                    block,
+                    at,
+                    width,
+                    step,
+                    call: CallAbove {
+                        span: inst.span,
+                        callee: callee.clone(),
+                        callee_ty: callee_ty.clone(),
+                        args,
+                    },
+                });
+            }
+        }
+        found
+    }
+
+    /// Writes the call at the end of `entering` and gives the length it
+    /// reads there.
+    fn call_above(&self, cfg: &mut CfgBody, entering: BlockIdx) -> ValueId {
+        let fresh_like = |cfg: &mut CfgBody, like: ValueId| {
+            let value = cfg.val_factory.next();
+            let ty = cfg.val_types[&like].clone();
+            cfg.val_types.insert(value, ty);
+            cfg.debug.set(value, ValOrigin::Expr);
+            value
+        };
+        let span = self.call.span;
+        let mut insts: Vec<Inst> = Vec::new();
+        let mut args: Vec<ValueId> = Vec::with_capacity(self.call.args.len());
+        for arg in &self.call.args {
+            match arg {
+                ArgAbove::Lent { like, target, path } => {
+                    let dst = fresh_like(cfg, *like);
+                    insts.push(Inst {
+                        span,
+                        kind: InstKind::Ref {
+                            dst,
+                            target: target.clone(),
+                            path: path.clone(),
+                            mutability: Mutability::Shared,
+                        },
+                    });
+                    args.push(dst);
+                }
+                ArgAbove::Outside(value) => args.push(*value),
+            }
+        }
+        let len = fresh_like(cfg, self.dst);
+        insts.push(Inst {
+            span,
+            kind: InstKind::FunctionCall {
+                dst: len,
+                callee: self.call.callee.clone(),
+                callee_ty: self.call.callee_ty.clone(),
+                args,
+                order: None,
+            },
+        });
+        cfg.blocks[entering.0].insts.extend(insts);
+        len
+    }
 }
 
 fn rewrite_after(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> FxHashMap<ValueId, ValueId> {

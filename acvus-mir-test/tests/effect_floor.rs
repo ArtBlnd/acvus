@@ -72,6 +72,7 @@ fn pull(i: &Interner) -> Function {
                     laws: Default::default(),
                     ensures: Vec::new(),
                     reaches: Default::default(),
+                    returns: Default::default(),
                     cost: None,
                 }],
                 generic: None,

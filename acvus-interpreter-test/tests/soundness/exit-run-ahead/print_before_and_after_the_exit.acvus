@@ -1,0 +1,9 @@
+let xs = vec([5, 3, -1, 8]);
+let n = 0;
+for x in &xs {
+    io::print(&(*x).to_string());
+    if *x < 0 { break; };
+    io::print("ok");
+    n = n + 1;
+}
+n

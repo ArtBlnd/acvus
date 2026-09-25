@@ -1,0 +1,7 @@
+let xs = vec([4, 1, 7]);
+let s = 0;
+for i in 0u64..10u64 {
+    if i == xs.len() { break; };
+    s = s + xs[i];
+}
+s

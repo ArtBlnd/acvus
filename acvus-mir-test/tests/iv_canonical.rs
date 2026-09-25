@@ -707,3 +707,51 @@ fn the_validator_refuses_a_count_that_is_not_a_u64() {
         "{errors:?}"
     );
 }
+
+/// Table row M04 (RFC-0066 rule 7): `out.len()` read before the one push
+/// every iteration makes is `len(out)` read above the header `+ k`. The call
+/// leaves the loop, `out` is then read only to lend it to `push`, and its
+/// storage has `push`'s `Fold` law. A conditional push states no such
+/// length, and the call stays.
+#[test]
+fn a_length_read_before_an_unconditional_push_is_read_from_its_length_on_entry() {
+    let calls_in_loop = |body: &str| {
+        let c = Compiled::of(
+            &format!(
+                "let xs = vec([5, 3, 8, 1]); let out = vec([]); \
+                 for x in &xs {{ {body} }} out.len()"
+            ),
+            Opt::Full,
+        );
+        let [loop_] = c.loops_by_header()[..] else {
+            panic!("one loop:\n{}", c.listing)
+        };
+        let calls = loop_
+            .natural
+            .blocks()
+            .flat_map(|block| c.insts(block))
+            .filter(|inst| matches!(inst.kind, InstKind::FunctionCall { .. }))
+            .count();
+        let deps = LoopDeps::of(&c.cfg, &c.laws, loop_.natural.header)
+            .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), c.listing));
+        let folds = deps
+            .judge(&c.cfg, &c.laws)
+            .into_iter()
+            .filter(|judged| {
+                matches!(
+                    judged.law,
+                    Some(Accumulator {
+                        law: Law::Fold(_),
+                        ..
+                    })
+                )
+            })
+            .count();
+        (calls, folds, c.listing)
+    };
+    let (calls, folds, listing) = calls_in_loop("let at = out.len() as i64; out.push(at * 10);");
+    assert_eq!((calls, folds), (1, 1), "only the push is called:\n{listing}");
+    let (calls, folds, listing) =
+        calls_in_loop("let at = out.len() as i64; if *x > 4 { out.push(at * 10); };");
+    assert_eq!((calls, folds), (2, 0), "the length is read in the loop:\n{listing}");
+}

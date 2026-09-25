@@ -150,6 +150,13 @@ pub enum ValidationErrorKind {
         stage: usize,
         cycle_stage: usize,
     },
+    /// RFC-0089 rule 5.
+    WorkAheadOfExit {
+        header: Label,
+        stage: usize,
+        exit_stage: usize,
+        held_back: crate::analysis::loop_deps::HeldBack,
+    },
     /// A `match` over a locally closed enum leaves a variant untaken.
     MatchMissesVariants {
         enum_name: Option<Astr>,

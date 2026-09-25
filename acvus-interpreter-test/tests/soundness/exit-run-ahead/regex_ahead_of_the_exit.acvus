@@ -1,0 +1,7 @@
+let re = regex("^[a-z]+-[0-9]{3}$").unwrap();
+let lines = vec(["abc".to_string(), "abc-123".to_string(), "q-999".to_string()]);
+let at = lines.len();
+for i in 0u64..lines.len() {
+    if re.is_match(&lines[i]) { at = i; break; };
+}
+at

@@ -379,6 +379,7 @@ pub struct GenericSig {
     pub laws: crate::laws::Laws,
     pub ensures: Vec<crate::laws::Postcondition>,
     pub reaches: crate::laws::Reaches,
+    pub returns: crate::laws::Returns,
     /// The weight `cost = N` states (RFC-0066 rule 8), or `None`.
     pub cost: Option<u64>,
 }
@@ -407,6 +408,7 @@ pub struct InstanceSig {
     pub laws: crate::laws::Laws,
     pub ensures: Vec<crate::laws::Postcondition>,
     pub reaches: crate::laws::Reaches,
+    pub returns: crate::laws::Returns,
     /// The weight in ticks `#[extern_fn(cost = N)]` states of one call
     /// (RFC-0066 rule 8), or `None` when the declaration states none and a
     /// call weighs its family's row.
@@ -424,6 +426,7 @@ impl InstanceSig {
             laws: crate::laws::Laws::None,
             ensures: Vec::new(),
             reaches: crate::laws::Reaches::Lent,
+            returns: crate::laws::Returns::Unstated,
             cost: None,
         }
     }

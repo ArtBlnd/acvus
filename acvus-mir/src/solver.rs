@@ -5310,6 +5310,7 @@ mod requirement_tests {
                     laws: crate::laws::Laws::None,
                     ensures: Vec::new(),
                     reaches: crate::laws::Reaches::Lent,
+                    returns: crate::laws::Returns::Unstated,
                     cost: None,
                 })
                 .collect(),
