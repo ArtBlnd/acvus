@@ -21,7 +21,7 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
     Callee, ForSource, IndexMode, Inst, InstKind, PathSeg, RefTarget, ValueId,
 };
-use crate::ty::{Alignment, FlowEnd, Flows, Mutability, Source, Ty};
+use crate::ty::{Alignment, FlowEnd, Flows, Labelled, Laid, Mutability, Source, Ty};
 
 // -- Positions (RFC-0079 rule 2) ------------------------------------
 
@@ -1268,9 +1268,17 @@ impl RegionAnalysis<'_> {
             for v in input.via.iter() {
                 add_via(&mut via, &state.get(*v), *v);
             }
-            match alignment == Alignment::Aligned && input.positions.len() == width {
-                true => join_part(&mut out, &[0], &input.positions),
-                false => join_part(&mut out, &[], &input.positions),
+            match &alignment {
+                Alignment::Aligned if input.positions.len() == width => {
+                    join_part(&mut out, &[0], &input.positions)
+                }
+                Alignment::Labelled(map) => {
+                    match labelled_ends(call.callee_ty, from, map, input.positions.len(), width) {
+                        Some(ends) => join_labelled(&mut out, map, &ends, &input.positions),
+                        None => join_part(&mut out, &[], &input.positions),
+                    }
+                }
+                Alignment::Aligned | Alignment::Any => join_part(&mut out, &[], &input.positions),
             }
         }
         let written: Vec<Written> = (0..arity)
@@ -1771,6 +1779,126 @@ fn flows_of(callee_ty: &Ty) -> Flows {
             _ => Flows::Every,
         },
         _ => Flows::Every,
+    }
+}
+
+/// The positions each segment of a `Labelled` flow's two ends covers at a
+/// call: the output's (the result) and the input's, each laid over the
+/// type the callee's function type gives that end. `None` where a shape is
+/// not its end's type, or its positions are not the ones the call holds;
+/// the flow is then read as `Any`, which covers every map.
+fn labelled_ends(
+    callee_ty: &Ty,
+    from: FlowEnd,
+    map: &Labelled,
+    from_width: usize,
+    to_width: usize,
+) -> Option<LabelledEnds> {
+    let fn_ty = match callee_ty {
+        Ty::Ref(_, inner) => inner.ty().into_owned(),
+        other => other.clone(),
+    };
+    let Ty::Fn { params, ret, .. } = &fn_ty else {
+        return None;
+    };
+    let FlowEnd::Param(index) = from else {
+        return None;
+    };
+    let from_ty = &params.get(index)?.ty;
+    let to = segments(&map.to, ret)?;
+    let from = segments(&map.from, from_ty)?;
+    let fits = positions(ret) == to_width
+        && positions(from_ty) == from_width
+        && map.takes.len() == to.len()
+        && map
+            .takes
+            .iter()
+            .flatten()
+            .all(|take| take.segment < from.len());
+    fits.then_some(LabelledEnds { to, from })
+}
+
+/// Where each segment of both ends of a `Labelled` flow lies at a call.
+struct LabelledEnds {
+    to: Vec<Range<usize>>,
+    from: Vec<Range<usize>>,
+}
+
+/// RFC-0096 rule 1: each output segment joins exactly the input segments
+/// its map names, position by position where both are one type variable's.
+fn join_labelled(out: &mut [Region], map: &Labelled, ends: &LabelledEnds, input: &[Region]) {
+    for (to, takes) in ends.to.iter().zip(&map.takes) {
+        for take in takes {
+            let from = &ends.from[take.segment];
+            let values = &input[from.clone()];
+            match take.aligned && from.len() == to.len() {
+                true => {
+                    for (mine, region) in out[to.clone()].iter_mut().zip(values) {
+                        mine.join_mut(region);
+                    }
+                }
+                false => {
+                    let all = fold(values);
+                    for mine in &mut out[to.clone()] {
+                        mine.join_mut(&all);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The positions of a value of `ty` each segment of `laid` covers, in
+/// order (`Laid`'s segments), or `None` where `laid` is not `ty`'s shape.
+pub fn segments(laid: &Laid, ty: &Ty) -> Option<Vec<Range<usize>>> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    lay_segments(laid, ty, &mut at, &mut out)?;
+    (at == positions(ty)).then_some(out)
+}
+
+fn lay_segments(laid: &Laid, ty: &Ty, at: &mut usize, out: &mut Vec<Range<usize>>) -> Option<()> {
+    match (laid, ty) {
+        (Laid::NoPosition, ty) => (positions(ty) == 0).then_some(()),
+        (Laid::Var | Laid::Unread, _) => {
+            let width = positions(ty);
+            out.push(*at..*at + width);
+            *at += width;
+            Some(())
+        }
+        (Laid::Ref(pointee), Ty::Ref(_, inner)) => {
+            out.push(*at..*at + 1);
+            *at += 1;
+            lay_segments(pointee, &inner.ty(), at, out)
+        }
+        (Laid::Option(inner), Ty::Option(ty)) | (Laid::Array(inner), Ty::Array(ty, _) | Ty::Slice(ty)) => {
+            lay_segments(inner, ty, at, out)
+        }
+        (Laid::Result(ok, err), Ty::Result(ok_ty, err_ty)) => {
+            lay_segments(ok, ok_ty, at, out)?;
+            lay_segments(err, err_ty, at, out)
+        }
+        (Laid::Tuple(parts), Ty::Tuple(items)) if parts.len() == items.len() => parts
+            .iter()
+            .zip(items)
+            .try_for_each(|(part, item)| lay_segments(part, item, at, out)),
+        (
+            Laid::User { regions, args },
+            Ty::UserDefined {
+                type_args,
+                region_params,
+                ..
+            },
+        ) if regions == region_params && args.len() == type_args.len() => {
+            for _ in 0..*regions {
+                out.push(*at..*at + 1);
+                *at += 1;
+            }
+            args.iter()
+                .zip(type_args)
+                .try_for_each(|(arg, ty)| lay_segments(arg, &ty.ty(), at, out))
+        }
+        _ => None,
     }
 }
 

@@ -8,6 +8,21 @@
 //! the macro does not read or an `InstanceOf`, every label beside it. An
 //! `Instance` parameter is read as the receiver it owns and as the
 //! requirement at its variable.
+//!
+//! An end is *laid out* where the macro reads its type position by
+//! position: a reference, an option, a result, a tuple, an array, a type
+//! variable, and an extension type, read as its region parameters, then its
+//! type arguments (RFC-0096 rule 2), a type argument it does not read being
+//! one segment of every label it names. Between two laid-out ends a flow
+//! maps each output segment to the input segments whose labels reach its
+//! own (RFC-0096 rule 1): `Aligned` where that map is one to one, `Any`
+//! where it is every to every, `Labelled` otherwise.
+//!
+//! Whether a generic type is an extension type is the type's own statement,
+//! `TyArg::LAYOUT`, which the macro cannot see. The macro reads the
+//! signature once per assignment of a reading to each generic type an end
+//! names, and the declaration keeps the flows of the assignment the named
+//! types state (`Derived::tokens`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -56,10 +71,132 @@ enum Access {
     Shared,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum Alignment {
     Aligned,
+    Labelled(Labelled),
     Any,
+}
+
+/// The macro's reading of `acvus_extern::Laid`.
+#[derive(Clone, PartialEq, Eq)]
+enum Laid {
+    NoPosition,
+    Ref(Box<Laid>),
+    Option(Box<Laid>),
+    Result(Box<Laid>, Box<Laid>),
+    Tuple(Vec<Laid>),
+    Array(Box<Laid>),
+    User {
+        candidate: usize,
+        regions: usize,
+        args: Vec<ReadArg>,
+    },
+    Var,
+    Unread,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ReadArg {
+    written_at: usize,
+    laid: Laid,
+}
+
+/// What one segment of a laid-out end is.
+#[derive(Clone, PartialEq, Eq)]
+enum Segment {
+    /// One position: a reference, or a region parameter, at this lifetime.
+    Life(Label),
+    /// Every position of a type variable's value.
+    Var(Label),
+    /// Every position of a type argument the macro does not read, which
+    /// may hold any of these labels.
+    Unread(BTreeSet<Label>),
+}
+
+impl Segment {
+    fn labels(&self) -> BTreeSet<Label> {
+        match self {
+            Segment::Life(label) | Segment::Var(label) => BTreeSet::from([label.clone()]),
+            Segment::Unread(labels) => labels.clone(),
+        }
+    }
+}
+
+/// An end read position by position: its shape, and its segments in the
+/// order `Laid` numbers them.
+#[derive(Clone)]
+struct Layout {
+    laid: Laid,
+    segments: Vec<Segment>,
+}
+
+impl Layout {
+    fn nothing() -> Self {
+        Layout {
+            laid: Laid::NoPosition,
+            segments: Vec::new(),
+        }
+    }
+}
+
+/// Where one output segment takes from: the input segment, and whether
+/// position by position.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Take {
+    segment: usize,
+    aligned: bool,
+}
+
+struct Labelled {
+    to: Laid,
+    from: Laid,
+    takes: Vec<Vec<Take>>,
+}
+
+/// Mirrors `acvus_extern::laid::WrittenArg`.
+#[derive(Clone, Copy)]
+enum WrittenArg {
+    Lifetime,
+    Positioned,
+    NonType,
+    Positionless,
+}
+
+/// A generic type an end names, which states its own layout.
+#[derive(Clone)]
+struct Candidate {
+    /// Where the signature writes it, as the key a reading is looked up by.
+    at: *const Type,
+    ty: Type,
+    written: Vec<WrittenArg>,
+}
+
+/// Which generic types a reading of the signature lays out: in discovery
+/// every one, each recorded as it is met; otherwise one flag per candidate
+/// discovery recorded.
+enum Reading {
+    Discovery,
+    Assigned { laid: Vec<bool> },
+}
+
+/// The flows of one reading, and which candidates it lays out.
+struct ReadFlows {
+    laid: Vec<bool>,
+    flows: Vec<Flow>,
+}
+
+/// What one reading of the signature finds.
+struct Read {
+    flows: Vec<Flow>,
+    candidates: Vec<Candidate>,
+}
+
+/// One arm of the dispatch on the statements: the readings whose flows are
+/// one token stream.
+struct Arm {
+    flows: TokenStream,
+    rendered: String,
+    patterns: Vec<TokenStream>,
 }
 
 #[derive(Clone, Copy)]
@@ -120,33 +257,51 @@ struct Shape {
     labels: BTreeSet<Label>,
     /// The labels of what a callee handed this value may write into.
     written: BTreeSet<Label>,
-    /// A label per position, a type variable's standing for all of its;
-    /// `None` where the positions are not the macro's to read.
-    layout: Option<Vec<Label>>,
+    /// The positions read one by one; `None` where they are not the
+    /// macro's to read.
+    layout: Option<Layout>,
 }
 
 impl Shape {
     fn positionless() -> Self {
         Shape {
-            layout: Some(Vec::new()),
+            layout: Some(Layout::nothing()),
             ..Shape::default()
         }
     }
 
-    fn concat(parts: Vec<Shape>) -> Self {
-        let mut shape = Shape::positionless();
+    /// The parts side by side, laid out as `laid` makes of theirs where
+    /// every part is laid out.
+    fn concat(parts: Vec<Shape>, laid: impl FnOnce(Vec<Laid>) -> Laid) -> Self {
+        let mut shape = Shape::default();
+        let mut layouts = Some(Vec::new());
         for part in parts {
             shape.labels.extend(part.labels);
             shape.written.extend(part.written);
-            shape.layout = match (shape.layout, part.layout) {
-                (Some(mut a), Some(b)) => {
-                    a.extend(b);
-                    Some(a)
+            layouts = match (layouts, part.layout) {
+                (Some(mut all), Some(one)) => {
+                    all.push(one);
+                    Some(all)
                 }
                 (None, _) | (_, None) => None,
             };
         }
+        shape.layout = layouts.map(|layouts| {
+            let segments = layouts.iter().flat_map(|l| l.segments.iter().cloned()).collect();
+            Layout {
+                laid: laid(layouts.into_iter().map(|l| l.laid).collect()),
+                segments,
+            }
+        });
         shape
+    }
+
+    fn wrapped(mut self, laid: impl FnOnce(Box<Laid>) -> Laid) -> Self {
+        self.layout = self.layout.map(|layout| Layout {
+            laid: laid(Box::new(layout.laid)),
+            segments: layout.segments,
+        });
+        self
     }
 }
 
@@ -167,6 +322,11 @@ struct Walker<'v> {
     carried: BTreeSet<String>,
     reading_ctx: bool,
     named_by_result: Vec<ResultLifetime>,
+    /// Whether the type being read is an end's or the result's; a `ctx`, a
+    /// `#[state]` or a requirement lays out no generic type.
+    laying_out: bool,
+    reading: &'v Reading,
+    candidates: Vec<Candidate>,
 }
 
 impl Walker<'_> {
@@ -216,15 +376,15 @@ impl Walker<'_> {
             Type::Reference(r) => self.reference(r, cx),
             Type::Paren(p) => self.walk(&p.elem, cx),
             Type::Group(g) => self.walk(&g.elem, cx),
-            Type::Array(a) => self.walk(&a.elem, cx),
-            Type::Slice(s) => self.walk(&s.elem, cx),
+            Type::Array(a) => Ok(self.walk(&a.elem, cx)?.wrapped(Laid::Array)),
+            Type::Slice(s) => Ok(self.walk(&s.elem, cx)?.wrapped(Laid::Array)),
             Type::Tuple(t) => {
                 let parts = t
                     .elems
                     .iter()
                     .map(|elem| self.walk(elem, cx))
                     .collect::<syn::Result<_>>()?;
-                Ok(Shape::concat(parts))
+                Ok(Shape::concat(parts, Laid::Tuple))
             }
             Type::Never(_) => Ok(Shape::positionless()),
             Type::Path(p) if p.qself.is_none() => self.path(ty, &p.path, cx),
@@ -245,9 +405,12 @@ impl Walker<'_> {
         };
         self.outlive(&pointee.labels, &read.labels);
         let mut shape = Shape {
-            layout: pointee
-                .layout
-                .map(|pointee| std::iter::once(read.own).chain(pointee).collect()),
+            layout: pointee.layout.map(|pointee| Layout {
+                laid: Laid::Ref(Box::new(pointee.laid)),
+                segments: std::iter::once(Segment::Life(read.own))
+                    .chain(pointee.segments)
+                    .collect(),
+            }),
             ..Shape::default()
         };
         if access == Access::Mut {
@@ -295,11 +458,16 @@ impl Walker<'_> {
             })
             .collect();
         let only_types = lifetimes.is_empty() && types.len() == args.args.len();
+        let only_written = lifetimes.len() + types.len() == args.args.len();
         match (last.ident.to_string().as_str(), lifetimes.as_slice(), types.as_slice()) {
-            ("Option", _, [some]) if only_types => self.walk(some, cx),
+            ("Option", _, [some]) if only_types => Ok(self.walk(some, cx)?.wrapped(Laid::Option)),
             ("Result", _, [ok, err]) if only_types => {
                 let parts = vec![self.walk(ok, cx)?, self.walk(err, cx)?];
-                Ok(Shape::concat(parts))
+                Ok(Shape::concat(parts, |mut laid| {
+                    let err = laid.pop().expect("a result has two parts");
+                    let ok = laid.pop().expect("a result has two parts");
+                    Laid::Result(Box::new(ok), Box::new(err))
+                }))
             }
             ("Closure", [captures], [handed, returned, rest @ ..]) => {
                 self.closure(captures, handed, returned, rest, cx)
@@ -307,14 +475,126 @@ impl Walker<'_> {
             ("Ref" | "Slice", [brand], [pointee, loan, rest @ ..]) => {
                 self.carrier(brand, pointee, loan, rest, cx)
             }
+            (_, lifetimes, types) if self.laying_out && only_written => {
+                match self.laid_out(ty, lifetimes, types)? {
+                    Some(candidate) => self.extension(candidate, lifetimes, types, cx),
+                    None => self.unread(ty, cx),
+                }
+            }
             _ => self.unread(ty, cx),
         }
+    }
+
+    /// Whether this reading lays out the generic type `ty`, and which
+    /// candidate it is; discovery records it the first time it is met.
+    fn laid_out(&mut self, ty: &Type, lifetimes: &[&Lifetime], types: &[&Type]) -> syn::Result<Option<usize>> {
+        let at: *const Type = ty;
+        let known = self.candidates.iter().position(|candidate| candidate.at == at);
+        match (self.reading, known) {
+            (Reading::Discovery, Some(index)) => Ok(Some(index)),
+            (Reading::Discovery, None) => {
+                let written = lifetimes
+                    .iter()
+                    .map(|_| WrittenArg::Lifetime)
+                    .chain(types.iter().map(|arg| self.written_arg(arg)))
+                    .collect();
+                self.candidates.push(Candidate {
+                    at,
+                    ty: ty.clone(),
+                    written,
+                });
+                Ok(Some(self.candidates.len() - 1))
+            }
+            (Reading::Assigned { laid }, Some(index)) => Ok(laid[index].then_some(index)),
+            (Reading::Assigned { .. }, None) => Err(syn::Error::new_spanned(
+                ty,
+                "#[extern_fn] met a generic type its discovery reading did not: a reading that \
+                 lays out every generic type meets each one another reading meets",
+            )),
+        }
+    }
+
+    /// A lifetime or a type variable, a reference or a generic type written
+    /// anywhere in `arg` gives it positions, and the type it stands at must
+    /// be a type parameter.
+    fn written_arg(&self, arg: &Type) -> WrittenArg {
+        if let Type::Path(p) = arg
+            && p.qself.is_none()
+            && let Some((kind, _)) = p.path.get_ident().and_then(|ident| self.vars.lookup(ident))
+        {
+            return match kind {
+                VarKind::Ty => WrittenArg::Positioned,
+                VarKind::Effect | VarKind::Len | VarKind::Identity | VarKind::Runtime => WrittenArg::NonType,
+            };
+        }
+        let mut found = Positions {
+            vars: self.vars,
+            any: false,
+        };
+        found.visit_type(arg);
+        match found.any {
+            true => WrittenArg::Positioned,
+            false => WrittenArg::Positionless,
+        }
+    }
+
+    /// An extension type, read as its region parameters, then its type
+    /// arguments, in declaration order (RFC-0096 rule 2): a lifetime is one
+    /// segment, a type argument laid out is its segments, and one that is
+    /// not is one segment of every label it names. An argument that is an
+    /// effect, a length, an identity or the runtime has no position. What
+    /// the callee may write through it is what it could through an unread
+    /// type: every label it names, and what the call lends a closure it
+    /// may hold, so writes stay the union (RFC-0096 rule 3).
+    fn extension(&mut self, candidate: usize, lifetimes: &[&Lifetime], types: &[&Type], cx: &Cx) -> syn::Result<Shape> {
+        let mut shape = Shape::default();
+        let mut segments = Vec::new();
+        let mut args = Vec::new();
+        for lt in lifetimes {
+            let read = self.lifetime(Some(lt), lt.span(), cx)?;
+            segments.push(Segment::Life(read.own));
+            shape.labels.extend(read.labels);
+        }
+        for (index, arg) in types.iter().enumerate() {
+            let written_at = lifetimes.len() + index;
+            if let WrittenArg::NonType = self.candidates[candidate].written[written_at] {
+                continue;
+            }
+            let part = self.walk(arg, cx)?;
+            let laid = match part.layout {
+                Some(layout) => {
+                    segments.extend(layout.segments);
+                    layout.laid
+                }
+                None => {
+                    segments.push(Segment::Unread(part.labels.clone()));
+                    Laid::Unread
+                }
+            };
+            args.push(ReadArg { written_at, laid });
+            shape.labels.extend(part.labels);
+            shape.written.extend(part.written);
+        }
+        shape.written.extend(shape.labels.iter().cloned());
+        shape.written.extend(cx.end.map(Label::LentTo));
+        shape.layout = Some(Layout {
+            laid: Laid::User {
+                candidate,
+                regions: lifetimes.len(),
+                args,
+            },
+            segments,
+        });
+        Ok(shape)
     }
 
     fn type_var(&mut self, ident: &syn::Ident, cx: &Cx) -> Shape {
         let var = Label::Var(ident.to_string());
         let mut shape = Shape {
-            layout: Some(vec![var.clone()]),
+            layout: Some(Layout {
+                laid: Laid::Var,
+                segments: vec![Segment::Var(var.clone())],
+            }),
             ..Shape::default()
         };
         shape.labels.insert(var.clone());
@@ -486,9 +766,85 @@ impl<'ast> Visit<'ast> for Named<'_> {
     }
 }
 
+/// Whether a written type names a lifetime, a type variable, a reference
+/// or a generic type.
+struct Positions<'v> {
+    vars: &'v Vars,
+    any: bool,
+}
+
+impl<'ast> Visit<'ast> for Positions<'_> {
+    fn visit_lifetime(&mut self, _: &'ast Lifetime) {
+        self.any = true;
+    }
+
+    fn visit_type_reference(&mut self, _: &'ast syn::TypeReference) {
+        self.any = true;
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let generic = path.segments.iter().any(|segment| !segment.arguments.is_none());
+        let variable = path
+            .get_ident()
+            .is_some_and(|ident| self.vars.lookup(ident).is_some());
+        self.any |= generic || variable;
+        syn::visit::visit_path(self, path);
+    }
+
+    fn visit_type(&mut self, ty: &'ast Type) {
+        match ty {
+            Type::Path(_) | Type::Reference(_) | Type::Tuple(_) | Type::Array(_) | Type::Slice(_)
+            | Type::Paren(_) | Type::Group(_) | Type::Never(_) => syn::visit::visit_type(self, ty),
+            _ => self.any = true,
+        }
+    }
+}
+
+/// A reading is run per assignment of laid out or unread to every
+/// candidate, so a signature naming more generic types than this is refused
+/// rather than read in exponentially many passes.
+const MOST_CANDIDATES: usize = 12;
+
+/// What `derive` reads off a signature: the generic types its ends name,
+/// and the flows under each assignment of a reading to them.
+pub struct Derived {
+    candidates: Vec<Candidate>,
+    readings: Vec<ReadFlows>,
+}
+
 /// The flows of the declaration whose Rust signature is `sig`, the role of
-/// each of its inputs in `roles`, as a `FlowTerm<Poly>` expression.
-pub fn derive(sig: &syn::Signature, roles: &[Role], vars: &Vars, ret: &Type) -> syn::Result<TokenStream> {
+/// each of its inputs in `roles`.
+pub fn derive(sig: &syn::Signature, roles: &[Role], vars: &Vars, ret: &Type) -> syn::Result<Derived> {
+    let Read { candidates, .. } = read(sig, roles, vars, ret, &Reading::Discovery, Vec::new())?;
+    if candidates.len() > MOST_CANDIDATES {
+        return Err(syn::Error::new(
+            sig.ident.span(),
+            format!(
+                "the parameters and the result name {} generic types, and #[extern_fn] reads at \
+                 most {MOST_CANDIDATES}: each states whether it is laid out (RFC-0096 rule 2), and \
+                 the macro reads the signature once per assignment",
+                candidates.len()
+            ),
+        ));
+    }
+    let mut readings = Vec::new();
+    for bits in 0..1usize << candidates.len() {
+        let laid: Vec<bool> = (0..candidates.len()).map(|k| bits & (1 << k) != 0).collect();
+        let reading = Reading::Assigned { laid: laid.clone() };
+        let Read { flows, .. } = read(sig, roles, vars, ret, &reading, candidates.clone())?;
+        readings.push(ReadFlows { laid, flows });
+    }
+    Ok(Derived { candidates, readings })
+}
+
+fn read(
+    sig: &syn::Signature,
+    roles: &[Role],
+    vars: &Vars,
+    ret: &Type,
+    reading: &Reading,
+    candidates: Vec<Candidate>,
+) -> syn::Result<Read> {
     let mut walker = Walker {
         vars,
         edges: declared_outlives(&sig.generics),
@@ -499,6 +855,9 @@ pub fn derive(sig: &syn::Signature, roles: &[Role], vars: &Vars, ret: &Type) -> 
         carried: BTreeSet::new(),
         reading_ctx: false,
         named_by_result: Vec::new(),
+        laying_out: false,
+        reading,
+        candidates,
     };
     let mut ends: BTreeMap<usize, Shape> = BTreeMap::new();
     for (arg, role) in sig.inputs.iter().zip(roles) {
@@ -510,6 +869,7 @@ pub fn derive(sig: &syn::Signature, roles: &[Role], vars: &Vars, ret: &Type) -> 
             Role::Ctx | Role::Other => None,
         };
         walker.reading_ctx = *role == Role::Ctx;
+        walker.laying_out = end.is_some();
         let shape = walker.walk(&pat_type.ty, &Cx::top(end))?;
         if let Some(index) = end {
             ends.insert(index, shape);
@@ -520,6 +880,7 @@ pub fn derive(sig: &syn::Signature, roles: &[Role], vars: &Vars, ret: &Type) -> 
         _ => None,
     };
     walker.side = Side::Result(taken);
+    walker.laying_out = true;
     let result = walker.walk(ret, &Cx::top(None))?;
     let handed: BTreeSet<Label> = ends.values().flat_map(|end| end.labels.iter().cloned()).collect();
     for index in ends.keys() {
@@ -555,7 +916,7 @@ pub fn derive(sig: &syn::Signature, roles: &[Role], vars: &Vars, ret: &Type) -> 
             flows.push(Flow {
                 to: End::Result,
                 from: *from,
-                alignment: alignment(&reach, input.layout.as_deref(), result.layout.as_deref()),
+                alignment: alignment(&reach, input.layout.as_ref(), result.layout.as_ref()),
             });
         }
     }
@@ -570,7 +931,69 @@ pub fn derive(sig: &syn::Signature, roles: &[Role], vars: &Vars, ret: &Type) -> 
             }
         }
     }
-    Ok(tokens(&flows))
+    Ok(Read {
+        flows,
+        candidates: walker.candidates,
+    })
+}
+
+impl Derived {
+    /// The flows as a `FlowTerm<Poly>` expression, each generic type named
+    /// at `comp`'s form of it: the flows of the reading its statements
+    /// assign, beside a compile-time check that each statement admits the
+    /// arguments the laid-out reading read.
+    pub fn tokens(&self, comp: impl Fn(&Type) -> Type) -> TokenStream {
+        if let [ReadFlows { flows, .. }] = self.readings.as_slice()
+            && self.candidates.is_empty()
+        {
+            return tokens(flows, &[]);
+        }
+        let statements: Vec<TokenStream> = self
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let ty = comp(&candidate.ty);
+                quote! { <#ty as ::acvus_extern::TyArg>::LAYOUT }
+            })
+            .collect();
+        let admitted = self.candidates.iter().zip(&statements).map(|(candidate, statement)| {
+            let written = candidate.written.iter().map(|arg| match arg {
+                WrittenArg::Lifetime => quote! { ::acvus_extern::laid::WrittenArg::Lifetime },
+                WrittenArg::Positioned => quote! { ::acvus_extern::laid::WrittenArg::Positioned },
+                WrittenArg::NonType => quote! { ::acvus_extern::laid::WrittenArg::NonType },
+                WrittenArg::Positionless => quote! { ::acvus_extern::laid::WrittenArg::Positionless },
+            });
+            let ty = &candidate.ty;
+            let refused = format!(
+                "`{}` states a layout whose parameters are not the arguments written here (RFC-0096 rule 2)",
+                quote! { #ty }
+            );
+            quote! {
+                const { ::core::assert!(#statement.admits(&[#(#written),*]), #refused) };
+            }
+        });
+        let mut arms: Vec<Arm> = Vec::new();
+        for ReadFlows { laid, flows } in &self.readings {
+            let flows = tokens(flows, &statements);
+            let pattern = quote! { [#(#laid),*] };
+            let rendered = flows.to_string();
+            match arms.iter_mut().find(|arm| arm.rendered == rendered) {
+                Some(arm) => arm.patterns.push(pattern),
+                None => arms.push(Arm {
+                    flows,
+                    rendered,
+                    patterns: vec![pattern],
+                }),
+            }
+        }
+        let arms = arms.into_iter().map(|Arm { flows, patterns, .. }| quote! { #(#patterns)|* => #flows, });
+        quote! {{
+            #(#admitted)*
+            match [#(#statements.is_laid_out()),*] {
+                #(#arms)*
+            }
+        }}
+    }
 }
 
 fn declared_outlives(generics: &syn::Generics) -> Vec<Edge> {
@@ -637,32 +1060,133 @@ impl Reach {
     }
 }
 
-/// `Aligned` where both ends are laid out, as many positions long, and a
-/// label reaches another only at its own position and of its own width (a
-/// lifetime one position, a type variable its own); `Any` otherwise.
-fn alignment(reach: &Reach, input: Option<&[Label]>, output: Option<&[Label]>) -> Alignment {
+/// RFC-0096 rule 1, where both ends are laid out: each output segment takes
+/// the input segments whose labels reach its own, position by position
+/// where both are one type variable's (the label `(T, k)`). `Aligned` is
+/// the map that takes segment `k` from segment `k` alone, each a lifetime
+/// or one variable; `Any` the one that takes every segment into every
+/// segment, none position by position; `Labelled` any other. `Any` where
+/// an end is not laid out.
+fn alignment(reach: &Reach, input: Option<&Layout>, output: Option<&Layout>) -> Alignment {
     let (Some(input), Some(output)) = (input, output) else {
         return Alignment::Any;
     };
-    let position_to_position = input.len() == output.len()
-        && input.iter().enumerate().all(|(k, from)| {
-            output.iter().enumerate().all(|(j, to)| {
-                !reach.reaches(from, to)
-                    || (k == j
-                        && match (from, to) {
-                            (Label::Life(_), Label::Life(_)) => true,
-                            (Label::Var(a), Label::Var(b)) => a == b,
-                            _ => false,
-                        })
-            })
+    let takes: Vec<Vec<Take>> = output
+        .segments
+        .iter()
+        .map(|to| {
+            let to_labels = to.labels();
+            input
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(_, from)| reach.any(&from.labels(), &to_labels))
+                .map(|(segment, from)| Take {
+                    segment,
+                    aligned: matches!((from, to), (Segment::Var(a), Segment::Var(b)) if a == b),
+                })
+                .collect()
+        })
+        .collect();
+    let one_to_one = input.segments.len() == output.segments.len()
+        && takes.iter().zip(&output.segments).enumerate().all(|(k, (takes, to))| {
+            let from = &input.segments[k];
+            takes.as_slice() == [Take { segment: k, aligned: matches!(from, Segment::Var(_)) }]
+                && match (from, to) {
+                    (Segment::Life(_), Segment::Life(_)) => true,
+                    (Segment::Var(a), Segment::Var(b)) => a == b,
+                    _ => false,
+                }
         });
-    match position_to_position {
-        true => Alignment::Aligned,
-        false => Alignment::Any,
+    let every_to_every = takes.iter().all(|takes| {
+        takes.len() == input.segments.len() && takes.iter().all(|take| !take.aligned)
+    });
+    match (one_to_one, every_to_every) {
+        (true, _) => Alignment::Aligned,
+        (false, true) => Alignment::Any,
+        (false, false) => Alignment::Labelled(Labelled {
+            to: output.laid.clone(),
+            from: input.laid.clone(),
+            takes,
+        }),
     }
 }
 
-fn tokens(flows: &[Flow]) -> TokenStream {
+fn laid_tokens(laid: &Laid, statements: &[TokenStream]) -> TokenStream {
+    let boxed = |inner: &Laid| {
+        let inner = laid_tokens(inner, statements);
+        quote! { ::std::boxed::Box::new(#inner) }
+    };
+    match laid {
+        Laid::NoPosition => quote! { ::acvus_extern::Laid::NoPosition },
+        Laid::Ref(inner) => {
+            let inner = boxed(inner);
+            quote! { ::acvus_extern::Laid::Ref(#inner) }
+        }
+        Laid::Option(inner) => {
+            let inner = boxed(inner);
+            quote! { ::acvus_extern::Laid::Option(#inner) }
+        }
+        Laid::Result(ok, err) => {
+            let ok = boxed(ok);
+            let err = boxed(err);
+            quote! { ::acvus_extern::Laid::Result(#ok, #err) }
+        }
+        Laid::Tuple(parts) => {
+            let parts = parts.iter().map(|part| laid_tokens(part, statements));
+            quote! { ::acvus_extern::Laid::Tuple(::std::vec![#(#parts),*]) }
+        }
+        Laid::Array(inner) => {
+            let inner = boxed(inner);
+            quote! { ::acvus_extern::Laid::Array(#inner) }
+        }
+        Laid::User {
+            candidate,
+            regions,
+            args,
+        } => {
+            let statement = &statements[*candidate];
+            let args = args.iter().map(|ReadArg { written_at, laid }| {
+                let laid = laid_tokens(laid, statements);
+                quote! { ::acvus_extern::laid::ReadArg { written_at: #written_at, laid: #laid } }
+            });
+            quote! {
+                ::acvus_extern::Laid::User {
+                    regions: #regions,
+                    args: #statement.type_args(::std::vec![#(#args),*]),
+                }
+            }
+        }
+        Laid::Var => quote! { ::acvus_extern::Laid::Var },
+        Laid::Unread => quote! { ::acvus_extern::Laid::Unread },
+    }
+}
+
+fn alignment_tokens(alignment: &Alignment, statements: &[TokenStream]) -> TokenStream {
+    match alignment {
+        Alignment::Aligned => quote! { ::acvus_extern::Alignment::Aligned },
+        Alignment::Any => quote! { ::acvus_extern::Alignment::Any },
+        Alignment::Labelled(labelled) => {
+            let to = laid_tokens(&labelled.to, statements);
+            let from = laid_tokens(&labelled.from, statements);
+            let takes = labelled.takes.iter().map(|takes| {
+                let takes = takes.iter().map(|Take { segment, aligned }| {
+                    quote! { ::acvus_extern::Take { segment: #segment, aligned: #aligned } }
+                });
+                quote! { ::std::vec![#(#takes),*] }
+            });
+            quote! {
+                ::acvus_extern::Alignment::Labelled(::std::boxed::Box::new(::acvus_extern::Labelled {
+                    to: #to,
+                    from: #from,
+                    takes: ::std::vec![#(#takes),*],
+                }))
+            }
+        }
+    }
+}
+
+fn tokens(flows: &[Flow], statements: &[TokenStream]) -> TokenStream {
     if flows.is_empty() {
         return quote! { ::acvus_extern::Flows::none().into() };
     }
@@ -672,10 +1196,7 @@ fn tokens(flows: &[Flow]) -> TokenStream {
             End::Param(index) => quote! { ::acvus_extern::FlowEnd::Param(#index) },
         };
         let from = flow.from;
-        let alignment = match flow.alignment {
-            Alignment::Aligned => quote! { ::acvus_extern::Alignment::Aligned },
-            Alignment::Any => quote! { ::acvus_extern::Alignment::Any },
-        };
+        let alignment = alignment_tokens(&flow.alignment, statements);
         quote! {
             ::acvus_extern::Flow {
                 to: #to,

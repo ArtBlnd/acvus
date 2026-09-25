@@ -1,0 +1,3 @@
+// expect 8
+// Two pulls of one iterator over a map's keys, both read after the second (RFC-0096).
+let m = hash_map(); insert(&mut m, 5, 50); insert(&mut m, 3, 30); let it = keys(&m); let a = next(&mut it); let b = next(&mut it); *a.unwrap() + *b.unwrap()

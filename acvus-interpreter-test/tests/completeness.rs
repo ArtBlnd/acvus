@@ -110,3 +110,68 @@ fn parts_of_an_element_a_mutable_iterator_yields() {
         "1",
     );
 }
+
+/// RFC-0096 rules 1 and 4: an element a borrowing `next` yields holds the
+/// collection's loan and not the iterator's, since `next`'s result is at the
+/// collection's lifetime and the call reads the flows of the instance it
+/// settled on. Two pulls of one iterator both stay readable after the second.
+#[test]
+fn two_pulls_of_a_vec_iterator() {
+    runs_to(
+        "let v = vec([5, 3, 8]); let it = as_iter(&v); let a = next(&mut it); \
+         let b = next(&mut it); *a.unwrap() * 10 + *b.unwrap()",
+        "53",
+    );
+}
+
+/// As `two_pulls_of_a_vec_iterator`, over an array.
+#[test]
+fn two_pulls_of_an_array_iterator() {
+    runs_to(
+        "let v = [5, 3, 8]; let it = as_iter(&v); let a = next(&mut it); \
+         let b = next(&mut it); *a.unwrap() * 10 + *b.unwrap()",
+        "53",
+    );
+}
+
+/// As `two_pulls_of_a_vec_iterator`, over a deque.
+#[test]
+fn two_pulls_of_a_deque_iterator() {
+    runs_to(
+        "let d = deque(); push_back(&mut d, 5); push_back(&mut d, 3); push_back(&mut d, 8); \
+         let it = as_iter(&d); let a = next(&mut it); let b = next(&mut it); \
+         *a.unwrap() * 10 + *b.unwrap()",
+        "53",
+    );
+}
+
+/// As `two_pulls_of_a_vec_iterator`, over a set, whose order the sum does
+/// not see.
+#[test]
+fn two_pulls_of_a_set_iterator() {
+    runs_to(
+        "let s = hash_set(); insert(&mut s, 5); insert(&mut s, 3); let it = as_iter(&s); \
+         let a = next(&mut it); let b = next(&mut it); *a.unwrap() + *b.unwrap()",
+        "8",
+    );
+}
+
+/// As `two_pulls_of_a_vec_iterator`, over a map's keys.
+#[test]
+fn two_pulls_of_a_map_keys_iterator() {
+    runs_to(
+        "let m = hash_map(); insert(&mut m, 5, 50); insert(&mut m, 3, 30); let it = keys(&m); \
+         let a = next(&mut it); let b = next(&mut it); *a.unwrap() + *b.unwrap()",
+        "8",
+    );
+}
+
+/// As `two_pulls_of_a_vec_iterator`, over a map's values.
+#[test]
+fn two_pulls_of_a_map_values_iterator() {
+    runs_to(
+        "let m = hash_map(); insert(&mut m, 5, 50); insert(&mut m, 3, 30); let it = values(&m); \
+         let a = next(&mut it); let b = next(&mut it); *a.unwrap() + *b.unwrap()",
+        "80",
+    );
+}

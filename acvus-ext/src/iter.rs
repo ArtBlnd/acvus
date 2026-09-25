@@ -164,25 +164,34 @@ where
     }
 
     /// The element `at` reads at this step's position, and the step.
-    pub fn step<'a, T>(
-        &'a mut self,
+    pub fn step<T>(
+        &mut self,
         ctx: &Ctx<'_, Rt>,
-        at: impl FnOnce(&'a C, usize) -> Option<&'a T>,
-    ) -> Option<&'a T>
+        at: impl for<'x> FnOnce(&'x C, usize) -> Option<&'x T>,
+    ) -> Option<&'r T>
     where
         C: Borrowable<Rt>,
-        T: 'a,
+        T: 'r,
     {
         let index = self.0.at;
         self.0.at += 1;
-        self.0.items.with(ctx.rt, |items| at(items, index))
+        let element: Option<*const T> = self
+            .0
+            .items
+            .with(ctx.rt, |items| at(items, index).map(std::ptr::from_ref));
+        // SAFETY: `items` is a shared loan on the container for `'r`, the
+        // one `Refs::of` was built from, and `with` reads the container in
+        // its own storage, which stays live and unwritten while that loan
+        // is held. `at` returns a part of that storage, so the element
+        // lives as long as the loan, not as long as this `&mut self`.
+        element.map(|element| unsafe { &*element })
     }
 }
 
 #[extern_fn(instance_of = sig::next, effect = pure)]
 pub(crate) fn next_refs_vec<'a, T, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Refs<'a, Vec<T>, I, Rt>,
+    it: &mut Refs<'a, Vec<T>, I, Rt>,
 ) -> Option<&'a T>
 where
     T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,
@@ -195,7 +204,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 pub(crate) fn next_refs_array<'a, T, N, I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: &'a mut Refs<'a, Arr<T, N>, I, Rt>,
+    it: &mut Refs<'a, Arr<T, N>, I, Rt>,
 ) -> Option<&'a T>
 where
     T: Var<kind::Type> + TransparentOver<Rt> + InPlaceElement<Rt>,

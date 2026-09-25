@@ -1,0 +1,3 @@
+// expect 50
+// The value names the map's storage, not the iterator's: it is read after the iterator's block ends.
+let m = hash_map(); insert(&mut m, 5, 50); let a = { let it = values(&m); next(&mut it) }; *a.unwrap()

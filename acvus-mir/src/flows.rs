@@ -3,16 +3,22 @@
 //!
 //! A flow names the ends of a call, not positions: `Param(i)` is the
 //! argument at `i` whatever its type, and a flow is `Aligned` (position `k`
-//! of the output from position `k` of the input) or `Any` (every position of
-//! the output from every position of the input). A function type is met in
-//! the solver before its parameters' types resolve, and the flows it carries
-//! then are already what the MIR reads: the positions an end has are the
-//! resolved type's (`analysis::loans::positions`), counted where a call is
-//! checked. An end of a type variable `T` flowing `Aligned` to another end of
-//! `T` is rule 5's label `(T, k)`: the input's `k`-th position reaches only
-//! the output's `k`-th.
+//! of the output from position `k` of the input), `Labelled` (each position
+//! of the output from the input positions whose labels reach its label,
+//! RFC-0096) or `Any` (every position of the output from every position of
+//! the input). A function type is met in the solver before its parameters'
+//! types resolve, and the flows it carries then are already what the MIR
+//! reads: the positions an end has are the resolved type's
+//! (`analysis::loans::positions`), counted where a call is checked. An end
+//! of a type variable `T` flowing `Aligned` to another end of `T` is rule
+//! 5's label `(T, k)`: the input's `k`-th position reaches only the
+//! output's `k`-th. A `Labelled` flow carries the shape of both ends as the
+//! extern's Rust signature lays them out (`Laid`), which a call walks beside
+//! the ends' resolved types to find each label's positions.
 
 use serde::{Deserialize, Serialize};
+
+use crate::ty::{Phase, TyTerm};
 
 /// One end of a flow: a value the call reads or writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -31,23 +37,144 @@ pub enum FlowEnd {
 }
 
 /// How the positions of a flow's two ends meet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Alignment {
     /// Position `k` of the output takes position `k` of the input; the two
     /// ends have one shape.
     Aligned,
+    /// Each position of the output takes the input positions its map names
+    /// (RFC-0096 rule 1).
+    Labelled(Box<Labelled>),
     /// Every position of the output takes every position of the input.
     Any,
 }
 
+/// The shape of one end of a `Labelled` flow, as the extern's Rust
+/// signature lays it out (RFC-0079 rule 2, RFC-0096 rule 2). Its
+/// *segments* are, in order: one per `Ref` (the reference's own
+/// position), one per region parameter of a `User`, and one per `Var` and
+/// `Unread`, which stand for every position of the part of the end's type
+/// they are matched with.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Laid {
+    NoPosition,
+    /// `&T`: one segment for the reference, then `T`'s.
+    Ref(Box<Laid>),
+    Option(Box<Laid>),
+    Result(Box<Laid>, Box<Laid>),
+    Tuple(Vec<Laid>),
+    /// `[T; N]` or `[T]`: the element's.
+    Array(Box<Laid>),
+    /// An extension type: one segment per region parameter, then its type
+    /// arguments', in declaration order.
+    User { regions: usize, args: Vec<Laid> },
+    /// A type variable: one segment, every position of its value.
+    Var,
+    /// A type the macro does not read, as a type argument of an extension
+    /// type: one segment, every position of it.
+    Unread,
+}
+
+impl Laid {
+    pub fn segment_count(&self) -> usize {
+        match self {
+            Laid::NoPosition => 0,
+            Laid::Var | Laid::Unread => 1,
+            Laid::Ref(pointee) => 1 + pointee.segment_count(),
+            Laid::Option(inner) | Laid::Array(inner) => inner.segment_count(),
+            Laid::Result(ok, err) => ok.segment_count() + err.segment_count(),
+            Laid::Tuple(parts) => parts.iter().map(Laid::segment_count).sum(),
+            Laid::User { regions, args } => regions + args.iter().map(Laid::segment_count).sum::<usize>(),
+        }
+    }
+
+    /// Whether this shape is `ty`'s, above the parts `Var` and `Unread`
+    /// stand for: the declared form of what a call matches against the
+    /// resolved type (`analysis::loans::segments`).
+    pub fn fits<V: Phase>(&self, ty: &TyTerm<V>) -> bool {
+        match (self, ty) {
+            (Laid::Var | Laid::Unread, _) => true,
+            (Laid::NoPosition, ty) => has_no_position(ty),
+            (Laid::Ref(pointee), TyTerm::Ref(_, inner)) => pointee.fits(&inner.ty()),
+            (Laid::Option(inner), TyTerm::Option(ty))
+            | (Laid::Array(inner), TyTerm::Array(ty, _) | TyTerm::Slice(ty)) => inner.fits(ty),
+            (Laid::Result(ok, err), TyTerm::Result(ok_ty, err_ty)) => ok.fits(ok_ty) && err.fits(err_ty),
+            (Laid::Tuple(parts), TyTerm::Tuple(items)) => {
+                parts.len() == items.len() && parts.iter().zip(items).all(|(part, item)| part.fits(item))
+            }
+            (
+                Laid::User { regions, args },
+                TyTerm::UserDefined {
+                    type_args,
+                    region_params,
+                    ..
+                },
+            ) => {
+                regions == region_params
+                    && args.len() == type_args.len()
+                    && args.iter().zip(type_args).all(|(arg, ty)| arg.fits(&ty.ty()))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Whether a value of `ty` has no position whatever its variables are.
+fn has_no_position<V: Phase>(ty: &TyTerm<V>) -> bool {
+    match ty {
+        TyTerm::Ref(..) | TyTerm::Fn { .. } | TyTerm::Handle(_) | TyTerm::Var(_) => false,
+        TyTerm::UserDefined {
+            type_args,
+            region_params,
+            ..
+        } => *region_params == 0 && type_args.iter().all(|arg| has_no_position(&arg.ty())),
+        TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Slice(inner) => has_no_position(inner),
+        TyTerm::Result(ok, err) => has_no_position(ok) && has_no_position(err),
+        TyTerm::Tuple(items) => items.iter().all(has_no_position),
+        TyTerm::Object(fields) => fields.values().all(has_no_position),
+        TyTerm::Enum { variants, .. } => variants.values().flatten().all(|payload| has_no_position(payload)),
+        TyTerm::Int(_)
+        | TyTerm::Float
+        | TyTerm::Char
+        | TyTerm::String
+        | TyTerm::Bool
+        | TyTerm::Unit
+        | TyTerm::Never
+        | TyTerm::Order
+        | TyTerm::Str
+        | TyTerm::Error(_) => true,
+    }
+}
+
+/// Where one segment of an output takes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Take {
+    /// The input segment.
+    pub segment: usize,
+    /// Position `k` of the output segment from position `k` of the input
+    /// one: both are one type variable's. Otherwise every position of the
+    /// output segment takes every position of the input one.
+    pub aligned: bool,
+}
+
+/// A `Labelled` flow: both ends' shapes and, for each segment of the
+/// output, the input segments it takes from (RFC-0096 rule 1). A segment
+/// no `Take` names takes nothing from this input.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Labelled {
+    pub to: Laid,
+    pub from: Laid,
+    pub takes: Vec<Vec<Take>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Flow {
     pub to: FlowEnd,
     pub from: FlowEnd,
     pub alignment: Alignment,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Source {
     pub from: FlowEnd,
     pub alignment: Alignment,
@@ -59,8 +186,9 @@ pub struct Source {
 /// gave a call without a summary, and what an extern's type states until
 /// its lifetimes are read (RFC-0079 rule 6). It is its own value because a
 /// declaration states it without counting the parameters; `Listed` holds
-/// the flows sorted, each pair of ends once, an `Any` flow standing for the
-/// `Aligned` one it covers, so two equal sets are equal values.
+/// the flows sorted, each pair of ends once per alignment, an `Any` flow
+/// standing for the `Aligned` or `Labelled` one it covers, so two equal
+/// sets are equal values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Flows {
     Every,
@@ -85,14 +213,15 @@ impl Flows {
         listed.dedup();
         let covered: Vec<Flow> = listed
             .iter()
-            .filter(|flow| flow.alignment == Alignment::Aligned)
-            .filter(|aligned| {
+            .filter(|flow| flow.alignment != Alignment::Any)
+            .filter(|narrow| {
                 listed.contains(&Flow {
+                    to: narrow.to,
+                    from: narrow.from,
                     alignment: Alignment::Any,
-                    ..**aligned
                 })
             })
-            .copied()
+            .cloned()
             .collect();
         listed.retain(|flow| !covered.contains(flow));
         Flows::Listed(listed)
@@ -102,7 +231,7 @@ impl Flows {
     pub fn join(&self, other: &Flows) -> Flows {
         match (self, other) {
             (Flows::Every, _) | (_, Flows::Every) => Flows::Every,
-            (Flows::Listed(a), Flows::Listed(b)) => Flows::of(a.iter().chain(b).copied()),
+            (Flows::Listed(a), Flows::Listed(b)) => Flows::of(a.iter().chain(b).cloned()),
         }
     }
 
@@ -113,19 +242,21 @@ impl Flows {
             (Flows::Listed(_), Flows::Every) => false,
             (Flows::Listed(_), Flows::Listed(b)) => b
                 .iter()
-                .all(|flow| self.admits(flow.to, flow.from, flow.alignment)),
+                .all(|flow| self.admits(flow.to, flow.from, &flow.alignment)),
         }
     }
 
     /// Whether `to` may take from `from` at `alignment`: an `Any` flow
-    /// admits an `Aligned` one between the same ends.
-    pub fn admits(&self, to: FlowEnd, from: FlowEnd, alignment: Alignment) -> bool {
+    /// admits an `Aligned` or a `Labelled` one between the same ends, and
+    /// a `Labelled` one admits only itself, since which positions it maps
+    /// depends on the ends' types.
+    pub fn admits(&self, to: FlowEnd, from: FlowEnd, alignment: &Alignment) -> bool {
         match self {
             Flows::Every => true,
             Flows::Listed(listed) => listed.iter().any(|flow| {
                 flow.to == to
                     && flow.from == from
-                    && (flow.alignment == Alignment::Any || flow.alignment == alignment)
+                    && (flow.alignment == Alignment::Any || flow.alignment == *alignment)
             }),
         }
     }
@@ -146,7 +277,7 @@ impl Flows {
                 .filter(|flow| flow.to == to)
                 .map(|flow| Source {
                     from: flow.from,
-                    alignment: flow.alignment,
+                    alignment: flow.alignment.clone(),
                 })
                 .collect(),
         }

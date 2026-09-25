@@ -1,0 +1,3 @@
+// expect 5
+// A map stage's next returns what its closure returns: the captured reference, read with its lender unwritten.
+let s = 5; let r = &s; let v = vec([1]); let m = into_iter(v) | map(|x| -> r); let a = next(&mut m); *a.unwrap()

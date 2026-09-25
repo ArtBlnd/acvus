@@ -1,0 +1,3 @@
+// expect 53
+// Two pulls of one iterator over an array, both elements read after the second (RFC-0096).
+let v = [5, 3, 8]; let it = as_iter(&v); let a = next(&mut it); let b = next(&mut it); *a.unwrap() * 10 + *b.unwrap()
