@@ -29,6 +29,7 @@ pub mod cost;
 pub mod executor;
 mod flight;
 mod host;
+mod host_graph;
 mod init;
 mod interpreter;
 #[cfg(feature = "tooling")]
@@ -78,6 +79,7 @@ pub use host::{
     CompileTimes, InputListing, Listing, UntypedEntry, UntypedOutput, context_refs, environment,
     untyped_entry_ty,
 };
+pub use host_graph::HostGraph;
 pub use port::Held;
 pub use runtime::AcvusRuntime;
 pub use space::{

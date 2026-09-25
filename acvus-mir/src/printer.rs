@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::cost::{CostTable, Costs, InPlace, LoopCost, TripCount};
 use crate::analysis::loop_deps::{
-    Accumulator, BodyDeps, CallIdentity, Control, Cycle, Guard, Law, LawOp, LoopDeps, Member,
+    Accumulator, BodyDeps, CallIdentity, Control, Cycle, CycleLaw, Guard, Law, LawOp, LoopDeps, Member,
     Order, Placement, Storage, Token,
 };
 use crate::analysis::loops::{Term, Trip};
@@ -81,7 +81,7 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 /// `Option(Call(#1, identity)) exact commutative`,
 /// `Ordered(Max, #2) exact commutative`,
 /// `First(Carried(r3), guarding Carried(r4)) exact`,
-/// `Reset(Op(Concat)) exact`,
+/// `Reset(Op(Concat)) exact`, `AffineMap exact`,
 /// `Product(Carried(r3): Op(Add) exact commutative, Carried(r4): Op(Add)
 /// exact commutative) exact commutative`.
 fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
@@ -167,6 +167,7 @@ fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
             }
         }
         Law::Reset(inner) => format!("Reset({})", fmt_law(inner, ctx, vn)),
+        Law::AffineMap => "AffineMap".to_string(),
     }
 }
 
@@ -318,11 +319,13 @@ fn fmt_term(
     }
 }
 
-/// `cycle Carried(r3) any_order law(Op(Add) exact commutative) {+}`.
+/// `cycle Carried(r3) any_order law(Op(Add) exact commutative) {+}`, and
+/// `scan` beside the law of a scan (RFC-0093 rule 8):
+/// `cycle Carried(r3) in_order law(Op(Add) exact commutative) scan {+}`.
 fn fmt_cycle(
     cycle: &Cycle,
     order: Order,
-    law: Option<&Accumulator>,
+    law: Option<&CycleLaw>,
     cfg: &CfgBody,
     ctx: &PrintCtx<'_>,
     vn: &mut ValNormalizer,
@@ -338,7 +341,10 @@ fn fmt_cycle(
         Order::InOrder => "in_order",
     };
     let law = match law {
-        Some(acc) => format!(" law({})", fmt_accumulator(acc, ctx, vn)),
+        Some(CycleLaw { accumulator, scan }) => {
+            let scan = if *scan { " scan" } else { "" };
+            format!(" law({}){scan}", fmt_accumulator(accumulator, ctx, vn))
+        }
         None => String::new(),
     };
     let held: Vec<String> = cycle

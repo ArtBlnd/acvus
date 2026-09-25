@@ -432,6 +432,7 @@ macro_rules! stored_extern_type {
                     identity_params: 0,
                     region_params: Self::REGION_PARAMS,
                     specializable: vec![$(specializable::<$k>()),+],
+                    may_hold_a_function: true,
                 }
             }
         }

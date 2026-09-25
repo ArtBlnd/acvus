@@ -332,6 +332,7 @@ fn qref_of(path: &Path) -> syn::Result<proc_macro2::TokenStream> {
             ::acvus_extern::QualifiedRef {
                 namespace: __ns.map(|__n| __i.intern(__n)),
                 name: __i.intern(#name),
+                host: None,
             }
         }),
         [ns, name] => Ok(quote! {

@@ -1349,7 +1349,7 @@ fn compile_bound(
     let mut bindings = Bindings::default();
     for (name, value) in bound {
         bindings
-            .bind(interner.intern(name), value.clone())
+            .bind(QualifiedRef::root(interner.intern(name)), value.clone())
             .map_err(|refused| format!("[bind] ${name}: {refused}"))?;
     }
     let graph = CompilationGraph {

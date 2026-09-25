@@ -14,7 +14,7 @@ use acvus_utils::Interner;
 
 use crate::host::{Codec, Storage, StorageError};
 use crate::port::Held;
-use crate::layout::{self, Nested};
+use crate::layout::{self, Nested, ZeroWidth};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -355,6 +355,13 @@ pub struct Space {
 }
 
 impl Space {
+    /// The zero-width elements one load may read in all, its nested values'
+    /// included (`ZeroWidth`, RFC-0033 rule 2). A unit decodes to one
+    /// 16-byte word, so the bound's units hold 16 MiB; an element that is a
+    /// tuple or object of units holds its box besides. A commit is not held
+    /// to it: a value holding more commits, and its load is refused.
+    pub const ZERO_WIDTH_ELEMENTS: usize = 1 << 20;
+
     pub fn new<M>(mode: M) -> Self
     where
         M: Mode + 'static,
@@ -404,12 +411,21 @@ impl Space {
     }
 
     /// The node at `hash`: a head, or any node a head's chain reaches
-    /// through its parents.
+    /// through its parents. The store's bytes are refused unless they hash
+    /// to `hash`, so short of a BLAKE3 collision no node names itself or a
+    /// descendant as its parent or a nested head, and a chain and a nesting
+    /// end.
     pub fn get(&self, hash: NodeHash) -> SpaceResult<Node> {
         let bytes = self
             .store
             .get(hash)?
             .ok_or_else(|| SpaceError::new(format!("no node {}", hex(&hash))))?;
+        if blake3::hash(&bytes).as_bytes() != &hash.0 {
+            return Err(SpaceError::new(format!(
+                "the node stored at {} hashes elsewhere",
+                hex(&hash)
+            )));
+        }
         Node::from_bytes(&bytes)
     }
 
@@ -440,7 +456,9 @@ macro_rules! space_values {
             /// The value of `id` as its head names it.
             $v fn load(&self, rt: &AcvusRuntime, id: &str, ty: &Ty) -> SpaceResult<Option<Value>> {
                 match self.head(id) {
-                    Some(head) => self.load_at(rt, ty, head).map(Some),
+                    Some(head) => self
+                        .load_at(rt, ty, head, &ZeroWidth::allowing(Self::ZERO_WIDTH_ELEMENTS))
+                        .map(Some),
                     None => Ok(None),
                 }
             }
@@ -485,11 +503,23 @@ impl Space {
             return Ok(None);
         };
         let ty = head.ty.to_ty(&rt.shared.interner);
-        let value = self.load_at(rt, &ty, head.hash)?;
+        let zero_width = ZeroWidth::allowing(Self::ZERO_WIDTH_ELEMENTS);
+        let value = self.load_at(rt, &ty, head.hash, &zero_width)?;
         Ok(Some(Stored { ty, value }))
     }
 
-    fn load_at(&self, rt: &AcvusRuntime, ty: &Ty, head: NodeHash) -> SpaceResult<Value> {
+    /// The value `head` names. Every node it reads is read whole: a
+    /// language shape's state by `layout::decode_all`, and an extension's
+    /// state and each op refused when its hooks leave a byte unread. What
+    /// the hooks read is the type's own promise (RFC-0080 rule 4); the
+    /// space bounds the zero-width parts they read through it.
+    fn load_at(
+        &self,
+        rt: &AcvusRuntime,
+        ty: &Ty,
+        head: NodeHash,
+        zero_width: &ZeroWidth,
+    ) -> SpaceResult<Value> {
         if !matches!(ty, Ty::UserDefined { .. }) {
             let node = self.get(head)?;
             if node.kind != NodeKind::State {
@@ -497,7 +527,7 @@ impl Space {
                     "a value of a language shape is a state node",
                 ));
             }
-            return layout::decode(rt, self, ty, &mut node.bytes.as_slice());
+            return layout::decode_all(rt, self, ty, &node.bytes, zero_width);
         }
         let (hooks, args) = layout::extension(rt, ty)?;
         let mut ops: Vec<Node> = Vec::new();
@@ -514,13 +544,27 @@ impl Space {
                 }
             }
         };
-        let decode = |t: &Ty, input: &mut &[u8]| layout::decode_owned(rt, self, t, input);
-        let mut value = (hooks.decode_state)(rt, &args, &decode, &mut state.bytes.as_slice())?;
+        let decode =
+            |t: &Ty, input: &mut &[u8]| layout::decode_part(rt, self, t, input, zero_width);
+        let shown = ty.display(&rt.shared.interner);
+        let mut input = state.bytes.as_slice();
+        let value = (hooks.decode_state)(rt, &args, &decode, &mut input)?;
+        // In a holder, so a value refused after its state is read is released.
+        // SAFETY: `decode_state` made the word, and no other holder owns it.
+        let mut value: Owned<AcvusRuntime> = unsafe { Owned::from_value(Holding::new(), value) };
+        layout::all_read(input, &format_args!("the state of {shown}"))?;
         for op in ops.iter().rev() {
-            (hooks.apply_op)(rt, &mut value, &args, &decode, &mut op.bytes.as_slice())?;
+            let mut input = op.bytes.as_slice();
+            // SAFETY: `apply_op` edits the payload in place through the
+            // type's hooks and writes no word into the holder.
+            (hooks.apply_op)(rt, unsafe { value.value_mut(Holding::new()) }, &args, &decode, &mut input)?;
+            layout::all_read(input, &format_args!("an op of {shown}"))?;
         }
-        (hooks.set_head)(rt, &mut value, head);
-        Ok(value)
+        // SAFETY: `set_head` writes the head into the payload, not a word
+        // into the holder.
+        (hooks.set_head)(rt, unsafe { value.value_mut(Holding::new()) }, head);
+        // SAFETY: the word moves to the caller, which owns it from then on.
+        Ok(value.into_value(unsafe { Holding::new() }))
     }
 
     /// The new head for `value`, chained onto the head it carries.
@@ -689,8 +733,14 @@ impl Nested for Space {
             .ok_or_else(|| SpaceError::new("a nested value is committed before its parent"))
     }
 
-    fn load(&self, rt: &AcvusRuntime, ty: &Ty, head: NodeHash) -> SpaceResult<Value> {
-        self.load_at(rt, ty, head)
+    fn load(
+        &self,
+        rt: &AcvusRuntime,
+        ty: &Ty,
+        head: NodeHash,
+        zero_width: &ZeroWidth,
+    ) -> SpaceResult<Value> {
+        self.load_at(rt, ty, head, zero_width)
     }
 }
 
@@ -804,5 +854,174 @@ impl Storage for SpaceStorage<'_> {
             self.committed.push(Committed { id, head });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use acvus_extern::{SpaceHooks, SpaceResult};
+    use acvus_mir::graph::QualifiedRef;
+    use acvus_mir::ty::LenTerm;
+    use rustc_hash::FxHashMap;
+
+    use super::*;
+    use crate::executor::SequentialExecutor;
+    use crate::interpreter::InterpreterContext;
+
+    fn refuse<T>() -> SpaceResult<T> {
+        Err(SpaceError::new("not in this test"))
+    }
+
+    /// An extension type's hooks as a type would write them: the state is a
+    /// count and that many units, read one at a time through the space, and
+    /// an op is one byte. The value itself is a unit; only what the space
+    /// does around the hooks is under test.
+    fn units_hooks() -> SpaceHooks<AcvusRuntime> {
+        SpaceHooks {
+            encode_state: Box::new(|_, _, _, _, _| refuse()),
+            decode_state: Box::new(|_, _, elem, input| {
+                let (count, rest) = input
+                    .split_first_chunk::<8>()
+                    .ok_or_else(|| SpaceError::new("Units: truncated count"))?;
+                *input = rest;
+                for _ in 0..u64::from_le_bytes(*count) {
+                    drop(elem(&Ty::Unit, input)?);
+                }
+                Ok(Value::unit())
+            }),
+            take_ops: Box::new(|_, _, _, _| refuse()),
+            apply_op: Box::new(|_, _, _, _, op| {
+                let (_, rest) = op
+                    .split_first()
+                    .ok_or_else(|| SpaceError::new("Units: empty op"))?;
+                *op = rest;
+                Ok(())
+            }),
+            children: Box::new(|_, _, _, _| Ok(())),
+            head: Box::new(|_, _| None),
+            set_head: Box::new(|_, _, _| {}),
+        }
+    }
+
+    fn units_runtime(i: &Interner) -> (AcvusRuntime, Ty) {
+        let id = QualifiedRef::root(i.intern("Units"));
+        let hooks = [(id, units_hooks())].into_iter().collect();
+        let rt = InterpreterContext::new(i, FxHashMap::default(), Arc::new(SequentialExecutor))
+            .with_space(hooks)
+            .runtime_over_an_empty_page();
+        let ty = Ty::UserDefined {
+            id,
+            type_args: vec![],
+            effect_args: vec![],
+            identity_args: vec![],
+            region_params: 0,
+        };
+        (rt, ty)
+    }
+
+    /// A store and the nodes written into it, each at its own address.
+    fn put(store: &MemoryStore, kind: NodeKind, parent: Option<NodeHash>, bytes: Vec<u8>) -> NodeHash {
+        let node = Node { kind, parent, bytes };
+        let hash = node.address();
+        store.put(hash, &node.to_bytes()).unwrap();
+        hash
+    }
+
+    fn held_at(i: &Interner, store: MemoryStore, id: &str, ty: &Ty, hash: NodeHash) -> Space {
+        let head = Head {
+            hash,
+            ty: ty.to_ser(i),
+        };
+        store.cmpxchg(id, None, head).unwrap().unwrap();
+        Space::over(Plain, Box::new(store))
+    }
+
+    fn count(n: u64) -> Vec<u8> {
+        n.to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn an_extension_node_is_read_whole() {
+        let i = Interner::new();
+        let (rt, ty) = units_runtime(&i);
+        // the state and an op, each read whole
+        let store = MemoryStore::default();
+        let state = put(&store, NodeKind::State, None, count(2));
+        let op = put(&store, NodeKind::Op, Some(state), vec![1]);
+        let space = held_at(&i, store, "u", &ty, op);
+        assert!(space.load(&rt, "u", &ty).unwrap().is_some());
+        // a byte after the state
+        let store = MemoryStore::default();
+        let state = put(&store, NodeKind::State, None, [count(2), vec![9]].concat());
+        let space = held_at(&i, store, "u", &ty, state);
+        let refusal = space.load(&rt, "u", &ty).expect_err("a byte after the state");
+        assert!(refusal.0.contains("left unread after the state of Units"), "{}", refusal.0);
+        // a byte after an op
+        let store = MemoryStore::default();
+        let state = put(&store, NodeKind::State, None, count(0));
+        let op = put(&store, NodeKind::Op, Some(state), vec![1, 9]);
+        let space = held_at(&i, store, "u", &ty, op);
+        let refusal = space.load(&rt, "u", &ty).expect_err("a byte after the op");
+        assert!(refusal.0.contains("left unread after an op of Units"), "{}", refusal.0);
+    }
+
+    /// A count an extension's hooks read themselves, of zero-width parts
+    /// read through the space, takes from the load's allowance.
+    #[test]
+    fn a_zero_width_count_a_hook_reads_is_bounded() {
+        let i = Interner::new();
+        let (rt, ty) = units_runtime(&i);
+        let store = MemoryStore::default();
+        let state = put(&store, NodeKind::State, None, count(u64::MAX));
+        let space = held_at(&i, store, "u", &ty, state);
+        let started = Instant::now();
+        let refusal = space.load(&rt, "u", &ty).expect_err("u64::MAX units");
+        assert!(refusal.0.contains("zero-width elements"), "{}", refusal.0);
+        assert!(started.elapsed() < Duration::from_secs(5), "refused after {:?}", started.elapsed());
+    }
+
+    /// Nested values share their parent's allowance: two nested values of
+    /// just over half the bound each are refused together.
+    #[test]
+    fn nested_loads_share_the_allowance() {
+        let i = Interner::new();
+        let (rt, units) = units_runtime(&i);
+        let half = (Space::ZERO_WIDTH_ELEMENTS / 2) as u64;
+        let pair = Ty::Array(Box::new(units.clone()), LenTerm::Known(2));
+        let loaded = |each: u64| {
+            let store = MemoryStore::default();
+            // one node, named twice: each naming is a load of its own
+            let child = put(&store, NodeKind::State, None, count(each));
+            let parent = put(&store, NodeKind::State, None, [count(2), child.0.to_vec(), child.0.to_vec()].concat());
+            let space = held_at(&i, store, "p", &pair, parent);
+            let value = space.load(&rt, "p", &pair)?.expect("held");
+            // SAFETY: the load made the word, and no other holder owns it.
+            drop(unsafe { Owned::<AcvusRuntime>::from_value(Holding::new(), value) });
+            SpaceResult::Ok(())
+        };
+        assert!(loaded(half).is_ok());
+        assert!(loaded(half + 1).is_err_and(|e| e.0.contains("zero-width elements")));
+    }
+
+    /// The store's bytes are the node only when they hash to its address:
+    /// an op stored as its own parent is refused, not followed forever.
+    #[test]
+    fn a_node_that_names_itself_is_refused() {
+        let i = Interner::new();
+        let (rt, ty) = units_runtime(&i);
+        let store = MemoryStore::default();
+        let at = NodeHash([3; NodeHash::LEN]);
+        let node = Node {
+            kind: NodeKind::Op,
+            parent: Some(at),
+            bytes: vec![1],
+        };
+        store.put(at, &node.to_bytes()).unwrap();
+        let space = held_at(&i, store, "u", &ty, at);
+        let refusal = space.load(&rt, "u", &ty).expect_err("a cycle");
+        assert!(refusal.0.contains("hashes elsewhere"), "{}", refusal.0);
     }
 }

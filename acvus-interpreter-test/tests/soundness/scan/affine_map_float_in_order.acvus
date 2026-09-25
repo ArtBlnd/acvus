@@ -1,0 +1,9 @@
+// expect 5.5
+let xs = vec([2.0, 4.0, 3.0]);
+let m = 0.0;
+let out = vec([]);
+for x in &xs {
+    m = m * 0.5 + *x;
+    out.push(m);
+}
+m

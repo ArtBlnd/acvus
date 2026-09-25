@@ -1924,6 +1924,7 @@ fn qref_expr(name: &str) -> proc_macro2::TokenStream {
         ::acvus_extern::QualifiedRef {
             namespace: __ns.map(|__n| __i.intern(__n)),
             name: __i.intern(#name),
+            host: None,
         }
     }
 }
@@ -2613,6 +2614,10 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     identity_params: #n_identities,
                     region_params: Self::REGION_PARAMS,
                     specializable: vec![true; #n_tys],
+                    // Not read from the payload: no statement of the payload's
+                    // own fields reaches the derive, and the payload's spelling
+                    // is not a fact about what it holds (RFC-0095 rule 4).
+                    may_hold_a_function: true,
                 }
             }
 

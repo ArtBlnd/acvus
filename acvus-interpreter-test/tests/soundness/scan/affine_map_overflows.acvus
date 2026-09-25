@@ -1,0 +1,9 @@
+// expect attempt to multiply with overflow
+let xs = vec([i64::MAX() / 4, 1, 1, 1]);
+let y = 0;
+let out = vec([]);
+for x in &xs {
+    y = 2 * y + *x;
+    out.push(y);
+}
+out.len()
