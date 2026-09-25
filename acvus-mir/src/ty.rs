@@ -4175,6 +4175,14 @@ impl<V: Phase> TyTerm<V> {
         });
     }
 
+    /// Whether an identity argument, known or a variable, appears anywhere
+    /// in the type.
+    pub fn carries_identity(&self) -> bool {
+        let mut carries = false;
+        self.for_each_identity(&mut |_| carries = true);
+        carries
+    }
+
     /// Every identity argument in the type, in `for_each_source`'s order.
     pub fn for_each_identity(&self, on_identity: &mut impl FnMut(&IdentityTerm<V>)) {
         match self {

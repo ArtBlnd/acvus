@@ -1458,7 +1458,10 @@ call site, with every mismatch an explicit `None`.
    the type lacks or a missing field makes the result `None`, never a
    panic, and releases what was filled. `Finished` comes only from that
    call's `Output`, branded by `'call` invariantly. The handler never reads
-   `T`. Other generics are allowed: a `Var` is opaque to it.
+   `T`. Other generics are allowed: a `Var` is opaque to it. A dynamic
+   result is a new source (RFC-0012 rule 4): a call whose result's settled
+   type carries an identity argument is refused, naming the call, since its
+   use would tie the host's value to a source it is not from.
 4. **Decoding at an expected type.** `Entry::run_encoded(Encoded)` decodes
    an entry's inputs at their types (RFC-0033, untrusted), refusing on any
    mismatch, and runs it.

@@ -303,6 +303,12 @@ pub enum MirErrorKind {
     ResultUnsettled {
         callee: QualifiedRef,
     },
+    /// A `dynamic` extern's result is a new source, and its use here settled
+    /// it at a type carrying an identity argument, which would tie the
+    /// host's value to a source it is not from (RFC-0097 rule 3).
+    ResultCarriesIdentity {
+        callee: QualifiedRef,
+    },
     UnificationFailure {
         expected: Ty,
         got: Ty,
@@ -744,6 +750,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     "the result of `{}` is typed by how this call's result is used, and no use \
                      here settles its type: read its fields, return it, or pass it where a type \
                      is declared (RFC-0097 rule 3)",
+                    qualified(interner, *callee)
+                )
+            }
+            MirErrorKind::ResultCarriesIdentity { callee } => {
+                write!(
+                    f,
+                    "the result of `{}` is a new source, and its use here gives it a type that \
+                     carries a source's identity; a value from outside the script comes from no \
+                     source the script holds (RFC-0097 rule 3)",
                     qualified(interner, *callee)
                 )
             }

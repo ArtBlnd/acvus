@@ -3,6 +3,7 @@
 //! used, and the handler fills an `Output` at that type. A mismatched leaf, a
 //! second write, a name the type lacks or a missing field is `None`.
 
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -74,8 +75,22 @@ where
 fn registry() -> Registry<AcvusRuntime> {
     extern_registry! {
         ns: "t",
-        types: [Held],
-        fns: [describe, name_only, nested, whole, twice, held, held_then_mismatch, fuzz],
+        types: [Held, Tok<_>],
+        fns: [
+            describe,
+            name_only,
+            nested,
+            whole,
+            twice,
+            held,
+            held_then_mismatch,
+            fuzz,
+            mk_tok,
+            same_source,
+            consume_tok,
+            forge,
+            forge_field,
+        ],
     }
 }
 
@@ -172,6 +187,86 @@ fn a_site_that_settles_no_type_is_a_compile_error() {
              declared (RFC-0097 rule 3)"
         ]
     );
+}
+
+// -- A dynamic result is a new source ----------------------------------------
+
+/// An extension type with an identity parameter: one value is one source.
+#[derive(ExternType)]
+#[repr(transparent)]
+struct Tok<I>(i64, PhantomData<I>)
+where
+    I: Var<kind::Identity>;
+
+#[extern_fn(effect = pure)]
+fn mk_tok<I>() -> Tok<I>
+where
+    I: Var<kind::Identity>,
+{
+    Tok(7, PhantomData)
+}
+
+/// Two values of one source.
+#[extern_fn(effect = pure)]
+fn same_source<I>(a: Tok<I>, b: Tok<I>) -> i64
+where
+    I: Var<kind::Identity>,
+{
+    a.0 * 10 + b.0
+}
+
+#[extern_fn(effect = pure)]
+fn consume_tok<I>(tok: Tok<I>) -> i64
+where
+    I: Var<kind::Identity>,
+{
+    tok.0
+}
+
+#[extern_fn(dynamic, effect = pure)]
+fn forge<'c, T, R>(n: i64, mut out: Output<'c, T, R>) -> Finished<'c, T, R>
+where
+    T: Var<kind::Type>,
+    R: Runtime,
+{
+    out.write(Tok::<()>(n, PhantomData));
+    out.finish()
+}
+
+#[extern_fn(dynamic, effect = pure)]
+fn forge_field<'c, T, R>(n: i64, mut out: Output<'c, T, R>) -> Finished<'c, T, R>
+where
+    T: Var<kind::Type>,
+    R: Runtime,
+{
+    out.field("k", |k| k.write(Tok::<()>(n, PhantomData)));
+    out.finish()
+}
+
+fn carries_identity(callee: &str) -> String {
+    format!(
+        "[main] the result of `t::{callee}` is a new source, and its use here gives it a type \
+         that carries a source's identity; a value from outside the script comes from no \
+         source the script holds (RFC-0097 rule 3)"
+    )
+}
+
+#[test]
+fn a_dynamic_result_tied_to_a_source_the_script_holds_is_a_compile_error() {
+    let source = "let t = mk_tok();\nif let Some(u) = forge(1) { same_source(t, u) } else { consume_tok(t) }";
+    assert_eq!(refused(source), [carries_identity("forge")]);
+}
+
+#[test]
+fn a_dynamic_result_carrying_an_identity_in_a_field_is_a_compile_error() {
+    let source = "let t = mk_tok();\nif let Some(r) = forge_field(1) { same_source(t, r.k) } else { consume_tok(t) }";
+    assert_eq!(refused(source), [carries_identity("forge_field")]);
+}
+
+#[test]
+fn a_dynamic_result_carrying_an_identity_no_other_value_holds_is_a_compile_error() {
+    let source = "if let Some(u) = forge(1) { consume_tok(u) } else { 0 }";
+    assert_eq!(refused(source), [carries_identity("forge")]);
 }
 
 // -- A sealed output releases what it filled ---------------------------------

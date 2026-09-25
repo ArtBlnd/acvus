@@ -97,6 +97,9 @@ struct BoundSite {
     var: crate::ty::TypeBoundId,
     span: Span,
     callee: Option<QualifiedRef>,
+    /// The declaration bounded the variable `Settled`: a `dynamic`
+    /// extern's result (RFC-0097 rule 3).
+    settled_by_use: bool,
 }
 
 /// A bounded effect variable and where a violation of its bound is
@@ -4150,10 +4153,11 @@ where
         self.bound_sites.extend(
             inst.bounded
                 .into_iter()
-                .map(|var| BoundSite {
-                    var,
+                .map(|bounded| BoundSite {
+                    var: bounded.var,
                     span: site.at,
                     callee: Some(qref),
+                    settled_by_use: bounded.settled_by_use,
                 }),
         );
         self.effect_bound_sites.extend(
@@ -4483,10 +4487,11 @@ where
                 continue;
             };
             let span = self.decision_sites[decision];
-            types.extend(bounded.into_iter().map(|var| BoundSite {
-                var,
+            types.extend(bounded.into_iter().map(|bounded| BoundSite {
+                var: bounded.var,
                 span,
                 callee: Some(qref),
+                settled_by_use: bounded.settled_by_use,
             }));
             effects.extend(
                 bounded_effects
@@ -4872,6 +4877,16 @@ where
             // refusal's consequence: the refused call's types are the ones
             // that reach the bounded variable.
             if !refused.is_empty() {
+                continue;
+            }
+            // A `dynamic` extern's result is a new source (RFC-0097 rule 3):
+            // a use that gives it a type with an identity argument, at any
+            // depth, would tie the host's value to a source it is not from.
+            if site.settled_by_use
+                && let Some(callee) = site.callee
+                && self.solver.resolve_ty(&TyTerm::Var(site.var)).carries_identity()
+            {
+                self.error(MirErrorKind::ResultCarriesIdentity { callee }, site.span);
                 continue;
             }
             match self.solver.close_ty(&TyTerm::Var(site.var)) {
@@ -7302,6 +7317,7 @@ where
             var,
             span,
             callee: None,
+            settled_by_use: false,
         });
         true
     }
@@ -7349,6 +7365,7 @@ where
                 var,
                 span,
                 callee: None,
+                settled_by_use: false,
             });
         }
         true

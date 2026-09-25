@@ -2359,11 +2359,21 @@ pub enum SettledSignature {
     Named {
         qref: QualifiedRef,
         instance: Option<InstanceChoice>,
-        bounded: Vec<TypeBoundId>,
+        bounded: Vec<BoundedVar>,
         bounded_effects: Vec<EffectVarId>,
         requirements: Vec<RequiredDecision>,
     },
     Local,
+}
+
+/// A variable an instantiation bounded, and whether its declaration asks
+/// the call's use to settle it (`TyVarBound::Settled`, RFC-0097 rule 3). The
+/// solve meets that bound with the bounds of the variables it joins, so the
+/// variable's bound at the freeze no longer says which declaration made it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundedVar {
+    pub var: TypeBoundId,
+    pub settled_by_use: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4881,7 +4891,7 @@ impl<'src> Solver<'src> {
             withholds,
             structural,
         } = compiler;
-        let mut bounded: Vec<TypeBoundId> = Vec::new();
+        let mut bounded: Vec<BoundedVar> = Vec::new();
         let mut bounded_effects: Vec<EffectVarId> = Vec::new();
         let fixed_generic = scheme.instances.as_ref().is_some_and(|instances| {
             instances.concrete.is_empty()
@@ -4901,7 +4911,10 @@ impl<'src> Solver<'src> {
             |var, fresh| {
                 let bound = scheme.bound_of(var);
                 if bound != TyVarBound::Any {
-                    bounded.push(fresh);
+                    bounded.push(BoundedVar {
+                        var: fresh,
+                        settled_by_use: bound == TyVarBound::Settled,
+                    });
                 }
                 bound
             },
@@ -5469,7 +5482,7 @@ pub struct EffectOutOfBound {
 /// variables where it chose to.
 pub struct Instantiated {
     pub ty: InferTy,
-    pub bounded: Vec<TypeBoundId>,
+    pub bounded: Vec<BoundedVar>,
     /// The effect variables a declared bound floors (RFC-0011 rule 5).
     pub bounded_effects: Vec<EffectVarId>,
     /// `Some` for an Extern function.
