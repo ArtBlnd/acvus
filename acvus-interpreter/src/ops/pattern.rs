@@ -55,8 +55,8 @@ where
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let matches = T::read(regs.word(self.slots.src.at)).wide() == self.want;
-        regs.set_word(self.slots.dst.at, matches as u64);
+        let matches = T::read(regs.word(self.slots.src.at())).wide() == self.want;
+        regs.set_word(self.slots.dst.at(), matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -72,8 +72,8 @@ impl<const THROUGH: bool> Op for TestFloat<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let matches = place::<THROUGH>(regs.peek(self.slots.src.at)).as_float() == self.want;
-        regs.set_word(self.slots.dst.at, matches as u64);
+        let matches = place::<THROUGH>(regs.peek(self.slots.src.at())).as_float() == self.want;
+        regs.set_word(self.slots.dst.at(), matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -89,8 +89,8 @@ impl<const THROUGH: bool> Op for TestBool<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let matches = place::<THROUGH>(regs.peek(self.slots.src.at)).as_bool() == self.want;
-        regs.set_word(self.slots.dst.at, matches as u64);
+        let matches = place::<THROUGH>(regs.peek(self.slots.src.at())).as_bool() == self.want;
+        regs.set_word(self.slots.dst.at(), matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -106,10 +106,10 @@ impl<const THROUGH: bool> Op for TestString<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
+        let source = place::<THROUGH>(regs.peek(self.slots.src.at()));
         // SAFETY: the type checker matches a string literal against a string.
         let matches = unsafe { source.as_str() } == self.want.as_str();
-        regs.set_word(self.slots.dst.at, matches as u64);
+        regs.set_word(self.slots.dst.at(), matches as u64);
         self.next.run(m, r0)
     }
 }
@@ -143,11 +143,11 @@ impl<const THROUGH: bool> Op for TestObjectKey<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = place::<THROUGH>(regs.peek(self.slots.src.at));
+        let source = place::<THROUGH>(regs.peek(self.slots.src.at()));
         // SAFETY: the preparation read `Object` from the type, and the
         // position is one the settled type's layout has.
         let held = unsafe { source.as_object() }[self.at.index()].kind();
-        regs.set_word(self.slots.dst.at, (held != Kind::Undef) as u64);
+        regs.set_word(self.slots.dst.at(), (held != Kind::Undef) as u64);
         self.next.run(m, r0)
     }
 }

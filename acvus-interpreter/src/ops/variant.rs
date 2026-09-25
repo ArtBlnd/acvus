@@ -117,8 +117,8 @@ impl<const THROUGH: bool, const SOME: bool> Op for TestOption<THROUGH, SOME> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let is_some = !scrutinee::<THROUGH>(regs.peek(self.slots.src.at)).is_none();
-        regs.set_word(self.slots.dst.at, (is_some == SOME) as u64);
+        let is_some = !scrutinee::<THROUGH>(regs.peek(self.slots.src.at())).is_none();
+        regs.set_word(self.slots.dst.at(), (is_some == SOME) as u64);
         self.next.run(m, r0)
     }
 }
@@ -134,10 +134,10 @@ impl<const THROUGH: bool> Op for TestVariant<THROUGH> {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let regs = m.regs();
-        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src.at));
+        let source = scrutinee::<THROUGH>(regs.peek(self.slots.src.at()));
         // SAFETY: the preparation read an enum from the source's type.
         let matches = unsafe { source.as_variant() }.tag().bits() == self.tag;
-        regs.set_word(self.slots.dst.at, matches as u64);
+        regs.set_word(self.slots.dst.at(), matches as u64);
         self.next.run(m, r0)
     }
 }

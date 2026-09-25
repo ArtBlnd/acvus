@@ -60,7 +60,7 @@ impl<const LARGE: bool, const WORD: bool> Op for Mov<LARGE, WORD> {
         match WORD {
             true => {
                 let bits = regs.take_word(self.src);
-                regs.set_word(self.dst.at, bits);
+                regs.set_word(self.dst.at(), bits);
             }
             false => {
                 let value = regs.take::<LARGE>(self.src);
@@ -139,7 +139,7 @@ where
 /// (RFC-0052 rule 5).
 ///
 /// Obligation across artifacts: under `PAIR`, `prepare::assign_slots` placed
-/// the result in the two adjacent registers `SlicePair::at` derives, and the
+/// the result in the two adjacent registers `Marked::pair` derives, and the
 /// caller's destination is a pair of the same shape (RFC-0047 rule 6).
 pub struct Return<const WORD: bool, const PAIR: bool> {
     pub slot: Marked,
@@ -156,7 +156,7 @@ impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
         }
         match PAIR {
             true => {
-                let pair = SlicePair::at(self.slot.at);
+                let pair = self.slot.pair();
                 let regs = m.regs();
                 let (ptr, len) = (regs.word(pair.ptr), regs.word(pair.len));
                 m.finish_pair(ptr, len);
@@ -165,7 +165,7 @@ impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
                 let value = match WORD {
                     true => {
                         let regs = m.regs();
-                        let kind = regs.peek(self.slot.at).kind();
+                        let kind = regs.peek(self.slot.at()).kind();
                         Value::inline(kind, regs.take_word(self.slot))
                     }
                     false => m.regs().take::<true>(self.slot),

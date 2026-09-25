@@ -356,7 +356,7 @@ mod tests {
     use crate::executor::SequentialExecutor;
     use crate::interpreter::InterpreterContext;
     use crate::ops::control::Fall;
-    use crate::regs::{Store, cells_for, mark_words};
+    use crate::regs::{FrameSlot, MarkWords, Store, cells_for};
     use crate::value::Kind;
 
     const FRAME: u16 = 8;
@@ -388,7 +388,7 @@ mod tests {
             entry: 0,
             frame_len: FRAME,
             frame_cells: u16::try_from(cells_for(FRAME)).expect("a small frame"),
-            mark_words: mark_words(FRAME),
+            mark_words: MarkWords::of(FRAME),
             entry_konsts: Box::new([]),
             literals: Arc::new(Literals::of(std::iter::empty())),
             slot_kinds: Box::new([]),
@@ -404,7 +404,7 @@ mod tests {
     }
 
     fn reg(index: u16) -> Marked {
-        Marked::of(Off::of(index))
+        Marked::of(FrameSlot::of(index))
     }
 
     fn konst(at: u16, value: Value) -> LaidKonst {
@@ -431,8 +431,8 @@ mod tests {
         let mut store = Store::new();
         let (mut regs, _) = store.bind(&body);
         regs.open_marks(body.mark_words);
-        for index in 0..FRAME {
-            regs.open(Off::of(index), Value::UNDEF);
+        for slot in FrameSlot::first(usize::from(FRAME)) {
+            regs.open(Off::of_below(slot), Value::UNDEF);
         }
         let mut placed: Vec<(u64, usize)> = Vec::new();
         for (index, before) in (0..FRAME).zip(before) {
@@ -453,9 +453,9 @@ mod tests {
             "the operation runs on to its successor"
         );
         let regs = m.regs();
-        let registers = (0..FRAME)
-            .map(|index| {
-                let value = regs.read(Off::of(index));
+        let registers = FrameSlot::first(usize::from(FRAME))
+            .map(|slot| {
+                let value = regs.read(Off::of_below(slot));
                 match value.kind() {
                     Kind::Large => Word::Large {
                         placed_in: placed

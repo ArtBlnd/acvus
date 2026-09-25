@@ -427,6 +427,286 @@ impl Words {
     }
 }
 
+// -- A slot's place in a run ------------------------------------------------
+
+/// An index below `N`.
+///
+/// Its field is private, so every `Below<N>` was made here, by a constructor
+/// that holds it below `N`: `new` and `of` check the index, and `first`
+/// checks a run's length once; `masked`, `compose` and `step_to` take the
+/// bound from their arguments' types and a constant assertion, and check
+/// nothing at run time. `Disp::of_below` and `Disp::after` read the bound
+/// from the type, so they multiply without a check.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Below<const N: u16>(u16);
+
+impl<const N: u16> Below<N> {
+    #[inline]
+    pub const fn new(index: u16) -> Option<Below<N>> {
+        match index < N {
+            true => Some(Below(index)),
+            false => None,
+        }
+    }
+
+    /// # Panics
+    /// `index` is not below `N`. In a constant this is a compile error.
+    #[inline]
+    pub const fn of(index: u16) -> Below<N> {
+        let Some(below) = Below::new(index) else {
+            panic!("Below::of: the index is not below its bound")
+        };
+        below
+    }
+
+    /// The first `len` indices, in order.
+    ///
+    /// # Panics
+    /// `len` is above `N`.
+    pub fn first(len: usize) -> impl Iterator<Item = Below<N>> {
+        let len = u16::try_from(len)
+            .ok()
+            .filter(|len| *len <= N)
+            .unwrap_or_else(|| {
+                panic!("Below::first: a run of {len} indices is past the bound {N}")
+            });
+        (0..len).map(Below)
+    }
+
+    /// The low bits of `bits` that name an index below `N`, a power of two:
+    /// `bits & (N - 1)`. A value already below `N`, such as a nonzero `u64`'s
+    /// `trailing_zeros` for `N = 64`, is itself.
+    #[inline(always)]
+    pub const fn masked(bits: u32) -> Below<N> {
+        const {
+            assert!(
+                N.is_power_of_two(),
+                "Below::masked: a mask names every index below a power of two alone"
+            )
+        };
+        Below((bits & (N as u32 - 1)) as u16)
+    }
+
+    /// `hi * B + lo`, which is at most `(W - 1) * B + B - 1 = W * B - 1`.
+    #[inline(always)]
+    pub const fn compose<const W: u16, const B: u16>(hi: Below<W>, lo: Below<B>) -> Below<N> {
+        const {
+            assert!(
+                W as u32 * B as u32 <= N as u32,
+                "Below::compose: W * B indices do not all lie below N"
+            )
+        };
+        Below(hi.0 * B + lo.0)
+    }
+
+    /// The index after this one, when this one is before `last`: then it is
+    /// at most `last`, which is below `N`.
+    #[inline(always)]
+    pub const fn step_to(self, last: Below<N>) -> Option<Below<N>> {
+        match self.0 < last.0 {
+            true => Some(Below(self.0 + 1)),
+            false => None,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// The place of one slot of a run of `S`s: its byte displacement from the
+/// run's first byte, `i * size_of::<S>()` for slot `i` (RFC-0080 rule 5).
+///
+/// It is multiplied once, where it is made, so a read at it adds and scales
+/// nothing (RFC-0052 rule 5). It is a `u16`, and every `Disp<S>` is a whole
+/// number of `S`s that fits one, so no reader checks it again.
+#[repr(transparent)]
+pub struct Disp<S>(u16, PhantomData<fn() -> S>);
+
+impl<S> Clone for Disp<S> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Disp<S> {}
+
+impl<S> PartialEq for Disp<S> {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<S> Eq for Disp<S> {}
+
+impl<S> PartialOrd for Disp<S> {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<S> Ord for Disp<S> {
+    #[inline(always)]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl<S> std::hash::Hash for Disp<S> {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        self.0.hash(state);
+    }
+}
+
+impl<S> fmt::Debug for Disp<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Disp").field(&self.0).finish()
+    }
+}
+
+impl<S> Disp<S> {
+    /// Slot `index` of a run of `S`s.
+    ///
+    /// # Panics
+    /// `index * size_of::<S>()` is above `u16::MAX`. In a constant this is a
+    /// compile error.
+    #[inline]
+    pub const fn of(index: u16) -> Disp<S> {
+        let Some(byte) = index.checked_mul(Self::SLOT) else {
+            panic!("Disp::of: the slot's displacement does not fit the u16 a Disp holds")
+        };
+        Disp(byte, PhantomData)
+    }
+
+    /// Slot `index` of a run of `S`s, below `N`.
+    #[inline(always)]
+    pub const fn of_below<const N: u16>(index: Below<N>) -> Disp<S> {
+        const { Self::fits::<N>() };
+        Disp(index.0 * Self::SLOT, PhantomData)
+    }
+
+    /// The slot after `index`: at most slot `N`, whose displacement `fits`
+    /// holds in the `u16`.
+    #[inline(always)]
+    pub const fn after<const N: u16>(index: Below<N>) -> Disp<S> {
+        const { Self::fits::<N>() };
+        Disp((index.0 + 1) * Self::SLOT, PhantomData)
+    }
+
+    const fn fits<const N: u16>() {
+        assert!(
+            N as usize * mem::size_of::<S>() <= u16::MAX as usize,
+            "Disp: the displacement of a Below's bound does not fit the u16 a Disp holds"
+        );
+    }
+
+    const SLOT: u16 = {
+        assert!(
+            mem::size_of::<S>() != 0 && mem::size_of::<S>() <= u16::MAX as usize,
+            "Disp: a slot is at least one byte and at most u16::MAX bytes wide"
+        );
+        mem::size_of::<S>() as u16
+    };
+
+    #[inline(always)]
+    pub const fn byte(self) -> usize {
+        self.0 as usize
+    }
+
+    #[inline(always)]
+    pub const fn index(self) -> usize {
+        (self.0 / Self::SLOT) as usize
+    }
+}
+
+/// The displacement of a slot below `N` of a run of `S`s. It is the `Disp` a
+/// holder reads, and it keeps the bound it was made under, so the slot after
+/// it is a displacement with no check: `after` divides its own displacement
+/// back into the index, which `of` made from a `Below<N>`.
+#[repr(transparent)]
+pub struct DispBelow<S, const N: u16>(Disp<S>);
+
+impl<S, const N: u16> Clone for DispBelow<S, N> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S, const N: u16> Copy for DispBelow<S, N> {}
+
+impl<S, const N: u16> PartialEq for DispBelow<S, N> {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<S, const N: u16> Eq for DispBelow<S, N> {}
+
+impl<S, const N: u16> fmt::Debug for DispBelow<S, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("DispBelow").field(&self.0.0).finish()
+    }
+}
+
+impl<S, const N: u16> DispBelow<S, N> {
+    #[inline(always)]
+    pub const fn of(index: Below<N>) -> DispBelow<S, N> {
+        DispBelow(Disp::of_below(index))
+    }
+
+    #[inline(always)]
+    pub const fn disp(self) -> Disp<S> {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn index(self) -> Below<N> {
+        Below(self.0.0 / Disp::<S>::SLOT)
+    }
+
+    /// The slot after this one.
+    #[inline(always)]
+    pub const fn after(self) -> Disp<S> {
+        Disp::after(self.index())
+    }
+}
+
+/// The slot `d` names in the run of `S`s that begins at `base`.
+///
+/// # Safety
+/// `base` is the first slot of a run of `S`s that lies in one allocation and
+/// has the slot `d` names.
+#[inline(always)]
+pub unsafe fn at<S>(base: NonNull<S>, d: Disp<S>) -> NonNull<S> {
+    // SAFETY: the caller's contract puts the slot inside `base`'s allocation,
+    // and `d` is a whole number of `S`s (`Disp::of`), so the result is aligned
+    // as `base` is.
+    unsafe { base.byte_add(d.byte()) }
+}
+
+/// The `u64` at byte `byte` of the allocation `base` points into: a mark word
+/// laid past a frame's registers, or the word of a register a chain leaf
+/// names.
+///
+/// # Safety
+/// The eight bytes at `byte` past `base` lie inside the allocation `base`
+/// points into, and their first is aligned to a `u64`.
+#[inline(always)]
+pub unsafe fn word_at<S>(base: NonNull<S>, byte: usize) -> NonNull<u64> {
+    // SAFETY: the caller's contract: the word lies inside `base`'s allocation
+    // and is aligned to a `u64`.
+    unsafe { base.byte_add(byte) }.cast::<u64>()
+}
+
 // -- A head with a trailing array -------------------------------------------
 
 /// The layout of one allocation that holds an `H` and then a run of `E`s:
@@ -994,6 +1274,71 @@ mod tests {
         assert_eq!(tag_of_word(word_of_tag(some)), some);
         assert_ne!(word_of_tag(some), word_of_tag(none));
         assert_ne!(word_of_tag(some) >> 32, 0, "a tag's word carries its interner");
+    }
+
+    #[test]
+    fn a_displacement_is_its_slot_times_the_slot_width() {
+        let d = Disp::<[u64; 2]>::of(3);
+        assert_eq!(d.byte(), 48);
+        assert_eq!(d.index(), 3);
+        assert_eq!(Disp::<[u64; 2]>::of(4095).byte(), 65520);
+        assert!(Disp::<u64>::of(1) < Disp::<u64>::of(2));
+
+        let run = [[1u64, 2], [3, 4], [5, 6]];
+        let base = NonNull::from(&run).cast::<[u64; 2]>();
+        // SAFETY: `run` has slot 2 and is live while it is read.
+        assert_eq!(unsafe { at(base, Disp::of(2)).read() }, [5, 6]);
+        // SAFETY: byte 24 is the second word of slot 1, inside `run` and
+        // aligned to a `u64`.
+        assert_eq!(unsafe { word_at(base, 24).read() }, 4);
+    }
+
+    #[test]
+    fn a_below_index_and_the_slot_after_it_are_their_slots_times_the_slot_width() {
+        let three = Below::<4>::of(3);
+        assert_eq!(Disp::<[u64; 2]>::of_below(three), Disp::of(3));
+        assert_eq!(Disp::<[u64; 2]>::after(three), Disp::of(4));
+        assert_eq!(Disp::<[u64; 2]>::after(Below::<4>::of(0)).byte(), 16);
+        let placed = DispBelow::<[u64; 2], 4>::of(three);
+        assert_eq!(placed.disp(), Disp::of(3));
+        assert_eq!(placed.index(), three);
+        assert_eq!(placed.after(), Disp::of(4));
+    }
+
+    #[test]
+    fn a_below_index_is_checked_when_given_and_composed_without_a_check() {
+        assert_eq!(Below::<4>::new(3).map(Below::get), Some(3));
+        assert_eq!(Below::<4>::new(4), None);
+        assert_eq!(
+            Below::<4>::first(3).map(Below::get).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(Below::<64>::masked(63).get(), 63);
+        assert_eq!(Below::<64>::masked(64).get(), 0);
+        assert_eq!(Below::<64>::masked(u64::MAX.trailing_zeros()).get(), 0);
+        assert_eq!(Below::<64>::masked((1u64 << 63).trailing_zeros()).get(), 63);
+        let last = Below::<320>::compose(Below::<5>::of(4), Below::<64>::of(63));
+        assert_eq!(last.get(), 319);
+        assert_eq!(Below::<5>::of(3).step_to(Below::of(4)), Some(Below::of(4)));
+        assert_eq!(Below::<5>::of(4).step_to(Below::of(4)), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not below its bound")]
+    fn a_below_index_at_its_bound_is_refused() {
+        Below::<4>::of(4);
+    }
+
+    #[test]
+    #[should_panic(expected = "past the bound")]
+    fn a_run_of_indices_past_the_bound_is_refused() {
+        let _ = Below::<4>::first(5);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not fit the u16 a Disp holds")]
+    fn a_displacement_past_a_u16_is_refused() {
+        Disp::<[u64; 2]>::of(4096);
     }
 
     #[test]

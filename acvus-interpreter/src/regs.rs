@@ -12,6 +12,7 @@ use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
 use acvus_extern::Release;
+use acvus_extern::repr;
 
 use crate::code::{Body, Marked, Off, WordMask};
 use crate::value::Value;
@@ -19,7 +20,13 @@ use crate::value::Value;
 /// The registers one cell holds: four cache lines of `Value`s.
 pub const CELL_SLOTS: u16 = 16;
 
-pub const MAX_FRAME_SLOTS: u16 = Off::MAX_INDEX + 1;
+pub const MAX_FRAME_SLOTS: u16 = 320;
+
+/// A register of a frame: an index below `MAX_FRAME_SLOTS`. prepare makes one
+/// by a check where it assigns a register, and the machine where it lays an
+/// argument run; `Regs::sweep` composes one from a mark word's index and a set
+/// bit's, with no check.
+pub type FrameSlot = repr::Below<MAX_FRAME_SLOTS>;
 
 pub const MAX_RUN_SLOTS: u16 = 256;
 
@@ -50,6 +57,30 @@ const _: () = assert!(
 pub(crate) const fn mark_words(slots: u16) -> u16 {
     MARK_WORDS_AT_LEAST + slots.saturating_sub(1) / MARK_WORD_SLOTS
 }
+
+/// The index of a frame's last mark word: below `MAX_MARK_WORDS` for a frame of
+/// at most `MAX_FRAME_SLOTS` registers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MarkWords(repr::Below<MAX_MARK_WORDS>);
+
+impl MarkWords {
+    /// # Panics
+    /// `slots` is above `MAX_FRAME_SLOTS`.
+    pub const fn of(slots: u16) -> MarkWords {
+        assert!(
+            slots <= MAX_FRAME_SLOTS,
+            "a frame's mark words are counted for more registers than one frame holds"
+        );
+        MarkWords(repr::Below::of(mark_words(slots) - MARK_WORDS_AT_LEAST))
+    }
+
+    #[inline(always)]
+    pub const fn last(self) -> repr::Below<MAX_MARK_WORDS> {
+        self.0
+    }
+}
+
+const MAX_MARK_WORDS: u16 = mark_words(MAX_FRAME_SLOTS);
 
 #[inline(always)]
 const fn mark_slots(slots: u16) -> u16 {
@@ -86,6 +117,15 @@ impl Cell {
         Cell {
             slots: [const { MaybeUninit::uninit() }; CELL_SLOTS as usize],
         }
+    }
+
+    /// The first register slot of a run of cells. A `Cell` is `repr(C)` over
+    /// `Value` slots alone and is a whole number of its own alignment wide
+    /// (the size assertion below), so a run of cells is one run of `Value`
+    /// slots, which an `Off` is a displacement into.
+    #[inline(always)]
+    fn first(cells: NonNull<[Cell]>) -> NonNull<Value> {
+        cells.cast::<Value>()
     }
 }
 
@@ -308,7 +348,7 @@ impl FrameState {
 
     /// The register `at` of the frame this window begins.
     #[inline(always)]
-    fn at(&self, at: Off) -> *mut Value {
+    fn at(&self, at: Off) -> NonNull<Value> {
         debug_assert!(
             at.index() < CELL_SLOTS as usize * ARG_CELLS,
             "a call lays an argument in the callee's register {}, past the cell the window \
@@ -319,13 +359,7 @@ impl FrameState {
         // the cell this writes before a frame is bound in it,
         // `Store::root_window` holds the widest frame there is, and the debug
         // assertion above holds the displacement inside that cell.
-        unsafe {
-            self.cells
-                .as_ptr()
-                .cast::<u8>()
-                .add(at.byte())
-                .cast::<Value>()
-        }
+        unsafe { repr::at(Cell::first(self.cells), at) }
     }
 
     /// One argument of a call, written to the register the callee reads it
@@ -343,10 +377,10 @@ impl FrameState {
     #[inline]
     pub fn laid(&mut self, arity: u16) -> &[Value] {
         self.bound.overlaid(arity);
-        let first = self.at(Off::of(0));
+        let first = self.at(const { Off::of(0) });
         // SAFETY: `lay` wrote every register of the run, and `at` holds the
         // widest of them inside the cell the window begins with.
-        unsafe { std::slice::from_raw_parts(first, usize::from(arity)) }
+        unsafe { std::slice::from_raw_parts(first.as_ptr(), usize::from(arity)) }
     }
 
     /// The callee's first `width` parameter registers, for a crossing that
@@ -365,9 +399,8 @@ impl FrameState {
         for slot in run.iter_mut() {
             slot.write(Value::UNDEF);
         }
-        // SAFETY: every slot of the run was written just above, and
-        // `MaybeUninit<Value>` and `Value` are the same layout.
-        unsafe { &mut *(run as *mut [MaybeUninit<Value>] as *mut [Value]) }
+        // SAFETY: every slot of the run was written just above.
+        unsafe { run.assume_init_mut() }
     }
 }
 
@@ -390,7 +423,10 @@ unsafe fn run_in(cells: &[Cell], at: Off, arity: u16, len: u16) -> &[Value] {
     );
     // SAFETY: the caller's contract.
     unsafe {
-        std::slice::from_raw_parts(cells.as_ptr().cast::<Value>().add(from), usize::from(arity))
+        std::slice::from_raw_parts(
+            repr::at(Cell::first(NonNull::from(cells)), at).as_ptr(),
+            usize::from(arity),
+        )
     }
 }
 
@@ -473,13 +509,7 @@ impl<'f> Regs<'f> {
             off.index()
         );
         // SAFETY: the two proofs stated on `Regs`.
-        unsafe {
-            self.cells
-                .as_ptr()
-                .cast::<u8>()
-                .add(off.byte())
-                .cast::<Value>()
-        }
+        unsafe { repr::at(Cell::first(NonNull::from(&*self.cells)), off) }.as_ptr()
     }
 
     #[inline(always)]
@@ -490,47 +520,37 @@ impl<'f> Regs<'f> {
             off.index()
         );
         // SAFETY: the two proofs stated on `Regs`.
-        unsafe {
-            self.cells
-                .as_mut_ptr()
-                .cast::<u8>()
-                .add(off.byte())
-                .cast::<Value>()
-        }
+        unsafe { repr::at(Cell::first(NonNull::from(&mut *self.cells)), off) }.as_ptr()
     }
 
-    /// `word_byte` is `Marked::word_byte` of the register being marked, which
-    /// `prepare` decided and moved into the operation.
+    /// The byte of the frame a mark word sits at: past the frame's `len`
+    /// registers, at `word_byte`, which is `Marked::word_byte` of the register
+    /// being marked, decided in `prepare` and moved into the operation.
     #[inline(always)]
-    fn mark_ptr(&self, word_byte: usize) -> *mut u64 {
+    fn mark_byte(&self, word_byte: usize) -> usize {
         debug_assert!(
             word_byte < usize::from(mark_words(self.len)) * size_of::<u64>(),
             "an operation marks the mark word at byte {word_byte}, which its body's frame does \
              not have"
         );
-        let byte = usize::from(self.len) * size_of::<Value>() + word_byte;
-        // SAFETY: `cells_for(len)` reserved `mark_slots(len)` slots at register
-        // index `len`, and the assertion above holds `word_byte` inside them.
-        unsafe {
-            self.cells
-                .as_ptr()
-                .cast::<u8>()
-                .add(byte)
-                .cast::<u64>()
-                .cast_mut()
-        }
+        usize::from(self.len) * size_of::<Value>() + word_byte
     }
 
     #[inline(always)]
     fn marked(&self, word_byte: usize) -> u64 {
-        // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr(word_byte) }
+        let byte = self.mark_byte(word_byte);
+        // SAFETY: `cells_for(len)` reserved `mark_slots(len)` slots at register
+        // index `len`, and `mark_byte`'s assertion holds `word_byte` inside
+        // them; a register slot is a whole number of mark words wide, so the
+        // word is aligned.
+        unsafe { repr::word_at(Cell::first(NonNull::from(&*self.cells)), byte).read() }
     }
 
     #[inline(always)]
     fn mark(&mut self, word_byte: usize, bits: u64) {
-        // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr(word_byte) = bits }
+        let byte = self.mark_byte(word_byte);
+        // SAFETY: as `marked`.
+        unsafe { repr::word_at(Cell::first(NonNull::from(&mut *self.cells)), byte).write(bits) }
     }
 
     #[cfg(test)]
@@ -544,8 +564,8 @@ impl<'f> Regs<'f> {
     /// closure-heavy body takes per element. This runs from
     /// `machine::open_frame` instead, once per window and body, which is also
     /// where the kind bytes are written.
-    pub fn open_marks(&mut self, mark_words: u16) {
-        for word in 1..usize::from(mark_words) {
+    pub fn open_marks(&mut self, mark_words: MarkWords) {
+        for word in 1..usize::from(mark_words.last().get()) + 1 {
             self.mark(word * size_of::<u64>(), 0);
         }
     }
@@ -595,7 +615,7 @@ impl<'f> Regs<'f> {
             self.marked(at.word_byte()) & at.mask() == 0,
             "a word-typed register carries the frame's claim on a Large"
         );
-        self.word(at.at)
+        self.word(at.at())
     }
 
     /// One store, and one `or` on the frame's mark word where the operation's
@@ -605,7 +625,7 @@ impl<'f> Regs<'f> {
         // SAFETY: `check_assignment`, as stated on `Regs`. A register this
         // overwrites was released by a drop instruction or never owned
         // (RFC-0018, RFC-0048 rule 6), so no value is lost here.
-        unsafe { self.at_mut(at.at).write(value) };
+        unsafe { self.at_mut(at.at()).write(value) };
         if LARGE {
             let word = at.word_byte();
             self.mark(word, self.marked(word) | at.mask());
@@ -631,7 +651,7 @@ impl<'f> Regs<'f> {
             )
         }
         match WORD {
-            true => self.set_word(at.at, value.bits()),
+            true => self.set_word(at.at(), value.bits()),
             false => self.define::<LARGE>(at, value),
         }
     }
@@ -650,7 +670,7 @@ impl<'f> Regs<'f> {
     /// (RFC-0052 rule 5).
     #[inline(always)]
     pub fn take<const LARGE: bool>(&mut self, at: Marked) -> Value {
-        let value = self.read(at.at);
+        let value = self.read(at.at());
         if LARGE {
             let word = at.word_byte();
             self.mark(word, self.marked(word) & !at.mask());
@@ -683,11 +703,11 @@ impl<'f> Regs<'f> {
         let word = at.word_byte();
         let marked = self.marked(word);
         if marked & one != 0 {
-            self.read(at.at).release();
+            self.read(at.at()).release();
         }
         // SAFETY: `check_assignment`, as stated on `Regs`, with the previous
         // owner released just above.
-        unsafe { self.at_mut(at.at).write(value) };
+        unsafe { self.at_mut(at.at()).write(value) };
         match LARGE {
             true => self.mark(word, marked | one),
             false => self.mark(word, marked & !one),
@@ -703,24 +723,29 @@ impl<'f> Regs<'f> {
     /// displacement and bit base fold, was measured at **+10.8 %** instead:
     /// `sweep` inlines into every return site, and a second copy of the release
     /// path costs more than the count does.
-    pub fn sweep(&mut self, mark_words: u16) {
-        let mut word = 0usize;
+    pub fn sweep(&mut self, mark_words: MarkWords) {
+        let last = mark_words.last();
+        let mut word = const { repr::Below::<MAX_MARK_WORDS>::of(0) };
         loop {
-            let mut live = self.marked(word * size_of::<u64>());
+            let word_byte = usize::from(word.get()) * size_of::<u64>();
+            let mut live = self.marked(word_byte);
             while live != 0 {
-                let bit = live.trailing_zeros() as u16 + word as u16 * MARK_WORD_SLOTS;
+                // A nonzero word's `trailing_zeros` is below 64, so the mask
+                // keeps it whole.
+                let bit = repr::Below::<MARK_WORD_SLOTS>::masked(live.trailing_zeros());
+                let slot = FrameSlot::compose(word, bit);
                 debug_assert!(
-                    bit < self.len,
+                    slot.get() < self.len,
                     "a set mark bit is a register index, which its frame holds"
                 );
-                self.read(Off::of(bit)).release();
+                self.read(Off::of_below(slot)).release();
                 live &= live - 1;
             }
-            self.mark(word * size_of::<u64>(), 0);
-            word += 1;
-            if word >= usize::from(mark_words) {
+            self.mark(word_byte, 0);
+            let Some(next) = word.step_to(last) else {
                 return;
-            }
+            };
+            word = next;
         }
     }
 
@@ -749,7 +774,7 @@ impl<'f> Regs<'f> {
         // `prepare::check_assignment` proves against `Body::frame_len`.
         unsafe {
             std::slice::from_raw_parts_mut(
-                self.cells.as_mut_ptr().cast::<Value>().add(from),
+                repr::at(Cell::first(NonNull::from(&mut *self.cells)), at).as_ptr(),
                 usize::from(width),
             )
         }
@@ -767,8 +792,8 @@ impl<'f> Regs<'f> {
     /// The frame's first register, which a chain's pre-multiplied leaf offsets
     /// are byte displacements from.
     #[inline]
-    pub fn as_ptr(&self) -> *const Value {
-        self.cells.as_ptr().cast::<Value>()
+    pub fn first_register(&self) -> NonNull<Value> {
+        Cell::first(NonNull::from(&*self.cells))
     }
 
     #[inline]
@@ -784,6 +809,81 @@ impl<'f> Regs<'f> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Arc;
+
+    use acvus_ast::Span;
+
+    use crate::code::Literals;
+
+    /// A `Large` whose drop the count of `alive` shows.
+    struct Counted {
+        _alive: Arc<()>,
+    }
+
+    fn body_of(frame_len: u16) -> Body {
+        Body {
+            heads: Box::new([]),
+            entry: 0,
+            frame_len,
+            frame_cells: u16::try_from(cells_for(frame_len)).expect("a frame's cells fit a u16"),
+            mark_words: MarkWords::of(frame_len),
+            entry_konsts: Box::new([]),
+            literals: Arc::new(Literals::of(std::iter::empty())),
+            slot_kinds: Box::new([]),
+            may_suspend: false,
+            returns_a_view: false,
+            params: Box::new([]),
+            param_run: 0,
+            param_marks: 0,
+            captures: Box::new([]),
+            order_param: None,
+            span: Span::ZERO,
+        }
+    }
+
+    /// `sweep` composes each register from a mark word's index and a set bit,
+    /// so a frame of every register it can hold releases the ones its last
+    /// mark word claims, the last register included, and clears every word.
+    #[test]
+    fn sweep_releases_the_registers_the_last_mark_word_claims() {
+        let body = body_of(MAX_FRAME_SLOTS);
+        let mut store = Store::new();
+        let (mut regs, _) = store.bind(&body);
+        regs.open_marks(body.mark_words);
+        for slot in FrameSlot::first(usize::from(MAX_FRAME_SLOTS)) {
+            regs.open(Off::of_below(slot), Value::UNDEF);
+        }
+        let alive = Arc::new(());
+        let claimed: [u16; 5] = [3, 256, 300, 318, 319];
+        for index in claimed {
+            // SAFETY: the word is never materialized; `release` drops it as the
+            // `Counted` it was erased from.
+            let value = unsafe {
+                Value::erase(Counted {
+                    _alive: Arc::clone(&alive),
+                })
+            };
+            regs.assign::<true>(Marked::of(FrameSlot::of(index)), value);
+        }
+        assert_eq!(Arc::strong_count(&alive), 1 + claimed.len());
+        assert_eq!(regs.mark_word(0), 1 << 3);
+        assert_eq!(
+            regs.mark_word(4),
+            1 << (300 - 256) | 1 << (318 - 256) | 1 << (319 - 256) | 1
+        );
+
+        regs.sweep(body.mark_words);
+
+        assert_eq!(
+            Arc::strong_count(&alive),
+            1,
+            "every claimed register is released once"
+        );
+        for word in 0..usize::from(mark_words(MAX_FRAME_SLOTS)) {
+            assert_eq!(regs.mark_word(word), 0, "mark word {word} is cleared");
+        }
+    }
 
     #[test]
     fn a_frame_carries_one_mark_word_per_sixty_four_registers() {
