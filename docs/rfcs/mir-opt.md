@@ -685,7 +685,10 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    - An arm that sends a token a value reading none of it, the other arm
      leaving it, is `last`; a compare and select by a strict order that
      also carries other tokens is the left-biased maximum or minimum;
-     both are associative, not commutative, `InOrder`.
+     both are associative, not commutative, `InOrder`. `first` is `last`
+     guarded by a `||` token the arm sets. An arm taken only at `k = 0`
+     that sends a value reading none of the token resets it: its law's
+     join takes no entry value.
 
 5. **Exits and effects.** An exit other than the header's is the control
    token's cycle: the stage it leaves from passes the control token to the
