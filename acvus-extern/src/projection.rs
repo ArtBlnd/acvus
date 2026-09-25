@@ -423,6 +423,77 @@ where
     }
 }
 
+impl<T, E> Borrowed for Result<T, E>
+where
+    T: Borrowed,
+    E: Borrowed,
+{
+    type Ref<'a>
+        = Result<<T as Borrowed>::Ref<'a>, <E as Borrowed>::Ref<'a>>
+    where
+        Self: 'a;
+    type Mut<'a>
+        = Result<<T as Borrowed>::Mut<'a>, <E as Borrowed>::Mut<'a>>
+    where
+        Self: 'a;
+}
+
+impl<T, E, Rt> Project<Rt> for Result<T, E>
+where
+    T: Project<Rt>,
+    E: Project<Rt>,
+    Rt: Runtime,
+{
+    type Table = (<T as Project<Rt>>::Table, <E as Project<Rt>>::Table);
+
+    /// # Panics
+    /// The settled type is not a `Result`. The checker settles a `Result`
+    /// field, and a lent value, at the type the Rust `Result` declares.
+    fn table(at: ArgAt<'_>) -> Self::Table {
+        let Ty::Result(ok, err) = at.ty else {
+            panic!("a `Result` projection's value is typed {:?}, which is no `Result`", at.ty)
+        };
+        (
+            <T as Project<Rt>>::table(ArgAt {
+                interner: at.interner,
+                ty: ok,
+            }),
+            <E as Project<Rt>>::table(ArgAt {
+                interner: at.interner,
+                ty: err,
+            }),
+        )
+    }
+
+    unsafe fn project<'a>(rt: &'a Rt, value: &'a Rt::Value, table: &Self::Table) -> Self::Ref<'a> {
+        // SAFETY: the caller's contract: `value` holds what the `Result`
+        // crossing's `erase` wrote.
+        let payload = unsafe { rt.result_at(value) };
+        // SAFETY: each side's payload holds what that side's crossing wrote,
+        // in storage live for `'a`.
+        unsafe {
+            payload
+                .map(|ok| <T as Project<Rt>>::project(rt, ok, &table.0))
+                .map_err(|err| <E as Project<Rt>>::project(rt, err, &table.1))
+        }
+    }
+
+    unsafe fn project_mut<'a>(
+        rt: &'a Rt,
+        value: &'a mut Rt::Value,
+        table: &Self::Table,
+    ) -> Self::Mut<'a> {
+        // SAFETY: as `project`, with the caller's exclusive loan.
+        let payload = unsafe { rt.result_at_mut(value) };
+        // SAFETY: as `project`, exclusively.
+        unsafe {
+            payload
+                .map(|ok| <T as Project<Rt>>::project_mut(rt, ok, &table.0))
+                .map_err(|err| <E as Project<Rt>>::project_mut(rt, err, &table.1))
+        }
+    }
+}
+
 /// A parameter declared as a projection: the reference the caller lent is the
 /// argument, and the projection is built inside the glue from it. It stays its
 /// own `Arg` because the macro picks a parameter's mode from the Rust type's

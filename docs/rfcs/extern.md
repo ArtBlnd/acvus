@@ -1124,9 +1124,9 @@ glue at the type the checker settled.
 3. **A host reads and edits as a handler does.** The host lends a value to a
    closure, and the closure's parameters cross exactly as an extern
    handler's do, through the glue the macro emits for a handler parameter:
-   `&T`, `&mut T`, `&str`, a slice of `Erased<Rt, T>`, a derive's
-   projection, and a `Ctx` that carries the runtime, written first as a
-   handler writes it (RFC-0023 rule 2). There is no second
+   `&T`, `&mut T`, `&str`, a slice of `Erased<Rt, T>`, a derive's or a
+   `Result`'s projection (RFC-0050), and a `Ctx` that carries the
+   runtime, written first (RFC-0023 rule 2). There is no second
    crossing and no host-only view.
    - A page is a program's view of one storage, opened by the program and
      borrowing it, so no page exists without a compilation and none serves

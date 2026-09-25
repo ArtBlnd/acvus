@@ -324,6 +324,20 @@ impl Runtime for Counting {
         Some(unsafe { &mut **cell })
     }
 
+    unsafe fn result_at<'a>(&self, value: &'a V) -> Result<&'a V, &'a V> {
+        let result = open_ref::<Result<acvus_extern::Owned<Self>, acvus_extern::Owned<Self>>>(value);
+        result.as_ref().map(|ok| &**ok).map_err(|err| &**err)
+    }
+
+    unsafe fn result_at_mut<'a>(&self, value: &'a mut V) -> Result<&'a mut V, &'a mut V> {
+        let result = open_mut::<Result<acvus_extern::Owned<Self>, acvus_extern::Owned<Self>>>(value);
+        // SAFETY: the caller's contract carries `value_mut`'s.
+        let payload = |held: &'a mut acvus_extern::Owned<Self>| unsafe {
+            held.value_mut(acvus_extern::Holding::new())
+        };
+        result.as_mut().map(payload).map_err(payload)
+    }
+
     fn symbol(&self, name: &str) -> acvus_extern::Astr {
         SYMBOLS.intern(name)
     }

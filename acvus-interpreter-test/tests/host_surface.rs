@@ -32,6 +32,33 @@ fn profile(name: String, age: i64) -> Profile {
 }
 
 #[derive(TyArg)]
+#[projection]
+pub struct Outcome {
+    r: Result<i64, String>,
+}
+
+#[extern_fn(effect = pure)]
+fn outcome(r: Result<i64, String>) -> Outcome {
+    Outcome { r }
+}
+
+#[extern_fn(effect = pure)]
+fn outcome_code(o: OutcomeRef<'_>) -> i64 {
+    match o.r {
+        Ok(n) => *n,
+        Err(e) => -(e.len() as i64),
+    }
+}
+
+#[extern_fn(effect = pure)]
+fn outcome_bump(o: OutcomeMut<'_>) {
+    match o.r {
+        Ok(n) => *n += 1,
+        Err(e) => e.push('!'),
+    }
+}
+
+#[derive(TyArg)]
 pub enum Mode {
     Idle,
     Busy,
@@ -133,7 +160,10 @@ fn registries() -> Vec<Registry<AcvusRuntime>> {
     registries.push(extern_registry! {
         ns: "host",
         types: [Tracked, History<_>],
-        fns: [profile, tracked, bump, coin, init_ran, history, record, recorded, pause, mark],
+        fns: [
+            profile, outcome, outcome_code, outcome_bump, tracked, bump, coin, init_ran, history,
+            record, recorded, pause, mark,
+        ],
     });
     registries
 }
@@ -473,6 +503,142 @@ async fn a_structural_result_is_read_and_edited_through_its_projection() {
                 })
                 .expect("the result is a `Profile`");
             assert_eq!(output.with(read).expect("the result is a `Profile`"), ("anne".to_owned(), 42));
+        })
+        .await
+}
+
+/// `Ok(3)` when `ok`, `Err("boom")` otherwise; the two arms meet at the `if`,
+/// so the result is the `Result<i64, String>` the entry declares.
+fn result_source(ok: bool) -> String {
+    format!(r#"if {ok} {{ Ok(3) }} else {{ Err("boom".to_string()) }}"#)
+}
+
+#[tokio::test]
+async fn a_result_is_read_through_its_projection_on_either_arm() {
+    for (ok, expected) in [(true, Ok(3)), (false, Err("boom".to_owned()))] {
+        let program = compiled(host().entry::<(), Result<i64, String>>("main", Source::Script(&result_source(ok))));
+        program
+            .scope(async |s| {
+                let mut storage = MemoryStorage::new();
+                let mut page = s.open(&mut storage);
+                let entry = s.entry::<(), Result<i64, String>>("main").expect("the entry returns a `Result`");
+                let output = entry.run(&mut page, ()).await.expect("the graph has no context");
+                let read = output
+                    .with(|r: Result<&i64, &String>| r.map(|n| *n).map_err(|e| e.clone()))
+                    .expect("the result is a `Result<i64, String>`");
+                assert_eq!(read, expected);
+            })
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn a_result_payload_is_edited_in_place_and_its_arm_stays() {
+    let program = compiled(host().entry::<(), Result<i64, String>>("main", Source::Script(&result_source(true))));
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let entry = s.entry::<(), Result<i64, String>>("main").expect("the entry returns a `Result`");
+            let mut output = entry.run(&mut page, ()).await.expect("the graph has no context");
+            output
+                .with_mut(|r: Result<&mut i64, &mut String>| {
+                    let Ok(n) = r else {
+                        panic!("the entry returned `Ok`")
+                    };
+                    *n += 39;
+                })
+                .expect("the result is a `Result<i64, String>`");
+            let read = output
+                .with(|r: Result<&i64, &String>| r.map(|n| *n).map_err(|e| e.clone()))
+                .expect("the result is a `Result<i64, String>`");
+            assert_eq!(read, Ok(42));
+            let mut ran = false;
+            let refused = output.with(|_: Result<&i64, &i64>| ran = true);
+            assert!(matches!(refused, Err(HostError::Mismatched { .. })), "{refused:?}");
+            assert!(!ran, "the closure runs only after its type matched");
+        })
+        .await
+}
+
+#[tokio::test]
+async fn a_result_of_an_option_is_read_through_both_projections() {
+    let cases = [
+        ("if true { Ok(Some(5)) } else { Err(\"e\".to_string()) }", Ok(Some(5))),
+        ("if true { Ok(None) } else { Err(\"e\".to_string()) }", Ok(None)),
+        ("if false { Ok(Some(5)) } else { Err(\"e\".to_string()) }", Err("e".to_owned())),
+    ];
+    for (source, expected) in cases {
+        let program = compiled(host().entry::<(), Result<Option<i64>, String>>("main", Source::Script(source)));
+        program
+            .scope(async |s| {
+                let mut storage = MemoryStorage::new();
+                let mut page = s.open(&mut storage);
+                let entry = s
+                    .entry::<(), Result<Option<i64>, String>>("main")
+                    .expect("the entry returns a `Result<Option<i64>, String>`");
+                let output = entry.run(&mut page, ()).await.expect("the graph has no context");
+                let read = output
+                    .with(|r: Result<Option<&i64>, &String>| r.map(|n| n.copied()).map_err(|e| e.clone()))
+                    .expect("the result is a `Result<Option<i64>, String>`");
+                assert_eq!(read, expected, "{source}");
+            })
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn a_result_field_of_a_struct_result_is_read_and_edited_through_its_projection() {
+    let program = compiled(
+        host()
+            .entry::<(), Outcome>("succeeded", Source::Script("outcome(Ok(7))"))
+            .entry::<(), Outcome>("failed", Source::Script(r#"outcome(Err("no".to_string()))"#)),
+    );
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            let read = |o: OutcomeRef<'_>| o.r.map(|n| *n).map_err(|e| e.clone());
+            let ok = s.entry::<(), Outcome>("succeeded").expect("the entry returns `Outcome`");
+            let mut output = ok.run(&mut page, ()).await.expect("the graph has no context");
+            assert_eq!(output.with(read).expect("an `Outcome`"), Ok(7));
+            output
+                .with_mut(|o: OutcomeMut<'_>| {
+                    let Ok(n) = o.r else {
+                        panic!("the entry returned `Ok`")
+                    };
+                    *n *= 6;
+                })
+                .expect("an `Outcome`");
+            assert_eq!(output.with(read).expect("an `Outcome`"), Ok(42));
+            let err = s.entry::<(), Outcome>("failed").expect("the entry returns `Outcome`");
+            let output = err.run(&mut page, ()).await.expect("the graph has no context");
+            assert_eq!(output.with(read).expect("an `Outcome`"), Err("no".to_owned()));
+        })
+        .await
+}
+
+/// A handler takes a `Result` projection as a field of its aggregate's
+/// projection, and edits the payload of the arm the tag names.
+#[tokio::test]
+async fn a_handler_reads_and_edits_a_result_field_through_the_projection() {
+    let program = compiled(
+        host()
+            .entry::<(), i64>("succeeded", Source::Script("let o = outcome(Ok(7)); outcome_bump(&mut o); outcome_code(&o)"))
+            .entry::<(), i64>(
+                "failed",
+                Source::Script(r#"let o = outcome(Err("no".to_string())); outcome_bump(&mut o); outcome_code(&o)"#),
+            ),
+    );
+    program
+        .scope(async |s| {
+            let mut storage = MemoryStorage::new();
+            let mut page = s.open(&mut storage);
+            for (key, expected) in [("succeeded", 8), ("failed", -3)] {
+                let entry = s.entry::<(), i64>(key).expect("the entry returns `i64`");
+                let output = entry.run(&mut page, ()).await.expect("the graph has no context");
+                assert_eq!(output.with(|n: &i64| *n).expect("an `i64`"), expected, "{key}");
+            }
         })
         .await
 }

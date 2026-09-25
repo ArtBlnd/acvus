@@ -80,19 +80,42 @@ impl AcvusRuntime {
         let Variant {
             values: [tag, payload],
         } = held;
-        // SAFETY: the first register of a variant this runtime wrote is its tag.
-        let tag = unsafe { tag.into_value(acvus_extern::Holding::new()).as_tag() };
-        if tag == self.shared.interner.intern("Ok") {
-            return Ok(payload);
+        // SAFETY: the first register of a variant this runtime wrote is its
+        // tag, a word that owns nothing.
+        let tag = unsafe { tag.into_value(acvus_extern::Holding::new()) };
+        // SAFETY: as above.
+        let arm = unsafe { self.result_arm(&tag) };
+        match arm {
+            Arm::Ok => Ok(payload),
+            Arm::Err => Err(payload),
         }
-        debug_assert!(
-            tag == self.shared.interner.intern("Err"),
-            "a Result crossed back holding the tag `{}`, and `variant_of_result` — the only \
-             writer `materialize`'s contract admits — writes `Ok` or `Err`",
-            tag.display(&self.shared.interner)
-        );
-        Err(payload)
     }
+
+    /// # Safety
+    /// `tag` is the tag register of a variant this runtime wrote.
+    ///
+    /// # Panics
+    /// The tag is neither `Ok` nor `Err`: `variant_of_result`, the one writer
+    /// of a crossed `Result`, writes only those two.
+    unsafe fn result_arm(&self, tag: &Value) -> Arm {
+        // SAFETY: the caller's contract.
+        let tag = unsafe { tag.as_tag() };
+        if tag == self.shared.interner.intern("Ok") {
+            return Arm::Ok;
+        }
+        if tag == self.shared.interner.intern("Err") {
+            return Arm::Err;
+        }
+        panic!(
+            "a Result holds the tag `{}`, and `variant_of_result` writes `Ok` or `Err`",
+            tag.display(&self.shared.interner)
+        )
+    }
+}
+
+enum Arm {
+    Ok,
+    Err,
 }
 
 /// The `Ctx` of a call whose frame outlives the frame it was made on: the
@@ -274,6 +297,29 @@ impl Runtime for AcvusRuntime {
 
     unsafe fn some_at_mut<'a>(&self, value: &'a mut Value) -> Option<&'a mut Value> {
         (!value.is_none()).then_some(value)
+    }
+
+    unsafe fn result_at<'a>(&self, value: &'a Value) -> Result<&'a Value, &'a Value> {
+        // SAFETY: the caller's contract: `variant_of_result` wrote a variant.
+        let Variant { values: [tag, payload] } = unsafe { value.as_variant() };
+        // SAFETY: the first register of a variant this runtime wrote is its tag.
+        match unsafe { self.result_arm(tag) } {
+            Arm::Ok => Ok(payload),
+            Arm::Err => Err(payload),
+        }
+    }
+
+    unsafe fn result_at_mut<'a>(&self, value: &'a mut Value) -> Result<&'a mut Value, &'a mut Value> {
+        // SAFETY: the caller's contract, exclusively.
+        let Variant { values: [tag, payload] } = unsafe { value.as_variant_mut() };
+        // SAFETY: the first register of a variant this runtime wrote is its tag.
+        let arm = unsafe { self.result_arm(tag) };
+        // SAFETY: the caller's contract carries `value_mut`'s.
+        let payload = unsafe { payload.value_mut(acvus_extern::Holding::new()) };
+        match arm {
+            Arm::Ok => Ok(payload),
+            Arm::Err => Err(payload),
+        }
     }
 
     fn symbol(&self, name: &str) -> acvus_utils::Astr {

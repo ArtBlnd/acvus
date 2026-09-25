@@ -71,7 +71,7 @@ pub use instance::{
     RestoreByValue, RestoreExclusive, RestoreShared, Signature, receiver_borrowed, receiver_by_value,
 };
 pub use len::Arr;
-pub use lend::{Alone, Borrows, Lendable, Param, SitesOf, WithCtx, lend};
+pub use lend::{Alone, Borrows, ByProjected, Lendable, Param, Projects, SitesOf, WithCtx, lend};
 pub use loan::{Loan, Mut, Shared};
 pub use name::{DeclarationForm, DeclaredType, NameKind, Named};
 pub use obj::{
