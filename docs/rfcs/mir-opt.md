@@ -541,7 +541,8 @@ iteration hands the next.
    the counter of a slice or array source and `f` pure work on `e` and
    invariants, holds `f` of the element at `k − 1` from the second
    iteration on and its entry value on the first; the pass reads it so,
-   and it carries nothing. After
+   and it carries nothing. A call rule 4 makes `{len(s) on entry, c}` is
+   read as that term from `len(s)` read above the header, and removed. After
    the stages are written, strength reduction (RFC-0056) reduces a counter
    expression whose readers all sit in one `InOrder` join, and its step
    joins that join. A `while` is declined, since it states no count; a later
@@ -575,16 +576,15 @@ iteration hands the next.
     decides how to wait.** No lowerer builds this yet; every loop runs in
     place.
     - Split, chunks of iterations, bounded in flight, pass the stages in
-      order. A free stage runs a chunk on arrival; a stage with a cycle
-      admits a chunk holding its token, passed in chunk order under
-      `InOrder`, one chunk at a time under `AnyOrder`, and absent under
-      `Disjoint`. With a law, a chunk combines first and the stage joins
-      the partial. The control token passes with the exiting stage's.
-    - In a `Sync` body the split is one synchronous executor call, and the
-      executor decides how to wait; the body stays `Sync` (RFC-0046 rule
-      1). A body that already suspends spawns the chunks and awaits them.
-    - Running in place is always admitted.
-    - A chunk does not split again: one level, by structure.
+      order: a free stage runs a chunk on arrival; a cycle's stage admits
+      one holding its token, in chunk order under `InOrder`, one at a time
+      under `AnyOrder`, none under `Disjoint`. With a law a chunk combines
+      first and the stage joins the partial. The control token passes with
+      the exiting stage's.
+    - In a `Sync` body the split is one synchronous executor call, which
+      decides how to wait (RFC-0046 rule 1); a suspending body spawns and
+      awaits chunks.
+    - Running in place is always admitted; chunks never split again.
 
 **Why.** A normal form is the same program on every target; a shape
 chosen for one is a guess about the lowerer, which knows the target, the
@@ -684,7 +684,10 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
    exiting stage is never free and never out of order. An operation with
    an effect runs only once its iteration holds the control token, so no
    effect is issued ahead of an exit; one without an effect may run ahead
-   and be discarded.
+   and be discarded when it finishes on every run: it holds no `while`
+   and no call of a local function, a `for` in it finishes when its body
+   does, and every extern it calls states `returns` (RFC-0082 rule 8). A
+   trap it raises in an iteration past the exit is discarded with it.
    A run apart reports the trap least in the order (iteration, stage), and
    a trap releases nothing (RFC-0048 rule 8). The lowerer runs an `Array`
    source in place until the release of elements scattered over chunks

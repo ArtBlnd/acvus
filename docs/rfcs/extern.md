@@ -1056,6 +1056,10 @@ Status: Proposed
    it through a call's callee, by the instance the call names, wherever
    it reads what a call reaches (RFC-0089 rule 4); a call whose instance
    states none reaches all its reference arguments lend it.
+8. **A call that returns.** `#[extern_fn(returns)]` states that every
+   call of `f` returns or traps. It is the author's promise (rule 5).
+   RFC-0089 rule 5 reads it, by the instance a call names, to run the call
+   ahead of its iteration's control token.
 
 **Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
 extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no
