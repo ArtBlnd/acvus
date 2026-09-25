@@ -127,6 +127,71 @@ fn a_runtime_error_is_the_operations_panic_message_with_status_2() {
     );
 }
 
+struct Panics {
+    args: &'static [&'static str],
+    message: &'static str,
+}
+
+#[test]
+fn an_unused_division_that_can_panic_panics_at_every_level() {
+    let dir = crate::sandbox::tempdir();
+    let cases = [
+        Panics {
+            args: &["let d = 100 / 0; 5"],
+            message: "attempt to divide by zero",
+        },
+        Panics {
+            args: &["let d = 100 % 0; 5"],
+            message: "attempt to calculate the remainder with a divisor of zero",
+        },
+        Panics {
+            args: &["let d = $x / $y; 5", "x=100", "y=0"],
+            message: "attempt to divide by zero",
+        },
+        Panics {
+            args: &["let m = -9223372036854775807 - 1; let d = m / -1; 5"],
+            message: "attempt to divide with overflow",
+        },
+        Panics {
+            args: &["let m = -9223372036854775807 - 1; let d = m % -1; 5"],
+            message: "attempt to calculate the remainder with overflow",
+        },
+    ];
+    for opt in ["none", "full"] {
+        for case in &cases {
+            let args = [&["run", "--opt", opt, "-e"], case.args].concat();
+            let out = acvus(dir.path(), &args);
+            assert_eq!(out.status.code(), Some(2), "at {opt}: {:?}", case.args);
+            assert_eq!(text(&out.stdout), "", "at {opt}: {:?}", case.args);
+            assert_eq!(
+                text(&out.stderr),
+                format!("error: {}\n", case.message),
+                "at {opt}: {:?}",
+                case.args
+            );
+        }
+    }
+}
+
+#[test]
+fn an_unused_division_that_cannot_panic_and_an_unused_overflow_run_past() {
+    let dir = crate::sandbox::tempdir();
+    let values = [
+        vec!["let d = $x / $y; 5", "x=100", "y=3"],
+        vec!["let d = $x / 2; 5", "x=100"],
+        vec!["let d = 7.0 / 0.0; 5"],
+        vec!["let m = 9223372036854775807; let d = m + 1; 5"],
+    ];
+    for opt in ["none", "full"] {
+        for source in &values {
+            let args = [&["run", "--opt", opt, "-e"], source.as_slice()].concat();
+            let out = acvus(dir.path(), &args);
+            assert_eq!(out.status.code(), Some(0), "at {opt}: {source:?}: {}", text(&out.stderr));
+            assert_eq!(text(&out.stdout), "5\n", "at {opt}: {source:?}");
+        }
+    }
+}
+
 #[test]
 fn a_call_against_a_parameter_a_literal_operand_fixed_is_a_compile_error() {
     let dir = tempfile::tempdir().unwrap();

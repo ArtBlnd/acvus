@@ -141,24 +141,26 @@ fn run_pipeline(
         return Err(msgs.join("\n"));
     }
 
+    let laws = crate::laws::LawTable::of(graph.functions.iter());
+
     // SSA -> DCE.
     {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(&mut module.main, MirBody::new()));
         crate::optimize::ssa_pass::run(&mut cfg_body);
         crate::optimize::string_copy::run(&mut cfg_body);
-        crate::optimize::dce::run(&mut cfg_body);
+        crate::optimize::dce::run(&mut cfg_body, &laws);
         module.main = crate::cfg::demote(cfg_body);
     }
     for closure in module.closures.values_mut() {
         let mut cfg_body = crate::cfg::promote(std::mem::replace(closure, MirBody::new()));
         crate::optimize::ssa_pass::run(&mut cfg_body);
         crate::optimize::string_copy::run(&mut cfg_body);
-        crate::optimize::dce::run(&mut cfg_body);
+        crate::optimize::dce::run(&mut cfg_body, &laws);
         *closure = crate::cfg::demote(cfg_body);
     }
 
     let validation_errors =
-        crate::validate::validate(&module, &crate::laws::LawTable::of(graph.functions.iter()));
+        crate::validate::validate(&module, &laws);
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()

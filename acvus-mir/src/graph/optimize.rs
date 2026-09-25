@@ -75,9 +75,9 @@ pub fn optimize(
         },
         Opt::Full => {
             for module in ssa_modules.values_mut() {
-                run_pass1_body(&mut module.main);
+                run_pass1_body(laws, &mut module.main);
                 for closure in module.closures.values_mut() {
-                    run_pass1_body(closure);
+                    run_pass1_body(laws, closure);
                 }
             }
             inliner::inline(&ssa_modules, &recursive)
@@ -210,12 +210,12 @@ impl Component {
     }
 }
 
-fn run_pass1_body(body: &mut crate::ir::MirBody) {
+fn run_pass1_body(laws: &LawTable, body: &mut crate::ir::MirBody) {
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
     optimize::string_copy::run(&mut cfg);
     optimize::dse::run(&mut cfg);
-    optimize::dce::run(&mut cfg);
+    optimize::dce::run(&mut cfg, laws);
     *body = cfg::demote(cfg);
 }
 
@@ -240,7 +240,7 @@ impl Undropped {
         let optimized = |body: MirBody| {
             let mut cfg = cfg::promote(body);
             match opt {
-                Opt::None => run_pass2_required(interner, &mut cfg),
+                Opt::None => run_pass2_required(interner, laws, &mut cfg),
                 Opt::Full => run_pass2(interner, laws, &mut cfg),
             }
             cfg
@@ -314,7 +314,7 @@ fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable) {
         for module in undropped.iter_mut() {
             for body in module.bodies_mut() {
                 if strip_arguments(body, &removed) {
-                    optimize::dce::run(body);
+                    optimize::dce::run(body, laws);
                     // RFC-0089 rule 6: what `dce` removed may have freed a
                     // stage, and cutting again merges the boundaries it left.
                     optimize::stages::run(body, laws);
@@ -375,7 +375,7 @@ fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usiz
 /// optimization, so the two folds that decide it run at every level: a bound
 /// `$` is a constant here as well, and the arms it decides against are gone
 /// from both bodies alike (RFC-0071 rule 5).
-fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
+fn run_pass2_required(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     optimize::ssa_pass::run(cfg);
     // A `String` copies (RFC-0018), and the copy is emitted here: without
     // it two names own one string and each drops it.
@@ -383,7 +383,7 @@ fn run_pass2_required(interner: &Interner, cfg: &mut CfgBody) {
     optimize::reborrow::run(cfg);
     optimize::fold::run(cfg);
     optimize::branch::run(interner, cfg);
-    optimize::dce::run(cfg);
+    optimize::dce::run(cfg, laws);
 }
 
 fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
@@ -408,7 +408,7 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // parameter, and after the fold, which settles a constant bound; before
     // `dce`, which sweeps the comparison the new terminator leaves unread.
     optimize::while_to_for::run(cfg, laws);
-    optimize::dce::run(cfg);
+    optimize::dce::run(cfg, laws);
     optimize::code_motion::run(cfg);
     // RFC-0066 rule 7: every induction variable of a `for` that anything
     // besides its own step reads is computed from the counter, decided per
@@ -419,12 +419,12 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // and merges; before a `dce` of its own, which sweeps what it leaves
     // unread, the header arguments the canonicalization removed included.
     optimize::gvn::run(cfg);
-    optimize::dce::run(cfg);
+    optimize::dce::run(cfg, laws);
     // RFC-0088: after that `dce`, which sweeps the arithmetic the loop passes
     // left in a body that nothing reads, so a body that does nothing holds
     // no instruction; before `forward`, which collapses the header the
     // removal leaves only jumping.
-    optimize::empty_loop::run(cfg);
+    optimize::empty_loop::run(cfg, laws);
     // A block that only jumps is its target; before `reorder`, which
     // schedules within a block.
     optimize::forward::run(cfg);

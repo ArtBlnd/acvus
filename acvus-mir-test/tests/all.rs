@@ -76,6 +76,7 @@ mod task;
 mod temporary_scrutinee;
 mod through;
 mod try_op;
+mod unused_division;
 mod user_defined_ty;
 mod while_to_for;
 

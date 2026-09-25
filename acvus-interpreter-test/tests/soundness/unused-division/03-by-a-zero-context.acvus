@@ -1,0 +1,2 @@
+// expect attempt to divide by zero
+let d = @x / @zero; 5

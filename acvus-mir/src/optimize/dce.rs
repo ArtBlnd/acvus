@@ -20,9 +20,12 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::inst_info;
+use crate::analysis::interval::InstAt;
 use crate::analysis::loans::Loans;
+use crate::analysis::raise::Raising;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
+use crate::laws::LawTable;
 use crate::ty::Ty;
 use crate::validate::move_check::is_move_only;
 
@@ -288,9 +291,16 @@ fn storage_reached(
 ///
 /// A store `Stores::conditional` holds is asked of its readers instead, and
 /// this answer does not apply to it.
-fn is_root(kind: &InstKind, loans: &Loans<'_>) -> bool {
+fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, raising: &Raising<'_>) -> bool {
     let val_types = &loans.cfg().val_types;
     if !loans.storage_effect(kind).writes.is_empty() {
+        return true;
+    }
+    let at = InstAt {
+        block: BlockIdx(at.block),
+        at: at.inst,
+    };
+    if raising.can_raise(at, kind) {
         return true;
     }
     // A call handed a `&mut` may write what it names, wherever that storage
@@ -324,11 +334,6 @@ fn is_root(kind: &InstKind, loans: &Loans<'_>) -> bool {
 
         InstKind::Check { .. } | InstKind::CheckSteps { .. } => true,
 
-        // A call typed `!` ends the run (RFC-0038): observable whatever its
-        // effect says.
-        InstKind::FunctionCall { callee_ty, .. } if matches!(callee_ty, Ty::Fn { ret, .. } if matches!(**ret, Ty::Never)) => {
-            true
-        }
         // A Pure call that writes no context has no effect (RFC-0007,
         // RFC-0025 rule 4): dead if its result is unused. A call whose effect is
         // unknown stays.
@@ -395,9 +400,10 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
 /// to observable behavior (Return, Store, Eval, effectful calls).
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let def_map = build_def_map(cfg);
     let loans = Loans::build(cfg);
+    let raising = Raising::of(cfg, laws);
     let stores = Stores::of(&loans);
 
     // Live instruction set.
@@ -414,7 +420,7 @@ pub fn run(cfg: &mut CfgBody) {
                 block: bi,
                 inst: ii,
             };
-            if !stores.conditional.contains(&at) && is_root(&inst.kind, &loans) {
+            if !stores.conditional.contains(&at) && is_root(at, &inst.kind, &loans, &raising) {
                 live_insts.insert(at);
                 worklist.extend(inst_info::uses(&inst.kind));
             }
@@ -806,7 +812,7 @@ mod tests {
     fn a_store_no_one_reads_is_dead_and_its_producer_stays() {
         let i = Interner::new();
         let mut cfg = opaque_store_never_read(&i, Vec::new());
-        run(&mut cfg);
+        run(&mut cfg, &LawTable::default());
         assert_eq!(stored(&cfg), Vec::new(), "a store with no reader is dead");
         assert_eq!(
             calls(&cfg),
@@ -827,7 +833,7 @@ mod tests {
                 mutability: crate::ty::Mutability::Shared,
             }],
         );
-        run(&mut cfg);
+        run(&mut cfg, &LawTable::default());
         assert_eq!(refs(&cfg), 0, "a reference no one reads is dead");
         assert_eq!(
             stored(&cfg),
@@ -856,7 +862,7 @@ mod tests {
             ],
             &[Ty::String, Ty::String, Ty::String, Ty::I64],
         );
-        run(&mut cfg);
+        run(&mut cfg, &LawTable::default());
         assert_eq!(
             stored(&cfg),
             vec![v(1)],
@@ -886,7 +892,7 @@ mod tests {
             ],
             4,
         );
-        run(&mut cfg);
+        run(&mut cfg, &LawTable::default());
         assert_eq!(
             stored(&cfg),
             Vec::new(),
@@ -911,7 +917,7 @@ mod tests {
             ],
             2,
         );
-        run(&mut cfg);
+        run(&mut cfg, &LawTable::default());
         assert_eq!(
             calls(&cfg),
             0,
@@ -937,7 +943,7 @@ mod tests {
                 ],
                 2,
             );
-            run(&mut cfg);
+            run(&mut cfg, &LawTable::default());
             assert_eq!(
                 calls(&cfg),
                 1,

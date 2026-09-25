@@ -14,6 +14,7 @@ use acvus_mir::ir::{
     BinOp, Checked, ExitTrip, ForSource, Inst, InstKind, Label, MirBody, MirModule, Overflow,
     Stages, ValueId,
 };
+use acvus_mir::laws::LawTable;
 use acvus_mir::optimize::{empty_loop, fold, gvn};
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{CastTy, IntTy, LenTerm, Ty};
@@ -481,7 +482,7 @@ fn built(shape: Shape) -> Built {
     hand.returns(done);
 
     let mut cfg = hand.cfg(&interner, 4);
-    empty_loop::run(&mut cfg);
+    empty_loop::run(&mut cfg, &LawTable::default());
     Built {
         cfg,
         bounds: parts.bounds,

@@ -38,15 +38,16 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{
     BinOp, Checked, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId,
 };
+use crate::laws::LawTable;
 use crate::optimize::dce;
 use crate::ty::{CastTy, IntTy, LenTerm, Ty};
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     while let Some(empty) = first_empty(cfg) {
         remove(cfg, empty);
         let alive = reachable(cfg);
         prune(cfg, &alive);
-        dce::run(cfg);
+        dce::run(cfg, laws);
     }
 }
 

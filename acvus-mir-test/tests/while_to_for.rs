@@ -39,7 +39,7 @@ impl Promoted {
         fold::run(&mut cfg);
         reborrow::run(&mut cfg);
         while_to_for::run(&mut cfg, &laws);
-        dce::run(&mut cfg);
+        dce::run(&mut cfg, &laws);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
         Self {
@@ -267,7 +267,7 @@ fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
         lowered_script(&i, source, &[], vec![]).unwrap_or_else(|e| panic!("{e}"));
     let mut cfg = promote(module.main);
     ssa_pass::run(&mut cfg);
-    dce::run(&mut cfg);
+    dce::run(&mut cfg, &laws);
     let before = snapshot(&cfg);
     let header = {
         let invariants = Invariants::of(&cfg);

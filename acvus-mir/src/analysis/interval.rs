@@ -391,6 +391,39 @@ impl Facts {
     }
 }
 
+impl Facts {
+    fn excludes(&self, value: ValueId, n: i128) -> bool {
+        self.constant_lower_bound(value).is_some_and(|lo| lo > n)
+            || self.constant_upper_bound(value).is_some_and(|hi| hi < n)
+    }
+
+    fn constant_lower_bound(&self, value: ValueId) -> Option<i128> {
+        let mut bound = self.interval(value).lo?;
+        for _ in 0..CHASE_LIMIT {
+            match bound {
+                Endpoint::Const(c) => return Some(c),
+                Endpoint::SliceLen { plus, .. } | Endpoint::ContainerLen { plus, .. } => {
+                    return Some(plus);
+                }
+                Endpoint::Value { of, plus } => bound = self.interval(of).lo?.plus(plus)?,
+            }
+        }
+        None
+    }
+
+    fn constant_upper_bound(&self, value: ValueId) -> Option<i128> {
+        let mut bound = self.interval(value).hi?;
+        for _ in 0..CHASE_LIMIT {
+            match bound {
+                Endpoint::Const(c) => return Some(c),
+                Endpoint::SliceLen { .. } | Endpoint::ContainerLen { .. } => return None,
+                Endpoint::Value { of, plus } => bound = self.interval(of).hi?.plus(plus)?,
+            }
+        }
+        None
+    }
+}
+
 /// One `Index` or `IndexSet` of a body, by where it stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InstAt {
@@ -401,30 +434,47 @@ pub struct InstAt {
 /// The `Index` and `IndexSet` instructions of `cfg` whose index the
 /// interval domain puts below their slice's length.
 pub fn bounded_indices(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
-    let domain = Domain::new(cfg, laws);
-    let entries = domain.fixpoint();
     let mut bounded = FxHashSet::default();
-    for (b, entry) in entries.iter().enumerate() {
-        let Some(mut facts) = entry.clone() else {
-            continue;
-        };
-        for (at, inst) in cfg.blocks[b].insts.iter().enumerate() {
-            let below = match &inst.kind {
-                InstKind::Index { slice, index, .. } | InstKind::IndexSet { slice, index, .. } => {
-                    facts.below_len(*index, *slice)
-                }
-                _ => false,
-            };
-            if below {
-                bounded.insert(InstAt {
-                    block: BlockIdx(b),
-                    at,
-                });
+    Domain::new(cfg, laws).visit_with_facts_before(|at, kind, facts| {
+        let below = match kind {
+            InstKind::Index { slice, index, .. } | InstKind::IndexSet { slice, index, .. } => {
+                facts.below_len(*index, *slice)
             }
-            domain.transfer(&inst.kind, &mut facts);
+            _ => false,
+        };
+        if below {
+            bounded.insert(at);
         }
-    }
+    });
     bounded
+}
+
+/// The integer `/` and `%` of `cfg` that the interval domain shows cannot
+/// panic (RFC-0037 rule 2): the divisor's interval leaves out zero and, at
+/// a signed width, the divisor's leaves out `-1` or the dividend's leaves
+/// out the width's minimum.
+pub fn unfailing_divisions(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
+    let mut unfailing = FxHashSet::default();
+    Domain::new(cfg, laws).visit_with_facts_before(|at, kind, facts| {
+        let InstKind::BinOp {
+            op: BinOp::Div | BinOp::Mod,
+            left,
+            right,
+            ..
+        } = kind
+        else {
+            return;
+        };
+        let Some(Ty::Int(width)) = cfg.val_types.get(left) else {
+            return;
+        };
+        let no_overflow =
+            !width.signed() || facts.excludes(*right, -1) || facts.excludes(*left, width.min());
+        if facts.excludes(*right, 0) && no_overflow {
+            unfailing.insert(at);
+        }
+    });
+    unfailing
 }
 
 struct Domain<'a> {
@@ -615,6 +665,22 @@ impl<'a> Domain<'a> {
                     | Ty::Ref(Mutability::Shared, _)
             )
         )
+    }
+
+    fn visit_with_facts_before(&self, mut visit: impl FnMut(InstAt, &InstKind, &Facts)) {
+        for (b, entry) in self.fixpoint().into_iter().enumerate() {
+            let Some(mut facts) = entry else {
+                continue;
+            };
+            for (at, inst) in self.cfg.blocks[b].insts.iter().enumerate() {
+                let here = InstAt {
+                    block: BlockIdx(b),
+                    at,
+                };
+                visit(here, &inst.kind, &facts);
+                self.transfer(&inst.kind, &mut facts);
+            }
+        }
     }
 
     fn fixpoint(&self) -> Vec<Option<Facts>> {

@@ -1,0 +1,2 @@
+// expect attempt to calculate the remainder with a divisor of zero
+let d = 100 % 0; 5

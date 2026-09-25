@@ -46,7 +46,7 @@ impl Analyzed {
         let LoweredScript { module, laws } = lowered.unwrap_or_else(|e| panic!("{source}\n{e}"));
         let mut cfg = promote(module.main);
         ssa_pass::run(&mut cfg);
-        dce::run(&mut cfg);
+        dce::run(&mut cfg, &laws);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
         Self {
