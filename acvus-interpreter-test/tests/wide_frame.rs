@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 use acvus_extern::{ExternType, Registry, extern_fn, extern_registry};
 use acvus_interpreter::{AcvusRuntime, HostError, Value};
@@ -77,6 +78,34 @@ fn a_literal_of_any_width_takes_a_few_registers() {
         for at in pushes {
             assert!(ops[at - 1].starts_with(made_by), "{:?}", &ops[at - 2..=at]);
         }
+    }
+}
+
+/// Compiling and preparing a literal of 4000 elements takes at most six
+/// times a literal of 1000, where a pass quadratic in the literal takes
+/// sixteen. Each size is timed three times and its fastest run kept, so a
+/// run slowed by the tests beside it does not decide the ratio.
+#[test]
+fn a_literal_compiles_in_time_linear_in_its_length() {
+    let fastest = |source: &str| {
+        (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                let outcome = corpus::attempt(source, Opt::Full, Stage::Prepare);
+                let took = start.elapsed();
+                assert_eq!(outcome, Outcome::Prepared);
+                took
+            })
+            .min()
+            .expect("three runs")
+    };
+    for literal in [int_literal, string_literal] {
+        let (short, long) = (fastest(&literal(1000)), fastest(&literal(4000)));
+        assert!(
+            long <= short * 6,
+            "1000 elements took {short:?} and 4000 took {long:?}, {:.1} times as long",
+            long.as_secs_f64() / short.as_secs_f64()
+        );
     }
 }
 

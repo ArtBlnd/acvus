@@ -254,8 +254,10 @@ holder that took ownership. Everything else copies.
    `Array<T, k>`, so no partly built array is typed as the whole. An element
    is live from its definition to its push, so a literal holds a few
    registers at any length. A `?` or `return` out of an element drops the
-   array so far, releasing each pushed element once; a trap releases
-   nothing (rule 8).
+   array so far as one value, which releases each pushed element once, in
+   index order; a trap releases nothing (rule 8). A pass shares, not copies,
+   what it knows of the array before each push, so a literal compiles in
+   time linear in its length.
 
 **Why.** A droppable `Value` needs an address wherever it may drop, which puts
 unwind landing pads in handlers and keeps values in memory; it forces a second

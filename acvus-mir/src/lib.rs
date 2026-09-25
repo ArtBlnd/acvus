@@ -10,6 +10,7 @@ pub mod lower;
 pub mod optimize;
 pub mod place;
 pub mod printer;
+mod pvec;
 pub mod ser_ty;
 pub mod solver;
 pub mod structural;

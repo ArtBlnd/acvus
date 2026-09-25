@@ -8,6 +8,7 @@
 //! storage a reference points at, and `holds`, every loan in any position.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use acvus_utils::Astr;
 use rustc_hash::FxHashMap;
@@ -516,18 +517,133 @@ pub struct Regions {
     via: Via,
 }
 
-/// The references a value was built through: a set, kept sorted and free of
-/// duplicates.
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
-pub struct Via(Vec<ValueId>);
+/// The references a value was built through.
+///
+/// The set is a persistent balanced tree, and a value built from another
+/// shares that value's nodes. Each `ArrayPush` of an array literal is built
+/// from the one before it and carries every earlier push in its set; the
+/// sorted `Vec` this replaces was copied at each push, which made the
+/// analysis of a literal quadratic in its length. Shared, a push costs one
+/// insertion.
+#[derive(Default, Clone)]
+pub struct Via(Tree);
+
+type Tree = Option<Arc<ViaNode>>;
+
+struct ViaNode {
+    value: ValueId,
+    height: u8,
+    len: usize,
+    left: Tree,
+    right: Tree,
+}
+
+fn height(tree: &Tree) -> u8 {
+    tree.as_deref().map_or(0, |node| node.height)
+}
+
+fn tree_len(tree: &Tree) -> usize {
+    tree.as_deref().map_or(0, |node| node.len)
+}
+
+fn node(value: ValueId, left: Tree, right: Tree) -> Tree {
+    Some(Arc::new(ViaNode {
+        value,
+        height: 1 + height(&left).max(height(&right)),
+        len: 1 + tree_len(&left) + tree_len(&right),
+        left,
+        right,
+    }))
+}
+
+/// An AVL rebalance of `node(value, left, right)`, whose sides differ in
+/// height by at most two.
+fn balanced(value: ValueId, left: Tree, right: Tree) -> Tree {
+    let (hl, hr) = (height(&left), height(&right));
+    if let Some(l) = left.as_deref().filter(|_| hl > hr + 1) {
+        return match l.right.as_deref().filter(|_| height(&l.right) > height(&l.left)) {
+            Some(lr) => node(
+                lr.value,
+                node(l.value, l.left.clone(), lr.left.clone()),
+                node(value, lr.right.clone(), right),
+            ),
+            None => node(l.value, l.left.clone(), node(value, l.right.clone(), right)),
+        };
+    }
+    if let Some(r) = right.as_deref().filter(|_| hr > hl + 1) {
+        return match r.left.as_deref().filter(|_| height(&r.left) > height(&r.right)) {
+            Some(rl) => node(
+                rl.value,
+                node(value, left, rl.left.clone()),
+                node(r.value, rl.right.clone(), r.right.clone()),
+            ),
+            None => node(r.value, node(value, left, r.left.clone()), r.right.clone()),
+        };
+    }
+    node(value, left, right)
+}
+
+/// `tree` with `value` added, or `None` when it already holds it.
+fn inserted(tree: &Tree, value: ValueId) -> Option<Tree> {
+    let Some(at) = tree.as_deref() else {
+        return Some(node(value, None, None));
+    };
+    match value.cmp(&at.value) {
+        std::cmp::Ordering::Less => {
+            inserted(&at.left, value).map(|left| balanced(at.value, left, at.right.clone()))
+        }
+        std::cmp::Ordering::Greater => {
+            inserted(&at.right, value).map(|right| balanced(at.value, at.left.clone(), right))
+        }
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
+/// The members of a set in ascending order.
+struct ViaIter<'a> {
+    stack: Vec<&'a ViaNode>,
+}
+
+impl<'a> ViaIter<'a> {
+    fn new(tree: &'a Tree) -> Self {
+        let mut iter = ViaIter { stack: Vec::new() };
+        iter.descend(tree);
+        iter
+    }
+
+    fn descend(&mut self, mut tree: &'a Tree) {
+        while let Some(at) = tree.as_deref() {
+            self.stack.push(at);
+            tree = &at.left;
+        }
+    }
+}
+
+impl<'a> Iterator for ViaIter<'a> {
+    type Item = &'a ValueId;
+
+    fn next(&mut self) -> Option<&'a ValueId> {
+        let at = self.stack.pop()?;
+        self.descend(&at.right);
+        Some(&at.value)
+    }
+}
 
 impl Via {
     pub const fn new() -> Self {
-        Self(Vec::new())
+        Self(None)
     }
 
     pub fn contains(&self, value: &ValueId) -> bool {
-        self.0.binary_search(value).is_ok()
+        let mut tree = &self.0;
+        while let Some(at) = tree.as_deref() {
+            tree = match value.cmp(&at.value) {
+                std::cmp::Ordering::Less => &at.left,
+                std::cmp::Ordering::Greater => &at.right,
+                std::cmp::Ordering::Equal => return true,
+            };
+        }
+        false
     }
 
     /// This set with `value` added.
@@ -537,41 +653,64 @@ impl Via {
         out
     }
 
-    fn iter(&self) -> impl Iterator<Item = &ValueId> {
-        self.0.iter()
+    fn len(&self) -> usize {
+        tree_len(&self.0)
     }
 
-    fn insert(&mut self, value: ValueId) {
-        if let Err(at) = self.0.binary_search(&value) {
-            self.0.insert(at, value);
+    fn same(&self, other: &Via) -> bool {
+        match (&self.0, &other.0) {
+            (Some(mine), Some(theirs)) => Arc::ptr_eq(mine, theirs),
+            (None, None) => true,
+            _ => false,
         }
     }
 
-    /// Adds every member of `other`; true when one was new.
+    fn iter(&self) -> impl Iterator<Item = &ValueId> {
+        ViaIter::new(&self.0)
+    }
+
+    /// Adds `value`; true when it was new.
+    fn insert(&mut self, value: ValueId) -> bool {
+        match inserted(&self.0, value) {
+            Some(tree) => {
+                self.0 = tree;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Adds every member of `other`; true when one was new. The smaller set
+    /// is inserted into the larger.
     fn join_mut(&mut self, other: &Via) -> bool {
-        let added = other.0.iter().filter(|value| !self.contains(value)).count();
-        if added == 0 {
+        if self.same(other) || other.len() == 0 {
             return false;
         }
-        let mut merged = Vec::with_capacity(self.0.len() + added);
-        let mut mine = self.0.iter().copied().peekable();
-        let mut theirs = other.0.iter().copied().peekable();
-        loop {
-            let next = match (mine.peek(), theirs.peek()) {
-                (Some(m), Some(t)) if m < t => mine.next(),
-                (Some(m), Some(t)) if m > t => theirs.next(),
-                (Some(_), Some(_)) => {
-                    theirs.next();
-                    mine.next()
-                }
-                (Some(_), None) => mine.next(),
-                (None, Some(_)) => theirs.next(),
-                (None, None) => break,
-            };
-            merged.extend(next);
+        let before = self.len();
+        let (mut into, from) = match other.len() > before {
+            true => (other.clone(), &*self),
+            false => (self.clone(), other),
+        };
+        for value in from.iter() {
+            into.insert(*value);
         }
-        self.0 = merged;
-        true
+        let added = into.len() > before;
+        *self = into;
+        added
+    }
+}
+
+impl PartialEq for Via {
+    fn eq(&self, other: &Via) -> bool {
+        self.same(other) || (self.len() == other.len() && self.iter().eq(other.iter()))
+    }
+}
+
+impl Eq for Via {}
+
+impl std::fmt::Debug for Via {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
     }
 }
 
@@ -580,10 +719,11 @@ impl FromIterator<ValueId> for Via {
     where
         I: IntoIterator<Item = ValueId>,
     {
-        let mut values: Vec<ValueId> = values.into_iter().collect();
-        values.sort_unstable();
-        values.dedup();
-        Self(values)
+        let mut via = Via::new();
+        for value in values {
+            via.insert(value);
+        }
+        via
     }
 }
 
@@ -1207,6 +1347,42 @@ impl RegionAnalysis<'_> {
         Regions::with_via(std::iter::once(names).chain(pointee).collect(), via)
     }
 
+    /// A `For` over a slice hands the body a reference into it, so the
+    /// element holds the source's loan for as long as the loop runs, which
+    /// is the terminator's own extent (RFC-0057 rule 2). An array's element
+    /// is moved out of it, and holds the array's element positions.
+    fn terminator_step(&self, term: &Terminator, state: &mut State, changed: &mut Changed) {
+        let Terminator::For { source, stages, .. } = term else {
+            return;
+        };
+        let Some(&target) = self.cfg.label_to_block.get(&stages.body()) else {
+            return;
+        };
+        let Some(&element) = self.cfg.blocks[target.0].params.first() else {
+            return;
+        };
+        let regions = match source {
+            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
+                let held = state.get(*slice).through(*slice);
+                let names = Region {
+                    loans: held.names().to_vec(),
+                };
+                let items = self.deref(state, *slice);
+                let positions = std::iter::once(names)
+                    .chain(reshape(&items, self.pointee_width(element)))
+                    .collect();
+                Regions::with_via(positions, &held.via)
+            }
+            ForSource::Array(array) => {
+                let held = state.get(*array).through(*array);
+                let positions = reshape(&held.positions, self.width(element));
+                Regions::with_via(positions, &held.via)
+            }
+            ForSource::Range { .. } => return,
+        };
+        self.put(state, element, regions, changed);
+    }
+
     fn step(&self, inst: &Inst, state: &mut State, changed: &mut Changed) {
         match &inst.kind {
             InstKind::Ref {
@@ -1633,40 +1809,8 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
         self.step(inst, state, &mut Changed::new());
     }
 
-    /// A `For` over a slice hands the body a reference into it, so the
-    /// element holds the source's loan for as long as the loop runs, which
-    /// is the terminator's own extent (RFC-0057 rule 2). An array's element
-    /// is moved out of it, and holds the array's element positions.
     fn terminator_uses(&self, term: &Terminator, state: &mut State) {
-        let Terminator::For { source, stages, .. } = term else {
-            return;
-        };
-        let Some(&target) = self.cfg.label_to_block.get(&stages.body()) else {
-            return;
-        };
-        let Some(&element) = self.cfg.blocks[target.0].params.first() else {
-            return;
-        };
-        let regions = match source {
-            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
-                let held = state.get(*slice).through(*slice);
-                let names = Region {
-                    loans: held.names().to_vec(),
-                };
-                let items = self.deref(state, *slice);
-                let positions = std::iter::once(names)
-                    .chain(reshape(&items, self.pointee_width(element)))
-                    .collect();
-                Regions::with_via(positions, &held.via)
-            }
-            ForSource::Array(array) => {
-                let held = state.get(*array).through(*array);
-                let positions = reshape(&held.positions, self.width(element));
-                Regions::with_via(positions, &held.via)
-            }
-            ForSource::Range { .. } => return,
-        };
-        self.put(state, element, regions, &mut Changed::new());
+        self.terminator_step(term, state, &mut Changed::new());
     }
 
     fn propagate_forward(
@@ -1756,8 +1900,13 @@ impl<'cfg> Loans<'cfg> {
             }
         }
         let result = forward_analysis(cfg, &analysis, entry);
+        // The fixpoint's block exits are not joined here. The walk below
+        // steps each block from its entry again and ends at its exit, so an
+        // exit adds nothing; its regions are equal to the walk's but built
+        // separately, and joining them cost each value the size of its
+        // `Via`, quadratic over an array literal's pushes.
         let mut regions: FxHashMap<ValueId, Regions> = FxHashMap::default();
-        for state in result.block_entry.iter().chain(&result.block_exit) {
+        for state in &result.block_entry {
             for (v, r) in &state.values {
                 regions.entry(*v).or_default().join_mut(r);
             }
@@ -1780,6 +1929,11 @@ impl<'cfg> Loans<'cfg> {
                         regions: now,
                     });
                 }
+            }
+            let mut changed = Changed::new();
+            analysis.terminator_step(&block.terminator, &mut state, &mut changed);
+            for value in changed {
+                regions.entry(value).or_default().join_mut(&state.get(value));
             }
             given.push(block_given);
         }

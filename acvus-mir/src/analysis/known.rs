@@ -18,6 +18,9 @@
 //! one there and the matching arm here moves with it. Where an answer cannot
 //! be computed identically, the value is left unknown.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use acvus_ast::Literal;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -38,7 +41,72 @@ pub enum Known {
     },
     Object(FxHashMap<Astr, Known>),
     Tuple(Vec<Known>),
-    Array(Vec<Known>),
+    Array(KnownArray),
+}
+
+/// The elements of a known array, in index order.
+///
+/// Each `ArrayPush` of an array literal is the array before it and one more
+/// element. The arrays of one literal share a buffer, each reading its
+/// first `len` elements: `pushed` appends to the buffer when the array ends
+/// it and copies the array into a buffer of its own when it does not. Only
+/// `pushed` writes a buffer, and only past the array's `len`, so an array
+/// reads the elements it was built with. Copying each prefix instead made a
+/// literal quadratic in its length.
+#[derive(Clone)]
+pub struct KnownArray {
+    parts: Rc<RefCell<Vec<Known>>>,
+    len: usize,
+}
+
+impl KnownArray {
+    fn empty() -> KnownArray {
+        KnownArray {
+            parts: Rc::new(RefCell::new(Vec::new())),
+            len: 0,
+        }
+    }
+
+    /// This array with `part` after its last element.
+    fn pushed(&self, part: Known) -> KnownArray {
+        let mut shared = self.parts.borrow_mut();
+        if shared.len() == self.len {
+            shared.push(part);
+            return KnownArray {
+                parts: Rc::clone(&self.parts),
+                len: self.len + 1,
+            };
+        }
+        let mut own = shared[..self.len].to_vec();
+        own.push(part);
+        KnownArray {
+            parts: Rc::new(RefCell::new(own)),
+            len: self.len + 1,
+        }
+    }
+
+    fn get(&self, at: usize) -> Option<Known> {
+        match at < self.len {
+            true => self.parts.borrow().get(at).cloned(),
+            false => None,
+        }
+    }
+}
+
+impl PartialEq for KnownArray {
+    fn eq(&self, other: &KnownArray) -> bool {
+        self.len == other.len
+            && (Rc::ptr_eq(&self.parts, &other.parts)
+                || self.parts.borrow()[..self.len] == other.parts.borrow()[..other.len])
+    }
+}
+
+impl std::fmt::Debug for KnownArray {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(&self.parts.borrow()[..self.len])
+            .finish()
+    }
 }
 
 /// A value one machine word holds, as the machine reads it back.
@@ -81,13 +149,17 @@ fn register_word(n: i128) -> u64 {
 }
 
 impl Known {
-    fn at(&self, path: &[PathSeg]) -> Option<&Known> {
-        path.iter().try_fold(self, |held, seg| match (seg, held) {
-            (PathSeg::Field(key), Known::Object(fields)) => fields.get(key),
-            (PathSeg::Index(at), Known::Tuple(parts) | Known::Array(parts)) => parts.get(*at),
-            (PathSeg::Payload, Known::Variant { payload, .. }) => payload.as_deref(),
+    fn at(&self, path: &[PathSeg]) -> Option<Known> {
+        let Some((seg, rest)) = path.split_first() else {
+            return Some(self.clone());
+        };
+        match (seg, self) {
+            (PathSeg::Field(key), Known::Object(fields)) => fields.get(key)?.at(rest),
+            (PathSeg::Index(at), Known::Tuple(parts)) => parts.get(*at)?.at(rest),
+            (PathSeg::Index(at), Known::Array(parts)) => parts.get(*at)?.at(rest),
+            (PathSeg::Payload, Known::Variant { payload, .. }) => payload.as_deref()?.at(rest),
             _ => None,
-        })
+        }
     }
 
     fn bool(held: bool) -> Known {
@@ -271,13 +343,9 @@ impl KnownValues {
                 Some(Known::Object(fields))
             }
             InstKind::MakeTuple { elements, .. } => Some(Known::Tuple(self.all(elements)?)),
-            InstKind::ArrayBegin { .. } => Some(Known::Array(Vec::new())),
+            InstKind::ArrayBegin { .. } => Some(Known::Array(KnownArray::empty())),
             InstKind::ArrayPush { array, value, .. } => match known(array)? {
-                Known::Array(parts) => {
-                    let mut parts = parts.clone();
-                    parts.push(known(value)?.clone());
-                    Some(Known::Array(parts))
-                }
+                Known::Array(parts) => Some(Known::Array(parts.pushed(known(value)?.clone()))),
                 _ => None,
             },
 
@@ -293,9 +361,9 @@ impl KnownValues {
                 if let Ty::Ref(..) = place.ty().as_ref() {
                     return None;
                 }
-                self.place(slots, target)?.at(path).cloned()
+                self.place(slots, target)?.at(path)
             }
-            InstKind::Take { target, path, .. } => self.place(slots, target)?.at(path).cloned(),
+            InstKind::Take { target, path, .. } => self.place(slots, target)?.at(path),
 
             InstKind::TestVariant { src, tag, .. } => {
                 let Known::Variant { tag: held, payload } = known(src)? else {
@@ -343,9 +411,7 @@ impl KnownValues {
                     _ => None,
                 }
             }
-            InstKind::ObjectGet { object, key, .. } => {
-                known(object)?.at(&[PathSeg::Field(*key)]).cloned()
-            }
+            InstKind::ObjectGet { object, key, .. } => known(object)?.at(&[PathSeg::Field(*key)]),
             InstKind::FieldGet {
                 object,
                 field,
@@ -356,14 +422,14 @@ impl KnownValues {
                     .chain(rest.iter().copied())
                     .map(PathSeg::Field)
                     .collect();
-                known(object)?.at(&path).cloned()
+                known(object)?.at(&path)
             }
             InstKind::TupleIndex { tuple, index, .. } => match known(tuple)? {
                 Known::Tuple(parts) => parts.get(*index).cloned(),
                 _ => None,
             },
             InstKind::ArrayIndex { array, index, .. } => match known(array)? {
-                Known::Array(parts) => parts.get(*index).cloned(),
+                Known::Array(parts) => parts.get(*index),
                 _ => None,
             },
 

@@ -17,6 +17,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
+use crate::pvec::PVec;
 use crate::structural::{Component, StructuralSignature, components};
 use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarBound, EffectVarId,
@@ -242,15 +243,20 @@ enum JoinKind {
 
 /// The union-find over every kind of variable, and the join on it.
 #[derive(Debug, Clone)]
+///
+/// The solver tries a join on a copy of the terms once per open conversion,
+/// so each table is a [`PVec`], whose copy costs what the trial writes. A
+/// `Vec` copy cost every variable of the body per conversion, quadratic in
+/// an array literal's elements.
 struct Terms {
-    ty_bounds: Vec<TypeBound>,
-    effect_vars: Vec<EffectBound>,
+    ty_bounds: PVec<TypeBound>,
+    effect_vars: PVec<EffectBound>,
     /// `a <= b` (RFC-0013 rule 1).
-    effect_below: Vec<(EffectVarId, EffectVarId)>,
-    len_vars: Vec<LenBound>,
-    identity_vars: Vec<IdentityBound>,
-    repr_vars: Vec<ReprBound>,
-    flow_vars: Vec<FlowBound>,
+    effect_below: PVec<(EffectVarId, EffectVarId)>,
+    len_vars: PVec<LenBound>,
+    identity_vars: PVec<IdentityBound>,
+    repr_vars: PVec<ReprBound>,
+    flow_vars: PVec<FlowBound>,
 }
 
 /// A function type's flows during the solve (RFC-0079 rule 5). Two
@@ -278,13 +284,13 @@ pub enum Raised {
 impl Terms {
     fn new() -> Self {
         Self {
-            ty_bounds: Vec::new(),
-            effect_vars: Vec::new(),
-            effect_below: Vec::new(),
-            len_vars: Vec::new(),
-            identity_vars: Vec::new(),
-            repr_vars: Vec::new(),
-            flow_vars: Vec::new(),
+            ty_bounds: PVec::new(),
+            effect_vars: PVec::new(),
+            effect_below: PVec::new(),
+            len_vars: PVec::new(),
+            identity_vars: PVec::new(),
+            repr_vars: PVec::new(),
+            flow_vars: PVec::new(),
         }
     }
 
@@ -699,7 +705,7 @@ impl Terms {
         let mut seen: Vec<EffectVarId> = vec![root];
         let mut stack: Vec<EffectVarId> = vec![root];
         while let Some(at) = stack.pop() {
-            for (b, a) in &self.effect_below {
+            for (b, a) in self.effect_below.iter() {
                 let (from, to) = match toward {
                     Toward::Below => (a, b),
                     Toward::Above => (b, a),
@@ -1737,19 +1743,19 @@ fn collect_open_vars(ty: &InferTy, out: &mut Vec<TypeBoundId>) {
     }
 }
 
-fn alloc_ty_var(ty_bounds: &mut Vec<TypeBound>, bound: TyVarBound) -> TypeBoundId {
+fn alloc_ty_var(ty_bounds: &mut PVec<TypeBound>, bound: TyVarBound) -> TypeBoundId {
     let id = TypeBoundId(ty_bounds.len() as u32);
     ty_bounds.push(TypeBound::Unresolved { bound });
     id
 }
 
-fn alloc_identity_var(identity_vars: &mut Vec<IdentityBound>) -> IdentityVarId {
+fn alloc_identity_var(identity_vars: &mut PVec<IdentityBound>) -> IdentityVarId {
     let id = IdentityVarId(identity_vars.len() as u32);
     identity_vars.push(IdentityBound::Unbound);
     id
 }
 
-fn alloc_len_var(len_vars: &mut Vec<LenBound>) -> LenVarId {
+fn alloc_len_var(len_vars: &mut PVec<LenBound>) -> LenVarId {
     let id = LenVarId(len_vars.len() as u32);
     len_vars.push(LenBound::Unbound);
     id
@@ -1758,7 +1764,7 @@ fn alloc_len_var(len_vars: &mut Vec<LenBound>) -> LenVarId {
 /// A fresh effect variable spans the whole chain whatever its bound: a
 /// floor asserted here would lift a `Sync` effect rather than refuse it
 /// (RFC-0011 rule 5).
-fn alloc_effect_var(effect_vars: &mut Vec<EffectBound>, bound: EffectVarBound) -> EffectVarId {
+fn alloc_effect_var(effect_vars: &mut PVec<EffectBound>, bound: EffectVarBound) -> EffectVarId {
     let id = EffectVarId(effect_vars.len() as u32);
     effect_vars.push(EffectBound::Range {
         lower: Effect::PURE,
@@ -1768,13 +1774,13 @@ fn alloc_effect_var(effect_vars: &mut Vec<EffectBound>, bound: EffectVarBound) -
     id
 }
 
-fn alloc_flow_var(flow_vars: &mut Vec<FlowBound>, seed: Flows) -> FlowVarId {
+fn alloc_flow_var(flow_vars: &mut PVec<FlowBound>, seed: Flows) -> FlowVarId {
     let id = FlowVarId(flow_vars.len() as u32);
     flow_vars.push(FlowBound::Root(seed));
     id
 }
 
-fn alloc_repr_var(repr_vars: &mut Vec<ReprBound>, owner: ReprOwner) -> ReprVarId {
+fn alloc_repr_var(repr_vars: &mut PVec<ReprBound>, owner: ReprOwner) -> ReprVarId {
     let id = ReprVarId(repr_vars.len() as u32);
     repr_vars.push(ReprBound::Unbound(owner));
     id
@@ -2508,6 +2514,51 @@ struct DecisionSlot {
     state: DecisionState,
 }
 
+/// Every decision of the solve, by id, and the ids of its signature
+/// decisions, which `open` records.
+///
+/// `awaits_signature` asks, for each open conversion, whether an open
+/// signature decision has the conversion's target as a parameter. Asking
+/// it of every decision cost their number per conversion, quadratic in an
+/// array literal's elements; asking it of the signatures costs the calls.
+#[derive(Debug, Clone, Default)]
+struct Decisions {
+    slots: Vec<DecisionSlot>,
+    signatures: Vec<DecisionId>,
+}
+
+impl Decisions {
+    fn open(&mut self, decision: Decision) -> DecisionId {
+        let id = DecisionId(self.slots.len() as u32);
+        if let Decision::Signature { .. } = decision {
+            self.signatures.push(id);
+        }
+        self.slots.push(DecisionSlot {
+            decision,
+            state: DecisionState::Open,
+        });
+        id
+    }
+
+    fn signatures(&self) -> impl Iterator<Item = &DecisionSlot> {
+        self.signatures.iter().map(|id| &self.slots[id.0 as usize])
+    }
+}
+
+impl std::ops::Deref for Decisions {
+    type Target = [DecisionSlot];
+
+    fn deref(&self) -> &[DecisionSlot] {
+        &self.slots
+    }
+}
+
+impl std::ops::DerefMut for Decisions {
+    fn deref_mut(&mut self) -> &mut [DecisionSlot] {
+        &mut self.slots
+    }
+}
+
 /// What one settlement round did to a decision.
 enum Progress {
     Unchanged,
@@ -2562,7 +2613,7 @@ struct CandidateAt {
 
 pub struct Solver<'src> {
     terms: Terms,
-    decisions: Vec<DecisionSlot>,
+    decisions: Decisions,
     begun_by_decisions: Vec<BegunSource>,
     children: FxHashMap<DecisionId, Vec<RequiredDecision>>,
     structural: FxHashMap<DecisionId, SettledStructural>,
@@ -2585,7 +2636,7 @@ pub struct Solver<'src> {
 #[derive(Clone)]
 pub struct SolverSnapshot {
     terms: Terms,
-    decisions: Vec<DecisionSlot>,
+    decisions: Decisions,
     begun_by_decisions: Vec<BegunSource>,
     children: FxHashMap<DecisionId, Vec<RequiredDecision>>,
     structural: FxHashMap<DecisionId, SettledStructural>,
@@ -2602,7 +2653,7 @@ impl<'src> Solver<'src> {
     ) -> Self {
         Self {
             terms: Terms::new(),
-            decisions: Vec::new(),
+            decisions: Decisions::default(),
             begun_by_decisions: Vec::new(),
             children: FxHashMap::default(),
             structural: FxHashMap::default(),
@@ -2937,11 +2988,7 @@ impl<'src> Solver<'src> {
     }
 
     pub fn decide(&mut self, decision: Decision) -> DecisionId {
-        self.decisions.push(DecisionSlot {
-            decision,
-            state: DecisionState::Open,
-        });
-        DecisionId((self.decisions.len() - 1) as u32)
+        self.decisions.open(decision)
     }
 
     /// The answer of a settled decision; `None` while it is open or after
@@ -3907,7 +3954,7 @@ impl<'src> Solver<'src> {
             return false;
         };
         self.decisions
-            .iter()
+            .signatures()
             .filter(|decision| matches!(decision.state, DecisionState::Open))
             .any(|decision| {
                 let Decision::Signature { call, .. } = &decision.decision else {

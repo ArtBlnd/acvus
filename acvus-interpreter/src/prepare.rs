@@ -10,6 +10,7 @@
 //! label sits — is decided here.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::mem;
@@ -5912,39 +5913,59 @@ fn order_moves(pairs: Vec<Carried>, scratch: Slot) -> MoveOrdering {
 
 // -- The slot assignment (RFC-0044 rule 2) -----------------------------
 
-/// A bit per `ValueId` of one body.
-#[derive(Clone, PartialEq, Eq)]
-struct ValueSet(Box<[u64]>);
+/// A set of the `ValueId`s of one body, as their raw indices in ascending
+/// order.
+///
+/// A set holds its members, not a bit per value of the body. `Live` keeps
+/// two sets per instruction, and a bit per value cost the body's length
+/// times its value count, which an array literal of n elements makes
+/// quadratic in n. Members cost what is live, and `assign_slots` reads
+/// every live member in any case.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct ValueSet(Vec<usize>);
 
 impl ValueSet {
-    fn new(values: usize) -> Self {
-        Self(vec![0; values.div_ceil(64)].into_boxed_slice())
-    }
-
     fn contains(&self, value: usize) -> bool {
-        self.0[value / 64] >> (value % 64) & 1 == 1
+        self.0.binary_search(&value).is_ok()
     }
 
     fn insert(&mut self, value: usize) {
-        self.0[value / 64] |= 1 << (value % 64);
-    }
-
-    fn remove(&mut self, value: usize) {
-        self.0[value / 64] &= !(1 << (value % 64));
-    }
-
-    fn union_with(&mut self, other: &Self) {
-        for (word, bits) in self.0.iter_mut().zip(other.0.iter()) {
-            *word |= bits;
+        if let Err(at) = self.0.binary_search(&value) {
+            self.0.insert(at, value);
         }
     }
 
+    fn remove(&mut self, value: usize) {
+        if let Ok(at) = self.0.binary_search(&value) {
+            self.0.remove(at);
+        }
+    }
+
+    fn union_with(&mut self, other: &Self) {
+        if other.0.iter().all(|value| self.contains(*value)) {
+            return;
+        }
+        let mut merged = Vec::with_capacity(self.0.len() + other.0.len());
+        let (mut mine, mut theirs) = (self.0.iter().peekable(), other.0.iter().peekable());
+        loop {
+            let next = match (mine.peek(), theirs.peek()) {
+                (Some(m), Some(t)) if m < t => mine.next(),
+                (Some(m), Some(t)) if m > t => theirs.next(),
+                (Some(_), Some(_)) => {
+                    theirs.next();
+                    mine.next()
+                }
+                (Some(_), None) => mine.next(),
+                (None, Some(_)) => theirs.next(),
+                (None, None) => break,
+            };
+            merged.extend(next.copied());
+        }
+        self.0 = merged;
+    }
+
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-        self.0.iter().enumerate().flat_map(|(word, bits)| {
-            (0..64)
-                .filter(move |bit| bits >> bit & 1 == 1)
-                .map(move |bit| word * 64 + bit)
-        })
+        self.0.iter().copied()
     }
 }
 
@@ -6148,7 +6169,7 @@ fn touch(ranges: &mut [Option<LiveRange>], value: usize, at: usize) {
 }
 
 /// A closed range of instruction indexes.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct LiveRange {
     pub(crate) lo: usize,
     pub(crate) hi: usize,
@@ -6288,16 +6309,16 @@ impl ReadsWithStorage {
 }
 
 impl Live {
-    fn of(edges: &Edges<'_>, reads: &ReadsWithStorage, values: usize) -> Self {
+    fn of(edges: &Edges<'_>, reads: &ReadsWithStorage) -> Self {
         let insts = edges.insts;
-        let mut live_in = vec![ValueSet::new(values); insts.len()];
-        let mut live_out = vec![ValueSet::new(values); insts.len()];
+        let mut live_in = vec![ValueSet::default(); insts.len()];
+        let mut live_out = vec![ValueSet::default(); insts.len()];
 
         let mut changed = true;
         while changed {
             changed = false;
             for at in (0..insts.len()).rev() {
-                let mut out = ValueSet::new(values);
+                let mut out = ValueSet::default();
                 edges.successors(at, |next| out.union_with(&live_in[next]));
                 let mut into = out.clone();
                 for def in inst_info::defs(&insts[at].kind) {
@@ -6322,7 +6343,7 @@ impl Live {
 
         let entry = match live_in.first() {
             Some(first) => first.clone(),
-            None => ValueSet::new(values),
+            None => ValueSet::default(),
         };
         Self {
             live_in,
@@ -6677,8 +6698,14 @@ enum Claim {
 /// two values may share a register only where `word_kind` gives them the
 /// same answer: this is where that rule holds, and `Prepare::slot_kinds`
 /// is the table it makes complete.
+///
+/// A slot's ranges are disjoint, which `take` asserts, and are kept by their
+/// first instruction, so the one range that can meet a new one is the last
+/// to begin at or before the new one's end. A list scanned per question
+/// cost each value placed every value its slot already held, and an array
+/// literal puts every push in a few registers.
 struct Occupancy {
-    taken: Vec<Vec<LiveRange>>,
+    taken: Vec<BTreeMap<usize, usize>>,
     claimed: Vec<Claim>,
 }
 
@@ -6694,11 +6721,18 @@ impl Occupancy {
         self.taken.len()
     }
 
-    fn free(&self, slot: usize, range: LiveRange, want: SlotClaim) -> bool {
-        let clear = match self.taken.get(slot) {
-            Some(taken) => !taken.iter().any(|held| held.overlaps(range)),
-            None => true,
+    fn clear(&self, slot: usize, range: LiveRange) -> bool {
+        let Some(taken) = self.taken.get(slot) else {
+            return true;
         };
+        !taken
+            .range(..=range.hi)
+            .next_back()
+            .is_some_and(|(&lo, &hi)| LiveRange { lo, hi }.overlaps(range))
+    }
+
+    fn free(&self, slot: usize, range: LiveRange, want: SlotClaim) -> bool {
+        let clear = self.clear(slot, range);
         let fits = match self.claimed.get(slot) {
             Some(Claim::Held(held)) => *held == want,
             Some(Claim::Free) | None => true,
@@ -6708,10 +6742,14 @@ impl Occupancy {
 
     fn take(&mut self, slot: usize, range: LiveRange, want: SlotClaim) {
         if self.taken.len() <= slot {
-            self.taken.resize_with(slot + 1, Vec::new);
+            self.taken.resize_with(slot + 1, BTreeMap::new);
             self.claimed.resize(slot + 1, Claim::Free);
         }
-        self.taken[slot].push(range);
+        assert!(
+            self.clear(slot, range),
+            "register {slot} is taken over {range:?} while it holds a value there"
+        );
+        self.taken[slot].insert(range.lo, range.hi);
         self.claimed[slot] = Claim::Held(want);
     }
 
@@ -6822,7 +6860,7 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
     };
     let insts = edges.insts;
     let reads = ReadsWithStorage::of(body);
-    let live = Live::of(&edges, &reads, values);
+    let live = Live::of(&edges, &reads);
 
     let mut def_sites: Vec<Vec<DefSite>> = vec![Vec::new(); values];
     let mut storages = vec![false; values];
@@ -8496,21 +8534,33 @@ impl Prepare<'_> {
     /// of a fixed register: an arithmetic operand, or an argument of a call
     /// the fusion rule admits. A window call is neither, and its argument
     /// registers are the ones `assign_slots` placed.
-    fn every_reader_takes_a_word(&self, value: ValueId) -> bool {
-        self.body.insts.iter().enumerate().all(|(at, inst)| {
-            let reads = inst_info::uses(&inst.kind)
-                .iter()
-                .any(|used| *used == value);
-            !reads
-                || matches!(inst.kind, InstKind::BinOp { .. } | InstKind::UnaryOp { .. })
+    fn every_reader_takes_a_word(&self, readers: &[usize]) -> bool {
+        readers.iter().all(|&at| {
+            matches!(self.body.insts[at].kind, InstKind::BinOp { .. } | InstKind::UnaryOp { .. })
                 || self.fusable_call(at).is_some()
         })
+    }
+
+    /// For each value, the instructions that read it, in body order.
+    fn readers(&self) -> Vec<SmallVec<[usize; 2]>> {
+        let mut readers: Vec<SmallVec<[usize; 2]>> =
+            vec![SmallVec::new(); self.body.val_factory.len()];
+        for (at, inst) in self.body.insts.iter().enumerate() {
+            for used in inst_info::uses(&inst.kind) {
+                let of = &mut readers[used.to_raw()];
+                if of.last() != Some(&at) {
+                    of.push(at);
+                }
+            }
+        }
+        readers
     }
 
     /// One register per distinct constant: an entry constant's register has
     /// no writer, so every constant of one kind and word reads the same one.
     fn hoist_konsts(&mut self) -> ScalarsFinal {
         let mut slot_of_word: FxHashMap<(u8, u64), u32> = FxHashMap::default();
+        let readers = self.readers();
         for at in 0..self.body.insts.len() {
             let InstKind::Const { dst, value } = &self.body.insts[at].kind else {
                 continue;
@@ -8519,7 +8569,7 @@ impl Prepare<'_> {
             let Some(word) = konst_value(&value, self.ty(dst)) else {
                 continue;
             };
-            if !self.every_reader_takes_a_word(dst) {
+            if !self.every_reader_takes_a_word(&readers[dst.to_raw()]) {
                 continue;
             }
             let slot = *slot_of_word

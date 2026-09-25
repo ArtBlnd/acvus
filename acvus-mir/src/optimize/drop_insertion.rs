@@ -24,6 +24,7 @@
 //! in every variant form.
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use crate::analysis::loans::Loans;
 use crate::analysis::loop_deps::{BodyDeps, HeaderDeps, Storage, Token};
@@ -57,10 +58,33 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
 
         let mut drops: Vec<BlockDrop> = Vec::new();
 
-        for (ii, inst) in block.insts.iter().enumerate() {
-            for u in loans.uses_with_storage(&inst.kind) {
+        // Each question below is a lookup in what one walk of the block
+        // gathered. Scanning the block per value was quadratic in an array
+        // literal, whose pushes make one long block.
+        let term_uses = terminator_uses_with_storage(&loans, block_idx);
+        let reads: Vec<_> = block
+            .insts
+            .iter()
+            .map(|inst| loans.uses_with_storage(&inst.kind))
+            .collect();
+        let mut last_read: FxHashMap<ValueId, usize> = FxHashMap::default();
+        for (ii, read) in reads.iter().enumerate() {
+            for u in read {
+                last_read.insert(*u, ii);
+            }
+        }
+        let ended: FxHashSet<ValueId> = block
+            .insts
+            .iter()
+            .flat_map(|inst| ended_by(&inst.kind, val_types))
+            .collect();
+
+        for (ii, read) in reads.iter().enumerate() {
+            let inst = &block.insts[ii];
+            for &u in read {
+                let last_use_in_block = last_read.get(&u) == Some(&ii) && !term_uses.contains(&u);
                 if !liveness.is_live_out(block_idx, u)
-                    && is_last_use_in_block(&loans, block_idx, ii, u)
+                    && last_use_in_block
                     && needs_drop(u, val_types)
                     && !ends_ownership(&inst.kind, u, val_types)
                 {
@@ -74,16 +98,22 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
 
         // Values defined in this block that are never used, or whose last use
         // is the terminator and it consumes them (no Drop needed).
-        let term_uses = terminator_uses_with_storage(&loans, block_idx);
         let already_dropped: FxHashSet<ValueId> = drops.iter().map(|drop| drop.value).collect();
 
-        // Collect all defs in this block, each once: a storage an `Assign`
-        // writes is defined at every write.
+        // Collect all defs in this block, each once, and after which
+        // instructions each is given: a storage an `Assign` writes is
+        // defined at every write.
         let mut all_defs: Vec<ValueId> = block.params.clone();
-        for inst in &block.insts {
+        let mut seen: FxHashSet<ValueId> = block.params.iter().copied().collect();
+        let mut defined_after: FxHashMap<ValueId, Vec<usize>> = FxHashMap::default();
+        for (at, inst) in block.insts.iter().enumerate() {
             for def in inst_info::defs(&inst.kind) {
-                if !all_defs.contains(&def) {
+                if seen.insert(def) {
                     all_defs.push(def);
+                }
+                let after = defined_after.entry(def).or_default();
+                if after.last() != Some(&(at + 1)) {
+                    after.push(at + 1);
                 }
             }
         }
@@ -94,10 +124,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
                 && needs_drop(v, val_types)
             {
                 // Check if consumed by any instruction or terminator.
-                let consumed_by_inst = block
-                    .insts
-                    .iter()
-                    .any(|inst| ends_ownership(&inst.kind, v, val_types));
+                let consumed_by_inst = ended.contains(&v);
                 let consumed_by_term = is_consumed_by_terminator(&block.terminator, v);
 
                 if consumed_by_inst || consumed_by_term {
@@ -112,21 +139,14 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
                     continue;
                 }
 
-                if !is_used_in_block(&loans, block_idx, v) {
+                if !last_read.contains_key(&v) {
                     // Unused def - each value it is given dies where it is
                     // given, so a drop follows every definition; a block
                     // parameter is defined before the block's first
                     // instruction.
-                    let defined: Vec<usize> = block
-                        .insts
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, inst)| inst_info::defs(&inst.kind).contains(&v))
-                        .map(|(at, _)| at + 1)
-                        .collect();
-                    match defined.is_empty() {
-                        true => drops.push(BlockDrop { at: 0, value: v }),
-                        false => {
+                    match defined_after.remove(&v) {
+                        None => drops.push(BlockDrop { at: 0, value: v }),
+                        Some(defined) => {
                             drops.extend(defined.into_iter().map(|at| BlockDrop { at, value: v }))
                         }
                     }
@@ -146,14 +166,24 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
         .map(|bi| emptied_in(&loans, BlockIdx(bi), val_types))
         .collect();
 
+    // Drops at one point run in the reverse of their order in `drops`: the
+    // order the one-at-a-time insertion this replaces gave them, which put
+    // each drop before the ones already at its point.
     for (block, drops) in cfg.blocks.iter_mut().zip(block_drops) {
-        for BlockDrop { at, value } in drops {
-            let drop_inst = Inst {
-                span: acvus_ast::Span::ZERO,
-                kind: InstKind::Drop { src: value },
-            };
-            block.insts.insert(at, drop_inst);
+        if drops.is_empty() {
+            continue;
         }
+        let original = std::mem::take(&mut block.insts);
+        let mut placed = drops.into_iter().rev().peekable();
+        let mut insts = Vec::with_capacity(original.len() + placed.len());
+        for (at, inst) in original.into_iter().enumerate() {
+            while let Some(drop) = placed.next_if(|drop| drop.at == at) {
+                insts.push(drop_inst(drop.value));
+            }
+            insts.push(inst);
+        }
+        insts.extend(placed.map(|drop| drop_inst(drop.value)));
+        block.insts = insts;
     }
 
     // -- Phase 2: edge drops (branch-point) -------------------------
@@ -511,27 +541,12 @@ fn retarget(term: &mut Terminator, slot: EdgeSlot, to: Label) {
     edge.args.clear();
 }
 
-/// Check if `val` is used after `at_idx` within the block (instructions + terminator).
-fn is_last_use_in_block(loans: &Loans<'_>, block: BlockIdx, at_idx: usize, val: ValueId) -> bool {
-    for inst in &loans.cfg().blocks[block.0].insts[at_idx + 1..] {
-        if loans.uses_with_storage(&inst.kind).contains(&val) {
-            return false;
-        }
+/// A `Drop` of `value`, placed by this pass.
+fn drop_inst(value: ValueId) -> Inst {
+    Inst {
+        span: acvus_ast::Span::ZERO,
+        kind: InstKind::Drop { src: value },
     }
-    if terminator_uses_with_storage(loans, block).contains(&val) {
-        return false;
-    }
-    true
-}
-
-/// Check if `val` is used by any instruction or terminator in the block.
-fn is_used_in_block(loans: &Loans<'_>, block: BlockIdx, val: ValueId) -> bool {
-    for inst in &loans.cfg().blocks[block.0].insts {
-        if loans.uses_with_storage(&inst.kind).contains(&val) {
-            return true;
-        }
-    }
-    terminator_uses_with_storage(loans, block).contains(&val)
 }
 
 /// The values a terminator keeps alive: the ones it uses, plus the storage
@@ -658,14 +673,21 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
     }
 }
 
-/// Whether `val` leaves this instruction owning nothing, by either road: the
-/// instruction took it, or the payload that was all it held left it.
+/// The values that leave this instruction owning nothing, by either road:
+/// the instruction took them, or the payload that was all one held left it.
+fn ended_by(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> SmallVec<[ValueId; 4]> {
+    let mut ended = consumed_by_inst(kind);
+    ended.extend(emptied_by(kind, val_types));
+    ended
+}
+
+/// Whether `val` is one of [`ended_by`]'s values.
 pub(crate) fn ends_ownership(
     kind: &InstKind,
     val: ValueId,
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> bool {
-    is_consumed_by_inst(kind, val) || emptied_by(kind, val_types) == Some(val)
+    ended_by(kind, val_types).contains(&val)
 }
 
 /// The registers a block leaves empty: the payload left them, and nothing
@@ -702,55 +724,52 @@ fn needs_drop(val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
         .unwrap_or(false)
 }
 
-/// Is `val` consumed (ownership transferred) by this instruction?
-///
-/// Consumed = the instruction takes ownership. No Drop needed after.
-/// Read = the instruction borrows. Drop still needed if this is the last use.
-fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
+/// The values this instruction takes ownership of: no Drop follows them.
+/// An operand the instruction only reads is not here, and still needs a Drop
+/// after its last use.
+fn consumed_by_inst(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
+    let mut consumed: SmallVec<[ValueId; 4]> = SmallVec::new();
     match kind {
-        // Function calls consume all arguments (ownership transfer to callee).
-        InstKind::FunctionCall { callee, args, .. } => {
-            args.contains(&val) || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
+        // Calls and spawns consume every argument, and the function value
+        // they call through.
+        InstKind::FunctionCall { callee, args, .. } | InstKind::Spawn { callee, args, .. } => {
+            consumed.extend(args.iter().copied());
+            if let crate::ir::Callee::Indirect(f) = callee {
+                consumed.push(*f);
+            }
         }
-        // Spawn consumes args.
-        InstKind::Spawn { callee, args, .. } => {
-            args.contains(&val) || matches!(callee, crate::ir::Callee::Indirect(f) if *f == val)
-        }
-        // Eval consumes the Handle.
-        InstKind::Eval { src, .. } => *src == val,
+        InstKind::Eval { src, .. } => consumed.push(*src),
         // A whole Take moves the value out of its slot (RFC-0018); a Take
         // of a part leaves the rest for a Drop.
         InstKind::Take { target, path, .. } => {
-            path.is_empty() && inst_info::storage(target) == Some(val)
+            if path.is_empty() {
+                consumed.extend(inst_info::storage(target));
+            }
         }
-        // Assign and Commit consume the value; the reference an Assign
-        // goes through is only read.
-        InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => *value == val,
-        // Cast consumes src (transforms it).
-        // Container constructors consume their elements.
-        InstKind::ArrayPush { array, value, .. } => *array == val || *value == val,
-        InstKind::StringConcat { parts, .. } => parts.contains(&val),
-        InstKind::StringAppend { part, .. } => *part == val,
+        // The reference an Assign goes through is only read.
+        InstKind::Assign { value, .. } | InstKind::Commit { value, .. } => consumed.push(*value),
+        InstKind::ArrayPush { array, value, .. } => consumed.extend([*array, *value]),
+        InstKind::StringConcat { parts, .. } => consumed.extend(parts.iter().copied()),
+        InstKind::StringAppend { part, .. } => consumed.push(*part),
+        InstKind::MakeTuple { elements, .. } => consumed.extend(elements.iter().copied()),
+        InstKind::MakeObject { fields, .. } => consumed.extend(fields.iter().map(|(_, v)| *v)),
+        InstKind::MakeVariant { payload, .. } => consumed.extend(payload.iter().copied()),
+        InstKind::MakeClosure { captures, .. } => consumed.extend(captures.iter().copied()),
+        InstKind::FieldSet { object, value, .. } => consumed.extend([*object, *value]),
+        InstKind::Drop { src } => consumed.push(*src),
+        // Only the element written through `IndexSet` changes owner; the
+        // slice it writes into is borrowed.
+        InstKind::IndexSet { value, .. } => consumed.push(*value),
+        // An unwrap's source is `move_check::emptied_by`'s answer, which
+        // both passes read; it is left out here so that one function gives
+        // that answer, not because an unwrap keeps its source.
+        InstKind::UnwrapVariant { .. } => {}
+
         InstKind::StringEq { .. }
         | InstKind::StringClone { .. }
         | InstKind::StructuralEq { .. }
-        | InstKind::StructuralClone { .. } => false,
-        InstKind::MakeTuple { elements, .. } => elements.contains(&val),
-        InstKind::MakeObject { fields, .. } => fields.iter().any(|(_, v)| *v == val),
-        InstKind::MakeVariant { payload, .. } => payload.as_ref() == Some(&val),
-        // Closure captures are consumed (moved into closure).
-        InstKind::MakeClosure { captures, .. } => captures.contains(&val),
-        // FieldSet consumes both object and value (produces new object).
-        InstKind::FieldSet { object, value, .. } => *object == val || *value == val,
-        // Drop consumes src.
-        InstKind::Drop { src } => *src == val,
-        // An unwrap's source is `move_check::emptied_by`'s answer, which
-        // both passes read; `false` here is this function declining to give
-        // a second one, not a claim that an unwrap keeps its source.
-        InstKind::UnwrapVariant { .. } => false,
-
-        // Read-only: these don't consume the value.
-        InstKind::FieldGet { .. }
+        | InstKind::StructuralClone { .. }
+        | InstKind::FieldGet { .. }
         | InstKind::BinOp { .. }
         | InstKind::UnaryOp { .. }
         | InstKind::Check { .. }
@@ -762,16 +781,10 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::ArrayIndex { .. }
         | InstKind::ObjectGet { .. }
         | InstKind::TupleIndex { .. }
-        | InstKind::Merge { .. } => false,
-
-        // A slice borrows its container and an `Index` borrows the slice;
-        // only the element written through `IndexSet` changes owner.
-        InstKind::AsSlice { .. } | InstKind::Index { .. } => false,
-        InstKind::IndexSet { value, .. } => *value == val,
-
-        // These don't consume a value; a Ref only reads the reference a
-        // place goes through.
-        InstKind::Const { .. }
+        | InstKind::Merge { .. }
+        | InstKind::AsSlice { .. }
+        | InstKind::Index { .. }
+        | InstKind::Const { .. }
         | InstKind::ConstStr { .. }
         | InstKind::ArrayBegin { .. }
         | InstKind::Ref { .. }
@@ -780,7 +793,7 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::BlockLabel { .. }
         | InstKind::Undef { .. }
         | InstKind::Poison { .. }
-        | InstKind::Nop => false,
+        | InstKind::Nop => {}
 
         // Control flow - handled by terminator, not here.
         InstKind::Jump { .. }
@@ -789,8 +802,9 @@ fn is_consumed_by_inst(kind: &InstKind, val: ValueId) -> bool {
         | InstKind::Switch { .. }
         | InstKind::For { .. }
         | InstKind::Return { .. }
-        | InstKind::Diverge => false,
+        | InstKind::Diverge => {}
     }
+    consumed
 }
 
 /// Is `val` consumed by the terminator?
