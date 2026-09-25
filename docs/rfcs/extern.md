@@ -1323,9 +1323,13 @@ instead, where the call is an ordinary call the checker sees whole.
 1. **One graph, one solve.** `HostGraph` takes several named `Host`s and
    compiles them into one compilation graph: one interner, one set of
    registries, one runtime, one solve (RFC-0090 rule 1). A host in the
-   graph declares no registries of its own. Its contexts, inits and
-   bindings stay its own, keyed under its name (`name/key`), so two hosts
-   never share a context by accident.
+   graph declares no registries of its own. A host is a scope of the
+   graph: its contexts, `$` inputs, bindings, inits and functions are
+   qualified by the host's name in the graph's own names, not by
+   rewriting a name's text, so two hosts never share one by accident. A
+   name its scripts write resolves in its host's scope; a local, a
+   parameter and a method name are not host names and are never
+   qualified.
 
 2. **An entry of one host is a function of another.** The graph exposes
    host `b`'s entry `e` to host `a` under a name `a`'s scripts call as an
@@ -1336,8 +1340,9 @@ instead, where the call is an ordinary call the checker sees whole.
    mistyped field is a compile error. The callee runs inside the caller's
    run as a call: its body's effects and context accesses are the call's,
    through its summary (RFC-0025), and its contexts are read and written
-   under `b/` in the same storage. A name the graph exposes that another
-   function of `a` already has is refused when the graph is built.
+   in `b`'s scope in the same storage. Only an entry that declares its
+   inputs can be exposed. A name the graph exposes that another function
+   of `a` already has is refused when the graph is built.
 
 3. **The calls form a DAG, and nothing else.** Each exposure is an edge
    `a → b`. The graph is refused when its edges hold a cycle of any length,
@@ -1348,14 +1353,14 @@ instead, where the call is an ordinary call the checker sees whole.
    is an edge the graph cannot see: a closure of `a` passed to `b` and
    called there runs `a`'s code under `b`, and closes a cycle that rule 3
    never reads. So the parameter and the result of an exposed entry hold no
-   function type, and no extension type whose declaration does not state
-   that it holds none. A declaration that does not state it may hold one.
+   function type, no task handle (it runs the code that made it), and no
+   extension type whose declaration does not state that it holds none. A declaration that does not state it may hold one.
    The check reads the solved types at the freeze and names the position
    refused.
 
 5. **One entrypoint runs.** A program built from a graph runs the entries
    the graph names as its own. An exposed entry is a function of the
-   hosts it is exposed to, and nothing else runs it.
+   hosts it is exposed to, and the graph refuses naming it as one it runs.
 
 6. **An extern frames a call through a closure.** An extern that must act
    around the callee (mark before, roll back after) takes a closure of no
