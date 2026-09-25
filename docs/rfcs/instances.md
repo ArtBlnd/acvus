@@ -114,13 +114,12 @@ checker already knows which instance that is. A word the checker chose is
 the cheapest carrier of that knowledge and keeps generics out of the
 machine. The word and the value it was chosen for are one fact, so they
 travel as one: kept apart, they are safe only while every value at a Rust
-`I` has the implementation the word addresses, a premise no local code
-holds, since the glue fills every `I` with `Owned<Rt>` (RFC-0068 rule 1).
+`I` has the word's implementation, which no local code holds, since the
+glue fills every `I` with `Owned<Rt>` (RFC-0068 rule 1).
 **Cost.** One store of the receiver into `ctx`, one load of the word, one
 indirect call, one load on the far side; a parameter at a signature
 variable adds one reference value and one borrow on the far side. An
-`Instance` is its receiver and one word, which a stage held side by side
-before.
+`Instance` is its receiver and one word.
 **Rejected.**
 - Entry tree carried in the value (a node arena, a carrier struct per
   bounded variable) — rebuilds per element what frame and site already
@@ -128,13 +127,12 @@ before.
 - Stamp in spare bytes — scalars have nowhere to hold one.
 - The receiver and its `Instance` side by side, typed at one `I` (this
   rule's former form) — a Rust type error refuses a mispairing only while
-  one Rust type at `I` has one implementation. A handler can hand a value
-  to an instance the checker chose for another, and nothing local refuses it.
-- One bundle naming several signatures at one receiver — `A + B → A` needs
-  a coercion, and no declaration needs it.
-- Every requirement as an owning `Instance`, `eq` and `hash` included — a
-  container would hold a word per element, the carrier the first entry
-  measured slower.
+  one Rust type at `I` has one implementation, so nothing local refuses
+  a value handed to another value's instance.
+- One bundle of several signatures at one receiver — `A + B → A` needs a
+  coercion no declaration needs.
+- Every requirement as an owning `Instance` — a container would hold a
+  word per element, the carrier measured slower above.
 - Interfaces in the `Large` header's vtable — scalars have no header,
   several acvus types share one Rust payload, and a `&'static` table cannot
   take another crate's registration.
