@@ -1,0 +1,19 @@
+// expect 2|7,9|0
+let scratch = vec([7, 9]);
+let none = vec([]);
+let out = vec([]);
+for x in &none {
+    let base = scratch.pop().unwrap();
+    out.push(base + *x);
+    scratch.push(base);
+}
+let unreached = vec([4]);
+let later = vec([1, 2]);
+for x in &later {
+    if *x > 5 {
+        let base = unreached.pop().unwrap();
+        out.push(base);
+        unreached.push(base);
+    };
+}
+scratch.len().to_string() + "|" + scratch.into_iter().map(|x| -> x.to_string()).join(",".to_string()) + "|" + out.len().to_string()

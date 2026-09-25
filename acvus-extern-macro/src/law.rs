@@ -1,5 +1,5 @@
 //! `#[extern_fn(law(..))]`: the algebraic laws a declaration states
-//! (RFC-0082 rules 2, 3 and 10).
+//! (RFC-0082 rules 2, 3 and 10), and `#[extern_fn(payload(o))]` (rule 3).
 
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
@@ -8,8 +8,8 @@ use syn::{Ident, Lit, Path, Token, Type};
 use crate::{ExternParam, Mode, Returning};
 
 /// `law(associative, commutative, identity = e)`,
-/// `law(fold(combine = g, identity = e), commutative)` or
-/// `law(total_order)`.
+/// `law(fold(combine = g, identity = e), commutative)`,
+/// `law(total_order)` or `law(inverse = g)`.
 pub(crate) struct LawAttr {
     first_word: Ident,
     associative: Option<Ident>,
@@ -17,6 +17,12 @@ pub(crate) struct LawAttr {
     identity: Option<IdentityAttr>,
     fold: Option<FoldAttr>,
     total_order: Option<Ident>,
+    inverse: Option<InverseAttr>,
+}
+
+struct InverseAttr {
+    keyword: Ident,
+    restore: Path,
 }
 
 enum IdentityAttr {
@@ -50,6 +56,7 @@ impl LawAttr {
         let mut identity = None;
         let mut fold = None;
         let mut total_order = None;
+        let mut inverse = None;
         while !content.is_empty() {
             let word: Ident = content.parse()?;
             let stated_twice = match word.to_string().as_str() {
@@ -65,13 +72,22 @@ impl LawAttr {
                     fold.replace(stated).is_some()
                 }
                 "total_order" => total_order.replace(word.clone()).is_some(),
+                "inverse" => {
+                    content.parse::<Token![=]>()?;
+                    let restore: Path = content.parse()?;
+                    let stated = InverseAttr {
+                        keyword: word.clone(),
+                        restore,
+                    };
+                    inverse.replace(stated).is_some()
+                }
                 other => {
                     return Err(syn::Error::new(
                         word.span(),
                         format!(
                             "unknown law `{other}`: a law is `associative`, `commutative`, \
-                             `identity = e`, `fold(combine = g, identity = e)`, or \
-                             `total_order` (RFC-0082)"
+                             `identity = e`, `fold(combine = g, identity = e)`, \
+                             `total_order`, or `inverse = g` (RFC-0082)"
                         ),
                     ));
                 }
@@ -109,6 +125,20 @@ impl LawAttr {
                  form (RFC-0082)",
             ));
         }
+        if let Some(stated) = &inverse
+            && (associative.is_some()
+                || commutative.is_some()
+                || identity.is_some()
+                || fold.is_some()
+                || total_order.is_some())
+        {
+            return Err(syn::Error::new(
+                stated.keyword.span(),
+                "the law `inverse` is a storage read's, and `associative`, `commutative`, \
+                 `identity`, `fold` and `total_order` are another form's: a declaration states \
+                 one form (RFC-0082)",
+            ));
+        }
         Ok(LawAttr {
             first_word,
             associative,
@@ -116,6 +146,7 @@ impl LawAttr {
             identity,
             fold,
             total_order,
+            inverse,
         })
     }
 
@@ -127,6 +158,25 @@ impl LawAttr {
         returning: &Returning,
     ) -> syn::Result<proc_macro2::TokenStream> {
         let commutative = self.commutative.is_some();
+        if let Some(inverse) = &self.inverse {
+            let reads_storage = match params {
+                [state] => state.mode == Mode::BorrowMut,
+                _ => false,
+            };
+            let gives_an_option =
+                matches!(returning, Returning::Value) && option_payload(ret).is_some();
+            if !reads_storage || !gives_an_option {
+                return Err(syn::Error::new(
+                    inverse.keyword.span(),
+                    format!(
+                        "the law `inverse` is stated over `f(s: &mut S) -> Option<X>`, and \
+                         `{fn_ident}` is not of that shape (RFC-0082 rule 3)"
+                    ),
+                ));
+            }
+            let restore = qref_of(&inverse.restore)?;
+            return Ok(quote! { ::acvus_extern::Laws::Inverse(#restore) });
+        }
         if let Some(order) = &self.total_order {
             let compares = match params {
                 [a, b] => {
@@ -344,6 +394,57 @@ fn qref_of(path: &Path) -> syn::Result<proc_macro2::TokenStream> {
             ::acvus_extern::QualifiedRef::qualified(__i.intern(#ns), __i.intern(#name))
         }),
         _ => Err(refused()),
+    }
+}
+
+/// `payload(o)` on `f(o: Option<T>) -> T` (RFC-0082 rule 3): the law
+/// `f` states, or the refusal naming the shape.
+pub(crate) fn checked_payload(
+    named: &Ident,
+    fn_ident: &Ident,
+    params: &[&ExternParam],
+    ret: &Type,
+    returning: &Returning,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let fits = match params {
+        [option] => {
+            *named == option.name
+                && option.mode == Mode::Value
+                && matches!(returning, Returning::Value)
+                && option_payload(&option.ty).is_some_and(|payload| same_type(payload, ret))
+        }
+        _ => false,
+    };
+    if !fits {
+        return Err(syn::Error::new(
+            named.span(),
+            format!(
+                "`payload({named})` is stated over `f({named}: Option<T>) -> T`, and \
+                 `{fn_ident}` is not of that shape (RFC-0082 rule 3)"
+            ),
+        ));
+    }
+    Ok(quote! { ::acvus_extern::Laws::Payload })
+}
+
+/// `X` of a type written `Option<X>`.
+fn option_payload(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    if path.qself.is_some() || path.path.segments.len() != 1 {
+        return None;
+    }
+    let segment = &path.path.segments[0];
+    if segment.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    match args.args.iter().collect::<Vec<_>>()[..] {
+        [syn::GenericArgument::Type(payload)] => Some(payload),
+        _ => None,
     }
 }
 

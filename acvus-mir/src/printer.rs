@@ -246,6 +246,15 @@ fn fmt_loop_facts(
             fmt_cycle(cycle, judged.order, judged.law.as_ref(), cfg, ctx, vn)
         ));
     }
+    // RFC-0093 rule 6: a storage held as a cell of `f` and `g` is no token.
+    for cell in deps.cells() {
+        lines.push(format!(
+            "cell({}, {}) {}",
+            ctx.interner.resolve(cell.take.id.name),
+            ctx.interner.resolve(cell.restore.id.name),
+            fmt_token(&Token::Storage(Storage::Slot(cell.slot)), ctx, vn)
+        ));
+    }
     lines.push(match deps.control {
         Control::Upfront => "control upfront".to_string(),
         Control::Chained { cycle } => match deps.cycles[cycle].stage() {

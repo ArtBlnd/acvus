@@ -1,6 +1,6 @@
 // id: E07
 // family: effects
-// desc: pop -> work -> push on a shared scratch vec, restored each iteration; `pop`/`push` declare no `inverse`
+// desc: pop -> work -> push on a shared scratch vec, restored each iteration; `pop` states `inverse = push` and `unwrap` states `payload`
 // expect: 15,13,18|1
 let scratch = vec([10]);
 let xs = vec([5, 3, 8]);

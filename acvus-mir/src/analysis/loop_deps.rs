@@ -486,6 +486,7 @@ pub struct LoopDeps {
     ahead_of_exit: Vec<AheadOfExit>,
     disjoint: Vec<ValueId>,
     keyed: Vec<KeyedStorage>,
+    cells: Vec<InverseCell>,
 }
 
 pub struct HeaderDeps {
@@ -538,7 +539,18 @@ impl LoopDeps {
         }
         let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body(), head);
         let slots = TargetSlots::of(loans, head.source(), loop_blocks);
-        let written = graph.written_storages(cfg, loans, &slots);
+        let cells = inverse_cells(
+            loans,
+            laws,
+            header,
+            loop_blocks,
+            &graph.written_storages(cfg, loans, &slots),
+        );
+        let written: Vec<ValueId> = graph
+            .written_storages(cfg, loans, &slots)
+            .into_iter()
+            .filter(|slot| !cells.iter().any(|cell| cell.slot == *slot))
+            .collect();
         let disjoint = disjoint_storages(loans, laws, header, loop_blocks, &written);
         let keyed = keyed_storages(
             loans,
@@ -546,7 +558,8 @@ impl LoopDeps {
             header,
             loop_blocks,
             written
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|slot| !disjoint.contains(slot))
                 .collect(),
         );
@@ -557,7 +570,16 @@ impl LoopDeps {
         };
         let joined_cycles = |lent: &[LentStorage]| -> (Vec<Cycle>, Vec<Cycle>) {
             let mut cycles: Vec<Cycle> = graph
-                .cycles(cfg, loans, &slots, &disjoint, lent, header, loop_blocks)
+                .cycles(
+                    cfg,
+                    loans,
+                    &slots,
+                    &disjoint,
+                    &cells,
+                    lent,
+                    header,
+                    loop_blocks,
+                )
                 .into_iter()
                 .map(|found| place(found, &stage_of))
                 .collect();
@@ -593,9 +615,9 @@ impl LoopDeps {
         // the cycle. A storage keeps its lent reads out only while its cycle
         // is its token alone, which `judge` reads the scan of, and holds none
         // of the scan's readers.
-        let mut lent: Vec<LentStorage> = graph
-            .written_storages(cfg, loans, &slots)
-            .into_iter()
+        let mut lent: Vec<LentStorage> = written
+            .iter()
+            .copied()
             .filter(|slot| !disjoint.contains(slot))
             .filter_map(|slot| {
                 let lending = graph.lent_reads(cfg, loans, slot);
@@ -731,6 +753,7 @@ impl LoopDeps {
             ahead_of_exit,
             disjoint,
             keyed,
+            cells,
         })
     }
 
@@ -766,6 +789,11 @@ impl LoopDeps {
 
     pub fn ahead_of_exit(&self) -> &[AheadOfExit] {
         &self.ahead_of_exit
+    }
+
+    /// The storages RFC-0093 rule 6 holds as a cell, which are no token.
+    pub fn cells(&self) -> &[InverseCell] {
+        &self.cells
     }
 
     /// Each cycle's order and law, by the index of [`Self::cycles`].
@@ -1915,6 +1943,217 @@ fn disjoint_storages(
         .collect()
 }
 
+// -- An inverse pair (RFC-0093 rule 6) -------------------------------------
+
+/// A storage every access of which in an iteration is `take(s)`, the payload
+/// of what it gives read by a call stating `payload`, then `restore(s, x)` of
+/// that payload, `take` stating `inverse = restore` (RFC-0082 rule 3): the
+/// storage holds that payload as one cell, and is no token. Moving `take`
+/// above the header and `restore` below the exit is the lowerer's (RFC-0092).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InverseCell {
+    pub slot: ValueId,
+    pub take: ExternInstance,
+    pub restore: ExternInstance,
+}
+
+/// The written storages of the loop that RFC-0093 rule 6 holds as a cell.
+///
+/// Only a payload read by a call stating `payload` is built. Rule 6's `Some`
+/// match is not: telling the arm a branch on an `Option` takes for `Some`
+/// from the one it takes for `None` needs the interned tag `Some`, which
+/// neither the body nor the law table carries, so a storage whose payload
+/// a match takes is a token.
+fn inverse_cells(
+    loans: &Loans<'_>,
+    laws: &LawTable,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+    written: &[ValueId],
+) -> Vec<InverseCell> {
+    if written.is_empty() {
+        return Vec::new();
+    }
+    let cfg = loans.cfg();
+    let reads = Reads::in_body(cfg);
+    let inner: FxHashSet<BlockIdx> = natural_loops_innermost_first(cfg, &DomTree::build(cfg))
+        .iter()
+        .filter(|inner| inner.header != header && loop_blocks.contains(&inner.header))
+        .flat_map(|inner| inner.blocks())
+        .collect();
+    let defined_at = |value: ValueId| {
+        loop_blocks.iter().find_map(|&block| {
+            cfg.blocks[block.0]
+                .insts
+                .iter()
+                .position(|inst| inst_info::defs(&inst.kind).contains(&value))
+                .map(|at| InstAt { block, at })
+        })
+    };
+    let inst = |at: InstAt| &cfg.blocks[at.block.0].insts[at.at].kind;
+    written
+        .iter()
+        .filter_map(|&slot| {
+            let mut touching: Vec<InstAt> = Vec::new();
+            for &block in loop_blocks {
+                let held = &cfg.blocks[block.0];
+                if terminator_touched(loans, &held.terminator).contains(&slot) {
+                    return None;
+                }
+                for (at, inst) in held.insts.iter().enumerate() {
+                    let touches = touched_slots(loans, &inst.kind).contains(&slot)
+                        || written_slots(loans, &inst.kind).contains(&slot);
+                    if touches {
+                        touching.push(InstAt { block, at });
+                    }
+                }
+            }
+            // Each access lends the whole storage `&mut` to one call, which
+            // reads that reference alone as the storage's.
+            let lent_to = |at: InstAt| -> Option<(ValueId, InstAt)> {
+                let InstKind::Ref {
+                    dst,
+                    target,
+                    path,
+                    mutability: Mutability::Mut,
+                } = inst(at)
+                else {
+                    return None;
+                };
+                if inst_info::storage(target) != Some(slot) || !path.is_empty() {
+                    return None;
+                }
+                if reads.count(*dst) != 1 {
+                    return None;
+                }
+                let reader = loop_blocks.iter().find_map(|&block| {
+                    cfg.blocks[block.0]
+                        .insts
+                        .iter()
+                        .position(|inst| inst_info::uses(&inst.kind).contains(dst))
+                        .map(|at| InstAt { block, at })
+                })?;
+                Some((*dst, reader))
+            };
+            let refs: Vec<InstAt> = touching
+                .iter()
+                .copied()
+                .filter(|at| matches!(inst(*at), InstKind::Ref { .. }))
+                .collect();
+            let [first, second] = refs[..] else {
+                return None;
+            };
+            let (first, second) = (lent_to(first)?, lent_to(second)?);
+            let unordered_call = |at: InstAt| match inst(at) {
+                InstKind::FunctionCall {
+                    dst,
+                    callee: callee @ Callee::Extern { id, instance, .. },
+                    args,
+                    order: None,
+                    ..
+                } => Some((
+                    *dst,
+                    callee,
+                    ExternInstance {
+                        id: *id,
+                        instance: *instance,
+                    },
+                    args.as_slice(),
+                )),
+                _ => None,
+            };
+            let take_of = |(lender, at): (ValueId, InstAt)| {
+                let (dst, callee, take, args) = unordered_call(at)?;
+                let ResolvedLaws::Inverse(restore) = laws.of_callee(callee) else {
+                    return None;
+                };
+                (args == [lender]).then_some((dst, take, *restore, at))
+            };
+            let ((option, take, restore, take_at), (lender, restore_at)) =
+                match (take_of(first), take_of(second)) {
+                    (Some(found), None) => (found, second),
+                    (None, Some(found)) => (found, first),
+                    _ => return None,
+                };
+            let (_, _, restored, restore_args) = unordered_call(restore_at)?;
+            let [restore_lender, payload] = restore_args[..] else {
+                return None;
+            };
+            if restored != restore || restore_lender != lender {
+                return None;
+            }
+            let accesses = [take_at, restore_at];
+            let every_access_is_the_pair = touching
+                .iter()
+                .all(|at| refs.contains(at) || accesses.contains(at));
+            if !every_access_is_the_pair {
+                return None;
+            }
+            // The payload: a call stating `payload` of what `take` gave,
+            // which nothing else reads, of one word, lending no storage.
+            let payload_at = defined_at(payload)?;
+            let (_, reader, _, read) = unordered_call(payload_at)?;
+            let reads_the_payload = matches!(laws.of_callee(reader), ResolvedLaws::Payload)
+                && read == [option]
+                && reads.count(option) == 1;
+            let one_word = cfg.val_types.get(&payload).and_then(|ty| ty.is_word()) == Some(true);
+            let lends = loans.holds(payload).next().is_some();
+            if !reads_the_payload || !one_word || lends {
+                return None;
+            }
+            // Each runs at most once in an iteration, and one that runs is
+            // followed, before the iteration ends, by the next.
+            let once = [take_at, payload_at, restore_at]
+                .iter()
+                .all(|at| !inner.contains(&at.block));
+            let ends = |from: InstAt, to: InstAt| {
+                runs_before_the_iteration_ends(cfg, header, loop_blocks, from, to)
+            };
+            let in_turn = ends(take_at, payload_at) && ends(payload_at, restore_at);
+            (once && in_turn).then_some(InverseCell {
+                slot,
+                take,
+                restore,
+            })
+        })
+        .collect()
+}
+
+/// Whether every path from `from` runs `to` before the iteration ends: before
+/// it reaches the header, leaves the loop, returns or diverges.
+fn runs_before_the_iteration_ends(
+    cfg: &CfgBody,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+    from: InstAt,
+    to: InstAt,
+) -> bool {
+    if from.block == to.block {
+        return from.at < to.at;
+    }
+    let mut seen: FxHashSet<BlockIdx> = FxHashSet::default();
+    let mut work: Vec<BlockIdx> = vec![from.block];
+    while let Some(block) = work.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        let successors = cfg.successors(block);
+        if successors.is_empty() {
+            return false;
+        }
+        for succ in successors {
+            if succ == to.block {
+                continue;
+            }
+            if succ == header || !loop_blocks.contains(&succ) {
+                return false;
+            }
+            work.push(succ);
+        }
+    }
+    true
+}
+
 /// Two literals of one value: a float's by its bits, so `0.0` and `-0.0`,
 /// which `==` holds equal, are two values.
 fn same_literal(a: &Literal, b: &Literal) -> bool {
@@ -2753,12 +2992,13 @@ impl Graph {
         loans: &Loans<'_>,
         slots: &TargetSlots,
         disjoint: &[ValueId],
+        cells: &[InverseCell],
         lent: &[LentStorage],
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
     ) -> Vec<Found> {
         let mut found: Vec<Held> = self.carried_cycles(cfg, header, loop_blocks);
-        found.extend(self.storage_cycles(cfg, loans, slots, disjoint, lent));
+        found.extend(self.storage_cycles(cfg, loans, slots, disjoint, cells, lent));
         let exits = self.with(|member| match member {
             Member::Term(block) => {
                 matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
@@ -3052,9 +3292,15 @@ impl Graph {
         loans: &Loans<'_>,
         slots: &TargetSlots,
         disjoint: &[ValueId],
+        cells: &[InverseCell],
         lent: &[LentStorage],
     ) -> Vec<Held> {
-        let storages = self.written_storages(cfg, loans, slots);
+        // RFC-0093 rule 6: a storage held as a cell is no token.
+        let storages: Vec<ValueId> = self
+            .written_storages(cfg, loans, slots)
+            .into_iter()
+            .filter(|slot| !cells.iter().any(|cell| cell.slot == *slot))
+            .collect();
         let mut element_writers: Vec<usize> = Vec::new();
         let mut contexts: Vec<QualifiedRef> = Vec::new();
         for (at, member) in self.members.iter().enumerate() {

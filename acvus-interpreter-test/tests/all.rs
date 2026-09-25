@@ -85,6 +85,7 @@ mod pattern_through;
 mod place_forms;
 mod prepare_contract;
 mod recorded_identity;
+mod recursive_component;
 mod recursive_summary;
 mod reference_coercion;
 mod regex;

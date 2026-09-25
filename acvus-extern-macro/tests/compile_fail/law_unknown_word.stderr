@@ -1,4 +1,4 @@
-error: unknown law `idempotent`: a law is `associative`, `commutative`, `identity = e`, `fold(combine = g, identity = e)`, or `total_order` (RFC-0082)
+error: unknown law `idempotent`: a law is `associative`, `commutative`, `identity = e`, `fold(combine = g, identity = e)`, `total_order`, or `inverse = g` (RFC-0082)
  --> tests/compile_fail/law_unknown_word.rs:5:45
   |
 5 | #[extern_fn(effect = pure, law(associative, idempotent))]

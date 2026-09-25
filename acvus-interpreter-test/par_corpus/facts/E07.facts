@@ -1,6 +1,7 @@
 for slice(r15) -> L1 else L2 stages [L1, L3, L4]
-// L1: cycle Storage(r16) in_order {ref, call pop, call unwrap, ref, call push}
-// L3: free {take, +}
-// L4: cycle Storage(r17) in_order law(Fold(r17, #3) exact) {ref, call push}
+// L1: free {ref, call pop, call unwrap, take, +}
+// L3: cycle Storage(r16) in_order law(Fold(r16, #3) exact) {ref, call push}
+// L4: free {ref, call push}
+// cell(pop, push) Storage(r17)
 // control upfront
-// cost W=4 O=18287 split when n > 146296, n = len(r15)
+// cost W=13 O=18287 split when n > 45015, n = len(r15)

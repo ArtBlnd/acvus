@@ -1085,8 +1085,11 @@ Status: Proposed
    binary function's. `#[extern_fn(law(inverse = g))]` on `f(s: &mut S) ->
    Option<X>` states that after `g(s, x)`, `f(s)` gives `Some(x)` and
    leaves `s` as before `g`, and that `g(s, x)` after `f(s)` gave `Some(x)`
-   leaves `s` as before `f`: the two are one cell, which RFC-0093 rule 6
-   promotes across a loop.
+   leaves `s` as before `f`, and that `f(s)` giving `None` leaves `s` as
+   it was: the two are one cell, which RFC-0093 rule 6 promotes across a
+   loop. `#[extern_fn(payload(o))]` on `f(o: Option<T>) -> T` states that
+   `f(Some(x))` is `x` and that `f(None)` traps; `option::unwrap` states
+   it, and RFC-0093 rule 6 reads it.
 4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2, ..))]` relates two
    terms by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
    parameter, the result `ret`, `len(x)` of a parameter or of `ret`, and

@@ -1,0 +1,10 @@
+// expect 15,13,18|1|10
+let scratch = vec([10]);
+let xs = vec([5, 3, 8]);
+let out = vec([]);
+for x in &xs {
+    let base = scratch.pop().unwrap();
+    out.push(base + *x);
+    scratch.push(base);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string()) + "|" + scratch.len().to_string() + "|" + scratch.pop().unwrap().to_string()

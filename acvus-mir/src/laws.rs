@@ -31,6 +31,17 @@ pub enum Laws {
     /// sign is a total order's comparison of `a` with `b`, under which equal
     /// values are one value (RFC-0082 rule 10).
     TotalOrder,
+    /// `#[extern_fn(law(inverse = g))]` on `f(s: &mut S) -> Option<X>`:
+    /// after `g(s, x)`, `f(s)` gives `Some(x)` and leaves `s` as before `g`;
+    /// `g(s, x)` after `f(s)` gave `Some(x)` leaves `s` as before `f`; and
+    /// `f(s)` giving `None` leaves `s` as it was (RFC-0082 rule 3).
+    /// `acvus_extern::Externs::combine` holds `g` to a registered
+    /// `g(s: &mut S, x: X)`.
+    Inverse(QualifiedRef),
+    /// `#[extern_fn(payload(o))]` on `f(o: Option<T>) -> T`: `f(Some(x))`
+    /// is `x` and `f(None)` traps (RFC-0082 rule 3). The signature it is
+    /// stated over states no other law, so it is one of this enum's forms.
+    Payload,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,6 +195,10 @@ pub enum ResolvedLaws {
     Binary(ResolvedBinary),
     Fold(ResolvedFold),
     TotalOrder,
+    /// `inverse = g`, with `g` taken at the instance whose state and payload
+    /// are the declaring instance's.
+    Inverse(ExternInstance),
+    Payload,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,6 +231,9 @@ pub enum LawRole {
     FoldCombine,
     /// A fold's `identity = e`: `e() -> S` at the declaration's `S`.
     FoldIdentity,
+    /// An inverse's `g`: `g(s: &mut S, x: X)` at the declaration's `S` and
+    /// `X`.
+    Inverse,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,9 +260,11 @@ pub fn resolve<'a>(
     let PolyTy::Fn { params, ret, .. } = declaring else {
         return match laws {
             Laws::None => Ok(ResolvedLaws::None),
-            Laws::Binary(_) | Laws::Fold(_) | Laws::TotalOrder => {
-                Err(Unresolved::UnfitDeclaration)
-            }
+            Laws::Binary(_)
+            | Laws::Fold(_)
+            | Laws::TotalOrder
+            | Laws::Inverse(_)
+            | Laws::Payload => Err(Unresolved::UnfitDeclaration),
         };
     };
     let instance_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
@@ -335,6 +355,30 @@ pub fn resolve<'a>(
                 false => Err(Unresolved::UnfitDeclaration),
             }
         }
+        Laws::Inverse(restore) => {
+            let ([state], PolyTy::Option(payload)) = (params.as_slice(), &**ret) else {
+                return Err(Unresolved::UnfitDeclaration);
+            };
+            let PolyTy::Ref(Mutability::Mut, state) = &state.ty else {
+                return Err(Unresolved::UnfitDeclaration);
+            };
+            Ok(ResolvedLaws::Inverse(instance_of(
+                LawRole::Inverse,
+                *restore,
+                &Wanted::Restoring {
+                    state: state.ty().into_owned(),
+                    payload: (**payload).clone(),
+                },
+            )?))
+        }
+        Laws::Payload => match (params.as_slice(), &**ret) {
+            ([option], payload)
+                if option.ty == PolyTy::Option(Box::new(payload.clone())) =>
+            {
+                Ok(ResolvedLaws::Payload)
+            }
+            _ => Err(Unresolved::UnfitDeclaration),
+        },
     }
 }
 
@@ -374,6 +418,8 @@ enum Wanted {
     Returning(PolyTy),
     /// `g(s: &mut S, part: S)`.
     Combining(PolyTy),
+    /// `g(s: &mut S, x: X)`.
+    Restoring { state: PolyTy, payload: PolyTy },
 }
 
 impl Wanted {
@@ -392,6 +438,15 @@ impl Wanted {
                 ),
                 _ => false,
             },
+            (Self::Restoring { state, payload }, [into, x]) if **ret == PolyTy::Unit => {
+                match &into.ty {
+                    PolyTy::Ref(Mutability::Mut, into) => matches_pattern(
+                        &PolyTy::Tuple(vec![state.clone(), payload.clone()]),
+                        &PolyTy::Tuple(vec![into.ty().into_owned(), x.ty.clone()]),
+                    ),
+                    _ => false,
+                }
+            }
             _ => false,
         }
     }
