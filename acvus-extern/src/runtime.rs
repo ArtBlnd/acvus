@@ -169,6 +169,27 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// As `some_at`, and the storage is exclusively named for `'a`.
     unsafe fn some_at_mut<'a>(&self, value: &'a mut Self::Value) -> Option<&'a mut Self::Value>;
 
+    /// Obligation across artifacts: what `erase` of a
+    /// `Result<Owned<Self>, Owned<Self>>` writes is the runtime's own choice.
+    /// `acvus-interpreter` writes the flat variant `[tag, payload]` (RFC-0050
+    /// rule 8), and a runtime that stores what it is handed keeps the Rust
+    /// value. This method reads whichever its own `erase` wrote.
+    ///
+    /// # Safety
+    /// `value` holds what `erase` of a `Result<Owned<Self>, Owned<Self>>`
+    /// wrote, live for `'a`.
+    unsafe fn result_at<'a>(&self, value: &'a Self::Value) -> Result<&'a Self::Value, &'a Self::Value>;
+
+    /// # Safety
+    /// As `result_at`, and the storage is exclusively named for `'a`. A word
+    /// written through the payload is owned by no other holder, and the word
+    /// it replaces is released or moved out by the writer, as
+    /// `Owned::value_mut`'s.
+    unsafe fn result_at_mut<'a>(
+        &self,
+        value: &'a mut Self::Value,
+    ) -> Result<&'a mut Self::Value, &'a mut Self::Value>;
+
     /// The name a field key is at run time (RFC-0050 rule 8).
     fn symbol(&self, name: &str) -> acvus_utils::Astr;
 
@@ -394,6 +415,12 @@ impl Runtime for TypesOnly {
         no_values()
     }
     unsafe fn some_at_mut<'a>(&self, _: &'a mut ()) -> Option<&'a mut ()> {
+        no_values()
+    }
+    unsafe fn result_at<'a>(&self, _: &'a ()) -> Result<&'a (), &'a ()> {
+        no_values()
+    }
+    unsafe fn result_at_mut<'a>(&self, _: &'a mut ()) -> Result<&'a mut (), &'a mut ()> {
         no_values()
     }
     fn symbol(&self, _: &str) -> acvus_utils::Astr {

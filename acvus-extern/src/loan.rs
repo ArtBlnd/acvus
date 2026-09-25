@@ -8,7 +8,8 @@
 
 use acvus_mir::ty::Mutability;
 
-use crate::handler::Lends;
+use crate::handler::{Borrowable, Lends};
+use crate::projection::{Borrowed, Project};
 use crate::runtime::Runtime;
 
 /// The strength of a borrow: what separated every `X`/`XMut` pair. A
@@ -23,11 +24,27 @@ pub trait Loan: Send + Sync + 'static {
     where
         T: ?Sized + 'a;
 
+    type Projection<'a, T>
+    where
+        T: Borrowed + 'a;
+
     /// # Safety
     /// As `Runtime::deref`, exclusively for `Mut`.
     unsafe fn deref<'a, T, Rt>(rt: &Rt, reference: &'a Rt::Value) -> Self::Of<'a, T>
     where
         T: Send + Sync + 'static,
+        Rt: Runtime;
+
+    /// # Safety
+    /// `reference` names a live storage holding what `T`'s crossing wrote,
+    /// exclusively for `Mut`, and `table` was built from its settled type.
+    unsafe fn project<'a, T, Rt>(
+        rt: &'a Rt,
+        reference: &'a Rt::Value,
+        table: &<T as Project<Rt>>::Table,
+    ) -> Self::Projection<'a, T>
+    where
+        T: Project<Rt> + 'a,
         Rt: Runtime;
 
     /// # Safety
@@ -57,6 +74,11 @@ impl Loan for Shared {
     where
         T: ?Sized + 'a;
 
+    type Projection<'a, T>
+        = <T as Borrowed>::Ref<'a>
+    where
+        T: Borrowed + 'a;
+
     unsafe fn deref<'a, T, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a T
     where
         T: Send + Sync + 'static,
@@ -64,6 +86,22 @@ impl Loan for Shared {
     {
         // SAFETY: the caller's contract.
         unsafe { rt.deref::<T>(reference) }
+    }
+
+    unsafe fn project<'a, T, Rt>(
+        rt: &'a Rt,
+        reference: &'a Rt::Value,
+        table: &<T as Project<Rt>>::Table,
+    ) -> <T as Borrowed>::Ref<'a>
+    where
+        T: Project<Rt> + 'a,
+        Rt: Runtime,
+    {
+        // SAFETY: the caller's contract: a live storage, which holds one of
+        // the runtime's values.
+        let value = unsafe { <Rt::Value as Borrowable<Rt>>::deref(rt, reference) };
+        // SAFETY: the caller's contract.
+        unsafe { T::project(rt, value, table) }
     }
 
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a T
@@ -94,6 +132,11 @@ impl Loan for Mut {
     where
         T: ?Sized + 'a;
 
+    type Projection<'a, T>
+        = <T as Borrowed>::Mut<'a>
+    where
+        T: Borrowed + 'a;
+
     unsafe fn deref<'a, T, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T
     where
         T: Send + Sync + 'static,
@@ -101,6 +144,21 @@ impl Loan for Mut {
     {
         // SAFETY: the caller's contract, exclusive for this loan.
         unsafe { rt.deref_mut::<T>(reference) }
+    }
+
+    unsafe fn project<'a, T, Rt>(
+        rt: &'a Rt,
+        reference: &'a Rt::Value,
+        table: &<T as Project<Rt>>::Table,
+    ) -> <T as Borrowed>::Mut<'a>
+    where
+        T: Project<Rt> + 'a,
+        Rt: Runtime,
+    {
+        // SAFETY: the caller's contract, exclusive for this loan.
+        let value = unsafe { <Rt::Value as Borrowable<Rt>>::deref_mut(rt, reference) };
+        // SAFETY: the caller's contract, exclusive for this loan.
+        unsafe { T::project_mut(rt, value, table) }
     }
 
     unsafe fn borrow<'a, T, Rep, Rt>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut T

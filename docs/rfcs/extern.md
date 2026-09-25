@@ -1065,7 +1065,9 @@ Status: Proposed
    all `f` runs, a call it makes of a function value it was handed
    included, so an `f` that calls one cannot state it: combining the
    registries refuses `total` on an instance a parameter of which holds a
-   function type, at any depth. It is the author's
+   function type, at any depth, and on an instance that requires an
+   instance of a signature (RFC-0067), whose call runs whichever instance
+   resolves the requirement. It is the author's
    promise (rule 5), sampled by tests that call each declared handler over
    its width's edges and a fixed sample of words. `analysis::raise` reads
    it, by the instance a call names, so a call whose value nothing reads
@@ -1141,9 +1143,9 @@ glue at the type the checker settled.
 3. **A host reads and edits as a handler does.** The host lends a value to a
    closure, and the closure's parameters cross exactly as an extern
    handler's do, through the glue the macro emits for a handler parameter:
-   `&T`, `&mut T`, `&str`, a slice of `Erased<Rt, T>`, a derive's
-   projection, and a `Ctx` that carries the runtime, written first as a
-   handler writes it (RFC-0023 rule 2). There is no second
+   `&T`, `&mut T`, `&str`, a slice of `Erased<Rt, T>`, a derive's,
+   `Option`'s or `Result`'s projection (RFC-0050 rule 6), and a `Ctx`
+   carrying the runtime, written first (RFC-0023 rule 2). There is no second
    crossing and no host-only view.
    - A page is a program's view of one storage, opened by the program and
      borrowing it, so no page exists without a compilation and none serves

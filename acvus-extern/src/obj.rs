@@ -1313,8 +1313,9 @@ where
         // came from, which the erase consumed, so no other holder owns it.
         .map(|v| unsafe { Owned::from_value(rt.holding(), erase_ok(v, rt)) })
         .map_err(|e| unsafe { Owned::from_value(rt.holding(), erase_err(e, rt)) });
-    // SAFETY: the language's Result is the runtime's
-    // `Result<Owned<Rt>, Owned<Rt>>` (RFC-0038, RFC-0048 rule 7).
+    // SAFETY: `materialize_result` and `Runtime::result_at` read what this
+    // writes back at `Result<Owned<Rt>, Owned<Rt>>`, the one type every
+    // runtime is handed a `Result` at (RFC-0038, RFC-0048 rule 7).
     unsafe { rt.erase::<Result<Owned<Rt>, Owned<Rt>>>(inner) }
 }
 
@@ -1330,7 +1331,7 @@ unsafe fn materialize_result<T, E, Rt>(
 where
     Rt: Runtime,
 {
-    // SAFETY: the caller's contract, and `erase_result` boxes a
+    // SAFETY: the caller's contract, and `erase_result` erased a
     // `Result<Owned<Rt>, Owned<Rt>>`.
     let inner = unsafe { rt.materialize::<Result<Owned<Rt>, Owned<Rt>>>(value) };
     // SAFETY: the caller's contract, forwarded: each arm's payload was erased
@@ -1342,9 +1343,10 @@ where
     }
 }
 
-// SAFETY: each arm crosses by its own side's crossing inside the runtime's
-// `Result<Owned<Rt>, Owned<Rt>>`, the language's flat variant; nothing else
-// crosses, and the capability is not kept.
+// SAFETY: each arm crosses by its own side's crossing inside the
+// `Result<Owned<Rt>, Owned<Rt>>` the runtime erases, which `acvus-interpreter`
+// holds as the language's flat variant; nothing else crosses, and the
+// capability is not kept.
 unsafe impl<T, E, Rep, Rt> OneValue<Rt, Rep> for Result<T, E>
 where
     T: OneValue<Rt, Rep>,
@@ -1450,6 +1452,8 @@ cross_tuple!(A a, B b, C c, D d, E e, F f, G g, H h);
 // compile-fail case in `acvus-extern-macro` pins that refusal at both
 // crossings, the concrete one through `Borrowable` and the monomorphized one
 // through the marker; adding either impl makes a case there pass silently.
+// A lent `Result` is read as its projection instead, through
+// `Runtime::result_at`, which names the payload where the variant holds it.
 
 // SAFETY: the element holds its carriers at `'s`, and `N` holds no value.
 unsafe impl<'s, T, N> crate::Within<'s> for Arr<T, N>

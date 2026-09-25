@@ -207,8 +207,9 @@ Status: Accepted
    the fields it names, and an argument whose closed field set lacks one is
    refused at the call. Field positions come from the settled type as a
    per-site glue table built at `prepare`. A struct variant has no
-   projection. `Result` crosses by value only (RFC-0038), since no storage is
-   shaped like Rust's `Result<T, E>`.
+   projection. No storage holds Rust's `Option<T>` or `Result<T, E>`; each
+   is lent as `Option<T::Ref<'a>>` or `Result<T::Ref<'a>, E::Ref<'a>>`
+   anywhere, arms derived projections included, tag read-only.
 
 7. **A container's element is realized, and a container is never a component
    set.** `Vec`, arrays and deques hold heap aggregates (rule 4); an array is

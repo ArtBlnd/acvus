@@ -44,6 +44,66 @@
 //!     drop(kept);
 //! }
 //! ```
+//!
+//! An `Option` and a `Result` are lent as their projections, at the top and
+//! nested in each other alike,
+//!
+//! ```
+//! # use acvus_extern::{Borrows, Runtime};
+//! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
+//! fn projected<Rt: Runtime>() {
+//!     call::<Rt, _, bool, _>(|r: Result<&i64, &String>| r.is_ok());
+//!     call::<Rt, _, (), _>(|r: Result<&mut i64, &mut String>| {
+//!         if let Ok(n) = r {
+//!             *n += 1;
+//!         }
+//!     });
+//!     call::<Rt, _, bool, _>(|o: Option<&i64>| o.is_some());
+//!     call::<Rt, _, (), _>(|o: Option<&mut i64>| {
+//!         if let Some(n) = o {
+//!             *n += 1;
+//!         }
+//!     });
+//!     call::<Rt, _, bool, _>(|o: Option<Result<&i64, &String>>| o.is_some());
+//!     call::<Rt, _, bool, _>(|r: Result<Option<&mut i64>, &mut String>| r.is_ok());
+//! }
+//! ```
+//!
+//! and neither by reference
+//!
+//! ```compile_fail
+//! # use acvus_extern::{Borrows, Runtime};
+//! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
+//! fn referenced<Rt: Runtime>() {
+//!     call::<Rt, _, bool, _>(|r: &Result<i64, String>| r.is_ok());
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! # use acvus_extern::{Borrows, Runtime};
+//! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
+//! fn referenced<Rt: Runtime>() {
+//!     call::<Rt, _, bool, _>(|o: &Option<i64>| o.is_some());
+//! }
+//! ```
+//!
+//! nor by value:
+//!
+//! ```compile_fail
+//! # use acvus_extern::{Borrows, Runtime};
+//! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
+//! fn moved<Rt: Runtime>() {
+//!     call::<Rt, _, bool, _>(|r: Result<i64, String>| r.is_ok());
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! # use acvus_extern::{Borrows, Runtime};
+//! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
+//! fn moved<Rt: Runtime>() {
+//!     call::<Rt, _, bool, _>(|o: Option<i64>| o.is_some());
+//! }
+//! ```
 
 use std::marker::PhantomData;
 
@@ -57,8 +117,8 @@ use crate::handler::{Arg, ArgAt, Borrowable, ByRef, CallSite, Gives, Parameters,
 use crate::len::Arr;
 use crate::loan::{Loan, Mut, Shared};
 use crate::erased::Erased;
-use crate::obj::{Form, Pair};
-use crate::projection::{ByProjection, Projected};
+use crate::obj::{Form, One, Pair};
+use crate::projection::{Borrowed, ByProjection, Project, Projected};
 use crate::registry::ExternTypeDecl;
 use crate::runtime::{Runtime, TypesOnly};
 use crate::slice::{BySlice, Slice};
@@ -402,6 +462,146 @@ where
             elements, rt, out,
         );
     }
+}
+
+/// An `Option` or a `Result` is lent through this and not through `ByRef`:
+/// its storage holds no Rust `Option<T>` or `Result<T, E>` for a reference to
+/// name.
+pub struct ByProjected<T, M>(PhantomData<fn() -> (T, M)>);
+
+impl<T, M, Rt> Arg<Rt> for ByProjected<T, M>
+where
+    T: Project<Rt>,
+    M: Loan,
+    Rt: Runtime,
+{
+    type Site = <T as Project<Rt>>::Table;
+    type Form = One;
+
+    /// # Panics
+    /// The argument is not a reference to a whole type. `lend` builds it as
+    /// `reference_to` the settled type.
+    fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site {
+        let lent = site.args[at];
+        let Some(held) = (match lent.ty {
+            Ty::Ref(_, held) => held.whole(),
+            _ => None,
+        }) else {
+            panic!("a lent projection's argument is typed {:?}, which is no reference", lent.ty)
+        };
+        <T as Project<Rt>>::table(ArgAt {
+            interner: lent.interner,
+            ty: held,
+        })
+    }
+}
+
+impl<T, M, Rt> Lendable<Rt> for ByProjected<T, M>
+where
+    T: Project<Rt> + Declared,
+    M: Loan,
+    Rt: Runtime,
+{
+    type Loan = M;
+
+    fn param_ty(interner: &Interner) -> PolyTy {
+        reference_param(M::MUTABILITY, T::declared(interner))
+    }
+
+    fn argument(_: &Interner, held: &Ty) -> Option<Ty> {
+        Some(reference_to(M::MUTABILITY, held.clone()))
+    }
+}
+
+impl<T, M, Rt> sealed::Lend<Rt> for ByProjected<T, M>
+where
+    T: Project<Rt> + Declared,
+    M: Loan,
+    Rt: Runtime,
+{
+    unsafe fn lend<'a>(_: Crossing<'a, Rt>, reference: &'a Rt::Value, _: &Ty, out: &mut [Rt::Value]) {
+        out[0] = *reference;
+    }
+}
+
+// SAFETY: the projection is `M::project` over this parameter's own word, a
+// reference to the lent storage, with the table its settled type built; it
+// borrows that storage at `'a` and nothing else, and the capability lends
+// only its runtime and is not kept.
+unsafe impl<'a, 'w, Q, T, M, Rt> Takes<'a, 'w, ByProjected<T, M>, Rt> for Q
+where
+    T: Project<Rt> + 'a,
+    M: Loan<Projection<'a, T> = Q>,
+    Rt: Runtime,
+{
+    unsafe fn take(rt: Crossing<'a, Rt>, run: &'a [Rt::Value], site: &<T as Project<Rt>>::Table) -> Q {
+        // SAFETY: the caller's contract: `run[0]` is this parameter's own
+        // value, a reference to a live storage holding what `T`'s crossing
+        // wrote, exclusively named where the loan is `Mut` (RFC-0018).
+        unsafe { M::project::<T, Rt>(rt.rt(), &run[0], site) }
+    }
+}
+
+/// A safe trait: the part's own type is read back from `Owner` at `Loan`, so
+/// an impl that names another owner makes the closure's annotation disagree
+/// with what it is called with, and the closure does not compile.
+pub trait Projects {
+    type Owner: Borrowed + 'static;
+    type Loan: Loan;
+}
+
+impl<'q, T> Projects for &'q T
+where
+    T: Borrowed<Ref<'q> = &'q T> + for<'s> Within<'s> + 'static,
+{
+    type Owner = T;
+    type Loan = Shared;
+}
+
+impl<'q, T> Projects for &'q mut T
+where
+    T: Borrowed<Mut<'q> = &'q mut T> + for<'s> Within<'s> + 'static,
+{
+    type Owner = T;
+    type Loan = Mut;
+}
+
+impl<A> Projects for Option<A>
+where
+    A: Projects,
+{
+    type Owner = Option<A::Owner>;
+    type Loan = A::Loan;
+}
+
+impl<A, B> Projects for Result<A, B>
+where
+    A: Projects,
+    B: Projects<Loan = A::Loan>,
+{
+    type Owner = Result<A::Owner, B::Owner>;
+    type Loan = A::Loan;
+}
+
+impl<A, Rt> Param<Rt> for Option<A>
+where
+    A: Projects,
+    Option<A::Owner>: Project<Rt> + Declared,
+    Rt: Runtime,
+{
+    type Marker = ByProjected<Option<A::Owner>, A::Loan>;
+    type At<'a> = <A::Loan as Loan>::Projection<'a, Option<A::Owner>>;
+}
+
+impl<A, B, Rt> Param<Rt> for Result<A, B>
+where
+    A: Projects,
+    B: Projects<Loan = A::Loan>,
+    Result<A::Owner, B::Owner>: Project<Rt> + Declared,
+    Rt: Runtime,
+{
+    type Marker = ByProjected<Result<A::Owner, B::Owner>, A::Loan>;
+    type At<'a> = <A::Loan as Loan>::Projection<'a, Result<A::Owner, B::Owner>>;
 }
 
 /// A parameter's Rust type as a closure names it, at whatever lifetime the

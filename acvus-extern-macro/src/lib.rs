@@ -2053,6 +2053,12 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             type Mut<'__a> = &'__a mut #key_ty where Self: '__a;
         }
 
+        impl<#static_params> ::acvus_extern::OwnStorage for #static_self
+        where
+            #static_where
+        {
+        }
+
         impl<#static_params __R> ::acvus_extern::Project<__R> for #static_self
         where
             __R: ::acvus_extern::Runtime,
@@ -3067,6 +3073,18 @@ impl<'a> ObjectShape<'a> {
                 type Mut<'__a> = #exclusive<'__a> where Self: '__a;
             }
 
+            impl ::acvus_extern::OwnStorage for #owner {}
+
+            impl<'__q> ::acvus_extern::Projects for #shared<'__q> {
+                type Owner = #owner;
+                type Loan = ::acvus_extern::Shared;
+            }
+
+            impl<'__q> ::acvus_extern::Projects for #exclusive<'__q> {
+                type Owner = #owner;
+                type Loan = ::acvus_extern::Mut;
+            }
+
             impl<'__a> #shared<'__a> {
                 /// # Safety
                 /// `obj` holds what the owner's crossing wrote and is live
@@ -3636,6 +3654,18 @@ fn enum_projection(
         impl ::acvus_extern::Borrowed for #owner {
             type Ref<'__a> = #shared<'__a> where Self: '__a;
             type Mut<'__a> = #arms_ty<'__a> where Self: '__a;
+        }
+
+        impl ::acvus_extern::OwnStorage for #owner {}
+
+        impl<'__q> ::acvus_extern::Projects for #shared<'__q> {
+            type Owner = #owner;
+            type Loan = ::acvus_extern::Shared;
+        }
+
+        impl<'__q> ::acvus_extern::Projects for #arms_ty<'__q> {
+            type Owner = #owner;
+            type Loan = ::acvus_extern::Mut;
         }
 
         impl<'__a> #shared<'__a> {

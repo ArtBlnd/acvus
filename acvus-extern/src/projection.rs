@@ -372,6 +372,17 @@ where
     }
 }
 
+/// A projected type that is not an option, so that a `Some` of it has a
+/// payload storage for `Runtime::some_at` to name; a runtime may give a
+/// nested option's payload none.
+///
+/// The trait is safe and has no parameter rather than being `unsafe`: the
+/// orphan rule lets another crate implement it only for a type of its own,
+/// which is never `Option`.
+pub trait OwnStorage {}
+
+impl<T, E> OwnStorage for Result<T, E> {}
+
 impl<T> Borrowed for Option<T>
 where
     T: Borrowed,
@@ -388,7 +399,7 @@ where
 
 impl<T, Rt> Project<Rt> for Option<T>
 where
-    T: Project<Rt> + crate::Borrowable<Rt>,
+    T: Project<Rt> + OwnStorage,
     Rt: Runtime,
 {
     type Table = <T as Project<Rt>>::Table;
@@ -405,7 +416,8 @@ where
     }
 
     unsafe fn project<'a>(rt: &'a Rt, value: &'a Rt::Value, table: &Self::Table) -> Self::Ref<'a> {
-        // SAFETY: the caller's contract, and the `Borrowable` bound above.
+        // SAFETY: the caller's contract, and the `OwnStorage` bound above:
+        // the payload is no option.
         let payload = unsafe { rt.some_at(value) }?;
         // SAFETY: the payload lies where the option does (RFC-0039).
         Some(unsafe { <T as Project<Rt>>::project(rt, payload, table) })
@@ -420,6 +432,77 @@ where
         let payload = unsafe { rt.some_at_mut(value) }?;
         // SAFETY: as `project`.
         Some(unsafe { <T as Project<Rt>>::project_mut(rt, payload, table) })
+    }
+}
+
+impl<T, E> Borrowed for Result<T, E>
+where
+    T: Borrowed,
+    E: Borrowed,
+{
+    type Ref<'a>
+        = Result<<T as Borrowed>::Ref<'a>, <E as Borrowed>::Ref<'a>>
+    where
+        Self: 'a;
+    type Mut<'a>
+        = Result<<T as Borrowed>::Mut<'a>, <E as Borrowed>::Mut<'a>>
+    where
+        Self: 'a;
+}
+
+impl<T, E, Rt> Project<Rt> for Result<T, E>
+where
+    T: Project<Rt>,
+    E: Project<Rt>,
+    Rt: Runtime,
+{
+    type Table = (<T as Project<Rt>>::Table, <E as Project<Rt>>::Table);
+
+    /// # Panics
+    /// The settled type is not a `Result`. The checker settles a `Result`
+    /// field, and a lent value, at the type the Rust `Result` declares.
+    fn table(at: ArgAt<'_>) -> Self::Table {
+        let Ty::Result(ok, err) = at.ty else {
+            panic!("a `Result` projection's value is typed {:?}, which is no `Result`", at.ty)
+        };
+        (
+            <T as Project<Rt>>::table(ArgAt {
+                interner: at.interner,
+                ty: ok,
+            }),
+            <E as Project<Rt>>::table(ArgAt {
+                interner: at.interner,
+                ty: err,
+            }),
+        )
+    }
+
+    unsafe fn project<'a>(rt: &'a Rt, value: &'a Rt::Value, table: &Self::Table) -> Self::Ref<'a> {
+        // SAFETY: the caller's contract: `value` holds what the `Result`
+        // crossing's `erase` wrote.
+        let payload = unsafe { rt.result_at(value) };
+        // SAFETY: each side's payload holds what that side's crossing wrote,
+        // in storage live for `'a`.
+        unsafe {
+            payload
+                .map(|ok| <T as Project<Rt>>::project(rt, ok, &table.0))
+                .map_err(|err| <E as Project<Rt>>::project(rt, err, &table.1))
+        }
+    }
+
+    unsafe fn project_mut<'a>(
+        rt: &'a Rt,
+        value: &'a mut Rt::Value,
+        table: &Self::Table,
+    ) -> Self::Mut<'a> {
+        // SAFETY: as `project`, with the caller's exclusive loan.
+        let payload = unsafe { rt.result_at_mut(value) };
+        // SAFETY: as `project`, exclusively.
+        unsafe {
+            payload
+                .map(|ok| <T as Project<Rt>>::project_mut(rt, ok, &table.0))
+                .map_err(|err| <E as Project<Rt>>::project_mut(rt, err, &table.1))
+        }
     }
 }
 
@@ -505,6 +588,8 @@ macro_rules! borrowed_as_self {
             type Ref<'__a> = &'__a Self where Self: '__a;
             type Mut<'__a> = &'__a mut Self where Self: '__a;
         }
+
+        impl<$($($g)*)?> $crate::OwnStorage for $t {}
 
         impl<$($($g)*,)? __Rt> $crate::Project<__Rt> for $t
         where
