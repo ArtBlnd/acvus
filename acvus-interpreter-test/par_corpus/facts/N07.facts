@@ -2,9 +2,9 @@ for range(0 (r28)..2 (r29)) -> L1 else L2 stages [L1, L7]
 // L1: free {const, const}
 // L7: cycle Storage(r30) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
-// cost in place: W=0
+// cost W=76 O=18281 split when n > 7698, n = max(2 (r29) - 0 (r28), 0)
 for range(0 (r32)..3 (r33)) -> L4 else L5 stages [L4, L6]
 // L4: free {index, as_slice, index}
 // L6: cycle Storage(r30) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
-// cost W=9 O=18281 split when n > 65000, n = max(3 (r33) - 0 (r32), 0)
+// cost W=24 O=18281 split when n > 24375, n = max(3 (r33) - 0 (r32), 0)

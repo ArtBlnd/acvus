@@ -245,3 +245,50 @@ fn a_float_sum_keeps_its_stages_and_weighs_only_its_free_stage() {
     );
     assert_eq!(work(&summed.with_costs, 0), TABLE.load, "{}", summed.with_costs);
 }
+
+#[test]
+fn a_disjoint_stage_runs_apart_and_weighs_its_work() {
+    let per_row = listed(
+        "let c = vec([vec([0, 0]), vec([0, 0])]);
+        for i in 0u64..2u64 { for j in 0u64..2u64 { c[i][j] = weighed(j as i64); } }
+        c[0u64][0u64] + c[1u64][1u64]",
+        Ty::I64,
+    );
+    let one_row = listed(
+        "let c = vec([vec([0, 0]), vec([0, 0])]);
+        for i in 0u64..2u64 { for j in 0u64..2u64 { c[0u64][j] = weighed(j as i64 + i as i64); } }
+        c[0u64][0u64] + c[1u64][1u64]",
+        Ty::I64,
+    );
+    let outer_facts = |listing: &str| -> String {
+        listing
+            .lines()
+            .skip_while(|line| !line.contains(" stages ["))
+            .skip(1)
+            .take_while(|line| !line.contains("// cost "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        outer_facts(&per_row.with_costs).contains(" disjoint "),
+        "{}",
+        per_row.with_costs
+    );
+    let found = work(&per_row.with_costs, 0);
+    assert!(
+        (2 * WEIGHED..3 * WEIGHED).contains(&found),
+        "W={found}:\n{}",
+        per_row.with_costs
+    );
+    assert!(
+        outer_facts(&one_row.with_costs).contains(" in_order "),
+        "{}",
+        one_row.with_costs
+    );
+    assert_eq!(
+        cost_lines(&one_row.with_costs).first().map(String::as_str),
+        Some("in place: W=0"),
+        "{}",
+        one_row.with_costs
+    );
+}

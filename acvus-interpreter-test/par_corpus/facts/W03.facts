@@ -2,4 +2,4 @@ for range(0 (r17)..r13) -> L1 else L2 stages [L1, L3]
 // L1: free {index, index, *}
 // L3: cycle Storage(r18) disjoint {index_set}
 // control upfront
-// cost W=7 O=18281 split when n > 83571, n = max(r13 - 0 (r17), 0)
+// cost W=10 O=18281 split when n > 58500, n = max(r13 - 0 (r17), 0)

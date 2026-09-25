@@ -2,8 +2,8 @@
 //! backend's static table, and the one compare on the trip count that
 //! chooses between running in place and splitting.
 //!
-//! This reads `analysis::loop_deps` for which stages are free and computes
-//! no stage fact itself. No MIR pass reads a cost, and none is measured at
+//! This reads `analysis::loop_deps` for which stages are free and which
+//! cycles are `Disjoint`, and computes no stage fact itself. No MIR pass reads a cost, and none is measured at
 //! run time; the reader it is for is a lowerer that splits (RFC-0066 rule
 //! 10), which no backend has yet.
 //!
@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::loop_deps::{LoopDeps, StageBlocks};
+use crate::analysis::loop_deps::{LoopDeps, Order, Placement, StageBlocks};
 use crate::analysis::loops::{Invariants, LoopId, LoopKind, LoopNest, Term, Trip};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, ValueId};
@@ -77,9 +77,8 @@ const PATH_ENDS: u64 = 0;
 /// is a `u64`.
 const BEYOND_EVERY_TRIP_COUNT: u128 = u128::MAX;
 
-/// Rule 8's value for what is unknown. Here that is an inner loop's least
-/// trip count when it is no constant `u64`, or when the loop can leave from
-/// its body and so end at any iteration.
+/// Rule 8's least trip count for an inner loop where that is unknown, here
+/// no constant `u64`, or where the loop can leave early, from its body.
 const UNKNOWN: u64 = 0;
 
 pub struct Costs<'a> {
@@ -132,20 +131,30 @@ impl<'a> Costs<'a> {
             .map(|id| &self.nest.get(id).trip)
     }
 
+    /// `W` sums the stages that run apart: the free ones, and those whose
+    /// every cycle is `Disjoint`, whose token is absent (RFC-0066 rule 10).
+    /// A stage holding an `AnyOrder` or `InOrder` cycle, or a cycle that
+    /// crosses into another stage, runs in its order and is not counted.
     pub fn of_loop(&self, deps: &LoopDeps) -> LoopCost {
         let stages = deps.membership.stages();
-        let free: Vec<&StageBlocks> = stages
-            .iter()
-            .enumerate()
-            .filter(|(stage, _)| deps.is_free(*stage))
-            .map(|(_, blocks)| blocks)
-            .collect();
-        if free.is_empty() {
+        if !(0..stages.len()).any(|stage| deps.is_free(stage)) {
             return LoopCost::InPlace(InPlace::NoFreeStage);
         }
-        let work = free
+        let judged = deps.judge(self.cfg, self.laws);
+        let runs_apart = |stage: usize| {
+            deps.cycles
+                .iter()
+                .zip(&judged)
+                .all(|(cycle, judged)| match &cycle.placement {
+                    Placement::Stage(at) => *at != stage || judged.order == Order::Disjoint,
+                    Placement::Crosses(across) => !across.contains(&stage),
+                })
+        };
+        let work = stages
             .iter()
-            .map(|stage| self.stage_work(stage))
+            .enumerate()
+            .filter(|(stage, _)| runs_apart(*stage))
+            .map(|(_, blocks)| self.stage_work(blocks))
             .fold(0, u64::saturating_add);
         if work == 0 {
             return LoopCost::InPlace(InPlace::NoWork);
@@ -162,10 +171,10 @@ impl<'a> Costs<'a> {
         }
     }
 
-    /// One chunk run apart: its dispatch, which is one synchronous executor
-    /// call in a `Sync` body and a spawn in a body that already suspends
-    /// (RFC-0066 rule 10); the merge that joins it back; and one buffered
-    /// element at each boundary between two stages.
+    /// Rule 8's `O`: one chunk's dispatch, which is a spawn where the body
+    /// suspends and otherwise one synchronous executor call (RFC-0066 rule
+    /// 10); one merge; and one buffered element per boundary between two
+    /// stages.
     fn overhead(&self, stages: &[StageBlocks]) -> u128 {
         let dispatch = match self.cfg.task {
             Task::Sync => self.table.chunk_dispatch,
@@ -220,8 +229,8 @@ impl<'a> Costs<'a> {
     /// A loop inside `region`, from its header to the first block after
     /// it: the header on each of `t + 1` visits, `t` iterations at their
     /// least, and the lightest way on from where it leaves. `t` is the
-    /// least trip count, which is zero for a loop that can leave from its
-    /// body, since that exit can end it at any iteration.
+    /// least trip count, which rule 8 counts as zero for a loop that can
+    /// leave early, from its body.
     fn inner_loop_weight(
         &self,
         inner: LoopId,
@@ -309,8 +318,9 @@ impl<'a> Costs<'a> {
         match terminator {
             Terminator::For { source, .. } => self.step_weight(*source),
             Terminator::Switch { .. } => self.table.compare,
-            // A two-way branch reads a `Bool` that the compare before it
-            // produced and was weighed for.
+            // A two-way branch or a jump has no row, and rule 8 weighs an
+            // operation with no row as nothing; the compare that produced a
+            // branch's `Bool` was weighed at its row.
             Terminator::JumpIf { .. } | Terminator::Diamond { .. } => 0,
             Terminator::Jump { .. }
             | Terminator::Return { .. }
@@ -387,8 +397,11 @@ impl<'a> Costs<'a> {
             | InstKind::MakeTuple { .. }
             | InstKind::MakeClosure { .. }
             | InstKind::MakeVariant { .. } => table.allocation,
-            // A word is an operand the backend writes into the operation
-            // that reads it.
+            // A word, a `ConstStr` (the prepared code owns the text, the
+            // constant being its pointer and length, RFC-0062 rule 2), an
+            // `Eval` (its call is weighed at its `Spawn`), a `Drop` and a
+            // marker have no row, and rule 8 weighs an operation with no row
+            // as nothing.
             InstKind::Const { value, .. } => match value {
                 Literal::String(_) | Literal::List(_) => table.allocation,
                 Literal::Int(_)
@@ -399,8 +412,6 @@ impl<'a> Costs<'a> {
                 | Literal::Bool(_)
                 | Literal::Unit => 0,
             },
-            // The prepared code owns the text; the constant is its pointer
-            // and length (RFC-0062 rule 2).
             InstKind::ConstStr { .. } => 0,
             InstKind::FunctionCall {
                 callee, callee_ty, ..
@@ -410,11 +421,8 @@ impl<'a> Costs<'a> {
             } => table
                 .spawn
                 .saturating_add(self.call_weight(callee, callee_ty)),
-            // The call it awaits is weighed at its `Spawn`.
             InstKind::Eval { .. } => 0,
             InstKind::Merge { .. } => table.merge,
-            // What a drop releases depends on the value, and a word's drop
-            // releases nothing, so its least is zero.
             InstKind::Drop { .. } => 0,
             InstKind::BlockLabel { .. }
             | InstKind::Undef { .. }

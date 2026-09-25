@@ -2,12 +2,12 @@ for range(0 (r34)..2 (r35)) -> L1 else L2 stages [L1, L11]
 // L1: free {const, const}
 // L11: cycle Storage(r36) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
-// cost in place: W=0
+// cost W=119 O=18281 split when n > 4916, n = max(2 (r35) - 0 (r34), 0)
 for range(0 (r38)..2 (r39)) -> L4 else L5 stages [L4, L10]
 // L4: free {const, const, const, index, as_slice, index, index, as_slice, index, *, +}
 // L10: cycle Storage(r36) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
-// cost W=43 O=18281 split when n > 13605, n = max(2 (r39) - 0 (r38), 0)
+// cost W=58 O=18281 split when n > 10087, n = max(2 (r39) - 0 (r38), 0)
 for range(0 (r43)..2 (r44)) -> L7 else L8 stages [L7, L9]
 // L7: free {index, as_slice, index, index, as_slice, index, *}
 // L9: cycle Carried(r42) any_order law(Op(Add) exact commutative) {+}

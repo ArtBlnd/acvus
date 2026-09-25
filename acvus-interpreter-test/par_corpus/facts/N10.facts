@@ -2,7 +2,7 @@ for range(0 (r26)..r22) -> L1 else L2 stages [L1, L9]
 // L1: free {const, index, as_slice, take, const, !=, const, +}
 // L9: cycle Storage(r27) disjoint {index_set}
 // control upfront
-// cost W=10 O=18281 split when n > 58500, n = max(r22 - 0 (r26), 0)
+// cost W=13 O=18281 split when n > 45000, n = max(r22 - 0 (r26), 0)
 for slice(r30) -> L4 else L5 stages [L4, L8]
 // L4: free {take, const, !=}
 // L8: cycle Carried(r32) any_order law(Op(Add) exact commutative) {const, +, branch, jump}
