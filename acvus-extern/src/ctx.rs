@@ -56,8 +56,8 @@ where
     /// The mono glue's, and no handler's.
     ///
     /// # Safety
-    /// An `Instance::call` named a receiver for the call now running, and
-    /// the value it named is live for `'r`.
+    /// An `Instance` or `InstanceOf` call named a receiver for the call now
+    /// running, and the value it named is live for `'r`.
     #[doc(hidden)]
     #[inline(always)]
     pub unsafe fn receiver<'r>(&mut self) -> &'r Rt::Value {

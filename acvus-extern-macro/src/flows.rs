@@ -5,7 +5,9 @@
 //! of the output: the same label; a lifetime it outlives, written
 //! (`'a: 'b`) or implied (`&'b T` for every lifetime in `T`); a closure's
 //! result, from what the closure captured and is handed; and, inside a type
-//! the macro does not read or an `Instance`, every label beside it.
+//! the macro does not read or an `InstanceOf`, every label beside it. An
+//! `Instance` parameter is read as the receiver it owns and as the
+//! requirement at its variable.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,7 +45,7 @@ pub enum Role {
     Ctx,
     /// The acvus parameter at this index: an end.
     Acvus(usize),
-    /// A `#[state]` or an `Instance`: no end.
+    /// A `#[state]` or an `InstanceOf`: no end.
     Other,
 }
 

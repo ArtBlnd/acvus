@@ -15,8 +15,8 @@
 //!   `flatten_arrays`, `flat_map`.
 //!
 //! There is no `pchain`. Its parameter is a `Vec` of pipelines, and a
-//! declaration requiring an instance of `I` takes a parameter standing at
-//! `I` itself, which a `Vec<I>` is not (RFC-0067 rule 1).
+//! declaration requiring `next` at `I` takes one pipeline as the `Instance`
+//! that owns it, which a `Vec<I>` is not (RFC-0067 rule 1).
 //! - Consumers: `collect`, `join`, `contains`, `find`, `reduce`,
 //!   `fold`, `any`, `all`, `count`, `last`, `nth`, `position`, `min_by_key`,
 //!   `max_by_key` (the key is `i64`), and the numeric aggregates `sum`,
@@ -42,7 +42,7 @@ use acvus_extern::{
     Arr, Closure, ClosureFn, Cross, Ctx, Erased, Monomorphize, Ref, Registry, Runtime, Shared,
     Stored, Suspends, TransparentOver, Var, core, extern_fn, extern_registry, kind,
 };
-use acvus_extern::{Instance, Later};
+use acvus_extern::{Instance, InstanceOf, Later};
 
 use crate::iter::*;
 
@@ -181,9 +181,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn map<'a, I, T, U, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (T,), U, E, Rt>,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Map<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -192,7 +191,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    Map(MapBody { inner: it, next, f })
+    Map(MapBody { inner: it, f })
 }
 
 /// The `map` it is given, with the calls joined: the first pull draws the
@@ -208,10 +207,9 @@ where
     E: Var<kind::Effect> + Suspends,
     Rt: Runtime,
 {
-    let Map(MapBody { inner, next, f }) = it;
+    let Map(MapBody { inner, f }) = it;
     Unordered(UnorderedBody {
         inner,
-        next,
         f,
         draw: UnorderedDraw::Undrawn,
     })
@@ -219,9 +217,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn filter<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Filter<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -229,14 +226,13 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    Filter(FilterBody { inner: it, next, f })
+    Filter(FilterBody { inner: it, f })
 }
 
 #[extern_fn(effect = pure)]
 fn take<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     n: u64,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Take<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -246,16 +242,14 @@ where
 {
     Take(TakeBody {
         inner: it,
-        next,
         remaining: n,
     })
 }
 
 #[extern_fn(effect = pure)]
 fn skip<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     n: u64,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Skip<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -265,16 +259,14 @@ where
 {
     Skip(SkipBody {
         inner: it,
-        next,
         remaining: n,
     })
 }
 
 #[extern_fn(effect = pure)]
 fn step_by<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     n: u64,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> StepBy<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -285,7 +277,6 @@ where
     assert!(n != 0, "step_by: step is zero");
     StepBy(StepByBody {
         inner: it,
-        next,
         step: n,
         started: false,
     })
@@ -293,9 +284,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn take_while<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> TakeWhile<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -305,7 +295,6 @@ where
 {
     TakeWhile(TakeWhileBody {
         inner: it,
-        next,
         f,
         done: false,
     })
@@ -313,9 +302,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn skip_while<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> SkipWhile<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -325,7 +313,6 @@ where
 {
     SkipWhile(SkipWhileBody {
         inner: it,
-        next,
         f,
         skipping: true,
     })
@@ -333,9 +320,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn chunks<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     n: u64,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Chunks<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -346,16 +332,14 @@ where
     assert!(n != 0, "chunks: chunk size is zero");
     Chunks(ChunksBody {
         inner: it,
-        next,
         size: n,
     })
 }
 
 #[extern_fn(effect = pure)]
 fn dedup<'a, I, T, E, Rt>(
-    it: I,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
-    eq: Instance<'a, core::eq<T, Rt>, T, Rt>,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    eq: InstanceOf<'a, core::eq<T, Rt>, T, Rt>,
 ) -> Dedup<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -363,15 +347,13 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    Dedup::drawing(it, next, eq)
+    Dedup::drawing(it, eq)
 }
 
 #[extern_fn(effect = pure)]
 fn chain<'a, A, B, T, E, Rt>(
-    a: A,
-    b: B,
-    next_a: Instance<'a, sig::next<A, T, E, Rt>, A, Rt, Later>,
-    next_b: Instance<'a, sig::next<B, T, E, Rt>, B, Rt, Later>,
+    a: Instance<'a, sig::next<A, T, E, Rt>, A, Rt, Later>,
+    b: Instance<'a, sig::next<B, T, E, Rt>, B, Rt, Later>,
 ) -> Chain<'a, A, B, T, E, Rt>
 where
     A: Var<kind::Type>,
@@ -382,17 +364,14 @@ where
 {
     Chain(ChainBody {
         first: a,
-        next_first: next_a,
         second: b,
-        next_second: next_b,
         on_first: true,
     })
 }
 
 #[extern_fn(effect = pure)]
 fn flatten<'a, I, T, E, Rt>(
-    it: I,
-    next: Instance<'a, sig::next<I, Vec<T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'a, sig::next<I, Vec<T>, E, Rt>, I, Rt, Later>,
 ) -> Flatten<'a, I, Vec<T>, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -402,15 +381,13 @@ where
 {
     Flatten(FlattenBody {
         inner: it,
-        next,
         pending: Vec::new().into_iter(),
     })
 }
 
 #[extern_fn(effect = pure)]
 fn flatten_arrays<'a, I, T, N, E, Rt>(
-    it: I,
-    next: Instance<'a, sig::next<I, Arr<T, N>, E, Rt>, I, Rt, Later>,
+    it: Instance<'a, sig::next<I, Arr<T, N>, E, Rt>, I, Rt, Later>,
 ) -> Flatten<'a, I, Arr<T, N>, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -421,16 +398,14 @@ where
 {
     Flatten(FlattenBody {
         inner: it,
-        next,
         pending: Vec::new().into_iter(),
     })
 }
 
 #[extern_fn(effect = pure)]
 fn flat_map<'a, I, T, U, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (T,), Vec<U>, E, Rt>,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> FlatMap<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -441,7 +416,6 @@ where
 {
     FlatMap(FlatMapBody {
         inner: it,
-        next,
         f,
         pending: Vec::new().into_iter(),
     })
@@ -449,8 +423,7 @@ where
 
 fn collect_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Vec<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -460,7 +433,7 @@ where
 {
     let mut it = it;
     let mut items = Vec::new();
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    while let Some(x) = it.call(ctx, ()) {
         items.push(x);
     }
     items
@@ -469,8 +442,7 @@ where
 #[extern_fn(effect = E, sync = collect_now)]
 async fn collect<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Vec<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -480,7 +452,7 @@ where
 {
     let mut it = it;
     let mut items = Vec::new();
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(x) = it.call_await(ctx, ()).await {
         items.push(x);
     }
     items
@@ -488,9 +460,8 @@ where
 
 fn join_now<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
     sep: String,
-    next: Instance<'_, sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
 ) -> String
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -500,7 +471,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut parts: Vec<String> = Vec::new();
-    while let Some(part) = next.call(ctx, &mut it, ()) {
+    while let Some(part) = it.call(ctx, ()) {
         parts.push(part.as_ref(rt).clone());
     }
     parts.join(&sep)
@@ -509,9 +480,8 @@ where
 #[extern_fn(effect = E, sync = join_now)]
 async fn join<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
     sep: String,
-    next: Instance<'_, sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
 ) -> String
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -521,7 +491,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut parts: Vec<String> = Vec::new();
-    while let Some(part) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(part) = it.call_await(ctx, ()).await {
         parts.push(part.as_ref(rt).clone());
     }
     parts.join(&sep)
@@ -529,9 +499,8 @@ where
 
 fn contains_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
     needle: T,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -541,7 +510,7 @@ where
 {
     let rt = ctx.rt;
     let mut it = it;
-    while let Some(item) = next.call(ctx, &mut it, ()) {
+    while let Some(item) = it.call(ctx, ()) {
         if *item.as_ref(rt) == needle {
             return true;
         }
@@ -552,9 +521,8 @@ where
 #[extern_fn(effect = E, sync = contains_now)]
 async fn contains<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
     needle: T,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -564,7 +532,7 @@ where
 {
     let rt = ctx.rt;
     let mut it = it;
-    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(item) = it.call_await(ctx, ()).await {
         if *item.as_ref(rt) == needle {
             return true;
         }
@@ -574,9 +542,8 @@ where
 
 fn find_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -586,7 +553,7 @@ where
 {
     let mut it = it;
     loop {
-        let x = next.call(ctx, &mut it, ())?;
+        let x = it.call(ctx, ())?;
         if f.call_now(ctx, (&x,)) {
             return Some(x);
         }
@@ -596,9 +563,8 @@ where
 #[extern_fn(effect = E, sync = find_now)]
 async fn find<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -608,7 +574,7 @@ where
 {
     let mut it = it;
     loop {
-        let x = next.call_await(ctx, &mut it, ()).await?;
+        let x = it.call_await(ctx, ()).await?;
         if f.call(ctx, (&x,)).await {
             return Some(x);
         }
@@ -617,9 +583,8 @@ where
 
 fn reduce_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (T, T), T, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -628,8 +593,8 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    let mut acc = next.call(ctx, &mut it, ())?;
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    let mut acc = it.call(ctx, ())?;
+    while let Some(x) = it.call(ctx, ()) {
         acc = f.call_now(ctx, (acc, x));
     }
     Some(acc)
@@ -638,9 +603,8 @@ where
 #[extern_fn(effect = E, sync = reduce_now)]
 async fn reduce<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (T, T), T, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -649,8 +613,8 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    let mut acc = next.call_await(ctx, &mut it, ()).await?;
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    let mut acc = it.call_await(ctx, ()).await?;
+    while let Some(x) = it.call_await(ctx, ()).await {
         acc = f.call(ctx, (acc, x)).await;
     }
     Some(acc)
@@ -658,10 +622,9 @@ where
 
 fn fold_now<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     init: U,
     f: Closure<'_, (U, T), U, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> U
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -672,7 +635,7 @@ where
 {
     let mut it = it;
     let mut acc = init;
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    while let Some(x) = it.call(ctx, ()) {
         acc = f.call_now(ctx, (acc, x));
     }
     acc
@@ -681,10 +644,9 @@ where
 #[extern_fn(effect = E, sync = fold_now)]
 async fn fold<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     init: U,
     f: Closure<'_, (U, T), U, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> U
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -695,7 +657,7 @@ where
 {
     let mut it = it;
     let mut acc = init;
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(x) = it.call_await(ctx, ()).await {
         acc = f.call(ctx, (acc, x)).await;
     }
     acc
@@ -703,9 +665,8 @@ where
 
 fn any_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -714,7 +675,7 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    while let Some(x) = it.call(ctx, ()) {
         if f.call_now(ctx, (&x,)) {
             return true;
         }
@@ -725,9 +686,8 @@ where
 #[extern_fn(effect = E, sync = any_now)]
 async fn any<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -736,7 +696,7 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(x) = it.call_await(ctx, ()).await {
         if f.call(ctx, (&x,)).await {
             return true;
         }
@@ -746,9 +706,8 @@ where
 
 fn all_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -757,7 +716,7 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    while let Some(x) = it.call(ctx, ()) {
         if !f.call_now(ctx, (&x,)) {
             return false;
         }
@@ -768,9 +727,8 @@ where
 #[extern_fn(effect = E, sync = all_now)]
 async fn all<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> bool
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -779,7 +737,7 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(x) = it.call_await(ctx, ()).await {
         if !f.call(ctx, (&x,)).await {
             return false;
         }
@@ -789,8 +747,7 @@ where
 
 fn count_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -800,7 +757,7 @@ where
 {
     let mut it = it;
     let mut n = 0;
-    while next.call(ctx, &mut it, ()).is_some() {
+    while it.call(ctx, ()).is_some() {
         n += 1;
     }
     n
@@ -809,8 +766,7 @@ where
 #[extern_fn(effect = E, sync = count_now)]
 async fn count<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -820,7 +776,7 @@ where
 {
     let mut it = it;
     let mut n = 0;
-    while next.call_await(ctx, &mut it, ()).await.is_some() {
+    while it.call_await(ctx, ()).await.is_some() {
         n += 1;
     }
     n
@@ -828,8 +784,7 @@ where
 
 fn last_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -839,7 +794,7 @@ where
 {
     let mut it = it;
     let mut last = None;
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    while let Some(x) = it.call(ctx, ()) {
         last = Some(x);
     }
     last
@@ -848,8 +803,7 @@ where
 #[extern_fn(effect = E, sync = last_now)]
 async fn last<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -859,7 +813,7 @@ where
 {
     let mut it = it;
     let mut last = None;
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(x) = it.call_await(ctx, ()).await {
         last = Some(x);
     }
     last
@@ -867,9 +821,8 @@ where
 
 fn nth_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     n: u64,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -879,17 +832,16 @@ where
 {
     let mut it = it;
     for _ in 0..n {
-        next.call(ctx, &mut it, ())?;
+        it.call(ctx, ())?;
     }
-    next.call(ctx, &mut it, ())
+    it.call(ctx, ())
 }
 
 #[extern_fn(effect = E, sync = nth_now)]
 async fn nth<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     n: u64,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -899,16 +851,15 @@ where
 {
     let mut it = it;
     for _ in 0..n {
-        next.call_await(ctx, &mut it, ()).await?;
+        it.call_await(ctx, ()).await?;
     }
-    next.call_await(ctx, &mut it, ()).await
+    it.call_await(ctx, ()).await
 }
 
 fn position_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -918,7 +869,7 @@ where
 {
     let mut it = it;
     let mut index = 0;
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    while let Some(x) = it.call(ctx, ()) {
         if f.call_now(ctx, (&x,)) {
             return Some(index);
         }
@@ -930,9 +881,8 @@ where
 #[extern_fn(effect = E, sync = position_now)]
 async fn position<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<i64>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -942,7 +892,7 @@ where
 {
     let mut it = it;
     let mut index = 0;
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(x) = it.call_await(ctx, ()).await {
         if f.call(ctx, (&x,)).await {
             return Some(index);
         }
@@ -953,8 +903,7 @@ where
 
 fn sum_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -965,7 +914,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut acc = T::ZERO;
-    while let Some(item) = next.call(ctx, &mut it, ()) {
+    while let Some(item) = it.call(ctx, ()) {
         acc = acc.add(*item.as_ref(rt));
     }
     acc
@@ -974,8 +923,7 @@ where
 #[extern_fn(effect = E, sync = sum_now)]
 async fn sum<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -986,7 +934,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut acc = T::ZERO;
-    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(item) = it.call_await(ctx, ()).await {
         acc = acc.add(*item.as_ref(rt));
     }
     acc
@@ -994,8 +942,7 @@ where
 
 fn product_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1006,7 +953,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut acc = T::ONE;
-    while let Some(item) = next.call(ctx, &mut it, ()) {
+    while let Some(item) = it.call(ctx, ()) {
         acc = acc.mul(*item.as_ref(rt));
     }
     acc
@@ -1015,8 +962,7 @@ where
 #[extern_fn(effect = E, sync = product_now)]
 async fn product<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> T
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1027,7 +973,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut acc = T::ONE;
-    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(item) = it.call_await(ctx, ()).await {
         acc = acc.mul(*item.as_ref(rt));
     }
     acc
@@ -1035,8 +981,7 @@ where
 
 fn min_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1047,7 +992,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut best: Option<T> = None;
-    while let Some(item) = next.call(ctx, &mut it, ()) {
+    while let Some(item) = it.call(ctx, ()) {
         let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
@@ -1060,8 +1005,7 @@ where
 #[extern_fn(effect = E, sync = min_now)]
 async fn min<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1072,7 +1016,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut best: Option<T> = None;
-    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(item) = it.call_await(ctx, ()).await {
         let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.min(current),
@@ -1084,8 +1028,7 @@ where
 
 fn max_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1096,7 +1039,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut best: Option<T> = None;
-    while let Some(item) = next.call(ctx, &mut it, ()) {
+    while let Some(item) = it.call(ctx, ()) {
         let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
@@ -1109,8 +1052,7 @@ where
 #[extern_fn(effect = E, sync = max_now)]
 async fn max<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1121,7 +1063,7 @@ where
     let rt = ctx.rt;
     let mut it = it;
     let mut best: Option<T> = None;
-    while let Some(item) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(item) = it.call_await(ctx, ()).await {
         let current = *item.as_ref(rt);
         best = Some(match best {
             Some(best) => best.max(current),
@@ -1153,9 +1095,8 @@ impl Extreme {
 
 async fn extreme_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
 where
@@ -1166,7 +1107,7 @@ where
 {
     let mut it = it;
     let mut best: Option<Keyed<T>> = None;
-    while let Some(value) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(value) = it.call_await(ctx, ()).await {
         let key = f.call(ctx, (&value,)).await;
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
@@ -1181,9 +1122,8 @@ where
 
 fn extreme_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     extreme: Extreme,
 ) -> Option<T>
 where
@@ -1194,7 +1134,7 @@ where
 {
     let mut it = it;
     let mut best: Option<Keyed<T>> = None;
-    while let Some(value) = next.call(ctx, &mut it, ()) {
+    while let Some(value) = it.call(ctx, ()) {
         let key = f.call_now(ctx, (&value,));
         let replace = match &best {
             Some(Keyed { key: best_key, .. }) => extreme.prefers(key, *best_key),
@@ -1209,9 +1149,8 @@ where
 
 fn min_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1219,15 +1158,14 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    extreme_by_key_now(ctx, it, f, next, Extreme::Min)
+    extreme_by_key_now(ctx, it, f, Extreme::Min)
 }
 
 #[extern_fn(effect = E, sync = min_by_key_now)]
 async fn min_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1235,14 +1173,13 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    extreme_by_key(ctx, it, f, next, Extreme::Min).await
+    extreme_by_key(ctx, it, f, Extreme::Min).await
 }
 
 fn max_by_key_now<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1250,15 +1187,14 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    extreme_by_key_now(ctx, it, f, next, Extreme::Max)
+    extreme_by_key_now(ctx, it, f, Extreme::Max)
 }
 
 #[extern_fn(effect = E, sync = max_by_key_now)]
 async fn max_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
+    it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'_, (Ref<'_, T, Shared, Rt>,), i64, E, Rt>,
-    next: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
 ) -> Option<T>
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1266,7 +1202,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    extreme_by_key(ctx, it, f, next, Extreme::Max).await
+    extreme_by_key(ctx, it, f, Extreme::Max).await
 }
 
 pub fn iterator_registry<Rt>() -> Registry<Rt>

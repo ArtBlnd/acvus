@@ -99,6 +99,20 @@ async fn skip_while_resumes_at_the_first_element_that_fails_and_keeps_the_rest()
     );
 }
 
+/// `chain` draws its first pipeline, then its second, each through the
+/// `next` that owns it: the two here are of one type and different
+/// values, so a stage drawing either through the other's instance, or
+/// the second first, yields another sequence.
+#[tokio::test]
+async fn chain_yields_the_first_pipeline_then_the_second() {
+    let digits = run(
+        "range(1, 3) | chain(range(7, 9)) | fold(0, |acc, x| -> acc * 10 + x)",
+        Ty::I64,
+    )
+    .await;
+    assert_eq!(digits.as_int(), 1278, "1, 2, then 7, 8");
+}
+
 #[tokio::test]
 async fn chunks_cover_the_source_with_a_short_last_chunk() {
     assert_eq!(

@@ -75,8 +75,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    inner: I,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+    inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
     f: Closure<'a, (T,), U, E, Rt>,
 }
 
@@ -93,9 +92,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn nmap<'a, I, T, U, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
     f: Closure<'a, (T,), U, E, Rt>,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
 ) -> NMap<'a, I, T, U, E, Rt>
 where
     I: Var<kind::Type>,
@@ -104,7 +102,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    NMap(NMapBody { inner: it, next, f })
+    NMap(NMapBody { inner: it, f })
 }
 
 #[extern_fn(instance_of = sig::next, effect = E)]
@@ -116,7 +114,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+    let x = it.0.inner.call(ctx, ())?;
     Some(it.0.f.call_now(ctx, (x,)))
 }
 
@@ -128,8 +126,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    inner: I,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+    inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
 }
 
@@ -145,9 +142,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn nfilter<'a, I, T, E, Rt>(
-    it: I,
+    it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
-    next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
 ) -> NFilter<'a, I, T, E, Rt>
 where
     I: Var<kind::Type>,
@@ -155,7 +151,7 @@ where
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    NFilter(NFilterBody { inner: it, next, f })
+    NFilter(NFilterBody { inner: it, f })
 }
 
 #[extern_fn(instance_of = sig::next, effect = E)]
@@ -167,7 +163,7 @@ where
     Rt: Runtime,
 {
     loop {
-        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        let x = it.0.inner.call(ctx, ())?;
         let keep = it.0.f.call_now(ctx, (&x,));
         if keep {
             return Some(x);
@@ -178,8 +174,7 @@ where
 #[extern_fn(effect = E)]
 fn nsum<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, i64, E, Rt>, I, Rt>,
+    it: Instance<'_, sig::next<I, i64, E, Rt>, I, Rt>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -188,7 +183,7 @@ where
 {
     let mut it = it;
     let mut acc = 0i64;
-    while let Some(x) = next.call(ctx, &mut it, ()) {
+    while let Some(x) = it.call(ctx, ()) {
         acc = acc.wrapping_add(x);
     }
     acc
@@ -200,8 +195,7 @@ where
     I: Var<kind::Type>,
     Rt: Runtime,
 {
-    inner: I,
-    next: Instance<'a, sig::next<I, i64, Pure, Rt>, I, Rt>,
+    inner: Instance<'a, sig::next<I, i64, Pure, Rt>, I, Rt, Later>,
 }
 
 #[derive(ExternType)]
@@ -213,17 +207,20 @@ where
     Rt: Runtime;
 
 #[extern_fn(effect = pure)]
-fn nslowed<'a, I, Rt>(it: I, next: Instance<'a, sig::next<I, i64, Pure, Rt>, I, Rt>) -> NSlowed<'a, I, Rt>
+fn nslowed<'a, I, Rt>(it: Instance<'a, sig::next<I, i64, Pure, Rt>, I, Rt>) -> NSlowed<'a, I, Rt>
 where
     I: Var<kind::Type>,
     Rt: Runtime,
 {
-    NSlowed(NSlowedBody { inner: it, next })
+    NSlowed(NSlowedBody {
+        inner: it.into_async(),
+    })
 }
 
 /// The file's async stage: it suspends once per element and reaches its
 /// inner stage through `into_async` — the sync instance `nslowed` was
-/// handed, called at the async task (RFC-0067 rule 5).
+/// handed, retyped when the stage was built and called at the async task
+/// (RFC-0067 rule 5).
 #[extern_fn(instance_of = sig::next, effect = pure)]
 async fn next_nslowed<I, Rt>(ctx: &mut Ctx<'_, Rt>, it: &mut NSlowed<'_, I, Rt>) -> Option<i64>
 where
@@ -231,10 +228,7 @@ where
     Rt: Runtime,
 {
     tokio::task::yield_now().await;
-    it.0.next
-        .into_async()
-        .call_await(ctx, &mut it.0.inner, ())
-        .await
+    it.0.inner.call_await(ctx, ()).await
 }
 
 /// `nsum` at the async task: the requirement is written `Later`, so the
@@ -242,8 +236,7 @@ where
 #[extern_fn(effect = pure)]
 async fn nsum_await<I, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: I,
-    next: Instance<'_, sig::next<I, i64, Pure, Rt>, I, Rt, Later>,
+    it: Instance<'_, sig::next<I, i64, Pure, Rt>, I, Rt, Later>,
 ) -> i64
 where
     I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -251,7 +244,7 @@ where
 {
     let mut it = it;
     let mut acc = 0i64;
-    while let Some(x) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(x) = it.call_await(ctx, ()).await {
         acc = acc.wrapping_add(x);
     }
     acc

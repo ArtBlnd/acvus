@@ -1,0 +1,42 @@
+error[E0277]: an `InstanceOf` stands at a type and reads the receivers it is handed, and this signature steps or consumes its receiver (`acvus_extern::Mut`)
+  --> tests/compile_fail/instance_of_at_a_stepped_receiver.rs:11:1
+   |
+11 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this `InstanceOf` is at a signature whose receiver is `&mut I` or `I`
+   |
+   = help: the trait `ReadsItsReceiver` is not implemented for `acvus_extern::Mut`
+   = note: a signature whose receiver is `&mut I` or `I` is required by taking the receiver and its instance as one parameter, `it: Instance<S, I, Rt>`, which owns the receiver it steps (RFC-0067 rule 1)
+help: the trait `ReadsItsReceiver` is implemented for `acvus_extern::Shared`
+  --> $WORKSPACE/acvus-extern/src/instance.rs
+   |
+   | impl ReadsItsReceiver for Shared {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for `Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>` to implement `Arg<__R>`
+   = note: required for `(ByValue<Erased<__R, !>>, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/instance_of_at_a_stepped_receiver.rs:11:1
+   |
+11 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
+   | ---------------------------------------------- doesn't satisfy `_: Arg<__R>`
+   |
+  ::: $WORKSPACE/acvus-extern/src/loan.rs
+   |
+   | pub struct Mut;
+   | -------------- doesn't satisfy `acvus_extern::Mut: ReadsItsReceiver`
+   |
+   = note: the following trait bounds were not satisfied:
+           `acvus_extern::Mut: ReadsItsReceiver`
+           which is required by `Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>, __R>: Iterator`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

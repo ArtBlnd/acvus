@@ -1,6 +1,6 @@
 //! `==` and `clone` at a structural type, component by component (RFC-0020).
 
-use acvus_extern::{Ctx, Instance, Owned, core};
+use acvus_extern::{Ctx, InstanceOf, Owned, core};
 use acvus_utils::Astr;
 
 use crate::code::{Exit, Marked, Off, Op, successor};
@@ -59,7 +59,7 @@ impl Shape {
                 Shape::Word => a.bits() == b.bits(),
                 Shape::Text => a.as_str() == b.as_str(),
                 Shape::Leaf { instance_entry } => {
-                    let eq: Instance<core::eq<Owned<Rt>, Rt>, Owned<Rt>, Rt> =
+                    let eq: InstanceOf<core::eq<Owned<Rt>, Rt>, Owned<Rt>, Rt> =
                         acvus_extern::Crossing::new(ctx.rt).instance(*instance_entry);
                     eq.call(ctx, owned(a), (owned(b),))
                 }
@@ -116,7 +116,7 @@ impl Shape {
                 Shape::Word => *value,
                 Shape::Text => Value::string(value.as_str()),
                 Shape::Leaf { instance_entry } => {
-                    let clone: Instance<core::clone<Owned<Rt>, Rt>, Owned<Rt>, Rt> =
+                    let clone: InstanceOf<core::clone<Owned<Rt>, Rt>, Owned<Rt>, Rt> =
                         acvus_extern::Crossing::new(ctx.rt).instance(*instance_entry);
                     clone.call(ctx, owned(value), ()).into_value(acvus_extern::Holding::new())
                 }

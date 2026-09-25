@@ -3,20 +3,11 @@
 //! for the requirements of the declaration it is handed to (RFC-0059
 //! rule 8).
 #![forbid(unsafe_code)]
-use acvus_extern::{CallSite, Now, Owned, Pure, Arg, Required, Runtime, extern_signature};
+use acvus_extern::{CallSite, Now, Owned, Arg, Required, Runtime, extern_signature};
 
-extern_signature! {
-    ns: "q",
-    effect = E,
-    fn next<I, T, E, Rt>(it: &mut I) -> Option<T>
-    where
-        I: Var<kind::Type>,
-        T: Var<kind::Type>,
-        E: Var<kind::Effect>,
-        Rt: Runtime;
-}
+extern_signature! { ns: "q", fn eq<T>(a: &T, b: &T) -> bool where T: Var<kind::Type>; }
 
-type Forge<Rt> = Required<next<Owned<Rt>, i64, Pure, Rt>, Owned<Rt>, Now, 0>;
+type Forge<Rt> = Required<eq<Owned<Rt>, Rt>, Owned<Rt>, Now, 0>;
 
 fn through_the_constructor<Rt>(words: &[Rt::Value])
 where
