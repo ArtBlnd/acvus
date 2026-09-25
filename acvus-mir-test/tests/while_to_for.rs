@@ -719,22 +719,21 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
     while_to_for::run(&i, &mut cfg, &laws);
     let after = snapshot(&cfg);
 
-    let Terminator::For { stages, .. } = &cfg.blocks[header.0].terminator else {
+    let Terminator::For { stages, exit, .. } = &cfg.blocks[header.0].terminator else {
         panic!(
             "the header ends in `For`: {:?}",
             cfg.blocks[header.0].terminator
         );
     };
     let body = cfg.label_to_block[&stages.body()];
+    let exit = cfg.label_to_block[exit];
     let mut grew = Vec::new();
-    let mut moved = Vec::new();
+    let mut body_head: Vec<String> = Vec::new();
+    let mut exit_head: Vec<String> = Vec::new();
     for (b, (was, is)) in before.iter().zip(&after).enumerate() {
         if b == header.0 {
             assert_eq!(was.params, is.params);
-            let (kept, left): (Vec<&String>, Vec<&String>) =
-                was.insts.iter().partition(|inst| is.insts.contains(inst));
-            assert_eq!(kept, is.insts.iter().collect::<Vec<_>>(), "the header only lost");
-            moved = left.into_iter().cloned().collect();
+            assert!(is.insts.is_empty(), "a `for` header holds no instruction");
             continue;
         }
         assert_eq!(was.terminator, is.terminator, "block {b}'s terminator");
@@ -746,7 +745,17 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
             ),
             false => assert_eq!(was.params, is.params, "block {b}'s parameters"),
         }
-        if was.insts != is.insts {
+        if was.insts == is.insts {
+            continue;
+        }
+        if b == body.0 || b == exit.0 {
+            let (head, rest) = is.insts.split_at(is.insts.len() - was.insts.len());
+            assert_eq!(rest, &was.insts[..], "block {b} only gained at its head");
+            match b == body.0 {
+                true => body_head = head.to_vec(),
+                false => exit_head = head.to_vec(),
+            }
+        } else {
             assert_eq!(
                 was.insts[..],
                 is.insts[..was.insts.len()],
@@ -755,24 +764,41 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
             grew.push(is.insts[was.insts.len()..].to_vec());
         }
     }
+    let grew_insts = grew.concat();
+    let lost = &before[header.0].insts;
+    let (to_entry, to_heads): (Vec<&String>, Vec<&String>) =
+        lost.iter().partition(|inst| grew_insts.contains(inst));
     assert_eq!(
-        grew.concat(),
-        moved,
-        "what the header lost is what the entering block gained, in order"
+        grew_insts.iter().collect::<Vec<_>>(),
+        to_entry,
+        "what the entering block gained the header lost, in order"
     );
-    let grew: Vec<&str> = grew
+    assert_eq!(
+        body_head.iter().collect::<Vec<_>>(),
+        to_heads,
+        "the rest of the header runs at the body's head, in order"
+    );
+    assert_eq!(
+        kinds(&exit_head),
+        kinds(&body_head),
+        "the exit's head runs the same instructions"
+    );
+    assert_eq!(
+        kinds(&grew_insts),
+        added,
+        "the bound's computation moves and nothing else"
+    );
+}
+
+fn kinds(insts: &[String]) -> Vec<&str> {
+    insts
         .iter()
-        .flatten()
         .map(|inst| {
             inst.split(|c: char| !c.is_alphanumeric())
                 .next()
                 .expect("a `Debug` of an instruction starts with its kind")
         })
-        .collect();
-    assert_eq!(
-        grew, added,
-        "the bound's computation moves and nothing else"
-    );
+        .collect()
 }
 
 #[test]
@@ -983,6 +1009,121 @@ fn a_call_before_a_product_is_declined() {
          while i < {{ d = opaque(n); n * m }} {{ s = s + i + d; i = i + 1; }} s"
     );
     assert_still_a_while(&Promoted::with_externs(&source, opaque), &source);
+}
+
+// -- A header instruction that is no step (RFC-0081 rule 2) -------------
+
+fn exit_block(o: &Promoted, loop_: &Loop) -> BlockIdx {
+    let Terminator::For { exit, .. } = &o.cfg.blocks[loop_.natural.header.0].terminator else {
+        panic!("the header ends in `For`");
+    };
+    o.cfg.label_to_block[exit]
+}
+
+fn binops(o: &Promoted, block: BlockIdx) -> Vec<(BinOp, ValueId)> {
+    o.cfg.blocks[block.0]
+        .insts
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstKind::BinOp { op, dst, .. } => Some((*op, *dst)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn call_args(o: &Promoted, block: BlockIdx) -> Vec<Vec<ValueId>> {
+    o.cfg.blocks[block.0]
+        .insts
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstKind::FunctionCall { args, .. } => Some(args.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_header_instruction_that_is_no_step_runs_at_the_heads_of_the_body_and_the_exit() {
+    let source = "let n = [1, 2, 3, 4, 5].len() as i64; let i = 0; \
+                  while { let z = 10 / (7 - i); i < n } { i = i + 1; } i";
+    let o = Promoted::of(source);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    assert!(
+        o.cfg.blocks[loop_.natural.header.0].insts.is_empty(),
+        "a `for` header holds no instruction:\n{source}"
+    );
+    let body = binops(&o, o.body_block(loop_));
+    let exit = binops(&o, exit_block(&o, loop_));
+    let ops = |found: &[(BinOp, ValueId)]| found.iter().map(|(op, _)| *op).collect::<Vec<_>>();
+    let header_order = [BinOp::Sub(Overflow::Trap), BinOp::Div];
+    assert_eq!(ops(&body[..2]), header_order, "the body's head:\n{source}");
+    assert_eq!(ops(&exit), header_order, "the exit's head:\n{source}");
+    assert_ne!(
+        body[1].1, exit[1].1,
+        "the exit's copy defines its own value"
+    );
+}
+
+#[test]
+fn an_effect_before_a_bound_runs_at_the_heads_of_the_body_and_the_exit_in_the_header_s_order() {
+    let source = format!(
+        "{WORD_N_AND_M} let d = 0; let e = 0; let s = 0; let i = 0; \
+         while i < {{ d = opaque(n); e = opaque(m); 10 }} {{ s = s + i + d + e; i = i + 1; }} s"
+    );
+    let o = Promoted::with_externs(&source, opaque);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let before = Promoted::lowered(&source, opaque, Pass::Skipped);
+    let header_calls = call_args(&before, before.sole_loop().natural.header);
+    assert_eq!(header_calls.len(), 2, "two calls in the header:\n{source}");
+    assert_eq!(call_args(&o, o.body_block(loop_)), header_calls, "{source}");
+    assert_eq!(
+        call_args(&o, exit_block(&o, loop_)),
+        header_calls,
+        "{source}"
+    );
+}
+
+#[test]
+fn a_header_value_read_where_the_exit_and_a_break_meet_is_a_parameter_there() {
+    let source = format!(
+        "{WORD_N_AND_M} let d = 0; let i = 0; \
+         while {{ d = d + 1; i < n }} {{ if i == 2 {{ break; }}; i = i + 1; }} i * 10 + d"
+    );
+    let before = Promoted::lowered(&source, |_| Vec::new(), Pass::Skipped);
+    let before_loop = before.sole_loop();
+    let [(_, counted)] = binops(&before, before_loop.natural.header)[..1] else {
+        panic!("the header counts `d` first:\n{source}");
+    };
+    let join = before
+        .readers(counted)
+        .into_iter()
+        .find(|block| !before_loop.natural.contains(*block));
+    assert!(
+        join.is_some(),
+        "the block after the loop reads the header's `d + 1`:\n{source}"
+    );
+
+    let o = Promoted::of(&source);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let own_exit = exit_block(&o, loop_);
+    let [(BinOp::Add(_), copy)] = binops(&o, own_exit)[..] else {
+        panic!("the exit's own block counts `d`:\n{source}");
+    };
+    let Terminator::Jump { label, args } = &o.cfg.blocks[own_exit.0].terminator else {
+        panic!("the exit's own block jumps to the exit");
+    };
+    assert!(args.contains(&copy), "the exit sends its copy:\n{source}");
+    let [(BinOp::Add(_), counted)] = binops(&o, o.body_block(loop_))[..1] else {
+        panic!("the body counts `d` first:\n{source}");
+    };
+    let joined = o.cfg.label_to_block[label];
+    assert!(
+        !o.readers(counted).contains(&joined),
+        "the join reads a parameter, not the body's copy:\n{source}"
+    );
 }
 
 // -- Pull loops (RFC-0089 rule 1) ---------------------------------------

@@ -103,6 +103,51 @@ fn a_break_out_of_a_while_is_a_region() {
     );
 }
 
+// -- a `while` converted to a range `for` (RFC-0094 rule 7) --------------
+
+#[track_caller]
+fn exit_of_the_one_for(source: &str, ret: Ty) -> Vec<String> {
+    let found = blocks(source, ret);
+    let named_regions = regions_named(&found, "For");
+    let [region] = named_regions.as_slice() else {
+        panic!("{source} prepares to one For: {:?}", families(&found))
+    };
+    region
+        .part("exit")
+        .unwrap_or_else(|| panic!("a For owns an exit chain"))
+        .ops
+        .iter()
+        .map(|name| family_of(name).to_string())
+        .collect()
+}
+
+#[test]
+fn a_break_out_of_a_converted_while_is_a_region() {
+    let source = "let s = 0; let i = 0; \
+                  while i < 10 { if i == 4 { break; }; s = s + i; i = i + 1; } s * 100 + i";
+    answers(source, "604");
+    assert_eq!(
+        body_of_the_one_loop(source, Ty::I64, "For"),
+        ["Eq", "Escape", "Add", "Add"]
+    );
+}
+
+#[test]
+fn a_flag_search_over_a_vec_is_a_region_whose_exit_drops_the_vec() {
+    let source = "let xs = vec([5, 3, 9, -1, 9]); let i = 0u64; let found = false; \
+                  while i < xs.len() && !found { \
+                  if xs[i] < 0 { found = true; } else { i = i + 1u64; }; } i";
+    answers(source, "3");
+    assert!(
+        body_of_the_one_loop(source, Ty::U64, "For").contains(&"Escape".to_string()),
+        "{source}"
+    );
+    assert!(
+        exit_of_the_one_for(source, Ty::U64).contains(&"DropValue".to_string()),
+        "{source}"
+    );
+}
+
 // -- `continue` ---------------------------------------------------------
 
 #[test]

@@ -1,0 +1,2 @@
+// expect 5
+let n = [1, 2, 3, 4, 5].len() as i64; let i = 0; while { let z = 10 / (7 - i); i < n } { i = i + 1; } i

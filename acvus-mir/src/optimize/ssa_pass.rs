@@ -257,6 +257,78 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
     }
 }
 
+/// Apply `s` to every value `kind` defines, as `inst_info::defs` lists
+/// them, except an `Assign`'s storage, which the instruction writes in
+/// place rather than defines.
+pub(crate) fn map_value_defs(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
+    match kind {
+        InstKind::Const { dst, .. }
+        | InstKind::ConstStr { dst, .. }
+        | InstKind::Ref { dst, .. }
+        | InstKind::Take { dst, .. }
+        | InstKind::Fetch { dst, .. }
+        | InstKind::BinOp { dst, .. }
+        | InstKind::UnaryOp { dst, .. }
+        | InstKind::Cast { dst, .. }
+        | InstKind::FieldGet { dst, .. }
+        | InstKind::FieldSet { dst, .. }
+        | InstKind::LoadFunction { dst, .. }
+        | InstKind::ArrayBegin { dst, .. }
+        | InstKind::ArrayPush { dst, .. }
+        | InstKind::StringConcat { dst, .. }
+        | InstKind::StringEq { dst, .. }
+        | InstKind::StringClone { dst, .. }
+        | InstKind::StructuralEq { dst, .. }
+        | InstKind::StructuralClone { dst, .. }
+        | InstKind::MakeObject { dst, .. }
+        | InstKind::MakeTuple { dst, .. }
+        | InstKind::TupleIndex { dst, .. }
+        | InstKind::TestLiteral { dst, .. }
+        | InstKind::TestObjectKey { dst, .. }
+        | InstKind::ArrayIndex { dst, .. }
+        | InstKind::AsSlice { dst, .. }
+        | InstKind::Index { dst, .. }
+        | InstKind::ObjectGet { dst, .. }
+        | InstKind::MakeClosure { dst, .. }
+        | InstKind::MakeVariant { dst, .. }
+        | InstKind::TestVariant { dst, .. }
+        | InstKind::UnwrapVariant { dst, .. }
+        | InstKind::Spawn { dst, .. }
+        | InstKind::Merge { dst, .. }
+        | InstKind::Poison { dst }
+        | InstKind::Undef { dst } => s(dst),
+        InstKind::FunctionCall { dst, order, .. } => {
+            s(dst);
+            if let Some(edge) = order {
+                s(&mut edge.after);
+            }
+        }
+        InstKind::Eval { dst, order, .. } => {
+            s(dst);
+            if let Some(order) = order {
+                s(order);
+            }
+        }
+        InstKind::BlockLabel { params, .. } => params.iter_mut().for_each(|v| s(v)),
+        InstKind::Assign { .. }
+        | InstKind::Commit { .. }
+        | InstKind::Drop { .. }
+        | InstKind::Check { .. }
+        | InstKind::CheckSteps { .. }
+        | InstKind::IndexSet { .. }
+        | InstKind::StringAppend { .. }
+        | InstKind::Jump { .. }
+        | InstKind::JumpIf { .. }
+        | InstKind::Diamond { .. }
+        | InstKind::Switch { .. }
+        | InstKind::For { .. }
+        | InstKind::While { .. }
+        | InstKind::Return { .. }
+        | InstKind::Diverge
+        | InstKind::Nop => {}
+    }
+}
+
 /// Apply value substitutions to a block terminator's operands.
 pub(crate) fn apply_subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) {
     let s = |v: &mut ValueId| {

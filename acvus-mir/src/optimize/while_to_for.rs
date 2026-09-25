@@ -81,7 +81,8 @@ use crate::ir::{
     Stages, ValOrigin, ValueId,
 };
 use crate::laws::{LawTable, Reaches};
-use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
+use crate::optimize::forward::edges_mut;
+use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator, map_value_defs};
 use crate::ty::{CastTy, IntTy, Mutability, Ty};
 
 mod leave;
@@ -1048,26 +1049,24 @@ impl Counted {
             }
             moved.push(copied);
         }
-        let mut leaving: Vec<usize> = self
-            .steps
-            .iter()
-            .map(|step| step.header_position)
-            .collect();
-        leaving.sort_unstable();
-        let mut taken: FxHashMap<usize, Inst> = FxHashMap::default();
-        for position in leaving.into_iter().rev() {
-            taken.insert(position, cfg.blocks[header.0].insts.remove(position));
+        let mut into_body: Vec<Inst> = Vec::new();
+        let mut into_exit: Vec<Inst> = Vec::new();
+        let header_insts = std::mem::take(&mut cfg.blocks[header.0].insts);
+        for (position, inst) in header_insts.into_iter().enumerate() {
+            let emit = self
+                .steps
+                .iter()
+                .find(|step| step.header_position == position)
+                .map(|step| step.emit);
+            match emit {
+                Some(Emit::Move) => {}
+                Some(Emit::Start) => into_body.push(inst),
+                None => {
+                    into_exit.push(inst.clone());
+                    into_body.push(inst);
+                }
+            }
         }
-        let into_body: Vec<Inst> = self
-            .steps
-            .iter()
-            .filter(|step| matches!(step.emit, Emit::Start))
-            .map(|step| {
-                taken
-                    .remove(&step.header_position)
-                    .expect("every step's instruction was taken out of the header")
-            })
-            .collect();
         cfg.blocks[entering.0].insts.extend(moved);
 
         let hi = self.hi.value();
@@ -1146,16 +1145,23 @@ impl Counted {
         cfg.blocks[body_block.0].insts = into_body.into_iter().chain(head).collect();
         let counter = fresh(cfg, &counter);
         cfg.blocks[body_block.0].params.push(counter);
-        let exit = match self.own_exit {
-            Some(own) => ExitEdge {
-                label: own.write(cfg, labels, self.exit, self.exit_args),
-                args: Vec::new(),
-            },
-            None => ExitEdge {
-                label: self.exit,
-                args: self.exit_args,
-            },
+        let (exit, joins) = match self.own_exit {
+            Some(own) => (
+                ExitEdge {
+                    label: own.write(cfg, labels, self.exit, self.exit_args),
+                    args: Vec::new(),
+                },
+                Some(self.exit),
+            ),
+            None => (
+                ExitEdge {
+                    label: self.exit,
+                    args: self.exit_args,
+                },
+                None,
+            ),
         };
+        let exit_label = exit.label;
         let header = cfg.label_to_block[&self.header];
         cfg.blocks[header.0].terminator = Terminator::For {
             source,
@@ -1164,6 +1170,132 @@ impl Counted {
             exit_args: exit.args,
             exit_trip: ExitTrip::Absent,
         };
+        HeaderRest {
+            header,
+            body: cfg.label_to_block[&self.body],
+            exit: cfg.label_to_block[&exit_label],
+            own_exit_target: joins.map(|label| cfg.label_to_block[&label]),
+            insts: into_exit,
+        }
+        .run_at_exit(cfg);
+    }
+}
+
+/// RFC-0081 rule 2: the header's instructions that are no step of the
+/// bound, which the body block's head runs under the header's names and
+/// the exit block's head under fresh ones.
+struct HeaderRest {
+    header: BlockIdx,
+    body: BlockIdx,
+    exit: BlockIdx,
+    own_exit_target: Option<BlockIdx>,
+    insts: Vec<Inst>,
+}
+
+impl HeaderRest {
+    fn run_at_exit(self, cfg: &mut CfgBody) {
+        let mut renamed: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+        let mut copies: Vec<Inst> = Vec::with_capacity(self.insts.len());
+        for mut inst in self.insts {
+            apply_subst(&mut inst.kind, &renamed);
+            map_value_defs(&mut inst.kind, &mut |dst| {
+                let ty = cfg.val_types[dst].clone();
+                let copy = fresh(cfg, &ty);
+                renamed.insert(*dst, copy);
+                *dst = copy;
+            });
+            copies.push(inst);
+        }
+        if copies.is_empty() {
+            return;
+        }
+        let exit_insts = std::mem::take(&mut cfg.blocks[self.exit.0].insts);
+        cfg.blocks[self.exit.0].insts = copies.into_iter().chain(exit_insts).collect();
+
+        let mut at_exit = renamed.clone();
+        let Terminator::For { exit_args, .. } = &mut cfg.blocks[self.header.0].terminator else {
+            panic!("the header was just given its `For`")
+        };
+        let sent: Vec<usize> = (0..exit_args.len())
+            .filter(|at| renamed.contains_key(&exit_args[*at]))
+            .collect();
+        let values: Vec<ValueId> = sent.iter().rev().map(|at| exit_args.remove(*at)).collect();
+        for (at, value) in sent.iter().rev().zip(values) {
+            let param = cfg.blocks[self.exit.0].params.remove(*at);
+            at_exit.insert(param, renamed[&value]);
+        }
+
+        let domtree = DomTree::build(cfg);
+        let mut past_join: Vec<ValueId> = Vec::new();
+        for (index, block) in cfg.blocks.iter_mut().enumerate() {
+            let block_idx = BlockIdx(index);
+            if block_idx == self.header || domtree.dominates(self.body, block_idx) {
+                continue;
+            }
+            if domtree.dominates(self.exit, block_idx) {
+                for inst in &mut block.insts {
+                    apply_subst(&mut inst.kind, &at_exit);
+                }
+                apply_subst_terminator(&mut block.terminator, &at_exit);
+                continue;
+            }
+            let read = block
+                .insts
+                .iter()
+                .flat_map(|inst| inst_info::uses(&inst.kind))
+                .chain(inst_info::terminator_uses(&block.terminator))
+                .filter(|value| renamed.contains_key(value));
+            for value in read {
+                let joined = self
+                    .own_exit_target
+                    .is_some_and(|joins| domtree.dominates(joins, block_idx));
+                assert!(
+                    joined,
+                    "{value:?} is read in {block_idx:?}, which neither the body, the exit nor a \
+                     join of the two dominates"
+                );
+                if !past_join.contains(&value) {
+                    past_join.push(value);
+                }
+            }
+        }
+        let Some(joins) = self.own_exit_target else {
+            return;
+        };
+        if past_join.is_empty() {
+            return;
+        }
+
+        let joins_label = cfg.blocks[joins.0].label;
+        let mut at_join: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+        for value in &past_join {
+            let ty = cfg.val_types[value].clone();
+            let param = fresh(cfg, &ty);
+            cfg.blocks[joins.0].params.push(param);
+            at_join.insert(*value, param);
+        }
+        for (index, block) in cfg.blocks.iter_mut().enumerate() {
+            let from_exit = BlockIdx(index) == self.exit;
+            for edge in edges_mut(&mut block.terminator) {
+                if *edge.to != joins_label {
+                    continue;
+                }
+                edge.args
+                    .extend(past_join.iter().map(|value| match from_exit {
+                        true => renamed[value],
+                        false => *value,
+                    }));
+            }
+        }
+        for (index, block) in cfg.blocks.iter_mut().enumerate() {
+            if !domtree.dominates(joins, BlockIdx(index)) {
+                continue;
+            }
+            for inst in &mut block.insts {
+                apply_subst(&mut inst.kind, &at_join);
+            }
+            apply_subst_terminator(&mut block.terminator, &at_join);
+        }
     }
 }
 

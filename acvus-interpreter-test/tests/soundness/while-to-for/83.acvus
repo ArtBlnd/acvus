@@ -1,0 +1,2 @@
+// expect 34
+let i = 0; let d = 0; while i < { d = d + 1; io::print(&d.to_string()); 3 } { io::print(&(100 + i).to_string()); i = i + 1; } i * 10 + d
