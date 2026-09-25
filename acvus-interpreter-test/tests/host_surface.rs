@@ -2480,13 +2480,11 @@ impl AsyncStorage for Yielding {
         Storage::load(&mut self.inner, key, codec)
     }
 
-    async fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
-        tokio::task::yield_now().await;
+    fn store(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
         Storage::store(&mut self.inner, key, held)
     }
 
-    async fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
-        tokio::task::yield_now().await;
+    fn restore(&mut self, key: &str, held: Held) -> Result<(), StorageError> {
         Storage::restore(&mut self.inner, key, held)
     }
 
@@ -2547,6 +2545,104 @@ async fn a_program_compiled_for_waited_access_runs_over_a_storage_that_yields_as
         .await;
     assert_eq!(by_sync, [141, 142]);
     assert_eq!(by_waiting, 42);
+}
+
+// -- A caller that drops a page call loses no holder (RFC-0090 rule 3) -----
+
+/// Polls the call `$call` makes `k` times and drops it, for `k = 1, 2, …`,
+/// until one poll completes it; `@n` holds 7 before each call. Gives what
+/// `@n` held after each drop, and after the call that completed.
+macro_rules! dropped_at_each_await {
+    ($page:ident, $call:expr) => {{
+        let mut after_drops = Vec::new();
+        loop {
+            $page.insert("n", 7_i64).await.expect("`@n` is an `i64`");
+            let polls = after_drops.len() + 1;
+            let completed = {
+                let mut call = std::pin::pin!($call);
+                let mut completed = false;
+                for _ in 0..polls {
+                    if futures::poll!(call.as_mut()).is_ready() {
+                        completed = true;
+                        break;
+                    }
+                }
+                completed
+            };
+            let held = $page.with("n", |n: &i64| *n).await;
+            let held = held.unwrap_or_else(|error| panic!("the storage lost `@n` after {polls} polls: {error}"));
+            if completed {
+                break (after_drops, held);
+            }
+            after_drops.push(held);
+        }
+    }};
+}
+
+fn cancelled_program() -> Program<AsyncAccess> {
+    host()
+        .async_access()
+        .entry::<(), i64>("main", Source::Script("@n = @n + 1; @n"))
+        .entry::<(), i64>("m", Source::Script("@m"))
+        .compile(SequentialExecutor)
+        .expect("the program compiles for waited access")
+}
+
+#[tokio::test]
+async fn a_with_or_with_mut_dropped_at_any_await_leaves_the_holder_in_the_storage() {
+    let program = cancelled_program();
+    program
+        .scope(async |s| {
+            let mut storage = Yielding::default();
+            let mut page = s.open(&mut storage);
+
+            let (dropped, held) = dropped_at_each_await!(page, page.with("n", |n: &i64| *n));
+            assert_eq!(dropped, [7], "`with` waits once, at its load");
+            assert_eq!(held, 7);
+
+            let (dropped, held) = dropped_at_each_await!(page, page.with_mut("n", |n: &mut i64| *n += 1));
+            assert_eq!(dropped, [7], "`with_mut` waits once, at its load");
+            assert_eq!(held, 8);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn an_insert_hands_its_holder_over_at_its_first_poll() {
+    let program = cancelled_program();
+    program
+        .scope(async |s| {
+            let mut storage = Yielding::default();
+            let mut page = s.open(&mut storage);
+            {
+                let mut insert = std::pin::pin!(page.insert("m", 9_i64));
+                assert!(
+                    futures::poll!(insert.as_mut()).is_ready(),
+                    "the insert waited, and a caller dropping it here drops the holder"
+                );
+            }
+            let held = page.with("m", |m: &i64| *m).await;
+            assert_eq!(held.expect("the storage holds `@m`"), 9);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_run_dropped_at_any_await_leaves_every_holder_it_handed_back_in_the_storage() {
+    let program = cancelled_program();
+    program
+        .scope(async |s| {
+            let main = s.entry::<(), i64>("main").expect("`main` returns `i64`");
+            let mut storage = Yielding::default();
+            let mut page = s.open(&mut storage);
+            let (dropped, held) = dropped_at_each_await!(page, async {
+                main.run(&mut page, ()).await.map(|output| output.with(|n: &i64| *n))
+            });
+            assert!(!dropped.is_empty(), "the run waits at its loads");
+            assert!(dropped.iter().all(|n| [7, 8].contains(n)), "{dropped:?}");
+            assert_eq!(held, 8);
+        })
+        .await;
 }
 
 #[tokio::test]
