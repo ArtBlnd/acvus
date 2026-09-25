@@ -471,9 +471,7 @@ Status: Proposed
 A loop's facts are analyses over MIR that every reader shares:
 `analysis::loops` for the nest and the trip count, `analysis::affine` for the
 values that advance by a fixed step, and `analysis::carried` for what one
-iteration hands the next. A pass may rewrite MIR into a normal form that holds
-on every target. The shape of a loop that depends on the target, the runtime
-or the actual `n` is the lowerer's, and no MIR pass writes it.
+iteration hands the next.
 
 1. **Normalization is the optimizer's; the target's shape is the
    lowerer's.** A MIR pass may rewrite a loop when the result is the same
@@ -551,10 +549,12 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    a chunk's dispatch, one buffered element), fixed in the backend. An
    extern may state its own weight (`cost = N`, or `heavy`); one that
    states none weighs its family's row. A loop's work `W` is the least
-   weight one iteration of its free stages can take: summed over their
-   blocks, the lighter arm of a branch, an inner loop at its least trip
-   count, zero where that is unknown. Its overhead `O` is the table's cost
-   of splitting it. The loop splits when `n · W > K · O`, where `n` is the
+   weight one iteration of the stages that run apart, its free and
+   `Disjoint` ones, can take: summed over their blocks, the lighter arm of
+   a branch, an inner loop at its least trip count, zero where that is
+   unknown or the loop can leave early; an operation with no row weighs
+   nothing. Its overhead `O` is one chunk's dispatch (a spawn where the
+   body suspends), one merge, and one buffered element per boundary. The loop splits when `n · W > K · O`, where `n` is the
    trip count, known on entry, and `K` is a high constant, so a wrong
    estimate errs toward running in place. `⌈K · O / W⌉` folds into one
    constant, and the run makes one compare. With no table, or no free
