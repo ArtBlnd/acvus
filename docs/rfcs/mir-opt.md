@@ -820,16 +820,45 @@ the step holds; its rules 2 and 3 apply unchanged.
    loop reaches through another loan (RFC-0082 rule 7), is a deterministic
    step of RFC-0081 rule 3. The header's own shared borrow passed to its
    bound's call (`v.len()`) is a read of the slot.
+6. **A back edge whose arguments decide the test leaves.** Where the
+   header's condition is a chain of `&&` and `||` over tests whose own
+   steps are the header's (RFC-0081 rule 3), and a back edge sends a
+   header parameter a constant under which the chain is false whatever
+   the other tests give (`found = true` for `… && !found`), that edge goes
+   to the exit instead of the header, carrying for each of the exit's
+   arguments what the header would have sent it on that visit. It does
+   so only where every instruction the header runs on that visit before
+   the deciding test is one an unused removal may drop (RFC-0048 rule 8):
+   it has no effect, cannot trap, and returns. A call qualifies only by
+   RFC-0082 rule 9's `total`. The skipped visit then computes nothing
+   observable, and the exit sees the values it saw. A parameter every
+   entering edge sends that constant's opposite, and every remaining back
+   edge too, is invariant, so its test folds and the rest of the chain is
+   the condition rules 1 to 5 read.
+7. **An exit from the body.** RFC-0081 rule 1 declines a loop with an edge
+   out of a block other than the header. That condition is lifted for an
+   edge to a block outside the loop, the edge rule 6 makes included. The
+   converted `For` keeps the edge and its arguments, and its exit carries
+   no trip count (`ExitTrip::Absent`). RFC-0081 rule 4's argument is per
+   visit: the `k`-th visit holds `b + k` in both loops, so a body edge
+   taken on that visit leaves both with the same values. The count the
+   range states is then an upper bound, and the cost reads it as one
+   (RFC-0066 rule 8, `n ≤`).
 
 **Why.** Each form is a counted loop the script wrote without the `for`
 that states it; the conversion is exact because the bound is a word the
 pass can compute with no rounding it cannot state and no overflow.
-**Cost.** Three recognizer cases and one computed trip count.
+**Cost.** Three recognizer cases and one computed trip count. An edge
+rule 6 moves skips one header visit's pure steps, which the removal rule
+already admits dropping.
 **Rejected.**
 - A step that is not a word constant — the division's divisor and sign
   are unknown, which is scalar evolution.
 - A quadratic or otherwise non-linear exit condition — its count is a
   root, not a quotient.
+- A normal form that reads a flag by its name or its spelling
+  (`found`, `done`) — rule 6 reads a constant an edge sends and the test it
+  decides, whatever the slot is called.
 
 ## RFC-0092: a lowerer runs a loop's stages as a token pipeline, and the executor decides how to wait
 
@@ -891,7 +920,7 @@ trip count, IV canonicalization, the region and the lowerer's split
      (RFC-0057 rule 1), so no width is declined and nothing is cast;
    - no block of the loop but the header has an edge out of it or returns,
      so a `break`, a `return` or a branch into a block that diverges
-     declines;
+     declines, except an edge RFC-0094 rule 7 admits;
    - the body block and the exit block each have one predecessor, the
      header;
    - when the pass writes the bound above the header, the entering block
@@ -975,8 +1004,8 @@ and the lowerer read a traversal from. Rewriting the terminator alone keeps
 the rewrite checkable by reading it: the body and the value after the loop
 are the ones the source wrote.
 **Cost.** A form neither this rule nor RFC-0094 states stays a `while`: a
-bound whose trapping step follows another trap, a flag the body sets, and
-a loop with a `break`. A computed bound costs its instructions above the header, once
+bound whose trapping step follows another trap, and a flag whose deciding
+edge skips a header step that may trap or not return. A computed bound costs its instructions above the header, once
 per entry, and a literal bound one constant. Until IV canonicalization
 replaces `i` with the counter, a body that reads `i` carries both. Every converted loop loses its head's comparison, and in the
 attention kernel each loop that holds another prepares one more back-edge
