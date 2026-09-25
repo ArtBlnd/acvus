@@ -341,13 +341,13 @@ Status: Accepted
      `to_string<T>(a: &T) -> String` requires `display` at `T` (rule 1)
      and appends to an empty `String`, so every type with a `display`
      instance has `.to_string()`, and its text has one source. `display`
-     stands at no `str`: a two-word receiver has no mono glue (RFC-0067
-     rule 8). The owned copy of a `&str` that RFC-0062 rule 2 writes
-     `"…".to_string()` is `string::to_string(a: &str) -> String`, a
-     conversion, not a text. The two never meet at one argument: the
-     generic's `T` ranges over the types `display` stands at (RFC-0067
-     rule 2), which hold no `str`, so a `&str` receiver leaves it
-     (RFC-0043).
+     stands at no `str` (a two-word receiver has no mono glue, RFC-0067
+     rule 8) and at no `String`, whose text is itself. The owned copy of
+     text, `"…".to_string()` and `s.to_string()` (RFC-0062 rule 2), is
+     `string::to_string(a: &str) -> String`, which `copies(a)`; a `String`
+     reaches it as a view. The generic's `T` ranges over the types
+     `display` stands at (RFC-0067 rule 2), which hold neither, so a text
+     receiver leaves it (RFC-0043).
 
    `display` writes into its caller's `String` rather than returning one,
    so a text built of many parts grows one buffer.
