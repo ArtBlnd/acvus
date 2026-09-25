@@ -1,4 +1,4 @@
 for range(0 (r18)..r15) -> L1 else L5 stages [L1]
 // L1: cycle Control in_order {branch}
 // control chained through L1
-// cost in place: no free stage
+// cost in place: no stage runs apart

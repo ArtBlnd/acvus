@@ -1,6 +1,6 @@
 //! Each clause of RFC-0066 rule 8 at the listing `acvus mir` prints: the
-//! cost line under a `For`, computed from `analysis::loop_deps`' free
-//! stages and a table. The table here gives each family a weight no sum of
+//! cost line under a `For`, computed from `analysis::loop_deps`' stages
+//! that run apart, free or `Disjoint`, and a table. The table here gives each family a weight no sum of
 //! the others reaches, so a line's `W` says which rows it counted.
 
 use acvus_extern::{Registry, extern_fn, extern_registry};
@@ -202,8 +202,36 @@ fn a_heavy_extern_that_states_no_cost_weighs_the_heavy_row() {
     );
 }
 
+/// The loop's one stage holds its one cycle, a `Disjoint` store: no stage
+/// is free, and that stage runs apart, so the loop is given a cost.
 #[test]
-fn a_loop_with_no_free_stage_runs_in_place() {
+fn a_loop_whose_only_stage_is_disjoint_is_given_a_cost() {
+    let filled = listed(
+        "let c = vec([0, 0, 0]); let z = 7; for i in 0u64..3u64 { c[i] = z; } c[0u64]",
+        Ty::I64,
+    );
+    let facts: Vec<&str> = filled
+        .with_costs
+        .lines()
+        .filter_map(|line| line.split_once("// ").map(|(_, fact)| fact))
+        .filter(|fact| !fact.starts_with("cost "))
+        .collect();
+    assert_eq!(
+        facts,
+        [
+            "L1: cycle Storage(r9) disjoint {index_set}",
+            "control upfront"
+        ],
+        "{}",
+        filled.with_costs
+    );
+    let found = work(&filled.with_costs, 0);
+    assert_eq!(found, TABLE.store, "W={found}:\n{}", filled.with_costs);
+}
+
+/// Each stage holds an `InOrder` cycle, so none runs apart.
+#[test]
+fn a_loop_whose_stages_are_all_in_order_runs_in_place() {
     let joined = listed(
         r#"let xs = vec(["a".to_string(), "b".to_string(), "c".to_string()]);
         let s = "".to_string();
@@ -212,9 +240,19 @@ fn a_loop_with_no_free_stage_runs_in_place() {
         out.len() as i64"#,
         Ty::I64,
     );
+    let stage_facts: Vec<&str> = joined
+        .with_costs
+        .lines()
+        .filter_map(|line| line.split_once("// L").map(|(_, fact)| fact))
+        .collect();
+    assert!(
+        stage_facts.len() == 2 && stage_facts.iter().all(|fact| fact.contains(" in_order ")),
+        "{}",
+        joined.with_costs
+    );
     assert_eq!(
         cost_lines(&joined.with_costs),
-        ["in place: no free stage"],
+        ["in place: no stage runs apart"],
         "{}",
         joined.with_costs
     );

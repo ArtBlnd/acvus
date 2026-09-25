@@ -1,4 +1,4 @@
 for slice(r9) -> L1 else L2 stages [L1]
 // L1: cycle Carried(r12)+Carried(r13) in_order {+, +, jump, jump}
 // control upfront
-// cost in place: no free stage
+// cost in place: no stage runs apart

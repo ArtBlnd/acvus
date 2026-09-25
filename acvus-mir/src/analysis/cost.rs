@@ -48,7 +48,8 @@ pub struct CostTable {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InPlace {
-    NoFreeStage,
+    /// No stage is free or holds only `Disjoint` cycles.
+    NoStageRunsApart,
     NoWork,
 }
 
@@ -135,11 +136,9 @@ impl<'a> Costs<'a> {
     /// every cycle is `Disjoint`, whose token is absent (RFC-0066 rule 10).
     /// A stage holding an `AnyOrder` or `InOrder` cycle, or a cycle that
     /// crosses into another stage, runs in its order and is not counted.
+    /// With no stage that runs apart the loop runs in place.
     pub fn of_loop(&self, deps: &LoopDeps) -> LoopCost {
         let stages = deps.membership.stages();
-        if !(0..stages.len()).any(|stage| deps.is_free(stage)) {
-            return LoopCost::InPlace(InPlace::NoFreeStage);
-        }
         let judged = deps.judge(self.cfg, self.laws);
         let runs_apart = |stage: usize| {
             deps.cycles
@@ -150,6 +149,9 @@ impl<'a> Costs<'a> {
                     Placement::Crosses(across) => !across.contains(&stage),
                 })
         };
+        if !(0..stages.len()).any(runs_apart) {
+            return LoopCost::InPlace(InPlace::NoStageRunsApart);
+        }
         let work = stages
             .iter()
             .enumerate()

@@ -2,4 +2,4 @@ for range(0 (r4)..5 (r5)) -> L1 else L2 stages [L1, L3]
 // L1: cycle Carried(r3) in_order {*, +}
 // L3: cycle Storage(r6) in_order law(Fold(r6, #1) exact) {ref, call push}
 // control upfront
-// cost in place: no free stage
+// cost in place: no stage runs apart

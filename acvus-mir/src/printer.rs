@@ -177,7 +177,7 @@ fn fmt_loop_facts(
 }
 
 /// `cost W=4 O=4096 split when n > 32768, n = len(r3)` (RFC-0066 rule 8),
-/// or `cost in place: no free stage`.
+/// or `cost in place: no stage runs apart`.
 fn fmt_cost(cost: LoopCost, trip: Option<String>) -> String {
     match cost {
         LoopCost::Split {
@@ -191,7 +191,9 @@ fn fmt_cost(cost: LoopCost, trip: Option<String>) -> String {
             };
             format!("cost W={work} O={overhead} split when n > {threshold}{named}")
         }
-        LoopCost::InPlace(InPlace::NoFreeStage) => "cost in place: no free stage".to_string(),
+        LoopCost::InPlace(InPlace::NoStageRunsApart) => {
+            "cost in place: no stage runs apart".to_string()
+        }
         LoopCost::InPlace(InPlace::NoWork) => "cost in place: W=0".to_string(),
     }
 }
