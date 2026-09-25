@@ -490,11 +490,13 @@ iteration hands the next.
    in the parent.
 
 3. **The term.** A term is a constant, a value invariant in the loop, a
-   source's length, or `+`, `−`, `×` or `max` of terms. It denotes an
+   source's length, a storage's length on the loop's entry, or `+`, `−`, `×` or `max` of terms. It denotes an
    integer. It is kept as found and evaluated where the lowerer knows the
    atoms, never simplified. A value is invariant in a loop when it is
-   defined outside the loop, or is a word `Const`, which reads nothing and
-   writes the same word each time (RFC-0056).
+   defined outside the loop, is a word `Const`, which reads nothing and
+   writes the same word each time (RFC-0056), or is an operation of
+   invariant operands reading nothing the loop writes, left where it
+   stands.
 
 4. **Affine values.** A value `v` is affine in a loop when
    `v = base + k·step` over the iteration number `k`, with `base` and `step`
@@ -502,7 +504,10 @@ iteration hands the next.
    range's element is `{at, 1}` and a slice's or an array's index is
    `{0, 1}`. A header parameter entered with `b` whose back edges all send
    `p + c`, `c` invariant, is `{b, c}`. `a·v`, `v + b`, `v − b` and `b − v`
-   of an affine `v`, `a` and `b` invariant, are affine. Only integers are affine: `+` and
+   of an affine `v`, `a` and `b` invariant, are affine. So is `len(s)` read
+   before a call every iteration makes exactly once, when that call's
+   postcondition states `len(s) = old(len(s)) + c` and nothing else in the
+   loop changes `s`'s length: `{len(s) on entry, c}` (RFC-0082 rule 6). Only integers are affine: `+` and
    `*` of either kind are exact modulo `2^width` on every run past them
    (RFC-0037 rule 3). The analysis is one loop deep.
 
@@ -578,14 +583,12 @@ iteration hands the next.
     - In a `Sync` body the split is one synchronous executor call, and the
       executor decides how to wait; the body stays `Sync` (RFC-0046 rule
       1). A body that already suspends spawns the chunks and awaits them.
-    - Running in place is always admitted; rule 8's one compare chooses
-      the split chain.
+    - Running in place is always admitted.
     - A chunk does not split again: one level, by structure.
 
-**Why.** A normal form that holds on every target is the same program
-everywhere, so writing it into MIR decides nothing a target could decide
-better. A shape chosen for a target is a guess about the lowerer, which
-knows the target, the runtime and the actual `n`. Order is read from the
+**Why.** A normal form is the same program on every target; a shape
+chosen for one is a guess about the lowerer, which knows the target, the
+runtime and `n`. Order is read from the
 operations' declarations, which say whether iterations can be reordered;
 a count says only what reordering costs.
 **Cost.** Three analyses built per body and read by every loop pass. A
@@ -594,14 +597,12 @@ an induction variable moves it between two forms. RFC-0057's and
 RFC-0064's analyses become inputs whose promises must stay stable.
 **Rejected.**
 - Unrolling, tiling, blocking or permutation as MIR passes — a lowerer's
-  guess written into the program's meaning, and nothing undoes it when the
-  guess is wrong for a target.
+  guess written into the program, which nothing undoes.
 - A table the runtime measures and caches — one machine's timing, and a
   cache to invalidate.
-- Scalar evolution alone — it answers the trip count and nothing when that
-  fails.
-- Leaving an `Iv` read after the loop carried — that loop keeps the
-  dependence the normal form removes, which then holds per variable.
+- Scalar evolution alone — nothing when the trip count fails.
+- Leaving an `Iv` read after the loop carried — it keeps the dependence
+  the normal form removes.
 - A `while` trip count derived from its recurrence — the door to general
   scalar evolution. A `while` is promoted to `for` only by a recognizer that
   is exact, or it stays undivided.

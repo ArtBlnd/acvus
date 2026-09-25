@@ -1037,7 +1037,8 @@ Status: Proposed
    instance of an extern with a `fold` law, lending `s` through its first
    argument and no other, and which the loop reads only to lend it to those
    calls, has the `Fold` law on that instance. `analysis::interval` reads a postcondition
-   through a call's callee (RFC-0047 rule 7). The merge names the extern
+   through a call's callee (RFC-0047 rule 7), and `analysis::affine` one
+   with `old` (RFC-0066 rule 4). The merge names the extern
    instance, and its identity and `combine` are for the split of RFC-0066
    rule 10,
    which is not built; until it is, no pass reads them, and rule 1 holds
