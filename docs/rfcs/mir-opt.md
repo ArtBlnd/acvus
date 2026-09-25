@@ -824,7 +824,8 @@ the step holds; its rules 2 and 3 apply unchanged.
    header's condition is a chain of `&&` and `||` over tests whose own
    steps are the header's (RFC-0081 rule 3), and a back edge sends a
    header parameter a constant under which the chain is false whatever
-   the other tests give (`found = true` for `… && !found`), that edge goes
+   the other tests give (`found = true` for `… && !found`), that edge,
+   followed through blocks that only pass their parameters on, goes
    to the exit instead of the header, carrying for each of the exit's
    arguments what the header would have sent it on that visit. It does
    so only where every instruction the header runs on that visit before
@@ -833,7 +834,8 @@ the step holds; its rules 2 and 3 apply unchanged.
    RFC-0082 rule 9's `total`. The skipped visit then computes nothing
    observable, and the exit sees the values it saw. A parameter every
    entering edge sends that constant's opposite, and every remaining back
-   edge too, is invariant, so its test folds and the rest of the chain is
+   edge that opposite or the parameter itself, is invariant, so its test
+   folds and the rest of the chain is
    the condition rules 1 to 5 read.
 7. **An exit from the body.** RFC-0081 rule 1 declines a loop with an edge
    out of a block other than the header. That condition is lifted for an
@@ -843,7 +845,9 @@ the step holds; its rules 2 and 3 apply unchanged.
    visit: the `k`-th visit holds `b + k` in both loops, so a body edge
    taken on that visit leaves both with the same values. The count the
    range states is then an upper bound, and the cost reads it as one
-   (RFC-0066 rule 8, `n ≤`).
+   (RFC-0066 rule 8, `n ≤`). The converted loop keeps the region its
+   `while` ran as (RFC-0057 rule 3): an edge out of the body leaves the
+   region and continues where it went, as the exit does.
 
 **Why.** Each form is a counted loop the script wrote without the `for`
 that states it; the conversion is exact because the bound is a word the
@@ -939,7 +943,12 @@ trip count, IV canonicalization, the region and the lowerer's split
    loop is IV canonicalization's (RFC-0066 rule 7). A bound the header
    computes moves to the end of the entering block, because the machine
    reads a range's bounds on the entering edge (RFC-0057 rule 7) and a
-   `for` header holds no instruction.
+   `for` header holds no instruction. A header instruction that is not a
+   step of the bound ran on every visit, the last one included, so it
+   moves to the head of the body block and to the head of the exit block,
+   in the header's order: it runs exactly as often, before the same body
+   and the same exit. The comparison it preceded is pure, so running it
+   after the range's own test changes nothing observable.
 
 3. **A computed bound is the header's first visit, moved to the entry.**
    The header runs on every entry before any body block. A step computed
