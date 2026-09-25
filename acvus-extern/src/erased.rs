@@ -92,14 +92,13 @@ where
         })
     }
 
-    pub fn as_mut<'a>(&'a mut self, rt: &'a R) -> &'a mut T
+    /// The held `T`, read and written in place for as long as the result
+    /// lives; dropping it ends the loan (`Runtime::loan_ended`).
+    pub fn as_mut<'a>(&'a mut self, rt: &'a R) -> StoredMut<'a, R, T>
     where
         T: Stored<R>,
     {
-        // SAFETY: as in `as_ref`; `&mut self` is the exclusive name.
-        T::from_payload_mut(unsafe { Holding::new() }, unsafe {
-            rt.value_as_mut::<T::Payload>(&mut self.0)
-        })
+        StoredMut { holder: self, rt }
     }
 
     pub fn into_inner(self, rt: &R) -> T
@@ -127,12 +126,101 @@ where
         unsafe { R::inline_ref::<T>(&self.0) }
     }
 
-    pub fn get_mut(&mut self) -> &mut T
+    /// As `as_mut`, for an `Inline` `T`, with no runtime in hand.
+    pub fn get_mut(&mut self) -> InlineMut<'_, R, T>
     where
         T: Stored<R> + Inline,
     {
-        // SAFETY: as in `get_ref`; `&mut self` is the exclusive name.
-        unsafe { R::inline_mut::<T>(&mut self.0) }
+        InlineMut { holder: self }
+    }
+}
+
+/// `Erased::as_mut`'s loan of the held `T`.
+pub struct StoredMut<'a, R, T>
+where
+    R: Runtime,
+    T: Stored<R>,
+{
+    holder: &'a mut Erased<R, T>,
+    rt: &'a R,
+}
+
+impl<R, T> std::ops::Deref for StoredMut<'_, R, T>
+where
+    R: Runtime,
+    T: Stored<R>,
+{
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.holder.as_ref(self.rt)
+    }
+}
+
+impl<R, T> std::ops::DerefMut for StoredMut<'_, R, T>
+where
+    R: Runtime,
+    T: Stored<R>,
+{
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as in `Erased::as_ref`; the loan's `&mut Erased` is the
+        // exclusive name, and `Drop` below ends the loan.
+        T::from_payload_mut(unsafe { Holding::new() }, unsafe {
+            self.rt.value_as_mut::<T::Payload>(&mut self.holder.0)
+        })
+    }
+}
+
+impl<R, T> Drop for StoredMut<'_, R, T>
+where
+    R: Runtime,
+    T: Stored<R>,
+{
+    fn drop(&mut self) {
+        R::loan_ended(&mut self.holder.0);
+    }
+}
+
+/// `Erased::get_mut`'s loan of the held `Inline` `T`.
+pub struct InlineMut<'a, R, T>
+where
+    R: Runtime,
+    T: Stored<R> + Inline,
+{
+    holder: &'a mut Erased<R, T>,
+}
+
+impl<R, T> std::ops::Deref for InlineMut<'_, R, T>
+where
+    R: Runtime,
+    T: Stored<R> + Inline,
+{
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.holder.get_ref()
+    }
+}
+
+impl<R, T> std::ops::DerefMut for InlineMut<'_, R, T>
+where
+    R: Runtime,
+    T: Stored<R> + Inline,
+{
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: as in `Erased::get_ref`; the loan's `&mut Erased` is the
+        // exclusive name, and `Drop` below hands the word to `loan_ended`.
+        unsafe { R::inline_mut::<T>(&mut self.holder.0) }
+    }
+}
+
+impl<R, T> Drop for InlineMut<'_, R, T>
+where
+    R: Runtime,
+    T: Stored<R> + Inline,
+{
+    fn drop(&mut self) {
+        R::loan_ended(&mut self.holder.0);
     }
 }
 

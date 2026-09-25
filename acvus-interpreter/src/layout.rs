@@ -3,9 +3,10 @@
 //! goes through the hooks its registry declared, and a nested extension
 //! value is written as the head of its own log, which the space supplies.
 
+use acvus_extern::repr::{self, Word};
 use acvus_extern::{NodeHash, ObjectShape, Owned, SpaceError, SpaceHooks, SpaceResult};
 use acvus_mir::graph::QualifiedRef;
-use acvus_mir::ty::{LenTerm, Ty, TypeArg};
+use acvus_mir::ty::{IntTy, LenTerm, Ty, TypeArg};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
@@ -97,7 +98,21 @@ pub fn encode(
     out: &mut Vec<u8>,
 ) -> SpaceResult<()> {
     match ty {
-        Ty::Int(k) => out.extend_from_slice(&value.bits().to_le_bytes()[..k.bytes()]),
+        Ty::Int(k) => {
+            let word = value.bits();
+            // SAFETY (each arm): a value of type `Int(k)` holds `into_word` of
+            // an integer of that width.
+            match k {
+                IntTy::I8 => out.extend_from_slice(&unsafe { i8::from_word(word) }.to_le_bytes()),
+                IntTy::I16 => out.extend_from_slice(&unsafe { i16::from_word(word) }.to_le_bytes()),
+                IntTy::I32 => out.extend_from_slice(&unsafe { i32::from_word(word) }.to_le_bytes()),
+                IntTy::I64 => out.extend_from_slice(&unsafe { i64::from_word(word) }.to_le_bytes()),
+                IntTy::U8 => out.extend_from_slice(&unsafe { u8::from_word(word) }.to_le_bytes()),
+                IntTy::U16 => out.extend_from_slice(&unsafe { u16::from_word(word) }.to_le_bytes()),
+                IntTy::U32 => out.extend_from_slice(&unsafe { u32::from_word(word) }.to_le_bytes()),
+                IntTy::U64 => out.extend_from_slice(&unsafe { u64::from_word(word) }.to_le_bytes()),
+            }
+        }
         Ty::Float => out.extend_from_slice(&value.as_float().to_bits().to_le_bytes()),
         Ty::Char => out.extend_from_slice(&value.as_char().to_le_bytes()),
         Ty::Bool => out.push(value.as_bool() as u8),
@@ -199,6 +214,14 @@ fn take_u64(input: &mut &[u8]) -> SpaceResult<u64> {
     Ok(u64::from_le_bytes(bytes))
 }
 
+/// A length, a count or an index laid as eight bytes, refused where this
+/// target's `usize` cannot hold it: a space written on a 64-bit target and
+/// read on a 32-bit one names numbers the reader has no `usize` for.
+fn take_len(input: &mut &[u8], what: &str) -> SpaceResult<usize> {
+    let word = take_u64(input)?;
+    repr::len_of_word(word).map_err(|e| SpaceError::new(format!("{what}: {e}")))
+}
+
 /// A part `decode` reads, in a holder of its own.
 pub(crate) fn decode_owned(
     rt: &AcvusRuntime,
@@ -236,14 +259,14 @@ pub fn decode(
         Ty::Bool => Value::bool_(take(input, 1)?[0] != 0),
         Ty::Unit => Value::unit(),
         Ty::String => {
-            let len = take_u64(input)? as usize;
+            let len = take_len(input, "String length")?;
             let bytes = take(input, len)?;
             Value::string(
                 std::str::from_utf8(bytes).map_err(|e| SpaceError::new(format!("String: {e}")))?,
             )
         }
         Ty::Array(elem, len) => {
-            let count = take_u64(input)? as usize;
+            let count = take_len(input, "Array length")?;
             if let LenTerm::Known(n) = len
                 && *n != count
             {
@@ -289,7 +312,7 @@ pub fn decode(
         }
         Ty::Enum { variants, .. } => {
             let sorted = sorted_variants(&rt.shared.interner, variants);
-            let index = take_u64(input)? as usize;
+            let index = take_len(input, "variant index")?;
             let (tag, payload_ty) = sorted
                 .get(index)
                 .ok_or_else(|| SpaceError::new("variant index out of its enum type"))?;
@@ -356,4 +379,24 @@ pub fn extension<'a>(
     }
     let args = type_args.iter().map(|a| a.ty().into_owned()).collect();
     Ok((hooks_of(rt, ty, id)?, args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A length laid by a 64-bit writer is refused, not truncated, where this
+    /// target's `usize` is narrower; on a 64-bit target every length fits.
+    #[test]
+    fn a_length_is_read_whole_or_refused() {
+        let laid = u64::MAX.to_le_bytes();
+        let read = take_len(&mut laid.as_slice(), "String length");
+        match usize::BITS {
+            64 => assert_eq!(read.ok(), Some(usize::MAX)),
+            _ => assert!(read.is_err_and(|e| e.0.starts_with("String length:"))),
+        }
+        let laid = 7u64.to_le_bytes();
+        assert_eq!(take_len(&mut laid.as_slice(), "String length").ok(), Some(7));
+        assert!(take_len(&mut [0u8; 4].as_slice(), "String length").is_err(), "four bytes are no length");
+    }
 }

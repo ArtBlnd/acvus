@@ -1,6 +1,6 @@
 //! This interpreter as a `Runtime`: the shared context is the host.
 
-use std::any::{TypeId, type_name};
+use std::any::TypeId;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
@@ -251,6 +251,10 @@ impl Runtime for AcvusRuntime {
         unsafe { read_mut::<T>(value) }
     }
 
+    fn loan_ended(storage: &mut Value) {
+        storage.settle_inline();
+    }
+
     unsafe fn deref<'a, T>(&self, reference: &'a Value) -> &'a T
     where
         T: Send + Sync + 'static,
@@ -402,41 +406,32 @@ unsafe fn read<T>(value: &Value) -> &T
 where
     T: 'static,
 {
-    match Kind::of::<T>() {
-        Some(kind) => {
-            debug_assert_eq!(
-                value.kind(),
-                kind,
-                "read: value is not a {}",
-                type_name::<T>()
-            );
-            // SAFETY: an `Inline` `T` was written into the word by `erase`.
-            unsafe { &*(value.bits_ref() as *const u64 as *const T) }
-        }
-        // SAFETY: a large `T` is the payload behind the header.
-        None => unsafe { value.peek::<T>() },
+    if acvus_extern::repr::is_inline::<T>() {
+        // SAFETY: the caller's contract: an inline `T` is in the word.
+        unsafe { value.inline_view::<T>() }
+    } else {
+        // SAFETY: the caller's contract: any other `T` is the payload behind
+        // the header.
+        unsafe { value.peek::<T>() }
     }
 }
 
 /// # Safety
-/// As `read`, exclusively.
+/// As `read`, exclusively, and an inline `T`'s value goes to `loan_ended`
+/// once the borrow ends: every caller is a `Runtime` method whose contract
+/// says so.
 unsafe fn read_mut<T>(value: &mut Value) -> &mut T
 where
     T: 'static,
 {
-    match Kind::of::<T>() {
-        Some(kind) => {
-            debug_assert_eq!(
-                value.kind(),
-                kind,
-                "read_mut: value is not a {}",
-                type_name::<T>()
-            );
-            // SAFETY: an `Inline` `T` was written into the word by `erase`.
-            unsafe { &mut *(value.bits_mut() as *mut u64 as *mut T) }
-        }
-        // SAFETY: a large `T` is the payload behind the header.
-        None => unsafe { value.peek_mut::<T>() },
+    if acvus_extern::repr::is_inline::<T>() {
+        // SAFETY: the caller's contract: an inline `T` is in the word, and
+        // the word is settled by `loan_ended` once the borrow ends.
+        unsafe { value.inline_view_mut::<T>() }
+    } else {
+        // SAFETY: the caller's contract: any other `T` is the payload behind
+        // the header.
+        unsafe { value.peek_mut::<T>() }
     }
 }
 

@@ -18,7 +18,7 @@ use acvus_utils::Interner;
 use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::handler::{ByRef, ByValue, Lends};
-use crate::loan::{Loan, Mut, Shared};
+use crate::loan::{Lending, Loan, Mut, Shared};
 use crate::obj::OneValue;
 use crate::owned::Owned;
 use crate::reference::Ref;
@@ -397,10 +397,10 @@ where
 {
     /// # Safety
     /// `crossed` is the caller's own value, live for `'b`, and holds what
-    /// the instance stands at; `at` is dead.
-    unsafe fn restore_shared(
-        rt: crate::Crossing<'_, Rt>,
-        at: &'b mut Rt::Value,
+    /// the instance stands at; `at` is empty.
+    unsafe fn restore_shared<'r>(
+        rt: crate::Crossing<'r, Rt>,
+        at: &'b mut Option<Lending<'r, Shared, Rt>>,
         crossed: &'b Rt::Value,
     ) -> Self;
 }
@@ -413,12 +413,15 @@ pub unsafe trait RestoreExclusive<'b, M, Rt>: Sized
 where
     Rt: Runtime,
 {
+    /// A borrow lent in place is read through `at`, whose drop after the
+    /// instance's body ends the loan (`Lending`).
+    ///
     /// # Safety
     /// As `RestoreShared::restore_shared`'s, and no other name of the
     /// storage is live.
-    unsafe fn restore_exclusive(
-        rt: crate::Crossing<'_, Rt>,
-        at: &'b mut Rt::Value,
+    unsafe fn restore_exclusive<'r>(
+        rt: crate::Crossing<'r, Rt>,
+        at: &'b mut Option<Lending<'r, Mut, Rt>>,
         crossed: &'b mut Rt::Value,
     ) -> Self;
 }
@@ -447,16 +450,16 @@ where
     Rt: Runtime,
 {
     #[inline(always)]
-    unsafe fn restore_shared(
-        rt: crate::Crossing<'_, Rt>,
-        at: &'b mut Rt::Value,
+    unsafe fn restore_shared<'r>(
+        rt: crate::Crossing<'r, Rt>,
+        at: &'b mut Option<Lending<'r, Shared, Rt>>,
         crossed: &'b Rt::Value,
     ) -> &'b D {
         // SAFETY: the caller's contract: `crossed` is live for `'b`.
-        *at = unsafe { rt.reference(crossed) };
+        let lending = at.insert(unsafe { Lending::of(rt.rt(), rt.reference(crossed)) });
         // SAFETY: the reference names the storage the caller lent, and what
         // that storage holds is live for `'b`.
-        unsafe { C::deref(rt.rt(), at) }
+        unsafe { C::deref(rt.rt(), lending.reference()) }
     }
 }
 
@@ -470,9 +473,9 @@ where
     Rt: Runtime,
 {
     #[inline(always)]
-    unsafe fn restore_shared(
-        rt: crate::Crossing<'_, Rt>,
-        _: &'b mut Rt::Value,
+    unsafe fn restore_shared<'r>(
+        rt: crate::Crossing<'r, Rt>,
+        _: &'b mut Option<Lending<'r, Shared, Rt>>,
         crossed: &'b Rt::Value,
     ) -> D {
         // SAFETY: the caller's contract: `crossed` is the caller's own
@@ -490,15 +493,17 @@ where
     Rt: Runtime,
 {
     #[inline(always)]
-    unsafe fn restore_exclusive(
-        rt: crate::Crossing<'_, Rt>,
-        at: &'b mut Rt::Value,
+    unsafe fn restore_exclusive<'r>(
+        rt: crate::Crossing<'r, Rt>,
+        at: &'b mut Option<Lending<'r, Mut, Rt>>,
         crossed: &'b mut Rt::Value,
     ) -> &'b mut D {
-        // SAFETY: as `RestoreShared`'s, exclusively.
-        *at = unsafe { rt.reference(crossed) };
-        // SAFETY: as `RestoreShared`'s, exclusively.
-        unsafe { C::deref_mut(rt.rt(), at) }
+        // SAFETY: as `RestoreShared`'s, exclusively: `crossed` is the only
+        // live name of the storage for `'b`.
+        let lending = at.insert(unsafe { Lending::of(rt.rt(), rt.reference(crossed)) });
+        // SAFETY: as `RestoreShared`'s, exclusively; the borrow is read
+        // through `lending`, so the loan ends when `at`'s holder drops it.
+        unsafe { C::deref_mut(rt.rt(), lending.reference()) }
     }
 }
 
@@ -511,9 +516,9 @@ where
     Rt: Runtime,
 {
     #[inline(always)]
-    unsafe fn restore_exclusive(
-        rt: crate::Crossing<'_, Rt>,
-        _: &'b mut Rt::Value,
+    unsafe fn restore_exclusive<'r>(
+        rt: crate::Crossing<'r, Rt>,
+        _: &'b mut Option<Lending<'r, Mut, Rt>>,
         crossed: &'b mut Rt::Value,
     ) -> D {
         // SAFETY: as the shared impl's, exclusively.
@@ -558,15 +563,15 @@ where
 }
 
 /// The receiver of a mono glue taken by `&` or `&mut`, at the handler's own
-/// type.
+/// type, read through the `Lending` whose drop ends its loan.
 ///
 /// # Safety
-/// `reference` names the receiver's storage, which holds what `D` names with
+/// `lending` names the receiver's storage, which holds what `D` names with
 /// every lifetime at `'static` and is live for `'s`, exclusively so for a
 /// `Mut` loan.
 #[doc(hidden)]
 #[inline(always)]
-pub unsafe fn receiver_borrowed<'s, D, M, C, Rt>(rt: &Rt, reference: &'s Rt::Value) -> M::Of<'s, D>
+pub unsafe fn receiver_borrowed<'s, D, M, C, Rt>(rt: &Rt, lending: &'s Lending<'_, M, Rt>) -> M::Of<'s, D>
 where
     M: Loan,
     C: Lends<D, Rt>,
@@ -574,5 +579,5 @@ where
     Rt: Runtime,
 {
     // SAFETY: the caller's contract.
-    unsafe { M::borrow::<D, C, Rt>(rt, reference) }
+    unsafe { M::borrow::<D, C, Rt>(rt, lending.reference()) }
 }

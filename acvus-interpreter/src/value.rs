@@ -2,15 +2,17 @@
 //! `Value`'s `Kind` says what Rust type it was erased from; the MIR type
 //! the interpreter carries beside it says what the program reads it as.
 
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::alloc::{alloc, dealloc, handle_alloc_error};
 use std::any::TypeId;
 use std::fmt;
-use std::mem::{self, MaybeUninit};
+use std::any::Any;
+use std::mem;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::slice;
 use std::sync::Arc;
 
+use acvus_extern::repr::{self, HeadAndTail, Word};
 use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
@@ -92,6 +94,76 @@ impl Kind {
         }
     }
 }
+
+/// An `Inline` value is its kind and its one word (`repr::Word`), and these
+/// are the readers and writers that dispatch a `T` known only by its
+/// `TypeId` to that word.
+macro_rules! inline_words {
+    ($($name:ident: $t:ty),*) => {
+        /// The `Value` an `Inline` `value` is: its kind and its word. `None`
+        /// for any other type.
+        #[inline(always)]
+        fn inline_value<T>(value: &T) -> Option<Value>
+        where
+            T: 'static,
+        {
+            let value: &dyn Any = value;
+            $(if let Some(value) = value.downcast_ref::<$t>() {
+                return Some(Value { kind: Kind::$name, word: value.into_word() });
+            })*
+            None
+        }
+
+        impl Value {
+            /// The `T` this word holds, where `T` is an `Inline` type. `None`
+            /// for any other type.
+            ///
+            /// # Safety
+            /// Where `T` is `Inline`, this value was erased from a `T`.
+            #[inline(always)]
+            unsafe fn inline_of<T>(self) -> Option<T>
+            where
+                T: 'static,
+            {
+                let mut out: Option<T> = None;
+                let slot: &mut dyn Any = &mut out;
+                $(if let Some(slot) = slot.downcast_mut::<Option<$t>>() {
+                    debug_assert_eq!(
+                        self.kind,
+                        Kind::$name,
+                        "materialize: {self:?} is not a {}",
+                        stringify!($t)
+                    );
+                    // SAFETY: the caller's contract: the word is `into_word`
+                    // of a `$t`.
+                    *slot = Some(unsafe { <$t as Word>::from_word(self.word) });
+                })*
+                out
+            }
+
+            /// After an in-place loan of an inline value ends: the value the
+            /// loan left in the word's first bytes, encoded whole again. A
+            /// value of any other kind is left as it is.
+            pub(crate) fn settle_inline(&mut self) {
+                match self.kind {
+                    // SAFETY: a word of kind `$name` is `into_word` of a `$t`,
+                    // written since only through a view of `$t`
+                    // (`inline_view_mut`), so its first bytes hold a `$t`.
+                    $(Kind::$name => unsafe { repr::settle::<$t>(&mut self.word) },)*
+                    Kind::Undef
+                    | Kind::Ref
+                    | Kind::Large
+                    | Kind::LargeRef
+                    | Kind::None
+                    | Kind::Instance
+                    | Kind::InstanceAwait
+                    | Kind::Code => {}
+                }
+            }
+        }
+    };
+}
+acvus_extern::for_each_inline!(inline_words);
 
 // -- Value ------------------------------------------------------------
 
@@ -213,20 +285,8 @@ macro_rules! value_word {
                     mem::forget(value);
                     return same;
                 }
-                match Kind::of::<T>() {
-                    Some(kind) => {
-                        let mut word = 0u64;
-                        // SAFETY: an `Inline` T fits the word; low bytes are written and read alike.
-                        unsafe {
-                            ptr::copy_nonoverlapping(
-                                &value as *const T as *const u8,
-                                &mut word as *mut u64 as *mut u8,
-                                mem::size_of::<T>(),
-                            );
-                        }
-                        mem::forget(value);
-                        Value { kind, word }
-                    }
+                match inline_value(&value) {
+                    Some(inline) => inline,
                     None => large(vtable_of::<T>(), || value),
                 }
             }
@@ -241,26 +301,10 @@ macro_rules! value_word {
                     // SAFETY: T is Value, one bit pattern under another name.
                     return unsafe { mem::transmute_copy(&self) };
                 }
-                match Kind::of::<T>() {
-                    Some(kind) => {
-                        debug_assert_eq!(
-                            self.kind,
-                            kind,
-                            "materialize: value is not a {}",
-                            std::any::type_name::<T>()
-                        );
-                        let word = self.word;
-                        let mut out = MaybeUninit::<T>::uninit();
-                        // SAFETY: erase wrote T's bytes into the low bytes of the word.
-                        unsafe {
-                            ptr::copy_nonoverlapping(
-                                &word as *const u64 as *const u8,
-                                out.as_mut_ptr() as *mut u8,
-                                mem::size_of::<T>(),
-                            );
-                            out.assume_init()
-                        }
-                    }
+                // SAFETY: the caller's contract: an inline `T` was erased
+                // into this word by `inline_value`.
+                match unsafe { self.inline_of::<T>() } {
+                    Some(inline) => inline,
                     None => {
                         debug_assert_eq!(
                             self.header().vtable.type_id,
@@ -355,6 +399,38 @@ macro_rules! value_word {
             $v fn bits_mut(&mut self) -> &mut u64 {
                 debug_assert!(self.kind.is_inline(), "bits_mut: {self:?} carries no bits");
                 &mut self.word
+            }
+
+            /// An inline `T`, read where the word holds it.
+            ///
+            /// # Safety
+            /// `T` is `Inline` (`repr::is_inline`), and this value was erased
+            /// from a `T`.
+            #[inline(always)]
+            pub(crate) unsafe fn inline_view<T>(&self) -> &T
+            where
+                T: 'static,
+            {
+                debug_assert_eq!(Some(self.kind), Kind::of::<T>(), "inline_view: {self:?} is not a {}", std::any::type_name::<T>());
+                // SAFETY: the caller's contract.
+                unsafe { repr::view::<T>(&self.word) }
+            }
+
+            /// As `inline_view`, exclusively. A write through it leaves the
+            /// word as `repr::view_mut` leaves it until `settle_inline`.
+            ///
+            /// # Safety
+            /// As `inline_view`, and `settle_inline` runs on this value once
+            /// the view ends, before the word is read whole
+            /// (`Runtime::loan_ended`).
+            #[inline(always)]
+            pub(crate) unsafe fn inline_view_mut<T>(&mut self) -> &mut T
+            where
+                T: 'static,
+            {
+                debug_assert_eq!(Some(self.kind), Kind::of::<T>(), "inline_view_mut: {self:?} is not a {}", std::any::type_name::<T>());
+                // SAFETY: the caller's contract.
+                unsafe { repr::view_mut::<T>(&mut self.word) }
             }
 
             // -- References (RFC-0018) ------------------------------------
@@ -532,8 +608,8 @@ pub type Object = acvus_extern::Obj<Owned<AcvusRuntime>>;
 pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 
 /// The head of a closure record: what it runs and how many values it
-/// captured. The captures follow the head in the same allocation, laid at
-/// `Slot<FnValue>`'s size (RFC-0069 rule 4); a closure of no captures has no
+/// captured. The captures follow the head in the same allocation, from the
+/// offset `ClosureRecord::TAIL` (RFC-0069 rule 4); a closure of no captures has no
 /// record at all (`Kind::Code`). `code` is first so that a boxed record and
 /// an inline `Kind::Code` word are read alike (`Value::code_of`).
 #[repr(C)]
@@ -544,39 +620,23 @@ pub struct FnValue {
     pub len: u16,
 }
 
-const _: () = assert!(
-    mem::align_of::<Slot<FnValue>>() == mem::align_of::<Owned<AcvusRuntime>>(),
-    "a closure record's captures are laid at the head's own alignment"
-);
-const _: () = assert!(
-    mem::size_of::<Slot<FnValue>>() + (u16::MAX as usize) * mem::size_of::<Owned<AcvusRuntime>>()
-        < isize::MAX as usize,
-    "a closure record of the widest capture count the head can name is a valid layout"
-);
+/// A closure record: the head, then its captures from the offset
+/// `Layout::extend` gives, so the captures sit at their own alignment on
+/// every target.
+type ClosureRecord = HeadAndTail<Slot<FnValue>, Owned<AcvusRuntime>>;
 
-/// The one layout a closure record is allocated, read and freed with.
-#[inline]
-fn closure_layout(len: u16) -> Layout {
-    // SAFETY: the alignment is `Slot<FnValue>`'s, a non-zero power of two,
-    // and the size of the widest record `len` can name is a valid layout
-    // size (the const assertion above).
-    unsafe {
-        Layout::from_size_align_unchecked(
-            mem::size_of::<Slot<FnValue>>()
-                + usize::from(len) * mem::size_of::<Owned<AcvusRuntime>>(),
-            mem::align_of::<Slot<FnValue>>(),
-        )
-    }
-}
+/// `ClosureRecord::TAIL` holds its own layout assertion; naming it here has
+/// the check evaluate it with the crate, not only where a record is built.
+const _: usize = ClosureRecord::TAIL;
 
 impl FnValue {
     /// # Safety
     /// `head` is the head of a live closure record.
     unsafe fn captures<'a>(head: NonNull<Slot<FnValue>>) -> &'a [Owned<AcvusRuntime>] {
-        // SAFETY: the caller's contract, and `closure_layout`: `len`
-        // captures follow the head.
+        // SAFETY: the caller's contract, and `ClosureRecord::layout`: `len`
+        // captures follow the head at `ClosureRecord::TAIL`.
         unsafe {
-            let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
+            let first = ClosureRecord::tail(head).as_ptr();
             slice::from_raw_parts(first, usize::from(head.as_ref().value.len))
         }
     }
@@ -589,9 +649,9 @@ unsafe fn drop_closure(p: NonNull<Header>) {
     unsafe {
         let head = p.cast::<Slot<FnValue>>();
         let len = head.as_ref().value.len;
-        let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
+        let first = ClosureRecord::tail(head).as_ptr();
         ptr::drop_in_place(slice::from_raw_parts_mut(first, usize::from(len)));
-        dealloc(head.as_ptr().cast::<u8>(), closure_layout(len));
+        dealloc(head.as_ptr().cast::<u8>(), ClosureRecord::layout(len));
     }
 }
 
@@ -693,39 +753,55 @@ macro_rules! value_constructors {
         #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
         impl Value {
             $v fn int(n: i64) -> Self {
-                Value::inline(Kind::I64, n as u64)
+                Value::inline(Kind::I64, n.into_word())
             }
-            /// An integer of width `k` from its two's-complement bits, sign- or
-            /// zero-extended to the word as `k` says (RFC-0037).
+            /// An integer of width `k` whose two's-complement bits at that
+            /// width are the low bits of `bits`, in its one word (`repr::Word`).
             $v fn from_bits(k: IntTy, bits: u64) -> Self {
-                Value::inline(Kind::int(k), bits)
+                let word = match k {
+                    IntTy::I8 => (bits as i8).into_word(),
+                    IntTy::I16 => (bits as i16).into_word(),
+                    IntTy::I32 => (bits as i32).into_word(),
+                    IntTy::I64 => (bits as i64).into_word(),
+                    IntTy::U8 => (bits as u8).into_word(),
+                    IntTy::U16 => (bits as u16).into_word(),
+                    IntTy::U32 => (bits as u32).into_word(),
+                    IntTy::U64 => bits.into_word(),
+                };
+                Value::inline(Kind::int(k), word)
             }
             $v fn float(f: f64) -> Self {
-                Value::inline(Kind::F64, f.to_bits())
+                Value::inline(Kind::F64, f.into_word())
             }
             /// A `char`'s word is its scalar value, the `u32` `char as u32` gives
             /// (RFC-0058).
             $v fn char_(c: char) -> Self {
-                Value::inline(Kind::Char, u64::from(u32::from(c)))
+                Value::inline(Kind::Char, c.into_word())
             }
             $v fn bool_(b: bool) -> Self {
-                Value::inline(Kind::Bool, b as u64)
+                Value::inline(Kind::Bool, b.into_word())
             }
             $v fn unit() -> Self {
-                Value::inline(Kind::Unit, 0)
+                Value::inline(Kind::Unit, ().into_word())
             }
             $v fn byte(b: u8) -> Self {
-                Value::inline(Kind::U8, b as u64)
+                Value::inline(Kind::U8, b.into_word())
             }
+            /// The word read as an `i64`: an integer of any width, sign- or
+            /// zero-extended as its encoding is.
             $v fn as_int(&self) -> i64 {
-                self.bits() as i64
+                // SAFETY: every word is `into_word` of some `i64`.
+                unsafe { i64::from_word(self.bits()) }
             }
             $v fn as_float(&self) -> f64 {
-                f64::from_bits(self.bits())
+                // SAFETY: every word is `into_word` of some `f64`.
+                unsafe { f64::from_word(self.bits()) }
             }
             /// The scalar value this word spells.
             $v fn as_char(&self) -> u32 {
-                let code = self.bits() as u32;
+                // SAFETY: every word of a `Char` is its scalar value
+                // zero-extended, which is `into_word` of that `u32`.
+                let code = unsafe { u32::from_word(self.bits()) };
                 debug_assert!(
                     char::from_u32(code).is_some(),
                     "a char's word is a Unicode scalar value, found {code:#x}; every way into a `Char` \
@@ -734,7 +810,8 @@ macro_rules! value_constructors {
                 code
             }
             $v fn as_bool(&self) -> bool {
-                self.bits() != 0
+                // SAFETY: a `Bool`'s word is `into_word` of its `bool`.
+                unsafe { bool::from_word(self.bits()) }
             }
 
             $v fn string(s: impl Into<String>) -> Self {
@@ -833,7 +910,7 @@ macro_rules! value_constructors {
             /// the name, so two tags compare as words and neither side needs the enum's
             /// type to write or read one.
             $v fn tag(tag: Astr) -> Value {
-                Value::inline(Kind::U64, tag.bits())
+                Value::inline(Kind::U64, tag.bits().into_word())
             }
             /// `Some(payload)`, in the one shape every option takes: the payload's
             /// own value, unless the payload is itself a `None`, whose depth word
@@ -873,7 +950,7 @@ macro_rules! value_constructors {
                 let len =
                     u16::try_from(captures.len()).expect("a closure captures at most u16::MAX registers");
                 debug_assert!(len > 0, "a closure of no captures is `Value::code`");
-                let layout = closure_layout(len);
+                let layout = ClosureRecord::layout(len);
                 // SAFETY: the layout has a non-zero size.
                 let block = unsafe { alloc(layout) }.cast::<Slot<FnValue>>();
                 let Some(head) = NonNull::new(block) else {
@@ -886,7 +963,7 @@ macro_rules! value_constructors {
                         header: Header { vtable: &FN },
                         value: FnValue { code, len },
                     });
-                    let first = head.as_ptr().add(1).cast::<Owned<AcvusRuntime>>();
+                    let first = ClosureRecord::tail(head).as_ptr();
                     for (at, capture) in captures.enumerate() {
                         first.add(at).write(capture);
                     }
@@ -1164,6 +1241,67 @@ mod tests {
         assert_eq!(unsafe { v.as_str() }, "hi");
         let r = Value::reference(&v);
         assert_eq!(unsafe { r.target().as_str() }, "hi");
+    }
+
+    /// An extern's result is erased, and a literal is built from its bits:
+    /// the two are one word at every width (RFC-0037 rule 6).
+    #[test]
+    fn an_erased_scalar_is_the_word_a_literal_of_it_is() {
+        fn same_word<T>(v: T, k: IntTy)
+        where
+            T: Word + PartialEq + fmt::Debug,
+        {
+            let erased = unsafe { Value::erase(v) };
+            let literal = Value::from_bits(k, IntTy::read(k, v.into_word()) as u64);
+            assert_eq!(erased.bits(), literal.bits(), "{v:?}");
+            assert_eq!(erased.bits(), v.into_word(), "{v:?}");
+            assert_eq!(unsafe { erased.materialize::<T>() }, v);
+        }
+        same_word(-1i8, IntTy::I8);
+        same_word(i8::MIN, IntTy::I8);
+        same_word(-1i16, IntTy::I16);
+        same_word(i16::MIN, IntTy::I16);
+        same_word(-1i32, IntTy::I32);
+        same_word(i32::MIN, IntTy::I32);
+        same_word(-1i64, IntTy::I64);
+        same_word(u8::MAX, IntTy::U8);
+        same_word(u16::MAX, IntTy::U16);
+        same_word(u32::MAX, IntTy::U32);
+        same_word(u64::MAX, IntTy::U64);
+        assert_eq!(unsafe { Value::erase(-1i8) }.bits(), u64::MAX);
+        assert_eq!(unsafe { Value::erase('\u{10FFFF}') }.bits(), 0x10FFFF);
+        assert_eq!(unsafe { Value::erase(true) }.bits(), 1);
+    }
+
+    /// A `&mut i8` writes the word's first byte alone; the loan's end writes
+    /// the whole word back.
+    #[test]
+    fn a_loan_of_an_inline_value_ends_in_its_whole_word() {
+        let mut v = unsafe { Value::erase(5i8) };
+        *unsafe { v.inline_view_mut::<i8>() } = -1;
+        assert_eq!(v.bits(), 0xFF, "the view wrote one byte");
+        v.settle_inline();
+        assert_eq!(v.bits(), (-1i8).into_word());
+        *unsafe { v.inline_view_mut::<i8>() } = 3;
+        v.settle_inline();
+        assert_eq!(v.bits(), 3i8.into_word());
+
+        let mut s = unsafe { Value::erase(String::from("x")) };
+        s.settle_inline();
+        assert_eq!(unsafe { s.as_str() }, "x", "a value of no inline kind is left as it is");
+    }
+
+    #[test]
+    fn a_closure_record_lays_its_captures_where_layout_extend_puts_them() {
+        let head = std::alloc::Layout::new::<Slot<FnValue>>();
+        let capture = std::alloc::Layout::new::<Owned<AcvusRuntime>>();
+        let (_, tail) = head.extend(capture).expect("a head and a capture are a layout");
+        assert_eq!(ClosureRecord::TAIL, tail);
+        assert_eq!(ClosureRecord::TAIL % mem::align_of::<Owned<AcvusRuntime>>(), 0);
+        assert_eq!(
+            ClosureRecord::layout(3).size(),
+            tail + 3 * mem::size_of::<Owned<AcvusRuntime>>()
+        );
     }
 
     #[test]

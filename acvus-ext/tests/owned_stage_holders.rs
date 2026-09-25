@@ -253,6 +253,9 @@ impl Runtime for Counted {
     {
         open_mut::<T>(value)
     }
+    /// This runtime's borrow is its storage's own Rust value, so a loan
+    /// leaves nothing to re-encode.
+    fn loan_ended(_: &mut V) {}
 
     unsafe fn deref<'a, T>(&self, reference: &'a V) -> &'a T
     where

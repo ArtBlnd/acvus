@@ -40,6 +40,7 @@ mod owned;
 mod projection;
 mod reference;
 mod registry;
+pub mod repr;
 mod runtime;
 mod slice;
 mod space;
@@ -55,7 +56,7 @@ pub use ctx::Ctx;
 pub use declared::Declared;
 pub use derive::transparent::Transparent;
 pub use effect::{Idempotent, Opaque, Pure, Suspends};
-pub use erased::Erased;
+pub use erased::{Erased, InlineMut, StoredMut};
 pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn, Passed, PassedByValue};
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtInstance, AtSite,
@@ -72,7 +73,7 @@ pub use instance::{
 };
 pub use len::Arr;
 pub use lend::{Alone, Borrows, ByProjected, Lendable, Param, Projects, SitesOf, WithCtx, lend};
-pub use loan::{Loan, Mut, Shared};
+pub use loan::{Lending, Loan, Mut, Shared};
 pub use name::{DeclarationForm, DeclaredType, NameKind, Named};
 pub use obj::{
     Cross, FieldAt, Form, FormKind, InPlaceElement, Inline, Nothing, Obj, ObjectShape, One,
