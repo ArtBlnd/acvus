@@ -1,0 +1,77 @@
+// app: 03 bfs_grid
+// desc: breadth-first shortest paths on a walled grid from `S`; prints the
+// distance to `G`, how many cells are reachable, the farthest distance and
+// the sum of all distances
+// expect: goal 19, reachable 33, farthest 19, total 296
+let rows = vec([
+    "S..#......".to_string(),
+    ".#.#.####.".to_string(),
+    ".#...#....".to_string(),
+    ".####.#.#.".to_string(),
+    "......#G#.".to_string(),
+]);
+let h = rows.len();
+let w = rows[0u64].len();
+
+// The grid as flat cells: walls, and where the start and the goal are.
+let parse = |rows, h, w| -> {
+    let wall = filled(h * w, false);
+    let start = 0u64;
+    let goal = 0u64;
+    for r in 0u64..h {
+        let line = rows[r].chars() | collect;
+        for c in 0u64..w {
+            wall[r * w + c] = line[c] == '#';
+        }
+        for c in 0u64..w {
+            if line[c] == 'S' {
+                start = r * w + c;
+            };
+            if line[c] == 'G' {
+                goal = r * w + c;
+            };
+        }
+    }
+    { wall: wall, start: start, goal: goal, }
+};
+
+// Distances in steps from `start`; -1 where no path reaches.
+let bfs = |wall, h, w, start| -> {
+    let dist = filled(h * w, -1);
+    let dr = vec([-1, 1, 0, 0]);
+    let dc = vec([0, 0, -1, 1]);
+    let queue = deque();
+    dist[start] = 0;
+    queue.push_back(start);
+    while let Some(cell) = queue.pop_front() {
+        let r = (cell / w) as i64;
+        let c = (cell % w) as i64;
+        for d in 0u64..4u64 {
+            let nr = r + dr[d];
+            let nc = c + dc[d];
+            if nr >= 0 && nr < (h as i64) && nc >= 0 && nc < (w as i64) {
+                let next = (nr as u64) * w + (nc as u64);
+                if !wall[next] && dist[next] < 0 {
+                    dist[next] = dist[cell] + 1;
+                    queue.push_back(next);
+                };
+            };
+        }
+    }
+    dist
+};
+
+let grid = parse(&rows, h, w);
+let dist = bfs(&grid.wall, h, w, grid.start);
+let reachable = 0;
+let farthest = 0;
+let total = 0;
+for i in 0u64..(h * w) {
+    let d = dist[i];
+    if d >= 0 {
+        reachable = reachable + 1;
+        total = total + d;
+    };
+    farthest = max(farthest, d);
+}
+"goal " + dist[grid.goal].to_string() + ", reachable " + reachable.to_string() + ", farthest " + farthest.to_string() + ", total " + total.to_string()

@@ -94,7 +94,7 @@ fn a_store_into_an_element_takes_the_container_exclusively() {
     let ir = ir("let a = [1, 2, 3]; a[1] = 9; a[1]");
     let body = main_body(&ir);
     assert!(body.contains("ref &mut a"), "{body}");
-    assert!(body.contains("] = "), "{body}");
+    assert!(body.contains("] = 9") || body.contains("] proven = 9"), "{body}");
 }
 
 /// A mutable projection demands its object mutably (RFC-0018).
@@ -107,7 +107,7 @@ fn a_store_through_a_field_takes_every_container_below_it_mutably() {
         2,
         "the element's container and the field's:\n{body}"
     );
-    assert!(body.contains("] = 4"), "{body}");
+    assert!(body.contains("] = 4") || body.contains("] proven = 4"), "{body}");
 }
 
 #[test]

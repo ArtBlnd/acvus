@@ -2,7 +2,9 @@ use acvus_extern::{
     Arr, Registry, Runtime, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
 
-#[extern_fn(effect = pure, ensures(ret = len(c)))]
+/// `total`: `len` reads the length the array holds, and widening a `usize` to
+/// `u64` neither fails nor panics on any target Rust supports.
+#[extern_fn(effect = pure, total, ensures(ret = len(c)))]
 fn len<T, N>(c: &Arr<T, N>) -> u64
 where
     T: Var<kind::Type>,

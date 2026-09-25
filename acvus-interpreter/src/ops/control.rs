@@ -317,12 +317,12 @@ where
 }
 
 /// The `while` shape `prepare::recognize_loop` finds in the IR (RFC-0044
-/// rule 4), as one operation holding its two chains.
+/// rule 4), as one operation holding its three chains.
 ///
 /// Every move this shape used to interpret is an operation `prepare` placed:
 /// the entering move before this operation, the move into the body at the head
-/// of `body`, the back edge at the end of `body`, and the exiting move after
-/// this operation.
+/// of `body`, the back edge at the end of `body`, and the exiting move in
+/// `exit`.
 /// `C` is where the head's condition is: `place::R0` where the head chain's
 /// last operation produced it — the word rides out of the part into the test
 /// here, which is why the head is run for its return value — and
@@ -341,6 +341,7 @@ where
     pub head: Box<dyn Op>,
     pub cond: C::At,
     pub body: Box<dyn Op>,
+    pub exit: Box<dyn Op>,
     pub next: Box<dyn Op>,
     pub at: PhantomData<fn() -> (C, E)>,
 }
@@ -357,6 +358,7 @@ where
         loop {
             let word = self.head.run(m, r0);
             if C::read(m.regs(), self.cond, word) == 0 {
+                self.exit.run(m, r0);
                 break;
             }
             match handed::<E>(self.body.run(m, r0)) {
@@ -379,12 +381,16 @@ where
                 part: "body",
                 head: self.body.as_ref(),
             },
+            OwnedOps {
+                part: "exit",
+                head: self.exit.as_ref(),
+            },
         ]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
-        vec![&mut self.head, &mut self.body]
+        vec![&mut self.head, &mut self.body, &mut self.exit]
     }
 }
 
@@ -797,6 +803,7 @@ where
 {
     pub src: S,
     pub body: Box<dyn Op>,
+    pub exit: Box<dyn Op>,
     pub next: Box<dyn Op>,
     pub ends: PhantomData<fn() -> E>,
 }
@@ -820,20 +827,27 @@ where
             S::step(&mut cursor);
         }
         self.src.ended(m, cursor);
+        self.exit.run(m, r0);
         self.next.run(m, r0)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn owns(&self) -> Vec<OwnedOps<'_>> {
-        vec![OwnedOps {
-            part: "body",
-            head: self.body.as_ref(),
-        }]
+        vec![
+            OwnedOps {
+                part: "body",
+                head: self.body.as_ref(),
+            },
+            OwnedOps {
+                part: "exit",
+                head: self.exit.as_ref(),
+            },
+        ]
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
     fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
-        vec![&mut self.body]
+        vec![&mut self.body, &mut self.exit]
     }
 }
 

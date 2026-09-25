@@ -9,12 +9,13 @@ use acvus_mir::analysis::affine::{AffineValues, Derivation};
 use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::inst_info;
 use acvus_mir::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
+use acvus_mir::analysis::raise::FunctionSummary;
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ir::{ForSource, ValueId};
+use acvus_mir::laws::LawTable;
 use acvus_mir::optimize::{dce, fold, reborrow, ssa_pass, while_to_for};
 use acvus_mir::ty::{Effect, EffectTerm, Instances, ParamTerm, Poly, PolyTy, Ty, lift_to_poly};
-use acvus_mir::laws::LawTable;
 use acvus_mir_test::{LoweredScript, lowered_script};
 use acvus_utils::Interner;
 
@@ -39,7 +40,7 @@ impl Promoted {
         fold::run(&mut cfg);
         reborrow::run(&mut cfg);
         while_to_for::run(&mut cfg, &laws);
-        dce::run(&mut cfg);
+        dce::run(&mut cfg, &laws, &FunctionSummary::unknown());
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
         Self {
@@ -261,13 +262,13 @@ struct BlockText {
     terminator: String,
 }
 
-fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
+fn assert_computation_alone_moves(source: &str, added: &[&str]) {
     let i = Interner::new();
     let LoweredScript { module, laws } =
         lowered_script(&i, source, &[], vec![]).unwrap_or_else(|e| panic!("{e}"));
     let mut cfg = promote(module.main);
     ssa_pass::run(&mut cfg);
-    dce::run(&mut cfg);
+    dce::run(&mut cfg, &laws, &FunctionSummary::unknown());
     let before = snapshot(&cfg);
     let header = {
         let invariants = Invariants::of(&cfg);
@@ -289,10 +290,14 @@ fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
     };
     let body = cfg.label_to_block[&stages.body()];
     let mut grew = Vec::new();
+    let mut moved = Vec::new();
     for (b, (was, is)) in before.iter().zip(&after).enumerate() {
         if b == header.0 {
             assert_eq!(was.params, is.params);
-            assert_eq!(was.insts, is.insts);
+            let (kept, left): (Vec<&String>, Vec<&String>) =
+                was.insts.iter().partition(|inst| is.insts.contains(inst));
+            assert_eq!(kept, is.insts.iter().collect::<Vec<_>>(), "the header only lost");
+            moved = left.into_iter().cloned().collect();
             continue;
         }
         assert_eq!(was.terminator, is.terminator, "block {b}'s terminator");
@@ -313,6 +318,11 @@ fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
             grew.push(is.insts[was.insts.len()..].to_vec());
         }
     }
+    assert_eq!(
+        grew.concat(),
+        moved,
+        "what the header lost is what the entering block gained, in order"
+    );
     let grew: Vec<&str> = grew
         .iter()
         .flatten()
@@ -324,21 +334,21 @@ fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
         .collect();
     assert_eq!(
         grew, added,
-        "the entering block gains the bound's computation and nothing else"
+        "the bound's computation moves and nothing else"
     );
 }
 
 #[test]
 fn the_pass_rewrites_the_terminator_alone() {
-    assert_computation_alone_is_added(
+    assert_computation_alone_moves(
         "let n = 10; let s = 0; let i = 0; while i < n { s = s + i; i = i + 1; } s + i",
         &[],
     );
 }
 
 #[test]
-fn a_literal_bound_adds_its_copy_and_nothing_else() {
-    assert_computation_alone_is_added(
+fn a_literal_bound_moves_and_nothing_else() {
+    assert_computation_alone_moves(
         "let s = 0; let i = 0; while i < 10 { s = s + i; i = i + 1; } s + i",
         &["Const"],
     );
@@ -389,8 +399,8 @@ fn a_len_bound_over_a_vector_the_loop_writes_is_declined() {
 }
 
 #[test]
-fn the_pass_adds_the_computation_of_the_bound_and_nothing_else() {
-    assert_computation_alone_is_added(
+fn the_pass_moves_the_computation_of_the_bound_and_nothing_else() {
+    assert_computation_alone_moves(
         &format!(
             "{UNFOLDED_N_AND_M} let s = 0; let i = 0; while i < n * 2 + m {{ s = s + i; i = i + 1; }} s + i"
         ),
@@ -432,8 +442,8 @@ fn a_pure_call_combined_with_word_operations_is_a_range_for() {
 }
 
 #[test]
-fn a_pure_call_adds_its_copy_in_the_order_of_the_header() {
-    assert_computation_alone_is_added(
+fn a_pure_call_moves_in_the_order_of_the_header() {
+    assert_computation_alone_moves(
         "let v = [1, 2, 3]; let s = v.as_slice(); let t = 0; let i = 0; \
          while i < s.len() / 2 { t = t + i; i = i + 1; } t + i",
         &["FunctionCall", "Const", "BinOp"],

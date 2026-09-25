@@ -235,6 +235,11 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
 /// same element, the inner `Index` becomes the outer one, which takes
 /// nothing off the path it was written on - the earlier instruction ran
 /// before it, and panicked there or not at all.
+///
+/// This merges two equal computations (RFC-0037 rule 3) and does not ask
+/// `analysis::raise`: that predicate decides the removal of an operation
+/// whose value nothing reads, and the inner `Index`'s value is still read,
+/// as the outer one's.
 fn names_an_address(kind: &InstKind) -> bool {
     match kind {
         InstKind::Index {

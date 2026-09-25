@@ -462,7 +462,9 @@ where
     it.step(ctx, Deque::get)
 }
 
-#[extern_fn(effect = pure, ensures(ret = len(d)))]
+/// `total`: `len` reads the length the deque holds, and widening a `usize` to
+/// `u64` neither fails nor panics on any target Rust supports.
+#[extern_fn(effect = pure, total, ensures(ret = len(d)))]
 fn len<T>(d: &Deque<T>) -> u64
 where
     T: Var<kind::Type>,

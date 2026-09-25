@@ -62,7 +62,9 @@ pub(crate) fn permute<T>(xs: &mut [T], sources: &[usize]) {
 
 // -- the moving half, generic in the element ----------------------------
 
-#[extern_fn(effect = pure, ensures(ret = len(s)))]
+/// `total`: `len` reads the length the slice holds, and widening a `usize` to
+/// `u64` neither fails nor panics on any target Rust supports.
+#[extern_fn(effect = pure, total, ensures(ret = len(s)))]
 fn len<T, Rt>(s: &[T]) -> u64
 where
     T: Var<kind::Type> + TransparentOver<Rt>,

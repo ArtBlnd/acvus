@@ -1,0 +1,44 @@
+// app: 07 stencil_double_buffer
+// desc: a 5-point averaging stencil over an integer heat grid with a fixed
+// border, three sweeps between two buffers that swap after each sweep;
+// prints the interior checksum, the hottest interior cell and the centre row
+// expect: sum 932, hottest 104, row 2: 100 62 104 104 96 24 0
+let w = 7u64;
+let h = 5u64;
+
+// A hot spot in the middle, a warm left edge, zero elsewhere.
+let cur = filled(w * h, 0);
+for r in 0u64..h {
+    cur[r * w] = 100;
+}
+cur[2u64 * w + 3u64] = 1000;
+let next = filled(w * h, 0);
+for r in 0u64..h {
+    next[r * w] = 100;
+}
+
+for sweep in 0u64..3u64 {
+    for r in 1u64..(h - 1u64) {
+        for c in 1u64..(w - 1u64) {
+            let i = r * w + c;
+            next[i] = (cur[i] + cur[i - 1u64] + cur[i + 1u64] + cur[i - w] + cur[i + w]) / 5;
+        }
+    }
+    let spent = cur;
+    cur = next;
+    next = spent;
+}
+
+let sum = 0;
+let hottest = 0;
+for r in 1u64..(h - 1u64) {
+    for c in 1u64..(w - 1u64) {
+        sum = sum + cur[r * w + c];
+        hottest = max(hottest, cur[r * w + c]);
+    }
+}
+let row = "".to_string();
+for c in 0u64..w {
+    row = row + " " + cur[2u64 * w + c].to_string();
+}
+"sum " + sum.to_string() + ", hottest " + hottest.to_string() + ", row 2:" + row

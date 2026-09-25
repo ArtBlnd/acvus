@@ -158,6 +158,13 @@ impl NaturalLoop {
         found
     }
 
+    /// No pass assumes a `while` ends, even one with no effect: the
+    /// analysis that finds "no effect" is the one that errs (RFC-0088,
+    /// Rejected).
+    pub fn is_while(&self, cfg: &CfgBody) -> bool {
+        !matches!(cfg.blocks[self.header.0].terminator, Terminator::For { .. })
+    }
+
     pub fn contains(&self, block: BlockIdx) -> bool {
         self.body[block.0]
     }

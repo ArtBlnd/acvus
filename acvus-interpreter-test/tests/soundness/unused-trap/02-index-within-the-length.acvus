@@ -1,0 +1,2 @@
+// expect 3
+let a = [1, 2]; let k = 1; let e = a[k]; 3

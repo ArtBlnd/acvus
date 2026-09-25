@@ -1,0 +1,2 @@
+// expect attempt to divide by zero
+let f = |n| -> n / 0; let d = f(1); 5

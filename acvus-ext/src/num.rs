@@ -228,37 +228,37 @@ macro_rules! int_common {
 
         // -- checked ----------------------------------------------------
 
-        #[extern_fn(instance_of = crate::num::sig::checked_add, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::checked_add, effect = pure, total)]
         pub fn checked_add(a: $t, b: $t) -> Option<$t> {
             a.checked_add(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::checked_sub, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::checked_sub, effect = pure, total)]
         pub fn checked_sub(a: $t, b: $t) -> Option<$t> {
             a.checked_sub(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::checked_mul, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::checked_mul, effect = pure, total)]
         pub fn checked_mul(a: $t, b: $t) -> Option<$t> {
             a.checked_mul(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::checked_div, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::checked_div, effect = pure, total)]
         pub fn checked_div(a: $t, b: $t) -> Option<$t> {
             a.checked_div(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::checked_rem, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::checked_rem, effect = pure, total)]
         pub fn checked_rem(a: $t, b: $t) -> Option<$t> {
             a.checked_rem(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::checked_neg, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::checked_neg, effect = pure, total)]
         pub fn checked_neg(a: $t) -> Option<$t> {
             a.checked_neg()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::checked_pow, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::checked_pow, effect = pure, total)]
         pub fn checked_pow(base: $t, exp: u32) -> Option<$t> {
             base.checked_pow(exp)
         }
@@ -268,13 +268,14 @@ macro_rules! int_common {
         #[extern_fn(
             instance_of = crate::num::sig::wrapping_add,
             effect = pure,
+            total,
             law(associative, commutative, identity = 0)
         )]
         pub fn wrapping_add(a: $t, b: $t) -> $t {
             a.wrapping_add(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::wrapping_sub, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::wrapping_sub, effect = pure, total)]
         pub fn wrapping_sub(a: $t, b: $t) -> $t {
             a.wrapping_sub(b)
         }
@@ -282,6 +283,7 @@ macro_rules! int_common {
         #[extern_fn(
             instance_of = crate::num::sig::wrapping_mul,
             effect = pure,
+            total,
             law(associative, commutative, identity = 1)
         )]
         pub fn wrapping_mul(a: $t, b: $t) -> $t {
@@ -300,29 +302,29 @@ macro_rules! int_common {
             a.wrapping_rem(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::wrapping_neg, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::wrapping_neg, effect = pure, total)]
         pub fn wrapping_neg(a: $t) -> $t {
             a.wrapping_neg()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::wrapping_pow, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::wrapping_pow, effect = pure, total)]
         pub fn wrapping_pow(base: $t, exp: u32) -> $t {
             base.wrapping_pow(exp)
         }
 
         // -- overflowing ------------------------------------------------
 
-        #[extern_fn(instance_of = crate::num::sig::overflowing_add, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::overflowing_add, effect = pure, total)]
         pub fn overflowing_add(a: $t, b: $t) -> ($t, bool) {
             a.overflowing_add(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::overflowing_sub, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::overflowing_sub, effect = pure, total)]
         pub fn overflowing_sub(a: $t, b: $t) -> ($t, bool) {
             a.overflowing_sub(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::overflowing_mul, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::overflowing_mul, effect = pure, total)]
         pub fn overflowing_mul(a: $t, b: $t) -> ($t, bool) {
             a.overflowing_mul(b)
         }
@@ -339,12 +341,12 @@ macro_rules! int_common {
             a.overflowing_rem(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::overflowing_neg, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::overflowing_neg, effect = pure, total)]
         pub fn overflowing_neg(a: $t) -> ($t, bool) {
             a.overflowing_neg()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::overflowing_pow, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::overflowing_pow, effect = pure, total)]
         pub fn overflowing_pow(base: $t, exp: u32) -> ($t, bool) {
             base.overflowing_pow(exp)
         }
@@ -353,7 +355,7 @@ macro_rules! int_common {
         // `saturating_add` and `saturating_mul` are declared per signedness,
         // in `int_signed` and `int_unsigned`: their laws differ.
 
-        #[extern_fn(instance_of = crate::num::sig::saturating_sub, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::saturating_sub, effect = pure, total)]
         pub fn saturating_sub(a: $t, b: $t) -> $t {
             a.saturating_sub(b)
         }
@@ -364,7 +366,7 @@ macro_rules! int_common {
             a.saturating_div(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::saturating_pow, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::saturating_pow, effect = pure, total)]
         pub fn saturating_pow(base: $t, exp: u32) -> $t {
             base.saturating_pow(exp)
         }
@@ -385,32 +387,32 @@ macro_rules! int_common {
 
         // -- bits -------------------------------------------------------
 
-        #[extern_fn(instance_of = crate::num::sig::leading_zeros, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::leading_zeros, effect = pure, total)]
         pub fn leading_zeros(a: $t) -> u32 {
             a.leading_zeros()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::trailing_zeros, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::trailing_zeros, effect = pure, total)]
         pub fn trailing_zeros(a: $t) -> u32 {
             a.trailing_zeros()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::count_ones, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::count_ones, effect = pure, total)]
         pub fn count_ones(a: $t) -> u32 {
             a.count_ones()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::swap_bytes, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::swap_bytes, effect = pure, total)]
         pub fn swap_bytes(a: $t) -> $t {
             a.swap_bytes()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::to_be, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::to_be, effect = pure, total)]
         pub fn to_be(a: $t) -> $t {
             a.to_be()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::to_le, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::to_le, effect = pure, total)]
         pub fn to_le(a: $t) -> $t {
             a.to_le()
         }
@@ -420,6 +422,7 @@ macro_rules! int_common {
         #[extern_fn(
             instance_of = crate::num::sig::min,
             effect = pure,
+            total,
             law(associative, commutative, identity = $t::MAX)
         )]
         pub fn min(a: $t, b: $t) -> $t {
@@ -429,6 +432,7 @@ macro_rules! int_common {
         #[extern_fn(
             instance_of = crate::num::sig::max,
             effect = pure,
+            total,
             law(associative, commutative, identity = $t::MIN)
         )]
         pub fn max(a: $t, b: $t) -> $t {
@@ -444,7 +448,7 @@ macro_rules! int_common {
             x.clamp(lo, hi)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::abs_diff, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::abs_diff, effect = pure, total)]
         pub fn abs_diff(a: $t, b: $t) -> u64 {
             u64::from(a.abs_diff(b))
         }
@@ -494,7 +498,7 @@ macro_rules! int_pow_signed {
 /// type can hold is a `u32` and there is no wide path to take.
 macro_rules! int_pow_narrow {
     ($t:ty) => {
-        #[extern_fn(instance_of = crate::num::sig::pow, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::pow, effect = pure, total)]
         pub fn pow(base: $t, exp: $t) -> $t {
             base.wrapping_pow(u32::from(exp))
         }
@@ -503,7 +507,7 @@ macro_rules! int_pow_narrow {
 
 macro_rules! int_pow_unsigned {
     ($t:ty) => {
-        #[extern_fn(instance_of = crate::num::sig::pow, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::pow, effect = pure, total)]
         pub fn pow(base: $t, exp: $t) -> $t {
             pow_at_width!($t, base, exp)
         }
@@ -514,29 +518,29 @@ macro_rules! int_signed {
     () => {
         /// No law: a signed saturating sum is not associative, since
         /// `(MAX + 1) + -1` is `MAX - 1` and `MAX + (1 + -1)` is `MAX`.
-        #[extern_fn(instance_of = crate::num::sig::saturating_add, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::saturating_add, effect = pure, total)]
         pub fn saturating_add(a: Width, b: Width) -> Width {
             a.saturating_add(b)
         }
 
         /// No law: a signed saturating product is not associative, since
         /// `(MAX × 2) × -1` is `-MAX` and `MAX × (2 × -1)` is `MIN`.
-        #[extern_fn(instance_of = crate::num::sig::saturating_mul, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::saturating_mul, effect = pure, total)]
         pub fn saturating_mul(a: Width, b: Width) -> Width {
             a.saturating_mul(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::abs, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::abs, effect = pure, total)]
         pub fn abs(a: Width) -> Width {
             a.wrapping_abs()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::signum, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::signum, effect = pure, total)]
         pub fn signum(a: Width) -> Width {
             a.signum()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::saturating_neg, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::saturating_neg, effect = pure, total)]
         pub fn saturating_neg(a: Width) -> Width {
             a.saturating_neg()
         }
@@ -557,6 +561,7 @@ macro_rules! int_unsigned {
         #[extern_fn(
             instance_of = crate::num::sig::saturating_add,
             effect = pure,
+            total,
             law(associative, commutative, identity = 0)
         )]
         pub fn saturating_add(a: Width, b: Width) -> Width {
@@ -570,18 +575,19 @@ macro_rules! int_unsigned {
         #[extern_fn(
             instance_of = crate::num::sig::saturating_mul,
             effect = pure,
+            total,
             law(associative, commutative, identity = 1)
         )]
         pub fn saturating_mul(a: Width, b: Width) -> Width {
             a.saturating_mul(b)
         }
 
-        #[extern_fn(instance_of = crate::num::sig::isqrt, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::isqrt, effect = pure, total)]
         pub fn isqrt(a: Width) -> Width {
             a.isqrt()
         }
 
-        #[extern_fn(instance_of = crate::num::sig::is_power_of_two, effect = pure)]
+        #[extern_fn(instance_of = crate::num::sig::is_power_of_two, effect = pure, total)]
         pub fn is_power_of_two(a: Width) -> bool {
             a.is_power_of_two()
         }
@@ -694,22 +700,22 @@ unsigned_width!(u64s: u64, pow = int_pow_unsigned);
 
 // -- f64 ----------------------------------------------------------------
 
-#[extern_fn(instance_of = sig::abs, effect = pure)]
+#[extern_fn(instance_of = sig::abs, effect = pure, total)]
 fn abs_float(a: f64) -> f64 {
     a.abs()
 }
 
-#[extern_fn(instance_of = sig::signum, effect = pure)]
+#[extern_fn(instance_of = sig::signum, effect = pure, total)]
 fn signum_float(a: f64) -> f64 {
     a.signum()
 }
 
-#[extern_fn(instance_of = sig::min, effect = pure)]
+#[extern_fn(instance_of = sig::min, effect = pure, total)]
 fn min_float(a: f64, b: f64) -> f64 {
     a.min(b)
 }
 
-#[extern_fn(instance_of = sig::max, effect = pure)]
+#[extern_fn(instance_of = sig::max, effect = pure, total)]
 fn max_float(a: f64, b: f64) -> f64 {
     a.max(b)
 }
@@ -722,14 +728,14 @@ fn clamp_float(x: f64, lo: f64, hi: f64) -> f64 {
     x.clamp(lo, hi)
 }
 
-#[extern_fn(instance_of = sig::pow, effect = pure)]
+#[extern_fn(instance_of = sig::pow, effect = pure, total)]
 fn pow_float(base: f64, exp: f64) -> f64 {
     base.powf(exp)
 }
 
 macro_rules! float_unary {
     ($($name:ident),* $(,)?) => {$(
-        #[extern_fn(effect = pure)]
+        #[extern_fn(effect = pure, total)]
         fn $name(a: f64) -> f64 {
             a.$name()
         }
@@ -744,7 +750,7 @@ float_unary! {
 
 macro_rules! float_binary {
     ($($name:ident),* $(,)?) => {$(
-        #[extern_fn(effect = pure)]
+        #[extern_fn(effect = pure, total)]
         fn $name(a: f64, b: f64) -> f64 {
             a.$name(b)
         }
@@ -757,7 +763,7 @@ float_binary! {
 
 macro_rules! float_predicate {
     ($($name:ident),* $(,)?) => {$(
-        #[extern_fn(effect = pure)]
+        #[extern_fn(effect = pure, total)]
         fn $name(a: f64) -> bool {
             a.$name()
         }
@@ -768,19 +774,19 @@ float_predicate! {
     is_nan, is_finite, is_infinite, is_normal, is_sign_negative, is_sign_positive,
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total)]
 fn powi(a: f64, n: i32) -> f64 {
     a.powi(n)
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total)]
 fn mul_add(a: f64, b: f64, c: f64) -> f64 {
     a.mul_add(b, c)
 }
 
 /// `f64::total_cmp` as the three values an `Ordering` has: Rust's total
 /// order over every `f64`, `NaN` included, where `==` is a partial one.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total)]
 fn total_cmp(a: f64, b: f64) -> i64 {
     match a.total_cmp(&b) {
         Ordering::Less => -1,
@@ -789,7 +795,7 @@ fn total_cmp(a: f64, b: f64) -> i64 {
     }
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total)]
 fn to_bits(a: f64) -> u64 {
     a.to_bits()
 }
@@ -801,17 +807,17 @@ macro_rules! int_constants {
         mod $m {
             use acvus_extern::{Registry, Runtime, extern_fn, extern_registry};
 
-            #[extern_fn(name = "MIN", effect = pure)]
+            #[extern_fn(name = "MIN", effect = pure, total)]
             fn min_value() -> $t {
                 <$t>::MIN
             }
 
-            #[extern_fn(name = "MAX", effect = pure)]
+            #[extern_fn(name = "MAX", effect = pure, total)]
             fn max_value() -> $t {
                 <$t>::MAX
             }
 
-            #[extern_fn(name = "BITS", effect = pure)]
+            #[extern_fn(name = "BITS", effect = pure, total)]
             fn bits() -> u32 {
                 <$t>::BITS
             }
@@ -841,38 +847,38 @@ int_constants!(u64_consts: u64, ns = "u64");
 mod f64_consts {
     use acvus_extern::{Registry, Runtime, extern_fn, extern_registry};
 
-    #[extern_fn(name = "MIN", effect = pure)]
+    #[extern_fn(name = "MIN", effect = pure, total)]
     fn min_value() -> f64 {
         f64::MIN
     }
 
-    #[extern_fn(name = "MAX", effect = pure)]
+    #[extern_fn(name = "MAX", effect = pure, total)]
     fn max_value() -> f64 {
         f64::MAX
     }
 
-    #[extern_fn(name = "EPSILON", effect = pure)]
+    #[extern_fn(name = "EPSILON", effect = pure, total)]
     fn epsilon() -> f64 {
         f64::EPSILON
     }
 
-    #[extern_fn(name = "INFINITY", effect = pure)]
+    #[extern_fn(name = "INFINITY", effect = pure, total)]
     fn infinity() -> f64 {
         f64::INFINITY
     }
 
-    #[extern_fn(name = "NEG_INFINITY", effect = pure)]
+    #[extern_fn(name = "NEG_INFINITY", effect = pure, total)]
     fn neg_infinity() -> f64 {
         f64::NEG_INFINITY
     }
 
-    #[extern_fn(name = "NAN", effect = pure)]
+    #[extern_fn(name = "NAN", effect = pure, total)]
     fn nan() -> f64 {
         f64::NAN
     }
 
-    #[extern_fn(effect = pure)]
-    fn from_bits(bits: u64) -> f64 {
+    #[extern_fn(effect = pure, total)]
+    pub(super) fn from_bits(bits: u64) -> f64 {
         f64::from_bits(bits)
     }
 
@@ -1067,6 +1073,139 @@ mod tests {
     laws_hold_at!(declared_laws_hold_at_u16, u16s: u16, saturating_add = 0, saturating_mul = 1);
     laws_hold_at!(declared_laws_hold_at_u32, u32s: u32, saturating_add = 0, saturating_mul = 1);
     laws_hold_at!(declared_laws_hold_at_u64, u64s: u64, saturating_add = 0, saturating_mul = 1);
+
+    /// These calls list every handler this file declares `total` that takes
+    /// an argument, at an integer width, and `total_holds_over_f64` every
+    /// one over `f64`: a declaration added above is sampled only once it is
+    /// added here.
+    macro_rules! total_holds_at {
+        ($test:ident, $m:ident: $t:ident, [$($own:ident),*], pow = $pow:expr) => {
+            #[test]
+            fn $test() {
+                let edges: [$t; 6] = [$t::MIN, $t::MAX, 0, 1, $t::MAX / 2, $t::MIN.wrapping_sub(1)];
+                let mut samples = Samples(SEED);
+                let words: Vec<$t> = edges
+                    .into_iter()
+                    .chain((0..SAMPLED).map(|_| samples.next() as $t))
+                    .collect();
+                let exponents: Vec<u32> = [0, 1, 2, 31, 63, 64, u32::MAX]
+                    .into_iter()
+                    .chain((0..SAMPLED).map(|_| samples.next() as u32))
+                    .collect();
+                for &a in &words {
+                    let _ = (
+                        $m::checked_neg(a),
+                        $m::wrapping_neg(a),
+                        $m::overflowing_neg(a),
+                        $m::leading_zeros(a),
+                        $m::trailing_zeros(a),
+                        $m::count_ones(a),
+                        $m::swap_bytes(a),
+                        $m::to_be(a),
+                        $m::to_le(a),
+                    );
+                    $(let _ = $m::$own(a);)*
+                    for &exp in &exponents {
+                        let _ = (
+                            $m::checked_pow(a, exp),
+                            $m::wrapping_pow(a, exp),
+                            $m::overflowing_pow(a, exp),
+                            $m::saturating_pow(a, exp),
+                        );
+                    }
+                    for &b in &words {
+                        let _ = (
+                            $m::checked_add(a, b),
+                            $m::checked_sub(a, b),
+                            $m::checked_mul(a, b),
+                            $m::checked_div(a, b),
+                            $m::checked_rem(a, b),
+                            $m::wrapping_add(a, b),
+                            $m::wrapping_sub(a, b),
+                            $m::wrapping_mul(a, b),
+                            $m::overflowing_add(a, b),
+                            $m::overflowing_sub(a, b),
+                            $m::overflowing_mul(a, b),
+                            $m::saturating_add(a, b),
+                            $m::saturating_sub(a, b),
+                            $m::saturating_mul(a, b),
+                            $m::min(a, b),
+                            $m::max(a, b),
+                            $m::abs_diff(a, b),
+                        );
+                        let pow: Option<fn($t, $t) -> $t> = $pow;
+                        if let Some(pow) = pow {
+                            let _ = pow(a, b);
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    total_holds_at!(total_holds_at_i8, i8s: i8, [abs, signum, saturating_neg], pow = None);
+    total_holds_at!(total_holds_at_i16, i16s: i16, [abs, signum, saturating_neg], pow = None);
+    total_holds_at!(total_holds_at_i32, i32s: i32, [abs, signum, saturating_neg], pow = None);
+    total_holds_at!(total_holds_at_i64, i64s: i64, [abs, signum, saturating_neg], pow = None);
+    total_holds_at!(total_holds_at_u8, u8s: u8, [isqrt, is_power_of_two], pow = Some(u8s::pow));
+    total_holds_at!(total_holds_at_u16, u16s: u16, [isqrt, is_power_of_two], pow = Some(u16s::pow));
+    total_holds_at!(total_holds_at_u32, u32s: u32, [isqrt, is_power_of_two], pow = Some(u32s::pow));
+    total_holds_at!(total_holds_at_u64, u64s: u64, [isqrt, is_power_of_two], pow = Some(u64s::pow));
+
+    #[test]
+    fn total_holds_over_f64() {
+        let mut samples = Samples(SEED);
+        let words: Vec<f64> = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f64::MIN,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            f64::EPSILON,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ]
+        .into_iter()
+        .chain((0..SAMPLED).map(|_| f64::from_bits(samples.next())))
+        .collect();
+        let unary: [fn(f64) -> f64; 26] = [
+            abs_float, signum_float, floor, ceil, round, trunc, fract, sqrt, cbrt, exp, exp2, ln,
+            log10, log2, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, to_degrees,
+            to_radians, recip,
+        ];
+        let binary: [fn(f64, f64) -> f64; 8] =
+            [min_float, max_float, pow_float, powf, log, atan2, hypot, copysign];
+        let predicates: [fn(f64) -> bool; 6] = [
+            is_nan,
+            is_finite,
+            is_infinite,
+            is_normal,
+            is_sign_negative,
+            is_sign_positive,
+        ];
+        for &a in &words {
+            let _ = (to_bits(a), f64_consts::from_bits(a.to_bits()));
+            for f in unary {
+                let _ = f(a);
+            }
+            for f in predicates {
+                let _ = f(a);
+            }
+            for n in [i32::MIN, -1, 0, 1, i32::MAX] {
+                let _ = powi(a, n);
+            }
+            for &b in &words {
+                let _ = total_cmp(a, b);
+                for f in binary {
+                    let _ = f(a, b);
+                }
+                let _ = mul_add(a, b, a);
+            }
+        }
+    }
 
     /// The identities the laws name resolve to the constants the property
     /// tests above sample against.

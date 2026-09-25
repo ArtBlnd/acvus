@@ -1,0 +1,2 @@
+// expect index out of bounds: the len is 2 but the index is 5
+let a = [1, 2]; let k = 5; let e = a[k]; 3

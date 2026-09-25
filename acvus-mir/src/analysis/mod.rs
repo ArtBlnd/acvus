@@ -12,4 +12,5 @@ pub mod liveness;
 pub mod loans;
 pub mod loop_deps;
 pub mod loops;
+pub mod raise;
 pub mod targets;

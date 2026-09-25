@@ -316,16 +316,16 @@ fn the_body_holds_no_comparison_and_no_move_of_the_counter() {
 }
 
 #[test]
-fn a_for_owns_its_body_alone_where_a_while_owns_a_head_too() {
+fn a_for_owns_no_head_where_a_while_owns_one() {
     let found = i64_blocks(SLICE);
     let traversal = one_region(SLICE, &found, "For");
     let parts: Vec<&str> = traversal.owns.iter().map(|p| p.part.as_str()).collect();
-    assert_eq!(parts, ["body"], "{:?}", ops_of_anywhere(&found));
+    assert_eq!(parts, ["body", "exit"], "{:?}", ops_of_anywhere(&found));
 
     let found = i64_blocks(WHILE);
     let condition = one_region(WHILE, &found, "Loop");
     let parts: Vec<&str> = condition.owns.iter().map(|p| p.part.as_str()).collect();
-    assert_eq!(parts, ["head", "body"], "{:?}", ops_of_anywhere(&found));
+    assert_eq!(parts, ["head", "body", "exit"], "{:?}", ops_of_anywhere(&found));
 }
 
 /// The `else if` chain whose arms assign variables. The references at the

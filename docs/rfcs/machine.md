@@ -228,7 +228,23 @@ holder that took ownership. Everything else copies.
    is not stated, and which trap a run reports is (the least in iteration
    and stage, RFC-0089 rule 5). A trap stays where control puts it: an
    operation that can trap moves only to where it runs on exactly the
-   paths it ran on.
+   paths it ran on, and a pass removes one whose value nothing reads only
+   where `analysis::raise` shows it cannot trap and finishes on every run,
+   the one predicate every pass that removes an instruction asks: no
+   effect-free loop is assumed to end (RFC-0088, Rejected), and a removed
+   call that would not have finished changes what the run does as a lost
+   trap does. An integer `/` or `%` and a checked index cannot trap where
+   the interval domain (RFC-0047 rule 7) clears them. A call of an extern
+   cannot trap where the instance it names is declared `total` (RFC-0082
+   rule 9), which states `returns`. A call of a local function cannot trap
+   where none of the callee's instructions can, and finishes where none of
+   the callee's loops is a `while` and each of its instructions finishes
+   (a `for` runs its body the count its terminator states); both are
+   decided callees first over the call graph, so a call inside a cycle of
+   it can trap and may not finish. A call through a function value can
+   trap. What finishes is the one test RFC-0089 rule 5 reads, which knows
+   no callee's body and so admits no call of a local function. An overflow
+   is removed as RFC-0037 rule 3 says.
 
 **Why.** A droppable `Value` needs an address wherever it may drop, which puts
 unwind landing pads in handlers and keeps values in memory; it forces a second
@@ -241,7 +257,11 @@ instruction, so the machine owns every fact `Drop` re-derives.
 boundary, free at run time. `mem::drop(v)` on a `Copy` value is a no-op that
 reads like a release, which is why the method is `release`. One bit test per
 `Large` define or assign, one mask clear per batched take, one bit iteration
-per frame exit.
+per frame exit. An unused call of an extern not declared `total`, of a local
+function that may trap or may not finish, or through a function value still
+runs, as does an unused checked index the interval domain cannot clear; each
+local function a call names is put through SSA once more, and its natural
+loops found, to decide whether it can trap and whether it finishes.
 
 **Rejected.**
 - Changing `Value`'s layout to make the second store cheap — it fixes a store
@@ -257,6 +277,13 @@ per frame exit.
   stands at the release a Rust holder makes under an erased type.
 - Lazy drop (a define releases a still-marked slot) and drop fusion
   (`drop_mask`) — not refused; later stages, each to be measured alone.
+- Removing a Pure call whose value nothing reads, whatever its callee does —
+  drops the callee's trap: an unused call of a local function that divides
+  by zero ran past it, and so did an unused `a[5]` on a two-element array.
+- Whether a function can trap as an axis of its effect type — the interval
+  proofs that clear a division or an index are MIR facts, computed after the
+  checker has closed the function's type, so the type could only say that a
+  body holding any division or index may trap.
 
 ## RFC-0052: An operation is a struct, and the machine calls it once
 

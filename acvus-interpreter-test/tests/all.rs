@@ -120,6 +120,7 @@ mod typed_stage_list;
 mod undeclared_context;
 mod unordered;
 mod unread_store_drop;
+mod unused_trap;
 mod weaker_admissions;
 mod while_let_call;
 

@@ -1,0 +1,22 @@
+for slice(r6) -> L1 else L2 stages [L1, L18]
+// L1: free {as_slice, call lower, assign, ref, as_slice, const_str, call trim_end_matches, const_str, call trim_end_matches, const_str, call trim_end_matches, const_str, call trim_end_matches, call to_string, drop, assign, ref, as_slice, call is_empty, !}
+// L18: cycle Storage(r7) in_order law(Fold(r7, #7) exact) {ref, call push}
+// control upfront
+// cost W=29 O=18281 split when n > 20173, n = len(r6)
+for slice(r35) -> L6 else L7 stages [L6, L16]
+// L6: free {call to_string, const, const}
+// L16: cycle Storage(r36) in_order {ref, call or_insert, take, +, assign}
+// control upfront
+// cost W=1 O=18281 split when n > 584992, n = len(r35)
+for slice(r54) -> L9 else L10 stages [L9, L17]
+// L9: free {call to_string, call get, call unwrap, take, make_object}
+// L17: cycle Storage(r55) in_order law(Fold(r55, #7) exact) {ref, call push}
+// control upfront
+// cost W=27 O=18281 split when n > 21667, n = len(r54)
+for range(0 (r77)..r71) -> L12 else L13 stages [L12, L19, L20, L21]
+// L12: free {const, >, index, ref, const_str, ref, call to_string, assign, ref}
+// L19: cycle Storage(r78) in_order {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
+// L20: free {take}
+// L21: cycle Storage(r79) any_order law(Op(Add) exact commutative) {take, +, assign}
+// control upfront
+// cost W=20 O=18293 split when n > 29269, n = max(r71 - 0 (r77), 0)

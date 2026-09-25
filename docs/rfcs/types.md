@@ -228,7 +228,12 @@ Status: Accepted
 2. Arithmetic, comparison and the bit operators take two operands of one
    width and produce it; nothing widens or narrows by itself (conversion is
    `as`, RFC-0049). `/` and `%` panic on a zero divisor and at `MIN / -1`
-   with Rust's texts.
+   with Rust's texts. A pass removes one whose value reaches nothing only
+   where the interval domain (RFC-0047 rule 7) shows its divisor is not
+   zero and, at a signed width, that its divisor is not `-1` or its
+   dividend not `MIN`; elsewhere it stays and panics where it runs
+   (RFC-0048 rule 8, which states the removal of every operation that can
+   trap).
    Negation takes a signed integer or `f64`.
 3. **Overflow is undefined.** A `+`, `-`, `*` or negation whose exact
    result does not fit the width, or a shift by the width or more, gives a
@@ -269,13 +274,17 @@ implementation sound where a program breaks the rule.
 **Cost.** Each trapping operation the interpreter runs pays one
 not-taken branch on its overflow flag. A loop made of little else pays it
 visibly: a Brainfuck interpreter in the language runs about 7 % slower
-than with wrapping `+`, and nothing else in the change costs it time.
+than with wrapping `+`, and nothing else in the change costs it time. An
+unused `/` or `%` the interval domain cannot clear still runs, and each
+removal pass that meets an integer division runs the domain over its body.
 
 **Rejected.**
 - Wrapping arithmetic — every analysis pays for a behaviour no correct
   script wants.
 - Overflow undefined with no trap — a bound an analysis derived could admit
   an access the overflow put out of range.
+- Removing an unused `/` or `%` as a pure computation — removes a panic the
+  program defines, so `let d = 100 / 0; 5` ran to `5`.
 - A suffix on every literal that is not `i64` as the rule — puts in the
   script the type the struct already states (suffixes exist as an option,
   RFC-0058).

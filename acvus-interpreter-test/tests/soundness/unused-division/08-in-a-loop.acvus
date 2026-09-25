@@ -1,0 +1,2 @@
+// expect attempt to divide by zero
+let s = 0; for i in 0..3 { let d = 10 / (i - 1); s = s + 1; } s

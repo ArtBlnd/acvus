@@ -3138,3 +3138,91 @@ fn a_family_member_with_a_part_the_runtime_fills_is_refused_where_the_registry_i
         "Fn(Vec<#(#Float, T)>) -> Vec<(Float, T)>"
     );
 }
+
+// -- `total` promises every call a declaration makes (RFC-0082 rule 9) --
+
+#[extern_fn(name = "count_where_total", effect = E, total)]
+fn count_where_total<T, E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    c: &Vec<T>,
+    keep: acvus_extern::Closure<'_, (Ref<'_, T, Shared, Rt>,), bool, E, Rt>,
+) -> u64
+where
+    T: Var<kind::Type> + TransparentOver<Rt>,
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    c.iter().filter(|x| keep.call_now(ctx, (*x,))).count() as u64
+}
+
+#[extern_fn(name = "apply_total", effect = E, total)]
+fn apply_total<E, Rt>(
+    ctx: &mut Ctx<'_, Rt>,
+    x: i64,
+    f: acvus_extern::Closure<'_, (i64,), i64, E, Rt>,
+) -> i64
+where
+    E: Var<kind::Effect>,
+    Rt: Runtime,
+{
+    f.call_now(ctx, (x,))
+}
+
+fn a_total_generic_extern_handed_a_closure<R>() -> Registry<R>
+where
+    R: Runtime,
+{
+    extern_registry! {
+        ns: "t",
+        types: [Vec<_>],
+        signatures: [],
+        fns: [count_where_total],
+    }
+}
+
+fn a_total_extern_handed_a_closure_over_words<R>() -> Registry<R>
+where
+    R: Runtime,
+{
+    extern_registry! {
+        ns: "t",
+        types: [],
+        signatures: [],
+        fns: [apply_total],
+    }
+}
+
+fn refused_as_total_over_a_function(registry: Registry<Tiny>, name: &str) {
+    let i = Interner::new();
+    let err = Externs::<Tiny>::combine(vec![registry], &i)
+        .err()
+        .expect("`total` cannot hold of a call that runs a function it was handed");
+    assert!(
+        matches!(
+            err,
+            acvus_extern::CombineError::TotalOverFunctionArgument { .. }
+        ),
+        "{err}"
+    );
+    let written = format!("{err}");
+    assert!(
+        written.contains(name) && written.contains("`total`") && written.contains("`returns`"),
+        "the refusal names the extern, the declaration and what it may state: {written}"
+    );
+}
+
+#[test]
+fn total_on_a_generic_extern_handed_a_closure_is_refused_at_combine() {
+    refused_as_total_over_a_function(
+        a_total_generic_extern_handed_a_closure(),
+        "t::count_where_total",
+    );
+}
+
+#[test]
+fn total_on_an_extern_handed_a_closure_over_words_is_refused_at_combine() {
+    refused_as_total_over_a_function(
+        a_total_extern_handed_a_closure_over_words(),
+        "t::apply_total",
+    );
+}

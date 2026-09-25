@@ -20,10 +20,8 @@
 //! across optimization levels.
 //!
 //! The machine reads a range's bounds on the edge that enters the loop,
-//! before the header runs. A bound the header computes is therefore
-//! computed again at the end of the entering block, from the same operands:
-//! a literal, as `while i < 10` lowers, the way `optimize::lsr` writes a
-//! literal again above a header (RFC-0056), and `@n * 2` the same way.
+//! before the header runs, and a `for` header holds no instruction. A bound
+//! the header computes therefore moves to the end of the entering block.
 //!
 //! A [`Step`] is deterministic: a word operation, or a call of an extern
 //! declared `pure` whose reference arguments are shared and defined
@@ -32,7 +30,8 @@
 //! gives the same value, and raises the same trap, on every header visit.
 //! The header runs on every entry before any body block, so one evaluation
 //! on the entering edge is that first visit moved ahead of the header's
-//! other instructions, onto exactly the paths it ran on. A trapping `+`,
+//! other instructions, onto exactly the paths it ran on, and every later
+//! visit repeated it. A trapping `+`,
 //! `-` or `*`, a `/`, a `%` and a call can trap, so a bound holding one is
 //! promoted only when no header instruction before its last such step,
 //! other than a step of the bound, can trap: then the entry raises exactly
@@ -40,7 +39,7 @@
 //! before it does not decline: a trap is not ordered with effects
 //! (RFC-0048 rule 8).
 
-use acvus_ast::{Literal, Span, SuffixedInt};
+use acvus_ast::{Literal, SuffixedInt};
 
 use crate::ir::{BinOp, Overflow};
 use crate::laws::LawTable;
@@ -89,26 +88,15 @@ enum Bound {
 }
 
 struct Step {
-    span: Span,
-    /// The copies are written in this order, so two steps that trap raise
-    /// in the order the header raised them.
     header_position: usize,
     dst: ValueId,
     kind: StepKind,
 }
 
 enum StepKind {
-    Word(Literal),
-    Arith {
-        op: Arith,
-        left: Operand,
-        right: Operand,
-    },
-    Call {
-        callee: Callee,
-        callee_ty: Ty,
-        args: Vec<Operand>,
-    },
+    Word,
+    Arith(Arith),
+    Call,
 }
 
 impl StepKind {
@@ -117,9 +105,9 @@ impl StepKind {
     /// `unwrap` is `pure` and panics.
     fn traps(&self) -> bool {
         match self {
-            Self::Word(_) => false,
-            Self::Arith { op, .. } => op.traps(),
-            Self::Call { .. } => true,
+            Self::Word => false,
+            Self::Arith(op) => op.traps(),
+            Self::Call => true,
         }
     }
 }
@@ -133,9 +121,7 @@ enum Operand {
 /// The integer operations a bound may hold. Each is a function of its two
 /// words at the width (RFC-0037): a trapping `+`, `-` or `*` traps where its
 /// exact result leaves the width, a wrapping one wraps, and `/` and `%`
-/// panic on a zero divisor and on the signed minimum divided by `-1`. The
-/// copy on the entering edge is the same operation, its `Overflow`
-/// included.
+/// panic on a zero divisor and on the signed minimum divided by `-1`.
 #[derive(Clone, Copy)]
 enum Arith {
     Add(Overflow),
@@ -295,33 +281,31 @@ impl Recognizer<'_> {
             .find(|(_, inst)| inst_info::defs(&inst.kind).contains(&value))?;
         let kind = match &inst.kind {
             InstKind::Const { .. } => match self.invariants.above(natural, value)? {
-                Invariant::Word(literal) => StepKind::Word(literal),
+                Invariant::Word(_) => StepKind::Word,
                 Invariant::Outside(_) => return None,
             },
             InstKind::BinOp {
                 op, left, right, ..
-            } if matches!(self.cfg.val_types[&value], Ty::Int(_)) => StepKind::Arith {
-                op: Arith::of(*op)?,
-                left: self.evaluate(*left, steps)?,
-                right: self.evaluate(*right, steps)?,
-            },
+            } if matches!(self.cfg.val_types[&value], Ty::Int(_)) => {
+                let op = Arith::of(*op)?;
+                self.evaluate(*left, steps)?;
+                self.evaluate(*right, steps)?;
+                StepKind::Arith(op)
+            }
             InstKind::FunctionCall {
-                callee: callee @ Callee::Extern { .. },
+                callee: Callee::Extern { .. },
                 callee_ty,
                 args,
                 ..
-            } if callee_ty.effect().is_some_and(|effect| effect.is_empty()) => StepKind::Call {
-                callee: callee.clone(),
-                callee_ty: callee_ty.clone(),
-                args: args
-                    .iter()
-                    .map(|&arg| self.argument(arg, steps))
-                    .collect::<Option<_>>()?,
-            },
+            } if callee_ty.effect().is_some_and(|effect| effect.is_empty()) => {
+                for &arg in args {
+                    self.argument(arg, steps)?;
+                }
+                StepKind::Call
+            }
             _ => return None,
         };
         steps.push(Step {
-            span: inst.span,
             header_position,
             dst: value,
             kind,
@@ -449,40 +433,14 @@ impl Counted {
         let hi = match self.hi {
             Bound::Outside(hi) => hi,
             Bound::Computed { steps, value } => {
-                let mut renamed: FxHashMap<ValueId, ValueId> = FxHashMap::default();
-                for step in steps {
-                    let copy = fresh(cfg, &cfg.val_types[&step.dst].clone());
-                    let read = |operand: Operand| match operand {
-                        Operand::Outside(value) => value,
-                        Operand::Step(value) => renamed[&value],
-                    };
-                    let kind = match step.kind {
-                        StepKind::Word(value) => InstKind::Const { dst: copy, value },
-                        StepKind::Arith { op, left, right } => InstKind::BinOp {
-                            dst: copy,
-                            op: op.op(),
-                            left: read(left),
-                            right: read(right),
-                        },
-                        StepKind::Call {
-                            callee,
-                            callee_ty,
-                            args,
-                        } => InstKind::FunctionCall {
-                            dst: copy,
-                            callee,
-                            callee_ty,
-                            args: args.into_iter().map(read).collect(),
-                            order: None,
-                        },
-                    };
-                    cfg.blocks[self.entering.0].insts.push(Inst {
-                        span: step.span,
-                        kind,
-                    });
-                    renamed.insert(step.dst, copy);
+                let header = &mut cfg.blocks[self.header.0].insts;
+                let mut moved: Vec<Inst> = Vec::with_capacity(steps.len());
+                for step in steps.iter().rev() {
+                    moved.push(header.remove(step.header_position));
                 }
-                renamed[&value]
+                moved.reverse();
+                cfg.blocks[self.entering.0].insts.extend(moved);
+                value
             }
         };
         // The body block's one predecessor is the header, so each of its

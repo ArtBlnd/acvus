@@ -1,0 +1,2 @@
+// expect attempt to calculate the remainder with overflow
+let d = @min % -1; 5

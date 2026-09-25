@@ -1,0 +1,108 @@
+// app: 01 tarjan_scc
+// desc: Tarjan's strongly connected components, iterative, over a graph in
+// compressed-row form; prints the component count and each node's component
+// expect: 4 components: 1,1,1,0,0,3,2,2,3,3
+let n = 10u64;
+// Edges: 0->1 1->2 2->0 2->3 3->4 4->3 5->6 6->7 7->6 5->8 8->9 9->5 7->4
+let edges_from = vec([0u64, 1u64, 2u64, 2u64, 3u64, 4u64, 5u64, 6u64, 7u64, 5u64, 8u64, 9u64, 7u64]);
+let edges_to = vec([1u64, 2u64, 0u64, 3u64, 4u64, 3u64, 6u64, 7u64, 6u64, 8u64, 9u64, 5u64, 4u64]);
+
+// Compressed rows: out-degrees, the offsets as an exclusive prefix sum, and
+// each edge's target placed in its source's row.
+let csr = |n, edges_from, edges_to| -> {
+    let degree = filled(n, 0);
+    for e in &edges_from {
+        degree[*e] = degree[*e] + 1;
+    }
+    let offs = vec([0u64]);
+    let run = 0u64;
+    for v in 0u64..n {
+        run = run + (degree[v] as u64);
+        offs.push(run);
+    }
+    let fill = filled(n, 0);
+    let targets = filled(edges_to.len(), 0);
+    for e in 0u64..edges_from.len() {
+        let v = edges_from[e];
+        let at = offs[v] + (fill[v] as u64);
+        targets[at] = edges_to[e] as i64;
+        fill[v] = fill[v] + 1;
+    }
+    { offs: offs, targets: targets, }
+};
+
+// Tarjan with an explicit call stack of (node, next edge); answers each
+// node's component, numbered in the order components complete.
+let tarjan = |n, offs, targets| -> {
+    let index = filled(n, -1);
+    let low = filled(n, 0);
+    let on_stack = filled(n, false);
+    let comp = filled(n, -1);
+    let stack = vec([]);
+    let call_node = vec([]);
+    let call_edge = vec([]);
+    let next_index = 0;
+    let comps = 0;
+    for s in 0u64..n {
+        if index[s] < 0 {
+            index[s] = next_index;
+            low[s] = next_index;
+            next_index = next_index + 1;
+            stack.push(s);
+            on_stack[s] = true;
+            call_node.push(s);
+            call_edge.push(offs[s]);
+            while call_node.len() > 0u64 {
+                let top = call_node.len() - 1u64;
+                let v = call_node[top];
+                let e = call_edge[top];
+                if e < offs[v + 1u64] {
+                    call_edge[top] = e + 1u64;
+                    let w = targets[e] as u64;
+                    if index[w] < 0 {
+                        index[w] = next_index;
+                        low[w] = next_index;
+                        next_index = next_index + 1;
+                        stack.push(w);
+                        on_stack[w] = true;
+                        call_node.push(w);
+                        call_edge.push(offs[w]);
+                    } else if on_stack[w] {
+                        low[v] = min(low[v], index[w]);
+                    };
+                } else {
+                    call_node.pop();
+                    call_edge.pop();
+                    if call_node.len() > 0u64 {
+                        let u = call_node[call_node.len() - 1u64];
+                        low[u] = min(low[u], low[v]);
+                    };
+                    if low[v] == index[v] {
+                        let open = true;
+                        while open {
+                            let w = stack.pop().unwrap();
+                            on_stack[w] = false;
+                            comp[w] = comps;
+                            if w == v {
+                                open = false;
+                            };
+                        }
+                        comps = comps + 1;
+                    };
+                };
+            }
+        };
+    }
+    { comp: comp, count: comps, }
+};
+
+let g = csr(n, &edges_from, &edges_to);
+let found = tarjan(n, &g.offs, &g.targets);
+let out = found.count.to_string() + " components: ";
+for v in 0u64..n {
+    if v > 0u64 {
+        out = out + ",";
+    };
+    out = out + found.comp[v].to_string();
+}
+out
