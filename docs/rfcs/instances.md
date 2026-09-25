@@ -337,10 +337,17 @@ Status: Accepted
    - `display<T>(a: &T, out: &mut String)`, appending `a`'s text to `out`
      — named at a template's `{{ x }}` whose `x` is not a `String` or a
      `&str` (RFC-0071 rule 3), with the template's text as `out`, so a tag
-     allocates no string of its own. The standard registry's one
+     allocates no string of its own. The standard registry's generic
      `to_string<T>(a: &T) -> String` requires `display` at `T` (rule 1)
      and appends to an empty `String`, so every type with a `display`
-     instance has `.to_string()`, and its text has one source.
+     instance has `.to_string()`, and its text has one source. `display`
+     stands at no `str`: a two-word receiver has no mono glue (RFC-0067
+     rule 8). The owned copy of a `&str` that RFC-0062 rule 2 writes
+     `"…".to_string()` is `string::to_string(a: &str) -> String`, a
+     conversion, not a text. The two never meet at one argument: the
+     generic's `T` ranges over the types `display` stands at (RFC-0067
+     rule 2), which hold no `str`, so a `&str` receiver leaves it
+     (RFC-0043).
 
    `display` writes into its caller's `String` rather than returning one,
    so a text built of many parts grows one buffer.
