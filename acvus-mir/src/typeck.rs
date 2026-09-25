@@ -6882,7 +6882,11 @@ where
         receives: bool,
     ) -> Vec<crate::error::LackedInstance> {
         let mut lacked = Vec::new();
-        for candidate in self.declared_signatures(QualifiedRef::root(name)) {
+        let written = match receives {
+            true => WrittenAs::Method,
+            false => WrittenAs::Callee,
+        };
+        for candidate in self.declared_signatures(QualifiedRef::root(name), written) {
             let SignatureCandidate::Named { qref, scheme } = candidate else {
                 continue;
             };
