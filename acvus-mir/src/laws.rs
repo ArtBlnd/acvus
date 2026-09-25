@@ -283,7 +283,11 @@ pub fn resolve<'a>(
             associative,
             commutative,
             identity,
-        }) => Ok(ResolvedLaws::Binary(ResolvedBinary {
+        }) => {
+            if !binary_fits(params, ret) {
+                return Err(Unresolved::UnfitDeclaration);
+            }
+            Ok(ResolvedLaws::Binary(ResolvedBinary {
             associative: *associative,
             commutative: *commutative,
             identity: match identity {
@@ -295,7 +299,8 @@ pub fn resolve<'a>(
                     &Wanted::Returning((**ret).clone()),
                 )?)),
             },
-        })),
+            }))
+        }
         Laws::Fold(FoldLaw {
             combine,
             identity,
@@ -331,6 +336,19 @@ pub fn resolve<'a>(
             }
         }
     }
+}
+
+/// RFC-0082 rule 2.
+fn binary_fits(params: &[crate::ty::PolyParam], ret: &PolyTy) -> bool {
+    let [a, b] = params else {
+        return false;
+    };
+    let str_view = |ty: &PolyTy| {
+        matches!(ty, PolyTy::Ref(Mutability::Shared, lent) if *lent.ty() == PolyTy::Str)
+    };
+    let over_values = a.ty == b.ty && a.ty == *ret;
+    let over_string_views = *ret == PolyTy::String && str_view(&a.ty) && str_view(&b.ty);
+    over_values || over_string_views
 }
 
 /// Whether `copies`, declared on an instance of type `declaring`, names a

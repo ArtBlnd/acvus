@@ -170,13 +170,13 @@ impl LawAttr {
             });
         }
         let binary = match params {
-            [a, b] => {
-                a.mode == Mode::Value
-                    && b.mode == Mode::Value
-                    && matches!(returning, Returning::Value)
-                    && same_type(&a.ty, &b.ty)
-                    && same_type(&a.ty, ret)
-            }
+            [a, b] if matches!(returning, Returning::Value) => match (a.mode, b.mode) {
+                (Mode::Value, Mode::Value) => same_type(&a.ty, &b.ty) && same_type(&a.ty, ret),
+                (Mode::Str, Mode::Str) => {
+                    matches!(ret, Type::Path(path) if path.path.is_ident("String"))
+                }
+                _ => false,
+            },
             _ => false,
         };
         if !binary {
@@ -184,8 +184,8 @@ impl LawAttr {
             return Err(syn::Error::new(
                 word.span(),
                 format!(
-                    "the law `{word}` is stated over `f(a: T, b: T) -> T`, and `{fn_ident}` \
-                     is not of that shape"
+                    "the law `{word}` is stated over `f(a: T, b: T) -> T` or \
+                     `f(a: &str, b: &str) -> String`, and `{fn_ident}` is not of that shape"
                 ),
             ));
         }

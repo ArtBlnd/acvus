@@ -2867,6 +2867,30 @@ fn total_order_on_no_comparison_is_refused() {
     );
 }
 
+/// RFC-0082 rule 2.
+#[test]
+fn a_binary_law_on_no_binary_signature_is_refused() {
+    let i = Interner::new();
+    let registry = a_nullary_declaration_stating(
+        acvus_extern::Laws::Binary(acvus_extern::BinaryLaws {
+            associative: true,
+            commutative: false,
+            identity: None,
+        }),
+        None,
+    );
+    let err = Externs::combine(vec![registry], &i)
+        .err()
+        .expect("`() -> i64` combines nothing");
+    assert!(
+        matches!(
+            err,
+            acvus_extern::CombineError::LawOnUnfitSignature { law: "law", .. }
+        ),
+        "{err}"
+    );
+}
+
 // -- A requirement reaches a mono glue or it is refused (RFC-0067) -----
 
 /// What a stateful instance holds, and what makes it no plain `fn`.

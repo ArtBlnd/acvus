@@ -16,6 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::affine::AffineValues;
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info::{self, Reads};
+use crate::analysis::interval::ConstantBounds;
 use crate::analysis::loans::Loans;
 use crate::analysis::loops::{
     Invariants, LoopNest, NaturalLoop, Term, natural_loops_innermost_first,
@@ -590,6 +591,9 @@ impl LoopDeps {
             Token::Storage(Storage::Slot(slot)) => {
                 folds.law(slot).or_else(|| read(State::Slot(slot)))
             }
+            Token::Carried(_) => {
+                read(state_of(token)?).or_else(|| first(&[token], &state_of, &reading_of))
+            }
             token => read(state_of(token)?),
         };
         let reading = |tokens: &[Token]| match tokens {
@@ -670,10 +674,10 @@ fn extremum<'a, 's, 'cfg>(
     })
 }
 
-/// RFC-0089 rule 4: a cycle of carried tokens one of which, a `Bool`, is a
-/// `||` token an arm sets, the arm taken only where it is unset and sending
-/// every other token a value that reads no token, the other arm leaving them
-/// all, is `first`: `last` of the others, guarded by that token.
+/// RFC-0093 rules 5 and 7: a cycle of carried tokens one of which is a `||`
+/// guard an arm sets, the arm taken only where it is unset and sending every
+/// other token a value that reads no token, the other arm leaving them all,
+/// is `first`: `last` of the others, guarded by that token.
 fn first<'a, 's, 'cfg>(
     tokens: &[Token],
     state_of: &dyn Fn(Token) -> Option<State>,
@@ -692,16 +696,19 @@ fn first<'a, 's, 'cfg>(
             .filter(|(token, ..)| *token != guard)
             .map(|&(_, param, index)| (param, index))
             .collect();
-        reading_of(State::Param { param, index })
-            .guards_first(&others)
-            .then(|| Accumulator {
-                law: Law::First {
-                    guard,
-                    carried: tokens.iter().copied().filter(|token| *token != guard).collect(),
-                },
-                exact: true,
-                commutative: false,
-            })
+        let carried = tokens.iter().copied().filter(|token| *token != guard).collect();
+        let guard = match reading_of(State::Param { param, index }).guards_first(&others)? {
+            Unset::Flag => Guard::Flag(guard),
+            Unset::Sentinel(sentinel) => Guard::Sentinel {
+                token: guard,
+                sentinel,
+            },
+        };
+        Some(Accumulator {
+            law: Law::First { guard, carried },
+            exact: true,
+            commutative: false,
+        })
     })
 }
 
@@ -948,15 +955,26 @@ pub enum Law {
     /// It has no identity in the token's type: a chunk's partial is `Option`
     /// of it with `None` as identity.
     Ordered { op: LawOp, order: ExternInstance },
-    /// `last` of `carried`, guarded by the `||` token `guard` its arm sets:
+    /// `last` of `carried`, guarded by `guard`, which its arm sets:
     /// `(f, a) · (g, b)` is `(f ‖ g, b)` where `g` holds and `f` does not,
     /// and `(f ‖ g, a)` otherwise, so the earlier set values stay.
     /// Associative, not commutative.
-    First { guard: Token, carried: Vec<Token> },
+    First { guard: Guard, carried: Vec<Token> },
     /// The inner law, whose token an arm taken only at the first iteration
     /// sets to a value reading none of it: the run from the entry value
     /// discards that value there, so the join takes no entry value.
     Reset(Box<Law>),
+}
+
+/// Whether a `first`'s arm has run (RFC-0093 rules 5 and 7).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Guard {
+    /// A `Bool` token the arm sets to `true`.
+    Flag(Token),
+    /// The token itself, which the arm sets and which holds the constant
+    /// `sentinel` until then: no write in the loop sends that constant. Its
+    /// value is guarded with `carried`, and a chunk starts from `sentinel`.
+    Sentinel { token: Token, sentinel: ValueId },
 }
 
 /// An operation the language owns, with the laws its own definition gives
@@ -1379,7 +1397,7 @@ fn disjoint_storages(
 /// values an affine index's terms name: they are invariant in the loop, so
 /// it holds at every access.
 struct Proven {
-    bounds: FxHashMap<ValueId, (Option<i128>, Option<i128>)>,
+    bounds: FxHashMap<ValueId, ConstantBounds>,
 }
 
 impl Proven {
@@ -1417,7 +1435,10 @@ impl Proven {
 
     fn constant(&self, value: ValueId) -> Option<i128> {
         match self.bounds.get(&value) {
-            Some((Some(lo), Some(hi))) if lo == hi => Some(*lo),
+            Some(ConstantBounds {
+                lo: Some(lo),
+                hi: Some(hi),
+            }) if lo == hi => Some(*lo),
             _ => None,
         }
     }
@@ -1425,8 +1446,8 @@ impl Proven {
     /// The least magnitude `value` can have, where its interval excludes 0.
     fn least_magnitude(&self, value: ValueId) -> Option<i128> {
         match self.bounds.get(&value) {
-            Some((Some(lo), _)) if *lo > 0 => Some(*lo),
-            Some((_, Some(hi))) if *hi < 0 => hi.checked_neg(),
+            Some(ConstantBounds { lo: Some(lo), .. }) if *lo > 0 => Some(*lo),
+            Some(ConstantBounds { hi: Some(hi), .. }) if *hi < 0 => hi.checked_neg(),
             _ => None,
         }
     }
@@ -2806,6 +2827,14 @@ enum Side {
     Else,
 }
 
+/// How a `first` reads its guard unset: a `Bool` flag that is `false`, or
+/// an integer that holds the constant `ValueId` (RFC-0093 rules 5 and 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unset {
+    Flag,
+    Sentinel(ValueId),
+}
+
 /// What the edges into a join send one of its parameters.
 struct Sent {
     sent: Vec<(BlockIdx, Side, ValueId)>,
@@ -2862,6 +2891,9 @@ struct LawReading<'a, 's, 'cfg> {
     /// Whether a join took a value reading none of the state from an arm
     /// taken only at the first iteration (RFC-0089 rule 4's reset).
     resets: bool,
+    /// The constant an integer state is unset at while `first` is read with
+    /// it as its own guard (RFC-0093 rule 7).
+    sentinel: Option<i128>,
 }
 
 impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
@@ -2919,6 +2951,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             entry_forms: FxHashMap::default(),
             assigned_more_than_once: false,
             resets: false,
+            sentinel: None,
         };
         reading.dependent = reading.values_reading_state(None);
         reading
@@ -4000,26 +4033,35 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         Some(op)
     }
 
-    /// RFC-0089 rule 4's `first`: this reading's state `g`, a `Bool`, is sent
-    /// `true` by one side of a branch whose test holds there only where `g`
-    /// does not, and `g` itself by the other; the same join receives, for
-    /// each of `guarded`, a value reading no token from that side and the
-    /// token itself from the other. Nothing reads a guarded token but its
-    /// hand-on, and what reads `g` decides only the branch, runs no effect
-    /// and nothing that can raise or not finish, since a chunk run from the
-    /// unset guard computes it where the program skips it, and reaches the
-    /// loop's next iteration only as `g` and the guarded tokens.
-    fn guards_first(mut self, guarded: &[(ValueId, usize)]) -> bool {
-        self.guards_first_checked(guarded).is_some()
+    /// RFC-0093 rules 5 and 7's `first`: this reading's state `g` is sent,
+    /// by one side of a branch whose test holds there only where `g` is
+    /// unset, `true` where `g` is a `Bool` (a flag), or a value reading no
+    /// token that the interval domain proves is never the constant `c` where
+    /// `g` is an integer compared with `c` (a sentinel), and `g` itself by
+    /// the other side; the same join receives, for each of `guarded`, a value
+    /// reading no token from that side and the token itself from the other.
+    /// Nothing reads a guarded token but its hand-on, and what reads `g`
+    /// decides only branches, runs no effect and nothing that can raise or
+    /// not finish, since a chunk run from the unset guard computes it where
+    /// the program skips it, and reaches the loop's next iteration only as
+    /// `g` and the guarded tokens.
+    fn guards_first(mut self, guarded: &[(ValueId, usize)]) -> Option<Unset> {
+        self.guards_first_checked(guarded)
     }
 
-    fn guards_first_checked(&mut self, guarded: &[(ValueId, usize)]) -> Option<()> {
+    fn guards_first_checked(&mut self, guarded: &[(ValueId, usize)]) -> Option<Unset> {
         let State::Param { param: guard, index } = self.state else {
             return None;
         };
-        if !matches!(self.cfg.val_types.get(&guard), Some(Ty::Bool)) || guarded.is_empty() {
-            return None;
-        }
+        let unset = match self.cfg.val_types.get(&guard) {
+            Some(Ty::Bool) if !guarded.is_empty() => Unset::Flag,
+            Some(Ty::Int(_)) => {
+                let sentinel = self.sentinel_compared(guard)?;
+                self.sentinel = Some(int_constant(self.cfg, sentinel)?);
+                Unset::Sentinel(sentinel)
+            }
+            _ => return None,
+        };
         let loop_ = self.loops.iter().find(|loop_| loop_.header == self.header)?;
         let back = loop_.back_arg(self.cfg, index)?;
         let backs: Vec<ValueId> = guarded
@@ -4049,15 +4091,11 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             (pair[0].0 != pair[1].0).then_some(pair)
         };
         let [(first_side, first_sent), (second_side, second_sent)] = sides(&sent)?;
-        let arm = match (self.bool_constant(first_sent), self.bool_constant(second_sent)) {
-            (Some(true), _) if second_sent == guard => first_side,
-            (_, Some(true)) if first_sent == guard => second_side,
+        let (arm, set) = match (first_sent == guard, second_sent == guard) {
+            (false, true) => (first_side, first_sent),
+            (true, false) => (second_side, second_sent),
             _ => return None,
         };
-        if !self.unset_where(cond, arm == Side::Then, &mut Vec::new()) {
-            return None;
-        }
-        let slots = slot_values(self.cfg);
         let readings: Vec<FxHashSet<ValueId>> = guarded
             .iter()
             .map(|&(param, index)| {
@@ -4072,6 +4110,20 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 .dependent
             })
             .collect();
+        let sets_the_guard = match (unset, self.sentinel) {
+            (Unset::Flag, _) => self.bool_constant(set) == Some(true),
+            (Unset::Sentinel(_), Some(sentinel)) => {
+                let reads_a_token = self.dependent.contains(&set)
+                    || readings.iter().any(|reading| reading.contains(&set));
+                let &(from, ..) = sent.iter().find(|(_, _, value)| *value == set)?;
+                !reads_a_token && self.never_sent(from, set, sentinel)
+            }
+            (Unset::Sentinel(_), None) => false,
+        };
+        if !sets_the_guard || !self.unset_where(cond, arm == Side::Then, &mut Vec::new()) {
+            return None;
+        }
+        let slots = slot_values(self.cfg);
         for ((&(q, _), &q_back), reading_q) in guarded.iter().zip(&backs).zip(&readings) {
             let (q_join, q_at) = self.param_of(q_back)?;
             if q_join != join {
@@ -4146,7 +4198,52 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             };
             !reads_guard || (!has_effect(kind) && !removal.stays_unused(at, kind))
         });
-        reads_harmlessly.then_some(())
+        reads_harmlessly.then_some(unset)
+    }
+
+    /// The constant `c` every compare of `guard` for equality is with, where
+    /// there is one and only one (RFC-0093 rule 7).
+    fn sentinel_compared(&self, guard: ValueId) -> Option<ValueId> {
+        let mut found: Option<(ValueId, i128)> = None;
+        for (_, kind) in self.insts() {
+            let Some(other) = self.compared_for_equality(kind, guard) else {
+                continue;
+            };
+            let constant = int_constant(self.cfg, other)?;
+            match found {
+                Some((_, held)) if held != constant => return None,
+                Some(_) => {}
+                None => found = Some((other, constant)),
+            }
+        }
+        found.map(|(value, _)| value)
+    }
+
+    /// The other operand of `kind`, where it is `==` or `!=` with `value` as
+    /// one operand.
+    fn compared_for_equality(&self, kind: &InstKind, value: ValueId) -> Option<ValueId> {
+        let InstKind::BinOp {
+            op: BinOp::Eq | BinOp::Neq,
+            left,
+            right,
+            ..
+        } = kind
+        else {
+            return None;
+        };
+        match (*left == value, *right == value) {
+            (true, false) => Some(*right),
+            (false, true) => Some(*left),
+            _ => None,
+        }
+    }
+
+    /// Whether the interval domain proves `value` is not `sentinel` where
+    /// `from`, the block whose edge sends it, begins.
+    fn never_sent(&self, from: BlockIdx, value: ValueId, sentinel: i128) -> bool {
+        crate::analysis::interval::constant_bounds_on_entry(self.cfg, self.laws, from, &[value])
+            .into_iter()
+            .all(|bounds| bounds.excludes(sentinel))
     }
 
     /// Whether, wherever `value` is `holds`, this reading's `Bool` state is
@@ -4159,7 +4256,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let State::Param { param: guard, .. } = self.state else {
             return false;
         };
-        if value == guard {
+        if value == guard && self.sentinel.is_none() {
             return !holds;
         }
         if seen.contains(&(value, holds)) {
@@ -4168,6 +4265,15 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         seen.push((value, holds));
         if let Some(constant) = self.bool_constant(value) {
             return constant != holds;
+        }
+        if let (Some(sentinel), Some(Def::Inst(at))) = (self.sentinel, self.defs.get(&value)) {
+            let kind = self.inst(*at);
+            if let Some(other) = self.compared_for_equality(kind, guard)
+                && int_constant(self.cfg, other) == Some(sentinel)
+            {
+                let equal_where_holds = matches!(kind, InstKind::BinOp { op: BinOp::Eq, .. });
+                return equal_where_holds == holds;
+            }
         }
         match self.defs.get(&value) {
             Some(Def::Inst(at)) => match self.inst(*at) {

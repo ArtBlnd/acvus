@@ -1,0 +1,14 @@
+// expect a;c;|x|
+let xs = vec(["a".to_string(), "skip".to_string(), "c".to_string()]);
+let text = "".to_string();
+for x in &xs {
+    if x != "skip" {
+        text = text.concat(x).concat(";");
+    };
+}
+let none = vec([]);
+let kept = "x".to_string();
+for x in &none {
+    kept = kept.concat(x);
+}
+text + "|" + kept + "|"

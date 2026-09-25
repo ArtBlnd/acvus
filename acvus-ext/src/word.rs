@@ -57,7 +57,10 @@ word_by_ord! {
 /// bit equality and its `<` is `total_cmp` (RFC-0020), and a requirement
 /// site reaching these instances must see the answers those instructions
 /// give. Bit equality is also what makes a `Float` hashable at all: `0.0`
-/// and `-0.0` are two keys here, as they are two bit patterns.
+/// and `-0.0` are two keys here, as they are two bit patterns. The proof of
+/// `cmp_float`'s `law(total_order)`: `total_cmp` compares the bit patterns
+/// through a bijection onto `i64`, so it is total and its `Equal` is bit
+/// equality.
 impl Word for f64 {
     fn equals(&self, other: &Self) -> bool {
         self.to_bits() == other.to_bits()
@@ -72,10 +75,6 @@ impl Word for f64 {
     }
 }
 
-/// `cmp_float` states no `total_order`, and that is a decision. Its
-/// `total_cmp` is a total order whose `Equal` is bit equality, the `==` of a
-/// `Float`, so the law would hold; whether a law is stated over floats is
-/// left to the owner's decision on floats.
 macro_rules! instances_of {
     ($(
         $t:ty => eq: $eq:ident, clone: $clone:ident, cmp: $cmp:ident $(($($total_order:tt)*))?,
@@ -105,7 +104,7 @@ macro_rules! instances_of {
 
 instances_of! {
     i64 => eq: eq_int, clone: clone_int, cmp: cmp_int (law(total_order)), hash: hash_int;
-    f64 => eq: eq_float, clone: clone_float, cmp: cmp_float, hash: hash_float;
+    f64 => eq: eq_float, clone: clone_float, cmp: cmp_float (law(total_order)), hash: hash_float;
     bool => eq: eq_bool, clone: clone_bool, cmp: cmp_bool (law(total_order)), hash: hash_bool;
     u8 => eq: eq_byte, clone: clone_byte, cmp: cmp_byte (law(total_order)), hash: hash_byte;
     char => eq: eq_char, clone: clone_char, cmp: cmp_char (law(total_order)), hash: hash_char;
@@ -153,7 +152,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Copies, Externs, FnKind, Interner, Laws, PolyTy, QualifiedRef, TypesOnly};
+    use acvus_extern::{Copies, Externs, FnKind, Interner, Laws, QualifiedRef, TypesOnly};
 
     /// A fixed-seed linear congruential sequence (Knuth's MMIX constants),
     /// so a failing sample names the same inputs on every run.
@@ -212,6 +211,38 @@ mod tests {
         total_order_holds(&bytes, cmp_byte, eq_byte);
         total_order_holds(&chars, cmp_char, eq_char);
         total_order_holds(&strings, cmp_string, eq_string);
+        let floats: Vec<f64> = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            f64::MIN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            -f64::NAN,
+            f64::from_bits(f64::NAN.to_bits() | 1),
+        ]
+        .into_iter()
+        .chain(raw.iter().map(|&word| f64::from_bits(word)))
+        .collect();
+        total_order_holds(&floats, cmp_float, eq_float);
+    }
+
+    /// `total_cmp` orders what `<` on reals leaves unordered or equal: `-0.0`
+    /// below `0.0`, and each NaN at a place of its own by its bits.
+    #[test]
+    fn cmp_float_orders_signed_zeros_and_nans() {
+        assert_eq!(cmp_float(&-0.0, &0.0), -1);
+        assert_eq!(cmp_float(&0.0, &-0.0), 1);
+        assert_eq!(cmp_float(&f64::NAN, &f64::NAN), 0);
+        assert_eq!(cmp_float(&f64::NAN, &f64::INFINITY), 1);
+        assert_eq!(cmp_float(&-f64::NAN, &f64::NEG_INFINITY), -1);
+        let payload = f64::from_bits(f64::NAN.to_bits() | 1);
+        assert_eq!(cmp_float(&f64::NAN, &payload), -1);
+        assert!(!eq_float(&f64::NAN, &payload));
     }
 
     /// RFC-0082 rule 10 sampled: each clone is the value its argument lends,
@@ -240,7 +271,7 @@ mod tests {
     }
 
     /// The declarations are the instances': every clone copies its one
-    /// argument, and every `cmp` states `total_order` but the `Float`'s.
+    /// argument, and every `cmp` states `total_order`.
     #[test]
     fn copies_and_total_order_are_declared_by_instance() {
         let i = Interner::new();
@@ -266,15 +297,7 @@ mod tests {
         let cmps = instances_of("cmp");
         assert_eq!(cmps.len(), 6);
         for instance in &cmps {
-            let PolyTy::Fn { params, .. } = &instance.ty else {
-                panic!("an instance is a function")
-            };
-            let over_float = matches!(&params[0].ty, PolyTy::Ref(_, lent) if *lent.ty() == PolyTy::Float);
-            let expected = match over_float {
-                true => Laws::None,
-                false => Laws::TotalOrder,
-            };
-            assert_eq!(instance.laws, expected, "{:?}", instance.ty);
+            assert_eq!(instance.laws, Laws::TotalOrder, "{:?}", instance.ty);
         }
     }
 }

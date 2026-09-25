@@ -1,0 +1,15 @@
+// expect 0,1,6,4,10|1
+let d = deque();
+d.push_back(0);
+d.push_back(1);
+let xs = vec([5, 3, 9]);
+for x in &xs {
+    d.push_back(*x + 1);
+}
+let e = deque();
+e.push_back(1);
+let none = vec([]);
+for x in &none {
+    e.push_back(*x);
+}
+d.vec().into_iter().map(|x| -> x.to_string()).join(",".to_string()) + "|" + e.len().to_string()

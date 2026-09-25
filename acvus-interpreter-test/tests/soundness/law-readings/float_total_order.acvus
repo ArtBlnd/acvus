@@ -1,0 +1,37 @@
+// expect -0|0|NaN|2|-inf
+let zeros = vec([0.0, -0.0, 0.0]);
+let least = 1.0;
+for x in &zeros {
+    if cmp(x, &least) < 0 {
+        least = *x;
+    };
+}
+let greatest = -1.0;
+for x in &zeros {
+    if cmp(x, &greatest) > 0 {
+        greatest = *x;
+    };
+}
+let with_nan = vec([1.0, f64::NAN(), 2.0]);
+let top = -1.0 / 0.0;
+for x in &with_nan {
+    if cmp(x, &top) > 0 {
+        top = *x;
+    };
+}
+let with_negative_nan = vec([1.0, f64::from_bits(18444492273895866368u64), 2.0]);
+let above = -1.0 / 0.0;
+for x in &with_negative_nan {
+    if cmp(x, &above) > 0 {
+        above = *x;
+    };
+}
+let empty = vec([]);
+let kept = -1.0 / 0.0;
+for x in &empty {
+    if cmp(x, &kept) > 0 {
+        kept = *x;
+    };
+}
+least.to_string() + "|" + greatest.to_string() + "|" + top.to_string() + "|" + above.to_string()
+    + "|" + kept.to_string()

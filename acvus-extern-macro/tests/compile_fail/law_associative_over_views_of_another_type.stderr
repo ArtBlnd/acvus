@@ -1,0 +1,5 @@
+error: the law `associative` is stated over `f(a: T, b: T) -> T` or `f(a: &str, b: &str) -> String`, and `width` is not of that shape
+ --> tests/compile_fail/law_associative_over_views_of_another_type.rs:6:32
+  |
+6 | #[extern_fn(effect = pure, law(associative))]
+  |                                ^^^^^^^^^^^
