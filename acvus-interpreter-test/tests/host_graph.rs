@@ -581,3 +581,18 @@ async fn an_entry_of_no_inputs_is_called_with_an_empty_object() {
     let mut storage = MemoryStorage::new();
     assert_eq!(run_unit(&program, &mut storage, "a/main").await, 7);
 }
+
+#[test]
+fn a_method_call_never_reaches_an_exposure_of_its_host() {
+    let source = "{ n: 3, }.twice()";
+    let refused = refusals(
+        graph()
+            .host("a", with_entry("main", source))
+            .and_then(|g| g.host("b", with_n_entry("twice", "$n * 2")))
+            .map(|g| g.expose("a", "twice", "b", "twice").entry("a", "main")),
+    );
+    assert_eq!(refused.len(), 1, "{refused:#?}");
+    assert_eq!(refused[0].origin, Some(Origin::Entry("a/main".to_owned())));
+    assert_eq!(refused[0].cause, None, "{refused:#?}");
+    assert_eq!(refused[0].message, "undefined function `twice`");
+}
