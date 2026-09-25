@@ -626,7 +626,8 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    stage by dominance.
    A pull loop — a `while` whose header calls an extern `next(&mut it)`,
    tests its `Option` and leaves only there — ends its header in
-   `Terminator::While { cond, body, exit, exit_args, stages }`: the header,
+   `Terminator::While { cond, stages, exit, exit_args }`, its body
+   `stages.body()` as a `For`'s: the header,
    its call and its test are the first stage and the control token's
    cycle, in order (rule 5), and the payload reaches later stages by
    dominance. Its count is unknown on entry, so its cost (RFC-0066 rule 8)
@@ -815,8 +816,10 @@ the step holds; its rules 2 and 3 apply unchanged.
    the range is `b + c₀ .. n`, whose start is the header's first visit's
    own step moved to the entry (RFC-0081 rule 3).
 5. **A borrow in the header.** A `Ref` the header makes of a slot that no
-   instruction of the loop writes, lends `&mut`, or lends to a call that
-   reaches it (RFC-0082 rule 7) is a deterministic step of RFC-0081 rule 3.
+   instruction of the loop writes or lends `&mut`, and that no call of the
+   loop reaches through another loan (RFC-0082 rule 7), is a deterministic
+   step of RFC-0081 rule 3. The header's own shared borrow passed to its
+   bound's call (`v.len()`) is a read of the slot.
 
 **Why.** Each form is a counted loop the script wrote without the `for`
 that states it; the conversion is exact because the bound is a word the
@@ -971,9 +974,8 @@ trip count, IV canonicalization, the region and the lowerer's split
 and the lowerer read a traversal from. Rewriting the terminator alone keeps
 the rewrite checkable by reading it: the body and the value after the loop
 are the ones the source wrote.
-**Cost.** Every other form stays a `while`: `i <= n`, a step of two, a
-bound that calls through a reference the header makes, such as
-`while i < v.len()`, a bound whose trapping step follows another trap, and
+**Cost.** A form neither this rule nor RFC-0094 states stays a `while`: a
+bound whose trapping step follows another trap, a flag the body sets, and
 a loop with a `break`. A computed bound costs its instructions above the header, once
 per entry, and a literal bound one constant. Until IV canonicalization
 replaces `i` with the counter, a body that reads `i` carries both. Every converted loop loses its head's comparison, and in the
