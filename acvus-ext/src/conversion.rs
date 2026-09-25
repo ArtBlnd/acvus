@@ -4,7 +4,8 @@
 //! declared beside the other core signatures in `acvus_extern::core` and
 //! its instances at the language's own types are here, with the one
 //! generic `to_string` that requires it (RFC-0070 rule 5). `display` has no
-//! instance at `str`: the owned copy of a `&str` is `string::to_string`.
+//! instance at `str` or at `String`: the owned copy of text, a `&str` or a
+//! `String` lent as one, is `string::to_string`.
 //! `to_int` converts a `Bool` and nothing else: every number-to-number
 //! conversion is `expr as T` in the language (RFC-0049), which is total,
 //! reaches every width in both directions, and is a chain leaf rather than
@@ -77,17 +78,12 @@ fn display_bool(a: &bool, out: &mut String) {
     append(out, a);
 }
 
-/// A `String`'s text is its bytes: they are copied once, into `out`.
-#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
-fn display_string(a: &String, out: &mut String) {
-    out.push_str(a);
-}
-
 /// The standard registry's one `to_string`: the text `display` appends at
 /// `T`, into an empty `String`. Every type with a `display` instance has it,
 /// and a type's text has one source (RFC-0070 rule 5). Its `T` ranges over
-/// the types `display` stands at, which hold no `str`, so `"…".to_string()`
-/// reaches `string::to_string` alone (RFC-0043).
+/// the types `display` stands at, which hold neither `str` nor `String`, so
+/// `"…".to_string()` and `s.to_string()` reach `string::to_string` alone
+/// (RFC-0043).
 #[extern_fn(effect = pure)]
 fn to_string<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
@@ -222,7 +218,7 @@ pub fn conversion_registry<R: Runtime>() -> Registry<R> {
         fns: [
             display_i8, display_i16, display_i32, display_int,
             display_u8, display_u16, display_u32, display_u64,
-            display_float, display_char, display_bool, display_string,
+            display_float, display_char, display_bool,
             to_string,
             to_int_bool,
             int_to_char,
@@ -264,7 +260,6 @@ mod tests {
         display_float(&1.5, &mut out);
         display_char(&'c', &mut out);
         display_bool(&true, &mut out);
-        display_string(&"é\0".to_string(), &mut out);
         let expected = [
             ">".to_string(),
             (-1i8).to_string(),
@@ -273,16 +268,16 @@ mod tests {
             1.5f64.to_string(),
             'c'.to_string(),
             true.to_string(),
-            "é\0".to_string(),
         ]
         .concat();
         assert_eq!(out, expected);
     }
 
-    /// RFC-0070 rule 5: `display` stands at no `str`; the owned copy of a
-    /// `&str` is `string::to_string`, and `std::to_string` is generic.
+    /// RFC-0070 rule 5: `display` stands at no `str` and at no `String`;
+    /// the owned copy of text is `string::to_string`, and `std::to_string`
+    /// is generic.
     #[test]
-    fn display_stands_at_no_str() {
+    fn display_stands_at_no_text() {
         let i = Interner::new();
         let reg = Externs::combine(vec![conversion_registry::<TypesOnly>()], &i)
             .expect("registry combines");
@@ -295,14 +290,18 @@ mod tests {
         let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
             panic!("display is an extern")
         };
-        let at_str = instances.concrete.iter().filter(|instance| {
+        let at_text = instances.concrete.iter().filter(|instance| {
             let acvus_extern::PolyTy::Fn { params, .. } = &instance.ty else {
                 panic!("an instance is a function")
             };
-            matches!(&params[0].ty, acvus_extern::PolyTy::Ref(_, lent) if *lent.ty() == acvus_extern::PolyTy::Str)
+            matches!(
+                &params[0].ty,
+                acvus_extern::PolyTy::Ref(_, lent)
+                    if matches!(*lent.ty(), acvus_extern::PolyTy::Str | acvus_extern::PolyTy::String)
+            )
         });
-        assert_eq!(at_str.count(), 0);
-        assert_eq!(instances.concrete.len(), 12);
+        assert_eq!(at_text.count(), 0);
+        assert_eq!(instances.concrete.len(), 11);
     }
 
     #[test]

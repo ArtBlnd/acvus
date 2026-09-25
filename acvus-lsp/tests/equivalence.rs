@@ -143,10 +143,13 @@ fn lsp_errors(interner: &Interner, environment: &CompilationGraph, source: &str)
     errs
 }
 
+/// What parsed is checked: `a + "x"` is refused beside the two parse
+/// errors. (An integer tag is no refusal: it appends through `core::display`,
+/// RFC-0071 rule 3.)
 #[test]
 fn a_broken_template_reports_every_parse_error_and_what_parsed() {
     let i = Interner::new();
-    let source = "% let a = 1\n% let = 2\n{{ a + 1 }}\n{{ f( }}\n";
+    let source = "% let a = 1\n% let = 2\n{{ a + \"x\" }}\n{{ f( }}\n";
     let env = with_std(&i, root_contexts(&i, &[]));
     let mut session = LspSession::new(&i, env.clone());
     let doc = session

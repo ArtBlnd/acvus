@@ -17,6 +17,16 @@ fn qualified(interner: &Interner, qref: QualifiedRef) -> String {
     }
 }
 
+/// A candidate of a refused call that left only by a required instance
+/// (RFC-0043): `candidate` requires `signature`, which stands at no instance
+/// for `at`, the type the instance is matched by.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LackedInstance {
+    pub candidate: QualifiedRef,
+    pub signature: QualifiedRef,
+    pub at: Ty,
+}
+
 /// Each spelling once, in the order first met: two instances that differ
 /// only in what a shown type leaves out, an identity or a requirement, are
 /// one line to a reader.
@@ -579,10 +589,12 @@ pub enum MirErrorKind {
         name: String,
         candidates: Vec<String>,
     },
-    /// RFC-0043.
+    /// RFC-0043. `lacked` names, for each candidate that left only by a
+    /// required instance (RFC-0070), the instance it lacked.
     NoMatchingFunction {
         name: String,
         ty: Ty,
+        lacked: Vec<LackedInstance>,
     },
     /// One call names the same place twice.
     PlaceNamedTwice(String),
@@ -911,13 +923,28 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 write!(f, "`{name}` is declared by")?;
                 listed(f, candidates)
             }
-            MirErrorKind::NoMatchingFunction { name, ty } => {
+            MirErrorKind::NoMatchingFunction { name, ty, lacked } => {
                 write!(
                     f,
                     "no `{name}` takes a call of type {}{}",
                     ty.shown(interner),
                     view_in(ty)
-                )
+                )?;
+                for LackedInstance {
+                    candidate,
+                    signature,
+                    at,
+                } in lacked
+                {
+                    write!(
+                        f,
+                        "; {} requires {}, which has no instance for {}",
+                        qualified(interner, *candidate),
+                        qualified(interner, *signature),
+                        at.shown(interner)
+                    )?;
+                }
+                Ok(())
             }
             MirErrorKind::PlaceNamedTwice(place) => {
                 write!(f, "`{place}` is named twice in one call")

@@ -280,6 +280,7 @@ struct IndexSite<'a, S> {
 struct CallAsWritten<'a, S> {
     args: &'a [Expr<S>],
     offset: usize,
+    receives: bool,
 }
 
 fn written_place<S>(interner: &Interner, expr: &Expr<S>) -> ShownValue {
@@ -438,6 +439,9 @@ struct NamedCall<'e, S> {
     args: &'e [Expr<S>],
     span: Span,
     refused_as: CallRefusal,
+    /// Whether the first operand is a receiver, which each candidate sees
+    /// in its own mode (RFC-0043 rules 4 and 6).
+    receives: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -700,6 +704,15 @@ pub struct DisplayCall<C, T> {
     pub callee: C,
     pub ty: T,
     pub at: Span,
+}
+
+/// A template's `{{ x }}` as it was checked, for `settle_tags` to decide
+/// once the body is solved (RFC-0071 rule 3).
+struct Tag<S> {
+    id: AstId,
+    expr: Expr<S>,
+    ty: InferTy,
+    span: Span,
 }
 
 /// The operator a decision was opened for, as its refusal names it.
@@ -1410,6 +1423,7 @@ impl<S> ProbedMember<S> {
             args: &[],
             span: self.marker_site.span,
             refused_as: CallRefusal::NoMatchingFunction,
+            receives: false,
         }
     }
 }
@@ -1774,6 +1788,11 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     /// The instance decision of each such tag: a failure of one is that
     /// tag's refusal.
     display_decisions: FxHashSet<DecisionId>,
+    /// Each `{{ x }}` of the body, decided once the body is solved.
+    tags: Vec<Tag<S>>,
+    /// The signature decisions of calls whose first operand is a receiver,
+    /// which a refusal sees in each candidate's mode.
+    receiving_decisions: FxHashSet<DecisionId>,
     /// The operator each of its operands' head decisions was opened for:
     /// a failure of one is that operator's mismatch.
     operand_decisions: FxHashMap<DecisionId, &'static str>,
@@ -1928,6 +1947,8 @@ where
             operator_decisions: FxHashMap::default(),
             displays: FxHashMap::default(),
             display_decisions: FxHashSet::default(),
+            tags: Vec::new(),
+            receiving_decisions: FxHashSet::default(),
             operand_decisions: FxHashMap::default(),
             requirer_of: FxHashMap::default(),
             decision_callees: FxHashMap::default(),
@@ -2454,6 +2475,7 @@ where
             args: &[],
             span: site.span,
             refused_as: CallRefusal::NoMatchingFunction,
+            receives: false,
         };
         let candidate = SignatureCandidate::Named {
             qref,
@@ -4690,7 +4712,8 @@ where
     fn solve_body(&mut self) {
         self.join_bound_variants();
         let mut unsettled = std::mem::take(&mut self.refused_in_body);
-        unsettled.extend(self.solver.solve());
+        let tags: Vec<InferTy> = self.tags.iter().map(|tag| tag.ty.clone()).collect();
+        unsettled.extend(self.solver.solve(&tags));
         let mut refused: FxHashSet<DecisionId> =
             unsettled.iter().map(Unsettled::decision).collect();
         self.place_begun_sources();
@@ -4709,8 +4732,11 @@ where
         }
         self.record_decided_call_types();
         self.settle_held_arguments();
-        let converted = self.solver.solve();
+        self.settle_tags();
+        let converted = self.solver.solve(&[]);
         refused.extend(converted.iter().map(Unsettled::decision));
+        self.place_begun_sources();
+        self.place_opened_children();
         self.report_unsettled(converted);
         self.resolve_conversions();
         self.settle_slice_args();
@@ -5332,10 +5358,16 @@ where
                     to: self.type_as_written(&to),
                     rules,
                 },
-                Unsettled::NoSignature { name, call, .. } => MirErrorKind::NoMatchingFunction {
-                    name: self.interner.resolve(name).to_string(),
-                    ty: self.call_type_as_written(&call),
-                },
+                Unsettled::NoSignature { name, call, .. } => {
+                    let types: Vec<InferTy> =
+                        call.params.iter().map(|param| param.ty.clone()).collect();
+                    let receives = self.receiving_decisions.contains(&decision);
+                    MirErrorKind::NoMatchingFunction {
+                        name: self.interner.resolve(name).to_string(),
+                        ty: self.call_type_as_written(&call),
+                        lacked: self.lacked_instances(name, &types, receives),
+                    }
+                }
                 Unsettled::EffectExceeded { conflict, .. } => {
                     MirErrorKind::EffectExceeded(conflict)
                 }
@@ -5761,6 +5793,7 @@ where
             args: &[],
             span: callee.span,
             refused_as,
+            receives: false,
         };
         let slice = self.check_named_call(candidates, &call, FirstOperand::Checked(container));
         let TyTerm::Ref(_, run) = self.solver.shallow_resolve_ty(&slice) else {
@@ -5900,6 +5933,7 @@ where
             args,
             span: call_span,
             refused_as: CallRefusal::NoMatchingFunction,
+            receives: true,
         };
         self.check_named_call(candidates, &call, FirstOperand::Receiver(receiver))
     }
@@ -6020,6 +6054,7 @@ where
                 CallAsWritten {
                     args: call.args,
                     offset,
+                    receives: call.receives,
                 },
                 call.span,
             ),
@@ -6133,9 +6168,19 @@ where
         call_span: Span,
     ) -> InferTy {
         let mut parameters = Parameters::Instantiated(&call_type.params);
-        self.admit_arguments(&mut parameters, first, args, call_span);
+        let types = self.admit_arguments(&mut parameters, first, args, call_span);
+        if types.iter().any(|ty| self.poisoned(ty)) {
+            return Self::infer_error();
+        }
         self.note_call_effect(&call_type.effect, call_span);
         call_type.ret.clone()
+    }
+
+    /// Whether a type is poison (RFC-0078 rule 5): an argument of it is
+    /// admitted everywhere, and the call it reaches is poison too and
+    /// reports nothing of its own (RFC-0043).
+    fn poisoned(&self, ty: &InferTy) -> bool {
+        self.solver.resolve_ty(ty).mentions_error()
     }
 
     /// The effect is the settled instance's, which the decision raises the
@@ -6173,6 +6218,9 @@ where
             call.args,
             call.span,
         );
+        if types.iter().any(|ty| self.poisoned(ty)) {
+            return Self::infer_error();
+        }
         if narrowing.options.is_empty() {
             return self.refuse_call(call, types, usize::from(first.is_some()));
         }
@@ -6204,6 +6252,9 @@ where
             body_effect: self.body_effect.clone(),
         });
         self.decision_sites.insert(decision, call.span);
+        if call.receives {
+            self.receiving_decisions.insert(decision);
+        }
         self.calls
             .insert(call.callee.id, CallChoice::Decided(decision));
         self.held_arguments
@@ -6274,6 +6325,11 @@ where
         ty: &InferTy,
         site: &ArgSite,
     ) {
+        // RFC-0043: an argument of poison is admitted everywhere, narrows no
+        // candidate and meets no parameter; the call is poison (`poisoned`).
+        if self.poisoned(ty) {
+            return;
+        }
         let reach = match parameters {
             Parameters::Instantiated(_) => Reach::Joined,
             Parameters::Narrowing(narrowing) => match self.narrow(narrowing, index, ty) {
@@ -6422,6 +6478,13 @@ where
             return Received::Taken(signatures, first);
         }
         let owned = self.check_receiver_place(receiver, agreed);
+        if self.poisoned(&owned) {
+            let first = FirstArg {
+                ty: owned,
+                site: ArgSite::of(receiver, call.span),
+            };
+            return Received::Refused(first);
+        }
         let (kept, mode) = match signatures {
             Signatures::One(candidate) => {
                 let mode = self.solver.receiver_mode(&candidate);
@@ -6736,13 +6799,11 @@ where
         written: CallAsWritten<'_, S>,
         call_span: Span,
     ) -> InferTy {
-        if types
-            .iter()
-            .any(|ty| Self::is_error(&self.solver.resolve_ty(ty)))
-        {
+        if types.iter().any(|ty| self.poisoned(ty)) {
             return Self::infer_error();
         }
 
+        let lacked = self.lacked_instances(self.interner.intern(name), &types, written.receives);
         let call = CallShape {
             params: types
                 .into_iter()
@@ -6759,11 +6820,62 @@ where
             MirErrorKind::NoMatchingFunction {
                 name: name.to_string(),
                 ty: self.call_type_as_written(&call),
+                lacked,
             },
             call_span,
             labels,
         );
         Self::infer_error()
+    }
+
+    /// Each candidate of the name that left a refused call only by a required
+    /// instance, with the instance it lacked (RFC-0043, RFC-0070): its
+    /// arguments join its parameters with every variable unbounded, and the
+    /// required signature stands at no instance there. A receiver is seen
+    /// lent where the candidate's first parameter is a reference and the
+    /// receiver is not one (RFC-0043 rule 6).
+    fn lacked_instances(
+        &mut self,
+        name: Astr,
+        types: &[InferTy],
+        receives: bool,
+    ) -> Vec<crate::error::LackedInstance> {
+        let mut lacked = Vec::new();
+        for candidate in self.declared_signatures(QualifiedRef::root(name)) {
+            let SignatureCandidate::Named { qref, scheme } = candidate else {
+                continue;
+            };
+            let lends = match scheme.params().first().map(|param| &param.ty) {
+                Some(TyTerm::Ref(mutability, _)) if receives => Some(*mutability),
+                _ => None,
+            };
+            let seen: Vec<InferTy> = types
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, ty)| match (index, lends, self.solver.resolve_ty(ty)) {
+                        (0, Some(mutability), resolved) if !matches!(resolved, TyTerm::Ref(..)) => {
+                            TyTerm::Ref(mutability, Box::new(TypeArg::uniform(resolved)))
+                        }
+                        (_, _, resolved) => resolved,
+                    },
+                )
+                .collect();
+            for (signature, call) in self.solver.lacked_requirements(&scheme, &seen) {
+                let Ty::Fn { params, .. } = call else {
+                    continue;
+                };
+                let Some(first) = params.into_iter().next() else {
+                    continue;
+                };
+                lacked.push(crate::error::LackedInstance {
+                    candidate: qref,
+                    signature,
+                    at: referent_shown(first.ty),
+                });
+            }
+        }
+        lacked
     }
 
     /// The call rewritten with the borrow every declaration of the name
@@ -6774,7 +6886,7 @@ where
     /// `PolyTy`. Its variables have no reader-facing spelling, so the note
     /// says the mode rather than printing the parameter.
     fn borrow_that_would_fit(&self, name: &str, written: CallAsWritten<'_, S>) -> Option<Label> {
-        let CallAsWritten { args, offset } = written;
+        let CallAsWritten { args, offset, .. } = written;
         let spelled: Option<Vec<&str>> = args
             .iter()
             .map(|arg| match arg {
@@ -7502,47 +7614,48 @@ where
         }
     }
 
-    /// A template's append reads a `String` or a `&str` as it is; any other
-    /// type is appended by `core::display` at that type, and a type with no
-    /// instance is refused here (RFC-0071 rule 3). A type still open at the
-    /// tag whose bound admits text is read as text, as every open type was
-    /// before any other type was admitted; one whose bound admits none, an
-    /// integer literal's, is appended by `display`.
+    /// A template's append. Which of text or `core::display` it is is
+    /// decided once the body is solved (`settle_tags`, RFC-0071 rule 3), so
+    /// a later use settles the tag's type rather than the tag guessing it.
     fn check_append(&mut self, id: AstId, expr: &Expr<S>, span: Span) {
         let ty = self.check_expr(expr);
-        let resolved = self.solver.resolve_ty(&ty);
-        let site = ConversionSite {
-            id: expr.id(),
+        self.tags.push(Tag {
+            id,
+            expr: expr.clone(),
+            ty,
             span,
-            report: ConversionReport::Emit,
-        };
-        match &resolved {
-            TyTerm::String | TyTerm::Error(_) => {}
-            TyTerm::Ref(_, inner) => match self.solver.resolve_ty(&inner.ty()) {
-                TyTerm::String | TyTerm::Str | TyTerm::Error(_) => {}
-                TyTerm::Var(var) if self.lent_may_be_text(var) => {
-                    self.convert_at(&inner.ty(), &TyTerm::String, site)
-                }
-                referent => self.check_display(id, expr, &referent, span),
-            },
-            TyTerm::Var(var) if self.held_may_be_text(*var) => {
-                self.convert_at(&ty, &TyTerm::String, site)
+        });
+    }
+
+    /// Each tag at the type the solve settled (RFC-0071 rule 3): a `String`
+    /// or a `&str` is appended as it is, a `&T` displays its `T`, and any
+    /// other type is appended by `core::display` at that type, whose
+    /// instance the solve after this one decides. A tag no use settled is a
+    /// `String`: the solve made it one beside the texts, and one whose bound
+    /// admits no `String` meets it here, refused as a tag of no text. A tag
+    /// of poison is the refusal it came from.
+    fn settle_tags(&mut self) {
+        for Tag { id, expr, ty, span } in std::mem::take(&mut self.tags) {
+            let resolved = self.solver.resolve_ty(&ty);
+            if resolved.mentions_error() {
+                continue;
             }
-            _ => self.check_display(id, expr, &resolved, span),
+            let site = ConversionSite {
+                id: expr.id(),
+                span,
+                report: ConversionReport::Emit,
+            };
+            match &resolved {
+                TyTerm::String => {}
+                TyTerm::Ref(_, inner) => match self.solver.resolve_ty(&inner.ty()) {
+                    TyTerm::String | TyTerm::Str => {}
+                    TyTerm::Var(_) => self.convert_at(&inner.ty(), &TyTerm::String, site),
+                    referent => self.check_display(id, &expr, &referent, span),
+                },
+                TyTerm::Var(_) => self.convert_at(&ty, &TyTerm::String, site),
+                _ => self.check_display(id, &expr, &resolved, span),
+            }
         }
-    }
-
-    /// Whether a tag's open type may still settle to text held by value: a
-    /// `String`, or a reference that may be a `&str` or a `&String`.
-    fn held_may_be_text(&self, var: crate::ty::TypeBoundId) -> bool {
-        let bound = self.solver.bound_of_var(var);
-        bound.admits(&TyTerm::String) || bound.admits_a_reference()
-    }
-
-    /// Whether what a tag's reference names, still open, may settle to text.
-    fn lent_may_be_text(&self, var: crate::ty::TypeBoundId) -> bool {
-        let bound = self.solver.bound_of_var(var);
-        bound.admits(&TyTerm::String) || bound.admits(&TyTerm::Str)
     }
 
     /// `{{ x }}` of a type that is not text: a call of `core::display` lent
@@ -8780,6 +8893,7 @@ where
             args,
             span: call_span,
             refused_as: CallRefusal::NoMatchingFunction,
+            receives: false,
         };
         let first = match first {
             Some(first) => FirstOperand::Checked(first),

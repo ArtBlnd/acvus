@@ -392,8 +392,10 @@ repository root at `0d308c5e`.
    parameter, and `Externs::combine` refuses a requirement that reaches
    one (`CombineError::RequiredInstanceWithoutGlue`, RFC-0067 rule 8). The
    standard `to_string<T>` requires `display` at `T`, so no `display`
-   instance is declared at `str`; the owned copy of a `&str` is
-   `string::to_string(a: &str) -> String`, a conversion (RFC-0070 rule 5).
+   instance is declared at `str`. None is declared at `String` either,
+   whose text is itself: the owned copy of text, a `&str` or a `String`
+   lent as one, is `string::to_string(a: &str) -> String`, a conversion
+   that states `copies(a)` (RFC-0070 rule 5).
    `acvus-interpreter-test/tests/instance_entry.rs` pins that every
    synchronous instance of a shared signature has a mono glue.
 

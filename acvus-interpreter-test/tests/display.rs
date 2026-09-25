@@ -170,6 +170,19 @@ fn a_tag_lends_its_place_and_reads_through_a_reference() {
     );
 }
 
+/// RFC-0071 rule 3: a tag of `&T` displays its `T`, an integer literal's
+/// width settled by the solve, as `.to_string()` gives it.
+#[test]
+fn a_tag_of_a_reference_to_a_literal_s_integer_displays_it() {
+    for source in [
+        "% let n = 7\n% let r = &n\n<{{ r }}>",
+        "% let n = 7\n<{{ &n }}>",
+        "% let n = 7\n<{{ n.to_string() }}>",
+    ] {
+        assert_eq!(text_at_both_levels(source, Form::Template), "<7>", "{source}");
+    }
+}
+
 #[test]
 fn a_tag_of_text_appends_as_it_is() {
     assert_eq!(

@@ -1634,16 +1634,23 @@ fn generate_extern_fn(
                     format!("`{named}` names no parameter of `{fn_ident}` (RFC-0082 rule 10)"),
                 ));
             };
-            let lends_the_result = params[at].mode == Mode::Borrow
-                && matches!(returning, Returning::Value)
-                && quote::ToTokens::to_token_stream(&params[at].ty).to_string()
-                    == quote::ToTokens::to_token_stream(&ret).to_string();
+            // The text a `&str` lends is a `String`'s value (RFC-0070 rule
+            // 5), as `acvus_mir::laws::copies_fits` reads it.
+            let lent = quote::ToTokens::to_token_stream(&params[at].ty).to_string();
+            let returned = quote::ToTokens::to_token_stream(&ret).to_string();
+            let lends_the_result = matches!(returning, Returning::Value)
+                && match params[at].mode {
+                    Mode::Borrow => lent == returned,
+                    Mode::Str => returned == "String",
+                    _ => false,
+                };
             if !lends_the_result {
                 return Err(syn::Error::new(
                     named.span(),
                     format!(
-                        "`copies({named})` is stated over `f(.., {named}: &T, ..) -> T`, and \
-                         `{fn_ident}` is not of that shape (RFC-0082 rule 10)"
+                        "`copies({named})` is stated over `f(.., {named}: &T, ..) -> T` or \
+                         `f(.., {named}: &str, ..) -> String`, and `{fn_ident}` is not of that \
+                         shape (RFC-0082 rule 10)"
                     ),
                 ));
             }

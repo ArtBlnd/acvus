@@ -87,7 +87,7 @@ text is refused by name: ``` `<` is not defined on String; use `string::cmp`,
 
 | Rust | how a script writes it |
 | --- | --- |
-| `s.to_owned()`, `s.to_string()` | `s.to_string()`: `string::to_string(a: &str) -> String` at a `&str`, the generic `to_string` at a `String` |
+| `s.to_owned()`, `s.to_string()` | `s.to_string()`: `string::to_string(a: &str) -> String`, at a `&str` or a `String` lent as one |
 | `s.parse::<i64>()` | `i64::parse(s)` or `i64::from_str(s)`, one pair per integer width |
 | `s.chars().count()` | `s.chars() \| count` |
 | `s.chars().rev()` | `rev_iter(s.chars() \| collect)` — there is no `rev` adaptor |

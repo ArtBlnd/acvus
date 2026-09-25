@@ -546,8 +546,9 @@ fn a_str_receiver_reaches_the_owned_copy_alone() {
 }
 
 /// Every type `core::display` stands at reaches the generic `to_string`,
-/// which requires that instance; a `String` receiver takes it directly, so
-/// `string::to_string`'s view of it leaves (RFC-0043 rule 1).
+/// which requires that instance. `display` stands at no `String`, so a
+/// `String` receiver leaves the generic and reaches `string::to_string` as
+/// a view, the copy (RFC-0070 rule 5).
 #[test]
 fn a_type_with_a_display_instance_reaches_the_generic_to_string() {
     let i = Interner::new();
@@ -559,7 +560,7 @@ fn a_type_with_a_display_instance_reaches_the_generic_to_string() {
         ("true.to_string()", vec!["std::to_string"]),
         (
             "let s = \"x\".to_string(); s.to_string()",
-            vec!["std::to_string", "string::to_string"],
+            vec!["string::to_string", "string::to_string"],
         ),
     ] {
         let c = checked(&i, source);
@@ -585,6 +586,21 @@ fn a_type_with_no_display_instance_has_no_to_string() {
             "{source}: {errors:#?}"
         );
     }
+}
+
+/// RFC-0043: the refusal names, for the candidate that left only by its
+/// required instance, the instance it lacked.
+#[test]
+fn a_refusal_names_the_display_instance_the_generic_to_string_lacked() {
+    let i = Interner::new();
+    assert_eq!(
+        errors_of(&i, "let o = { a: 1, }; o.to_string()"),
+        vec![
+            "no `to_string` takes a call of type Fn({a: i64}) -> _; std::to_string requires \
+             core::display, which has no instance for {a: i64}"
+                .to_string()
+        ]
+    );
 }
 
 /// Refused: a set an argument empties opens no decision and names the call

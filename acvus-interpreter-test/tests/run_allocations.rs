@@ -666,9 +666,9 @@ async fn a_template_of_integer_tags_grows_one_buffer() {
 }
 
 /// `.to_string()` at a `String` allocates what the owned copy of a `&str`
-/// allocates, a new `String` and nothing more: the generic `to_string`
-/// starts from an empty `String`, and `display` at `String` copies the bytes
-/// into it once.
+/// allocates, a new `String` and nothing more: `display` stands at no
+/// `String`, so the call is `string::to_string` of a view of it, which copies
+/// the bytes once (RFC-0070 rule 5).
 fn owned_text_per_iteration(owned: &str) -> String {
     format!(
         "let s = \"abc\".to_string(); let acc = 0; let i = 0; while i < @n {{ \

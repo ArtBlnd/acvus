@@ -148,8 +148,11 @@ by the least element of what it admits, in this order:
    referent the pattern had not settled, which is how a `&&T` would be
    formed (RFC-0029);
 4. a lend: a reference;
-5. a capture: a word;
-6. an instance: the one the body's task allows.
+5. a template tag's type, or what a tag's reference names, still open:
+   `String` (RFC-0071 rule 3), after the lends, so a tag `&x` of an
+   integer literal names the width step 1 gave it;
+6. a capture: a word;
+7. an instance: the one the body's task allows.
 
 An open effect closes the same way: it is the least element of its
 interval, the join of what the body requires (RFC-0013 rule 5).
@@ -207,9 +210,13 @@ Three rules, and nothing else:
 2. **Poison satisfies every bound.** `TyVarBound::admits` admits `Ty::Error`
    whatever the bound is, so freezing a poisoned variable is not a bound
    violation.
-3. **A refusal about poison is not reported.** A call one of whose argument
-   types is poison is not refused for having no matching signature
-   (`no_matching_function`), and `typeck::reported` drops an error that is a
+3. **A refusal about poison is not reported.** An argument whose type holds
+   poison anywhere (`&<error>` too) is admitted by every candidate and
+   narrows none, and the call is poison, reporting nothing of its own
+   (RFC-0043): at the check the call's type is poison
+   (`typeck::poisoned`), and a signature decision an argument became poison
+   in during the solve fails silently with its return bound to poison
+   (`Progress::Poisoned`). `typeck::reported` drops an error that is a
    consequence of an earlier one.
 
 A component that is refused becomes poison and is carried into the
@@ -308,7 +315,7 @@ path), a **rule with no statement** (a section above now states it), or
 | `solver::takes_signature` (`takes_unjoined`) | nothing — it did not ask, and eliminated candidates on an argument whose head the solve owns | instance of R2 rule 2: `admission_waits` |
 | `solver::take_other` | returning `Ok` without binding when the other side was poison | instance of Poison rule 1: binds |
 | `ty::TyVarBound::admits` | — | instance of Poison rule 2: admits `Ty::Error` whatever the bound |
-| `typeck::no_matching_function` | — | instance of Poison rule 3: silent when an argument is poison |
+| `typeck::no_matching_function` | — | instance of Poison rule 3: silent when an argument is poison, a poison held inside a reference included |
 | `typeck::reject_reference_in_data` | a second path for components "the solver never binds to poison" | gone; every component goes through `as_data` |
 | `typeck::solve_body`'s literal loop | `let Ok(Ty::Int(k)) = freeze_ty(..) else { continue }` — a freeze failure discarded | instance of R3: `settle_int_literals` refuses, naming the widths |
 | `graph::optimize::optimize` | a `_context_types` parameter no pass reads | not a rule; gone, with its four call sites |
