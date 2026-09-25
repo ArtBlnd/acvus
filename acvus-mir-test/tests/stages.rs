@@ -1523,6 +1523,122 @@ fn a_float_total_an_inner_loop_sums_into_is_in_order_in_the_outer_loop() {
     );
 }
 
+/// An inner loop that leaves early by a `break` decided by its element hands
+/// back `total` at the iteration it leaves in, which is still the entry value
+/// plus a run of the inner loop's elements, so the outer cycle on `total` is
+/// `+`.
+#[test]
+fn an_inner_loop_leaving_early_by_its_element_hands_the_outer_loop_the_add_law() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 0; \
+         for row in &m { for x in &row { if *x == 5 { break; }; total = total + *x; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Add))
+        )],
+        "{}",
+        c.listing
+    );
+}
+
+/// The inner loop leaves when `total` passes 3: how much of a row joins
+/// `total` depends on `total`, so the outer loop has no law.
+#[test]
+fn an_inner_loop_leaving_by_the_total_gives_the_outer_loop_no_law() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 0; \
+         for row in &m { for x in &row { if total > 3 { break; }; total = total + *x; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(vec![TokenKind::Carried], Order::InOrder, None)],
+        "{}",
+        c.listing
+    );
+}
+
+/// The inner loop leaves by `t0`, the total the outer iteration entered it
+/// with. The inner loop's own cycle on `total` is still `+`, but how much of
+/// a row joins `total` depends on `total`, so the outer loop has no law.
+#[test]
+fn an_inner_loop_leaving_by_the_entry_total_gives_the_outer_loop_no_law() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 0; \
+         for row in &m { let t0 = total; \
+         for x in &row { if t0 > 3 { break; }; total = total + *x; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(vec![TokenKind::Carried], Order::InOrder, None)],
+        "{}",
+        c.listing
+    );
+}
+
+/// The `break` hands back `100`, not a sum, so the outer loop has no law.
+#[test]
+fn an_inner_loop_leaving_with_another_value_gives_the_outer_loop_no_law() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 0; \
+         for row in &m { for x in &row { total = total + *x; \
+         if *x == 5 { total = 100; break; }; } } total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(vec![TokenKind::Carried], Order::InOrder, None)],
+        "{}",
+        c.listing
+    );
+}
+
+/// A `return` of `total` from the inner loop leaves the outer loop too: the
+/// exit is the control token's cycle, `total`'s cycle joins it, and a cycle
+/// of two tokens has no law (RFC-0089 rule 5).
+#[test]
+fn a_return_of_the_total_from_an_inner_loop_gives_the_outer_loop_no_law() {
+    let c = Compiled::of(
+        "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 0; \
+         for row in &m { for x in &row { if *x == 5 { return total; }; total = total + *x; } } \
+         total",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(
+            vec![TokenKind::Carried, TokenKind::Control],
+            Order::InOrder,
+            None
+        )],
+        "{}",
+        c.listing
+    );
+}
+
+/// A `?` in the inner loop stays where it is, since its `Err` holds a
+/// `String`, and leaves the outer loop from inside the inner one: the outer
+/// loop is one stage, the control token's cycle with `total` in it, with no
+/// law.
+#[test]
+fn a_try_in_an_inner_loop_gives_the_outer_loop_no_law() {
+    let c = Compiled::of(
+        "let rows = vec([vec([\"1\".to_string()]), vec([\"30\".to_string()])]); let total = 0; \
+         for row in &rows { for s in &row { total = total + i64::from_str(s)?; } } Ok(total)",
+    );
+    assert_eq!(
+        cycle_stages(&c.shapes_of(c.outer_header())),
+        [&one(
+            vec![TokenKind::Carried, TokenKind::Control],
+            Order::InOrder,
+            None
+        )],
+        "{}",
+        c.listing
+    );
+}
+
 /// RFC-0066 rule 1: the `return` inside the inner loop moves into the inner
 /// loop's own exit, so the outer loop leaves from its own body. The inner
 /// search finishes, so it runs ahead in a free stage, and the exit is the

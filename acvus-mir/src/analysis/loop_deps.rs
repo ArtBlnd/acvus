@@ -2735,13 +2735,22 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     }
 
     /// RFC-0089 rule 4, through a nested loop: header parameter `index` of
-    /// `nested`, a `for` that leaves only by its header's exit, entered with
-    /// a value of this iteration and read once the nested loop has handed
-    /// it back. When that parameter's cycle in the nested loop has law `L`
-    /// and nothing else there reads it, the value handed back is the entry
-    /// value combined through `L` with the nested loop's run from `L`'s
-    /// identity: `((e ⊕ y₁) ⊕ y₂) … = e ⊕ (y₁ ⊕ y₂ …)` by associativity,
-    /// and `e` itself where the run is empty.
+    /// `nested`, a `for`, entered with a value of this iteration and read
+    /// where the nested loop holds it or has handed it back. When that
+    /// parameter's cycle in the nested loop has law `L` and nothing else
+    /// there reads it, the parameter at the start of the nested loop's
+    /// `k`-th iteration is the entry value combined through `L` with the
+    /// run of its first `k - 1` iterations from `L`'s identity:
+    /// `((e ⊕ y₁) ⊕ y₂) … = e ⊕ (y₁ ⊕ y₂ …)` by associativity, and `e`
+    /// itself where the run is empty.
+    ///
+    /// This reading does not ask how the nested loop leaves, and that is a
+    /// decision. The identity holds at every iteration, so an exit that hands
+    /// on the parameter hands on the entry value combined with a run from the
+    /// identity. An exit that hands on some other value passes it into a
+    /// block parameter, which is read by its own form, and a `return` hands
+    /// nothing back to this loop. The tests in `acvus-mir-test/tests/stages.rs`
+    /// that name an inner loop leaving early pin each of these cases.
     fn through_nested_loop(&mut self, nested: usize, index: usize) -> Option<Form<'a>> {
         let cfg = self.cfg;
         let nested = &self.loops[nested];
@@ -2750,20 +2759,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return None;
         };
         let nested_blocks: Vec<BlockIdx> = nested.blocks().collect();
-        let leaves_elsewhere = nested_blocks
-            .iter()
-            .filter(|block| **block != header)
-            .any(|block| {
-                cfg.successors(*block)
-                    .into_iter()
-                    .any(|succ| !nested.contains(succ))
-                    || matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
-            });
-        let entry = nested.entry_arg(cfg, index);
-        if leaves_elsewhere {
-            return None;
-        }
-        let entry = self.form(entry?)?;
+        let entry = self.form(nested.entry_arg(cfg, index)?)?;
         let param = cfg.blocks[header.0].params[index];
         let slots = TargetSlots::of(self.loans, *source, &nested_blocks);
         let Update {
