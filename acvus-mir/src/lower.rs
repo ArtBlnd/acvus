@@ -724,10 +724,14 @@ impl<'a> Lowerer<'a> {
         self.emit_inst(span, InstKind::Return { value, order });
     }
 
-    /// Read the current `Order` of the body, if it has one.
+    /// Read the current `Order` of the body, if it has one: inside an
+    /// `anyorder` region, the merge of what its calls yielded so far.
     fn current_order(&mut self, span: Span) -> Option<ValueId> {
-        self.order_slot
-            .map(|slot| self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order))
+        let slot = match self.anyorder {
+            Some(scope) => scope.acc,
+            None => self.order_slot?,
+        };
+        Some(self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order))
     }
 
     /// Emit a call. A callee whose effect is not Pure takes the current
@@ -813,13 +817,7 @@ impl<'a> Lowerer<'a> {
         };
         let outer = self.anyorder;
         if outer.is_none() {
-            let entry = self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order);
-            let acc = self.alloc_slot(
-                Ty::Order,
-                ValOrigin::Named(self.interner.intern("$anyorder")),
-            );
-            self.emit_assign(span, RefTarget::Var(acc), vec![], entry);
-            self.anyorder = Some(AnyorderScope { entry, acc });
+            self.open_anyorder(slot, span);
         }
         self.push_scope();
         for s in body {
@@ -831,6 +829,16 @@ impl<'a> Lowerer<'a> {
             let exit = self.emit_take(span, RefTarget::Var(scope.acc), vec![], Ty::Order);
             self.emit_assign(span, RefTarget::Var(slot), vec![], exit);
         }
+    }
+
+    fn open_anyorder(&mut self, slot: ValueId, span: Span) {
+        let entry = self.emit_take(span, RefTarget::Var(slot), vec![], Ty::Order);
+        let acc = self.alloc_slot(
+            Ty::Order,
+            ValOrigin::Named(self.interner.intern("$anyorder")),
+        );
+        self.emit_assign(span, RefTarget::Var(acc), vec![], entry);
+        self.anyorder = Some(AnyorderScope { entry, acc });
     }
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
@@ -2927,6 +2935,14 @@ impl<'a> Lowerer<'a> {
                 let saved_taken_out = std::mem::take(&mut self.taken_out);
                 let lambda_effect = self.type_of_id(*id).effect().unwrap_or(Effect::OPAQUE);
                 self.enter_body_order(lambda_effect, *span);
+                // `anyorder` is lexical: a closure defined inside the block
+                // belongs to it, so its body is the region over its own entry
+                // `Order`, wherever it is called from.
+                if saved_anyorder.is_some()
+                    && let Some(slot) = self.order_slot
+                {
+                    self.open_anyorder(slot, *span);
+                }
                 self.enter_contexts(acvus_ast::direct_expr_context_refs(body), *span);
 
                 // Captures and params are the closure body's first bindings.

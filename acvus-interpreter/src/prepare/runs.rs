@@ -879,8 +879,6 @@ mod tests {
     use acvus_mir::ty::ObjectTy;
     use acvus_utils::{Interner, QualifiedRef};
 
-    use crate::regs::MAX_SCALAR_SLOTS;
-
     use super::*;
 
     fn object(i: &Interner, fields: &[(&str, Ty)]) -> Ty {
@@ -1077,8 +1075,8 @@ mod tests {
             9
         );
         assert!(
-            place(&[widest()], MAX_SCALAR_SLOTS + 1).is_none(),
-            "the region does not fit above a full scalar frame"
+            place(&[widest()], MAX_FRAME_SLOTS - MAX_RUN_SLOTS + 1).is_none(),
+            "the region does not fit above a base that leaves it one register short"
         );
     }
 

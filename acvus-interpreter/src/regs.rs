@@ -13,17 +13,13 @@ use std::ptr::NonNull;
 
 use acvus_extern::Release;
 
-use crate::code::{Body, Marked, Off};
+use crate::code::{Body, Marked, Off, WordMask};
 use crate::value::Value;
 
 /// The registers one cell holds: four cache lines of `Value`s.
 pub const CELL_SLOTS: u16 = 16;
 
-pub const MAX_FRAME_SLOTS: u16 = MAX_SCALAR_SLOTS + MAX_RUN_SLOTS;
-
-/// `prepare::assign_slots` is what keeps this bound: it colours a scalar value
-/// into the registers below it and nothing here can check that it did.
-pub const MAX_SCALAR_SLOTS: u16 = 64;
+pub const MAX_FRAME_SLOTS: u16 = Off::MAX_INDEX + 1;
 
 pub const MAX_RUN_SLOTS: u16 = 256;
 
@@ -34,6 +30,12 @@ const MARK_WORDS_PER_SLOT: u16 = 2;
 /// `Regs::of` writes `Body::param_marks` into mark word 0 whatever a frame's
 /// length is, so even a frame of no registers carries that one word.
 const MARK_WORDS_AT_LEAST: u16 = 1;
+
+const _: () = assert!(
+    MAX_ARG_SLOTS <= MARK_WORD_SLOTS as usize,
+    "a call lays its arguments in the callee's first registers, whose claims `Body::param_marks` \
+     writes into mark word 0 alone"
+);
 
 const _: () = assert!(
     MARK_WORD_SLOTS as u32 == u64::BITS,
@@ -90,10 +92,6 @@ impl Cell {
 const _: () = assert!(
     size_of::<Cell>() == 256 && align_of::<Cell>() == 64,
     "a cell is four cache lines and starts one"
-);
-const _: () = assert!(
-    MAX_FRAME_SLOTS == Off::MAX_INDEX + 1,
-    "the widest frame and the widest byte displacement are the same bound"
 );
 const _: () = assert!(
     ARG_CELLS <= WINDOW_CELLS,
@@ -639,19 +637,22 @@ impl<'f> Regs<'f> {
     }
 
     /// The batched form: one `and` of the constant mask of the registers this
-    /// operation consumes (RFC-0048 rule 5).
-    ///
-    /// `prepare::take_mask` and `prepare::window_take_mask` are what keep every
-    /// register of a mask inside mark word 0; each asserts it where it builds
-    /// one, and no structure here shows that they did.
+    /// operation consumes in mark word 0 (RFC-0048 rule 5). `prepare::Takes`
+    /// puts a `control::Disown` just before the operation for the ones above it.
     #[inline(always)]
     pub fn take_mask(&mut self, mask: u64) {
-        let marked = self.marked(0);
+        self.take_mask_of(WordMask { word_byte: 0, mask });
+    }
+
+    #[inline(always)]
+    pub fn take_mask_of(&mut self, WordMask { word_byte, mask }: WordMask) {
+        let word_byte = word_byte as usize;
+        let marked = self.marked(word_byte);
         debug_assert!(
             marked & mask == mask,
             "an operation takes a register its frame does not own: a double take"
         );
-        self.mark(0, marked & !mask);
+        self.mark(word_byte, marked & !mask);
     }
 
     /// RFC-0045: the old value is released before the new one lands.
@@ -789,8 +790,8 @@ mod tests {
     /// A frame of at most 64 registers occupies the cells it occupied before the
     /// runs: one mark slot, and `cells_for` the expression it was.
     #[test]
-    fn a_scalar_frame_occupies_the_cells_it_did() {
-        for len in 0..=MAX_SCALAR_SLOTS {
+    fn a_frame_of_one_mark_word_occupies_the_cells_it_did() {
+        for len in 0..=MARK_WORD_SLOTS {
             assert_eq!(
                 cells_for(len),
                 (usize::from(len) + 1).div_ceil(CELL_SLOTS as usize),

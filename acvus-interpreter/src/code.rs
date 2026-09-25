@@ -130,6 +130,12 @@ impl Marked {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WordMask {
+    pub word_byte: u32,
+    pub mask: u64,
+}
+
 const _: () = assert!(
     Off::MAX_INDEX as usize / crate::regs::MARK_WORD_SLOTS as usize * size_of::<u64>()
         <= u32::MAX as usize,
