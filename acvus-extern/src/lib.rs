@@ -73,7 +73,7 @@ pub use instance::{
 };
 pub use len::Arr;
 pub use lend::{Alone, Borrows, ByProjected, Lendable, Param, Projects, SitesOf, WithCtx, lend};
-pub use loan::{Loan, Mut, Shared};
+pub use loan::{Lending, Loan, Mut, Shared};
 pub use name::{DeclarationForm, DeclaredType, NameKind, Named};
 pub use obj::{
     Cross, FieldAt, Form, FormKind, InPlaceElement, Inline, Nothing, Obj, ObjectShape, One,

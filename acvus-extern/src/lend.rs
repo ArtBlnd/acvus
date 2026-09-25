@@ -495,11 +495,15 @@ where
         })
     }
 
+    /// The projection's own end: each storage it lent — the payload of an
+    /// `Option` or of a `Result`'s arm, and whatever that payload's own
+    /// projection lent — goes to `Runtime::loan_ended` (`Project::
+    /// loan_ended`).
     #[inline(always)]
-    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value]) {
-        // SAFETY: the caller's contract: `run[0]` is the reference to the
-        // lent storage, and the projection over it has ended.
-        unsafe { M::loan_ended(rt, &run[0]) }
+    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], site: &Self::Site) {
+        // SAFETY: the caller's contract: `run[0]` is the reference `take`
+        // projected with this table, and the projection over it has ended.
+        unsafe { M::projection_ended::<T, Rt>(rt, &run[0], site) }
     }
 }
 
@@ -755,7 +759,7 @@ where
         // SAFETY: the caller's contract: `run` is this parameter's own run,
         // whose storage outlives the call, and the closure the borrow goes to
         // returns before `_loans` drops.
-        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run) };
+        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run, sites) };
         // SAFETY: the caller's contract: `run` is this parameter's own run.
         let (lent,) = unsafe { <(Q::Marker,) as Parameters<Rt>>::take(crossing, run, sites) };
         self(lent.take::<Q::At<'_>>())
@@ -781,7 +785,7 @@ where
         // SAFETY: as the one-parameter form's.
         let crossing = unsafe { Crossing::new(rt) };
         // SAFETY: as the one-parameter form's.
-        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run) };
+        let _loans = unsafe { Loans::<(Q::Marker,), Rt>::over(rt, run, sites) };
         // SAFETY: as the one-parameter form's.
         let (lent,) = unsafe { <(Q::Marker,) as Parameters<Rt>>::take(crossing, run, sites) };
         let mut rooted = rt.rooted();

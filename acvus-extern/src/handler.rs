@@ -170,13 +170,14 @@ where
     fn site(site: &CallSite<'_, Rt>, at: usize) -> Self::Site;
 
     /// The body has returned, so every borrow `take` handed it has ended: a
-    /// parameter that lent its storage exclusively hands it to
-    /// `Runtime::loan_ended`, and every other parameter does nothing.
+    /// parameter that lent a storage exclusively hands each storage it lent
+    /// to `Runtime::loan_ended` — found through `site`, the table `take` read,
+    /// where it lent several — and every other parameter does nothing.
     ///
     /// # Safety
-    /// `run` is the run `take` read, whose storages are still live, and no
-    /// borrow `take` handed out is live.
-    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value]);
+    /// `run` is the run `take` read and `site` the table it read, whose
+    /// storages are still live, and no borrow `take` handed out is live.
+    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], site: &Self::Site);
 }
 
 /// A handler's parameter type, taken out of the values of a call's argument
@@ -249,7 +250,7 @@ where
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]
-    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value]) {}
+    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value], _: &Self::Site) {}
 }
 
 impl<T, Rt> Arg<Rt> for ByValue<T, Specialized>
@@ -263,7 +264,7 @@ where
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]
-    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value]) {}
+    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value], _: &Self::Site) {}
 }
 
 impl<T, M, Rt> Arg<Rt> for ByRef<T, M, Uniform>
@@ -278,7 +279,7 @@ where
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]
-    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value]) {
+    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], _: &()) {
         // SAFETY: the caller's contract: `run[0]` is the reference `take`
         // lent the storage through, and that borrow has ended.
         unsafe { M::loan_ended(rt, &run[0]) }
@@ -297,7 +298,7 @@ where
     fn site(_: &CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]
-    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value]) {
+    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], _: &()) {
         // SAFETY: the caller's contract: `run[0]` is the reference `take`
         // lent the storage through, and that borrow has ended.
         unsafe { M::loan_ended(rt, &run[0]) }
@@ -330,7 +331,7 @@ where
     }
 
     #[inline(always)]
-    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value]) {}
+    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value], _: &Self::Site) {}
 }
 
 // SAFETY: the instance is the site table's; the capability is not used.
@@ -1015,8 +1016,9 @@ where
     ) -> <Self as Parameters<Rt>>::Out<'a, 'w>;
 
     /// # Safety
-    /// As `Arg::loan_ended`, for each parameter over its own values of `run`.
-    unsafe fn loans_ended(rt: &Rt, run: &[Rt::Value]);
+    /// As `Arg::loan_ended`, for each parameter over its own values of `run`
+    /// and its own site of `sites`.
+    unsafe fn loans_ended(rt: &Rt, run: &[Rt::Value], sites: &Self::Sites);
 }
 
 /// The parameters' loans over one call's run, ended when this is dropped:
@@ -1029,7 +1031,7 @@ where
 {
     rt: &'r Rt,
     run: &'r [Rt::Value],
-    parameters: PhantomData<fn() -> A>,
+    sites: &'r A::Sites,
 }
 
 impl<'r, A, Rt> Loans<'r, A, Rt>
@@ -1038,16 +1040,12 @@ where
     Rt: Runtime,
 {
     /// # Safety
-    /// `run` is the run `Parameters::take` reads for this call, its storages
-    /// outlive this value, and every borrow `take` hands out ends before it
-    /// is dropped.
+    /// `run` and `sites` are what `Parameters::take` reads for this call, its
+    /// storages outlive this value, and every borrow `take` hands out ends
+    /// before it is dropped.
     #[inline(always)]
-    pub(crate) unsafe fn over(rt: &'r Rt, run: &'r [Rt::Value]) -> Loans<'r, A, Rt> {
-        Loans {
-            rt,
-            run,
-            parameters: PhantomData,
-        }
+    pub(crate) unsafe fn over(rt: &'r Rt, run: &'r [Rt::Value], sites: &'r A::Sites) -> Loans<'r, A, Rt> {
+        Loans { rt, run, sites }
     }
 }
 
@@ -1059,7 +1057,7 @@ where
     #[inline(always)]
     fn drop(&mut self) {
         // SAFETY: `over`'s contract.
-        unsafe { A::loans_ended(self.rt, self.run) }
+        unsafe { A::loans_ended(self.rt, self.run, self.sites) }
     }
 }
 
@@ -1358,13 +1356,13 @@ macro_rules! parameters {
 
             #[inline(always)]
             #[allow(unused_variables, unused_mut, unused_assignments)]
-            unsafe fn loans_ended(rt: &Rt, run: &[Rt::Value]) {
+            unsafe fn loans_ended(rt: &Rt, run: &[Rt::Value], sites: &Self::Sites) {
                 let mut _at = 0usize;
                 $(
                     let _width = <$arg as Arg<Rt>>::WIDTH;
                     // SAFETY: the caller's contract, over this parameter's
-                    // own values of the run.
-                    unsafe { <$arg as Arg<Rt>>::loan_ended(rt, &run[_at.._at + _width]) };
+                    // own values of the run and its own site.
+                    unsafe { <$arg as Arg<Rt>>::loan_ended(rt, &run[_at.._at + _width], &sites.$at) };
                     _at += _width;
                 )*
             }
@@ -1508,7 +1506,7 @@ where
         // SAFETY: the run is the one `take` reads below, the caller keeps its
         // storages live for the call, and the body the borrows go to returns
         // before `_loans` drops.
-        let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, run) };
+        let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, run, &self.sites) };
         // SAFETY: the caller's contract, which is `Parameters::take`'s.
         let args = unsafe { <A as Parameters<Rt>>::take(rt, run, &self.sites) };
         let out = <<R as Ret<Rt>>::Form as Returned>::as_mut_slice::<Rt>(out);
@@ -1641,7 +1639,7 @@ where
             let ctx = unsafe { Rt::ctx_of(&mut rooted) };
             // SAFETY: as the synchronous impl's, over the run the future owns;
             // the body's future completes before `_loans` drops.
-            let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, &held) };
+            let _loans = unsafe { Loans::<A, Rt>::over(ctx.rt, &held, &sites) };
             // SAFETY: as the synchronous impl's, over the run the future owns.
             let args = unsafe {
                 <A as Parameters<Rt>>::take(Crossing::new(ctx.rt), &held, &sites)

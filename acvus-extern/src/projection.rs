@@ -60,6 +60,18 @@ where
         value: &'a mut Rt::Value,
         table: &Self::Table,
     ) -> Self::Mut<'a>;
+
+    /// Every borrow `project_mut` made of `value` has ended: each storage it
+    /// lent in place — the value itself for a type the runtime stores as
+    /// itself, each field's, a payload's — goes to `Runtime::loan_ended`,
+    /// found again through the same table. This is where a `&mut i8` a
+    /// projection lent has its word re-encoded (RFC-0039 rule 2), and a
+    /// projection that lends a storage names it here.
+    ///
+    /// # Safety
+    /// As `project_mut`'s, over the value `project_mut` was handed, and no
+    /// borrow it made is live.
+    unsafe fn loan_ended(rt: &Rt, value: &mut Rt::Value, table: &Self::Table);
 }
 
 /// Where each field an object projection names sits in the object the caller
@@ -105,6 +117,16 @@ where
     /// `reference` names a live object storage holding what the owner's
     /// crossing wrote, and it is exclusively named for a `Mut` projection.
     unsafe fn of(rt: &'a Rt, reference: &'a Rt::Value, table: &Self::Table) -> Self;
+
+    /// The projection `of` built over `reference` has ended: a `Mut`
+    /// projection hands each storage it lent to `Runtime::loan_ended`
+    /// (`Project::loan_ended` over the owner's storage), a `Shared` one does
+    /// nothing.
+    ///
+    /// # Safety
+    /// As `of`'s, over the storage `of` projected, and no borrow the
+    /// projection handed out is live.
+    unsafe fn loan_ended(rt: &Rt, reference: &Rt::Value, table: &Self::Table);
 }
 
 /// The position each field an object projection names holds in the object
@@ -433,6 +455,15 @@ where
         // SAFETY: as `project`.
         Some(unsafe { <T as Project<Rt>>::project_mut(rt, payload, table) })
     }
+
+    unsafe fn loan_ended(rt: &Rt, value: &mut Rt::Value, table: &Self::Table) {
+        // SAFETY: as `project_mut`'s: the payload `project_mut` lent, where
+        // there is one.
+        if let Some(payload) = unsafe { rt.some_at_mut(value) } {
+            // SAFETY: the caller's contract, over that payload.
+            unsafe { <T as Project<Rt>>::loan_ended(rt, payload, table) }
+        }
+    }
 }
 
 impl<T, E> Borrowed for Result<T, E>
@@ -504,6 +535,17 @@ where
                 .map_err(|err| <E as Project<Rt>>::project_mut(rt, err, &table.1))
         }
     }
+
+    unsafe fn loan_ended(rt: &Rt, value: &mut Rt::Value, table: &Self::Table) {
+        // SAFETY: as `project_mut`'s: the payload of the arm `project_mut`
+        // lent.
+        match unsafe { rt.result_at_mut(value) } {
+            // SAFETY: the caller's contract, over that payload.
+            Ok(ok) => unsafe { <T as Project<Rt>>::loan_ended(rt, ok, &table.0) },
+            // SAFETY: as above.
+            Err(err) => unsafe { <E as Project<Rt>>::loan_ended(rt, err, &table.1) },
+        }
+    }
 }
 
 /// A parameter declared as a projection: the reference the caller lent is the
@@ -525,13 +567,16 @@ where
         <P as Projected<'static, Rt>>::table(site.args[at])
     }
 
-    /// NOTE: a projection's component borrows a field's storage inside the
-    /// object, and nothing here reaches those storages, so a `&mut i8`
-    /// component leaves its field's word as the borrow wrote it. Re-encoding
-    /// each component's storage needs the projection's table to name them;
-    /// it is not built yet.
+    /// The projection's own end: each component's storage, found through
+    /// the site's table, goes to `Runtime::loan_ended` (`Projected::
+    /// loan_ended`).
     #[inline(always)]
-    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value]) {}
+    unsafe fn loan_ended(rt: &Rt, run: &[Rt::Value], site: &Self::Site) {
+        // SAFETY: the caller's contract: `run[0]` is the reference `take`
+        // built the projection over with this table, and the projection has
+        // ended.
+        unsafe { <P as Projected<'static, Rt>>::loan_ended(rt, &run[0], site) }
+    }
 }
 
 // SAFETY: the projection is `Q::of` over this parameter's own word with the
@@ -629,6 +674,15 @@ macro_rules! borrowed_as_self {
                 <Self as $crate::Stored<__Rt>>::from_payload_mut(unsafe { $crate::Holding::new() }, unsafe {
                     __rt.value_as_mut::<<Self as $crate::Stored<__Rt>>::Payload>(__value)
                 })
+            }
+
+            unsafe fn loan_ended(
+                _: &__Rt,
+                __value: &mut <__Rt as $crate::Runtime>::Value,
+                _: &(),
+            ) {
+                // `project_mut` lent the value itself.
+                <__Rt as $crate::Runtime>::loan_ended(__value)
             }
         }
     };

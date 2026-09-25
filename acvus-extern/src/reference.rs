@@ -82,12 +82,13 @@ where
     /// Read and write through the reference. The borrow `f` is handed does
     /// not outlive `f`, so the loan ends where `with` returns.
     pub fn with<R>(&mut self, rt: &Rt, f: impl for<'a> FnOnce(&'a mut T) -> R) -> R {
-        // SAFETY: the storage is live for as long as this reference, and the
-        // one borrow of it below ends with `f`, before `_ending` drops.
-        let _ending = unsafe { crate::loan::Ending::of(rt, &self.0) };
-        // SAFETY: as the shared `with`'s, and an exclusive loan is the only
-        // live name of its storage, which `&mut self` keeps.
-        f(unsafe { <Mut as Loan>::borrow::<T, crate::Uniform, Rt>(rt, &self.0) })
+        // SAFETY: the storage is live for as long as this reference, and an
+        // exclusive loan is the only live name of it, which `&mut self`
+        // keeps for the borrow below.
+        let lending = unsafe { crate::loan::Lending::<Mut, Rt>::of(rt, self.0) };
+        // SAFETY: as the shared `with`'s; the borrow is read through
+        // `lending`, so it ends before `lending` drops.
+        f(unsafe { <Mut as Loan>::borrow::<T, crate::Uniform, Rt>(rt, lending.reference()) })
     }
 }
 

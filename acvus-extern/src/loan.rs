@@ -6,6 +6,8 @@
 //! loan carries the Rust borrow, the runtime calls that open it, and the acvus
 //! mutability.
 
+use std::marker::PhantomData;
+
 use acvus_mir::ty::Mutability;
 
 use crate::handler::{Borrowable, Lends};
@@ -69,6 +71,21 @@ pub trait Loan: Send + Sync + 'static {
     /// `reference` names a live storage, and no borrow of it is live.
     unsafe fn loan_ended<Rt>(rt: &Rt, reference: &Rt::Value)
     where
+        Rt: Runtime;
+
+    /// A projection `project` made of the storage `reference` names has
+    /// ended: at `Mut`, each storage the projection lent in place goes to
+    /// `Runtime::loan_ended`, through `Project::loan_ended` over the same
+    /// storage and table.
+    ///
+    /// # Safety
+    /// As `project`'s, and no borrow the projection handed out is live.
+    unsafe fn projection_ended<T, Rt>(
+        rt: &Rt,
+        reference: &Rt::Value,
+        table: &<T as Project<Rt>>::Table,
+    ) where
+        T: Project<Rt>,
         Rt: Runtime;
 }
 
@@ -135,6 +152,14 @@ impl Loan for Shared {
     #[inline(always)]
     unsafe fn loan_ended<Rt>(_: &Rt, _: &Rt::Value)
     where
+        Rt: Runtime,
+    {
+    }
+
+    #[inline(always)]
+    unsafe fn projection_ended<T, Rt>(_: &Rt, _: &Rt::Value, _: &<T as Project<Rt>>::Table)
+    where
+        T: Project<Rt>,
         Rt: Runtime,
     {
     }
@@ -206,36 +231,74 @@ impl Loan for Mut {
         let storage = unsafe { <Rt::Value as Borrowable<Rt>>::deref_mut(rt, reference) };
         Rt::loan_ended(storage);
     }
-}
 
-/// An exclusive loan of the storage `reference` names, ended when this is
-/// dropped: after the borrow's user returns, and while a panic in it unwinds.
-pub(crate) struct Ending<'r, Rt>
-where
-    Rt: Runtime,
-{
-    rt: &'r Rt,
-    reference: &'r Rt::Value,
-}
-
-impl<'r, Rt> Ending<'r, Rt>
-where
-    Rt: Runtime,
-{
-    /// # Safety
-    /// `reference` names a live storage that outlives this value, and every
-    /// borrow of it made meanwhile ends before this is dropped.
-    pub(crate) unsafe fn of(rt: &'r Rt, reference: &'r Rt::Value) -> Ending<'r, Rt> {
-        Ending { rt, reference }
+    #[inline(always)]
+    unsafe fn projection_ended<T, Rt>(rt: &Rt, reference: &Rt::Value, table: &<T as Project<Rt>>::Table)
+    where
+        T: Project<Rt>,
+        Rt: Runtime,
+    {
+        // SAFETY: the caller's contract: the storage `project` read is live,
+        // and no borrow of it is.
+        let value = unsafe { <Rt::Value as Borrowable<Rt>>::deref_mut(rt, reference) };
+        // SAFETY: as above, over the value `project_mut` was handed.
+        unsafe { T::loan_ended(rt, value, table) }
     }
 }
 
-impl<Rt> Drop for Ending<'_, Rt>
+/// A borrow lent in place through the reference word this holds, and the
+/// end of that loan: dropping it hands the storage to `M::loan_ended`, after
+/// the borrow's user returns and while a panic in it unwinds.
+///
+/// The borrow is read through `reference`, whose result lives no longer than
+/// the borrow of this value, so no borrow made through it outlives the drop
+/// that ends it. The glue a macro writes lends a receiver and each exclusive
+/// position of a signature's rest through one, and `Ref::with` its storage.
+#[doc(hidden)]
+pub struct Lending<'r, M, Rt>
 where
+    M: Loan,
     Rt: Runtime,
 {
+    rt: &'r Rt,
+    reference: Rt::Value,
+    loan: PhantomData<fn() -> M>,
+}
+
+impl<'r, M, Rt> Lending<'r, M, Rt>
+where
+    M: Loan,
+    Rt: Runtime,
+{
+    /// # Safety
+    /// `reference` is a reference word naming a live storage that outlives
+    /// this value, named by nothing else while a borrow made through it at
+    /// `Mut` lives.
+    #[inline(always)]
+    pub unsafe fn of(rt: &'r Rt, reference: Rt::Value) -> Lending<'r, M, Rt> {
+        Lending {
+            rt,
+            reference,
+            loan: PhantomData,
+        }
+    }
+
+    /// The reference word a borrow of the storage is read through.
+    #[inline(always)]
+    pub fn reference(&self) -> &Rt::Value {
+        &self.reference
+    }
+}
+
+impl<M, Rt> Drop for Lending<'_, M, Rt>
+where
+    M: Loan,
+    Rt: Runtime,
+{
+    #[inline(always)]
     fn drop(&mut self) {
-        // SAFETY: `of`'s contract.
-        unsafe { <Mut as Loan>::loan_ended(self.rt, self.reference) }
+        // SAFETY: `of`'s contract: the storage is live, and every borrow read
+        // through `reference` borrowed `self`, so none is live here.
+        unsafe { M::loan_ended(self.rt, &self.reference) }
     }
 }

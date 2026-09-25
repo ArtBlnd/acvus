@@ -930,9 +930,14 @@ fn generate_extern_fn(
                 _ => quote! { ::acvus_extern::Shared },
             };
             match p.mode {
+                // The receiver is read through a `Lending`, which ends its
+                // loan when the glue's scope ends, after the body.
                 Mode::BorrowMut | Mode::Borrow => quote! {
                     let __recv_at = unsafe {
-                        <__R as ::acvus_extern::Runtime>::reference(__rt.rt(), &*__ctx.receiver())
+                        ::acvus_extern::Lending::<#loan, __R>::of(
+                            __rt.rt(),
+                            <__R as ::acvus_extern::Runtime>::reference(__rt.rt(), &*__ctx.receiver()),
+                        )
                     };
                     let #at = unsafe {
                         ::acvus_extern::receiver_borrowed::<_, #loan, #c, __R>(__rt.rt(), &__recv_at)
@@ -963,7 +968,7 @@ fn generate_extern_fn(
         let restoring = (has_glue && !rest_idents.is_empty()).then(|| {
             let sig_mod = sig_mod.as_ref().expect("has_glue names a signature");
             quote! {
-                let mut __lent: #sig_mod::Lent<__R> = ::core::default::Default::default();
+                let mut __lent: #sig_mod::Lent<'_, __R> = ::core::default::Default::default();
                 // SAFETY: as the receiver's: the run is this signature's
                 // own, at the types this instance has.
                 let (#(#rest_idents,)*) = unsafe {
@@ -2136,6 +2141,15 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 // SAFETY: as `project`, with the caller's exclusive loan.
                 unsafe { __rt.value_as_mut::<#key_ty>(__value) }
             }
+
+            unsafe fn loan_ended(
+                _: &__R,
+                __value: &mut <__R as ::acvus_extern::Runtime>::Value,
+                _: &(),
+            ) {
+                // `project_mut` lent the value itself.
+                <__R as ::acvus_extern::Runtime>::loan_ended(__value)
+            }
         }
     });
     let identity_indices: Option<Vec<usize>> = input
@@ -3198,6 +3212,38 @@ impl<'a> ObjectShape<'a> {
                         },)*
                     }
                 }
+
+                /// The projection `over` built has ended: each field's
+                /// storage, at the position the table names, goes to its
+                /// own crossing's `Project::loan_ended`, which hands a
+                /// storage lent in place to `Runtime::loan_ended`.
+                ///
+                /// # Safety
+                /// As `over`'s, over the object `over` projected, and no
+                /// borrow the projection handed out is live.
+                pub unsafe fn ended<__R>(
+                    __rt: &__R,
+                    __obj: &mut ::acvus_extern::Obj<::acvus_extern::Owned<__R>>,
+                    __table: &#table_ty,
+                ) where
+                    __R: ::acvus_extern::Runtime,
+                {
+                    // SAFETY: as `over`'s: the same positions of the same
+                    // object.
+                    let [#(#idents),*] = unsafe {
+                        ::acvus_extern::Fields::<::acvus_extern::Mut, __R>::of(__obj)
+                            .disjoint::<#width>(__table.at)
+                    };
+                    // SAFETY: the caller's contract, at each field `over`
+                    // projected with this table.
+                    #(unsafe {
+                        <#tys as ::acvus_extern::Project<__R>>::loan_ended(
+                            __rt,
+                            #idents,
+                            &__table.fields.#ats,
+                        )
+                    };)*
+                }
             }
 
             impl<__R> ::acvus_extern::Project<__R> for #owner
@@ -3234,6 +3280,22 @@ impl<'a> ObjectShape<'a> {
                     // SAFETY: as `project`, with the caller's exclusive loan.
                     unsafe {
                         #exclusive::over(
+                            __rt,
+                            ::acvus_extern::object::<::acvus_extern::Nested, ::acvus_extern::Mut, __R>(__rt, __value),
+                            __table,
+                        )
+                    }
+                }
+
+                unsafe fn loan_ended(
+                    __rt: &__R,
+                    __value: &mut <__R as ::acvus_extern::Runtime>::Value,
+                    __table: &Self::Table,
+                ) {
+                    // SAFETY: the caller's contract: the object
+                    // `project_mut` projected.
+                    unsafe {
+                        #exclusive::ended(
                             __rt,
                             ::acvus_extern::object::<::acvus_extern::Nested, ::acvus_extern::Mut, __R>(__rt, __value),
                             __table,
@@ -3287,6 +3349,14 @@ impl<'a> ObjectShape<'a> {
                         )
                     }
                 }
+
+                /// A shared projection lends nothing exclusively.
+                unsafe fn loan_ended(
+                    _: &__R,
+                    _: &<__R as ::acvus_extern::Runtime>::Value,
+                    _: &Self::Table,
+                ) {
+                }
             }
 
             // SAFETY: a projection is at its own lifetime, and borrows only
@@ -3312,6 +3382,22 @@ impl<'a> ObjectShape<'a> {
                     // SAFETY: as the shared projection's, exclusively.
                     unsafe {
                         #exclusive::over(
+                            __rt,
+                            ::acvus_extern::object::<::acvus_extern::Lent, ::acvus_extern::Mut, __R>(__rt, __reference),
+                            __table,
+                        )
+                    }
+                }
+
+                unsafe fn loan_ended(
+                    __rt: &__R,
+                    __reference: &<__R as ::acvus_extern::Runtime>::Value,
+                    __table: &Self::Table,
+                ) {
+                    // SAFETY: the caller's contract: the object storage `of`
+                    // projected, which no borrow names any longer.
+                    unsafe {
+                        #exclusive::ended(
                             __rt,
                             ::acvus_extern::object::<::acvus_extern::Lent, ::acvus_extern::Mut, __R>(__rt, __reference),
                             __table,
@@ -3631,6 +3717,7 @@ fn enum_projection(
     let mut declared_arms = Vec::new();
     let mut read_arms = Vec::new();
     let mut write_arms = Vec::new();
+    let mut end_arms = Vec::new();
     let mut payload_at = 0usize;
     for (at, variant) in variants.iter().enumerate() {
         let v = variant.ident;
@@ -3641,6 +3728,7 @@ fn enum_projection(
                 declared_arms.push(quote! { #v });
                 read_arms.push(quote! { #matched => Self::#v });
                 write_arms.push(quote! { #matched => Self::#v });
+                end_arms.push(quote! { #matched => {} });
             }
             Some(ty) => {
                 let held = syn::Index::from(payload_at);
@@ -3675,6 +3763,17 @@ fn enum_projection(
                             )
                         }
                     })
+                });
+                end_arms.push(quote! {
+                    // SAFETY: the caller's contract: the payload `over`
+                    // handed this arm's `project_mut`.
+                    #matched => unsafe {
+                        <#ty as ::acvus_extern::Project<__R>>::loan_ended(
+                            __rt,
+                            __payload,
+                            &__table.payloads.#held,
+                        )
+                    }
                 });
             }
         }
@@ -3768,6 +3867,37 @@ fn enum_projection(
                     #(#write_arms,)*
                 }
             }
+
+            /// The arm `over` lent has ended: the payload of the variant
+            /// the tag now names goes to its own crossing's
+            /// `Project::loan_ended`, which hands a storage lent in place to
+            /// `Runtime::loan_ended`. A variant `set` wrote since is read by
+            /// its own tag, and its words are the crossing's own.
+            ///
+            /// # Safety
+            /// As `over`'s, over the variant `over` projected, and no borrow
+            /// an arm handed out is live.
+            pub unsafe fn ended<__R>(
+                __rt: &__R,
+                __variant: &mut ::acvus_extern::Variant<::acvus_extern::Owned<__R>>,
+                __table: &#table_ty,
+            ) where
+                __R: ::acvus_extern::Runtime,
+            {
+                // SAFETY: as `over`'s.
+                let __tag = unsafe {
+                    <__R as ::acvus_extern::Runtime>::tag_symbol(__rt, __variant.tag())
+                };
+                let __at = ::acvus_extern::derive::variant::arm_of(__tag, &__table.tags, #name);
+                // SAFETY: as `over`'s: the payload word goes only to its
+                // arm's `loan_ended`.
+                let __payload = unsafe {
+                    __variant.payload_mut().value_mut(::acvus_extern::Holding::new())
+                };
+                match __at {
+                    #(#end_arms,)*
+                }
+            }
         }
 
         impl<'__a, __R> #exclusive<'__a, __R>
@@ -3833,6 +3963,18 @@ fn enum_projection(
                     #arms_ty::over(__rt, ::acvus_extern::variant::<::acvus_extern::Nested, ::acvus_extern::Mut, __R>(__rt, __value), __table)
                 }
             }
+
+            unsafe fn loan_ended(
+                __rt: &__R,
+                __value: &mut <__R as ::acvus_extern::Runtime>::Value,
+                __table: &Self::Table,
+            ) {
+                // SAFETY: the caller's contract: the variant `project_mut`
+                // projected.
+                unsafe {
+                    #arms_ty::ended(__rt, ::acvus_extern::variant::<::acvus_extern::Nested, ::acvus_extern::Mut, __R>(__rt, __value), __table)
+                }
+            }
         }
 
         impl<'__q, __R> ::acvus_extern::Param<__R> for #shared<'__q>
@@ -3876,6 +4018,14 @@ fn enum_projection(
                     #shared::over(__rt, ::acvus_extern::variant::<::acvus_extern::Lent, ::acvus_extern::Shared, __R>(__rt, __reference), __table)
                 }
             }
+
+            /// A shared projection lends nothing exclusively.
+            unsafe fn loan_ended(
+                _: &__R,
+                _: &<__R as ::acvus_extern::Runtime>::Value,
+                _: &Self::Table,
+            ) {
+            }
         }
 
         // SAFETY: as the shared projection's.
@@ -3904,6 +4054,23 @@ fn enum_projection(
                 // SAFETY: as the shared projection's, exclusively.
                 unsafe {
                     #exclusive::over(
+                        __rt,
+                        ::acvus_extern::variant::<::acvus_extern::Lent, ::acvus_extern::Mut, __R>(__rt, __reference),
+                        __table,
+                    )
+                }
+            }
+
+            unsafe fn loan_ended(
+                __rt: &__R,
+                __reference: &<__R as ::acvus_extern::Runtime>::Value,
+                __table: &Self::Table,
+            ) {
+                // SAFETY: the caller's contract: the variant storage `of`
+                // projected, which neither the projection nor an arm it
+                // handed out names any longer.
+                unsafe {
+                    #arms_ty::ended(
                         __rt,
                         ::acvus_extern::variant::<::acvus_extern::Lent, ::acvus_extern::Mut, __R>(__rt, __reference),
                         __table,
@@ -4636,7 +4803,28 @@ fn signature_module(
         .filter(|(_, at)| matches!(at, RestAt::VariableShared | RestAt::VariableExclusive))
         .map(|(at, _)| format_ident!("__at{at}"))
         .collect();
-    let lent_len = lent.len();
+    // Each lent position's slot: the `Lending` its borrow is read through,
+    // at the loan the position takes, which the glue drops after the body
+    // and so ends the loan. A signature that lends nothing has no slot and
+    // still names the lifetime.
+    let lent_slots: Vec<proc_macro2::TokenStream> = rest
+        .iter()
+        .filter_map(|at| match at {
+            RestAt::VariableShared => Some(quote! { ::acvus_extern::Shared }),
+            RestAt::VariableExclusive => Some(quote! { ::acvus_extern::Mut }),
+            RestAt::VariableValue | RestAt::Itself(_) => None,
+        })
+        .map(|loan| quote! {
+            ::core::option::Option<::acvus_extern::Lending<'__r, #loan, #runtime>>
+        })
+        .collect();
+    let (lent_ty, lent_pattern) = match lent_slots.is_empty() {
+        true => (
+            quote! { ::core::marker::PhantomData<&'__r #runtime> },
+            quote! { _ },
+        ),
+        false => (quote! { (#(#lent_slots,)*) }, quote! { (#(#lent,)*) }),
+    };
     let crossed = rest
         .iter()
         .zip(&tys)
@@ -4711,8 +4899,7 @@ fn signature_module(
         pub mod #module {
             pub type Rest<'__a, #runtime> = #run;
 
-            pub type Lent<#runtime> =
-                [<#runtime as ::acvus_extern::Runtime>::Value; #lent_len];
+            pub type Lent<'__r, #runtime> = #lent_ty;
 
             /// A result as it crosses between an instance's glue and a
             /// requirer: `Ret` is one type for every instance of the
@@ -4751,10 +4938,10 @@ fn signature_module(
             /// and the storages it names are live for `'b`.
             #[allow(clippy::needless_lifetimes, unused_variables)]
             #[inline(always)]
-            pub unsafe fn restore<'__a, '__b, #runtime #(, #markers)* #(, #variable_handlers)*>(
-                __rt: ::acvus_extern::Crossing<'_, #runtime>,
+            pub unsafe fn restore<'__a, '__b, '__r, #runtime #(, #markers)* #(, #variable_handlers)*>(
+                __rt: ::acvus_extern::Crossing<'__r, #runtime>,
                 __rest: Rest<'__a, #runtime>,
-                __lent: &'__b mut Lent<#runtime>,
+                __lent: &'__b mut Lent<'__r, #runtime>,
                 _: ::core::marker::PhantomData<(#(#markers,)*)>,
             ) -> (#(#restored,)*)
             where
@@ -4763,7 +4950,7 @@ fn signature_module(
                 #(#bounds,)*
             {
                 let (#(#args,)*) = __rest;
-                let [#(#lent,)*] = __lent;
+                let #lent_pattern = __lent;
                 (#(#takes,)*)
             }
         }

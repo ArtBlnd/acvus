@@ -222,9 +222,16 @@ Status: Accepted
    writes the whole word back: the glue ends a `&mut T` parameter's loan
    when the body returns or unwinds, a host lend when its closure does,
    `Ref::with` when its closure does, and `Erased::as_mut` and `get_mut`
-   when the borrow they return is dropped. A projection's exclusive
-   component (RFC-0050 rule 6) is not yet ended this way: its field keeps
-   the bytes the borrow wrote until something writes the field whole.
+   when the borrow they return is dropped. A projection lends each of its
+   components' storages, so its own end names them: `Project::loan_ended`,
+   required of every projection, walks the table the projection was built
+   with — a derived struct's field positions, an enum's tags (the payload of
+   the variant the tag now names), an `Option`'s payload, a `Result`'s arm —
+   down to each storage lent in place and hands it to `Runtime::loan_ended`,
+   and a handler's projection parameter and a host's lent `Option` or
+   `Result` end through it. A mono instance glue lends its receiver and each
+   exclusive rest position through a `Lending`, the reference its borrow is
+   read through, whose drop after the body ends the loan.
 3. An extension type — `#[derive(ExternType)]` — is stored as its payload,
    the first field, and is `#[repr(transparent)]` over it, so a reference to
    the payload is a reference to the type; the derive requires the attribute.

@@ -265,7 +265,7 @@ where
     /// replaces a whole value, and an element read in place is read through
     /// `Erased`, whose exclusive borrow ends its own loan.
     #[inline(always)]
-    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value]) {}
+    unsafe fn loan_ended(_: &Rt, _: &[Rt::Value], _: &Self::Site) {}
 }
 
 // SAFETY: the slice is read from this parameter's own pair at `D`, which

@@ -1,13 +1,19 @@
 //! An inline scalar has one word wherever it came from (RFC-0037 rule 6,
 //! `acvus_extern::repr::Word`): a value an extern returned or wrote through a
 //! `&mut` compares equal, inside every structural shape and as a map key, to
-//! the same value written as a literal. Each program runs at both
-//! optimization levels.
+//! the same value written as a literal. The `&mut` is every one a Rust body
+//! can be lent in place (RFC-0039 rule 2): a parameter, a field of a derived
+//! struct's projection, the payload of a derived enum's arm, the payload of a
+//! host's lent `Result` and `Option`, and an instance's receiver. Each
+//! program runs at both optimization levels.
 
+use std::ops::Deref;
 use std::sync::Arc;
 
-use acvus_extern::{Erased, Registry, Runtime, extern_fn, extern_registry};
-use acvus_interpreter::{AcvusRuntime, Value};
+use acvus_extern::{
+    Ctx, Erased, Instance, Registry, Runtime, TyArg, Var, extern_fn, extern_registry, kind,
+};
+use acvus_interpreter::{AcvusRuntime, Host, MemoryStorage, SequentialExecutor, Source, Value};
 use acvus_interpreter_test::{check_graph, execute_compiled};
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::graph::optimize::Opt;
@@ -38,7 +44,11 @@ macro_rules! narrow_externs {
         fn narrow_registry() -> Registry<AcvusRuntime> {
             extern_registry! {
                 ns: "t",
-                fns: [$($low, $high, $set,)* set_first_i8, set_first_i16, set_first_i32],
+                signatures: [sig::overwrite],
+                fns: [
+                    $($low, $high, $set,)* set_first_i8, set_first_i16, set_first_i32,
+                    set_narrow_a, set_cell, overwrite_i8, overwritten,
+                ],
             }
         }
     };
@@ -79,6 +89,71 @@ where
     Rt: Runtime,
 {
     *dst[0].get_mut() = value;
+}
+
+/// A struct of narrow scalars, lent through its exclusive projection, whose
+/// `a` is a `&mut i8` over the field's own word.
+#[derive(TyArg)]
+#[projection]
+pub struct Narrow {
+    a: i8,
+    b: i16,
+}
+
+/// Writes `value` into the lent struct's `a` through its projection.
+#[extern_fn(effect = pure)]
+fn set_narrow_a(n: NarrowMut<'_>, value: i8) {
+    *n.a = value;
+}
+
+/// An enum whose one payload is a narrow scalar.
+#[derive(TyArg)]
+#[projection]
+pub enum Cell {
+    Empty,
+    Full(i8),
+}
+
+/// Writes `value` into the payload of the lent enum's `Full` arm.
+#[extern_fn(effect = pure)]
+fn set_cell<Rt>(c: CellMut<'_, Rt>, value: i8)
+where
+    Rt: Runtime,
+{
+    let mut c = c;
+    if let CellArms::Full(x) = c.arms() {
+        *x = value;
+    }
+}
+
+mod sig {
+    use acvus_extern::extern_signature;
+
+    extern_signature! {
+        ns: "t",
+        fn overwrite<T>(place: &mut T)
+        where
+            T: Var<kind::Type>;
+    }
+}
+
+/// The `i8` instance of `overwrite`: its receiver is lent in place through
+/// the mono glue.
+#[extern_fn(instance_of = sig::overwrite, effect = pure)]
+fn overwrite_i8(place: &mut i8) {
+    *place = -1;
+}
+
+/// Calls the `overwrite` of its `T` on its own copy of `a`, and returns it.
+#[extern_fn(effect = pure)]
+fn overwritten<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: T, overwrite: Instance<'_, sig::overwrite<T, Rt>, T, Rt>) -> T
+where
+    T: Var<kind::Type> + Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    let mut a = a;
+    overwrite.call(ctx, &mut a, ());
+    a
 }
 
 fn run(source: &str, ret: Ty, opt: Opt) -> Value {
@@ -260,4 +335,128 @@ fn an_element_an_extern_writes_in_place_equals_its_literal() {
              let e = a[0u64]; (e, 0) == (1{name}, 0)"
         ));
     }
+}
+
+/// A `&mut i8` field of a derived struct's projection, written across the
+/// sign in both directions; the struct is then compared whole, in a tuple,
+/// and as a map key, with one built from literals.
+#[test]
+fn a_field_an_extern_writes_through_a_struct_projection_equals_its_literal() {
+    for (start, written) in [("0i8", "-1i8"), ("-1i8", "1i8")] {
+        let lent = format!("let s = {{ a: {start}, b: -2i16, }}; set_narrow_a(&mut s, {written});");
+        let literal = format!("{{ a: {written}, b: -2i16, }}");
+        holds(&format!("{lent} s == {literal}"));
+        holds(&format!("{lent} (s, 0) == ({literal}, 0)"));
+        holds(&format!(
+            "{lent} let m = hash_map_by(|k| -> 0u64, |a, b| -> a == b); insert(&mut m, s, 10); \
+             let q = {literal}; contains_key(&m, &q)"
+        ));
+    }
+}
+
+/// The payload of a derived enum's arm, lent through `CellMut::arms`.
+#[test]
+fn a_payload_an_extern_writes_through_an_enum_arm_equals_its_literal() {
+    for (start, written) in [("0i8", "-1i8"), ("-1i8", "1i8")] {
+        let lent = format!(
+            "let c = if 0 < 1 {{ Cell::Full({start}) }} else {{ Cell::Empty }}; set_cell(&mut c, {written});"
+        );
+        let literal = format!("Cell::Full({written})");
+        holds(&format!("{lent} c == {literal}"));
+        holds(&format!("{lent} (c, 0) == ({literal}, 0)"));
+        holds(&format!(
+            "{lent} let m = hash_map_by(|k| -> 0u64, |a, b| -> a == b); insert(&mut m, c, 10); \
+             let q = {literal}; contains_key(&m, &q)"
+        ));
+    }
+}
+
+/// An instance's `&mut` receiver, lent in place by its mono glue.
+#[test]
+fn a_receiver_an_instance_writes_equals_its_literal() {
+    holds("(overwritten(0i8), 0) == (-1i8, 0)");
+    holds(
+        "let x = overwritten(0i8); let m = hash_map_by(|k| -> 0u64, |a, b| -> a == b); \
+         insert(&mut m, (x, 1), 10); let q = (-1i8, 1); contains_key(&m, &q)",
+    );
+}
+
+/// `@key` is seeded by `seed`, edited in place by `edit` through the page's
+/// `with_mut`, and then `check` must answer `true`, at both optimization
+/// levels.
+async fn edited_context_holds<Q, F>(seed: &str, check: &str, edit: F)
+where
+    F: acvus_extern::Borrows<AcvusRuntime, Q, ()> + Clone,
+{
+    for opt in [Opt::None, Opt::Full] {
+        let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
+        registries.push(narrow_registry());
+        let host = Host::new(registries)
+            .opt(opt)
+            .entry::<(), ()>("seed", Source::Script(seed))
+            .entry::<(), bool>("check", Source::Script(check));
+        let program = match host.compile(SequentialExecutor) {
+            Ok(program) => program,
+            Err(error) => panic!("at {opt:?}, refused: {error:?}"),
+        };
+        let edit = edit.clone();
+        program
+            .scope(async |s| {
+                let mut storage = MemoryStorage::new();
+                let mut page = s.open(&mut storage);
+                let seeded = s.entry::<(), ()>("seed").expect("`seed` returns `()`");
+                seeded.run(&mut page, ()).await.expect("`seed` reads no context");
+                page.with_mut("r", edit).await.expect("`@r` is held at the closure's type");
+                let checked = s.entry::<(), bool>("check").expect("`check` returns `bool`");
+                let output = checked.run(&mut page, ()).await.expect("`@r` is held");
+                assert!(output.with(|b: &bool| *b).expect("a `bool`"), "at {opt:?}: {check}");
+            })
+            .await;
+    }
+}
+
+/// A host's `Result<&mut i8, _>`: the payload of the `Ok` arm, lent in place.
+#[tokio::test]
+async fn a_result_payload_a_host_writes_equals_its_literal() {
+    let seed = r#"@r = if 0 < 1 { Ok(0i8) } else { Err("e".to_string()) };"#;
+    let set = |r: Result<&mut i8, &mut String>| {
+        *r.expect("`seed` wrote `Ok`") = -1;
+    };
+    let literal = r#"if 0 < 1 { Ok(-1i8) } else { Err("e".to_string()) }"#;
+    // A `Result` holding a `String` is moved out of `@r` by the read, and a
+    // run leaves every context it moved assigned, so each check writes
+    // `@r` back.
+    let back = format!("@r = {literal};");
+    edited_context_holds(seed, &format!("let ok = @r == {literal}; {back} ok"), set).await;
+    edited_context_holds(seed, &format!("let ok = (@r, 0) == ({literal}, 0); {back} ok"), set).await;
+    edited_context_holds(
+        seed,
+        &format!(
+            "let m = hash_map_by(|k| -> 0u64, |a, b| -> a == b); insert(&mut m, @r, 10); \
+             let q = {literal}; let ok = contains_key(&m, &q); {back} ok"
+        ),
+        set,
+    )
+    .await;
+}
+
+/// A host's `Option<&mut i16>`: the payload of a `Some`, lent in place.
+#[tokio::test]
+async fn an_option_payload_a_host_writes_equals_its_literal() {
+    let seed = "@r = if 0 < 1 { Some(0i16) } else { None };";
+    let set = |o: Option<&mut i16>| {
+        *o.expect("`seed` wrote `Some`") = -1;
+    };
+    let literal = "if 0 < 1 { Some(-1i16) } else { None }";
+    edited_context_holds(seed, &format!("@r == {literal}"), set).await;
+    edited_context_holds(seed, &format!("(@r, 0) == ({literal}, 0)"), set).await;
+    edited_context_holds(
+        seed,
+        &format!(
+            "let m = hash_map_by(|k| -> 0u64, |a, b| -> a == b); insert(&mut m, @r, 10); \
+             let q = {literal}; contains_key(&m, &q)"
+        ),
+        set,
+    )
+    .await;
 }
