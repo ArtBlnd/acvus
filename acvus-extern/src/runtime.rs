@@ -224,7 +224,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// values, one per register of the pair the machine keeps a slice in
     /// (RFC-0047 rule 6). A runtime whose value cannot carry a bare word
     /// holds no slice and says so here.
-    fn slice_into_run(&self, words: crate::slice::Words, out: &mut [Self::Value]);
+    fn slice_into_run(&self, words: crate::repr::Words, out: &mut [Self::Value]);
 
     /// The same slice read back out of that run.
     ///
@@ -232,7 +232,7 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// `run` is what `slice_into_run` wrote, and the elements it names are
     /// live and unmoved — the loan the slice holds is what keeps them so
     /// (RFC-0018).
-    unsafe fn slice_from_run(&self, run: &[Self::Value]) -> crate::slice::Words;
+    unsafe fn slice_from_run(&self, run: &[Self::Value]) -> crate::repr::Words;
 
     /// A reference value naming `target`'s storage (RFC-0018): what a
     /// handler passes to a closure whose parameter is `&T` / `&mut T`.
@@ -452,10 +452,10 @@ impl Runtime for TypesOnly {
     fn is_undef(&self, _: &()) -> bool {
         no_values()
     }
-    fn slice_into_run(&self, _: crate::slice::Words, _: &mut [()]) {
+    fn slice_into_run(&self, _: crate::repr::Words, _: &mut [()]) {
         no_values()
     }
-    unsafe fn slice_from_run(&self, _: &[()]) -> crate::slice::Words {
+    unsafe fn slice_from_run(&self, _: &[()]) -> crate::repr::Words {
         no_values()
     }
     unsafe fn call_n<'a>(&'a self, _: &'a (), _: &mut [()]) -> Self::CallFuture<'a> {

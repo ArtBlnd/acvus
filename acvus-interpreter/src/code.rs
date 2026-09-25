@@ -445,10 +445,7 @@ impl Literals {
                 continue;
             }
             let owned: Box<str> = Box::from(text);
-            let words = Words {
-                ptr: owned.as_ptr() as u64,
-                len: owned.len() as u64,
-            };
+            let words = Words::of_str(&owned);
             runs.insert(owned, words);
         }
         Literals { runs }
@@ -710,6 +707,14 @@ impl CodeRef {
     pub fn address(self) -> *const () {
         self.0.as_ptr().cast()
     }
+
+    /// # Safety
+    /// `address` is `CodeRef::address` of a `CodeRef`.
+    #[inline(always)]
+    pub(crate) unsafe fn of_address(address: *const Code) -> CodeRef {
+        // SAFETY: the caller's contract: a `CodeRef` is a `NonNull`.
+        CodeRef(unsafe { std::ptr::NonNull::new_unchecked(address.cast_mut()) })
+    }
 }
 
 impl Code {
@@ -915,12 +920,7 @@ mod tests {
     /// `run` names live UTF-8, which is what this test is checking.
     unsafe fn text_of(run: acvus_extern::Words) -> &'static str {
         // SAFETY: the caller's contract.
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-                run.ptr as *const u8,
-                run.len as usize,
-            ))
-        }
+        unsafe { run.str() }
     }
 
     #[test]
@@ -930,7 +930,7 @@ mod tests {
             Literals::of(std::iter::once(module_text.as_str()))
         };
         let run = literals.run("héllo");
-        assert_eq!(run.len, 6);
+        assert_eq!(run.len(), 6);
         // SAFETY: the table owns the copy and is alive here, which is the
         // claim under test.
         assert_eq!(unsafe { text_of(run) }, "héllo");

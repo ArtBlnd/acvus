@@ -256,6 +256,177 @@ pub fn len_of_word(word: u64) -> Result<usize, TooWide> {
     usize::try_from(word).map_err(|_| TooWide(word))
 }
 
+#[inline(always)]
+fn word_of_len(len: usize) -> u64 {
+    len as u64
+}
+
+// -- Pointers <-> the word ----------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct PtrWord(u64);
+
+impl PtrWord {
+    #[inline(always)]
+    pub const fn word(self) -> u64 {
+        self.0
+    }
+
+    /// # Safety
+    /// `word` is `PtrWord::word` of some `PtrWord`.
+    #[inline(always)]
+    pub const unsafe fn from_word(word: u64) -> PtrWord {
+        PtrWord(word)
+    }
+}
+
+#[inline(always)]
+pub fn word_of_ptr<T>(ptr: *const T) -> PtrWord
+where
+    T: ?Sized,
+{
+    PtrWord(ptr.expose_provenance() as u64)
+}
+
+#[inline(always)]
+pub fn ptr_of_word<T>(word: PtrWord) -> *const T {
+    debug_assert!(
+        usize::try_from(word.0).is_ok(),
+        "ptr_of_word: {:#x} is no address of this target",
+        word.0
+    );
+    std::ptr::with_exposed_provenance(word.0 as usize)
+}
+
+// -- Function addresses -------------------------------------------------------
+
+/// A function pointer kept by its bytes and not as an integer address: a
+/// pointer made back from an integer carries no provenance.
+#[derive(Clone, Copy)]
+pub struct FnAddr(mem::MaybeUninit<fn()>);
+
+impl fmt::Debug for FnAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("FnAddr(..)")
+    }
+}
+
+#[inline(always)]
+pub fn fn_addr<F>(f: F) -> FnAddr
+where
+    F: Copy,
+{
+    const {
+        assert!(
+            mem::size_of::<F>() == mem::size_of::<fn()>(),
+            "fn_addr: the type is not the width of a function pointer"
+        )
+    };
+    // SAFETY: `F` is as wide as the destination (the assertion above), and a
+    // `MaybeUninit` holds any bytes.
+    FnAddr(unsafe { mem::transmute_copy::<F, mem::MaybeUninit<fn()>>(&f) })
+}
+
+/// # Safety
+/// `addr` is `fn_addr::<F>(f)` for some `f` of this same `F`.
+#[inline(always)]
+pub unsafe fn fn_of<F>(addr: FnAddr) -> F
+where
+    F: Copy,
+{
+    const {
+        assert!(
+            mem::size_of::<F>() == mem::size_of::<fn()>(),
+            "fn_of: the type is not the width of a function pointer"
+        )
+    };
+    // SAFETY: the caller's contract: the bytes are an `F`'s, copied whole.
+    unsafe { mem::transmute_copy::<mem::MaybeUninit<fn()>, F>(&addr.0) }
+}
+
+// -- A run as two words -------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Words {
+    ptr: PtrWord,
+    len: u64,
+}
+
+impl Words {
+    #[inline(always)]
+    pub fn of_slice<T>(run: &[T]) -> Words {
+        Words {
+            ptr: word_of_ptr(run.as_ptr()),
+            len: word_of_len(run.len()),
+        }
+    }
+
+    #[inline(always)]
+    pub fn of_slice_mut<T>(run: &mut [T]) -> Words {
+        Words {
+            ptr: word_of_ptr(run.as_mut_ptr()),
+            len: word_of_len(run.len()),
+        }
+    }
+
+    #[inline(always)]
+    pub fn of_str(text: &str) -> Words {
+        Self::of_slice(text.as_bytes())
+    }
+
+    #[inline(always)]
+    pub fn into_pair(self) -> [u64; 2] {
+        [self.ptr.0, self.len]
+    }
+
+    /// # Safety
+    /// `pair` is `into_pair` of some `Words`.
+    #[inline(always)]
+    pub unsafe fn from_pair(pair: [u64; 2]) -> Words {
+        Words {
+            ptr: PtrWord(pair[0]),
+            len: pair[1],
+        }
+    }
+
+    #[inline(always)]
+    pub fn len(self) -> usize {
+        self.len as usize
+    }
+
+    #[inline(always)]
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// # Safety
+    /// The maker was given a run of `len()` elements laid out as `T`s, and
+    /// that run is live, and written through no other name, for `'a`.
+    #[inline(always)]
+    pub unsafe fn slice<'a, T>(self) -> &'a [T] {
+        // SAFETY: the caller's contract.
+        unsafe { std::slice::from_raw_parts(ptr_of_word::<T>(self.ptr), self.len()) }
+    }
+
+    /// # Safety
+    /// As `slice`'s, the maker was `of_slice_mut`, and no other name of the
+    /// run is used for `'a`.
+    #[inline(always)]
+    pub unsafe fn slice_mut<'a, T>(self) -> &'a mut [T] {
+        // SAFETY: the caller's contract.
+        unsafe { std::slice::from_raw_parts_mut(ptr_of_word::<T>(self.ptr).cast_mut(), self.len()) }
+    }
+
+    /// # Safety
+    /// As `slice::<u8>`'s, and the bytes are UTF-8.
+    #[inline(always)]
+    pub unsafe fn str<'a>(self) -> &'a str {
+        // SAFETY: the caller's contract.
+        unsafe { std::str::from_utf8_unchecked(self.slice::<u8>()) }
+    }
+}
+
 // -- A head with a trailing array -------------------------------------------
 
 /// The layout of one allocation that holds an `H` and then a run of `E`s:
@@ -399,6 +570,81 @@ mod tests {
         } else {
             assert_eq!(len_of_word(u64::MAX), Ok(usize::MAX));
         }
+    }
+
+    #[test]
+    fn a_pointer_reads_back_from_its_word() {
+        fn round_trip<T>(ptr: *const T) {
+            assert_eq!(ptr_of_word::<T>(word_of_ptr(ptr)), ptr);
+        }
+        let byte = 7u8;
+        let word = 7u64;
+        let boxed = Box::new([1u64, 2, 3]);
+        let text = String::from("héllo");
+        round_trip(&byte);
+        round_trip(&word);
+        round_trip(&*boxed);
+        round_trip(text.as_ptr());
+        round_trip(std::ptr::from_ref(&word).cast::<()>());
+        let run: &[u64] = &boxed[1..];
+        assert_eq!(
+            ptr_of_word::<u64>(word_of_ptr(std::ptr::from_ref(run))),
+            run.as_ptr(),
+            "an unsized pointer's word is its address"
+        );
+        #[cfg(target_pointer_width = "64")]
+        round_trip(std::ptr::without_provenance::<u8>(0xFEDC_BA98_7654_3210));
+
+        // SAFETY: the word is `word_of_ptr`'s, stored bare.
+        let again = unsafe { PtrWord::from_word(word_of_ptr(&word).word()) };
+        // SAFETY: the pointer is `&word`'s, which is live.
+        assert_eq!(unsafe { *ptr_of_word::<u64>(again) }, 7);
+    }
+
+    #[test]
+    fn a_function_reads_back_from_its_address() {
+        fn double(n: u64) -> u64 {
+            n * 2
+        }
+        type Entry = for<'a> unsafe fn(&'a u64) -> u64;
+        unsafe fn read(n: &u64) -> u64 {
+            *n + 1
+        }
+        let addr = fn_addr::<fn(u64) -> u64>(double);
+        // SAFETY: `addr` is `fn_addr` of a `fn(u64) -> u64`.
+        let f: fn(u64) -> u64 = unsafe { fn_of(addr) };
+        assert_eq!(f(21), 42);
+
+        let addr = fn_addr::<Entry>(read);
+        // SAFETY: as above, at `Entry`.
+        let f: Entry = unsafe { fn_of(addr) };
+        // SAFETY: `read` has no precondition.
+        assert_eq!(unsafe { f(&41) }, 42);
+    }
+
+    #[test]
+    fn a_run_reads_back_from_its_pair() {
+        let values = vec![3u64, 4, 5];
+        // SAFETY: the pair is `into_pair`'s.
+        let words = unsafe { Words::from_pair(Words::of_slice(&values).into_pair()) };
+        assert_eq!(words.len(), 3);
+        // SAFETY: `values` is live and unwritten while the view is read.
+        assert_eq!(unsafe { words.slice::<u64>() }, &values[..]);
+
+        let mut values = values;
+        let words = Words::of_slice_mut(&mut values);
+        // SAFETY: `words` is `of_slice_mut`'s, and `values` is named only
+        // through it until the view ends.
+        let view = unsafe { words.slice_mut::<u64>() };
+        view[0] = 9;
+        assert_eq!(values, [9, 4, 5]);
+
+        let text = String::from("héllo");
+        let words = Words::of_str(&text);
+        assert_eq!(words.len(), 6);
+        // SAFETY: `text` is live UTF-8.
+        assert_eq!(unsafe { words.str() }, "héllo");
+        assert!(Words::of_slice::<u8>(&[]).is_empty());
     }
 
     #[test]
