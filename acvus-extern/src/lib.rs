@@ -81,7 +81,7 @@ pub use obj::{
 };
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{
-    Borrowed, BorrowedWhole, ByProjection, Fields, Lent, Nested, ObjectAt, Project, Projected,
+    Borrowed, BorrowedWhole, ByProjection, Fields, Lent, Nested, ObjectAt, OwnStorage, Project, Projected,
     Reach, VariantAt, object, object_fields_at, payload_at, variant, variant_tags_at,
 };
 pub use reference::Ref;

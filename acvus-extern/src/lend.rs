@@ -45,7 +45,8 @@
 //! }
 //! ```
 //!
-//! A `Result` is lent as its projection,
+//! An `Option` and a `Result` are lent as their projections, at the top and
+//! nested in each other alike,
 //!
 //! ```
 //! # use acvus_extern::{Borrows, Runtime};
@@ -57,6 +58,14 @@
 //!             *n += 1;
 //!         }
 //!     });
+//!     call::<Rt, _, bool, _>(|o: Option<&i64>| o.is_some());
+//!     call::<Rt, _, (), _>(|o: Option<&mut i64>| {
+//!         if let Some(n) = o {
+//!             *n += 1;
+//!         }
+//!     });
+//!     call::<Rt, _, bool, _>(|o: Option<Result<&i64, &String>>| o.is_some());
+//!     call::<Rt, _, bool, _>(|r: Result<Option<&mut i64>, &mut String>| r.is_ok());
 //! }
 //! ```
 //!
@@ -70,6 +79,14 @@
 //! }
 //! ```
 //!
+//! ```compile_fail
+//! # use acvus_extern::{Borrows, Runtime};
+//! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
+//! fn referenced<Rt: Runtime>() {
+//!     call::<Rt, _, bool, _>(|o: &Option<i64>| o.is_some());
+//! }
+//! ```
+//!
 //! nor by value:
 //!
 //! ```compile_fail
@@ -77,6 +94,14 @@
 //! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
 //! fn moved<Rt: Runtime>() {
 //!     call::<Rt, _, bool, _>(|r: Result<i64, String>| r.is_ok());
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! # use acvus_extern::{Borrows, Runtime};
+//! fn call<Rt, Q, O, F>(_: F) where Rt: Runtime, F: Borrows<Rt, Q, O> {}
+//! fn moved<Rt: Runtime>() {
+//!     call::<Rt, _, bool, _>(|o: Option<i64>| o.is_some());
 //! }
 //! ```
 
@@ -439,8 +464,9 @@ where
     }
 }
 
-/// A `Result` is lent through this and not through `ByRef`: its storage holds
-/// no Rust `Result<T, E>` for a `&Result<T, E>` to name.
+/// An `Option` or a `Result` is lent through this and not through `ByRef`:
+/// its storage holds no Rust `Option<T>` or `Result<T, E>` for a reference to
+/// name.
 pub struct ByProjected<T, M>(PhantomData<fn() -> (T, M)>);
 
 impl<T, M, Rt> Arg<Rt> for ByProjected<T, M>
@@ -555,6 +581,16 @@ where
 {
     type Owner = Result<A::Owner, B::Owner>;
     type Loan = A::Loan;
+}
+
+impl<A, Rt> Param<Rt> for Option<A>
+where
+    A: Projects,
+    Option<A::Owner>: Project<Rt> + Declared,
+    Rt: Runtime,
+{
+    type Marker = ByProjected<Option<A::Owner>, A::Loan>;
+    type At<'a> = <A::Loan as Loan>::Projection<'a, Option<A::Owner>>;
 }
 
 impl<A, B, Rt> Param<Rt> for Result<A, B>

@@ -372,6 +372,17 @@ where
     }
 }
 
+/// A projected type that is not an option, so that a `Some` of it has a
+/// payload storage for `Runtime::some_at` to name; a runtime may give a
+/// nested option's payload none.
+///
+/// The trait is safe and has no parameter rather than being `unsafe`: the
+/// orphan rule lets another crate implement it only for a type of its own,
+/// which is never `Option`.
+pub trait OwnStorage {}
+
+impl<T, E> OwnStorage for Result<T, E> {}
+
 impl<T> Borrowed for Option<T>
 where
     T: Borrowed,
@@ -388,7 +399,7 @@ where
 
 impl<T, Rt> Project<Rt> for Option<T>
 where
-    T: Project<Rt> + crate::Borrowable<Rt>,
+    T: Project<Rt> + OwnStorage,
     Rt: Runtime,
 {
     type Table = <T as Project<Rt>>::Table;
@@ -405,7 +416,8 @@ where
     }
 
     unsafe fn project<'a>(rt: &'a Rt, value: &'a Rt::Value, table: &Self::Table) -> Self::Ref<'a> {
-        // SAFETY: the caller's contract, and the `Borrowable` bound above.
+        // SAFETY: the caller's contract, and the `OwnStorage` bound above:
+        // the payload is no option.
         let payload = unsafe { rt.some_at(value) }?;
         // SAFETY: the payload lies where the option does (RFC-0039).
         Some(unsafe { <T as Project<Rt>>::project(rt, payload, table) })
@@ -576,6 +588,8 @@ macro_rules! borrowed_as_self {
             type Ref<'__a> = &'__a Self where Self: '__a;
             type Mut<'__a> = &'__a mut Self where Self: '__a;
         }
+
+        impl<$($($g)*)?> $crate::OwnStorage for $t {}
 
         impl<$($($g)*,)? __Rt> $crate::Project<__Rt> for $t
         where

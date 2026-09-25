@@ -3226,3 +3226,43 @@ fn total_on_an_extern_handed_a_closure_over_words_is_refused_at_combine() {
         "t::apply_total",
     );
 }
+
+#[extern_fn(name = "same_total", effect = pure, total)]
+fn same_total<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: &T, b: &T, eq_at: Instance<'_, eq<T, Rt>, T, Rt>) -> bool
+where
+    T: Var<kind::Type> + Borrowable<Rt> + std::ops::Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+    eq_at.call(ctx, a, (b,))
+}
+
+fn a_total_extern_that_requires_an_instance<R>() -> Registry<R>
+where
+    R: Runtime,
+{
+    extern_registry! {
+        ns: "t",
+        types: [],
+        signatures: [eq],
+        fns: [eq_int, same_total],
+    }
+}
+
+/// A call of an extern that requires an instance runs that instance, which
+/// the extern's own declaration does not see.
+#[test]
+fn total_on_an_extern_that_requires_an_instance_is_refused_at_combine() {
+    let i = Interner::new();
+    let err = Externs::<Tiny>::combine(vec![a_total_extern_that_requires_an_instance()], &i)
+        .err()
+        .expect("`total` cannot hold of a call that runs an instance it requires");
+    let acvus_extern::CombineError::TotalOverRequiredInstance { function, signature, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!((function.as_str(), signature.as_str()), ("t::same_total", "t::eq"));
+    let written = format!("{err}");
+    assert!(
+        written.contains("`total`") && written.contains("`returns`"),
+        "the refusal names the declaration and what it may state: {written}"
+    );
+}
