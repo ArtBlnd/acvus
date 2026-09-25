@@ -355,14 +355,20 @@ holds its own iterator, which Rust's `slice::Iter` does not.
    `Any` maps every position to every position. At a call an output
    position becomes the join of exactly the input positions its map
    names.
-2. **Extension types are laid out.** The macro reads a
-   `#[derive(ExternType)]` type position by position: its region
-   parameters, then its type arguments, in declaration order, each a
-   label. A type the macro does not read stays unread, its flow `Any`.
+2. **Extension types are laid out where they say so.** A type the macro
+   reads position by position states its layout itself: a
+   `#[derive(ExternType)]` type states its region parameters, then its
+   type arguments, in declaration order, each a label. The macro takes
+   that statement from the type, never from how its name is written; a
+   type that states none is unread, its flow `Any`.
 3. **Writes stay the union.** What a callee may write is still every input
    into every output it may write (RFC-0079 rule 5); a labelled flow
    narrows only the result.
-4. **The flow is the one Rust checked.** The macro writes a labelled flow
+4. **A call reads the settled instance's flows.** A call of a shared
+   signature (RFC-0019) reads the flows of the instance the checker settled
+   at it (RFC-0068 rule 5), as it reads that instance's effect; the
+   signature's own flows stand only where no instance is settled.
+5. **The flow is the one Rust checked.** The macro writes a labelled flow
    only from the handler's Rust signature, which Rust checked the body
    against. The body returns nothing its signature's lifetimes do not
    allow. A handler that reaches past them with `unsafe` states the fact
