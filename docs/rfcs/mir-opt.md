@@ -767,13 +767,15 @@ law and runs in its order.
    that sends a value reading none of the token resets it: its law's
    join takes no entry value.
 6. **An inverse pair.** A storage every access of which in an iteration
-   is `f(s)` giving an `Option`, its payload taken by the language's own
-   unwrap or `Some` match, then `g(s, x)` of that payload, `f` stating
-   `inverse = g` (RFC-0082 rule 3), holds that payload as one cell: a
-   pass reads `f(s)` above the header, the iterations read the cell, and
-   `g` follows the exit when the cell holds a value. The storage is then
-   no token; an unwrap's trap stays at the first iteration that reaches
-   it.
+   is `f(s)` giving an `Option`, its payload taken by a call stating
+   `payload` or by a `Some` match, then `g(s, x)` of that payload, `f`
+   stating `inverse = g` (RFC-0082 rule 3), holds that payload as one
+   cell: a pass reads `f(s)` above the header, the iterations read the
+   cell, and `g` follows the exit when the cell holds a value. The cell
+   holds a payload of one word. The storage is then no token, and the
+   facts name it a cell of `f` and `g`; the pass that moves them is the
+   lowerer's (RFC-0092). A payload read's trap stays at the first
+   iteration that reaches it.
 7. **A sentinel.** A token compared with a constant that no write in the
    loop can send, as the interval domain proves, is its own `||` guard
    for rule 5's `first`.
