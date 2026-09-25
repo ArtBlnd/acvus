@@ -32,6 +32,20 @@ impl Promoted {
     }
 
     fn with_externs(source: &str, externs: impl FnOnce(&Interner) -> Vec<Function>) -> Self {
+        Self::lowered(source, externs, Pass::Runs)
+    }
+
+    /// The same pipeline with `while_to_for` left out: the loop as the pass
+    /// found it, after the same `dce`.
+    fn unconverted(source: &str) -> Self {
+        Self::lowered(source, |_| Vec::new(), Pass::Skipped)
+    }
+
+    fn lowered(
+        source: &str,
+        externs: impl FnOnce(&Interner) -> Vec<Function>,
+        pass: Pass,
+    ) -> Self {
         let i = Interner::new();
         let LoweredScript { module, laws } = lowered_script(&i, source, &externs(&i), vec![])
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
@@ -39,7 +53,9 @@ impl Promoted {
         ssa_pass::run(&mut cfg);
         fold::run(&mut cfg);
         reborrow::run(&mut cfg);
-        while_to_for::run(&i, &mut cfg, &laws);
+        if let Pass::Runs = pass {
+            while_to_for::run(&i, &mut cfg, &laws);
+        }
         dce::run(&mut cfg, &laws, &FunctionSummary::unknown());
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
@@ -117,6 +133,11 @@ impl Promoted {
 struct Range {
     at: ValueId,
     hi: ValueId,
+}
+
+enum Pass {
+    Runs,
+    Skipped,
 }
 
 /// RFC-0094 rule 3's count: the constant it divides the distance by.
@@ -430,11 +451,224 @@ fn a_bound_the_body_writes_is_declined() {
     );
 }
 
+// -- An exit from the body (RFC-0094 rule 7) ------------------------------
+
+/// The `For`'s own exit block and the block it jumps to, which the body's
+/// edges out of the loop reach too.
+struct SharedExit {
+    own: BlockIdx,
+    joined: BlockIdx,
+}
+
+impl Promoted {
+    fn shared_exit(&self, loop_: &Loop) -> SharedExit {
+        let Terminator::For { exit, exit_args, .. } =
+            &self.cfg.blocks[loop_.natural.header.0].terminator
+        else {
+            panic!("the header ends in `For`");
+        };
+        assert_eq!(exit_args, &[], "the `For` leaves through a block of its own");
+        let own = self.cfg.label_to_block[exit];
+        assert_eq!(
+            self.cfg.predecessors()[&own][..],
+            [loop_.natural.header],
+            "the `For`'s own exit block is entered from the header alone"
+        );
+        let Terminator::Jump { label, .. } = &self.cfg.blocks[own.0].terminator else {
+            panic!("the `For`'s exit block jumps to the block the body leaves for");
+        };
+        SharedExit {
+            own,
+            joined: self.cfg.label_to_block[label],
+        }
+    }
+
+    /// The blocks other than the `For`'s own exit that enter `joined`.
+    fn edges_from_the_body(&self, exit: &SharedExit) -> Vec<BlockIdx> {
+        self.cfg.predecessors()[&exit.joined]
+            .iter()
+            .copied()
+            .filter(|pred| *pred != exit.own)
+            .collect()
+    }
+
+    fn jump_into(&self, from: BlockIdx, to: BlockIdx) -> Vec<ValueId> {
+        let label = self.cfg.blocks[to.0].label;
+        match &self.cfg.blocks[from.0].terminator {
+            Terminator::Jump { label: target, args } if *target == label => args.clone(),
+            other => panic!("{from:?} jumps to {label:?}, found {other:?}"),
+        }
+    }
+}
+
+const BROKEN_COUNT: &str = "let n = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].len() as i64; \
+     let s = 0; let r = 0; let i = 0; \
+     while i < n { if s > 20 { r = s * 2; break; }; s = s + i; i = i + 1; } r + s + i";
+
 #[test]
-fn a_break_is_declined() {
+fn a_break_in_a_counted_while_is_converted_with_its_edge_and_arguments_kept() {
+    let o = Promoted::of(BROKEN_COUNT);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let exit = o.shared_exit(loop_);
+    let [break_block] = o.edges_from_the_body(&exit)[..] else {
+        panic!("one edge from the body joins the exit:\n{BROKEN_COUNT}");
+    };
+    let before = Promoted::unconverted(BROKEN_COUNT);
+    let before_loop = before.sole_loop();
+    let Terminator::JumpIf {
+        else_label,
+        else_args,
+        ..
+    } = &before.cfg.blocks[before_loop.natural.header.0].terminator
+    else {
+        panic!("the unconverted header branches");
+    };
+    let joined = before.cfg.label_to_block[else_label];
+    assert_eq!(
+        o.cfg.blocks[exit.joined.0].label, *else_label,
+        "the block the header left for is the one the `For`'s exit jumps to"
+    );
+    assert_eq!(
+        o.jump_into(exit.own, exit.joined),
+        *else_args,
+        "the `For`'s exit sends what the header's exit edge sent"
+    );
+    let break_label = o.cfg.blocks[break_block.0].label;
+    let before_break = before.cfg.label_to_block[&break_label];
+    assert_eq!(
+        o.jump_into(break_block, exit.joined),
+        before.jump_into(before_break, joined),
+        "the edge out of the body keeps its arguments:\n{BROKEN_COUNT}"
+    );
+}
+
+#[test]
+fn a_return_in_a_counted_while_is_declined() {
     assert_declined(
-        "let n = 10; let s = 0; let i = 0; \
-         while i < n { if s > 20 { break; }; s = s + i; i = i + 1; } s",
+        "let n = [1, 2, 3].len() as i64; let s = 0; let i = 0; \
+         while i < n { if s > 20 { return s; }; s = s + i; i = i + 1; } s + i",
+    );
+}
+
+// -- A back edge whose arguments decide the test (RFC-0094 rule 6) -------
+
+/// S11 of the parallel-loop corpus, whose found arm also moves `i`, so the
+/// value it sends the exit is not the header's.
+const SEARCH: &str = "let xs = vec([5, 3, 9, -1, 9]); let i = 0u64; let found = false; \
+     while i < xs.len() && !found { \
+         if xs[i] < 0 { found = true; i = i + 100u64; } else { i = i + 1u64; }; \
+     } i";
+
+#[test]
+fn a_back_edge_whose_flag_decides_the_test_goes_to_the_exit() {
+    let o = Promoted::of(SEARCH);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let header = &o.cfg.blocks[loop_.natural.header.0];
+    assert!(
+        header
+            .params
+            .iter()
+            .all(|param| o.cfg.val_types[param] != Ty::Bool),
+        "the flag is folded, and no header parameter carries it:\n{SEARCH}"
+    );
+    let exit = o.shared_exit(loop_);
+    let i = o.carried_counter(loop_);
+    assert_eq!(
+        o.jump_into(exit.own, exit.joined),
+        [i],
+        "the `For`'s exit sends `i`, which the exit read"
+    );
+    let [found_arm] = o.edges_from_the_body(&exit)[..] else {
+        panic!("the found arm's edge goes to the exit:\n{SEARCH}");
+    };
+    let [sent] = o.jump_into(found_arm, exit.joined)[..] else {
+        panic!("the found arm sends the exit one value");
+    };
+    let InstKind::BinOp {
+        op: BinOp::Add(_),
+        left,
+        right,
+        ..
+    } = o.definition(sent)
+    else {
+        panic!("the found arm sends the `i + 100` it sent the header, found {:?}", o.definition(sent));
+    };
+    assert_eq!((*left, o.literal(*right)), (i, Some(100)));
+}
+
+fn pure_scale(i: &Interner) -> Vec<Function> {
+    vec![Function {
+        qref: QualifiedRef::root(i.intern("pure_scale")),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            effect_bounds: vec![],
+            instances: Instances::default(),
+            requires: vec![],
+        },
+        ty: PolyTy::Fn {
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::I64)),
+            captures: vec![],
+            effect: EffectTerm::<Poly>::Known(Effect::PURE),
+            flows: acvus_mir::ty::Flows::Every.into(),
+        },
+    }]
+}
+
+fn opaque_and_pure_scale(i: &Interner) -> Vec<Function> {
+    opaque(i).into_iter().chain(pure_scale(i)).collect()
+}
+
+fn flag_search(bound: &str) -> String {
+    format!(
+        "{WORD_N_AND_M} let d = opaque(m); let found = false; let i = 0; \
+         while i < {bound} && !found {{ if i * i > 7 {{ found = true; }} else {{ i = i + 1; }}; }} i"
+    )
+}
+
+/// The control: the same search whose bound skips nothing that can trap.
+#[test]
+fn a_flag_search_over_a_bound_that_cannot_trap_is_converted() {
+    let source = flag_search("n");
+    let o = Promoted::with_externs(&source, opaque_and_pure_scale);
+    o.range(o.sole_loop());
+}
+
+#[test]
+fn a_flag_whose_edge_skips_a_division_by_a_parameter_is_declined() {
+    let source = flag_search("n / d");
+    assert_still_a_while(&Promoted::with_externs(&source, opaque_and_pure_scale), &source);
+}
+
+#[test]
+fn a_flag_whose_edge_skips_a_pure_call_not_declared_total_is_declined() {
+    let source = flag_search("pure_scale(n)");
+    assert_still_a_while(&Promoted::with_externs(&source, opaque_and_pure_scale), &source);
+}
+
+/// `found` true leaves `!found || i < 3` to `i < 3`, so the edge that sets
+/// it decides nothing; with `found` false the chain is `i < n`, which the
+/// ranges read.
+#[test]
+fn a_flag_whose_constant_does_not_decide_the_chain_is_declined() {
+    assert_declined(
+        "let n = [1, 2, 3, 4, 5].len() as i64; let found = false; let i = 0; \
+         while i < n && (!found || i < 3) { if i == 2 { found = true; } else { i = i + 1; }; } i",
+    );
+}
+
+#[test]
+fn a_flag_another_edge_sets_to_a_test_is_declined() {
+    assert_declined(
+        "let n = [1, 2, 3, 4, 5].len() as i64; let found = false; let i = 0; \
+         while i < n && !found { \
+             if i == 2 { found = true; } else { found = i > 3; i = i + 1; }; \
+         } i",
     );
 }
 
@@ -485,22 +719,21 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
     while_to_for::run(&i, &mut cfg, &laws);
     let after = snapshot(&cfg);
 
-    let Terminator::For { stages, .. } = &cfg.blocks[header.0].terminator else {
+    let Terminator::For { stages, exit, .. } = &cfg.blocks[header.0].terminator else {
         panic!(
             "the header ends in `For`: {:?}",
             cfg.blocks[header.0].terminator
         );
     };
     let body = cfg.label_to_block[&stages.body()];
+    let exit = cfg.label_to_block[exit];
     let mut grew = Vec::new();
-    let mut moved = Vec::new();
+    let mut body_head: Vec<String> = Vec::new();
+    let mut exit_head: Vec<String> = Vec::new();
     for (b, (was, is)) in before.iter().zip(&after).enumerate() {
         if b == header.0 {
             assert_eq!(was.params, is.params);
-            let (kept, left): (Vec<&String>, Vec<&String>) =
-                was.insts.iter().partition(|inst| is.insts.contains(inst));
-            assert_eq!(kept, is.insts.iter().collect::<Vec<_>>(), "the header only lost");
-            moved = left.into_iter().cloned().collect();
+            assert!(is.insts.is_empty(), "a `for` header holds no instruction");
             continue;
         }
         assert_eq!(was.terminator, is.terminator, "block {b}'s terminator");
@@ -512,7 +745,17 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
             ),
             false => assert_eq!(was.params, is.params, "block {b}'s parameters"),
         }
-        if was.insts != is.insts {
+        if was.insts == is.insts {
+            continue;
+        }
+        if b == body.0 || b == exit.0 {
+            let (head, rest) = is.insts.split_at(is.insts.len() - was.insts.len());
+            assert_eq!(rest, &was.insts[..], "block {b} only gained at its head");
+            match b == body.0 {
+                true => body_head = head.to_vec(),
+                false => exit_head = head.to_vec(),
+            }
+        } else {
             assert_eq!(
                 was.insts[..],
                 is.insts[..was.insts.len()],
@@ -521,24 +764,41 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
             grew.push(is.insts[was.insts.len()..].to_vec());
         }
     }
+    let grew_insts = grew.concat();
+    let lost = &before[header.0].insts;
+    let (to_entry, to_heads): (Vec<&String>, Vec<&String>) =
+        lost.iter().partition(|inst| grew_insts.contains(inst));
     assert_eq!(
-        grew.concat(),
-        moved,
-        "what the header lost is what the entering block gained, in order"
+        grew_insts.iter().collect::<Vec<_>>(),
+        to_entry,
+        "what the entering block gained the header lost, in order"
     );
-    let grew: Vec<&str> = grew
+    assert_eq!(
+        body_head.iter().collect::<Vec<_>>(),
+        to_heads,
+        "the rest of the header runs at the body's head, in order"
+    );
+    assert_eq!(
+        kinds(&exit_head),
+        kinds(&body_head),
+        "the exit's head runs the same instructions"
+    );
+    assert_eq!(
+        kinds(&grew_insts),
+        added,
+        "the bound's computation moves and nothing else"
+    );
+}
+
+fn kinds(insts: &[String]) -> Vec<&str> {
+    insts
         .iter()
-        .flatten()
         .map(|inst| {
             inst.split(|c: char| !c.is_alphanumeric())
                 .next()
                 .expect("a `Debug` of an instruction starts with its kind")
         })
-        .collect();
-    assert_eq!(
-        grew, added,
-        "the bound's computation moves and nothing else"
-    );
+        .collect()
 }
 
 #[test]
@@ -749,6 +1009,121 @@ fn a_call_before_a_product_is_declined() {
          while i < {{ d = opaque(n); n * m }} {{ s = s + i + d; i = i + 1; }} s"
     );
     assert_still_a_while(&Promoted::with_externs(&source, opaque), &source);
+}
+
+// -- A header instruction that is no step (RFC-0081 rule 2) -------------
+
+fn exit_block(o: &Promoted, loop_: &Loop) -> BlockIdx {
+    let Terminator::For { exit, .. } = &o.cfg.blocks[loop_.natural.header.0].terminator else {
+        panic!("the header ends in `For`");
+    };
+    o.cfg.label_to_block[exit]
+}
+
+fn binops(o: &Promoted, block: BlockIdx) -> Vec<(BinOp, ValueId)> {
+    o.cfg.blocks[block.0]
+        .insts
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstKind::BinOp { op, dst, .. } => Some((*op, *dst)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn call_args(o: &Promoted, block: BlockIdx) -> Vec<Vec<ValueId>> {
+    o.cfg.blocks[block.0]
+        .insts
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstKind::FunctionCall { args, .. } => Some(args.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_header_instruction_that_is_no_step_runs_at_the_heads_of_the_body_and_the_exit() {
+    let source = "let n = [1, 2, 3, 4, 5].len() as i64; let i = 0; \
+                  while { let z = 10 / (7 - i); i < n } { i = i + 1; } i";
+    let o = Promoted::of(source);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    assert!(
+        o.cfg.blocks[loop_.natural.header.0].insts.is_empty(),
+        "a `for` header holds no instruction:\n{source}"
+    );
+    let body = binops(&o, o.body_block(loop_));
+    let exit = binops(&o, exit_block(&o, loop_));
+    let ops = |found: &[(BinOp, ValueId)]| found.iter().map(|(op, _)| *op).collect::<Vec<_>>();
+    let header_order = [BinOp::Sub(Overflow::Trap), BinOp::Div];
+    assert_eq!(ops(&body[..2]), header_order, "the body's head:\n{source}");
+    assert_eq!(ops(&exit), header_order, "the exit's head:\n{source}");
+    assert_ne!(
+        body[1].1, exit[1].1,
+        "the exit's copy defines its own value"
+    );
+}
+
+#[test]
+fn an_effect_before_a_bound_runs_at_the_heads_of_the_body_and_the_exit_in_the_header_s_order() {
+    let source = format!(
+        "{WORD_N_AND_M} let d = 0; let e = 0; let s = 0; let i = 0; \
+         while i < {{ d = opaque(n); e = opaque(m); 10 }} {{ s = s + i + d + e; i = i + 1; }} s"
+    );
+    let o = Promoted::with_externs(&source, opaque);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let before = Promoted::lowered(&source, opaque, Pass::Skipped);
+    let header_calls = call_args(&before, before.sole_loop().natural.header);
+    assert_eq!(header_calls.len(), 2, "two calls in the header:\n{source}");
+    assert_eq!(call_args(&o, o.body_block(loop_)), header_calls, "{source}");
+    assert_eq!(
+        call_args(&o, exit_block(&o, loop_)),
+        header_calls,
+        "{source}"
+    );
+}
+
+#[test]
+fn a_header_value_read_where_the_exit_and_a_break_meet_is_a_parameter_there() {
+    let source = format!(
+        "{WORD_N_AND_M} let d = 0; let i = 0; \
+         while {{ d = d + 1; i < n }} {{ if i == 2 {{ break; }}; i = i + 1; }} i * 10 + d"
+    );
+    let before = Promoted::lowered(&source, |_| Vec::new(), Pass::Skipped);
+    let before_loop = before.sole_loop();
+    let [(_, counted)] = binops(&before, before_loop.natural.header)[..1] else {
+        panic!("the header counts `d` first:\n{source}");
+    };
+    let join = before
+        .readers(counted)
+        .into_iter()
+        .find(|block| !before_loop.natural.contains(*block));
+    assert!(
+        join.is_some(),
+        "the block after the loop reads the header's `d + 1`:\n{source}"
+    );
+
+    let o = Promoted::of(&source);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let own_exit = exit_block(&o, loop_);
+    let [(BinOp::Add(_), copy)] = binops(&o, own_exit)[..] else {
+        panic!("the exit's own block counts `d`:\n{source}");
+    };
+    let Terminator::Jump { label, args } = &o.cfg.blocks[own_exit.0].terminator else {
+        panic!("the exit's own block jumps to the exit");
+    };
+    assert!(args.contains(&copy), "the exit sends its copy:\n{source}");
+    let [(BinOp::Add(_), counted)] = binops(&o, o.body_block(loop_))[..1] else {
+        panic!("the body counts `d` first:\n{source}");
+    };
+    let joined = o.cfg.label_to_block[label];
+    assert!(
+        !o.readers(counted).contains(&joined),
+        "the join reads a parameter, not the body's copy:\n{source}"
+    );
 }
 
 // -- Pull loops (RFC-0089 rule 1) ---------------------------------------

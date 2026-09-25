@@ -1,0 +1,2 @@
+// expect attempt to add with overflow
+let i = 250u8; let found = false; while i < 255u8 && !found { if i == 0u8 { found = true; } else { i = i + 10u8; }; } i as i64

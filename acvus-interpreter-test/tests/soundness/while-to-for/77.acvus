@@ -1,0 +1,2 @@
+// expect 7
+let xs = vec([5, 3, 9, 8, 9]); let i = 0u64; let found = false; let s = 0; while i < xs.len() && !found { if xs[i] > 8 { break; }; if xs[i] < 0 { found = true; } else { s = s + xs[i]; i = i + 1u64; }; } (i as i64) * 0 + s + (if found { 100 } else { 0 }) - 1

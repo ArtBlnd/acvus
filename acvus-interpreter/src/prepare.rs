@@ -898,6 +898,27 @@ struct ForRegion {
     body_block: Range<usize>,
     body_regions: Vec<Region>,
     back: usize,
+    forwarded: Option<ForwardedExit>,
+}
+
+/// Obligation across artifacts: `acvus_mir::optimize::while_to_for` writes
+/// a converted `while`'s own exit right after the last latch, jumping to
+/// the exit its body's edges also reach (RFC-0094 rule 7). The region runs
+/// that block as its exit part, which runs only where the test fails.
+struct ForwardedExit {
+    block: Range<usize>,
+    regions: Vec<Region>,
+    jump: usize,
+    to: Label,
+}
+
+impl ForRegion {
+    fn end(&self) -> usize {
+        match &self.forwarded {
+            Some(forwarded) => forwarded.jump + 1,
+            None => self.back + 1,
+        }
+    }
 }
 
 /// The block a branch's arms meet at.
@@ -913,6 +934,7 @@ struct Within {
     /// The latch a stage chain gathers its back edges in, where a jump to it
     /// is a `continue`; see `recognize_for`.
     continues_through: Option<Label>,
+    leaves_past: Option<Label>,
 }
 
 /// What a chain can hand the region above it besides `FALL`.
@@ -1155,7 +1177,7 @@ impl Region {
     fn end(&self) -> usize {
         match self {
             Region::Loop(region) => region.end(),
-            Region::For(region) => region.back + 1,
+            Region::For(region) => region.end(),
             Region::Diamond(region) => region.join + 1,
             Region::Switch(region) => region.join + 1,
             Region::Escape(region) => region.after,
@@ -2621,6 +2643,9 @@ impl<'a> Prepare<'a> {
             InstKind::Jump { label, .. } if within.continues_through == Some(*label) => {
                 Some(Verdict::Continue(stops_at))
             }
+            InstKind::Jump { label, .. } if within.leaves_past == Some(*label) => {
+                Some(Verdict::Break(stops_at))
+            }
             InstKind::Return { .. } => Some(Verdict::Returns(stops_at)),
             _ => None,
         }
@@ -2822,6 +2847,7 @@ impl<'a> Prepare<'a> {
                 header,
                 exit: exit_label,
                 continues_through: None,
+                leaves_past: None,
             }),
         );
         if body_end != back {
@@ -2884,6 +2910,7 @@ impl<'a> Prepare<'a> {
         {
             return None;
         }
+        let forwarded = self.forwarded_exit(terminator, *exit, body_label..back);
 
         // A body whose back edges its stage chain gathers in one latch is
         // read as the loop as written, whose `continue`s jumped to the
@@ -2895,6 +2922,7 @@ impl<'a> Prepare<'a> {
             header,
             exit: *exit,
             continues_through: None,
+            leaves_past: forwarded.as_ref().map(|forwarded| forwarded.to),
         };
         let as_written = self.straight_run(body_label + 1, back, Some(within));
         let (body_end, body_regions) = match (as_written, self.stage_chains.latch_of(header)) {
@@ -2919,9 +2947,39 @@ impl<'a> Prepare<'a> {
             body_block: body_label + 1..body_end,
             body_regions,
             back,
+            forwarded,
         };
-        self.is_closed(region.enter_jump..region.back + 1)
+        self.is_closed(region.enter_jump..region.end())
             .then_some(region)
+    }
+
+    fn forwarded_exit(
+        &self,
+        terminator: usize,
+        exit: Label,
+        body: Range<usize>,
+    ) -> Option<ForwardedExit> {
+        let insts = self.body.insts.as_slice();
+        let exit_at = body.end + 1;
+        if self.references(exit).as_slice() != [terminator] {
+            return None;
+        }
+        let StraightRun { stops_at, regions } = self.straight_run(exit_at + 1, insts.len(), None);
+        if hands_of(&regions).any() {
+            return None;
+        }
+        let InstKind::Jump { label: to, .. } = &insts.get(stops_at)?.kind else {
+            return None;
+        };
+        let body_leaves_to = self.references(*to).iter().any(|at| body.contains(at));
+        (block_label(insts.get(stops_at + 1)?) == Some(*to) && body_leaves_to).then(|| {
+            ForwardedExit {
+                block: exit_at + 1..stops_at,
+                regions,
+                jump: stops_at,
+                to: *to,
+            }
+        })
     }
 
     /// `acvus_mir::lower` writes the two arms and then the join between the
@@ -3707,7 +3765,10 @@ impl<'a> Prepare<'a> {
         let entering = self.move_ops(entered, entering);
         ops.extend(entering);
 
-        let exit = ExitEdge::of_for(self, region.terminator);
+        let exit = match &region.forwarded {
+            None => ExitEdge::of_for(self, region.terminator),
+            Some(forwarded) => ExitEdge::of_forwarded_for(self, region.terminator, forwarded),
+        };
         let (back_to, back_args) = (*back_to, back_args.clone());
         let back = self.back_moves(&back_to, &back_args);
 

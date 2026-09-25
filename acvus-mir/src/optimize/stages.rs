@@ -2089,7 +2089,7 @@ impl Chain<'_> {
                     to: deciding.label,
                 });
             }
-            writer.blocks.push(deciding.close(term));
+            writer.close_deciding(deciding, term);
             for &arm in &self.shape.arms_of[&at] {
                 let mut arm_block = cfg.blocks[arm.0].clone();
                 retarget_edges(&mut arm_block.terminator, from, to);
@@ -2143,6 +2143,25 @@ impl StageWriter<'_> {
             params,
             insts: Vec::new(),
         });
+    }
+
+    /// A `for` or pull `while` is a branch the spine passes when its body
+    /// leaves on every path and no back edge makes it a loop. Its header
+    /// holds no instruction: `acvus-interpreter`'s `prepare` reads the
+    /// header as the label right above the terminator. So what the stage
+    /// runs before it closes in a block of its own that jumps there.
+    fn close_deciding(&mut self, deciding: Open, term: Terminator) {
+        let traverses = matches!(term, Terminator::For { .. } | Terminator::While { .. });
+        if !traverses || deciding.insts.is_empty() {
+            self.blocks.push(deciding.close(term));
+            return;
+        }
+        let header = self.labels.fresh();
+        self.blocks.push(deciding.close(Terminator::Jump {
+            label: header,
+            args: Vec::new(),
+        }));
+        self.blocks.push(Open::empty(header).close(term));
     }
 
     fn begin_own(&mut self) {

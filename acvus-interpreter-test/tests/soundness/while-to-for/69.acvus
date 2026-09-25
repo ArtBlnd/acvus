@@ -1,0 +1,2 @@
+// expect attempt to divide by zero
+let d = 1; let i = 0; let found = false; while i < 10 / d && !found { if i == 2 { found = true; d = 0; } else { i = i + 1; }; } i

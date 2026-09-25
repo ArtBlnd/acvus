@@ -1,0 +1,5 @@
+for range(0 (r15)..r13) -> L1 else L9(trip) stages [L1, L10]
+// L1: free {index, const, <}
+// L10: cycle Control in_order {branch}
+// control chained through L10
+// cost W=4 O=18281 split when n > 146248, n ≤ max(r13 - 0 (r15), 0)

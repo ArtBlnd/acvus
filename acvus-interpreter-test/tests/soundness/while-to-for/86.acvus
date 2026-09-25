@@ -1,0 +1,2 @@
+// expect 23
+let xs = vec([5, 3, -1, 9]); let n = xs.len(); let i = 0u64; let d = 0; while { d = d + 1; i < n } { if xs[i] < 0 { break; }; i = i + 1u64; } i * 10 + d

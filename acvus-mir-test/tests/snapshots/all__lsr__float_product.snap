@@ -40,18 +40,19 @@ expression: listing
     ; r15 (i) : i64
     ; r16 (v28) : i64
     ; r17 (acc) : Float
-    ; r18 (v11) : Bool
-    ; r19 (v30) : i64
-    ; r20 (i) : i64
+    ; r18 (v30) : i64
+    ; r19 (i) : i64
+    ; r20 (v11) : Bool
     ; r21 (x) : Float
-    ; r22 (acc) : Float
-    ; r23 (@n) : i64
-    ; r24 (v21) : i64
-    ; r25 (v24) : i64
-    ; r26 (v27) : Float
-    ; r27 (i) : i64
+    ; r22 (@n) : i64
+    ; r23 (i) : i64
+    ; r24 (v34) : Bool
+    ; r25 (v21) : i64
+    ; r26 (v24) : i64
+    ; r27 (v27) : Float
     ; r28 (acc) : Float
-    ; r29 (v26) : Float
-    ; r30 (v29) : i64
-    ; r31 (@n) : i64
-    ; r32 (x) : Float
+    ; r29 (acc) : Float
+    ; r30 (v26) : Float
+    ; r31 (v29) : i64
+    ; r32 (@n) : i64
+    ; r33 (x) : Float
