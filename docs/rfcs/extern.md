@@ -1311,13 +1311,14 @@ have made it.
 
 Status: Proposed
 
-A script sometimes has to run another script whose inputs depend on which
-one it runs, as a model's turn calls another model's turn. An extern cannot
-stand in the middle with the callee's arguments: its signature is one Rust
-function, and a value lent into a call does not outlive it (RFC-0079 rule
-9), so the extern can neither take every argument shape nor hand one out.
-The call is made in the language instead, where the checker sees both
-sides, and an extern that must frame it takes a closure that makes it.
+An application is often several programs, each a host's entries, inits
+and contexts, where one program runs another's entry as a step: a model's
+turn calls another model's turn, a tool calls a shared formatter. Compiled
+apart, the call crosses two interners, two registries and two runtimes,
+and no checker sees both sides. An extern cannot stand in the middle
+either: its signature is one Rust function, and a value lent into a call
+does not outlive it (RFC-0079 rule 9). The hosts are compiled as one graph
+instead, where the call is an ordinary call the checker sees whole.
 
 1. **One graph, one solve.** `HostGraph` takes several named `Host`s and
    compiles them into one compilation graph: one interner, one set of
