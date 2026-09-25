@@ -460,3 +460,62 @@ async fn an_option_payload_a_host_writes_equals_its_literal() {
     )
     .await;
 }
+
+// -- Which loans end in a re-encode -----------------------------------------
+
+/// An extension type stored as the inline scalar it is transparent over.
+#[derive(acvus_extern::ExternType)]
+#[extern_type(name = "Gauge")]
+#[repr(transparent)]
+pub struct Gauge(i8);
+
+/// An extension type stored behind the word, as the source of an iterator
+/// is.
+#[derive(acvus_extern::ExternType)]
+#[extern_type(name = "Queue")]
+#[repr(transparent)]
+pub struct Queue<T, Rt>(std::vec::IntoIter<T>, std::marker::PhantomData<Rt>)
+where
+    T: Var<kind::Type>,
+    Rt: Runtime;
+
+/// A struct with no inline field, lent through its exclusive projection.
+#[derive(TyArg)]
+#[projection]
+pub struct Labelled {
+    label: String,
+}
+
+/// A parameter's loan ends in a re-encode exactly where the type it lends
+/// exclusively can be an inline scalar in the value word; the glue of every
+/// other parameter holds no loan guard.
+#[test]
+fn a_loan_ends_in_a_re_encode_exactly_where_its_type_lends_a_word() {
+    use acvus_extern::{Arg, ByProjection, ByRef, Ending, Mut, Parameters, Shared, Through, Uniform};
+
+    type Rt = AcvusRuntime;
+    fn lends<A>() -> bool
+    where
+        A: Arg<Rt>,
+    {
+        A::LENDS_A_WORD
+    }
+
+    assert!(lends::<ByRef<i8, Mut>>());
+    assert!(lends::<ByRef<u64, Mut>>());
+    assert!(lends::<ByRef<Gauge, Mut>>());
+    assert!(lends::<ByProjection<NarrowMut<'static>>>());
+    assert!(lends::<ByProjection<CellMut<'static, Rt>>>());
+    assert!(<(ByRef<String, Mut>, ByRef<i8, Mut>) as Parameters<Rt>>::LENDS_A_WORD);
+    assert!(<Through<Uniform, i8> as Ending<Rt>>::LENDS_A_WORD);
+
+    assert!(!lends::<ByRef<i8, Shared>>());
+    assert!(!lends::<ByRef<String, Mut>>());
+    assert!(!lends::<ByRef<Queue<Erased<Rt, i8>, Rt>, Mut>>());
+    assert!(!lends::<ByRef<Vec<Erased<Rt, i8>>, Mut>>());
+    assert!(!lends::<ByRef<Erased<Rt, i8>, Mut>>());
+    assert!(!lends::<ByProjection<NarrowRef<'static>>>());
+    assert!(!lends::<ByProjection<LabelledMut<'static>>>());
+    assert!(!<(ByRef<String, Mut>, ByRef<Queue<Erased<Rt, i8>, Rt>, Mut>) as Parameters<Rt>>::LENDS_A_WORD);
+    assert!(!<Through<Uniform, Queue<Erased<Rt, i8>, Rt>> as Ending<Rt>>::LENDS_A_WORD);
+}

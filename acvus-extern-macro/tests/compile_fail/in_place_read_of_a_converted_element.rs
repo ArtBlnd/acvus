@@ -5,7 +5,7 @@
 //! position a shared signature's glue restores.
 use acvus_extern::{
     Borrowable, ByRef, Crossing, Lending, Loan, Mut, Ref, RestoreExclusive, RestoreShared, Runtime, Shared,
-    Uniform,
+    Through, Uniform,
 };
 
 unsafe fn read_in_place<Rt>(rt: &Rt, reference: &Rt::Value) -> usize
@@ -41,7 +41,7 @@ where
     .len()
 }
 
-unsafe fn restore_exclusive<'r, Rt>(rt: Crossing<'r, Rt>, at: &mut Option<Lending<'r, Mut, Rt>>, crossed: &mut Rt::Value)
+unsafe fn restore_exclusive<'r, Rt>(rt: Crossing<'r, Rt>, at: &mut Option<Lending<'r, Mut, Rt, Through<Uniform, Vec<i64>>>>, crossed: &mut Rt::Value)
 where
     Rt: Runtime,
 {

@@ -18,7 +18,7 @@ use acvus_utils::Interner;
 use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::handler::{ByRef, ByValue, Lends};
-use crate::loan::{Lending, Loan, Mut, Shared};
+use crate::loan::{Ending, Lending, Loan, Mut, Shared, Through, Unnamed};
 use crate::obj::OneValue;
 use crate::owned::Owned;
 use crate::reference::Ref;
@@ -413,6 +413,9 @@ pub unsafe trait RestoreExclusive<'b, M, Rt>: Sized
 where
     Rt: Runtime,
 {
+    /// What `restore_exclusive` lends in place through `at`.
+    type Ending: Ending<Rt>;
+
     /// A borrow lent in place is read through `at`, whose drop after the
     /// instance's body ends the loan (`Lending`).
     ///
@@ -421,7 +424,7 @@ where
     /// storage is live.
     unsafe fn restore_exclusive<'r>(
         rt: crate::Crossing<'r, Rt>,
-        at: &'b mut Option<Lending<'r, Mut, Rt>>,
+        at: &'b mut Option<Lending<'r, Mut, Rt, Self::Ending>>,
         crossed: &'b mut Rt::Value,
     ) -> Self;
 }
@@ -492,10 +495,12 @@ where
     D: crate::Within<'b>,
     Rt: Runtime,
 {
+    type Ending = Through<C, D>;
+
     #[inline(always)]
     unsafe fn restore_exclusive<'r>(
         rt: crate::Crossing<'r, Rt>,
-        at: &'b mut Option<Lending<'r, Mut, Rt>>,
+        at: &'b mut Option<Lending<'r, Mut, Rt, Through<C, D>>>,
         crossed: &'b mut Rt::Value,
     ) -> &'b mut D {
         // SAFETY: as `RestoreShared`'s, exclusively: `crossed` is the only
@@ -515,10 +520,13 @@ where
     D: OneValue<Rt> + crate::Within<'b>,
     Rt: Runtime,
 {
+    /// The `Ref` is materialized, and nothing is lent through the slot.
+    type Ending = Unnamed;
+
     #[inline(always)]
     unsafe fn restore_exclusive<'r>(
         rt: crate::Crossing<'r, Rt>,
-        _: &'b mut Option<Lending<'r, Mut, Rt>>,
+        _: &'b mut Option<Lending<'r, Mut, Rt, Unnamed>>,
         crossed: &'b mut Rt::Value,
     ) -> D {
         // SAFETY: as the shared impl's, exclusively.
@@ -571,7 +579,10 @@ where
 /// `Mut` loan.
 #[doc(hidden)]
 #[inline(always)]
-pub unsafe fn receiver_borrowed<'s, D, M, C, Rt>(rt: &Rt, lending: &'s Lending<'_, M, Rt>) -> M::Of<'s, D>
+pub unsafe fn receiver_borrowed<'s, D, M, C, Rt>(
+    rt: &Rt,
+    lending: &'s Lending<'_, M, Rt, Through<C, D>>,
+) -> M::Of<'s, D>
 where
     M: Loan,
     C: Lends<D, Rt>,

@@ -231,7 +231,16 @@ Status: Accepted
    and a handler's projection parameter and a host's lent `Option` or
    `Result` end through it. A mono instance glue lends its receiver and each
    exclusive rest position through a `Lending`, the reference its borrow is
-   read through, whose drop after the body ends the loan.
+   read through, whose drop after the body ends the loan. Whether a loan has
+   a word to re-encode is the lent type's constant, not a test at the loan's
+   end: `Borrowable`, `Project`, `Projected` and `Arg` each state
+   `LENDS_A_WORD`, a projection as the disjunction of its components', and
+   every chain ends at `repr::Placement`, which is true of a `Word` type and
+   false of every other, or at `true` where the stored type's outermost
+   constructor is a type parameter. A glue none of whose parameters lends a
+   word holds no loan guard, and a `Lending` of a type that lends none ends
+   in nothing, so an iterator's `next(&mut it)` costs what it did before
+   rule 2 re-encoded anything.
 3. An extension type — `#[derive(ExternType)]` — is stored as its payload,
    the first field, and is `#[repr(transparent)]` over it, so a reference to
    the payload is a reference to the type; the derive requires the attribute.
@@ -308,6 +317,13 @@ struct.
   `Erased::get_mut` and a host lend would each need their own; ending the
   loan over the storage itself is one call at the one place each loan
   already ends.
+- Every loan's end dispatching on the storage's run-time kind — the check
+  and the unwind edge it adds kept the glue of `next(&mut it)` out of line,
+  and `while let Some(x) = next(&mut it)` over a mapped range ran 24 %
+  slower for no word re-encoded.
+- Deciding the end by `repr::is_inline`'s `TypeId` test — it is a run-time
+  test that the optimizer folds, and no constant can compare `TypeId`s on
+  the pinned toolchain.
 - Parsing a wire format at run time through a language type — parsing is the
   extern fn's job; the derive projects its result.
 - A write through an option in Rust storage (`take`, `replace`, an

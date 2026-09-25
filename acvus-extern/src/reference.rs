@@ -85,7 +85,8 @@ where
         // SAFETY: the storage is live for as long as this reference, and an
         // exclusive loan is the only live name of it, which `&mut self`
         // keeps for the borrow below.
-        let lending = unsafe { crate::loan::Lending::<Mut, Rt>::of(rt, self.0) };
+        let lending =
+            unsafe { crate::loan::Lending::<Mut, Rt, crate::loan::Through<crate::Uniform, T>>::of(rt, self.0) };
         // SAFETY: as the shared `with`'s; the borrow is read through
         // `lending`, so it ends before `lending` drops.
         f(unsafe { <Mut as Loan>::borrow::<T, crate::Uniform, Rt>(rt, lending.reference()) })

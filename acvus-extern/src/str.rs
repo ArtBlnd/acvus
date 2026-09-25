@@ -159,6 +159,8 @@ where
     type Site = ();
     type Form = Pair;
 
+    const LENDS_A_WORD: bool = false;
+
     fn site(_: &crate::handler::CallSite<'_, Rt>, _: usize) {}
 
     #[inline(always)]

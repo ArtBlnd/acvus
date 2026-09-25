@@ -1131,6 +1131,14 @@ macro_rules! whole_box {
 #[macro_export]
 macro_rules! whole_box_in_place {
     ($t:ty, $rt:ident) => {
+        // Asked of `$t` and not of its canonical form, which has the same
+        // outermost constructor.
+        const LENDS_A_WORD: bool = {
+            #[allow(unused_imports)]
+            use $crate::repr::InBox as _;
+            $crate::repr::Placement::<$t>::IN_THE_WORD
+        };
+
         unsafe fn deref<'a>(rt: &$rt, reference: &'a <$rt as $crate::Runtime>::Value) -> &'a Self {
             // SAFETY: the caller's contract.
             unsafe { $crate::derive::canonical::deref::<$t, $rt>(rt, reference) }
@@ -1507,6 +1515,8 @@ where
     N: Var<kind::Length>,
     Rt: Runtime,
 {
+    const LENDS_A_WORD: bool = false;
+
     unsafe fn deref<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a Self {
         // SAFETY: the caller's contract, and `erase` boxes an
         // `Arr<Owned<Rt>, ()>`.

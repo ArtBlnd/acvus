@@ -461,6 +461,9 @@ unsafe impl acvus_extern::OneValue<AcvusRuntime> for Value {
 }
 
 impl acvus_extern::Borrowable<AcvusRuntime> for Value {
+    /// A write through the borrow replaces the whole value.
+    const LENDS_A_WORD: bool = false;
+
     unsafe fn deref<'a>(_: &AcvusRuntime, reference: &'a Value) -> &'a Value {
         // SAFETY: the caller's contract: a live reference.
         unsafe { reference.target() }

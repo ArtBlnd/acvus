@@ -209,6 +209,33 @@ where
     *word = value.into_word();
 }
 
+// -- Where a type lies ----------------------------------------------------
+
+/// Whether a runtime keeps a `P` in its value word: `true` for a `Word`
+/// type, which a runtime lends in place through `view_mut`, and `false` for
+/// every other type, which a runtime keeps behind the word.
+///
+/// The constant is resolved where `Placement::<P>` is written, with `InBox`
+/// in scope. Where `P` is a type parameter or a projection at that point, the
+/// answer is `InBox`'s even when the parameter is later filled with a `Word`
+/// type, so a crossing whose stored type has a parameter as its outermost
+/// constructor answers `true` itself instead of asking this.
+pub struct Placement<P>(PhantomData<fn() -> P>);
+
+impl<P> Placement<P>
+where
+    P: Word,
+{
+    pub const IN_THE_WORD: bool = true;
+}
+
+/// `Placement`'s answer for a type that is not `Word`.
+pub trait InBox {
+    const IN_THE_WORD: bool = false;
+}
+
+impl<P> InBox for Placement<P> {}
+
 // -- Lengths --------------------------------------------------------------
 
 /// A length or an index read as a `u64` that this target's `usize` cannot
@@ -301,6 +328,23 @@ mod tests {
         assert_eq!(true.into_word(), 1);
         assert_eq!('\u{10FFFF}'.into_word(), 0x10FFFF);
         assert_eq!(().into_word(), 0);
+    }
+
+    #[test]
+    fn placement_answers_the_inline_list_and_nothing_else() {
+        use super::InBox as _;
+
+        macro_rules! in_the_word {
+            ($($name:ident: $t:ty),*) => {
+                $(assert!(Placement::<$t>::IN_THE_WORD, "{} is Inline", stringify!($t));)*
+            };
+        }
+        crate::for_each_inline!(in_the_word);
+        assert!(!Placement::<String>::IN_THE_WORD);
+        assert!(!Placement::<Vec<i8>>::IN_THE_WORD);
+        assert!(!Placement::<Option<i8>>::IN_THE_WORD);
+        assert!(!Placement::<(i8,)>::IN_THE_WORD);
+        assert!(!Placement::<std::vec::IntoIter<i64>>::IN_THE_WORD);
     }
 
     #[test]
