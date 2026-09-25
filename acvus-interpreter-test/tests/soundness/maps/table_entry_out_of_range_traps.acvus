@@ -1,0 +1,10 @@
+// expect index out of bounds: the len is 3 but the index is 3
+let t = vec([vec([0u64, 1u64]), vec([3u64, 0u64]), vec([1u64, 2u64])]);
+let bits = "100";
+let bs = bits.to_string().to_bytes();
+let s = 0u64;
+for b in &bs {
+    let d = (*b - b'0') as u64;
+    s = t[s][d];
+}
+s

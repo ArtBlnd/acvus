@@ -4550,7 +4550,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// [`Self::free_arm_step`]), or which it resets from an arm taken only
     /// at the first iteration (see [`Self::taken_only_first`]).
     fn joined(&mut self, sent: &[(Form<'a>, Option<ValueId>, BlockIdx)]) -> Option<Form<'a>> {
-        let mut step: Option<Step<'a>> = None;
+        let mut steps: Vec<Step<'a>> = Vec::new();
         let mut reads_state = false;
         let mut free: Vec<Option<ValueId>> = Vec::new();
         let mut resets = false;
@@ -4560,10 +4560,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 Form::Free => free.push(value),
                 Form::State => reads_state = true,
                 Form::Combined(held) => {
-                    if step.is_some_and(|step| step != held) {
-                        return None;
+                    if !steps.contains(&held) {
+                        steps.push(held);
                     }
-                    step = Some(held);
                     reads_state = true;
                 }
             }
@@ -4572,14 +4571,31 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return None;
         }
         self.resets |= resets;
-        if free.is_empty() {
-            return Some(step.map_or(Form::State, Form::Combined));
+        let one_law = match steps[..] {
+            [] => Some(None),
+            [step] => Some(Some(step)),
+            _ => None,
+        };
+        if let Some(step) = one_law {
+            if free.is_empty() {
+                return Some(step.map_or(Form::State, Form::Combined));
+            }
+            let free_step = self.free_arm_step(&free, step);
+            if let Some(free_step) = free_step
+                && step.is_none_or(|held| held == free_step)
+            {
+                return Some(Form::Combined(free_step));
+            }
         }
-        let free_step = self.free_arm_step(&free, step)?;
-        match step {
-            Some(held) if held != free_step => None,
-            _ => Some(Form::Combined(free_step)),
-        }
+        Self::affine_arms(&steps).then_some(Form::Combined(Step::AffineMap))
+    }
+
+    /// RFC-0093 rule 9: every arm sends the state an affine map of it. An arm
+    /// that leaves the state sends `1·y + 0`, one that combines it sends the
+    /// map `Step::is_affine` accepts, which is integer, and one that sends a
+    /// value `v` reading none of it sends `0·y + v`, of the join's one type.
+    fn affine_arms(steps: &[Step<'a>]) -> bool {
+        steps.iter().all(|step| step.is_affine())
     }
 
     /// Whether `block` runs at the first iteration and at no other: the one

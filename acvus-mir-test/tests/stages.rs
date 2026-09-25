@@ -1637,9 +1637,12 @@ fn an_inner_loop_leaving_by_the_entry_total_gives_the_outer_loop_no_law() {
     );
 }
 
-/// The `break` hands back `100`, not a sum, so the outer loop has no law.
+/// The `break` hands back `100` and the inner loop's own exit the entry
+/// total plus the row's run, so the join after the inner loop sends
+/// `0·total + 100` or `1·total + run`, chosen by `*x == 5`, which reads
+/// nothing of `total`: the outer loop has the affine map (RFC-0093 rule 9).
 #[test]
-fn an_inner_loop_leaving_with_another_value_gives_the_outer_loop_no_law() {
+fn an_inner_loop_leaving_with_another_value_gives_the_outer_loop_the_affine_map() {
     let c = Compiled::of(
         "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 0; \
          for row in &m { for x in &row { total = total + *x; \
@@ -1647,7 +1650,11 @@ fn an_inner_loop_leaving_with_another_value_gives_the_outer_loop_no_law() {
     );
     assert_eq!(
         cycle_stages(&c.shapes_of(c.outer_header())),
-        [&one(vec![TokenKind::Carried], Order::InOrder, None)],
+        [&one(
+            vec![TokenKind::Carried],
+            Order::InOrder,
+            exact(LawKind::AffineMap)
+        )],
         "{}",
         c.listing
     );

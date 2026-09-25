@@ -1,0 +1,13 @@
+// expect attempt to add with overflow
+let m = vec([vec([1u8, 2u8]), vec([4u8, 5u8, 6u8]), vec([100u8, 60u8])]);
+let total = 0u8;
+for row in &m {
+    for x in &row {
+        total = total + *x;
+        if *x == 5u8 {
+            total = 100u8;
+            break;
+        };
+    }
+}
+total
