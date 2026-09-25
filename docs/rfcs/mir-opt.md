@@ -1020,10 +1020,6 @@ replaces `i` with the counter, a body that reads `i` carries both. Every convert
 attention kernel each loop that holds another prepares one more back-edge
 move than its `while` did.
 **Rejected.**
-- Converting `i <= n`, or a step other than one, by computing a bound —
-  `n + 1` leaves the width at its maximum, and a step `s` needs the
-  rounded-up quotient of `n − b` by `s`, which is the arithmetic of
-  the scalar evolution RFC-0066 rejects.
 - Converting with a computed exit value — the value after the loop would
   be the pass's arithmetic instead of the body's own `i + 1`, and deriving
   it from the trip count is IV canonicalization's.
