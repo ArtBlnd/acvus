@@ -33,59 +33,36 @@ use acvus_utils::Interner;
 
 use crate::loan::{Loan, Mut, Shared};
 use crate::obj::{Cross, TransparentOver};
+use crate::repr::Words;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
-/// A run as the machine holds it: one word per register of the pair.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Words {
-    pub ptr: u64,
-    pub len: u64,
-}
-
 /// A run of the runtime's values in a storage: what a `Slice` carries and
 /// what the crossing builds it from. Nothing outside this module names one.
+///
+/// Obligation across artifacts: `acvus-interpreter`'s `ops::index` keeps
+/// a slice in the register pair these two words are (RFC-0047 rule 6).
 struct Elements<Rt>
 where
     Rt: Runtime,
 {
-    ptr: *const Rt::Value,
-    len: usize,
+    words: Words,
+    of: PhantomData<fn() -> Rt>,
 }
-
-// SAFETY: an `Elements` is a borrow of a storage the checker keeps alive
-// for as long as the slice value exists (RFC-0018), and the storage holds
-// `Rt::Value`s, which are `Send + Sync` by the `Runtime` contract. The raw
-// pointer carries no capability the `&[Rt::Value]` it was taken from did
-// not already have.
-unsafe impl<Rt> Send for Elements<Rt> where Rt: Runtime {}
-// SAFETY: as `Send`.
-unsafe impl<Rt> Sync for Elements<Rt> where Rt: Runtime {}
 
 impl<Rt> Elements<Rt>
 where
     Rt: Runtime,
 {
-    /// Obligation across artifacts: `acvus-interpreter`'s `ops::index` keeps
-    /// a slice in the register pair these two words are (RFC-0047 rule 6).
-    ///
     /// # Safety
-    /// `words.ptr` is the first of `words.len` live `Rt::Value`s of one run,
-    /// and that run outlives every `Elements` this makes — the loan the
-    /// slice holds is what keeps it so (RFC-0018).
+    /// `words` names live `Rt::Value`s of one run, and that run outlives
+    /// every `Elements` this makes — the loan the slice holds is what keeps
+    /// it so (RFC-0018).
     #[inline(always)]
     const unsafe fn from_words(words: Words) -> Self {
         Self {
-            ptr: words.ptr as *const Rt::Value,
-            len: words.len as usize,
-        }
-    }
-
-    #[inline(always)]
-    fn words(&self) -> Words {
-        Words {
-            ptr: self.ptr as u64,
-            len: self.len as u64,
+            words,
+            of: PhantomData,
         }
     }
 }
@@ -115,11 +92,11 @@ where
     Rt: Runtime,
 {
     pub fn len(&self) -> usize {
-        self.0.len
+        self.0.words.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.len == 0
+        self.0.words.is_empty()
     }
 }
 
@@ -132,7 +109,7 @@ where
     pub fn with<'a, R>(&'a self, f: impl FnOnce(&'a [T]) -> R) -> R {
         // SAFETY: the module's head: the run is live for as long as this
         // slice, and `T: TransparentOver<Rt>` is the layout.
-        f(unsafe { std::slice::from_raw_parts(self.0.ptr.cast::<T>(), self.0.len) })
+        f(unsafe { self.0.words.slice::<T>() })
     }
 }
 
@@ -145,11 +122,7 @@ where
     pub fn with<'a, R>(&'a mut self, f: impl FnOnce(&'a mut [T]) -> R) -> R {
         // SAFETY: as the shared `with`'s, and an exclusive slice is the only
         // live name of its run (RFC-0047 rule 2), which `&'a mut self` keeps.
-        f(
-            unsafe {
-                std::slice::from_raw_parts_mut(self.0.ptr.cast_mut().cast::<T>(), self.0.len)
-            },
-        )
+        f(unsafe { self.0.words.slice_mut::<T>() })
     }
 }
 
@@ -220,11 +193,7 @@ where
     Rt: Runtime,
 {
     fn give(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
-        let words = Words {
-            ptr: self.as_ptr() as u64,
-            len: self.len() as u64,
-        };
-        rt.slice_into_run(words, out)
+        rt.slice_into_run(Words::of_slice(self), out)
     }
 }
 
@@ -237,11 +206,7 @@ where
     Rt: Runtime,
 {
     fn give(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
-        let words = Words {
-            ptr: self.as_mut_ptr() as u64,
-            len: self.len() as u64,
-        };
-        rt.slice_into_run(words, out)
+        rt.slice_into_run(Words::of_slice_mut(self), out)
     }
 }
 
@@ -283,8 +248,7 @@ where
         // SAFETY: the caller's contract: `run` is this parameter's pair, and
         // the container it names is live for `'a` (RFC-0018); `D:
         // TransparentOver<Rt>` is the layout.
-        let words = unsafe { rt.slice_from_run(run) };
-        unsafe { std::slice::from_raw_parts(words.ptr as *const D, words.len as usize) }
+        unsafe { rt.slice_from_run(run).slice::<D>() }
     }
 }
 
@@ -298,8 +262,7 @@ where
     unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], _: &()) -> &'a mut [D] {
         // SAFETY: as the shared form's, and a `&mut [D]` argument is the
         // only live name of its run (RFC-0047 rule 2).
-        let words = unsafe { rt.slice_from_run(run) };
-        unsafe { std::slice::from_raw_parts_mut(words.ptr as *mut D, words.len as usize) }
+        unsafe { rt.slice_from_run(run).slice_mut::<D>() }
     }
 }
 
@@ -335,10 +298,10 @@ where
     }
 
     fn into_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
-        rt.slice_into_run(self.0.words(), out)
+        rt.slice_into_run(self.0.words, out)
     }
 
     fn into_return_run(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
-        rt.slice_into_run(self.0.words(), out)
+        rt.slice_into_run(self.0.words, out)
     }
 }

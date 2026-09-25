@@ -1,0 +1,2 @@
+// expect 4
+let xs = vec([5, 3, 9, -1, 2]); let i = 0u64; let done = false; while i < xs.len() && done == false { done = xs[i] < 0; i = i + 1u64; } i

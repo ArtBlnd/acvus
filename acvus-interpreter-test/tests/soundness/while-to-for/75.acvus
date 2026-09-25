@@ -1,0 +1,2 @@
+// expect 22
+let xs = vec([5, 3, -1, 8, 9]); let i = 0u64; let found = false; while !(i >= xs.len() || found) { if xs[i] < 0 { found = true; } else { i = i + 1u64; }; } i * 10 + (if found { 2 } else { 0 })

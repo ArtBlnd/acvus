@@ -1,0 +1,2 @@
+// expect 5
+let i = @max - 5; let s = 0; while i < @max { if i == @min { break; }; s = s + 1; i = i + 1; } if i == @max { s } else { 0 - s }

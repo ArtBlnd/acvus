@@ -1,0 +1,2 @@
+// expect index out of bounds: the len is 3 but the index is 3
+let xs = vec([1, 2, 3]); let n = 5u64; let i = 0u64; let s = 0; while { s = s + xs[i]; i < n } { i = i + 1u64; } s

@@ -1,6 +1,6 @@
 use acvus_mir::ir::InstKind;
 
-use super::Prepare;
+use super::{ForwardedExit, Prepare};
 use crate::code::{Op, chain};
 use crate::ops::control;
 
@@ -22,6 +22,22 @@ impl ExitEdge {
 
     pub(super) fn of_for(prep: &mut Prepare<'_>, terminator: usize) -> ExitEdge {
         ExitEdge(chain(prep.exit_moves(terminator), Box::new(control::Yield)))
+    }
+
+    pub(super) fn of_forwarded_for(
+        prep: &mut Prepare<'_>,
+        terminator: usize,
+        forwarded: &ForwardedExit,
+    ) -> ExitEdge {
+        let into_exit = prep.exit_moves(terminator);
+        let forwarding = prep.jump_moves(forwarded.jump);
+        let exit_block = prep.straight(
+            forwarded.block.clone(),
+            &forwarded.regions,
+            forwarding,
+            Box::new(control::Yield),
+        );
+        ExitEdge(chain(into_exit, exit_block))
     }
 
     pub(super) fn into_op(self) -> Box<dyn Op> {

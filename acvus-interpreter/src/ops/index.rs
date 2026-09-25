@@ -14,47 +14,6 @@ use crate::machine::Machine;
 use crate::regs::Regs;
 use crate::value::{Kind, Value};
 
-/// The run a slice pair names, as the machine reads it: `len` values from
-/// `ptr`, in storage the slice's loan keeps live (RFC-0018).
-struct Run {
-    ptr: *const Value,
-    len: usize,
-}
-
-impl Run {
-    /// # Safety
-    /// `words` is a pair `AsSlice` wrote, and its container is live and
-    /// unmoved for as long as this run is read.
-    unsafe fn from_words(words: Words) -> Self {
-        Self {
-            ptr: words.ptr as *const Value,
-            len: words.len as usize,
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    /// # Safety
-    /// `at < self.len()`, and the run is live.
-    #[inline(always)]
-    unsafe fn at<'a>(&self, at: usize) -> &'a Value {
-        // SAFETY: the caller's contract.
-        unsafe { &*self.ptr.add(at) }
-    }
-
-    /// # Safety
-    /// As `at`, and the pair was written from a `&mut [T]`, so this run is
-    /// the only live name of its storage.
-    #[allow(clippy::mut_from_ref)]
-    #[inline(always)]
-    unsafe fn at_mut<'a>(&self, at: usize) -> &'a mut Value {
-        // SAFETY: the caller's contract.
-        unsafe { &mut *self.ptr.cast_mut().add(at) }
-    }
-}
-
 /// The registers an indexed read names.
 #[derive(Clone, Copy)]
 pub struct Read {
@@ -68,27 +27,25 @@ fn out_of_bounds(len: usize, index: u64) -> String {
     format!("index out of bounds: the len is {len} but the index is {index}")
 }
 
-/// The run the pair at `slice` holds.
+/// The pair at `slice`.
 ///
 /// # Safety
 /// The container the slice borrows is live and unmoved, which the loan the
 /// slice holds keeps true for as long as the pair is live (RFC-0018).
 #[inline(always)]
-unsafe fn run(regs: &Regs<'_>, slice: SlicePair) -> Run {
-    let words = Words {
-        ptr: regs.word(slice.ptr),
-        len: regs.word(slice.len),
-    };
-    // SAFETY: the caller's contract, and `AsSlice` is what wrote the pair.
-    unsafe { Run::from_words(words) }
+unsafe fn words(regs: &Regs<'_>, slice: SlicePair) -> Words {
+    // SAFETY: the checker types this pair a slice, and the producers of a
+    // slice pair write it from `into_pair`: `ConstStr`, `slice_into_run`,
+    // `land_words` and a body's pair exit (RFC-0047 rule 6); a move copies it.
+    unsafe { Words::from_pair([regs.word(slice.ptr), regs.word(slice.len)]) }
 }
 
-/// The element position `index` names, checked against `run` where the
+/// The element position `index` names, checked against `len` where the
 /// instruction carries no proof of the bound.
 #[inline]
-fn position<const CHECKED: bool>(run: &Run, index: u64) -> usize {
-    if CHECKED && index >= run.len() as u64 {
-        panic!("{}", out_of_bounds(run.len(), index));
+fn position<const CHECKED: bool>(len: usize, index: u64) -> usize {
+    if CHECKED && index >= len as u64 {
+        panic!("{}", out_of_bounds(len, index));
     }
     // The bound above, or the interval pass's proof (RFC-0047 rule 7), puts
     // `index` below a length, which is a `usize`.
@@ -105,11 +62,11 @@ pub(crate) unsafe fn element<'a, const CHECKED: bool>(
     slice: SlicePair,
     index: u64,
 ) -> &'a Value {
-    // SAFETY: the caller's contract.
-    let run = unsafe { run(regs, slice) };
-    let at = position::<CHECKED>(&run, index);
-    // SAFETY: the caller's contract, and `position` put `at` within the run.
-    unsafe { run.at(at) }
+    // SAFETY: the caller's contract; the run holds the runtime's values.
+    let run = unsafe { words(regs, slice).slice::<Value>() };
+    let at = position::<CHECKED>(run.len(), index);
+    // SAFETY: `position` put `at` within the run.
+    unsafe { run.get_unchecked(at) }
 }
 
 pub struct IndexCopy<const CHECKED: bool> {
@@ -181,12 +138,12 @@ impl<const CHECKED: bool, const LARGE: bool> Op for IndexSet<CHECKED, LARGE> {
         let regs = m.regs();
         let index = regs.word(self.index);
         let value = regs.take::<LARGE>(self.value);
-        // SAFETY: the slice holds its container's loan.
-        let slice = unsafe { run(regs, self.slice) };
-        let at = position::<CHECKED>(&slice, index);
-        // SAFETY: the operand is a `&mut [T]`, so its run is named once
-        // here, and `position` put `at` within it.
-        let slot = unsafe { slice.at_mut(at) };
+        // SAFETY: the slice holds its container's loan, and the operand is a
+        // `&mut [T]`, so its run is named once here.
+        let slice = unsafe { words(regs, self.slice).slice_mut::<Value>() };
+        let at = position::<CHECKED>(slice.len(), index);
+        // SAFETY: `position` put `at` within the run.
+        let slot = unsafe { slice.get_unchecked_mut(at) };
         let overwritten = *slot;
         *slot = value;
         release_if::<LARGE>(overwritten);

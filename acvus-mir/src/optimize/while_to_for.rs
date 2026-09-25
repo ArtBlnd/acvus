@@ -55,10 +55,17 @@
 //! to a call that reaches it is a deterministic step. In every form `i`
 //! stays a header parameter advanced by its own step, which keeps its trap,
 //! and IV canonicalization reads it from the counter (RFC-0066 rule 7).
+//!
+//! RFC-0094 rule 7 admits an edge out of the body to a block from which
+//! every path reaches the loop's exit with no `return` and no `!`: the
+//! `k`-th visit holds `b + k` in both loops, so an edge the body takes on
+//! that visit leaves both with the same values. The `For` keeps the edge,
+//! and its count is then a bound. Rule 6, in [`leave`], moves a back edge whose constant decides the
+//! header's test to the exit, which makes such an edge.
 
 use acvus_ast::{Literal, SuffixedInt};
 use acvus_utils::Interner;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::analysis::affine::{AffineValues, Derivation, Operand as AffineOperand};
@@ -74,10 +81,14 @@ use crate::ir::{
     Stages, ValOrigin, ValueId,
 };
 use crate::laws::{LawTable, Reaches};
-use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
+use crate::optimize::forward::edges_mut;
+use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator, map_value_defs};
 use crate::ty::{CastTy, IntTy, Mutability, Ty};
 
+mod leave;
+
 pub fn run(interner: &Interner, cfg: &mut CfgBody, laws: &LawTable) {
+    leave::run(cfg, laws);
     let domtree = DomTree::build(cfg);
     let invariants = Invariants::of(cfg);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
@@ -109,6 +120,31 @@ pub fn run(interner: &Interner, cfg: &mut CfgBody, laws: &LawTable) {
     for loop_ in pulls {
         loop_.apply(cfg);
     }
+}
+
+/// Whether rules 1 to 5 convert the loop headed at `header`.
+fn converts(cfg: &CfgBody, laws: &LawTable, header: Label) -> bool {
+    let domtree = DomTree::build(cfg);
+    let invariants = Invariants::of(cfg);
+    let nest = LoopNest::of(cfg, &domtree, &invariants);
+    let preds = cfg.predecessors();
+    let literals = const_literals(cfg);
+    let loans = Loans::build(cfg);
+    nest.iter()
+        .filter(|(_, loop_)| cfg.blocks[loop_.natural.header.0].label == header)
+        .any(|(_, loop_)| {
+            Recognizer {
+                cfg,
+                loop_,
+                invariants: &invariants,
+                laws,
+                loans: &loans,
+                preds: &preds,
+                literals: &literals,
+            }
+            .counted()
+            .is_some()
+        })
 }
 
 /// A pull loop (RFC-0089 rule 1): the header lends one storage `&mut` to
@@ -307,6 +343,17 @@ struct Counted {
     /// kept it live is gone, so a `Check` at its place keeps its trap
     /// (RFC-0037 rule 3).
     kept_step: Option<ValueId>,
+    own_exit: Option<OwnExit>,
+}
+
+/// Where the exit block is entered from the body too (RFC-0094 rule 7), the
+/// `For` leaves through a block of its own that jumps to it, so the exit
+/// block of the range is entered from the header alone (RFC-0081 rule 1)
+/// and IV canonicalization can hand it the trip count. The block goes right
+/// after the last latch, where `acvus-interpreter`'s `prepare` reads a
+/// `for` region's exit label.
+struct OwnExit {
+    after: Label,
 }
 
 struct Recognizer<'a> {
@@ -345,11 +392,16 @@ impl Recognizer<'_> {
             || !natural.contains(body_block)
             || natural.contains(exit_block)
             || !self.only_from_header(body_block)
-            || !self.only_from_header(exit_block)
-            || !self.leaves_only_from_header()
+            || !self.leaves_by_breaks(exit_block)
         {
             return None;
         }
+        let own_exit = match self.only_from_header(exit_block) {
+            true => None,
+            false => Some(OwnExit {
+                after: self.cfg.blocks[natural.latches.iter().max()?.0].label,
+            }),
+        };
 
         let affine = AffineValues::of(self.cfg, self.loop_, self.invariants, self.laws);
         let recognized = self
@@ -415,6 +467,7 @@ impl Recognizer<'_> {
             steps,
             form: recognized.form,
             kept_step,
+            own_exit,
         })
     }
 
@@ -778,6 +831,43 @@ impl Recognizer<'_> {
         }
     }
 
+    /// RFC-0094 rule 7: every edge out of a block of the loop other than
+    /// the header goes to a block outside it from which every path reaches
+    /// `exit` with no `return` and no `!` on the way, and `exit` is entered
+    /// from nowhere else.
+    fn leaves_by_breaks(&self, exit: BlockIdx) -> bool {
+        let natural = &self.loop_.natural;
+        let mut broken: FxHashSet<BlockIdx> = FxHashSet::default();
+        let mut work: Vec<BlockIdx> = natural
+            .blocks()
+            .filter(|&block| block != natural.header)
+            .flat_map(|block| self.cfg.successors(block))
+            .filter(|&succ| !natural.contains(succ))
+            .collect();
+        while let Some(block) = work.pop() {
+            if block == exit || !broken.insert(block) {
+                continue;
+            }
+            if matches!(
+                self.cfg.blocks[block.0].terminator,
+                Terminator::Return { .. } | Terminator::Diverge
+            ) {
+                return false;
+            }
+            for succ in self.cfg.successors(block) {
+                if natural.contains(succ) {
+                    return false;
+                }
+                work.push(succ);
+            }
+        }
+        self.preds.get(&exit).is_some_and(|preds| {
+            preds
+                .iter()
+                .all(|pred| natural.contains(*pred) || broken.contains(pred))
+        })
+    }
+
     fn leaves_only_from_header(&self) -> bool {
         let natural = &self.loop_.natural;
         natural
@@ -959,26 +1049,24 @@ impl Counted {
             }
             moved.push(copied);
         }
-        let mut leaving: Vec<usize> = self
-            .steps
-            .iter()
-            .map(|step| step.header_position)
-            .collect();
-        leaving.sort_unstable();
-        let mut taken: FxHashMap<usize, Inst> = FxHashMap::default();
-        for position in leaving.into_iter().rev() {
-            taken.insert(position, cfg.blocks[header.0].insts.remove(position));
+        let mut into_body: Vec<Inst> = Vec::new();
+        let mut into_exit: Vec<Inst> = Vec::new();
+        let header_insts = std::mem::take(&mut cfg.blocks[header.0].insts);
+        for (position, inst) in header_insts.into_iter().enumerate() {
+            let emit = self
+                .steps
+                .iter()
+                .find(|step| step.header_position == position)
+                .map(|step| step.emit);
+            match emit {
+                Some(Emit::Move) => {}
+                Some(Emit::Start) => into_body.push(inst),
+                None => {
+                    into_exit.push(inst.clone());
+                    into_body.push(inst);
+                }
+            }
         }
-        let into_body: Vec<Inst> = self
-            .steps
-            .iter()
-            .filter(|step| matches!(step.emit, Emit::Start))
-            .map(|step| {
-                taken
-                    .remove(&step.header_position)
-                    .expect("every step's instruction was taken out of the header")
-            })
-            .collect();
         cfg.blocks[entering.0].insts.extend(moved);
 
         let hi = self.hi.value();
@@ -1057,14 +1145,190 @@ impl Counted {
         cfg.blocks[body_block.0].insts = into_body.into_iter().chain(head).collect();
         let counter = fresh(cfg, &counter);
         cfg.blocks[body_block.0].params.push(counter);
+        let (exit, joins) = match self.own_exit {
+            Some(own) => (
+                ExitEdge {
+                    label: own.write(cfg, labels, self.exit, self.exit_args),
+                    args: Vec::new(),
+                },
+                Some(self.exit),
+            ),
+            None => (
+                ExitEdge {
+                    label: self.exit,
+                    args: self.exit_args,
+                },
+                None,
+            ),
+        };
+        let exit_label = exit.label;
         let header = cfg.label_to_block[&self.header];
         cfg.blocks[header.0].terminator = Terminator::For {
             source,
             stages: Stages::lowered(self.body),
-            exit: self.exit,
-            exit_args: self.exit_args,
+            exit: exit.label,
+            exit_args: exit.args,
             exit_trip: ExitTrip::Absent,
         };
+        HeaderRest {
+            header,
+            body: cfg.label_to_block[&self.body],
+            exit: cfg.label_to_block[&exit_label],
+            own_exit_target: joins.map(|label| cfg.label_to_block[&label]),
+            insts: into_exit,
+        }
+        .run_at_exit(cfg);
+    }
+}
+
+/// RFC-0081 rule 2: the header's instructions that are no step of the
+/// bound, which the body block's head runs under the header's names and
+/// the exit block's head under fresh ones.
+struct HeaderRest {
+    header: BlockIdx,
+    body: BlockIdx,
+    exit: BlockIdx,
+    own_exit_target: Option<BlockIdx>,
+    insts: Vec<Inst>,
+}
+
+impl HeaderRest {
+    fn run_at_exit(self, cfg: &mut CfgBody) {
+        let mut renamed: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+        let mut copies: Vec<Inst> = Vec::with_capacity(self.insts.len());
+        for mut inst in self.insts {
+            apply_subst(&mut inst.kind, &renamed);
+            map_value_defs(&mut inst.kind, &mut |dst| {
+                let ty = cfg.val_types[dst].clone();
+                let copy = fresh(cfg, &ty);
+                renamed.insert(*dst, copy);
+                *dst = copy;
+            });
+            copies.push(inst);
+        }
+        if copies.is_empty() {
+            return;
+        }
+        let exit_insts = std::mem::take(&mut cfg.blocks[self.exit.0].insts);
+        cfg.blocks[self.exit.0].insts = copies.into_iter().chain(exit_insts).collect();
+
+        let mut at_exit = renamed.clone();
+        let Terminator::For { exit_args, .. } = &mut cfg.blocks[self.header.0].terminator else {
+            panic!("the header was just given its `For`")
+        };
+        let sent: Vec<usize> = (0..exit_args.len())
+            .filter(|at| renamed.contains_key(&exit_args[*at]))
+            .collect();
+        let values: Vec<ValueId> = sent.iter().rev().map(|at| exit_args.remove(*at)).collect();
+        for (at, value) in sent.iter().rev().zip(values) {
+            let param = cfg.blocks[self.exit.0].params.remove(*at);
+            at_exit.insert(param, renamed[&value]);
+        }
+
+        let domtree = DomTree::build(cfg);
+        let mut past_join: Vec<ValueId> = Vec::new();
+        for (index, block) in cfg.blocks.iter_mut().enumerate() {
+            let block_idx = BlockIdx(index);
+            if block_idx == self.header || domtree.dominates(self.body, block_idx) {
+                continue;
+            }
+            if domtree.dominates(self.exit, block_idx) {
+                for inst in &mut block.insts {
+                    apply_subst(&mut inst.kind, &at_exit);
+                }
+                apply_subst_terminator(&mut block.terminator, &at_exit);
+                continue;
+            }
+            let read = block
+                .insts
+                .iter()
+                .flat_map(|inst| inst_info::uses(&inst.kind))
+                .chain(inst_info::terminator_uses(&block.terminator))
+                .filter(|value| renamed.contains_key(value));
+            for value in read {
+                let joined = self
+                    .own_exit_target
+                    .is_some_and(|joins| domtree.dominates(joins, block_idx));
+                assert!(
+                    joined,
+                    "{value:?} is read in {block_idx:?}, which neither the body, the exit nor a \
+                     join of the two dominates"
+                );
+                if !past_join.contains(&value) {
+                    past_join.push(value);
+                }
+            }
+        }
+        let Some(joins) = self.own_exit_target else {
+            return;
+        };
+        if past_join.is_empty() {
+            return;
+        }
+
+        let joins_label = cfg.blocks[joins.0].label;
+        let mut at_join: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+        for value in &past_join {
+            let ty = cfg.val_types[value].clone();
+            let param = fresh(cfg, &ty);
+            cfg.blocks[joins.0].params.push(param);
+            at_join.insert(*value, param);
+        }
+        for (index, block) in cfg.blocks.iter_mut().enumerate() {
+            let from_exit = BlockIdx(index) == self.exit;
+            for edge in edges_mut(&mut block.terminator) {
+                if *edge.to != joins_label {
+                    continue;
+                }
+                edge.args
+                    .extend(past_join.iter().map(|value| match from_exit {
+                        true => renamed[value],
+                        false => *value,
+                    }));
+            }
+        }
+        for (index, block) in cfg.blocks.iter_mut().enumerate() {
+            if !domtree.dominates(joins, BlockIdx(index)) {
+                continue;
+            }
+            for inst in &mut block.insts {
+                apply_subst(&mut inst.kind, &at_join);
+            }
+            apply_subst_terminator(&mut block.terminator, &at_join);
+        }
+    }
+}
+
+struct ExitEdge {
+    label: Label,
+    args: Vec<ValueId>,
+}
+
+impl OwnExit {
+    /// A block that jumps to `exit` with `args`, written after the latch.
+    fn write(
+        self,
+        cfg: &mut CfgBody,
+        labels: &mut LabelFactory,
+        exit: Label,
+        args: Vec<ValueId>,
+    ) -> Label {
+        let label = labels.fresh();
+        let block = Block {
+            label,
+            params: Vec::new(),
+            insts: Vec::new(),
+            terminator: Terminator::Jump { label: exit, args },
+        };
+        let after_latch = cfg.label_to_block[&self.after].0 + 1;
+        cfg.blocks.insert(after_latch, block);
+        cfg.label_to_block = cfg
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(at, block)| (block.label, BlockIdx(at)))
+            .collect();
+        label
     }
 }
 

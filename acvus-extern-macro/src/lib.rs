@@ -1320,7 +1320,7 @@ fn generate_extern_fn(
                         // SAFETY: `__at` is typed at the signature's `Later`.
                         ::core::option::Option::Some(unsafe {
                             ::acvus_extern::InstanceRun::from_glue(
-                                __at as usize,
+                                ::acvus_extern::repr::fn_addr(__at),
                                 ::acvus_extern::Task::Async,
                             )
                         })
@@ -1406,7 +1406,7 @@ fn generate_extern_fn(
                         // SAFETY: `__at` is typed at the signature's `Now`.
                         ::core::option::Option::Some(unsafe {
                             ::acvus_extern::InstanceRun::from_glue(
-                                __at as usize,
+                                ::acvus_extern::repr::fn_addr(__at),
                                 ::acvus_extern::Task::Sync,
                             )
                         })
@@ -5461,7 +5461,7 @@ fn signature_call(
                 // took of a mono glue of this signature, which it took at
                 // this type and at no other.
                 let __f: <Self as ::acvus_extern::Signature<#runtime>>::Now =
-                    unsafe { ::core::mem::transmute(__entry.run.at()) };
+                    unsafe { ::acvus_extern::repr::fn_of(__entry.run.at()) };
                 // SAFETY: this is the requirer's half of the crossing
                 // `extern_signature!` wrote, and it reads the result at the
                 // requirer's type, which the checker unified with the
@@ -5504,7 +5504,7 @@ fn signature_call(
                     // SAFETY: as `call_now`'s, at the awaiting shape the
                     // task above named.
                     let __f: <Self as ::acvus_extern::Signature<#runtime>>::Later =
-                        unsafe { ::core::mem::transmute(__entry.run.at()) };
+                        unsafe { ::acvus_extern::repr::fn_of(__entry.run.at()) };
                     // SAFETY: as `call_now`'s.
                     let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
                     // SAFETY: as `call_now`'s.
