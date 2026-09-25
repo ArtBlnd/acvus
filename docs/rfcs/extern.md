@@ -1019,7 +1019,9 @@ Status: Accepted
    between them by safe arithmetic (`word_of_tag`, `tag_of_word`). A cast between two types a
    `TypeId` shows equal is repr's too, checked there. A lifetime erased
    for a value the runtime keeps is repr's, with the fact that bounds it.
-   No `transmute`, `transmute_copy` or pointer cast between types is
+   A register's place in a frame is repr's `Disp<S>`, the byte offset of a
+   slot of a run of `S`, bounded when made; a read at a displacement or at
+   a mark word is repr's `at` or `word_at`. No `transmute`, `transmute_copy` or pointer cast between types is
    written outside repr.
 
 **Why.** A safe trait or a public field that unsafe code trusts lets safe
