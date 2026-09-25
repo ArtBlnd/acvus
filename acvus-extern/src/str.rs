@@ -6,23 +6,12 @@ use acvus_utils::Interner;
 
 use crate::handler::{Arg, Gives, Ret, Takes};
 use crate::obj::{Cross, Pair};
+use crate::repr::Words;
 use crate::runtime::Runtime;
-use crate::slice::Words;
 use crate::ty_arg::{PolyVars, TyArg, Var, kind};
 
-/// A run of UTF-8 as the machine holds it: a pointer and a length in bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct StrView {
-    ptr: *const u8,
-    bytes: usize,
-}
-
-// SAFETY: a `StrView` is a borrow of bytes the checker keeps alive for as
-// long as the view exists (RFC-0018), and `&str` is `Send + Sync`. The raw
-// pointer carries no capability the `&str` it was taken from did not have.
-unsafe impl Send for StrView {}
-// SAFETY: as `Send`.
-unsafe impl Sync for StrView {}
+pub struct StrView(Words);
 
 /// The crossing's and the runtime's, and no handler's: a handler takes the
 /// language's `&str` as Rust's `&str` (`ByStr`) and returns it as Rust's
@@ -35,31 +24,22 @@ impl StrView {
     /// `&str` holds keeps true for a view that crosses (RFC-0018).
     #[doc(hidden)]
     pub unsafe fn of(s: &str) -> Self {
-        Self {
-            ptr: s.as_ptr(),
-            bytes: s.len(),
-        }
+        Self(Words::of_str(s))
     }
 
     /// # Safety
-    /// `words.ptr` is the first of `words.len` live UTF-8 bytes of one run,
-    /// and that run outlives every `StrView` this makes.
+    /// `words` names live UTF-8 bytes of one run, and that run outlives
+    /// every `StrView` this makes.
     #[doc(hidden)]
     #[inline(always)]
     pub const unsafe fn from_words(words: Words) -> Self {
-        Self {
-            ptr: words.ptr as *const u8,
-            bytes: words.len as usize,
-        }
+        Self(words)
     }
 
     #[doc(hidden)]
     #[inline(always)]
     pub fn words(&self) -> Words {
-        Words {
-            ptr: self.ptr as u64,
-            len: self.bytes as u64,
-        }
+        self.0
     }
 
     /// Obligation across artifacts: the UTF-8 that `from_utf8_unchecked`
@@ -76,7 +56,7 @@ impl StrView {
     pub unsafe fn as_str<'a>(&self) -> &'a str {
         // SAFETY: the caller's contract for liveness, and the checker's
         // obligation above for the encoding.
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.ptr, self.bytes)) }
+        unsafe { self.0.str() }
     }
 }
 
@@ -140,9 +120,7 @@ where
     Rt: Runtime,
 {
     fn give(self, rt: crate::Crossing<'_, Rt>, out: &mut [Rt::Value]) {
-        // SAFETY: the result is a borrow of a parameter the caller lent
-        // for this call (RFC-0047 rule 3), which outlives the pair.
-        rt.slice_into_run(unsafe { StrView::of(self) }.words(), out)
+        rt.slice_into_run(Words::of_str(self), out)
     }
 }
 

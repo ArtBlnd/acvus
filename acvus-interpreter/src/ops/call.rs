@@ -1395,8 +1395,9 @@ fn land_pair(m: &mut Machine<'_>, dst: SlicePair, out: [Value; 2]) {
 #[inline]
 fn land_words(m: &mut Machine<'_>, dst: SlicePair, words: Words) {
     let regs = m.regs();
-    regs.set_word(dst.ptr, words.ptr);
-    regs.set_word(dst.len, words.len);
+    let [ptr, len] = words.into_pair();
+    regs.set_word(dst.ptr, ptr);
+    regs.set_word(dst.len, len);
 }
 
 pub struct CallPair1<H> {
@@ -2189,10 +2190,10 @@ unsafe fn call_closure<const THROUGH: bool>(
     let rt = m.ctx.rt;
     match THROUGH {
         true => {
-            let closure: &Value = unsafe {
-                let target = m.regs().peek(callee.at).target();
-                &*(target as *const Value)
-            };
+            // SAFETY: the caller's contract: under `THROUGH` the register is a
+            // live reference to a closure whose register is not written during
+            // the call.
+            let closure: &Value = unsafe { m.regs().peek(callee.at).target() };
             // SAFETY: the caller's contract: the register holds a closure, so
             // its code word names the `Code` this enters and the captures the
             // entry reads.

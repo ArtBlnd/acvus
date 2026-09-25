@@ -95,13 +95,13 @@ unsafe fn lent<'a>(regs: &'a Regs<'_>, text: LentText) -> &'a str {
         LentText::Own(slot) => unsafe { regs.peek(slot).as_str() },
         LentText::Through(slot) => unsafe { regs.peek(slot).target().as_str() },
         LentText::Pair(pair) => {
-            let words = Words {
-                ptr: regs.word(pair.ptr),
-                len: regs.word(pair.len),
-            };
-            // SAFETY: the caller's contract for liveness, and the encoding is
-            // the obligation `StrView::as_str` names.
-            unsafe { StrView::from_words(words).as_str() }
+            // SAFETY: the pair is a `&str` pair, written from `into_pair` as
+            // `ops::index::words` states; the caller's contract for liveness;
+            // and the encoding is the obligation `StrView::as_str` names.
+            unsafe {
+                let words = Words::from_pair([regs.word(pair.ptr), regs.word(pair.len)]);
+                StrView::from_words(words).as_str()
+            }
         }
     }
 }

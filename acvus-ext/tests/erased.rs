@@ -346,15 +346,18 @@ impl Runtime for Counting {
     }
 
     fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [Self::Value]) {
-        out[0] = V::Word(words.ptr);
-        out[1] = V::Word(words.len);
+        let [ptr, len] = words.into_pair();
+        out[0] = V::Word(ptr);
+        out[1] = V::Word(len);
     }
 
     unsafe fn slice_from_run(&self, run: &[Self::Value]) -> acvus_extern::Words {
         let (V::Word(ptr), V::Word(len)) = (run[0], run[1]) else {
             panic!("slice_from_run: not the pair a slice was written into: {run:?}")
         };
-        acvus_extern::Words { ptr, len }
+        // SAFETY: the caller's contract: `run` is what `slice_into_run` wrote
+        // from `into_pair`.
+        unsafe { acvus_extern::Words::from_pair([ptr, len]) }
     }
 
     fn call_is_sync(&self, _: &V) -> bool {
@@ -457,20 +460,14 @@ impl World {
     fn slice_view(&self, container: &V) -> [V; 2] {
         let elements = open_ref::<Vec<Owned<Counting>>>(container);
         let mut pair = [V::default(); 2];
-        let words = Words {
-            ptr: elements.as_ptr() as u64,
-            len: elements.len() as u64,
-        };
+        let words = Words::of_slice(elements);
         self.rt.slice_into_run(words, &mut pair);
         pair
     }
 
     fn str_view(&self, s: &str) -> [V; 2] {
         let mut pair = [V::default(); 2];
-        let words = Words {
-            ptr: s.as_ptr() as u64,
-            len: s.len() as u64,
-        };
+        let words = Words::of_str(s);
         self.rt.slice_into_run(words, &mut pair);
         pair
     }
