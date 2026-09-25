@@ -2776,6 +2776,18 @@ fn a_restore_some_iterations_skip_is_no_cell() {
     assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
 }
 
+/// A `break` between the `pop` and the `push` leaves the loop with the value
+/// taken, which a restore after the exit would put back.
+#[test]
+fn a_break_between_the_take_and_the_restore_is_no_cell() {
+    let c = scratch_loop(
+        "let base = scratch.pop().unwrap(); if *x == 3 { break; }; \
+         out.push(base + *x); scratch.push(base);",
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+}
+
 /// Inside a nested loop the pair runs once per inner iteration: the outer
 /// loop does not hold it as a cell, while the inner loop, where it runs once
 /// per iteration, does.
