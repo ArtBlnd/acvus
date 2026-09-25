@@ -276,8 +276,11 @@ accumulated text, a `String`.
    `%%` is appended with one `%` in its place. There is no other whitespace
    rule.
 3. **`{{ expr }}` in a text line is the format string of RFC-0058 rule 6.**
-   The expression is a `String` or a `&str`; nothing is converted to text
-   implicitly, and `{{ "{{" }}` writes a literal `{{`.
+   A `String` or a `&str` is appended as it is. Any other type is appended
+   by `core::display` at that type (RFC-0070 rule 5), the instance the
+   checker chooses, writing into the template's text; a type with none, an `Object` or an `Enum` among them,
+   is refused where the tag is written. Nothing converts without a declared
+   instance, and `{{ "{{" }}` writes a literal `{{`.
 4. **`$name` is an input the host injects, shared by the whole graph.** It is
    not a parameter of the template: `{{ rules() }}` passes nothing, and `$lang`
    inside `rules` is the same injected value as in its caller: a call to a
