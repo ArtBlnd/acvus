@@ -22,29 +22,30 @@ use crate::handler::{ByRef, ByValue, Lends};
 use crate::loan::{Ending, Lending, Loan, Mut, Shared, Through, Unnamed};
 use crate::obj::OneValue;
 use crate::owned::Owned;
+use crate::repr::FnAddr;
 use crate::reference::Ref;
 use crate::runtime::Runtime;
 use crate::ty_arg::PolyVars;
 
 /// The address of a mono glue and the task it runs at.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct InstanceRun {
-    at: usize,
+    at: FnAddr,
     task: Task,
 }
 
 impl InstanceRun {
     /// # Safety
-    /// `at` is the address of a `fn` of the signature's `Now` type when
+    /// `at` is `repr::fn_addr` of a `fn` of the signature's `Now` type when
     /// `task` is `Sync`, and of its `Later` type otherwise.
     #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn from_glue(at: usize, task: Task) -> Self {
+    pub unsafe fn from_glue(at: FnAddr, task: Task) -> Self {
         InstanceRun { at, task }
     }
 
     #[inline(always)]
-    pub fn at(self) -> usize {
+    pub fn at(self) -> FnAddr {
         self.at
     }
 

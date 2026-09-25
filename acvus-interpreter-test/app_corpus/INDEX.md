@@ -6,22 +6,22 @@ Every app is `<nn>_<name>.acvus`. Its header states `app`, `desc` and `expect` (
 
 A row's class is `matches` (the facts state the expected grain, or the expected sequential structure), `under-claim` (the facts state less parallelism than the expected structure; the missing rule, declaration or decision is named), or `OVER-CLAIM` (the facts state more than is sound). A stage the facts print as `disjoint` or with a law runs apart (RFC-0092 rules 1 and 2), whatever else its region holds; a `While` or an iterator pipeline prints no stages and runs in place.
 
-The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved; and again with a token compared with a constant no write sends as its own `first` guard, `string::concat`'s law over the views of a `String`, `deque::push_back`'s fold law and `total_order` on `f64`'s `cmp`, where 03:49 (`queue` gains `Fold`) and 12:16 moved.
+The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved; and again with a token compared with a constant no write sends as its own `first` guard, `string::concat`'s law over the views of a `String`, `deque::push_back`'s fold law and `total_order` on `f64`'s `cmp`, where 03:49 (`queue` gains `Fold`) and 12:16 moved; and again with RFC-0093 rule 8's scan, its previous partial and its affine map law, where 01:19, 02:21, 08:11 and 08:42 moved.
 
 ## Summary
 
 - Apps: 12; all run to their expected output at `--opt full` and `--opt none` (24 of 24 runs).
-- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 47, `under-claim` 28, `OVER-CLAIM` 0.
+- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 50, `under-claim` 25, `OVER-CLAIM` 0.
 - No over-claim was found. Every `disjoint` stage was checked against every place its storage is read or written in the loop, every `any_order` law against whether the combined value's order is observed, and every free stage against the tokens it reads (the reading is in each row).
 
 | missing rule, declaration or decision | under-claims |
 |---|---|
 | iterator pipeline is not a `For` (the T2 Stream round; D10 for pull loops) | 11 |
 | cycle split by key over a vec's slots (RFC-0089 Open) | 6 |
-| scan law (RFC-0089 Open), alone or per key | 6 |
+| cycle split by key with a scan per key (RFC-0089 Open) | 2 |
 | affine analysis one loop deep (RFC-0066 rule 4): a row loop over an inner column range | 2 |
 | `or_insert`'s fold law on an `Equiv` map (D8, decided, not declared) | 2 |
-| first-hit select `if x == none && p { x = k }` read as `first` (RFC-0093 rule 7): its guarded test can trap where the program skips it, and no rule discards a trap a chunk raises behind a guard an earlier chunk set | 1 |
+| first-hit select `if x == none && p { x = k }` read as `first` (RFC-0093 rule 7): its guarded test can trap where the program skips it, and no rule discards a trap a chunk raises behind a guard an earlier chunk set | 2 |
 
 ## Loops
 
@@ -30,14 +30,14 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | app | line | loop | expected | `acvus mir` now | class |
 |---|---|---|---|---|---|
 | [01](01_tarjan_scc.acvus) | 14 | csr: out-degrees `degree[*e] += 1` | S2 `degree` split by key, AnyOrder `+` | `stages [L1, L9]`; L1 free; L9 Storage in_order no law | under-claim: key split |
-| 01 | 19 | csr: offsets, `run += degree[v]; offs.push(run)` | scan of `run`, Fold(push) InOrder | `stages [L4, L10, L11]`; L4 free; L10 Carried in_order no law {+}; L11 Storage in_order Fold | under-claim: scan law |
+| 01 | 19 | csr: offsets, `run += degree[v]; offs.push(run)` | scan of `run`, Fold(push) InOrder | `stages [L4, L10, L11]`; L4 free; L10 Carried in_order Op(Add) scan {+}; L11 Storage in_order Fold | matches: `offs.push(run)` reads the partial (RFC-0093 rule 8) |
 | 01 | 25 | csr: placement `targets[offs[v] + fill[v]] = …` | keyed exclusive scan of `fill`; `targets` InOrder | `stages [L7, L12, L13, L14]`; L12 Storage(fill) in_order; L13 free; L14 Storage(targets) in_order | under-claim: key split with a scan per key |
 | 01 | 46 | tarjan: roots `for s` | one InOrder stage over `next_index`, `comps`, `index`, `low`, `on_stack`, `stack`, `call_node`, `call_edge`, `comp` | `stages [L1, L25]`; L1 free {const}; L25 cycle Carried+Carried+Storage×6 in_order; L25 Storage in_order; `cost in place: W=0` | matches: the tokens named are the DFS state |
 | 01 | 55 | tarjan: DFS `while call_node.len() > 0` | runs in place | no `For` | matches |
 | 01 | 82 | tarjan: pop a component `while open` | runs in place | no `For` | matches |
 | 01 | 102 | render `if v > 0 { out += "," }; out += comp[v]` | Storage(`out`) InOrder, law Concat | `stages [L1, L5]`; L5 Storage in_order Op(Concat) | matches: the chain of both assignments (RFC-0089 rule 4) |
 | [02](02_fwbw_scc.acvus) | 16 | csr: out-degrees | as 01:14 | as 01:14 | under-claim: key split |
-| 02 | 21 | csr: offsets | as 01:19 | as 01:19 | under-claim: scan law |
+| 02 | 21 | csr: offsets | as 01:19 | as 01:19 | matches |
 | 02 | 27 | csr: placement | as 01:25 | as 01:25 | under-claim: key split with a scan per key |
 | 02 | 41 | reach: levels `while frontier.len() > 0` | runs in place | no `For` | matches |
 | 02 | 43 | reach: expand a level `for u in &frontier` | free row bounds; `seen` test-and-set split by key, in order within a key; `next` Fold(push) InOrder | `stages [L4, L15]`; L4 free; L15 Storage(seen) in_order no law; L15 Storage(next) in_order Fold | under-claim: key split |
@@ -87,10 +87,10 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | 07 | 35 | checksum cells | `+`, `max` AnyOrder | `stages [L19, L27, L28, L29]`; L27 any_order Op(Add); L29 any_order Call(max) | matches |
 | 07 | 41 | render the centre row | Concat InOrder | `stages [L22, L30]`; L30 Storage in_order Op(Concat) | matches |
 | [08](08_prefix_histogram.acvus) | 6 | `split_whitespace() \| map(parse) \| collect` | Stream map, Fold(push) | no `For` | under-claim: pipeline |
-| 08 | 11 | prefix sums `pre[i + 1] = pre[i] + lat[i]` | scan by `+` | `stages [L1, L11]`; L11 Storage in_order no law | under-claim: scan law |
+| 08 | 11 | prefix sums `pre[i + 1] = pre[i] + lat[i]` | scan by `+` | `stages [L1, L11]`; L11 Storage in_order Op(Add) scan | matches: `pre[i]` is the partial `pre[i + 1]` stored the iteration before (RFC-0093 rule 8) |
 | 08 | 20 | range totals | `answer[q]` Disjoint | `stages [L1, L3]`; L3 Storage disjoint | matches |
 | 08 | 31 | histogram `hist[b] += 1` | split by key, AnyOrder `+` | `stages [L1, L3]`; L3 Storage in_order no law | under-claim: key split |
-| 08 | 42 | median bucket | scan of `seen`; `median` first-hit `min` | `stages [L4, L12, L13]`; L12 Carried in_order no law; L13 Storage in_order no law | under-claim: scan law (and first-hit select) |
+| 08 | 42 | median bucket | scan of `seen`; `median` first-hit `min` | `stages [L4, L12, L13]`; L12 Carried in_order Op(Add) scan; L13 Storage in_order no law | under-claim: first-hit select (the scan of `seen` matches) |
 | [09](09_brainfuck.acvus) | 9 | `chars() \| collect` | Stream copy, Fold(push) | no `For` | under-claim: pipeline |
 | 09 | 11 | keep commands | free compares; Fold(push) InOrder | `stages [L1, L34]`; L34 Storage in_order Fold | matches |
 | 09 | 21 | match brackets | one InOrder cycle over `open`, `jump` | `stages [L27, L33]`; L33 Storage(open) in_order; L33 Storage(jump) in_order | matches |

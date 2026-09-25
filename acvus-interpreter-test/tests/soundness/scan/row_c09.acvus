@@ -1,0 +1,9 @@
+// expect 7
+let xs = vec([3, 8, 4, 6, 1, 9]);
+let peak = i64::MIN();
+let dd = 0;
+for x in &xs {
+    peak = max(peak, *x);
+    dd = max(dd, peak - *x);
+}
+dd

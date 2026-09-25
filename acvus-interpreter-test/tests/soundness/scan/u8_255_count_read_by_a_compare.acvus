@@ -1,0 +1,11 @@
+// expect attempt to add with overflow
+let xs = vec([250u8, 5u8, 1u8]);
+let s = 0u8;
+let c = 0;
+for x in &xs {
+    s = s + *x;
+    if s > 100u8 {
+        c = c + 1;
+    };
+}
+c

@@ -12,7 +12,7 @@ use crate::error::{
     DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, ShownValue,
 };
 use crate::graph::bind::{DeferredJoin, Typed, type_bound};
-use crate::graph::{Bindings, BoundValue, Inputs, QualifiedRef};
+use crate::graph::{BoundValue, Inputs, QualifiedRef};
 use crate::ir::{Callee, CastKind, Chosen, ExternCast, ForKind, IndexAccess, IndexMode};
 use crate::place::{
     Loan, PlaceBase, Storage, WrittenBase, names_a_place, projected, projected_store,
@@ -104,6 +104,12 @@ struct EffectBoundSite {
 
 /// An integer literal awaiting its width, checked against its value once
 /// the width is known (RFC-0037).
+#[derive(Clone, Copy)]
+enum WrittenAs {
+    Callee,
+    Method,
+}
+
 /// How a pattern source is read: known where it was checked, or the answer
 /// of the match decision its open head opened.
 #[derive(Clone, Copy)]
@@ -1154,6 +1160,7 @@ pub struct TypeResolution {
     /// Join of the effects of every call in the body.
     pub effect: Effect,
     pub context_types: FxHashMap<QualifiedRef, Ty>,
+    pub host: Option<Astr>,
     /// The body's flows as a named function's (RFC-0079 rule 5), what its
     /// type states once its call-graph component settles.
     pub flows: Flows,
@@ -1684,8 +1691,7 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     interner: &'a Interner,
     /// Unified type environment: contexts + functions.
     env: &'a TypeEnv,
-    /// Namespace this function belongs to.
-    namespace: Option<Astr>,
+    host: Option<Astr>,
     scopes: Vec<FxHashMap<Astr, Bound>>,
     /// What each name resolved to, but a call's callee, which `view`
     /// records from `calls` once the solve settled which one it is.
@@ -1863,6 +1869,7 @@ impl TypeChecker<'_, '_, '_, Clean> {
             lambda_captures,
             effect,
             context_types,
+            host: self.host,
             flows,
         });
         Checked {
@@ -1906,7 +1913,7 @@ where
             candidate_binder_of: FxHashMap::default(),
             binder_types: FxHashMap::default(),
             env,
-            namespace: None,
+            host: None,
             param_types,
             bound_inputs: Vec::new(),
             solver,
@@ -2009,9 +2016,8 @@ where
         self.solver.freeze_effect(&self.body_effect)
     }
 
-    /// Set the namespace for context lookups.
-    pub fn with_namespace(mut self, namespace: Option<Astr>) -> Self {
-        self.namespace = namespace;
+    pub fn with_host(mut self, host: Option<Astr>) -> Self {
+        self.host = host;
         self
     }
 
@@ -2019,8 +2025,11 @@ where
     /// has (RFC-0087 rule 2), so the body is checked against the value it
     /// will hold rather than against an open variable. A name the
     /// declaration already bound keeps the declared type.
-    pub fn with_bound_inputs(mut self, bindings: &Bindings) -> Self {
-        for (name, value) in bindings.iter() {
+    pub fn with_bound_inputs<'b, I>(mut self, bindings: I) -> Self
+    where
+        I: IntoIterator<Item = (Astr, &'b BoundValue)>,
+    {
+        for (name, value) in bindings {
             if self.param_types.iter().any(|p| p.name == name) {
                 continue;
             }
@@ -2246,9 +2255,19 @@ where
                         .as_ref()
                         .is_some_and(|expected| self.flows_on_trial(ty, expected, *site))
                 };
-                let mut contexts: Vec<&QualifiedRef> = self.env.contexts.keys().collect();
+                let mut contexts: Vec<&QualifiedRef> = self
+                    .env
+                    .contexts
+                    .keys()
+                    .filter(|qref| qref.host == self.host)
+                    .collect();
                 contexts.sort_by(|a, b| self.written_order(a, b));
-                let mut functions: Vec<&QualifiedRef> = self.env.functions.keys().collect();
+                let mut functions: Vec<&QualifiedRef> = self
+                    .env
+                    .functions
+                    .keys()
+                    .filter(|qref| self.reaches(**qref))
+                    .collect();
                 functions.sort_by(|a, b| self.written_order(a, b));
                 ProbeProduct::Value {
                     expected: written,
@@ -2357,7 +2376,9 @@ where
             .into_iter()
             .filter_map(|name| {
                 let mut by_arity: BTreeMap<usize, Vec<SignatureCandidate>> = BTreeMap::new();
-                for candidate in self.declared_signatures(QualifiedRef::root(name)) {
+                for candidate in
+                    self.declared_signatures(QualifiedRef::root(name), WrittenAs::Method)
+                {
                     let Some(arity) = candidate.arity().filter(|arity| *arity >= 1) else {
                         continue;
                     };
@@ -2528,7 +2549,7 @@ where
             let opened = solver.decisions_opened();
             let mut trial =
                 TypeChecker::new(self.interner, self.env, solver, self.inputs, Vec::new())
-                    .with_namespace(self.namespace);
+                    .with_host(self.host);
             trial.type_map = self.type_map.clone();
             admit(&mut trial)
                 && trial.errors.is_empty()
@@ -3499,10 +3520,20 @@ where
         seen
     }
 
+    fn reaches(&self, function: QualifiedRef) -> bool {
+        function.host.is_none() || (function.host == self.host && function.namespace.is_none())
+    }
+
     /// RFC-0043.
-    fn signature_set(&mut self, name: QualifiedRef, callee: AstId) -> Vec<SignatureCandidate> {
-        let mut candidates = self.declared_signatures(name);
+    fn signature_set(
+        &mut self,
+        name: QualifiedRef,
+        callee: AstId,
+        written: WrittenAs,
+    ) -> Vec<SignatureCandidate> {
+        let mut candidates = self.declared_signatures(name, written);
         if name.namespace.is_none()
+            && name.host.is_none()
             && let Some(ty) = self.local_signature(name.name, callee)
         {
             candidates.push(SignatureCandidate::Local { ty });
@@ -3510,8 +3541,16 @@ where
         candidates
     }
 
-    fn declared_signatures(&self, name: QualifiedRef) -> Vec<SignatureCandidate> {
-        let mut candidates: Vec<SignatureCandidate> = match self.env.resolve_fn(name) {
+    fn declared_signatures(
+        &self,
+        name: QualifiedRef,
+        written: WrittenAs,
+    ) -> Vec<SignatureCandidate> {
+        let host = match written {
+            WrittenAs::Callee => self.host,
+            WrittenAs::Method => None,
+        };
+        let mut candidates: Vec<SignatureCandidate> = match self.env.resolve_fn(name, host) {
             crate::ty::FnLookup::Found(qref, scheme) => vec![SignatureCandidate::Named {
                 qref,
                 scheme: scheme.clone(),
@@ -3811,7 +3850,7 @@ where
                 root: acvus_ast::Root::Context(name),
                 ..
             }) => {
-                let qref = QualifiedRef::root(*name);
+                let qref = QualifiedRef::root(*name).in_host(self.host);
                 self.note_access(Effect::write(qref), span);
                 let ty = self.resolve_context_type(*id, qref, span);
                 self.record_ret(*id, ty)
@@ -3947,6 +3986,7 @@ where
             .env
             .functions
             .keys()
+            .filter(|q| self.reaches(**q))
             .filter_map(|q| match wanted.namespace {
                 Some(ns) => {
                     (q.namespace == Some(ns)).then(|| self.interner.resolve(q.name).to_string())
@@ -3966,7 +4006,7 @@ where
 
     fn near_namespaces(&self, wanted: Astr, of: Astr) -> DidYouMean {
         let declaring = self.env.functions.keys().filter_map(|q| {
-            (q.name == of)
+            (q.name == of && q.host.is_none())
                 .then(|| q.namespace)
                 .flatten()
                 .map(|ns| self.interner.resolve(ns).to_string())
@@ -5488,6 +5528,7 @@ where
             .env
             .contexts
             .keys()
+            .filter(|qref| qref.host == self.host)
             .map(|qref| self.interner.resolve(qref.name))
             .collect();
         if names.is_empty() || names.len() > SHOWN {
@@ -5883,7 +5924,7 @@ where
                 ..
             }) = Loan::of(place)
         {
-            self.note_access(Effect::write(qref), span);
+            self.note_access(Effect::write(qref.in_host(self.host)), span);
         }
         match self.solver.lend(of, mutability) {
             LendOutcome::Names { referent, .. } => Some(referent),
@@ -5920,7 +5961,7 @@ where
         args: &[Expr<S>],
         call_span: Span,
     ) -> InferTy {
-        let candidates = self.signature_set(QualifiedRef::root(name), callee_id);
+        let candidates = self.signature_set(QualifiedRef::root(name), callee_id, WrittenAs::Method);
         if candidates.is_empty() {
             return self.undefined_function(QualifiedRef::root(name), call_span);
         }
@@ -7797,8 +7838,9 @@ where
                 span,
             } => {
                 self.probe_scope(*id, *span, qref.name);
-                let ty = self.resolve_context_type(*id, *qref, *span);
-                self.note_access(Effect::read(*qref), *span);
+                let qref = qref.in_host(self.host);
+                let ty = self.resolve_context_type(*id, qref, *span);
+                self.note_access(Effect::read(qref), *span);
                 self.record_ret(*id, ty)
             }
 
@@ -8870,7 +8912,7 @@ where
             return self.check_callable(&resolved, first.as_ref(), args, call_span);
         };
         self.probe_scope(func.id(), func.span(), name.name);
-        let candidates = self.signature_set(*name, func.id());
+        let candidates = self.signature_set(*name, func.id(), WrittenAs::Callee);
         if candidates.is_empty() {
             if let Some(ns) = name.namespace {
                 return self.check_structural_variant(
@@ -9202,8 +9244,9 @@ where
                     PatternMode::Deferred => self.deferred_context_binds.push(span),
                     PatternMode::Value => {}
                 }
-                self.note_access(Effect::write(*qref), span);
-                let ctx_ty = self.resolve_context_type(*id, *qref, span);
+                let qref = qref.in_host(self.host);
+                self.note_access(Effect::write(qref), span);
+                let ctx_ty = self.resolve_context_type(*id, qref, span);
                 let joined = match source {
                     PatternSource::Expr(id) => {
                         let site = ConversionSite {

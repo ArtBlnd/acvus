@@ -1,0 +1,11 @@
+// expect 2
+let xs = vec([5, 3, 8, 1]);
+let s = 0;
+let c = 0;
+for x in &xs {
+    s = s + *x;
+    if s > 10 {
+        c = c + 1;
+    };
+}
+c

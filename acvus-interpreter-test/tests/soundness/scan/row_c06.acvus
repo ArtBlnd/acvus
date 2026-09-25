@@ -1,0 +1,9 @@
+// expect 0,3,7,8
+let words = vec(["fig".to_string(), "pear".to_string(), "a".to_string(), "kiwi".to_string()]);
+let total = 0u64;
+let offs = vec([]);
+for w in &words {
+    offs.push(total);
+    total = total + w.len();
+}
+offs.into_iter().map(|x| -> x.to_string()).join(",".to_string())

@@ -432,7 +432,7 @@ fn every_literal_form_binds_where_the_template_compiles_unbound() {
 #[test]
 fn a_value_with_no_type_is_refused_where_it_is_bound() {
     let interner = Interner::new();
-    let name = interner.intern("x");
+    let name = QualifiedRef::root(interner.intern("x"));
     let bind = |value: BoundValue| Bindings::default().bind(name, value);
 
     assert_eq!(

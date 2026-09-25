@@ -10,7 +10,7 @@ use acvus_ast::{Literal, Span};
 use acvus_mir::analysis::affine::{AffineValues, for_body};
 use acvus_mir::analysis::carried::{Carried, CarriedState};
 use acvus_mir::analysis::domtree::DomTree;
-use acvus_mir::analysis::loop_deps::{Accumulator, Law, LawOp, LoopDeps, Token};
+use acvus_mir::analysis::loop_deps::{Accumulator, CycleLaw, Law, LawOp, LoopDeps, Token};
 use acvus_mir::analysis::loops::{Invariants, Loop, LoopKind, LoopNest};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::QualifiedRef;
@@ -99,7 +99,7 @@ impl Compiled {
                     .iter()
                     .any(|token| matches!(token, Token::Carried(param) if states.contains(param)))
             })
-            .map(|(_, judged)| judged.law)
+            .map(|(_, judged)| judged.law.map(|law| law.accumulator))
             .collect()
     }
 
@@ -327,7 +327,7 @@ fn a_merge_is_still_carried_and_an_iv_read_only_inside_asks_for_no_count() {
 }
 
 const RECURRENCE: &str = "let acc = 0; let j = 0; \
-     for i in 0..6 { acc = acc * 2 + (j * 3 + 1); j = j + 1; } acc";
+     for i in 0..6 { acc = acc * acc + (j * 3 + 1); j = j + 1; } acc";
 
 const BREAK: &str = "let j = 0; let s = 0; \
      for i in 0..@n { if i == 4 { break; }; s = s + j; j = j + 5; } s * 1000 + j";
@@ -369,7 +369,7 @@ fn a_canonical_counter_an_in_order_join_reads_is_reduced_and_a_break_keeps_its_i
             )
         })
         .count();
-    assert_eq!(products, 1, "only `acc * 2` multiplies:\n{}", full.listing);
+    assert_eq!(products, 1, "only `acc * acc` multiplies:\n{}", full.listing);
     assert_eq!(full.exit_trip(loop_), ExitTrip::Absent);
 
     let full = Compiled::of(BREAK, Opt::Full);
@@ -389,7 +389,7 @@ fn a_canonical_counter_an_in_order_join_reads_is_reduced_and_a_break_keeps_its_i
 
 const BOTH: &str = "let j = 0; let s = 0; for i in 0..@n { s = s + j; j = j + 2; } \
      let acc = 0; let q = 0; \
-     for i in 0..6 { acc = acc * 2 + (q * 3 + 1); q = q + 1; } \
+     for i in 0..6 { acc = acc * acc + (q * 3 + 1); q = q + 1; } \
      s + j + acc";
 
 /// The first loop's `j` is read by the merge and after the loop, and is
@@ -741,8 +741,11 @@ fn a_length_read_before_an_unconditional_push_is_read_from_its_length_on_entry()
             .filter(|judged| {
                 matches!(
                     judged.law,
-                    Some(Accumulator {
-                        law: Law::Fold(_),
+                    Some(CycleLaw {
+                        accumulator: Accumulator {
+                            law: Law::Fold(_),
+                            ..
+                        },
                         ..
                     })
                 )

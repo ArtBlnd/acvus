@@ -1,0 +1,9 @@
+// expect 9223372036854775807
+let xs = vec([i64::MAX() - 2, 1, 1]);
+let s = 0;
+let out = vec([]);
+for x in &xs {
+    s = s + *x;
+    out.push(s);
+}
+out[2u64]

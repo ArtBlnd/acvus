@@ -1,6 +1,6 @@
 for slice(r16) -> L1 else L2 stages [L1, L3, L4, L5]
 // L1: free {take}
-// L3: cycle Carried(r18) in_order {call max}
+// L3: cycle Carried(r18) in_order law(Call(#2, identity) exact commutative) scan {call max}
 // L4: free {take, -}
 // L5: cycle Carried(r19) any_order law(Call(#2, identity) exact commutative) {call max}
 // control upfront

@@ -226,7 +226,7 @@ impl InferResult {
 
 /// Extract call edges for a single function from its parsed AST.
 /// Returns the list of QualifiedRefs that this function references.
-fn value_refs(parsed: &ParsedSource) -> Vec<Astr> {
+fn value_refs(parsed: &ParsedSource) -> Vec<QualifiedRef> {
     match parsed {
         ParsedSource::Script(script) => collect_value_refs_script(script),
         ParsedSource::Template(template) => collect_value_refs_template(template),
@@ -241,9 +241,11 @@ fn value_refs(parsed: &ParsedSource) -> Vec<Astr> {
 /// or one whose body names itself, which the call graph's edges leave out.
 fn is_cyclic(scc: &[QualifiedRef], parsed: &FxHashMap<QualifiedRef, &ParsedSource>) -> bool {
     match scc {
-        [only] => parsed
-            .get(only)
-            .is_some_and(|body| value_refs(body).contains(&only.name)),
+        [only] => parsed.get(only).is_some_and(|body| {
+            value_refs(body)
+                .iter()
+                .any(|written| written.name == only.name)
+        }),
         _ => true,
     }
 }
@@ -281,15 +283,45 @@ fn grown_inputs(
         .collect()
 }
 
+pub struct CallTargets {
+    bare: FxHashMap<(Option<Astr>, Astr), QualifiedRef>,
+    hosted: FxHashSet<QualifiedRef>,
+}
+
+impl CallTargets {
+    pub fn of<'f, I>(locals: I) -> Self
+    where
+        I: IntoIterator<Item = &'f QualifiedRef>,
+    {
+        let mut bare = FxHashMap::default();
+        let mut hosted = FxHashSet::default();
+        for local in locals {
+            if local.namespace.is_none() {
+                bare.insert((local.host, local.name), *local);
+            }
+            if local.host.is_some() {
+                hosted.insert(*local);
+            }
+        }
+        CallTargets { bare, hosted }
+    }
+
+    fn written_in(&self, caller: QualifiedRef, written: QualifiedRef) -> Option<QualifiedRef> {
+        match written.host {
+            Some(_) => self.hosted.get(&written).copied(),
+            None => self.bare.get(&(caller.host, written.name)).copied(),
+        }
+    }
+}
+
 pub fn extract_call_edges(
     parsed: &ParsedSource,
-    name_to_fn: &FxHashMap<Astr, QualifiedRef>,
+    targets: &CallTargets,
     self_id: QualifiedRef,
 ) -> Vec<QualifiedRef> {
-    let names: Vec<Astr> = value_refs(parsed);
     let mut callees = Vec::new();
-    for name in names {
-        if let Some(&callee_id) = name_to_fn.get(&name)
+    for written in value_refs(parsed) {
+        if let Some(callee_id) = targets.written_in(self_id, written)
             && callee_id != self_id
             && !callees.contains(&callee_id)
         {
@@ -305,12 +337,13 @@ fn build_call_graph(
     graph: &CompilationGraph,
     extract: &ExtractResult,
 ) -> FxHashMap<QualifiedRef, Vec<QualifiedRef>> {
-    let name_to_id: FxHashMap<Astr, QualifiedRef> = graph
-        .functions
-        .iter()
-        .filter(|f| matches!(f.kind, FnKind::Local(..)))
-        .map(|f| (f.qref.name, f.qref))
-        .collect();
+    let targets = CallTargets::of(
+        graph
+            .functions
+            .iter()
+            .filter(|f| matches!(f.kind, FnKind::Local(..)))
+            .map(|f| &f.qref),
+    );
 
     let mut edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>> = FxHashMap::default();
     for func in graph.functions.iter() {
@@ -320,15 +353,12 @@ fn build_call_graph(
         let Some(parsed) = extract.parsed.get(&func.qref) else {
             continue;
         };
-        edges.insert(
-            func.qref,
-            extract_call_edges(parsed, &name_to_id, func.qref),
-        );
+        edges.insert(func.qref, extract_call_edges(parsed, &targets, func.qref));
     }
     edges
 }
 
-fn collect_value_refs_stmts<S>(stmts: &[acvus_ast::Stmt<S>], refs: &mut Vec<Astr>) {
+fn collect_value_refs_stmts<S>(stmts: &[acvus_ast::Stmt<S>], refs: &mut Vec<QualifiedRef>) {
     use acvus_ast::*;
     for stmt in stmts {
         match stmt {
@@ -372,7 +402,7 @@ fn collect_value_refs_stmts<S>(stmts: &[acvus_ast::Stmt<S>], refs: &mut Vec<Astr
 }
 
 /// Collect all RefKind::Value identifiers from a script AST.
-fn collect_value_refs_script<S>(script: &acvus_ast::Script<S>) -> Vec<Astr> {
+fn collect_value_refs_script<S>(script: &acvus_ast::Script<S>) -> Vec<QualifiedRef> {
     let mut refs = Vec::new();
     collect_value_refs_stmts(&script.stmts, &mut refs);
     if let Some(tail) = &script.tail {
@@ -381,20 +411,20 @@ fn collect_value_refs_script<S>(script: &acvus_ast::Script<S>) -> Vec<Astr> {
     refs
 }
 
-fn collect_value_refs_template<S>(template: &acvus_ast::Template<S>) -> Vec<Astr> {
+fn collect_value_refs_template<S>(template: &acvus_ast::Template<S>) -> Vec<QualifiedRef> {
     let mut refs = Vec::new();
     collect_value_refs_stmts(&template.body, &mut refs);
     refs
 }
 
-fn collect_value_refs_place<S>(place: &acvus_ast::Place<S>, refs: &mut Vec<Astr>) {
+fn collect_value_refs_place<S>(place: &acvus_ast::Place<S>, refs: &mut Vec<QualifiedRef>) {
     use acvus_ast::*;
     match place {
         Place::Field { object, .. } => collect_value_refs_place(object, refs),
         Place::Base(PlaceBase::Root {
             root: Root::Local(name),
             ..
-        }) => refs.push(*name),
+        }) => refs.push(QualifiedRef::root(*name)),
         Place::Base(PlaceBase::Root { .. }) => {}
         Place::Base(PlaceBase::Element {
             container, index, ..
@@ -405,14 +435,14 @@ fn collect_value_refs_place<S>(place: &acvus_ast::Place<S>, refs: &mut Vec<Astr>
     }
 }
 
-fn collect_value_refs_expr<S>(expr: &acvus_ast::Expr<S>, refs: &mut Vec<Astr>) {
+fn collect_value_refs_expr<S>(expr: &acvus_ast::Expr<S>, refs: &mut Vec<QualifiedRef>) {
     use acvus_ast::*;
     match expr {
         Expr::Ident {
             name,
             ref_kind: RefKind::Value,
             ..
-        } => refs.push(name.name),
+        } => refs.push(*name),
         Expr::Ident { .. } | Expr::Literal { .. } | Expr::ContextRef { .. } | Expr::Error(_) => {}
         Expr::BinaryOp { left, right, .. } | Expr::Pipe { left, right, .. } => {
             collect_value_refs_expr(left, refs);
@@ -519,7 +549,7 @@ fn collect_value_refs_expr<S>(expr: &acvus_ast::Expr<S>, refs: &mut Vec<Astr>) {
     }
 }
 
-fn collect_value_refs_else_branch<S>(eb: &acvus_ast::ElseBranch<S>, refs: &mut Vec<Astr>) {
+fn collect_value_refs_else_branch<S>(eb: &acvus_ast::ElseBranch<S>, refs: &mut Vec<QualifiedRef>) {
     match eb {
         acvus_ast::ElseBranch::ElseIf(expr) => collect_value_refs_expr(expr, refs),
         acvus_ast::ElseBranch::Else { body, tail, .. } => {
@@ -781,6 +811,7 @@ struct BodyCheck<'c> {
     env: &'c crate::ty::TypeEnv,
     declared_params: Vec<ParamTerm<Infer>>,
     inputs: Inputs,
+    host: Option<Astr>,
     bindings: &'c Bindings,
     effect: EffectTerm<Infer>,
     probe: Option<acvus_ast::AstId>,
@@ -821,7 +852,8 @@ impl BodyCheck<'_> {
             self.inputs,
             self.declared_params.clone(),
         )
-        .with_bound_inputs(self.bindings)
+        .with_host(self.host)
+        .with_bound_inputs(self.bindings.in_host(self.host))
         .with_body_effect(self.effect.clone());
         match self.probe {
             Some(marker) => checker.with_probe(marker),
@@ -858,7 +890,9 @@ impl<'g> KnownContexts<'g> {
         let mut inits = FxHashMap::default();
         for ctx in contexts {
             let ty = match (&ctx.init, &ctx.ty) {
-                (Some(ContextInit::Declared(declared)), TyTerm::Var(_)) => solver.instantiate_poly(declared),
+                (Some(ContextInit::Declared(declared)), TyTerm::Var(_)) => {
+                    solver.instantiate_poly(declared)
+                }
                 _ => solver.instantiate_poly(&ctx.ty),
             };
             if let Some(ContextInit::Body(function)) = &ctx.init {
@@ -1054,6 +1088,7 @@ impl Component<'_> {
                     env: &env,
                     declared_params: declared_params[&fid].clone(),
                     inputs: *inputs,
+                    host: fid.host,
                     bindings: self.bindings,
                     effect: effect_vars[&fid].clone(),
                     probe: self

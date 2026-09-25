@@ -732,20 +732,52 @@ impl LoopDeps {
             Token::Storage(Storage::Slot(slot)) => Some(State::Slot(slot)),
             Token::Storage(Storage::Element | Storage::Context(_)) | Token::Control => None,
         };
-        let alone = |token: Token| match token {
-            Token::Storage(Storage::Slot(slot)) => {
-                folds.law(slot).or_else(|| read(State::Slot(slot)))
-            }
-            Token::Carried(_) => {
-                read(state_of(token)?).or_else(|| first(&[token], &state_of, &reading_of))
-            }
-            token => read(state_of(token)?),
+        let kept = |accumulator: Accumulator| CycleLaw {
+            accumulator,
+            scan: false,
         };
-        let reading = |tokens: &[Token]| match tokens {
-            [token] => alone(*token),
+        // A reader that writes the token is in the cycle, not a reader
+        // (RFC-0093 rule 8): the law read no step of it.
+        let scanned = |scan: Scan, cycle: &Cycle| {
+            let read_outside = scan
+                .readers
+                .iter()
+                .all(|reader| !cycle.members.contains(reader));
+            read_outside.then_some(CycleLaw {
+                accumulator: scan.accumulator,
+                scan: true,
+            })
+        };
+        // RFC-0093 rule 8's previous partial is read at the loop's affine
+        // places, which only a storage reached at them has.
+        let previous_partial = |slot: ValueId| {
+            let affine = AffineValues::of(cfg, loop_, &invariants, laws);
+            let places = Places::of(&loans, laws);
+            let found = PreviousPlaces::of(cfg, &places, &affine, laws, self.header, &loop_blocks, slot)?;
+            LawReading::of(&loans, laws, &slots, self.header, &loop_blocks, State::Previous(slot))
+                .previous_partial(found)
+        };
+        let alone = |token: Token, cycle: &Cycle| match token {
+            Token::Storage(Storage::Slot(slot)) => folds
+                .law(slot)
+                .or_else(|| read(State::Slot(slot)))
+                .map(kept)
+                .or_else(|| scanned(previous_partial(slot)?, cycle)),
+            Token::Carried(_) => {
+                let state = state_of(token)?;
+                read(state)
+                    .or_else(|| first(&[token], &state_of, &reading_of))
+                    .map(kept)
+                    .or_else(|| scanned(reading_of(state).scan()?, cycle))
+            }
+            token => read(state_of(token)?).map(kept),
+        };
+        let reading = |cycle: &Cycle| match &cycle.tokens[..] {
+            [token] => alone(*token, cycle),
             tokens => product(tokens, &state_of, &reading_of)
                 .or_else(|| extremum(tokens, &state_of, &reading_of))
-                .or_else(|| first(tokens, &state_of, &reading_of)),
+                .or_else(|| first(tokens, &state_of, &reading_of))
+                .map(kept),
         };
         self.cycles
             .iter()
@@ -1062,7 +1094,17 @@ pub enum Order {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Judged {
     pub order: Order,
-    pub law: Option<Accumulator>,
+    pub law: Option<CycleLaw>,
+}
+
+/// A cycle's law, and whether it is a scan (RFC-0093 rule 8): the cycle's
+/// partials, its token's value before or after an iteration's update, are
+/// read outside it, so a lowerer hands each reader the partial its own
+/// iteration computes (RFC-0092 rule 5). A scan exists only beside a law.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CycleLaw {
+    pub accumulator: Accumulator,
+    pub scan: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1112,6 +1154,17 @@ pub enum Law {
     /// sets to a value reading none of it: the run from the entry value
     /// discards that value there, so the join takes no entry value.
     Reset(Box<Law>),
+    /// An integer token updated as `a·y + x`, `a` and `x` values of the
+    /// iteration that read nothing of `y` (RFC-0093 rule 8). An iteration
+    /// is the map `y ↦ a·y + x`, written `(a, x)`; running `(a₁, x₁)` and
+    /// then `(a₂, x₂)` is `y ↦ a₂·(a₁·y + x₁) + x₂`, the map
+    /// `(a₁·a₂, a₂·x₁ + x₂)`. Composition of maps is associative, and `(1, 0)`
+    /// is its identity. `+` and `*` over an integer wrap (RFC-0037 rule 3),
+    /// which is arithmetic in the ring modulo `2^w`, where the expansion
+    /// above holds exactly. It does not commute: `(2, 0)` then `(1, 1)` is
+    /// `(2, 1)`, and the other order is `(2, 2)`. Over a float the expansion
+    /// rounds differently from the program's order, and no law is read.
+    AffineMap,
 }
 
 /// Whether a `first`'s arm has run (RFC-0093 rules 5 and 7).
@@ -1195,11 +1248,15 @@ pub struct FoldAccumulator {
 /// A cycle through several tokens has a law only by a reading that names
 /// several. A float law joined in arrival order changes the rounding, so an
 /// inexact law is `InOrder`, and so is a law that does not commute, whose
-/// partials join in chunk order.
+/// partials join in chunk order. A scan is `InOrder` whatever its law: its
+/// readers take the partials in order (RFC-0093 rule 8), and each chunk's
+/// offset is the chunks before it combined in chunk order (RFC-0092 rule
+/// 5), so a chunk run out of order would hand its readers partials that
+/// miss an earlier chunk.
 fn judge(
     cycle: &Cycle,
     disjoint: &[ValueId],
-    reading: Option<&dyn Fn(&[Token]) -> Option<Accumulator>>,
+    reading: Option<&dyn Fn(&Cycle) -> Option<CycleLaw>>,
 ) -> Judged {
     let law = match (&cycle.tokens[..], reading) {
         ([Token::Storage(Storage::Element)], _) => {
@@ -1214,11 +1271,14 @@ fn judge(
                 law: None,
             };
         }
-        (tokens, Some(reading)) => reading(tokens),
+        (_, Some(reading)) => reading(cycle),
         (_, None) => None,
     };
     let order = match &law {
-        Some(acc) if acc.exact && acc.commutative => Order::AnyOrder,
+        Some(CycleLaw {
+            accumulator,
+            scan: false,
+        }) if accumulator.exact && accumulator.commutative => Order::AnyOrder,
         _ => Order::InOrder,
     };
     Judged { order, law }
@@ -1539,6 +1599,96 @@ fn disjoint_storages(
         .filter(|(_, found)| one_affine_component(found, &affine, &proven))
         .map(|(slot, _)| slot)
         .collect()
+}
+
+/// A storage the loop reaches only by copying an element out and by one
+/// store of an element, each at one path component affine in the counter
+/// with one constant step `a` (RFC-0066 rule 4): the store at `b + k·a`,
+/// each load at the store's own place or at the place the iteration before
+/// stored, `b − a + k·a` (RFC-0093 rule 8's `v[i - 1]` where the cycle
+/// stores `v[i]`). The terms are exact on every run past them (RFC-0037
+/// rule 3), so no other iteration stores at a place an iteration loads.
+struct PreviousPlaces {
+    store: InstAt,
+    stored: ValueId,
+    /// The loads of the previous iteration's place, with what they define.
+    previous: Vec<(InstAt, ValueId)>,
+    /// The loads of the iteration's own place.
+    current: Vec<InstAt>,
+}
+
+impl PreviousPlaces {
+    fn of(
+        cfg: &CfgBody,
+        places: &Places<'_, '_>,
+        affine: &AffineValues,
+        laws: &LawTable,
+        header: BlockIdx,
+        loop_blocks: &[BlockIdx],
+        slot: ValueId,
+    ) -> Option<PreviousPlaces> {
+        let mut store: Option<(InstAt, ValueId, ValueId)> = None;
+        let mut loads: Vec<(InstAt, ValueId, ValueId)> = Vec::new();
+        let mut reached: Vec<Place> = Vec::new();
+        for &block in loop_blocks {
+            let held = &cfg.blocks[block.0];
+            if places.reach_of_term(&held.terminator, slot).is_some() {
+                return None;
+            }
+            for (at, inst) in held.insts.iter().enumerate() {
+                let Some(reach) = places.reach_of_inst(&inst.kind, slot) else {
+                    continue;
+                };
+                let Reach::Places(found) = reach else {
+                    return None;
+                };
+                let [place] = &found[..] else {
+                    return None;
+                };
+                let [Component::At(index)] = place.path[..] else {
+                    return None;
+                };
+                let at = InstAt { block, at };
+                match &inst.kind {
+                    InstKind::Index {
+                        dst,
+                        mode: IndexMode::Copy,
+                        ..
+                    } => loads.push((at, *dst, index)),
+                    InstKind::IndexSet { value, .. } if store.is_none() => {
+                        store = Some((at, *value, index));
+                    }
+                    _ => return None,
+                }
+                reached.push(place.clone());
+            }
+        }
+        let (store, stored, stored_at) = store?;
+        let proven = Proven::of(cfg, laws, header, affine, &[(slot, reached)]);
+        let stored_at = affine.get(stored_at)?;
+        let Stride::Constant(step) = stride(&stored_at.step, &proven)? else {
+            return None;
+        };
+        let mut previous: Vec<(InstAt, ValueId)> = Vec::new();
+        let mut current: Vec<InstAt> = Vec::new();
+        for (at, load, index) in loads {
+            let loaded_at = affine.get(index)?;
+            if stride(&loaded_at.step, &proven)? != Stride::Constant(step) {
+                return None;
+            }
+            match constant_difference(&stored_at.base, &loaded_at.base, &proven)? {
+                0 => current.push(at),
+                difference if difference == step => previous.push((at, load)),
+                _ => return None,
+            }
+        }
+        Some(PreviousPlaces {
+            store,
+            stored,
+            previous,
+            current,
+        })
+    }
 }
 
 /// What the interval domain proves, where the loop's header begins, of the
@@ -2873,6 +3023,8 @@ enum Step<'a> {
         op: LawOp,
         order: ExternInstance,
     },
+    /// `a·y + x` over an integer (RFC-0093 rule 8).
+    AffineMap,
 }
 
 /// A law an `Option` token's payload combines through.
@@ -2943,17 +3095,42 @@ impl Step<'_> {
                 exact: true,
                 commutative: true,
             },
+            Self::AffineMap => Accumulator {
+                law: Law::AffineMap,
+                exact: true,
+                commutative: false,
+            },
         }
+    }
+
+    /// Whether this step is an integer `+` or `*`, or `a·y + x`: a step an
+    /// update through `+` and `*` of values reading nothing of the state
+    /// composes into `a·y + x`.
+    fn is_affine(self) -> bool {
+        matches!(
+            self,
+            Self::Op {
+                op: LawOp::Add | LawOp::Mul,
+                exact: true,
+            } | Self::AffineMap
+        )
     }
 }
 
 impl<'a> Form<'a> {
     /// This form combined once more through `step`, the state still on the
-    /// left: the state or a combination through the same law.
+    /// left: the state or a combination through the same law. An integer
+    /// `+` and `*` of values reading nothing of the state, in any order and
+    /// number, are `a·y + x` (RFC-0093 rule 8): `a·y + x` plus `u` is
+    /// `a·y + (x + u)`, and times `u` is `(a·u)·y + x·u`, exactly modulo
+    /// `2^w`.
     fn then(self, step: Step<'a>) -> Option<Form<'a>> {
         match self {
             Self::State => Some(Self::Combined(step)),
             Self::Combined(previous) if previous == step => Some(Self::Combined(step)),
+            Self::Combined(previous) if previous.is_affine() && step.is_affine() => {
+                Some(Self::Combined(Step::AffineMap))
+            }
             Self::Combined(_) | Self::Free => None,
         }
     }
@@ -2974,29 +3151,38 @@ struct Update<'a> {
 
 impl Update<'_> {
     fn accumulator(&self) -> Accumulator {
-        let Accumulator {
-            law,
-            exact,
-            commutative,
-        } = self.step.accumulator();
-        let law = match self.resets {
-            true => Law::Reset(Box::new(law)),
-            false => law,
-        };
-        Accumulator {
-            law,
-            exact,
-            commutative,
-        }
+        accumulator_of(self.step, self.resets)
     }
 }
 
-/// The state a cycle's law is read over: a header parameter, or a storage
-/// the body loads and stores whole.
+/// The law of an update through `step`, reset where an arm taken only at
+/// the first iteration resets the state.
+fn accumulator_of(step: Step<'_>, resets: bool) -> Accumulator {
+    let Accumulator {
+        law,
+        exact,
+        commutative,
+    } = step.accumulator();
+    let law = match resets {
+        true => Law::Reset(Box::new(law)),
+        false => law,
+    };
+    Accumulator {
+        law,
+        exact,
+        commutative,
+    }
+}
+
+/// The state a cycle's law is read over: a header parameter, a storage
+/// the body loads and stores whole, or a storage the body stores at one
+/// affine place each iteration and reads at the place the iteration before
+/// stored (RFC-0093 rule 8's previous partial).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Param { param: ValueId, index: usize },
     Slot(ValueId),
+    Previous(ValueId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3079,6 +3265,24 @@ struct LawReading<'a, 's, 'cfg> {
     /// The constant an integer state is unset at while `first` is read with
     /// it as its own guard (RFC-0093 rule 7).
     sentinel: Option<i128>,
+    /// Under `State::Previous`, the loads of the previous iteration's place,
+    /// each the state as the iteration received it, and the value the
+    /// iteration stores at its own place.
+    previous: Option<PreviousPartial>,
+}
+
+/// A law read as a scan (RFC-0093 rule 8), and the members that read its
+/// partials, which the cycle must not hold: a reader that writes the token
+/// is in the cycle, where the law reads no step of it.
+struct Scan {
+    accumulator: Accumulator,
+    readers: Vec<Member>,
+}
+
+/// What a `State::Previous` reading reads the state through.
+struct PreviousPartial {
+    loads: Vec<ValueId>,
+    stored: ValueId,
 }
 
 impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
@@ -3137,6 +3341,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             assigned_more_than_once: false,
             resets: false,
             sentinel: None,
+            previous: None,
         };
         reading.dependent = reading.values_reading_state(None);
         reading
@@ -3197,6 +3402,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let mut dependent: FxHashSet<ValueId> = FxHashSet::default();
         if let State::Param { param, .. } = self.state {
             dependent.insert(param);
+        }
+        if let Some(previous) = &self.previous {
+            dependent.extend(previous.loads.iter().copied());
         }
         loop {
             let mut changed = false;
@@ -3271,7 +3479,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     fn state_slot(&self) -> Option<ValueId> {
         match self.state {
-            State::Slot(slot) => Some(slot),
+            State::Slot(slot) | State::Previous(slot) => Some(slot),
             State::Param { .. } => None,
         }
     }
@@ -3302,10 +3510,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         self.update().map(|update| update.accumulator())
     }
 
-    /// The step every iteration combines the state through, and every value
-    /// of the iteration that reads the state, each of which the update
-    /// accounts for.
-    fn update(mut self) -> Option<Update<'a>> {
+    /// The step every iteration combines the state through: the form of
+    /// what the iteration hands the next.
+    fn next_step(&mut self) -> Option<Step<'a>> {
         let next = match self.state {
             State::Param { index, .. } => {
                 let loop_ = self
@@ -3316,10 +3523,22 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 self.form(next)?
             }
             State::Slot(slot) => self.stored(slot)?,
+            State::Previous(_) => {
+                let stored = self.previous.as_ref()?.stored;
+                self.form(stored)?
+            }
         };
-        let Form::Combined(step) = next else {
-            return None;
-        };
+        match next {
+            Form::Combined(step) => Some(step),
+            Form::Free | Form::State => None,
+        }
+    }
+
+    /// The step every iteration combines the state through, and every value
+    /// of the iteration that reads the state, each of which the update
+    /// accounts for.
+    fn update(mut self) -> Option<Update<'a>> {
+        let step = self.next_step()?;
         let slots = slot_values(self.cfg);
         // A storage the iteration defines and drops is read only through
         // the values its reads define, which are checked themselves; any
@@ -3349,6 +3568,188 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             reading_state: self.dependent,
             chain: self.chain,
         })
+    }
+
+    /// RFC-0093 rule 8: the law of a header parameter's update whose values
+    /// are read off the update, where every such read is of a partial, the
+    /// parameter as the iteration received it or what the iteration hands
+    /// the next; with the members that read them.
+    fn scan(mut self) -> Option<Scan> {
+        let State::Param { param, index } = self.state else {
+            return None;
+        };
+        let step = self.next_step()?;
+        let loop_ = self
+            .loops
+            .iter()
+            .find(|loop_| loop_.header == self.header)?;
+        let handed_on = loop_.back_arg(self.cfg, index)?;
+        let readers = self.readers_of_partials(&[param, handed_on], None)?;
+        Some(Scan {
+            accumulator: accumulator_of(step, self.resets),
+            readers,
+        })
+    }
+
+    /// RFC-0093 rule 8's previous partial: `found`'s loads of the previous
+    /// iteration's place are the state as the iteration received it, and
+    /// its store at the iteration's own place hands the next iteration its
+    /// state. Every iteration stores its partial at a place of its own, so
+    /// the storage holds every partial past the loop: the law is a scan.
+    /// The store and those loads run in every iteration and in no nested
+    /// loop, so each iteration reads what the one before stored; a load of
+    /// the iteration's own place runs before the store, so it reads what
+    /// no iteration stored, a value of the iteration.
+    fn previous_partial(mut self, found: PreviousPlaces) -> Option<Scan> {
+        let every_iteration = |block: BlockIdx| {
+            self.deciders.get(&block).is_none_or(Vec::is_empty)
+                && self.nested_loops_holding(block).is_empty()
+        };
+        let store = found.store;
+        let before_store = |at: InstAt| match at.block == store.block {
+            true => at.at < store.at,
+            false => self.domtree.dominates(at.block, store.block),
+        };
+        let runs_so = every_iteration(store.block)
+            && found.previous.iter().all(|(at, _)| every_iteration(at.block))
+            && found.current.iter().all(|at| before_store(*at));
+        if !runs_so {
+            return None;
+        }
+        let loads: Vec<ValueId> = found.previous.iter().map(|(_, load)| *load).collect();
+        let mut partials = loads.clone();
+        partials.push(found.stored);
+        self.previous = Some(PreviousPartial {
+            loads,
+            stored: found.stored,
+        });
+        self.dependent = self.values_reading_state(None);
+        let step = self.next_step()?;
+        let readers = self.readers_of_partials(&partials, Some(store))?;
+        Some(Scan {
+            accumulator: accumulator_of(step, self.resets),
+            readers,
+        })
+    }
+
+    /// The members of the iteration that read the state and are no step of
+    /// its update (`store`, where the update ends in one, is), where each
+    /// reads it at `partials` or at a value that is the state as the
+    /// iteration received it: an instruction off the update reads the
+    /// update's values only there, a branch that decides a value reading the
+    /// state decides by the update's values only there, and an edge sends
+    /// one of the update's values to a parameter off the update, the loop's
+    /// exit or another header parameter only there. `None` where one reads
+    /// another value of the update. Run after the update is read, whose
+    /// chain holds the update's values.
+    fn readers_of_partials(&self, partials: &[ValueId], store: Option<InstAt>) -> Option<Vec<Member>> {
+        let partial = |value: ValueId| {
+            partials.contains(&value) || self.forms.get(&value) == Some(&Some(Form::State))
+        };
+        let off_partial = |value: &ValueId| self.chain.contains(value) && !partial(*value);
+        let slots = slot_values(self.cfg);
+        let reader = |value: &ValueId| {
+            self.dependent.contains(value) && !self.chain.contains(value) && !slots.contains(value)
+        };
+        let reads = |value: &ValueId| self.chain.contains(value) || reader(value);
+        let mut readers: Vec<Member> = Vec::new();
+        for (at, kind) in self.insts() {
+            let of_the_update = Some(at) == store
+                || inst_info::defs(kind)
+                    .iter()
+                    .any(|def| self.chain.contains(def));
+            if of_the_update {
+                continue;
+            }
+            let uses = inst_info::uses(kind);
+            if uses.iter().any(off_partial) {
+                return None;
+            }
+            if uses.iter().any(reads) || inst_info::defs(kind).iter().any(reader) {
+                readers.push(Member::Inst(at));
+            }
+        }
+        let preds = self.cfg.predecessors();
+        for value in self.dependent.iter().filter(|value| reader(value)) {
+            let mut deciders: Vec<BlockIdx> = Vec::new();
+            match self.defs.get(value) {
+                Some(Def::Inst(at)) => {
+                    deciders.extend(self.deciders.get(&at.block).into_iter().flatten());
+                }
+                Some(Def::Param { block, .. }) => {
+                    deciders.extend(self.deciders.get(block).into_iter().flatten());
+                    let from: Vec<BlockIdx> = preds
+                        .get(block)
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .filter(|pred| self.blocks.contains(pred))
+                        .collect();
+                    deciders.extend(self.join_deciders(*block, &from));
+                }
+                // The header parameter a `State::Param` reads is itself the
+                // partial.
+                None => {}
+            }
+            let decided_off_partial = deciders.iter().any(|decider| {
+                Self::decision(&self.cfg.blocks[decider.0].terminator)
+                    .iter()
+                    .any(off_partial)
+            });
+            if decided_off_partial {
+                return None;
+            }
+        }
+        let own = match self.state {
+            State::Param { index, .. } => Some(index),
+            State::Slot(_) | State::Previous(_) => None,
+        };
+        for block in self.body() {
+            let term = &self.cfg.blocks[block.0].terminator;
+            let branches = matches!(
+                term,
+                Terminator::Jump { .. }
+                    | Terminator::JumpIf { .. }
+                    | Terminator::Diamond { .. }
+                    | Terminator::Switch { .. }
+            );
+            let mut reading = match branches {
+                true => Self::decision(term).iter().any(reader),
+                false => {
+                    let uses = inst_info::terminator_uses(term);
+                    if uses.iter().any(off_partial) {
+                        return None;
+                    }
+                    uses.iter().any(reads)
+                }
+            };
+            for edge in edges(term) {
+                let target = self.cfg.label_to_block.get(&edge.target).copied();
+                let params: &[ValueId] = match target {
+                    Some(target) => &self.cfg.blocks[target.0].params,
+                    None => &[],
+                };
+                for (at, sent) in edge.args.iter().enumerate() {
+                    let position = at + edge.fills_from;
+                    let own_hand_on = target == Some(self.header) && Some(position) == own;
+                    let along_the_update = target != Some(self.header)
+                        && params
+                            .get(position)
+                            .is_some_and(|param| self.chain.contains(param));
+                    if own_hand_on || along_the_update {
+                        continue;
+                    }
+                    if off_partial(sent) {
+                        return None;
+                    }
+                    reading |= reads(sent);
+                }
+            }
+            if reading {
+                readers.push(Member::Term(block));
+            }
+        }
+        Some(readers)
     }
 
     /// The form of the value the storage holds when the iteration ends. With
@@ -3745,6 +4146,13 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     fn computed_form(&mut self, value: ValueId) -> Option<Form<'a>> {
         if matches!(self.state, State::Param { param, .. } if param == value) {
+            return Some(Form::State);
+        }
+        if self
+            .previous
+            .as_ref()
+            .is_some_and(|previous| previous.loads.contains(&value))
+        {
             return Some(Form::State);
         }
         let def = *self.defs.get(&value)?;

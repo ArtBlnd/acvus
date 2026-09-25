@@ -1,0 +1,14 @@
+// expect [0,0]
+let text = "(()(()))()";
+let bs = text.to_string().to_bytes();
+let depth = 0;
+let low = 0;
+for b in &bs {
+    if *b == b'(' {
+        depth = depth + 1;
+    } else {
+        depth = depth - 1;
+    };
+    low = min(low, depth);
+}
+(depth, low)

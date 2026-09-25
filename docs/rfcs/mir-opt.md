@@ -730,8 +730,8 @@ consults. The cutting pass, rerun after a pass that frees a stage.
 - First: named commutation sets in place of `commutes: bool`.
 - After the executor's pipeline: a cycle split by key; a `Stream` source
   for `while` loops.
-- When a use asks: speculative exits; a scan law, for a body that reads a
-  partial; an action law for heavy work inside a cycle.
+- When a use asks: speculative exits; an action law for heavy work inside
+  a cycle. (A scan law is RFC-0093 rule 8.)
 
 ## RFC-0093: a cycle's law is read from what it computes
 
@@ -777,12 +777,25 @@ law and runs in its order.
 7. **A sentinel.** A token compared with a constant that no write in the
    loop can send, as the interval domain proves, is its own `||` guard
    for rule 5's `first`.
+8. **A scan.** A cycle whose token has a law by the readings above and
+   whose values are read outside the cycle (a partial: the token's value
+   before or after an iteration's update, read by a later stage, a
+   push or a compare) has that law as a scan: the facts say `scan` beside
+   the law. The readers take the partial as a value the cycle hands them,
+   in order; a reader that writes the token is in the cycle, not a
+   reader. A read of the storage at the previous iteration's affine place
+   (`v[i - 1]` where the cycle stores `v[i]`) is a read of the previous
+   partial. A token updated as `a·y + x`, with `a` and `x` read from the
+   iteration and not from `y`, has the law of affine maps, which compose
+   as `(a₁·a₂, a₂·x₁ + x₂)` with identity `(1, 0)`, at an integer width;
+   a float one stays in order.
 
 **Why.** A law stated on the loop would be a second statement of what the
 operations already say; read from them, it follows every pass that
 rewrites them.
 **Cost.** Each reading is a recognizer in `loop_deps`, with a test that
-fails when it is removed.
+fails when it is removed. A scan costs its lowerer a second pass over
+each chunk (RFC-0092 rule 5).
 **Rejected.**
 - Keeping the readings in RFC-0089 — they grow with every law, and RFC-0089
   states what a stage is.
@@ -889,6 +902,14 @@ place. This is the contract a lowerer is held to.
    a suspending body spawns and awaits chunks.
 4. **One level.** Running in place is always admitted; chunks never split
    again.
+5. **A scan rescans.** A cycle whose law is a scan (RFC-0093 rule 8) runs
+   in two passes: each chunk combines its updates from the law's
+   identity; the chunks' totals are combined in chunk order from the
+   entry value into each chunk's offset; each chunk then runs its cycle
+   again from its offset, handing its readers the program's own partials.
+   The second pass computes every partial the program computes, with the
+   program's operations, so it traps exactly where the program does; the
+   first pass and the offsets combine with the wrapping operation (rule 2).
 
 **Why.** The stages say what may run apart and the cost what it is worth;
 how chunks move is the lowerer's, and stating it apart from the analyses

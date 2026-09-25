@@ -215,9 +215,10 @@ impl Compiled {
                     .map(|(cycle, judged)| CycleShape {
                         tokens: cycle.tokens.iter().map(TokenKind::of).collect(),
                         order: judged.order,
-                        law: judged.law.as_ref().map(|acc| LawShape {
-                            law: LawKind::of(&acc.law),
-                            exact: acc.exact,
+                        law: judged.law.as_ref().map(|law| LawShape {
+                            law: LawKind::of(&law.accumulator.law),
+                            exact: law.accumulator.exact,
+                            scan: law.scan,
                         }),
                     })
                     .collect();
@@ -301,6 +302,8 @@ impl TokenKind {
 struct LawShape {
     law: LawKind,
     exact: bool,
+    /// RFC-0093 rule 8.
+    scan: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -316,6 +319,7 @@ enum LawKind {
     Ordered(LawOp),
     First,
     Reset(Box<LawKind>),
+    AffineMap,
 }
 
 impl LawKind {
@@ -334,6 +338,7 @@ impl LawKind {
             Law::Ordered { op, .. } => LawKind::Ordered(*op),
             Law::First { .. } => LawKind::First,
             Law::Reset(inner) => LawKind::Reset(Box::new(LawKind::of(inner))),
+            Law::AffineMap => LawKind::AffineMap,
         }
     }
 }
@@ -346,8 +351,22 @@ fn one(tokens: Vec<TokenKind>, order: Order, law: Option<LawShape>) -> Shape {
     Shape::Cycles(vec![cycle(tokens, order, law)])
 }
 
+/// The exact `+` law of a cycle whose partials are read outside it
+/// (RFC-0093 rule 8).
+fn scanned_add() -> Option<LawShape> {
+    Some(LawShape {
+        law: LawKind::Op(LawOp::Add),
+        exact: true,
+        scan: true,
+    })
+}
+
 fn exact(law: LawKind) -> Option<LawShape> {
-    Some(LawShape { law, exact: true })
+    Some(LawShape {
+        law,
+        exact: true,
+        scan: false,
+    })
 }
 
 fn cycle_stages(shapes: &[Shape]) -> Vec<&Shape> {
@@ -404,7 +423,8 @@ fn a_float_sum_is_in_order_with_its_inexact_law() {
                 Order::InOrder,
                 Some(LawShape {
                     law: LawKind::Op(LawOp::Add),
-                    exact: false
+                    exact: false,
+                    scan: false,
                 })
             )
         ],
@@ -644,7 +664,8 @@ fn a_counter_a_pure_computation_reads_is_not_carried_and_has_no_cycle() {
 
 /// `i * 4 + 7` is read only by `acc`'s update, whose stage is `InOrder`, so
 /// strength reduction carries it as a counter of its own, whose cycle lies
-/// in that stage beside `acc`'s (RFC-0056).
+/// in that stage beside `acc`'s (RFC-0056). `acc`'s update reads the
+/// counter's partial, so the counter's `+` law is a scan (RFC-0093 rule 8).
 #[test]
 fn a_counter_expression_an_in_order_stage_alone_reads_is_reduced_inside_that_stage() {
     let c = Compiled::of(
@@ -659,7 +680,7 @@ fn a_counter_expression_an_in_order_stage_alone_reads_is_reduced_inside_that_sta
         last[..],
         [
             cycle(vec![TokenKind::Carried], Order::InOrder, None),
-            cycle(vec![TokenKind::Carried], Order::InOrder, None)
+            cycle(vec![TokenKind::Carried], Order::InOrder, scanned_add())
         ],
         "the stage holds `acc`'s cycle and the reduced counter's:\n{}",
         c.listing
@@ -965,9 +986,12 @@ fn a_reduced_counter_advances_at_the_end_membership_gives_its_stage() {
     let Shape::Cycles(held) = &c.shapes()[stage] else {
         panic!("the last stage holds cycles: {}", c.for_lines());
     };
-    assert!(
-        held.iter()
-            .all(|cycle| cycle.order == Order::InOrder && cycle.law.is_none()),
+    assert_eq!(
+        held[..],
+        [
+            cycle(vec![TokenKind::Carried], Order::InOrder, None),
+            cycle(vec![TokenKind::Carried], Order::InOrder, scanned_add())
+        ],
         "{}",
         c.for_lines()
     );
@@ -1230,6 +1254,7 @@ fn a_float_difference_keeps_its_order_with_an_inexact_law() {
     let inexact = Some(LawShape {
         law: LawKind::Op(LawOp::Add),
         exact: false,
+        scan: false,
     });
     assert_eq!(
         held,
@@ -1510,16 +1535,21 @@ fn an_inner_loop_that_also_reads_the_total_gives_the_outer_loop_no_law() {
 }
 
 /// The inner loop multiplies `total` and the outer loop adds to it: one
-/// iteration of the outer loop combines through two laws, which is none.
+/// iteration of the outer loop maps `total` to `(total + 1)·p`, `p` the
+/// row's product, which is the affine map law over `i64` (RFC-0093 rule 8).
 #[test]
-fn an_inner_product_under_an_outer_sum_gives_the_outer_loop_no_law() {
+fn an_inner_product_under_an_outer_sum_gives_the_outer_loop_the_affine_map_law() {
     let c = Compiled::of(
         "let m = vec([vec([1, 2, 3]), vec([4, 5, 6])]); let total = 1; \
          for row in &m { total = total + 1; for x in &row { total = total * *x; } } total",
     );
     assert_eq!(
         cycle_stages(&c.shapes_of(c.outer_header())),
-        [&one(vec![TokenKind::Carried], Order::InOrder, None)],
+        [&one(
+            vec![TokenKind::Carried],
+            Order::InOrder,
+            exact(LawKind::AffineMap)
+        )],
         "{}",
         c.listing
     );
@@ -1540,7 +1570,8 @@ fn a_float_total_an_inner_loop_sums_into_is_in_order_in_the_outer_loop() {
             Order::InOrder,
             Some(LawShape {
                 law: LawKind::Op(LawOp::Add),
-                exact: false
+                exact: false,
+                scan: false,
             })
         )],
         "{}",

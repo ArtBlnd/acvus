@@ -172,6 +172,8 @@ where
             identity_params: 0,
             region_params: Self::REGION_PARAMS,
             specializable: vec![true],
+            // A `Vec` holds its elements and nothing else, each at its type argument.
+            may_hold_a_function: false,
         }
     }
 }

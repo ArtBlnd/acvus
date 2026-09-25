@@ -340,15 +340,15 @@ impl Runtime for Tiny {
     fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [V]) {
         // A slice is two of the machine's registers (RFC-0047 rule 6); this
         // runtime has no registers, so each word is its own value.
-        out[0] = erased(words.ptr);
-        out[1] = erased(words.len);
+        let [ptr, len] = words.into_pair();
+        out[0] = erased(ptr);
+        out[1] = erased(len);
     }
 
     unsafe fn slice_from_run(&self, run: &[V]) -> acvus_extern::Words {
-        acvus_extern::Words {
-            ptr: *open_ref::<u64>(&run[0]),
-            len: *open_ref::<u64>(&run[1]),
-        }
+        // SAFETY: the caller's contract: `run` is what `slice_into_run` wrote
+        // from `into_pair`.
+        unsafe { acvus_extern::Words::from_pair([*open_ref::<u64>(&run[0]), *open_ref::<u64>(&run[1])]) }
     }
 
     fn instance_value(entry: &acvus_extern::InstanceEntry<Tiny>) -> V {
@@ -1476,15 +1476,14 @@ fn a_slice_entry_hands_back_two_words_naming_the_container() {
             .into_op(())
             .call(&Tiny, &[container()], &mut pair)
     };
-    let Words { ptr, len } = unsafe { Tiny.slice_from_run(&pair) };
-    assert_eq!(len, 3);
-    assert_ne!(ptr, 0);
+    let words = unsafe { Tiny.slice_from_run(&pair) };
+    assert_eq!(words.len(), 3);
+    assert_ne!(words.into_pair()[0], 0);
 
-    let run = ptr as *const V;
-    for at in 0..len as usize {
-        // SAFETY: the words came from the handler, whose storage is live
-        // here, and `at` is below the length the handler reported.
-        let (lent, again) = unsafe { (&*run.add(at), &*run.add(at)) };
+    // SAFETY: the words came from the handler, whose storage is live here.
+    let run = unsafe { words.slice::<V>() };
+    for at in 0..words.len() {
+        let (lent, again) = (&run[at], &run[at]);
         assert!(
             std::ptr::eq(lent, again),
             "element {at} is one place in the container's own storage"
@@ -1516,10 +1515,7 @@ fn a_slice_parameter_is_two_of_the_argument_run_and_reads_the_container() {
 
     let mut run = [V::default(); 2];
     Tiny.slice_into_run(
-        Words {
-            ptr: storage.as_ptr() as u64,
-            len: storage.len() as u64,
-        },
+        Words::of_slice(&storage),
         &mut run,
     );
     let mut out = [V::default(); 1];
@@ -1745,10 +1741,7 @@ fn a_lent_element_out_of_a_lent_slice_names_the_container() {
     let storage = vec![erased(7i64), erased(8i64)];
     let mut pair = [V::default(); 2];
     Tiny.slice_into_run(
-        Words {
-            ptr: storage.as_ptr() as u64,
-            len: storage.len() as u64,
-        },
+        Words::of_slice(&storage),
         &mut pair,
     );
     let ExternHandler::Sync(entry) = handler(&reg, &i, "slice_first") else {

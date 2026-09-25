@@ -93,7 +93,8 @@ pub use registry::{
     SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
-pub use slice::{BySlice, Slice, Words};
+pub use repr::Words;
+pub use slice::{BySlice, Slice};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};
 pub use str::{ByStr, RetStr, StrView};
 pub use ty_arg::{
