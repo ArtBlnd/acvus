@@ -302,6 +302,9 @@ impl Runtime for Counting {
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
+    fn rust_fn(&self, _: acvus_extern::RustBody<Self>) -> V {
+        self.no_closures()
+    }
     fn sleep(
         &self,
         d: std::time::Duration,

@@ -44,6 +44,7 @@ mod reference;
 mod registry;
 pub mod repr;
 mod runtime;
+mod rust_fn;
 mod slice;
 mod space;
 mod str;
@@ -52,7 +53,7 @@ mod uniform;
 mod vec;
 mod within;
 
-pub use args::{Args, ArgsSite, ByArgs, Encoded, Members, Positions};
+pub use args::{Args, ArgsSite, ByArgs, Encoded, MOST_MEMBERS, Members, Positions};
 pub use canonical::Canonical;
 pub use crossing::{Crossing, Holding};
 pub use ctx::Ctx;
@@ -96,6 +97,7 @@ pub use registry::{
     SignatureDecl, family_casts,
 };
 pub use runtime::{Runtime, TypesOnly};
+pub use rust_fn::{RustBody, RustCallee, RustFn, RustParams};
 pub use repr::Words;
 pub use slice::{BySlice, Slice};
 pub use space::{Decode, Encode, Journaled, NodeHash, SpaceError, SpaceHooks, SpaceResult, Visit};

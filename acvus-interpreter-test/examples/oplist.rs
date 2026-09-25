@@ -119,6 +119,7 @@ fn dump(name: &str, code: &Code) {
                 expr.arity, body.plan.shape, body.plan.root, body.kind, body.konsts
             ),
         },
+        CodeBody::Rust => println!("== {name}: CodeBody::Rust (a Rust closure, no frame, no Machine)"),
     }
 }
 

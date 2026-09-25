@@ -1,0 +1,13 @@
+error: a `RustFn` parameter is a concrete type, not one of this declaration's variables: `Args` lends each argument at the type its parameter names, and a call of a function value settles none (RFC-0097 rule 2)
+ --> tests/compile_fail/rust_fn_variable_parameter.rs:6:37
+  |
+6 | fn counter<A, R>(k: i64) -> RustFn<(A,), i64, R>
+  |                                     ^
+
+warning: unused imports: `Runtime`, `RustFn`, `Var`, and `kind`
+ --> tests/compile_fail/rust_fn_variable_parameter.rs:3:20
+  |
+3 | use acvus_extern::{Runtime, RustFn, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

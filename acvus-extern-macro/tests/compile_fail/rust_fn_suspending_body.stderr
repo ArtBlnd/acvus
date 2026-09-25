@@ -1,0 +1,13 @@
+error: `adder` returns a `RustFn`, whose function type carries the effect this declaration states, and an `async fn` states a task above `Sync`: the `RustFn`'s body would be typed as one that suspends, and a body that suspends is a later step (RFC-0097 rule 2). Declare a plain `fn` at `effect = pure`, `idempotent` or `opaque`.
+ --> tests/compile_fail/rust_fn_suspending_body.rs:7:10
+  |
+7 | async fn adder<R>(k: i64) -> RustFn<(i64,), i64, R>
+  |          ^^^^^
+
+warning: unused imports: `Runtime` and `RustFn`
+ --> tests/compile_fail/rust_fn_suspending_body.rs:4:20
+  |
+4 | use acvus_extern::{Runtime, RustFn, extern_fn};
+  |                    ^^^^^^^  ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

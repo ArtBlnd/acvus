@@ -298,6 +298,9 @@ impl Runtime for Counting {
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
+    fn rust_fn(&self, _: acvus_extern::RustBody<Self>) -> V {
+        panic!("Counting makes no Rust function value")
+    }
     fn sleep(
         &self,
         d: std::time::Duration,

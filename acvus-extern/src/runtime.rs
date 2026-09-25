@@ -259,6 +259,11 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// the call that made it. A timer is the host's, so there is no default.
     fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send + use<Self>;
 
+    /// Obligation across artifacts: a script calls the value this returns
+    /// through the one entry it calls every closure of this runtime through
+    /// (RFC-0097 rule 2), so no call site tells the two apart.
+    fn rust_fn(&self, body: crate::RustBody<Self>) -> Self::Value;
+
     /// Whether running `f` reaches its result without suspending.
     /// `Closure` asks once, when it is built. A runtime whose closures
     /// can always suspend answers `false`, which is the default.
@@ -421,6 +426,9 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     unsafe fn reference(&self, _: &()) {}
+    fn rust_fn(&self, _: crate::RustBody<TypesOnly>) {
+        no_values()
+    }
     unsafe fn encode(&self, _: &acvus_mir::ty::Ty, _: &(), _: &mut Vec<u8>) -> crate::SpaceResult<()> {
         Err(crate::SpaceError::new("TypesOnly runtime holds no values"))
     }

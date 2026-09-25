@@ -596,6 +596,101 @@ fn args_written(ty: &Type) -> syn::Result<Option<ArgsWritten>> {
     }))
 }
 
+const RUST_FN_SHAPE: &str = "a `RustFn` result is written `RustFn<(A, B, ..), R, Rt>`: a tuple of \
+     one to eight parameter types, the result type, and this declaration's runtime (RFC-0097 rule 2)";
+
+struct RustFnWritten {
+    params: Vec<Type>,
+}
+
+fn rust_fn_written(ty: &Type) -> syn::Result<Option<RustFnWritten>> {
+    let Type::Path(p) = ty else {
+        return Ok(None);
+    };
+    let Some(seg) = p.path.segments.last() else {
+        return Ok(None);
+    };
+    if seg.ident != "RustFn" {
+        return Ok(None);
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return Err(syn::Error::new_spanned(seg, RUST_FN_SHAPE));
+    };
+    let written: Vec<&syn::GenericArgument> = args.args.iter().collect();
+    let [
+        syn::GenericArgument::Type(Type::Tuple(params)),
+        syn::GenericArgument::Type(_),
+        syn::GenericArgument::Type(_),
+    ] = written.as_slice()
+    else {
+        return Err(syn::Error::new_spanned(seg, RUST_FN_SHAPE));
+    };
+    if params.elems.is_empty() || params.elems.len() > 8 {
+        return Err(syn::Error::new_spanned(params, RUST_FN_SHAPE));
+    }
+    Ok(Some(RustFnWritten {
+        params: params.elems.iter().cloned().collect(),
+    }))
+}
+
+fn rust_fn_effect(
+    attr: &ExternFnAttr,
+    vars: &Vars,
+    written: &RustFnWritten,
+    ret: &Type,
+    fn_ident: &Ident,
+    is_async: bool,
+) -> syn::Result<proc_macro2::TokenStream> {
+    if let Some(variable) = written.params.iter().find(|param| vars.mentions_ty_var(param)) {
+        return Err(syn::Error::new_spanned(
+            variable,
+            "a `RustFn` parameter is a concrete type, not one of this declaration's variables: \
+             `Args` lends each argument at the type its parameter names, and a call of a function \
+             value settles none (RFC-0097 rule 2)",
+        ));
+    }
+    if vars.mentions_mono(ret) {
+        return Err(syn::Error::new_spanned(
+            ret,
+            "a `RustFn` result names no `Monomorphize` variable: its body is one Rust closure, \
+             compiled once (RFC-0097 rule 2)",
+        ));
+    }
+    let task = match (is_async, attr.heavy) {
+        (true, _) => Some("an `async fn`"),
+        (false, true) => Some("`heavy`"),
+        (false, false) => None,
+    };
+    let suspends = |declared: &str| {
+        syn::Error::new(
+            fn_ident.span(),
+            format!(
+                "`{fn_ident}` returns a `RustFn`, whose function type carries the effect this \
+                 declaration states, and {declared} states a task above `Sync`: the `RustFn`'s \
+                 body would be typed as one that suspends, and a body that suspends is a later \
+                 step (RFC-0097 rule 2). Declare a plain `fn` at `effect = pure`, `idempotent` \
+                 or `opaque`."
+            ),
+        )
+    };
+    if let Some(declared) = task {
+        return Err(suspends(declared));
+    }
+    let commutes = if attr.commutative {
+        quote! { .commutative() }
+    } else {
+        quote! {}
+    };
+    match &attr.effect {
+        Some(e) if e == "pure" => Ok(quote! { ::acvus_extern::Effect::PURE }),
+        Some(e) if e == "idempotent" => Ok(quote! { ::acvus_extern::Effect::IDEMPOTENT #commutes }),
+        None => Ok(quote! { ::acvus_extern::Effect::OPAQUE #commutes }),
+        Some(e) if e == "opaque" => Ok(quote! { ::acvus_extern::Effect::OPAQUE #commutes }),
+        Some(_) => Err(suspends("an effect variable, whose task is the one it is instantiated at,")),
+    }
+    .map(|effect| quote! { ::acvus_extern::EffectTerm::Known(#effect) })
+}
+
 /// What an `Instance` or `InstanceOf` parameter's type says.
 enum Requirement {
     Of(RequiredParam),
@@ -1020,6 +1115,10 @@ fn generate_extern_fn(
     let ret = parse_return(&func.sig.output);
     refuse_static_argument(&ret)?;
     let returning = Returning::of(&ret);
+    let rust_fn_effect = match rust_fn_written(&ret)? {
+        Some(written) => Some(rust_fn_effect(&attr, &vars, &written, &ret, &func.sig.ident, is_async)?),
+        None => None,
+    };
     let mut roles: Vec<flows::Role> = takes_ctx.then_some(flows::Role::Ctx).into_iter().collect();
     let mut acvus_index = 0;
     for p in &rust_params {
@@ -1216,12 +1315,16 @@ fn generate_extern_fn(
         let comp_ret = vars.to_compile_time_instance(&returning.filled(&ret), member);
         let comp_ret =
             returning.acvus_ty(&quote! { #comp_ret }, &quote! { ::acvus_extern::TypesOnly });
+        let ret_ty = match &rust_fn_effect {
+            Some(fn_effect) => quote! { <#comp_ret>::declared_fn_ty(__i, &__vars, #fn_effect) },
+            None => quote! { <#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars) },
+        };
         let declared_flows =
             derived_flows.tokens(|named| vars.to_compile_time_instance(named, member));
         quote! {
             ::acvus_extern::PolyTy::Fn {
                 params: vec![#(#param_terms),*],
-                ret: Box::new(<#comp_ret as ::acvus_extern::TyArg>::poly_ty(__i, &__vars)),
+                ret: Box::new(#ret_ty),
                 captures: vec![],
                 effect: #effect,
                 flows: #declared_flows,

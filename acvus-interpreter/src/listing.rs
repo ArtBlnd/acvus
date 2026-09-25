@@ -210,7 +210,7 @@ fn collect_part_ops(parts: &[PartListing], found: &mut Vec<String>) {
 pub fn code_listing(code: &Code) -> Vec<BlockListing> {
     match &code.body {
         CodeBody::Body(body) => body_listing(body),
-        CodeBody::Expr(_) => Vec::new(),
+        CodeBody::Expr(_) | CodeBody::Rust => Vec::new(),
     }
 }
 
@@ -253,12 +253,14 @@ impl fmt::Display for Text<'_> {
 pub enum CodeText {
     Blocks(Vec<BlockListing>),
     Frameless,
+    RustBody,
 }
 
 pub fn code_text(code: &Code) -> CodeText {
     match &code.body {
         CodeBody::Body(body) => body_text(body),
         CodeBody::Expr(_) => CodeText::Frameless,
+        CodeBody::Rust => CodeText::RustBody,
     }
 }
 
@@ -271,6 +273,7 @@ impl fmt::Display for CodeText {
         match self {
             CodeText::Blocks(blocks) => text(blocks).fmt(f),
             CodeText::Frameless => writeln!(f, "one frameless chain, no blocks"),
+            CodeText::RustBody => writeln!(f, "a Rust closure, no blocks"),
         }
     }
 }
