@@ -1,4 +1,4 @@
 for range(0 (r17)..r13) -> L1 else L2 stages [L1, L3]
 // L1: free {index, index, *}
-// L3: cycle Storage(r18) in_order {index_set}
+// L3: cycle Storage(r18) disjoint {index_set}
 // control upfront

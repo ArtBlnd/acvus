@@ -1,5 +1,6 @@
 //! One binary: `cargo test -p acvus-mir-test --test all <file>::<test>`.
 
+mod affine_disjoint;
 mod array;
 mod bce;
 mod body_summary;

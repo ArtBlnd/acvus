@@ -10,16 +10,22 @@
 //! whether it runs, and the earlier members that touch a storage slot or a
 //! context it touches where one of the two writes it.
 
+use acvus_ast::Literal;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::analysis::affine::AffineValues;
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::loans::Loans;
-use crate::analysis::loops::{Invariants, LoopNest, NaturalLoop, natural_loops_innermost_first};
+use crate::analysis::loops::{
+    Invariants, LoopNest, NaturalLoop, Term, natural_loops_innermost_first,
+};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::graph::QualifiedRef;
-use crate::ir::{BinOp, Callee, ForSource, InstKind, Label, RefTarget, Stages, ValueId};
+use crate::ir::{
+    BinOp, Callee, ForSource, IndexMode, InstKind, Label, PathSeg, RefTarget, Stages, ValueId,
+};
 use crate::laws::{
     ExternInstance, LawTable, ResolvedBinary, ResolvedFold, ResolvedIdentity, ResolvedLaws,
 };
@@ -323,6 +329,7 @@ pub struct LoopDeps {
     pub control: Control,
     early_reads: Vec<EarlyRead>,
     effects: Vec<EffectWait>,
+    disjoint: Vec<ValueId>,
 }
 
 pub struct HeaderDeps {
@@ -371,13 +378,19 @@ impl LoopDeps {
         let membership = StageMembership::of(cfg, header, *source, stages, loop_blocks)?;
         let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body());
         let slots = TargetSlots::of(loans, *source, loop_blocks);
+        let disjoint = disjoint_storages(
+            loans,
+            header,
+            loop_blocks,
+            &graph.written_storages(cfg, loans, &slots),
+        );
         let stage_of = |member: Member| {
             membership
                 .stage_of(member.block())
                 .expect("a chain whose shape holds puts every block of the body in a stage")
         };
         let mut cycles: Vec<Cycle> = graph
-            .cycles(cfg, loans, &slots, header, loop_blocks)
+            .cycles(cfg, loans, &slots, &disjoint, header, loop_blocks)
             .into_iter()
             .map(|found| place(found, &stage_of))
             .collect();
@@ -456,6 +469,7 @@ impl LoopDeps {
             control,
             early_reads,
             effects,
+            disjoint,
         })
     }
 
@@ -497,7 +511,11 @@ impl LoopDeps {
         let Some(id) = nest.by_header(self.header) else {
             // No back edge reaches the header: the body runs at most once,
             // so no iteration hands a next one anything to merge.
-            return self.cycles.iter().map(|cycle| judge(cycle, None)).collect();
+            return self
+                .cycles
+                .iter()
+                .map(|cycle| judge(cycle, &self.disjoint, None))
+                .collect();
         };
         let loop_ = nest.get(id);
         let loans = Loans::build(cfg);
@@ -532,7 +550,7 @@ impl LoopDeps {
         };
         self.cycles
             .iter()
-            .map(|cycle| judge(cycle, Some(&reading)))
+            .map(|cycle| judge(cycle, &self.disjoint, Some(&reading)))
             .collect()
     }
 }
@@ -761,9 +779,19 @@ pub struct FoldAccumulator {
 /// with no law. A float law joined in arrival order changes the rounding,
 /// so an inexact law is `InOrder` too, and so is a law that does not
 /// commute, whose partials join in chunk order.
-fn judge(cycle: &Cycle, reading: Option<&dyn Fn(Token) -> Option<Accumulator>>) -> Judged {
+fn judge(
+    cycle: &Cycle,
+    disjoint: &[ValueId],
+    reading: Option<&dyn Fn(Token) -> Option<Accumulator>>,
+) -> Judged {
     let law = match (&cycle.tokens[..], reading) {
         ([Token::Storage(Storage::Element)], _) => {
+            return Judged {
+                order: Order::Disjoint,
+                law: None,
+            };
+        }
+        ([Token::Storage(Storage::Slot(slot))], _) if disjoint.contains(slot) => {
             return Judged {
                 order: Order::Disjoint,
                 law: None,
@@ -777,6 +805,311 @@ fn judge(cycle: &Cycle, reading: Option<&dyn Fn(Token) -> Option<Accumulator>>) 
         _ => Order::InOrder,
     };
     Judged { order, law }
+}
+
+// -- A storage reached at one affine index of the counter (rule 4) -------
+
+#[derive(Debug, Clone, PartialEq)]
+enum Component {
+    Named(PathSeg),
+    At(ValueId),
+}
+
+#[derive(Debug, Clone)]
+struct Place {
+    slot: ValueId,
+    path: Vec<Component>,
+}
+
+impl Place {
+    fn below(mut self, steps: impl IntoIterator<Item = Component>) -> Place {
+        self.path.extend(steps);
+        self
+    }
+}
+
+enum Reach {
+    Places(Vec<Place>),
+    Whole,
+}
+
+/// The element parameter of a `for` body over a slice is the source's
+/// element at the counter parameter beside it.
+#[derive(Clone, Copy)]
+struct ForElement {
+    source: ValueId,
+    counter: ValueId,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct AffineTerm<'a> {
+    base: &'a Term,
+    step: &'a Term,
+}
+
+/// The place a value names is read off the instruction that defines it;
+/// a value no `Ref`, `AsSlice`, `Index` by reference or `for` element
+/// defines names no place, and whatever reaches through it reaches the
+/// whole storage.
+struct Places<'a, 'cfg> {
+    cfg: &'cfg CfgBody,
+    loans: &'a Loans<'cfg>,
+    defs: FxHashMap<ValueId, InstAt>,
+    elements: FxHashMap<ValueId, ForElement>,
+}
+
+impl<'a, 'cfg> Places<'a, 'cfg> {
+    fn of(loans: &'a Loans<'cfg>) -> Self {
+        let cfg = loans.cfg();
+        let mut defs: FxHashMap<ValueId, InstAt> = FxHashMap::default();
+        let mut elements: FxHashMap<ValueId, ForElement> = FxHashMap::default();
+        for (index, block) in cfg.blocks.iter().enumerate() {
+            for (at, inst) in block.insts.iter().enumerate() {
+                for def in inst_info::defs(&inst.kind) {
+                    defs.insert(
+                        def,
+                        InstAt {
+                            block: BlockIdx(index),
+                            at,
+                        },
+                    );
+                }
+            }
+            if let Terminator::For {
+                source: ForSource::Slice(source) | ForSource::SliceMut(source),
+                stages,
+                ..
+            } = &block.terminator
+                && let Some(body) = cfg.label_to_block.get(&stages.body())
+                && let [element, counter] = cfg.blocks[body.0].params[..]
+            {
+                elements.insert(
+                    element,
+                    ForElement {
+                        source: *source,
+                        counter,
+                    },
+                );
+            }
+        }
+        Self {
+            cfg,
+            loans,
+            defs,
+            elements,
+        }
+    }
+
+    fn of_target(&self, target: &RefTarget) -> Option<Place> {
+        match target {
+            RefTarget::Var(slot) | RefTarget::Param(slot) => Some(Place {
+                slot: self.loans.storage_of(*slot).slot()?,
+                path: Vec::new(),
+            }),
+            RefTarget::Through(reference) => self.named_by(*reference),
+        }
+    }
+
+    fn named_by(&self, value: ValueId) -> Option<Place> {
+        if let Some(element) = self.elements.get(&value) {
+            return Some(
+                self.named_by(element.source)?
+                    .below([Component::At(element.counter)]),
+            );
+        }
+        let at = self.defs.get(&value)?;
+        match &self.cfg.blocks[at.block.0].insts[at.at].kind {
+            InstKind::Ref { target, path, .. } => Some(
+                self.of_target(target)?
+                    .below(path.iter().cloned().map(Component::Named)),
+            ),
+            InstKind::AsSlice { container, .. } => self.named_by(*container),
+            InstKind::Index {
+                slice,
+                index,
+                mode: IndexMode::Ref,
+                ..
+            } => Some(self.named_by(*slice)?.below([Component::At(*index)])),
+            _ => None,
+        }
+    }
+
+    fn holds(&self, value: ValueId, slot: ValueId) -> bool {
+        self.loans
+            .holds(value)
+            .any(|loan| loan.storage.slot() == Some(slot))
+    }
+
+    fn within(place: Option<Place>, slot: ValueId) -> Reach {
+        match place {
+            Some(place) if place.slot == slot => Reach::Places(vec![place]),
+            Some(_) | None => Reach::Whole,
+        }
+    }
+
+    /// `None` for an instruction that reaches nothing of `slot`, which
+    /// includes a `Ref`, an `AsSlice` and an `Index` by reference: each
+    /// names a place, and the instructions that read or write through what
+    /// it defines reach it.
+    fn reach_of_inst(&self, kind: &InstKind, slot: ValueId) -> Option<Reach> {
+        let touches = touched_slots(self.loans, kind).contains(&slot)
+            || written_slots(self.loans, kind).contains(&slot)
+            || inst_info::uses(kind)
+                .into_iter()
+                .any(|used| self.holds(used, slot));
+        if !touches {
+            return None;
+        }
+        Some(match kind {
+            InstKind::Ref { .. }
+            | InstKind::AsSlice { .. }
+            | InstKind::Index {
+                mode: IndexMode::Ref,
+                ..
+            } => return None,
+            InstKind::Index {
+                slice,
+                index,
+                mode: IndexMode::Copy,
+                ..
+            }
+            | InstKind::IndexSet { slice, index, .. } => Self::within(
+                self.named_by(*slice)
+                    .map(|place| place.below([Component::At(*index)])),
+                slot,
+            ),
+            InstKind::Take { target, path, .. } | InstKind::Assign { target, path, .. } => {
+                Self::within(
+                    self.of_target(target)
+                        .map(|place| place.below(path.iter().cloned().map(Component::Named))),
+                    slot,
+                )
+            }
+            InstKind::StringAppend { target, .. } => Self::within(self.named_by(*target), slot),
+            InstKind::FunctionCall {
+                callee: Callee::Extern { .. } | Callee::Direct(_),
+                args,
+                ..
+            } => self.reach_of_args(args, slot),
+            _ => Reach::Whole,
+        })
+    }
+
+    /// A callee reaches, through each argument, the place it names and
+    /// everything under it.
+    fn reach_of_args(&self, args: &[ValueId], slot: ValueId) -> Reach {
+        let mut places: Vec<Place> = Vec::new();
+        for &arg in args.iter().filter(|arg| self.holds(**arg, slot)) {
+            match Self::within(self.named_by(arg), slot) {
+                Reach::Places(found) => places.extend(found),
+                Reach::Whole => return Reach::Whole,
+            }
+        }
+        match places.is_empty() {
+            true => Reach::Whole,
+            false => Reach::Places(places),
+        }
+    }
+
+    fn reach_of_term(&self, term: &Terminator, slot: ValueId) -> Option<Reach> {
+        let touches = terminator_touched(self.loans, term).contains(&slot)
+            || inst_info::terminator_uses(term)
+                .into_iter()
+                .any(|used| self.holds(used, slot));
+        if !touches {
+            return None;
+        }
+        Some(match term {
+            Terminator::For {
+                source: ForSource::Slice(source) | ForSource::SliceMut(source),
+                ..
+            } => Self::within(self.named_by(*source), slot),
+            _ => Reach::Whole,
+        })
+    }
+}
+
+/// The storages among `written` whose every place the loop reaches lies
+/// under one path component that is the same `a·k + b` of the counter at
+/// every access, `a` a nonzero constant. The component's value is exact on
+/// every run past it (RFC-0037 rule 3), so no two iterations reach one
+/// place.
+fn disjoint_storages(
+    loans: &Loans<'_>,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+    written: &[ValueId],
+) -> Vec<ValueId> {
+    if written.is_empty() {
+        return Vec::new();
+    }
+    let cfg = loans.cfg();
+    let invariants = Invariants::of(cfg);
+    let nest = LoopNest::of(cfg, &DomTree::build(cfg), &invariants);
+    let Some(id) = nest.by_header(header) else {
+        return Vec::new();
+    };
+    let affine = AffineValues::of(cfg, nest.get(id), &invariants);
+    let places = Places::of(loans);
+    let reached = |slot: ValueId| -> Option<Vec<Place>> {
+        let mut found: Vec<Place> = Vec::new();
+        for &block in loop_blocks {
+            let held = &cfg.blocks[block.0];
+            let reaches = held
+                .insts
+                .iter()
+                .map(|inst| places.reach_of_inst(&inst.kind, slot))
+                .chain([places.reach_of_term(&held.terminator, slot)]);
+            for reach in reaches.flatten() {
+                match reach {
+                    Reach::Places(at) => found.extend(at),
+                    Reach::Whole => return None,
+                }
+            }
+        }
+        Some(found)
+    };
+    written
+        .iter()
+        .copied()
+        .filter(|slot| reached(*slot).is_some_and(|found| one_affine_component(&found, &affine)))
+        .collect()
+}
+
+fn one_affine_component(reached: &[Place], affine: &AffineValues) -> bool {
+    let Some(shortest) = reached.iter().map(|place| place.path.len()).min() else {
+        return false;
+    };
+    let term_at = |place: &Place, position: usize| match &place.path[position] {
+        Component::At(index) => affine
+            .get(*index)
+            .filter(|found| constant(&found.step).is_some_and(|step| step != 0))
+            .map(|found| AffineTerm {
+                base: &found.base,
+                step: &found.step,
+            }),
+        Component::Named(_) => None,
+    };
+    (0..shortest).any(|position| {
+        let Some(first) = term_at(&reached[0], position) else {
+            return false;
+        };
+        reached[1..]
+            .iter()
+            .all(|place| term_at(place, position) == Some(first))
+    })
+}
+
+fn constant(term: &Term) -> Option<i128> {
+    match term {
+        Term::Const(Literal::Int(value)) => Some(*value),
+        Term::Const(Literal::IntOf(suffixed)) => Some(suffixed.value),
+        Term::Const(_) | Term::Value(_) | Term::Len(_) => None,
+        Term::Add(a, b) => constant(a)?.checked_add(constant(b)?),
+        Term::Sub(a, b) => constant(a)?.checked_sub(constant(b)?),
+        Term::Mul(a, b) => constant(a)?.checked_mul(constant(b)?),
+        Term::Max(a, b) => Some(constant(a)?.max(constant(b)?)),
+    }
 }
 
 // -- The dependence graph within one iteration ----------------------------
@@ -1101,11 +1434,12 @@ impl Graph {
         cfg: &CfgBody,
         loans: &Loans<'_>,
         slots: &TargetSlots,
+        disjoint: &[ValueId],
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
     ) -> Vec<Found> {
         let mut found: Vec<Held> = self.carried_cycles(cfg, header, loop_blocks);
-        found.extend(self.storage_cycles(cfg, loans, slots));
+        found.extend(self.storage_cycles(cfg, loans, slots, disjoint));
         let exits = self.with(|member| match member {
             Member::Term(block) => {
                 matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
@@ -1240,11 +1574,42 @@ impl Graph {
         found
     }
 
-    /// A storage's cycle is every member that touches it and every member
-    /// between them; the element's, its writers and the members between
-    /// them, since each iteration writes only the element at its counter.
-    fn storage_cycles(&self, cfg: &CfgBody, loans: &Loans<'_>, slots: &TargetSlots) -> Vec<Held> {
+    /// The storages live at the header that a member writes.
+    fn written_storages(
+        &self,
+        cfg: &CfgBody,
+        loans: &Loans<'_>,
+        slots: &TargetSlots,
+    ) -> Vec<ValueId> {
         let mut storages: Vec<ValueId> = Vec::new();
+        for member in &self.members {
+            let Member::Inst(InstAt { block, at }) = *member else {
+                continue;
+            };
+            for slot in written_slots(loans, &cfg.blocks[block.0].insts[at].kind) {
+                if let Some(Written::Storage(slot)) = slots.target_of(slot)
+                    && !storages.contains(&slot)
+                {
+                    storages.push(slot);
+                }
+            }
+        }
+        storages
+    }
+
+    /// A storage's cycle is every member that touches it and every member
+    /// between them. One no two iterations reach at one place, as the
+    /// element each iteration writes at its counter, holds its writers and
+    /// the members between them: a read of it reads what no other
+    /// iteration writes.
+    fn storage_cycles(
+        &self,
+        cfg: &CfgBody,
+        loans: &Loans<'_>,
+        slots: &TargetSlots,
+        disjoint: &[ValueId],
+    ) -> Vec<Held> {
+        let storages = self.written_storages(cfg, loans, slots);
         let mut element_writers: Vec<usize> = Vec::new();
         let mut contexts: Vec<QualifiedRef> = Vec::new();
         for (at, member) in self.members.iter().enumerate() {
@@ -1253,14 +1618,10 @@ impl Graph {
             };
             let kind = &cfg.blocks[block.0].insts[inst].kind;
             for slot in written_slots(loans, kind) {
-                match slots.target_of(slot) {
-                    Some(Written::Element) if !element_writers.contains(&at) => {
-                        element_writers.push(at)
-                    }
-                    Some(Written::Storage(slot)) if !storages.contains(&slot) => {
-                        storages.push(slot)
-                    }
-                    Some(Written::Element | Written::Storage(_)) | None => {}
+                if let Some(Written::Element) = slots.target_of(slot)
+                    && !element_writers.contains(&at)
+                {
+                    element_writers.push(at);
                 }
             }
             if let InstKind::Commit { context, .. } = kind
@@ -1275,8 +1636,12 @@ impl Graph {
                 self.with(|member| member_storage(cfg, loans, member).touched.contains(&slot));
             let writers =
                 self.with(|member| member_storage(cfg, loans, member).written.contains(&slot));
-            let mut members = self.between(&touchers, &writers);
-            members.extend(touchers);
+            let from = match disjoint.contains(&slot) {
+                true => writers.clone(),
+                false => touchers,
+            };
+            let mut members = self.between(&from, &writers);
+            members.extend(from);
             found.push(Held {
                 tokens: vec![Token::Storage(Storage::Slot(slot))],
                 members,

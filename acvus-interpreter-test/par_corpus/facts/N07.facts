@@ -1,8 +1,8 @@
 for range(0 (r28)..2 (r29)) -> L1 else L2 stages [L1, L7]
 // L1: free {const, const}
-// L7: cycle Storage(r30) in_order {ref, as_slice, index, as_slice, index_set}
+// L7: cycle Storage(r30) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
 for range(0 (r32)..3 (r33)) -> L4 else L5 stages [L4, L6]
 // L4: free {index, as_slice, index}
-// L6: cycle Storage(r30) in_order {ref, as_slice, index, as_slice, index_set}
+// L6: cycle Storage(r30) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
