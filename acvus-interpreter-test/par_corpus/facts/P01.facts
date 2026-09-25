@@ -1,6 +1,6 @@
 for slice(r4) -> L1 else L2 stages [L1, L6, L7]
 // L1: free {take, const, ==}
-// L6: cycle Carried(r7) in_order {+, -, jump, jump}
+// L6: cycle Carried(r7) in_order law(Op(Add) exact commutative) scan {+, -, jump, jump}
 // L7: cycle Carried(r8) any_order law(Call(#2, identity) exact commutative) {call min}
 // control upfront
 // cost W=4 O=18287 split when n > 146296, n = len(r4)

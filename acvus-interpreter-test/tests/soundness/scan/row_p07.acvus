@@ -1,0 +1,8 @@
+// expect 90210
+let text = "90210";
+let bs = text.to_string().to_bytes();
+let n = 0;
+for b in &bs {
+    n = n * 10 + ((*b - b'0') as i64);
+}
+n

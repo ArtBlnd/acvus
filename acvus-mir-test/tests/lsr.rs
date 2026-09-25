@@ -1,8 +1,11 @@
 //! The listing `optimize::lsr` leaves (RFC-0056), and the shapes it
 //! declines. The pass reduces only a counter expression that one `InOrder`
 //! join reads (RFC-0066 rule 7), so every loop here that is meant to be
-//! reduced carries a recurrence: `acc * 2 + …` reads the accumulator outside
-//! a merge, and its join, which reads the expression, is `InOrder`. It
+//! reduced carries a recurrence: `acc * acc % 1000 + …` squares the
+//! accumulator, which no reading of RFC-0093 gives a law, and its join,
+//! which reads the expression, is `InOrder` with no law. (`acc * 2 + …`
+//! has the affine map law, RFC-0093 rule 8, whose stage the pass
+//! declines.) It
 //! reduces the program's trapping `i * k + x` only where word bounds, `k`
 //! and `x` keep both operations inside the width, so those loops count to a
 //! word and multiply by words.
@@ -133,13 +136,13 @@ const BOTH_FORMS: &str = "\
 let reduced = 0; \
 let i = 0; \
 while i < 40 { \
-    reduced = reduced * 2 + (i * 5 + 7); \
+    reduced = reduced * reduced % 1000 + (i * 5 + 7); \
     i = i + 1; \
 } \
 let unreduced = 0; \
 let j = 0; \
 while j < 40 { \
-    if j + 1 > j { unreduced = unreduced * 2 + (j * 5 + 7); }; \
+    if j + 1 > j { unreduced = unreduced * unreduced % 1000 + (j * 5 + 7); }; \
     j = j + 1; \
 } \
 reduced - unreduced";
@@ -154,10 +157,10 @@ fn the_reduced_body_multiplies_and_the_unreduced_one_still_does() {
     assert_eq!(
         where_it_multiplies(&listing),
         ["L1: 1".to_string(), "L6: 2".to_string()],
-        "the first loop's body keeps only `reduced * 2`, and the reduction \
+        "the first loop's body keeps only `reduced * reduced`, and the reduction \
          steps by `5` and starts at `7`, the start `0 * 5 + 7` written \
          folded, so nothing multiplies above the header; under the `if`, \
-         `j * 5` stays beside `unreduced * 2`:\n{listing}"
+         `j * 5` stays beside `unreduced * unreduced`:\n{listing}"
     );
 }
 
@@ -167,7 +170,7 @@ const A_PRODUCT_THAT_CAN_OVERFLOW: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < 40 { \
-    acc = acc * 2 + (i * @k + @x); \
+    acc = acc * acc % 1000 + (i * @k + @x); \
     i = i + 1; \
 } \
 acc";
@@ -242,7 +245,7 @@ const BARE_PRODUCTS: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < @n { \
-    acc = acc * 2 + i * @k; \
+    acc = acc * acc % 1000 + i * @k; \
     i = i + 1; \
 } \
 let shared = 0; \
@@ -264,7 +267,7 @@ fn a_bare_product_keeps_its_multiplication() {
         where_it_multiplies(&listing),
         ["L1: 2".to_string(), "L4: 1".to_string()],
         "both bodies keep the multiplication they were written with, beside \
-         the first body's `acc * 2`, and no start or step stands above either \
+         the first body's `acc * acc`, and no start or step stands above either \
          header: a reduction that does not lower the operation count is not \
          applied (RFC-0056):\n{listing}"
     );
@@ -307,7 +310,7 @@ const RECURRENCE: &str = "\
 let acc = 0; \
 let i = 0; \
 while i < 40 { \
-    acc = acc * 2 + (i * 5 + 7); \
+    acc = acc * acc % 1000 + (i * 5 + 7); \
     i = i + 1; \
 } \
 acc";
@@ -329,8 +332,8 @@ fn a_merge_is_left_as_written_and_a_recurrence_is_reduced() {
     assert_eq!(
         where_it_multiplies(&recurrence),
         ["L1: 1".to_string()],
-        "`acc * 2` is a recurrence, joined `InOrder`, and the join reads \
-         `i * 5 + 7`, so the body keeps only `acc * 2`. The counter steps \
+        "`acc * acc` is a recurrence, joined `InOrder`, and the join reads \
+         `i * 5 + 7`, so the body keeps only `acc * acc`. The counter steps \
          by 1, so the reduction steps by `5`, and its start `0 * 5 + 7` \
          is written folded as `7`, so nothing multiplies above the \
          header:\n{recurrence}"

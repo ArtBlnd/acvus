@@ -1,0 +1,9 @@
+// expect 0,200,255
+let xs = vec([200u8, 55u8, 0u8]);
+let total = 0u8;
+let offs = vec([]);
+for x in &xs {
+    offs.push(total);
+    total = total + *x;
+}
+offs.into_iter().map(|x| -> x.to_string()).join(",".to_string())

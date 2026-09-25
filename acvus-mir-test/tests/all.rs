@@ -28,6 +28,7 @@ mod error_types;
 mod exclusion;
 mod fold;
 mod for_loop;
+mod scan;
 mod stages;
 mod gvn;
 mod hash_types;

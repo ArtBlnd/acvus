@@ -1,0 +1,6 @@
+// expect attempt to add with overflow
+let v = vec([i64::MAX() - 3, 1, 1, 1, 1, -9]);
+for i in 1u64..v.len() {
+    v[i] = v[i] + v[i - 1u64];
+}
+v[5u64]

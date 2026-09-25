@@ -1,0 +1,6 @@
+// expect 100,200,255
+let v = vec([100u8, 100u8, 55u8]);
+for i in 1u64..v.len() {
+    v[i] = v[i] + v[i - 1u64];
+}
+v.into_iter().map(|x| -> x.to_string()).join(",".to_string())

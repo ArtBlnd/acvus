@@ -1,11 +1,11 @@
 for range(0 (r14)..r6) -> L1 else L2 stages [L1, L11]
 // L1: free {index, const, +}
-// L11: cycle Storage(r15) in_order {index, +, index_set}
+// L11: cycle Storage(r15) in_order law(Op(Add) exact commutative) scan {index, +, index_set}
 // control upfront
 // cost W=4 O=18281 split when n > 146248, n = max(r6 - 0 (r14), 0)
 for range(0 (r63)..6 (r54)) -> L4 else L5 stages [L4, L12, L13]
 // L4: free {index}
-// L12: cycle Carried(r62) in_order {+}
+// L12: cycle Carried(r62) in_order law(Op(Add) exact commutative) scan {+}
 // L13: cycle Storage(r64) in_order {take, ==, const, *, cast, >=, const, assign, branch, jump, jump, branch}
 // control upfront
 // cost W=3 O=18287 split when n > 195062, n = max(6 (r54) - 0 (r63), 0)
