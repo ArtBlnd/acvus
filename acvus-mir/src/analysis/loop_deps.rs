@@ -406,7 +406,7 @@ impl LoopDeps {
             .collect();
         let unjoined = cycles.clone();
 
-        // RFC-0066 rule 10: the control token passes with the exiting
+        // RFC-0092: the control token passes with the exiting
         // stage's tokens, so the cycles lying there are one join with it.
         let exiting = cycles
             .iter()

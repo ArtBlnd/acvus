@@ -39,7 +39,7 @@ pub struct CostTable {
     pub spawn: u64,
     pub merge: u64,
     /// One synchronous executor call that runs a chunk, which is how a
-    /// `Sync` body splits (RFC-0066 rule 10).
+    /// `Sync` body splits (RFC-0092).
     pub chunk_dispatch: u64,
     /// One element a chunk hands from a stage to the next.
     pub buffered_element: u64,
@@ -144,7 +144,7 @@ impl<'a> Costs<'a> {
     }
 
     /// `W` sums the stages that run apart: the free ones, and those whose
-    /// every cycle is `Disjoint`, whose token is absent (RFC-0066 rule 10).
+    /// every cycle is `Disjoint`, whose token is absent (RFC-0092).
     /// A stage holding an `AnyOrder` or `InOrder` cycle, or a cycle that
     /// crosses into another stage, runs in its order and is not counted.
     /// With no stage that runs apart the loop runs in place. A loop whose

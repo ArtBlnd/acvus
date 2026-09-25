@@ -476,7 +476,9 @@ iteration hands the next.
 1. **Normalization is the optimizer's; the target's shape is the
    lowerer's.** A MIR pass may rewrite a loop when the result is the same
    program on every target: IV canonicalization, collapsing a rectangular
-   nest, separating a merge's join from the body. Unrolling, tiling and
+   nest, separating a merge's join from the body, moving an exit that
+   leaves a nested loop's parent into the nested loop's own exit with a
+   verdict the parent branches on after it. Unrolling, tiling and
    blocking, a chunk size, and whether to split a loop at all depend on the
    target, the runtime or `n`, and they are the lowerer's.
 
@@ -572,19 +574,7 @@ iteration hands the next.
    jump's target must be inside it. A loop whose stages are not regions is
    not divided.
 
-10. **The lowerer runs the stages as a token pipeline, and the executor
-    decides how to wait.** No lowerer builds this yet; every loop runs in
-    place.
-    - Split, chunks of iterations, bounded in flight, pass the stages in
-      order: a free stage runs a chunk on arrival; a cycle's stage admits
-      one holding its token, in chunk order under `InOrder`, one at a time
-      under `AnyOrder`, none under `Disjoint`. With a law a chunk combines
-      first and the stage joins the partial. The control token passes with
-      the exiting stage's.
-    - In a `Sync` body the split is one synchronous executor call, which
-      decides how to wait (RFC-0046 rule 1); a suspending body spawns and
-      awaits chunks.
-    - Running in place is always admitted; chunks never split again.
+10. **The lowerer runs the stages.** RFC-0092 states how.
 
 **Why.** A normal form is the same program on every target; a shape
 chosen for one is a guess about the lowerer, which knows the target, the
@@ -676,7 +666,11 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
      spelled: through a branch whose other arm leaves the token as it was
      (the law's identity stands in), through a compare and select of
      integers, which is their `min` or `max` by the order's definition,
-     and through a storage the cycle loads, combines and stores whole.
+     through a storage the cycle loads, combines and stores whole, and
+     through a nested loop: a token that enters one as a header
+     parameter's entry value and that its exit hands back, whose cycle
+     there has law `L` and nothing else there reads, is combined through
+     `L` with the nested loop's run from `L`'s identity.
 
 5. **Exits and effects.** An exit other than the header's is the control
    token's cycle: the stage it leaves from passes the control token to the
@@ -725,12 +719,45 @@ consults. The cutting pass, rerun after a pass that frees a stage.
   alternatives.
 
 **Open.** Each runs as `InOrder` today; the tiers weigh ease against reach.
-- First: a law through a nested loop; named commutation sets in place of
-  `commutes: bool`.
+- First: named commutation sets in place of `commutes: bool`.
 - After the executor's pipeline: a cycle split by key; a `Stream` source
   for `while` loops.
 - When a use asks: speculative exits; a scan law, for a body that reads a
   partial; an action law for heavy work inside a cycle.
+
+## RFC-0092: a lowerer runs a loop's stages as a token pipeline, and the executor decides how to wait
+
+Status: Proposed
+
+The stages of RFC-0089 and the cost of RFC-0066 rule 8 are what a lowerer
+reads to run a loop apart. No lowerer builds this yet; every loop runs in
+place. This is the contract a lowerer is held to.
+
+1. **Chunks pass the stages in order.** A split loop is cut into chunks of
+   iterations, bounded in flight, which pass the stages in order: a free
+   stage runs a chunk on arrival; a cycle's stage admits one holding its
+   token, in chunk order under `InOrder`, one at a time under `AnyOrder`,
+   none under `Disjoint`. The control token passes with the exiting
+   stage's.
+2. **A law combines inside a chunk.** With a law a chunk combines first and
+   the stage joins the partial, in chunk order when the law does not
+   commute. Where the program's operation traps (RFC-0037 rule 3), a
+   partial combined from the identity may overflow where the program's
+   own order does not; the lowerer combines partials with the wrapping
+   operation and traps where the program would.
+3. **The executor decides how to wait.** In a `Sync` body the split is one
+   synchronous executor call, which decides how to wait (RFC-0046 rule 1);
+   a suspending body spawns and awaits chunks.
+4. **One level.** Running in place is always admitted; chunks never split
+   again.
+
+**Why.** The stages say what may run apart and the cost what it is worth;
+how chunks move is the lowerer's, and stating it apart from the analyses
+keeps each RFC to what its readers use.
+**Cost.** A family of split operations in each backend that splits.
+**Rejected.**
+- Keeping the pipeline in RFC-0066 — it mixes the analyses with a
+  lowerer's contract no pass reads.
 
 ## RFC-0081: a `while` that counts by one to an invariant bound is a range `for`
 

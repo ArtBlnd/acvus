@@ -21,7 +21,7 @@
 //! nothing. Anywhere else each iteration computes `i * k + x` from its own
 //! `i`, and a derived counter would make it wait for the previous
 //! iteration's value. A stage with a law combines a chunk before it joins
-//! the partial (RFC-0066 rule 10), which a counter carried from the chunk
+//! the partial (RFC-0092), which a counter carried from the chunk
 //! before would serialize; that stage is declined. A `while` has no stages
 //! and is declined.
 //!

@@ -528,8 +528,8 @@ mod tests {
         );
     }
 
-    /// The control token passes with the exiting stage's tokens (RFC-0066
-    /// rule 10): `s`'s cycle, `AnyOrder` alone, is one `InOrder` join with
+    /// The control token passes with the exiting stage's tokens
+    /// (RFC-0092): `s`'s cycle, `AnyOrder` alone, is one `InOrder` join with
     /// the exit in the stage both lie in.
     #[test]
     fn an_exit_joins_the_cycles_of_its_stage_in_order() {

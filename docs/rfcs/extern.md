@@ -1039,8 +1039,7 @@ Status: Proposed
    calls, has the `Fold` law on that instance. `analysis::interval` reads a postcondition
    through a call's callee (RFC-0047 rule 7), and `analysis::affine` one
    with `old` (RFC-0066 rule 4). The merge names the extern
-   instance, and its identity and `combine` are for the split of RFC-0066
-   rule 10,
+   instance, and its identity and `combine` are for the split of RFC-0092,
    which is not built; until it is, no pass reads them, and rule 1 holds
    them only by that reader to come.
 7. **Places a call reaches.** `#[extern_fn(reaches(p1, ..))]` on `f`

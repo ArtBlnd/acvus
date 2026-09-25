@@ -116,6 +116,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0083: a pure operation computed on every path to it is the value computed first (Proposed)
 - RFC-0088: a `for` whose body does nothing is a jump to its exit (Proposed)
 - RFC-0089: a `for` is a chain of stages no dependence cycle crosses, and what each stage is the IR already says (Proposed)
+- RFC-0092: a lowerer runs a loop's stages as a token pipeline, and the executor decides how to wait (Proposed)
 
 ### [ownership.md](ownership.md)
 
