@@ -1012,8 +1012,9 @@ Status: Proposed
 4. **Postconditions.** `#[extern_fn(ensures(t1 rel t2, ..))]` relates two
    terms by `=`, `≤` or `<`. A term is RFC-0066 rule 3's: a constant, a
    parameter, the result `ret`, `len(x)` of a parameter or of `ret`, and
-   `+`, `−`, `×` and `max` of terms. `len(x)` is the element count of a
-   slice or a container; a parameter or `ret` read as a number is an
+   `+`, `−`, `×` and `max` of terms, and `old(t)`, the term `t` as it stood
+   when the call began, for a `&mut` parameter's state. `len(x)` is the
+   element count of a slice or a container; a parameter or `ret` read as a number is an
    integer. There is no quantifier, no condition and no function of the
    author's. Rust's lexer refuses `≤`, `−` and `×` before a macro reads
    them, so a declaration writes `<=`, `-` and `*`.

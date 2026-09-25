@@ -503,8 +503,8 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    terms of rule 3. A `for`'s counter is affine from its terminator: a
    range's element is `{at, 1}` and a slice's or an array's index is
    `{0, 1}`. A header parameter entered with `b` whose back edges all send
-   `p + c`, `c` invariant, is `{b, c}`. `a·v` and `v + b` of an affine `v`,
-   `a` and `b` invariant, are affine. Only integers are affine: `+` and
+   `p + c`, `c` invariant, is `{b, c}`. `a·v`, `v + b`, `v − b` and `b − v`
+   of an affine `v`, `a` and `b` invariant, are affine. Only integers are affine: `+` and
    `*` of either kind are exact modulo `2^width` on every run past them
    (RFC-0037 rule 3). The analysis is one loop deep.
 
@@ -533,7 +533,12 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
    step that cannot trap, a range's own counter or one word bounds keep
    in the width, needs none. A rewritten `Iv`
    is carried no longer, so it is no target and orders nothing. The choice is per
-   variable and reads nothing the stage pass decides. After
+   variable and reads nothing the stage pass decides. A header parameter
+   every back edge sends `f(e)`, `e` the element the iteration read at
+   the counter of a slice or array source and `f` pure work on `e` and
+   invariants, holds `f` of the element at `k − 1` from the second
+   iteration on and its entry value on the first; the pass reads it so,
+   and it carries nothing. After
    the stages are written, strength reduction (RFC-0056) reduces a counter
    expression whose readers all sit in one `InOrder` join, and its step
    joins that join. A `while` is declined, since it states no count; a later
@@ -581,10 +586,8 @@ or the actual `n` is the lowerer's, and no MIR pass writes it.
 everywhere, so writing it into MIR decides nothing a target could decide
 better. A shape chosen for a target is a guess about the lowerer, which
 knows the target, the runtime and the actual `n`. Order is read from the
-declarations of the operations on each target, because they say whether
-iterations can be reordered, and a count says only what reordering costs. The author writes
-the loop, and the system finds the parallelism from facts the checker
-already establishes.
+operations' declarations, which say whether iterations can be reordered;
+a count says only what reordering costs.
 **Cost.** Three analyses built per body and read by every loop pass. A
 table per backend and a family of split operations. A change in who reads
 an induction variable moves it between two forms. RFC-0057's and
@@ -593,10 +596,8 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 - Unrolling, tiling, blocking or permutation as MIR passes — a lowerer's
   guess written into the program's meaning, and nothing undoes it when the
   guess is wrong for a target.
-- A table the runtime measures at first compilation and caches — it ties
-  the compiler to one machine's timing at one moment and adds a cache to
-  invalidate. The backend knows its costs, and the embedder that chose the
-  backend supplies them.
+- A table the runtime measures and caches — one machine's timing, and a
+  cache to invalidate.
 - Scalar evolution alone — it answers the trip count and nothing when that
   fails.
 - Leaving an `Iv` read after the loop carried — that loop keeps the
@@ -604,14 +605,12 @@ RFC-0064's analyses become inputs whose promises must stay stable.
 - A `while` trip count derived from its recurrence — the door to general
   scalar evolution. A `while` is promoted to `for` only by a recognizer that
   is exact, or it stays undivided.
-- An explicit `par for` — the facts the split needs are the checker's. Where
-  they are not established, the author is told why, not asked to assert them.
-
+- An explicit `par for` — the facts the split needs are the checker's.
 - A reassociable float reduction — it fixes a rounding every later lowering
   would have to keep.
 
-**Open.** How `&&` and `||` are recognized as merges. Whether rule 9's
-jump-boundary conditions reduce to effect boundaries alone.
+**Open.** Whether rule 9's jump-boundary conditions reduce to effect
+boundaries alone.
 
 ## RFC-0089: a `for` is a chain of stages no dependence cycle crosses, and what each stage is the IR already says
 
@@ -661,8 +660,8 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
      at every access, with `a ≠ 0` and `b` invariant in the loop: the term
      is exact, so two iterations never touch one place. The `&mut`
      source's element is `a = 1, b = 0`. An extern call reaches only the
-     places its declaration states, and all of the storage when it states
-     none; `AnyOrder` when every operation in it commutes (RFC-0013), is
+     places its declaration states, and all a reference argument lends it
+     when it states none; `AnyOrder` when every operation in it commutes (RFC-0013), is
      joined by a `merge` (RFC-0007 rule 7), or combines through a
      commutative law; `InOrder` otherwise. A float law is `InOrder`:
      joining in arrival order changes the rounding.
