@@ -688,6 +688,8 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
    and no call of a local function, a `for` in it finishes when its body
    does, and every extern it calls states `returns` (RFC-0082 rule 8). A
    trap it raises in an iteration past the exit is discarded with it.
+   Such a loop's trip count is only a bound, and its cost (RFC-0066 rule
+   8) says `n ≤` that bound: work past the exit is spent and discarded.
    A run apart reports the trap least in the order (iteration, stage), and
    a trap releases nothing (RFC-0048 rule 8). The lowerer runs an `Array`
    source in place until the release of elements scattered over chunks
