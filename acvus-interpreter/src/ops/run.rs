@@ -432,7 +432,7 @@ mod tests {
         let (mut regs, _) = store.bind(&body);
         regs.open_marks(body.mark_words);
         for slot in FrameSlot::first(usize::from(FRAME)) {
-            regs.open(Off::bounded(slot), Value::UNDEF);
+            regs.open(Off::of_below(slot), Value::UNDEF);
         }
         let mut placed: Vec<(u64, usize)> = Vec::new();
         for (index, before) in (0..FRAME).zip(before) {
@@ -455,7 +455,7 @@ mod tests {
         let regs = m.regs();
         let registers = FrameSlot::first(usize::from(FRAME))
             .map(|slot| {
-                let value = regs.read(Off::bounded(slot));
+                let value = regs.read(Off::of_below(slot));
                 match value.kind() {
                     Kind::Large => Word::Large {
                         placed_in: placed

@@ -282,7 +282,7 @@ where
     open_frame(callee, &mut regs);
     let laid = window.laid(arity);
     for (slot, arg) in FrameSlot::first(laid.len()).zip(laid) {
-        regs.open(Off::bounded(slot), *arg);
+        regs.open(Off::of_below(slot), *arg);
     }
     run_frame(callee, named, regs, rt, true, fill)
 }
@@ -576,7 +576,7 @@ impl Code {
         let arity = u16::try_from(args.len()).expect("an argument run is at most one cell wide");
         let RootFrame { mut state, cells } = RootFrame::new();
         for (slot, arg) in FrameSlot::first(args.len()).zip(args) {
-            state.lay(Off::bounded(slot), *arg);
+            state.lay(Off::of_below(slot), *arg);
         }
         // SAFETY: the contract `fn_value_call` carries — `f` is a closure of
         // this `Code` — and the arguments are laid where an entry reads them.

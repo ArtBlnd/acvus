@@ -1021,11 +1021,17 @@ Status: Accepted
    for a value the runtime keeps is repr's, with the fact that bounds it.
    A register's place in a frame is repr's `Disp<S>`, the byte offset of a
    slot of a run of `S`, bounded when made. `Disp::of` checks a constant.
-   Any other index is a `Bounded`, an `unsafe` trait whose type holds the
-   index below a bound and is made by a check where the index is assigned,
-   and `Disp::bounded` and `Disp::after` make a displacement from it with
-   no check, since a constant assertion fits the bound's displacement in
-   the `u16`. A read at a displacement or at
+   Any other index is repr's value type `Below<N>`, whose private field
+   holds it below the constant `N`. It is made by a check where the index
+   is assigned (`new`, `of`, `first`), or composed with no check from
+   indices whose types already bound it: `masked` keeps a word's low bits
+   below a power of two, and `compose` makes `hi * B + lo` below `N` under
+   a constant assertion that `W * B <= N`. `Disp::of_below` and
+   `Disp::after` make a displacement from a `Below<N>` with no check,
+   since a constant assertion fits `N`'s displacement in the `u16`, and
+   `DispBelow<S, N>` keeps that bound beside a displacement so the slot
+   after it needs none. No trait lets another crate state a bound that
+   repr trusts. A read at a displacement or at
    a mark word is repr's `at` or `word_at`. No `transmute`, `transmute_copy` or pointer cast between types is
    written outside repr.
 

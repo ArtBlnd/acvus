@@ -22,56 +22,11 @@ pub const CELL_SLOTS: u16 = 16;
 
 pub const MAX_FRAME_SLOTS: u16 = 320;
 
-/// A register of a frame: an index below `MAX_FRAME_SLOTS`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub struct FrameSlot(u16);
-
-impl FrameSlot {
-    pub const fn new(index: u16) -> Option<FrameSlot> {
-        match index < MAX_FRAME_SLOTS {
-            true => Some(FrameSlot(index)),
-            false => None,
-        }
-    }
-
-    /// # Panics
-    /// `index` is not below `MAX_FRAME_SLOTS`.
-    pub const fn of(index: u16) -> FrameSlot {
-        let Some(slot) = FrameSlot::new(index) else {
-            panic!("a register index is past the MAX_FRAME_SLOTS registers one frame holds")
-        };
-        slot
-    }
-
-    /// The first `len` registers, in order.
-    ///
-    /// # Panics
-    /// `len` is above `MAX_FRAME_SLOTS`.
-    pub fn first(len: usize) -> impl Iterator<Item = FrameSlot> {
-        let len = u16::try_from(len)
-            .ok()
-            .filter(|len| *len <= MAX_FRAME_SLOTS)
-            .unwrap_or_else(|| {
-                panic!("a run of {len} registers is past the {MAX_FRAME_SLOTS} one frame holds")
-            });
-        (0..len).map(FrameSlot)
-    }
-
-    pub const fn get(self) -> u16 {
-        self.0
-    }
-}
-
-// SAFETY: `new`, `first` and `Regs::sweep` are the constructors, and each
-// holds the index below `MAX_FRAME_SLOTS`.
-unsafe impl repr::Bounded for FrameSlot {
-    const BOUND: u16 = MAX_FRAME_SLOTS;
-
-    #[inline(always)]
-    fn slot(self) -> u16 {
-        self.0
-    }
-}
+/// A register of a frame: an index below `MAX_FRAME_SLOTS`. prepare makes one
+/// by a check where it assigns a register, and the machine where it lays an
+/// argument run; `Regs::sweep` composes one from a mark word's index and a set
+/// bit's, with no check.
+pub type FrameSlot = repr::Below<MAX_FRAME_SLOTS>;
 
 pub const MAX_RUN_SLOTS: u16 = 256;
 
@@ -103,9 +58,10 @@ pub(crate) const fn mark_words(slots: u16) -> u16 {
     MARK_WORDS_AT_LEAST + slots.saturating_sub(1) / MARK_WORD_SLOTS
 }
 
-/// The mark words of a frame of at most `MAX_FRAME_SLOTS` registers.
+/// The index of a frame's last mark word: below `MAX_MARK_WORDS` for a frame of
+/// at most `MAX_FRAME_SLOTS` registers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct MarkWords(u16);
+pub struct MarkWords(repr::Below<MAX_MARK_WORDS>);
 
 impl MarkWords {
     /// # Panics
@@ -115,21 +71,16 @@ impl MarkWords {
             slots <= MAX_FRAME_SLOTS,
             "a frame's mark words are counted for more registers than one frame holds"
         );
-        MarkWords(mark_words(slots))
+        MarkWords(repr::Below::of(mark_words(slots) - MARK_WORDS_AT_LEAST))
     }
 
     #[inline(always)]
-    pub const fn get(self) -> u16 {
+    pub const fn last(self) -> repr::Below<MAX_MARK_WORDS> {
         self.0
     }
 }
 
 const MAX_MARK_WORDS: u16 = mark_words(MAX_FRAME_SLOTS);
-
-const _: () = assert!(
-    MAX_MARK_WORDS as u32 * MARK_WORD_SLOTS as u32 <= MAX_FRAME_SLOTS as u32,
-    "every bit of a frame's mark words names a FrameSlot"
-);
 
 #[inline(always)]
 const fn mark_slots(slots: u16) -> u16 {
@@ -614,7 +565,7 @@ impl<'f> Regs<'f> {
     /// `machine::open_frame` instead, once per window and body, which is also
     /// where the kind bytes are written.
     pub fn open_marks(&mut self, mark_words: MarkWords) {
-        for word in 1..usize::from(mark_words.get()) {
+        for word in 1..usize::from(mark_words.last().get()) + 1 {
             self.mark(word * size_of::<u64>(), 0);
         }
     }
@@ -773,27 +724,28 @@ impl<'f> Regs<'f> {
     /// `sweep` inlines into every return site, and a second copy of the release
     /// path costs more than the count does.
     pub fn sweep(&mut self, mark_words: MarkWords) {
-        let mut word = 0usize;
+        let last = mark_words.last();
+        let mut word = const { repr::Below::<MAX_MARK_WORDS>::of(0) };
         loop {
-            let mut live = self.marked(word * size_of::<u64>());
+            let word_byte = usize::from(word.get()) * size_of::<u64>();
+            let mut live = self.marked(word_byte);
             while live != 0 {
-                // `word` is below `mark_words`, which is at most
-                // `MAX_MARK_WORDS`, and a set bit of a `u64` is below 64, so
-                // the assertion under `MAX_MARK_WORDS` puts the index below
-                // `MAX_FRAME_SLOTS`.
-                let bit = FrameSlot(live.trailing_zeros() as u16 + word as u16 * MARK_WORD_SLOTS);
+                // A nonzero word's `trailing_zeros` is below 64, so the mask
+                // keeps it whole.
+                let bit = repr::Below::<MARK_WORD_SLOTS>::masked(live.trailing_zeros());
+                let slot = FrameSlot::compose(word, bit);
                 debug_assert!(
-                    bit.0 < self.len,
+                    slot.get() < self.len,
                     "a set mark bit is a register index, which its frame holds"
                 );
-                self.read(Off::bounded(bit)).release();
+                self.read(Off::of_below(slot)).release();
                 live &= live - 1;
             }
-            self.mark(word * size_of::<u64>(), 0);
-            word += 1;
-            if word >= usize::from(mark_words.get()) {
+            self.mark(word_byte, 0);
+            let Some(next) = word.step_to(last) else {
                 return;
-            }
+            };
+            word = next;
         }
     }
 
@@ -857,6 +809,81 @@ impl<'f> Regs<'f> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Arc;
+
+    use acvus_ast::Span;
+
+    use crate::code::Literals;
+
+    /// A `Large` whose drop the count of `alive` shows.
+    struct Counted {
+        _alive: Arc<()>,
+    }
+
+    fn body_of(frame_len: u16) -> Body {
+        Body {
+            heads: Box::new([]),
+            entry: 0,
+            frame_len,
+            frame_cells: u16::try_from(cells_for(frame_len)).expect("a frame's cells fit a u16"),
+            mark_words: MarkWords::of(frame_len),
+            entry_konsts: Box::new([]),
+            literals: Arc::new(Literals::of(std::iter::empty())),
+            slot_kinds: Box::new([]),
+            may_suspend: false,
+            returns_a_view: false,
+            params: Box::new([]),
+            param_run: 0,
+            param_marks: 0,
+            captures: Box::new([]),
+            order_param: None,
+            span: Span::ZERO,
+        }
+    }
+
+    /// `sweep` composes each register from a mark word's index and a set bit,
+    /// so a frame of every register it can hold releases the ones its last
+    /// mark word claims, the last register included, and clears every word.
+    #[test]
+    fn sweep_releases_the_registers_the_last_mark_word_claims() {
+        let body = body_of(MAX_FRAME_SLOTS);
+        let mut store = Store::new();
+        let (mut regs, _) = store.bind(&body);
+        regs.open_marks(body.mark_words);
+        for slot in FrameSlot::first(usize::from(MAX_FRAME_SLOTS)) {
+            regs.open(Off::of_below(slot), Value::UNDEF);
+        }
+        let alive = Arc::new(());
+        let claimed: [u16; 5] = [3, 256, 300, 318, 319];
+        for index in claimed {
+            // SAFETY: the word is never materialized; `release` drops it as the
+            // `Counted` it was erased from.
+            let value = unsafe {
+                Value::erase(Counted {
+                    _alive: Arc::clone(&alive),
+                })
+            };
+            regs.assign::<true>(Marked::of(FrameSlot::of(index)), value);
+        }
+        assert_eq!(Arc::strong_count(&alive), 1 + claimed.len());
+        assert_eq!(regs.mark_word(0), 1 << 3);
+        assert_eq!(
+            regs.mark_word(4),
+            1 << (300 - 256) | 1 << (318 - 256) | 1 << (319 - 256) | 1
+        );
+
+        regs.sweep(body.mark_words);
+
+        assert_eq!(
+            Arc::strong_count(&alive),
+            1,
+            "every claimed register is released once"
+        );
+        for word in 0..usize::from(mark_words(MAX_FRAME_SLOTS)) {
+            assert_eq!(regs.mark_word(word), 0, "mark word {word} is cleared");
+        }
+    }
 
     #[test]
     fn a_frame_carries_one_mark_word_per_sixty_four_registers() {

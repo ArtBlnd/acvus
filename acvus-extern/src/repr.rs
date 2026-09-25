@@ -429,15 +429,90 @@ impl Words {
 
 // -- A slot's place in a run ------------------------------------------------
 
-/// An index its type holds below `BOUND`, from which `Disp::bounded` and
-/// `Disp::after` make a displacement without a run-time check.
+/// An index below `N`.
 ///
-/// # Safety
-/// `slot` returns a value below `BOUND` for every value of `Self`.
-pub unsafe trait Bounded: Copy {
-    const BOUND: u16;
+/// Its field is private, so every `Below<N>` was made here, by a constructor
+/// that holds it below `N`: `new` and `of` check the index, and `first`
+/// checks a run's length once; `masked`, `compose` and `step_to` take the
+/// bound from their arguments' types and a constant assertion, and check
+/// nothing at run time. `Disp::of_below` and `Disp::after` read the bound
+/// from the type, so they multiply without a check.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Below<const N: u16>(u16);
 
-    fn slot(self) -> u16;
+impl<const N: u16> Below<N> {
+    #[inline]
+    pub const fn new(index: u16) -> Option<Below<N>> {
+        match index < N {
+            true => Some(Below(index)),
+            false => None,
+        }
+    }
+
+    /// # Panics
+    /// `index` is not below `N`. In a constant this is a compile error.
+    #[inline]
+    pub const fn of(index: u16) -> Below<N> {
+        let Some(below) = Below::new(index) else {
+            panic!("Below::of: the index is not below its bound")
+        };
+        below
+    }
+
+    /// The first `len` indices, in order.
+    ///
+    /// # Panics
+    /// `len` is above `N`.
+    pub fn first(len: usize) -> impl Iterator<Item = Below<N>> {
+        let len = u16::try_from(len)
+            .ok()
+            .filter(|len| *len <= N)
+            .unwrap_or_else(|| {
+                panic!("Below::first: a run of {len} indices is past the bound {N}")
+            });
+        (0..len).map(Below)
+    }
+
+    /// The low bits of `bits` that name an index below `N`, a power of two:
+    /// `bits & (N - 1)`. A value already below `N`, such as a nonzero `u64`'s
+    /// `trailing_zeros` for `N = 64`, is itself.
+    #[inline(always)]
+    pub const fn masked(bits: u32) -> Below<N> {
+        const {
+            assert!(
+                N.is_power_of_two(),
+                "Below::masked: a mask names every index below a power of two alone"
+            )
+        };
+        Below((bits & (N as u32 - 1)) as u16)
+    }
+
+    /// `hi * B + lo`, which is at most `(W - 1) * B + B - 1 = W * B - 1`.
+    #[inline(always)]
+    pub const fn compose<const W: u16, const B: u16>(hi: Below<W>, lo: Below<B>) -> Below<N> {
+        const {
+            assert!(
+                W as u32 * B as u32 <= N as u32,
+                "Below::compose: W * B indices do not all lie below N"
+            )
+        };
+        Below(hi.0 * B + lo.0)
+    }
+
+    /// The index after this one, when this one is before `last`: then it is
+    /// at most `last`, which is below `N`.
+    #[inline(always)]
+    pub const fn step_to(self, last: Below<N>) -> Option<Below<N>> {
+        match self.0 < last.0 {
+            true => Some(Below(self.0 + 1)),
+            false => None,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
 }
 
 /// The place of one slot of a run of `S`s: its byte displacement from the
@@ -510,33 +585,25 @@ impl<S> Disp<S> {
         Disp(byte, PhantomData)
     }
 
-    /// Slot `index` of a run of `S`s.
+    /// Slot `index` of a run of `S`s, below `N`.
     #[inline(always)]
-    pub fn bounded<I>(index: I) -> Disp<S>
-    where
-        I: Bounded,
-    {
-        const { Self::fits::<I>() };
-        Disp(index.slot() * Self::SLOT, PhantomData)
+    pub const fn of_below<const N: u16>(index: Below<N>) -> Disp<S> {
+        const { Self::fits::<N>() };
+        Disp(index.0 * Self::SLOT, PhantomData)
     }
 
-    /// The slot after `index`.
+    /// The slot after `index`: at most slot `N`, whose displacement `fits`
+    /// holds in the `u16`.
     #[inline(always)]
-    pub fn after<I>(index: I) -> Disp<S>
-    where
-        I: Bounded,
-    {
-        const { Self::fits::<I>() };
-        Disp((index.slot() + 1) * Self::SLOT, PhantomData)
+    pub const fn after<const N: u16>(index: Below<N>) -> Disp<S> {
+        const { Self::fits::<N>() };
+        Disp((index.0 + 1) * Self::SLOT, PhantomData)
     }
 
-    const fn fits<I>()
-    where
-        I: Bounded,
-    {
+    const fn fits<const N: u16>() {
         assert!(
-            I::BOUND as usize * mem::size_of::<S>() <= u16::MAX as usize,
-            "Disp: the displacement of a Bounded index's bound does not fit the u16 a Disp holds"
+            N as usize * mem::size_of::<S>() <= u16::MAX as usize,
+            "Disp: the displacement of a Below's bound does not fit the u16 a Disp holds"
         );
     }
 
@@ -556,6 +623,60 @@ impl<S> Disp<S> {
     #[inline(always)]
     pub const fn index(self) -> usize {
         (self.0 / Self::SLOT) as usize
+    }
+}
+
+/// The displacement of a slot below `N` of a run of `S`s. It is the `Disp` a
+/// holder reads, and it keeps the bound it was made under, so the slot after
+/// it is a displacement with no check: `after` divides its own displacement
+/// back into the index, which `of` made from a `Below<N>`.
+#[repr(transparent)]
+pub struct DispBelow<S, const N: u16>(Disp<S>);
+
+impl<S, const N: u16> Clone for DispBelow<S, N> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S, const N: u16> Copy for DispBelow<S, N> {}
+
+impl<S, const N: u16> PartialEq for DispBelow<S, N> {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<S, const N: u16> Eq for DispBelow<S, N> {}
+
+impl<S, const N: u16> fmt::Debug for DispBelow<S, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("DispBelow").field(&self.0.0).finish()
+    }
+}
+
+impl<S, const N: u16> DispBelow<S, N> {
+    #[inline(always)]
+    pub const fn of(index: Below<N>) -> DispBelow<S, N> {
+        DispBelow(Disp::of_below(index))
+    }
+
+    #[inline(always)]
+    pub const fn disp(self) -> Disp<S> {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn index(self) -> Below<N> {
+        Below(self.0.0 / Disp::<S>::SLOT)
+    }
+
+    /// The slot after this one.
+    #[inline(always)]
+    pub const fn after(self) -> Disp<S> {
+        Disp::after(self.index())
     }
 }
 
@@ -1172,23 +1293,46 @@ mod tests {
         assert_eq!(unsafe { word_at(base, 24).read() }, 4);
     }
 
-    #[derive(Clone, Copy)]
-    struct BelowFour(u16);
-
-    // SAFETY: the test builds a `BelowFour` from 0 and 3 only.
-    unsafe impl Bounded for BelowFour {
-        const BOUND: u16 = 4;
-
-        fn slot(self) -> u16 {
-            self.0
-        }
+    #[test]
+    fn a_below_index_and_the_slot_after_it_are_their_slots_times_the_slot_width() {
+        let three = Below::<4>::of(3);
+        assert_eq!(Disp::<[u64; 2]>::of_below(three), Disp::of(3));
+        assert_eq!(Disp::<[u64; 2]>::after(three), Disp::of(4));
+        assert_eq!(Disp::<[u64; 2]>::after(Below::<4>::of(0)).byte(), 16);
+        let placed = DispBelow::<[u64; 2], 4>::of(three);
+        assert_eq!(placed.disp(), Disp::of(3));
+        assert_eq!(placed.index(), three);
+        assert_eq!(placed.after(), Disp::of(4));
     }
 
     #[test]
-    fn a_bounded_index_and_the_slot_after_it_are_their_slots_times_the_slot_width() {
-        assert_eq!(Disp::<[u64; 2]>::bounded(BelowFour(3)), Disp::of(3));
-        assert_eq!(Disp::<[u64; 2]>::after(BelowFour(3)), Disp::of(4));
-        assert_eq!(Disp::<[u64; 2]>::after(BelowFour(0)).byte(), 16);
+    fn a_below_index_is_checked_when_given_and_composed_without_a_check() {
+        assert_eq!(Below::<4>::new(3).map(Below::get), Some(3));
+        assert_eq!(Below::<4>::new(4), None);
+        assert_eq!(
+            Below::<4>::first(3).map(Below::get).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(Below::<64>::masked(63).get(), 63);
+        assert_eq!(Below::<64>::masked(64).get(), 0);
+        assert_eq!(Below::<64>::masked(u64::MAX.trailing_zeros()).get(), 0);
+        assert_eq!(Below::<64>::masked((1u64 << 63).trailing_zeros()).get(), 63);
+        let last = Below::<320>::compose(Below::<5>::of(4), Below::<64>::of(63));
+        assert_eq!(last.get(), 319);
+        assert_eq!(Below::<5>::of(3).step_to(Below::of(4)), Some(Below::of(4)));
+        assert_eq!(Below::<5>::of(4).step_to(Below::of(4)), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not below its bound")]
+    fn a_below_index_at_its_bound_is_refused() {
+        Below::<4>::of(4);
+    }
+
+    #[test]
+    #[should_panic(expected = "past the bound")]
+    fn a_run_of_indices_past_the_bound_is_refused() {
+        let _ = Below::<4>::first(5);
     }
 
     #[test]

@@ -53,30 +53,30 @@ pub type Off = acvus_extern::repr::Disp<Value>;
 pub struct Marked {
     mask: u64,
     word_byte: u32,
-    at: Off,
+    at: repr::DispBelow<Value, { crate::regs::MAX_FRAME_SLOTS }>,
 }
 
 impl Marked {
-    pub fn of(slot: FrameSlot) -> Marked {
-        let index = usize::from(slot.get());
+    pub const fn of(slot: FrameSlot) -> Marked {
+        let index = slot.get() as usize;
         Marked {
             mask: 1u64 << (index % crate::regs::MARK_WORD_SLOTS as usize),
             word_byte: (index / crate::regs::MARK_WORD_SLOTS as usize * size_of::<u64>()) as u32,
-            at: Off::bounded(slot),
+            at: repr::DispBelow::of(slot),
         }
     }
 
     #[inline(always)]
     pub const fn at(self) -> Off {
-        self.at
+        self.at.disp()
     }
 
     /// The slice pair whose `ptr` is this register.
     #[inline(always)]
-    pub fn pair(self) -> SlicePair {
+    pub const fn pair(self) -> SlicePair {
         SlicePair {
-            ptr: self.at,
-            len: Off::after(self),
+            ptr: self.at.disp(),
+            len: self.at.after(),
         }
     }
 
@@ -90,17 +90,6 @@ impl Marked {
     #[inline(always)]
     pub const fn mask(self) -> u64 {
         self.mask
-    }
-}
-
-// SAFETY: `Marked::of` is the one constructor and takes `at` from a
-// `FrameSlot`, and no method changes it.
-unsafe impl repr::Bounded for Marked {
-    const BOUND: u16 = crate::regs::MAX_FRAME_SLOTS;
-
-    #[inline(always)]
-    fn slot(self) -> u16 {
-        self.at.index() as u16
     }
 }
 
@@ -134,9 +123,9 @@ pub struct SlicePair {
 }
 
 impl SlicePair {
-    pub fn at(ptr: FrameSlot) -> SlicePair {
+    pub const fn at(ptr: FrameSlot) -> SlicePair {
         SlicePair {
-            ptr: Off::bounded(ptr),
+            ptr: Off::of_below(ptr),
             len: Off::after(ptr),
         }
     }
