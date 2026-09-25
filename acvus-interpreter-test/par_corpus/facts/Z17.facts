@@ -1,7 +1,7 @@
 for slice(r10) -> L1 else L2 stages [L1, L3, L4, L5]
 // L1: free {take}
-// L3: cycle Storage(r13) in_order {take, +, assign, ref, call to_string}
-// L4: free {assign, ref, as_slice}
+// L3: cycle Storage(r13) in_order law(Op(Add) exact commutative) scan {take, +, assign}
+// L4: free {ref, call to_string, assign, ref, as_slice}
 // L5: cycle Order(r12) in_order {spawn print, eval}
 // control upfront
-// cost W=12 O=18293 split when n > 48782, n = len(r10)
+// cost W=16 O=18293 split when n > 36586, n = len(r10)

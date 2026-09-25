@@ -1,0 +1,11 @@
+// expect attempt to add with overflow
+let xs = vec([9223372036854775807, 1, 1]);
+let n = 0;
+let s = 0;
+for x in &xs {
+    if *x > 0 {
+        s = s + n % 7;
+        n = n + *x;
+    };
+}
+(s, n)

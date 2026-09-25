@@ -1,0 +1,9 @@
+// expect 9223372036854775806|9223372036854775807
+let xs = vec([9223372036854775806, 1]);
+let s = 0;
+let out = vec([]);
+for x in &xs {
+    s = s + *x;
+    out.push(s.to_string());
+}
+out.into_iter().join("|".to_string())

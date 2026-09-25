@@ -229,14 +229,16 @@ fn a_loop_whose_only_stage_is_disjoint_is_given_a_cost() {
     assert_eq!(found, TABLE.store, "W={found}:\n{}", filled.with_costs);
 }
 
-/// Each stage holds an `InOrder` cycle, so none runs apart.
+/// Each stage holds an `InOrder` cycle, so none runs apart. Prepending has
+/// no law, so the read that lends `s` to `to_string` stays in its cycle
+/// (RFC-0093 rule 8 takes it out only beside a scan).
 #[test]
 fn a_loop_whose_stages_are_all_in_order_runs_in_place() {
     let joined = listed(
         r#"let xs = vec(["a".to_string(), "b".to_string(), "c".to_string()]);
         let s = "".to_string();
         let out = vec([]);
-        for x in &xs { s = s + x; out.push(s.to_string()); }
+        for x in &xs { s = x + s; out.push(s.to_string()); }
         out.len() as i64"#,
         Ty::I64,
     );
