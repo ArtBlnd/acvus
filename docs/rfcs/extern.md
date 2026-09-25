@@ -1222,7 +1222,9 @@ glue at the type the checker settled.
      (`Host::async_access`), so every `Fetch` and `Commit` is typed `Async`
      and lowered as a spawn and its evaluation (RFC-0046); a program compiled
      for synchronous access opens only a synchronous storage, a mismatch the
-     Rust types refuse.
+     Rust types refuse. Only a load and a commit wait: handing a holder
+     back (`store`, `restore`) is synchronous even to a waiting storage, so
+     no dropped future ever holds one.
    - Running the entry gives an `Output`, which borrows the program as a
      page does. It owns the value, releases it when dropped, and offers
      `with(|p| …)` and `with_mut(|p| …)`; no value leaves it except through
@@ -1278,12 +1280,9 @@ authors of externs and hosts, who take care but meet no trap. The script's
 user takes on nothing. A context's type written in data is a second statement of what
 the scripts already say, and two statements can disagree. Solved in the
 graph, the type has one source, and an init is checked against it like a
-store. An extern handler already crosses the
-boundary soundly with values lent and not kept, and a host that lends into a
-closure needs nothing more, so one crossing serves both and a gap in one is a
-gap in the other. A storage is read and written where the program says,
-because a read the program did not make can be stale by the time it would
-have made it.
+store. A handler already crosses the boundary soundly with values lent and
+not kept, so one crossing serves host and handler. A storage is read where
+the program says, since a read it did not make can be stale.
 **Cost.**
 - A host names a Rust type for its entry, and for each context it reads or
   inserts.
