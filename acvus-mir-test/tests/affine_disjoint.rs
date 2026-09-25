@@ -281,3 +281,48 @@ fn a_store_at_the_length_an_unconditional_push_grows_is_disjoint() {
         assert_eq!(orders(body), ["in_order", "in_order"], "{body}");
     }
 }
+
+/// RFC-0089 rule 4 asks `a ≠ 0` of the step: an invariant the interval
+/// domain proves one nonzero constant is that constant.
+#[test]
+fn a_stride_bound_through_a_let_is_read_as_its_constant() {
+    let source = "let w = 7u64;
+         let cur = filled(w * 5u64, 0);
+         for r in 0u64..5u64 { cur[r * w] = 100; }
+         cur.len()";
+    assert_eq!(storage_orders(source), ["disjoint"], "{}", listing(source));
+}
+
+/// A step the interval domain puts in `[3, 4]` is nonzero, and bases one
+/// apart are no multiple of it.
+#[test]
+fn a_stride_the_interval_proves_nonzero_is_disjoint_by_its_least_magnitude() {
+    let source = "let v = vec([1, 2]);
+         let w = if v.len() > 5u64 { 3u64 } else { 4u64 };
+         let cur = filled(32u64, 0);
+         for r in 0u64..5u64 { cur[r * w] = 100; cur[r * w + 1u64] = 7; }
+         cur.len()";
+    assert_eq!(storage_orders(source), ["disjoint"], "{}", listing(source));
+}
+
+/// Bases three apart meet where the step is 3.
+#[test]
+fn bases_as_far_apart_as_the_least_stride_stay_in_order() {
+    let source = "let v = vec([1, 2]);
+         let w = if v.len() > 5u64 { 3u64 } else { 4u64 };
+         let cur = filled(32u64, 0);
+         for r in 0u64..5u64 { cur[r * w] = 100; cur[r * w + 3u64] = 7; }
+         cur.len()";
+    assert_eq!(storage_orders(source), ["in_order"], "{}", listing(source));
+}
+
+/// A step the interval domain puts in `[0, 4]` may be zero.
+#[test]
+fn a_stride_that_may_be_zero_stays_in_order() {
+    let source = "let v = vec([1, 2]);
+         let w = if v.len() > 5u64 { 0u64 } else { 4u64 };
+         let cur = filled(32u64, 0);
+         for r in 0u64..5u64 { cur[r * w] = 100; }
+         cur.len()";
+    assert_eq!(storage_orders(source), ["in_order"], "{}", listing(source));
+}

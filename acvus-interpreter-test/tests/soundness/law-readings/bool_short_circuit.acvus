@@ -1,0 +1,13 @@
+// expect 11
+let xs = vec([5, 0, 8, 1, 9, 0]);
+let any_big = false;
+let all_positive = true;
+for x in &xs {
+    any_big = any_big || *x > 7;
+}
+for x in &xs {
+    all_positive = all_positive && 10 / (*x + 1) > 0;
+}
+let a = if any_big { 1 } else { 0 };
+let b = if all_positive { 10 } else { 20 };
+a + b

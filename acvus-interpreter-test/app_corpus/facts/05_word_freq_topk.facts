@@ -15,7 +15,7 @@ for slice(r54) -> L9 else L10 stages [L9, L17]
 // cost W=27 O=18281 split when n > 21667, n = len(r54)
 for range(0 (r77)..r71) -> L12 else L13 stages [L12, L19, L20, L21]
 // L12: free {const, >, index, ref, const_str, ref, call to_string, assign, ref}
-// L19: cycle Storage(r78) in_order {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
+// L19: cycle Storage(r78) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
 // L20: free {take}
 // L21: cycle Storage(r79) any_order law(Op(Add) exact commutative) {take, +, assign}
 // control upfront

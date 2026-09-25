@@ -14,8 +14,8 @@ use std::process::Output;
 
 use crate::sandbox;
 
-/// The cases `INDEX.md`'s summary counts: 134 positive, 26 negative controls.
-const CASES: usize = 134 + 26;
+/// The cases `INDEX.md`'s summary counts: 135 positive, 26 negative controls.
+const CASES: usize = 135 + 26;
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

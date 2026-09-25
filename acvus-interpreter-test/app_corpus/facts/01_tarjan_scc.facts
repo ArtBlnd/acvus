@@ -1,6 +1,6 @@
 for range(0 (r52)..10 (r36)) -> L1 else L2 stages [L1, L5]
 // L1: free {const, >, ref, as_slice, index, call to_string, assign, ref}
-// L5: cycle Storage(r53) in_order {ref, concat, assign, ref, concat, assign}
+// L5: cycle Storage(r53) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost W=17 O=18281 split when n > 34412, n = max(10 (r36) - 0 (r52), 0)
 for slice(r3) -> L1 else L2 stages [L1, L9]

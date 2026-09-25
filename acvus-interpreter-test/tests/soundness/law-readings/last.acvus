@@ -1,0 +1,13 @@
+// expect 299
+let xs = vec([9, 3, 9, 1, 5]);
+let at = 99u64;
+let never = 99u64;
+for i in 0u64..xs.len() {
+    if xs[i] == 9 {
+        at = i;
+    };
+    if xs[i] == 7 {
+        never = i;
+    };
+}
+at * 100u64 + never

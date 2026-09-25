@@ -76,14 +76,34 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 }
 
 /// `Op(Add) exact commutative`, `Call(#0, option-lifted) exact`,
-/// `Fold(r3, #1) exact`, `Order exact commutative`.
+/// `Fold(r3, #1) exact`, `Order exact commutative`, `Last exact`,
+/// `Extremum(Max, Carried(r3), carrying Carried(r4)) exact`,
+/// `Option(Call(#1, identity)) exact commutative`,
+/// `Product(Carried(r3): Op(Add) exact commutative, Carried(r4): Op(Add)
+/// exact commutative) exact commutative`.
 fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
-    let law = match &acc.law {
-        Law::Op(LawOp::Add) => "Op(Add)".to_string(),
-        Law::Op(LawOp::Mul) => "Op(Mul)".to_string(),
-        Law::Op(LawOp::Min) => "Op(Min)".to_string(),
-        Law::Op(LawOp::Max) => "Op(Max)".to_string(),
-        Law::Op(LawOp::Concat) => "Op(Concat)".to_string(),
+    let law = fmt_law(&acc.law, ctx, vn);
+    let exact = if acc.exact { " exact" } else { " inexact" };
+    let commutative = if acc.commutative { " commutative" } else { "" };
+    format!("{law}{exact}{commutative}")
+}
+
+fn fmt_law_op(op: LawOp) -> &'static str {
+    match op {
+        LawOp::Add => "Add",
+        LawOp::Mul => "Mul",
+        LawOp::Min => "Min",
+        LawOp::Max => "Max",
+        LawOp::Concat => "Concat",
+        LawOp::Or => "Or",
+        LawOp::And => "And",
+        LawOp::Xor => "Xor",
+    }
+}
+
+fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
+    match law {
+        Law::Op(op) => format!("Op({})", fmt_law_op(*op)),
         Law::Call(call) => {
             let identity = match call.identity {
                 CallIdentity::Declared(_) => "identity",
@@ -97,10 +117,47 @@ fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer
             ctx.fmt_fn_id(fold.callee.id)
         ),
         Law::Order => "Order".to_string(),
-    };
-    let exact = if acc.exact { " exact" } else { " inexact" };
-    let commutative = if acc.commutative { " commutative" } else { "" };
-    format!("{law}{exact}{commutative}")
+        Law::Last => "Last".to_string(),
+        Law::Extremum { op, over, carried } => {
+            let carried: Vec<String> = carried
+                .iter()
+                .map(|token| fmt_token(token, ctx, vn))
+                .collect();
+            format!(
+                "Extremum({}, {}, carrying {})",
+                fmt_law_op(*op),
+                fmt_token(over, ctx, vn),
+                carried.join(" and ")
+            )
+        }
+        Law::OptionLifted(inner) => format!("Option({})", fmt_law(inner, ctx, vn)),
+        Law::Product(parts) => {
+            let parts: Vec<String> = parts
+                .iter()
+                .map(|(token, acc)| {
+                    format!(
+                        "{}: {}",
+                        fmt_token(token, ctx, vn),
+                        fmt_accumulator(acc, ctx, vn)
+                    )
+                })
+                .collect();
+            format!("Product({})", parts.join(", "))
+        }
+    }
+}
+
+fn fmt_token(token: &Token, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
+    match token {
+        Token::Order(value) => format!("Order({})", vn.fmt_val(*value)),
+        Token::Carried(value) => format!("Carried({})", vn.fmt_val(*value)),
+        Token::Storage(Storage::Slot(slot)) => format!("Storage({})", vn.fmt_val(*slot)),
+        Token::Storage(Storage::Context(context)) => {
+            format!("Storage(@{})", ctx.interner.resolve(context.name))
+        }
+        Token::Storage(Storage::Element) => "Storage(element)".to_string(),
+        Token::Control => "Control".to_string(),
+    }
 }
 
 /// What the listing shows of each `For`'s stages: the boundaries the
@@ -247,16 +304,7 @@ fn fmt_cycle(
     let tokens: Vec<String> = cycle
         .tokens
         .iter()
-        .map(|token| match token {
-            Token::Order(value) => format!("Order({})", vn.fmt_val(*value)),
-            Token::Carried(value) => format!("Carried({})", vn.fmt_val(*value)),
-            Token::Storage(Storage::Slot(slot)) => format!("Storage({})", vn.fmt_val(*slot)),
-            Token::Storage(Storage::Context(context)) => {
-                format!("Storage(@{})", ctx.interner.resolve(context.name))
-            }
-            Token::Storage(Storage::Element) => "Storage(element)".to_string(),
-            Token::Control => "Control".to_string(),
-        })
+        .map(|token| fmt_token(token, ctx, vn))
         .collect();
     let order = match order {
         Order::Disjoint => "disjoint",

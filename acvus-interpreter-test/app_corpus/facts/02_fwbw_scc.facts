@@ -22,7 +22,7 @@ for range(0 (r141)..12 (r41)) -> L36 else L37 stages [L36, L46]
 // cost W=5 O=18281 split when n > 116999, n = max(12 (r41) - 0 (r141), 0)
 for range(0 (r156)..12 (r41)) -> L41 else L42 stages [L41, L47]
 // L41: free {const, >, index, call to_string, assign, ref}
-// L47: cycle Storage(r157) in_order {ref, concat, assign, ref, concat, assign}
+// L47: cycle Storage(r157) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost W=11 O=18281 split when n > 53182, n = max(12 (r41) - 0 (r156), 0)
 for slice(r3) -> L1 else L2 stages [L1, L9]

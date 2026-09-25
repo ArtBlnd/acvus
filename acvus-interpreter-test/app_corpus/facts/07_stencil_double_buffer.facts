@@ -1,13 +1,13 @@
 for range(0 (r5)..5 (r6)) -> L1 else L2 stages [L1, L24]
 // L1: free {const, *}
-// L24: cycle Storage(r7) in_order {index_set}
+// L24: cycle Storage(r7) disjoint {index_set}
 // control upfront
-// cost W=1 O=18281 split when n > 584992, n = max(5 (r6) - 0 (r5), 0)
+// cost W=4 O=18281 split when n > 146248, n = max(5 (r6) - 0 (r5), 0)
 for range(0 (r21)..5 (r6)) -> L4 else L5 stages [L4, L25]
 // L4: free {const, *}
-// L25: cycle Storage(r22) in_order {index_set}
+// L25: cycle Storage(r22) disjoint {index_set}
 // control upfront
-// cost W=1 O=18281 split when n > 584992, n = max(5 (r6) - 0 (r21), 0)
+// cost W=4 O=18281 split when n > 146248, n = max(5 (r6) - 0 (r21), 0)
 for range(0 (r26)..3 (r27)) -> L7 else L8 stages [L7, L33]
 // L7: free {const, const}
 // L33: cycle Storage(r22)+Storage(r7) in_order {ref, as_slice, ref, as_slice, index, index, +, index, +, index, +, index, +, /, index_set, take, take, assign, assign}

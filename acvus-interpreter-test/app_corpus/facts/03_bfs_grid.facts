@@ -8,7 +8,7 @@ for range(0 (r36)..r33) -> L1 else L2 stages [L1, L5, L6]
 for range(0 (r13)..r1) -> L1 else L2 stages [L1, L17, L18]
 // L1: free {index, as_slice, call chars, call collect, assign, const, ref, as_slice, const}
 // L17: cycle Storage(r14) in_order {index_set}
-// L18: cycle Carried(r11)+Carried(r12) in_order {*, +, *, +, jump, branch, jump, branch, jump, jump}
+// L18: cycle Carried(r11)+Carried(r12) in_order law(Product(Carried(r11): Last exact, Carried(r12): Last exact) exact) {*, +, *, +, jump, branch, jump, branch, jump, jump}
 // control upfront
 // cost W=17 O=18287 split when n > 34423, n = max(r1 - 0 (r13), 0)
 for range(0 (r22)..r2) -> L4 else L5 stages [L4, L13]
@@ -18,9 +18,9 @@ for range(0 (r22)..r2) -> L4 else L5 stages [L4, L13]
 // cost W=9 O=18281 split when n > 65000, n = max(r2 - 0 (r22), 0)
 for range(0 (r31)..r2) -> L7 else L8 stages [L7, L14, L15, L16]
 // L7: free {index, const, ==, const}
-// L14: cycle Carried(r29) in_order {*, +, branch, jump}
+// L14: cycle Carried(r29) in_order law(Last exact) {*, +, branch, jump}
 // L15: free {index, ==}
-// L16: cycle Carried(r30) in_order {*, +, branch, jump}
+// L16: cycle Carried(r30) in_order law(Last exact) {*, +, branch, jump}
 // control upfront
 // cost W=8 O=18293 split when n > 73172, n = max(r2 - 0 (r31), 0)
 for range(0 (r40)..4 (r41)) -> L4 else L5 stages [L4, L22]

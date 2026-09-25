@@ -1,15 +1,15 @@
 // id: F10
 // family: iterators
-// desc: a local `each(v, f)` helper with a loop, called under anyorder with a printing lambda
+// desc: a local `each(v, f)` helper with a loop, defined inside the anyorder block and called there with a printing lambda
 // expect: 5\n3\n2
-let each = |v, f| -> {
-    for x in &v {
-        f(*x);
-    }
-    v.len()
-};
 let n = 0u64;
 anyorder {
+    let each = |v, f| -> {
+        for x in &v {
+            f(*x);
+        }
+        v.len()
+    };
     n = each(vec([5, 3]), |x| -> io::print(&x.to_string()));
 }
 n

@@ -5,7 +5,7 @@ for range(0 (r52)..r39) -> L1 else L2 stages [L1, L27]
 // cost W=5 O=18281 split when n > 116999, n = max(r39 - 0 (r52), 0)
 for range(0 (r59)..r41) -> L4 else L5 stages [L4, L25]
 // L4: free {index, index, -, index, index, -, *, *, +}
-// L25: cycle Carried(r57)+Carried(r58) in_order {<, cast, branch, jump}
+// L25: cycle Carried(r57)+Carried(r58) in_order law(Extremum(Min, Carried(r58), carrying Carried(r57)) exact) {<, cast, branch, jump}
 // control upfront
 // cost W=17 O=18281 split when n > 34412, n = max(r41 - 0 (r59), 0)
 for range(0 (r88)..r39) -> L9 else L10 stages [L9, L19, L20, L21, L22, L23]
@@ -35,6 +35,6 @@ for range(0 (r11)..r3) -> L1 else L2 stages [L1, L8]
 // cost W=20 O=18281 split when n > 29250, n = max(r3 - 0 (r11), 0)
 for range(0 (r43)..r42) -> L4 else L5 stages [L4, L9]
 // L4: free {const, >, index, call to_string, assign, ref}
-// L9: cycle Storage(r12) in_order {ref, concat, assign, ref, concat, assign}
+// L9: cycle Storage(r12) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost W=11 O=18281 split when n > 53182, n = max(r42 - 0 (r43), 0)

@@ -1,0 +1,19 @@
+// expect 91
+let xs = vec([5, 3, 9, 1, 8]);
+let none = vec([]);
+let best = None;
+for x in &xs {
+    best = match best {
+        None => Some(*x),
+        Some(b) => Some(max(b, *x)),
+    };
+}
+let empty = None;
+for x in &none {
+    empty = match empty {
+        None => Some(*x),
+        Some(b) => Some(max(b, *x)),
+    };
+}
+let e = match empty { None => 1, Some(b) => b + 100, };
+best.unwrap() * 10 + e

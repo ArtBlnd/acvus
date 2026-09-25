@@ -215,12 +215,7 @@ impl Compiled {
                         tokens: cycle.tokens.iter().map(TokenKind::of).collect(),
                         order: judged.order,
                         law: judged.law.as_ref().map(|acc| LawShape {
-                            law: match &acc.law {
-                                Law::Op(op) => LawKind::Op(*op),
-                                Law::Call(_) => LawKind::Call,
-                                Law::Fold(_) => LawKind::Fold,
-                                Law::Order => LawKind::Order,
-                            },
+                            law: LawKind::of(&acc.law),
                             exact: acc.exact,
                         }),
                     })
@@ -313,6 +308,27 @@ enum LawKind {
     Call,
     Fold,
     Order,
+    Last,
+    Extremum(LawOp),
+    OptionLifted(Box<LawKind>),
+    Product(Vec<LawKind>),
+}
+
+impl LawKind {
+    fn of(law: &Law) -> LawKind {
+        match law {
+            Law::Op(op) => LawKind::Op(*op),
+            Law::Call(_) => LawKind::Call,
+            Law::Fold(_) => LawKind::Fold,
+            Law::Order => LawKind::Order,
+            Law::Last => LawKind::Last,
+            Law::Extremum { op, .. } => LawKind::Extremum(*op),
+            Law::OptionLifted(inner) => LawKind::OptionLifted(Box::new(LawKind::of(inner))),
+            Law::Product(parts) => {
+                LawKind::Product(parts.iter().map(|(_, acc)| LawKind::of(&acc.law)).collect())
+            }
+        }
+    }
 }
 
 fn cycle(tokens: Vec<TokenKind>, order: Order, law: Option<LawShape>) -> CycleShape {
@@ -1686,4 +1702,286 @@ fn a_return_from_a_nested_loop_over_an_array_stays_where_it_is() {
         "the exit is not moved, and the outer loop is one stage:\n{}",
         c.listing
     );
+}
+
+// -- Laws through switches, chains, Bool, several tokens, Option, `last`
+// -- and a left-biased extremum (RFC-0089 rules 2 and 4) -----------------
+
+fn law_of(held: &CycleShape) -> Option<&LawKind> {
+    held.law.as_ref().map(|shape| &shape.law)
+}
+
+/// Every token of every cycle of `source`'s one loop.
+fn all_tokens(source: &str) -> (Vec<TokenKind>, String) {
+    let c = Compiled::of(source);
+    let deps = c.deps();
+    let tokens = deps
+        .cycles
+        .iter()
+        .flat_map(|cycle| cycle.tokens.iter().map(TokenKind::of))
+        .collect();
+    (tokens, c.for_lines())
+}
+
+#[test]
+fn a_short_circuit_or_on_the_token_is_the_or_law() {
+    let (held, lines) =
+        the_cycle("let v = [5, 3, 8]; let f = false; for x in &v { f = f || *x > 4; } f");
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Or))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_short_circuit_and_on_the_token_is_the_and_law() {
+    let (held, lines) =
+        the_cycle("let v = [5, 3, 8]; let f = true; for x in &v { f = f && *x > 2; } f");
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::And))
+        ),
+        "{lines}"
+    );
+}
+
+/// A chunk combined from `false` computes the right operand where the
+/// program's own run skips it, so an operand that can trap has no law.
+#[test]
+fn a_short_circuit_whose_skipped_operand_can_raise_has_no_law() {
+    let (held, lines) =
+        the_cycle("let v = [5, 0, 8]; let f = true; for x in &v { f = f || 10 / *x > 1; } f");
+    assert_eq!(law_of(&held), None, "{lines}");
+    assert_eq!(held.order, Order::InOrder, "{lines}");
+}
+
+#[test]
+fn an_arm_fixing_a_bool_token_reads_as_the_law_that_constant_absorbs() {
+    let (held, lines) = the_cycle(
+        "let v = [5, 3, 9]; let f = false; for x in &v { if *x == 9 { f = true; }; } f",
+    );
+    assert_eq!(law_of(&held), Some(&LawKind::Op(LawOp::Or)), "{lines}");
+    assert_eq!(held.order, Order::AnyOrder, "{lines}");
+    let (held, lines) = the_cycle(
+        "let v = [5, 3, 9]; let f = true; for x in &v { if *x == 9 { f = false; }; } f",
+    );
+    assert_eq!(law_of(&held), Some(&LawKind::Op(LawOp::And)), "{lines}");
+    assert_eq!(held.order, Order::AnyOrder, "{lines}");
+}
+
+#[test]
+fn a_negation_under_a_branch_is_the_xor_law() {
+    let (held, lines) = the_cycle(
+        "let v = [5, 3, 9, 9]; let on = false; for x in &v { if *x == 9 { on = !on; }; } on",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Op(LawOp::Xor))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn two_tokens_whose_steps_read_no_other_have_the_product_of_their_laws() {
+    let (held, lines) = the_cycle(
+        "let v = [5, -3, 8]; let s = 0; let n = 0; \
+         for x in &v { if *x >= 0 { s = s + *x; n = n + 1; }; } s / n",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried, TokenKind::Carried],
+            Order::AnyOrder,
+            exact(LawKind::Product(vec![
+                LawKind::Op(LawOp::Add),
+                LawKind::Op(LawOp::Add)
+            ]))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn two_tokens_one_of_whose_steps_reads_the_other_have_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = [5, -3, 8]; let s = 0; let n = 0; \
+         for x in &v { if *x >= 0 { s = s + n; n = n + 1; }; } s",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+    assert_eq!(held.order, Order::InOrder, "{lines}");
+}
+
+#[test]
+fn a_switch_on_an_option_token_combining_its_payload_is_the_law_lifted_over_option() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 3, 8]); let best = None; \
+         for x in &v { best = match best { None => Some(*x), Some(b) => Some(max(b, *x)), }; } \
+         best.unwrap()",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::AnyOrder,
+            exact(LawKind::OptionLifted(Box::new(LawKind::Call)))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_switch_on_an_option_token_combining_another_value_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 3, 8]); let best = None; \
+         for x in &v { best = match best { None => Some(*x), Some(b) => Some(max(b, *x + 1)), }; } \
+         best.unwrap()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// Both values are computed before the switch, so only their being one
+/// value tells the lifted law from another.
+#[test]
+fn a_switch_on_an_option_token_combining_a_value_other_than_the_one_it_starts_from_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 3, 8]); let best = None; \
+         for x in &v { let y = *x; let z = *x + 1; \
+         best = match best { None => Some(y), Some(b) => Some(max(b, z)), }; } \
+         best.unwrap()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+#[test]
+fn an_arm_setting_a_value_reading_none_of_the_token_is_last() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 9, 1, 9]); let at = 99u64; \
+         for i in 0u64..v.len() { if v[i] == 9 { at = i; }; } at",
+    );
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Carried], Order::InOrder, exact(LawKind::Last)),
+        "{lines}"
+    );
+}
+
+#[test]
+fn an_arm_setting_the_token_under_a_branch_that_reads_it_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 9, 1, 9]); let at = 99u64; \
+         for i in 0u64..v.len() { if at == 99u64 && v[i] == 9 { at = i; }; } at",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+#[test]
+fn a_strict_compare_and_select_carrying_another_token_is_a_left_biased_extremum() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 9, 1, 9]); let best = i64::MIN(); let at = 0u64; \
+         for i in 0u64..v.len() { if v[i] > best { best = v[i]; at = i; }; } at",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried, TokenKind::Carried],
+            Order::InOrder,
+            exact(LawKind::Extremum(LawOp::Max))
+        ),
+        "{lines}"
+    );
+}
+
+/// With `>=` a tie takes the later index: no left-biased extremum.
+#[test]
+fn a_compare_and_select_by_a_non_strict_order_carrying_a_token_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 9, 1, 9]); let best = i64::MIN(); let at = 0u64; \
+         for i in 0u64..v.len() { if v[i] >= best { best = v[i]; at = i; }; } at",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+#[test]
+fn a_compare_and_select_carrying_a_value_that_reads_a_token_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let v = vec([5, 9, 1, 9]); let best = i64::MIN(); let at = 0u64; \
+         for i in 0u64..v.len() { if v[i] > best { best = v[i]; at = at + 1u64; }; } at",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+#[test]
+fn a_header_parameter_every_back_edge_sends_one_constant_is_no_token() {
+    let source = "let v = [5, 3, 8]; let first = true; let s = 0; \
+         for x in &v { if first { s = s + 100; }; first = false; s = s + *x; } s";
+    let (tokens, lines) = all_tokens(source);
+    assert_eq!(tokens, [TokenKind::Carried], "{lines}");
+    let (held, lines) = the_cycle(source);
+    assert_eq!(law_of(&held), Some(&LawKind::Op(LawOp::Add)), "{lines}");
+}
+
+#[test]
+fn a_header_parameter_kept_where_a_branch_on_it_fixed_it_is_no_token() {
+    let source = "let v = [5, 3, 8]; let first = true; let s = 0; \
+         for x in &v { if first { s = s + 100; first = false; } else { s = s + *x; }; } s";
+    let (tokens, lines) = all_tokens(source);
+    assert_eq!(tokens, [TokenKind::Carried], "{lines}");
+}
+
+#[test]
+fn a_header_parameter_sent_its_own_negation_stays_a_token() {
+    let source = "let v = [5, 3, 8]; let odd = true; let s = 0; \
+         for x in &v { if odd { s = s + *x; }; odd = !odd; } s";
+    let (tokens, lines) = all_tokens(source);
+    assert_eq!(tokens.len(), 2, "{lines}");
+}
+
+#[test]
+fn two_assignments_of_one_storage_in_an_iteration_are_read_as_their_chain() {
+    let (held, lines) = the_cycle(
+        "let out = \"\".to_string(); \
+         for i in 0u64..3u64 { if i > 0u64 { out = out + \",\"; }; out = out + i.to_string(); } \
+         out",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::InOrder,
+            exact(LawKind::Op(LawOp::Concat))
+        ),
+        "{lines}"
+    );
+}
+
+#[test]
+fn a_chain_of_assignments_under_a_branch_that_reads_the_storage_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let out = \"\".to_string(); \
+         for i in 0u64..3u64 { if len(&out) > 0u64 { out = out + \",\"; }; out = out + i.to_string(); } \
+         out",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// The skip arm keeps `flag` under a branch on another value, so past the
+/// first iteration it is not one constant.
+#[test]
+fn a_header_parameter_kept_under_a_branch_on_another_value_stays_a_token() {
+    let source = "let v = [5, 3, 8]; let flag = true; \
+         for x in &v { if *x > 4 { flag = false; }; } flag";
+    let (tokens, lines) = all_tokens(source);
+    assert_eq!(tokens, [TokenKind::Carried], "{lines}");
 }

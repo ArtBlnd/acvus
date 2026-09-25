@@ -1,5 +1,5 @@
 for range(0 (r14)..r9) -> L1 else L2 stages [L1, L5]
 // L1: free {index}
-// L5: cycle Carried(r12)+Carried(r13) in_order {>, index, branch, jump}
+// L5: cycle Carried(r12)+Carried(r13) in_order law(Extremum(Max, Carried(r12), carrying Carried(r13)) exact) {>, index, branch, jump}
 // control upfront
 // cost W=3 O=18281 split when n > 194998, n = max(r9 - 0 (r14), 0)

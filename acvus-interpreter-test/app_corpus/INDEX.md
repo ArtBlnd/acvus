@@ -6,12 +6,12 @@ Every app is `<nn>_<name>.acvus`. Its header states `app`, `desc` and `expect` (
 
 A row's class is `matches` (the facts state the expected grain, or the expected sequential structure), `under-claim` (the facts state less parallelism than the expected structure; the missing rule, declaration or decision is named), or `OVER-CLAIM` (the facts state more than is sound). A stage the facts print as `disjoint` or with a law runs apart (RFC-0092 rules 1 and 2), whatever else its region holds; a `While` or an iterator pipeline prints no stages and runs in place.
 
-The facts were read at beb6edba (master), with the binary built from this tree.
+The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so.
 
 ## Summary
 
 - Apps: 12; all run to their expected output at `--opt full` and `--opt none` (24 of 24 runs).
-- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 38, `under-claim` 37, `OVER-CLAIM` 0.
+- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 46, `under-claim` 29, `OVER-CLAIM` 0.
 - No over-claim was found. Every `disjoint` stage was checked against every place its storage is read or written in the loop, every `any_order` law against whether the combined value's order is observed, and every free stage against the tokens it reads (the reading is in each row).
 
 | missing rule, declaration or decision | under-claims |
@@ -19,13 +19,9 @@ The facts were read at beb6edba (master), with the binary built from this tree.
 | iterator pipeline is not a `For` (the T2 Stream round; D10 for pull loops) | 11 |
 | cycle split by key over a vec's slots (RFC-0089 Open) | 6 |
 | scan law (RFC-0089 Open), alone or per key | 6 |
-| law read across two assignments of one storage token in an iteration (`s = s + a; s = s + b`, a branch around the first or not) | 4 |
 | affine analysis one loop deep (RFC-0066 rule 4): a row loop over an inner column range | 2 |
-| a stride bound above the loop is not read as its nonzero constant (RFC-0089 rule 4's `a ≠ 0`) | 2 |
 | `or_insert`'s fold law on an `Equiv` map (D8, decided, not declared) | 2 |
-| first-hit select `if x == none && p { x = k }` read as `min` | 1 |
-| last-set law for a guarded overwrite of a counter value | 1 |
-| argmin over two tokens `(d, c)` in one cycle | 1 |
+| first-hit select `if x == none && p { x = k }` read as `min`: RFC-0089 rule 4 as amended states no `first` reading, and `min` needs `k ≠ none` on every hit | 1 |
 | `string::concat` declares no law | 1 |
 
 ## Loops
@@ -40,7 +36,7 @@ The facts were read at beb6edba (master), with the binary built from this tree.
 | 01 | 46 | tarjan: roots `for s` | one InOrder stage over `next_index`, `comps`, `index`, `low`, `on_stack`, `stack`, `call_node`, `call_edge`, `comp` | `stages [L1, L25]`; L1 free {const}; L25 cycle Carried+Carried+Storage×6 in_order; L25 Storage in_order; `cost in place: W=0` | matches: the tokens named are the DFS state |
 | 01 | 55 | tarjan: DFS `while call_node.len() > 0` | runs in place | no `For` | matches |
 | 01 | 82 | tarjan: pop a component `while open` | runs in place | no `For` | matches |
-| 01 | 102 | render `if v > 0 { out += "," }; out += comp[v]` | Storage(`out`) InOrder, law Concat | `stages [L1, L5]`; L5 Storage in_order no law | under-claim: law across two assignments of one storage |
+| 01 | 102 | render `if v > 0 { out += "," }; out += comp[v]` | Storage(`out`) InOrder, law Concat | `stages [L1, L5]`; L5 Storage in_order Op(Concat) | matches: the chain of both assignments (RFC-0089 rule 4) |
 | [02](02_fwbw_scc.acvus) | 16 | csr: out-degrees | as 01:14 | as 01:14 | under-claim: key split |
 | 02 | 21 | csr: offsets | as 01:19 | as 01:19 | under-claim: scan law |
 | 02 | 27 | csr: placement | as 01:25 | as 01:25 | under-claim: key split with a scan per key |
@@ -52,29 +48,29 @@ The facts were read at beb6edba (master), with the binary built from this tree.
 | 02 | 69 | trimmed: in-edges count | Carried AnyOrder `+` | `stages [L11, L19]`; L19 Carried any_order Op(Add) | matches |
 | 02 | 86 | worklist `while let Some(p) = work.pop()` | runs in place; partitions not claimed apart (label counter and worklist are tokens) | no `For` | matches |
 | 02 | 88 | apply the trim | `label`, `part` Disjoint | `stages [L4, L45]`; L45 Storage disjoint ×2 | matches |
-| 02 | 98 | pivot: `if pivot == n && part[v] == p { pivot = v }` | Carried AnyOrder, law `min`, identity `n` | `stages [L9, L48]`; L48 Carried in_order no law | under-claim: first-hit select as `min` |
+| 02 | 98 | pivot: `if pivot == n && part[v] == p { pivot = v }` | Carried AnyOrder, law `min`, identity `n` | `stages [L9, L48]`; L48 Carried in_order no law | under-claim: first-hit select as `min` (no reading in RFC-0089 rule 4 as amended) |
 | 02 | 106 | relabel around the pivot | `label`, `part` Disjoint | `stages [L19, L49]`; L49 Storage disjoint ×2 | matches |
 | 02 | 128 | count components | Carried AnyOrder `+` | `stages [L36, L46]`; L46 Storage any_order Op(Add) | matches |
-| 02 | 134 | render | as 01:102 | `stages [L41, L47]`; L47 Storage in_order no law | under-claim: law across two assignments of one storage |
-| [03](03_bfs_grid.acvus) | 21 | parse rows `for r` | `wall` Disjoint over rows; `start`, `goal` InOrder with a last-set law | `stages [L1, L17, L18]`; L1 free; L17 Storage(wall) in_order; L18 Carried+Carried in_order no law | under-claim: affine one loop deep (and last-set law) |
+| 02 | 134 | render | as 01:102 | `stages [L41, L47]`; L47 Storage in_order Op(Concat) | matches |
+| [03](03_bfs_grid.acvus) | 21 | parse rows `for r` | `wall` Disjoint over rows; `start`, `goal` InOrder with a last-set law | `stages [L1, L17, L18]`; L1 free; L17 Storage(wall) in_order; L18 Carried+Carried in_order Product(Last, Last) | under-claim: affine one loop deep (the last-set law is read through the nested loop) |
 | 03 | 23 | walls of a row `wall[r·w + c] = …` | Disjoint | `stages [L4, L13]`; L13 Storage disjoint | matches |
-| 03 | 26 | find `S`, `G` in a row | Carried InOrder, last-set law | `stages [L7, L14, L15, L16]`; L14 Carried in_order no law; L16 Carried in_order no law | under-claim: last-set law |
+| 03 | 26 | find `S`, `G` in a row | Carried InOrder, last-set law | `stages [L7, L14, L15, L16]`; L14 Carried in_order Last; L16 Carried in_order Last | matches |
 | 03 | 46 | BFS `while let Some(cell) = queue.pop_front()` | runs in place | no `For` | matches |
 | 03 | 49 | neighbours `for d in 0..4` | free coordinates and bounds; `dist`, `queue` InOrder | `stages [L4, L22]`; L4 free; L22 Storage(dist) in_order; L22 Storage(queue) in_order no law | matches |
 | 03 | 69 | summary | `+`, `+`, `max` AnyOrder | `stages [L1, L5, L6]`; L5 Storage any_order Op(Add) ×2; L6 Storage any_order Call(max) | matches |
 | [04](04_kmeans_step.acvus) | 16 | assign `for p`, nearest-centroid loop inside | inner loop whole in the free stage; `assign[p]` Disjoint | `stages [L1, L27]`; L1 free (holds the inner loop); L27 Storage disjoint | matches |
-| 04 | 19 | nearest centroid `if d < best_d { best_d = d; best = c }` | Carried pair AnyOrder, argmin law | `stages [L4, L25]`; L4 free; L25 Carried+Carried in_order no law | under-claim: argmin over two tokens |
+| 04 | 19 | nearest centroid `if d < best_d { best_d = d; best = c }` | Carried pair InOrder, left-biased argmin | `stages [L4, L25]`; L4 free; L25 Carried+Carried in_order Extremum(Min, best_d, carrying best) | matches (expected corrected from AnyOrder, as par-corpus R14) |
 | 04 | 35 | cluster sums `sx[a] += …` | three slots split by key, AnyOrder `+` | `stages [L9, L19, L20, L21, L22, L23]`; L19, L21, L23 Storage in_order no law | under-claim: key split |
 | 04 | 43 | move centroids | `cx`, `cy` Disjoint | `stages [L12, L26]`; L26 Storage disjoint ×2 | matches |
 | 04 | 51 | inertia | Carried AnyOrder `+` | `stages [L17, L24]`; L24 Carried any_order Op(Add) | matches |
 | 04 | 60 | render centroids | Concat InOrder | `stages [L1, L8]`; L8 Storage in_order Op(Concat) | matches |
-| 04 | 64 | render sizes (separator under `if`) | Concat InOrder | `stages [L4, L9]`; L9 Storage in_order no law | under-claim: law across two assignments of one storage |
+| 04 | 64 | render sizes (separator under `if`) | Concat InOrder | `stages [L4, L9]`; L9 Storage in_order Op(Concat) | matches |
 | [05](05_word_freq_topk.acvus) | 9 | `split_whitespace() \| collect` | Stream copy, Fold(push) | no `For` | under-claim: pipeline |
 | 05 | 13 | normalize tokens | free text work; Fold(push) InOrder | `stages [L1, L18]`; L1 free {lower, trim_end_matches ×4, …}; L18 Storage in_order Fold | matches |
 | 05 | 21 | count `*or_insert(&mut counts, w, 0) += 1` | Storage InOrder, fold law (partial maps merged in chunk order) | `stages [L6, L16]`; L16 Storage in_order no law | under-claim: D8 `or_insert` fold law |
 | 05 | 27 | `keys \| map \| collect` | Stream map, Fold(push) | no `For` | under-claim: pipeline |
 | 05 | 29 | rows | free `get`, object; Fold(push) | `stages [L9, L17]`; L9 free; L17 Storage in_order Fold | matches |
-| 05 | 43 | top-k render and `covered` | Concat InOrder; `+` AnyOrder | `stages [L12, L19, L20, L21]`; L19 Storage in_order no law; L21 Storage any_order Op(Add) | under-claim: law across two assignments of one storage |
+| 05 | 43 | top-k render and `covered` | Concat InOrder; `+` AnyOrder | `stages [L12, L19, L20, L21]`; L19 Storage in_order Op(Concat); L21 Storage any_order Op(Add) | matches |
 | [06](06_record_transform.acvus) | 19 | `lines() \| collect` | Stream copy, Fold(push) | no `For` | under-claim: pipeline |
 | 06 | 25 | parse lines | parsing apart; Fold(push) InOrder | `stages [L1, L10]`; L1 free; L10 Storage in_order Fold; the parse lies in L10 under `if !starts_with` | matches: the fold law runs the stage apart |
 | 06 | 27 | `split(",") \| collect` | Stream copy, Fold(push) | no `For` | under-claim: pipeline |
@@ -83,8 +79,8 @@ The facts were read at beb6edba (master), with the binary built from this tree.
 | 06 | 80 | `as_iter() \| map \| sum` | Stream map, AnyOrder `+` | no `For` | under-claim: pipeline |
 | 06 | 82 | `keys \| map \| collect` | Stream map, Fold(push) | no `For` | under-claim: pipeline |
 | 06 | 85 | render | Concat InOrder | `stages [L9, L11]`; L11 Storage in_order Op(Concat) | matches |
-| [07](07_stencil_double_buffer.acvus) | 11 | left edge `cur[r·w] = 100` | Disjoint (`a = w = 7`) | `stages [L1, L24]`; L24 Storage in_order no law | under-claim: stride bound above the loop |
-| 07 | 16 | left edge of `next` | as line 11 | `stages [L4, L25]`; L25 Storage in_order no law | under-claim: stride bound above the loop |
+| [07](07_stencil_double_buffer.acvus) | 11 | left edge `cur[r·w] = 100` | Disjoint (`a = w = 7`) | `stages [L1, L24]`; L24 Storage disjoint | matches: the interval domain proves `w` the constant 7 |
+| 07 | 16 | left edge of `next` | as line 11 | `stages [L4, L25]`; L25 Storage disjoint | matches |
 | 07 | 20 | sweeps | one InOrder stage over `cur`, `next` | `stages [L7, L33]`; L33 Storage+Storage in_order; `cost in place: W=0` | matches |
 | 07 | 21 | rows of a sweep | `next` Disjoint over rows | `stages [L10, L31]`; L31 Storage in_order no law | under-claim: affine one loop deep |
 | 07 | 22 | cells of a row `next[r·w + c] = …` | free reads of `cur`; `next` Disjoint | `stages [L13, L26]`; L13 free; L26 Storage disjoint | matches |

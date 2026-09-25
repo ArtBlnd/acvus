@@ -1,0 +1,11 @@
+// expect 1503
+let xs = vec([5, -3, 8, 2, -1]);
+let s = 0;
+let n = 0;
+for x in &xs {
+    if *x >= 0 {
+        s = s + *x;
+        n = n + 1;
+    };
+}
+s * 100 + n

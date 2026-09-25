@@ -457,6 +457,28 @@ pub fn untrapping(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
     untrapping
 }
 
+/// The constant bounds the interval domain proves of each of `values` where
+/// `block` begins, `None` at an end it leaves unbounded; `block` unreached
+/// proves none.
+pub fn constant_bounds_on_entry(
+    cfg: &CfgBody,
+    laws: &LawTable,
+    block: BlockIdx,
+    values: &[ValueId],
+) -> Vec<(Option<i128>, Option<i128>)> {
+    let entries = Domain::new(cfg, laws).fixpoint();
+    let facts = entries[block.0].clone().unwrap_or_default();
+    values
+        .iter()
+        .map(|value| {
+            (
+                facts.constant_lower_bound(*value),
+                facts.constant_upper_bound(*value),
+            )
+        })
+        .collect()
+}
+
 fn division_defined(cfg: &CfgBody, kind: &InstKind, facts: &Facts) -> bool {
     let InstKind::BinOp {
         op: BinOp::Div | BinOp::Mod,

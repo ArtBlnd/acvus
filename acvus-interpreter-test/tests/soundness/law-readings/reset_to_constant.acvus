@@ -1,0 +1,24 @@
+// expect 1119
+let xs = vec([5, 3, 9]);
+let first = true;
+let s = 0;
+let firsts = 0;
+for x in &xs {
+    if first {
+        s = s + 100;
+        firsts = firsts + 1;
+    };
+    first = false;
+    s = s + *x;
+}
+let ys = vec([1, 2]);
+let head = true;
+for y in &ys {
+    if head {
+        s = s + 1000 * *y;
+        head = false;
+    } else {
+        s = s + *y;
+    };
+}
+s + firsts * 0 + (if head { 1 } else { 0 })

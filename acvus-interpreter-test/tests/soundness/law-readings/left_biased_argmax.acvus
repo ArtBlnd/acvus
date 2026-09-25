@@ -1,0 +1,11 @@
+// expect 109
+let xs = vec([5, 9, 1, 9, 3]);
+let best = i64::MIN();
+let at = 0u64;
+for i in 0u64..xs.len() {
+    if xs[i] > best {
+        best = xs[i];
+        at = i;
+    };
+}
+(at as i64) * 100 + best

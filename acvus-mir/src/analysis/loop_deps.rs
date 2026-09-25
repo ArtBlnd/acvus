@@ -563,9 +563,10 @@ impl LoopDeps {
         };
         let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
         let slots = TargetSlots::of(&loans, *source, &loop_blocks);
-        let read = |state: State| {
-            LawReading::of(&loans, laws, &slots, self.header, &loop_blocks, state).law()
+        let reading_of = |state: State| {
+            LawReading::of(&loans, laws, &slots, self.header, &loop_blocks, state)
         };
+        let read = |state: State| reading_of(state).law();
         let folds = FoldReading {
             loans: &loans,
             laws,
@@ -577,21 +578,95 @@ impl LoopDeps {
                 .collect(),
         };
         let params = &cfg.blocks[self.header.0].params;
-        let reading = |token: Token| match token {
+        let state_of = |token: Token| match token {
             Token::Carried(param) | Token::Order(param) => {
                 let index = params.iter().position(|held| *held == param)?;
-                read(State::Param { param, index })
+                Some(State::Param { param, index })
             }
+            Token::Storage(Storage::Slot(slot)) => Some(State::Slot(slot)),
+            Token::Storage(Storage::Element | Storage::Context(_)) | Token::Control => None,
+        };
+        let alone = |token: Token| match token {
             Token::Storage(Storage::Slot(slot)) => {
                 folds.law(slot).or_else(|| read(State::Slot(slot)))
             }
-            Token::Storage(Storage::Element | Storage::Context(_)) | Token::Control => None,
+            token => read(state_of(token)?),
+        };
+        let reading = |tokens: &[Token]| match tokens {
+            [token] => alone(*token),
+            tokens => product(tokens, &state_of, &reading_of)
+                .or_else(|| extremum(tokens, &state_of, &reading_of)),
         };
         self.cycles
             .iter()
             .map(|cycle| judge(cycle, &self.disjoint, Some(&reading)))
             .collect()
     }
+}
+
+/// RFC-0089 rule 4: a cycle of several tokens whose steps read no other
+/// token has the product of their laws, each read as if its token were
+/// alone. A token's steps read another's where a value its update is
+/// computed through reads the other's state.
+fn product<'a, 's, 'cfg>(
+    tokens: &[Token],
+    state_of: &dyn Fn(Token) -> Option<State>,
+    reading_of: &dyn Fn(State) -> LawReading<'a, 's, 'cfg>,
+) -> Option<Accumulator> {
+    let updates: Vec<(Token, Update<'_>)> = tokens
+        .iter()
+        .map(|&token| Some((token, reading_of(state_of(token)?).update()?)))
+        .collect::<Option<_>>()?;
+    for (at, (_, update)) in updates.iter().enumerate() {
+        for (other, (_, other_update)) in updates.iter().enumerate() {
+            if at != other && !update.chain.is_disjoint(&other_update.reading_state) {
+                return None;
+            }
+        }
+    }
+    let parts: Vec<(Token, Accumulator)> = updates
+        .into_iter()
+        .map(|(token, update)| (token, update.step.accumulator()))
+        .collect();
+    Some(Accumulator {
+        exact: parts.iter().all(|(_, acc)| acc.exact),
+        commutative: parts.iter().all(|(_, acc)| acc.commutative),
+        law: Law::Product(parts),
+    })
+}
+
+/// RFC-0089 rule 4: a cycle of carried tokens one of which is chosen by a
+/// strict compare and select that carries every other with it has the
+/// left-biased maximum or minimum.
+fn extremum<'a, 's, 'cfg>(
+    tokens: &[Token],
+    state_of: &dyn Fn(Token) -> Option<State>,
+    reading_of: &dyn Fn(State) -> LawReading<'a, 's, 'cfg>,
+) -> Option<Accumulator> {
+    let carried: Vec<(Token, ValueId, usize)> = tokens
+        .iter()
+        .map(|&token| match (token, state_of(token)?) {
+            (Token::Carried(_), State::Param { param, index }) => Some((token, param, index)),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    carried.iter().find_map(|&(over, param, index)| {
+        let others: Vec<(ValueId, usize)> = carried
+            .iter()
+            .filter(|(token, ..)| *token != over)
+            .map(|&(_, param, index)| (param, index))
+            .collect();
+        let op = reading_of(State::Param { param, index }).extremum_carrying(&others)?;
+        Some(Accumulator {
+            law: Law::Extremum {
+                op,
+                over,
+                carried: tokens.iter().copied().filter(|token| *token != over).collect(),
+            },
+            exact: true,
+            commutative: false,
+        })
+    })
 }
 
 /// RFC-0082 rule 6: a storage every write of which in the loop is a call of
@@ -813,6 +888,24 @@ pub enum Law {
     Fold(FoldAccumulator),
     /// The `Order` of an `anyorder` region, joined by `Merge`.
     Order,
+    /// `a · b = b`, associative since both groupings of three are the last.
+    /// It has no identity in the token's type: a chunk's partial is `Option`
+    /// of it with `None` as identity, which the lowerer writes.
+    Last,
+    /// `(a, s) · (b, t)` is `(b, t)` where `b` wins the strict compare `op`
+    /// (`Max` or `Min`) against `a`, and `(a, s)` otherwise, so a tie keeps
+    /// the earlier. It has no identity in the tokens' types: a chunk's
+    /// partial is `Option` of the tuple with `None` as identity.
+    Extremum {
+        op: LawOp,
+        over: Token,
+        carried: Vec<Token>,
+    },
+    /// `None · Some(y)` is `Some(y)` and `Some(b) · Some(y)` is
+    /// `Some(b ⊕ y)`, `⊕` the inner law.
+    OptionLifted(Box<Law>),
+    /// Each token combined by its own law.
+    Product(Vec<(Token, Accumulator)>),
 }
 
 /// An operation the language owns, with the laws its own definition gives
@@ -833,6 +926,11 @@ pub enum Law {
 ///   bytes of `a`, then of `b`, then of `c`, so it is associative with the
 ///   empty string as identity. It does not commute: `"a" ++ "b"` is not
 ///   `"b" ++ "a"`, and a law over it joins its partials in chunk order.
+/// - `Or`, `And` and `Xor` over `Bool` are the language's `||`, `&&` and
+///   `!=` (RFC-0089 rule 4). Each is a function of the two truth values its
+///   table defines, and the tables are associative and symmetric: `Or` is
+///   true where either is, `And` where both are, `Xor` where exactly one
+///   is. Their identities are `false`, `true` and `false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LawOp {
     Add,
@@ -840,12 +938,17 @@ pub enum LawOp {
     Min,
     Max,
     Concat,
+    Or,
+    And,
+    Xor,
 }
 
 impl LawOp {
     pub fn commutes(self) -> bool {
         match self {
-            Self::Add | Self::Mul | Self::Min | Self::Max => true,
+            Self::Add | Self::Mul | Self::Min | Self::Max | Self::Or | Self::And | Self::Xor => {
+                true
+            }
             Self::Concat => false,
         }
     }
@@ -872,14 +975,14 @@ pub struct FoldAccumulator {
     pub fold: ResolvedFold,
 }
 
-/// A cycle through several tokens has no one update, and is `InOrder`
-/// with no law. A float law joined in arrival order changes the rounding,
-/// so an inexact law is `InOrder` too, and so is a law that does not
-/// commute, whose partials join in chunk order.
+/// A cycle through several tokens has a law only by a reading that names
+/// several. A float law joined in arrival order changes the rounding, so an
+/// inexact law is `InOrder`, and so is a law that does not commute, whose
+/// partials join in chunk order.
 fn judge(
     cycle: &Cycle,
     disjoint: &[ValueId],
-    reading: Option<&dyn Fn(Token) -> Option<Accumulator>>,
+    reading: Option<&dyn Fn(&[Token]) -> Option<Accumulator>>,
 ) -> Judged {
     let law = match (&cycle.tokens[..], reading) {
         ([Token::Storage(Storage::Element)], _) => {
@@ -894,8 +997,8 @@ fn judge(
                 law: None,
             };
         }
-        ([token], Some(reading)) => reading(*token),
-        _ => None,
+        (tokens, Some(reading)) => reading(tokens),
+        (_, None) => None,
     };
     let order = match &law {
         Some(acc) if acc.exact && acc.commutative => Order::AnyOrder,
@@ -1170,8 +1273,8 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
 
 /// The storages among `written` whose every place the loop reaches lies
 /// under one path component that is `a·k + b` of the counter at every
-/// access, one nonzero constant `a` and bases that differ by constants none
-/// a nonzero multiple of `a`. The component's value is exact on every run
+/// access, one step `a ≠ 0` and bases that differ by constants none a
+/// nonzero multiple of `a`. The component's value is exact on every run
 /// past it (RFC-0037 rule 3), so no two iterations reach one place.
 fn disjoint_storages(
     loans: &Loans<'_>,
@@ -1209,41 +1312,152 @@ fn disjoint_storages(
         }
         Some(found)
     };
-    written
+    let by_slot: Vec<(ValueId, Vec<Place>)> = written
         .iter()
-        .copied()
-        .filter(|slot| reached(*slot).is_some_and(|found| one_affine_component(&found, &affine)))
+        .filter_map(|slot| Some((*slot, reached(*slot)?)))
+        .collect();
+    let proven = Proven::of(cfg, laws, header, &affine, &by_slot);
+    by_slot
+        .into_iter()
+        .filter(|(_, found)| one_affine_component(found, &affine, &proven))
+        .map(|(slot, _)| slot)
         .collect()
 }
 
-fn one_affine_component(reached: &[Place], affine: &AffineValues) -> bool {
+/// What the interval domain proves, where the loop's header begins, of the
+/// values an affine index's terms name: they are invariant in the loop, so
+/// it holds at every access.
+struct Proven {
+    bounds: FxHashMap<ValueId, (Option<i128>, Option<i128>)>,
+}
+
+impl Proven {
+    fn of(
+        cfg: &CfgBody,
+        laws: &LawTable,
+        header: BlockIdx,
+        affine: &AffineValues,
+        reached: &[(ValueId, Vec<Place>)],
+    ) -> Self {
+        let mut atoms: Vec<ValueId> = Vec::new();
+        for place in reached.iter().flat_map(|(_, found)| found) {
+            for component in &place.path {
+                let Component::At(index) = component else {
+                    continue;
+                };
+                if let Some(found) = affine.get(*index) {
+                    value_atoms(&found.step, &mut atoms);
+                    value_atoms(&found.base, &mut atoms);
+                }
+            }
+        }
+        let bounds = match atoms.is_empty() {
+            true => FxHashMap::default(),
+            false => atoms
+                .iter()
+                .copied()
+                .zip(crate::analysis::interval::constant_bounds_on_entry(
+                    cfg, laws, header, &atoms,
+                ))
+                .collect(),
+        };
+        Self { bounds }
+    }
+
+    fn constant(&self, value: ValueId) -> Option<i128> {
+        match self.bounds.get(&value) {
+            Some((Some(lo), Some(hi))) if lo == hi => Some(*lo),
+            _ => None,
+        }
+    }
+
+    /// The least magnitude `value` can have, where its interval excludes 0.
+    fn least_magnitude(&self, value: ValueId) -> Option<i128> {
+        match self.bounds.get(&value) {
+            Some((Some(lo), _)) if *lo > 0 => Some(*lo),
+            Some((_, Some(hi))) if *hi < 0 => hi.checked_neg(),
+            _ => None,
+        }
+    }
+}
+
+fn value_atoms(term: &Term, into: &mut Vec<ValueId>) {
+    match term {
+        Term::Value(value) => {
+            if !into.contains(value) {
+                into.push(*value);
+            }
+        }
+        Term::Const(_) | Term::Len(_) | Term::LenOnEntry(_) => {}
+        Term::Add(a, b) | Term::Sub(a, b) | Term::Mul(a, b) | Term::Max(a, b) => {
+            value_atoms(a, into);
+            value_atoms(b, into);
+        }
+    }
+}
+
+/// An affine index's step `a`, known nonzero (RFC-0089 rule 4).
+#[derive(Clone, Copy, PartialEq)]
+enum Stride {
+    Constant(i128),
+    /// `factor` times an invariant value the interval domain proves
+    /// nonzero, of magnitude at least `least`.
+    Invariant {
+        value: ValueId,
+        factor: i128,
+        least: u128,
+    },
+}
+
+fn stride(step: &Term, proven: &Proven) -> Option<Stride> {
+    if let Some(step) = constant(step, proven) {
+        return (step != 0).then_some(Stride::Constant(step));
+    }
+    let linear = Linear::of(step, proven)?;
+    let atoms: Vec<&(&Term, i128)> = linear
+        .atoms
+        .iter()
+        .filter(|(_, coefficient)| *coefficient != 0)
+        .collect();
+    let (&[&(Term::Value(value), factor)], 0) = (&atoms[..], linear.constant) else {
+        return None;
+    };
+    let least = proven
+        .least_magnitude(*value)?
+        .unsigned_abs()
+        .checked_mul(factor.unsigned_abs())?;
+    Some(Stride::Invariant {
+        value: *value,
+        factor,
+        least,
+    })
+}
+
+fn one_affine_component(reached: &[Place], affine: &AffineValues, proven: &Proven) -> bool {
     let Some(shortest) = reached.iter().map(|place| place.path.len()).min() else {
         return false;
     };
     let term_at = |place: &Place, position: usize| match &place.path[position] {
         Component::At(index) => affine
             .get(*index)
-            .and_then(|found| {
-                constant(&found.step)
-                    .filter(|step| *step != 0)
-                    .map(|step| (&found.base, step))
-            }),
+            .and_then(|found| Some((&found.base, stride(&found.step, proven)?))),
         Component::Named(_) => None,
     };
     (0..shortest).any(|position| {
-        let terms: Option<Vec<(&Term, i128)>> = reached
+        let terms: Option<Vec<(&Term, Stride)>> = reached
             .iter()
             .map(|place| term_at(place, position))
             .collect();
-        terms.is_some_and(|terms| never_meet(&terms))
+        terms.is_some_and(|terms| never_meet(&terms, proven))
     })
 }
 
-/// Terms `base + k·a` of one constant `a ≠ 0` whose bases differ pairwise
-/// by constants none a nonzero multiple of `a`: `b₁ + k₁·a = b₂ + k₂·a`
-/// holds only where `b₁ − b₂ = (k₂ − k₁)·a`, so only at `k₁ = k₂`
-/// (RFC-0089 rule 4).
-fn never_meet(terms: &[(&Term, i128)]) -> bool {
+/// Terms `base + k·a` of one step `a ≠ 0` whose bases differ pairwise by
+/// constants none a nonzero multiple of `a`: `b₁ + k₁·a = b₂ + k₂·a` holds
+/// only where `b₁ − b₂ = (k₂ − k₁)·a`, so only at `k₁ = k₂` (RFC-0089 rule
+/// 4). Of an invariant step only its least magnitude is known, and a
+/// difference below it is no nonzero multiple.
+fn never_meet(terms: &[(&Term, Stride)], proven: &Proven) -> bool {
     let Some(&(_, step)) = terms.first() else {
         return false;
     };
@@ -1256,20 +1470,23 @@ fn never_meet(terms: &[(&Term, i128)]) -> bool {
             bases.push(base);
         }
     }
+    let apart = |difference: i128| match step {
+        Stride::Constant(step) => {
+            difference == 0 || difference.checked_rem(step).is_some_and(|rest| rest != 0)
+        }
+        Stride::Invariant { least, .. } => difference.unsigned_abs() < least,
+    };
     bases.iter().enumerate().all(|(at, first)| {
         bases[at + 1..].iter().all(|second| {
-            constant_difference(first, second)
-                .is_some_and(|difference| {
-                    difference == 0 || difference.checked_rem(step).is_some_and(|rest| rest != 0)
-                })
+            constant_difference(first, second, proven).is_some_and(apart)
         })
     })
 }
 
 /// `a − b` where it is a constant: the two terms as sums of constant
 /// multiples of the same atoms, whose every atom cancels.
-fn constant_difference(a: &Term, b: &Term) -> Option<i128> {
-    let difference = Linear::of(a)?.minus(Linear::of(b)?)?;
+fn constant_difference(a: &Term, b: &Term, proven: &Proven) -> Option<i128> {
+    let difference = Linear::of(a, proven)?.minus(Linear::of(b, proven)?)?;
     difference
         .atoms
         .iter()
@@ -1302,8 +1519,8 @@ impl<'a> Linear<'a> {
     }
 
     /// `None` where a coefficient leaves `i128`.
-    fn of(term: &'a Term) -> Option<Self> {
-        if let Some(value) = constant(term) {
+    fn of(term: &'a Term, proven: &Proven) -> Option<Self> {
+        if let Some(value) = constant(term, proven) {
             return Some(Self::constant(value));
         }
         match term {
@@ -1312,11 +1529,11 @@ impl<'a> Linear<'a> {
             | Term::Len(_)
             | Term::LenOnEntry(_)
             | Term::Max(..) => Some(Self::atom(term)),
-            Term::Add(a, b) => Self::of(a)?.plus(Self::of(b)?),
-            Term::Sub(a, b) => Self::of(a)?.minus(Self::of(b)?),
-            Term::Mul(a, b) => match (constant(a), constant(b)) {
-                (Some(factor), _) => Self::of(b)?.times(factor),
-                (_, Some(factor)) => Self::of(a)?.times(factor),
+            Term::Add(a, b) => Self::of(a, proven)?.plus(Self::of(b, proven)?),
+            Term::Sub(a, b) => Self::of(a, proven)?.minus(Self::of(b, proven)?),
+            Term::Mul(a, b) => match (constant(a, proven), constant(b, proven)) {
+                (Some(factor), _) => Self::of(b, proven)?.times(factor),
+                (_, Some(factor)) => Self::of(a, proven)?.times(factor),
                 (None, None) => Some(Self::atom(term)),
             },
         }
@@ -1346,15 +1563,18 @@ impl<'a> Linear<'a> {
     }
 }
 
-fn constant(term: &Term) -> Option<i128> {
+/// A term's value where it is a constant: its literals, and each invariant
+/// value the interval domain proves one constant.
+fn constant(term: &Term, proven: &Proven) -> Option<i128> {
     match term {
         Term::Const(Literal::Int(value)) => Some(*value),
         Term::Const(Literal::IntOf(suffixed)) => Some(suffixed.value),
-        Term::Const(_) | Term::Value(_) | Term::Len(_) | Term::LenOnEntry(_) => None,
-        Term::Add(a, b) => constant(a)?.checked_add(constant(b)?),
-        Term::Sub(a, b) => constant(a)?.checked_sub(constant(b)?),
-        Term::Mul(a, b) => constant(a)?.checked_mul(constant(b)?),
-        Term::Max(a, b) => Some(constant(a)?.max(constant(b)?)),
+        Term::Value(value) => proven.constant(*value),
+        Term::Const(_) | Term::Len(_) | Term::LenOnEntry(_) => None,
+        Term::Add(a, b) => constant(a, proven)?.checked_add(constant(b, proven)?),
+        Term::Sub(a, b) => constant(a, proven)?.checked_sub(constant(b, proven)?),
+        Term::Mul(a, b) => constant(a, proven)?.checked_mul(constant(b, proven)?),
+        Term::Max(a, b) => Some(constant(a, proven)?.max(constant(b, proven)?)),
     }
 }
 
@@ -1753,6 +1973,7 @@ impl Graph {
             .copied()
             .filter(|block| *block != header && cfg.successors(*block).contains(&header))
             .collect();
+        let domtree = DomTree::build(cfg);
         let mut found: Vec<Held> = Vec::new();
         for (index, &param) in cfg.blocks[header.0].params.iter().enumerate() {
             let mut sent: Vec<ValueId> = Vec::new();
@@ -1776,7 +1997,7 @@ impl Graph {
                     }
                 }
             }
-            if sent.is_empty() {
+            if sent.is_empty() || sends_one_constant(cfg, &domtree, header, param, &latches) {
                 continue;
             }
             let ty = cfg
@@ -1919,6 +2140,181 @@ impl Graph {
         }
         found
     }
+}
+
+/// RFC-0089 rule 2: whether every back edge sends header parameter `param`
+/// one constant, so that past the first iteration it holds that constant
+/// and is no token. An edge sends it the constant `c` where the value it
+/// passes is `c`'s `Const`, a block parameter every edge into which sends
+/// `c`, or `param` itself on an edge only a branch deciding by `param` being
+/// `c` reaches.
+fn sends_one_constant(
+    cfg: &CfgBody,
+    domtree: &DomTree,
+    header: BlockIdx,
+    param: ValueId,
+    latches: &[BlockIdx],
+) -> bool {
+    let header_label = cfg.blocks[header.0].label;
+    let Some(index) = cfg.blocks[header.0]
+        .params
+        .iter()
+        .position(|held| *held == param)
+    else {
+        return false;
+    };
+    let mut constants: Vec<Literal> = Vec::new();
+    let mut fixed_by_branch: Vec<(BlockIdx, usize)> = Vec::new();
+    for latch in latches {
+        for (edge_at, edge) in edges(&cfg.blocks[latch.0].terminator).into_iter().enumerate() {
+            if edge.target != header_label {
+                continue;
+            }
+            let Some(&arg) = index
+                .checked_sub(edge.fills_from)
+                .and_then(|position| edge.args.get(position))
+            else {
+                return false;
+            };
+            let mut seen: Vec<ValueId> = Vec::new();
+            if !constants_sent(
+                cfg,
+                header,
+                param,
+                (*latch, edge_at),
+                arg,
+                &mut seen,
+                &mut constants,
+                &mut fixed_by_branch,
+            ) {
+                return false;
+            }
+        }
+    }
+    let [constant] = &constants[..] else {
+        return false;
+    };
+    let Literal::Bool(held) = constant else {
+        return fixed_by_branch.is_empty();
+    };
+    fixed_by_branch
+        .iter()
+        .all(|&(from, edge)| decided_to(cfg, domtree, param, *held, from, edge))
+}
+
+/// Gathers the constants `value`, passed by the edge `via` (a block and
+/// the index of its terminator's edge), stands for; each place it is
+/// `param` itself is gathered as the edge that passes it.
+#[allow(clippy::too_many_arguments)]
+fn constants_sent(
+    cfg: &CfgBody,
+    header: BlockIdx,
+    param: ValueId,
+    via: (BlockIdx, usize),
+    value: ValueId,
+    seen: &mut Vec<ValueId>,
+    constants: &mut Vec<Literal>,
+    fixed_by_branch: &mut Vec<(BlockIdx, usize)>,
+) -> bool {
+    if value == param {
+        fixed_by_branch.push(via);
+        return true;
+    }
+    if seen.contains(&value) {
+        return false;
+    }
+    seen.push(value);
+    let constant = cfg.blocks.iter().flat_map(|block| &block.insts).find_map(|inst| {
+        match &inst.kind {
+            InstKind::Const { dst, value: literal } if *dst == value => Some(literal.clone()),
+            _ => None,
+        }
+    });
+    if let Some(constant) = constant {
+        if !constants.contains(&constant) {
+            constants.push(constant);
+        }
+        return true;
+    }
+    let owner = (0..cfg.blocks.len()).map(BlockIdx).find_map(|block| {
+        cfg.blocks[block.0]
+            .params
+            .iter()
+            .position(|held| *held == value)
+            .map(|at| BlockParam { block, at })
+    });
+    let Some(BlockParam { block, at }) = owner.filter(|owner| owner.block != header) else {
+        return false;
+    };
+    let label = cfg.blocks[block.0].label;
+    let preds = cfg.predecessors();
+    for pred in preds.get(&block).into_iter().flatten() {
+        for (edge_at, edge) in edges(&cfg.blocks[pred.0].terminator).into_iter().enumerate() {
+            if edge.target != label {
+                continue;
+            }
+            let Some(&arg) = at
+                .checked_sub(edge.fills_from)
+                .and_then(|position| edge.args.get(position))
+            else {
+                return false;
+            };
+            let via = (*pred, edge_at);
+            if !constants_sent(cfg, header, param, via, arg, seen, constants, fixed_by_branch) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Whether edge `edge` of `from`'s terminator is taken only where a
+/// branch on `param` itself found it `held`: it is that branch's edge on
+/// `held`'s side, or `from` lies under that side's block, which only the
+/// branch enters.
+fn decided_to(
+    cfg: &CfgBody,
+    domtree: &DomTree,
+    param: ValueId,
+    held: bool,
+    from: BlockIdx,
+    edge: usize,
+) -> bool {
+    let side_edge = match held {
+        true => 0,
+        false => 1,
+    };
+    let preds = cfg.predecessors();
+    (0..cfg.blocks.len()).map(BlockIdx).any(|branch| {
+        let (Terminator::JumpIf {
+            cond,
+            then_label,
+            else_label,
+            ..
+        }
+        | Terminator::Diamond {
+            cond,
+            then_label,
+            else_label,
+            ..
+        }) = &cfg.blocks[branch.0].terminator
+        else {
+            return false;
+        };
+        if *cond != param || then_label == else_label {
+            return false;
+        }
+        if branch == from {
+            return edge == side_edge;
+        }
+        let side = cfg.label_to_block[match held {
+            true => then_label,
+            false => else_label,
+        }];
+        let entered_by_the_branch_alone =
+            preds.get(&side).map(|from| from.as_slice()) == Some(&[branch][..]);
+        entered_by_the_branch_alone && (side == from || domtree.dominates(side, from))
+    })
 }
 
 /// The value `value` is a copy of: a parameter of a block other than the
@@ -2193,6 +2589,30 @@ enum Step<'a> {
         law: &'a ResolvedBinary,
     },
     Order,
+    Last,
+    OptionLifted(Lifted<'a>),
+}
+
+/// A law an `Option` token's payload combines through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Lifted<'a> {
+    Op {
+        op: LawOp,
+        exact: bool,
+    },
+    Call {
+        callee: ExternInstance,
+        law: &'a ResolvedBinary,
+    },
+}
+
+impl<'a> Lifted<'a> {
+    fn step(self) -> Step<'a> {
+        match self {
+            Self::Op { op, exact } => Step::Op { op, exact },
+            Self::Call { callee, law } => Step::Call { callee, law },
+        }
+    }
 }
 
 impl Step<'_> {
@@ -2219,6 +2639,23 @@ impl Step<'_> {
                 exact: true,
                 commutative: true,
             },
+            Self::Last => Accumulator {
+                law: Law::Last,
+                exact: true,
+                commutative: false,
+            },
+            Self::OptionLifted(inner) => {
+                let Accumulator {
+                    law,
+                    exact,
+                    commutative,
+                } = inner.step().accumulator();
+                Accumulator {
+                    law: Law::OptionLifted(Box::new(law)),
+                    exact,
+                    commutative,
+                }
+            }
         }
     }
 }
@@ -2243,6 +2680,7 @@ impl<'a> Form<'a> {
 struct Update<'a> {
     step: Step<'a>,
     reading_state: FxHashSet<ValueId>,
+    chain: FxHashSet<ValueId>,
 }
 
 /// The state a cycle's law is read over: a header parameter, or a storage
@@ -2264,6 +2702,12 @@ enum Def {
 enum Side {
     Then,
     Else,
+}
+
+/// What the edges into a join send one of its parameters.
+struct Sent {
+    sent: Vec<(BlockIdx, Side, ValueId)>,
+    deciders: Vec<BlockIdx>,
 }
 
 /// The side of a compare and select that yields a value of the iteration,
@@ -2299,6 +2743,10 @@ struct LawReading<'a, 's, 'cfg> {
     /// that choose between the state and a value of the iteration.
     chain: FxHashSet<ValueId>,
     forms: FxHashMap<ValueId, Option<Form<'a>>>,
+    /// Where a storage state is assigned more than once in an iteration,
+    /// what it holds where each block begins.
+    entry_forms: FxHashMap<BlockIdx, Option<Form<'a>>>,
+    assigned_more_than_once: bool,
 }
 
 impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
@@ -2353,8 +2801,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             dependent: FxHashSet::default(),
             chain: FxHashSet::default(),
             forms: FxHashMap::default(),
+            entry_forms: FxHashMap::default(),
+            assigned_more_than_once: false,
         };
-        reading.dependent = reading.values_reading_state();
+        reading.dependent = reading.values_reading_state(None);
         reading
     }
 
@@ -2394,6 +2844,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         match term {
             Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
             Terminator::Switch { tag, .. } => vec![*tag],
+            // A jump leaves by its one edge whatever it sends.
+            Terminator::Jump { .. } => Vec::new(),
             // A traversal takes its body or its exit by its counter against
             // its source; the values its exit edge passes decide nothing.
             Terminator::For { source, .. } => source.uses().into_iter().collect(),
@@ -2403,8 +2855,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     /// Every value of the iteration that reads the state: through what it
     /// reads, through a storage the iteration defines and drops that was
-    /// given such a value, and through a branch that decides by one.
-    fn values_reading_state(&self) -> FxHashSet<ValueId> {
+    /// given such a value, and through a branch that decides by one other
+    /// than the branch ending `excused`.
+    fn values_reading_state(&self, excused: Option<BlockIdx>) -> FxHashSet<ValueId> {
         let mut dependent: FxHashSet<ValueId> = FxHashSet::default();
         if let State::Param { param, .. } = self.state {
             dependent.insert(param);
@@ -2428,7 +2881,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 let reads = inst_info::uses(kind)
                     .into_iter()
                     .any(|used| dependent.contains(&used));
-                let decided = self.decided_by_state(at.block, &dependent);
+                let decided = self.decided_by_state(at.block, &dependent, excused);
                 if !(loads_state || reads_local || reads || decided) {
                     continue;
                 }
@@ -2452,9 +2905,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             }
             for block in self.body().collect::<Vec<_>>() {
                 let term = &self.cfg.blocks[block.0].terminator;
-                let decides_by_state = Self::decision(term)
-                    .iter()
-                    .any(|value| dependent.contains(value));
+                let decides_by_state = Some(block) != excused
+                    && Self::decision(term)
+                        .iter()
+                        .any(|value| dependent.contains(value));
                 for edge in edges(term) {
                     let Some(&target) = self.cfg.label_to_block.get(&edge.target) else {
                         continue;
@@ -2465,7 +2919,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     let params = &self.cfg.blocks[target.0].params;
                     for (at, &param) in params.iter().enumerate().skip(edge.fills_from) {
                         let sent = edge.args[at - edge.fills_from];
-                        let decided = decides_by_state || self.decided_by_state(block, &dependent);
+                        let decided =
+                            decides_by_state || self.decided_by_state(block, &dependent, excused);
                         if dependent.contains(&sent) || decided {
                             changed |= dependent.insert(param);
                         }
@@ -2486,11 +2941,17 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     }
 
     /// Whether a branch that decides whether `block` runs reads the state.
-    fn decided_by_state(&self, block: BlockIdx, dependent: &FxHashSet<ValueId>) -> bool {
+    fn decided_by_state(
+        &self,
+        block: BlockIdx,
+        dependent: &FxHashSet<ValueId>,
+        excused: Option<BlockIdx>,
+    ) -> bool {
         self.deciders
             .get(&block)
             .into_iter()
             .flatten()
+            .filter(|decider| Some(**decider) != excused)
             .any(|decider| {
                 Self::decision(&self.cfg.blocks[decider.0].terminator)
                     .iter()
@@ -2549,15 +3010,19 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         (!partial_read_elsewhere && !other_header_args_read_state).then_some(Update {
             step,
             reading_state: self.dependent,
+            chain: self.chain,
         })
     }
 
-    /// The form of the value the storage holds when the iteration ends:
-    /// the one store of it, loaded before it only as the update's operand,
+    /// The form of the value the storage holds when the iteration ends. With
+    /// one store: that store, loaded before it only as the update's operand,
     /// run where every branch it lies under decides by values that read
     /// nothing of the state, or as the chosen arm of a compare and select.
+    /// With several: what the latch holds at its end, each assignment read
+    /// over what its block holds before it (RFC-0089 rule 4, "the chain of
+    /// all the iteration's assignments").
     fn stored(&mut self, slot: ValueId) -> Option<Form<'a>> {
-        let mut store: Option<(InstAt, ValueId)> = None;
+        let mut stores: Vec<(InstAt, ValueId)> = Vec::new();
         for (at, kind) in self.insts() {
             let touched = touched_slots(self.loans, kind);
             let written = written_slots(self.loans, kind);
@@ -2568,10 +3033,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     value,
                     restores: false,
                 } if inst_info::storage(target) == Some(slot) => {
-                    if !path.is_empty() || store.is_some() {
+                    if !path.is_empty() {
                         return None;
                     }
-                    store = Some((at, *value));
+                    stores.push((at, *value));
                 }
                 InstKind::Take {
                     target,
@@ -2585,7 +3050,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     mutability: crate::ty::Mutability::Shared,
                     ..
                 } if inst_info::storage(target) == Some(slot) => {
-                    if !self.is_state_slot(target, path) || written.contains(&slot) {
+                    let whole_or_payload =
+                        path.is_empty() || matches!(path[..], [crate::ir::PathSeg::Payload]);
+                    if !whole_or_payload || written.contains(&slot) {
                         return None;
                     }
                 }
@@ -2603,7 +3070,27 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 _ => {}
             }
         }
-        let (at, value) = store?;
+        let (at, value) = match stores[..] {
+            [] => return None,
+            [one] => one,
+            _ => {
+                if stores
+                    .iter()
+                    .any(|(at, _)| !self.nested_loops_holding(at.block).is_empty())
+                {
+                    return None;
+                }
+                self.assigned_more_than_once = true;
+                let [latch] = self.latches()[..] else {
+                    return None;
+                };
+                let end = self.cfg.blocks[latch.0].insts.len();
+                return self.held_before(InstAt {
+                    block: latch,
+                    at: end,
+                });
+            }
+        };
         match self
             .deciders
             .get(&at.block)
@@ -2623,6 +3110,196 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     chosen_on: side,
                 })
             }
+            _ => None,
+        }
+    }
+
+    /// The blocks of the body whose terminator jumps to the header.
+    fn latches(&self) -> Vec<BlockIdx> {
+        self.body()
+            .filter(|block| self.cfg.successors(*block).contains(&self.header))
+            .collect()
+    }
+
+    /// What the storage state holds just before `at`: the value of the last
+    /// assignment before it in its block, and otherwise what its block holds
+    /// where it begins.
+    fn held_before(&mut self, at: InstAt) -> Option<Form<'a>> {
+        match self.assigned_before(at) {
+            Some(value) => self.form(value),
+            None => self.held_at_entry(at.block),
+        }
+    }
+
+    /// The value of the last assignment of the storage state in `at`'s block
+    /// before `at`.
+    fn assigned_before(&self, at: InstAt) -> Option<ValueId> {
+        let State::Slot(slot) = self.state else {
+            return None;
+        };
+        self.cfg.blocks[at.block.0].insts[..at.at]
+            .iter()
+            .rev()
+            .find_map(|inst| match &inst.kind {
+                InstKind::Assign { target, value, .. }
+                    if inst_info::storage(target) == Some(slot) =>
+                {
+                    Some(*value)
+                }
+                _ => None,
+            })
+    }
+
+    fn body_label(&self) -> Label {
+        let Terminator::For { stages, .. } = &self.cfg.blocks[self.header.0].terminator else {
+            panic!("block {} heads the `For` a law is read of", self.header.0)
+        };
+        stages.body()
+    }
+
+    /// What the storage state holds where `block` begins: the state itself
+    /// at the body's entry, and otherwise what its predecessors hold at
+    /// their ends, joined as a join's parameter is. A predecessor `block`
+    /// dominates is a nested loop's back edge, and that loop assigns no
+    /// state.
+    fn held_at_entry(&mut self, block: BlockIdx) -> Option<Form<'a>> {
+        if block == self.cfg.label_to_block[&self.body_label()] {
+            return Some(Form::State);
+        }
+        if let Some(known) = self.entry_forms.get(&block) {
+            return *known;
+        }
+        // A path back to `block` holds none of the state's forms.
+        self.entry_forms.insert(block, None);
+        let preds: Vec<BlockIdx> = self
+            .cfg
+            .predecessors()
+            .get(&block)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|pred| *pred != self.header && self.blocks.contains(pred))
+            .filter(|pred| !self.domtree.dominates(block, *pred))
+            .collect();
+        let form = self.held_at_join(block, &preds);
+        self.entry_forms.insert(block, form);
+        form
+    }
+
+    fn held_at_join(&mut self, block: BlockIdx, preds: &[BlockIdx]) -> Option<Form<'a>> {
+        let mut sent: Vec<(Form<'a>, Option<ValueId>)> = Vec::new();
+        for &pred in preds {
+            let end = InstAt {
+                block: pred,
+                at: self.cfg.blocks[pred.0].insts.len(),
+            };
+            sent.push((self.held_before(end)?, self.assigned_before(end)));
+        }
+        match preds {
+            [] => None,
+            [_] => Some(sent[0].0),
+            _ => {
+                let deciders = self.join_deciders(block, preds);
+                match self.decide_freely(&deciders) {
+                    true => self.joined(&sent),
+                    false => None,
+                }
+            }
+        }
+    }
+
+    /// The branches that decide which of `preds` reaches the join `block`,
+    /// other than those that decide whether `block` runs at all.
+    fn join_deciders(&self, block: BlockIdx, preds: &[BlockIdx]) -> Vec<BlockIdx> {
+        let own: Vec<BlockIdx> = self.deciders.get(&block).cloned().unwrap_or_default();
+        let mut deciders: Vec<BlockIdx> = Vec::new();
+        for &from in preds {
+            let mut by = self.deciders.get(&from).cloned().unwrap_or_default();
+            if self.cfg.successors(from).len() > 1 {
+                by.push(from);
+            }
+            for decider in by {
+                if !own.contains(&decider) && !deciders.contains(&decider) {
+                    deciders.push(decider);
+                }
+            }
+        }
+        deciders
+    }
+
+    /// The forms a join receives, joined where every branch choosing among
+    /// them reads nothing of the state: one law the forms that read the
+    /// state combine through, which a value reading none of it stands in
+    /// for as that law allows (see [`Self::free_arm_step`]).
+    fn joined(&self, sent: &[(Form<'a>, Option<ValueId>)]) -> Option<Form<'a>> {
+        let mut step: Option<Step<'a>> = None;
+        let mut reads_state = false;
+        let mut free: Vec<Option<ValueId>> = Vec::new();
+        for &(form, value) in sent {
+            match form {
+                Form::Free => free.push(value),
+                Form::State => reads_state = true,
+                Form::Combined(held) => {
+                    if step.is_some_and(|step| step != held) {
+                        return None;
+                    }
+                    step = Some(held);
+                    reads_state = true;
+                }
+            }
+        }
+        if !reads_state {
+            return None;
+        }
+        if free.is_empty() {
+            return Some(step.map_or(Form::State, Form::Combined));
+        }
+        let free_step = self.free_arm_step(&free, step)?;
+        match step {
+            Some(held) if held != free_step => None,
+            _ => Some(Form::Combined(free_step)),
+        }
+    }
+
+    /// The law an arm that sends the token a value reading none of it reads
+    /// as, the other arms leaving the token or combining it through `step`:
+    /// over `Bool`, an arm that fixes it to `true` is `‖` of that arm's test
+    /// and one that fixes it to `false` is `&&` of its negation; otherwise
+    /// the arm is `last` (RFC-0089 rule 4).
+    fn free_arm_step(
+        &self,
+        free: &[Option<ValueId>],
+        step: Option<Step<'a>>,
+    ) -> Option<Step<'a>> {
+        let constants: Option<Vec<bool>> = free
+            .iter()
+            .map(|value| value.and_then(|value| self.bool_constant(value)))
+            .collect();
+        let fixed = match constants.as_deref() {
+            Some([first, rest @ ..]) if rest.iter().all(|other| other == first) => Some(*first),
+            _ => None,
+        };
+        let bool_law = |op: LawOp| Step::Op { op, exact: true };
+        match (fixed, step) {
+            (Some(true), None | Some(Step::Op { op: LawOp::Or, .. })) => Some(bool_law(LawOp::Or)),
+            (Some(false), None | Some(Step::Op { op: LawOp::And, .. })) => {
+                Some(bool_law(LawOp::And))
+            }
+            (_, None | Some(Step::Last)) => Some(Step::Last),
+            _ => None,
+        }
+    }
+
+    /// The `Bool` a value is where a `Const` of the iteration defines it.
+    fn bool_constant(&self, value: ValueId) -> Option<bool> {
+        let Some(Def::Inst(at)) = self.defs.get(&value) else {
+            return None;
+        };
+        match self.inst(*at) {
+            InstKind::Const {
+                value: Literal::Bool(held),
+                ..
+            } => Some(*held),
             _ => None,
         }
     }
@@ -2754,6 +3431,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let Update {
             step,
             reading_state,
+            ..
         } = LawReading::of(
             self.loans,
             self.laws,
@@ -2785,7 +3463,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 mutability: crate::ty::Mutability::Shared,
                 ..
             } => match inst_info::storage(target) {
-                Some(_) if self.is_state_slot(target, path) => Some(Form::State),
+                Some(_) if self.is_state_slot(target, path) => match self.assigned_more_than_once {
+                    true => self.held_before(at),
+                    false => Some(Form::State),
+                },
                 Some(slot) if self.is_local(slot) && path.is_empty() => self.held(slot),
                 Some(_) => None,
                 None => {
@@ -2798,6 +3479,32 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     }
                 }
             },
+            InstKind::BinOp {
+                op: op @ (BinOp::Or | BinOp::And | BinOp::Xor | BinOp::Neq),
+                left,
+                right,
+                ..
+            } if matches!(self.cfg.val_types.get(left), Some(Ty::Bool)) => {
+                let op = match op {
+                    BinOp::Or => LawOp::Or,
+                    BinOp::And => LawOp::And,
+                    _ => LawOp::Xor,
+                };
+                let step = Step::Op { op, exact: true };
+                match (self.form(*left)?, self.form(*right)?) {
+                    (state, Form::Free) | (Form::Free, state) => state.then(step),
+                    _ => None,
+                }
+            }
+            // `!p` is `p != true`.
+            InstKind::UnaryOp {
+                op: crate::ir::UnaryOp::Not,
+                operand,
+                ..
+            } => self.form(*operand)?.then(Step::Op {
+                op: LawOp::Xor,
+                exact: true,
+            }),
             InstKind::BinOp {
                 op, left, right, ..
             } => {
@@ -2915,54 +3622,20 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// that decide by values that read nothing of the state, or a compare
     /// and select.
     fn param_form(&mut self, block: BlockIdx, index: usize) -> Option<Form<'a>> {
-        let label = self.cfg.blocks[block.0].label;
-        let own: Vec<BlockIdx> = self.deciders.get(&block).cloned().unwrap_or_default();
-        let mut sent: Vec<(BlockIdx, Side, ValueId)> = Vec::new();
-        let mut deciders: Vec<BlockIdx> = Vec::new();
-        for from in self.body().collect::<Vec<_>>() {
-            let term = &self.cfg.blocks[from.0].terminator;
-            let is_branch = self.cfg.successors(from).len() > 1;
-            for (at, edge) in edges(term).into_iter().enumerate() {
-                if edge.target != label {
-                    continue;
-                }
-                let position = index.checked_sub(edge.fills_from)?;
-                let side = match at {
-                    0 => Side::Then,
-                    _ => Side::Else,
-                };
-                sent.push((from, side, edge.args[position]));
-                let mut by = self.deciders.get(&from).cloned().unwrap_or_default();
-                if is_branch {
-                    by.push(from);
-                }
-                for decider in by {
-                    if !own.contains(&decider) && !deciders.contains(&decider) {
-                        deciders.push(decider);
-                    }
-                }
-            }
-        }
+        let Sent { sent, deciders } = self.sent_to(block, index)?;
         if self.decide_freely(&deciders) {
-            let mut joined: Option<Form<'a>> = None;
+            let mut forms: Vec<(Form<'a>, Option<ValueId>)> = Vec::new();
             for &(_, _, value) in &sent {
-                let form = self.form(value)?;
-                joined = Some(match (joined, form) {
-                    (None, form) => form,
-                    (Some(Form::State), Form::State) => Form::State,
-                    (Some(Form::State), Form::Combined(step))
-                    | (Some(Form::Combined(step)), Form::State) => Form::Combined(step),
-                    (Some(Form::Combined(held)), Form::Combined(step)) if held == step => {
-                        Form::Combined(step)
-                    }
-                    _ => return None,
-                });
+                forms.push((self.form(value)?, Some(value)));
             }
-            return joined;
+            return self.joined(&forms);
         }
         let [branch] = deciders[..] else {
             return None;
         };
+        if let Terminator::Switch { .. } = &self.cfg.blocks[branch.0].terminator {
+            return self.option_lift(branch, &sent);
+        }
         let [first, second] = sent[..] else {
             return None;
         };
@@ -2974,16 +3647,432 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if first_side == second_side {
             return None;
         }
-        let chosen = match (self.form(first.2)?, self.form(second.2)?) {
-            (Form::Free, Form::State) => (first.2, first_side),
-            (Form::State, Form::Free) => (second.2, second_side),
-            _ => return None,
+        let (then_value, else_value) = match first_side {
+            Side::Then => (first.2, second.2),
+            Side::Else => (second.2, first.2),
         };
+        if let Some(form) = self.short_circuit(branch, then_value, else_value) {
+            return Some(form);
+        }
+        let (chosen, chosen_on) =
+            self.chosen_over_state(branch, [(first_side, first.2), (second_side, second.2)])?;
         self.select(&Select {
             branch,
-            chosen: chosen.0,
-            chosen_on: chosen.1,
+            chosen,
+            chosen_on,
         })
+    }
+
+    /// Of the two values a join receives from the two sides of `branch`,
+    /// the one that reads nothing of the state but through `branch`, where
+    /// the other is the state.
+    fn chosen_over_state(
+        &mut self,
+        branch: BlockIdx,
+        sent: [(Side, ValueId); 2],
+    ) -> Option<(ValueId, Side)> {
+        let excused = self.values_reading_state(Some(branch));
+        let mut forms: Vec<Form<'a>> = Vec::new();
+        for (_, value) in sent {
+            forms.push(match excused.contains(&value) {
+                false => Form::Free,
+                true => self.form(value)?,
+            });
+        }
+        match forms[..] {
+            [Form::Free, Form::State] => Some((sent[0].1, sent[0].0)),
+            [Form::State, Form::Free] => Some((sent[1].1, sent[1].0)),
+            _ => None,
+        }
+    }
+
+    /// What the edges into `block` send its parameter `index`, each with the
+    /// block it leaves and the edge's side, and the branches that choose
+    /// among those edges other than those deciding whether `block` runs.
+    fn sent_to(&self, block: BlockIdx, index: usize) -> Option<Sent> {
+        let label = self.cfg.blocks[block.0].label;
+        let mut sent: Vec<(BlockIdx, Side, ValueId)> = Vec::new();
+        let mut from_blocks: Vec<BlockIdx> = Vec::new();
+        for from in self.body() {
+            let term = &self.cfg.blocks[from.0].terminator;
+            for (at, edge) in edges(term).into_iter().enumerate() {
+                if edge.target != label {
+                    continue;
+                }
+                let position = index.checked_sub(edge.fills_from)?;
+                let side = match at {
+                    0 => Side::Then,
+                    _ => Side::Else,
+                };
+                sent.push((from, side, edge.args[position]));
+                if !from_blocks.contains(&from) {
+                    from_blocks.push(from);
+                }
+            }
+        }
+        Some(Sent {
+            sent,
+            deciders: self.join_deciders(block, &from_blocks),
+        })
+    }
+
+    /// RFC-0089 rule 4's left-biased extremum: this reading's state `p`, an
+    /// integer, is chosen by a compare with a value `y` of the iteration by
+    /// a strict order, the chosen arm sending `y` to `p` and to each of
+    /// `carried` a value that reads no token, the other arm leaving all of
+    /// them; and nothing else of the iteration reads `p` or any of
+    /// `carried`. Returns `Max` or `Min`.
+    fn extremum_carrying(mut self, carried: &[(ValueId, usize)]) -> Option<LawOp> {
+        let State::Param { param, index } = self.state else {
+            return None;
+        };
+        let loop_ = self.loops.iter().find(|loop_| loop_.header == self.header)?;
+        let back = loop_.back_arg(self.cfg, index)?;
+        let carried_backs: Vec<ValueId> = carried
+            .iter()
+            .map(|&(_, q_index)| loop_.back_arg(self.cfg, q_index))
+            .collect::<Option<_>>()?;
+        let (join, at) = self.param_of(back)?;
+        let Sent { sent, deciders } = self.sent_to(join, at)?;
+        let [branch] = deciders[..] else {
+            return None;
+        };
+        let sides = |this: &Self, sent: &[(BlockIdx, Side, ValueId)]| -> Option<[(Side, ValueId); 2]> {
+            let [first, second] = sent[..] else {
+                return None;
+            };
+            let side_of = |(from, side, _): (BlockIdx, Side, ValueId)| match from == branch {
+                true => Some(side),
+                false => this.side_reaching(branch, from),
+            };
+            let pair = [(side_of(first)?, first.2), (side_of(second)?, second.2)];
+            (pair[0].0 != pair[1].0).then_some(pair)
+        };
+        let [first, second] = sides(&self, &sent)?;
+        let (chosen, chosen_on) = self.chosen_over_state(branch, [first, second])?;
+        let (Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. }) =
+            &self.cfg.blocks[branch.0].terminator
+        else {
+            return None;
+        };
+        let cond = *cond;
+        let strict = matches!(self.defs.get(&cond), Some(Def::Inst(at))
+            if matches!(self.inst(*at), InstKind::BinOp { op: BinOp::Lt | BinOp::Gt, .. }));
+        let Form::Combined(Step::Op {
+            op: op @ (LawOp::Min | LawOp::Max),
+            ..
+        }) = self.select(&Select {
+            branch,
+            chosen,
+            chosen_on,
+        })?
+        else {
+            return None;
+        };
+        if !strict {
+            return None;
+        }
+        let reading_p = self.values_reading_state(Some(branch));
+        let slots = slot_values(self.cfg);
+        let only_the_update = reading_p
+            .iter()
+            .all(|value| !slots.contains(value) && [param, cond, back].contains(value));
+        if !only_the_update {
+            return None;
+        }
+        let readings: Vec<FxHashSet<ValueId>> = carried
+            .iter()
+            .map(|&(param, index)| {
+                LawReading::of(
+                    self.loans,
+                    self.laws,
+                    self.slots,
+                    self.header,
+                    &self.blocks,
+                    State::Param { param, index },
+                )
+                .dependent
+            })
+            .collect();
+        for ((&(q, _), &q_back), reading_q) in carried.iter().zip(&carried_backs).zip(&readings) {
+            let (q_join, q_at) = self.param_of(q_back)?;
+            if q_join != join {
+                return None;
+            }
+            let Sent { sent, .. } = self.sent_to(join, q_at)?;
+            let [(first_side, first), (_, second)] = sides(&self, &sent)?;
+            let (sent_chosen, sent_left) = match first_side == chosen_on {
+                true => (first, second),
+                false => (second, first),
+            };
+            let reads_a_token = reading_p.contains(&sent_chosen)
+                || readings.iter().any(|reading| reading.contains(&sent_chosen));
+            let only_handed_on = reading_q
+                .iter()
+                .all(|value| !slots.contains(value) && [q, q_back].contains(value));
+            if sent_left != q || reads_a_token || !only_handed_on {
+                return None;
+            }
+        }
+        Some(op)
+    }
+
+    /// The block and position of the block parameter `value` is.
+    fn param_of(&self, value: ValueId) -> Option<(BlockIdx, usize)> {
+        match self.defs.get(&value) {
+            Some(Def::Param { block, index }) => Some((*block, *index)),
+            _ => None,
+        }
+    }
+
+    /// A branch on a `Bool` token `p` itself, whose arm where `p` holds
+    /// sends `true` and whose other arm sends `y`, is `p ‖ y`; one whose arm
+    /// where `p` fails sends `false` and whose other arm sends `y` is
+    /// `p && y` (RFC-0089 rule 4). `y` reads nothing of `p` but through the
+    /// branch, and its arm holds no effect, no operation that can raise and
+    /// no loop: a chunk combined from the identity computes `y` where the
+    /// program's own run skips it.
+    fn short_circuit(
+        &mut self,
+        branch: BlockIdx,
+        then_value: ValueId,
+        else_value: ValueId,
+    ) -> Option<Form<'a>> {
+        let (Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. }) =
+            &self.cfg.blocks[branch.0].terminator
+        else {
+            return None;
+        };
+        let cond = *cond;
+        if !matches!(self.cfg.val_types.get(&cond), Some(Ty::Bool)) || self.form(cond)? != Form::State
+        {
+            return None;
+        }
+        let (op, y, arm) = match (self.bool_constant(then_value), self.bool_constant(else_value)) {
+            (Some(true), _) => (LawOp::Or, else_value, Side::Else),
+            (_, Some(false)) => (LawOp::And, then_value, Side::Then),
+            _ => return None,
+        };
+        if self.values_reading_state(Some(branch)).contains(&y) {
+            return None;
+        }
+        let arm_blocks: Vec<BlockIdx> = self
+            .body()
+            .filter(|block| {
+                self.deciders
+                    .get(block)
+                    .is_some_and(|deciders| deciders.contains(&branch))
+                    && self.side_reaching(branch, *block) == Some(arm)
+            })
+            .collect();
+        if !self.runs_ahead_harmlessly(&arm_blocks) {
+            return None;
+        }
+        for &block in &arm_blocks {
+            for inst in &self.cfg.blocks[block.0].insts {
+                self.chain.extend(inst_info::defs(&inst.kind));
+            }
+        }
+        self.chain.extend([y, cond, then_value, else_value]);
+        Some(Form::Combined(Step::Op { op, exact: true }))
+    }
+
+    /// Whether `blocks` hold no loop's header, no operation with an effect,
+    /// and none that can raise or may not finish.
+    fn runs_ahead_harmlessly(&self, blocks: &[BlockIdx]) -> bool {
+        let summary = FunctionSummary::unknown();
+        let removal = raise::Removal::of(self.cfg, self.laws, &summary);
+        let holds_a_loop = self
+            .loops
+            .iter()
+            .any(|loop_| blocks.contains(&loop_.header));
+        !holds_a_loop
+            && blocks.iter().all(|block| {
+                self.cfg.blocks[block.0]
+                    .insts
+                    .iter()
+                    .enumerate()
+                    .all(|(at, inst)| {
+                        let at = crate::analysis::interval::InstAt { block: *block, at };
+                        !has_effect(&inst.kind) && !removal.stays_unused(at, &inst.kind)
+                    })
+            })
+    }
+
+    /// A switch on an `Option` token whose `None` arm sends `Some(y)` and
+    /// whose `Some(b)` arm sends `Some(b ⊕ y)`, `y` reading nothing of the
+    /// token but through the switch and `⊕` a law, is `⊕` lifted over
+    /// `Option` (RFC-0089 rule 4).
+    fn option_lift(&mut self, switch: BlockIdx, sent: &[(BlockIdx, Side, ValueId)]) -> Option<Form<'a>> {
+        let Terminator::Switch { tag, arms, default } = &self.cfg.blocks[switch.0].terminator
+        else {
+            return None;
+        };
+        let tag = *tag;
+        if self.form(tag)? != Form::State {
+            return None;
+        }
+        let targets: Vec<(Option<&crate::ir::SwitchKey>, BlockIdx)> = arms
+            .iter()
+            .map(|(key, label, _)| (Some(key), self.cfg.label_to_block[label]))
+            .chain(
+                default
+                    .iter()
+                    .map(|(label, _)| (None, self.cfg.label_to_block[label])),
+            )
+            .collect();
+        if targets.len() != 2 {
+            return None;
+        }
+        // Each value the join receives, with the arm it is sent from.
+        let mut from_arms: Vec<(Option<&crate::ir::SwitchKey>, BlockIdx, ValueId)> = Vec::new();
+        for &(from, _, value) in sent {
+            let [(key, arm)] = targets
+                .iter()
+                .copied()
+                .filter(|(_, arm)| *arm == from || self.domtree.dominates(*arm, from))
+                .collect::<Vec<_>>()[..]
+            else {
+                return None;
+            };
+            from_arms.push((key, arm, value));
+        }
+        let [(first_key, first_arm, first), (second_key, second_arm, second)] = from_arms[..]
+        else {
+            return None;
+        };
+        if first_arm == second_arm {
+            return None;
+        }
+        let payload_of = |value: ValueId| match self.defs.get(&value) {
+            Some(Def::Inst(at)) => match self.inst(*at) {
+                InstKind::MakeVariant {
+                    tag,
+                    payload: Some(payload),
+                    ..
+                } => Some((*tag, *payload)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let ((first_tag, first_payload), (second_tag, second_payload)) =
+            (payload_of(first)?, payload_of(second)?);
+        let is_option = matches!(self.cfg.val_types.get(&first), Some(Ty::Option(_)));
+        if first_tag != second_tag || !is_option {
+            return None;
+        }
+        let some = crate::ir::SwitchKey::Tag(first_tag);
+        let (y, combined, some_arm) = match (first_key == Some(&some), second_key == Some(&some)) {
+            (false, true) => (first_payload, second_payload, second_arm),
+            (true, false) => (second_payload, first_payload, first_arm),
+            _ => return None,
+        };
+        let excused = self.values_reading_state(Some(switch));
+        if excused.contains(&y) {
+            return None;
+        }
+        let Some(&Def::Inst(at)) = self.defs.get(&combined) else {
+            return None;
+        };
+        let (lifted, left, right) = self.binary_law(self.inst(at))?;
+        let is_payload = |value: ValueId| self.payload_read(value, tag, some_arm);
+        let (payload, other, commutes_needed) = match (is_payload(left), is_payload(right)) {
+            (true, false) => (left, right, false),
+            (false, true) => (right, left, true),
+            _ => return None,
+        };
+        let commutes = match lifted {
+            Lifted::Op { op, .. } => op.commutes(),
+            Lifted::Call { law, .. } => law.commutative,
+        };
+        if (commutes_needed && !commutes)
+            || !self.same_value(y, other)
+            || excused.contains(&other)
+        {
+            return None;
+        }
+        self.chain
+            .extend([tag, y, other, payload, combined, first, second]);
+        Some(Form::Combined(Step::OptionLifted(lifted)))
+    }
+
+    /// Whether `value` reads the payload of the `Option` token the switch on
+    /// `tag` decides by, in that switch's `Some` arm `some_arm`.
+    fn payload_read(&self, value: ValueId, tag: ValueId, some_arm: BlockIdx) -> bool {
+        let Some(&Def::Inst(at)) = self.defs.get(&value) else {
+            return false;
+        };
+        let in_arm = at.block == some_arm || self.domtree.dominates(some_arm, at.block);
+        let reads = match (self.inst(at), self.state) {
+            (
+                InstKind::Take {
+                    target,
+                    path,
+                    taken_out: false,
+                    ..
+                },
+                State::Slot(slot),
+            ) => {
+                matches!(path[..], [crate::ir::PathSeg::Payload])
+                    && (inst_info::storage(target) == Some(slot)
+                        || *target == RefTarget::Through(tag))
+            }
+            (InstKind::UnwrapVariant { src, .. }, State::Param { param, .. }) => *src == param,
+            _ => false,
+        };
+        in_arm && reads
+    }
+
+    /// An associative binary law an instruction combines two values
+    /// through, and those values in order.
+    fn binary_law(&self, kind: &InstKind) -> Option<(Lifted<'a>, ValueId, ValueId)> {
+        match kind {
+            InstKind::BinOp {
+                op, left, right, ..
+            } => {
+                let ty = self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
+                let exact = match ty {
+                    ty if crate::analysis::affine::exact_under_wrapping(ty) => true,
+                    Ty::Float => false,
+                    _ => return None,
+                };
+                let op = match op {
+                    BinOp::Add(_) => LawOp::Add,
+                    BinOp::Mul(_) => LawOp::Mul,
+                    BinOp::Min => LawOp::Min,
+                    BinOp::Max => LawOp::Max,
+                    _ => return None,
+                };
+                Some((Lifted::Op { op, exact }, *left, *right))
+            }
+            InstKind::FunctionCall {
+                callee: callee @ Callee::Extern { id, instance, .. },
+                args,
+                ..
+            } => {
+                let ResolvedLaws::Binary(law @ ResolvedBinary {
+                    associative: true, ..
+                }) = self.laws.of_callee(callee)
+                else {
+                    return None;
+                };
+                let &[left, right] = args.as_slice() else {
+                    return None;
+                };
+                Some((
+                    Lifted::Call {
+                        callee: ExternInstance {
+                            id: *id,
+                            instance: *instance,
+                        },
+                        law,
+                    },
+                    left,
+                    right,
+                ))
+            }
+            _ => None,
+        }
     }
 
     /// `if y < s { s = y }` and its mirror images over an integer: the
@@ -3044,6 +4133,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if a == b {
             return true;
         }
+        // A copy of an element read through a shared slice at one index is
+        // the element's place, as a take through a reference is.
         let read = |value: ValueId| match self.defs.get(&value) {
             Some(Def::Inst(at)) => match self.inst(*at) {
                 InstKind::Take {
@@ -3051,7 +4142,13 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     path,
                     taken_out: false,
                     ..
-                } => Some((*reference, path.clone())),
+                } => Some((*reference, path.iter().cloned().map(Component::Named).collect())),
+                InstKind::Index {
+                    slice,
+                    index,
+                    mode: IndexMode::Copy,
+                    ..
+                } => Some((*slice, vec![Component::At(*index)])),
                 _ => None,
             },
             _ => None,
