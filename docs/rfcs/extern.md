@@ -1357,13 +1357,14 @@ sides, and an extern that must frame it takes a closure that makes it.
    hosts it is exposed to, and nothing else runs it.
 
 6. **An extern frames a call through a closure.** An extern that must act
-   around the callee (mark before, roll back after) takes the arguments at
-   a type variable and a closure that makes the call:
-   `call<A, R>(…, args: &A, make: Closure<(&A,), R, E>) -> R`. It calls
-   `make` as often as it needs, lending `args` each time. `A` never
-   leaves the call, and the checker checks the closure's body, the real
-   call included. Nothing here is new: a stage already calls its closure
-   with a value at a variable (RFC-0067 rule 4).
+   around the callee (mark before, roll back after) takes a closure of no
+   parameters that makes the call, its arguments captured:
+   `call<R>(…, make: Closure<(), R, E>) -> R`, written
+   `call_llm(@h, || summarize({ text: t }))`. It calls `make` as often as
+   it needs. The arguments never reach the extern, so no argument type
+   enters its signature, and the checker checks the closure's body, the
+   real call included. A capture the body moves out cannot serve a second
+   call, and the move check refuses that as anywhere else.
 
 **Why.** One solve gives both sides of the call one type: no comparison
 across interners, no identity question between two registries, no copy of
@@ -1385,5 +1386,7 @@ its hosts. Without rule 4 it would hold only for what the graph can see.
 - Arguments as a builder checked when the call runs (`args()` with
   per-type setters) — the checker sees neither side, and the argument types
   are the builder's few.
+- The arguments as a parameter of the extern beside the closure — the
+  extern cannot open them, so passing them is a capture spelled twice.
 - Recursion between hosts, or a cycle broken by a call through a closure —
   rule 3 and rule 4 refuse both.
