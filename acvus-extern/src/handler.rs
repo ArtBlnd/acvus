@@ -206,7 +206,7 @@ where
     /// `run` is this parameter's own `WIDTH` values of a call's argument
     /// run, and any storage a reference it yields names is live and unmoved
     /// for `'a` — exclusively so for an exclusive reference (RFC-0018).
-    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], site: &A::Site) -> Self;
+    unsafe fn take(rt: crate::Crossing<'a, Rt>, run: &'a [Rt::Value], site: &'a A::Site) -> Self;
 }
 
 /// One parameter's values of a call's argument run, handed to the closure the
@@ -449,7 +449,7 @@ where
     unsafe fn take(
         rt: crate::Crossing<'a, Rt>,
         run: &'a [Rt::Value],
-        site: &OwningSite<A, Rt>,
+        site: &'a OwningSite<A, Rt>,
     ) -> Instance<'w, S, R, Rt, T> {
         // SAFETY: the caller's contract, which is the argument's own.
         let recv = unsafe { R::take(rt, run, &site.argument) };

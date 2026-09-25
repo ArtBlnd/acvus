@@ -36,6 +36,11 @@ struct FoldAttr {
 }
 
 impl LawAttr {
+    /// The first law the attribute states.
+    pub(crate) fn first_word(&self) -> &Ident {
+        &self.first_word
+    }
+
     pub(crate) fn parse_after(keyword: Ident, input: ParseStream) -> syn::Result<Self> {
         let content;
         syn::parenthesized!(content in input);

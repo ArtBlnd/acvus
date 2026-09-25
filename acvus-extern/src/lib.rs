@@ -18,6 +18,7 @@
 
 extern crate self as acvus_extern;
 
+mod args;
 mod canonical;
 pub mod core;
 mod crossing;
@@ -51,6 +52,7 @@ mod uniform;
 mod vec;
 mod within;
 
+pub use args::{Args, ArgsSite, ByArgs, Encoded, Members, Positions};
 pub use canonical::Canonical;
 pub use crossing::{Crossing, Holding};
 pub use ctx::Ctx;
@@ -58,7 +60,7 @@ pub use declared::Declared;
 pub use derive::transparent::Transparent;
 pub use effect::{Idempotent, Opaque, Pure, Suspends};
 pub use erased::{Erased, InlineMut, StoredMut};
-pub use func::{ArgTypes, Args, CallArgs, Closure, ClosureFn, Passed, PassedByValue};
+pub use func::{ArgTypes, CallArgs, ClosureArgs, Closure, ClosureFn, Passed, PassedByValue};
 pub use handler::{
     Arg, ArgAt, ArgRun, AsyncAtSite, AsyncCall, AsyncFactory, AsyncGlue, AtInstance, AtSite,
     Borrowable, BorrowableSpecialized, ByRef, ByValue, CallForms, CallSite, DeclaredInstance,

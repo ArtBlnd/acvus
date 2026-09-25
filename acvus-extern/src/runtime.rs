@@ -242,6 +242,18 @@ pub trait Runtime: Sized + Send + Sync + 'static {
     /// closure it is passed to keeps it no longer than the call.
     unsafe fn reference(&self, target: &Self::Value) -> Self::Value;
 
+    /// `value` laid out as canonical bytes by `ty` and appended to `out`
+    /// (RFC-0033), for `Args::encode`.
+    ///
+    /// # Safety
+    /// `value` holds a value this runtime crossed at `ty`, live for the call.
+    unsafe fn encode(
+        &self,
+        ty: &acvus_mir::ty::Ty,
+        value: &Self::Value,
+        out: &mut Vec<u8>,
+    ) -> crate::SpaceResult<()>;
+
     /// A future that waits `d` (RFC-0075 rule 1). It borrows nothing of
     /// `&self`: `use<Self>` is its whole capture, so a handler holds it past
     /// the call that made it. A timer is the host's, so there is no default.
@@ -409,6 +421,9 @@ impl Runtime for TypesOnly {
         panic!("TypesOnly runtime holds no values")
     }
     unsafe fn reference(&self, _: &()) {}
+    unsafe fn encode(&self, _: &acvus_mir::ty::Ty, _: &(), _: &mut Vec<u8>) -> crate::SpaceResult<()> {
+        Err(crate::SpaceError::new("TypesOnly runtime holds no values"))
+    }
     /// Nothing runs here, so nothing waits beside it; the thread sleeps.
     fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send + use<> {
         async move { std::thread::sleep(d) }

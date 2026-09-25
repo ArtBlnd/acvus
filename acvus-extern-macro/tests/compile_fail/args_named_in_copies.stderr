@@ -1,0 +1,13 @@
+error: `copies(args)` names an `Args`, which lends no reference the result could copy: its members are taken by value (RFC-0082 rule 10, RFC-0097 rule 1)
+ --> tests/compile_fail/args_named_in_copies.rs:6:35
+  |
+6 | #[extern_fn(effect = pure, copies(args))]
+  |                                   ^^^^
+
+warning: unused imports: `Args`, `Runtime`, `Var`, and `kind`
+ --> tests/compile_fail/args_named_in_copies.rs:4:20
+  |
+4 | use acvus_extern::{Args, Runtime, Var, extern_fn, kind};
+  |                    ^^^^  ^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

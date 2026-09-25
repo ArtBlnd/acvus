@@ -855,6 +855,32 @@ where
     Rt: Runtime,
     F: Borrows<Rt, Q, O>,
 {
+    // SAFETY: the caller's contract: the storage is live and unmoved while
+    // the reference is used, which is this call.
+    let reference = unsafe { rt.reference(word) };
+    // SAFETY: the caller's contract, and `reference` names `word`'s storage.
+    unsafe { lend_through(rt, interner, &reference, held, f) }
+}
+
+/// As `lend`, through a reference value that already names the storage: a
+/// call's argument settled at `&T` or `&mut T` is lent as its target
+/// (RFC-0097 rule 1).
+///
+/// # Safety
+/// `reference` is a reference value naming a live, unmoved storage `rt`
+/// crossed at `held`, named by nothing else while `f` runs where the
+/// marker's loan is `Mut` (RFC-0018).
+pub(crate) unsafe fn lend_through<Rt, Q, O, F>(
+    rt: &Rt,
+    interner: &Interner,
+    reference: &Rt::Value,
+    held: &Ty,
+    f: F,
+) -> Result<O, PolyTy>
+where
+    Rt: Runtime,
+    F: Borrows<Rt, Q, O>,
+{
     let param = <F::Marker as Lendable<Rt>>::param_ty(interner);
     let Some(argument) = <F::Marker as Lendable<Rt>>::argument(interner, held) else {
         return Err(param);
@@ -873,12 +899,9 @@ where
         width
     };
     let mut run = [Rt::Value::default(); WIDEST];
-    // SAFETY: the caller's contract: the storage is live and unmoved while
-    // the reference is used, which is this call.
-    let reference = unsafe { rt.reference(word) };
     // SAFETY: the caller's contract, and `argument` answered for `held`.
     unsafe {
-        <F::Marker as sealed::Lend<Rt>>::lend(Crossing::new(rt), &reference, held, &mut run[..width])
+        <F::Marker as sealed::Lend<Rt>>::lend(Crossing::new(rt), reference, held, &mut run[..width])
     };
     // SAFETY: `run` is the marker's run over the storage, and `sites` was
     // built from the argument's settled type.

@@ -86,7 +86,7 @@ where
 }
 
 /// A closure's parameter tuple.
-pub trait Args: Send + Sync {}
+pub trait ClosureArgs: Send + Sync {}
 
 pub trait CanonicalArgs: Send + Sync {
     type Canon: CanonicalArgs<Canon = Self::Canon> + 'static;
@@ -99,7 +99,7 @@ pub trait CanonicalArgs: Send + Sync {
 /// exactly the tuple's members at the types the checker settled for them,
 /// each crossed by its own `Passed`; it crosses nothing else with the
 /// capability; and it keeps no capability past the call.
-pub unsafe trait CallArgs<Rt>: Args
+pub unsafe trait CallArgs<Rt>: ClosureArgs
 where
     Rt: Runtime,
 {
@@ -373,7 +373,7 @@ where
     unsafe { R::materialize(rt, out) }
 }
 
-impl Args for () {}
+impl ClosureArgs for () {}
 
 impl CanonicalArgs for () {
     type Canon = ();
@@ -410,7 +410,7 @@ impl ArgTypes for () {
     }
 }
 
-impl<A0> Args for (A0,) where A0: Send + Sync {}
+impl<A0> ClosureArgs for (A0,) where A0: Send + Sync {}
 
 impl<A0> CanonicalArgs for (A0,)
 where
@@ -453,7 +453,7 @@ where
 /// `call_n`. One more line is one more arity.
 macro_rules! args_of {
     ($($A:ident: $at:tt),+) => {
-        impl<$($A,)+> Args for ($($A,)+) where $($A: Send + Sync,)+ {}
+        impl<$($A,)+> ClosureArgs for ($($A,)+) where $($A: Send + Sync,)+ {}
 
         impl<$($A,)+> CanonicalArgs for ($($A,)+)
         where

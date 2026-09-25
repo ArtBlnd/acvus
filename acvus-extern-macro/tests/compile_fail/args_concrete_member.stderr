@@ -1,0 +1,13 @@
+error: `i64` is a concrete member of `Args`: a position whose type Rust names is an ordinary parameter, taken as `x: i64` (RFC-0097 rule 1)
+ --> tests/compile_fail/args_concrete_member.rs:6:35
+  |
+6 | fn count<A, R>(args: Args<'_, (A, i64), R>) -> u64
+  |                                   ^^^
+
+warning: unused imports: `Args`, `Runtime`, `Var`, and `kind`
+ --> tests/compile_fail/args_concrete_member.rs:3:20
+  |
+3 | use acvus_extern::{Args, Runtime, Var, extern_fn, kind};
+  |                    ^^^^  ^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

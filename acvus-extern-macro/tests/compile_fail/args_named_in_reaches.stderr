@@ -1,0 +1,13 @@
+error: `reaches` names `args`, an `Args`: a call reaches a place only through a reference parameter, and an `Args` takes its members by value (RFC-0082 rule 7, RFC-0097 rule 1)
+ --> tests/compile_fail/args_named_in_reaches.rs:5:36
+  |
+5 | #[extern_fn(effect = pure, reaches(args))]
+  |                                    ^^^^
+
+warning: unused imports: `Args`, `Runtime`, `Var`, and `kind`
+ --> tests/compile_fail/args_named_in_reaches.rs:3:20
+  |
+3 | use acvus_extern::{Args, Runtime, Var, extern_fn, kind};
+  |                    ^^^^  ^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

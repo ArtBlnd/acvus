@@ -1408,3 +1408,61 @@ its hosts. Without rule 4 it would hold only for what the graph can see.
   extern cannot open them, so passing them is a capture spelled twice.
 - Recursion between hosts, or a cycle broken by a call through a closure —
   rule 3 and rule 4 refuse both.
+
+## RFC-0097: A dynamic extern meets data from outside the checker at one sealed gate
+
+Status: Proposed
+
+Data from outside the graph (a model's output, another program's bytes, a
+file) has no type the checker saw. A statically typed host still has to
+turn it into typed values and read typed values out of a call it cannot
+name in Rust. Both happen at one gate the interpreter keeps, typed by the
+call site, with every mismatch an explicit `None`.
+
+1. **A view of the call's arguments.** A handler may take
+   `Args<'call, P, Rt>`, `P` a tuple of the declaration's own type
+   variables and `Rt` its runtime:
+   each is one acvus parameter at its position (RFC-0023 rule 5), and the
+   view holds those arguments as sealed `(Ty, value)` pairs, moved in and
+   released at the end of the call, so a write through it is seen within
+   the call only. A concrete member is refused, being an ordinary
+   parameter, and so is a second `Args`. It reads one only by
+   lending, `with(i, |p| …)` and `with_mut(i, |p| …)`, each `Option`,
+   `Some` exactly when the closure's parameter type, a borrow or a
+   projection, is the argument's settled type (the check of
+   `acvus_extern::lend`). No method returns a value, a
+   `Ty` or a word. `len()` counts the arguments; `encode()` lays them out by
+   their types (RFC-0033) as `Encoded` bytes, owned and `'static`.
+2. **A Rust closure as a function value.** An extern may return a closure
+   `Fn(Args<'call>, Output<'call>) -> Finished<'call>` as a script function
+   value. Its state is `Send + Sync + 'static`; its arguments arrive per call
+   as rule 1's view and its result is built through rule 3. The function
+   type is the one its call site settles.
+3. **A result the site types.** An extern declared `dynamic` returns
+   `Finished<'call>`, and its script type is `Option<τ>`, `τ` settled at the
+   call site by its use and refused when still open at the freeze. The
+   interpreter hands the handler an `Output<'call>` for `τ`: it is filled
+   leaf by leaf, `write::<T>` and `field(name, …)`, each checked against
+   `τ` at once, and sealed by `finish()`. A mismatch or a missing field
+   makes the result `None`, never a panic. `Finished<'call>` comes only from
+   that call's `Output`. The handler never reads `τ`. Generics are allowed:
+   a `Var` is opaque to it.
+4. **Decoding at an expected type.** `Entry::run_encoded(Encoded)` decodes
+   an entry's inputs at their types (RFC-0033, untrusted), refusing on any
+   mismatch, and runs it.
+
+**Why.** Outside data is untyped wherever it comes from; the one honest
+place to check it is where it enters, against the type the checker settled
+there. Sealing the gate keeps every other crossing the checker's own
+(RFC-0068), and lending only keeps runtime values uncloned.
+**Cost.** A site-settled result needs a must-settle bound and the call
+site's result type in the prepared site; a Rust-bodied function value is a
+new closure kind.
+**Rejected.**
+- Reading an argument by value (`get::<T>`) — it clones a runtime value.
+- A handler with no generics at all — RFC-0023 needs a declared variable;
+  an opaque `Var` changes nothing the gate guards.
+- A serde value the interpreter converts — the handler's leaves are
+  already typed Rust values; a second data model adds a conversion.
+- Checking at the end by comparing a built type with `τ` — an `Output`
+  that knows `τ` fails at the first wrong leaf.

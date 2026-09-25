@@ -268,6 +268,15 @@ impl Runtime for Counting {
         open_mut(unsafe { <V as acvus_extern::Borrowable<Counting>>::deref_mut(self, reference) })
     }
 
+    unsafe fn encode(
+        &self,
+        _: &acvus_extern::Ty,
+        _: &V,
+        _: &mut Vec<u8>,
+    ) -> acvus_extern::SpaceResult<()> {
+        Err(acvus_extern::SpaceError::new("this test runtime lays out no value"))
+    }
+
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }

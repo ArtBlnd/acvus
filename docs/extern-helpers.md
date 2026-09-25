@@ -171,6 +171,12 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `ByRef` | a parameter taken by reference, at a strength | derived from `Arg` — from `&T` and `&mut T`, one name for both since the loan is a parameter |
 | `ByProjection` | a parameter declared as a projection | derived from `Arg` — a projection is a type with a lifetime argument, neither a value nor a borrow of one, so the macro picks it by that shape |
 | `ByStr` | a parameter written `&str` | derived from `Arg` — its run is the pair a view occupies where every `ByRef` is one value |
+| `Args` | the call's arguments at the positions the declaration names only by type variable, each lent at the type the site settled (RFC-0097 rule 1) | atom — it owns the words the call moved in, and hands out no word, no `Ty` and no value |
+| `Members` | the tuple of type variables an `Args` covers | atom — sealed; its arity is how many positions and words the view takes |
+| `ByArgs` | a parameter written `Args<'_, (A, ..), Rt>` | derived from `Arg` — one acvus parameter per member, the settled types kept in its site table |
+| `ArgsSite` | an `Args`'s site: the settled type of each member and the interner they were settled under | derived from `Arg::Site` — owned copies, since a site table outlives the preparation that filled it |
+| `Positions` | the run an `Args` takes, one word per member | derived from `Form` — it survives the caller suspending, the words being moved into the view |
+| `Encoded` | an `Args`'s arguments laid out by their settled types (RFC-0033) | atom — owned bytes, built only by `Args::encode` |
 | `Ret` | how a result is written into the destination run the caller lent | atom — the caller's registers or a heap object's body, written the same way |
 | `Val` | a result crossing as itself | derived from `Ret` |
 | `RetStr` | a result written `&str` | derived from `Ret` — the view's pair rather than an owned value |
@@ -179,9 +185,9 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `IntoRun` | a closure call's arguments written into the callee's parameter registers | atom — the argument side of what `Ret` does for a result |
 | `Closure` | the runtime's closure value at the types its declaration names | atom — it holds the value and the one answer to "does a call suspend" |
 | `ClosureFn` | calling one | atom — the one place a body crosses back into the runtime |
-| `Args` | a closure's parameter tuple, with the erased tuple it has at run time | atom — arity is a tuple, not a family of types |
-| `CallArgs` | the same tuple as a call needs it | derived from `Args` — the runtime entry that takes this many arguments |
-| `ArgTypes` | the same tuple as the declared type needs it | derived from `Args` — the parameter terms of the closure's acvus type |
+| `ClosureArgs` | a closure's parameter tuple, with the erased tuple it has at run time | atom — arity is a tuple, not a family of types |
+| `CallArgs` | the same tuple as a call needs it | derived from `ClosureArgs` — the runtime entry that takes this many arguments |
+| `ArgTypes` | the same tuple as the declared type needs it | derived from `ClosureArgs` — the parameter terms of the closure's acvus type |
 
 ## Axis 4 — typing
 

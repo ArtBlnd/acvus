@@ -422,6 +422,15 @@ impl Runtime for Tiny {
         // SAFETY: the target is live and, by the checker, exclusively named.
         open_mut(unsafe { &mut *(*p as *mut V) })
     }
+    unsafe fn encode(
+        &self,
+        _: &acvus_extern::Ty,
+        _: &V,
+        _: &mut Vec<u8>,
+    ) -> acvus_extern::SpaceResult<()> {
+        Err(acvus_extern::SpaceError::new("this test runtime lays out no value"))
+    }
+
     unsafe fn reference(&self, target: &V) -> V {
         V::Reference(target as *const V)
     }
