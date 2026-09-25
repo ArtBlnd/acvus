@@ -1417,8 +1417,13 @@ turn it into typed values and read typed values out of a call it cannot
 name in Rust. Both happen at one gate the interpreter keeps, typed by the
 call site, with every mismatch an explicit `None`.
 
-1. **A view of the call's arguments.** A handler may take `Args<'call>`:
-   the call's arguments as sealed `(Ty, value)` pairs. It reads one only by
+1. **A view of the call's arguments.** A handler may take
+   `Args<'call, P>`, `P` a tuple of the declaration's own type variables:
+   each is one acvus parameter at its position (RFC-0023 rule 5), and the
+   view holds those arguments as sealed `(Ty, value)` pairs, moved in and
+   released at the end of the call, so a write through it is seen within
+   the call only. A concrete member is refused, being an ordinary
+   parameter, and so is a second `Args`. It reads one only by
    lending, `with::<T>(i, |&T| …)` and `with_mut::<T>(i, |&mut T| …)`, each
    `Option`, `Some` exactly when `T`'s declaration is the argument's settled
    type (the check of `acvus_extern::lend`). No method returns a value, a
