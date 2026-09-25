@@ -655,8 +655,14 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
 4. **What a stage is, is read.** `analysis::loop_deps` is the one place
    that computes, per stage, its cycles and, per cycle, its token, order
    and law; the validator, the passes and the lowerer read it.
-   - Order is `Disjoint` when the cycle writes only the element at its
-     counter; `AnyOrder` when every operation in it commutes (RFC-0013), is
+   - Order is `Disjoint` when every place the cycle writes in its storage,
+     and every place the loop reads there, lies under one path component
+     that is `a·k + b` in the counter `k` (RFC-0066 rule 4), the same term
+     at every access, with `a ≠ 0` and `b` invariant in the loop: the term
+     is exact, so two iterations never touch one place. The `&mut`
+     source's element is `a = 1, b = 0`. An extern call reaches only the
+     places its declaration states, and all of the storage when it states
+     none; `AnyOrder` when every operation in it commutes (RFC-0013), is
      joined by a `merge` (RFC-0007 rule 7), or combines through a
      commutative law; `InOrder` otherwise. A float law is `InOrder`:
      joining in arrival order changes the rounding.
@@ -713,8 +719,7 @@ consults. The cutting pass, rerun after a pass that frees a stage.
   alternatives.
 
 **Open.** Each runs as `InOrder` today; the tiers weigh ease against reach.
-- First: a law through a nested loop; a store at an injective affine index
-  of the counter as `Disjoint`; named commutation sets in place of
+- First: a law through a nested loop; named commutation sets in place of
   `commutes: bool`.
 - After the executor's pipeline: a cycle split by key; a `Stream` source
   for `while` loops.
