@@ -97,6 +97,19 @@ fn an_unbound_dispatch_requires_the_tag_and_both_arms() {
     );
 }
 
+/// RFC-0071 rule 3: a tag whose type no use settles is a `String`, so a
+/// `$` read only in a tag, or lent to one, is a `String` input.
+#[test]
+fn a_param_read_only_in_a_tag_is_a_string_input() {
+    for opt in [Opt::None, Opt::Full] {
+        assert_eq!(
+            inputs_at("{{ $name }}|{{ &$lang }}", &[], opt),
+            vec![shown("lang", "String"), shown("name", "String")],
+            "{opt:?}"
+        );
+    }
+}
+
 #[test]
 fn binding_the_tag_leaves_the_arm_it_chose() {
     assert_eq!(
@@ -419,7 +432,7 @@ fn every_literal_form_binds_where_the_template_compiles_unbound() {
 #[test]
 fn a_value_with_no_type_is_refused_where_it_is_bound() {
     let interner = Interner::new();
-    let name = interner.intern("x");
+    let name = QualifiedRef::root(interner.intern("x"));
     let bind = |value: BoundValue| Bindings::default().bind(name, value);
 
     assert_eq!(

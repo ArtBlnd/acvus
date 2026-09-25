@@ -32,7 +32,7 @@ for slice(r3) -> L1 else L2 stages [L1, L9]
 // cost W=6 O=18281 split when n > 97499, n = len(r3)
 for range(0 (r25)..r1) -> L4 else L5 stages [L4, L10, L11]
 // L4: free {index, cast}
-// L10: cycle Carried(r24) in_order {+}
+// L10: cycle Carried(r24) in_order law(Op(Add) exact commutative) scan {+}
 // L11: cycle Storage(r26) in_order law(Fold(r26, #3) exact) {ref, call push}
 // control upfront
 // cost W=4 O=18287 split when n > 146296, n = max(r1 - 0 (r25), 0)

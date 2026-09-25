@@ -230,7 +230,7 @@ pub fn variant_tags_at<'a, const K: usize>(
             interner: at.interner,
             ty,
         });
-        (key.bits(), payload)
+        (crate::repr::word_of_tag(key), payload)
     })
 }
 

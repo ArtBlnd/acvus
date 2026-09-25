@@ -7,9 +7,10 @@
 //! not dominate the latch, so the pass leaves that multiplication where it
 //! is. The two are the reduced and the unreduced form of one computation, in
 //! one program, on one run, and the test reads their difference. The
-//! accumulator doubles before it adds, `acc * 2 + …`: a plain sum is a merge,
-//! joined `AnyOrder`, and the pass reduces only what an `InOrder` join reads
-//! (RFC-0066 rule 7).
+//! accumulator is squared before it adds, `acc * acc % 1000 + …`: a plain
+//! sum is a merge, joined `AnyOrder`, `acc * 2 + …` has the affine map law
+//! (RFC-0093 rule 8), and the pass reduces only what an `InOrder` join with
+//! no law reads (RFC-0066 rule 7).
 //!
 //! The program's `*` and `+` trap where they leave the width (RFC-0037
 //! rule 3), and the pass reduces them only where the loop's word bounds,
@@ -43,20 +44,20 @@ fn ctx(i: &Interner, entries: &[(&str, i64)]) -> Context {
         .collect()
 }
 
-/// `acc * 2 + (i * k + x)` over the iterations. A case is one whose
-/// program does not overflow, and Rust's own operators here say so.
-fn doubling_reference(case: &Case) -> i64 {
-    (0..case.n).fold(0i64, |acc, i| acc * 2 + (i * case.factor + case.offset))
+/// `acc * acc % 1000 + (i * k + x)` over the iterations. A case is one
+/// whose program does not overflow, and Rust's own operators here say so.
+fn squaring_reference(case: &Case) -> i64 {
+    (0..case.n).fold(0i64, |acc, i| acc * acc % 1000 + (i * case.factor + case.offset))
 }
 
 fn both_forms(case: &Case) -> String {
     let Case { n, factor, offset } = case;
     format!(
         "let reduced = 0; let i = 0; \
-         while i < {n} {{ reduced = reduced * 2 + (i * {factor} + {offset}); i = i + 1; }} \
+         while i < {n} {{ reduced = reduced * reduced % 1000 + (i * {factor} + {offset}); i = i + 1; }} \
          let unreduced = 0; let j = 0; \
          while j < {n} {{ \
-             if j + 1 > j {{ unreduced = unreduced * 2 + (j * {factor} + {offset}); }}; \
+             if j + 1 > j {{ unreduced = unreduced * unreduced % 1000 + (j * {factor} + {offset}); }}; \
              j = j + 1; \
          }} \
          reduced - unreduced"
@@ -67,7 +68,7 @@ fn reduced_only(case: &Case) -> String {
     let Case { n, factor, offset } = case;
     format!(
         "let acc = 0; let i = 0; \
-         while i < {n} {{ acc = acc * 2 + (i * {factor} + {offset}); i = i + 1; }} \
+         while i < {n} {{ acc = acc * acc % 1000 + (i * {factor} + {offset}); i = i + 1; }} \
          acc"
     )
 }
@@ -121,7 +122,7 @@ async fn the_reduced_form_and_the_unreduced_one_agree() {
         );
         assert_eq!(
             run_case(reduced_only(&case)).await,
-            doubling_reference(&case),
+            squaring_reference(&case),
             "n={n} k={factor} x={offset}: the reduced loop does not compute the recurrence"
         );
     }
@@ -149,7 +150,7 @@ async fn a_counter_advanced_past_the_width_after_the_last_iteration_agrees() {
     );
     assert_eq!(
         run_case(reduced_only(&case)).await,
-        doubling_reference(&case),
+        squaring_reference(&case),
         "the reduced loop does not compute the recurrence"
     );
 }
@@ -159,13 +160,13 @@ const FACTOR: i64 = 5;
 const OFFSET: i64 = 7;
 
 /// The division raises where the divisor reaches zero (RFC-0037 rule 2).
-/// The accumulator doubles here too: `acc + a` then `acc + b` alone is a
+/// The accumulator is squared here too: `acc + a` then `acc + b` alone is a
 /// sum, which RFC-0089 rule 4 reads as a merge through its two steps.
 fn reduced_with_a_division(n: i64) -> String {
     format!(
         "let acc = 0; let i = 0; \
          while i < {n} {{ \
-             acc = acc * 2 + (i * {FACTOR} + {OFFSET}); \
+             acc = acc * acc % 1000 + (i * {FACTOR} + {OFFSET}); \
              acc = acc + 10 / (@d - i); \
              i = i + 1; \
          }} \
@@ -188,7 +189,7 @@ async fn with_division(n: i64) -> i64 {
 #[tokio::test]
 async fn every_iteration_before_the_raise_still_runs() {
     let completed = (0..DIVISOR_REACHES_ZERO_AT).fold(0i64, |acc, i| {
-        acc * 2 + (i * FACTOR + OFFSET) + 10 / (DIVISOR_REACHES_ZERO_AT - i)
+        acc * acc % 1000 + (i * FACTOR + OFFSET) + 10 / (DIVISOR_REACHES_ZERO_AT - i)
     });
     assert_eq!(with_division(DIVISOR_REACHES_ZERO_AT).await, completed);
 }

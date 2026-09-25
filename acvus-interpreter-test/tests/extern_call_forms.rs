@@ -185,7 +185,12 @@ fn a_pair_parameter_costs_two_registers_and_not_a_window() {
             &interner,
             source,
             Context::default(),
-            vec![registry(), acvus_ext::conversion_registry()],
+            vec![
+                registry(),
+                acvus_ext::conversion_registry(),
+                acvus_ext::iterator_registry(),
+                acvus_ext::string_registry(),
+            ],
             Ty::I64,
         );
         let ops = ops_of_anywhere(&blocks);
@@ -334,7 +339,12 @@ async fn a_large_value_crosses_the_one_argument_form() {
         &interner,
         "form_string(\"hello\".to_string())",
         Context::default(),
-        vec![registry(), acvus_ext::conversion_registry()],
+        vec![
+            registry(),
+            acvus_ext::conversion_registry(),
+            acvus_ext::iterator_registry(),
+            acvus_ext::string_registry(),
+        ],
         Ty::String,
     )
     .await;

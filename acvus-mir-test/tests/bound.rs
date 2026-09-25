@@ -47,6 +47,7 @@ fn types(i: &Interner) -> TypeRegistry {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false; params],
+                may_hold_a_function: true,
             })
             .expect("one declaration per name");
     }

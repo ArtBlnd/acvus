@@ -5,7 +5,7 @@ for range(0 (r15)..r13) -> L1 else L2 stages [L1, L7]
 // cost W=10 O=18281 split when n > 58500, n = max(r13 - 0 (r15), 0)
 while r23 -> L4 else L5 stages [L3, L4, L6]
 // L3: cycle Storage(r24)+Control in_order {ref, call next, test_variant, while}
-// L4: free {unwrap_variant, assign, ref, call to_string, drop, array_begin, call vec}
+// L4: free {unwrap_variant, assign, ref, as_slice, call to_string, drop, array_begin, call vec}
 // L6: cycle Storage(r16) in_order {ref, call or_insert, call push}
 // control chained through L3
 // cost in place: no count on entry

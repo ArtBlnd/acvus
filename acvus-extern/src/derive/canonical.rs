@@ -1,22 +1,32 @@
 //! A type stored as itself is boxed at its canonical form and read back
 //! through it (`Canonical`).
 
-use std::mem::ManuallyDrop;
-
 use crate::canonical::{Canonical, same_layout};
+use crate::repr::SameLayout;
 use crate::runtime::Runtime;
 use crate::ty_arg::kind;
+
+/// The layout `Canonical` proves.
+#[inline(always)]
+fn layout<T>() -> SameLayout<T, T::Canon>
+where
+    T: Canonical<kind::Type>,
+{
+    // SAFETY: `Canonical`'s contract: `T::Canon` is `T` with each uniform
+    // part's `X` at `Never` and each lifetime at `'static`, one layout under
+    // its three layers.
+    unsafe { same_layout!(T, T::Canon) }
+}
 
 pub fn erase<T, Rt>(rt: crate::Crossing<'_, Rt>, value: T) -> Rt::Value
 where
     T: Canonical<kind::Type>,
     Rt: Runtime,
 {
-    same_layout!(T, T::Canon);
-    let held = ManuallyDrop::new(value);
-    // SAFETY: `Canonical`'s contract, with the layout checked above; `held`
-    // is never read again, so the value moves out exactly once.
-    let canon = unsafe { std::ptr::read((&raw const *held).cast::<T::Canon>()) };
+    // SAFETY: the canonical form releases what `T` would (`Canonical`'s
+    // release layer), and nothing reads it at `T::Canon` but the runtime's
+    // box, whose `'static` no loan of `T`'s outlives: RFC-0079 rule 7.
+    let canon = unsafe { layout::<T>().cast(value) };
     // SAFETY: a type stored as itself is stored as its canonical form.
     unsafe { rt.erase::<T::Canon>(canon) }
 }
@@ -28,11 +38,11 @@ where
     T: Canonical<kind::Type>,
     Rt: Runtime,
 {
-    same_layout!(T, T::Canon);
     // SAFETY: the caller's contract, and `erase` is `erase::<T::Canon>`.
-    let canon = ManuallyDrop::new(unsafe { rt.materialize::<T::Canon>(value) });
-    // SAFETY: as `erase`'s, read back the other way.
-    unsafe { std::ptr::read((&raw const *canon).cast::<T>()) }
+    let canon = unsafe { rt.materialize::<T::Canon>(value) };
+    // SAFETY: the caller's contract: the canonical form was erased from a
+    // `T`, which it is again.
+    unsafe { layout::<T>().flip().cast(canon) }
 }
 
 /// # Safety
@@ -42,10 +52,9 @@ where
     T: Canonical<kind::Type>,
     Rt: Runtime,
 {
-    same_layout!(T, T::Canon);
-    // SAFETY: the caller's contract, and `Canonical`'s with the layout
-    // checked above.
-    unsafe { &*(rt.deref::<T::Canon>(reference) as *const T::Canon).cast::<T>() }
+    // SAFETY: the caller's contract: the storage was erased from a `T`,
+    // which it is again for the loan.
+    unsafe { layout::<T>().flip().cast_ref(rt.deref::<T::Canon>(reference)) }
 }
 
 /// # Safety
@@ -56,9 +65,9 @@ where
     T: Canonical<kind::Type>,
     Rt: Runtime,
 {
-    same_layout!(T, T::Canon);
-    // SAFETY: as `deref`, with the caller's exclusive loan.
-    unsafe { &mut *(rt.deref_mut::<T::Canon>(reference) as *mut T::Canon).cast::<T>() }
+    // SAFETY: as `deref`, with the caller's exclusive loan; what is
+    // written as a `T` is a canonical form erased from a `T` again.
+    unsafe { layout::<T>().flip().cast_mut(rt.deref_mut::<T::Canon>(reference)) }
 }
 
 /// The canonical form's bytes named as `T`: `Stored::from_payload` of a
@@ -68,9 +77,10 @@ where
     T: Canonical<kind::Type>,
     Rt: Runtime,
 {
-    same_layout!(T, T::Canon);
-    // SAFETY: `Canonical`'s contract, with the layout checked above.
-    unsafe { &*(canon as *const T::Canon).cast::<T>() }
+    // SAFETY: `Canonical`'s contract: a `T::Canon` differs from a `T` in a
+    // uniform part's `X`, which only a `PhantomData` holds, and in lifetimes
+    // at `'static`, which read at `'c` hold for `'c`.
+    unsafe { layout::<T>().flip().cast_ref(canon) }
 }
 
 /// As `from_canon`, exclusively.
@@ -79,7 +89,6 @@ where
     T: Canonical<kind::Type>,
     Rt: Runtime,
 {
-    same_layout!(T, T::Canon);
     // SAFETY: as `from_canon`'s; `&mut T::Canon` is the exclusive name.
-    unsafe { &mut *(canon as *mut T::Canon).cast::<T>() }
+    unsafe { layout::<T>().flip().cast_mut(canon) }
 }

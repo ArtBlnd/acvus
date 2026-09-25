@@ -1,12 +1,10 @@
 //! This interpreter as a `Runtime`: the shared context is the host.
 
-use std::any::TypeId;
 use std::future::Future;
-use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use acvus_extern::{Ctx, Owned, Runtime, Variant};
+use acvus_extern::{Ctx, Owned, Runtime, Variant, repr};
 
 use crate::flight::{Flight, Tally};
 use crate::interpreter::InterpreterContext;
@@ -195,13 +193,8 @@ impl Runtime for AcvusRuntime {
     where
         T: Send + Sync + 'static,
     {
-        if TypeId::of::<T>() == TypeId::of::<CrossedResult>() {
-            let crossed = self.result_of_variant(value);
-            // SAFETY: the `TypeId` above says `T` is `CrossedResult`; the copy
-            // takes ownership and the original is forgotten.
-            let out: T = unsafe { mem::transmute_copy(&crossed) };
-            mem::forget(crossed);
-            return out;
+        if let Some(same) = repr::same_type::<CrossedResult, T>() {
+            return same.cast(self.result_of_variant(value));
         }
         unsafe { value.materialize::<T>() }
     }
@@ -210,11 +203,8 @@ impl Runtime for AcvusRuntime {
     where
         T: Send + Sync + 'static,
     {
-        if TypeId::of::<T>() == TypeId::of::<CrossedResult>() {
-            // SAFETY: as `materialize`'s.
-            let crossed: CrossedResult = unsafe { mem::transmute_copy(&value) };
-            mem::forget(value);
-            return self.variant_of_result(crossed);
+        if let Some(same) = repr::same_type::<T, CrossedResult>() {
+            return self.variant_of_result(same.cast(value));
         }
         unsafe { Value::erase(value) }
     }

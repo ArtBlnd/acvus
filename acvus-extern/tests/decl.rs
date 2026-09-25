@@ -760,6 +760,16 @@ where
     eq_at.call(ctx, a, (b,))
 }
 
+// A signature whose rest is a concrete `&mut String`, as `core::display`'s
+// is: the requirer's own Rust reference crosses as itself (RFC-0067 rule 6).
+extern_signature! { ns: "t", fn show<T>(a: &T, out: &mut String) where T: Var<kind::Type>; }
+
+#[extern_fn(instance_of = show, effect = pure)]
+fn show_int(a: &i64, out: &mut String) {
+    use std::fmt::Write;
+    write!(out, "<{a}>").expect("a write into a String does not fail");
+}
+
 extern_signature! { ns: "t", fn advance<I>(it: &mut I) -> i64 where I: Var<kind::Type>; }
 
 /// An instance that takes an `Instance` parameter, which `#[extern_fn]`
@@ -823,11 +833,11 @@ where
     extern_registry! {
         ns: "t",
         types: [Boxed<_, _, R>, Token<_>, Held<R>, Vec<_>],
-        signatures: [eq, step, front, advance, spend],
+        signatures: [eq, step, front, advance, spend, show],
         fns: [add, identity, apply, boxed, fetch, digest, take_token, draw, bump, as_slice,
               sum_slice, slice_first, at, count_where, eq_int, eq_string, step_int, drive,
               held, front_held, first_of, same, advance_twice, drive_advance, spend_int,
-              spend_of,
+              spend_of, show_int,
               greet(Greeting("hello".to_string()))],
     }
 }
@@ -1124,6 +1134,35 @@ fn a_mono_glue_runs_the_instance_the_glue_runs() {
         (&Place(other),),
         |same| same
     ));
+}
+
+/// A concrete `&mut String` after the receiver crosses through
+/// `CrossesRest` and the mono glue as the requirer's own reference: what the
+/// instance appends is in the caller's `String` after the call.
+#[test]
+fn a_concrete_mut_string_rest_is_written_through_to_the_caller() {
+    let (i, reg) = combined::<Tiny>();
+    let on_int = call_type(
+        vec![
+            acvus_extern::Ty::Ref(
+                acvus_extern::Mutability::Shared,
+                Box::new(TypeArg::uniform(acvus_extern::Ty::I64)),
+            ),
+            acvus_extern::Ty::Ref(
+                acvus_extern::Mutability::Mut,
+                Box::new(TypeArg::uniform(acvus_extern::Ty::String)),
+            ),
+        ],
+        acvus_extern::Ty::Unit,
+        &i,
+    );
+    instance_for(&reg, &i, "show", &on_int).expect("the i64 instance of t::show");
+    let recv = Place(erased(7i64));
+    let at = receiver_at(&reg, &i, "show", &on_int, 0);
+    let mut out = String::from("x=");
+    call_instance_of::<show<Place, Tiny>, _, _>(&at, &recv, (&mut out,), |()| ());
+    call_instance_of::<show<Place, Tiny>, _, _>(&at, &recv, (&mut out,), |()| ());
+    assert_eq!(out, "x=<7><7>");
 }
 
 #[test]

@@ -9,7 +9,8 @@ use acvus_mir::analysis::affine::{Affine, AffineValues, Derivation, for_body};
 use acvus_mir::analysis::carried::{Carried, CarriedState};
 use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::loop_deps::{
-    Accumulator, CallIdentity, CallLaw, FoldAccumulator, Law, LawOp, LoopDeps, Storage, Token,
+    Accumulator, CallIdentity, CallLaw, CycleLaw, FoldAccumulator, Law, LawOp, LoopDeps, Storage,
+    Token,
 };
 use acvus_mir::analysis::loops::{
     Invariance, Invariants, Loop, LoopId, LoopKind, LoopNest, Nesting, Term, Trip,
@@ -80,7 +81,11 @@ impl Analyzed {
 
     /// The law `loop_deps` judges on the cycle holding each token `holds`
     /// picks out of a `for`, in the order of the cycles.
-    fn laws_where(&self, loop_: &Loop, holds: impl Fn(&Token) -> bool) -> Vec<Option<Accumulator>> {
+    fn cycle_laws_where(
+        &self,
+        loop_: &Loop,
+        holds: impl Fn(&Token) -> bool,
+    ) -> Vec<Option<CycleLaw>> {
         let deps = LoopDeps::of(&self.cfg, &self.laws, loop_.natural.header)
             .unwrap_or_else(|fault| panic!("{}", fault.shown()));
         let judged = deps.judge(&self.cfg, &self.laws);
@@ -92,8 +97,15 @@ impl Analyzed {
             .collect()
     }
 
+    fn laws_where(&self, loop_: &Loop, holds: impl Fn(&Token) -> bool) -> Vec<Option<Accumulator>> {
+        self.cycle_laws_where(loop_, holds)
+            .into_iter()
+            .map(|law| law.map(|law| law.accumulator))
+            .collect()
+    }
+
     /// The law of the cycle over each carried state of a `for`.
-    fn state_laws(&self, loop_: &Loop) -> Vec<Option<Accumulator>> {
+    fn state_cycle_laws(&self, loop_: &Loop) -> Vec<Option<CycleLaw>> {
         let states: Vec<ValueId> = self
             .state(loop_)
             .params
@@ -101,10 +113,17 @@ impl Analyzed {
             .filter(|p| p.carried == Carried::State)
             .map(|p| p.param)
             .collect();
-        self.laws_where(
+        self.cycle_laws_where(
             loop_,
             |token| matches!(token, Token::Carried(param) if states.contains(param)),
         )
+    }
+
+    fn state_laws(&self, loop_: &Loop) -> Vec<Option<Accumulator>> {
+        self.state_cycle_laws(loop_)
+            .into_iter()
+            .map(|law| law.map(|law| law.accumulator))
+            .collect()
     }
 
     /// The law of the cycle over each storage slot a `for` writes.
@@ -453,23 +472,28 @@ fn the_state_as_the_second_operand_has_a_law_only_when_the_extern_commutes() {
     assert!(!call.commutative);
 }
 
+/// RFC-0093 rule 8: `t = t + m` reads the partial `m` outside `m`'s cycle,
+/// so `m`'s law is a scan.
 #[test]
-fn a_state_read_beside_its_update_has_no_law() {
+fn a_state_read_beside_its_update_has_its_law_as_a_scan() {
     let a = with_laws(
         "let n = 10; let m = 0; let t = 0; for x in 0..n { m = lawful::joined(m, x); t = t + m; } t",
     );
     let loop_ = a.sole_loop();
-    let laws = a.state_laws(loop_);
-    assert!(
-        !laws.iter().any(|law| matches!(
-            law,
-            Some(Accumulator {
-                law: Law::Call(_),
-                ..
-            })
-        )),
-        "the loop reads the partial `m`: {laws:?}"
-    );
+    let laws = a.state_cycle_laws(loop_);
+    let scanned_calls: Vec<bool> = laws
+        .iter()
+        .filter_map(|law| match law {
+            Some(CycleLaw {
+                accumulator: Accumulator {
+                    law: Law::Call(_), ..
+                },
+                scan,
+            }) => Some(*scan),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(scanned_calls, [true], "the loop reads the partial `m`: {laws:?}");
 }
 
 #[test]

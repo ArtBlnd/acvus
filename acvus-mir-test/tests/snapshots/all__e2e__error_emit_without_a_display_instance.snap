@@ -1,0 +1,5 @@
+---
+source: acvus-mir-test/tests/e2e.rs
+expression: result.unwrap_err()
+---
+[infer:test] [0..12] `{{ }}` has no instance of core::display for Array<i64, 2>

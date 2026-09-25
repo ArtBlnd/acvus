@@ -119,8 +119,8 @@ pub unsafe fn lend_run<'v, R>(_: Holding<'_, R>, values: &'v mut [Owned<R>]) -> 
 where
     R: Runtime,
 {
-    let len = values.len();
-    // SAFETY: the `repr(transparent)` stated above, and the caller's contract
-    // for what the slots hold.
-    unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<R::Value>(), len) }
+    // SAFETY: the caller's contract: no slot owns a value, so a write
+    // through the result releases none, and whatever it writes, a holder
+    // then owns.
+    unsafe { Owned::<R>::over_value().flip().cast_slice_mut(values) }
 }

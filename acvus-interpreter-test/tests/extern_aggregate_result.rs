@@ -82,7 +82,12 @@ async fn answer(source: &str) -> i64 {
         &interner,
         source,
         Context::default(),
-        vec![registry(), acvus_ext::conversion_registry()],
+        vec![
+            registry(),
+            acvus_ext::conversion_registry(),
+            acvus_ext::iterator_registry(),
+            acvus_ext::string_registry(),
+        ],
         Ty::I64,
     )
     .await
@@ -96,7 +101,12 @@ fn one_extern_operation(source: &str) -> String {
         &interner,
         source,
         Context::default(),
-        vec![registry(), acvus_ext::conversion_registry()],
+        vec![
+            registry(),
+            acvus_ext::conversion_registry(),
+            acvus_ext::iterator_registry(),
+            acvus_ext::string_registry(),
+        ],
         Ty::I64,
     );
     let ops = ops_of_anywhere(&blocks);

@@ -143,10 +143,13 @@ fn lsp_errors(interner: &Interner, environment: &CompilationGraph, source: &str)
     errs
 }
 
+/// What parsed is checked: `a + "x"` is refused beside the two parse
+/// errors. (An integer tag is no refusal: it appends through `core::display`,
+/// RFC-0071 rule 3.)
 #[test]
 fn a_broken_template_reports_every_parse_error_and_what_parsed() {
     let i = Interner::new();
-    let source = "% let a = 1\n% let = 2\n{{ a + 1 }}\n{{ f( }}\n";
+    let source = "% let a = 1\n% let = 2\n{{ a + \"x\" }}\n{{ f( }}\n";
     let env = with_std(&i, root_contexts(&i, &[]));
     let mut session = LspSession::new(&i, env.clone());
     let doc = session
@@ -293,18 +296,19 @@ fn incremental_update_fixes_error() {
     let i = Interner::new();
     let mut session = LspSession::new(&i, with_std(&i, root_contexts(&i, &[("x", Ty::I64)])));
 
-    // Start with emit type error: Int not emittable in template.
+    // Start with an emit type error: an array has no `core::display`
+    // instance, so a template cannot append it.
     let doc = session
-        .open(template_document(&i, "test"), "{{ @x }}")
+        .open(template_document(&i, "test"), "{{ [@x] }}")
         .expect("the session opens no other document");
     let errs = session.diagnostics(doc);
     assert!(
         !errs.is_empty(),
-        "should have emit error for Int in template"
+        "should have emit error for an array in template"
     );
 
-    // Fix: call to_string on it.
-    session.update_source(doc, "{{ @x.to_string() }}");
+    // Fix: append the element, which has one.
+    session.update_source(doc, "{{ @x }}");
     let errs = session.diagnostics(doc);
     assert!(
         errs.is_empty(),
@@ -473,7 +477,7 @@ mod required_inputs {
     use acvus_lsp::LspSession;
     use acvus_mir::graph::{Bindings, BoundValue, CompilationGraph};
     use acvus_mir::ty::TypeRegistry;
-    use acvus_utils::Interner;
+    use acvus_utils::{Interner, QualifiedRef};
 
     fn text(value: &str) -> BoundValue {
         BoundValue::String(value.to_string())
@@ -482,7 +486,7 @@ mod required_inputs {
     fn bound(interner: &Interner, name: &str, value: BoundValue) -> CompilationGraph {
         let mut bindings = Bindings::default();
         bindings
-            .bind(interner.intern(name), value)
+            .bind(QualifiedRef::root(interner.intern(name)), value)
             .expect("text types on its own");
         super::environment(vec![], vec![], TypeRegistry::default(), bindings)
     }

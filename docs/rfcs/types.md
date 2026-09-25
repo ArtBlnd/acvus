@@ -432,7 +432,10 @@ shapes; `Converted` — one declared rule (RFC-0023) casts it there, through
 a reference one rule each way; `Viewed` — the argument borrows a storage
 and the parameter takes a view of it (`&v` at `&[T]`, RFC-0047; `&s` at
 `&str`, RFC-0062); `Refused`, and the candidate leaves the set there. A set
-an argument empties is `NoMatchingFunction` there.
+an argument empties is `NoMatchingFunction` there, naming for a candidate
+that left only by a required instance (RFC-0070) the instance it lacked.
+An argument whose type is poison (RFC-0078 rule 5) is admitted everywhere
+and the call, poison too, reports nothing of its own.
 
 1. **Direct first.** At an argument some candidate takes directly, every
    candidate that would take it only by conversion or view leaves the set.

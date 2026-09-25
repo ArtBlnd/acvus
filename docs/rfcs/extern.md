@@ -1011,6 +1011,17 @@ Status: Accepted
    trusts (RFC-0013). An extension library is written for the users of its
    own language, and its author answers for its soundness.
 
+5. **A layout identity is a witness, and a cast is repr's.** A cast
+   between two types of one layout (a `repr(transparent)` wrapper and its
+   field, a box's two forms) is a call into `acvus_extern::repr` taking a
+   witness that only `same_layout!` or the derive that proved the layout
+   makes. A tag's word and its `Astr` are not one layout; repr converts
+   between them by safe arithmetic (`word_of_tag`, `tag_of_word`). A cast between two types a
+   `TypeId` shows equal is repr's too, checked there. A lifetime erased
+   for a value the runtime keeps is repr's, with the fact that bounds it.
+   No `transmute`, `transmute_copy` or pointer cast between types is
+   written outside repr.
+
 **Why.** A safe trait or a public field that unsafe code trusts lets safe
 code break the trust: an `Inline` impl outside the list, a `Ctx` frame
 swapped, an `Instance` forged from a word each reached undefined behaviour
@@ -1222,7 +1233,9 @@ glue at the type the checker settled.
      (`Host::async_access`), so every `Fetch` and `Commit` is typed `Async`
      and lowered as a spawn and its evaluation (RFC-0046); a program compiled
      for synchronous access opens only a synchronous storage, a mismatch the
-     Rust types refuse.
+     Rust types refuse. Only a load and a commit wait: handing a holder
+     back (`store`, `restore`) is synchronous even to a waiting storage, so
+     no dropped future ever holds one.
    - Running the entry gives an `Output`, which borrows the program as a
      page does. It owns the value, releases it when dropped, and offers
      `with(|p| …)` and `with_mut(|p| …)`; no value leaves it except through
@@ -1278,12 +1291,9 @@ authors of externs and hosts, who take care but meet no trap. The script's
 user takes on nothing. A context's type written in data is a second statement of what
 the scripts already say, and two statements can disagree. Solved in the
 graph, the type has one source, and an init is checked against it like a
-store. An extern handler already crosses the
-boundary soundly with values lent and not kept, and a host that lends into a
-closure needs nothing more, so one crossing serves both and a gap in one is a
-gap in the other. A storage is read and written where the program says,
-because a read the program did not make can be stale by the time it would
-have made it.
+store. A handler already crosses the boundary soundly with values lent and
+not kept, so one crossing serves host and handler. A storage is read where
+the program says, since a read it did not make can be stale.
 **Cost.**
 - A host names a Rust type for its entry, and for each context it reads or
   inserts.
@@ -1306,6 +1316,96 @@ have made it.
 - Loading contexts when a page opens — a read the program did not make.
 - Choosing waited access by the storage at run time — a body compiled
   `Sync` cannot wait.
+
+## RFC-0095: A host graph compiles several hosts into one solve, and a host calls another's entry as a function along a DAG
+
+Status: Proposed
+
+An application is often several programs, each a host's entries, inits
+and contexts, where one program runs another's entry as a step: a model's
+turn calls another model's turn, a tool calls a shared formatter. Compiled
+apart, the call crosses two interners, two registries and two runtimes,
+and no checker sees both sides. An extern cannot stand in the middle
+either: its signature is one Rust function, and a value lent into a call
+does not outlive it (RFC-0079 rule 9). The hosts are compiled as one graph
+instead, where the call is an ordinary call the checker sees whole.
+
+1. **One graph, one solve.** `HostGraph` takes several named `Host`s and
+   compiles them into one compilation graph: one interner, one set of
+   registries, one runtime, one solve (RFC-0090 rule 1). A host in the
+   graph declares no registries of its own. A host is a scope of the
+   graph: its contexts, `$` inputs, bindings, inits and functions are
+   qualified by the host's name in the graph's own names, not by
+   rewriting a name's text, so two hosts never share one by accident. A
+   name its scripts write resolves in its host's scope; a local, a
+   parameter and a method name are not host names and are never
+   qualified.
+
+2. **An entry of one host is a function of another.** The graph exposes
+   host `b`'s entry `e` to host `a` under a name `a`'s scripts call as an
+   ordinary function. Its parameter is one object whose fields are `e`'s
+   `$` inputs that no binding fixes, and its result is `e`'s result, both at
+   the types the solve settles. So `summarize({ text: t })` is checked
+   against `summarize`'s inputs where it is written, and a missing or
+   mistyped field is a compile error. The callee runs inside the caller's
+   run as a call: its body's effects and context accesses are the call's,
+   through its summary (RFC-0025), and its contexts are read and written
+   in `b`'s scope in the same storage. Only an entry that declares its
+   inputs can be exposed. A name the graph exposes that another function
+   of `a` already has is refused when the graph is built.
+
+3. **The calls form a DAG, and nothing else.** Each exposure is an edge
+   `a → b`. The graph is refused when its edges hold a cycle of any length,
+   a host exposed to itself included, and the refusal names the cycle. No
+   strongly connected set of hosts is admitted in any form.
+
+4. **Nothing callable crosses from one host to another.** A function value
+   is an edge the graph cannot see: a closure of `a` passed to `b` and
+   called there runs `a`'s code under `b`, and closes a cycle that rule 3
+   never reads. So the parameter and the result of an exposed entry hold no
+   function type, no task handle (it runs the code that made it), and no
+   extension type whose declaration does not state that it holds none. A declaration that does not state it may hold one.
+   The check reads the solved types at the freeze and names the position
+   refused.
+
+5. **One entrypoint runs.** A program built from a graph runs the entries
+   the graph names as its own. An exposed entry is a function of the
+   hosts it is exposed to, and the graph refuses naming it as one it runs.
+
+6. **An extern frames a call through a closure.** An extern that must act
+   around the callee (mark before, roll back after) takes a closure of no
+   parameters that makes the call, its arguments captured:
+   `call<R>(…, make: Closure<(), R, E>) -> R`, written
+   `call_llm(@h, || summarize({ text: t }))`. It calls `make` as often as
+   it needs. The arguments never reach the extern, so no argument type
+   enters its signature, and the checker checks the closure's body, the
+   real call included. A capture the body moves out cannot serve a second
+   call, and the move check refuses that as anywhere else.
+
+**Why.** One solve gives both sides of the call one type: no comparison
+across interners, no identity question between two registries, no copy of
+a value between two runtimes. The cycle rule keeps every call finite in
+its hosts. Without rule 4 it would hold only for what the graph can see.
+**Cost.**
+- A host graph compiles its hosts together, so a change to one recompiles
+  the graph.
+- An exposed entry takes and returns no function value.
+- A host in a graph gives up its own registries.
+
+**Rejected.**
+- Calling a separately compiled program, its entry type checked when bound
+  — types from two interners and extension types from two registries have
+  no shared identity, and the arguments would have to be copied between
+  runtimes.
+- An extern that forwards the arguments to the host — a value lent into a
+  call cannot leave it (RFC-0079 rule 9), by design.
+- Arguments as a builder checked when the call runs (`args()` with
+  per-type setters) — the checker sees neither side, and the argument types
+  are the builder's few.
+- The arguments as a parameter of the extern beside the closure — the
+  extern cannot open them, so passing them is a capture spelled twice.
+- Recursion between hosts, or a cycle broken by a call through a closure —
+  rule 3 and rule 4 refuse both.
 
 ## RFC-0097: A dynamic extern meets data from outside the checker at one sealed gate
 

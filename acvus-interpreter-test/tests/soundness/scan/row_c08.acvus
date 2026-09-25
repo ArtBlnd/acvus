@@ -1,0 +1,9 @@
+// expect 1,4,11,26
+let xs = vec([1, 2, 3, 4]);
+let y = 0;
+let out = vec([]);
+for x in &xs {
+    y = 2 * y + *x;
+    out.push(y);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

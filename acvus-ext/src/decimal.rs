@@ -25,9 +25,14 @@ fn decimal(text: String) -> Result<Decimal, DecimalError> {
         .map_err(|_| DecimalError::Unparsable(text))
 }
 
-#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
-fn to_string_decimal(a: &Decimal) -> String {
-    a.0.to_string()
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+fn display_decimal(a: &Decimal, out: &mut String) {
+    use std::fmt::Write;
+    // `String`'s `write_str` returns `Ok` on every path, and
+    // `rust_decimal::Decimal`'s `Display` returns what `pad_integral` into
+    // that writer returns and no error of its own (rust_decimal 1.40.0,
+    // `src/decimal.rs`; a change of that dependency re-opens this).
+    write!(out, "{}", a.0).expect("a String's fmt::Write does not fail");
 }
 
 /// The `Option` that `ToPrimitive::to_f64` returns is the trait's shape,
@@ -96,7 +101,7 @@ pub fn decimal_registry<R: Runtime>() -> Registry<R> {
         ns: "std",
         types: [Decimal],
         fns: [
-            decimal, to_string_decimal, decimal_to_float,
+            decimal, display_decimal, decimal_to_float,
             eq_decimal, clone_decimal, cmp_decimal,
             add_decimal, sub_decimal, mul_decimal, div_decimal, rem_decimal, neg_decimal,
         ],

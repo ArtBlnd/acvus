@@ -14,7 +14,7 @@ expression: ir
      5 |   r4 = call #1(r3)
      6 |   assign n = r4
      7 |   r5 = ref &n
-     8 |   r6 = call #0(r5)
+     8 |   r6 = call #2(r5)
      9 |   return r6
 
     ; r0 (v1) : &str
