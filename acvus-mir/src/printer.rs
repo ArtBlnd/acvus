@@ -83,7 +83,8 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 /// `First(Carried(r3), guarding Carried(r4)) exact`,
 /// `Reset(Op(Concat)) exact`, `AffineMap exact`,
 /// `Product(Carried(r3): Op(Add) exact commutative, Carried(r4): Op(Add)
-/// exact commutative) exact commutative`.
+/// exact commutative) exact commutative`, with `scan` beside a part that is
+/// one: `Product(Carried(r3): Op(Xor) exact commutative scan, …)`.
 fn fmt_accumulator(acc: &Accumulator, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
     let law = fmt_law(&acc.law, ctx, vn);
     let exact = if acc.exact { " exact" } else { " inexact" };
@@ -137,11 +138,12 @@ fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
         Law::Product(parts) => {
             let parts: Vec<String> = parts
                 .iter()
-                .map(|(token, acc)| {
+                .map(|(token, part)| {
+                    let scan = if part.scan { " scan" } else { "" };
                     format!(
-                        "{}: {}",
+                        "{}: {}{scan}",
                         fmt_token(token, ctx, vn),
-                        fmt_accumulator(acc, ctx, vn)
+                        fmt_accumulator(&part.accumulator, ctx, vn)
                     )
                 })
                 .collect();

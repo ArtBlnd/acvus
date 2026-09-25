@@ -1,0 +1,15 @@
+// expect 2
+let bs = "a,\"b,c\",d;e,f".to_string().to_bytes();
+let quoted = false;
+let commas = 0;
+for b in &bs {
+    if *b == b';' {
+        break;
+    };
+    if *b == b'"' {
+        quoted = !quoted;
+    } else if *b == b',' && !quoted {
+        commas = commas + 1;
+    };
+}
+commas

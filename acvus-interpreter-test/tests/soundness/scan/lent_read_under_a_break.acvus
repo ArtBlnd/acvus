@@ -1,0 +1,12 @@
+// expect a|ab
+let xs = vec(["a".to_string(), "b".to_string(), "stop".to_string(), "c".to_string()]);
+let s = "".to_string();
+let out = vec([]);
+for x in &xs {
+    if x.len() == 4u64 {
+        break;
+    };
+    s = s + x;
+    out.push(s.to_string());
+}
+out.into_iter().join("|".to_string())

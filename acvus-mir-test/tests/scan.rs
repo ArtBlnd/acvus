@@ -9,9 +9,11 @@ use acvus_mir::analysis::domtree::DomTree;
 use acvus_mir::analysis::loops::natural_loops_innermost_first;
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ir::{BinOp, InstKind};
 use acvus_mir::printer::dump_with_facts;
-use acvus_mir_test::compile_script_at;
+use acvus_mir::ty::{Effect, Flows, Mutability, ParamTerm, Ty, TyTerm, TypeArg, lift_to_poly};
+use acvus_mir_test::{LoweredScript, compile_script_at, multi_fn_module_at};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -32,7 +34,26 @@ impl Scanned {
         let interner = Interner::new();
         let compiled = compile_script_at(&interner, source, &FxHashMap::default(), Opt::Full)
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
-        let listing = dump_with_facts(&interner, &compiled.module, &compiled.laws);
+        Self::judged(&interner, compiled)
+    }
+
+    /// `of`, with `externs` declared beside the standard ones.
+    fn with_externs(source: &str, externs: impl Fn(&Interner) -> Vec<Function>) -> Self {
+        let interner = Interner::new();
+        let compiled = multi_fn_module_at(
+            &interner,
+            ("main", source),
+            &[],
+            &[],
+            &externs(&interner),
+            Opt::Full,
+        )
+        .unwrap_or_else(|e| panic!("{source}\n{e}"));
+        Self::judged(&interner, compiled)
+    }
+
+    fn judged(interner: &Interner, compiled: LoweredScript) -> Self {
+        let listing = dump_with_facts(interner, &compiled.module, &compiled.laws);
         let cfg = promote(compiled.module.main.clone());
         let header = natural_loops_innermost_first(&cfg, &DomTree::build(&cfg))
             .iter()
@@ -93,6 +114,11 @@ fn kind_name(cfg: &CfgBody, block: BlockIdx, at: usize) -> &'static str {
         InstKind::Index { .. } => "index",
         InstKind::IndexSet { .. } => "index_set",
         InstKind::Const { .. } => "const",
+        InstKind::Ref { .. } => "ref",
+        InstKind::FunctionCall { .. } => "call",
+        InstKind::StringConcat { .. } => "concat",
+        InstKind::Assign { .. } => "assign",
+        InstKind::AsSlice { .. } => "as_slice",
         _ => "other",
     }
 }
@@ -227,4 +253,257 @@ fn an_exclusive_and_an_inclusive_read_are_both_scans() {
          for x in &v { let t = total + *x; vec::push(&mut out, t); total = t * 3; } vec::len(&out)",
     );
     assert_eq!(law_of(between.carried_cycle()), None, "{}", between.listing);
+}
+
+impl Scanned {
+    /// The cycle of the storage the loop assigns whole.
+    fn storage_cycle(&self) -> &JudgedCycle {
+        let found: Vec<&JudgedCycle> = self
+            .cycles
+            .iter()
+            .filter(|cycle| {
+                cycle
+                    .tokens
+                    .iter()
+                    .any(|token| matches!(token, Token::Storage(Storage::Slot(_))))
+                    && cycle.holds.contains(&"assign")
+            })
+            .collect();
+        match found[..] {
+            [one] => one,
+            _ => panic!("one storage assigned whole:\n{}", self.listing),
+        }
+    }
+}
+
+/// An extern of one parameter `x: param` returning `ret`, whose flows are
+/// every one its type allows, and with `effect`.
+fn extern_of(i: &Interner, name: &str, param: Ty, ret: Ty, effect: Effect) -> Function {
+    Function {
+        qref: QualifiedRef::root(i.intern(name)),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            effect_bounds: vec![],
+            instances: Default::default(),
+            requires: vec![],
+        },
+        ty: TyTerm::Fn {
+            params: vec![ParamTerm::new(i.intern("x"), lift_to_poly(&param))],
+            ret: Box::new(lift_to_poly(&ret)),
+            captures: vec![],
+            effect: effect.into(),
+            flows: Flows::Every.into(),
+        },
+    }
+}
+
+fn string_ref(mutability: Mutability) -> Ty {
+    Ty::Ref(mutability, Box::new(TypeArg::uniform(Ty::String)))
+}
+
+/// A running concatenation whose storage the loop reads by lending it to
+/// `to_string` after each store (corpus row C07), in the listing's
+/// `for x in &xs`.
+const RUNNING: &str = "let xs = vec([\"a\".to_string(), \"b\".to_string(), \"c\".to_string()]); \
+     let s = \"\".to_string(); let out = vec([]); \
+     for x in &xs { s = s + x; out.push(s.to_string()); } out.len()";
+
+/// Corpus row C07; RFC-0093 rule 8: "a read that only lends a storage
+/// token's value to a call that neither writes nor keeps it … is a reader
+/// of its partial, not a member of its cycle".
+#[test]
+fn a_read_lent_to_a_call_that_neither_writes_nor_keeps_it_reads_the_partial() {
+    let c = Scanned::of(RUNNING);
+    let held = c.storage_cycle();
+    assert_eq!(law_of(held), Some((&Law::Op(LawOp::Concat), true)), "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+    assert_eq!(held.holds, ["ref", "concat", "assign"], "{}", c.listing);
+    assert!(
+        c.listing
+            .contains("cycle Storage(r17) in_order law(Op(Concat) exact) scan {ref, concat, assign}"),
+        "{}",
+        c.listing
+    );
+    assert!(c.listing.contains("free {ref, as_slice, call to_string}"), "{}", c.listing);
+}
+
+/// `s.to_string()` at a `String` is `string::to_string` of the `&str` view
+/// (RFC-0070 rule 5), so the storage reaches the call through a `ref` and a
+/// shared `as_slice` of it. The view only reads the storage and borrows it
+/// alone, so the path lends the storage to a call that neither writes nor
+/// keeps it: the `ref`, the view and the call read the partial, and none
+/// of them is a member of the storage's cycle.
+#[test]
+fn a_read_lent_through_a_view_of_the_storage_reads_the_partial() {
+    let c = Scanned::of(RUNNING);
+    assert!(
+        c.listing.contains("free {ref, as_slice, call to_string}"),
+        "the call is lent the storage through its view:\n{}",
+        c.listing
+    );
+    let held = c.storage_cycle();
+    assert_eq!(law_of(held), Some((&Law::Op(LawOp::Concat), true)), "{}", c.listing);
+    assert_eq!(held.holds, ["ref", "concat", "assign"], "{}", c.listing);
+    assert!(
+        c.cycles
+            .iter()
+            .all(|cycle| !cycle.holds.contains(&"as_slice")),
+        "no cycle holds the view:\n{}",
+        c.listing
+    );
+}
+
+/// Corpus row R16; RFC-0093 rule 8: "a reader that writes the token is in
+/// the cycle, not a reader". `string::cmp(x, &best)` is lent `best`
+/// through its `&str` view and neither writes nor keeps it, but the select
+/// that stores into `best` decides by its result: the update is computed
+/// through the call, so the `ref`, the view and the call stay in the
+/// storage's cycle, and the cycle keeps its maximum under `cmp`, no scan.
+#[test]
+fn a_lent_read_the_update_is_computed_through_stays_in_its_cycle() {
+    let c = Scanned::of(
+        "let xs = vec([\"fig\".to_string(), \"pear\".to_string(), \"apple\".to_string()]); \
+         let best = \"\".to_string(); \
+         for x in &xs { if string::cmp(x, &best) > 0 { best = x.to_string(); }; } best",
+    );
+    let held = c.storage_cycle();
+    for kind in ["ref", "as_slice", "call"] {
+        assert!(held.holds.contains(&kind), "{kind}: {:?}\n{}", held.holds, c.listing);
+    }
+    assert!(
+        matches!(law_of(held), Some((_, false))),
+        "a law, no scan: {}",
+        c.listing
+    );
+}
+
+/// The lent read leaves the cycle only where the cycle's law is a scan,
+/// whose rescan makes the value it lends (RFC-0092 rule 5): prepending reads
+/// no law, so the read stays in the storage's cycle.
+#[test]
+fn a_lent_read_of_a_storage_without_a_scan_stays_in_its_cycle() {
+    let c = Scanned::of(
+        "let xs = vec([\"a\".to_string(), \"b\".to_string()]); \
+         let s = \"\".to_string(); let out = vec([]); \
+         for x in &xs { s = x + s; out.push(s.to_string()); } out.len()",
+    );
+    let held = c.storage_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert!(held.holds.contains(&"call"), "{:?}\n{}", held.holds, c.listing);
+}
+
+/// "keeps" is a loan on the storage the call's declared flows give its
+/// result: `keep(&s)` hands back a `&String` of `s`, so the borrow it is
+/// lent outlives the call and the read is no reader of a partial.
+#[test]
+fn a_call_that_keeps_a_loan_on_the_storage_stays_in_its_cycle() {
+    let c = Scanned::with_externs(
+        "let xs = vec([\"a\".to_string(), \"b\".to_string()]); \
+         let s = \"\".to_string(); \
+         for x in &xs { s = s + x; keep(&s); } s.len()",
+        |i| {
+            vec![extern_of(
+                i,
+                "keep",
+                string_ref(Mutability::Shared),
+                string_ref(Mutability::Shared),
+                Effect::PURE,
+            )]
+        },
+    );
+    let held = c.storage_cycle();
+    assert!(held.holds.contains(&"call"), "{:?}\n{}", held.holds, c.listing);
+    assert!(
+        !matches!(law_of(held), Some((_, true))),
+        "no scan: {}",
+        c.listing
+    );
+}
+
+/// A call lent the storage `&mut` writes it (its effect), so it stays in
+/// the cycle, and the storage's law reads no second write.
+#[test]
+fn a_call_that_writes_the_storage_stays_in_its_cycle() {
+    let c = Scanned::with_externs(
+        "let xs = vec([\"a\".to_string(), \"b\".to_string()]); \
+         let s = \"\".to_string(); let out = vec([]); \
+         for x in &xs { s = s + x; stamp(&mut s); out.push(s.to_string()); } out.len()",
+        |i| {
+            vec![extern_of(
+                i,
+                "stamp",
+                string_ref(Mutability::Mut),
+                Ty::Unit,
+                Effect::PURE,
+            )]
+        },
+    );
+    let held = c.storage_cycle();
+    assert!(held.holds.contains(&"call"), "{:?}\n{}", held.holds, c.listing);
+    assert_eq!(law_of(held), None, "{}", c.listing);
+}
+
+/// Corpus row P05; RFC-0093 rule 8: "In a cycle of several tokens, a token
+/// whose steps read no other token and that has a law is a scan when
+/// another token's step reads it; that token's law is then read over the
+/// partials it reads". The jumps that hand both tokens on keep them one
+/// cycle; `quoted` is the scan and `commas` adds over its partials.
+#[test]
+fn a_token_another_token_reads_is_a_scan_inside_the_product() {
+    let c = Scanned::of(
+        "let bs = \"a,\\\"b,c\\\",d\".to_string().to_bytes(); let quoted = false; let commas = 0; \
+         for b in &bs { if *b == b'\"' { quoted = !quoted; } \
+         else if *b == b',' && !quoted { commas = commas + 1; }; } commas",
+    );
+    let held = c.cycle_where(|tokens| matches!(tokens, [Token::Carried(_), Token::Carried(_)]));
+    let Some(CycleLaw { accumulator, scan: true }) = &held.law else {
+        panic!("a scan: {}", c.listing);
+    };
+    let Law::Product(parts) = &accumulator.law else {
+        panic!("a product: {}", c.listing);
+    };
+    let parts: Vec<(&Law, bool)> = parts
+        .iter()
+        .map(|(_, part)| (&part.accumulator.law, part.scan))
+        .collect();
+    assert_eq!(
+        parts,
+        [(&Law::Op(LawOp::Xor), true), (&Law::Op(LawOp::Add), false)],
+        "{}",
+        c.listing
+    );
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+    assert!(
+        c.listing.contains(
+            "law(Product(Carried(r7): Op(Xor) exact commutative scan, \
+             Carried(r8): Op(Add) exact commutative) exact commutative) scan"
+        ),
+        "{}",
+        c.listing
+    );
+}
+
+/// The token another reads must have a law: `n` squares itself, so `s`,
+/// which adds `n`, reads no partial of a law, and the cycle has none.
+#[test]
+fn a_token_reading_another_without_a_law_gives_no_law() {
+    let c = Scanned::of(
+        "let v = [5, 3, 8]; let s = 0; let n = 1; \
+         for x in &v { if *x >= 0 { s = s + n; n = n * n + 1; }; } s",
+    );
+    let held = c.cycle_where(|tokens| matches!(tokens, [Token::Carried(_), Token::Carried(_)]));
+    assert_eq!(held.law, None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}
+
+/// Two tokens each of whose steps reads the other have no scan, though
+/// each adds the other's partial: neither's steps read no other token.
+#[test]
+fn tokens_reading_each_other_give_no_law() {
+    let c = Scanned::of(
+        "let v = [1, 1, 1]; let s = 1; let n = 1; \
+         for x in &v { if *x > 0 { let t = s; s = s + n; n = n + t * 2; }; } s",
+    );
+    let held = c.cycle_where(|tokens| matches!(tokens, [Token::Carried(_), Token::Carried(_)]));
+    assert_eq!(held.law, None, "{}", c.listing);
 }

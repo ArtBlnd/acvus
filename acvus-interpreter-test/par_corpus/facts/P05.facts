@@ -1,5 +1,5 @@
 for slice(r4) -> L1 else L2 stages [L1, L11]
 // L1: free {take, const, ==}
-// L11: cycle Carried(r7)+Carried(r8) in_order {!, !, const, +, jump, jump, branch, jump, jump}
+// L11: cycle Carried(r7)+Carried(r8) in_order law(Product(Carried(r7): Op(Xor) exact commutative scan, Carried(r8): Op(Add) exact commutative) exact commutative) scan {!, !, const, +, jump, jump, branch, jump, jump}
 // control upfront
 // cost W=4 O=18281 split when n > 146248, n = len(r4)
