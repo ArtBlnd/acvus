@@ -1,0 +1,13 @@
+// expect 107
+let m = vec([vec([1, 2, 3]), vec([4, 5, 6]), vec([7])]);
+let total = 0;
+for row in &m {
+    for x in &row {
+        total = total + *x;
+        if *x == 5 {
+            total = 100;
+            break;
+        };
+    }
+}
+total

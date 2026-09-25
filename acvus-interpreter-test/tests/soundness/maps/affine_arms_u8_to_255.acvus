@@ -1,0 +1,13 @@
+// expect [255,12]
+let bs = "abc\nabcdefgh".to_string().to_bytes();
+let col = 247u8;
+let out = vec([]);
+for b in &bs {
+    if *b == b'\n' {
+        col = 247u8;
+    } else {
+        col = col + 1u8;
+    };
+    out.push(col);
+}
+(col, out.len())

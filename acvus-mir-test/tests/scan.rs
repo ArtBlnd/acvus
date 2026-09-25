@@ -1,6 +1,7 @@
 //! A cycle whose law's partials are read outside it is a scan (RFC-0093
-//! rule 8): what `analysis::loop_deps` judges of such a cycle after the full
-//! pipeline, and what the facts print beside its law.
+//! rule 8), and the laws rule 9 reads of maps as values: what
+//! `analysis::loop_deps` judges of such a cycle after the full pipeline, and
+//! what the facts print beside its law.
 
 use acvus_mir::analysis::loop_deps::{
     CycleLaw, Law, LawOp, LoopDeps, Member, Order, Storage, Token,
@@ -506,4 +507,58 @@ fn tokens_reading_each_other_give_no_law() {
     );
     let held = c.cycle_where(|tokens| matches!(tokens, [Token::Carried(_), Token::Carried(_)]));
     assert_eq!(held.law, None, "{}", c.listing);
+}
+
+/// Corpus row P02 (RFC-0093 rule 9): `col`'s arms send `0·col + 0` and
+/// `1·col + 1`, so its law is the affine map, beside `line`'s `+` in a
+/// product that joins in order.
+#[test]
+fn a_branch_whose_arms_each_send_an_affine_map_has_the_affine_map_law() {
+    let c = Scanned::of(
+        "let bs = \"ab\\ncde\\nfg\".to_string().to_bytes(); let line = 1; let col = 0; \
+         for b in &bs { if *b == b'\\n' { line = line + 1; col = 0; } else { col = col + 1; }; } \
+         (line, col)",
+    );
+    let held = c.cycle_where(|tokens| matches!(tokens, [Token::Carried(_), Token::Carried(_)]));
+    let Some(CycleLaw { accumulator, scan: false }) = &held.law else {
+        panic!("a law: {}", c.listing);
+    };
+    let Law::Product(parts) = &accumulator.law else {
+        panic!("a product: {}", c.listing);
+    };
+    let parts: Vec<&Law> = parts.iter().map(|(_, part)| &part.accumulator.law).collect();
+    assert_eq!(parts, [&Law::Op(LawOp::Add), &Law::AffineMap], "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+    let mixed = Scanned::of(
+        "let v = [3, 1, 4]; let y = 1; for x in &v { if *x > 2 { y = y * 3; } else { y = y + *x; }; } y",
+    );
+    let held = mixed.carried_cycle();
+    assert_eq!(law_of(held), Some((&Law::AffineMap, false)), "{}", mixed.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", mixed.listing);
+}
+
+/// RFC-0093 rule 9 reads affine arms at an integer width only: a float
+/// arm's `+` rounds, and the cycle keeps its order with no law.
+#[test]
+fn a_float_branch_of_affine_arms_has_no_law() {
+    let c = Scanned::of(
+        "let v = [2.0, 4.0, 3.0]; let m = 1.0; \
+         for x in &v { if *x > 2.5 { m = 0.0; } else { m = m + *x; }; } m",
+    );
+    let held = c.carried_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}
+
+/// RFC-0093 rule 9 needs every arm to send an affine map: an arm's `max`
+/// is no affine map beside the other's `+`, and the cycle has no law.
+#[test]
+fn a_branch_with_one_arm_not_affine_has_no_law() {
+    let c = Scanned::of(
+        "let v = [1, 5, 2, 7]; let m = 0; \
+         for x in &v { if *x > 4 { m = m + *x; } else { m = max(m, *x); }; } m",
+    );
+    let held = c.carried_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
 }

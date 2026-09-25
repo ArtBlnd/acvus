@@ -1,0 +1,13 @@
+// expect attempt to add with overflow
+let t = vec([vec([0u64, 1u64]), vec([2u64, 0u64]), vec([1u64, 2u64])]);
+let bs = vec([]);
+for i in 0u64..300u64 {
+    bs.push(i % 2u64);
+}
+let s = 0u64;
+let ones = 0u8;
+for d in &bs {
+    s = t[s][*d];
+    ones = ones + 1u8;
+}
+(s, ones)
