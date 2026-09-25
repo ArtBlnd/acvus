@@ -5,8 +5,10 @@
 
 use std::marker::PhantomData;
 use std::mem::{MaybeUninit, size_of};
+use std::ptr::NonNull;
 use std::slice;
 
+use acvus_extern::repr;
 use acvus_mir::ty::IntTy;
 
 use crate::code::{
@@ -278,7 +280,7 @@ impl Num for f64 {
 /// and the word position this indexes by.
 #[derive(Clone, Copy)]
 pub struct Operands<'a> {
-    base: *const Value,
+    base: NonNull<Value>,
     len: usize,
     borrow: PhantomData<&'a Value>,
 }
@@ -287,7 +289,7 @@ impl<'a> Operands<'a> {
     #[inline(always)]
     pub fn of(values: &'a [Value]) -> Operands<'a> {
         Operands {
-            base: values.as_ptr(),
+            base: NonNull::from(values).cast::<Value>(),
             len: values.len(),
             borrow: PhantomData,
         }
@@ -296,7 +298,7 @@ impl<'a> Operands<'a> {
     #[inline(always)]
     pub(crate) fn of_frame(regs: &'a Regs<'_>) -> Operands<'a> {
         Operands {
-            base: regs.as_ptr(),
+            base: regs.first_register(),
             len: regs.len(),
             borrow: PhantomData,
         }
@@ -356,7 +358,7 @@ fn word(operands: Operands<'_>, offset: u16) -> u64 {
     // only writer of these offsets, so the address is inside the space and
     // aligned to a `Value` word. The two assertions above are that
     // statement, executed.
-    unsafe { operands.base.cast::<u8>().add(at).cast::<u64>().read() }
+    unsafe { repr::word_at(operands.base, at).read() }
 }
 
 #[inline(always)]

@@ -12,6 +12,7 @@ use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
 use acvus_extern::Release;
+use acvus_extern::repr;
 
 use crate::code::{Body, Marked, Off, WordMask};
 use crate::value::Value;
@@ -19,7 +20,11 @@ use crate::value::Value;
 /// The registers one cell holds: four cache lines of `Value`s.
 pub const CELL_SLOTS: u16 = 16;
 
-pub const MAX_FRAME_SLOTS: u16 = Off::MAX_INDEX + 1;
+pub const MAX_FRAME_SLOTS: u16 = 320;
+
+/// The widest frame's last register has an `Off`: a constant `Disp::of` that
+/// does not fit fails the build.
+const _: Off = Off::of(MAX_FRAME_SLOTS - 1);
 
 pub const MAX_RUN_SLOTS: u16 = 256;
 
@@ -86,6 +91,15 @@ impl Cell {
         Cell {
             slots: [const { MaybeUninit::uninit() }; CELL_SLOTS as usize],
         }
+    }
+
+    /// The first register slot of a run of cells. A `Cell` is `repr(C)` over
+    /// `Value` slots alone and is a whole number of its own alignment wide
+    /// (the size assertion below), so a run of cells is one run of `Value`
+    /// slots, which an `Off` is a displacement into.
+    #[inline(always)]
+    fn first(cells: NonNull<[Cell]>) -> NonNull<Value> {
+        cells.cast::<Value>()
     }
 }
 
@@ -308,7 +322,7 @@ impl FrameState {
 
     /// The register `at` of the frame this window begins.
     #[inline(always)]
-    fn at(&self, at: Off) -> *mut Value {
+    fn at(&self, at: Off) -> NonNull<Value> {
         debug_assert!(
             at.index() < CELL_SLOTS as usize * ARG_CELLS,
             "a call lays an argument in the callee's register {}, past the cell the window \
@@ -319,13 +333,7 @@ impl FrameState {
         // the cell this writes before a frame is bound in it,
         // `Store::root_window` holds the widest frame there is, and the debug
         // assertion above holds the displacement inside that cell.
-        unsafe {
-            self.cells
-                .as_ptr()
-                .cast::<u8>()
-                .add(at.byte())
-                .cast::<Value>()
-        }
+        unsafe { repr::at(Cell::first(self.cells), at) }
     }
 
     /// One argument of a call, written to the register the callee reads it
@@ -346,7 +354,7 @@ impl FrameState {
         let first = self.at(Off::of(0));
         // SAFETY: `lay` wrote every register of the run, and `at` holds the
         // widest of them inside the cell the window begins with.
-        unsafe { std::slice::from_raw_parts(first, usize::from(arity)) }
+        unsafe { std::slice::from_raw_parts(first.as_ptr(), usize::from(arity)) }
     }
 
     /// The callee's first `width` parameter registers, for a crossing that
@@ -365,9 +373,8 @@ impl FrameState {
         for slot in run.iter_mut() {
             slot.write(Value::UNDEF);
         }
-        // SAFETY: every slot of the run was written just above, and
-        // `MaybeUninit<Value>` and `Value` are the same layout.
-        unsafe { &mut *(run as *mut [MaybeUninit<Value>] as *mut [Value]) }
+        // SAFETY: every slot of the run was written just above.
+        unsafe { run.assume_init_mut() }
     }
 }
 
@@ -390,7 +397,10 @@ unsafe fn run_in(cells: &[Cell], at: Off, arity: u16, len: u16) -> &[Value] {
     );
     // SAFETY: the caller's contract.
     unsafe {
-        std::slice::from_raw_parts(cells.as_ptr().cast::<Value>().add(from), usize::from(arity))
+        std::slice::from_raw_parts(
+            repr::at(Cell::first(NonNull::from(cells)), at).as_ptr(),
+            usize::from(arity),
+        )
     }
 }
 
@@ -473,13 +483,7 @@ impl<'f> Regs<'f> {
             off.index()
         );
         // SAFETY: the two proofs stated on `Regs`.
-        unsafe {
-            self.cells
-                .as_ptr()
-                .cast::<u8>()
-                .add(off.byte())
-                .cast::<Value>()
-        }
+        unsafe { repr::at(Cell::first(NonNull::from(&*self.cells)), off) }.as_ptr()
     }
 
     #[inline(always)]
@@ -490,47 +494,37 @@ impl<'f> Regs<'f> {
             off.index()
         );
         // SAFETY: the two proofs stated on `Regs`.
-        unsafe {
-            self.cells
-                .as_mut_ptr()
-                .cast::<u8>()
-                .add(off.byte())
-                .cast::<Value>()
-        }
+        unsafe { repr::at(Cell::first(NonNull::from(&mut *self.cells)), off) }.as_ptr()
     }
 
-    /// `word_byte` is `Marked::word_byte` of the register being marked, which
-    /// `prepare` decided and moved into the operation.
+    /// The byte of the frame a mark word sits at: past the frame's `len`
+    /// registers, at `word_byte`, which is `Marked::word_byte` of the register
+    /// being marked, decided in `prepare` and moved into the operation.
     #[inline(always)]
-    fn mark_ptr(&self, word_byte: usize) -> *mut u64 {
+    fn mark_byte(&self, word_byte: usize) -> usize {
         debug_assert!(
             word_byte < usize::from(mark_words(self.len)) * size_of::<u64>(),
             "an operation marks the mark word at byte {word_byte}, which its body's frame does \
              not have"
         );
-        let byte = usize::from(self.len) * size_of::<Value>() + word_byte;
-        // SAFETY: `cells_for(len)` reserved `mark_slots(len)` slots at register
-        // index `len`, and the assertion above holds `word_byte` inside them.
-        unsafe {
-            self.cells
-                .as_ptr()
-                .cast::<u8>()
-                .add(byte)
-                .cast::<u64>()
-                .cast_mut()
-        }
+        usize::from(self.len) * size_of::<Value>() + word_byte
     }
 
     #[inline(always)]
     fn marked(&self, word_byte: usize) -> u64 {
-        // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr(word_byte) }
+        let byte = self.mark_byte(word_byte);
+        // SAFETY: `cells_for(len)` reserved `mark_slots(len)` slots at register
+        // index `len`, and `mark_byte`'s assertion holds `word_byte` inside
+        // them; a register slot is a whole number of mark words wide, so the
+        // word is aligned.
+        unsafe { repr::word_at(Cell::first(NonNull::from(&*self.cells)), byte).read() }
     }
 
     #[inline(always)]
     fn mark(&mut self, word_byte: usize, bits: u64) {
-        // SAFETY: as `mark_ptr`.
-        unsafe { *self.mark_ptr(word_byte) = bits }
+        let byte = self.mark_byte(word_byte);
+        // SAFETY: as `marked`.
+        unsafe { repr::word_at(Cell::first(NonNull::from(&mut *self.cells)), byte).write(bits) }
     }
 
     #[cfg(test)]
@@ -749,7 +743,7 @@ impl<'f> Regs<'f> {
         // `prepare::check_assignment` proves against `Body::frame_len`.
         unsafe {
             std::slice::from_raw_parts_mut(
-                self.cells.as_mut_ptr().cast::<Value>().add(from),
+                repr::at(Cell::first(NonNull::from(&mut *self.cells)), at).as_ptr(),
                 usize::from(width),
             )
         }
@@ -767,8 +761,8 @@ impl<'f> Regs<'f> {
     /// The frame's first register, which a chain's pre-multiplied leaf offsets
     /// are byte displacements from.
     #[inline]
-    pub fn as_ptr(&self) -> *const Value {
-        self.cells.as_ptr().cast::<Value>()
+    pub fn first_register(&self) -> NonNull<Value> {
+        Cell::first(NonNull::from(&*self.cells))
     }
 
     #[inline]

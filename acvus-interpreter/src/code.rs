@@ -27,58 +27,14 @@ use crate::value::{Kind, Value};
 /// written in it. An operation never holds one — it holds an `Off`.
 pub type Slot = u16;
 
-/// A register's byte displacement inside its frame.
+/// A register's place in its frame: `repr::Disp`, the byte displacement of
+/// a slot of the frame's run of `Value`s (RFC-0080 rule 5).
 ///
 /// `prepare` multiplies once, when it builds the operation, so no `run`
 /// scales: `Add::<i64>::run`'s three `shl $4` are what this type removes
-/// (RFC-0052 rule 5). `Slot` and `Off` are different types so that the index and
-/// the displacement cannot be handed to each other's reader.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub struct Off(u16);
-
-impl Off {
-    /// The widest register index an `Off` can stand for. `regs.rs` asserts this
-    /// against `MAX_FRAME_SLOTS`, so the two bounds cannot disagree.
-    pub const MAX_INDEX: u16 = 319;
-
-    pub const fn of(slot: Slot) -> Off {
-        debug_assert!(
-            slot <= Off::MAX_INDEX,
-            "an operation names a register past the ones one frame holds, which \
-             `Prepare::plan_runs` asserts against `regs::MAX_FRAME_SLOTS` before emitting one"
-        );
-        Off(slot * size_of::<Value>() as u16)
-    }
-
-    /// The displacement `Regs` adds to the frame's first byte.
-    #[inline(always)]
-    pub const fn byte(self) -> usize {
-        self.0 as usize
-    }
-
-    #[inline(always)]
-    const fn next(self) -> Off {
-        Off::of(self.index() as Slot + 1)
-    }
-
-    /// The register index, for the diagnostics and the listings that speak in
-    /// `Slot`; no `run` calls it.
-    #[inline(always)]
-    pub const fn index(self) -> usize {
-        self.0 as usize / size_of::<Value>()
-    }
-
-    /// The one `Off` that is not a displacement: the argument of a fused call
-    /// that reads the call before it rather than a register (RFC-0044 rule
-    /// 7). `ops::call::arg` matches it before anything reads it as one, and
-    /// `of` cannot produce it.
-    pub const PREVIOUS: Off = Off(u16::MAX);
-
-    #[inline(always)]
-    pub const fn field(self, at: u16) -> Off {
-        Off::of(self.index() as Slot + at)
-    }
-}
+/// (RFC-0052 rule 5). `Slot` and `Off` are different types so that the index
+/// and the displacement cannot be handed to each other's reader.
+pub type Off = acvus_extern::repr::Disp<Value>;
 
 /// A register and the frame's claim on the `Large` it may own: the mark word's
 /// displacement inside the mark region and the register's bit in it, both
@@ -101,14 +57,7 @@ pub struct Marked {
 }
 
 impl Marked {
-    /// # Panics
-    /// `at` is `Off::PREVIOUS`, the one `Off` that is not a register, so no
-    /// mark word holds a claim on it.
     pub const fn of(at: Off) -> Marked {
-        assert!(
-            at.index() <= Off::MAX_INDEX as usize,
-            "a marking operation names the fused call's argument, which is not a register"
-        );
         let index = at.index();
         Marked {
             mask: 1u64 << (index % crate::regs::MARK_WORD_SLOTS as usize),
@@ -137,9 +86,11 @@ pub struct WordMask {
 }
 
 const _: () = assert!(
-    Off::MAX_INDEX as usize / crate::regs::MARK_WORD_SLOTS as usize * size_of::<u64>()
+    u16::MAX as usize / size_of::<Value>() / crate::regs::MARK_WORD_SLOTS as usize
+        * size_of::<u64>()
         <= u32::MAX as usize,
-    "the widest frame's last mark word lies within the displacement a Marked carries"
+    "the mark word of the widest register an Off names lies within the displacement a Marked \
+     carries"
 );
 
 const _: () = assert!(
@@ -159,11 +110,11 @@ pub struct SlicePair {
 
 impl SlicePair {
     /// # Panics
-    /// As `Off::next`.
+    /// As `Disp::of`, for the register after `ptr`.
     pub const fn at(ptr: Off) -> SlicePair {
         SlicePair {
             ptr,
-            len: ptr.next(),
+            len: Off::of(ptr.index() as Slot + 1),
         }
     }
 }

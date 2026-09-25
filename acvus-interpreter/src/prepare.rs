@@ -8964,13 +8964,13 @@ impl<'a> Prepare<'a> {
             let found = self
                 .fusable_call(*at)
                 .expect("a recognized run holds a fusable call at every index it named");
-            let mut args = [call::PREVIOUS; 2];
+            let mut args = [call::FusedArg::Previous; 2];
             for (word, id) in args.iter_mut().zip(found.args) {
                 *word = match previous {
-                    Some(held) if *id == held => call::PREVIOUS,
+                    Some(held) if *id == held => call::FusedArg::Previous,
                     Some(_) | None => {
                         read.push(*id);
-                        self.off(*id)
+                        call::FusedArg::At(self.off(*id))
                     }
                 };
             }

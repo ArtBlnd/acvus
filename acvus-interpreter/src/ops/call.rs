@@ -212,8 +212,8 @@ pub enum AsyncShape {
 /// Where one call of a fused run reads its arguments (RFC-0044 rule 7).
 pub enum FusedShape {
     Nullary,
-    Unary { a: Off },
-    Binary { a: Off, b: Off },
+    Unary { a: FusedArg },
+    Binary { a: FusedArg, b: FusedArg },
 }
 
 /// The shapes a form does not take, which `prepare`'s reading of the
@@ -1811,9 +1811,13 @@ where
     }
 }
 
-/// The argument of a fused call that reads what the call before it produced
-/// rather than a register (RFC-0044 rule 7).
-pub const PREVIOUS: Off = Off::PREVIOUS;
+/// Where one argument of a fused call is read (RFC-0044 rule 7): what the
+/// call before it produced, or a register.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FusedArg {
+    Previous,
+    At(Off),
+}
 
 /// One call of a fused run, at the shapes `prepare::FusableCall` admits:
 /// three or fewer arguments including the held value. A slice-returning
@@ -1835,13 +1839,13 @@ pub struct Nullary<H> {
 
 pub struct Unary<H> {
     f: H,
-    a: Off,
+    a: FusedArg,
 }
 
 pub struct Binary<H> {
     f: H,
-    a: Off,
-    b: Off,
+    a: FusedArg,
+    b: FusedArg,
 }
 
 impl<H> Invoke for Nullary<H>
@@ -1882,10 +1886,10 @@ where
 }
 
 #[inline]
-fn arg(m: &mut Machine<'_>, held: Value, at: Off) -> Value {
+fn arg(m: &mut Machine<'_>, held: Value, at: FusedArg) -> Value {
     match at {
-        PREVIOUS => held,
-        at => m.regs().read(at),
+        FusedArg::Previous => held,
+        FusedArg::At(at) => m.regs().read(at),
     }
 }
 
