@@ -1,0 +1,15 @@
+error: lifetime may not live long enough
+  --> tests/compile_fail/dynamic_finished_of_another_call.rs:10:5
+   |
+ 6 | fn swapped<'a, 'b: 'a, T, R>(_: Output<'a, T, R>, other: Output<'b, T, R>) -> Finished<'a, T, R>
+   |            --  -- lifetime `'b` defined here
+   |            |
+   |            lifetime `'a` defined here
+...
+10 |     other.finish()
+   |     ^^^^^^^^^^^^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+   |
+   = help: consider adding the following bound: `'a: 'b`
+   = note: requirement occurs because of the type `Finished<'_, T, R>`, which makes the generic argument `'_` invariant
+   = note: the struct `Finished<'call, T, Rt>` is invariant over the parameter `'call`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

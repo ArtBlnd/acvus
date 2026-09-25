@@ -59,18 +59,25 @@ pub struct ArgAt<'a> {
 }
 
 /// One call site as `prepare` hands it to a handler: the settled type of
-/// each argument, and the word of the entry `prepare` chose for each
-/// requirement the callee states, in the declaration's order (RFC-0070 rule 2).
+/// each argument, the settled type of its result, and the word of the entry
+/// `prepare` chose for each requirement the callee states, in the
+/// declaration's order (RFC-0070 rule 2).
 ///
 /// The fields are private because `Required::site` and `Owning`'s `take`
 /// make a callable `InstanceOf` or `Instance` out of a `requires` word:
 /// only `new`, which is `unsafe`, puts a word there, and `of_args` puts
 /// none.
+///
+/// `ret` is `None` for a site that is no extern call's — a lent closure's
+/// (`acvus_extern::lend`) and a test's — and `prepare` gives every extern
+/// call site its result's type through `returning`. A `dynamic` extern's
+/// `Output` is the one reader (RFC-0097 rule 3).
 pub struct CallSite<'a, Rt>
 where
     Rt: Runtime,
 {
     pub(crate) args: &'a [ArgAt<'a>],
+    pub(crate) ret: Option<ArgAt<'a>>,
     pub(crate) requires: &'a [Rt::Value],
 }
 
@@ -82,6 +89,7 @@ where
     pub fn of_args(args: &'a [ArgAt<'a>]) -> Self {
         CallSite {
             args,
+            ret: None,
             requires: &[],
         }
     }
@@ -96,7 +104,19 @@ where
     /// sited here, and that entry is an instance of the `n`th requirement's
     /// signature at the type its variable is filled with at this site.
     pub unsafe fn new(args: &'a [ArgAt<'a>], requires: &'a [Rt::Value]) -> Self {
-        CallSite { args, requires }
+        CallSite {
+            args,
+            ret: None,
+            requires,
+        }
+    }
+
+    /// The site with the type the checker settled for the call's result.
+    pub fn returning(self, ret: ArgAt<'a>) -> Self {
+        CallSite {
+            ret: Some(ret),
+            ..self
+        }
     }
 }
 

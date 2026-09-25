@@ -1442,19 +1442,23 @@ call site, with every mismatch an explicit `None`.
    typed per call site come with rule 3. Its state is
    `Send + Sync + 'static` and released with the value. The call site
    calls it as any function value; its arguments arrive per call as rule
-   1's view. With rule 3 the closure may instead return `Finished<'call>`
-   through an `Output<'call>` for a site-settled result. A body that
-   suspends is a later step.
+   1's view. With rule 3 the closure may instead return
+   `Finished<'call, T, Rt>` through an `Output<'call, T, Rt>` for a
+   site-settled result. A body that suspends is a later step.
 
 3. **A result the site types.** An extern declared `dynamic` returns
-   `Finished<'call>`, and its script type is `Option<τ>`, `τ` settled at the
-   call site by its use and refused when still open at the freeze. The
-   interpreter hands the handler an `Output<'call>` for `τ`: it is filled
-   leaf by leaf, `write::<T>` and `field(name, …)`, each checked against
-   `τ` at once, and sealed by `finish()`. A mismatch or a missing field
-   makes the result `None`, never a panic. `Finished<'call>` comes only from
-   that call's `Output`. The handler never reads `τ`. Generics are allowed:
-   a `Var` is opaque to it.
+   `Finished<'call, T, Rt>`, `T` one of its own `Var<kind::Type>`
+   parameters, and its script type is `Option<T>`, `T` bounded `Settled`:
+   settled at the call site by its use, and refused, naming the call, when
+   still open at the freeze. The handler takes an `Output<'call, T, Rt>`,
+   which the glue builds from the type `prepare` settled for the call's
+   result (`CallSite::returning`): it is filled leaf by leaf, `write::<V>`
+   and `field(name, …)`, each checked against `T`'s settled type at once,
+   and sealed by `finish()`. A mismatch, a second write of a place, a name
+   the type lacks or a missing field makes the result `None`, never a
+   panic, and releases what was filled. `Finished` comes only from that
+   call's `Output`, branded by `'call` invariantly. The handler never reads
+   `T`. Other generics are allowed: a `Var` is opaque to it.
 4. **Decoding at an expected type.** `Entry::run_encoded(Encoded)` decodes
    an entry's inputs at their types (RFC-0033, untrusted), refusing on any
    mismatch, and runs it.

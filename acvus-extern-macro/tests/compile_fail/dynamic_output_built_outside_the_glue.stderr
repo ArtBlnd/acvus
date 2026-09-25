@@ -1,0 +1,7 @@
+error: cannot construct `acvus_extern::Output<'_, _, _>` with struct literal syntax due to private fields
+ --> tests/compile_fail/dynamic_output_built_outside_the_glue.rs:6:5
+  |
+6 |     Output { sealed: false }
+  |     ^^^^^^   ------------- private field
+  |
+  = note: ...and other private fields `rt`, `site`, `root`, `_brand` and `_settled` that were not provided

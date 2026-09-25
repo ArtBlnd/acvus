@@ -1,0 +1,13 @@
+error: a `dynamic` declaration returns `Finished<'call, T, Rt>`: the call's lifetime, one of its own `Var<kind::Type>` parameters, whose script type is `Option<T>`, and its runtime (RFC-0097 rule 3)
+ --> tests/compile_fail/dynamic_result_at_a_concrete_type.rs:6:58
+  |
+6 | fn parse<'c, R>(out: Output<'c, i64, R>) -> Finished<'c, i64, R>
+  |                                                          ^^^
+
+warning: unused imports: `Finished`, `Output`, and `Runtime`
+ --> tests/compile_fail/dynamic_result_at_a_concrete_type.rs:3:20
+  |
+3 | use acvus_extern::{Finished, Output, Runtime, extern_fn};
+  |                    ^^^^^^^^  ^^^^^^  ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

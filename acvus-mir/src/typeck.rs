@@ -90,9 +90,13 @@ struct ShownSource {
 }
 
 /// A bounded type variable and where a violation of its bound is reported.
+/// `callee` names the declaration whose scheme it was instantiated from,
+/// and is `None` for a variable the checker bounds itself (an operand, a
+/// literal).
 struct BoundSite {
     var: crate::ty::TypeBoundId,
     span: Span,
+    callee: Option<QualifiedRef>,
 }
 
 /// A bounded effect variable and where a violation of its bound is
@@ -4146,7 +4150,11 @@ where
         self.bound_sites.extend(
             inst.bounded
                 .into_iter()
-                .map(|var| BoundSite { var, span: site.at }),
+                .map(|var| BoundSite {
+                    var,
+                    span: site.at,
+                    callee: Some(qref),
+                }),
         );
         self.effect_bound_sites.extend(
             inst.bounded_effects
@@ -4466,6 +4474,7 @@ where
                 unreachable!("a signature decision answers with a signature")
             };
             let SettledSignature::Named {
+                qref,
                 bounded,
                 bounded_effects,
                 ..
@@ -4474,7 +4483,11 @@ where
                 continue;
             };
             let span = self.decision_sites[decision];
-            types.extend(bounded.into_iter().map(|var| BoundSite { var, span }));
+            types.extend(bounded.into_iter().map(|var| BoundSite {
+                var,
+                span,
+                callee: Some(qref),
+            }));
             effects.extend(
                 bounded_effects
                     .into_iter()
@@ -4911,6 +4924,15 @@ where
         // open, and that is the refusal the reader was already told.
         if self.errors.is_empty() {
             for site in never_settled {
+                // A `dynamic` extern's result is the one variable a call asks
+                // its use to settle, and the refusal names that call
+                // (RFC-0097 rule 3).
+                if let (Some(callee), TyVarBound::Settled) =
+                    (site.callee, self.solver.bound_of_var(site.var))
+                {
+                    self.error(MirErrorKind::ResultUnsettled { callee }, site.span);
+                    continue;
+                }
                 let resolved_ty = self.type_as_written(&TyTerm::Var(site.var));
                 self.error(MirErrorKind::AmbiguousType { resolved_ty }, site.span);
             }
@@ -7276,7 +7298,11 @@ where
         let TyTerm::Var(var) = self.solver.resolve_ty(operand) else {
             unreachable!("two open variables unify into an open variable");
         };
-        self.bound_sites.push(BoundSite { var, span });
+        self.bound_sites.push(BoundSite {
+            var,
+            span,
+            callee: None,
+        });
         true
     }
 
@@ -7319,7 +7345,11 @@ where
             return false;
         }
         if let TyTerm::Var(var) = self.solver.resolve_ty(open) {
-            self.bound_sites.push(BoundSite { var, span });
+            self.bound_sites.push(BoundSite {
+                var,
+                span,
+                callee: None,
+            });
         }
         true
     }

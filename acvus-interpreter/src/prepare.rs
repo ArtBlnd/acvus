@@ -1732,6 +1732,15 @@ impl<'a> Prepare<'a> {
             .collect()
     }
 
+    /// The settled type of a call's result, which a `dynamic` extern's
+    /// `Output` is filled at (RFC-0097 rule 3).
+    fn ret_site(&self, result: ValueId) -> ArgAt<'_> {
+        ArgAt {
+            interner: self.ctx.interner,
+            ty: self.ty(result),
+        }
+    }
+
     fn chosen(&self, id: &QualifiedRef, instance: usize, required: &[Chosen]) -> ChosenExtern {
         let mut entries = self.entries.borrow_mut();
         ChosenExtern {
@@ -3696,6 +3705,7 @@ impl<'a> Prepare<'a> {
         let body = chain(into_body, ran);
 
         let InstKind::FunctionCall {
+            dst: result,
             callee:
                 Callee::Extern {
                     id,
@@ -3717,7 +3727,10 @@ impl<'a> Prepare<'a> {
             // word per requirement it states, each `Value::instance` of an entry
             // the module's `InstanceEntryStore` keeps boxed for as long as the
             // prepared code runs, built for the instance the checker settled on.
-            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires.as_slice()) })
+            f.at_site(
+                &unsafe { acvus_extern::CallSite::new(&sites, requires.as_slice()) }
+                    .returning(self.ret_site(*result)),
+            )
         };
         let CallHead {
             it, x, large, word, ..
@@ -4717,6 +4730,7 @@ impl<'a> Prepare<'a> {
             InstKind::Spawn {
                 dst, callee, args, ..
             } => {
+                let handle = *dst;
                 let dst = self.marked(*dst);
                 match callee {
                     Callee::Direct(id) => {
@@ -4743,7 +4757,18 @@ impl<'a> Prepare<'a> {
                         // word per requirement it states, each `Value::instance` of an entry
                         // the module's `InstanceEntryStore` keeps boxed for as long as the
                         // prepared code runs, built for the instance the checker settled on.
-                        let site = unsafe { acvus_extern::CallSite::new(&sites, &requires) };
+                        let Ty::Handle(spawned) = self.ty(handle) else {
+                            panic!(
+                                "a spawn's result is typed {:?}, which is no handle",
+                                self.ty(handle)
+                            )
+                        };
+                        let ret = ArgAt {
+                            interner: self.ctx.interner,
+                            ty: spawned,
+                        };
+                        let site = unsafe { acvus_extern::CallSite::new(&sites, &requires) }
+                            .returning(ret);
                         assert_eq!(
                             handler.width().ret,
                             1,
@@ -5163,7 +5188,10 @@ impl<'a> Prepare<'a> {
                             // word per requirement it states, each `Value::instance` of an entry
                             // the module's `InstanceEntryStore` keeps boxed for as long as the
                             // prepared code runs, built for the instance the checker settled on.
-                            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires) })
+                            f.at_site(
+                                &unsafe { acvus_extern::CallSite::new(&sites, requires) }
+                                    .returning(self.ret_site(site.dst)),
+                            )
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -5183,7 +5211,10 @@ impl<'a> Prepare<'a> {
                             // word per requirement it states, each `Value::instance` of an entry
                             // the module's `InstanceEntryStore` keeps boxed for as long as the
                             // prepared code runs, built for the instance the checker settled on.
-                            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires) })
+                            f.at_site(
+                                &unsafe { acvus_extern::CallSite::new(&sites, requires) }
+                                    .returning(self.ret_site(site.dst)),
+                            )
                         };
                         let window = self.window(at, args, ops);
                         let resume = next.block();
@@ -5222,7 +5253,10 @@ impl<'a> Prepare<'a> {
             // `Value::instance` of an entry the module's `InstanceEntryStore`
             // keeps boxed for as long as the prepared code runs, built for the
             // instance the checker settled on.
-            f.at_site(&unsafe { acvus_extern::CallSite::new(&sites, requires) })
+            f.at_site(
+                &unsafe { acvus_extern::CallSite::new(&sites, requires) }
+                    .returning(self.ret_site(result)),
+            )
         };
         let takes = self.take_mask(args);
         let slots = self.argument_words(args);
@@ -8959,7 +8993,8 @@ impl<'a> Prepare<'a> {
             // word per requirement it states, each `Value::instance` of an entry
             // the module's `InstanceEntryStore` keeps boxed for as long as the
             // prepared code runs, built for the instance the checker settled on.
-            let site = unsafe { acvus_extern::CallSite::new(&sites, &found.requires) };
+            let site = unsafe { acvus_extern::CallSite::new(&sites, &found.requires) }
+                .returning(self.ret_site(found.dst));
             calls.push(f.at_site(&site).into_fused(shape));
         }
         let last = previous.expect("a recognized run holds at least one call");

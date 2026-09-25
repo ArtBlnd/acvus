@@ -38,6 +38,7 @@ mod lend;
 mod loan;
 mod name;
 mod obj;
+mod output;
 mod owned;
 mod projection;
 mod reference;
@@ -85,6 +86,7 @@ pub use obj::{
     OneRegister, OneValue, OptionOf, Pair, RetForms, Returned, Run, Stored, SurvivesSuspension,
     TransparentOver, Tup, Variant,
 };
+pub use output::{ByOutput, Finished, Output, OutputSite, Place, RetFinished};
 pub use owned::{Owned, Release, lend_run};
 pub use projection::{
     Borrowed, BorrowedWhole, ByProjection, Fields, Lent, Nested, ObjectAt, OwnStorage, Project, Projected,

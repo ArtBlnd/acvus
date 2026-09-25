@@ -19,6 +19,7 @@ where
 {
     let site = CallSite::<Rt> {
         args: &[],
+        ret: None,
         requires: words,
     };
     let _ = <Forge<Rt> as Arg<Rt>>::site(&site, 0);
@@ -35,6 +36,7 @@ where
     let words = [Rt::instance_value(&entry)];
     let site = CallSite::<Rt> {
         args: &[],
+        ret: None,
         requires: &words,
     };
     let _ = <Forge<Rt> as Arg<Rt>>::site(&site, 0);

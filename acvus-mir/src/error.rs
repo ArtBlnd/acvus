@@ -298,6 +298,11 @@ pub enum MirErrorKind {
     AmbiguousType {
         resolved_ty: Ty,
     },
+    /// A `dynamic` extern's result is typed by its call site, and nothing at
+    /// this call settled it (RFC-0097 rule 3).
+    ResultUnsettled {
+        callee: QualifiedRef,
+    },
     UnificationFailure {
         expected: Ty,
         got: Ty,
@@ -733,6 +738,15 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                      and one place cannot hold both"
                 )
             }
+            MirErrorKind::ResultUnsettled { callee } => {
+                write!(
+                    f,
+                    "the result of `{}` is typed by how this call's result is used, and no use \
+                     here settles its type: read its fields, return it, or pass it where a type \
+                     is declared (RFC-0097 rule 3)",
+                    qualified(interner, *callee)
+                )
+            }
             MirErrorKind::AmbiguousType { resolved_ty } => {
                 write!(
                     f,
@@ -1035,6 +1049,7 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                 )?;
                 match bound {
                     crate::ty::TyVarBound::Any => write!(f, " (any)"),
+                    crate::ty::TyVarBound::Settled => write!(f, " (any, settled at the call)"),
                     crate::ty::TyVarBound::OneOf { shapes, .. } => {
                         write!(f, ", one of")?;
                         listed(

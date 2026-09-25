@@ -65,6 +65,8 @@ struct ExternFnAttr {
     /// `cost = N`: one call weighs `N` ticks of the backend's table
     /// (RFC-0066 rule 8), in place of its family's row.
     cost: Option<LitInt>,
+    /// `dynamic`: the result is typed by each call site (RFC-0097 rule 3).
+    dynamic: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +99,7 @@ impl Parse for ExternFnAttr {
             returns: None,
             copies: None,
             cost: None,
+            dynamic: false,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -124,6 +127,13 @@ impl Parse for ExternFnAttr {
                     return Err(syn::Error::new(key.span(), message));
                 }
                 out.returns = Some(stated);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
+            if key == "dynamic" {
+                out.dynamic = true;
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -215,7 +225,7 @@ impl Parse for ExternFnAttr {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     `ensures`, `reaches`, `copies`, `returns`, `total` or `cost`",
+                     `ensures`, `reaches`, `copies`, `returns`, `total`, `cost` or `dynamic`",
                 ));
             }
             if !input.is_empty() {
@@ -312,6 +322,8 @@ enum Returning {
     /// A Rust borrow of a parameter, at the carrier the declaration names
     /// for it (RFC-0047 rule 3, RFC-0068 rule 4).
     Lent(LentShape),
+    /// `Finished<'call, T, Rt>`, the script's `Option<T>` (RFC-0097 rule 3).
+    Finished(Type),
 }
 
 /// A returned borrow: `&T`, `&mut T`, `&[T]`, `&mut [T]`, or an `Option`
@@ -407,7 +419,10 @@ fn option_payload(ty: &Type) -> Option<&Type> {
 }
 
 impl Returning {
-    fn of(ty: &Type) -> Self {
+    fn of(ty: &Type, finished: Option<&SettledWritten>) -> Self {
+        if let Some(finished) = finished {
+            return Returning::Finished(finished.settled.clone());
+        }
         match ty {
             Type::Reference(r) if is_str(&r.elem) => Returning::Str,
             _ => match LentShape::of(ty) {
@@ -419,7 +434,7 @@ impl Returning {
 
     /// Whether the result borrows a parameter's storage.
     fn lends(&self) -> bool {
-        !matches!(self, Returning::Value)
+        matches!(self, Returning::Str | Returning::Lent(_))
     }
 
     /// The type the declaration's fills are applied to: the element of a
@@ -427,6 +442,7 @@ impl Returning {
     fn filled(&self, ret: &Type) -> Type {
         match self {
             Returning::Lent(shape) => shape.elem.clone(),
+            Returning::Finished(settled) => settled.clone(),
             Returning::Value | Returning::Str => ret.clone(),
         }
     }
@@ -441,6 +457,7 @@ impl Returning {
             Returning::Value => quote! { #filled },
             Returning::Str => quote! { ::acvus_extern::StrView },
             Returning::Lent(shape) => shape.carrier(filled, rt),
+            Returning::Finished(_) => quote! { ::core::option::Option<#filled> },
         }
     }
 
@@ -459,6 +476,7 @@ impl Returning {
                 let carrier = shape.carrier(filled, rt);
                 quote! { ::acvus_extern::RetLent<#carrier> }
             }
+            Returning::Finished(_) => quote! { ::acvus_extern::RetFinished },
         }
     }
 }
@@ -526,6 +544,15 @@ enum RustParam {
     /// `Args<'_, (A, ..), Rt>`: one acvus parameter per member, each taken
     /// by value, held together by one view (RFC-0097 rule 1).
     Args(ArgsParam),
+    /// `Output<'call, T, Rt>`, a `dynamic` declaration's result as the call
+    /// fills it (RFC-0097 rule 3).
+    Output(OutputParam),
+}
+
+struct OutputParam {
+    written: Type,
+    settled: Type,
+    runtime: Type,
 }
 
 struct ArgsParam {
@@ -547,7 +574,7 @@ impl RustParam {
         match self {
             RustParam::Acvus(param) | RustParam::Owning { param, .. } => std::slice::from_ref(param),
             RustParam::Args(args) => &args.members,
-            RustParam::State(_) | RustParam::Required(_) => &[],
+            RustParam::State(_) | RustParam::Required(_) | RustParam::Output(_) => &[],
         }
     }
 }
@@ -691,6 +718,185 @@ fn rust_fn_effect(
     .map(|effect| quote! { ::acvus_extern::EffectTerm::Known(#effect) })
 }
 
+const OUTPUT_SHAPE: &str = "an `Output` parameter is written `Output<'call, T, Rt>`: the call's \
+     lifetime, the type variable its `Finished` result names, and this declaration's runtime \
+     (RFC-0097 rule 3)";
+
+const FINISHED_SHAPE: &str = "a `dynamic` declaration returns `Finished<'call, T, Rt>`: the \
+     call's lifetime, one of its own `Var<kind::Type>` parameters, whose script type is \
+     `Option<T>`, and its runtime (RFC-0097 rule 3)";
+
+/// A `Finished<'call, T, Rt>` or `Output<'call, T, Rt>` type's `T` and `Rt`.
+struct SettledWritten {
+    settled: Type,
+    runtime: Type,
+}
+
+fn settled_written(ty: &Type, name: &str, shape: &str) -> syn::Result<Option<SettledWritten>> {
+    let Type::Path(p) = ty else {
+        return Ok(None);
+    };
+    let Some(seg) = p.path.segments.last() else {
+        return Ok(None);
+    };
+    if seg.ident != name {
+        return Ok(None);
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return Err(syn::Error::new_spanned(seg, shape));
+    };
+    let written: Vec<&syn::GenericArgument> = args.args.iter().collect();
+    let [
+        syn::GenericArgument::Lifetime(_),
+        syn::GenericArgument::Type(settled),
+        syn::GenericArgument::Type(runtime),
+    ] = written.as_slice()
+    else {
+        return Err(syn::Error::new_spanned(seg, shape));
+    };
+    Ok(Some(SettledWritten {
+        settled: settled.clone(),
+        runtime: runtime.clone(),
+    }))
+}
+
+/// The position among the declaration's type variables of the one a
+/// `dynamic` declaration's result names, or `None` for any other
+/// declaration; what `dynamic`, `Output` and `Finished` stand beside is
+/// refused (RFC-0097 rule 3).
+fn dynamic_result(
+    rust_params: &[RustParam],
+    vars: &Vars,
+    attr: &ExternFnAttr,
+    ret: &Type,
+    finished: Option<&SettledWritten>,
+    fn_ident: &Ident,
+    is_async: bool,
+    is_coercion: bool,
+) -> syn::Result<Option<usize>> {
+    let mut outputs = rust_params.iter().filter_map(|p| match p {
+        RustParam::Output(output) => Some(output),
+        RustParam::Acvus(_)
+        | RustParam::State(_)
+        | RustParam::Required(_)
+        | RustParam::Owning { .. }
+        | RustParam::Args(_) => None,
+    });
+    let output = outputs.next();
+    if let Some(second) = outputs.next() {
+        return Err(syn::Error::new_spanned(
+            &second.written,
+            "a second `Output`: a call fills one result (RFC-0097 rule 3)",
+        ));
+    }
+    let (finished, output) = match (attr.dynamic, finished, output) {
+        (false, None, None) => return Ok(None),
+        (false, Some(_), _) => {
+            return Err(syn::Error::new_spanned(
+                ret,
+                "a `Finished` result is a `dynamic` declaration's, whose script type the call \
+                 site settles: write `#[extern_fn(dynamic, ..)]` (RFC-0097 rule 3)",
+            ));
+        }
+        (false, None, Some(output)) => {
+            return Err(syn::Error::new_spanned(
+                &output.written,
+                "an `Output` fills a `dynamic` declaration's result: write \
+                 `#[extern_fn(dynamic, ..)]` and return the `Finished` it builds (RFC-0097 rule 3)",
+            ));
+        }
+        (true, None, _) => return Err(syn::Error::new_spanned(ret, FINISHED_SHAPE)),
+        (true, Some(_), None) => {
+            return Err(syn::Error::new(
+                fn_ident.span(),
+                format!(
+                    "`{fn_ident}` is `dynamic` and takes no `Output`: its `Finished` comes only \
+                     from the `Output<'call, T, Rt>` the call hands it (RFC-0097 rule 3)"
+                ),
+            ));
+        }
+        (true, Some(finished), Some(output)) => (finished, output),
+    };
+    let settled = &finished.settled;
+    let variable = match settled {
+        Type::Path(p) if p.qself.is_none() => p.path.get_ident().and_then(|id| vars.lookup(id)),
+        _ => None,
+    };
+    let Some((VarKind::Ty, at)) = variable else {
+        return Err(syn::Error::new_spanned(settled, FINISHED_SHAPE));
+    };
+    if quote! { #settled }.to_string() != {
+        let at = &output.settled;
+        quote! { #at }.to_string()
+    } {
+        return Err(syn::Error::new_spanned(&output.settled, OUTPUT_SHAPE));
+    }
+    let names_the_runtime = |runtime: &Type| {
+        matches!(runtime, Type::Path(p)
+            if p.qself.is_none() && vars.runtime_ident().is_some_and(|rt| p.path.is_ident(rt)))
+    };
+    if !names_the_runtime(&finished.runtime) {
+        return Err(syn::Error::new_spanned(&finished.runtime, FINISHED_SHAPE));
+    }
+    if !names_the_runtime(&output.runtime) {
+        return Err(syn::Error::new_spanned(&output.runtime, OUTPUT_SHAPE));
+    }
+    if vars.mono_var().is_some() {
+        return Err(syn::Error::new(
+            fn_ident.span(),
+            "a `dynamic` declaration is one Rust body that fills whatever type its site \
+             settles, and a `Monomorphize` variable asks for one body per member type \
+             (RFC-0041, RFC-0097 rule 3)",
+        ));
+    }
+    let task = match (is_async, attr.heavy, &attr.sync) {
+        (true, _, _) => Some("an `async fn`"),
+        (false, true, _) => Some("`heavy`"),
+        (false, false, Some(_)) => Some("`sync =`"),
+        (false, false, None) => None,
+    };
+    if let Some(task) = task {
+        return Err(syn::Error::new(
+            fn_ident.span(),
+            format!(
+                "`{fn_ident}` is `dynamic` and states {task}: its `Output` borrows the call's \
+                 site table and runtime, and a body that suspends or is offloaded holding one \
+                 is not built. Declare a plain `fn` (RFC-0097 rule 3)."
+            ),
+        ));
+    }
+    if let Some(signature) = &attr.instance_of {
+        return Err(syn::Error::new_spanned(
+            signature,
+            "an instance of a shared signature returns at the signature's own type, and a \
+             `dynamic` result has none until its site settles it (RFC-0097 rule 3)",
+        ));
+    }
+    if is_coercion {
+        return Err(syn::Error::new(
+            fn_ident.span(),
+            "an extern_cast or extern_view converts to the one type its result names, and a \
+             `dynamic` result names none (RFC-0023 rule 8, RFC-0097 rule 3)",
+        ));
+    }
+    let stated = [
+        attr.law.as_ref().map(|law| (law.first_word().span(), "a law")),
+        attr.ensures.as_ref().map(|_| (fn_ident.span(), "`ensures`")),
+        attr.copies.as_ref().map(|named| (named.span(), "`copies`")),
+    ];
+    if let Some((span, what)) = stated.into_iter().flatten().next() {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "{what} is stated over the value a declaration returns, and a `dynamic` \
+                 declaration returns a `Finished`, whose value its body never names at a type \
+                 (RFC-0082, RFC-0097 rule 3)"
+            ),
+        ));
+    }
+    Ok(Some(at))
+}
+
 /// What an `Instance` or `InstanceOf` parameter's type says.
 enum Requirement {
     Of(RequiredParam),
@@ -787,7 +993,11 @@ fn refuse_args_beside(
 ) -> syn::Result<()> {
     let mut views = rust_params.iter().filter_map(|p| match p {
         RustParam::Args(args) => Some(args),
-        RustParam::Acvus(_) | RustParam::State(_) | RustParam::Required(_) | RustParam::Owning { .. } => None,
+        RustParam::Acvus(_)
+        | RustParam::State(_)
+        | RustParam::Required(_)
+        | RustParam::Owning { .. }
+        | RustParam::Output(_) => None,
     });
     let Some(view) = views.next() else {
         return Ok(());
@@ -906,7 +1116,7 @@ impl Taker {
                     takers.push(Taker::Args(at..at + args.members.len()));
                     at += args.members.len();
                 }
-                RustParam::State(_) | RustParam::Required(_) => {}
+                RustParam::State(_) | RustParam::Required(_) | RustParam::Output(_) => {}
             }
         }
         takers
@@ -941,7 +1151,7 @@ impl RequirementIndex {
                     index.standing.push(nth);
                     nth += 1;
                 }
-                RustParam::State(_) => {}
+                RustParam::State(_) | RustParam::Output(_) => {}
             }
         }
         index
@@ -992,7 +1202,8 @@ struct FlowInputs {
 /// the acvus parameter, and as the requirement at its variable, whose
 /// signature ties that variable to the signature's other ones, as it did
 /// when the requirement was a parameter of its own. Each `Args` parameter
-/// read as its members, each an input taken by value.
+/// read as its members, each an input taken by value. An `Output` is no
+/// input: the result it fills holds only values its body wrote.
 fn flow_inputs(sig: &syn::Signature, roles: &[flows::Role]) -> syn::Result<FlowInputs> {
     let mut inputs = FlowInputs {
         sig: sig.clone(),
@@ -1000,6 +1211,11 @@ fn flow_inputs(sig: &syn::Signature, roles: &[flows::Role]) -> syn::Result<FlowI
     };
     inputs.sig.inputs.clear();
     for (arg, role) in sig.inputs.iter().zip(roles) {
+        if let FnArg::Typed(pat_type) = arg
+            && settled_written(&pat_type.ty, "Output", OUTPUT_SHAPE)?.is_some()
+        {
+            continue;
+        }
         if let (FnArg::Typed(pat_type), flows::Role::Acvus(first)) = (arg, role)
             && let Some(ArgsWritten { members, .. }) = args_written(&pat_type.ty)?
         {
@@ -1098,7 +1314,11 @@ fn generate_extern_fn(
         .iter()
         .filter_map(|p| match p {
             RustParam::State(st) => Some(st),
-            RustParam::Acvus(_) | RustParam::Required(_) | RustParam::Owning { .. } | RustParam::Args(_) => None,
+            RustParam::Acvus(_)
+            | RustParam::Required(_)
+            | RustParam::Owning { .. }
+            | RustParam::Args(_)
+            | RustParam::Output(_) => None,
         })
         .collect();
     // Every requirement in the order of the Rust parameters that state it,
@@ -1107,14 +1327,25 @@ fn generate_extern_fn(
         .iter()
         .filter_map(|p| match p {
             RustParam::Required(r) | RustParam::Owning { required: r, .. } => Some(r),
-            RustParam::Acvus(_) | RustParam::State(_) | RustParam::Args(_) => None,
+            RustParam::Acvus(_) | RustParam::State(_) | RustParam::Args(_) | RustParam::Output(_) => None,
         })
         .collect();
     let at_requirement = RequirementIndex::of(&rust_params);
     refuse_two_owners(&rust_params)?;
     let ret = parse_return(&func.sig.output);
     refuse_static_argument(&ret)?;
-    let returning = Returning::of(&ret);
+    let finished = settled_written(&ret, "Finished", FINISHED_SHAPE)?;
+    let dynamic_at = dynamic_result(
+        &rust_params,
+        &vars,
+        &attr,
+        &ret,
+        finished.as_ref(),
+        &func.sig.ident,
+        is_async,
+        is_cast || is_view,
+    )?;
+    let returning = Returning::of(&ret, finished.as_ref());
     let rust_fn_effect = match rust_fn_written(&ret)? {
         Some(written) => Some(rust_fn_effect(&attr, &vars, &written, &ret, &func.sig.ident, is_async)?),
         None => None,
@@ -1127,14 +1358,22 @@ fn generate_extern_fn(
                 roles.push(flows::Role::Acvus(acvus_index));
                 acvus_index += p.acvus().len();
             }
-            RustParam::State(_) | RustParam::Required(_) => roles.push(flows::Role::Other),
+            RustParam::State(_) | RustParam::Required(_) | RustParam::Output(_) => {
+                roles.push(flows::Role::Other)
+            }
         }
     }
     let FlowInputs {
         sig: flow_sig,
         roles: flow_roles,
     } = flow_inputs(&func.sig, &roles)?;
-    let derived_flows = flows::derive(&flow_sig, &flow_roles, &vars, &ret)?;
+    // A `Finished` is the script's `Option<T>`, holding what the body wrote
+    // through its `Output`, and its flows are that type's.
+    let flow_ret: Type = match &returning {
+        Returning::Finished(settled) => syn::parse_quote! { ::core::option::Option<#settled> },
+        Returning::Value | Returning::Str | Returning::Lent(_) => ret.clone(),
+    };
+    let derived_flows = flows::derive(&flow_sig, &flow_roles, &vars, &flow_ret)?;
     if returning.lends() {
         if !params.iter().any(|p| p.mode.lends_its_storage()) {
             return Err(syn::Error::new_spanned(
@@ -1336,6 +1575,14 @@ fn generate_extern_fn(
     let arg_idents: Vec<Ident> = (0..takers.len()).map(|i| format_ident!("__a{i}")).collect();
     let inst_idents: Vec<Ident> = (0..at_requirement.standing.len())
         .map(|i| format_ident!("__q{i}"))
+        .collect();
+    // The `Output` takes no argument, so it stands after every parameter that
+    // does, beside the requirements.
+    let takes_output = rust_params.iter().any(|p| matches!(p, RustParam::Output(_)));
+    let out_idents: Vec<Ident> = takes_output.then(|| format_ident!("__o")).into_iter().collect();
+    let out_markers: Vec<proc_macro2::TokenStream> = takes_output
+        .then(|| quote! { ::acvus_extern::ByOutput })
+        .into_iter()
         .collect();
     let crossing = |ty: &Type, member: Option<&Type>| -> proc_macro2::TokenStream {
         if member.is_some() && vars.mentions_mono(ty) {
@@ -1562,6 +1809,7 @@ fn generate_extern_fn(
                     inst_at += 1;
                     quote! { #at }
                 }
+                RustParam::Output(_) => quote! { __o },
             })
             .collect();
         let capture_state = (!states.is_empty()).then(|| {
@@ -1575,6 +1823,7 @@ fn generate_extern_fn(
         let taken = quote! {
             #(let #arg_idents = #arg_idents.take();)*
             #(let #inst_idents = #inst_idents.take();)*
+            #(let #out_idents = #out_idents.take();)*
         };
         // An instance whose result is a borrow crosses it through the
         // marker that borrow stands at; an owned result through the
@@ -1658,9 +1907,9 @@ fn generate_extern_fn(
                     ::acvus_extern::async_glue_at_instance::<
                         __R,
                         _,
-                        (#(#arg_markers,)* #(#inst_markers,)*),
+                        (#(#arg_markers,)* #(#inst_markers,)* #(#out_markers,)*),
                         #entry_ty,
-                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| {
+                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)* #(#out_idents,)*)| {
                         // SAFETY: this is the glue `#[extern_fn]` wrote, and it crosses
                     // each value at the declaration's own types.
                     let __rt = unsafe { ::acvus_extern::Crossing::new(__ctx.rt) };
@@ -1676,8 +1925,8 @@ fn generate_extern_fn(
             quote! {
                 ::acvus_extern::ExternHandler::awaited({
                     #capture_state
-                    ::acvus_extern::async_glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)*)>(
-                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*)| {
+                    ::acvus_extern::async_glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)* #(#out_markers,)*)>(
+                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)* #(#out_idents,)*)| {
                             #capture_state
                             // SAFETY: this is the glue `#[extern_fn]` wrote, and it crosses
                     // each value at the declaration's own types.
@@ -1744,10 +1993,10 @@ fn generate_extern_fn(
                     ::acvus_extern::glue_at_instance::<
                         __R,
                         _,
-                        (#(#arg_markers,)* #(#inst_markers,)*),
+                        (#(#arg_markers,)* #(#inst_markers,)* #(#out_markers,)*),
                         #ret_marker,
                         #entry_ty,
-                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*), __ret| {
+                    >(move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)* #(#out_idents,)*), __ret| {
                         #taken
                         __ret.put(#call)
                     })
@@ -1757,8 +2006,8 @@ fn generate_extern_fn(
             quote! {
                 ::acvus_extern::ExternHandler::#sync_variant({
                     #capture_state
-                    ::acvus_extern::glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)*), #ret_marker>(
-                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)*), __ret| {
+                    ::acvus_extern::glue::<__R, _, (#(#arg_markers,)* #(#inst_markers,)* #(#out_markers,)*), #ret_marker>(
+                        move |#ctx_param, (#(#arg_idents,)* #(#inst_idents,)* #(#out_idents,)*), __ret| {
                             #taken
                             __ret.put(#call)
                         }
@@ -1899,7 +2148,10 @@ fn generate_extern_fn(
             }
         }
     };
-    let bounds = vars.bound_exprs();
+    let mut bounds = vars.bound_exprs();
+    if let Some(at) = dynamic_at {
+        bounds[at] = quote! { ::acvus_extern::TyVarBound::Settled };
+    }
     let effect_bounds = vars.effect_bound_exprs();
     let requires: Vec<proc_macro2::TokenStream> = required
         .iter()
@@ -2112,6 +2364,23 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             continue;
         }
         refuse_static_argument(pat_type.ty.as_ref())?;
+        if let Some(SettledWritten { settled, runtime }) =
+            settled_written(pat_type.ty.as_ref(), "Output", OUTPUT_SHAPE)?
+        {
+            params.push(RustParam::Output(OutputParam {
+                written: (*pat_type.ty).clone(),
+                settled,
+                runtime,
+            }));
+            continue;
+        }
+        if settled_written(pat_type.ty.as_ref(), "Finished", FINISHED_SHAPE)?.is_some() {
+            return Err(syn::Error::new_spanned(
+                &pat_type.ty,
+                "a `Finished` is a `dynamic` declaration's result and no parameter: it comes \
+                 only from the `Output` of the call that returns it (RFC-0097 rule 3)",
+            ));
+        }
         if let Some(ArgsWritten { members, runtime }) = args_written(pat_type.ty.as_ref())? {
             let members = members
                 .into_iter()
@@ -5015,6 +5284,13 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                     &args.written,
                     "a signature declares no `Args`: its instances are called through their mono \
                      glue, which builds none (RFC-0067 rule 8, RFC-0097 rule 1)",
+                ));
+            }
+            RustParam::Output(output) => {
+                return Err(syn::Error::new_spanned(
+                    &output.written,
+                    "a signature declares no `Output`: its instances return at the signature's \
+                     own result type, which no call site settles (RFC-0097 rule 3)",
                 ));
             }
         }

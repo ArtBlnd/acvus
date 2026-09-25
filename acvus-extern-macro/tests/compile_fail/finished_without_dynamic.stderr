@@ -1,0 +1,13 @@
+error: a `Finished` result is a `dynamic` declaration's, whose script type the call site settles: write `#[extern_fn(dynamic, ..)]` (RFC-0097 rule 3)
+ --> tests/compile_fail/finished_without_dynamic.rs:6:46
+  |
+6 | fn parse<'c, T, R>(out: Output<'c, T, R>) -> Finished<'c, T, R>
+  |                                              ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Finished`, `Output`, `Runtime`, `Var`, and `kind`
+ --> tests/compile_fail/finished_without_dynamic.rs:3:20
+  |
+3 | use acvus_extern::{Finished, Output, Runtime, Var, extern_fn, kind};
+  |                    ^^^^^^^^  ^^^^^^  ^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

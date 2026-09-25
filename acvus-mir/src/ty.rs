@@ -256,6 +256,10 @@ pub enum TyVarBound {
         signed: bool,
         among: Vec<IntTy>,
     },
+    /// The variable takes any type, and the use that instantiated it must
+    /// settle which: open at the freeze it is refused, never taken as `!`
+    /// (RFC-0097 rule 3). A `dynamic` extern bounds its result's variable so.
+    Settled,
 }
 
 impl TyVarBound {
@@ -266,7 +270,7 @@ impl TyVarBound {
     /// Whether a variable under this bound may still become a reference.
     pub fn admits_a_reference(&self) -> bool {
         match self {
-            TyVarBound::Any => true,
+            TyVarBound::Any | TyVarBound::Settled => true,
             TyVarBound::OneOf { shapes } => shapes
                 .iter()
                 .any(|shape| matches!(shape, TyTerm::Ref(..) | TyTerm::Var(_))),
@@ -308,7 +312,7 @@ impl TyVarBound {
     pub fn admits(&self, ty: &Ty) -> bool {
         match self {
             _ if matches!(ty, Ty::Error(_)) => true,
-            Self::Any => true,
+            Self::Any | Self::Settled => true,
             Self::OneOf { shapes } => shapes.iter().any(|s| matches_poly(ty, s)),
             Self::Integer { signed, among } => {
                 matches!(ty, Ty::Int(k) if among.contains(k) && (!*signed || k.signed()))
@@ -316,11 +320,15 @@ impl TyVarBound {
         }
     }
 
-    /// The bound either side satisfies (RFC-0043).
+    /// The bound either side satisfies (RFC-0043). Where either side
+    /// admits every type the union does too, and it is `Settled` where
+    /// either side asks its use to settle it: an open variable is refused
+    /// rather than taken as `!` under one reading and not the other.
     pub fn union(self, other: Self) -> Self {
+        let settled = matches!(self, Self::Settled) || matches!(other, Self::Settled);
         let shapes = |bound: Self| -> Option<Vec<PolyTy>> {
             match bound {
-                Self::Any => None,
+                Self::Any | Self::Settled => None,
                 Self::OneOf { shapes, .. } => Some(shapes),
                 Self::Integer { among, .. } => Some(among.into_iter().map(TyTerm::Int).collect()),
             }
@@ -330,15 +338,20 @@ impl TyVarBound {
                 a.extend(b);
                 Self::OneOf { shapes: a }
             }
+            (None, _) | (_, None) if settled => Self::Settled,
             (None, _) | (_, None) => Self::Any,
         }
     }
 
     /// The bound both sides satisfy: the pairwise unifiers of their shapes.
-    /// `None` when no type does.
+    /// `None` when no type does. `Settled` admits every type, and every other
+    /// bound closes a variable at the freeze by its own rule — a `OneOf` open
+    /// there is refused, an integer literal takes its width (RFC-0037) — so it
+    /// meets another as that other, and `Any` as itself.
     pub fn meet(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (Self::Any, b) | (b, Self::Any) => Some(b.clone()),
+            (Self::Settled, b) | (b, Self::Settled) => Some(b.clone()),
             (
                 Self::Integer {
                     signed: sa,
