@@ -60,7 +60,7 @@ fn to_string_bool(a: &bool) -> String {
     a.to_string()
 }
 
-#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::to_string, effect = pure, copies(a))]
 fn to_string_string(a: &String) -> String {
     a.clone()
 }
@@ -220,6 +220,43 @@ mod tests {
         assert_eq!(
             reg.handlers.len() - core.handlers.len(),
             signatures + plain_fns
+        );
+    }
+
+    /// RFC-0082 rule 10: the text of a `String` is a copy of it, sampled;
+    /// the text of a `&str` states no `copies`, since its result is of
+    /// another type than the value it lends.
+    #[test]
+    fn copies_holds_over_the_text_of_a_string_alone() {
+        for text in ["", "a", "é\0", "\u{10FFFF}"] {
+            let text = text.to_string();
+            assert_eq!(to_string_string(&text), text);
+        }
+        let i = Interner::new();
+        let reg = Externs::combine(vec![conversion_registry::<TypesOnly>()], &i)
+            .expect("registry combines");
+        let qref = acvus_extern::QualifiedRef::qualified(i.intern("core"), i.intern("to_string"));
+        let function = reg
+            .functions
+            .iter()
+            .find(|f| f.qref == qref)
+            .expect("the signature is declared");
+        let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
+            panic!("to_string is an extern")
+        };
+        let copying: Vec<&acvus_extern::PolyTy> = instances
+            .concrete
+            .iter()
+            .filter(|instance| instance.copies.is_some())
+            .map(|instance| &instance.ty)
+            .collect();
+        assert_eq!(copying.len(), 1, "{copying:?}");
+        let acvus_extern::PolyTy::Fn { params, .. } = copying[0] else {
+            panic!("an instance is a function")
+        };
+        assert!(
+            matches!(&params[0].ty, acvus_extern::PolyTy::Ref(_, lent) if *lent.ty() == acvus_extern::PolyTy::String),
+            "{copying:?}"
         );
     }
 

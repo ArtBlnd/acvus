@@ -38,6 +38,7 @@ pub mod sig {
         signum(a),
         min(a, b),
         max(a, b),
+        gcd(a, b),
         clamp(x, lo, hi),
         pow(base, exp),
         wrapping_add(a, b),
@@ -587,6 +588,22 @@ macro_rules! int_unsigned {
             a.isqrt()
         }
 
+        /// There is no signed instance: over a signed width `gcd(0, -4)` is
+        /// `4`, so `0` is no identity, and `|MIN|` is no value of the width.
+        #[extern_fn(
+            instance_of = crate::num::sig::gcd,
+            effect = pure,
+            total,
+            law(associative, commutative, identity = 0)
+        )]
+        pub fn gcd(a: Width, b: Width) -> Width {
+            let (mut a, mut b) = (a, b);
+            while b != 0 {
+                (a, b) = (b, a % b);
+            }
+            a
+        }
+
         #[extern_fn(instance_of = crate::num::sig::is_power_of_two, effect = pure, total)]
         pub fn is_power_of_two(a: Width) -> bool {
             a.is_power_of_two()
@@ -681,7 +698,7 @@ macro_rules! unsigned_width {
                     min, max, clamp, abs_diff,
                     to_hex, to_binary, to_octal,
                     pow,
-                        isqrt, is_power_of_two, next_power_of_two,
+                        isqrt, is_power_of_two, next_power_of_two, gcd,
                     ],
                 }
             }
@@ -916,7 +933,7 @@ where
             sig::leading_zeros, sig::trailing_zeros, sig::count_ones,
             sig::swap_bytes, sig::to_be, sig::to_le,
             sig::isqrt, sig::is_power_of_two, sig::next_power_of_two,
-            sig::abs_diff,
+            sig::abs_diff, sig::gcd,
             sig::to_hex, sig::to_binary, sig::to_octal,
         ],
         fns: [
@@ -988,7 +1005,7 @@ mod tests {
         let reg = Externs::combine(registries, &i).expect("registries combine");
         let core = Externs::<TypesOnly>::combine(vec![], &i).expect("core combines");
 
-        let shared_signatures = 48;
+        let shared_signatures = 49;
         let float_fns = 39;
         let int_constants = 8 * 3;
         let float_constants = 6 + 1;
@@ -1069,17 +1086,41 @@ mod tests {
     laws_hold_at!(declared_laws_hold_at_i16, i16s: i16);
     laws_hold_at!(declared_laws_hold_at_i32, i32s: i32);
     laws_hold_at!(declared_laws_hold_at_i64, i64s: i64);
-    laws_hold_at!(declared_laws_hold_at_u8, u8s: u8, saturating_add = 0, saturating_mul = 1);
-    laws_hold_at!(declared_laws_hold_at_u16, u16s: u16, saturating_add = 0, saturating_mul = 1);
-    laws_hold_at!(declared_laws_hold_at_u32, u32s: u32, saturating_add = 0, saturating_mul = 1);
-    laws_hold_at!(declared_laws_hold_at_u64, u64s: u64, saturating_add = 0, saturating_mul = 1);
+    laws_hold_at!(
+        declared_laws_hold_at_u8,
+        u8s: u8,
+        saturating_add = 0,
+        saturating_mul = 1,
+        gcd = 0,
+    );
+    laws_hold_at!(
+        declared_laws_hold_at_u16,
+        u16s: u16,
+        saturating_add = 0,
+        saturating_mul = 1,
+        gcd = 0,
+    );
+    laws_hold_at!(
+        declared_laws_hold_at_u32,
+        u32s: u32,
+        saturating_add = 0,
+        saturating_mul = 1,
+        gcd = 0,
+    );
+    laws_hold_at!(
+        declared_laws_hold_at_u64,
+        u64s: u64,
+        saturating_add = 0,
+        saturating_mul = 1,
+        gcd = 0,
+    );
 
     /// These calls list every handler this file declares `total` that takes
     /// an argument, at an integer width, and `total_holds_over_f64` every
     /// one over `f64`: a declaration added above is sampled only once it is
     /// added here.
     macro_rules! total_holds_at {
-        ($test:ident, $m:ident: $t:ident, [$($own:ident),*], pow = $pow:expr) => {
+        ($test:ident, $m:ident: $t:ident, [$($own:ident),*], [$($own_binary:ident),*], pow = $pow:expr) => {
             #[test]
             fn $test() {
                 let edges: [$t; 6] = [$t::MIN, $t::MAX, 0, 1, $t::MAX / 2, $t::MIN.wrapping_sub(1)];
@@ -1133,6 +1174,7 @@ mod tests {
                             $m::max(a, b),
                             $m::abs_diff(a, b),
                         );
+                        $(let _ = $m::$own_binary(a, b);)*
                         let pow: Option<fn($t, $t) -> $t> = $pow;
                         if let Some(pow) = pow {
                             let _ = pow(a, b);
@@ -1143,14 +1185,38 @@ mod tests {
         };
     }
 
-    total_holds_at!(total_holds_at_i8, i8s: i8, [abs, signum, saturating_neg], pow = None);
-    total_holds_at!(total_holds_at_i16, i16s: i16, [abs, signum, saturating_neg], pow = None);
-    total_holds_at!(total_holds_at_i32, i32s: i32, [abs, signum, saturating_neg], pow = None);
-    total_holds_at!(total_holds_at_i64, i64s: i64, [abs, signum, saturating_neg], pow = None);
-    total_holds_at!(total_holds_at_u8, u8s: u8, [isqrt, is_power_of_two], pow = Some(u8s::pow));
-    total_holds_at!(total_holds_at_u16, u16s: u16, [isqrt, is_power_of_two], pow = Some(u16s::pow));
-    total_holds_at!(total_holds_at_u32, u32s: u32, [isqrt, is_power_of_two], pow = Some(u32s::pow));
-    total_holds_at!(total_holds_at_u64, u64s: u64, [isqrt, is_power_of_two], pow = Some(u64s::pow));
+    total_holds_at!(total_holds_at_i8, i8s: i8, [abs, signum, saturating_neg], [], pow = None);
+    total_holds_at!(total_holds_at_i16, i16s: i16, [abs, signum, saturating_neg], [], pow = None);
+    total_holds_at!(total_holds_at_i32, i32s: i32, [abs, signum, saturating_neg], [], pow = None);
+    total_holds_at!(total_holds_at_i64, i64s: i64, [abs, signum, saturating_neg], [], pow = None);
+    total_holds_at!(
+        total_holds_at_u8,
+        u8s: u8,
+        [isqrt, is_power_of_two],
+        [gcd],
+        pow = Some(u8s::pow)
+    );
+    total_holds_at!(
+        total_holds_at_u16,
+        u16s: u16,
+        [isqrt, is_power_of_two],
+        [gcd],
+        pow = Some(u16s::pow)
+    );
+    total_holds_at!(
+        total_holds_at_u32,
+        u32s: u32,
+        [isqrt, is_power_of_two],
+        [gcd],
+        pow = Some(u32s::pow)
+    );
+    total_holds_at!(
+        total_holds_at_u64,
+        u64s: u64,
+        [isqrt, is_power_of_two],
+        [gcd],
+        pow = Some(u64s::pow)
+    );
 
     #[test]
     fn total_holds_over_f64() {
@@ -1253,6 +1319,47 @@ mod tests {
             }
             assert_eq!(widths.len(), 8, "{sig}: {widths:?}");
         }
+    }
+
+    #[test]
+    fn gcd_declares_its_law_at_the_unsigned_widths_alone() {
+        use acvus_extern::{BinaryLaws, FnKind, Identity, Laws, Literal, QualifiedRef};
+        let i = Interner::new();
+        let mut registries = vec![num_registry::<TypesOnly>()];
+        registries.extend(num_width_registries());
+        registries.extend(num_constant_registries());
+        let reg = Externs::combine(registries, &i).expect("registries combine");
+        let qref = QualifiedRef::qualified(i.intern("num"), i.intern("gcd"));
+        let function = reg
+            .functions
+            .iter()
+            .find(|f| f.qref == qref)
+            .expect("the signature is declared");
+        let FnKind::Extern { instances, .. } = &function.kind else {
+            panic!("gcd is an extern")
+        };
+        let mut widths: Vec<&str> = Vec::new();
+        for instance in &instances.concrete {
+            let acvus_extern::PolyTy::Fn { ret, .. } = &instance.ty else {
+                panic!("an instance is a function")
+            };
+            let acvus_extern::PolyTy::Int(width) = &**ret else {
+                panic!("gcd at {ret:?}")
+            };
+            assert!(!width.signed(), "gcd at {}", width.name());
+            assert_eq!(
+                instance.laws,
+                Laws::Binary(BinaryLaws {
+                    associative: true,
+                    commutative: true,
+                    identity: Some(Identity::Const(Literal::Int(0))),
+                }),
+                "gcd at {}",
+                width.name()
+            );
+            widths.push(width.name());
+        }
+        assert_eq!(widths, ["u8", "u16", "u32", "u64"]);
     }
 
     /// `saturating_add` and `saturating_mul` state their laws at the four

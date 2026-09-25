@@ -1,0 +1,22 @@
+// expect 6|0|7|1
+let xs = vec([12u64, 0u64, 18u64, 24u64, 30u64]);
+let g = 0u64;
+for x in &xs {
+    g = num::gcd(g, *x);
+}
+let zeros = vec([0u64, 0u64]);
+let z = 0u64;
+for x in &zeros {
+    z = num::gcd(z, *x);
+}
+let one = vec([7u64]);
+let o = 0u64;
+for x in &one {
+    o = num::gcd(*x, o);
+}
+let coprime = vec([4u8, 9u8, 25u8]);
+let c = 0u8;
+for x in &coprime {
+    c = num::gcd(c, *x);
+}
+g.to_string() + "|" + z.to_string() + "|" + o.to_string() + "|" + c.to_string()

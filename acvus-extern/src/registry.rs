@@ -5,7 +5,7 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::laws::{
-    BinaryLaws, Identity, LawRole, Laws, Postcondition, Reaches, Returns, Unresolved,
+    BinaryLaws, Copies, Identity, LawRole, Laws, Postcondition, Reaches, Returns, Unresolved,
 };
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
@@ -47,6 +47,9 @@ pub struct FnDecl {
     /// rule 7).
     pub reaches: Reaches,
     pub returns: Returns,
+    /// `copies(x)`: the result equals what reference parameter `x` lends
+    /// (RFC-0082 rule 10).
+    pub copies: Option<Copies>,
     /// The weight in ticks of one call, when the declaration states it
     /// (`cost = N`, RFC-0066 rule 8); a declaration that states none weighs
     /// its family's row of the backend's table.
@@ -199,6 +202,7 @@ where
             ensures: Vec::new(),
             reaches: Reaches::Lent,
             returns: Returns::Unstated,
+            copies: None,
             cost: None,
         },
         instances: Instances {
@@ -329,6 +333,7 @@ where
             ensures: decl.ensures,
             reaches: decl.reaches,
             returns: decl.returns,
+            copies: decl.copies,
             cost: decl.cost,
         },
         instances: Instances {
@@ -862,6 +867,7 @@ struct LawfulInstance<R: Runtime> {
     ensures: Vec<Postcondition>,
     reaches: Reaches,
     returns: Returns,
+    copies: Option<Copies>,
     cost: Option<u64>,
 }
 
@@ -1016,6 +1022,7 @@ impl<R: Runtime> Externs<R> {
                         &decl.ensures,
                         &decl.reaches,
                         decl.returns,
+                        decl.copies,
                         decl.cost,
                     ),
                     requires: decl
@@ -1070,6 +1077,7 @@ impl<R: Runtime> Externs<R> {
                                 arm.ensures.clone(),
                                 arm.reaches.clone(),
                                 arm.returns,
+                                arm.copies,
                                 arm.cost,
                             )
                     })
@@ -1106,12 +1114,20 @@ impl<R: Runtime> Externs<R> {
             let concrete = instances
                 .concrete
                 .iter()
-                .map(|at| (&at.ty, &at.laws, at.returns, at.requires.first()));
+                .map(|at| (&at.ty, &at.laws, at.returns, at.copies, at.requires.first()));
             let generic = instances
                 .generic
                 .as_ref()
-                .map(|at| (&function.ty, &at.laws, at.returns, None));
-            for (ty, laws, returns, own_requirement) in concrete.chain(generic) {
+                .map(|at| (&function.ty, &at.laws, at.returns, at.copies, None));
+            for (ty, laws, returns, copies, own_requirement) in concrete.chain(generic) {
+                if let Some(copies) = copies
+                    && !acvus_mir::laws::copies_fits(copies, ty)
+                {
+                    return Err(CombineError::LawOnUnfitSignature {
+                        function: written(interner, function.qref),
+                        law: "copies",
+                    });
+                }
                 if returns == Returns::Total && takes_a_function_value(ty) {
                     return Err(CombineError::TotalOverFunctionArgument {
                         function: written(interner, function.qref),
@@ -1169,6 +1185,7 @@ impl LawSite<'_> {
             Laws::None => return Ok(()),
             Laws::Binary(_) => "law",
             Laws::Fold(_) => "fold",
+            Laws::TotalOrder => "total_order",
         };
         let PolyTy::Fn { ret, .. } = self.ty else {
             return Err(self.unshaped(law));
@@ -1340,6 +1357,7 @@ fn add_instance<R: Runtime>(
             ensures: decl.ensures.clone(),
             reaches: decl.reaches.clone(),
             returns: decl.returns,
+            copies: decl.copies,
             cost: decl.cost,
         }));
     Ok(())

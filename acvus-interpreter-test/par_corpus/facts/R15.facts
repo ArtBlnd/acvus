@@ -1,4 +1,4 @@
 for slice(r11) -> L1 else L2 stages [L1]
-// L1: cycle Storage(r14) in_order {assign, ref, concat, assign, ref, concat, assign}
+// L1: cycle Storage(r14) in_order law(Reset(Op(Concat)) exact) {assign, ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost in place: no stage runs apart

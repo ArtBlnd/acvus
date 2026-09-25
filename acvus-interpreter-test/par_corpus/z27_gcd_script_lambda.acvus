@@ -1,6 +1,6 @@
-// id: R11
-// family: reduction
-// desc: gcd through a local recursive-free lambda loop; gcd is associative and commutative but nothing declares it
+// id: Z27
+// family: negative
+// desc: gcd through a script lambda: gcd is associative and commutative, but no law is stated on a script function
 // expect: 6
 let gcd = |a, b| -> {
     let x = a;

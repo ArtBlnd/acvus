@@ -6,7 +6,7 @@ Every app is `<nn>_<name>.acvus`. Its header states `app`, `desc` and `expect` (
 
 A row's class is `matches` (the facts state the expected grain, or the expected sequential structure), `under-claim` (the facts state less parallelism than the expected structure; the missing rule, declaration or decision is named), or `OVER-CLAIM` (the facts state more than is sound). A stage the facts print as `disjoint` or with a law runs apart (RFC-0092 rules 1 and 2), whatever else its region holds; a `While` or an iterator pipeline prints no stages and runs in place.
 
-The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so.
+The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved.
 
 ## Summary
 
@@ -21,8 +21,8 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | scan law (RFC-0089 Open), alone or per key | 6 |
 | affine analysis one loop deep (RFC-0066 rule 4): a row loop over an inner column range | 2 |
 | `or_insert`'s fold law on an `Equiv` map (D8, decided, not declared) | 2 |
-| first-hit select `if x == none && p { x = k }` read as `min`: RFC-0089 rule 4 as amended states no `first` reading, and `min` needs `k ≠ none` on every hit | 1 |
-| `string::concat` declares no law | 1 |
+| first-hit select `if x == none && p { x = k }` read as `min`: RFC-0089 rule 4's `first` is guarded by a `\|\|` token the arm sets, and no rule reads a compare of the token with a constant as one; `min` needs `k ≠ none` on every hit and the hits in increasing order | 1 |
+| `string::concat(a: &str, b: &str) -> String` is of no shape RFC-0082 rule 2 states a law over | 1 |
 
 ## Loops
 
@@ -48,7 +48,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | 02 | 69 | trimmed: in-edges count | Carried AnyOrder `+` | `stages [L11, L19]`; L19 Carried any_order Op(Add) | matches |
 | 02 | 86 | worklist `while let Some(p) = work.pop()` | runs in place; partitions not claimed apart (label counter and worklist are tokens) | no `For` | matches |
 | 02 | 88 | apply the trim | `label`, `part` Disjoint | `stages [L4, L45]`; L45 Storage disjoint ×2 | matches |
-| 02 | 98 | pivot: `if pivot == n && part[v] == p { pivot = v }` | Carried AnyOrder, law `min`, identity `n` | `stages [L9, L48]`; L48 Carried in_order no law | under-claim: first-hit select as `min` (no reading in RFC-0089 rule 4 as amended) |
+| 02 | 98 | pivot: `if pivot == n && part[v] == p { pivot = v }` | Carried AnyOrder, law `min`, identity `n` | `stages [L9, L48]`; L48 Carried in_order no law | under-claim: first-hit select as `min` (RFC-0089 rule 4 reads `first` only through a `\|\|` token the arm sets) |
 | 02 | 106 | relabel around the pivot | `label`, `part` Disjoint | `stages [L19, L49]`; L49 Storage disjoint ×2 | matches |
 | 02 | 128 | count components | Carried AnyOrder `+` | `stages [L36, L46]`; L46 Storage any_order Op(Add) | matches |
 | 02 | 134 | render | as 01:102 | `stages [L41, L47]`; L47 Storage in_order Op(Concat) | matches |
@@ -104,7 +104,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | [11](11_strip_log_segments.acvus) | 17 | cut segments `while let Some(start) = rest.find("<Log>")` | runs in place | no `For` | matches |
 | 11 | 35 | clean each message: `strip(m)` | the call (with its `while`) in the free stage; `+` AnyOrder; Fold(push) | `stages [L1, L3, L4, L5]`; L1 free {call indirect, …}; L3 Storage any_order Op(Add); L4 free; L5 Storage in_order Fold | matches |
 | 11 | 40 | `into_iter() \| join` | Stream, Concat InOrder | no `For` | under-claim: pipeline |
-| [12](12_transcript_concat.acvus) | 16 | `text = text.concat(label).concat(…)` | Concat InOrder through `string::concat`; `+` AnyOrder | `stages [L1, L8]`; L8 Storage(text) in_order no law; L8 Storage any_order Op(Add) | under-claim: `string::concat` declares no law |
+| [12](12_transcript_concat.acvus) | 16 | `text = text.concat(label).concat(…)` | Concat InOrder through `string::concat`; `+` AnyOrder | `stages [L1, L8]`; L8 Storage(text) in_order no law; L8 Storage any_order Op(Add) | under-claim: `string::concat` declares no law (RFC-0082 rule 2 states none over its `(&str, &str) -> String`) |
 
 ## Found while building
 

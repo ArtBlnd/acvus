@@ -1,0 +1,17 @@
+// expect 2099
+let xs = vec([5, 3, 9, 1, 9]);
+let at = 99u64;
+let found = false;
+let none = 99u64;
+let never = false;
+for i in 0u64..xs.len() {
+    if !found && xs[i] == 9 {
+        at = i;
+        found = true;
+    };
+    if !never && xs[i] == 7 {
+        none = i;
+        never = true;
+    };
+}
+at * 1000u64 + none

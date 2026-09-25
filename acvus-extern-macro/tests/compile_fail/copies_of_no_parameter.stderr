@@ -1,0 +1,5 @@
+error: `b` names no parameter of `same` (RFC-0082 rule 10)
+ --> tests/compile_fail/copies_of_no_parameter.rs:4:35
+  |
+4 | #[extern_fn(effect = pure, copies(b))]
+  |                                   ^

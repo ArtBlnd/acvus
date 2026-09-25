@@ -1,5 +1,5 @@
 for slice(r11) -> L1 else L2 stages [L1, L5]
 // L1: free {as_slice, const}
-// L5: cycle Storage(r12) in_order {ref, as_slice, call cmp, >, call to_string, assign, branch}
+// L5: cycle Storage(r12) any_order law(Ordered(Max, #2) exact commutative) {ref, as_slice, call cmp, >, call to_string, assign, branch}
 // control upfront
 // cost W=3 O=18281 split when n > 194998, n = len(r11)

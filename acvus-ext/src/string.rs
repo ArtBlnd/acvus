@@ -258,7 +258,7 @@ fn char_at(s: &str, i: i64) -> char {
 
 /// Rust's `Ord for str`: the bytes compared lexicographically, `-1`, `0` or
 /// `1` as `a` is before, equal to, or after `b`.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, law(total_order))]
 fn cmp(a: &str, b: &str) -> i64 {
     match a.cmp(b) {
         Ordering::Less => -1,
@@ -561,6 +561,30 @@ where
 mod tests {
     use super::*;
     use acvus_extern::{Externs, Interner, TypesOnly};
+
+    /// RFC-0082 rule 10 sampled: the sign of `cmp` is antisymmetric,
+    /// transitive and total, and `0` exactly where the bytes are the same.
+    #[test]
+    fn total_order_holds_over_cmp() {
+        let words: Vec<String> = ["", "a", "ab", "b", "é", "a\0", "\u{10FFFF}"]
+            .into_iter()
+            .map(str::to_string)
+            .chain((0u64..48).map(|at| format!("{:x}", at.wrapping_mul(0x9e37_79b9) % 4096)))
+            .collect();
+        for a in &words {
+            for b in &words {
+                let ab = cmp(a, b);
+                assert!([-1, 0, 1].contains(&ab), "the sign at {a:?}, {b:?}");
+                assert_eq!(ab, -cmp(b, a), "antisymmetric at {a:?}, {b:?}");
+                assert_eq!(ab == 0, a == b, "equal values are one value at {a:?}, {b:?}");
+                for c in words.iter().take(16) {
+                    if ab <= 0 && cmp(b, c) <= 0 {
+                        assert!(cmp(a, c) <= 0, "transitive at {a:?}, {b:?}, {c:?}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn registry_produces_functions() {

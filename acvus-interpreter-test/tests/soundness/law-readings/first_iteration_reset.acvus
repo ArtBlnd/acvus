@@ -1,0 +1,25 @@
+// expect a, b, c|entry
+let xs = vec(["a".to_string(), "b".to_string(), "c".to_string()]);
+let s = "entry".to_string();
+let first = true;
+for x in &xs {
+    if first {
+        s = x.to_string();
+        first = false;
+    } else {
+        s = s + ", " + x;
+    };
+}
+let empty = vec(["q".to_string()]);
+empty.pop();
+let t = "entry".to_string();
+let once = true;
+for x in &empty {
+    if once {
+        t = x.to_string();
+        once = false;
+    } else {
+        t = t + ", " + x;
+    };
+}
+s + "|" + t

@@ -27,6 +27,10 @@ pub enum Laws {
     /// `#[extern_fn(law(fold(combine = g, identity = e)))]` on
     /// `f(s: &mut S, x: X)`.
     Fold(FoldLaw),
+    /// `#[extern_fn(law(total_order))]` on `f(a: &T, b: &T) -> i64`: `f`'s
+    /// sign is a total order's comparison of `a` with `b`, under which equal
+    /// values are one value (RFC-0082 rule 10).
+    TotalOrder,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +106,14 @@ pub enum Subject {
     Ret,
 }
 
+/// `#[extern_fn(copies(x))]` (RFC-0082 rule 10): `ret` is a value equal to
+/// what reference parameter `param` lends, numbered as [`PostTerm::Param`]
+/// numbers it, so a reader may read the result as that value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Copies {
+    pub param: usize,
+}
+
 /// `#[extern_fn(reaches(p, ..))]` (RFC-0082 rule 7): what a call reaches
 /// of the storages its reference arguments lend, which `analysis::loop_deps`
 /// reads (RFC-0089 rule 4).
@@ -171,6 +183,7 @@ pub enum ResolvedLaws {
     None,
     Binary(ResolvedBinary),
     Fold(ResolvedFold),
+    TotalOrder,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -229,7 +242,9 @@ pub fn resolve<'a>(
     let PolyTy::Fn { params, ret, .. } = declaring else {
         return match laws {
             Laws::None => Ok(ResolvedLaws::None),
-            Laws::Binary(_) | Laws::Fold(_) => Err(Unresolved::UnfitDeclaration),
+            Laws::Binary(_) | Laws::Fold(_) | Laws::TotalOrder => {
+                Err(Unresolved::UnfitDeclaration)
+            }
         };
     };
     let instance_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
@@ -300,6 +315,34 @@ pub fn resolve<'a>(
                 commutative: *commutative,
             }))
         }
+        Laws::TotalOrder => {
+            let compares = match params.as_slice() {
+                [a, b] => match (&a.ty, &b.ty) {
+                    (PolyTy::Ref(Mutability::Shared, a), PolyTy::Ref(Mutability::Shared, b)) => {
+                        a.ty() == b.ty()
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            match compares && matches!(**ret, PolyTy::Int(crate::ty::IntTy::I64)) {
+                true => Ok(ResolvedLaws::TotalOrder),
+                false => Err(Unresolved::UnfitDeclaration),
+            }
+        }
+    }
+}
+
+/// Whether `copies`, declared on an instance of type `declaring`, names a
+/// shared reference parameter lending a value of the result's type
+/// (RFC-0082 rule 10).
+pub fn copies_fits(copies: Copies, declaring: &PolyTy) -> bool {
+    let PolyTy::Fn { params, ret, .. } = declaring else {
+        return false;
+    };
+    match params.get(copies.param).map(|param| &param.ty) {
+        Some(PolyTy::Ref(Mutability::Shared, lent)) => *lent.ty() == **ret,
+        _ => false,
     }
 }
 
@@ -340,6 +383,7 @@ struct DeclaredAt<'a> {
     ensures: &'a [Postcondition],
     reaches: &'a Reaches,
     returns: Returns,
+    copies: Option<Copies>,
     cost: Option<u64>,
 }
 
@@ -350,6 +394,7 @@ struct Declared {
     ensures: Vec<Postcondition>,
     reaches: Reaches,
     returns: Returns,
+    copies: Option<Copies>,
     cost: Option<u64>,
 }
 
@@ -383,6 +428,7 @@ impl LawTable {
                         ensures: &instance.ensures,
                         reaches: &instance.reaches,
                         returns: instance.returns,
+                        copies: instance.copies,
                         cost: instance.cost,
                     })
                     .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
@@ -391,6 +437,7 @@ impl LawTable {
                         ensures: &generic.ensures,
                         reaches: &generic.reaches,
                         returns: generic.returns,
+                        copies: generic.copies,
                         cost: generic.cost,
                     }));
                 let mut declared: Vec<Declared> = declared_at
@@ -400,6 +447,7 @@ impl LawTable {
                              ensures,
                              reaches,
                              returns,
+                             copies,
                              cost,
                          }| Declared {
                         laws: resolve(laws, ty, |named| functions.get(&named).copied())
@@ -413,6 +461,14 @@ impl LawTable {
                         ensures: ensures.to_vec(),
                         reaches: reaches.clone(),
                         returns,
+                        copies: copies.inspect(|copies| {
+                            assert!(
+                                copies_fits(*copies, ty),
+                                "`copies` of {:?} names no shared reference parameter lending \
+                                 its result's type, and combining the registries refuses it",
+                                function.qref
+                            )
+                        }),
                         cost,
                     })
                     .collect();
@@ -451,6 +507,16 @@ impl LawTable {
             Some(declared) => &declared.reaches,
             None => &LENT,
         }
+    }
+
+    /// The argument whose lent value the result of the instance a call names
+    /// equals (`copies(x)`, RFC-0082 rule 10), numbered as a call's
+    /// arguments are; `None` where it states none, and for a call of a local
+    /// function or through a value.
+    pub fn copies_of(&self, callee: &Callee) -> Option<usize> {
+        self.declared(callee)
+            .and_then(|declared| declared.copies)
+            .map(|copies| copies.param)
     }
 
     pub fn returns_of(&self, callee: &Callee) -> Returns {
