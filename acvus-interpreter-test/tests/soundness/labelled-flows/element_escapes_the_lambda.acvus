@@ -1,0 +1,3 @@
+// refuse
+// The element holds the loan on the lambda's own vector: it cannot be the lambda's result.
+let f = |k| -> { let v = vec([k]); let it = as_iter(&v); next(&mut it) }; *f(5).unwrap()

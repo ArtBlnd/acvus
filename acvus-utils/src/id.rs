@@ -56,7 +56,9 @@ macro_rules! declare_id {
 /// consumed to produce a `LocalVec` that can only be indexed by this Id type.
 ///
 /// Internally stores index + 1 as `NonZero<u32>` for niche optimization
-/// (`Option<Id>` is the same size as `Id`).
+/// (`Option<Id>` is the same size as `Id`), so the indices it holds are
+/// `0..=u32::MAX - 1`. `LocalIdOps::try_from_raw` refuses an index outside
+/// them; `LocalIdOps::from_raw` panics on one.
 ///
 /// ```ignore
 /// acvus_utils::declare_local_id!(pub ValueId);
@@ -82,9 +84,19 @@ macro_rules! declare_local_id {
         }
 
         impl $crate::LocalIdOps for $name {
-            // SAFETY: index + 1 is always >= 1 for valid indices.
+            fn try_from_raw(index: usize) -> Option<Self> {
+                let index = u32::try_from(index).ok()?;
+                std::num::NonZero::<u32>::MIN.checked_add(index).map(Self)
+            }
             fn from_raw(index: usize) -> Self {
-                Self(unsafe { std::num::NonZero::new_unchecked((index as u32) + 1) })
+                match <Self as $crate::LocalIdOps>::try_from_raw(index) {
+                    Some(id) => id,
+                    None => panic!(
+                        "{} index {} exceeds the local id space (at most u32::MAX - 1)",
+                        stringify!($name),
+                        index,
+                    ),
+                }
             }
             fn to_raw(self) -> usize { (self.0.get() - 1) as usize }
         }
@@ -96,6 +108,14 @@ macro_rules! declare_local_id {
 /// These methods are intentionally not meant for direct use - use
 /// `LocalFactory` and `LocalVec` instead.
 pub trait LocalIdOps: Copy + Eq + std::hash::Hash + std::fmt::Debug {
+    /// The id of `index`, or `None` when `index` is above `u32::MAX - 1`.
+    /// For an index read from outside the process, such as a recorded
+    /// identity.
+    #[doc(hidden)]
+    fn try_from_raw(index: usize) -> Option<Self>;
+    /// The id of `index`; panics when `index` is above `u32::MAX - 1`. For
+    /// an index the process produced itself: a factory's next id, or an
+    /// index below a factory's `len`.
     #[doc(hidden)]
     fn from_raw(index: usize) -> Self;
     #[doc(hidden)]
@@ -124,7 +144,8 @@ impl<I: LocalIdOps> LocalFactory<I> {
         }
     }
 
-    /// Allocate the next sequential id.
+    /// Allocate the next sequential id. Panics once the id type's space
+    /// (`u32::MAX` ids) is exhausted.
     pub fn next(&mut self) -> I {
         let id = I::from_raw(self.next);
         self.next += 1;
@@ -193,5 +214,45 @@ impl<I: LocalIdOps, V: Clone> Clone for LocalVec<I, V> {
             data: self.data.clone(),
             _phantom: PhantomData,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LocalIdOps;
+
+    crate::declare_local_id!(TestId);
+
+    #[test]
+    fn the_last_index_below_the_boundary_is_an_id() {
+        let last = (u32::MAX - 1) as usize;
+        let id = TestId::try_from_raw(last).expect("u32::MAX - 1 is in the space");
+        assert_eq!(id.to_raw(), last);
+        assert_eq!(TestId::from_raw(last).to_raw(), last);
+    }
+
+    #[test]
+    fn the_boundary_index_is_refused() {
+        assert_eq!(TestId::try_from_raw(u32::MAX as usize), None);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn an_index_above_u32_is_refused() {
+        assert_eq!(TestId::try_from_raw(u32::MAX as usize + 1), None);
+        assert_eq!(TestId::try_from_raw(1 << 32), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "TestId index 4294967295 exceeds the local id space")]
+    fn from_raw_panics_at_the_boundary() {
+        TestId::from_raw(u32::MAX as usize);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "TestId index 4294967296 exceeds the local id space")]
+    fn from_raw_panics_above_u32_rather_than_colliding() {
+        TestId::from_raw(1 << 32);
     }
 }

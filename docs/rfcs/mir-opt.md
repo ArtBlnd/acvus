@@ -790,7 +790,7 @@ law and runs in its order.
    as `(a₁·a₂, a₂·x₁ + x₂)` with identity `(1, 0)`, at an integer width;
    a float one stays in order.
    A read that only lends a storage token's value to a call that neither
-   writes nor keeps it (a `ref` then `to_string`) is a reader of its
+   writes nor keeps it (a `ref`, an `as_slice` view of it, then `to_string`) is a reader of its
    partial, not a member of its cycle; the rescan of RFC-0092 rule 5
    makes the value it lends. In a cycle of several tokens, a token whose
    steps read no other token and that has a law is a scan when another

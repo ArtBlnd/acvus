@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/layout_taken_from_another_type.rs:15:28
+   |
+15 | const MINE: Layout<Mine> = Layout::<Theirs>::laid_out();
+   |             ------------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Layout<Mine>`, found `Layout<Theirs>`
+   |             |
+   |             expected because of the type of the constant
+   |
+   = note: expected struct `acvus_extern::Layout<Mine>`
+              found struct `acvus_extern::Layout<Theirs>`

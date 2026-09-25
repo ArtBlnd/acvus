@@ -470,7 +470,7 @@ where
 #[extern_fn(instance_of = sig::next, effect = pure)]
 fn next_refs_deque<'a, T, I, Rt>(
     ctx: &mut acvus_extern::Ctx<'_, Rt>,
-    it: &'a mut Refs<'_, Deque<T>, I, Rt>,
+    it: &mut Refs<'a, Deque<T>, I, Rt>,
 ) -> Option<&'a T>
 where
     T: Var<kind::Type> + TransparentOver<Rt>,

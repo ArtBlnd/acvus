@@ -1,0 +1,3 @@
+// refuse
+// The element holds the set's loan: an insert while it is live is refused.
+let s = hash_set(); insert(&mut s, 5); let it = as_iter(&s); let a = next(&mut it); insert(&mut s, 1); *a.unwrap()

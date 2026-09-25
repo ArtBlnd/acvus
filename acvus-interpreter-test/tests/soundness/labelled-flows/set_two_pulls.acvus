@@ -1,0 +1,3 @@
+// expect 8
+// Two pulls of one iterator over a set, both elements read after the second (RFC-0096).
+let s = hash_set(); insert(&mut s, 5); insert(&mut s, 3); let it = as_iter(&s); let a = next(&mut it); let b = next(&mut it); *a.unwrap() + *b.unwrap()

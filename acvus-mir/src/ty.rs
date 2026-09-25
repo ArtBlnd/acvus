@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::fmt;
 
-pub use crate::flows::{Alignment, Flow, FlowEnd, FlowTerm, Flows, Source};
+pub use crate::flows::{Alignment, Flow, FlowEnd, FlowTerm, Flows, Labelled, Laid, Source, Take};
 use crate::graph::types::QualifiedRef;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};

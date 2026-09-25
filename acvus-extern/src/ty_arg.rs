@@ -19,6 +19,7 @@ use acvus_mir::ty::{
 use acvus_utils::{Interner, QualifiedRef};
 
 use crate::canonical::Canonical;
+use crate::laid::Layout;
 use crate::name::Named;
 use crate::registry::ExternTypeDecl;
 
@@ -261,6 +262,7 @@ impl SlotRepr {
 /// A Rust type that names an acvus type.
 pub trait TyArg: Var<kind::Type> {
     const SLOT: SlotRepr = SlotRepr::Ground;
+    const LAYOUT: Layout<Self> = Layout::UNREAD;
 
     fn poly_ty(interner: &Interner, vars: &PolyVars) -> PolyTy;
 
