@@ -1306,3 +1306,84 @@ have made it.
 - Loading contexts when a page opens — a read the program did not make.
 - Choosing waited access by the storage at run time — a body compiled
   `Sync` cannot wait.
+
+## RFC-0095: A host graph compiles several hosts into one solve, and a host calls another's entry as a function along a DAG
+
+Status: Proposed
+
+A script sometimes has to run another script whose inputs depend on which
+one it runs, as a model's turn calls another model's turn. An extern cannot
+stand in the middle with the callee's arguments: its signature is one Rust
+function, and a value lent into a call does not outlive it (RFC-0079 rule
+9), so the extern can neither take every argument shape nor hand one out.
+The call is made in the language instead, where the checker sees both
+sides, and an extern that must frame it takes a closure that makes it.
+
+1. **One graph, one solve.** `HostGraph` takes several named `Host`s and
+   compiles them into one compilation graph: one interner, one set of
+   registries, one runtime, one solve (RFC-0090 rule 1). A host in the
+   graph declares no registries of its own. Its contexts, inits and
+   bindings stay its own, keyed under its name (`name/key`), so two hosts
+   never share a context by accident.
+
+2. **An entry of one host is a function of another.** The graph exposes
+   host `b`'s entry `e` to host `a` under a name `a`'s scripts call as an
+   ordinary function. Its parameter is one object whose fields are `e`'s
+   `$` inputs that no binding fixes, and its result is `e`'s result, both at
+   the types the solve settles. So `summarize({ text: t })` is checked
+   against `summarize`'s inputs where it is written, and a missing or
+   mistyped field is a compile error. The callee runs inside the caller's
+   run as a call: its body's effects and context accesses are the call's,
+   through its summary (RFC-0025), and its contexts are read and written
+   under `b/` in the same storage. A name the graph exposes that another
+   function of `a` already has is refused when the graph is built.
+
+3. **The calls form a DAG, and nothing else.** Each exposure is an edge
+   `a → b`. The graph is refused when its edges hold a cycle of any length,
+   a host exposed to itself included, and the refusal names the cycle. No
+   strongly connected set of hosts is admitted in any form.
+
+4. **Nothing callable crosses from one host to another.** A function value
+   is an edge the graph cannot see: a closure of `a` passed to `b` and
+   called there runs `a`'s code under `b`, and closes a cycle that rule 3
+   never reads. So the parameter and the result of an exposed entry hold no
+   function type, and no extension type whose declaration does not state
+   that it holds none. A declaration that does not state it may hold one.
+   The check reads the solved types at the freeze and names the position
+   refused.
+
+5. **One entrypoint runs.** A program built from a graph runs the entries
+   the graph names as its own. An exposed entry is a function of the
+   hosts it is exposed to, and nothing else runs it.
+
+6. **An extern frames a call through a closure.** An extern that must act
+   around the callee (mark before, roll back after) takes the arguments at
+   a type variable and a closure that makes the call:
+   `call<A, R>(…, args: &A, make: Closure<(&A,), R, E>) -> R`. It calls
+   `make` as often as it needs, lending `args` each time. `A` never
+   leaves the call, and the checker checks the closure's body, the real
+   call included. Nothing here is new: a stage already calls its closure
+   with a value at a variable (RFC-0067 rule 4).
+
+**Why.** One solve gives both sides of the call one type: no comparison
+across interners, no identity question between two registries, no copy of
+a value between two runtimes. The cycle rule keeps every call finite in
+its hosts. Without rule 4 it would hold only for what the graph can see.
+**Cost.**
+- A host graph compiles its hosts together, so a change to one recompiles
+  the graph.
+- An exposed entry takes and returns no function value.
+- A host in a graph gives up its own registries.
+
+**Rejected.**
+- Calling a separately compiled program, its entry type checked when bound
+  — types from two interners and extension types from two registries have
+  no shared identity, and the arguments would have to be copied between
+  runtimes.
+- An extern that forwards the arguments to the host — a value lent into a
+  call cannot leave it (RFC-0079 rule 9), by design.
+- Arguments as a builder checked when the call runs (`args()` with
+  per-type setters) — the checker sees neither side, and the argument types
+  are the builder's few.
+- Recursion between hosts, or a cycle broken by a call through a closure —
+  rule 3 and rule 4 refuse both.
