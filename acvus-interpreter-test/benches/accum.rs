@@ -121,8 +121,7 @@ mod next_design {
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        inner: I,
-        next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+        inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
         f: Closure<'a, (T,), U, E, Rt>,
     }
 
@@ -139,9 +138,8 @@ mod next_design {
 
     #[extern_fn(effect = pure)]
     fn nmap<'a, I, T, U, E, Rt>(
-        it: I,
+        it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
         f: Closure<'a, (T,), U, E, Rt>,
-        next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
     ) -> NMap<'a, I, T, U, E, Rt>
     where
         I: Var<kind::Type>,
@@ -150,7 +148,7 @@ mod next_design {
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        NMap(NMapBody { inner: it, next, f })
+        NMap(NMapBody { inner: it, f })
     }
 
     #[extern_fn(instance_of = sig::next, effect = E)]
@@ -162,7 +160,7 @@ mod next_design {
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+        let x = it.0.inner.call(ctx, ())?;
         Some(it.0.f.call_now(ctx, (x,)))
     }
 
@@ -174,8 +172,7 @@ mod next_design {
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        inner: I,
-        next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
+        inner: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
         f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
     }
 
@@ -191,9 +188,8 @@ mod next_design {
 
     #[extern_fn(effect = pure)]
     fn nfilter<'a, I, T, E, Rt>(
-        it: I,
+        it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
         f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
-        next: Instance<'a, sig::next<I, T, E, Rt>, I, Rt>,
     ) -> NFilter<'a, I, T, E, Rt>
     where
         I: Var<kind::Type>,
@@ -201,7 +197,7 @@ mod next_design {
         E: Var<kind::Effect>,
         Rt: Runtime,
     {
-        NFilter(NFilterBody { inner: it, next, f })
+        NFilter(NFilterBody { inner: it, f })
     }
 
     #[extern_fn(instance_of = sig::next, effect = E)]
@@ -213,7 +209,7 @@ mod next_design {
         Rt: Runtime,
     {
         loop {
-            let x = it.0.next.call(ctx, &mut it.0.inner, ())?;
+            let x = it.0.inner.call(ctx, ())?;
             let keep = it.0.f.call_now(ctx, (&x,));
             if keep {
                 return Some(x);
@@ -224,8 +220,7 @@ mod next_design {
     #[extern_fn(effect = E)]
     fn nsum<I, E, Rt>(
         ctx: &mut Ctx<'_, Rt>,
-        it: I,
-        next: Instance<'_, sig::next<I, i64, E, Rt>, I, Rt>,
+        it: Instance<'_, sig::next<I, i64, E, Rt>, I, Rt>,
     ) -> i64
     where
         I: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -234,7 +229,7 @@ mod next_design {
     {
         let mut it = it;
         let mut acc = 0i64;
-        while let Some(x) = next.call(ctx, &mut it, ()) {
+        while let Some(x) = it.call(ctx, ()) {
             acc = acc.wrapping_add(x);
         }
         acc

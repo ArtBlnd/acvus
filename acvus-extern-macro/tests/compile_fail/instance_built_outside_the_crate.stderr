@@ -1,0 +1,13 @@
+error[E0624]: associated function `own` is private
+  --> tests/compile_fail/instance_built_outside_the_crate.rs:25:21
+   |
+25 |       Pipeline::<Rt>::own(recv, word)
+   |                       ^^^ private associated function
+   |
+  ::: $WORKSPACE/acvus-extern/src/instance.rs
+   |
+   | /     pub(crate) unsafe fn own(recv: R, value: Rt::Value) -> Self
+   | |     where
+   | |         S::Mode: StepsItsReceiver,
+   | |         R: Holds<Rt, S::This>,
+   | |______________________________- private associated function defined here

@@ -1,0 +1,44 @@
+error[E0277]: an `Instance` owns the receiver of a signature whose call steps or consumes it, and this signature reads its receiver through `&` (`acvus_extern::Shared`)
+  --> tests/compile_fail/instance_at_a_shared_receiver.rs:10:1
+   |
+10 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this `Instance` is at a signature whose receiver is `&I`
+   |
+   = help: the trait `StepsItsReceiver` is not implemented for `acvus_extern::Shared`
+   = note: a signature whose receiver is `&I` is required by `InstanceOf<S, I, Rt>`, which stands at the type and is handed each receiver it reads (RFC-0067 rule 1)
+help: the following other types implement trait `StepsItsReceiver`
+  --> $WORKSPACE/acvus-extern/src/instance.rs
+   |
+   | impl StepsItsReceiver for Mut {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `acvus_extern::Mut`
+   | impl StepsItsReceiver for Moved {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Moved`
+   = note: required for `Owning<ByValue<Erased<__R, !>>, eq<Erased<__R, !>, __R>, acvus_extern::Now, 0>` to implement `Arg<__R>`
+   = note: required for `(Owning<ByValue<Erased<__R, !>>, eq<Erased<__R, !>, __R>, acvus_extern::Now, 0>, ByValue<Erased<__R, !>>)` to implement `Parameters<__R>`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, Owning<ByValue<Erased<__R, !>>, eq<Erased<__R, !>, __R>, acvus_extern::Now, 0>, __R>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/instance_at_a_shared_receiver.rs:10:1
+   |
+10 | #[extern_fn(effect = pure)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Pending<'a, 'w, A, Rt>
+   | --------------------------------- doesn't satisfy `_: Iterator`
+...
+   | pub struct Owning<A, S, T, const NTH: usize>(PhantomData<fn() -> (A, S, T)>);
+   | -------------------------------------------- doesn't satisfy `_: Arg<__R>`
+   |
+  ::: $WORKSPACE/acvus-extern/src/loan.rs
+   |
+   | pub struct Shared;
+   | ----------------- doesn't satisfy `acvus_extern::Shared: StepsItsReceiver`
+   |
+   = note: the following trait bounds were not satisfied:
+           `acvus_extern::Shared: StepsItsReceiver`
+           which is required by `Owning<ByValue<Erased<__R, !>>, eq<Erased<__R, !>, __R>, acvus_extern::Now, 0>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, Owning<ByValue<Erased<__R, !>>, eq<Erased<__R, !>, __R>, acvus_extern::Now, 0>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, Owning<ByValue<Erased<__R, !>>, eq<Erased<__R, !>, __R>, acvus_extern::Now, 0>, __R>: Iterator`
+   = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

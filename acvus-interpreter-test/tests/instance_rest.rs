@@ -13,7 +13,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use acvus_extern::{
-    Ctx, Instance, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
+    Ctx, InstanceOf, OneValue, Registry, Runtime, Var, extern_fn, extern_registry, kind,
 };
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::*;
@@ -62,13 +62,12 @@ fn tally_int(a: &i64, b: Option<i64>) -> i64 {
 /// The customer: a handler generic in `T` calling the `eq` of its `T`,
 /// with the second argument standing at that same variable.
 #[extern_fn(effect = pure)]
-fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: T, b: T, eq: Instance<'_, sig::eq<T, Rt>, T, Rt>) -> bool
+fn same<T, Rt>(ctx: &mut Ctx<'_, Rt>, a: T, b: T, eq: InstanceOf<'_, sig::eq<T, Rt>, T, Rt>) -> bool
 where
     T: Var<kind::Type> + Deref<Target = Rt::Value>,
     Rt: Runtime,
 {
-    let mut a = a;
-    eq.call(ctx, &mut a, (&b,))
+    eq.call(ctx, &a, (&b,))
 }
 
 /// The same crossing where the rest position is a pattern over the
@@ -78,14 +77,13 @@ fn tally_of<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: T,
     b: Option<T>,
-    tally: Instance<'_, sig::tally<T, Rt>, T, Rt>,
+    tally: InstanceOf<'_, sig::tally<T, Rt>, T, Rt>,
 ) -> i64
 where
     T: Var<kind::Type> + Deref<Target = Rt::Value> + OneValue<Rt>,
     Rt: Runtime,
 {
-    let mut a = a;
-    tally.call(ctx, &mut a, (b,))
+    tally.call(ctx, &a, (b,))
 }
 
 fn rest_registry<R>() -> Registry<R>

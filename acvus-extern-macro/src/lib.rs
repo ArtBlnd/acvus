@@ -514,25 +514,45 @@ struct RequiredParam {
 enum RustParam {
     Acvus(ExternParam),
     State(StateParam),
+    /// `InstanceOf<S, I, Rt, T>`: a requirement standing at its type, which
+    /// is no acvus parameter.
     Required(RequiredParam),
+    /// `Instance<S, I, Rt, T>`: the acvus parameter at `I`, owned by the
+    /// requirement the checker chose for its type.
+    Owning {
+        param: ExternParam,
+        required: RequiredParam,
+    },
 }
 
-fn required_of(ty: &Type) -> syn::Result<Option<RequiredParam>> {
+/// What an `Instance` or `InstanceOf` parameter's type says.
+enum Requirement {
+    Of(RequiredParam),
+    Owning {
+        required: RequiredParam,
+        held: Type,
+        mode: Mode,
+    },
+}
+
+const REQUIREMENT_SHAPE: &str = "a requirement names the signature it requires, the variable it stands at, \
+     and the runtime: `it: Instance<sig::next<I, i64, E, Rt>, I, Rt>` owns the receiver its \
+     call steps, `eq: InstanceOf<core::eq<T, Rt>, T, Rt>` stands at a type (RFC-0067 rule 1)";
+
+fn requirement_param(ty: &Type) -> syn::Result<Option<Requirement>> {
     let Type::Path(p) = ty else {
         return Ok(None);
     };
     let Some(seg) = p.path.segments.last() else {
         return Ok(None);
     };
-    if seg.ident != "Instance" {
-        return Ok(None);
-    }
+    let owns = match seg.ident.to_string().as_str() {
+        "Instance" => true,
+        "InstanceOf" => false,
+        _ => return Ok(None),
+    };
     let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
-        return Err(syn::Error::new_spanned(
-            seg,
-            "an instance parameter names the signature it requires, the variable it stands \
-             at, and the runtime: `next: Instance<sig::next<I, i64, E, Rt>, I, Rt>`",
-        ));
+        return Err(syn::Error::new_spanned(seg, REQUIREMENT_SHAPE));
     };
     let tys: Vec<&Type> = args
         .args
@@ -542,34 +562,203 @@ fn required_of(ty: &Type) -> syn::Result<Option<RequiredParam>> {
             _ => None,
         })
         .collect();
-    let (Some(signature), Some(var)) = (tys.first(), tys.get(1)) else {
-        return Err(syn::Error::new_spanned(
-            seg,
-            "an instance parameter names the signature it requires, the variable it stands \
-             at, and the runtime: `next: Instance<sig::next<I, i64, E, Rt>, I, Rt>`",
-        ));
-    };
-    let Type::Path(v) = var else {
-        return Err(syn::Error::new_spanned(
-            var,
-            "an instance stands at one of this declaration's own type variables",
-        ));
-    };
-    let Some(var) = v.path.get_ident() else {
-        return Err(syn::Error::new_spanned(
-            var,
-            "an instance stands at one of this declaration's own type variables",
-        ));
+    let (Some(signature), Some(at)) = (tys.first(), tys.get(1)) else {
+        return Err(syn::Error::new_spanned(seg, REQUIREMENT_SHAPE));
     };
     let task = match tys.get(3) {
         Some(t) => (*t).clone(),
         None => syn::parse_quote! { ::acvus_extern::Now },
     };
-    Ok(Some(RequiredParam {
-        signature: (*signature).clone(),
-        var: var.clone(),
-        task,
+    let variable = |ty: &Type| -> Option<Ident> {
+        let Type::Path(v) = ty else {
+            return None;
+        };
+        v.path.get_ident().cloned()
+    };
+    if !owns {
+        let Some(var) = variable(at) else {
+            return Err(syn::Error::new_spanned(
+                at,
+                "an instance stands at one of this declaration's own type variables",
+            ));
+        };
+        return Ok(Some(Requirement::Of(RequiredParam {
+            signature: (*signature).clone(),
+            var,
+            task,
+        })));
+    }
+    let (var, held, mode) = match at {
+        Type::Reference(r) if r.mutability.is_some() => {
+            (variable(&r.elem), (*r.elem).clone(), Mode::BorrowMut)
+        }
+        at => (variable(at), (*at).clone(), Mode::Value),
+    };
+    let Some(var) = var else {
+        return Err(syn::Error::new_spanned(
+            at,
+            "an `Instance` owns its receiver at one of this declaration's own type variables: \
+             the value `I`, or the `&mut I` its requirer was lent (RFC-0067 rule 1)",
+        ));
+    };
+    Ok(Some(Requirement::Owning {
+        required: RequiredParam {
+            signature: (*signature).clone(),
+            var,
+            task,
+        },
+        held,
+        mode,
     }))
+}
+
+/// The index in `FnDecl::requires` each requirement a declaration states
+/// takes, read off its Rust parameters in order.
+struct RequirementIndex {
+    /// Per acvus parameter: the requirement whose `Instance` owns it.
+    owning: Vec<Option<usize>>,
+    /// Per `InstanceOf` parameter, in order.
+    standing: Vec<usize>,
+}
+
+impl RequirementIndex {
+    fn of(rust_params: &[RustParam]) -> Self {
+        let mut index = RequirementIndex {
+            owning: Vec::new(),
+            standing: Vec::new(),
+        };
+        let mut nth = 0;
+        for p in rust_params {
+            match p {
+                RustParam::Acvus(_) => index.owning.push(None),
+                RustParam::Owning { .. } => {
+                    index.owning.push(Some(nth));
+                    nth += 1;
+                }
+                RustParam::Required(_) => {
+                    index.standing.push(nth);
+                    nth += 1;
+                }
+                RustParam::State(_) => {}
+            }
+        }
+        index
+    }
+}
+
+/// Two `Instance`s cannot own one receiver (RFC-0067 rule 1).
+fn refuse_two_owners(rust_params: &[RustParam]) -> syn::Result<()> {
+    let owners: Vec<&RustParam> = rust_params
+        .iter()
+        .filter(|p| matches!(p, RustParam::Owning { .. }))
+        .collect();
+    for (at, owner) in owners.iter().enumerate() {
+        let RustParam::Owning { param, required } = owner else {
+            continue;
+        };
+        let first = owners[..at].iter().find_map(|earlier| match earlier {
+            RustParam::Owning {
+                param: first,
+                required: earlier,
+            } if earlier.var == required.var => Some(first),
+            _ => None,
+        });
+        if let Some(first) = first {
+            return Err(syn::Error::new(
+                required.var.span(),
+                format!(
+                    "`{param}` and `{first}` are two `Instance`s at `{var}`, and two `Instance`s \
+                     cannot own one receiver: a declaration takes one receiver-owning requirement \
+                     per variable (RFC-0067 rule 1)",
+                    param = param.name,
+                    first = first.name,
+                    var = required.var,
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The Rust inputs whose flows a declaration states, with their roles.
+struct FlowInputs {
+    sig: syn::Signature,
+    roles: Vec<flows::Role>,
+}
+
+/// Each `Instance` parameter read twice: as the receiver it owns, which is
+/// the acvus parameter, and as the requirement at its variable, whose
+/// signature ties that variable to the signature's other ones, as it did
+/// when the requirement was a parameter of its own.
+fn flow_inputs(sig: &syn::Signature, roles: &[flows::Role]) -> FlowInputs {
+    let mut inputs = FlowInputs {
+        sig: sig.clone(),
+        roles: Vec::new(),
+    };
+    inputs.sig.inputs.clear();
+    for (arg, role) in sig.inputs.iter().zip(roles) {
+        inputs.sig.inputs.push(arg.clone());
+        inputs.roles.push(*role);
+        let FnArg::Typed(pat_type) = arg else {
+            continue;
+        };
+        let Some(owned) = owned_receiver(&pat_type.ty) else {
+            continue;
+        };
+        let mut requirement = pat_type.clone();
+        *requirement.ty = at_variable(&pat_type.ty, &owned);
+        if let Some(FnArg::Typed(at)) = inputs.sig.inputs.last_mut() {
+            *at.ty = owned;
+        }
+        inputs.sig.inputs.push(FnArg::Typed(requirement));
+        inputs.roles.push(flows::Role::Other);
+    }
+    inputs
+}
+
+/// `Instance<S, R, ..>` with `R` replaced by the variable it holds.
+fn at_variable(instance: &Type, owned: &Type) -> Type {
+    let held = match owned {
+        Type::Reference(r) => (*r.elem).clone(),
+        owned => owned.clone(),
+    };
+    let mut at = instance.clone();
+    if let Type::Path(p) = &mut at
+        && let Some(seg) = p.path.segments.last_mut()
+        && let syn::PathArguments::AngleBracketed(args) = &mut seg.arguments
+        && let Some(slot) = args
+            .args
+            .iter_mut()
+            .filter_map(|a| match a {
+                syn::GenericArgument::Type(t) => Some(t),
+                _ => None,
+            })
+            .nth(1)
+    {
+        *slot = held;
+    }
+    at
+}
+
+/// The receiver an `Instance<S, R, ..>` type owns, `R` as written.
+fn owned_receiver(ty: &Type) -> Option<Type> {
+    let Type::Path(p) = ty else {
+        return None;
+    };
+    let seg = p.path.segments.last()?;
+    if seg.ident != "Instance" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    args.args
+        .iter()
+        .filter_map(|a| match a {
+            syn::GenericArgument::Type(t) => Some(t.clone()),
+            _ => None,
+        })
+        .nth(1)
 }
 
 fn generate_extern_fn(
@@ -594,7 +783,7 @@ fn generate_extern_fn(
     let params: Vec<&ExternParam> = rust_params
         .iter()
         .filter_map(|p| match p {
-            RustParam::Acvus(a) => Some(a),
+            RustParam::Acvus(a) | RustParam::Owning { param: a, .. } => Some(a),
             RustParam::State(_) | RustParam::Required(_) => None,
         })
         .collect();
@@ -602,16 +791,20 @@ fn generate_extern_fn(
         .iter()
         .filter_map(|p| match p {
             RustParam::State(st) => Some(st),
-            RustParam::Acvus(_) | RustParam::Required(_) => None,
+            RustParam::Acvus(_) | RustParam::Required(_) | RustParam::Owning { .. } => None,
         })
         .collect();
+    // Every requirement in the order of the Rust parameters that state it,
+    // which is the order `FnDecl::requires` and the site table index.
     let required: Vec<&RequiredParam> = rust_params
         .iter()
         .filter_map(|p| match p {
-            RustParam::Required(r) => Some(r),
+            RustParam::Required(r) | RustParam::Owning { required: r, .. } => Some(r),
             RustParam::Acvus(_) | RustParam::State(_) => None,
         })
         .collect();
+    let at_requirement = RequirementIndex::of(&rust_params);
+    refuse_two_owners(&rust_params)?;
     let ret = parse_return(&func.sig.output);
     refuse_static_argument(&ret)?;
     let returning = Returning::of(&ret);
@@ -619,14 +812,18 @@ fn generate_extern_fn(
     let mut acvus_index = 0;
     for p in &rust_params {
         match p {
-            RustParam::Acvus(_) => {
+            RustParam::Acvus(_) | RustParam::Owning { .. } => {
                 roles.push(flows::Role::Acvus(acvus_index));
                 acvus_index += 1;
             }
             RustParam::State(_) | RustParam::Required(_) => roles.push(flows::Role::Other),
         }
     }
-    let declared_flows = flows::derive(&func.sig, &roles, &vars, &ret)?;
+    let FlowInputs {
+        sig: flow_sig,
+        roles: flow_roles,
+    } = flow_inputs(&func.sig, &roles);
+    let declared_flows = flows::derive(&flow_sig, &flow_roles, &vars, &ret)?;
     if returning.lends() {
         if !params.iter().any(|p| p.mode.lends_its_storage()) {
             return Err(syn::Error::new_spanned(
@@ -819,7 +1016,7 @@ fn generate_extern_fn(
     };
 
     let arg_idents: Vec<Ident> = (0..params.len()).map(|i| format_ident!("__a{i}")).collect();
-    let inst_idents: Vec<Ident> = (0..required.len())
+    let inst_idents: Vec<Ident> = (0..at_requirement.standing.len())
         .map(|i| format_ident!("__q{i}"))
         .collect();
     let crossing = |ty: &Type, member: Option<&Type>| -> proc_macro2::TokenStream {
@@ -859,7 +1056,7 @@ fn generate_extern_fn(
                 &quote! { __R },
             )
         };
-        let arg_markers: Vec<proc_macro2::TokenStream> = params
+        let base_markers: Vec<proc_macro2::TokenStream> = params
             .iter()
             .zip(&rt_tys)
             .map(|(p, ty)| {
@@ -882,43 +1079,79 @@ fn generate_extern_fn(
                 }
             })
             .collect();
-        let inst_markers: Vec<proc_macro2::TokenStream> = required
+        // An `Instance` parameter takes its argument as the acvus parameter
+        // it owns does, and its word from the site table.
+        let arg_markers: Vec<proc_macro2::TokenStream> = base_markers
             .iter()
-            .enumerate()
-            .map(|(at, r)| {
+            .zip(&at_requirement.owning)
+            .map(|(marker, owner)| match owner {
+                None => marker.clone(),
+                Some(nth) => {
+                    let r = required[*nth];
+                    let sig = vars.to_runtime_instance(&r.signature, member);
+                    let task = &r.task;
+                    quote! { ::acvus_extern::Owning<#marker, #sig, #task, #nth> }
+                }
+            })
+            .collect();
+        let inst_markers: Vec<proc_macro2::TokenStream> = at_requirement
+            .standing
+            .iter()
+            .map(|&nth| {
+                let r = required[nth];
                 let sig = vars.to_runtime_instance(&r.signature, member);
                 let var = &r.var;
                 let var: Type = syn::parse_quote! { #var };
                 let var = vars.to_runtime_instance(&var, member);
                 let task = &r.task;
-                quote! { ::acvus_extern::Required<#sig, #var, #task, #at> }
+                quote! { ::acvus_extern::Required<#sig, #var, #task, #nth> }
             })
             .collect();
         let entry_param = match required.is_empty() {
             true => quote! { _ },
             false => quote! { __entry },
         };
-        let inst_from_entry: Vec<proc_macro2::TokenStream> = required
+        let standing_from_entry = at_requirement
+            .standing
             .iter()
             .zip(&inst_idents)
-            .enumerate()
-            .map(|(at, (r, ident))| {
+            .map(|(&nth, ident)| {
+                let r = required[nth];
                 let sig = vars.to_runtime_instance(&r.signature, member);
                 let var = &r.var;
                 let var: Type = syn::parse_quote! { #var };
                 let var = vars.to_runtime_instance(&var, member);
                 let task = &r.task;
-                let at = proc_macro2::Literal::usize_unsuffixed(at);
+                let nth = proc_macro2::Literal::usize_unsuffixed(nth);
                 quote! {
                     // SAFETY: the entry's `requires` holds, at this
                     // declaration's own order, the word of the entry
                     // `prepare` chose for this requirement, and that entry
                     // lives as long as the one this glue runs.
-                    let #ident: ::acvus_extern::Instance<'__w, #sig, #var, __R, #task> =
-                        unsafe { __rt.instance(__entry.requires[#at]) };
+                    let #ident: ::acvus_extern::InstanceOf<'__w, #sig, #var, __R, #task> =
+                        unsafe { __rt.instance(__entry.requires[#nth]) };
                 }
-            })
-            .collect();
+            });
+        let owning_from_entry = at_requirement
+            .owning
+            .iter()
+            .zip(&arg_idents)
+            .filter_map(|(owner, ident)| owner.map(|nth| (nth, ident)))
+            .map(|(nth, ident)| {
+                let r = required[nth];
+                let sig = vars.to_runtime_instance(&r.signature, member);
+                let task = &r.task;
+                let nth = proc_macro2::Literal::usize_unsuffixed(nth);
+                quote! {
+                    // SAFETY: as an `InstanceOf`'s, and the word was chosen
+                    // for the type of the argument this glue has just read.
+                    let #ident = unsafe {
+                        __rt.instance_owning::<#sig, _, #task>(#ident, __entry.requires[#nth])
+                    };
+                }
+            });
+        let inst_from_entry: Vec<proc_macro2::TokenStream> =
+            standing_from_entry.chain(owning_from_entry).collect();
         // A receiver is read through the loan device, which is where a
         // type with no storage of its own is refused; nothing else reads
         // a value's payload in place.
@@ -956,7 +1189,7 @@ fn generate_extern_fn(
         // The run after the receiver is the signature's, not this
         // instance's: the types below only say which instance's glue this
         // is, and the signature's own module decides what crosses.
-        let rest_markers: Vec<&proc_macro2::TokenStream> = arg_markers.iter().skip(1).collect();
+        let rest_markers: Vec<&proc_macro2::TokenStream> = base_markers.iter().skip(1).collect();
         // Nothing crosses after the receiver where the signature carries
         // nothing, and the glue of such an instance is the code it was
         // before a position at a variable had a crossing of its own.
@@ -988,7 +1221,7 @@ fn generate_extern_fn(
         let passed: Vec<proc_macro2::TokenStream> = rust_params
             .iter()
             .map(|p| match p {
-                RustParam::Acvus(_) => {
+                RustParam::Acvus(_) | RustParam::Owning { .. } => {
                     let at = &arg_idents[acvus_at];
                     acvus_at += 1;
                     quote! { #at }
@@ -1546,9 +1779,27 @@ fn parse_params(sig: &mut syn::Signature, runtime: Option<&Ident>) -> syn::Resul
             continue;
         }
         refuse_static_argument(pat_type.ty.as_ref())?;
-        if let Some(required) = required_of(pat_type.ty.as_ref())? {
-            params.push(RustParam::Required(required));
-            continue;
+        match requirement_param(pat_type.ty.as_ref())? {
+            Some(Requirement::Of(required)) => {
+                params.push(RustParam::Required(required));
+                continue;
+            }
+            Some(Requirement::Owning {
+                required,
+                held,
+                mode,
+            }) => {
+                params.push(RustParam::Owning {
+                    param: ExternParam {
+                        name: ident.to_string(),
+                        ty: held,
+                        mode,
+                    },
+                    required,
+                });
+                continue;
+            }
+            None => {}
         }
         if let Some(runtime) = runtime
             && crosses_as_ctx(pat_type.ty.as_ref(), runtime)
@@ -4373,9 +4624,13 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
                     "a signature declares no state",
                 ));
             }
-            RustParam::Required(r) => {
+            RustParam::Required(RequiredParam { signature, .. })
+            | RustParam::Owning {
+                required: RequiredParam { signature, .. },
+                ..
+            } => {
                 return Err(syn::Error::new_spanned(
-                    r.signature,
+                    signature,
                     "a signature requires no instance of its own",
                 ));
             }
@@ -4415,7 +4670,7 @@ fn generate_signature(input: SignatureInput) -> syn::Result<proc_macro2::TokenSt
         },
     };
     // The marker names the signature's own variables, so that a handler
-    // writes the requirement at its own: `Instance<sig::eq<T, Rt>>`. Every
+    // writes the requirement at its own: `InstanceOf<sig::eq<T, Rt>>`. Every
     // parameter is defaulted, so the bare `eq` an `instance_of` attribute
     // names still resolves.
     let declared: Vec<&Ident> = vars.idents();
@@ -4584,25 +4839,19 @@ fn span_of(param: &GenericParam) -> Span {
 
 /// The first parameter of a shared signature, as the `Signature` impl
 /// spells it (RFC-0070 rule 4).
-struct Receiver {
-    recv: proc_macro2::TokenStream,
-}
+/// How a signature's first parameter takes its receiver, as
+/// `Signature::Mode` names it.
+struct ReceiverMode(proc_macro2::TokenStream);
 
-impl Receiver {
+impl ReceiverMode {
     /// `None` where the mode has no receiver form: a `str` view and a
     /// projection name storage the caller lent, and a bounded variable is
     /// not that storage.
-    fn of(mode: Mode, first: &Ident) -> Option<Self> {
+    fn of(mode: Mode) -> Option<Self> {
         match mode {
-            Mode::Borrow => Some(Self {
-                recv: quote! { &'__a #first },
-            }),
-            Mode::BorrowMut => Some(Self {
-                recv: quote! { &'__a mut #first },
-            }),
-            Mode::Value => Some(Self {
-                recv: quote! { #first },
-            }),
+            Mode::Borrow => Some(Self(quote! { ::acvus_extern::Shared })),
+            Mode::BorrowMut => Some(Self(quote! { ::acvus_extern::Mut })),
+            Mode::Value => Some(Self(quote! { ::acvus_extern::Moved })),
             Mode::Str | Mode::Slice | Mode::SliceMut | Mode::Projection => None,
         }
     }
@@ -5129,7 +5378,7 @@ fn signature_call(
     if !Vars::is_exactly(&head.ty, first) {
         return proc_macro2::TokenStream::new();
     }
-    let Some(Receiver { recv }) = Receiver::of(head.mode, first) else {
+    let Some(ReceiverMode(receiver_mode)) = ReceiverMode::of(head.mode) else {
         return proc_macro2::TokenStream::new();
     };
     let rest: Vec<RestAt> = tail.iter().map(|p| RestAt::of(p, vars)).collect();
@@ -5178,10 +5427,7 @@ fn signature_call(
             #(#rest_crossings,)*
         {
             type This = #first;
-            type Recv<'__a>
-                = #recv
-            where
-                Self: '__a;
+            type Mode = #receiver_mode;
             type Words<'__a>
                 = #module::Rest<'__a, #runtime>
             where

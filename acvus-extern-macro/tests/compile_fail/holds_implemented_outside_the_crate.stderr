@@ -1,0 +1,29 @@
+error[E0277]: the trait bound `Forged<Rt>: acvus_extern::instance::sealed::Holds<Rt, Forged<Rt>>` is not satisfied
+  --> tests/compile_fail/holds_implemented_outside_the_crate.rs:11:36
+   |
+11 | impl<Rt> Holds<Rt, Forged<Rt>> for Forged<Rt>
+   |                                    ^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Deref` is not implemented for `Forged<Rt>`
+  --> tests/compile_fail/holds_implemented_outside_the_crate.rs:7:1
+   |
+ 7 | struct Forged<Rt>(Rt::Value)
+   | ^^^^^^^^^^^^^^^^^
+help: the trait `acvus_extern::instance::sealed::Holds<Rt, I>` is implemented for `&mut I`
+  --> $WORKSPACE/acvus-extern/src/instance.rs
+   |
+   | / impl<I, Rt> sealed::Holds<Rt, I> for &mut I
+   | | where
+   | |     I: Deref<Target = Rt::Value>,
+   | |     Rt: Runtime,
+   | |________________^
+   = note: required for `Forged<Rt>` to implement `acvus_extern::instance::sealed::Holds<Rt, Forged<Rt>>`
+note: required by a bound in `Holds`
+  --> $WORKSPACE/acvus-extern/src/instance.rs
+   |
+   | pub trait Holds<Rt, This>: sealed::Holds<Rt, This>
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Holds`
+   = note: `Holds` is a "sealed trait", because to implement it you also need to implement `acvus_extern::instance::sealed::Holds`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+   = help: the following types implement the trait:
+             I
+             &mut I

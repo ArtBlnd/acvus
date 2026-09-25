@@ -63,12 +63,13 @@ pub use handler::{
     Borrowable, BorrowableSpecialized, ByRef, ByValue, CallForms, CallSite, DeclaredInstance,
     DirectOp, ExternHandler, Gives, Glue, Handler, HandlerFactory, InRegisters, InWindow,
     InstanceEntries, Instances, IntoRun, Lends, LentBack, NoInstance, NoInstances, Parameters,
-    Pending, REGISTER_FORM, Required, RequiredInstance, Ret, RetLent, Returning,
+    Owning, Pending, REGISTER_FORM, Required, RequiredInstance, Ret, RetLent, Returning,
     SitesNoParameterReads, Specialized, Takes, Uniform, Unsited, Val, ValueParameters, ValuesOnly, Width, async_glue, async_glue_at_instance, glue,
     glue_at_instance,
 };
 pub use instance::{
-    CalledAt, CrossesRest, Instance, InstanceEntry, InstanceRun, Later, Now, Receiver, RequirementOf, RestRun,
+    CalledAt, Consume, CrossesRest, Holds, Instance, InstanceEntry, InstanceOf, InstanceRun, Later,
+    Moved, Now, ReadsItsReceiver, RequirementOf, RestRun, StepsItsReceiver,
     RestoreByValue, RestoreExclusive, RestoreShared, Signature, receiver_borrowed, receiver_by_value,
 };
 pub use len::Arr;

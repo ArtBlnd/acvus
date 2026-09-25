@@ -37,7 +37,7 @@ pub struct FnDecl {
     /// The shared signature this function is an instance of (RFC-0019).
     pub instance_of: Option<QualifiedRef>,
     /// The instances this declaration requires (RFC-0067 rule 1), in the order
-    /// `#[extern_fn]` read its `Instance` parameters.
+    /// `#[extern_fn]` read its `Instance` and `InstanceOf` parameters.
     pub requires: Vec<Requirement>,
     pub names: Vec<Named>,
     pub laws: Laws,
@@ -71,12 +71,12 @@ pub enum Coercion {
     View,
 }
 
-/// One `Instance<S<..>, I, Rt>` parameter of a declaration: the signature
-/// it names, that signature's type at the declaration's own variables, and
-/// the highest task an instance it reaches may run at (RFC-0046): what the
-/// parameter's `Now`/`Later` spelling drives, met with what the requiring
-/// Rust body can — an `async fn` body with a `sync =` twin requires what
-/// the twin does.
+/// One `Instance<S<..>, I, Rt>` or `InstanceOf<S<..>, I, Rt>` parameter of
+/// a declaration: the signature it names, that signature's type at the
+/// declaration's own variables, and the highest task an instance it reaches
+/// may run at (RFC-0046): what the parameter's `Now`/`Later` spelling
+/// drives, met with what the requiring Rust body can — an `async fn` body
+/// with a `sync =` twin requires what the twin does.
 pub struct Requirement {
     pub signature: QualifiedRef,
     pub pattern: PolyTy,

@@ -90,7 +90,7 @@ alternative it rejects. A decision another section owns is pointed to with
 
 ### [instances.md](instances.md)
 
-- RFC-0067: The machine holds no generics; a required instance is one word beside the value
+- RFC-0067: The machine holds no generics; an instance that steps a value owns it
 - RFC-0068: A value is read back at a type only where the checker decided
 - RFC-0070: An instance requires what its own declaration says
 

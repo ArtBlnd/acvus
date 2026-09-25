@@ -36,7 +36,7 @@ use acvus_extern::{
     Registry, Runtime, Shared, Specialized, Stored, Term, TransparentOver, TyArg, TyVarBound,
     UserDefinedDecl, Var, borrowed_as_self, core, extern_fn, extern_registry, kind,
 };
-use acvus_extern::{Instance, Later, held_effect};
+use acvus_extern::{Instance, InstanceOf, Later, held_effect};
 
 use crate::iter::{Items, Refs, sig};
 
@@ -65,8 +65,8 @@ where
         eq: EqOf<'a, K, E, Rt>,
     },
     Instances {
-        hash: Instance<'a, core::hash<K, Rt>, K, Rt>,
-        eq: Instance<'a, core::eq<K, Rt>, K, Rt>,
+        hash: InstanceOf<'a, core::hash<K, Rt>, K, Rt>,
+        eq: InstanceOf<'a, core::eq<K, Rt>, K, Rt>,
     },
 }
 
@@ -535,8 +535,8 @@ where
 
 #[extern_fn(effect = pure)]
 fn hash_map<'a, K, V, E, Rt>(
-    hash: Instance<'a, core::hash<K, Rt>, K, Rt>,
-    eq: Instance<'a, core::eq<K, Rt>, K, Rt>,
+    hash: InstanceOf<'a, core::hash<K, Rt>, K, Rt>,
+    eq: InstanceOf<'a, core::eq<K, Rt>, K, Rt>,
 ) -> HashMap<'a, K, V, E, Rt>
 where
     K: Var<kind::Type>,
@@ -1054,8 +1054,8 @@ fn keyed<K>(key: K) -> Binding<K, ()> {
 
 #[extern_fn(effect = pure)]
 fn hash_set<'a, K, E, Rt>(
-    hash: Instance<'a, core::hash<K, Rt>, K, Rt>,
-    eq: Instance<'a, core::eq<K, Rt>, K, Rt>,
+    hash: InstanceOf<'a, core::hash<K, Rt>, K, Rt>,
+    eq: InstanceOf<'a, core::eq<K, Rt>, K, Rt>,
 ) -> HashSet<'a, K, E, Rt>
 where
     K: Var<kind::Type>,
@@ -1431,10 +1431,9 @@ where
 
 fn from_iter_now<'a, It, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: It,
+    it: Instance<'a, sig::next<It, K, E, Rt>, It, Rt, Later>,
     hash: HashOf<'a, K, E, Rt>,
     eq: EqOf<'a, K, E, Rt>,
-    next: Instance<'a, sig::next<It, K, E, Rt>, It, Rt, Later>,
 ) -> HashSet<'a, K, E, Rt>
 where
     It: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1449,7 +1448,7 @@ where
 {
     let mut it = it;
     let mut s = HashSet(Table::new(Keying::Closures { hash, eq }, 0), PhantomData);
-    while let Some(key) = next.call(ctx, &mut it, ()) {
+    while let Some(key) = it.call(ctx, ()) {
         s.table_mut().occupy_now(ctx, keyed(key));
     }
     s
@@ -1458,10 +1457,9 @@ where
 #[extern_fn(effect = E, sync = from_iter_now)]
 async fn from_iter<'a, It, K, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
-    it: It,
+    it: Instance<'a, sig::next<It, K, E, Rt>, It, Rt, Later>,
     hash: HashOf<'a, K, E, Rt>,
     eq: EqOf<'a, K, E, Rt>,
-    next: Instance<'a, sig::next<It, K, E, Rt>, It, Rt, Later>,
 ) -> HashSet<'a, K, E, Rt>
 where
     It: Var<kind::Type> + Deref<Target = Rt::Value>,
@@ -1476,7 +1474,7 @@ where
 {
     let mut it = it;
     let mut s = HashSet(Table::new(Keying::Closures { hash, eq }, 0), PhantomData);
-    while let Some(key) = next.call_await(ctx, &mut it, ()).await {
+    while let Some(key) = it.call_await(ctx, ()).await {
         s.table_mut().occupy(ctx, keyed(key)).await;
     }
     s
