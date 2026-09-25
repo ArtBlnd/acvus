@@ -1418,15 +1418,17 @@ name in Rust. Both happen at one gate the interpreter keeps, typed by the
 call site, with every mismatch an explicit `None`.
 
 1. **A view of the call's arguments.** A handler may take
-   `Args<'call, P>`, `P` a tuple of the declaration's own type variables:
+   `Args<'call, P, Rt>`, `P` a tuple of the declaration's own type
+   variables and `Rt` its runtime:
    each is one acvus parameter at its position (RFC-0023 rule 5), and the
    view holds those arguments as sealed `(Ty, value)` pairs, moved in and
    released at the end of the call, so a write through it is seen within
    the call only. A concrete member is refused, being an ordinary
    parameter, and so is a second `Args`. It reads one only by
-   lending, `with::<T>(i, |&T| …)` and `with_mut::<T>(i, |&mut T| …)`, each
-   `Option`, `Some` exactly when `T`'s declaration is the argument's settled
-   type (the check of `acvus_extern::lend`). No method returns a value, a
+   lending, `with(i, |p| …)` and `with_mut(i, |p| …)`, each `Option`,
+   `Some` exactly when the closure's parameter type, a borrow or a
+   projection, is the argument's settled type (the check of
+   `acvus_extern::lend`). No method returns a value, a
    `Ty` or a word. `len()` counts the arguments; `encode()` lays them out by
    their types (RFC-0033) as `Encoded` bytes, owned and `'static`.
 2. **A Rust closure as a function value.** An extern may return a closure
