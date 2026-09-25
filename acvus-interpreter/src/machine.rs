@@ -62,10 +62,10 @@ impl Returned for Value {
 impl Returned for Words {
     #[inline(always)]
     fn of(exit: [Value; 2]) -> Words {
-        Words {
-            ptr: exit[0].bits(),
-            len: exit[1].bits(),
-        }
+        // SAFETY: the obligation above: `Words` is read here only for a body
+        // whose result the checker types a view, and that body exits with a
+        // slice pair, which its producer wrote from `into_pair`.
+        unsafe { Words::from_pair([exit[0].bits(), exit[1].bits()]) }
     }
 }
 
@@ -365,7 +365,7 @@ where
                 }
             }
             Pending::Pair { dst, fut } => {
-                let Words { ptr, len } = fut.await;
+                let [ptr, len] = fut.await.into_pair();
                 machine.regs.set_word(dst.ptr, ptr);
                 machine.regs.set_word(dst.len, len);
             }

@@ -12,7 +12,7 @@ use std::ptr::{self, NonNull};
 use std::slice;
 use std::sync::Arc;
 
-use acvus_extern::repr::{self, HeadAndTail, Word};
+use acvus_extern::repr::{self, HeadAndTail, PtrWord, Word};
 use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
@@ -241,7 +241,7 @@ where
     let slot = unsafe { slot.assume_init() };
     Value {
         kind: Kind::Large,
-        word: Box::into_raw(slot) as *mut Header as u64,
+        word: repr::word_of_ptr(Box::into_raw(slot).cast::<Header>()).word(),
     }
 }
 
@@ -329,8 +329,9 @@ macro_rules! value_word {
             #[inline]
             fn payload(&self) -> NonNull<Header> {
                 debug_assert_eq!(self.kind, Kind::Large, "payload: {self:?} is not large");
-                // SAFETY: a `Large` word is the pointer `large` leaked, never null.
-                unsafe { NonNull::new_unchecked(self.word as *mut Header) }
+                // SAFETY: a `Large` word is `word_of_ptr` of the pointer `large`
+                // or `closure` leaked, which is not null.
+                unsafe { NonNull::new_unchecked(self.ptr::<Header>().cast_mut()) }
             }
 
             fn header(&self) -> &Header {
@@ -439,7 +440,7 @@ macro_rules! value_word {
             $v fn reference(target: &Value) -> Value {
                 Value {
                     kind: Kind::Ref,
-                    word: ptr::from_ref(target) as u64,
+                    word: repr::word_of_ptr(target).word(),
                 }
             }
 
@@ -457,7 +458,7 @@ macro_rules! value_word {
             $v unsafe fn target<'a>(&self) -> &'a Value {
                 debug_assert_eq!(self.kind, Kind::Ref, "target: {self:?} is not a reference");
                 // SAFETY: the caller's contract: the target is live and unmoved.
-                unsafe { &*(self.word as *const Value) }
+                unsafe { &*self.ptr::<Value>() }
             }
 
             #[inline]
@@ -467,7 +468,7 @@ macro_rules! value_word {
                         acvus_extern::Task::Sync => Kind::Instance,
                         _ => Kind::InstanceAwait,
                     },
-                    word: entry as *const _ as u64,
+                    word: repr::word_of_ptr(entry).word(),
                 }
             }
 
@@ -483,7 +484,7 @@ macro_rules! value_word {
                     "as_instance_entry: {self:?} is not an instance"
                 );
                 // SAFETY: the caller's contract.
-                unsafe { &*(self.word as *const acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>) }
+                unsafe { &*self.ptr::<acvus_extern::InstanceEntry<crate::runtime::AcvusRuntime>>() }
             }
 
             /// A projection onto the aggregate whose flat layout begins at `base`.
@@ -497,7 +498,7 @@ macro_rules! value_word {
             $v fn large_ref(base: *mut Value) -> Value {
                 Value {
                     kind: Kind::LargeRef,
-                    word: base as u64,
+                    word: repr::word_of_ptr(base).word(),
                 }
             }
 
@@ -512,7 +513,19 @@ macro_rules! value_word {
                     "target_mut: {self:?} is not a reference"
                 );
                 // SAFETY: the caller's contract: the target is live and named once.
-                unsafe { &mut *(self.word as *mut Value) }
+                unsafe { &mut *self.ptr::<Value>().cast_mut() }
+            }
+
+            /// The pointer a word of a pointer kind holds.
+            ///
+            /// # Safety
+            /// The value's kind is one whose word a constructor here made
+            /// with `repr::word_of_ptr`: `Large`, `Ref`, `LargeRef`,
+            /// `Instance`, `InstanceAwait` or `Code`.
+            #[inline(always)]
+            unsafe fn ptr<T>(&self) -> *const T {
+                // SAFETY: the caller's contract.
+                repr::ptr_of_word(unsafe { PtrWord::from_word(self.word) })
             }
         }
     };
@@ -533,11 +546,11 @@ impl fmt::Debug for Value {
                 }
                 Ok(())
             }
-            Kind::Ref => write!(f, "Ref({:p})", self.word as *const Value),
+            Kind::Ref => write!(f, "Ref({:#x})", self.word),
             Kind::Instance => write!(f, "Instance({:#x})", self.word),
             Kind::InstanceAwait => write!(f, "InstanceAwait({:#x})", self.word),
             Kind::Code => write!(f, "<fn {:#x}>", self.word),
-            Kind::LargeRef => write!(f, "LargeRef({:p})", self.word as *const Value),
+            Kind::LargeRef => write!(f, "LargeRef({:#x})", self.word),
             Kind::Large => {
                 let vtable = self.header().vtable;
                 match vtable.debug {
@@ -610,9 +623,7 @@ pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 /// The head of a closure record: what it runs and how many values it
 /// captured. The captures follow the head in the same allocation, from the
 /// offset `ClosureRecord::TAIL` (RFC-0069 rule 4); a closure of no captures has no
-/// record at all (`Kind::Code`). `code` is first so that a boxed record and
-/// an inline `Kind::Code` word are read alike (`Value::code_of`).
-#[repr(C)]
+/// record at all (`Kind::Code`).
 pub struct FnValue {
     pub code: crate::code::CodeRef,
     /// A `u16` because it counts capture registers, which `prepare` colours
@@ -970,7 +981,7 @@ macro_rules! value_constructors {
                 }
                 Value {
                     kind: Kind::Large,
-                    word: head.as_ptr() as *mut Header as u64,
+                    word: repr::word_of_ptr(head.cast::<Header>().as_ptr()).word(),
                 }
             }
 
@@ -979,7 +990,7 @@ macro_rules! value_constructors {
             $v fn code(code: crate::code::CodeRef) -> Self {
                 Value {
                     kind: Kind::Code,
-                    word: code.address() as u64,
+                    word: repr::word_of_ptr(code.address()).word(),
                 }
             }
             pub(crate) fn handle(launched: Launched) -> Self {
@@ -1099,15 +1110,14 @@ macro_rules! value_constructors {
             /// The value is a closure: `Value::code` or `Value::closure` wrote it.
             #[inline(always)]
             $v unsafe fn code_of(&self) -> crate::code::CodeRef {
-                let record: *const FnValue = match self.kind {
-                    Kind::Code => (&raw const self.word).cast(),
+                match self.kind {
+                    // SAFETY: a `Kind::Code` word is `word_of_ptr` of a
+                    // `CodeRef`'s address (`Value::code`).
+                    Kind::Code => unsafe { crate::code::CodeRef::of_address(self.ptr::<crate::code::Code>()) },
                     // SAFETY: the caller's contract: a closure that is not
                     // `Kind::Code` is a boxed `FnValue`.
-                    _ => unsafe { &raw const self.payload().cast::<Slot<FnValue>>().as_ref().value },
-                };
-                // SAFETY: `FnValue` is `repr(C)` with `code` first, and a `Kind::Code`
-                // word is a `CodeRef`, so both arms point at one.
-                unsafe { (*record).code }
+                    _ => unsafe { self.payload().cast::<Slot<FnValue>>().as_ref().value.code },
+                }
             }
 
             /// # Safety

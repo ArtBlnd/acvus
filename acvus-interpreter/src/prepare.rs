@@ -4351,14 +4351,14 @@ impl<'a> Prepare<'a> {
 
             InstKind::ConstStr { dst, text } => {
                 let pair = self.pair(*dst);
-                let run = self.literals.run(text);
+                let [ptr, len] = self.literals.run(text).into_pair();
                 made(move |next| {
                     Box::new(constant::Const {
                         dst: pair.ptr,
-                        word: run.ptr,
+                        word: ptr,
                         next: Box::new(constant::Const {
                             dst: pair.len,
-                            word: run.len,
+                            word: len,
                             next,
                         }),
                     })

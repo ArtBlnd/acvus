@@ -348,15 +348,15 @@ impl Runtime for AcvusRuntime {
     }
 
     fn slice_into_run(&self, words: acvus_extern::Words, out: &mut [Value]) {
-        out[0] = word(words.ptr);
-        out[1] = word(words.len);
+        let [ptr, len] = words.into_pair();
+        out[0] = word(ptr);
+        out[1] = word(len);
     }
 
     unsafe fn slice_from_run(&self, run: &[Value]) -> acvus_extern::Words {
-        acvus_extern::Words {
-            ptr: run[0].bits(),
-            len: run[1].bits(),
-        }
+        // SAFETY: the caller's contract: `run` is what `slice_into_run` wrote
+        // from `into_pair`.
+        unsafe { acvus_extern::Words::from_pair([run[0].bits(), run[1].bits()]) }
     }
 
     fn call_is_sync(&self, f: &Value) -> bool {
