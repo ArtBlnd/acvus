@@ -146,7 +146,14 @@ Status: Accepted
    of a language shape is one state node: an integer in its width's bytes,
    `f64` in eight, a string as its length and bytes, an array as its count and
    elements, an object as its fields in name order, an option as one byte and
-   the payload, an enum as its variant's index and payload.
+   the payload, an enum as its variant's index and payload. Decoding treats
+   its bytes as untrusted: a `bool` is the byte `0` or `1`, a `char` a
+   Unicode scalar value, a string valid UTF-8, a tag or index one its type
+   has, and a count or length at most what the remaining bytes can hold (a
+   count of zero-width elements at most the bound the decoder is given).
+   A value decoded from bytes leaves none unread. Anything else is a
+   refusal, never a panic, a truncation or a default. Every `f64` bit
+   pattern is an `f64`.
 3. A value of an extension type is a chain: a state node, then op nodes, each
    the parent's value changed by one recorded op. The type declares this once,
    as `Journaled`: its state layout, its ops, how an op replays, where its

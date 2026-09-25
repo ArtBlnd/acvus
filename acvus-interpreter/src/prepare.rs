@@ -4351,14 +4351,14 @@ impl<'a> Prepare<'a> {
 
             InstKind::ConstStr { dst, text } => {
                 let pair = self.pair(*dst);
-                let run = self.literals.run(text);
+                let [ptr, len] = self.literals.run(text).into_pair();
                 made(move |next| {
                     Box::new(constant::Const {
                         dst: pair.ptr,
-                        word: run.ptr,
+                        word: ptr,
                         next: Box::new(constant::Const {
                             dst: pair.len,
-                            word: run.len,
+                            word: len,
                             next,
                         }),
                     })
@@ -7493,10 +7493,7 @@ mod recognizer_tests {
         }
 
         fn async_extern(&mut self, name: &str) -> QualifiedRef {
-            let id = QualifiedRef {
-                namespace: None,
-                name: self.interner.intern(name),
-            };
+            let id = QualifiedRef::root(self.interner.intern(name));
             let handler = ExternHandler::awaited(acvus_extern::async_glue::<
                 crate::runtime::AcvusRuntime,
                 _,
@@ -7507,10 +7504,7 @@ mod recognizer_tests {
         }
 
         fn sync_extern(&mut self, name: &str) -> QualifiedRef {
-            let id = QualifiedRef {
-                namespace: None,
-                name: self.interner.intern(name),
-            };
+            let id = QualifiedRef::root(self.interner.intern(name));
             let handler = nullary_handler();
             self.externs.insert(id, Executable::Extern(vec![handler]));
             id
@@ -7995,10 +7989,7 @@ mod assignment_tests {
     const WINDOW: &str = "window";
 
     fn extern_ref(name: &str) -> QualifiedRef {
-        QualifiedRef {
-            namespace: None,
-            name: SYMBOLS.intern(name),
-        }
+        QualifiedRef::root(SYMBOLS.intern(name))
     }
 
     fn call(dst: usize, name: &str, args: &[usize]) -> Inst {

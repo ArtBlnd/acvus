@@ -21,6 +21,7 @@ fn iterator_registry(i: &Interner) -> TypeRegistry {
         identity_params: 1,
         region_params: 0,
         specializable: vec![false],
+        may_hold_a_function: true,
     })
     .expect("one declaration per name");
     reg

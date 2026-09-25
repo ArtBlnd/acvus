@@ -473,7 +473,7 @@ mod required_inputs {
     use acvus_lsp::LspSession;
     use acvus_mir::graph::{Bindings, BoundValue, CompilationGraph};
     use acvus_mir::ty::TypeRegistry;
-    use acvus_utils::Interner;
+    use acvus_utils::{Interner, QualifiedRef};
 
     fn text(value: &str) -> BoundValue {
         BoundValue::String(value.to_string())
@@ -482,7 +482,7 @@ mod required_inputs {
     fn bound(interner: &Interner, name: &str, value: BoundValue) -> CompilationGraph {
         let mut bindings = Bindings::default();
         bindings
-            .bind(interner.intern(name), value)
+            .bind(QualifiedRef::root(interner.intern(name)), value)
             .expect("text types on its own");
         super::environment(vec![], vec![], TypeRegistry::default(), bindings)
     }
