@@ -1436,7 +1436,10 @@ call site, with every mismatch an explicit `None`.
 2. **A Rust closure as a function value.** An extern may return
    `RustFn<P, R, Rt>`, a script function value of type `Fn(P…) -> R`
    whose body is a Rust closure `Fn(&mut Ctx, Args<'call, P, Rt>) -> R`,
-   `R` crossing as an extern's result does. Its state is
+   `R` crossing as an extern's result does. `P` holds concrete types
+   only: a call of a function value settles no type for its callee, so a
+   variable in `P` would have nothing to lend its argument at; arguments
+   typed per call site come with rule 3. Its state is
    `Send + Sync + 'static` and released with the value. The call site
    calls it as any function value; its arguments arrive per call as rule
    1's view. With rule 3 the closure may instead return `Finished<'call>`
