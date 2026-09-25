@@ -360,7 +360,9 @@ holds its own iterator, which Rust's `slice::Iter` does not.
    `#[derive(ExternType)]` type states its region parameters, then its
    type arguments, in declaration order, each a label. The macro takes
    that statement from the type, never from how its name is written; a
-   type that states none is unread, its flow `Any`.
+   type that states none is unread, its flow `Any`. The macro reads a
+   signature once for each way its generic types may be laid out, so a
+   signature naming more than twelve generic types is refused.
 3. **Writes stay the union.** What a callee may write is still every input
    into every output it may write (RFC-0079 rule 5); a labelled flow
    narrows only the result.
