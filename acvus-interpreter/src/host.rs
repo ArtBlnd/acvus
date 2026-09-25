@@ -239,7 +239,7 @@ use futures::FutureExt;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::executor::Executor;
-use crate::init::{DeclaredInits, GraphParts, InitGiven, InitSource, RustInit};
+use crate::init::{DeclaredInits, GraphParts, InitGiven, InitKey, InitSource, RustInit};
 use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
 use crate::ops::storage::{fetch_now, fetch_waited};
 use crate::port::{Gate, Held, Port, ended, serve};
@@ -845,24 +845,49 @@ pub(crate) enum EntryDeclaration {
 }
 
 #[derive(Clone)]
-pub(crate) enum Namespace {
-    Root,
-    Host(String),
+pub(crate) struct GraphName {
+    pub(crate) host: Option<String>,
+    pub(crate) namespace: Option<String>,
+    pub(crate) name: String,
 }
 
-impl Namespace {
-    pub(crate) fn key(&self, name: &str) -> String {
-        match self {
-            Namespace::Root => name.to_owned(),
-            Namespace::Host(host) => format!("{host}/{name}"),
+impl GraphName {
+    pub(crate) fn qref(&self, interner: &Interner) -> QualifiedRef {
+        QualifiedRef {
+            namespace: self
+                .namespace
+                .as_deref()
+                .map(|namespace| interner.intern(namespace)),
+            name: interner.intern(&self.name),
+            host: self.host.as_deref().map(|host| interner.intern(host)),
         }
     }
 }
 
+/// The key a program's caller names an entry or a context by, and a
+/// refusal's origin shows: `host/name` for a host of a graph. Storage holds
+/// a context under this key.
+pub(crate) fn program_key(host: Option<&str>, name: &str) -> String {
+    match host {
+        Some(host) => format!("{host}/{name}"),
+        None => name.to_owned(),
+    }
+}
+
+fn program_key_of(interner: &Interner, qref: QualifiedRef) -> String {
+    let name = match qref.namespace {
+        Some(namespace) => format!(
+            "{}::{}",
+            interner.resolve(namespace),
+            interner.resolve(qref.name)
+        ),
+        None => interner.resolve(qref.name).to_owned(),
+    };
+    program_key(qref.host.map(|host| interner.resolve(host)), &name)
+}
+
 pub(crate) struct EntryDecl {
-    pub(crate) name: String,
-    pub(crate) bare_name: Option<String>,
-    pub(crate) inputs_under: Namespace,
+    pub(crate) name: GraphName,
     pub(crate) ast: ParsedAst,
     pub(crate) declaration: EntryDeclaration,
 }
@@ -942,7 +967,10 @@ where
     pub fn init(mut self, key: &str, source: Source<'_>) -> Self {
         let ast = self.parsed(Origin::Init(key.to_owned()), source);
         self.parts.inits.push(InitSource {
-            key: key.to_owned(),
+            key: InitKey {
+                host: None,
+                written: key.to_owned(),
+            },
             given: InitGiven::Source(ast),
         });
         self
@@ -958,7 +986,10 @@ where
         let declared = T::declared(&self.parts.interner);
         let make = Box::new(move |crossing: Crossing<'_, AcvusRuntime>| Owned::erased(crossing, make()));
         self.parts.inits.push(InitSource {
-            key: key.to_owned(),
+            key: InitKey {
+                host: None,
+                written: key.to_owned(),
+            },
             given: InitGiven::Rust(RustInit::new(declared, make)),
         });
         self
@@ -1000,17 +1031,31 @@ where
         self.declare_entry(name, source, EntryDeclaration::Typed { inputs, declared })
     }
 
-    fn declare_entry(mut self, name: &str, source: Source<'_>, declaration: EntryDeclaration) -> Self {
+    fn declare_entry(
+        mut self,
+        name: &str,
+        source: Source<'_>,
+        declaration: EntryDeclaration,
+    ) -> Self {
         let origin = Origin::Entry(name.to_owned());
-        if self.parts.entries.iter().any(|entry| entry.name == name) {
+        if self
+            .parts
+            .entries
+            .iter()
+            .any(|entry| entry.name.name == name)
+        {
             let message = format!("the entry `{name}` is given twice");
-            self.parts.refusals.push(Refusal::of(Some(origin.clone()), message));
+            self.parts
+                .refusals
+                .push(Refusal::of(Some(origin.clone()), message));
         }
         let ast = self.parsed(origin, source);
         self.parts.entries.push(EntryDecl {
-            name: name.to_owned(),
-            bare_name: Some(name.to_owned()),
-            inputs_under: Namespace::Root,
+            name: GraphName {
+                host: None,
+                namespace: None,
+                name: name.to_owned(),
+            },
             ast,
             declaration,
         });
@@ -1040,7 +1085,7 @@ where
         })?;
         self.parts
             .bindings
-            .bind(interner.intern(name), value)
+            .bind(QualifiedRef::root(interner.intern(name)), value)
             .map_err(|e| refused(format!("${name}: {e}")))?;
         Ok(self)
     }
@@ -1101,20 +1146,11 @@ struct EntryInputs {
 }
 
 impl EntryInputs {
-    fn of(
-        interner: &Interner,
-        shape: ResolvedShape,
-        under: &Namespace,
-        params: &[(Astr, ValueId)],
-    ) -> EntryInputs {
-        let fields: Vec<Astr> = shape
+    fn of(interner: &Interner, shape: ResolvedShape, params: &[(Astr, ValueId)]) -> EntryInputs {
+        let param_of: Vec<usize> = shape
             .fields
             .iter()
-            .map(|(field, _)| interner.intern(&under.key(interner.resolve(*field))))
-            .collect();
-        let param_of: Vec<usize> = fields
-            .iter()
-            .map(|field| {
+            .map(|(field, _)| {
                 params.iter().position(|(param, _)| param == field).unwrap_or_else(|| {
                     panic!(
                         "the entry's declared input `${}` is no parameter of its module: a typed \
@@ -1124,7 +1160,9 @@ impl EntryInputs {
                 })
             })
             .collect();
-        if let Some((param, _)) = params.iter().find(|(param, _)| !fields.contains(param))
+        if let Some((param, _)) = params
+            .iter()
+            .find(|(param, _)| shape.fields.iter().all(|(field, _)| field != param))
         {
             panic!(
                 "the entry's module takes `${}`, which its declared inputs lack: a typed entry's \
@@ -1212,7 +1250,6 @@ impl FieldValue for Given {
 struct Declaration {
     name: String,
     shape: EntryShape,
-    inputs_under: Namespace,
 }
 
 struct LocalFunction {
@@ -1306,20 +1343,25 @@ pub(crate) fn compile(
     let mut scripts: FxHashMap<QualifiedRef, String> = FxHashMap::default();
     let mut functions: Vec<Function> = Vec::with_capacity(entries.len() + extern_fns.len());
     for EntryDecl {
-        name,
-        bare_name,
-        inputs_under,
+        name: written,
         ast,
         declaration,
     } in entries
     {
-        let qref = QualifiedRef::root(interner.intern(&name));
+        let qref = written.qref(interner);
+        let name = program_key_of(interner, qref);
         let origin = Some(Origin::Entry(name.clone()));
-        let shadowed = match &bare_name {
-            Some(bare) => bare_callable(interner, &extern_fns, &types, QualifiedRef::root(interner.intern(bare))),
+        let bare = written.namespace.is_none().then_some(written.name.as_str());
+        let shadowed = match bare {
+            Some(bare) => bare_callable(
+                interner,
+                &extern_fns,
+                &types,
+                QualifiedRef::root(interner.intern(bare)),
+            ),
             None => Vec::new(),
         };
-        if let (Some(bare), false) = (&bare_name, shadowed.is_empty()) {
+        if let (Some(bare), false) = (bare, shadowed.is_empty()) {
             let listed: Vec<String> = shadowed.iter().map(|name| format!("`{name}`")).collect();
             let what = match declaration {
                 EntryDeclaration::Function | EntryDeclaration::Positional { .. } => "function",
@@ -1334,7 +1376,11 @@ pub(crate) fn compile(
                 ..Refusal::of(origin.clone(), message)
             });
         }
-        named.extend(context_refs(&ast));
+        named.extend(
+            context_refs(&ast)
+                .into_iter()
+                .map(|context| context.in_host(qref.host)),
+        );
         let local = match declaration {
             EntryDeclaration::Typed { inputs, declared } => {
                 refusals.extend(inputs.repeated_names().into_iter().map(|repeated| {
@@ -1344,18 +1390,12 @@ pub(crate) fn compile(
                     );
                     Refusal::of(origin.clone(), message)
                 }));
-                let params: Vec<Astr> = inputs
-                    .fields
-                    .iter()
-                    .map(|(field, _)| interner.intern(&inputs_under.key(interner.resolve(*field))))
-                    .collect();
                 refusals.extend(
                     inputs
                         .fields
                         .iter()
-                        .zip(&params)
-                        .filter(|(_, param)| bindings.get(**param).is_some())
-                        .map(|((field, _), _)| {
+                        .filter(|(field, _)| bindings.get(QualifiedRef::root(*field).in_host(qref.host)).is_some())
+                        .map(|(field, _)| {
                             let message = format!(
                                 "the input `${}` of the entry `{name}` is already fixed by a binding",
                                 interner.resolve(*field)
@@ -1366,8 +1406,7 @@ pub(crate) fn compile(
                 let params = inputs
                     .fields
                     .iter()
-                    .zip(params)
-                    .map(|((_, ty), param)| ParamTerm::new(param, ty.clone()))
+                    .map(|(field, ty)| ParamTerm::new(*field, ty.clone()))
                     .collect();
                 let ty = TyTerm::Fn {
                     params,
@@ -1414,14 +1453,7 @@ pub(crate) fn compile(
         let LocalFunction { kind, ty, shape } = local;
         scripts.insert(qref, name.clone());
         if let Some(shape) = shape {
-            declared.insert(
-                qref,
-                Declaration {
-                    name,
-                    shape,
-                    inputs_under,
-                },
-            );
+            declared.insert(qref, Declaration { name, shape });
         }
         functions.push(Function { qref, kind, ty });
     }
@@ -1443,7 +1475,10 @@ pub(crate) fn compile(
         Ok(declared) => declared,
         Err(refused) => {
             refusals.extend(refused.into_iter().map(|refusal| {
-                Refusal::of(Some(Origin::Init(refusal.key().to_owned())), refusal.to_string())
+                Refusal::of(
+                    Some(Origin::Init(refusal.key().stored())),
+                    refusal.to_string(),
+                )
             }));
             return Err(refusals);
         }
@@ -1469,7 +1504,7 @@ pub(crate) fn compile(
         Some(name) => Some(Origin::Entry(name.clone())),
         None => declared_inits
             .key_of(qref)
-            .map(|key| Origin::Init(key.to_owned())),
+            .map(|key| Origin::Init(key.stored())),
     };
 
     let started = Instant::now();
@@ -1526,8 +1561,11 @@ pub(crate) fn compile(
         return Err(refusals);
     }
 
-    let context_names: FxHashMap<QualifiedRef, Astr> =
-        graph.contexts.iter().map(|c| (c.qref, c.qref.name)).collect();
+    let context_names: FxHashMap<QualifiedRef, Astr> = graph
+        .contexts
+        .iter()
+        .map(|c| (c.qref, interner.intern(&program_key_of(interner, c.qref))))
+        .collect();
     let mut executables: FxHashMap<QualifiedRef, Executable> = handlers
         .into_iter()
         .map(|(q, h)| (q, Executable::Extern(h)))
@@ -1565,13 +1603,14 @@ pub(crate) fn compile(
     let mut required = optimized.inputs;
     let compiled_entries: HashMap<String, CompiledEntry> = declared
         .into_iter()
-        .map(|(qref, Declaration { name, shape, inputs_under })| {
-            let (Some(module), Some(required)) = (modules.remove(&qref), required.remove(&qref)) else {
+        .map(|(qref, Declaration { name, shape })| {
+            let (Some(module), Some(required)) = (modules.remove(&qref), required.remove(&qref))
+            else {
                 panic!("`optimize` keeps a module and its inputs for an entry no stage refused")
             };
             let shape = match shape {
                 EntryShape::Typed { inputs, declared } => CompiledShape::Typed {
-                    inputs: EntryInputs::of(interner, inputs, &inputs_under, &module.main.params),
+                    inputs: EntryInputs::of(interner, inputs, &module.main.params),
                     declared,
                 },
                 EntryShape::Untyped => CompiledShape::Untyped,
@@ -1594,18 +1633,21 @@ pub(crate) fn compile(
             let Some(ty) = inf.context_types.get(&c.qref) else {
                 panic!("inference settles a type for every context of the graph")
             };
-            (interner.resolve(c.qref.name).to_owned(), Arc::new(ty.clone()))
+            (program_key_of(interner, c.qref), Arc::new(ty.clone()))
         })
         .collect();
-    let init_functions: Vec<(String, QualifiedRef)> = declared_inits
+    let init_functions: Vec<(InitKey, QualifiedRef)> = declared_inits
         .functions()
-        .map(|(key, function)| (key.to_owned(), function))
+        .map(|(key, function)| (key.clone(), function))
         .collect();
     let inits = match declared_inits.solved(interner, &solved) {
         Ok(inits) => inits,
         Err(refused) => {
             refusals.extend(refused.into_iter().map(|refusal| {
-                Refusal::of(Some(Origin::Init(refusal.key().to_owned())), refusal.to_string())
+                Refusal::of(
+                    Some(Origin::Init(refusal.key().stored())),
+                    refusal.to_string(),
+                )
             }));
             return Err(refusals);
         }
@@ -1622,11 +1664,12 @@ pub(crate) fn compile(
                 .filter(|(_, function)| lookup_module(&shared, function).main.may_suspend)
                 .map(|(key, _)| {
                     let message = format!(
-                        "the init of `@{key}` can wait, and a program compiled for synchronous access \
+                        "the init of `@{}` can wait, and a program compiled for synchronous access \
                          runs an init inside the fetch that finds its key absent, which cannot wait; \
-                         compile with `Host::async_access`"
+                         compile with `Host::async_access`",
+                        key.written
                     );
-                    Refusal::of(Some(Origin::Init(key.clone())), message)
+                    Refusal::of(Some(Origin::Init(key.stored())), message)
                 }),
         );
         if !refusals.is_empty() {

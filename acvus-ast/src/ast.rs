@@ -207,11 +207,6 @@ impl<S> PlaceExpr<S> {
         &self.0
     }
 
-    /// Only `rename`, which changes names and never which node a name is.
-    pub(crate) fn expr_mut(&mut self) -> &mut Expr<S> {
-        &mut self.0
-    }
-
     fn names_a_place(expr: &Expr<S>) -> bool {
         match expr {
             Expr::Ident {

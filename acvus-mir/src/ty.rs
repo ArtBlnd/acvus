@@ -2796,17 +2796,21 @@ pub enum FnLookup<'a> {
 impl TypeEnv {
     /// A script's bare name is its own function if it has one, else the
     /// functions of that name under any namespace (RFC-0021, RFC-0043).
-    pub fn resolve_fn(&self, name: QualifiedRef) -> FnLookup<'_> {
+    pub fn resolve_fn(&self, name: QualifiedRef, host: Option<Astr>) -> FnLookup<'_> {
+        let written_bare = name.namespace.is_none() && name.host.is_none();
+        if written_bare && let Some(scheme) = self.functions.get(&name.in_host(host)) {
+            return FnLookup::Found(name.in_host(host), scheme);
+        }
         if let Some(scheme) = self.functions.get(&name) {
             return FnLookup::Found(name, scheme);
         }
-        if name.namespace.is_some() {
+        if !written_bare {
             return FnLookup::Missing;
         }
         let mut candidates: Vec<QualifiedRef> = self
             .functions
             .keys()
-            .filter(|q| q.name == name.name && q.namespace.is_some())
+            .filter(|q| q.name == name.name && q.namespace.is_some() && q.host.is_none())
             .copied()
             .collect();
         candidates.sort();

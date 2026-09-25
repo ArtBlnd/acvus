@@ -6,22 +6,21 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use acvus_ast::rename::{Renames, rename_script, rename_template};
 use acvus_ast::{AstId, Expr, RefKind, Script, Span};
 use acvus_extern::Registry;
 use acvus_mir::graph::infer::InferResult;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::graph::{Bindings, ParsedAst, QualifiedRef, RecoveredAst};
+use acvus_mir::graph::{Bindings, ParsedAst, QualifiedRef};
 use acvus_mir::ty::{ObjectTy, ParamTerm, PolyTy, Ty, TyTerm, TypeRegistry};
-use acvus_utils::{Astr, Interner};
+use acvus_utils::Interner;
 use rustc_hash::FxHashSet;
 
 use crate::executor::Executor;
 use crate::host::{
-    Access, AsyncAccess, Cause, EntryDecl, EntryDeclaration, Host, HostError, HostParts, Namespace,
-    Origin, Program, Refusal, ResolvedShape, SyncAccess, compile,
+    Access, AsyncAccess, Cause, EntryDecl, EntryDeclaration, GraphName, Host, HostError, HostParts,
+    Origin, Program, Refusal, ResolvedShape, SyncAccess, compile, program_key,
 };
-use crate::init::{InitGiven, InitSource};
+use crate::init::{InitKey, InitSource};
 use crate::runtime::AcvusRuntime;
 
 pub struct HostGraph<A = SyncAccess> {
@@ -53,12 +52,6 @@ struct Run {
 pub(crate) struct Exposed {
     qref: QualifiedRef,
     name: String,
-    inputs: Vec<ExposedInput>,
-}
-
-struct ExposedInput {
-    in_graph: Astr,
-    written: String,
 }
 
 impl HostGraph<SyncAccess> {
@@ -186,30 +179,51 @@ impl Plan {
                 refusals.push(Refusal::of(None, message));
             }
         }
-        let missing_host = |host: &str| Refusal::of(None, format!("the graph has no host `{host}`"));
+        let missing_host =
+            |host: &str| Refusal::of(None, format!("the graph has no host `{host}`"));
 
         let mut exposed = Vec::new();
-        let mut exposed_as: FxHashSet<String> = FxHashSet::default();
+        let mut exposed_as: FxHashSet<(&str, &str)> = FxHashSet::default();
         for exposure in exposures {
-            let Exposure { into, name, from, entry } = exposure;
+            let Exposure {
+                into,
+                name,
+                from,
+                entry,
+            } = exposure;
             let refused = |why: String| {
-                Refusal::of(None, format!("`{from}/{entry}` is exposed to `{into}` as `{name}`, {why}"))
+                Refusal::of(
+                    None,
+                    format!("`{from}/{entry}` is exposed to `{into}` as `{name}`, {why}"),
+                )
             };
-            if !exposed_as.insert(Namespace::Host(into.clone()).key(name)) {
-                refusals.push(refused(format!("and another entry is exposed to `{into}` under that name")));
+            if !exposed_as.insert((into, name)) {
+                refusals.push(refused(format!(
+                    "and another entry is exposed to `{into}` under that name"
+                )));
             }
             let Some(into_parts) = by_name.get(into.as_str()) else {
                 refusals.push(missing_host(into));
                 continue;
             };
-            if into_parts.entries.iter().any(|declared| declared.name == *name) {
-                refusals.push(refused(format!("which is already the name of an entry of `{into}`")));
+            if into_parts
+                .entries
+                .iter()
+                .any(|declared| declared.name.name == *name)
+            {
+                refusals.push(refused(format!(
+                    "which is already the name of an entry of `{into}`"
+                )));
             }
             let Some(from_parts) = by_name.get(from.as_str()) else {
                 refusals.push(missing_host(from));
                 continue;
             };
-            match from_parts.entries.iter().find(|declared| declared.name == *entry) {
+            match from_parts
+                .entries
+                .iter()
+                .find(|declared| declared.name.name == *entry)
+            {
                 Some(EntryDecl {
                     declaration: EntryDeclaration::Typed { inputs, declared },
                     ..
@@ -246,19 +260,27 @@ impl Plan {
                 refusals.push(missing_host(host));
                 continue;
             };
-            let refused = |why: String| Refusal::of(None, format!("the graph runs `{host}/{entry}`, {why}"));
-            if !parts.entries.iter().any(|declared| declared.name == *entry) {
+            let refused =
+                |why: String| Refusal::of(None, format!("the graph runs `{host}/{entry}`, {why}"));
+            if !parts
+                .entries
+                .iter()
+                .any(|declared| declared.name.name == *entry)
+            {
                 refusals.push(refused(format!("and `{host}` has no entry `{entry}`")));
                 continue;
             }
-            if let Some(exposure) = exposures.iter().find(|x| x.from == *host && x.entry == *entry) {
+            if let Some(exposure) = exposures
+                .iter()
+                .find(|x| x.from == *host && x.entry == *entry)
+            {
                 refusals.push(refused(format!(
                     "which is exposed to `{}` as `{}`, and only the hosts an entry is exposed to run it",
                     exposure.into, exposure.name
                 )));
                 continue;
             }
-            running.insert(format!("{host}/{entry}"));
+            running.insert(program_key(Some(host), entry));
         }
         match refusals.is_empty() {
             true => Ok(Plan {
@@ -339,53 +361,15 @@ fn strongly_connected_with<'n>(calls: &BTreeMap<&'n str, Vec<&'n str>>, start: &
 }
 
 fn under_host(host: &str, refusals: Vec<Refusal>) -> impl Iterator<Item = Refusal> + use<> {
-    let under = Namespace::Host(host.to_owned());
+    let host = host.to_owned();
     refusals.into_iter().map(move |refusal| Refusal {
         origin: refusal.origin.map(|origin| match origin {
-            Origin::Entry(name) => Origin::Entry(under.key(&name)),
-            Origin::Init(key) => Origin::Init(under.key(&key)),
-            Origin::Binding(name) => Origin::Binding(under.key(&name)),
+            Origin::Entry(name) => Origin::Entry(program_key(Some(&host), &name)),
+            Origin::Init(key) => Origin::Init(program_key(Some(&host), &key)),
+            Origin::Binding(name) => Origin::Binding(program_key(Some(&host), &name)),
         }),
         ..refusal
     })
-}
-
-struct HostNames<'n> {
-    interner: &'n Interner,
-    host: &'n Namespace,
-    functions: &'n FxHashSet<Astr>,
-}
-
-impl HostNames<'_> {
-    fn under(&self, name: Astr) -> Astr {
-        self.interner.intern(&self.host.key(self.interner.resolve(name)))
-    }
-
-    fn ast(&mut self, ast: &mut ParsedAst) {
-        match ast {
-            ParsedAst::Script(script) => rename_script(script, self),
-            ParsedAst::Template(template) => rename_template(template, self),
-            ParsedAst::Recovered(RecoveredAst::Script(script)) => rename_script(script, self),
-            ParsedAst::Recovered(RecoveredAst::Template(template)) => rename_template(template, self),
-        }
-    }
-}
-
-impl Renames for HostNames<'_> {
-    fn context(&mut self, name: Astr) -> Astr {
-        self.under(name)
-    }
-
-    fn input(&mut self, name: Astr) -> Astr {
-        self.under(name)
-    }
-
-    fn value(&mut self, name: Astr) -> Astr {
-        match self.functions.contains(&name) {
-            true => self.under(name),
-            false => name,
-        }
-    }
 }
 
 fn merge(
@@ -401,51 +385,34 @@ fn merge(
     let mut refusals: Vec<Refusal> = Vec::new();
     let mut parse = Duration::ZERO;
     for GraphHost { name: host, parts } in hosts {
-        let namespace = Namespace::Host(host.clone());
-        let functions: FxHashSet<Astr> = parts
-            .entries
-            .iter()
-            .map(|declared| declared.name.as_str())
-            .chain(
-                plan.exposed
-                    .iter()
-                    .filter(|exposure| exposure.into == host)
-                    .map(|exposure| exposure.name.as_str()),
-            )
-            .map(|name| interner.intern(name))
-            .collect();
-        let mut names = HostNames {
-            interner,
-            host: &namespace,
-            functions: &functions,
-        };
-        for (name, value) in parts.bindings.iter() {
-            if let Err(refused) = bindings.bind(names.under(name), value.clone()) {
-                let origin = Origin::Binding(namespace.key(interner.resolve(name)));
+        let in_host = Some(interner.intern(&host));
+        for (name, value) in parts.bindings.in_host(None) {
+            if let Err(refused) =
+                bindings.bind(QualifiedRef::root(name).in_host(in_host), value.clone())
+            {
+                let origin = Origin::Binding(program_key(Some(&host), interner.resolve(name)));
                 refusals.push(Refusal::of(Some(origin), refused.to_string()));
             }
         }
-        for mut declared in parts.entries {
-            names.ast(&mut declared.ast);
-            entries.push(EntryDecl {
-                name: namespace.key(&declared.name),
-                inputs_under: namespace.clone(),
-                ..declared
-            });
-        }
-        for InitSource { key, given } in parts.inits {
-            let given = match given {
-                InitGiven::Source(mut ast) => {
-                    names.ast(&mut ast);
-                    InitGiven::Source(ast)
-                }
-                InitGiven::Rust(rust) => InitGiven::Rust(rust),
-            };
-            inits.push(InitSource {
-                key: namespace.key(&key),
-                given,
-            });
-        }
+        entries.extend(parts.entries.into_iter().map(|declared| EntryDecl {
+            name: GraphName {
+                host: Some(host.clone()),
+                ..declared.name
+            },
+            ..declared
+        }));
+        inits.extend(
+            parts
+                .inits
+                .into_iter()
+                .map(|InitSource { key, given }| InitSource {
+                    key: InitKey {
+                        host: Some(host.clone()),
+                        ..key
+                    },
+                    given,
+                }),
+        );
         parse_refusals.extend(under_host(&host, parts.parse_refusals));
         refusals.extend(under_host(&host, parts.refusals));
         parse += parts.parse;
@@ -453,68 +420,53 @@ fn merge(
 
     let mut exposed: Vec<Exposed> = Vec::new();
     for exposure in &plan.exposed {
-        let from = Namespace::Host(exposure.from.clone());
-        let entry = from.key(&exposure.entry);
-        let positional = format!("{entry}/call");
-        if !exposed.iter().any(|already| already.name == entry) {
-            let inputs: Vec<ExposedInput> = exposure
+        let entry = QualifiedRef::root(interner.intern(&exposure.entry))
+            .in_host(Some(interner.intern(&exposure.from)));
+        let positional = GraphName {
+            host: Some(exposure.from.clone()),
+            namespace: Some(exposure.entry.clone()),
+            name: POSITIONAL_CALL.to_owned(),
+        };
+        if !exposed.iter().any(|already| already.qref == entry) {
+            let params = exposure
                 .inputs
                 .fields
                 .iter()
-                .map(|(field, _)| {
-                    let written = interner.resolve(*field).to_owned();
-                    ExposedInput {
-                        in_graph: interner.intern(&from.key(&written)),
-                        written,
-                    }
-                })
-                .collect();
-            let params = inputs
-                .iter()
-                .zip(&exposure.inputs.fields)
-                .map(|(input, (_, ty))| ParamTerm::new(input.in_graph, ty.clone()))
+                .map(|(field, ty)| ParamTerm::new(*field, ty.clone()))
                 .collect();
             entries.push(EntryDecl {
+                ast: ParsedAst::Script(script(call_of(entry, Vec::new()))),
                 name: positional.clone(),
-                bare_name: None,
-                inputs_under: Namespace::Root,
-                ast: ParsedAst::Script(script(call_of(interner, &entry, Vec::new()))),
                 declaration: EntryDeclaration::Positional {
                     params,
                     ret: exposure.declared.clone(),
                 },
             });
             exposed.push(Exposed {
-                qref: QualifiedRef::root(interner.intern(&entry)),
-                name: entry,
-                inputs,
+                qref: entry,
+                name: program_key(Some(&exposure.from), &exposure.entry),
             });
         }
-        let argument = TyTerm::Object(ObjectTy::written(exposure.inputs.fields.iter().cloned().collect()));
+        let argument = TyTerm::Object(ObjectTy::written(
+            exposure.inputs.fields.iter().cloned().collect(),
+        ));
         entries.push(EntryDecl {
-            name: Namespace::Host(exposure.into.clone()).key(&exposure.name),
-            bare_name: Some(exposure.name.clone()),
-            inputs_under: Namespace::Root,
-            ast: ParsedAst::Script(script(unpacked_call(interner, &exposure.inputs, &positional))),
+            name: GraphName {
+                host: Some(exposure.into.clone()),
+                namespace: None,
+                name: exposure.name.clone(),
+            },
+            ast: ParsedAst::Script(script(unpacked_call(
+                interner,
+                &exposure.inputs,
+                positional.qref(interner),
+            ))),
             declaration: EntryDeclaration::Positional {
                 params: vec![ParamTerm::new(interner.intern(EXPOSURE_ARGUMENT), argument)],
                 ret: exposure.declared.clone(),
             },
         });
     }
-    let mut named: FxHashSet<&str> = FxHashSet::default();
-    let mut twice: Vec<String> = entries
-        .iter()
-        .filter(|declared| !named.insert(&declared.name))
-        .map(|declared| declared.name.clone())
-        .collect();
-    twice.sort_unstable();
-    twice.dedup();
-    refusals.extend(
-        twice
-            .into_iter()
-            .map(|name| Refusal::of(None, format!("two functions of the graph are named `{name}`"))),
-    );
 
     let merged = HostParts {
         interner: interner.clone(),
@@ -531,6 +483,7 @@ fn merge(
 }
 
 const EXPOSURE_ARGUMENT: &str = "arguments";
+const POSITIONAL_CALL: &str = "call";
 
 fn script(tail: Expr) -> Script {
     Script {
@@ -541,36 +494,39 @@ fn script(tail: Expr) -> Script {
     }
 }
 
-fn ident(interner: &Interner, name: &str, ref_kind: RefKind) -> Expr {
+fn ident(name: QualifiedRef, ref_kind: RefKind) -> Expr {
     Expr::Ident {
         id: AstId::alloc(),
-        name: QualifiedRef::root(interner.intern(name)),
+        name,
         ref_kind,
         span: Span::ZERO,
     }
 }
 
-fn call_of(interner: &Interner, callee: &str, args: Vec<Expr>) -> Expr {
+fn call_of(callee: QualifiedRef, args: Vec<Expr>) -> Expr {
     Expr::FuncCall {
         id: AstId::alloc(),
-        func: Box::new(ident(interner, callee, RefKind::Value)),
+        func: Box::new(ident(callee, RefKind::Value)),
         args,
         span: Span::ZERO,
     }
 }
 
-fn unpacked_call(interner: &Interner, inputs: &ResolvedShape, positional: &str) -> Expr {
+fn unpacked_call(interner: &Interner, inputs: &ResolvedShape, positional: QualifiedRef) -> Expr {
     let args = inputs
         .fields
         .iter()
         .map(|(field, _)| Expr::FieldAccess {
             id: AstId::alloc(),
-            object: Box::new(ident(interner, EXPOSURE_ARGUMENT, RefKind::ExternParam)),
+            object: Box::new(ident(
+                QualifiedRef::root(interner.intern(EXPOSURE_ARGUMENT)),
+                RefKind::ExternParam,
+            )),
             field: *field,
             span: Span::ZERO,
         })
         .collect();
-    call_of(interner, positional, args)
+    call_of(positional, args)
 }
 
 // -- Nothing callable crosses (RFC-0095 rule 4) ----------------------------
@@ -589,11 +545,9 @@ pub(crate) fn crossing_refusals(
         };
         let meta = outcome.meta();
         for input in &meta.inputs {
-            let written = match entry.inputs.iter().find(|exposed| exposed.in_graph == input.name) {
-                Some(exposed) => exposed.written.clone(),
-                None => interner.resolve(input.name).to_owned(),
-            };
-            if let Some(held) = reader.first_in(&input.ty, format!("${written}")) {
+            if let Some(held) =
+                reader.first_in(&input.ty, format!("${}", interner.resolve(input.name)))
+            {
                 refusals.push(held.refusal(interner, &entry.name, "input"));
             }
         }

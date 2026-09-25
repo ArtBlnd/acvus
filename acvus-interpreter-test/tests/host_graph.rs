@@ -420,3 +420,164 @@ fn a_mistyped_field_inside_the_framing_closure_is_refused() {
         [("type mismatch: expected {n: i64}, got {n: Bool}".to_owned(), "{ n: t, }")]
     );
 }
+
+// -- A host is a scope of the graph's names (RFC-0095 rule 1) ---------------
+
+#[tokio::test]
+async fn a_method_named_like_an_entry_of_its_host_is_still_the_method() {
+    let program = compiled(
+        graph()
+            .host("a", |host| {
+                Ok(host
+                    .entry::<(), i64>("as_slice", Source::Script("0"))
+                    .entry::<(), i64>("main", Source::Script("let v = [1, 2, 3]; v.as_slice().len() as i64")))
+            })
+            .map(|g| g.entry("a", "main")),
+    );
+    let mut storage = MemoryStorage::new();
+    assert_eq!(run_unit(&program, &mut storage, "a/main").await, 3);
+}
+
+#[test]
+fn an_entry_named_like_a_bare_callable_extern_is_refused_in_a_graph_too() {
+    let refused = refusals(
+        graph()
+            .host("a", with_entry("len", "0"))
+            .map(|g| g.entry("a", "len")),
+    );
+    let shadowing: Vec<&Refusal> = refused
+        .iter()
+        .filter(|refusal| matches!(refusal.cause, Some(Cause::Shadows { .. })))
+        .collect();
+    assert_eq!(shadowing.len(), 1, "{refused:#?}");
+    assert_eq!(shadowing[0].origin, Some(Origin::Entry("a/len".to_owned())));
+    assert!(
+        shadowing[0].message.contains("which a script calls as `len`"),
+        "{}",
+        shadowing[0].message
+    );
+}
+
+#[tokio::test]
+async fn a_local_and_a_parameter_named_like_a_function_of_their_host_are_untouched() {
+    let program = compiled(
+        graph()
+            .host("a", |host| {
+                Ok(host
+                    .entry::<(), i64>("f", Source::Script("100"))
+                    .entry::<(), i64>("main", Source::Script("let f = 5; let g = |f| -> f + 1; g(f) + f() ")))
+            })
+            .map(|g| g.entry("a", "main")),
+    );
+    let mut storage = MemoryStorage::new();
+    assert_eq!(run_unit(&program, &mut storage, "a/main").await, 106);
+}
+
+#[test]
+fn a_diagnostic_shows_a_name_as_its_script_wrote_it() {
+    let source = "f = 1; 0";
+    let refused = refusals(
+        graph()
+            .host("a", |host| {
+                Ok(host
+                    .entry::<(), i64>("f", Source::Script("0"))
+                    .entry::<(), i64>("main", Source::Script(source)))
+            })
+            .map(|g| g.entry("a", "main")),
+    );
+    assert_eq!(refused.len(), 1, "{refused:#?}");
+    assert_eq!(refused[0].origin, Some(Origin::Entry("a/main".to_owned())));
+    assert_eq!(
+        refused[0].message,
+        "cannot assign to `f`: no binding named `f` is in scope; `let f = ...;` binds it"
+    );
+}
+
+#[test]
+fn an_init_refusal_shows_its_context_as_written_and_names_the_host_in_its_origin() {
+    let refused = refusals(
+        graph()
+            .host("a", |host| {
+                Ok(host
+                    .init("x", Source::Expr("@y"))
+                    .entry::<(), i64>("main", Source::Script("@x")))
+            })
+            .map(|g| g.entry("a", "main")),
+    );
+    assert_eq!(refused.len(), 1, "{refused:#?}");
+    assert_eq!(refused[0].origin, Some(Origin::Init("a/x".to_owned())));
+    assert_eq!(refused[0].message, "the init of `@x` names `@y`, and an init names no context");
+}
+
+#[tokio::test]
+async fn two_hosts_keep_their_bindings_of_one_name_apart() {
+    let program = compiled(
+        graph()
+            .host("a", |host| host.bind("k", "1").map(|host| host.entry::<(), i64>("main", Source::Script("$k"))))
+            .and_then(|g| {
+                g.host("b", |host| host.bind("k", "2").map(|host| host.entry::<(), i64>("main", Source::Script("$k"))))
+            })
+            .map(|g| g.entry("a", "main").entry("b", "main")),
+    );
+    let mut storage = MemoryStorage::new();
+    assert_eq!(run_unit(&program, &mut storage, "a/main").await, 1);
+    assert_eq!(run_unit(&program, &mut storage, "b/main").await, 2);
+}
+
+#[test]
+fn a_host_named_like_an_extern_namespace_is_not_reached_through_it() {
+    let messages = messages(
+        graph()
+            .host("a", with_entry("main", "string::twice({ n: 1, })"))
+            .and_then(|g| g.host("string", with_n_entry("twice", "$n * 2")))
+            .map(|g| g.entry("a", "main").entry("string", "twice")),
+    );
+    assert_eq!(messages, ["type mismatch: expected i64, got string{twice({n: i64})}"]);
+}
+
+#[tokio::test]
+async fn a_host_calls_its_own_function_by_its_bare_name_when_another_host_has_one_of_that_name() {
+    let program = compiled(
+        graph()
+            .host("a", |host| {
+                Ok(host
+                    .entry::<(), i64>("f", Source::Script("1"))
+                    .entry::<(), i64>("main", Source::Script("f()")))
+            })
+            .and_then(|g| {
+                g.host("b", |host| {
+                    Ok(host
+                        .entry::<(), i64>("f", Source::Script("2"))
+                        .entry::<(), i64>("main", Source::Script("f()")))
+                })
+            })
+            .map(|g| g.entry("a", "main").entry("b", "main")),
+    );
+    let mut storage = MemoryStorage::new();
+    assert_eq!(run_unit(&program, &mut storage, "a/main").await, 1);
+    assert_eq!(run_unit(&program, &mut storage, "b/main").await, 2);
+}
+
+#[test]
+fn a_function_of_another_host_is_not_reached_by_its_bare_name() {
+    let messages = messages(
+        graph()
+            .host("a", with_entry("main", "g()"))
+            .and_then(|g| g.host("b", with_entry("g", "2")))
+            .map(|g| g.entry("a", "main").entry("b", "g")),
+    );
+    assert_eq!(messages.len(), 1, "{messages:#?}");
+    assert!(messages[0].starts_with("undefined function `g`"), "{messages:#?}");
+}
+
+#[tokio::test]
+async fn an_entry_of_no_inputs_is_called_with_an_empty_object() {
+    let program = compiled(
+        graph()
+            .host("a", with_entry("main", "seven({})"))
+            .and_then(|g| g.host("b", with_entry("seven", "7")))
+            .map(|g| g.expose("a", "seven", "b", "seven").entry("a", "main")),
+    );
+    let mut storage = MemoryStorage::new();
+    assert_eq!(run_unit(&program, &mut storage, "a/main").await, 7);
+}

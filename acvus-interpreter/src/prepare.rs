@@ -7432,10 +7432,7 @@ mod recognizer_tests {
         }
 
         fn async_extern(&mut self, name: &str) -> QualifiedRef {
-            let id = QualifiedRef {
-                namespace: None,
-                name: self.interner.intern(name),
-            };
+            let id = QualifiedRef::root(self.interner.intern(name));
             let handler = ExternHandler::awaited(acvus_extern::async_glue::<
                 crate::runtime::AcvusRuntime,
                 _,
@@ -7446,10 +7443,7 @@ mod recognizer_tests {
         }
 
         fn sync_extern(&mut self, name: &str) -> QualifiedRef {
-            let id = QualifiedRef {
-                namespace: None,
-                name: self.interner.intern(name),
-            };
+            let id = QualifiedRef::root(self.interner.intern(name));
             let handler = nullary_handler();
             self.externs.insert(id, Executable::Extern(vec![handler]));
             id
@@ -7934,10 +7928,7 @@ mod assignment_tests {
     const WINDOW: &str = "window";
 
     fn extern_ref(name: &str) -> QualifiedRef {
-        QualifiedRef {
-            namespace: None,
-            name: SYMBOLS.intern(name),
-        }
+        QualifiedRef::root(SYMBOLS.intern(name))
     }
 
     fn call(dst: usize, name: &str, args: &[usize]) -> Inst {

@@ -11,6 +11,7 @@ pub struct QualifiedRef {
     pub namespace: Option<Astr>,
     /// Context or function name.
     pub name: Astr,
+    pub host: Option<Astr>,
 }
 
 impl QualifiedRef {
@@ -18,6 +19,7 @@ impl QualifiedRef {
         Self {
             namespace: None,
             name,
+            host: None,
         }
     }
 
@@ -25,6 +27,11 @@ impl QualifiedRef {
         Self {
             namespace: Some(namespace),
             name,
+            host: None,
         }
+    }
+
+    pub fn in_host(self, host: Option<Astr>) -> Self {
+        Self { host, ..self }
     }
 }
