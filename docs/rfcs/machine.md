@@ -205,7 +205,8 @@ holder that took ownership. Everything else copies.
    `Kind::Empty`; `Undef` stays, as an SSA definition.
 5. **A take is static and batched.** `prepare` emits which operand slots each
    operation consumes, and the operation reads them and clears their bits
-   with one constant mask it carries (`take_mask`); a copied word touches
+   with one constant mask it carries (`take_mask`) for mark word 0; a take
+   in a higher word is cleared by a `Disown` placed just before it; a copied word touches
    neither slot nor mask. The double-take check is `debug_assert!(marked & mask ==
    mask)`. Tuple helpers are `#[inline(always)]`, since a `(Value, Value)`
    crosses a call boundary through memory.
