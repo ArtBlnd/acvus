@@ -103,9 +103,6 @@ fn a_nested_store_is_disjoint_in_each_loop_by_the_component_of_its_counter() {
 fn a_store_two_iterations_can_both_reach_stays_in_order() {
     let cases = [
         "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]);
-         for i in 0u64..xs.len() { out[i / 2u64] = out[i / 2u64] + xs[i]; }
-         out.len()",
-        "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]);
          for i in 0u64..xs.len() { out[0u64] = xs[i]; }
          out.len()",
         "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]); let c = 1u64;
@@ -133,6 +130,17 @@ fn a_store_two_iterations_can_both_reach_stays_in_order() {
     for source in cases {
         assert_eq!(storage_orders(source), ["in_order"], "{}", listing(source));
     }
+    // RFC-0098 rule 1: two iterations reach one slot here too, and the
+    // updates at a slot combine by `+`, so the storage is keyed by `i / 2`.
+    let halved = "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]);
+         for i in 0u64..xs.len() { out[i / 2u64] = out[i / 2u64] + xs[i]; }
+         out.len()";
+    let orders = storage_orders(halved);
+    assert!(
+        matches!(&orders[..], [order] if order.starts_with("keyed(")),
+        "{}",
+        listing(halved)
+    );
     let inner_counter_only = "let out = vec([0, 0, 0]);
          for i in 0u64..3u64 {
              for j in 0u64..3u64 { out[j] = out[j] + (i as i64) + (j as i64); }

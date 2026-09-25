@@ -1,0 +1,7 @@
+// expect 128,255,0
+let h = vec([0u8, 0u8, 0u8]);
+for i in 0u64..383u64 {
+    let b = (i * i) % 3u64;
+    h[b] = h[b] + 1u8;
+}
+h.into_iter().map(|x| -> x.to_string()).join(",".to_string())

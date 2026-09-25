@@ -8,8 +8,8 @@ use rustc_hash::FxHashMap;
 
 use crate::analysis::cost::{CostTable, Costs, InPlace, LoopCost, TripCount};
 use crate::analysis::loop_deps::{
-    Accumulator, BodyDeps, CallIdentity, Control, Cycle, CycleLaw, Guard, Law, LawOp, LoopDeps, Member,
-    Order, Placement, Storage, Token,
+    Accumulator, BodyDeps, CallIdentity, Control, Cycle, CycleLaw, Guard, KeyOrder, Law, LawOp,
+    LoopDeps, Member, Order, Placement, Storage, Token,
 };
 use crate::analysis::loops::{Term, Trip};
 use crate::cfg::{CfgBody, Terminator, promote};
@@ -323,7 +323,9 @@ fn fmt_term(
 
 /// `cycle Carried(r3) any_order law(Op(Add) exact commutative) {+}`, and
 /// `scan` beside the law of a scan (RFC-0093 rule 8):
-/// `cycle Carried(r3) in_order law(Op(Add) exact commutative) scan {+}`.
+/// `cycle Carried(r3) in_order law(Op(Add) exact commutative) scan {+}`, and
+/// a keyed cycle's key and its order within one key (RFC-0098):
+/// `cycle Storage(r4) keyed(r9) any_order law(Op(Add) exact commutative) {index, +, index_set}`.
 fn fmt_cycle(
     cycle: &Cycle,
     order: Order,
@@ -338,9 +340,16 @@ fn fmt_cycle(
         .map(|token| fmt_token(token, ctx, vn))
         .collect();
     let order = match order {
-        Order::Disjoint => "disjoint",
-        Order::AnyOrder => "any_order",
-        Order::InOrder => "in_order",
+        Order::Disjoint => "disjoint".to_string(),
+        Order::AnyOrder => "any_order".to_string(),
+        Order::InOrder => "in_order".to_string(),
+        Order::Keyed { key, within } => {
+            let within = match within {
+                KeyOrder::AnyOrder => "any_order",
+                KeyOrder::InOrder => "in_order",
+            };
+            format!("keyed({}) {within}", vn.fmt_val(key))
+        }
     };
     let law = match law {
         Some(CycleLaw { accumulator, scan }) => {

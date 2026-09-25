@@ -485,6 +485,7 @@ pub struct LoopDeps {
     effects: Vec<EffectWait>,
     ahead_of_exit: Vec<AheadOfExit>,
     disjoint: Vec<ValueId>,
+    keyed: Vec<KeyedStorage>,
 }
 
 pub struct HeaderDeps {
@@ -537,12 +538,17 @@ impl LoopDeps {
         }
         let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body(), head);
         let slots = TargetSlots::of(loans, head.source(), loop_blocks);
-        let disjoint = disjoint_storages(
+        let written = graph.written_storages(cfg, loans, &slots);
+        let disjoint = disjoint_storages(loans, laws, header, loop_blocks, &written);
+        let keyed = keyed_storages(
             loans,
             laws,
             header,
             loop_blocks,
-            &graph.written_storages(cfg, loans, &slots),
+            written
+                .into_iter()
+                .filter(|slot| !disjoint.contains(slot))
+                .collect(),
         );
         let stage_of = |member: Member| {
             membership
@@ -724,6 +730,7 @@ impl LoopDeps {
             effects,
             ahead_of_exit,
             disjoint,
+            keyed,
         })
     }
 
@@ -772,7 +779,7 @@ impl LoopDeps {
             return self
                 .cycles
                 .iter()
-                .map(|cycle| judge(cycle, &self.disjoint, None))
+                .map(|cycle| judge(cycle, &self.disjoint, None, None))
                 .collect();
         };
         let loop_ = nest.get(id);
@@ -851,9 +858,17 @@ impl LoopDeps {
                 .map(kept)
                 .or_else(|| scanned_product(tokens, &state_of, &reading_of)),
         };
+        let keyed_law = |slot: ValueId| {
+            let keyed = self.keyed.iter().find(|keyed| keyed.slot == slot)?;
+            let law = reading_of(State::Keyed(slot)).keyed_law(keyed)?;
+            Some(KeyedLaw {
+                key: keyed.key,
+                law,
+            })
+        };
         self.cycles
             .iter()
-            .map(|cycle| judge(cycle, &self.disjoint, Some(&reading)))
+            .map(|cycle| judge(cycle, &self.disjoint, Some(&keyed_law), Some(&reading)))
             .collect()
     }
 }
@@ -1253,6 +1268,23 @@ pub enum Order {
     Disjoint,
     AnyOrder,
     InOrder,
+    /// RFC-0098 rule 1: updates at one value of `key` combine by the
+    /// cycle's law, `within` one another, and updates at two values are
+    /// disjoint.
+    Keyed { key: ValueId, within: KeyOrder },
+}
+
+/// How updates at one key of a keyed cycle are joined (RFC-0098 rule 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOrder {
+    AnyOrder,
+    InOrder,
+}
+
+/// A keyed storage's key and the law of the updates at its element.
+struct KeyedLaw {
+    key: ValueId,
+    law: Accumulator,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1422,8 +1454,26 @@ pub struct FoldAccumulator {
 fn judge(
     cycle: &Cycle,
     disjoint: &[ValueId],
+    keyed_law: Option<&dyn Fn(ValueId) -> Option<KeyedLaw>>,
     reading: Option<&dyn Fn(&Cycle) -> Option<CycleLaw>>,
 ) -> Judged {
+    if let ([Token::Storage(Storage::Slot(slot))], Some(keyed_law)) =
+        (&cycle.tokens[..], keyed_law)
+        && !disjoint.contains(slot)
+        && let Some(KeyedLaw { key, law }) = keyed_law(*slot)
+    {
+        let within = match law.exact && law.commutative {
+            true => KeyOrder::AnyOrder,
+            false => KeyOrder::InOrder,
+        };
+        return Judged {
+            order: Order::Keyed { key, within },
+            law: Some(CycleLaw {
+                accumulator: law,
+                scan: false,
+            }),
+        };
+    }
     let law = match (&cycle.tokens[..], reading) {
         ([Token::Storage(Storage::Element)], _) => {
             return Judged {
@@ -1765,6 +1815,113 @@ fn disjoint_storages(
         .filter(|(_, found)| one_affine_component(found, &affine, &proven))
         .map(|(slot, _)| slot)
         .collect()
+}
+
+/// RFC-0098 rule 1's keyed storage.
+#[derive(Debug, Clone)]
+struct KeyedStorage {
+    slot: ValueId,
+    key: ValueId,
+    loads: Vec<ElementLoad>,
+    stores: Vec<ElementStore>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ElementLoad {
+    at: InstAt,
+    loaded: ValueId,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ElementStore {
+    at: InstAt,
+    stored: ValueId,
+}
+
+fn keyed_storages(
+    loans: &Loans<'_>,
+    laws: &LawTable,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+    candidates: Vec<ValueId>,
+) -> Vec<KeyedStorage> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let cfg = loans.cfg();
+    let places = Places::of(loans, laws);
+    let in_nested_loop: FxHashSet<BlockIdx> =
+        natural_loops_innermost_first(cfg, &DomTree::build(cfg))
+            .iter()
+            .filter(|inner| inner.header != header && loop_blocks.contains(&inner.header))
+            .flat_map(NaturalLoop::blocks)
+            .collect();
+    let computed_once: FxHashSet<ValueId> = loop_blocks
+        .iter()
+        .filter(|block| !in_nested_loop.contains(block))
+        .flat_map(|block| {
+            let held = &cfg.blocks[block.0];
+            held.insts
+                .iter()
+                .flat_map(|inst| inst_info::defs(&inst.kind))
+                .chain(held.params.iter().copied())
+        })
+        .collect();
+    candidates
+        .into_iter()
+        .filter_map(|slot| keyed_storage(cfg, &places, loop_blocks, slot))
+        .filter(|keyed| computed_once.contains(&keyed.key))
+        .collect()
+}
+
+fn keyed_storage(
+    cfg: &CfgBody,
+    places: &Places<'_, '_>,
+    loop_blocks: &[BlockIdx],
+    slot: ValueId,
+) -> Option<KeyedStorage> {
+    let mut key: Option<ValueId> = None;
+    let mut loads: Vec<ElementLoad> = Vec::new();
+    let mut stores: Vec<ElementStore> = Vec::new();
+    for &block in loop_blocks {
+        let held = &cfg.blocks[block.0];
+        if places.reach_of_term(&held.terminator, slot).is_some() {
+            return None;
+        }
+        for (at, inst) in held.insts.iter().enumerate() {
+            let Some(reach) = places.reach_of_inst(&inst.kind, slot) else {
+                continue;
+            };
+            let Reach::Places(found) = reach else {
+                return None;
+            };
+            let [place] = &found[..] else {
+                return None;
+            };
+            let [Component::At(index)] = place.path[..] else {
+                return None;
+            };
+            if *key.get_or_insert(index) != index {
+                return None;
+            }
+            let at = InstAt { block, at };
+            match &inst.kind {
+                InstKind::Index {
+                    dst,
+                    mode: IndexMode::Copy,
+                    ..
+                } => loads.push(ElementLoad { at, loaded: *dst }),
+                InstKind::IndexSet { value, .. } => stores.push(ElementStore { at, stored: *value }),
+                _ => return None,
+            }
+        }
+    }
+    Some(KeyedStorage {
+        slot,
+        key: key?,
+        loads,
+        stores,
+    })
 }
 
 /// A storage the loop reaches only by copying an element out and by one
@@ -3478,14 +3635,16 @@ fn accumulator_of(step: Step<'_>, resets: bool) -> Accumulator {
 }
 
 /// The state a cycle's law is read over: a header parameter, a storage
-/// the body loads and stores whole, or a storage the body stores at one
+/// the body loads and stores whole, a storage the body stores at one
 /// affine place each iteration and reads at the place the iteration before
-/// stored (RFC-0093 rule 8's previous partial).
+/// stored (RFC-0093 rule 8's previous partial), or the element of a keyed
+/// storage at the iteration's key (RFC-0098 rule 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Param { param: ValueId, index: usize },
     Slot(ValueId),
     Previous(ValueId),
+    Keyed(ValueId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3568,10 +3727,7 @@ struct LawReading<'a, 's, 'cfg> {
     /// The constant an integer state is unset at while `first` is read with
     /// it as its own guard (RFC-0093 rule 7).
     sentinel: Option<i128>,
-    /// Under `State::Previous`, the loads of the previous iteration's place,
-    /// each the state as the iteration received it, and the value the
-    /// iteration stores at its own place.
-    previous: Option<PreviousPartial>,
+    placed: Option<Placed>,
 }
 
 /// A law read as a scan (RFC-0093 rule 8), and the members that read its
@@ -3584,9 +3740,11 @@ struct Scan {
     chain: FxHashSet<ValueId>,
 }
 
-/// What a `State::Previous` reading reads the state through.
-struct PreviousPartial {
+/// What a `State::Previous` or `State::Keyed` reading reads the state
+/// through.
+struct Placed {
     loads: Vec<ValueId>,
+    store: InstAt,
     stored: ValueId,
 }
 
@@ -3646,7 +3804,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             assigned_more_than_once: false,
             resets: false,
             sentinel: None,
-            previous: None,
+            placed: None,
         };
         reading.dependent = reading.values_reading_state(None);
         reading
@@ -3708,8 +3866,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if let State::Param { param, .. } = self.state {
             dependent.insert(param);
         }
-        if let Some(previous) = &self.previous {
-            dependent.extend(previous.loads.iter().copied());
+        if let Some(placed) = &self.placed {
+            dependent.extend(placed.loads.iter().copied());
         }
         loop {
             let mut changed = false;
@@ -3784,7 +3942,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     fn state_slot(&self) -> Option<ValueId> {
         match self.state {
-            State::Slot(slot) | State::Previous(slot) => Some(slot),
+            State::Slot(slot) | State::Previous(slot) | State::Keyed(slot) => Some(slot),
             State::Param { .. } => None,
         }
     }
@@ -3829,8 +3987,12 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             }
             State::Slot(slot) => self.stored(slot)?,
             State::Previous(_) => {
-                let stored = self.previous.as_ref()?.stored;
+                let stored = self.placed.as_ref()?.stored;
                 self.form(stored)?
+            }
+            State::Keyed(_) => {
+                let Placed { store, stored, .. } = *self.placed.as_ref()?;
+                self.stored_at(store, stored)?
             }
         };
         match next {
@@ -3901,7 +4063,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 let (store, stored) = self.single_store(slot)?;
                 (vec![stored], Some(store))
             }
-            State::Previous(_) => return None,
+            State::Previous(_) | State::Keyed(_) => return None,
         };
         let step = self.next_step()?;
         if self.assigned_more_than_once {
@@ -3979,8 +4141,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let loads: Vec<ValueId> = found.previous.iter().map(|(_, load)| *load).collect();
         let mut partials = loads.clone();
         partials.push(found.stored);
-        self.previous = Some(PreviousPartial {
+        self.placed = Some(Placed {
             loads,
+            store,
             stored: found.stored,
         });
         self.dependent = self.values_reading_state(None);
@@ -3991,6 +4154,56 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             readers,
             chain: self.chain,
         })
+    }
+
+    /// RFC-0098 rule 1: the law of the updates at a keyed storage's element.
+    ///
+    /// An update with an arm taken only at the first iteration has no keyed
+    /// law. That arm resets the element at the first iteration's key alone,
+    /// and a keyed join would apply the reset at every key.
+    fn keyed_law(mut self, keyed: &KeyedStorage) -> Option<Accumulator> {
+        let [ElementStore { at: store, stored }] = keyed.stores[..] else {
+            return None;
+        };
+        let once = |block: BlockIdx| self.nested_loops_holding(block).is_empty();
+        let before_store = |at: InstAt| match at.block == store.block {
+            true => at.at < store.at,
+            false => !self.reaches_in_iteration(store.block, at.block),
+        };
+        let runs_so = once(store.block)
+            && keyed
+                .loads
+                .iter()
+                .all(|load| once(load.at.block) && before_store(load.at));
+        if !runs_so {
+            return None;
+        }
+        self.placed = Some(Placed {
+            loads: keyed.loads.iter().map(|load| load.loaded).collect(),
+            store,
+            stored,
+        });
+        self.dependent = self.values_reading_state(None);
+        let update = self.update()?;
+        match update.resets {
+            true => None,
+            false => Some(update.accumulator()),
+        }
+    }
+
+    fn reaches_in_iteration(&self, from: BlockIdx, to: BlockIdx) -> bool {
+        let mut seen: FxHashSet<BlockIdx> = FxHashSet::default();
+        let mut work: Vec<BlockIdx> = self.cfg.successors(from).to_vec();
+        while let Some(block) = work.pop() {
+            if block == self.header || !self.blocks.contains(&block) || !seen.insert(block) {
+                continue;
+            }
+            if block == to {
+                return true;
+            }
+            work.extend(self.cfg.successors(block));
+        }
+        false
     }
 
     /// The members of the iteration that read the state and are no step of
@@ -4063,7 +4276,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         }
         let own = match self.state {
             State::Param { index, .. } => Some(index),
-            State::Slot(_) | State::Previous(_) => None,
+            State::Slot(_) | State::Previous(_) | State::Keyed(_) => None,
         };
         for block in self.body() {
             let term = &self.cfg.blocks[block.0].terminator;
@@ -4190,6 +4403,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 });
             }
         };
+        self.stored_at(at, value)
+    }
+
+    fn stored_at(&mut self, at: InstAt, value: ValueId) -> Option<Form<'a>> {
         match self
             .deciders
             .get(&at.block)
@@ -4510,9 +4727,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return Some(Form::State);
         }
         if self
-            .previous
+            .placed
             .as_ref()
-            .is_some_and(|previous| previous.loads.contains(&value))
+            .is_some_and(|placed| placed.loads.contains(&value))
         {
             return Some(Form::State);
         }

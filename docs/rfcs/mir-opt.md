@@ -728,8 +728,8 @@ consults. The cutting pass, rerun after a pass that frees a stage.
 
 **Open.** Each runs as `InOrder` today; the tiers weigh ease against reach.
 - First: named commutation sets in place of `commutes: bool`.
-- After the executor's pipeline: a cycle split by key; a `Stream` source
-  for `while` loops.
+- After the executor's pipeline: a `Stream` source for `while` loops. (A
+  cycle split by key is RFC-0098.)
 - When a use asks: speculative exits; an action law for heavy work inside
   a cycle. (A scan law is RFC-0093 rule 8.)
 
@@ -1304,3 +1304,39 @@ runs its iterations.
   deletes a loop that does not end; such loops are rare, so it gains little.
   Only a `for`, which states its count, is removed, and an unused call of a
   local function holding a `while` stays (RFC-0048 rule 8).
+
+## RFC-0098: a cycle that touches its storage at one key per iteration splits by key
+
+Status: Proposed
+
+A histogram, a word count or a group-by writes one shared table, so its
+cycle is the table's and runs in order. Each iteration touches only one
+entry, though, and entries at different keys are disjoint: the cycle is
+many small cycles, one per key, each with the law its entry's update has.
+
+1. **A keyed cycle.** A storage token whose every access in an iteration
+   is at one key `κ` the iteration computes (an element `h[κ]` of an array
+   or a vec, or an entry a call reaches at its key argument, RFC-0082 rule
+   7) is keyed. Where the updates at one key have a law `L` by RFC-0093,
+   the cycle's order is `Keyed(L)`: updates at one key combine by `L`,
+   updates at different keys are disjoint. A read of the whole storage in
+   the loop (its length, an iteration over it) makes it an ordinary token.
+2. **A map's keys meet by an equivalence.** A map or set token is keyed
+   only where its type carries the `Equiv` marker: its key's `eq`
+   declares an equivalence and its `hash` agrees with it. An `Opaque` one
+   stays in order.
+3. **Order within and across keys.** Updates at one key keep chunk order
+   when `L` does not commute (a `push` per key keeps input order within
+   the key). A map or set that iterates in insertion order is joined in
+   chunk order, so a key takes its first chunk's position.
+4. **The lowerer's reading** (RFC-0092): each chunk builds its entries from
+   `L`'s identity; the join combines per key, in chunk order where rule 3
+   says so.
+
+**Why.** The entries are the independent unit, and the law of one entry's
+update is already read by RFC-0093; keying only names the entry.
+**Cost.** A keyed join per split loop; a map's join allocates its partial
+tables.
+**Rejected.**
+- Keying a map by its key's spelled type — equality of a key is its `eq`
+  instance's, which only a declaration states.

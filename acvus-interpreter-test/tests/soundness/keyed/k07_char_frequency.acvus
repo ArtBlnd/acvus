@@ -1,0 +1,9 @@
+// expect 3,1,1,1
+let text = "abacad";
+let h = vec([0, 0, 0, 0]);
+let cs = text.chars();
+while let Some(c) = cs.next() {
+    let at = (c as u64) - ('a' as u64);
+    h[at] = h[at] + 1;
+}
+h.into_iter().map(|x| -> x.to_string()).join(",".to_string())

@@ -10,11 +10,11 @@ for range(0 (r89)..r71) -> L4 else L5 stages [L4, L25]
 // cost W=17 O=18281 split when n > 34412, n = max(r71 - 0 (r89), 0)
 for range(0 (r118)..r69) -> L9 else L10 stages [L9, L19, L20, L21, L22, L23]
 // L9: free {index, cast, index}
-// L19: cycle Storage(r119) in_order {index, +, index_set}
+// L19: cycle Storage(r119) keyed(r120) any_order law(Op(Add) exact commutative) {index, +, index_set}
 // L20: free {index}
-// L21: cycle Storage(r120) in_order {index, +, index_set}
+// L21: cycle Storage(r121) keyed(r120) any_order law(Op(Add) exact commutative) {index, +, index_set}
 // L22: free {const}
-// L23: cycle Storage(r121) in_order {index, +, index_set}
+// L23: cycle Storage(r122) keyed(r120) any_order law(Op(Add) exact commutative) {index, +, index_set}
 // control upfront
 // cost W=10 O=18305 split when n > 58576, n = max(r69 - 0 (r118), 0)
 for range(0 (r144)..r71) -> L12 else L13 stages [L12, L26]

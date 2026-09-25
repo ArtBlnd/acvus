@@ -6,18 +6,18 @@ Every app is `<nn>_<name>.acvus`. Its header states `app`, `desc` and `expect` (
 
 A row's class is `matches` (the facts state the expected grain, or the expected sequential structure), `under-claim` (the facts state less parallelism than the expected structure; the missing rule, declaration or decision is named), or `OVER-CLAIM` (the facts state more than is sound). A stage the facts print as `disjoint` or with a law runs apart (RFC-0092 rules 1 and 2), whatever else its region holds; a `While` or an iterator pipeline prints no stages and runs in place.
 
-The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved; and again with a token compared with a constant no write sends as its own `first` guard, `string::concat`'s law over the views of a `String`, `deque::push_back`'s fold law and `total_order` on `f64`'s `cmp`, where 03:49 (`queue` gains `Fold`) and 12:16 moved; and again with RFC-0093 rule 8's scan, its previous partial and its affine map law, where 01:19, 02:21, 08:11 and 08:42 moved.
+The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved; and again with a token compared with a constant no write sends as its own `first` guard, `string::concat`'s law over the views of a `String`, `deque::push_back`'s fold law and `total_order` on `f64`'s `cmp`, where 03:49 (`queue` gains `Fold`) and 12:16 moved; and again with RFC-0093 rule 8's scan, its previous partial and its affine map law, where 01:19, 02:21, 08:11 and 08:42 moved; and again with RFC-0098 rule 1's keyed cycle, where 04:35 and 08:31 moved.
 
 ## Summary
 
 - Apps: 12; all run to their expected output at `--opt full` and `--opt none` (24 of 24 runs).
-- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 50, `under-claim` 25, `OVER-CLAIM` 0.
+- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 52, `under-claim` 23, `OVER-CLAIM` 0.
 - No over-claim was found. Every `disjoint` stage was checked against every place its storage is read or written in the loop, every `any_order` law against whether the combined value's order is observed, and every free stage against the tokens it reads (the reading is in each row).
 
 | missing rule, declaration or decision | under-claims |
 |---|---|
 | iterator pipeline is not a `For` (the T2 Stream round; D10 for pull loops) | 11 |
-| cycle split by key over a vec's slots (RFC-0089 Open) | 6 |
+| cycle split by key over a vec's slots (RFC-0098 rule 1 reads a key only as one value, and `*e` read twice is two) | 4 |
 | cycle split by key with a scan per key (RFC-0089 Open) | 2 |
 | affine analysis one loop deep (RFC-0066 rule 4): a row loop over an inner column range | 2 |
 | `or_insert`'s fold law on an `Equiv` map (D8, decided, not declared) | 2 |
@@ -59,7 +59,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | 03 | 69 | summary | `+`, `+`, `max` AnyOrder | `stages [L1, L5, L6]`; L5 Storage any_order Op(Add) ×2; L6 Storage any_order Call(max) | matches |
 | [04](04_kmeans_step.acvus) | 16 | assign `for p`, nearest-centroid loop inside | inner loop whole in the free stage; `assign[p]` Disjoint | `stages [L1, L27]`; L1 free (holds the inner loop); L27 Storage disjoint | matches |
 | 04 | 19 | nearest centroid `if d < best_d { best_d = d; best = c }` | Carried pair InOrder, left-biased argmin | `stages [L4, L25]`; L4 free; L25 Carried+Carried in_order Extremum(Min, best_d, carrying best) | matches (expected corrected from AnyOrder, as par-corpus R14) |
-| 04 | 35 | cluster sums `sx[a] += …` | three slots split by key, AnyOrder `+` | `stages [L9, L19, L20, L21, L22, L23]`; L19, L21, L23 Storage in_order no law | under-claim: key split |
+| 04 | 35 | cluster sums `sx[a] += …` | three slots split by key, AnyOrder `+` | `stages [L9, L19, L20, L21, L22, L23]`; L19, L21, L23 Storage keyed(`a`) any_order Op(Add) | matches |
 | 04 | 43 | move centroids | `cx`, `cy` Disjoint | `stages [L12, L26]`; L26 Storage disjoint ×2 | matches |
 | 04 | 51 | inertia | Carried AnyOrder `+` | `stages [L17, L24]`; L24 Carried any_order Op(Add) | matches |
 | 04 | 60 | render centroids | Concat InOrder | `stages [L1, L8]`; L8 Storage in_order Op(Concat) | matches |
@@ -89,7 +89,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | [08](08_prefix_histogram.acvus) | 6 | `split_whitespace() \| map(parse) \| collect` | Stream map, Fold(push) | no `For` | under-claim: pipeline |
 | 08 | 11 | prefix sums `pre[i + 1] = pre[i] + lat[i]` | scan by `+` | `stages [L1, L11]`; L11 Storage in_order Op(Add) scan | matches: `pre[i]` is the partial `pre[i + 1]` stored the iteration before (RFC-0093 rule 8) |
 | 08 | 20 | range totals | `answer[q]` Disjoint | `stages [L1, L3]`; L3 Storage disjoint | matches |
-| 08 | 31 | histogram `hist[b] += 1` | split by key, AnyOrder `+` | `stages [L1, L3]`; L3 Storage in_order no law | under-claim: key split |
+| 08 | 31 | histogram `hist[b] += 1` | split by key, AnyOrder `+` | `stages [L1, L3]`; L3 Storage keyed(`b`) any_order Op(Add) | matches |
 | 08 | 42 | median bucket | scan of `seen`; `median` first-hit `min` | `stages [L4, L12, L13]`; L12 Carried in_order Op(Add) scan; L13 Storage in_order no law | under-claim: first-hit select (the scan of `seen` matches) |
 | [09](09_brainfuck.acvus) | 9 | `chars() \| collect` | Stream copy, Fold(push) | no `For` | under-claim: pipeline |
 | 09 | 11 | keep commands | free compares; Fold(push) InOrder | `stages [L1, L34]`; L34 Storage in_order Fold | matches |
