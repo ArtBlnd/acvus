@@ -656,9 +656,10 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0066 rule
    and law; the validator, the passes and the lowerer read it.
    - Order is `Disjoint` when every place the cycle writes in its storage,
      and every place the loop reads there, lies under one path component
-     that is `a·k + b` in the counter `k` (RFC-0066 rule 4), the same term
-     at every access, with `a ≠ 0` and `b` invariant in the loop: the term
-     is exact, so two iterations never touch one place. The `&mut`
+     that is `a·k + b` in the counter `k` (RFC-0066 rule 4), one `a ≠ 0` at
+     every access and bases invariant in the loop that differ by constants,
+     none a nonzero multiple of `a`: the terms are exact, so two iterations
+     never touch one place. The `&mut`
      source's element is `a = 1, b = 0`. An extern call reaches only the
      places its declaration states, and all a reference argument lends it
      when it states none; `AnyOrder` when every operation in it commutes (RFC-0013), is
