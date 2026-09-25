@@ -599,6 +599,20 @@ impl LoopDeps {
                 let scan =
                     LawReading::of(loans, laws, &slots, header, loop_blocks, State::Slot(slot))
                         .scan()?;
+                // A lent read whose value the update is computed through,
+                // as the comparison a select on the storage decides by, is
+                // no reader of a partial: it writes the token (rule 8).
+                let through_the_update = lending.iter().any(|at| match graph.members[*at] {
+                    Member::Inst(InstAt { block, at }) => {
+                        inst_info::defs(&cfg.blocks[block.0].insts[at].kind)
+                            .iter()
+                            .any(|def| scan.chain.contains(def))
+                    }
+                    Member::Term(_) => false,
+                });
+                if through_the_update {
+                    return None;
+                }
                 let readers = scan
                     .readers
                     .iter()
@@ -2621,7 +2635,15 @@ impl Graph {
     /// as a write), whose result holds no loan on `slot` and neither does a
     /// storage it writes (it keeps none, as the declared flows give it), and
     /// every argument of which that holds a loan on `slot` is a borrow of
-    /// the whole slot that this call alone reads. A call through a value
+    /// the whole slot, or a view of one, that this call alone reads.
+    ///
+    /// A view is a shared `AsSlice` of a value that holds only the slot's
+    /// loan (a `String`'s `&str`, a container's `&[T]`): the kind is a pure,
+    /// infallible projection whose result holds the loan its container
+    /// holds, and a shared one gives no way to write through it, so the
+    /// view only reads the slot and borrows it alone. The borrow and each
+    /// view on the path are read by the next step alone, so the path lends
+    /// the slot to this call and to nothing else. A call through a value
     /// reaches what the value captured, which its arguments do not show, and
     /// is left in the cycle. A call that writes `slot` stays a member twice
     /// over: `storage_cycles` holds every writer, and the storage's law
@@ -2658,21 +2680,9 @@ impl Graph {
             let mut lenders: Vec<usize> = Vec::new();
             let mut only_borrows = true;
             for &arg in args.iter().filter(|arg| keeps(**arg)) {
-                let borrow = match self.definers(arg) {
-                    [definer] => Some(*definer),
-                    _ => None,
-                };
-                let lent_here = borrow.is_some_and(|borrow| {
-                    let whole_borrow = matches!(
-                        kind_of(self.members[borrow]),
-                        Some(InstKind::Ref { target, path, .. })
-                            if inst_info::storage(target) == Some(slot) && path.is_empty()
-                    );
-                    whole_borrow && self.readers(arg).iter().all(|reader| *reader == member)
-                });
-                match (borrow, lent_here) {
-                    (Some(borrow), true) => lenders.push(borrow),
-                    _ => only_borrows = false,
+                match self.lent_path(cfg, slot, arg, member) {
+                    Some(path) => lenders.extend(path),
+                    None => only_borrows = false,
                 }
             }
             if only_borrows && !lenders.is_empty() {
@@ -2683,6 +2693,51 @@ impl Graph {
         lending.sort_unstable();
         lending.dedup();
         lending
+    }
+
+    /// The members that lend `slot` to `reader` through `value`: a whole
+    /// `Ref` of the slot, then any number of shared `AsSlice` views of it
+    /// (see `lent_reads`), each value on the path read by its next step
+    /// alone and defined by one member of the loop. `None` where `value` is
+    /// not such a path.
+    fn lent_path(
+        &self,
+        cfg: &CfgBody,
+        slot: ValueId,
+        value: ValueId,
+        reader: Member,
+    ) -> Option<Vec<usize>> {
+        let mut path: Vec<usize> = Vec::new();
+        let mut value = value;
+        let mut reader = reader;
+        loop {
+            if self.readers(value).iter().any(|read| *read != reader) {
+                return None;
+            }
+            let [definer] = self.definers(value) else {
+                return None;
+            };
+            path.push(*definer);
+            let Member::Inst(InstAt { block, at }) = self.members[*definer] else {
+                return None;
+            };
+            match &cfg.blocks[block.0].insts[at].kind {
+                InstKind::Ref { target, path: seg, .. }
+                    if inst_info::storage(target) == Some(slot) && seg.is_empty() =>
+                {
+                    return Some(path);
+                }
+                InstKind::AsSlice {
+                    container,
+                    mutability: Mutability::Shared,
+                    ..
+                } => {
+                    reader = self.members[*definer];
+                    value = *container;
+                }
+                _ => return None,
+            }
+        }
     }
 
     /// The storages live at the header that a member writes.

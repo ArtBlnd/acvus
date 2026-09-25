@@ -118,6 +118,7 @@ fn kind_name(cfg: &CfgBody, block: BlockIdx, at: usize) -> &'static str {
         InstKind::FunctionCall { .. } => "call",
         InstKind::StringConcat { .. } => "concat",
         InstKind::Assign { .. } => "assign",
+        InstKind::AsSlice { .. } => "as_slice",
         _ => "other",
     }
 }
@@ -323,7 +324,57 @@ fn a_read_lent_to_a_call_that_neither_writes_nor_keeps_it_reads_the_partial() {
         "{}",
         c.listing
     );
-    assert!(c.listing.contains("free {ref, call to_string}"), "{}", c.listing);
+    assert!(c.listing.contains("free {ref, as_slice, call to_string}"), "{}", c.listing);
+}
+
+/// `s.to_string()` at a `String` is `string::to_string` of the `&str` view
+/// (RFC-0070 rule 5), so the storage reaches the call through a `ref` and a
+/// shared `as_slice` of it. The view only reads the storage and borrows it
+/// alone, so the path lends the storage to a call that neither writes nor
+/// keeps it: the `ref`, the view and the call read the partial, and none
+/// of them is a member of the storage's cycle.
+#[test]
+fn a_read_lent_through_a_view_of_the_storage_reads_the_partial() {
+    let c = Scanned::of(RUNNING);
+    assert!(
+        c.listing.contains("free {ref, as_slice, call to_string}"),
+        "the call is lent the storage through its view:\n{}",
+        c.listing
+    );
+    let held = c.storage_cycle();
+    assert_eq!(law_of(held), Some((&Law::Op(LawOp::Concat), true)), "{}", c.listing);
+    assert_eq!(held.holds, ["ref", "concat", "assign"], "{}", c.listing);
+    assert!(
+        c.cycles
+            .iter()
+            .all(|cycle| !cycle.holds.contains(&"as_slice")),
+        "no cycle holds the view:\n{}",
+        c.listing
+    );
+}
+
+/// Corpus row R16; RFC-0093 rule 8: "a reader that writes the token is in
+/// the cycle, not a reader". `string::cmp(x, &best)` is lent `best`
+/// through its `&str` view and neither writes nor keeps it, but the select
+/// that stores into `best` decides by its result: the update is computed
+/// through the call, so the `ref`, the view and the call stay in the
+/// storage's cycle, and the cycle keeps its maximum under `cmp`, no scan.
+#[test]
+fn a_lent_read_the_update_is_computed_through_stays_in_its_cycle() {
+    let c = Scanned::of(
+        "let xs = vec([\"fig\".to_string(), \"pear\".to_string(), \"apple\".to_string()]); \
+         let best = \"\".to_string(); \
+         for x in &xs { if string::cmp(x, &best) > 0 { best = x.to_string(); }; } best",
+    );
+    let held = c.storage_cycle();
+    for kind in ["ref", "as_slice", "call"] {
+        assert!(held.holds.contains(&kind), "{kind}: {:?}\n{}", held.holds, c.listing);
+    }
+    assert!(
+        matches!(law_of(held), Some((_, false))),
+        "a law, no scan: {}",
+        c.listing
+    );
 }
 
 /// The lent read leaves the cycle only where the cycle's law is a scan,
