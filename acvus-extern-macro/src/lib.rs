@@ -2049,7 +2049,9 @@ fn generate_extern_type(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             }
         }
     };
-    let payload_lends_a_word = lends_a_word(&key_ty, &type_params);
+    // The key is the type `erase` hands the runtime, and the one
+    // `deref_mut` and `project_mut` lend.
+    let payload_lends_a_word = quote! { ::acvus_extern::repr::may_lie_in_the_word::<#key_ty>() };
     let payload_in_place = quote! {
         const LENDS_A_WORD: bool = #payload_lends_a_word;
 
@@ -2425,37 +2427,6 @@ fn uniform_check(
                 #obligation;
             }
         };
-    }
-}
-
-/// Whether the outermost constructor of `ty` is one of `params` or a
-/// projection, so that what it is filled with is not known where it is
-/// written.
-fn outermost_is_parameter(ty: &Type, params: &[Ident]) -> bool {
-    match ty {
-        Type::Paren(inner) => outermost_is_parameter(&inner.elem, params),
-        Type::Group(inner) => outermost_is_parameter(&inner.elem, params),
-        Type::Path(path) => {
-            path.qself.is_some() || path.path.get_ident().is_some_and(|ident| params.contains(ident))
-        }
-        _ => false,
-    }
-}
-
-/// The `LENDS_A_WORD` of a crossing that lends the storage the runtime
-/// keeps a `stored` in: `repr::Placement`'s answer, and `true` where
-/// `stored`'s outermost constructor is a parameter, which a `Word` type may
-/// fill.
-fn lends_a_word(stored: &Type, params: &[Ident]) -> proc_macro2::TokenStream {
-    match outermost_is_parameter(stored, params) {
-        true => quote! { true },
-        false => quote! {
-            {
-                #[allow(unused_imports)]
-                use ::acvus_extern::repr::InBox as _;
-                ::acvus_extern::repr::Placement::<#stored>::IN_THE_WORD
-            }
-        },
     }
 }
 

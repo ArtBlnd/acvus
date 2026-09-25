@@ -46,8 +46,9 @@ where
 {
     type Table: Clone + Send + Sync + 'static;
 
-    /// Whether `project_mut` lends a storage in the runtime's value word,
-    /// which a write leaves to `loan_ended` to re-encode.
+    /// Whether `project_mut` can lend a storage in the runtime's value word,
+    /// which a write leaves to `loan_ended` to re-encode: `false` only where
+    /// a fact of the type rules it out, as `Borrowable::LENDS_A_WORD`.
     const LENDS_A_WORD: bool;
 
     fn table(at: ArgAt<'_>) -> Self::Table;
@@ -672,15 +673,9 @@ macro_rules! borrowed_as_self {
         {
             type Table = ();
 
-            // Asked of `Self` and not of its `Payload`: the where clause
-            // above leaves `<Self as Stored<__Rt>>::Payload` unnormalized
-            // here, and a type stored as itself has the payload's outermost
-            // constructor.
-            const LENDS_A_WORD: bool = {
-                #[allow(unused_imports)]
-                use $crate::repr::InBox as _;
-                $crate::repr::Placement::<$t>::IN_THE_WORD
-            };
+            // The payload `project_mut` lends.
+            const LENDS_A_WORD: bool =
+                $crate::repr::may_lie_in_the_word::<<Self as $crate::Stored<__Rt>>::Payload>();
 
             fn table(_: $crate::ArgAt<'_>) {}
 

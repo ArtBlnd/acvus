@@ -209,32 +209,25 @@ where
     *word = value.into_word();
 }
 
-// -- Where a type lies ----------------------------------------------------
+// -- Whether a type can lie in the word -------------------------------------
 
-/// Whether a runtime keeps a `P` in its value word: `true` for a `Word`
-/// type, which a runtime lends in place through `view_mut`, and `false` for
-/// every other type, which a runtime keeps behind the word.
+/// Whether a value of `T` can be one a runtime keeps in its value word.
 ///
-/// The constant is resolved where `Placement::<P>` is written, with `InBox`
-/// in scope. Where `P` is a type parameter or a projection at that point, the
-/// answer is `InBox`'s even when the parameter is later filled with a `Word`
-/// type, so a crossing whose stored type has a parameter as its outermost
-/// constructor answers `true` itself instead of asking this.
-pub struct Placement<P>(PhantomData<fn() -> P>);
-
-impl<P> Placement<P>
-where
-    P: Word,
-{
-    pub const IN_THE_WORD: bool = true;
+/// It is `false` only where `T`'s own layout rules the word out: `T` is
+/// wider than 8 bytes, aligned to more than 8, or has drop glue. It is
+/// `true` of every other type, and of every `Word` type among them, which
+/// `obj::inline!` asserts of each type `for_each_inline!` lists — the list a
+/// runtime's `is_inline` reads.
+///
+/// It reads the type and not how the type is written: a constant that asks
+/// it of a type parameter, an alias or a macro type is evaluated at the type
+/// they are filled with. A `true` of a type a runtime keeps behind the word
+/// costs one re-encode that changes nothing; a `false` is never a type a
+/// runtime keeps in it.
+#[inline(always)]
+pub const fn may_lie_in_the_word<T>() -> bool {
+    mem::size_of::<T>() <= 8 && mem::align_of::<T>() <= 8 && !mem::needs_drop::<T>()
 }
-
-/// `Placement`'s answer for a type that is not `Word`.
-pub trait InBox {
-    const IN_THE_WORD: bool = false;
-}
-
-impl<P> InBox for Placement<P> {}
 
 // -- Lengths --------------------------------------------------------------
 
@@ -331,20 +324,39 @@ mod tests {
     }
 
     #[test]
-    fn placement_answers_the_inline_list_and_nothing_else() {
-        use super::InBox as _;
-
+    fn only_a_layout_that_rules_the_word_out_answers_false() {
         macro_rules! in_the_word {
             ($($name:ident: $t:ty),*) => {
-                $(assert!(Placement::<$t>::IN_THE_WORD, "{} is Inline", stringify!($t));)*
+                $(assert!(may_lie_in_the_word::<$t>(), "{} is Inline", stringify!($t));)*
             };
         }
         crate::for_each_inline!(in_the_word);
-        assert!(!Placement::<String>::IN_THE_WORD);
-        assert!(!Placement::<Vec<i8>>::IN_THE_WORD);
-        assert!(!Placement::<Option<i8>>::IN_THE_WORD);
-        assert!(!Placement::<(i8,)>::IN_THE_WORD);
-        assert!(!Placement::<std::vec::IntoIter<i64>>::IN_THE_WORD);
+
+        // A parameter, an alias of one and a macro type are answered at what
+        // fills them.
+        type Id<T> = T;
+        macro_rules! same {
+            ($t:ty) => {
+                $t
+            };
+        }
+        const fn through_a_parameter<T>() -> bool {
+            may_lie_in_the_word::<Id<T>>()
+        }
+        assert!(through_a_parameter::<i8>());
+        assert!(may_lie_in_the_word::<same!(i8)>());
+        assert!(!through_a_parameter::<String>());
+
+        // What the layout cannot rule out answers `true`, at the cost of a
+        // re-encode that changes nothing.
+        assert!(may_lie_in_the_word::<Option<i8>>());
+        assert!(may_lie_in_the_word::<(i8,)>());
+
+        assert!(!may_lie_in_the_word::<String>());
+        assert!(!may_lie_in_the_word::<Vec<i8>>());
+        assert!(!may_lie_in_the_word::<Box<i8>>());
+        assert!(!may_lie_in_the_word::<[u64; 2]>());
+        assert!(!may_lie_in_the_word::<std::vec::IntoIter<i64>>());
     }
 
     #[test]

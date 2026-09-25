@@ -4,8 +4,9 @@
 //! the same value written as a literal. The `&mut` is every one a Rust body
 //! can be lent in place (RFC-0039 rule 2): a parameter, a field of a derived
 //! struct's projection, the payload of a derived enum's arm, the payload of a
-//! host's lent `Result` and `Option`, and an instance's receiver. Each
-//! program runs at both optimization levels.
+//! host's lent `Result` and `Option`, an instance's receiver, and an
+//! extension type whose payload a type parameter fills. Each program runs at
+//! both optimization levels.
 
 use std::ops::Deref;
 use std::sync::Arc;
@@ -15,9 +16,9 @@ use acvus_extern::{
 };
 use acvus_interpreter::{AcvusRuntime, Host, MemoryStorage, SequentialExecutor, Source, Value};
 use acvus_interpreter_test::{check_graph, execute_compiled};
-use acvus_mir::graph::ParsedAst;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ty::Ty;
+use acvus_mir::graph::{ParsedAst, QualifiedRef};
+use acvus_mir::ty::{IntTy, Ty, TypeArg};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -45,9 +46,11 @@ macro_rules! narrow_externs {
             extern_registry! {
                 ns: "t",
                 signatures: [sig::overwrite],
+                types: [Aliased<_>],
                 fns: [
                     $($low, $high, $set,)* set_first_i8, set_first_i16, set_first_i32,
                     set_narrow_a, set_cell, overwrite_i8, overwritten,
+                    aliased, set_aliased,
                 ],
             }
         }
@@ -156,8 +159,53 @@ where
     a
 }
 
+/// The identity alias: a payload written through it names the parameter
+/// under another spelling.
+type Id<T> = T;
+
+/// An extension type whose payload is its type parameter, written through
+/// `Id`. Filled with `i8`, its storage is the scalar's word.
+#[derive(acvus_extern::ExternType)]
+#[extern_type(name = "Aliased")]
+#[repr(transparent)]
+pub struct Aliased<T>(Id<T>)
+where
+    T: Var<kind::Type>;
+
+#[extern_fn(effect = pure)]
+fn aliased(value: i8) -> Aliased<i8> {
+    Aliased(value)
+}
+
+/// Writes `value` into the lent payload.
+#[extern_fn(effect = pure)]
+fn set_aliased(place: &mut Aliased<i8>, value: i8) {
+    place.0 = value;
+}
+
+/// The type `name<#i8>` of an extension type of one type parameter: the
+/// argument is held at its own Rust type, `i8`.
+fn filled_with_i8(i: &Interner, name: &str) -> Ty {
+    Ty::UserDefined {
+        id: QualifiedRef::root(i.intern(name)),
+        type_args: vec![TypeArg::specialized(Ty::Int(IntTy::I8))],
+        effect_args: vec![],
+        identity_args: vec![],
+        region_params: 0,
+    }
+}
+
 fn run(source: &str, ret: Ty, opt: Opt) -> Value {
+    run_at(source, |_| ret.clone(), opt)
+}
+
+/// As `run`, with the result type built over the program's interner.
+fn run_at<F>(source: &str, ret: F, opt: Opt) -> Value
+where
+    F: Fn(&Interner) -> Ty,
+{
     let i = Interner::new();
+    let ret = ret(&i);
     let parsed = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("main parses"));
     let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
     registries.push(narrow_registry());
@@ -381,6 +429,32 @@ fn a_receiver_an_instance_writes_equals_its_literal() {
     );
 }
 
+/// An extension type's payload, lent `&mut` and written across the sign in
+/// both directions, is then the word the same value built fresh is. The
+/// type `name` declares its payload as its type parameter, filled here with
+/// `i8`; the program returns the value itself, so the comparison is of the
+/// runtime's words (`Value`'s `==`: kind and word).
+fn a_lent_payload_is_the_word_of_its_literal(name: &str, make: &str, set: &str) {
+    for (start, written) in [("0i8", "-1i8"), ("-1i8", "1i8"), ("0i8", "-128i8")] {
+        for opt in [Opt::None, Opt::Full] {
+            let lent = run_at(
+                &format!("let a = {make}({start}); {set}(&mut a, {written}); a"),
+                |i| filled_with_i8(i, name),
+                opt,
+            );
+            let fresh = run_at(&format!("{make}({written})"), |i| filled_with_i8(i, name), opt);
+            assert_eq!(lent, fresh, "at {opt:?}: {set} from {start} to {written}");
+        }
+    }
+}
+
+/// The payload is written `Id<T>`: no spelling of the stored type decides
+/// whether its loan ends in a re-encode.
+#[test]
+fn a_payload_written_through_an_alias_of_its_parameter_is_re_encoded() {
+    a_lent_payload_is_the_word_of_its_literal("Aliased", "aliased", "set_aliased");
+}
+
 /// `@key` is seeded by `seed`, edited in place by `edit` through the page's
 /// `with_mut`, and then `check` must answer `true`, at both optimization
 /// levels.
@@ -486,11 +560,13 @@ pub struct Labelled {
     label: String,
 }
 
-/// A parameter's loan ends in a re-encode exactly where the type it lends
-/// exclusively can be an inline scalar in the value word; the glue of every
-/// other parameter holds no loan guard.
+/// A parameter's loan ends in a re-encode wherever the type it lends
+/// exclusively can be an inline scalar in the value word, and the glue of a
+/// parameter whose type rules the word out holds no loan guard: an iterator
+/// source, a container, a `String`, the runtime's own value, and a
+/// projection none of whose components can lend a word.
 #[test]
-fn a_loan_ends_in_a_re_encode_exactly_where_its_type_lends_a_word() {
+fn a_loan_ends_in_a_re_encode_wherever_its_type_can_lend_a_word() {
     use acvus_extern::{Arg, ByProjection, ByRef, Ending, Mut, Parameters, Shared, Through, Uniform};
 
     type Rt = AcvusRuntime;
@@ -504,6 +580,7 @@ fn a_loan_ends_in_a_re_encode_exactly_where_its_type_lends_a_word() {
     assert!(lends::<ByRef<i8, Mut>>());
     assert!(lends::<ByRef<u64, Mut>>());
     assert!(lends::<ByRef<Gauge, Mut>>());
+    assert!(lends::<ByRef<Aliased<i8>, Mut>>());
     assert!(lends::<ByProjection<NarrowMut<'static>>>());
     assert!(lends::<ByProjection<CellMut<'static, Rt>>>());
     assert!(<(ByRef<String, Mut>, ByRef<i8, Mut>) as Parameters<Rt>>::LENDS_A_WORD);

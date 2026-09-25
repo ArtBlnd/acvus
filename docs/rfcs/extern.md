@@ -234,13 +234,21 @@ Status: Accepted
    read through, whose drop after the body ends the loan. Whether a loan has
    a word to re-encode is the lent type's constant, not a test at the loan's
    end: `Borrowable`, `Project`, `Projected` and `Arg` each state
-   `LENDS_A_WORD`, a projection as the disjunction of its components', and
-   every chain ends at `repr::Placement`, which is true of a `Word` type and
-   false of every other, or at `true` where the stored type's outermost
-   constructor is a type parameter. A glue none of whose parameters lends a
-   word holds no loan guard, and a `Lending` of a type that lends none ends
-   in nothing, so an iterator's `next(&mut it)` costs what it did before
-   rule 2 re-encoded anything.
+   `LENDS_A_WORD`, a projection as the disjunction of its components'. A
+   type states whether it lends the word, and one that does not rule the
+   word out lends it: the constant is `false` only where a fact of the type
+   rules the word out, so a wrong answer costs a re-encode and never leaves
+   a word unencoded. The facts are an impl whose storage is another value
+   (a `Vec`, `Erased`, the runtime's value, a shared loan), a derived
+   aggregate's object, and at a stored type's leaf
+   `repr::may_lie_in_the_word` of the type the runtime keeps, `false` only
+   where that type is wider or more aligned than the word or has drop glue
+   (each inline type is asserted against it). It reads the type, not its
+   spelling, so a parameter, an alias or a macro type is answered at what
+   fills it. A glue none of whose
+   parameters lends a word holds no loan guard, and a `Lending` of a type
+   that lends none ends in nothing, so an iterator's `next(&mut it)` costs
+   what it did before rule 2 re-encoded anything.
 3. An extension type — `#[derive(ExternType)]` — is stored as its payload,
    the first field, and is `#[repr(transparent)]` over it, so a reference to
    the payload is a reference to the type; the derive requires the attribute.
@@ -324,6 +332,10 @@ struct.
 - Deciding the end by `repr::is_inline`'s `TypeId` test — it is a run-time
   test that the optimizer folds, and no constant can compare `TypeId`s on
   the pinned toolchain.
+- Deciding the leaf by whether the stored type is known to be `Word` where
+  the constant is written — it resolves at the generic definition, so an
+  unknown type answered `false`, and a syntactic check for a parameter
+  missed `type Id<T> = T`.
 - Parsing a wire format at run time through a language type — parsing is the
   extern fn's job; the derive projects its result.
 - A write through an option in Rust storage (`take`, `replace`, an

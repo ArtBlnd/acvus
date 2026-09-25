@@ -448,8 +448,12 @@ pub trait Borrowable<Rt>: OneValue<Rt>
 where
     Rt: Runtime,
 {
-    /// Whether `deref_mut` lends the runtime's value word itself, which a
-    /// write leaves to be re-encoded when the loan ends.
+    /// Whether `deref_mut` can lend the runtime's value word itself, which a
+    /// write leaves to be re-encoded when the loan ends. An impl states
+    /// `false` only where a fact of the type rules the word out — its
+    /// storage is another value it names, or `repr::may_lie_in_the_word` of
+    /// the type the runtime keeps is `false` — and `true` wherever it does
+    /// not know: a wrong `true` costs a re-encode that changes nothing.
     const LENDS_A_WORD: bool;
 
     /// # Safety
