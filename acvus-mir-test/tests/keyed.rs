@@ -325,6 +325,16 @@ fn a_key_plus_one_and_the_key_times_one_are_no_keyed_storage() {
     );
 }
 
+#[test]
+fn a_remainder_and_the_remainder_of_its_operands_swapped_are_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([5u64, 3u64, 6u64]);
+         let h = vec([0, 0, 0, 0, 0, 0, 0, 0]);
+         for x in &xs { h[*x % 7u64] = h[7u64 % *x] + 1; }
+         h.len()",
+    );
+}
+
 /// The programs under `acvus-interpreter-test`'s `tests/soundness/keyed`,
 /// which its soundness harness runs at both levels, and whether each is a
 /// keyed cycle.
