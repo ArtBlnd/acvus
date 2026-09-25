@@ -557,8 +557,8 @@ iteration hands the next.
    body suspends), one merge, and one buffered element per boundary. The loop splits when `n · W > K · O`, where `n` is the
    trip count, known on entry, and `K` is a high constant, so a wrong
    estimate errs toward running in place. `⌈K · O / W⌉` folds into one
-   constant, and the run makes one compare. With no table, or no free
-   stage, every loop runs in place. No MIR pass reads a cost, and none is
+   constant, and the run makes one compare. With no table, or no stage
+   that runs apart, a loop runs in place. No MIR pass reads a cost, and none is
    measured at run time: another dialect's lowering decides statically.
 
 9. **Regions.** A region is a stage of a `For` (RFC-0089) evaluated as
