@@ -1623,6 +1623,104 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
         }
     }
 
+    /// RFC-0098 rule 1: whether the program shows the key values `a` and
+    /// `b` equal. They are one value; or copies of one place through one
+    /// shared reference, whose referent no write reaches while it lives
+    /// (RFC-0028); or one language operation over operands that are one
+    /// key, an operation that reads nothing but its operands. A take
+    /// through a `&mut` or of a local place, and a call, show nothing.
+    fn one_key(&self, a: ValueId, b: ValueId) -> bool {
+        if a == b {
+            return true;
+        }
+        let (Some(a_at), Some(b_at)) = (self.defs.get(&a), self.defs.get(&b)) else {
+            return false;
+        };
+        let inst = |at: &InstAt| &self.cfg.blocks[at.block.0].insts[at.at].kind;
+        match (inst(a_at), inst(b_at)) {
+            (
+                InstKind::Take {
+                    target: RefTarget::Through(a_ref),
+                    path: a_path,
+                    taken_out: false,
+                    ..
+                },
+                InstKind::Take {
+                    target: RefTarget::Through(b_ref),
+                    path: b_path,
+                    taken_out: false,
+                    ..
+                },
+            ) => {
+                a_ref == b_ref
+                    && a_path == b_path
+                    && matches!(
+                        self.cfg.val_types.get(a_ref),
+                        Some(Ty::Ref(Mutability::Shared, _))
+                    )
+            }
+            (
+                InstKind::BinOp {
+                    op: a_op,
+                    left: a_left,
+                    right: a_right,
+                    ..
+                },
+                InstKind::BinOp {
+                    op: b_op,
+                    left: b_left,
+                    right: b_right,
+                    ..
+                },
+            ) => {
+                a_op == b_op
+                    && self.read_by_value(*a_left)
+                    && self.read_by_value(*a_right)
+                    && self.one_key(*a_left, *b_left)
+                    && self.one_key(*a_right, *b_right)
+            }
+            (
+                InstKind::UnaryOp {
+                    op: a_op,
+                    operand: a_operand,
+                    ..
+                },
+                InstKind::UnaryOp {
+                    op: b_op,
+                    operand: b_operand,
+                    ..
+                },
+            ) => {
+                a_op == b_op
+                    && self.read_by_value(*a_operand)
+                    && self.one_key(*a_operand, *b_operand)
+            }
+            (
+                InstKind::Cast {
+                    src: a_src,
+                    to: a_to,
+                    ..
+                },
+                InstKind::Cast {
+                    src: b_src,
+                    to: b_to,
+                    ..
+                },
+            ) => a_to == b_to && self.read_by_value(*a_src) && self.one_key(*a_src, *b_src),
+            (InstKind::Const { value: a_value, .. }, InstKind::Const { value: b_value, .. }) => {
+                self.cfg.val_types.get(&a) == self.cfg.val_types.get(&b)
+                    && same_literal(a_value, b_value)
+            }
+            _ => false,
+        }
+    }
+
+    /// An operand of no reference type: an operation over it reads nothing
+    /// but the operand.
+    fn read_by_value(&self, operand: ValueId) -> bool {
+        matches!(self.cfg.val_types.get(&operand), Some(ty) if !matches!(ty, Ty::Ref(..)))
+    }
+
     fn holds(&self, value: ValueId, slot: ValueId) -> bool {
         self.loans
             .holds(value)
@@ -1817,6 +1915,21 @@ fn disjoint_storages(
         .collect()
 }
 
+/// Two literals of one value: a float's by its bits, so `0.0` and `-0.0`,
+/// which `==` holds equal, are two values.
+fn same_literal(a: &Literal, b: &Literal) -> bool {
+    match (a, b) {
+        (Literal::Float(a), Literal::Float(b)) => a.to_bits() == b.to_bits(),
+        (Literal::List(a), Literal::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_literal(a, b))
+        }
+        (Literal::Float(_) | Literal::List(_), _) | (_, Literal::Float(_) | Literal::List(_)) => {
+            false
+        }
+        (a, b) => a == b,
+    }
+}
+
 /// RFC-0098 rule 1's keyed storage.
 #[derive(Debug, Clone)]
 struct KeyedStorage {
@@ -1869,15 +1982,17 @@ fn keyed_storages(
         .collect();
     candidates
         .into_iter()
-        .filter_map(|slot| keyed_storage(cfg, &places, loop_blocks, slot))
-        .filter(|keyed| computed_once.contains(&keyed.key))
+        .filter_map(|slot| keyed_storage(cfg, &places, loop_blocks, &computed_once, slot))
         .collect()
 }
 
+/// A storage whose every place in the iteration is `[At(κ)]`, each `κ`
+/// computed once per iteration and one key with the first.
 fn keyed_storage(
     cfg: &CfgBody,
     places: &Places<'_, '_>,
     loop_blocks: &[BlockIdx],
+    computed_once: &FxHashSet<ValueId>,
     slot: ValueId,
 ) -> Option<KeyedStorage> {
     let mut key: Option<ValueId> = None;
@@ -1901,7 +2016,8 @@ fn keyed_storage(
             let [Component::At(index)] = place.path[..] else {
                 return None;
             };
-            if *key.get_or_insert(index) != index {
+            if !computed_once.contains(&index) || !places.one_key(*key.get_or_insert(index), index)
+            {
                 return None;
             }
             let at = InstAt { block, at };

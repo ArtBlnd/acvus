@@ -1,0 +1,8 @@
+// expect attempt to divide by zero
+let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+for x in &xs {
+    let y = *x % 3u64;
+    h[*x / y] = h[*x / y] + 1;
+}
+h.into_iter().map(|x| -> x.to_string()).join(",".to_string())

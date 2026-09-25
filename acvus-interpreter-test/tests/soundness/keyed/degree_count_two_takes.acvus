@@ -1,0 +1,7 @@
+// expect 1,1,2,1,1,2,1,2,1,1
+let es = vec([0u64, 1u64, 2u64, 2u64, 3u64, 4u64, 5u64, 6u64, 7u64, 5u64, 8u64, 9u64, 7u64]);
+let degree = filled(10u64, 0);
+for e in &es {
+    degree[*e] = degree[*e] + 1;
+}
+degree.into_iter().map(|x| -> x.to_string()).join(",".to_string())

@@ -1,0 +1,10 @@
+// expect 0,1,0,1,1,0,1,1,1
+let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+let i = 0u64;
+for x in &xs {
+    let q = &xs[i];
+    h[*q] = h[*x] + 1;
+    i = i + 1u64;
+}
+h.into_iter().map(|x| -> x.to_string()).join(",".to_string())

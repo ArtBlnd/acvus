@@ -185,10 +185,163 @@ fn an_element_updated_at_the_counter_stays_disjoint() {
     assert_eq!((c.order, c.law), (Order::Disjoint, None), "{}", c.listing);
 }
 
-/// The programs `acvus-interpreter-test`'s soundness harness runs at both
-/// levels under `tests/soundness/keyed` exercise a keyed cycle.
+// -- RFC-0098 rule 1: two key values the program shows equal are one key --
+
+const LEVELS: [Opt; 2] = [Opt::None, Opt::Full];
+
+fn keyed_at_every_level(source: &str) {
+    for opt in LEVELS {
+        let c = outer_storage_cycle_at(source, opt);
+        let Order::Keyed { within, .. } = c.order else {
+            panic!("keyed at {opt:?}:\n{}", c.listing)
+        };
+        assert_eq!(within, KeyOrder::AnyOrder, "{opt:?}:\n{}", c.listing);
+        assert_eq!(c.law, Some(Law::Op(LawOp::Add)), "{opt:?}:\n{}", c.listing);
+    }
+}
+
+fn in_order_at_every_level(source: &str) {
+    for opt in LEVELS {
+        let c = outer_storage_cycle_at(source, opt);
+        assert_eq!((c.order, c.law), (Order::InOrder, None), "{opt:?}:\n{}", c.listing);
+    }
+}
+
+/// App corpus rows 01:15 and 02:17: `*e` read twice through the element's
+/// `&u64` is one key.
 #[test]
-fn every_keyed_soundness_program_is_keyed() {
+fn a_degree_count_reading_its_key_twice_through_one_shared_reference_is_keyed() {
+    keyed_at_every_level(
+        "let es = vec([0u64, 1u64, 2u64, 2u64, 3u64]);
+         let degree = filled(4u64, 0);
+         for e in &es { degree[*e] = degree[*e] + 1; }
+         degree.len()",
+    );
+}
+
+/// `*x % 4u64` computed twice: one `%` over a copy through one shared
+/// reference and one constant.
+#[test]
+fn a_bucket_computed_twice_by_one_remainder_is_keyed() {
+    keyed_at_every_level(
+        "let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+         let h = vec([0, 0, 0, 0]);
+         for x in &xs { h[*x % 4u64] = h[*x % 4u64] + 1; }
+         h.len()",
+    );
+}
+
+/// The two divisions have one operand pair, so the first traps wherever
+/// the second would, before any access to `h`.
+#[test]
+fn a_bucket_computed_twice_by_one_division_by_a_divisor_of_the_iteration_is_keyed() {
+    keyed_at_every_level(
+        "let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+         let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+         for x in &xs { let y = *x % 3u64 + 1u64; h[*x / y] = h[*x / y] + 1; }
+         h.len()",
+    );
+}
+
+/// The element's own reference and `&xs[i]` name one element, but they are
+/// two references, and the program does not show them equal.
+#[test]
+fn a_key_read_through_two_references_to_one_element_is_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+         let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+         let i = 0u64;
+         for x in &xs { let q = &xs[i]; h[*q] = h[*x] + 1; i = i + 1u64; }
+         h.len()",
+    );
+}
+
+#[test]
+fn a_key_read_twice_through_a_mutable_reference_is_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+         let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+         for x in &mut xs { h[*x] = h[*x] + 1; }
+         h.len()",
+    );
+}
+
+/// `wrapping_add` is a call, so its two results are two keys.
+#[test]
+fn a_key_computed_twice_by_a_call_is_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+         let h = vec([0, 0, 0, 0]);
+         for x in &xs { h[wrapping_add(*x, 1u64) % 4u64] = h[wrapping_add(*x, 1u64) % 4u64] + 1; }
+         h.len()",
+    );
+}
+
+/// `k` is lent, so it stays a place at both levels: read, written through
+/// `r`, and read again.
+#[test]
+fn a_key_read_from_a_place_written_between_the_reads_is_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([4u64, 1u64, 8u64, 3u64, 6u64, 7u64]);
+         let h = vec([0, 0, 0, 0]);
+         for x in &xs {
+             let k = *x % 4u64;
+             let a = h[k];
+             let r = &mut k;
+             *r = (*r + 1u64) % 4u64;
+             h[k] = a + 1;
+         }
+         h.len()",
+    );
+}
+
+#[test]
+fn a_key_and_the_key_plus_one_are_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([4u64, 1u64, 5u64, 3u64, 6u64, 7u64]);
+         let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+         for x in &xs { h[*x] = h[*x + 1u64] + 1; }
+         h.len()",
+    );
+}
+
+#[test]
+fn a_key_plus_one_and_the_key_plus_two_are_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([4u64, 1u64, 5u64, 3u64, 6u64, 0u64]);
+         let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+         for x in &xs { h[*x + 1u64] = h[*x + 2u64] + 1; }
+         h.len()",
+    );
+}
+
+#[test]
+fn a_key_plus_one_and_the_key_times_one_are_no_keyed_storage() {
+    in_order_at_every_level(
+        "let xs = vec([4u64, 1u64, 5u64, 3u64, 6u64, 0u64]);
+         let h = vec([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+         for x in &xs { h[*x + 1u64] = h[*x * 1u64] + 1; }
+         h.len()",
+    );
+}
+
+/// The programs under `acvus-interpreter-test`'s `tests/soundness/keyed`,
+/// which its soundness harness runs at both levels, and whether each is a
+/// keyed cycle.
+const KEYED_SOUNDNESS_PROGRAMS: &[(&str, bool)] = &[
+    ("degree_count_two_takes.acvus", true),
+    ("division_by_zero_in_the_key_traps.acvus", true),
+    ("k02_histogram_vec_bucket.acvus", true),
+    ("k07_char_frequency.acvus", true),
+    ("last_per_key_in_order.acvus", true),
+    ("two_references_to_one_element.acvus", false),
+    ("u8_bucket_past_255.acvus", true),
+    ("u8_bucket_past_255_two_takes.acvus", true),
+    ("u8_bucket_to_255.acvus", true),
+];
+
+#[test]
+fn every_keyed_soundness_program_is_judged_as_listed() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("the crate lies in the workspace")
@@ -199,12 +352,18 @@ fn every_keyed_soundness_program_is_keyed() {
         .filter(|path| path.extension().is_some_and(|extension| extension == "acvus"))
         .collect();
     programs.sort();
-    assert_eq!(programs.len(), 5, "{programs:?}");
-    for program in programs {
-        let source = std::fs::read_to_string(&program).expect("the program");
+    let names: Vec<&str> = programs
+        .iter()
+        .map(|path| path.file_name().and_then(|name| name.to_str()).expect("a named program"))
+        .collect();
+    let listed: Vec<&str> = KEYED_SOUNDNESS_PROGRAMS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names, listed);
+    for (program, &(_, keyed)) in programs.iter().zip(KEYED_SOUNDNESS_PROGRAMS) {
+        let source = std::fs::read_to_string(program).expect("the program");
         let c = outer_storage_cycle(&source);
-        assert!(
+        assert_eq!(
             matches!(c.order, Order::Keyed { .. }),
+            keyed,
             "{}:\n{}",
             program.display(),
             c.listing

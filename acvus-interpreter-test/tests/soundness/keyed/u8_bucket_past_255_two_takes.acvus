@@ -1,0 +1,7 @@
+// expect attempt to add with overflow
+let es = filled(300u64, 1).into_iter().map(|x| -> x as u64).collect();
+let h = vec([0u8, 0u8, 0u8]);
+for e in &es {
+    h[*e] = h[*e] + 1u8;
+}
+h.into_iter().map(|x| -> x.to_string()).join(",".to_string())
