@@ -475,6 +475,262 @@ impl<H, E> HeadAndTail<H, E> {
     }
 }
 
+// -- Two types of one layout ------------------------------------------------
+
+/// The witness that `A` and `B` are one layout (RFC-0080 rule 5): one size,
+/// one alignment, and each byte of the one at the same offset under the same
+/// validity as the other's, so that a place holding a valid `A` holds a
+/// valid `B` and the reverse.
+///
+/// Only `same_layout!` makes one. Its constructor, private to acvus-extern,
+/// checks the size and the alignment when the instantiation is compiled, and
+/// the macro's caller answers for the rest with the fact that proves it — a
+/// `repr(transparent)` wrapper and its field, a type and its `Canonical`
+/// form, a derive's `Transparent` impl. Outside acvus-extern a witness is
+/// only ever handed out: the field is private and the constructor is
+/// `pub(crate)`.
+///
+/// The witness speaks of layout and of nothing else. What a type promises
+/// beyond its bytes — who releases what it holds, the lifetimes it names, an
+/// invariant its constructor keeps — is not in it, so each cast below is
+/// `unsafe` and its caller names that part.
+pub struct SameLayout<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
+
+impl<A, B> Clone for SameLayout<A, B> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<A, B> Copy for SameLayout<A, B> {}
+
+impl<A, B> SameLayout<A, B> {
+    /// `same_layout!`'s. The size and the alignment are checked here, at
+    /// each instantiation, so no witness names two types that differ in
+    /// either.
+    ///
+    /// # Safety
+    /// Each byte of `A` sits at the same offset under the same validity as
+    /// `B`'s, so a place holding a valid `A` holds a valid `B` and the
+    /// reverse.
+    #[inline(always)]
+    pub(crate) const unsafe fn vouched() -> Self {
+        const {
+            assert!(
+                Layout::new::<A>().size() == Layout::new::<B>().size()
+                    && Layout::new::<A>().align() == Layout::new::<B>().align(),
+                "a witness names two types of one size and alignment"
+            )
+        };
+        SameLayout(PhantomData)
+    }
+
+    /// The same fact read from the other side.
+    #[inline(always)]
+    pub const fn flip(self) -> SameLayout<B, A> {
+        SameLayout(PhantomData)
+    }
+
+    /// `a`'s bytes, moved whole, as a `B`.
+    ///
+    /// # Safety
+    /// The witness gives a valid `B`. The caller holds the rest of what a
+    /// `B` promises for these bytes, and dropping the `B` releases what
+    /// dropping `a` would have.
+    #[inline(always)]
+    pub unsafe fn cast(self, a: A) -> B {
+        let a = mem::ManuallyDrop::new(a);
+        // SAFETY: the witness puts a valid `B` in `a`'s place, `ManuallyDrop`
+        // keeps `a` from being released, and the caller's contract covers
+        // the rest of `B`.
+        unsafe { std::ptr::read((&raw const *a).cast::<B>()) }
+    }
+
+    /// The place `a` names, named as a `B` for as long.
+    ///
+    /// # Safety
+    /// The witness gives a valid `B`. The caller holds the rest of what a
+    /// `B` promises for these bytes for `'a`, the lifetimes `B` names among
+    /// them.
+    #[inline(always)]
+    pub unsafe fn cast_ref<'a>(self, a: &'a A) -> &'a B {
+        // SAFETY: the witness gives one size, one alignment and a valid `B`
+        // in the place; the caller's contract covers the rest.
+        unsafe { &*std::ptr::from_ref(a).cast::<B>() }
+    }
+
+    /// As `cast_ref`, exclusively.
+    ///
+    /// # Safety
+    /// As `cast_ref`'s, and whatever is written through the `B` is, read as
+    /// an `A` again once the loan ends, what an `A` promises.
+    #[inline(always)]
+    pub unsafe fn cast_mut<'a>(self, a: &'a mut A) -> &'a mut B {
+        // SAFETY: as `cast_ref`'s; the witness runs both ways, and the
+        // caller's contract covers what is written.
+        unsafe { &mut *std::ptr::from_mut(a).cast::<B>() }
+    }
+
+    /// A run of `A`s named as a run of `B`s of the same length: one layout
+    /// per element is one layout per run.
+    ///
+    /// # Safety
+    /// As `cast_mut`'s, for each element.
+    #[inline(always)]
+    pub unsafe fn cast_slice_mut<'a>(self, run: &'a mut [A]) -> &'a mut [B] {
+        let len = run.len();
+        // SAFETY: an element of `B` has `A`'s size and alignment (the
+        // witness), so `len` of them cover `run`'s bytes exactly; the
+        // caller's contract covers each element.
+        unsafe { std::slice::from_raw_parts_mut(run.as_mut_ptr().cast::<B>(), len) }
+    }
+}
+
+// -- One type under two names -------------------------------------------------
+
+/// The witness that `A` and `B` are one type, which only `same_type` makes,
+/// from the two `TypeId`s.
+pub struct SameType<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
+
+impl<A, B> Clone for SameType<A, B> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<A, B> Copy for SameType<A, B> {}
+
+impl<A, B> SameType<A, B> {
+    /// `a` under its other name.
+    #[inline(always)]
+    pub fn cast(self, a: A) -> B {
+        let a = mem::ManuallyDrop::new(a);
+        // SAFETY: the witness says `A` is `B` (`same_type`), so the copy is
+        // the value itself, and `ManuallyDrop` keeps the original from being
+        // released.
+        unsafe { mem::transmute_copy::<A, B>(&*a) }
+    }
+}
+
+/// Whether `A` and `B` are one type, as the witness that casts between them.
+/// The check is the two `TypeId`s, which the `'static` bounds make exact: two
+/// types that differ in a lifetime alone are not both `'static`.
+#[inline(always)]
+pub fn same_type<A, B>() -> Option<SameType<A, B>>
+where
+    A: 'static,
+    B: 'static,
+{
+    (TypeId::of::<A>() == TypeId::of::<B>()).then_some(SameType(PhantomData))
+}
+
+// -- A run as an array --------------------------------------------------------
+
+/// A run of `N` elements named as the array it is: `[T; N]` is `N` `T`s in a
+/// row with no other requirement.
+///
+/// # Safety
+/// `run.len() == N`.
+#[inline(always)]
+pub unsafe fn array<T, const N: usize>(run: &[T]) -> &[T; N] {
+    debug_assert_eq!(run.len(), N, "array: a run of {} is not [_; {N}]", run.len());
+    // SAFETY: the caller's contract: the length is `N`, which is the only
+    // way the conversion fails.
+    unsafe { <&[T; N]>::try_from(run).unwrap_unchecked() }
+}
+
+/// As `array`, exclusively.
+///
+/// # Safety
+/// `run.len() == N`.
+#[inline(always)]
+pub unsafe fn array_mut<T, const N: usize>(run: &mut [T]) -> &mut [T; N] {
+    debug_assert_eq!(run.len(), N, "array_mut: a run of {} is not [_; {N}]", run.len());
+    // SAFETY: as `array`'s.
+    unsafe { <&mut [T; N]>::try_from(run).unwrap_unchecked() }
+}
+
+// -- A lifetime the runtime bounds --------------------------------------------
+
+/// A type named at each lifetime `'a`. `At<'a>` and `At<'static>` are one
+/// type expression read at two lifetimes, so they differ in the lifetime
+/// alone: a generic associated type cannot pick another type by its
+/// lifetime.
+pub trait Lifetimed {
+    type At<'a>: ?Sized + 'a;
+}
+
+/// A pointer to an `F::At<'a>`, with the lifetime erased: a runtime keeps it
+/// where no lifetime can follow it, and bounds each use by a fact of its own.
+///
+/// # Safety
+/// Each dereference of the result happens within `'a`. The caller names the
+/// fact that bounds them, which the type no longer carries.
+#[inline(always)]
+pub unsafe fn unbounded<'a, F>(ptr: NonNull<F::At<'a>>) -> NonNull<F::At<'static>>
+where
+    F: Lifetimed + ?Sized,
+{
+    // SAFETY: `F::At<'a>` and `F::At<'static>` differ in the lifetime alone
+    // (`Lifetimed`), so the two pointers have one layout and one metadata;
+    // the caller's contract bounds the uses.
+    unsafe { mem::transmute_copy::<NonNull<F::At<'a>>, NonNull<F::At<'static>>>(&ptr) }
+}
+
+/// A shared name of a place, at a lifetime its borrow does not give: the
+/// place is reached through a copy of a word (a reference word read from a
+/// local), and the lifetime of the storage the word names is the runtime's
+/// fact, not the copy's.
+///
+/// # Safety
+/// The place `place` names stays live, and no exclusive name of it is used,
+/// for `'b`. The caller names the fact that bounds `'b`.
+#[inline(always)]
+pub unsafe fn unbounded_ref<'a, 'b, T>(place: &'a T) -> &'b T
+where
+    T: ?Sized,
+{
+    // SAFETY: the caller's contract: the place is live and shared for `'b`.
+    unsafe { &*std::ptr::from_ref(place) }
+}
+
+/// As `unbounded_ref`, exclusively.
+///
+/// # Safety
+/// The place `place` names stays live for `'b`, and the result is its only
+/// name used meanwhile. The caller names the fact that bounds `'b`.
+#[inline(always)]
+pub unsafe fn unbounded_mut<'a, 'b, T>(place: &'a mut T) -> &'b mut T
+where
+    T: ?Sized,
+{
+    // SAFETY: the caller's contract: the place is live and exclusive for
+    // `'b`.
+    unsafe { &mut *std::ptr::from_mut(place) }
+}
+
+// -- A variant's tag in the word ----------------------------------------------
+
+/// The word a variant's tag register holds for the tag `tag`: its bits
+/// (`Astr::bits`), which carry the interner, so two tags are one word
+/// exactly when they are one name.
+#[inline(always)]
+pub fn word_of_tag(tag: acvus_utils::Astr) -> u64 {
+    tag.bits()
+}
+
+/// The tag a tag register's word names.
+///
+/// # Panics
+/// `word` is no `word_of_tag`'s: its high half, which holds a non-zero
+/// interner id in every tag's word, is zero.
+#[inline(always)]
+pub fn tag_of_word(word: u64) -> acvus_utils::Astr {
+    acvus_utils::Astr::of_bits(word)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +901,99 @@ mod tests {
         // SAFETY: `text` is live UTF-8.
         assert_eq!(unsafe { words.str() }, "héllo");
         assert!(Words::of_slice::<u8>(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_layout_witness_casts_there_and_back() {
+        #[repr(transparent)]
+        #[derive(Debug, PartialEq)]
+        struct Name(String);
+
+        // SAFETY: `Name` is `repr(transparent)` over `String`.
+        let layout = unsafe { SameLayout::<String, Name>::vouched() };
+
+        // SAFETY: a `Name` promises nothing a `String` does not, and
+        // releases what the `String` would.
+        let name = unsafe { layout.cast(String::from("héllo")) };
+        assert_eq!(name, Name(String::from("héllo")));
+        // SAFETY: as above, read back the other way.
+        let text = unsafe { layout.flip().cast(name) };
+        assert_eq!(text, "héllo");
+
+        let mut text = text;
+        // SAFETY: as above, for the loan.
+        assert_eq!(unsafe { layout.cast_ref(&text) }.0, "héllo");
+        // SAFETY: as above; what is written is a `String` again.
+        unsafe { layout.cast_mut(&mut text) }.0.push('!');
+        assert_eq!(text, "héllo!");
+
+        let mut run = vec![Name(String::from("a")), Name(String::from("b"))];
+        // SAFETY: as above, per element.
+        let strings = unsafe { layout.flip().cast_slice_mut(&mut run) };
+        assert_eq!(strings.len(), 2);
+        strings[1].push('c');
+        assert_eq!(run, [Name(String::from("a")), Name(String::from("bc"))]);
+    }
+
+    #[test]
+    fn a_type_identity_casts_only_between_one_type() {
+        let same = same_type::<String, String>().expect("`String` is `String`");
+        let text = same.cast(String::from("héllo"));
+        assert_eq!(same.cast(text), "héllo");
+        assert_eq!(same_type::<u64, u64>().map(|same| same.cast(7)), Some(7));
+
+        assert!(same_type::<u64, i64>().is_none());
+        assert!(same_type::<String, Vec<u8>>().is_none());
+        assert!(same_type::<&'static str, String>().is_none());
+    }
+
+    #[test]
+    fn an_unbounded_pointer_reads_the_place_it_was_made_from() {
+        struct TextAt;
+        impl Lifetimed for TextAt {
+            type At<'a> = dyn AsRef<str> + 'a;
+        }
+        let mut text = String::from("héllo");
+        let place: &mut (dyn AsRef<str> + '_) = &mut text;
+        // SAFETY: `text` outlives every dereference below.
+        let reach = unsafe { unbounded::<TextAt>(NonNull::from(place)) };
+        // SAFETY: as above, and nothing else names `text` meanwhile.
+        assert_eq!(unsafe { reach.as_ref() }.as_ref(), "héllo");
+    }
+
+    #[test]
+    fn an_unbounded_reference_names_the_place_it_was_made_from() {
+        let mut word = 7u64;
+        let copy = std::ptr::from_mut(&mut word);
+        // SAFETY: `word` outlives the result, and nothing else names it
+        // while the result is used.
+        let place: &mut u64 = unsafe { unbounded_mut(&mut *copy) };
+        *place = 9;
+        // SAFETY: as above, shared.
+        let read: &u64 = unsafe { unbounded_ref(&*copy) };
+        assert_eq!(*read, 9);
+        assert_eq!(word, 9);
+    }
+
+    #[test]
+    fn a_run_is_named_as_its_array() {
+        let mut run = [1u64, 2, 3];
+        // SAFETY: the run is 3 long.
+        assert_eq!(unsafe { array::<u64, 3>(&run) }, &[1, 2, 3]);
+        // SAFETY: as above.
+        let array = unsafe { array_mut::<u64, 3>(&mut run) };
+        array[2] = 9;
+        assert_eq!(run, [1, 2, 9]);
+    }
+
+    #[test]
+    fn a_tag_reads_back_from_its_word() {
+        let interner = acvus_utils::Interner::new();
+        let some = interner.intern("Some");
+        let none = interner.intern("None");
+        assert_eq!(tag_of_word(word_of_tag(some)), some);
+        assert_ne!(word_of_tag(some), word_of_tag(none));
+        assert_ne!(word_of_tag(some) >> 32, 0, "a tag's word carries its interner");
     }
 
     #[test]

@@ -1,0 +1,10 @@
+error[E0624]: associated function `vouched` is private
+ --> tests/compile_fail/witness_same_layout_forged.rs:8:46
+  |
+8 |     let _ = unsafe { SameLayout::<u64, f64>::vouched() };
+  |                                              ^^^^^^^ private associated function
+  |
+ ::: $WORKSPACE/acvus-extern/src/repr.rs
+  |
+  |     pub(crate) const unsafe fn vouched() -> Self {
+  |     -------------------------------------------- private associated function defined here

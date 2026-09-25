@@ -1011,6 +1011,17 @@ Status: Accepted
    trusts (RFC-0013). An extension library is written for the users of its
    own language, and its author answers for its soundness.
 
+5. **A layout identity is a witness, and a cast is repr's.** A cast
+   between two types of one layout (a `repr(transparent)` wrapper and its
+   field, a box's two forms) is a call into `acvus_extern::repr` taking a
+   witness that only `same_layout!` or the derive that proved the layout
+   makes. A tag's word and its `Astr` are not one layout; repr converts
+   between them by safe arithmetic (`word_of_tag`, `tag_of_word`). A cast between two types a
+   `TypeId` shows equal is repr's too, checked there. A lifetime erased
+   for a value the runtime keeps is repr's, with the fact that bounds it.
+   No `transmute`, `transmute_copy` or pointer cast between types is
+   written outside repr.
+
 **Why.** A safe trait or a public field that unsafe code trusts lets safe
 code break the trust: an `Inline` impl outside the list, a `Ctx` frame
 swapped, an `Instance` forged from a word each reached undefined behaviour

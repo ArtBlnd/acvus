@@ -279,11 +279,8 @@ macro_rules! value_word {
             where
                 T: Send + Sync + 'static,
             {
-                if TypeId::of::<T>() == TypeId::of::<Value>() {
-                    // SAFETY: T is Value; the copy takes over and the original is forgotten.
-                    let same: Value = unsafe { mem::transmute_copy(&value) };
-                    mem::forget(value);
-                    return same;
+                if let Some(same) = repr::same_type::<T, Value>() {
+                    return same.cast(value);
                 }
                 match inline_value(&value) {
                     Some(inline) => inline,
@@ -297,9 +294,8 @@ macro_rules! value_word {
             where
                 T: Send + Sync + 'static,
             {
-                if TypeId::of::<T>() == TypeId::of::<Value>() {
-                    // SAFETY: T is Value, one bit pattern under another name.
-                    return unsafe { mem::transmute_copy(&self) };
+                if let Some(same) = repr::same_type::<Value, T>() {
+                    return same.cast(self);
                 }
                 // SAFETY: the caller's contract: an inline `T` was erased
                 // into this word by `inline_value`.
@@ -708,7 +704,7 @@ typed_debug_fn! { Tuple;
 typed_debug_fn! { Object; dbg_object = |d, f| f.debug_map().entries(d.fields()).finish(); }
 typed_debug_fn! { VariantValue;
     dbg_variant = |d, f| {
-        let tag = Astr::of_bits(d.tag().bits());
+        let tag = repr::tag_of_word(d.tag().bits());
         match d.payload().kind() {
             Kind::Undef => write!(f, "{tag:?}"),
             _ => write!(f, "{tag:?}({:?})", d.payload()),
@@ -921,7 +917,7 @@ macro_rules! value_constructors {
             /// the name, so two tags compare as words and neither side needs the enum's
             /// type to write or read one.
             $v fn tag(tag: Astr) -> Value {
-                Value::inline(Kind::U64, tag.bits().into_word())
+                Value::inline(Kind::U64, repr::word_of_tag(tag))
             }
             /// `Some(payload)`, in the one shape every option takes: the payload's
             /// own value, unless the payload is itself a `None`, whose depth word
@@ -1104,7 +1100,7 @@ macro_rules! value_constructors {
             /// # Safety
             /// The value is a variant's tag register.
             $v unsafe fn as_tag(&self) -> Astr {
-                Astr::of_bits(self.bits())
+                repr::tag_of_word(self.bits())
             }
             /// # Safety
             /// The value is a closure: `Value::code` or `Value::closure` wrote it.
