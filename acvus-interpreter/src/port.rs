@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use acvus_extern::{Borrows, Holding, Lendable, Owned, Shared};
+use acvus_extern::{Borrows, Holding, Lendable, Owned, Shared, repr};
 use acvus_mir::ty::{PolyTy, Ty};
 use acvus_utils::Interner;
 use futures::channel::{mpsc, oneshot};
@@ -149,6 +149,13 @@ pub(crate) struct Gate {
 
 struct Reach(NonNull<dyn Storage>);
 
+/// `dyn Storage` at each lifetime, for erasing the one a gate cannot carry.
+struct StorageAt;
+
+impl repr::Lifetimed for StorageAt {
+    type At<'a> = dyn Storage + 'a;
+}
+
 // SAFETY: `Storage: Send`, and a `Reach` is dereferenced only under the
 // gate's lock, one access at a time.
 unsafe impl Send for Reach {}
@@ -158,10 +165,10 @@ impl Gate {
     /// `storage` is not touched otherwise, and outlives every access, until
     /// `close` returns.
     pub(crate) unsafe fn open(storage: &mut dyn Storage) -> Gate {
-        let reach: NonNull<dyn Storage + '_> = NonNull::from(storage);
         // SAFETY: the caller's contract bounds every dereference by `close`,
-        // which the erased lifetime does not.
-        let reach: NonNull<dyn Storage + 'static> = unsafe { std::mem::transmute(reach) };
+        // which the erased lifetime does not: `with` dereferences only under
+        // the lock, and `close` empties the reach under the same lock.
+        let reach = unsafe { repr::unbounded::<StorageAt>(NonNull::from(storage)) };
         Gate {
             reach: Mutex::new(Some(Reach(reach))),
         }

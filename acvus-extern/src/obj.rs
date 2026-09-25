@@ -427,9 +427,8 @@ macro_rules! returned {
                     $width,
                     "a destination run is this result form's own width"
                 );
-                // SAFETY: the caller's contract: `out` is `$width` long, and a
-                // `[T; N]` is `N` `T`s with no other requirement.
-                unsafe { &mut *(out.as_mut_ptr() as *mut [Rt::Value; $width]) }
+                // SAFETY: the caller's contract: `out` is `$width` long.
+                unsafe { $crate::repr::array_mut::<Rt::Value, $width>(out) }
             }
 
             fn select<Rt, F, H>(forms: F, f: H) -> F::Out
@@ -518,7 +517,7 @@ impl<const W: usize> Returned for Run<W> {
             "a destination run is this result form's own width"
         );
         // SAFETY: as the macro's.
-        unsafe { &mut *(out.as_mut_ptr() as *mut [Rt::Value; W]) }
+        unsafe { crate::repr::array_mut::<Rt::Value, W>(out) }
     }
 
     fn select<Rt, F, H>(forms: F, f: H) -> F::Out
@@ -1519,8 +1518,9 @@ where
         // SAFETY: the caller's contract names the storage a crossing wrote
         // at this type.
         let items = T::in_place(unsafe { crate::Holding::new() }, &stored.0);
-        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
-        unsafe { &*(items as *const Vec<T> as *const Self) }
+        // SAFETY: `Arr<T, N>` names its `Vec<T>` alone, and `N` is a
+        // `PhantomData`'s.
+        unsafe { Self::over_items().cast_ref(items) }
     }
 
     unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
@@ -1529,7 +1529,7 @@ where
         let stored = unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(reference) };
         // SAFETY: as `deref`'s.
         let items = T::in_place_mut(unsafe { crate::Holding::new() }, &mut stored.0);
-        // SAFETY: `Arr<T, N>` is `repr(transparent)` over `Vec<T>`.
-        unsafe { &mut *(items as *mut Vec<T> as *mut Self) }
+        // SAFETY: as `deref`'s, both ways.
+        unsafe { Self::over_items().cast_mut(items) }
     }
 }
