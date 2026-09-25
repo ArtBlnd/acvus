@@ -1109,8 +1109,10 @@ Status: Proposed
    them only by that reader to come.
 7. **Places a call reaches.** `#[extern_fn(reaches(p1, ..))]` on `f`
    states every place `f` reads or writes through its reference
-   parameters: `x`, all the reference parameter `x` lends, or `x[i]`, its
-   element at the `u64` parameter `i`. It names every reference
+   parameters: `x`, all the reference parameter `x` lends, `x[i]`, its
+   element at the `u64` parameter `i`, or `x[k]`, a map or set's entry at
+   the key parameter `k`, meeting other keys by the map's equivalence
+   (RFC-0098 rule 2). It names every reference
    parameter. A length `f` reads to check an index is no place, as an
    index's own check is not: no write of an element changes it. It is the
    author's promise as a law is (rule 5), sampled only by tests.
