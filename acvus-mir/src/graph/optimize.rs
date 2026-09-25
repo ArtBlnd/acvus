@@ -95,19 +95,19 @@ pub fn optimize(
         .into_iter()
         .map(|(qref, module)| Undropped::optimized(interner, laws, qref, module, opt))
         .collect();
-    settle_inputs(&mut undropped);
+    settle_inputs(&mut undropped, laws);
 
     for module in undropped {
         let qref = module.qref;
         inputs.insert(qref, required_inputs(&module.main));
-        let module = module.finished();
+        let module = module.finished(laws);
 
         let mut errors = validate::type_check::check_types(&module);
         errors.extend(validate::bounds::check_bounds(&module, laws));
         // RFC-0089 rules 1, 3 and 5, asked of the module after
         // `insert_drops`, which is the last pass: the form must hold on the
         // body the machine runs.
-        errors.extend(validate::stages::check(&module));
+        errors.extend(validate::stages::check(&module, laws));
         if !errors.is_empty() {
             all_errors.push((qref, errors));
         }
@@ -262,11 +262,11 @@ impl Undropped {
         std::iter::once(&mut self.main).chain(self.closures.iter_mut().map(|(_, body)| body))
     }
 
-    fn finished(self) -> MirModule {
+    fn finished(self, laws: &LawTable) -> MirModule {
         let finish = |mut cfg: CfgBody| {
             debug_validate(&cfg);
             let val_types = cfg.val_types.clone();
-            optimize::drop_insertion::insert_drops(&mut cfg, &val_types);
+            optimize::drop_insertion::insert_drops(&mut cfg, &val_types, laws);
             let mut body = cfg::demote(cfg);
             optimize::rejoin::run(&mut body);
             body
@@ -293,7 +293,7 @@ impl Undropped {
 /// so a parameter removed here is removed from every call to the module, and
 /// a value a caller read only to pass it is unread in turn: the removal
 /// repeats until no module loses one.
-fn settle_inputs(undropped: &mut [Undropped]) {
+fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable) {
     loop {
         let mut removed: FxHashMap<QualifiedRef, Vec<usize>> = FxHashMap::default();
         for module in undropped.iter_mut() {
@@ -317,7 +317,7 @@ fn settle_inputs(undropped: &mut [Undropped]) {
                     optimize::dce::run(body);
                     // RFC-0089 rule 6: what `dce` removed may have freed a
                     // stage, and cutting again merges the boundaries it left.
-                    optimize::stages::run(body);
+                    optimize::stages::run(body, laws);
                 }
             }
         }
@@ -435,7 +435,7 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // instructions and a pass that moved one across a stage's boundary
     // would leave a dependence cycle crossing it after the fact; after
     // `iv_canon`, so a canonicalized induction variable is no token.
-    optimize::stages::run(cfg);
+    optimize::stages::run(cfg, laws);
     // RFC-0056, RFC-0066 rule 7: after the stages, since it reduces only a
     // counter expression that one `InOrder` stage reads, and puts the
     // derived counter's step in that stage. It adds instructions to the

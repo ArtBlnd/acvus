@@ -80,7 +80,7 @@ impl Analyzed {
     /// The law `loop_deps` judges on the cycle holding each token `holds`
     /// picks out of a `for`, in the order of the cycles.
     fn laws_where(&self, loop_: &Loop, holds: impl Fn(&Token) -> bool) -> Vec<Option<Accumulator>> {
-        let deps = LoopDeps::of(&self.cfg, loop_.natural.header)
+        let deps = LoopDeps::of(&self.cfg, &self.laws, loop_.natural.header)
             .unwrap_or_else(|fault| panic!("{}", fault.shown()));
         let judged = deps.judge(&self.cfg, &self.laws);
         deps.cycles
@@ -745,4 +745,52 @@ fn a_fold_combines_through_the_instance_of_its_own_types() {
     assert_eq!(fold.callee, called(&a, &i, "folded", "put"));
     assert_eq!(fold.fold.combine, called(&a, &i, "folded", "append"));
     assert_eq!(fold.fold.identity, called(&a, &i, "folded", "empty"));
+}
+
+#[test]
+fn a_difference_with_the_counter_is_affine_with_its_step_kept_or_negated() {
+    let a = Analyzed::of("let c = 9; let s = 0; for i in 0..4 { s = s + (i - 2) + (c - i); } s");
+    let loop_ = a.sole_loop();
+    let LoopKind::For {
+        source: ForSource::Range { at, .. },
+    } = loop_.kind
+    else {
+        panic!("a range `for`, found {:?}", loop_.kind);
+    };
+    let counter = a.for_counter(loop_);
+    let affine = a.affine(loop_);
+    let differences: Vec<(ValueId, bool)> = loop_
+        .natural
+        .blocks()
+        .flat_map(|block| &a.cfg.blocks[block.0].insts)
+        .filter_map(|inst| match inst.kind {
+            InstKind::BinOp {
+                dst,
+                op: acvus_mir::ir::BinOp::Sub(_),
+                left,
+                right,
+            } if left == counter || right == counter => Some((dst, left == counter)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(differences.len(), 2, "`i - 2` and `c - i`");
+    for (dst, counter_on_left) in differences {
+        let found = affine.get(dst).expect("a difference with the counter is affine");
+        match counter_on_left {
+            true => {
+                assert!(matches!(found.derivation, Derivation::Lowered { of, .. } if of == counter));
+                assert!(matches!(&found.base, Term::Sub(base, _) if **base == Term::Value(at)));
+                assert_eq!(found.step, Term::int(1), "`i - 2` keeps the counter's step");
+            }
+            false => {
+                assert!(matches!(found.derivation, Derivation::Reflected { of, .. } if of == counter));
+                assert!(matches!(&found.base, Term::Sub(_, base) if **base == Term::Value(at)));
+                assert_eq!(
+                    found.step,
+                    Term::int(0).sub(Term::int(1)),
+                    "`c - i` negates the counter's step"
+                );
+            }
+        }
+    }
 }

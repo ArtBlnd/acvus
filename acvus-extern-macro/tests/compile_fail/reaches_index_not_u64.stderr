@@ -1,0 +1,5 @@
+error: `i` is not a `u64` taken by value, and an element is named by its index (RFC-0082 rule 7)
+ --> tests/compile_fail/reaches_index_not_u64.rs:4:38
+  |
+4 | #[extern_fn(effect = pure, reaches(a[i]))]
+  |                                      ^

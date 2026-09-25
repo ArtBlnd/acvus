@@ -739,7 +739,7 @@ async fn an_owned_element_one_part_reads_is_released_once_in_that_part() {
     else {
         panic!("the loop states its stages:\n{mir}")
     };
-    let membership = LoopDeps::of(&cfg, header)
+    let membership = LoopDeps::of(&cfg, &compiled.laws, header)
         .unwrap_or_else(|fault| panic!("{}:\n{mir}", fault.shown()))
         .membership;
     let stages_holding = |holds: fn(&acvus_mir::ir::InstKind) -> bool| -> Vec<usize> {
@@ -783,7 +783,7 @@ async fn an_owned_element_two_sums_read_is_released_once() {
         .map(acvus_mir::cfg::BlockIdx)
         .filter(|at| matches!(cfg.blocks[at.0].terminator, acvus_mir::cfg::Terminator::For { .. }))
         .map(|header| {
-            let deps = LoopDeps::of(&cfg, header)
+            let deps = LoopDeps::of(&cfg, &compiled.laws, header)
                 .unwrap_or_else(|fault| panic!("{}:\n{mir}", fault.shown()));
             (0..deps.membership.stages().len())
                 .filter(|stage| !deps.is_free(*stage))

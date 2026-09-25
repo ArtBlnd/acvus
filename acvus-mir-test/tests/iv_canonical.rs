@@ -87,7 +87,7 @@ impl Compiled {
             .filter(|p| p.carried == Carried::State)
             .map(|p| p.param)
             .collect();
-        let deps = LoopDeps::of(&self.cfg, loop_.natural.header)
+        let deps = LoopDeps::of(&self.cfg, &self.laws, loop_.natural.header)
             .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), self.listing));
         let judged = deps.judge(&self.cfg, &self.laws);
         deps.cycles

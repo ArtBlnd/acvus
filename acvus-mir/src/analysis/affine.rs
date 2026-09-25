@@ -10,10 +10,11 @@
 //!   rule 3).
 //! - A carried header parameter whose entering edges all send `b` and
 //!   whose back edges all send `p + c`, with `c` invariant, is `{b, c}`.
-//! - `a·v` and `v + b` of an affine `v`, with `a` and `b` invariant, are
-//!   affine: `{a·base, a·step}` and `{base + b, step}`.
+//! - `a·v`, `v + b`, `v − b` and `b − v` of an affine `v`, with `a` and `b`
+//!   invariant, are affine: `{a·base, a·step}`, `{base + b, step}`,
+//!   `{base − b, step}` and `{b − base, 0 − step}` (RFC-0066 rule 4).
 //!
-//! Only integers are affine, and a `+` or `*` of either kind makes one
+//! Only integers are affine, and a `+`, `−` or `*` of either kind makes one
 //! (`ir::Overflow`). A wrapping one is arithmetic modulo `2^width`, a
 //! ring; a trapping one gives the integer result on every run that goes
 //! past it, since a run whose result does not fit ends there (RFC-0037
@@ -77,6 +78,16 @@ pub enum Derivation {
     Offset {
         of: ValueId,
         offset: Operand,
+    },
+    /// `of − offset`.
+    Lowered {
+        of: ValueId,
+        offset: Operand,
+    },
+    /// `from − of`: the step negated.
+    Reflected {
+        of: ValueId,
+        from: Operand,
     },
 }
 
@@ -164,12 +175,12 @@ impl AffineValues {
                 if values.contains_key(&dst) || !integer(dst) {
                     continue;
                 }
-                let (of, other) = match (
+                let (of, other, affine_on_left) = match (
                     values.contains_key(&operation.left),
                     values.contains_key(&operation.right),
                 ) {
-                    (true, false) => (operation.left, operation.right),
-                    (false, true) => (operation.right, operation.left),
+                    (true, false) => (operation.left, operation.right, true),
+                    (false, true) => (operation.right, operation.left, false),
                     _ => continue,
                 };
                 let Some(invariant) = invariants.at(natural, other) else {
@@ -197,6 +208,19 @@ impl AffineValues {
                             of,
                             offset: operand,
                         },
+                    },
+                    BinOp::Sub(_) if affine_on_left => Affine {
+                        base: known.base.clone().sub(term),
+                        step: known.step.clone(),
+                        derivation: Derivation::Lowered {
+                            of,
+                            offset: operand,
+                        },
+                    },
+                    BinOp::Sub(_) => Affine {
+                        base: term.sub(known.base.clone()),
+                        step: Term::int(0).sub(known.step.clone()),
+                        derivation: Derivation::Reflected { of, from: operand },
                     },
                     _ => continue,
                 };

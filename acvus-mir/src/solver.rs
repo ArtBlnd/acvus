@@ -5309,6 +5309,7 @@ mod requirement_tests {
                     effect_bounds: Vec::new(),
                     laws: crate::laws::Laws::None,
                     ensures: Vec::new(),
+                    reaches: crate::laws::Reaches::Lent,
                 })
                 .collect(),
             generic: None,

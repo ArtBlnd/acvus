@@ -218,7 +218,7 @@ fn iterations_run_apart_when_nothing_crosses_the_latch() {
         let [header] = headers[..] else {
             panic!("{source} holds one `for`")
         };
-        let deps = LoopDeps::of(&cfg, header).unwrap_or_else(|fault| panic!("{}", fault.shown()));
+        let deps = LoopDeps::of(&cfg, &compiled.laws, header).unwrap_or_else(|fault| panic!("{}", fault.shown()));
         let judged = deps.judge(&cfg, &compiled.laws);
         let runs_apart = deps.cycles.iter().zip(&judged).all(|(cycle, judged)| {
             cycle.tokens == [Token::Storage(Storage::Element)] && judged.order == Order::Disjoint

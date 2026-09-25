@@ -71,6 +71,8 @@ pub struct CompileResult {
     /// The `$` inputs the entry still reads, which the host supplies.
     pub required_inputs: Vec<acvus_mir::graph::ContextInfo>,
     pub settled_tail: Ty,
+    /// The declarations `analysis::loop_deps` reads (RFC-0082).
+    pub laws: acvus_mir::laws::LawTable,
 }
 
 fn compile(
@@ -329,7 +331,8 @@ where
         });
     }
 
-    let opt_result = graph_optimize::optimize(interner, &acvus_mir::laws::LawTable::of(graph.functions.iter()), result.modules.clone(), opt);
+    let laws = acvus_mir::laws::LawTable::of(graph.functions.iter());
+    let opt_result = graph_optimize::optimize(interner, &laws, result.modules.clone(), opt);
 
     // Report validation errors from optimization.
     for (qref, errs) in &opt_result.errors {
@@ -372,6 +375,7 @@ where
         instances,
         required_inputs,
         settled_tail: tail,
+        laws,
     })
 }
 

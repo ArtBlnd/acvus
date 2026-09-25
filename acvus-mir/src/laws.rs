@@ -96,6 +96,28 @@ pub enum Subject {
     Ret,
 }
 
+/// `#[extern_fn(reaches(p, ..))]` (RFC-0082 rule 7): what a call reaches
+/// of the storages its reference arguments lend, which `analysis::loop_deps`
+/// reads (RFC-0089 rule 4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Reaches {
+    /// No declaration: a call reaches all each reference argument lends it.
+    #[default]
+    Lent,
+    /// A call reaches these places and nothing else through its reference
+    /// arguments.
+    Places(Vec<ReachedPlace>),
+}
+
+/// `x`, the whole of what reference parameter `x` lends, or `x[i]`, its
+/// element at the `u64` parameter `i`. A parameter is numbered as
+/// [`PostTerm::Param`] numbers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReachedPlace {
+    pub param: usize,
+    pub element: Option<usize>,
+}
+
 /// An extern and one of its instances, numbered as `Callee::Extern`
 /// numbers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -279,6 +301,7 @@ struct DeclaredAt<'a> {
     ty: &'a PolyTy,
     laws: &'a Laws,
     ensures: &'a [Postcondition],
+    reaches: &'a Reaches,
 }
 
 /// What one instance of an extern declares.
@@ -286,6 +309,7 @@ struct DeclaredAt<'a> {
 struct Declared {
     laws: ResolvedLaws,
     ensures: Vec<Postcondition>,
+    reaches: Reaches,
 }
 
 #[derive(Debug, Default)]
@@ -316,14 +340,21 @@ impl LawTable {
                         ty: &instance.ty,
                         laws: &instance.laws,
                         ensures: &instance.ensures,
+                        reaches: &instance.reaches,
                     })
                     .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
                         ty: &function.ty,
                         laws: &generic.laws,
                         ensures: &generic.ensures,
+                        reaches: &generic.reaches,
                     }));
                 let mut declared: Vec<Declared> = declared_at
-                    .map(|DeclaredAt { ty, laws, ensures }| Declared {
+                    .map(|DeclaredAt {
+                             ty,
+                             laws,
+                             ensures,
+                             reaches,
+                         }| Declared {
                         laws: resolve(laws, ty, |named| functions.get(&named).copied())
                             .unwrap_or_else(|unresolved| {
                                 panic!(
@@ -333,6 +364,7 @@ impl LawTable {
                                 )
                             }),
                         ensures: ensures.to_vec(),
+                        reaches: reaches.clone(),
                     })
                     .collect();
                 if declared.is_empty() {
@@ -358,6 +390,17 @@ impl LawTable {
         match self.declared(callee) {
             Some(declared) => &declared.ensures,
             None => &[],
+        }
+    }
+
+    /// What a call of the instance `callee` names reaches through its
+    /// reference arguments; a call of a local function or through a value
+    /// states nothing, and reaches all they lend.
+    pub fn reaches_of(&self, callee: &Callee) -> &Reaches {
+        static LENT: Reaches = Reaches::Lent;
+        match self.declared(callee) {
+            Some(declared) => &declared.reaches,
+            None => &LENT,
         }
     }
 

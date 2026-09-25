@@ -143,6 +143,14 @@ impl Checked {
         }
     }
 
+    pub fn wrapping_op(self) -> BinOp {
+        match self {
+            Checked::Add => BinOp::Add(Overflow::Wrap),
+            Checked::Sub => BinOp::Sub(Overflow::Wrap),
+            Checked::Mul => BinOp::Mul(Overflow::Wrap),
+        }
+    }
+
     pub fn of_trapping(op: BinOp) -> Option<Checked> {
         match op {
             BinOp::Add(Overflow::Trap) => Some(Checked::Add),

@@ -86,6 +86,7 @@ fn advance_fn(i: &Interner) -> Function {
         effect_bounds: vec![],
         laws: Default::default(),
         ensures: Vec::new(),
+        reaches: Default::default(),
     };
     let mut inner = PolyBuilder::new();
     Function {

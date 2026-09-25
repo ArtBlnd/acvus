@@ -27,7 +27,8 @@ use crate::ir::{
     BinOp, Callee, ForSource, IndexMode, InstKind, Label, PathSeg, RefTarget, Stages, ValueId,
 };
 use crate::laws::{
-    ExternInstance, LawTable, ResolvedBinary, ResolvedFold, ResolvedIdentity, ResolvedLaws,
+    ExternInstance, LawTable, ReachedPlace, Reaches, ResolvedBinary, ResolvedFold,
+    ResolvedIdentity, ResolvedLaws,
 };
 use crate::ty::{Mutability, Ty};
 
@@ -342,7 +343,7 @@ pub struct BodyDeps {
 }
 
 impl BodyDeps {
-    pub fn of(cfg: &CfgBody) -> Self {
+    pub fn of(cfg: &CfgBody, laws: &LawTable) -> Self {
         let loans = Loans::build(cfg);
         let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
         let found = (0..cfg.blocks.len())
@@ -350,7 +351,7 @@ impl BodyDeps {
             .filter(|at| matches!(cfg.blocks[at.0].terminator, Terminator::For { .. }))
             .map(|header| HeaderDeps {
                 header,
-                deps: LoopDeps::with(cfg, &loans, header, &loop_blocks_of(&loops, header)),
+                deps: LoopDeps::with(cfg, &loans, laws, header, &loop_blocks_of(&loops, header)),
             })
             .collect();
         Self { loops: found }
@@ -360,15 +361,16 @@ impl BodyDeps {
 impl LoopDeps {
     /// # Panics
     /// If `header` does not end in `For`.
-    pub fn of(cfg: &CfgBody, header: BlockIdx) -> Result<LoopDeps, ShapeFault> {
+    pub fn of(cfg: &CfgBody, laws: &LawTable, header: BlockIdx) -> Result<LoopDeps, ShapeFault> {
         let loans = Loans::build(cfg);
         let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
-        LoopDeps::with(cfg, &loans, header, &loop_blocks_of(&loops, header))
+        LoopDeps::with(cfg, &loans, laws, header, &loop_blocks_of(&loops, header))
     }
 
     fn with(
         cfg: &CfgBody,
         loans: &Loans<'_>,
+        laws: &LawTable,
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
     ) -> Result<LoopDeps, ShapeFault> {
@@ -380,6 +382,7 @@ impl LoopDeps {
         let slots = TargetSlots::of(loans, *source, loop_blocks);
         let disjoint = disjoint_storages(
             loans,
+            laws,
             header,
             loop_blocks,
             &graph.written_storages(cfg, loans, &slots),
@@ -841,12 +844,6 @@ struct ForElement {
     counter: ValueId,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct AffineTerm<'a> {
-    base: &'a Term,
-    step: &'a Term,
-}
-
 /// The place a value names is read off the instruction that defines it;
 /// a value no `Ref`, `AsSlice`, `Index` by reference or `for` element
 /// defines names no place, and whatever reaches through it reaches the
@@ -854,12 +851,13 @@ struct AffineTerm<'a> {
 struct Places<'a, 'cfg> {
     cfg: &'cfg CfgBody,
     loans: &'a Loans<'cfg>,
+    laws: &'a LawTable,
     defs: FxHashMap<ValueId, InstAt>,
     elements: FxHashMap<ValueId, ForElement>,
 }
 
 impl<'a, 'cfg> Places<'a, 'cfg> {
-    fn of(loans: &'a Loans<'cfg>) -> Self {
+    fn of(loans: &'a Loans<'cfg>, laws: &'a LawTable) -> Self {
         let cfg = loans.cfg();
         let mut defs: FxHashMap<ValueId, InstAt> = FxHashMap::default();
         let mut elements: FxHashMap<ValueId, ForElement> = FxHashMap::default();
@@ -895,6 +893,7 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
         Self {
             cfg,
             loans,
+            laws,
             defs,
             elements,
         }
@@ -987,7 +986,15 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             }
             InstKind::StringAppend { target, .. } => Self::within(self.named_by(*target), slot),
             InstKind::FunctionCall {
-                callee: Callee::Extern { .. } | Callee::Direct(_),
+                callee: callee @ Callee::Extern { .. },
+                args,
+                ..
+            } => match self.laws.reaches_of(callee) {
+                Reaches::Lent => self.reach_of_args(args, slot),
+                Reaches::Places(declared) => self.reach_of_declared(declared, args, slot),
+            },
+            InstKind::FunctionCall {
+                callee: Callee::Direct(_),
                 args,
                 ..
             } => self.reach_of_args(args, slot),
@@ -1003,6 +1010,44 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             match Self::within(self.named_by(arg), slot) {
                 Reach::Places(found) => places.extend(found),
                 Reach::Whole => return Reach::Whole,
+            }
+        }
+        match places.is_empty() {
+            true => Reach::Whole,
+            false => Reach::Places(places),
+        }
+    }
+
+    /// A callee whose declaration states its places reaches, through an
+    /// argument that lends `slot`, the places stated of that argument's
+    /// parameter; an argument lending `slot` at a parameter of which none
+    /// is stated reaches the whole storage.
+    fn reach_of_declared(
+        &self,
+        declared: &[ReachedPlace],
+        args: &[ValueId],
+        slot: ValueId,
+    ) -> Reach {
+        let mut places: Vec<Place> = Vec::new();
+        for (param, &arg) in args.iter().enumerate() {
+            if !self.holds(arg, slot) {
+                continue;
+            }
+            let stated: Vec<&ReachedPlace> = declared
+                .iter()
+                .filter(|place| place.param == param)
+                .collect();
+            if stated.is_empty() {
+                return Reach::Whole;
+            }
+            let Some(lent) = self.named_by(arg).filter(|place| place.slot == slot) else {
+                return Reach::Whole;
+            };
+            for place in stated {
+                places.push(match place.element {
+                    Some(index) => lent.clone().below([Component::At(args[index])]),
+                    None => lent.clone(),
+                });
             }
         }
         match places.is_empty() {
@@ -1030,12 +1075,13 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
 }
 
 /// The storages among `written` whose every place the loop reaches lies
-/// under one path component that is the same `a·k + b` of the counter at
-/// every access, `a` a nonzero constant. The component's value is exact on
-/// every run past it (RFC-0037 rule 3), so no two iterations reach one
-/// place.
+/// under one path component that is `a·k + b` of the counter at every
+/// access, one nonzero constant `a` and bases that differ by constants none
+/// a nonzero multiple of `a`. The component's value is exact on every run
+/// past it (RFC-0037 rule 3), so no two iterations reach one place.
 fn disjoint_storages(
     loans: &Loans<'_>,
+    laws: &LawTable,
     header: BlockIdx,
     loop_blocks: &[BlockIdx],
     written: &[ValueId],
@@ -1050,7 +1096,7 @@ fn disjoint_storages(
         return Vec::new();
     };
     let affine = AffineValues::of(cfg, nest.get(id), &invariants);
-    let places = Places::of(loans);
+    let places = Places::of(loans, laws);
     let reached = |slot: ValueId| -> Option<Vec<Place>> {
         let mut found: Vec<Place> = Vec::new();
         for &block in loop_blocks {
@@ -1083,21 +1129,125 @@ fn one_affine_component(reached: &[Place], affine: &AffineValues) -> bool {
     let term_at = |place: &Place, position: usize| match &place.path[position] {
         Component::At(index) => affine
             .get(*index)
-            .filter(|found| constant(&found.step).is_some_and(|step| step != 0))
-            .map(|found| AffineTerm {
-                base: &found.base,
-                step: &found.step,
+            .and_then(|found| {
+                constant(&found.step)
+                    .filter(|step| *step != 0)
+                    .map(|step| (&found.base, step))
             }),
         Component::Named(_) => None,
     };
     (0..shortest).any(|position| {
-        let Some(first) = term_at(&reached[0], position) else {
-            return false;
-        };
-        reached[1..]
+        let terms: Option<Vec<(&Term, i128)>> = reached
             .iter()
-            .all(|place| term_at(place, position) == Some(first))
+            .map(|place| term_at(place, position))
+            .collect();
+        terms.is_some_and(|terms| never_meet(&terms))
     })
+}
+
+/// Terms `base + k·a` of one constant `a ≠ 0` whose bases differ pairwise
+/// by constants none a nonzero multiple of `a`: `b₁ + k₁·a = b₂ + k₂·a`
+/// holds only where `b₁ − b₂ = (k₂ − k₁)·a`, so only at `k₁ = k₂`
+/// (RFC-0089 rule 4).
+fn never_meet(terms: &[(&Term, i128)]) -> bool {
+    let Some(&(_, step)) = terms.first() else {
+        return false;
+    };
+    if terms.iter().any(|(_, other)| *other != step) {
+        return false;
+    }
+    let mut bases: Vec<&Term> = Vec::new();
+    for (base, _) in terms {
+        if !bases.contains(base) {
+            bases.push(base);
+        }
+    }
+    bases.iter().enumerate().all(|(at, first)| {
+        bases[at + 1..].iter().all(|second| {
+            constant_difference(first, second)
+                .is_some_and(|difference| {
+                    difference == 0 || difference.checked_rem(step).is_some_and(|rest| rest != 0)
+                })
+        })
+    })
+}
+
+/// `a − b` where it is a constant: the two terms as sums of constant
+/// multiples of the same atoms, whose every atom cancels.
+fn constant_difference(a: &Term, b: &Term) -> Option<i128> {
+    let difference = Linear::of(a)?.minus(Linear::of(b)?)?;
+    difference
+        .atoms
+        .iter()
+        .all(|(_, coefficient)| *coefficient == 0)
+        .then_some(difference.constant)
+}
+
+/// A term as `constant + Σ coefficient·atom`. An atom is a value, a
+/// length, or a product or `max` no constant factors out of, compared as
+/// written.
+#[derive(Clone)]
+struct Linear<'a> {
+    constant: i128,
+    atoms: Vec<(&'a Term, i128)>,
+}
+
+impl<'a> Linear<'a> {
+    fn constant(constant: i128) -> Self {
+        Self {
+            constant,
+            atoms: Vec::new(),
+        }
+    }
+
+    fn atom(term: &'a Term) -> Self {
+        Self {
+            constant: 0,
+            atoms: vec![(term, 1)],
+        }
+    }
+
+    /// `None` where a coefficient leaves `i128`.
+    fn of(term: &'a Term) -> Option<Self> {
+        if let Some(value) = constant(term) {
+            return Some(Self::constant(value));
+        }
+        match term {
+            Term::Const(_) | Term::Value(_) | Term::Len(_) | Term::Max(..) => {
+                Some(Self::atom(term))
+            }
+            Term::Add(a, b) => Self::of(a)?.plus(Self::of(b)?),
+            Term::Sub(a, b) => Self::of(a)?.minus(Self::of(b)?),
+            Term::Mul(a, b) => match (constant(a), constant(b)) {
+                (Some(factor), _) => Self::of(b)?.times(factor),
+                (_, Some(factor)) => Self::of(a)?.times(factor),
+                (None, None) => Some(Self::atom(term)),
+            },
+        }
+    }
+
+    fn plus(mut self, other: Self) -> Option<Self> {
+        self.constant = self.constant.checked_add(other.constant)?;
+        for (atom, coefficient) in other.atoms {
+            match self.atoms.iter_mut().find(|(held, _)| **held == *atom) {
+                Some((_, held)) => *held = held.checked_add(coefficient)?,
+                None => self.atoms.push((atom, coefficient)),
+            }
+        }
+        Some(self)
+    }
+
+    fn minus(self, other: Self) -> Option<Self> {
+        self.plus(other.times(-1)?)
+    }
+
+    fn times(mut self, factor: i128) -> Option<Self> {
+        self.constant = self.constant.checked_mul(factor)?;
+        for (_, coefficient) in &mut self.atoms {
+            *coefficient = coefficient.checked_mul(factor)?;
+        }
+        Some(self)
+    }
 }
 
 fn constant(term: &Term) -> Option<i128> {

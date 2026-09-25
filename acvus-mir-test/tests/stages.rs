@@ -80,7 +80,7 @@ impl Compiled {
     }
 
     fn deps(&self) -> LoopDeps {
-        LoopDeps::of(&self.cfg, self.only_header())
+        LoopDeps::of(&self.cfg, &self.laws, self.only_header())
             .unwrap_or_else(|fault| panic!("{}:\n{}", fault.shown(), self.listing))
     }
 

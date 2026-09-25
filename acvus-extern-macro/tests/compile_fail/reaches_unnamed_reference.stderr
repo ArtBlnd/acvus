@@ -1,0 +1,5 @@
+error: `reaches` names no place of the reference parameter `b`: it states every place the call reaches through each (RFC-0082 rule 7)
+ --> tests/compile_fail/reaches_unnamed_reference.rs:6:4
+  |
+6 | fn both(a: &Vec<u64>, b: &Vec<u64>, i: u64) -> u64 {
+  |    ^^^^

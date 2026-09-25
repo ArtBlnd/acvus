@@ -228,7 +228,7 @@ where
     c.extend(items);
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, reaches(c[i], c[j]))]
 fn swap<T>(c: &mut Vec<T>, i: u64, j: u64)
 where
     T: Var<kind::Type>,
@@ -574,6 +574,32 @@ mod tests {
                 let mut combined = pushed(new(), a);
                 extend(&mut combined, pushed(new(), b));
                 assert_eq!(combined, whole, "split of {xs:?} at {at}");
+            }
+        }
+    }
+
+    /// `swap`'s `reaches(c[i], c[j])`: over sampled vecs and every pair of
+    /// indices, the result holds the elements at `i` and `j` exchanged,
+    /// every other element as it was, and the length as it was.
+    #[test]
+    fn swap_reaches_only_the_elements_at_its_two_indices() {
+        let mut samples = Samples(0x5eed_5a9e_0c1a_7e01);
+        for len in 1..=12u64 {
+            let before: Vec<i64> = (0..len).map(|_| samples.next() as i64).collect();
+            for i in 0..len {
+                for j in 0..len {
+                    let mut after = before.clone();
+                    swap(&mut after, i, j);
+                    assert_eq!(after.len(), before.len());
+                    for at in 0..len {
+                        let expected = match at {
+                            at if at == i => before[j as usize],
+                            at if at == j => before[i as usize],
+                            at => before[at as usize],
+                        };
+                        assert_eq!(after[at as usize], expected, "swap({i}, {j}) of {before:?}");
+                    }
+                }
             }
         }
     }

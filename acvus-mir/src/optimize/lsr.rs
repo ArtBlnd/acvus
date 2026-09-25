@@ -179,7 +179,7 @@ impl Chain {
         let Terminator::For { source, .. } = &cfg.blocks[frame.header.0].terminator else {
             return None;
         };
-        let deps = LoopDeps::of(cfg, frame.header).ok()?;
+        let deps = LoopDeps::of(cfg, laws, frame.header).ok()?;
         let ends: Vec<BlockIdx> = deps
             .membership
             .stages()
@@ -373,7 +373,10 @@ impl Scope<'_> {
                     Some(Counted::Index)
                 }
             },
-            Derivation::Scaled { .. } | Derivation::Offset { .. } => None,
+            Derivation::Scaled { .. }
+            | Derivation::Offset { .. }
+            | Derivation::Lowered { .. }
+            | Derivation::Reflected { .. } => None,
         }
     }
 

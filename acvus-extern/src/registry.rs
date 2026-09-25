@@ -4,7 +4,7 @@
 use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
-use acvus_mir::laws::{BinaryLaws, Identity, LawRole, Laws, Postcondition, Unresolved};
+use acvus_mir::laws::{BinaryLaws, Identity, LawRole, Laws, Postcondition, Reaches, Unresolved};
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
     ParamTerm, Poly, PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg,
@@ -41,6 +41,9 @@ pub struct FnDecl {
     pub laws: Laws,
     /// What the declaration promises of its result (RFC-0082 rule 4).
     pub ensures: Vec<Postcondition>,
+    /// The places a call reaches through its reference arguments (RFC-0082
+    /// rule 7).
+    pub reaches: Reaches,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +190,7 @@ where
             names: Vec::new(),
             laws: Laws::None,
             ensures: Vec::new(),
+            reaches: Reaches::Lent,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -314,6 +318,7 @@ where
             names: decl.names,
             laws: decl.laws,
             ensures: decl.ensures,
+            reaches: decl.reaches,
         },
         instances: Instances {
             concrete: vec![DeclaredInstance {
@@ -814,6 +819,7 @@ struct LawfulInstance<R: Runtime> {
     instance: DeclaredInstance<R>,
     laws: Laws,
     ensures: Vec<Postcondition>,
+    reaches: Reaches,
 }
 
 impl<R: Runtime> Externs<R> {
@@ -962,7 +968,7 @@ impl<R: Runtime> Externs<R> {
                 kind: FnKind::Extern {
                     bounds: decl.bounds,
                     effect_bounds: decl.effect_bounds,
-                    instances: instances.signatures(&decl.laws, &decl.ensures),
+                    instances: instances.signatures(&decl.laws, &decl.ensures, &decl.reaches),
                     requires: decl
                         .requires
                         .iter()
@@ -1010,7 +1016,11 @@ impl<R: Runtime> Externs<R> {
                     .iter()
                     .map(|arm| {
                         arm.instance
-                            .signature_under(arm.laws.clone(), arm.ensures.clone())
+                            .signature_under(
+                                arm.laws.clone(),
+                                arm.ensures.clone(),
+                                arm.reaches.clone(),
+                            )
                     })
                     .collect(),
                 generic: None,
@@ -1241,6 +1251,7 @@ fn add_instance<R: Runtime>(
             instance,
             laws: decl.laws.clone(),
             ensures: decl.ensures.clone(),
+            reaches: decl.reaches.clone(),
         }));
     Ok(())
 }

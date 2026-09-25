@@ -1042,6 +1042,19 @@ Status: Proposed
    rule 10,
    which is not built; until it is, no pass reads them, and rule 1 holds
    them only by that reader to come.
+7. **Places a call reaches.** `#[extern_fn(reaches(p1, ..))]` on `f`
+   states every place `f` reads or writes through its reference
+   parameters: `x`, all the reference parameter `x` lends, or `x[i]`, its
+   element at the `u64` parameter `i`. It names every reference
+   parameter. A length `f` reads to check an index is no place, as an
+   index's own check is not: no write of an element changes it. It is the
+   author's promise as a law is (rule 5), sampled only by tests.
+   `#[extern_fn]` refuses a name that is no parameter, a place of a
+   parameter taken by value, an index that is not a `u64` taken by value,
+   and a reference parameter no place names. `analysis::loop_deps` reads
+   it through a call's callee, by the instance the call names, wherever
+   it reads what a call reaches (RFC-0089 rule 4); a call whose instance
+   states none reaches all its reference arguments lend it.
 
 **Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
 extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no

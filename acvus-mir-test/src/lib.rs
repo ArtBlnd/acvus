@@ -122,7 +122,8 @@ fn run_pipeline(
         *closure = cfg::demote(cfg_closure);
     }
 
-    let validation_errors = acvus_mir::validate::validate(&module);
+    let validation_errors =
+        acvus_mir::validate::validate(&module, &LawTable::of(graph.functions.iter()));
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()

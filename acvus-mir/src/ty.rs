@@ -378,6 +378,7 @@ pub struct Instances {
 pub struct GenericSig {
     pub laws: crate::laws::Laws,
     pub ensures: Vec<crate::laws::Postcondition>,
+    pub reaches: crate::laws::Reaches,
 }
 
 impl Instances {
@@ -403,6 +404,7 @@ pub struct InstanceSig {
     pub effect_bounds: Vec<EffectVarBound>,
     pub laws: crate::laws::Laws,
     pub ensures: Vec<crate::laws::Postcondition>,
+    pub reaches: crate::laws::Reaches,
 }
 
 impl InstanceSig {
@@ -415,6 +417,7 @@ impl InstanceSig {
             effect_bounds: Vec::new(),
             laws: crate::laws::Laws::None,
             ensures: Vec::new(),
+            reaches: crate::laws::Reaches::Lent,
         }
     }
 }

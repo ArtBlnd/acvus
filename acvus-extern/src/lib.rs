@@ -108,7 +108,8 @@ pub use acvus_extern_macro::{
 
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::laws::{
-    BinaryLaws, FoldLaw, Identity, Laws, PostTerm, Postcondition, Relation, Subject,
+    BinaryLaws, FoldLaw, Identity, Laws, PostTerm, Postcondition, Reaches, ReachedPlace, Relation,
+    Subject,
 };
 pub use acvus_mir::ty::{
     Alignment, CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, Flow, FlowEnd, Flows, HeldTy, Home, IdentityTerm,

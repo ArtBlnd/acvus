@@ -9,7 +9,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use acvus_mir::laws::{Laws, Postcondition};
+use acvus_mir::laws::{Laws, Postcondition, Reaches};
 use acvus_mir::ty::{EffectVarBound, PolyTy, RequirementSig, Task, Ty};
 use acvus_utils::{Interner, QualifiedRef};
 use futures::future::BoxFuture;
@@ -1725,6 +1725,7 @@ where
         &self,
         laws: Laws,
         ensures: Vec<Postcondition>,
+        reaches: Reaches,
     ) -> acvus_mir::ty::InstanceSig {
         acvus_mir::ty::InstanceSig {
             ty: self.signature.clone(),
@@ -1734,6 +1735,7 @@ where
             effect_bounds: self.effect_bounds.clone(),
             laws,
             ensures,
+            reaches,
         }
     }
 }
@@ -1773,16 +1775,18 @@ impl<R: Runtime> Instances<R> {
         &self,
         laws: &Laws,
         ensures: &[Postcondition],
+        reaches: &Reaches,
     ) -> acvus_mir::ty::Instances {
         acvus_mir::ty::Instances {
             concrete: self
                 .concrete
                 .iter()
-                .map(|i| i.signature_under(laws.clone(), ensures.to_vec()))
+                .map(|i| i.signature_under(laws.clone(), ensures.to_vec(), reaches.clone()))
                 .collect(),
             generic: self.generic.as_ref().map(|_| acvus_mir::ty::GenericSig {
                 laws: laws.clone(),
                 ensures: ensures.to_vec(),
+                reaches: reaches.clone(),
             }),
         }
     }

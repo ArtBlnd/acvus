@@ -23,9 +23,10 @@ use crate::analysis::loops::{Invariants, LoopNest};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, Stages, ValueId};
+use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let mut examined: FxHashSet<Label> = FxHashSet::default();
     while let Some(header) = innermost_unexamined_for(cfg, &examined) {
         examined.insert(header);
@@ -34,8 +35,8 @@ pub fn run(cfg: &mut CfgBody) {
             continue;
         };
         match stages.len() {
-            1 => cut(cfg, header),
-            _ => merge_boundaries(cfg, at),
+            1 => cut(cfg, laws, header),
+            _ => merge_boundaries(cfg, laws, at),
         }
     }
 }
@@ -54,8 +55,8 @@ fn innermost_unexamined_for(cfg: &CfgBody, examined: &FxHashSet<Label>) -> Optio
 /// Removes each boundary before a stage that holds no instruction, or that
 /// is free and follows a free stage. A chain whose shape fails is left for
 /// `validate::stages` to refuse.
-fn merge_boundaries(cfg: &mut CfgBody, header: BlockIdx) {
-    let Ok(deps) = LoopDeps::of(cfg, header) else {
+fn merge_boundaries(cfg: &mut CfgBody, laws: &LawTable, header: BlockIdx) {
+    let Ok(deps) = LoopDeps::of(cfg, laws, header) else {
         return;
     };
     let stages = deps.membership.stages();
@@ -88,11 +89,11 @@ struct Facts {
     leaves: bool,
 }
 
-fn cut(cfg: &mut CfgBody, header_label: Label) {
+fn cut(cfg: &mut CfgBody, laws: &LawTable, header_label: Label) {
     let Some(facts) = Facts::of(cfg, header_label) else {
         return;
     };
-    if let Some(written) = plan(cfg, &facts) {
+    if let Some(written) = plan(cfg, laws, &facts) {
         *cfg = written;
     }
 }
@@ -139,7 +140,7 @@ struct Planned {
 
 /// The body rewritten as the chain the cycles cut it into, or `None` where
 /// the loop stays one stage.
-fn plan(cfg: &CfgBody, facts: &Facts) -> Option<CfgBody> {
+fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
     let header = facts.header;
     if facts.leaves || !cfg.blocks[header.0].insts.is_empty() {
         return None;
@@ -176,7 +177,7 @@ fn plan(cfg: &CfgBody, facts: &Facts) -> Option<CfgBody> {
         let loans = Loans::build(&work);
         let units = Units::of(&work, &region, &shape, &loans, facts)?;
         let graph = Graph::of(&work, &region, &shape, &units, facts)?;
-        let deps = LoopDeps::of(&work, region.header).ok()?;
+        let deps = LoopDeps::of(&work, laws, region.header).ok()?;
         let joins = graph.joins(&units, &deps);
         graph.order(&units, &joins)?
     };

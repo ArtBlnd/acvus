@@ -555,7 +555,10 @@ fn refusals(body: MirBody, ret: Ty) -> Vec<ValidationErrorKind> {
         ret,
         flows: acvus_mir::ty::Flows::Every,
     };
-    validate(&module).into_iter().map(|e| e.kind).collect()
+    validate(&module, &acvus_mir::laws::LawTable::default())
+        .into_iter()
+        .map(|e| e.kind)
+        .collect()
 }
 
 fn names(kinds: &[ValidationErrorKind]) -> Vec<String> {

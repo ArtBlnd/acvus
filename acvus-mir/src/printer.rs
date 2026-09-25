@@ -500,7 +500,7 @@ fn write_body(
         StageFacts::Computed(laws) => {
             let cfg = promote(body.clone());
             Some(Computed {
-                deps: BodyDeps::of(&cfg),
+                deps: BodyDeps::of(&cfg, laws),
                 cfg,
                 laws,
             })

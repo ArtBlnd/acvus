@@ -1,0 +1,5 @@
+error: `c` is not taken by reference, and a call reaches a place only through a reference argument (RFC-0082 rule 7)
+ --> tests/compile_fail/reaches_by_value.rs:4:36
+  |
+4 | #[extern_fn(effect = pure, reaches(c[i]))]
+  |                                    ^

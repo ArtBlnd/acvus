@@ -157,7 +157,8 @@ fn run_pipeline(
         *closure = crate::cfg::demote(cfg_body);
     }
 
-    let validation_errors = crate::validate::validate(&module);
+    let validation_errors =
+        crate::validate::validate(&module, &crate::laws::LawTable::of(graph.functions.iter()));
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()

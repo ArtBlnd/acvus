@@ -1,6 +1,8 @@
-//! A storage a `for` reaches only under one path component that is the same
-//! affine value of the counter at every access is `Disjoint` (RFC-0089 rule
-//! 4), and a store two iterations can both reach stays `InOrder`.
+//! A storage a `for` reaches only under one path component that is an
+//! affine value of the counter at every access, one step and bases no
+//! multiple of it apart, is `Disjoint` (RFC-0089 rule 4), and a store two
+//! iterations can both reach stays `InOrder`. A header parameter carrying
+//! work on the previous element carries nothing (RFC-0066 rule 7).
 
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::printer::dump_with_facts;
@@ -118,6 +120,15 @@ fn a_store_two_iterations_can_both_reach_stays_in_order() {
         "let v = vec([5, 3, 8, 1]);
          for i in 0u64..v.len() { v[i] = (v.len() as i64) + v[i]; }
          v.len()",
+        "let v = vec([5, 3, 8, 1]); let c = v.len() - 1u64;
+         for i in 1u64..v.len() { v[c - i] = v[c - i + 1u64]; }
+         v.len()",
+        "let v = vec([5, 3, 8, 1]);
+         for i in 0u64..v.len() { v.swap(i, 0u64); }
+         v.len()",
+        "let v = vec([5, 3, 8, 1, 7, 2]);
+         for i in 0u64..2u64 { v.swap(2u64 * i, 2u64 * i + 2u64); }
+         v.len()",
     ];
     for source in cases {
         assert_eq!(storage_orders(source), ["in_order"], "{}", listing(source));
@@ -132,5 +143,73 @@ fn a_store_two_iterations_can_both_reach_stays_in_order() {
         ["in_order", "disjoint"],
         "{}",
         listing(inner_counter_only)
+    );
+}
+
+#[test]
+fn an_index_that_counts_down_from_an_invariant_is_disjoint() {
+    let reflected = "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0, 0, 0]);
+         let c = xs.len() - 1u64;
+         for i in 0u64..xs.len() { out[c - i] = xs[i]; }
+         out.len()";
+    assert_eq!(storage_orders(reflected), ["disjoint"], "{}", listing(reflected));
+    let lowered = "let xs = vec([5, 3, 8, 1, 7, 2]); let out = vec([0, 0, 0, 0]);
+         for i in 2u64..6u64 { out[i - 2u64] = xs[i]; }
+         out.len()";
+    assert_eq!(storage_orders(lowered), ["disjoint"], "{}", listing(lowered));
+}
+
+#[test]
+fn terms_of_one_step_whose_bases_are_no_multiple_of_it_apart_are_disjoint() {
+    let pairs = "let v = vec([5, 3, 8, 1]);
+         for i in 0u64..(v.len() / 2u64) { v[2u64 * i] = v[2u64 * i + 1u64]; }
+         v.len()";
+    assert_eq!(storage_orders(pairs), ["disjoint"], "{}", listing(pairs));
+}
+
+#[test]
+fn a_swap_of_the_two_places_its_declaration_states_is_disjoint() {
+    let source = "let v = vec([5, 3, 8, 1]);
+         for i in 0u64..(v.len() / 2u64) { v.swap(2u64 * i, 2u64 * i + 1u64); }
+         v.len()";
+    assert_eq!(storage_orders(source), ["disjoint"], "{}", listing(source));
+}
+
+fn carried_count(source: &str) -> usize {
+    facts(source)
+        .iter()
+        .map(|fact| fact.matches("Carried(").count())
+        .sum()
+}
+
+#[test]
+fn a_parameter_carrying_work_on_the_previous_element_carries_nothing() {
+    let previous = "let xs = vec([1, 1, 2, 2, 3]); let prev = -1; let runs = 0;
+         for x in &xs { if *x != prev { runs = runs + 1; }; prev = *x; }
+         runs";
+    assert_eq!(carried_count(previous), 1, "{}", listing(previous));
+    let class = "let bs = \"a b\".to_string().to_bytes(); let in_word = false; let words = 0;
+         for b in &bs {
+             let sp = *b == b' ';
+             if !sp && !in_word { words = words + 1; };
+             in_word = !sp;
+         }
+         words";
+    assert_eq!(carried_count(class), 1, "{}", listing(class));
+}
+
+#[test]
+fn a_parameter_carrying_what_the_loop_writes_stays_carried() {
+    let source = "let xs = vec([1, 1, 2, 2, 3]); let buf = vec([0]); let prev = -1; let runs = 0;
+         for x in &xs {
+             if *x != prev { runs = runs + 1; };
+             prev = buf[0u64];
+             buf[0u64] = *x;
+         }
+         runs";
+    assert!(
+        facts(source).iter().any(|fact| fact.contains("Carried(") && !fact.contains("any_order")),
+        "{}",
+        listing(source)
     );
 }

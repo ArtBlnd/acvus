@@ -57,9 +57,18 @@
 //! makes a `for` of a `while` where that is exact, and this pass then
 //! applies to the result unchanged.
 //!
-//! It adds only `BinOp`, `Cast` and `Const` instructions. Strength reduction
-//! runs after the stages, and reduces only what an `InOrder` stage reads
-//! (RFC-0056).
+//! It adds only `BinOp`, `Cast` and `Const` instructions for an `Iv`.
+//! Strength reduction runs after the stages, and reduces only what an
+//! `InOrder` stage reads (RFC-0056).
+//!
+//! A header parameter every back edge sends `f(e)`, `e` the element read at
+//! the counter of a slice source and `f` pure work on `e` and invariants,
+//! is `f` of the element at `k − 1` and its entry value at `k = 0`
+//! (RFC-0066 rule 7). The pass reads it so with a branch on `k = 0` at the
+//! body's head and `f` run again on `source[k − 1]`, and the parameter
+//! carries nothing. The source is a shared slice, which no iteration
+//! writes, so the element read again is the one read before. An array
+//! source is declined.
 
 use acvus_ast::{Literal, Span};
 use rustc_hash::FxHashMap;
@@ -70,7 +79,8 @@ use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopNest, edge_args};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
-    BinOp, Checked, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, ValOrigin, ValueId,
+    BinOp, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Inst, InstKind, Label, Overflow,
+    RefTarget, UnaryOp, ValOrigin, ValueId,
 };
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, LenTerm, Ty};
@@ -114,6 +124,7 @@ pub fn run(cfg: &mut CfgBody) {
         substitute(cfg, loop_, &shape, &domtree, &replacements);
         drop_header_params(cfg, &shape, &ivs);
     }
+    rewrite_neighbours(cfg);
 }
 
 // -- The loop's blocks ------------------------------------------------
@@ -643,4 +654,435 @@ fn edges_into(term: &mut Terminator, label: Label) -> Vec<EdgeInto<'_>> {
             .collect(),
         Terminator::Return { .. } | Terminator::Diverge | Terminator::Fallthrough => Vec::new(),
     }
+}
+
+// -- A header parameter carrying work on the previous element ----------
+
+/// A header parameter every back edge sends `f(e)`, `e` the element the
+/// iteration read at the counter of a slice source and `f` pure work on
+/// `e` and invariants: from the second iteration on it holds `f` of the
+/// element at `k − 1`, and on the first its entry value (RFC-0066 rule 7).
+struct Neighbour {
+    header_index: usize,
+    param: ValueId,
+    init: ValueId,
+    source: ValueId,
+    element: ValueId,
+    work: Vec<Work>,
+    sent: Sent,
+}
+
+/// What the back edges send: the element itself, or the value the last
+/// step of `f` defines.
+#[derive(Clone, Copy)]
+enum Sent {
+    Element,
+    Computed(ValueId),
+}
+
+/// One step of `f`, in an order that defines each operand before its
+/// reader.
+#[derive(Clone)]
+struct Work {
+    at: InstAt,
+    kind: InstKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct InstAt {
+    block: BlockIdx,
+    at: usize,
+}
+
+/// Rewrites one such parameter at a time, since each rewrite adds blocks
+/// to its loop and the nest is read again after it.
+fn rewrite_neighbours(cfg: &mut CfgBody) {
+    loop {
+        let domtree = DomTree::build(cfg);
+        let invariants = Invariants::of(cfg);
+        let nest = LoopNest::of(cfg, &domtree, &invariants);
+        let found = nest.iter().find_map(|(_, loop_)| {
+            let shape = Shape::of(cfg, loop_)?;
+            let neighbour = Neighbour::find(cfg, loop_, &shape, &invariants)?;
+            Some((shape, neighbour))
+        });
+        let Some((shape, neighbour)) = found else {
+            return;
+        };
+        neighbour.rewrite(cfg, &shape);
+    }
+}
+
+impl Neighbour {
+    fn find(cfg: &CfgBody, loop_: &Loop, shape: &Shape, invariants: &Invariants) -> Option<Self> {
+        let ForSource::Slice(source) = shape.source else {
+            return None;
+        };
+        let [element_ref, counter] = cfg.blocks[shape.body.0].params[..] else {
+            return None;
+        };
+        let header = &cfg.blocks[shape.header.0];
+        header
+            .params
+            .iter()
+            .enumerate()
+            .find_map(|(header_index, &param)| {
+                let init = loop_.natural.entry_arg(cfg, header_index)?;
+                let next = loop_.natural.back_arg(cfg, header_index)?;
+                let read_outside = cfg
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, _)| {
+                        !loop_.natural.contains(BlockIdx(*at)) || BlockIdx(*at) == shape.header
+                    })
+                    .any(|(_, block)| reads_value(block, param));
+                if next == param || read_outside {
+                    return None;
+                }
+                let mut reading = PreviousWork {
+                    cfg,
+                    loop_,
+                    invariants,
+                    source,
+                    element_ref,
+                    counter,
+                    element: None,
+                    work: Vec::new(),
+                };
+                reading.read(next)?;
+                let element = reading.element?;
+                let sent = match next == element {
+                    true => Sent::Element,
+                    false => Sent::Computed(next),
+                };
+                Some(Neighbour {
+                    header_index,
+                    param,
+                    init,
+                    source,
+                    element,
+                    work: reading.work,
+                    sent,
+                })
+            })
+    }
+
+    /// The body block `B(e, k)` becomes `B(e, k): if k == 0 -> J(init) else
+    /// R`, `R: J(f(source[k − 1]))`, and `J(p)` holds what `B` held, with
+    /// `p` for the parameter. `f` runs again in `R` with its arithmetic
+    /// wrapping; it cannot trap there, since the same `f` of the same
+    /// element ran at the iteration before and a trap would have ended the
+    /// run there. Each trapping step of `f` left in the body, which `dce`
+    /// sweeps once nothing reads it, keeps its trap by a `Check` at its
+    /// place (RFC-0037 rule 3).
+    fn rewrite(self, cfg: &mut CfgBody, shape: &Shape) {
+        let mut checks: Vec<(InstAt, InstKind)> = self
+            .work
+            .iter()
+            .filter_map(|step| match step.kind {
+                InstKind::BinOp {
+                    op, left, right, ..
+                } => Checked::of_trapping(op)
+                    .map(|op| (step.at, InstKind::Check { op, left, right })),
+                _ => None,
+            })
+            .collect();
+        checks.sort_by_key(|(at, _)| std::cmp::Reverse((at.block, at.at)));
+        for (at, kind) in checks {
+            let span = cfg.blocks[at.block.0].insts[at.at].span;
+            cfg.blocks[at.block.0].insts.insert(at.at, Inst { span, kind });
+        }
+
+        let body = shape.body;
+        let counter = cfg.blocks[body.0].params[shape.source.counter_param()];
+        let span = cfg.blocks[body.0]
+            .insts
+            .first()
+            .map_or(Span::ZERO, |inst| inst.span);
+        let mut labels = cfg
+            .blocks
+            .iter()
+            .map(|block| block.label)
+            .filter(|label| *label != crate::cfg::ENTRY_LABEL)
+            .map(|label| label.0 + 1)
+            .max()
+            .unwrap_or(0);
+        let mut fresh_label = || {
+            let label = Label(labels);
+            labels += 1;
+            label
+        };
+        let rest_label = fresh_label();
+        let join_label = fresh_label();
+        let fresh = |cfg: &mut CfgBody, ty: Ty| {
+            let value = cfg.val_factory.next();
+            let previous = cfg.val_types.insert(value, ty);
+            assert!(
+                previous.is_none(),
+                "{value:?} is fresh from the factory and already carried a type"
+            );
+            cfg.debug.set(value, ValOrigin::Expr);
+            value
+        };
+        let at = |kind: InstKind| Inst { span, kind };
+
+        let held = cfg.val_types[&self.param].clone();
+        let joined = fresh(cfg, held);
+        let zero = fresh(cfg, Ty::U64);
+        let first = fresh(cfg, Ty::Bool);
+        let one = fresh(cfg, Ty::U64);
+        let before = fresh(cfg, Ty::U64);
+        let element_ty = cfg.val_types[&self.element].clone();
+        let previous = fresh(cfg, element_ty);
+
+        let mut rest = vec![
+            at(InstKind::Const {
+                dst: one,
+                value: Literal::Int(1),
+            }),
+            at(InstKind::BinOp {
+                dst: before,
+                op: BinOp::Sub(Overflow::Wrap),
+                left: counter,
+                right: one,
+            }),
+            at(InstKind::Index {
+                dst: previous,
+                slice: self.source,
+                index: before,
+                mode: IndexMode::Copy,
+                bound: IndexBound::Checked,
+            }),
+        ];
+        let mut renamed: FxHashMap<ValueId, ValueId> = FxHashMap::from_iter([(self.element, previous)]);
+        for step in &self.work {
+            let mut kind = step.kind.clone();
+            for def in inst_info::defs(&kind) {
+                let ty = cfg.val_types[&def].clone();
+                renamed.insert(def, fresh(cfg, ty));
+            }
+            apply_subst(&mut kind, &renamed);
+            rename_defs(&mut kind, &renamed);
+            if let InstKind::BinOp { op, .. } = &mut kind
+                && let Some(checked) = Checked::of_trapping(*op)
+            {
+                *op = checked.wrapping_op();
+            }
+            rest.push(at(kind));
+        }
+        let sent_back = match self.sent {
+            Sent::Element => previous,
+            Sent::Computed(value) => renamed[&value],
+        };
+
+        let block = &mut cfg.blocks[body.0];
+        let insts = std::mem::replace(
+            &mut block.insts,
+            vec![
+                at(InstKind::Const {
+                    dst: zero,
+                    value: Literal::Int(0),
+                }),
+                at(InstKind::BinOp {
+                    dst: first,
+                    op: BinOp::Eq,
+                    left: counter,
+                    right: zero,
+                }),
+            ],
+        );
+        let terminator = std::mem::replace(
+            &mut block.terminator,
+            Terminator::JumpIf {
+                cond: first,
+                then_label: join_label,
+                then_args: vec![self.init],
+                else_label: rest_label,
+                else_args: Vec::new(),
+            },
+        );
+        for (label, params, insts, terminator) in [
+            (
+                rest_label,
+                Vec::new(),
+                rest,
+                Terminator::Jump {
+                    label: join_label,
+                    args: vec![sent_back],
+                },
+            ),
+            (join_label, vec![joined], insts, terminator),
+        ] {
+            cfg.label_to_block.insert(label, BlockIdx(cfg.blocks.len()));
+            cfg.blocks.push(crate::cfg::Block {
+                label,
+                params,
+                insts,
+                terminator,
+            });
+        }
+
+        let body_label = cfg.blocks[body.0].label;
+        if cfg.demoted_diamonds.remove(&body_label) {
+            cfg.demoted_diamonds.insert(join_label);
+        }
+        let subst = FxHashMap::from_iter([(self.param, joined)]);
+        for (at, block) in cfg.blocks.iter_mut().enumerate() {
+            if BlockIdx(at) == shape.header {
+                continue;
+            }
+            for inst in &mut block.insts {
+                apply_subst(&mut inst.kind, &subst);
+            }
+            apply_subst_terminator(&mut block.terminator, &subst);
+        }
+        drop_header_param(cfg, shape, self.header_index);
+        remove_unread_element_take(cfg, self.element);
+    }
+}
+
+/// `dce` keeps every `Take`, since one may empty the storage it names. A
+/// word taken through the element's shared reference is a copy that
+/// empties nothing, so the element read the back edges alone read goes
+/// with them.
+fn remove_unread_element_take(cfg: &mut CfgBody, element: ValueId) {
+    if Reads::in_body(cfg).count(element) != 0 {
+        return;
+    }
+    for block in &mut cfg.blocks {
+        block.insts.retain(|inst| {
+            !matches!(&inst.kind, InstKind::Take {
+                dst,
+                target: RefTarget::Through(_),
+                ..
+            } if *dst == element)
+        });
+    }
+}
+
+/// Reads `f` back from the value the back edges send, as far as it is
+/// pure work on the one element read at the counter and on invariants.
+struct PreviousWork<'a> {
+    cfg: &'a CfgBody,
+    loop_: &'a Loop,
+    invariants: &'a Invariants,
+    source: ValueId,
+    element_ref: ValueId,
+    counter: ValueId,
+    element: Option<ValueId>,
+    work: Vec<Work>,
+}
+
+impl PreviousWork<'_> {
+    fn read(&mut self, value: ValueId) -> Option<()> {
+        if self.element == Some(value) || self.work.iter().any(|step| inst_info::defs(&step.kind).contains(&value)) {
+            return Some(());
+        }
+        if let Some(invariant) = self.invariants.at(&self.loop_.natural, value) {
+            return match invariant {
+                Invariant::Outside(_) => Some(()),
+                Invariant::Word(_) => {
+                    let at = self.def_of(value)?;
+                    self.work.push(Work {
+                        at,
+                        kind: self.cfg.blocks[at.block.0].insts[at.at].kind.clone(),
+                    });
+                    Some(())
+                }
+            };
+        }
+        let at = self.def_of(value)?;
+        let kind = &self.cfg.blocks[at.block.0].insts[at.at].kind;
+        match kind {
+            InstKind::Take {
+                target: RefTarget::Through(reference),
+                path,
+                taken_out: false,
+                ..
+            } if *reference == self.element_ref && path.is_empty() => self.read_element(value),
+            InstKind::Index {
+                slice,
+                index,
+                mode: IndexMode::Copy,
+                ..
+            } if *slice == self.source && *index == self.counter => self.read_element(value),
+            InstKind::BinOp {
+                op, left, right, ..
+            } => {
+                let traps_uncheckably =
+                    op.can_trap_on_integers() && Checked::of_trapping(*op).is_none();
+                if traps_uncheckably {
+                    return None;
+                }
+                let (left, right) = (*left, *right);
+                self.read(left)?;
+                self.read(right)?;
+                self.work.push(Work {
+                    at,
+                    kind: kind.clone(),
+                });
+                Some(())
+            }
+            InstKind::UnaryOp {
+                op: UnaryOp::Not | UnaryOp::Neg(Overflow::Wrap),
+                operand,
+                ..
+            } => {
+                let operand = *operand;
+                self.read(operand)?;
+                self.work.push(Work {
+                    at,
+                    kind: kind.clone(),
+                });
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    /// The element is read once, and is a word read again at `k − 1`.
+    fn read_element(&mut self, value: ValueId) -> Option<()> {
+        if self.element.is_some_and(|read| read != value) {
+            return None;
+        }
+        self.cfg.val_types[&value].is_word().filter(|word| *word)?;
+        self.element = Some(value);
+        Some(())
+    }
+
+    fn def_of(&self, value: ValueId) -> Option<InstAt> {
+        self.loop_.natural.blocks().find_map(|block| {
+            self.cfg.blocks[block.0]
+                .insts
+                .iter()
+                .position(|inst| inst_info::defs(&inst.kind).contains(&value))
+                .map(|at| InstAt { block, at })
+        })
+    }
+}
+
+fn rename_defs(kind: &mut InstKind, renamed: &FxHashMap<ValueId, ValueId>) {
+    match kind {
+        InstKind::BinOp { dst, .. } | InstKind::UnaryOp { dst, .. } | InstKind::Const { dst, .. } => {
+            *dst = renamed[dst];
+        }
+        other => panic!("`f` holds only `BinOp`, `UnaryOp` and `Const`, not {other:?}"),
+    }
+}
+
+fn drop_header_param(cfg: &mut CfgBody, shape: &Shape, index: usize) {
+    let header_label = cfg.blocks[shape.header.0].label;
+    for block in &mut cfg.blocks {
+        for edge in edges_into(&mut block.terminator, header_label) {
+            let at = index.checked_sub(edge.supplied_params).unwrap_or_else(|| {
+                panic!(
+                    "header parameter {index} is one an edge's terminator fills, and a \
+                     parameter the back edges send is one every edge sends"
+                )
+            });
+            edge.args.remove(at);
+        }
+    }
+    cfg.blocks[shape.header.0].params.remove(index);
 }

@@ -15,17 +15,18 @@
 use crate::analysis::loop_deps::{BodyDeps, HeaderDeps};
 use crate::cfg::promote;
 use crate::ir::{InstKind, Label, MirBody, MirModule};
+use crate::laws::LawTable;
 use crate::validate::{ValidationError, ValidationErrorKind};
 
-pub fn check(module: &MirModule) -> Vec<ValidationError> {
-    let mut errors = check_body("main", &module.main);
+pub fn check(module: &MirModule, laws: &LawTable) -> Vec<ValidationError> {
+    let mut errors = check_body("main", &module.main, laws);
     for (label, closure) in &module.closures {
-        errors.extend(check_body(&format!("closure({label:?})"), closure));
+        errors.extend(check_body(&format!("closure({label:?})"), closure, laws));
     }
     errors
 }
 
-fn check_body(scope: &str, body: &MirBody) -> Vec<ValidationError> {
+fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationError> {
     let mut stated_at: Vec<StatedAt> = Vec::new();
     let mut block = crate::cfg::ENTRY_LABEL;
     for (at, inst) in body.insts.iter().enumerate() {
@@ -40,7 +41,7 @@ fn check_body(scope: &str, body: &MirBody) -> Vec<ValidationError> {
     }
     let cfg = promote(body.clone());
     let mut errors: Vec<ValidationError> = Vec::new();
-    for HeaderDeps { header, deps } in BodyDeps::of(&cfg).loops {
+    for HeaderDeps { header, deps } in BodyDeps::of(&cfg, laws).loops {
         let header = cfg.blocks[header.0].label;
         let inst_index = stated_at
             .iter()
@@ -88,7 +89,6 @@ mod tests {
     use crate::analysis::loop_deps::{LoopDeps, Order, Token};
     use crate::cfg::{BlockIdx, Terminator};
     use crate::ir::{BinOp, DebugInfo, ExitTrip, ForSource, Inst, Overflow, Stages, ValueId};
-    use crate::laws::LawTable;
     use crate::ty::{Task, Ty};
     use acvus_ast::Literal;
     use acvus_utils::{LocalFactory, LocalIdOps};
@@ -297,7 +297,7 @@ mod tests {
     }
 
     fn refusals(module: &MirModule) -> Vec<ValidationErrorKind> {
-        check(module).into_iter().map(|error| error.kind).collect()
+        check(module, &LawTable::default()).into_iter().map(|error| error.kind).collect()
     }
 
     struct OnlyLoop {
@@ -311,7 +311,7 @@ mod tests {
             .map(BlockIdx)
             .find(|at| matches!(cfg.blocks[at.0].terminator, Terminator::For { .. }))
             .expect("the body holds one `For`");
-        let deps = LoopDeps::of(&cfg, header).expect("the chain's shape holds");
+        let deps = LoopDeps::of(&cfg, &LawTable::default(), header).expect("the chain's shape holds");
         OnlyLoop { cfg, deps }
     }
 

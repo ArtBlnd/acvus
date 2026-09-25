@@ -17,6 +17,7 @@ use syn::{
 };
 
 mod ensures;
+mod reaches;
 mod flows;
 mod generics;
 mod law;
@@ -54,6 +55,7 @@ struct ExternFnAttr {
     sync: Option<Ident>,
     law: Option<law::LawAttr>,
     ensures: Option<ensures::EnsuresAttr>,
+    reaches: Option<reaches::ReachesAttr>,
 }
 
 impl Parse for ExternFnAttr {
@@ -67,6 +69,7 @@ impl Parse for ExternFnAttr {
             sync: None,
             law: None,
             ensures: None,
+            reaches: None,
         };
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -107,6 +110,19 @@ impl Parse for ExternFnAttr {
                 }
                 continue;
             }
+            if key == "reaches" {
+                if out.reaches.is_some() {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "`reaches(..)` is stated twice: state every place in one",
+                    ));
+                }
+                out.reaches = Some(reaches::ReachesAttr::parse_after(&key, input)?);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             input.parse::<Token![=]>()?;
             if key == "name" {
                 out.name = Some(input.parse()?);
@@ -120,7 +136,7 @@ impl Parse for ExternFnAttr {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     or `ensures`",
+                     `ensures` or `reaches`",
                 ));
             }
             if !input.is_empty() {
@@ -1283,6 +1299,10 @@ fn generate_extern_fn(
         }
         None => quote! { ::std::vec::Vec::new() },
     };
+    let reaches = match &attr.reaches {
+        Some(stated) => stated.declared(fn_ident, &params)?,
+        None => quote! { ::acvus_extern::Reaches::Lent },
+    };
 
     let fresh_vars = vars.fresh_vars_expr();
     let rt_bounds = quote! { __R: ::acvus_extern::Runtime, };
@@ -1337,6 +1357,7 @@ fn generate_extern_fn(
                     names: __vars.names(),
                     laws: #laws,
                     ensures: #ensures,
+                    reaches: #reaches,
                 },
                 instances: __instances,
             };

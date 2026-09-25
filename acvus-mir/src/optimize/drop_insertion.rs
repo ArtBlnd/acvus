@@ -30,11 +30,12 @@ use crate::analysis::loop_deps::{BodyDeps, HeaderDeps, Storage, Token};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId};
+use crate::laws::LawTable;
 use crate::ty::Ty;
 use crate::validate::move_check::{emptied_by, is_move_only};
 
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
-pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
+pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws: &LawTable) {
     let loans = Loans::build(cfg);
     let liveness = liveness::analyze_with(&loans);
 
@@ -48,7 +49,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 
     // -- Phase 1: within-block drops --------------------------------
 
-    let stage_entries = stage_entries(cfg, &loans);
+    let stage_entries = stage_entries(cfg, &loans, laws);
     let mut block_drops: Vec<Vec<BlockDrop>> = Vec::with_capacity(cfg.blocks.len());
     for bi in 0..cfg.blocks.len() {
         let block_idx = BlockIdx(bi);
@@ -221,11 +222,11 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>) {
 /// stage reads, which the stage holding its cycle releases, or a value one
 /// stage alone touches. A value two stages touch has no entry here and is
 /// dropped where the body begins.
-fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>) -> StageEntries {
+fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>, laws: &LawTable) -> StageEntries {
     let mut carried_entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut shared: FxHashSet<ValueId> = FxHashSet::default();
-    for HeaderDeps { header, deps } in BodyDeps::of(cfg).loops {
+    for HeaderDeps { header, deps } in BodyDeps::of(cfg, laws).loops {
         // A chain whose shape fails is refused by `validate::stages`, which
         // reads this pass's output; its values are dropped where the body
         // begins.
@@ -935,7 +936,7 @@ mod tests {
             vec![(v(0), Ty::I64)],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         assert_eq!(count_drops(&cfg), 0);
     }
 
@@ -966,7 +967,7 @@ mod tests {
             vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         assert_eq!(count_drops(&cfg), 1);
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
@@ -989,7 +990,7 @@ mod tests {
             vec![(v(0), user_defined_ty())],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         assert_eq!(count_drops(&cfg), 0);
     }
 
@@ -1038,7 +1039,7 @@ mod tests {
             ],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         let kinds: Vec<&InstKind> = cfg.blocks[0].insts.iter().map(|i| &i.kind).collect();
         let dropped_after = |write: usize| matches!(kinds.get(write + 1), Some(InstKind::Drop { src }) if *src == v(5));
         let writes: Vec<usize> = kinds
@@ -1071,7 +1072,7 @@ mod tests {
             vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         assert_eq!(count_drops(&cfg), 1);
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
@@ -1133,7 +1134,7 @@ mod tests {
             ],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
 
         // v0 should be dropped in the else block (block index 2).
         let else_drops = block_drop_targets(&cfg, 2);
@@ -1199,7 +1200,7 @@ mod tests {
             ],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         // v0 is forwarded to both branches -> no edge drops.
         // v2, v3 are returned -> no drops.
         assert_eq!(count_drops(&cfg), 0);
@@ -1250,7 +1251,7 @@ mod tests {
             ],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         // v0 dropped after FieldGet(v0), v1 dropped after FieldGet(v1).
         assert_eq!(count_drops(&cfg), 2);
         let targets = drop_targets(&cfg);
@@ -1293,7 +1294,7 @@ mod tests {
             vec![(v(0), user_defined_ty()), (v(1), Ty::I64), (v(2), Ty::I64)],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         assert_eq!(count_drops(&cfg), 1);
         // v0 should be dropped after the second FieldGet (its last use).
         let targets = drop_targets(&cfg);
@@ -1328,7 +1329,7 @@ mod tests {
             ],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         assert_eq!(count_drops(&cfg), 1);
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
@@ -1361,7 +1362,7 @@ mod tests {
             ],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         assert_eq!(count_drops(&cfg), 1);
     }
 
@@ -1420,7 +1421,7 @@ mod tests {
             ],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         // then block should drop v1 (not forwarded to then).
         let then_drops = block_drop_targets(&cfg, 1);
         assert!(
@@ -1464,7 +1465,7 @@ mod tests {
             vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
         );
 
-        insert_drops(&mut cfg, &val_types);
+        insert_drops(&mut cfg, &val_types, &LawTable::default());
         let targets = drop_targets(&cfg);
         let v0_drops = targets.iter().filter(|&&t| t == v(0)).count();
         assert_eq!(v0_drops, 1, "v0 should be dropped exactly once");

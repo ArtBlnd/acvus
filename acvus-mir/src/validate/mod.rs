@@ -15,6 +15,7 @@ use std::fmt;
 use acvus_utils::Interner;
 
 use crate::ir::{MirModule, ValOrigin};
+use crate::laws::LawTable;
 
 /// Every rule a `MirModule` answers on its own, for a module no phase of
 /// `graph::optimize` was run over — the hand-built and directly lowered
@@ -26,9 +27,9 @@ use crate::ir::{MirModule, ValOrigin};
 /// refusal pass 0 already reported a second time.
 /// `acvus-cli/tests/cli.rs::a_write_while_a_reference_is_live_is_refused_once`
 /// is what fails then.
-pub fn validate(module: &MirModule) -> Vec<ValidationError> {
+pub fn validate(module: &MirModule, laws: &LawTable) -> Vec<ValidationError> {
     let mut errors = type_check::check_types(module);
-    errors.extend(stages::check(module));
+    errors.extend(stages::check(module, laws));
     errors.extend(borrow_check::check_borrows(module));
     errors.extend(exhaustive::check_exhaustive(module));
     errors

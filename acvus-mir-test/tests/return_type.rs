@@ -2,6 +2,7 @@
 
 use acvus_mir::ir::{InstKind, MirBody, MirModule};
 use acvus_mir::ty::{Mutability, Ty, TypeArg};
+use acvus_mir::laws::LawTable;
 use acvus_mir::validate::validate;
 use acvus_mir_test::{compile_script_mode_raw, declared_script_module, lowered_script_module};
 use acvus_utils::Interner;
@@ -41,7 +42,7 @@ fn return_a_reference(body: &mut MirBody) {
 
 fn refusals(module: &MirModule) -> Vec<String> {
     let i = Interner::new();
-    validate(module)
+    validate(module, &LawTable::default())
         .iter()
         .map(|e| e.display(&i).to_string())
         .collect()
@@ -51,7 +52,7 @@ fn refusals(module: &MirModule) -> Vec<String> {
 fn a_lambda_returning_an_array_is_accepted() {
     let module = module("let f = |x| -> [x, x, x]; f(1)");
     assert_eq!(module.closures.len(), 1);
-    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+    assert!(validate(&module, &LawTable::default()).is_empty(), "{:?}", refusals(&module));
 }
 
 #[test]
@@ -109,10 +110,10 @@ fn a_main_declared_never_holds_its_return_to_nothing() {
     let mut module = declared_script_module(&i, "let f = |x| -> [x, x, x]; f(1)", &[], Ty::Never)
         .expect("compiles");
     assert_eq!(module.ret, Ty::Never);
-    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+    assert!(validate(&module, &LawTable::default()).is_empty(), "{:?}", refusals(&module));
 
     return_a_reference(&mut module.main);
-    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+    assert!(validate(&module, &LawTable::default()).is_empty(), "{:?}", refusals(&module));
 }
 
 /// The declaration a host states is the type the module carries, not what
@@ -143,7 +144,7 @@ fn a_diverging_body_satisfies_any_declaration() {
     let i = Interner::new();
     let module =
         declared_script_module(&i, r#"panic("no".to_string())"#, &[], Ty::I64).expect("compiles");
-    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+    assert!(validate(&module, &LawTable::default()).is_empty(), "{:?}", refusals(&module));
 }
 
 fn array_of_3() -> Ty {
@@ -155,13 +156,13 @@ fn a_lambda_whose_body_diverges_is_accepted() {
     let module = module("let f = |x| -> panic(\"no\".to_string()); f(1)");
     let body = module.closures.values().next().expect("one closure");
     assert_eq!(body.val_types[&returned(body)], Ty::Never);
-    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+    assert!(validate(&module, &LawTable::default()).is_empty(), "{:?}", refusals(&module));
 }
 
 #[test]
 fn a_script_whose_tail_is_unit_passes() {
     let module = module("let x = 1; ()");
-    assert!(validate(&module).is_empty(), "{:?}", refusals(&module));
+    assert!(validate(&module, &LawTable::default()).is_empty(), "{:?}", refusals(&module));
 }
 
 #[test]
