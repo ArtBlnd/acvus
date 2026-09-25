@@ -1,0 +1,2 @@
+// expect 4
+let h = vec([0u64, 0u64]); let t = 0u64; for x in [0u64, 1u64] { h[x] = h[x] + 1u64; for _y in &h { t = t + 1u64; } } t

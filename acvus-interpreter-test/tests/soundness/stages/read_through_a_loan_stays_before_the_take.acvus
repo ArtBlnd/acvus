@@ -1,0 +1,2 @@
+// expect 4
+let s = "a".to_string(); let n = 0; for _x in [1, 2] { let b = s; let c = b + "x"; s = b; n = n + c.len(); } n

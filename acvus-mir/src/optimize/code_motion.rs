@@ -820,7 +820,9 @@ fn definition_in(cfg: &CfgBody, loop_: &NaturalLoop, value: ValueId) -> Option<A
 /// of it: the `Ref` under one, the `AsSlice` itself, or an `Index` /
 /// `IndexSet` of one. Anything else - a call taking the container, an
 /// `Assign` of a new one, a `push` - and the slice the loop would carry
-/// may no longer name the container's elements.
+/// may no longer name the container's elements. A collected slice read by
+/// anything but an `Index` / `IndexSet` of it - a `for` over it, a jump
+/// carrying it - is such a touch as well (`read_only_elementwise`).
 fn every_touch_goes_through(
     cfg: &CfgBody,
     loop_: &NaturalLoop,
@@ -837,6 +839,12 @@ fn every_touch_goes_through(
         })
         .collect();
 
+    if !slices
+        .iter()
+        .all(|&slice| read_only_elementwise(cfg, slice))
+    {
+        return false;
+    }
     loop_.blocks().all(|block| {
         cfg.blocks[block.0]
             .insts
@@ -859,6 +867,26 @@ fn every_touch_goes_through(
                 let effect = loans.storage_effect(&held.kind);
                 !effect.reads.contains(&storage) && !effect.writes.contains(&storage)
             })
+    })
+}
+
+/// The coalesced `&mut [T]` takes the place of each collected slice at each
+/// of its readers, and an element access is the one reader that means the
+/// same through either mutability. A `for` over a shared slice is a `Slice`
+/// source (RFC-0057 rule 2), which a `&mut [T]` is not, and a jump or a
+/// return lets the slice out as a value of its own type; either is a touch
+/// of the storage that is not an element access, and the storage keeps its
+/// slices.
+fn read_only_elementwise(cfg: &CfgBody, slice: ValueId) -> bool {
+    cfg.blocks.iter().all(|block| {
+        block.insts.iter().all(|inst| match &inst.kind {
+            InstKind::Index { slice: through, .. } | InstKind::IndexSet { slice: through, .. }
+                if *through == slice =>
+            {
+                true
+            }
+            other => !inst_info::uses(other).contains(&slice),
+        }) && !terminator_uses_vec(&block.terminator).contains(&slice)
     })
 }
 

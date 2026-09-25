@@ -248,7 +248,7 @@ impl Units {
                     }
                 }
                 let writes = written_slots(loans, &inst.kind);
-                for slot in touched_slots(loans, &inst.kind) {
+                for slot in touched(loans, &inst.kind) {
                     if facts.slots.target_of(slot).is_some() {
                         continue;
                     }
@@ -353,7 +353,7 @@ impl Units {
                         .into_iter()
                         .filter(|value| !slot_values.contains(value)),
                 );
-                unit.touched.extend(touched_slots(loans, &inst.kind));
+                unit.touched.extend(touched(loans, &inst.kind));
                 unit.written.extend(written_slots(loans, &inst.kind));
                 built.by_member.insert(member, id);
                 for def in inst_info::defs(&inst.kind) {
@@ -512,6 +512,23 @@ fn leaves_from_a_nested_loop(cfg: &CfgBody, nest: &LoopNest, loop_: &Loop) -> bo
                     .iter()
                     .any(|succ| !loop_.natural.contains(*succ))
         })
+}
+
+/// The slots an instruction touches: those `touched_slots` names, and each
+/// one a reference it reads lends. A read through a reference is a touch of
+/// what it lends, as a branch's read is, since the loan lasts until that
+/// read: `string_concat [&base, ..]` reads `base`, and a `take base` the
+/// source wrote after it stays after it.
+fn touched(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {
+    let mut slots = touched_slots(loans, kind);
+    for used in inst_info::uses(kind) {
+        for slot in loans.holds(used).filter_map(|loan| loan.storage.slot()) {
+            if !slots.contains(&slot) {
+                slots.push(slot);
+            }
+        }
+    }
+    slots
 }
 
 fn written_slots(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {
