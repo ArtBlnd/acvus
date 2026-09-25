@@ -1,5 +1,5 @@
-error: `copies(a)` is stated over `f(.., a: &T, ..) -> T`, and `widen` is not of that shape (RFC-0082 rule 10)
- --> tests/compile_fail/copies_of_another_type.rs:5:35
+error: `copies(a)` is stated over `f(.., a: &T, ..) -> T` or `f(.., a: &str, ..) -> String`, and `widen` is not of that shape (RFC-0082 rule 10)
+ --> tests/compile_fail/copies_of_another_type.rs:6:35
   |
-5 | #[extern_fn(effect = pure, copies(a))]
+6 | #[extern_fn(effect = pure, copies(a))]
   |                                   ^

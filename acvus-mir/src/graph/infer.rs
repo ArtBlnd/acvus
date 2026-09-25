@@ -1367,12 +1367,15 @@ mod tests {
         Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)))
     }
 
-    /// `core::to_string` at `T = Str`: the copy that turns a literal into
-    /// the owned text (RFC-0062 rule 2). These graphs are built by hand
-    /// rather than from the standard registries, and a script has no other
-    /// way to write a `String`.
+    /// `string::to_string(a: &str) -> String`: the copy that turns a literal
+    /// into the owned text (RFC-0062 rule 2, RFC-0070 rule 5). These graphs
+    /// are built by hand rather than from the standard registries, and a
+    /// script has no other way to write a `String`.
     fn to_string_extern(interner: &Interner) -> Function {
-        make_extern_fn(interner, "to_string", vec![str_view()], Ty::String)
+        Function {
+            qref: QualifiedRef::qualified(interner.intern("string"), interner.intern("to_string")),
+            ..make_extern_fn(interner, "to_string", vec![str_view()], Ty::String)
+        }
     }
 
     fn make_graph(interner: &Interner, source: &str) -> CompilationGraph {

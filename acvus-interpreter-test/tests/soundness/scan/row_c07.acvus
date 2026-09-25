@@ -1,0 +1,9 @@
+// expect a|ab|abc
+let xs = vec(["a".to_string(), "b".to_string(), "c".to_string()]);
+let s = "".to_string();
+let out = vec([]);
+for x in &xs {
+    s = s + x;
+    out.push(s.to_string());
+}
+out.into_iter().join("|".to_string())

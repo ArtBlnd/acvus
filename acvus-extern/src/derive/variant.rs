@@ -48,7 +48,7 @@ where
 /// type on a projection's argument, so every variant reaching one is
 /// declared.
 pub fn arm_of<const K: usize>(tag: Astr, tags: &[u64; K], name: &str) -> usize {
-    let bits = tag.bits();
+    let bits = crate::repr::word_of_tag(tag);
     tags.iter()
         .position(|declared| *declared == bits)
         .unwrap_or_else(|| {

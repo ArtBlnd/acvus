@@ -1,0 +1,9 @@
+// expect attempt to add with overflow
+let xs = vec([i64::MAX(), 1, -1, 3]);
+let s = 0;
+let out = vec([]);
+for x in &xs {
+    s = s + *x;
+    out.push(s);
+}
+out.len()

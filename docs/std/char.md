@@ -33,7 +33,7 @@ value.
 
 | Rust | how a script writes it |
 | --- | --- |
-| `c.to_string()` | `c.to_string()`, the `core::to_string` instance for `char` |
+| `c.to_string()` | `c.to_string()`, the generic `to_string` over the `core::display` instance for `char` |
 | `c as u32` | `c as u32`, a cast and not a call (RFC-0049) |
 | `char::from_u32(n)` | `int_to_char(n)`, in `conversion`, which returns `Result<char, CharError>` |
 

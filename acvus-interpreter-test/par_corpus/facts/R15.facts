@@ -1,4 +1,5 @@
-for slice(r14) -> L1 else L2 stages [L1]
-// L1: cycle Storage(r17) in_order law(Reset(Op(Concat)) exact) {assign, ref, concat, assign, ref, concat, assign}
+for slice(r14) -> L1 else L2 stages [L1, L6]
+// L1: free {as_slice}
+// L6: cycle Storage(r17) in_order law(Reset(Op(Concat)) exact) {assign, ref, concat, assign, ref, concat, assign}
 // control upfront
-// cost in place: no stage runs apart
+// cost W=3 O=18281 split when n > 194998, n = len(r14)

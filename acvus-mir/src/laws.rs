@@ -352,14 +352,17 @@ fn binary_fits(params: &[crate::ty::PolyParam], ret: &PolyTy) -> bool {
 }
 
 /// Whether `copies`, declared on an instance of type `declaring`, names a
-/// shared reference parameter lending a value of the result's type
-/// (RFC-0082 rule 10).
+/// shared reference parameter lending a value of the result's type, or the
+/// text of a `String` result as a `&str` (RFC-0082 rule 10, RFC-0070 rule 5).
 pub fn copies_fits(copies: Copies, declaring: &PolyTy) -> bool {
     let PolyTy::Fn { params, ret, .. } = declaring else {
         return false;
     };
     match params.get(copies.param).map(|param| &param.ty) {
-        Some(PolyTy::Ref(Mutability::Shared, lent)) => *lent.ty() == **ret,
+        Some(PolyTy::Ref(Mutability::Shared, lent)) => {
+            let lent = lent.ty();
+            *lent == **ret || (*lent == PolyTy::Str && **ret == PolyTy::String)
+        }
         _ => false,
     }
 }

@@ -1,13 +1,13 @@
 for slice(r10) -> L1 else L2 stages [L1, L15]
-// L1: free {const}
+// L1: free {const, as_slice}
 // L15: cycle Storage(r11) in_order {ref, call len, call len, ref, as_slice, index, string_eq, ref, call len, <, ref, call remove, ref, string_clone, call push, ref, call len, ==, ref, const, call remove, ref, call to_string, call push, for, branch, jump, branch, branch}
 // L15: cycle Storage(r12) any_order law(Op(Add) exact commutative) {take, +, assign}
 // L15: cycle Storage(r13) any_order law(Op(Add) exact commutative) {take, +, assign}
 // L15: cycle Storage(r14) in_order law(Fold(r14, #5) exact) {ref, call push}
 // control upfront
-// cost in place: W=0
-for range(0 (r20)..r19) -> L4 else L5(r18) stages [L4, L14]
+// cost W=3 O=18281 split when n > 194998, n = len(r10)
+for range(0 (r21)..r20) -> L4 else L5(r19) stages [L4, L14]
 // L4: free {ref, as_slice, index, string_eq}
 // L14: cycle Control in_order {branch}
 // control chained through L14
-// cost W=10 O=18281 split when n > 58500, n ≤ max(r19 - 0 (r20), 0)
+// cost W=10 O=18281 split when n > 58500, n ≤ max(r20 - 0 (r21), 0)

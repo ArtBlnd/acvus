@@ -61,6 +61,44 @@ fn a_template_prints_its_text_and_an_expression_prints_its_value() {
     assert_eq!(text(&out.stdout), "20\n");
 }
 
+/// RFC-0071 rule 3 at the CLI: which of text or `core::display` a tag is is
+/// decided once the body is solved, so a tag whose type the solve names, a
+/// `Decimal` out of a generic's instance, and a tag of `&T` over an integer
+/// literal append the text `.to_string()` gives. Each was refused while the
+/// tag was decided where it is checked.
+#[test]
+fn a_tag_the_solve_settles_appends_what_to_string_gives() {
+    let dir = tempfile::tempdir().unwrap();
+    let opt = "% let opt = decimal(\"1.50\".to_string()).ok()\n";
+    for (name, tag, control, shown) in [
+        (
+            "decimal",
+            format!("{opt}<{{{{ opt.unwrap() }}}}>"),
+            format!("{opt}<{{{{ opt.unwrap().to_string() }}}}>"),
+            "<1.50>",
+        ),
+        (
+            "lent",
+            "% let n = 7\n% let r = &n\n<{{ r }}>".to_string(),
+            "% let n = 7\n<{{ n.to_string() }}>".to_string(),
+            "<7>",
+        ),
+        (
+            "borrowed",
+            "% let n = 7\n<{{ &n }}>".to_string(),
+            "% let n = 7\n<{{ n.to_string() }}>".to_string(),
+            "<7>",
+        ),
+    ] {
+        for (file, source) in [(format!("{name}.acvt"), tag), (format!("{name}-control.acvt"), control)] {
+            write(dir.path(), &file, &source);
+            let out = acvus(dir.path(), &["run", &file]);
+            assert_eq!(out.status.code(), Some(0), "{file}: {}", text(&out.stderr));
+            assert_eq!(text(&out.stdout), shown, "{file}");
+        }
+    }
+}
+
 #[test]
 fn a_closure_parameter_lent_to_a_str_parameter_runs() {
     let dir = tempfile::tempdir().unwrap();

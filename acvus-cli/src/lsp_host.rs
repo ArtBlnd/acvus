@@ -305,6 +305,31 @@ mod tests {
         assert_eq!(messages(&workspace.diagnostics()[&script]), batch);
     }
 
+    /// RFC-0043: `&k`, whose type the refused `+` made poison, is admitted
+    /// by every `len`, and the call, poison too, reports nothing of its own.
+    #[test]
+    fn a_poison_argument_to_len_reports_only_the_refusal_it_came_from() {
+        let tree = Tree::new();
+        let source = "let m = @n + 1;\nlet k = m + \"x\";\nlen(&k)\n";
+        let script = tree.write("a/main.acvus", source);
+        let interner = Interner::new();
+        let workspace = tree.workspace(&interner);
+
+        let units = [compile::Unit {
+            role: compile::Role::Entry("main".to_string()),
+            space: None,
+            path: script.display().to_string(),
+            mode: compile::Mode::Script,
+            text: source.to_string(),
+        }];
+        let Err(batch) = batch(&units) else {
+            panic!("`acvus check` accepts a str added to an i64");
+        };
+
+        assert_eq!(batch, ["type mismatch in `+`: i64 vs str"]);
+        assert_eq!(messages(&workspace.diagnostics()[&script]), batch);
+    }
+
     #[test]
     fn each_script_is_its_own_compilation() {
         let tree = Tree::new();

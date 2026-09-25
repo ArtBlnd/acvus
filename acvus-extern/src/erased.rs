@@ -38,6 +38,17 @@ where
         Self(ManuallyDrop::new(value), PhantomData)
     }
 
+    /// `Erased` is `repr(transparent)` over the runtime's value, which a
+    /// runtime reads a run or a place of holders at.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn over_value() -> crate::repr::SameLayout<R::Value, Self> {
+        // SAFETY: `Erased<R, T>` is `repr(transparent)` with
+        // `ManuallyDrop<R::Value>`, itself `repr(transparent)` over
+        // `R::Value`, as its one non-zero-sized field.
+        unsafe { same_layout!(R::Value, Self) }
+    }
+
     pub(crate) fn held_mut(&mut self) -> &mut R::Value {
         &mut self.0
     }
@@ -324,15 +335,18 @@ where
         // `Runtime::deref::<R::Value>`, whose contract is a storage erased
         // *from* a `R::Value`; `Self` is `repr(transparent)` over it.
         let slot = unsafe { <R::Value as crate::Borrowable<R>>::deref(rt, reference) };
-        // SAFETY: as above.
-        unsafe { &*(slot as *const R::Value).cast::<Self>() }
+        // SAFETY: a shared name of the value as its holder releases nothing,
+        // and `T` is a `PhantomData`'s.
+        unsafe { Self::over_value().cast_ref(slot) }
     }
 
     unsafe fn deref_mut<'a>(rt: &R, reference: &'a R::Value) -> &'a mut Self {
         // SAFETY: as `deref`, with the caller's exclusive loan.
         let slot = unsafe { <R::Value as crate::Borrowable<R>>::deref_mut(rt, reference) };
-        // SAFETY: as above.
-        unsafe { &mut *(slot as *mut R::Value).cast::<Self>() }
+        // SAFETY: as `deref`'s. A write through the holder replaces the
+        // value whole, as a write of the value would, and the holder is not
+        // dropped here, so it releases nothing.
+        unsafe { Self::over_value().cast_mut(slot) }
     }
 }
 
@@ -346,17 +360,20 @@ where
     R: Runtime,
 {
     fn in_place<'v>(_: Holding<'_, R>, values: &'v Vec<Owned<R>>) -> &'v Vec<Self> {
-        same_layout!(Vec<Owned<R>>, Vec<Self>);
         // SAFETY: `Owned<R>` is this type's canonical form, and the two
-        // `Vec`s differ in nothing else (`Canonical`), with the layout
-        // checked above.
-        unsafe { &*(values as *const Vec<Owned<R>>).cast::<Vec<Self>>() }
+        // `Vec`s differ in nothing else (`Canonical`).
+        let layout = unsafe { same_layout!(Vec<Owned<R>>, Vec<Self>) };
+        // SAFETY: an `Erased<R, T>` differs from an `Owned<R>` in `T` alone,
+        // which a `PhantomData` holds, so the elements keep their holders'
+        // promises.
+        unsafe { layout.cast_ref(values) }
     }
 
     fn in_place_mut<'v>(_: Holding<'_, R>, values: &'v mut Vec<Owned<R>>) -> &'v mut Vec<Self> {
-        same_layout!(Vec<Owned<R>>, Vec<Self>);
-        // SAFETY: as `in_place`; `&mut` is the exclusive name.
-        unsafe { &mut *(values as *mut Vec<Owned<R>>).cast::<Vec<Self>>() }
+        // SAFETY: as `in_place`'s.
+        let layout = unsafe { same_layout!(Vec<Owned<R>>, Vec<Self>) };
+        // SAFETY: as `in_place`'s, both ways; `&mut` is the exclusive name.
+        unsafe { layout.cast_mut(values) }
     }
 }
 

@@ -34,7 +34,7 @@ governs the borrow, the effect system says whether the call may suspend.
      `&mut` takes `Instance<S, &mut I, …>`, which owns that loan.
    - **A function of a type's values: `InstanceOf<S, I, Rt, T>` stands at
      the type**, `S`'s receiver type being `I` by a bound of the type. A signature whose receiver is `&I` (`core::eq`,
-     `core::hash`, `core::cmp`, `core::clone`, `core::to_string`) is required
+     `core::hash`, `core::cmp`, `core::clone`, `core::display`) is required
      by an `InstanceOf`, exactly one of the runtime's values (`ONE_VALUE`).
      Its call takes the receiver, since a requirer applies it to many values
      of the type (a map's keys, both sides of `==`). Its ground is RFC-0068
@@ -334,9 +334,23 @@ Status: Accepted
      `<=`, `>`, `>=` on an extension type (RFC-0020).
    - `clone<T>(a: &T) -> T` — named at the explicit copy (RFC-0018).
    - `hash<T>(a: &T) -> u64` — named at a map's keying.
-   - `to_string<T>(a: &T) -> String` — named at interpolation, once it
-     lowers to a call.
+   - `display<T>(a: &T, out: &mut String)`, appending `a`'s text to `out`
+     — named at a template's `{{ x }}` whose `x` is not a `String` or a
+     `&str` (RFC-0071 rule 3), with the template's text as `out`, so a tag
+     allocates no string of its own. The standard registry's generic
+     `to_string<T>(a: &T) -> String` requires `display` at `T` (rule 1)
+     and appends to an empty `String`, so every type with a `display`
+     instance has `.to_string()`, and its text has one source. `display`
+     stands at no `str` (a two-word receiver has no mono glue, RFC-0067
+     rule 8) and at no `String`, whose text is itself. The owned copy of
+     text, `"…".to_string()` and `s.to_string()` (RFC-0062 rule 2), is
+     `string::to_string(a: &str) -> String`, which `copies(a)`; a `String`
+     reaches it as a view. The generic's `T` ranges over the types
+     `display` stands at (RFC-0067 rule 2), which hold neither, so a text
+     receiver leaves it (RFC-0043).
 
+   `display` writes into its caller's `String` rather than returning one,
+   so a text built of many parts grows one buffer.
    `cmp` answers an `i64` because the language has no `Ordering`, and a core
    type beside the signature is not worth it. `hash` answers `u64` because a
    hash is a bit pattern, not a number. An instance of `hash` at `T` is

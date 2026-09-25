@@ -27,6 +27,7 @@ mod core_instances;
 mod cost;
 mod deque;
 mod diamond;
+mod display;
 mod differential;
 mod e2e;
 mod element_borrow_key;

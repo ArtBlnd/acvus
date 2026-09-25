@@ -2579,6 +2579,10 @@ enum Progress {
     Narrowed,
     Settled(Answer),
     Failed(Unsettled),
+    /// A signature decision an argument of poison reached (RFC-0043): the
+    /// call is poison too and reports nothing of its own, since the refusal
+    /// the poison came from is the one the reader is told.
+    Poisoned,
 }
 
 // -- Solver ---------------------------------------------------------------
@@ -3053,6 +3057,10 @@ impl<'src> Solver<'src> {
                         failures.push(why);
                         progressed = true;
                     }
+                    Progress::Poisoned => {
+                        self.decisions[index].state = DecisionState::Failed;
+                        progressed = true;
+                    }
                 }
             }
             if !progressed {
@@ -3067,7 +3075,12 @@ impl<'src> Solver<'src> {
     /// a reference, a capture a word, an identity a source of its own;
     /// then settle again, and report every decision that neither settled
     /// nor could take a least element.
-    pub fn solve(&mut self) -> Vec<Unsettled> {
+    ///
+    /// `tags` are the types of a template's `{{ x }}`: one no use settled,
+    /// or what a reference among them names, is a `String` once the lends
+    /// are closed (RFC-0071 rule 3). Which of text or `core::display` a tag
+    /// is, the checker decides once this returns.
+    pub fn solve(&mut self, tags: &[InferTy]) -> Vec<Unsettled> {
         let mut failures = self.settle();
         // A pattern's mode closes first. Before a width or a text takes its
         // least element: no least element is a reference, so a head still
@@ -3100,6 +3113,10 @@ impl<'src> Solver<'src> {
             }
         }
         self.close_lends_by_least_element(&mut failures);
+        failures.extend(self.settle());
+        // After the lends: what a tag `&x` names is `x`'s type once the
+        // lend is closed, and a width `x` took above is not a text.
+        self.close_tags_as_text(tags);
         failures.extend(self.settle());
         self.close_captures_by_least_element(&mut failures);
         failures.extend(self.settle());
@@ -3457,6 +3474,10 @@ impl<'src> Solver<'src> {
         awaiting_head: &[UnjoinedArgument],
         body_effect: &EffectTerm<Infer>,
     ) -> Progress {
+        if self.takes_poison(call, &options, awaiting_head) {
+            self.terms.poison(&call.ret, ErrorToken::new());
+            return Progress::Poisoned;
+        }
         let mut remaining: Vec<SignatureOption> = options
             .iter()
             .filter(|option| self.takes_signature(call, awaiting_head, option))
@@ -3541,6 +3562,28 @@ impl<'src> Solver<'src> {
             _ if narrowed => Progress::Narrowed,
             _ => Progress::Unchanged,
         }
+    }
+
+    /// Whether an argument of the call is poison (RFC-0078 rule 5): one the
+    /// call's parameter joined, one the decision holds unjoined, or one a
+    /// candidate takes by conversion or view. Such an argument is admitted
+    /// everywhere, and the call is poison (RFC-0043).
+    fn takes_poison(
+        &self,
+        call: &CallShape,
+        options: &[SignatureOption],
+        awaiting_head: &[UnjoinedArgument],
+    ) -> bool {
+        let poison = |ty: &InferTy| self.terms.resolve_ty(ty).mentions_error();
+        call.params.iter().any(|param| poison(&param.ty))
+            || awaiting_head.iter().any(|argument| poison(&argument.ty))
+            || options.iter().any(|option| {
+                option
+                    .converted
+                    .iter()
+                    .chain(&option.viewed)
+                    .any(|argument| poison(&argument.ty))
+            })
     }
 
     /// Admission at an argument the decision held unjoined, asked again with
@@ -3882,6 +3925,109 @@ impl<'src> Solver<'src> {
             TyTerm::Var(var) => !matches!(self.bound_of_var(var), TyVarBound::Integer { .. }),
             _ => self.lends_an_unnamed_head(arg) && shapes.iter().any(borrows_a_view),
         }
+    }
+
+    /// RFC-0071 rule 3: a tag whose type no use settled, or what a tag's
+    /// reference names where that is open, is a `String`.
+    fn close_tags_as_text(&mut self, tags: &[InferTy]) {
+        for tag in tags {
+            let shown = match self.terms.shallow_resolve_ty(tag) {
+                TyTerm::Ref(_, lent) => lent.ty().into_owned(),
+                held => held,
+            };
+            let TyTerm::Var(var) = self.terms.shallow_resolve_ty(&shown) else {
+                continue;
+            };
+            let root = self.terms.find_ty_root(var).0 as usize;
+            let TypeBound::Unresolved { bound } = &self.terms.ty_bounds[root] else {
+                continue;
+            };
+            if !bound.admits(&Ty::String) {
+                continue;
+            }
+            self.terms.ty_bounds[root] = TypeBound::Resolved {
+                ty: TyTerm::String,
+                bound: bound.clone(),
+                growth: Growth::Fixed,
+            };
+        }
+    }
+
+    /// The instances `scheme` lacked at a call of `args` (RFC-0043,
+    /// RFC-0070): where the call's arguments join its parameters with every
+    /// variable left unbounded, each requirement no instance of its
+    /// signature takes at the types that join gives it, with the
+    /// requirement's call type there, as written. Empty where an argument
+    /// does not join even so, since the candidate then left by more than a
+    /// requirement. The terms are put back as they were: the trial keeps
+    /// nothing.
+    pub fn lacked_requirements(
+        &mut self,
+        scheme: &Scheme,
+        args: &[InferTy],
+    ) -> Vec<(QualifiedRef, Ty)> {
+        if scheme.requires.is_empty() {
+            return Vec::new();
+        }
+        let kept = self.terms.clone();
+        let lacked = self.lacked_on_the_terms(scheme, args);
+        self.terms = kept;
+        lacked
+    }
+
+    fn lacked_on_the_terms(
+        &mut self,
+        scheme: &Scheme,
+        args: &[InferTy],
+    ) -> Vec<(QualifiedRef, Ty)> {
+        let patterns: Vec<&PolyTy> = scheme.requires.iter().map(|req| &req.pattern).collect();
+        let OpenInstance { ty, beside, .. } = self.terms.instantiate_open_beside(
+            &scheme.ty,
+            &patterns,
+            &scheme.effect_bounds,
+            self.registry,
+        );
+        let TyTerm::Fn { params, .. } = &ty else {
+            return Vec::new();
+        };
+        if params.len() != args.len() {
+            return Vec::new();
+        }
+        for (arg, param) in args.iter().zip(params) {
+            if self
+                .terms
+                .join(
+                    arg,
+                    &param.ty,
+                    Position::Value,
+                    JoinKind::Flow,
+                    self.registry,
+                )
+                .is_err()
+            {
+                return Vec::new();
+            }
+        }
+        scheme
+            .requires
+            .iter()
+            .zip(beside)
+            .filter_map(|(requirement, pattern)| {
+                let call = called_at(pattern, requirement.calls);
+                let bound = EffectBoundedBy::of(Some(requirement.signature));
+                let taken = requirement.instances.generic.is_some()
+                    || requirement
+                        .instances
+                        .concrete
+                        .iter()
+                        .filter(|sig| sig.task <= requirement.calls)
+                        .any(|sig| self.terms.would_take(&call, &sig.ty, bound, self.registry));
+                if taken {
+                    return None;
+                }
+                Some((requirement.signature, self.written_ty(&call).ok()?))
+            })
+            .collect()
     }
 
     /// The candidate a signature decision settled on, which takes each

@@ -58,8 +58,8 @@ pub(crate) fn make_graph(
     (graph, test_qref)
 }
 
-/// `core::to_string` at `T = Str`: the copy that turns a string literal into
-/// the owned text (RFC-0062 rule 2). These helpers build their graph by
+/// `string::to_string(a: &str) -> String`: the copy that turns a string
+/// literal into the owned text (RFC-0062 rule 2, RFC-0070 rule 5). These helpers build their graph by
 /// hand rather than from the standard registries, so a script compiled
 /// through them reaches no declaration it did not name; this one it names,
 /// because a `String` is otherwise unwritable in a script.
@@ -68,7 +68,7 @@ fn to_string(interner: &Interner) -> Function {
 
     let str_view = Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::Str)));
     Function {
-        qref: QualifiedRef::root(interner.intern("to_string")),
+        qref: QualifiedRef::qualified(interner.intern("string"), interner.intern("to_string")),
         kind: FnKind::Extern {
             bounds: vec![],
             effect_bounds: vec![],

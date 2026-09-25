@@ -1,0 +1,9 @@
+// expect 5,5,8,8
+let xs = vec([5, 3, 8, 1]);
+let m = i64::MIN();
+let out = vec([]);
+for x in &xs {
+    m = max(m, *x);
+    out.push(m);
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

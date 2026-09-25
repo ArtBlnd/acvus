@@ -30,6 +30,17 @@ use acvus_extern::{Erased, Registry, Runtime, TyArg, Var, extern_fn, extern_regi
 
 use crate::iter::Items;
 
+/// The owned copy of text, written `"…".to_string()` or `s.to_string()`
+/// (RFC-0062 rule 2), a `String` reaching it lent as a `&str`: a
+/// conversion, not a text, so it is no instance of `core::display`, which
+/// stands at no `str` and no `String` (RFC-0070 rule 5). A `&str` reaches a
+/// `String` parameter only through this. Its result is the text `a` lends
+/// (RFC-0082 rule 10).
+#[extern_fn(effect = pure, copies(a))]
+fn to_string(a: &str) -> String {
+    a.to_owned()
+}
+
 fn padding(fill: &str, count: usize) -> String {
     fill.chars().cycle().take(count).collect()
 }
@@ -542,7 +553,7 @@ where
     extern_registry! {
         ns: "string",
         fns: [
-            len, is_empty, concat, trim, trim_start, trim_end,
+            to_string, len, is_empty, concat, trim, trim_start, trim_end,
             trim_matches, trim_start_matches, trim_end_matches,
             upper, lower, to_ascii_uppercase, to_ascii_lowercase, is_ascii,
             contains, starts_with, ends_with, replace, replacen, repeat,
@@ -563,6 +574,45 @@ where
 mod tests {
     use super::*;
     use acvus_extern::{Externs, Interner, TypesOnly};
+
+    /// RFC-0082 rule 10 sampled: the owned copy of text is the text it was
+    /// lent, byte for byte, and it is the one function of this registry
+    /// stating `copies`.
+    #[test]
+    fn copies_holds_over_the_owned_copy_of_text() {
+        for text in ["", "a", "é\0", "\u{10FFFF}"] {
+            assert_eq!(to_string(text), text);
+            assert_eq!(to_string(&text.to_string()), text);
+        }
+        let i = Interner::new();
+        let reg = Externs::combine(
+            vec![
+                crate::iterator_registry::<TypesOnly>(),
+                string_registry::<TypesOnly>(),
+            ],
+            &i,
+        )
+        .expect("registry combines");
+        let copying: Vec<acvus_extern::QualifiedRef> = reg
+            .functions
+            .iter()
+            .filter(|function| {
+                let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
+                    return false;
+                };
+                instances.concrete.iter().any(|at| at.copies.is_some())
+                    || instances.generic.as_ref().is_some_and(|at| at.copies.is_some())
+            })
+            .map(|function| function.qref)
+            .collect();
+        assert_eq!(
+            copying,
+            [acvus_extern::QualifiedRef::qualified(
+                i.intern("string"),
+                i.intern("to_string")
+            )]
+        );
+    }
 
     /// RFC-0082 rule 10 sampled: the sign of `cmp` is antisymmetric,
     /// transitive and total, and `0` exactly where the bytes are the same.
@@ -663,7 +713,7 @@ mod tests {
         .expect("registry combines");
         let core = Externs::combine(vec![crate::iterator_registry::<TypesOnly>()], &i)
             .expect("the baseline combines");
-        assert_eq!(reg.functions.len() - core.functions.len(), 53);
-        assert_eq!(reg.handlers.len() - core.handlers.len(), 53);
+        assert_eq!(reg.functions.len() - core.functions.len(), 54);
+        assert_eq!(reg.handlers.len() - core.handlers.len(), 54);
     }
 }
