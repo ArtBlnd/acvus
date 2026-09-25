@@ -1,0 +1,6 @@
+// expect "5,3,8,1,0,0"
+let xs = vec([5, 3, 8, 1]);
+let out = vec([9]);
+let pos = vec([0, 0, 0, 0, 0, 0]);
+for x in &xs { pos[out.len() - 1u64] = *x; out.push(*x); }
+pos.into_iter().map(|x| -> x.to_string()).join(",".to_string())

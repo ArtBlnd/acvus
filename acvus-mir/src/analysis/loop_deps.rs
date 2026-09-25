@@ -1097,7 +1097,7 @@ fn disjoint_storages(
     let Some(id) = nest.by_header(header) else {
         return Vec::new();
     };
-    let affine = AffineValues::of(cfg, nest.get(id), &invariants);
+    let affine = AffineValues::of(cfg, nest.get(id), &invariants, laws);
     let places = Places::of(loans, laws);
     let reached = |slot: ValueId| -> Option<Vec<Place>> {
         let mut found: Vec<Place> = Vec::new();
@@ -1215,9 +1215,11 @@ impl<'a> Linear<'a> {
             return Some(Self::constant(value));
         }
         match term {
-            Term::Const(_) | Term::Value(_) | Term::Len(_) | Term::Max(..) => {
-                Some(Self::atom(term))
-            }
+            Term::Const(_)
+            | Term::Value(_)
+            | Term::Len(_)
+            | Term::LenOnEntry(_)
+            | Term::Max(..) => Some(Self::atom(term)),
             Term::Add(a, b) => Self::of(a)?.plus(Self::of(b)?),
             Term::Sub(a, b) => Self::of(a)?.minus(Self::of(b)?),
             Term::Mul(a, b) => match (constant(a), constant(b)) {
@@ -1256,7 +1258,7 @@ fn constant(term: &Term) -> Option<i128> {
     match term {
         Term::Const(Literal::Int(value)) => Some(*value),
         Term::Const(Literal::IntOf(suffixed)) => Some(suffixed.value),
-        Term::Const(_) | Term::Value(_) | Term::Len(_) => None,
+        Term::Const(_) | Term::Value(_) | Term::Len(_) | Term::LenOnEntry(_) => None,
         Term::Add(a, b) => constant(a)?.checked_add(constant(b)?),
         Term::Sub(a, b) => constant(a)?.checked_sub(constant(b)?),
         Term::Mul(a, b) => constant(a)?.checked_mul(constant(b)?),

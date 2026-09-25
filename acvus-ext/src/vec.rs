@@ -157,7 +157,12 @@ where
 
 /// Pushing a run of items onto `c` equals extending `c` by the vecs that
 /// pushing each part of the run onto `new()` builds, in the run's order.
-#[extern_fn(effect = pure, law(fold(combine = extend, identity = new)))]
+/// A push adds one element: `Vec::push` appends `item` and removes none.
+#[extern_fn(
+    effect = pure,
+    law(fold(combine = extend, identity = new)),
+    ensures(len(c) = old(len(c)) + 1)
+)]
 fn push<T>(c: &mut Vec<T>, item: T)
 where
     T: Var<kind::Type>,
@@ -575,6 +580,24 @@ mod tests {
                 extend(&mut combined, pushed(new(), b));
                 assert_eq!(combined, whole, "split of {xs:?} at {at}");
             }
+        }
+    }
+
+    /// `push`'s `ensures(len(c) = old(len(c)) + 1)`: over sampled vecs of
+    /// every length up to 24, a push leaves one element more, the item last
+    /// and the rest as they were. The debug build this test runs in also
+    /// evaluates the postcondition at every return (RFC-0082 rule 5).
+    #[test]
+    fn push_adds_one_element_as_its_postcondition_states() {
+        let mut samples = Samples(0x5eed_9054_0c1a_7e02);
+        for len in 0..=24 {
+            let before: Vec<i64> = (0..len).map(|_| samples.next() as i64).collect();
+            let item = samples.next() as i64;
+            let mut after = before.clone();
+            push(&mut after, item);
+            assert_eq!(after.len(), before.len() + 1);
+            assert_eq!(after[..len], before[..]);
+            assert_eq!(after[len], item);
         }
     }
 

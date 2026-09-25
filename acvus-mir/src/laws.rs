@@ -75,7 +75,8 @@ pub enum Relation {
 }
 
 /// A term of RFC-0066 rule 3 over one call: a constant, a parameter, the
-/// result, the length of either, and `+`, `−`, `×` and `max` of terms. It
+/// result, the length of either, `+`, `−`, `×` and `max` of terms, and
+/// `old(t)`, `t` as it stood when the call began (RFC-0082 rule 4). It
 /// denotes an integer. A parameter is numbered as the declaration's acvus
 /// parameters are, which is the order of a call's arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +90,9 @@ pub enum PostTerm {
     Sub(Box<PostTerm>, Box<PostTerm>),
     Mul(Box<PostTerm>, Box<PostTerm>),
     Max(Box<PostTerm>, Box<PostTerm>),
+    /// The term as it stood when the call began, over the state of `&mut`
+    /// parameters; `#[extern_fn]` refuses one that reads anything else.
+    Old(Box<PostTerm>),
 }
 
 /// What `len(x)` reads: a parameter or the result.

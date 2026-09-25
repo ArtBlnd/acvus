@@ -300,7 +300,7 @@ impl<'a> Costs<'a> {
         match term {
             Term::Const(literal) => integer(literal),
             Term::Value(value) => self.integers.get(value).copied(),
-            Term::Len(_) => None,
+            Term::Len(_) | Term::LenOnEntry(_) => None,
             Term::Add(a, b) => self.constant(a)?.checked_add(self.constant(b)?),
             Term::Sub(a, b) => self.constant(a)?.checked_sub(self.constant(b)?),
             Term::Mul(a, b) => self.constant(a)?.checked_mul(self.constant(b)?),

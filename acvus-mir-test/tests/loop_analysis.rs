@@ -12,7 +12,7 @@ use acvus_mir::analysis::loop_deps::{
     Accumulator, CallIdentity, CallLaw, FoldAccumulator, Law, LawOp, LoopDeps, Storage, Token,
 };
 use acvus_mir::analysis::loops::{
-    Invariants, Loop, LoopId, LoopKind, LoopNest, Nesting, Term, Trip,
+    Invariance, Invariants, Loop, LoopId, LoopKind, LoopNest, Nesting, Term, Trip,
 };
 use acvus_mir::cfg::{CfgBody, promote};
 use acvus_mir::graph::{Function, QualifiedRef};
@@ -66,7 +66,7 @@ impl Analyzed {
     }
 
     fn affine(&self, loop_: &Loop) -> AffineValues {
-        AffineValues::of(&self.cfg, loop_, &self.invariants)
+        AffineValues::of(&self.cfg, loop_, &self.invariants, &self.laws)
     }
 
     fn state(&self, loop_: &Loop) -> CarriedState {
@@ -792,5 +792,148 @@ fn a_difference_with_the_counter_is_affine_with_its_step_kept_or_negated() {
                 );
             }
         }
+    }
+}
+
+// -- Standing operations and the length a push grows (RFC-0066 rules 3, 4) --
+
+/// The one instruction of the loop whose kind `pick` answers.
+fn sole_in_loop<T>(a: &Analyzed, loop_: &Loop, pick: impl Fn(&InstKind) -> Option<T>) -> T {
+    let found: Vec<T> = loop_
+        .natural
+        .blocks()
+        .flat_map(|block| &a.cfg.blocks[block.0].insts)
+        .filter_map(|inst| pick(&inst.kind))
+        .collect();
+    let [only] = <[T; 1]>::try_from(found).unwrap_or_else(|found| {
+        panic!("one such instruction in the loop, found {}", found.len())
+    });
+    only
+}
+
+fn copied_element(kind: &InstKind) -> Option<ValueId> {
+    match kind {
+        InstKind::Index {
+            dst,
+            mode: acvus_mir::ir::IndexMode::Copy,
+            ..
+        } => Some(*dst),
+        _ => None,
+    }
+}
+
+/// `n - 1u64` computed in the body from `n`, defined before the loop, and a
+/// word constant is invariant where it stands: no reader above the header
+/// reads it, and `(n - 1) - i` is affine through it with the step negated.
+#[test]
+fn an_operation_of_invariants_in_the_body_is_invariant_where_it_stands() {
+    let a = Analyzed::of(
+        "let n = 4u64; let s = 0u64; for i in 0u64..n { s = s + (n - 1u64 - i); } s",
+    );
+    let loop_ = a.sole_loop();
+    let counter = a.for_counter(loop_);
+    let (standing, reflected) = sole_in_loop(&a, loop_, |kind| match kind {
+        InstKind::BinOp {
+            dst,
+            op: acvus_mir::ir::BinOp::Sub(_),
+            left,
+            right,
+        } if *right == counter => Some((*left, *dst)),
+        _ => None,
+    });
+    assert!(
+        loop_.natural.contains(a.invariants.def_block(standing)),
+        "`n - 1u64` stays in the body"
+    );
+    assert_eq!(
+        a.invariants.in_loop(&loop_.natural, standing),
+        Some(Invariance::Standing(standing))
+    );
+    assert_eq!(a.invariants.above(&loop_.natural, standing), None);
+    let found = a.affine(loop_);
+    let found = found.get(reflected).expect("`(n - 1) - i` is affine");
+    assert!(matches!(
+        &found.derivation,
+        Derivation::Reflected { of, from } if *of == counter
+            && from.invariance == Invariance::Standing(standing)
+    ));
+    assert_eq!(found.step, Term::int(0).sub(Term::int(1)));
+}
+
+/// An element read at a constant index stands in a loop that writes
+/// another storage, and not in one that writes the storage it reads.
+#[test]
+fn an_operation_reading_a_storage_the_loop_writes_is_not_invariant() {
+    let unwritten = Analyzed::of(
+        "let v = vec([0u64, 0u64, 0u64]); let w = vec([2u64, 1u64, 0u64]);
+         for i in 0u64..3u64 { v[i] = w[0u64]; } v.len()",
+    );
+    let loop_ = unwritten.sole_loop();
+    let read = sole_in_loop(&unwritten, loop_, copied_element);
+    assert_eq!(
+        unwritten.invariants.in_loop(&loop_.natural, read),
+        Some(Invariance::Standing(read)),
+        "`w[0]` reads what the loop does not write"
+    );
+
+    let written = Analyzed::of(
+        "let v = vec([2u64, 1u64, 0u64]);
+         for i in 0u64..3u64 { let d = v[0u64]; v[i] = d; } v.len()",
+    );
+    let loop_ = written.sole_loop();
+    let read = sole_in_loop(&written, loop_, copied_element);
+    assert_eq!(
+        written.invariants.in_loop(&loop_.natural, read),
+        None,
+        "`v[0]` reads what the loop writes"
+    );
+}
+
+/// The value of the one call in the loop that returns a `u64`.
+fn length_read(a: &Analyzed, loop_: &Loop) -> ValueId {
+    sole_in_loop(a, loop_, |kind| match kind {
+        InstKind::FunctionCall { dst, .. } if a.cfg.val_types[dst] == acvus_mir::ty::Ty::U64 => {
+            Some(*dst)
+        }
+        _ => None,
+    })
+}
+
+/// `v.len()` read before the one push every iteration makes: `push`
+/// states `len(c) = old(len(c)) + 1`, so the length is `{len(v) on entry, 1}`.
+#[test]
+fn a_length_read_before_an_unconditional_push_is_affine_from_its_length_on_entry() {
+    let a = Analyzed::of(
+        "let n = 3; let v = new(); let t = 0u64; for x in 0..n { t = t + v.len(); v.push(x); } t",
+    );
+    let loop_ = a.sole_loop();
+    let read = length_read(&a, loop_);
+    let affine = a.affine(loop_);
+    let found = affine.get(read).expect("the length read before the push is affine");
+    let Derivation::Length { storage } = found.derivation else {
+        panic!("a length, found {:?}", found.derivation);
+    };
+    assert_eq!(found.base, Term::LenOnEntry(storage));
+    assert_eq!(found.step, Term::int(1));
+}
+
+/// Where the push does not run once on every iteration, or something else
+/// changes the length, or the read follows the push, the length is not
+/// affine: rule 4 admits one call every iteration makes exactly once. Two
+/// unconditional pushes would step by 2, and the rule does not add them:
+/// the second is something else in the loop changing the length.
+#[test]
+fn a_length_the_loop_changes_otherwise_is_not_affine() {
+    for body in [
+        "t = t + v.len(); if x > 1 { v.push(x); };",
+        "t = t + v.len(); v.push(x); v.push(x);",
+        "t = t + v.len(); v.push(x); v.pop();",
+        "v.push(x); t = t + v.len();",
+    ] {
+        let source = format!("let n = 3; let v = new(); let t = 0u64; for x in 0..n {{ {body} }} t");
+        let a = Analyzed::of(&source);
+        let loop_ = a.sole_loop();
+        let read = length_read(&a, loop_);
+        assert_eq!(a.affine(loop_).get(read), None, "{body}");
     }
 }

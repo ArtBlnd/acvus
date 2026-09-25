@@ -209,7 +209,7 @@ fn fmt_term(
         Term::Add(..) | Term::Sub(..) | Term::Mul(..) => {
             format!("({})", fmt_term(term, vn, consts, texts))
         }
-        Term::Const(_) | Term::Value(_) | Term::Len(_) | Term::Max(..) => {
+        Term::Const(_) | Term::Value(_) | Term::Len(_) | Term::LenOnEntry(_) | Term::Max(..) => {
             fmt_term(term, vn, consts, texts)
         }
     };
@@ -217,6 +217,7 @@ fn fmt_term(
         Term::Const(literal) => fmt_literal(literal),
         Term::Value(value) => vn.fmt_use(*value, consts, texts),
         Term::Len(source) => format!("len({})", vn.fmt_use(*source, consts, texts)),
+        Term::LenOnEntry(slot) => format!("len({}) on entry", vn.fmt_use(*slot, consts, texts)),
         Term::Add(a, b) => format!("{} + {}", operand(a, vn), operand(b, vn)),
         Term::Sub(a, b) => format!("{} - {}", operand(a, vn), operand(b, vn)),
         Term::Mul(a, b) => format!("{} * {}", operand(a, vn), operand(b, vn)),

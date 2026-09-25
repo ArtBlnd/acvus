@@ -115,7 +115,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
             continue;
         };
         let invariants = Invariants::of(cfg);
-        let affine = AffineValues::of(cfg, loop_, &invariants);
+        let affine = AffineValues::of(cfg, loop_, &invariants, laws);
         let uses = use_blocks(cfg);
         let reductions = Scope {
             cfg,
@@ -363,9 +363,11 @@ impl Scope<'_> {
 
     fn counted(&self, iv: ValueId) -> Option<Counted> {
         match self.derivation(iv)? {
+            // A standing step is not read above the header, where the
+            // derived counter starts.
             Derivation::Carried { init, step } => Some(Counted::Carried {
                 init: *init,
-                step: step.invariant.clone(),
+                step: step.invariance.above()?.clone(),
             }),
             Derivation::Counter => match self.chain.source {
                 ForSource::Range { at, .. } => Some(Counted::Range { at }),
@@ -376,7 +378,8 @@ impl Scope<'_> {
             Derivation::Scaled { .. }
             | Derivation::Offset { .. }
             | Derivation::Lowered { .. }
-            | Derivation::Reflected { .. } => None,
+            | Derivation::Reflected { .. }
+            | Derivation::Length { .. } => None,
         }
     }
 
@@ -419,12 +422,19 @@ impl Scope<'_> {
                 let Some(join) = self.read_in_one_join(sum.dst) else {
                     continue;
                 };
+                // The derived counter starts above the header, where no
+                // standing operand is read (RFC-0066 rule 3).
+                let (Some(factor_above), Some(offset_above)) =
+                    (factor.invariance.above(), sum.offset.invariance.above())
+                else {
+                    continue;
+                };
                 let traps = *product_kind == Overflow::Trap || sum.kind == Overflow::Trap;
                 if traps
                     && !self.fits_on_every_iteration(
                         &counted,
-                        &factor.invariant,
-                        &sum.offset.invariant,
+                        factor_above,
+                        offset_above,
                         *dst,
                     )
                 {
@@ -443,8 +453,8 @@ impl Scope<'_> {
                     dst: sum.dst,
                     ty: self.cfg.val_types[dst].clone(),
                     counted,
-                    factor: factor.invariant.clone(),
-                    offset: sum.offset.invariant,
+                    factor: factor_above.clone(),
+                    offset: offset_above.clone(),
                     product: Site { block, inst },
                     sum: sum.site,
                     join,

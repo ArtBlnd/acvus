@@ -950,7 +950,8 @@ impl<'a> Domain<'a> {
             PostTerm::Ret
             | PostTerm::Len(Subject::Ret)
             | PostTerm::Mul(..)
-            | PostTerm::Max(..) => None,
+            | PostTerm::Max(..)
+            | PostTerm::Old(..) => None,
         }
     }
 

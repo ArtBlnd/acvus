@@ -45,10 +45,14 @@
 //! run (RFC-0037 rule 3).
 
 use crate::analysis::domtree::DomTree;
+use crate::analysis::inst_info;
+use crate::analysis::loans::Loans;
+use crate::analysis::targets;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{ExitTrip, ForSource, InstKind, Label, ValueId};
+use crate::ir::{Callee, ExitTrip, ForSource, InstKind, Label, ValueId};
+use crate::ty::{Mutability, Ty};
 use acvus_ast::Literal;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub struct BackEdge {
     pub tail: BlockIdx,
@@ -194,11 +198,39 @@ pub enum Invariant {
     Word(Literal),
 }
 
+/// Why a value is the same on every iteration of a loop (RFC-0066 rule 3):
+/// it can be read above the header ([`Invariant`]), or it is an operation
+/// of invariant operands inside the loop that reads nothing the loop
+/// writes, left where it stands.
+///
+/// A standing operation is not moved: one that can end the run keeps its
+/// trap on the paths it ran on (RFC-0037 rule 3), and a loop that runs no
+/// iteration never computes it. So no reader above the header can read
+/// it, and a reader that writes a value there asks [`Invariance::above`],
+/// which a standing value answers with nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Invariance {
+    Above(Invariant),
+    Standing(ValueId),
+}
+
+impl Invariance {
+    /// What a reader above the header reads, where it can read one.
+    pub fn above(&self) -> Option<&Invariant> {
+        match self {
+            Invariance::Above(invariant) => Some(invariant),
+            Invariance::Standing(_) => None,
+        }
+    }
+}
+
 /// The one answer to "is this value the same on every iteration", built
 /// once per body and asked per loop.
 pub struct Invariants {
     def_block: FxHashMap<ValueId, BlockIdx>,
     words: FxHashMap<ValueId, Literal>,
+    /// Per loop header, the operations standing in that loop.
+    standing: FxHashMap<BlockIdx, FxHashSet<ValueId>>,
 }
 
 impl Invariants {
@@ -215,9 +247,57 @@ impl Invariants {
                 _ => None,
             })
             .collect();
-        Self {
+        let mut invariants = Self {
             def_block: def_blocks(cfg),
             words,
+            standing: FxHashMap::default(),
+        };
+        let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
+        if loops.is_empty() {
+            return invariants;
+        }
+        let loans = Loans::build(cfg);
+        for loop_ in &loops {
+            let standing = invariants.standing_in(cfg, &loans, loop_);
+            invariants.standing.insert(loop_.header, standing);
+        }
+        invariants
+    }
+
+    /// The operations standing in `loop_` (RFC-0066 rule 3): each defines
+    /// one word, has no effect, reads only values invariant in the loop,
+    /// and touches no storage the loop writes. Found to a fixpoint, since
+    /// an operand may itself be a standing operation.
+    fn standing_in(&self, cfg: &CfgBody, loans: &Loans<'_>, loop_: &NaturalLoop) -> FxHashSet<ValueId> {
+        let written = written_in(cfg, loans, loop_);
+        let candidates: Vec<(ValueId, &InstKind)> = loop_
+            .blocks()
+            .flat_map(|block| cfg.blocks[block.0].insts.iter())
+            .filter_map(|inst| {
+                let dst = standing_operation(&inst.kind)?;
+                let is_word = cfg.val_types.get(&dst).and_then(Ty::is_word) == Some(true);
+                (is_word && touches_none_of(loans, &inst.kind, &written)).then_some((dst, &inst.kind))
+            })
+            .collect();
+        let mut standing: FxHashSet<ValueId> = FxHashSet::default();
+        loop {
+            let before = standing.len();
+            for (dst, kind) in &candidates {
+                if standing.contains(dst) {
+                    continue;
+                }
+                let invariant_operand = |value: &ValueId| {
+                    !loop_.contains(self.def_block(*value))
+                        || self.words.contains_key(value)
+                        || standing.contains(value)
+                };
+                if inst_info::uses(kind).iter().all(invariant_operand) {
+                    standing.insert(*dst);
+                }
+            }
+            if standing.len() == before {
+                return standing;
+            }
         }
     }
 
@@ -234,12 +314,95 @@ impl Invariants {
         self.words.get(&value)
     }
 
-    pub fn at(&self, loop_: &NaturalLoop, value: ValueId) -> Option<Invariant> {
+    /// `value` as a reader above `loop_`'s header reads it, where it can:
+    /// defined outside the loop, or a word to write again.
+    pub fn above(&self, loop_: &NaturalLoop, value: ValueId) -> Option<Invariant> {
         if !loop_.contains(self.def_block(value)) {
             return Some(Invariant::Outside(value));
         }
         self.words.get(&value).cloned().map(Invariant::Word)
     }
+
+    /// Whether `value` is invariant in `loop_` (RFC-0066 rule 3), and why.
+    pub fn in_loop(&self, loop_: &NaturalLoop, value: ValueId) -> Option<Invariance> {
+        if let Some(invariant) = self.above(loop_, value) {
+            return Some(Invariance::Above(invariant));
+        }
+        self.standing
+            .get(&loop_.header)
+            .is_some_and(|standing| standing.contains(&value))
+            .then_some(Invariance::Standing(value))
+    }
+}
+
+/// The value an instruction defines when it is an operation that can stand
+/// in a loop: arithmetic and a cast, a shared reference to a storage and
+/// its slice, an element read, and a call that carries no `Order`, which
+/// has no effect (RFC-0013). A `Take` may empty its slot, a `Fetch` reads a
+/// context, and a constructor builds a heap value each time; none of them
+/// stands.
+fn standing_operation(kind: &InstKind) -> Option<ValueId> {
+    match kind {
+        InstKind::BinOp { dst, .. }
+        | InstKind::UnaryOp { dst, .. }
+        | InstKind::Cast { dst, .. }
+        | InstKind::Index { dst, .. }
+        | InstKind::Ref {
+            dst,
+            mutability: Mutability::Shared,
+            ..
+        }
+        | InstKind::AsSlice {
+            dst,
+            mutability: Mutability::Shared,
+            ..
+        } => Some(*dst),
+        InstKind::FunctionCall {
+            dst,
+            callee: Callee::Direct(_) | Callee::Extern { .. },
+            order: None,
+            ..
+        } => Some(*dst),
+        _ => None,
+    }
+}
+
+/// The storage slots `loop_` writes: what an instruction writes or lends
+/// exclusively, and the source a `for` inside it writes through.
+fn written_in(cfg: &CfgBody, loans: &Loans<'_>, loop_: &NaturalLoop) -> FxHashSet<ValueId> {
+    let mut written: FxHashSet<ValueId> = FxHashSet::default();
+    for block in loop_.blocks() {
+        let held = &cfg.blocks[block.0];
+        for inst in &held.insts {
+            written.extend(targets::effect(loans, &inst.kind).writes);
+            written.extend(targets::slots_lent_mutably(loans, &inst.kind));
+        }
+        if let Terminator::For {
+            source: ForSource::SliceMut(source),
+            ..
+        } = &held.terminator
+        {
+            written.extend(loans.holds(*source).filter_map(|loan| loan.storage.slot()));
+        }
+    }
+    written
+}
+
+/// Whether `kind` touches no storage in `written`. Every loan it reaches
+/// must name a slot of this body: a storage outside it is one the loop's
+/// writes are not counted against, so an operation that reaches one does
+/// not stand.
+fn touches_none_of(loans: &Loans<'_>, kind: &InstKind, written: &FxHashSet<ValueId>) -> bool {
+    let through_slots = inst_info::uses(kind)
+        .iter()
+        .all(|value| loans.holds(*value).all(|loan| loan.storage.slot().is_some()));
+    let effect = loans.storage_effect(kind);
+    through_slots
+        && effect
+            .reads
+            .iter()
+            .chain(&effect.writes)
+            .all(|slot| !written.contains(slot))
 }
 
 /// The arguments the one edge of `term` to `label` carries, or `None` when
@@ -308,11 +471,11 @@ pub fn edge_args(term: &Terminator, label: Label) -> Option<&[ValueId]> {
     }
 }
 
-/// A symbolic integer over what one entry to a loop fixes (RFC-0066): a
-/// constant, a value invariant in the loop, the length of a `for`'s
-/// source, and `+`, `−`, `×` and `max` of those. It is written as the
-/// analysis found it and not simplified; a reader evaluates it where it
-/// knows the atoms.
+/// A symbolic integer over what one entry to a loop fixes (RFC-0066 rule
+/// 3): a constant, a value invariant in the loop, the length of a `for`'s
+/// source, a storage's length on the loop's entry, and `+`, `−`, `×` and
+/// `max` of those. It is written as the analysis found it and not
+/// simplified; a reader evaluates it where it knows the atoms.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Term {
     Const(Literal),
@@ -321,6 +484,9 @@ pub enum Term {
     /// the loop cannot change: the source's borrow or move holds it for
     /// the loop's extent (RFC-0057 rules 2 and 5).
     Len(ValueId),
+    /// The element count storage slot `s` holds when the loop is entered
+    /// (RFC-0066 rule 4's `len(s) on entry`).
+    LenOnEntry(ValueId),
     Add(Box<Term>, Box<Term>),
     Sub(Box<Term>, Box<Term>),
     Mul(Box<Term>, Box<Term>),
@@ -348,11 +514,12 @@ impl Term {
         Term::Max(Box::new(self), Box::new(other))
     }
 
-    /// The values the term reads, `Len`'s source among them.
+    /// The values the term reads, `Len`'s source and `LenOnEntry`'s slot
+    /// among them.
     pub fn atoms(&self) -> Vec<ValueId> {
         match self {
             Term::Const(_) => Vec::new(),
-            Term::Value(value) | Term::Len(value) => vec![*value],
+            Term::Value(value) | Term::Len(value) | Term::LenOnEntry(value) => vec![*value],
             Term::Add(a, b) | Term::Sub(a, b) | Term::Mul(a, b) | Term::Max(a, b) => {
                 a.atoms().into_iter().chain(b.atoms()).collect()
             }
@@ -365,6 +532,15 @@ impl From<Invariant> for Term {
         match invariant {
             Invariant::Outside(value) => Term::Value(value),
             Invariant::Word(literal) => Term::Const(literal),
+        }
+    }
+}
+
+impl From<Invariance> for Term {
+    fn from(invariance: Invariance) -> Term {
+        match invariance {
+            Invariance::Above(invariant) => Term::from(invariant),
+            Invariance::Standing(value) => Term::Value(value),
         }
     }
 }
@@ -513,7 +689,7 @@ impl LoopNest {
                 Trip::Known(term) => term
                     .atoms()
                     .into_iter()
-                    .all(|atom| invariants.at(&loops[parent.0].natural, atom).is_some()),
+                    .all(|atom| invariants.in_loop(&loops[parent.0].natural, atom).is_some()),
                 Trip::Unknown => false,
             };
             loops[i].nesting = Nesting::Inside {
@@ -553,7 +729,7 @@ fn trip_count(natural: &NaturalLoop, kind: LoopKind, invariants: &Invariants) ->
         return Trip::Unknown;
     };
     let settled = |value: ValueId| {
-        Term::from(invariants.at(natural, value).unwrap_or_else(|| {
+        Term::from(invariants.above(natural, value).unwrap_or_else(|| {
             panic!(
                 "the `for` headed at block {} reads {value:?}, which its own body defines",
                 natural.header.0
@@ -730,7 +906,7 @@ mod tests {
         let domtree = DomTree::build(&cfg);
         let invariants = Invariants::of(&cfg);
         for loop_ in natural_loops_innermost_first(&cfg, &domtree) {
-            assert_eq!(invariants.at(&loop_, v(0)), Some(Invariant::Outside(v(0))));
+            assert_eq!(invariants.above(&loop_, v(0)), Some(Invariant::Outside(v(0))));
         }
     }
 }

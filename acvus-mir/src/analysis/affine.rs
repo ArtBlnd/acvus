@@ -13,6 +13,17 @@
 //! - `a·v`, `v + b`, `v − b` and `b − v` of an affine `v`, with `a` and `b`
 //!   invariant, are affine: `{a·base, a·step}`, `{base + b, step}`,
 //!   `{base − b, step}` and `{b − base, 0 − step}` (RFC-0066 rule 4).
+//! - A call's result its postcondition states `= len(s)`, read before a
+//!   call every iteration makes exactly once whose postcondition states
+//!   `len(s) = old(len(s)) + c`, with nothing else in the loop writing `s`,
+//!   is `{len(s) on entry, c}` (RFC-0066 rule 4, RFC-0082 rule 6): the
+//!   iterations before it made the call once each and nothing else moved
+//!   the length.
+//!
+//! An invariant here is RFC-0066 rule 3's, a standing operation of the
+//! body among them (`analysis::loops::Invariance`). A reader that writes
+//! `base + k·step` above the header or at the head of the body asks each
+//! operand for [`Invariance::above`] and declines a standing one.
 //!
 //! Only integers are affine, and a `+`, `−` or `*` of either kind makes one
 //! (`ir::Overflow`). A wrapping one is arithmetic modulo `2^width`, a
@@ -31,19 +42,23 @@
 //!
 //! `base` and `step` are `analysis::loops::Term`s: the type the trip count
 //! is written in, over the same atoms — a constant, a value invariant in
-//! the loop, a source's length — so a reader that evaluates a trip count
+//! the loop, a source's length, a storage's length on entry — so a reader that evaluates a trip count
 //! evaluates these with the same code. Beside the terms, each value keeps
 //! the rule that made it, with the operands typed as the rule read them;
 //! `optimize::lsr` rewrites from that and does not match the instructions
 //! a second time.
 
 use crate::ir::BinOp;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, Term};
+use crate::analysis::domtree::DomTree;
+use crate::analysis::loans::Loans;
+use crate::analysis::loops::{Invariance, Invariants, Loop, LoopKind, NaturalLoop, Term};
+use crate::analysis::targets;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{ForSource, InstKind, ValueId};
-use crate::ty::Ty;
+use crate::ir::{ForSource, InstKind, RefTarget, ValueId};
+use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
+use crate::ty::{Mutability, Ty};
 
 /// Whether `+` and `*` at `ty` are arithmetic in a ring on every run that
 /// reaches them: exact under reassociation and distribution modulo
@@ -54,11 +69,12 @@ pub fn exact_under_wrapping(ty: &Ty) -> bool {
 }
 
 /// An invariant operand of the instruction a rule read: the value the
-/// instruction names, and how a reader above the header reads it.
+/// instruction names, and why it is invariant, which says whether and how a
+/// reader above the header reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Operand {
     pub value: ValueId,
-    pub invariant: Invariant,
+    pub invariance: Invariance,
 }
 
 /// The rule that made a value affine, and what it read.
@@ -89,6 +105,9 @@ pub enum Derivation {
         of: ValueId,
         from: Operand,
     },
+    /// The length of storage slot `storage`, read before the one call each
+    /// iteration makes that grows it.
+    Length { storage: ValueId },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,7 +123,7 @@ pub struct AffineValues {
 }
 
 impl AffineValues {
-    pub fn of(cfg: &CfgBody, loop_: &Loop, invariants: &Invariants) -> Self {
+    pub fn of(cfg: &CfgBody, loop_: &Loop, invariants: &Invariants, laws: &LawTable) -> Self {
         let natural = &loop_.natural;
         let mut values: FxHashMap<ValueId, Affine> = FxHashMap::default();
         let integer = |value: ValueId| exact_under_wrapping(&cfg.val_types[&value]);
@@ -115,7 +134,7 @@ impl AffineValues {
             let base = match source {
                 ForSource::Range { at, .. } => Term::from(
                     invariants
-                        .at(natural, at)
+                        .above(natural, at)
                         .expect("a `for` source is settled before the header runs"),
                 ),
                 ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => Term::int(0),
@@ -150,24 +169,26 @@ impl AffineValues {
             let Some(step) = sum.other_than(param) else {
                 continue;
             };
-            let Some(invariant) = invariants.at(natural, step) else {
+            let Some(invariance) = invariants.in_loop(natural, step) else {
                 continue;
             };
             values.insert(
                 param,
                 Affine {
                     base: Term::Value(init),
-                    step: Term::from(invariant.clone()),
+                    step: Term::from(invariance.clone()),
                     derivation: Derivation::Carried {
                         init,
                         step: Operand {
                             value: step,
-                            invariant,
+                            invariance,
                         },
                     },
                 },
             );
         }
+
+        values.extend(lengths(cfg, natural, invariants, laws));
 
         loop {
             let mut found: Vec<(ValueId, Affine)> = Vec::new();
@@ -183,14 +204,14 @@ impl AffineValues {
                     (false, true) => (operation.right, operation.left, false),
                     _ => continue,
                 };
-                let Some(invariant) = invariants.at(natural, other) else {
+                let Some(invariance) = invariants.in_loop(natural, other) else {
                     continue;
                 };
                 let known = &values[&of];
-                let term = Term::from(invariant.clone());
+                let term = Term::from(invariance.clone());
                 let operand = Operand {
                     value: other,
-                    invariant,
+                    invariance,
                 };
                 let affine = match operation.op {
                     BinOp::Mul(_) => Affine {
@@ -238,6 +259,265 @@ impl AffineValues {
     pub fn get(&self, value: ValueId) -> Option<&Affine> {
         self.values.get(&value)
     }
+}
+
+/// Where an instruction stands: its block and its index there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct At {
+    block: BlockIdx,
+    index: usize,
+}
+
+/// A call whose postcondition states `len(p) = old(len(p)) + c` of the
+/// storage its argument `p` lends whole and exclusively.
+struct Grows {
+    at: At,
+    storage: ValueId,
+    by: Term,
+}
+
+/// A call whose postcondition states `ret = len(p)` of the storage its
+/// argument `p` lends whole.
+struct ReadsLength {
+    at: At,
+    dst: ValueId,
+    storage: ValueId,
+}
+
+/// RFC-0066 rule 4's `len(s)` clause: each value a call states `= len(s)`,
+/// read before the one call every iteration makes that states
+/// `len(s) = old(len(s)) + c`, where nothing else in the loop writes `s`.
+fn lengths(
+    cfg: &CfgBody,
+    natural: &NaturalLoop,
+    invariants: &Invariants,
+    laws: &LawTable,
+) -> Vec<(ValueId, Affine)> {
+    let refs: FxHashMap<ValueId, (&RefTarget, bool, Mutability)> = cfg
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter_map(|inst| match &inst.kind {
+            InstKind::Ref {
+                dst,
+                target,
+                path,
+                mutability,
+            } => Some((*dst, (target, path.is_empty(), *mutability))),
+            _ => None,
+        })
+        .collect();
+    // The slot `value` is a reference to, whole, taken at `mutability`.
+    let whole = |value: ValueId, mutability: Mutability| match refs.get(&value) {
+        Some((RefTarget::Var(slot) | RefTarget::Param(slot), true, taken))
+            if *taken == mutability =>
+        {
+            Some(*slot)
+        }
+        _ => None,
+    };
+    let mut grows: Vec<Grows> = Vec::new();
+    let mut reads: Vec<ReadsLength> = Vec::new();
+    for block in natural.blocks().filter(|block| *block != natural.header) {
+        for (index, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
+            let InstKind::FunctionCall {
+                dst, callee, args, ..
+            } = &inst.kind
+            else {
+                continue;
+            };
+            let at = At { block, index };
+            for postcondition in laws.postconditions_of(callee) {
+                if let Some((param, by)) = growth(postcondition) {
+                    let by = match by {
+                        PostTerm::Const(c) => Some(Term::int(*c)),
+                        PostTerm::Param(k) => args
+                            .get(*k)
+                            .and_then(|arg| invariants.in_loop(natural, *arg))
+                            .map(Term::from),
+                        _ => None,
+                    };
+                    if let (Some(by), Some(storage)) = (
+                        by,
+                        args.get(param).and_then(|arg| whole(*arg, Mutability::Mut)),
+                    ) {
+                        grows.push(Grows { at, storage, by });
+                    }
+                }
+                if let Some(param) = length_of(postcondition)
+                    && let Some(storage) =
+                        args.get(param).and_then(|arg| whole(*arg, Mutability::Shared))
+                    && exact_under_wrapping(&cfg.val_types[dst])
+                {
+                    reads.push(ReadsLength {
+                        at,
+                        dst: *dst,
+                        storage,
+                    });
+                }
+            }
+        }
+    }
+    if grows.is_empty() || reads.is_empty() {
+        return Vec::new();
+    }
+    let loans = Loans::build(cfg);
+    let domtree = DomTree::build(cfg);
+    let mut found = Vec::new();
+    for read in reads {
+        let [grow] = &grows
+            .iter()
+            .filter(|grow| grow.storage == read.storage)
+            .collect::<Vec<_>>()[..]
+        else {
+            continue;
+        };
+        let only_writer = writers(cfg, &loans, natural, read.storage) == [grow.at];
+        if only_writer
+            && once_per_iteration(cfg, &domtree, natural, grow.at.block)
+            && !reached_after(cfg, natural, grow.at, read.at)
+        {
+            found.push((
+                read.dst,
+                Affine {
+                    base: Term::LenOnEntry(read.storage),
+                    step: grow.by.clone(),
+                    derivation: Derivation::Length {
+                        storage: read.storage,
+                    },
+                },
+            ));
+        }
+    }
+    found
+}
+
+/// The parameter `p` and the term `c` of `len(p) = old(len(p)) + c`, in
+/// either order of the relation and of the sum.
+fn growth(postcondition: &Postcondition) -> Option<(usize, &PostTerm)> {
+    let Postcondition {
+        left,
+        relation: Relation::Eq,
+        right,
+    } = postcondition
+    else {
+        return None;
+    };
+    let grown = |now: &PostTerm, sum: &'_ PostTerm| -> Option<usize> {
+        let PostTerm::Len(Subject::Param(param)) = now else {
+            return None;
+        };
+        let PostTerm::Old(was) = sum else {
+            return None;
+        };
+        (**was == PostTerm::Len(Subject::Param(*param))).then_some(*param)
+    };
+    [(left, right), (right, left)]
+        .into_iter()
+        .find_map(|(now, other)| {
+            let PostTerm::Add(a, b) = other else {
+                return None;
+            };
+            [(&**a, &**b), (&**b, &**a)]
+                .into_iter()
+                .find_map(|(was, by)| grown(now, was).map(|param| (param, by)))
+        })
+}
+
+/// The parameter `p` of `ret = len(p)`, in either order.
+fn length_of(postcondition: &Postcondition) -> Option<usize> {
+    match postcondition {
+        Postcondition {
+            left: PostTerm::Ret,
+            relation: Relation::Eq,
+            right: PostTerm::Len(Subject::Param(param)),
+        }
+        | Postcondition {
+            left: PostTerm::Len(Subject::Param(param)),
+            relation: Relation::Eq,
+            right: PostTerm::Ret,
+        } => Some(*param),
+        _ => None,
+    }
+}
+
+/// Every place in the loop that writes `storage`: an instruction whose
+/// storage effect writes it, and a `for` whose exclusive source holds it.
+fn writers(cfg: &CfgBody, loans: &Loans<'_>, natural: &NaturalLoop, storage: ValueId) -> Vec<At> {
+    let mut found = Vec::new();
+    for block in natural.blocks() {
+        let held = &cfg.blocks[block.0];
+        for (index, inst) in held.insts.iter().enumerate() {
+            if targets::effect(loans, &inst.kind).writes.contains(&storage) {
+                found.push(At { block, index });
+            }
+        }
+        if let Terminator::For {
+            source: ForSource::SliceMut(source),
+            ..
+        } = &held.terminator
+            && loans
+                .holds(*source)
+                .any(|loan| loan.storage.slot() == Some(storage))
+        {
+            found.push(At {
+                block,
+                index: held.insts.len(),
+            });
+        }
+    }
+    found
+}
+
+/// The blocks of the loop an iteration reaches after `from`, without
+/// passing the header.
+fn reached_within(cfg: &CfgBody, natural: &NaturalLoop, from: BlockIdx) -> FxHashSet<BlockIdx> {
+    let mut reached: FxHashSet<BlockIdx> = FxHashSet::default();
+    let mut work = vec![from];
+    while let Some(block) = work.pop() {
+        for succ in cfg.successors(block) {
+            if succ != natural.header && natural.contains(succ) && reached.insert(succ) {
+                work.push(succ);
+            }
+        }
+    }
+    reached
+}
+
+/// Whether every iteration runs `block` exactly once: no path returns to it
+/// within one iteration, and it dominates every latch and every block an
+/// iteration can leave the loop from, so no iteration goes on or ends
+/// without it.
+fn once_per_iteration(
+    cfg: &CfgBody,
+    domtree: &DomTree,
+    natural: &NaturalLoop,
+    block: BlockIdx,
+) -> bool {
+    if block == natural.header || reached_within(cfg, natural, block).contains(&block) {
+        return false;
+    }
+    natural
+        .blocks()
+        .filter(|at| *at != natural.header)
+        .filter(|at| {
+            natural.latches.contains(at)
+                || matches!(
+                    cfg.blocks[at.0].terminator,
+                    Terminator::Return { .. } | Terminator::Diverge
+                )
+                || cfg
+                    .successors(*at)
+                    .iter()
+                    .any(|succ| !natural.contains(*succ))
+        })
+        .all(|at| domtree.dominates(block, at))
+}
+
+/// Whether an iteration can reach `later` after `earlier` has run.
+fn reached_after(cfg: &CfgBody, natural: &NaturalLoop, earlier: At, later: At) -> bool {
+    (later.block == earlier.block && later.index > earlier.index)
+        || reached_within(cfg, natural, earlier.block).contains(&later.block)
 }
 
 /// One `BinOp` of a loop's body, by the value it defines.

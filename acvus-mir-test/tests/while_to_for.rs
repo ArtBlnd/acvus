@@ -14,13 +14,15 @@ use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ir::{ForSource, ValueId};
 use acvus_mir::optimize::{dce, fold, reborrow, ssa_pass, while_to_for};
 use acvus_mir::ty::{Effect, EffectTerm, Instances, ParamTerm, Poly, PolyTy, Ty, lift_to_poly};
-use acvus_mir_test::lowered_script_module;
+use acvus_mir::laws::LawTable;
+use acvus_mir_test::{LoweredScript, lowered_script};
 use acvus_utils::Interner;
 
 struct Promoted {
     cfg: CfgBody,
     nest: LoopNest,
     invariants: Invariants,
+    laws: LawTable,
 }
 
 impl Promoted {
@@ -30,13 +32,13 @@ impl Promoted {
 
     fn with_externs(source: &str, externs: impl FnOnce(&Interner) -> Vec<Function>) -> Self {
         let i = Interner::new();
-        let module = lowered_script_module(&i, source, &externs(&i))
+        let LoweredScript { module, laws } = lowered_script(&i, source, &externs(&i), vec![])
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
         let mut cfg = promote(module.main);
         ssa_pass::run(&mut cfg);
         fold::run(&mut cfg);
         reborrow::run(&mut cfg);
-        while_to_for::run(&mut cfg);
+        while_to_for::run(&mut cfg, &laws);
         dce::run(&mut cfg);
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
@@ -44,6 +46,7 @@ impl Promoted {
             cfg,
             nest,
             invariants,
+            laws,
         }
     }
 
@@ -66,7 +69,7 @@ impl Promoted {
     }
 
     fn carried_counter(&self, loop_: &Loop) -> ValueId {
-        let affine = AffineValues::of(&self.cfg, loop_, &self.invariants);
+        let affine = AffineValues::of(&self.cfg, loop_, &self.invariants, &self.laws);
         let found: Vec<ValueId> = self.cfg.blocks[loop_.natural.header.0]
             .params
             .iter()
@@ -121,7 +124,7 @@ fn assert_converted(source: &str) -> Promoted {
     let Range { at, hi } = o.range(loop_);
     for bound in [at, hi] {
         assert_eq!(
-            o.invariants.at(&loop_.natural, bound),
+            o.invariants.above(&loop_.natural, bound),
             Some(Invariant::Outside(bound)),
             "a range's bounds are settled above the header:\n{source}"
         );
@@ -260,7 +263,8 @@ struct BlockText {
 
 fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
     let i = Interner::new();
-    let module = lowered_script_module(&i, source, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let LoweredScript { module, laws } =
+        lowered_script(&i, source, &[], vec![]).unwrap_or_else(|e| panic!("{e}"));
     let mut cfg = promote(module.main);
     ssa_pass::run(&mut cfg);
     dce::run(&mut cfg);
@@ -274,7 +278,7 @@ fn assert_computation_alone_is_added(source: &str, added: &[&str]) {
         loop_.natural.header
     };
 
-    while_to_for::run(&mut cfg);
+    while_to_for::run(&mut cfg, &laws);
     let after = snapshot(&cfg);
 
     let Terminator::For { stages, .. } = &cfg.blocks[header.0].terminator else {

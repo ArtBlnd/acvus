@@ -1,6 +1,6 @@
 //! Every form RFC-0082 rule 4 holds: `=`, `<=` and `<`; a constant, a
-//! parameter, `ret`, `len` of a slice, a container or `ret`, and `+`, `-`,
-//! `*` and `max` of terms.
+//! parameter, `ret`, `len` of a slice, a container or `ret`, `+`, `-`,
+//! `*` and `max` of terms, and `old` of a term over `&mut` parameters.
 use acvus_extern::{Runtime, TransparentOver, Var, extern_fn, kind};
 
 #[extern_fn(effect = pure, ensures(ret = len(s)))]
@@ -32,6 +32,14 @@ where
     Rt: Runtime,
 {
     s
+}
+
+#[extern_fn(effect = pure, ensures(len(c) = old(len(c)) + 1, len(c) <= old(len(c) * 2) + 1))]
+fn grown<T>(c: &mut Vec<T>, item: T)
+where
+    T: Var<kind::Type>,
+{
+    c.push(item);
 }
 
 fn main() {}

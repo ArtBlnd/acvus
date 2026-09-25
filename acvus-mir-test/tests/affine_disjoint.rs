@@ -213,3 +213,69 @@ fn a_parameter_carrying_what_the_loop_writes_stays_carried() {
         listing(source)
     );
 }
+
+/// W05: `n - 1u64` the body computes from `n` and a word is invariant where
+/// it stands (RFC-0066 rule 3), so `(n - 1) - i` is affine and the store
+/// is `Disjoint`; both subtractions stay in the body's free stage, and none
+/// is hoisted above a loop that may run no iteration.
+#[test]
+fn a_store_at_an_invariant_the_body_computes_less_the_counter_is_disjoint() {
+    let source = "let xs = vec([5, 3, 8, 1]); let n = xs.len(); let out = vec([0, 0, 0, 0]);
+         for i in 0u64..n { out[n - 1u64 - i] = xs[i]; }
+         out.len()";
+    assert_eq!(storage_orders(source), ["disjoint"], "{}", listing(source));
+    let free = facts(source)
+        .into_iter()
+        .find(|fact| fact.contains(": free {"))
+        .expect("the free stage");
+    let (_, held) = free.split_once('{').expect("a stage lists what it holds");
+    let subtractions = held
+        .trim_end_matches('}')
+        .split(", ")
+        .filter(|operation| *operation == "-")
+        .count();
+    assert_eq!(subtractions, 2, "{free}");
+}
+
+/// An element read at a constant index is invariant where the loop does
+/// not write its storage, and the store it indexes is `Disjoint`; where the
+/// loop writes that storage, it is not, and the store stays in order.
+#[test]
+fn an_index_read_from_a_storage_the_loop_writes_is_no_invariant() {
+    let unwritten = "let xs = vec([5, 3, 8, 1]); let v = vec([2u64, 1u64, 0u64]);
+         let out = vec([0, 0, 0]);
+         for i in 0u64..3u64 { out[v[0u64] - i] = xs[i]; }
+         out.len()";
+    assert_eq!(storage_orders(unwritten), ["disjoint"], "{}", listing(unwritten));
+    let written = "let v = vec([2u64, 1u64, 0u64]);
+         for i in 0u64..3u64 { let c = v[0u64]; v[c - i] = 7u64; }
+         v.len()";
+    assert_eq!(storage_orders(written), ["in_order"], "{}", listing(written));
+}
+
+/// `out.len()` read before the one push every iteration makes is
+/// `{len(out) on entry, 1}` (RFC-0066 rule 4, `push`'s
+/// `len(c) = old(len(c)) + 1`), so a store at it is `Disjoint`; a
+/// conditional push, a second push or a pop leaves it in order.
+#[test]
+fn a_store_at_the_length_an_unconditional_push_grows_is_disjoint() {
+    let orders = |body: &str| {
+        storage_orders(&format!(
+            "let xs = vec([5, 3, 8, 1]); let out = vec([]); let pos = vec([0, 0, 0, 0, 0, 0, 0, 0]);
+             for x in &xs {{ {body} }}
+             pos.len()"
+        ))
+    };
+    assert_eq!(
+        orders("pos[out.len()] = *x; out.push(*x);"),
+        ["in_order", "disjoint"],
+        "`out` in order through its push, `pos` disjoint"
+    );
+    for body in [
+        "pos[out.len()] = *x; if *x > 2 { out.push(*x); };",
+        "pos[out.len()] = *x; out.push(*x); out.push(*x);",
+        "pos[out.len()] = *x; out.push(*x); out.pop();",
+    ] {
+        assert_eq!(orders(body), ["in_order", "in_order"], "{body}");
+    }
+}

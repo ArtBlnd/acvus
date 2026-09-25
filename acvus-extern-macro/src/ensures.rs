@@ -3,8 +3,9 @@
 //! return (rule 5).
 //!
 //! A relation is `t1 = t2`, `t1 <= t2` or `t1 < t2`. A term is a constant,
-//! a parameter, `ret`, `len(x)` of a parameter or of `ret`, and `+`, `-`,
-//! `*` and `max(a, b)` of terms. The RFC writes `≤`, `−` and `×`; Rust's
+//! a parameter, `ret`, `len(x)` of a parameter or of `ret`, `+`, `-`, `*`
+//! and `max(a, b)` of terms, and `old(t)`, `t` as it stood when the call
+//! began, over the state of `&mut` parameters. The RFC writes `≤`, `−` and `×`; Rust's
 //! lexer refuses those characters before a macro reads the attribute, so
 //! the declaration spells them `<=`, `-` and `*`. Nothing else is read: no
 //! quantifier, no condition and no function of the author's.
@@ -14,7 +15,7 @@ use quote::{ToTokens, quote};
 use syn::parse::ParseStream;
 use syn::{Ident, LitInt, Token, Type};
 
-use crate::ExternParam;
+use crate::{ExternParam, Mode};
 
 pub(crate) struct EnsuresAttr {
     relations: Vec<Relation>,
@@ -30,6 +31,8 @@ struct Relation {
 pub(crate) struct Stated {
     /// The registry's `Vec<Postcondition>`.
     pub(crate) declared: TokenStream,
+    /// The statements that take each `old(t)` before the body runs.
+    pub(crate) before: TokenStream,
     /// The statements that check each relation against `__acvus_ret`.
     pub(crate) evaluated: TokenStream,
 }
@@ -50,10 +53,13 @@ enum Term {
     Sub(Box<Term>, Box<Term>),
     Mul(Box<Term>, Box<Term>),
     Max(Box<Term>, Box<Term>),
+    /// `old(t)`: `t` as it stood when the call began.
+    Old(Box<Term>),
 }
 
 const TERMS: &str = "a term is a constant, a parameter, `ret`, `len(x)` of a parameter or \
-                     of `ret`, or `+`, `-`, `*` or `max(a, b)` of terms (RFC-0082 rule 4)";
+                     of `ret`, `+`, `-`, `*` or `max(a, b)` of terms, or `old(t)` of a term \
+                     over `&mut` parameters (RFC-0082 rule 4)";
 
 impl EnsuresAttr {
     pub(crate) fn parse_after(keyword: &Ident, input: ParseStream) -> syn::Result<Self> {
@@ -88,6 +94,7 @@ impl EnsuresAttr {
     /// checker can decide.
     pub(crate) fn stated(&self, fn_ident: &Ident, params: &[&ExternParam]) -> syn::Result<Stated> {
         let mut declared = Vec::new();
+        let mut before = Vec::new();
         let mut evaluated = Vec::new();
         let function = fn_ident.to_string();
         for relation in &self.relations {
@@ -97,8 +104,8 @@ impl EnsuresAttr {
             declared.push(quote! {
                 ::acvus_extern::Postcondition { left: #left, relation: #rel, right: #right }
             });
-            let left = relation.left.evaluated();
-            let right = relation.right.evaluated();
+            let left = relation.left.evaluated(&mut before);
+            let right = relation.right.evaluated(&mut before);
             let written = relation.to_string();
             evaluated.push(quote! {
                 ::acvus_extern::ensures::assert_postcondition(
@@ -110,6 +117,7 @@ impl EnsuresAttr {
         }
         Ok(Stated {
             declared: quote! { vec![#(#declared),*] },
+            before: quote! { #(#before)* },
             evaluated: quote! { #(#evaluated)* },
         })
     }
@@ -175,6 +183,7 @@ impl std::fmt::Display for Term {
             Term::Sub(a, b) => write!(f, "({a} - {b})"),
             Term::Mul(a, b) => write!(f, "({a} * {b})"),
             Term::Max(a, b) => write!(f, "max({a}, {b})"),
+            Term::Old(t) => write!(f, "old({t})"),
         }
     }
 }
@@ -261,11 +270,18 @@ impl Term {
                     }
                     Ok(Term::Max(Box::new(a), Box::new(b)))
                 }
+                "old" => {
+                    let t = Self::parse_sum(&args)?;
+                    if !args.is_empty() {
+                        return Err(syn::Error::new(args.span(), "`old` takes one term"));
+                    }
+                    Ok(Term::Old(Box::new(t)))
+                }
                 other => Err(syn::Error::new(
                     word.span(),
                     format!(
                         "`{other}` is not in the vocabulary: the functions of a term are \
-                         `len` and `max`, and there is no function of the author's \
+                         `len`, `max` and `old`, and there is no function of the author's \
                          (RFC-0082 rule 4)"
                     ),
                 )),
@@ -311,14 +327,58 @@ impl Term {
             Term::Sub(a, b) => binary(quote! { Sub }, a, b),
             Term::Mul(a, b) => binary(quote! { Mul }, a, b),
             Term::Max(a, b) => binary(quote! { Max }, a, b),
+            Term::Old(t) => {
+                t.held_before(fn_ident, params)?;
+                let t = t.declared(fn_ident, params)?;
+                Ok(quote! { ::acvus_extern::PostTerm::Old(::std::boxed::Box::new(#t)) })
+            }
         }
     }
 
-    fn evaluated(&self) -> TokenStream {
-        let binary = |op: &str, a: &Term, b: &Term| {
+    /// Refuses a term `old` cannot take: one that reads `ret`, which does
+    /// not exist when the call begins, another `old`, or a parameter not
+    /// taken `&mut`, whose state the call cannot change.
+    fn held_before(&self, fn_ident: &Ident, params: &[&ExternParam]) -> syn::Result<()> {
+        match self {
+            Term::Const(_) => Ok(()),
+            Term::Named(word) | Term::Len(word) => {
+                if word == "ret" {
+                    return Err(syn::Error::new(
+                        word.span(),
+                        "`old` reads the call's start, where there is no `ret` \
+                         (RFC-0082 rule 4)",
+                    ));
+                }
+                let at = param_at(word, fn_ident, params)?;
+                match params[at].mode {
+                    Mode::BorrowMut | Mode::SliceMut => Ok(()),
+                    _ => Err(syn::Error::new(
+                        word.span(),
+                        format!(
+                            "`old` reads a `&mut` parameter's state, and `{word}` is not \
+                             taken `&mut` (RFC-0082 rule 4)"
+                        ),
+                    )),
+                }
+            }
+            Term::Add(a, b) | Term::Sub(a, b) | Term::Mul(a, b) | Term::Max(a, b) => {
+                a.held_before(fn_ident, params)?;
+                b.held_before(fn_ident, params)
+            }
+            Term::Old(t) => Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("`old({t})` inside `old` states nothing more (RFC-0082 rule 4)"),
+            )),
+        }
+    }
+
+    /// The evaluation of the term at the return. An `old(t)` is read from
+    /// the value `before` takes of `t` ahead of the body.
+    fn evaluated(&self, before: &mut Vec<TokenStream>) -> TokenStream {
+        let mut binary = |op: &str, a: &Term, b: &Term| {
             let op = Ident::new(op, proc_macro2::Span::call_site());
-            let a = a.evaluated();
-            let b = b.evaluated();
+            let a = a.evaluated(before);
+            let b = b.evaluated(before);
             quote! { ::acvus_extern::ensures::#op(#a, #b) }
         };
         match self {
@@ -335,6 +395,15 @@ impl Term {
             Term::Sub(a, b) => binary("sub", a, b),
             Term::Mul(a, b) => binary("mul", a, b),
             Term::Max(a, b) => binary("max", a, b),
+            Term::Old(t) => {
+                let held = Ident::new(
+                    &format!("__acvus_old_{}", before.len()),
+                    proc_macro2::Span::call_site(),
+                );
+                let t = t.evaluated(before);
+                before.push(quote! { let #held: ::core::option::Option<i128> = #t; });
+                quote! { #held }
+            }
         }
     }
 }
@@ -374,11 +443,14 @@ fn param_at(word: &Ident, fn_ident: &Ident, params: &[&ExternParam]) -> syn::Res
 /// The body `block` of `fn_ident`, returning `ret`, with each postcondition
 /// evaluated at its return in a debug build. The body runs as a closure,
 /// or an `async` block for an `async fn`, so a `return` inside it returns
-/// to the evaluation and not past it.
+/// to the evaluation and not past it. Each `old(t)` is taken ahead of it,
+/// `before`, and read only by the evaluation: a release build reads
+/// nothing of it, and what it took is pure and left dead.
 pub(crate) fn wrap_body(
     block: &syn::Block,
     ret: &Type,
     is_async: bool,
+    before: &TokenStream,
     evaluated: &TokenStream,
 ) -> syn::Block {
     let run = match is_async {
@@ -387,6 +459,7 @@ pub(crate) fn wrap_body(
         false => quote! { (|| -> #ret #block)() },
     };
     syn::parse_quote! {{
+        #before
         #[allow(clippy::redundant_closure_call)]
         let __acvus_ret = #run;
         if ::core::cfg!(debug_assertions) {

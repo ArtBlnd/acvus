@@ -1,0 +1,5 @@
+error: `old` reads a `&mut` parameter's state, and `c` is not taken `&mut` (RFC-0082 rule 4)
+ --> tests/compile_fail/ensures_old_of_a_shared_parameter.rs:5:50
+  |
+5 | #[extern_fn(effect = pure, ensures(ret = old(len(c))))]
+  |                                                  ^

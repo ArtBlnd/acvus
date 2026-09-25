@@ -1,0 +1,6 @@
+// expect 0
+let xs = vec([]);
+let n = xs.len();
+let out = vec([]);
+for i in 0u64..n { out[n - 1u64 - i] = 1; }
+out.len()

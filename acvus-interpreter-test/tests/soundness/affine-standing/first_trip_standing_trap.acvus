@@ -1,0 +1,5 @@
+let xs = vec([5, 3]);
+let k = xs.len() - 2u64;
+let out = vec([0, 0]);
+for i in 0u64..xs.len() { out[k - 1u64 - i] = xs[i]; }
+out.len()

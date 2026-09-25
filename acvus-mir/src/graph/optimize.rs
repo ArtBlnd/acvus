@@ -407,14 +407,14 @@ fn run_pass2(interner: &Interner, laws: &LawTable, cfg: &mut CfgBody) {
     // RFC-0081: after `ssa_pass`, which makes the counter a header
     // parameter, and after the fold, which settles a constant bound; before
     // `dce`, which sweeps the comparison the new terminator leaves unread.
-    optimize::while_to_for::run(cfg);
+    optimize::while_to_for::run(cfg, laws);
     optimize::dce::run(cfg);
     optimize::code_motion::run(cfg);
     // RFC-0066 rule 7: every induction variable of a `for` that anything
     // besides its own step reads is computed from the counter, decided per
     // variable; after the hoist, which leaves each loop's invariants above
     // its header.
-    optimize::iv_canon::run(cfg);
+    optimize::iv_canon::run(cfg, laws);
     // RFC-0083: after IV canonicalization, whose arithmetic it simplifies
     // and merges; before a `dce` of its own, which sweeps what it leaves
     // unread, the header arguments the canonicalization removed included.

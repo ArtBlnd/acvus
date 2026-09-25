@@ -1310,7 +1310,13 @@ fn generate_extern_fn(
     let ensures = match &attr.ensures {
         Some(stated) => {
             let stated = stated.stated(fn_ident, &params)?;
-            *emitted.block = ensures::wrap_body(&func.block, &ret, is_async, &stated.evaluated);
+            *emitted.block = ensures::wrap_body(
+                &func.block,
+                &ret,
+                is_async,
+                &stated.before,
+                &stated.evaluated,
+            );
             stated.declared
         }
         None => quote! { ::std::vec::Vec::new() },

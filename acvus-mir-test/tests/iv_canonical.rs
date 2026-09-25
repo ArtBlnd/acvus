@@ -70,7 +70,7 @@ impl Compiled {
     }
 
     fn state(&self, loop_: &Loop) -> CarriedState {
-        let affine = AffineValues::of(&self.cfg, loop_, &self.invariants);
+        let affine = AffineValues::of(&self.cfg, loop_, &self.invariants, &self.laws);
         CarriedState::of(&self.cfg, loop_, &affine)
     }
 

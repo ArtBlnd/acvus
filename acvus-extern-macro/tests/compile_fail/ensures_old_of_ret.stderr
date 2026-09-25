@@ -1,0 +1,5 @@
+error: `old` reads the call's start, where there is no `ret` (RFC-0082 rule 4)
+ --> tests/compile_fail/ensures_old_of_ret.rs:5:49
+  |
+5 | #[extern_fn(effect = pure, ensures(len(c) = old(ret)))]
+  |                                                 ^^^

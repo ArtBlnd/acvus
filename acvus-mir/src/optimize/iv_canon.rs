@@ -82,17 +82,18 @@ use crate::ir::{
     BinOp, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Inst, InstKind, Label, Overflow,
     RefTarget, UnaryOp, ValOrigin, ValueId,
 };
+use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, LenTerm, Ty};
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
     let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
     for (_, loop_) in nest.iter() {
         let Some(shape) = Shape::of(cfg, loop_) else {
             continue;
         };
-        let affine = AffineValues::of(cfg, loop_, &Invariants::of(cfg));
+        let affine = AffineValues::of(cfg, loop_, &Invariants::of(cfg), laws);
         let reads = Reads::in_body(cfg);
         let ivs: Vec<Iv> = cfg.blocks[shape.header.0]
             .params
@@ -191,6 +192,9 @@ impl Iv {
         let Derivation::Carried { init, step } = &affine.get(param)?.derivation else {
             return None;
         };
+        // `base + k·step` is written at the head of the body and after the
+        // loop, where a standing step is not yet computed, or never is.
+        let step = step.invariance.above()?;
         let Ty::Int(width) = cfg.val_types[&param] else {
             return None;
         };
@@ -232,7 +236,7 @@ impl Iv {
             next,
             width,
             init: *init,
-            step: step.invariant.clone(),
+            step: step.clone(),
             read_after,
         })
     }
@@ -979,7 +983,7 @@ impl PreviousWork<'_> {
         if self.element == Some(value) || self.work.iter().any(|step| inst_info::defs(&step.kind).contains(&value)) {
             return Some(());
         }
-        if let Some(invariant) = self.invariants.at(&self.loop_.natural, value) {
+        if let Some(invariant) = self.invariants.above(&self.loop_.natural, value) {
             return match invariant {
                 Invariant::Outside(_) => Some(()),
                 Invariant::Word(_) => {

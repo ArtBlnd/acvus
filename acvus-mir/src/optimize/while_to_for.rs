@@ -43,6 +43,7 @@
 use acvus_ast::{Literal, Span, SuffixedInt};
 
 use crate::ir::{BinOp, Overflow};
+use crate::laws::LawTable;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -57,7 +58,7 @@ use crate::ir::{
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{Mutability, Ty};
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
     let invariants = Invariants::of(cfg);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
@@ -70,6 +71,7 @@ pub fn run(cfg: &mut CfgBody) {
                 cfg,
                 loop_,
                 invariants: &invariants,
+                laws,
                 preds: &preds,
                 literals: &literals,
             }
@@ -191,6 +193,7 @@ struct Recognizer<'a> {
     cfg: &'a CfgBody,
     loop_: &'a Loop,
     invariants: &'a Invariants,
+    laws: &'a LawTable,
     preds: &'a FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
     literals: &'a FxHashMap<ValueId, Literal>,
 }
@@ -228,13 +231,13 @@ impl Recognizer<'_> {
         }
 
         let condition = self.condition(header, *cond)?;
-        let affine = AffineValues::of(self.cfg, self.loop_, self.invariants);
+        let affine = AffineValues::of(self.cfg, self.loop_, self.invariants, self.laws);
         let Some(Derivation::Carried { init: at, step }) =
             affine.get(condition.counter).map(|a| &a.derivation)
         else {
             return None;
         };
-        if !self.is_one(&step.invariant) {
+        if !step.invariance.above().is_some_and(|step| self.is_one(step)) {
             return None;
         }
         let hi = self.bound(condition.bound)?;
@@ -279,7 +282,7 @@ impl Recognizer<'_> {
 
     fn evaluate(&self, value: ValueId, steps: &mut Vec<Step>) -> Option<Operand> {
         let natural = &self.loop_.natural;
-        if let Some(Invariant::Outside(value)) = self.invariants.at(natural, value) {
+        if let Some(Invariant::Outside(value)) = self.invariants.above(natural, value) {
             return Some(Operand::Outside(value));
         }
         if steps.iter().any(|step| step.dst == value) {
@@ -291,7 +294,7 @@ impl Recognizer<'_> {
             .enumerate()
             .find(|(_, inst)| inst_info::defs(&inst.kind).contains(&value))?;
         let kind = match &inst.kind {
-            InstKind::Const { .. } => match self.invariants.at(natural, value)? {
+            InstKind::Const { .. } => match self.invariants.above(natural, value)? {
                 Invariant::Word(literal) => StepKind::Word(literal),
                 Invariant::Outside(_) => return None,
             },

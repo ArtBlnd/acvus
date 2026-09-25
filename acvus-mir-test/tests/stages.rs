@@ -95,7 +95,7 @@ impl Compiled {
         let invariants = Invariants::of(&self.cfg);
         let nest = LoopNest::of(&self.cfg, &DomTree::build(&self.cfg), &invariants);
         let loop_ = nest.get(nest.by_header(header).expect("the header heads a loop"));
-        let affine = AffineValues::of(&self.cfg, loop_, &invariants);
+        let affine = AffineValues::of(&self.cfg, loop_, &invariants, &self.laws);
         self.cfg.blocks[header.0]
             .params
             .iter()
