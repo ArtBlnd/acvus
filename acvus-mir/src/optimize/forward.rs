@@ -59,9 +59,9 @@ struct Edge {
 }
 
 /// One outgoing edge of a terminator, in place.
-struct EdgeMut<'a> {
-    to: &'a mut Label,
-    args: &'a mut Vec<ValueId>,
+pub(crate) struct EdgeMut<'a> {
+    pub(crate) to: &'a mut Label,
+    pub(crate) args: &'a mut Vec<ValueId>,
 }
 
 pub fn run(cfg: &mut CfgBody) {
@@ -197,7 +197,7 @@ fn follow(forwarders: &FxHashMap<Label, Edge>, from: Label, edge: &Edge) -> Opti
     Some(edge)
 }
 
-fn edges_mut(term: &mut Terminator) -> Vec<EdgeMut<'_>> {
+pub(crate) fn edges_mut(term: &mut Terminator) -> Vec<EdgeMut<'_>> {
     match term {
         Terminator::Jump { label, args } => vec![EdgeMut { to: label, args }],
         Terminator::JumpIf {

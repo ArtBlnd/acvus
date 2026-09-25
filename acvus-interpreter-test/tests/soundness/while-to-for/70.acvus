@@ -1,0 +1,2 @@
+// expect 253
+let i = 250u8; let n = 255u8; while i < n { if i == 253u8 { break; }; i = i + 1u8; } i as i64

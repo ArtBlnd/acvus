@@ -284,6 +284,24 @@ fn storage_reached(
 
 // -- Root identification ---------------------------------------------
 
+/// Whether a removal of the unused instruction at `at` may drop it
+/// (RFC-0048 rule 8): it writes no storage, has no effect, cannot trap and
+/// finishes. This is the question [`run`] asks of every instruction, and
+/// the one `while_to_for` asks of a header visit a back edge skips
+/// (RFC-0094 rule 6).
+pub(crate) fn unused_may_drop(
+    at: InstAt,
+    kind: &InstKind,
+    loans: &Loans<'_>,
+    removal: &Removal<'_>,
+) -> bool {
+    let at = Point {
+        block: at.block.0,
+        inst: at.at,
+    };
+    !is_root(at, kind, loans, removal)
+}
+
 /// Is this instruction a root (has side effects, unconditionally live)?
 ///
 /// An instruction with ANY effect (read, write, IO) must not

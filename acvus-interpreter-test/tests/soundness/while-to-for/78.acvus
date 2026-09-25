@@ -1,0 +1,2 @@
+// expect index out of bounds: the len is 3 but the index is 3
+let xs = vec([5, 3, 9]); let i = 0u64; let found = false; while i <= xs.len() && !found { if xs[i] < 0 { found = true; } else { i = i + 1u64; }; } i

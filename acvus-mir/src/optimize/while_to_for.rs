@@ -55,10 +55,17 @@
 //! to a call that reaches it is a deterministic step. In every form `i`
 //! stays a header parameter advanced by its own step, which keeps its trap,
 //! and IV canonicalization reads it from the counter (RFC-0066 rule 7).
+//!
+//! RFC-0094 rule 7 admits an edge out of the body to a block from which
+//! every path reaches the loop's exit with no `return` and no `!`: the
+//! `k`-th visit holds `b + k` in both loops, so an edge the body takes on
+//! that visit leaves both with the same values. The `For` keeps the edge,
+//! and its count is then a bound. Rule 6, in [`leave`], moves a back edge whose constant decides the
+//! header's test to the exit, which makes such an edge.
 
 use acvus_ast::{Literal, SuffixedInt};
 use acvus_utils::Interner;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::analysis::affine::{AffineValues, Derivation, Operand as AffineOperand};
@@ -77,7 +84,10 @@ use crate::laws::{LawTable, Reaches};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ty::{CastTy, IntTy, Mutability, Ty};
 
+mod leave;
+
 pub fn run(interner: &Interner, cfg: &mut CfgBody, laws: &LawTable) {
+    leave::run(cfg, laws);
     let domtree = DomTree::build(cfg);
     let invariants = Invariants::of(cfg);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
@@ -109,6 +119,31 @@ pub fn run(interner: &Interner, cfg: &mut CfgBody, laws: &LawTable) {
     for loop_ in pulls {
         loop_.apply(cfg);
     }
+}
+
+/// Whether rules 1 to 5 convert the loop headed at `header`.
+fn converts(cfg: &CfgBody, laws: &LawTable, header: Label) -> bool {
+    let domtree = DomTree::build(cfg);
+    let invariants = Invariants::of(cfg);
+    let nest = LoopNest::of(cfg, &domtree, &invariants);
+    let preds = cfg.predecessors();
+    let literals = const_literals(cfg);
+    let loans = Loans::build(cfg);
+    nest.iter()
+        .filter(|(_, loop_)| cfg.blocks[loop_.natural.header.0].label == header)
+        .any(|(_, loop_)| {
+            Recognizer {
+                cfg,
+                loop_,
+                invariants: &invariants,
+                laws,
+                loans: &loans,
+                preds: &preds,
+                literals: &literals,
+            }
+            .counted()
+            .is_some()
+        })
 }
 
 /// A pull loop (RFC-0089 rule 1): the header lends one storage `&mut` to
@@ -307,6 +342,17 @@ struct Counted {
     /// kept it live is gone, so a `Check` at its place keeps its trap
     /// (RFC-0037 rule 3).
     kept_step: Option<ValueId>,
+    own_exit: Option<OwnExit>,
+}
+
+/// Where the exit block is entered from the body too (RFC-0094 rule 7), the
+/// `For` leaves through a block of its own that jumps to it, so the exit
+/// block of the range is entered from the header alone (RFC-0081 rule 1)
+/// and IV canonicalization can hand it the trip count. The block goes right
+/// after the last latch, where `acvus-interpreter`'s `prepare` reads a
+/// `for` region's exit label.
+struct OwnExit {
+    after: Label,
 }
 
 struct Recognizer<'a> {
@@ -345,11 +391,16 @@ impl Recognizer<'_> {
             || !natural.contains(body_block)
             || natural.contains(exit_block)
             || !self.only_from_header(body_block)
-            || !self.only_from_header(exit_block)
-            || !self.leaves_only_from_header()
+            || !self.leaves_by_breaks(exit_block)
         {
             return None;
         }
+        let own_exit = match self.only_from_header(exit_block) {
+            true => None,
+            false => Some(OwnExit {
+                after: self.cfg.blocks[natural.latches.iter().max()?.0].label,
+            }),
+        };
 
         let affine = AffineValues::of(self.cfg, self.loop_, self.invariants, self.laws);
         let recognized = self
@@ -415,6 +466,7 @@ impl Recognizer<'_> {
             steps,
             form: recognized.form,
             kept_step,
+            own_exit,
         })
     }
 
@@ -778,6 +830,43 @@ impl Recognizer<'_> {
         }
     }
 
+    /// RFC-0094 rule 7: every edge out of a block of the loop other than
+    /// the header goes to a block outside it from which every path reaches
+    /// `exit` with no `return` and no `!` on the way, and `exit` is entered
+    /// from nowhere else.
+    fn leaves_by_breaks(&self, exit: BlockIdx) -> bool {
+        let natural = &self.loop_.natural;
+        let mut broken: FxHashSet<BlockIdx> = FxHashSet::default();
+        let mut work: Vec<BlockIdx> = natural
+            .blocks()
+            .filter(|&block| block != natural.header)
+            .flat_map(|block| self.cfg.successors(block))
+            .filter(|&succ| !natural.contains(succ))
+            .collect();
+        while let Some(block) = work.pop() {
+            if block == exit || !broken.insert(block) {
+                continue;
+            }
+            if matches!(
+                self.cfg.blocks[block.0].terminator,
+                Terminator::Return { .. } | Terminator::Diverge
+            ) {
+                return false;
+            }
+            for succ in self.cfg.successors(block) {
+                if natural.contains(succ) {
+                    return false;
+                }
+                work.push(succ);
+            }
+        }
+        self.preds.get(&exit).is_some_and(|preds| {
+            preds
+                .iter()
+                .all(|pred| natural.contains(*pred) || broken.contains(pred))
+        })
+    }
+
     fn leaves_only_from_header(&self) -> bool {
         let natural = &self.loop_.natural;
         natural
@@ -1057,14 +1146,57 @@ impl Counted {
         cfg.blocks[body_block.0].insts = into_body.into_iter().chain(head).collect();
         let counter = fresh(cfg, &counter);
         cfg.blocks[body_block.0].params.push(counter);
+        let exit = match self.own_exit {
+            Some(own) => ExitEdge {
+                label: own.write(cfg, labels, self.exit, self.exit_args),
+                args: Vec::new(),
+            },
+            None => ExitEdge {
+                label: self.exit,
+                args: self.exit_args,
+            },
+        };
         let header = cfg.label_to_block[&self.header];
         cfg.blocks[header.0].terminator = Terminator::For {
             source,
             stages: Stages::lowered(self.body),
-            exit: self.exit,
-            exit_args: self.exit_args,
+            exit: exit.label,
+            exit_args: exit.args,
             exit_trip: ExitTrip::Absent,
         };
+    }
+}
+
+struct ExitEdge {
+    label: Label,
+    args: Vec<ValueId>,
+}
+
+impl OwnExit {
+    /// A block that jumps to `exit` with `args`, written after the latch.
+    fn write(
+        self,
+        cfg: &mut CfgBody,
+        labels: &mut LabelFactory,
+        exit: Label,
+        args: Vec<ValueId>,
+    ) -> Label {
+        let label = labels.fresh();
+        let block = Block {
+            label,
+            params: Vec::new(),
+            insts: Vec::new(),
+            terminator: Terminator::Jump { label: exit, args },
+        };
+        let after_latch = cfg.label_to_block[&self.after].0 + 1;
+        cfg.blocks.insert(after_latch, block);
+        cfg.label_to_block = cfg
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(at, block)| (block.label, BlockIdx(at)))
+            .collect();
+        label
     }
 }
 

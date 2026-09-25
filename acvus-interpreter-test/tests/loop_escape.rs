@@ -90,10 +90,12 @@ fn a_break_over_a_slice_carries_the_value() {
     );
 }
 
+/// `!=` is no bound RFC-0081 or RFC-0094 reads, so the loop stays a
+/// `while`.
 #[test]
 fn a_break_out_of_a_while_is_a_region() {
     let source = "let i = 0; let acc = 0; \
-                  while i < 10 { i = i + 1; if i > 5 { break; }; acc = acc + i; } acc";
+                  while i != 10 { i = i + 1; if i > 5 { break; }; acc = acc + i; } acc";
     answers(source, "15");
     assert_eq!(
         body_of_the_one_loop(source, Ty::I64, "Loop"),

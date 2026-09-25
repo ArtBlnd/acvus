@@ -32,6 +32,20 @@ impl Promoted {
     }
 
     fn with_externs(source: &str, externs: impl FnOnce(&Interner) -> Vec<Function>) -> Self {
+        Self::lowered(source, externs, Pass::Runs)
+    }
+
+    /// The same pipeline with `while_to_for` left out: the loop as the pass
+    /// found it, after the same `dce`.
+    fn unconverted(source: &str) -> Self {
+        Self::lowered(source, |_| Vec::new(), Pass::Skipped)
+    }
+
+    fn lowered(
+        source: &str,
+        externs: impl FnOnce(&Interner) -> Vec<Function>,
+        pass: Pass,
+    ) -> Self {
         let i = Interner::new();
         let LoweredScript { module, laws } = lowered_script(&i, source, &externs(&i), vec![])
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
@@ -39,7 +53,9 @@ impl Promoted {
         ssa_pass::run(&mut cfg);
         fold::run(&mut cfg);
         reborrow::run(&mut cfg);
-        while_to_for::run(&i, &mut cfg, &laws);
+        if let Pass::Runs = pass {
+            while_to_for::run(&i, &mut cfg, &laws);
+        }
         dce::run(&mut cfg, &laws, &FunctionSummary::unknown());
         let invariants = Invariants::of(&cfg);
         let nest = LoopNest::of(&cfg, &DomTree::build(&cfg), &invariants);
@@ -117,6 +133,11 @@ impl Promoted {
 struct Range {
     at: ValueId,
     hi: ValueId,
+}
+
+enum Pass {
+    Runs,
+    Skipped,
 }
 
 /// RFC-0094 rule 3's count: the constant it divides the distance by.
@@ -430,11 +451,224 @@ fn a_bound_the_body_writes_is_declined() {
     );
 }
 
+// -- An exit from the body (RFC-0094 rule 7) ------------------------------
+
+/// The `For`'s own exit block and the block it jumps to, which the body's
+/// edges out of the loop reach too.
+struct SharedExit {
+    own: BlockIdx,
+    joined: BlockIdx,
+}
+
+impl Promoted {
+    fn shared_exit(&self, loop_: &Loop) -> SharedExit {
+        let Terminator::For { exit, exit_args, .. } =
+            &self.cfg.blocks[loop_.natural.header.0].terminator
+        else {
+            panic!("the header ends in `For`");
+        };
+        assert_eq!(exit_args, &[], "the `For` leaves through a block of its own");
+        let own = self.cfg.label_to_block[exit];
+        assert_eq!(
+            self.cfg.predecessors()[&own][..],
+            [loop_.natural.header],
+            "the `For`'s own exit block is entered from the header alone"
+        );
+        let Terminator::Jump { label, .. } = &self.cfg.blocks[own.0].terminator else {
+            panic!("the `For`'s exit block jumps to the block the body leaves for");
+        };
+        SharedExit {
+            own,
+            joined: self.cfg.label_to_block[label],
+        }
+    }
+
+    /// The blocks other than the `For`'s own exit that enter `joined`.
+    fn edges_from_the_body(&self, exit: &SharedExit) -> Vec<BlockIdx> {
+        self.cfg.predecessors()[&exit.joined]
+            .iter()
+            .copied()
+            .filter(|pred| *pred != exit.own)
+            .collect()
+    }
+
+    fn jump_into(&self, from: BlockIdx, to: BlockIdx) -> Vec<ValueId> {
+        let label = self.cfg.blocks[to.0].label;
+        match &self.cfg.blocks[from.0].terminator {
+            Terminator::Jump { label: target, args } if *target == label => args.clone(),
+            other => panic!("{from:?} jumps to {label:?}, found {other:?}"),
+        }
+    }
+}
+
+const BROKEN_COUNT: &str = "let n = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].len() as i64; \
+     let s = 0; let r = 0; let i = 0; \
+     while i < n { if s > 20 { r = s * 2; break; }; s = s + i; i = i + 1; } r + s + i";
+
 #[test]
-fn a_break_is_declined() {
+fn a_break_in_a_counted_while_is_converted_with_its_edge_and_arguments_kept() {
+    let o = Promoted::of(BROKEN_COUNT);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let exit = o.shared_exit(loop_);
+    let [break_block] = o.edges_from_the_body(&exit)[..] else {
+        panic!("one edge from the body joins the exit:\n{BROKEN_COUNT}");
+    };
+    let before = Promoted::unconverted(BROKEN_COUNT);
+    let before_loop = before.sole_loop();
+    let Terminator::JumpIf {
+        else_label,
+        else_args,
+        ..
+    } = &before.cfg.blocks[before_loop.natural.header.0].terminator
+    else {
+        panic!("the unconverted header branches");
+    };
+    let joined = before.cfg.label_to_block[else_label];
+    assert_eq!(
+        o.cfg.blocks[exit.joined.0].label, *else_label,
+        "the block the header left for is the one the `For`'s exit jumps to"
+    );
+    assert_eq!(
+        o.jump_into(exit.own, exit.joined),
+        *else_args,
+        "the `For`'s exit sends what the header's exit edge sent"
+    );
+    let break_label = o.cfg.blocks[break_block.0].label;
+    let before_break = before.cfg.label_to_block[&break_label];
+    assert_eq!(
+        o.jump_into(break_block, exit.joined),
+        before.jump_into(before_break, joined),
+        "the edge out of the body keeps its arguments:\n{BROKEN_COUNT}"
+    );
+}
+
+#[test]
+fn a_return_in_a_counted_while_is_declined() {
     assert_declined(
-        "let n = 10; let s = 0; let i = 0; \
-         while i < n { if s > 20 { break; }; s = s + i; i = i + 1; } s",
+        "let n = [1, 2, 3].len() as i64; let s = 0; let i = 0; \
+         while i < n { if s > 20 { return s; }; s = s + i; i = i + 1; } s + i",
+    );
+}
+
+// -- A back edge whose arguments decide the test (RFC-0094 rule 6) -------
+
+/// S11 of the parallel-loop corpus, whose found arm also moves `i`, so the
+/// value it sends the exit is not the header's.
+const SEARCH: &str = "let xs = vec([5, 3, 9, -1, 9]); let i = 0u64; let found = false; \
+     while i < xs.len() && !found { \
+         if xs[i] < 0 { found = true; i = i + 100u64; } else { i = i + 1u64; }; \
+     } i";
+
+#[test]
+fn a_back_edge_whose_flag_decides_the_test_goes_to_the_exit() {
+    let o = Promoted::of(SEARCH);
+    let loop_ = o.sole_loop();
+    o.range(loop_);
+    let header = &o.cfg.blocks[loop_.natural.header.0];
+    assert!(
+        header
+            .params
+            .iter()
+            .all(|param| o.cfg.val_types[param] != Ty::Bool),
+        "the flag is folded, and no header parameter carries it:\n{SEARCH}"
+    );
+    let exit = o.shared_exit(loop_);
+    let i = o.carried_counter(loop_);
+    assert_eq!(
+        o.jump_into(exit.own, exit.joined),
+        [i],
+        "the `For`'s exit sends `i`, which the exit read"
+    );
+    let [found_arm] = o.edges_from_the_body(&exit)[..] else {
+        panic!("the found arm's edge goes to the exit:\n{SEARCH}");
+    };
+    let [sent] = o.jump_into(found_arm, exit.joined)[..] else {
+        panic!("the found arm sends the exit one value");
+    };
+    let InstKind::BinOp {
+        op: BinOp::Add(_),
+        left,
+        right,
+        ..
+    } = o.definition(sent)
+    else {
+        panic!("the found arm sends the `i + 100` it sent the header, found {:?}", o.definition(sent));
+    };
+    assert_eq!((*left, o.literal(*right)), (i, Some(100)));
+}
+
+fn pure_scale(i: &Interner) -> Vec<Function> {
+    vec![Function {
+        qref: QualifiedRef::root(i.intern("pure_scale")),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            effect_bounds: vec![],
+            instances: Instances::default(),
+            requires: vec![],
+        },
+        ty: PolyTy::Fn {
+            params: vec![ParamTerm::<Poly>::new(
+                i.intern("x"),
+                lift_to_poly(&Ty::I64),
+            )],
+            ret: Box::new(lift_to_poly(&Ty::I64)),
+            captures: vec![],
+            effect: EffectTerm::<Poly>::Known(Effect::PURE),
+            flows: acvus_mir::ty::Flows::Every.into(),
+        },
+    }]
+}
+
+fn opaque_and_pure_scale(i: &Interner) -> Vec<Function> {
+    opaque(i).into_iter().chain(pure_scale(i)).collect()
+}
+
+fn flag_search(bound: &str) -> String {
+    format!(
+        "{WORD_N_AND_M} let d = opaque(m); let found = false; let i = 0; \
+         while i < {bound} && !found {{ if i * i > 7 {{ found = true; }} else {{ i = i + 1; }}; }} i"
+    )
+}
+
+/// The control: the same search whose bound skips nothing that can trap.
+#[test]
+fn a_flag_search_over_a_bound_that_cannot_trap_is_converted() {
+    let source = flag_search("n");
+    let o = Promoted::with_externs(&source, opaque_and_pure_scale);
+    o.range(o.sole_loop());
+}
+
+#[test]
+fn a_flag_whose_edge_skips_a_division_by_a_parameter_is_declined() {
+    let source = flag_search("n / d");
+    assert_still_a_while(&Promoted::with_externs(&source, opaque_and_pure_scale), &source);
+}
+
+#[test]
+fn a_flag_whose_edge_skips_a_pure_call_not_declared_total_is_declined() {
+    let source = flag_search("pure_scale(n)");
+    assert_still_a_while(&Promoted::with_externs(&source, opaque_and_pure_scale), &source);
+}
+
+/// `found` true leaves `!found || i < 3` to `i < 3`, so the edge that sets
+/// it decides nothing; with `found` false the chain is `i < n`, which the
+/// ranges read.
+#[test]
+fn a_flag_whose_constant_does_not_decide_the_chain_is_declined() {
+    assert_declined(
+        "let n = [1, 2, 3, 4, 5].len() as i64; let found = false; let i = 0; \
+         while i < n && (!found || i < 3) { if i == 2 { found = true; } else { i = i + 1; }; } i",
+    );
+}
+
+#[test]
+fn a_flag_another_edge_sets_to_a_test_is_declined() {
+    assert_declined(
+        "let n = [1, 2, 3, 4, 5].len() as i64; let found = false; let i = 0; \
+         while i < n && !found { \
+             if i == 2 { found = true; } else { found = i > 3; i = i + 1; }; \
+         } i",
     );
 }
 
