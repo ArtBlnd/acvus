@@ -4175,10 +4175,12 @@ where
             self.decision_sites.insert(required.id, site.at);
             self.decision_callees.insert(required.id, qref);
         }
-        let mut minted = Vec::new();
-        inst.ty.for_each_source(&mut |id| minted.push(id));
-        for id in minted {
-            self.solver.source_begins_at(id, site.source_begins);
+        if let crate::ty::Instancing::Fresh = scheme.instancing {
+            let mut minted = Vec::new();
+            inst.ty.for_each_source(&mut |id| minted.push(id));
+            for id in minted {
+                self.solver.source_begins_at(id, site.source_begins);
+            }
         }
         SchemeAt {
             ty: inst.ty,
@@ -4547,6 +4549,7 @@ where
                 generic: None,
             }),
             requires: Vec::new(),
+            instancing: crate::ty::Instancing::Fresh,
         }
     }
 

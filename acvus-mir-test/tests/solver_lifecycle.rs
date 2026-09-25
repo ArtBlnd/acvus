@@ -314,6 +314,7 @@ fn s3_dependent_decisions_settle_in_one_call() {
         effect_bounds: vec![],
         instances: Some(instances),
         requires: vec![],
+        instancing: acvus_mir::ty::Instancing::Fresh,
     });
     let Some(InstanceChoice::Decided(instance)) = instantiated.instance else {
         panic!("a decision among instances")
