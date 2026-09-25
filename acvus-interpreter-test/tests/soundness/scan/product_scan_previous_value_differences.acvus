@@ -1,0 +1,11 @@
+// expect 14
+let xs = vec([3, 5, 1, 10]);
+let prev = 0;
+let rise = 0;
+for x in &xs {
+    if *x > prev {
+        rise = rise + (*x - prev);
+    };
+    prev = *x;
+}
+rise

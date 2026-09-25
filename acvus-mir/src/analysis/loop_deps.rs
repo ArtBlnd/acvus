@@ -549,32 +549,88 @@ impl LoopDeps {
                 .stage_of(member.block())
                 .expect("a chain whose shape holds puts every block of the body in a stage")
         };
-        let mut cycles: Vec<Cycle> = graph
-            .cycles(cfg, loans, &slots, &disjoint, header, loop_blocks)
-            .into_iter()
-            .map(|found| place(found, &stage_of))
-            .collect();
-        let unjoined = cycles.clone();
-
-        // RFC-0092: the control token passes with the exiting
-        // stage's tokens, so the cycles lying there are one join with it.
-        let exiting = cycles
-            .iter()
-            .find(|cycle| cycle.tokens.contains(&Token::Control))
-            .and_then(Cycle::stage);
-        if let Some(stage) = exiting {
-            let (joined, kept): (Vec<Cycle>, Vec<Cycle>) = cycles
+        let joined_cycles = |lent: &[LentStorage]| -> (Vec<Cycle>, Vec<Cycle>) {
+            let mut cycles: Vec<Cycle> = graph
+                .cycles(cfg, loans, &slots, &disjoint, lent, header, loop_blocks)
                 .into_iter()
-                .partition(|cycle| cycle.stage() == Some(stage));
-            let mut one = Found::default();
-            for cycle in joined {
-                one.tokens.extend(cycle.tokens);
-                one.members.extend(cycle.members);
+                .map(|found| place(found, &stage_of))
+                .collect();
+            let unjoined = cycles.clone();
+
+            // RFC-0092: the control token passes with the exiting
+            // stage's tokens, so the cycles lying there are one join with it.
+            let exiting = cycles
+                .iter()
+                .find(|cycle| cycle.tokens.contains(&Token::Control))
+                .and_then(Cycle::stage);
+            if let Some(stage) = exiting {
+                let (joined, kept): (Vec<Cycle>, Vec<Cycle>) = cycles
+                    .into_iter()
+                    .partition(|cycle| cycle.stage() == Some(stage));
+                let mut one = Found::default();
+                for cycle in joined {
+                    one.tokens.extend(cycle.tokens);
+                    one.members.extend(cycle.members);
+                }
+                cycles = kept;
+                cycles.push(place(one, &stage_of));
             }
-            cycles = kept;
-            cycles.push(place(one, &stage_of));
-        }
-        cycles.sort_by_key(|cycle| (cycle.earliest_stage(), cycle.members[0]));
+            cycles.sort_by_key(|cycle| (cycle.earliest_stage(), cycle.members[0]));
+            (unjoined, cycles)
+        };
+        // RFC-0093 rule 8: a read that only lends a storage token's value to
+        // a call that neither writes nor keeps it is a reader of its partial,
+        // not a member of its cycle, where the cycle's law is a scan: the
+        // rescan of RFC-0092 rule 5 makes the value it lends. Without a scan
+        // nothing makes that value, and a reader in another stage would read
+        // the storage while a later iteration writes it, so the read stays in
+        // the cycle. A storage keeps its lent reads out only while its cycle
+        // is its token alone, which `judge` reads the scan of, and holds none
+        // of the scan's readers.
+        let mut lent: Vec<LentStorage> = graph
+            .written_storages(cfg, loans, &slots)
+            .into_iter()
+            .filter(|slot| !disjoint.contains(slot))
+            .filter_map(|slot| {
+                let lending = graph.lent_reads(cfg, loans, slot);
+                if lending.is_empty() {
+                    return None;
+                }
+                let scan =
+                    LawReading::of(loans, laws, &slots, header, loop_blocks, State::Slot(slot))
+                        .scan()?;
+                let readers = scan
+                    .readers
+                    .iter()
+                    .map(|reader| graph.index.get(reader).copied())
+                    .collect::<Option<Vec<usize>>>()?;
+                Some(LentStorage {
+                    slot,
+                    lending,
+                    readers,
+                })
+            })
+            .collect();
+        let (unjoined, cycles) = loop {
+            let (unjoined, cycles) = joined_cycles(&lent);
+            let refused = lent.iter().position(|held| {
+                let token = Token::Storage(Storage::Slot(held.slot));
+                let Some(cycle) = cycles.iter().find(|cycle| cycle.tokens.contains(&token)) else {
+                    return true;
+                };
+                cycle.tokens != [token]
+                    || held
+                        .readers
+                        .iter()
+                        .any(|reader| cycle.members.contains(&graph.members[*reader]))
+            });
+            match refused {
+                Some(at) => {
+                    lent.remove(at);
+                }
+                None => break (unjoined, cycles),
+            }
+        };
         let control = match cycles
             .iter()
             .position(|cycle| cycle.tokens.contains(&Token::Control))
@@ -762,7 +818,8 @@ impl LoopDeps {
                 .law(slot)
                 .or_else(|| read(State::Slot(slot)))
                 .map(kept)
-                .or_else(|| scanned(previous_partial(slot)?, cycle)),
+                .or_else(|| scanned(previous_partial(slot)?, cycle))
+                .or_else(|| scanned(reading_of(State::Slot(slot)).scan()?, cycle)),
             Token::Carried(_) => {
                 let state = state_of(token)?;
                 read(state)
@@ -777,7 +834,8 @@ impl LoopDeps {
             tokens => product(tokens, &state_of, &reading_of)
                 .or_else(|| extremum(tokens, &state_of, &reading_of))
                 .or_else(|| first(tokens, &state_of, &reading_of))
-                .map(kept),
+                .map(kept)
+                .or_else(|| scanned_product(tokens, &state_of, &reading_of)),
         };
         self.cycles
             .iter()
@@ -806,15 +864,107 @@ fn product<'a, 's, 'cfg>(
             }
         }
     }
-    let parts: Vec<(Token, Accumulator)> = updates
+    let parts: Vec<(Token, CycleLaw)> = updates
         .into_iter()
-        .map(|(token, update)| (token, update.accumulator()))
+        .map(|(token, update)| {
+            let accumulator = update.accumulator();
+            (
+                token,
+                CycleLaw {
+                    accumulator,
+                    scan: false,
+                },
+            )
+        })
         .collect();
-    Some(Accumulator {
-        exact: parts.iter().all(|(_, acc)| acc.exact),
-        commutative: parts.iter().all(|(_, acc)| acc.commutative),
-        law: Law::Product(parts),
-    })
+    Some(product_of(parts).accumulator)
+}
+
+/// The product of `parts`' laws, a scan where one of them is.
+fn product_of(parts: Vec<(Token, CycleLaw)>) -> CycleLaw {
+    let scan = parts.iter().any(|(_, part)| part.scan);
+    CycleLaw {
+        accumulator: Accumulator {
+            exact: parts.iter().all(|(_, part)| part.accumulator.exact),
+            commutative: parts.iter().all(|(_, part)| part.accumulator.commutative),
+            law: Law::Product(parts),
+        },
+        scan,
+    }
+}
+
+/// RFC-0093 rule 8: in a cycle of several tokens, a token whose steps read
+/// no other token and that has a law is a scan where another token's step
+/// reads it, and that token's law is read over the partials it reads. A
+/// token's steps read another's where a value its update is computed
+/// through reads the other's state. A token read by another is read only at
+/// its partials, which its scan reading checks; the reading token's own
+/// update then takes those values as values of the iteration, which read
+/// nothing of its state. A token that reads another and is read by a third
+/// is no scan (its steps read another token), so the cycle has no law.
+///
+/// Membership cannot say which member reads which token here: a jump that
+/// hands both tokens on is a member of both. The readings are therefore read
+/// from values alone, and a loop with a nested loop is declined, where a
+/// branch inside the nested loop can decide an update the values do not show.
+fn scanned_product<'a, 's, 'cfg>(
+    tokens: &[Token],
+    state_of: &dyn Fn(Token) -> Option<State>,
+    reading_of: &dyn Fn(State) -> LawReading<'a, 's, 'cfg>,
+) -> Option<CycleLaw> {
+    struct Read<'a> {
+        token: Token,
+        dependent: FxHashSet<ValueId>,
+        update: Option<Update<'a>>,
+        scan: Option<Scan>,
+    }
+    let mut reads: Vec<Read<'_>> = Vec::with_capacity(tokens.len());
+    for &token in tokens {
+        let state = state_of(token)?;
+        let reading = reading_of(state);
+        if reading.holds_nested_loop() {
+            return None;
+        }
+        reads.push(Read {
+            token,
+            dependent: reading.dependent.clone(),
+            update: reading_of(state).update(),
+            scan: reading_of(state).scan(),
+        });
+    }
+    let chain_of = |read: &Read<'_>| -> Option<FxHashSet<ValueId>> {
+        match (&read.update, &read.scan) {
+            (Some(update), _) => Some(update.chain.clone()),
+            (None, Some(scan)) => Some(scan.chain.clone()),
+            (None, None) => None,
+        }
+    };
+    let chains: Vec<FxHashSet<ValueId>> = reads.iter().map(chain_of).collect::<Option<_>>()?;
+    let steps_read = |reader: usize, read: usize| {
+        reader != read && !chains[reader].is_disjoint(&reads[read].dependent)
+    };
+    let mut parts: Vec<(Token, CycleLaw)> = Vec::with_capacity(reads.len());
+    for (at, read) in reads.iter().enumerate() {
+        let reads_another = (0..reads.len()).any(|other| steps_read(at, other));
+        let read_by_another = (0..reads.len()).any(|other| steps_read(other, at));
+        let part = match (reads_another, read_by_another) {
+            (true, true) => return None,
+            (false, true) => {
+                let scan = read.scan.as_ref()?;
+                CycleLaw {
+                    accumulator: scan.accumulator.clone(),
+                    scan: true,
+                }
+            }
+            (_, false) => CycleLaw {
+                accumulator: read.update.as_ref()?.accumulator(),
+                scan: false,
+            },
+        };
+        parts.push((read.token, part));
+    }
+    let law = product_of(parts);
+    law.scan.then_some(law)
 }
 
 /// RFC-0089 rule 4: a cycle of carried tokens one of which is chosen by a
@@ -1137,8 +1287,10 @@ pub enum Law {
     /// `None · Some(y)` is `Some(y)` and `Some(b) · Some(y)` is
     /// `Some(b ⊕ y)`, `⊕` the inner law.
     OptionLifted(Box<Law>),
-    /// Each token combined by its own law.
-    Product(Vec<(Token, Accumulator)>),
+    /// Each token combined by its own law. A part marked `scan` is a token
+    /// whose steps read no other token and whose partials another token's
+    /// step reads, whose law is read over them (RFC-0093 rule 8).
+    Product(Vec<(Token, CycleLaw)>),
     /// The greater (`Max`) or lesser (`Min`) of two values under the total
     /// order the extern `order` compares by (RFC-0082 rule 10). Equal values
     /// are one value under it, so the choice is associative and commutative.
@@ -1988,6 +2140,16 @@ struct Held {
     members: FxHashSet<usize>,
 }
 
+/// A storage whose law reads as a scan when the members that only lend its
+/// value to a call that neither writes nor keeps it read its partial
+/// (RFC-0093 rule 8): those members, and the members the scan names as its
+/// readers, by their index in the graph.
+struct LentStorage {
+    slot: ValueId,
+    lending: Vec<usize>,
+    readers: Vec<usize>,
+}
+
 /// One edge of a terminator: the target's parameters before `fills_from`
 /// are the terminator's own, and `args` fill the rest.
 struct EdgeArgs<'a> {
@@ -2297,17 +2459,19 @@ impl Graph {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn cycles(
         &self,
         cfg: &CfgBody,
         loans: &Loans<'_>,
         slots: &TargetSlots,
         disjoint: &[ValueId],
+        lent: &[LentStorage],
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
     ) -> Vec<Found> {
         let mut found: Vec<Held> = self.carried_cycles(cfg, header, loop_blocks);
-        found.extend(self.storage_cycles(cfg, loans, slots, disjoint));
+        found.extend(self.storage_cycles(cfg, loans, slots, disjoint, lent));
         let exits = self.with(|member| match member {
             Member::Term(block) => {
                 matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
@@ -2450,6 +2614,77 @@ impl Graph {
         found
     }
 
+    /// RFC-0093 rule 8: the members that only lend storage `slot`'s value to
+    /// a call that neither writes nor keeps it, the calls with the borrows
+    /// they are lent. Each such call is a direct or extern call that does
+    /// not write `slot` (its effect, which counts a `&mut` borrow it is lent
+    /// as a write), whose result holds no loan on `slot` and neither does a
+    /// storage it writes (it keeps none, as the declared flows give it), and
+    /// every argument of which that holds a loan on `slot` is a borrow of
+    /// the whole slot that this call alone reads. A call through a value
+    /// reaches what the value captured, which its arguments do not show, and
+    /// is left in the cycle. A call that writes `slot` stays a member twice
+    /// over: `storage_cycles` holds every writer, and the storage's law
+    /// reads no write but its one store.
+    fn lent_reads(&self, cfg: &CfgBody, loans: &Loans<'_>, slot: ValueId) -> Vec<usize> {
+        let kind_of = |member: Member| -> Option<&InstKind> {
+            match member {
+                Member::Inst(InstAt { block, at }) => Some(&cfg.blocks[block.0].insts[at].kind),
+                Member::Term(_) => None,
+            }
+        };
+        let keeps = |value: ValueId| {
+            loans
+                .holds(value)
+                .any(|loan| loan.storage.slot() == Some(slot))
+        };
+        let mut lending: Vec<usize> = Vec::new();
+        for (at, &member) in self.members.iter().enumerate() {
+            let Some(
+                call @ InstKind::FunctionCall {
+                    dst,
+                    callee: Callee::Direct(_) | Callee::Extern { .. },
+                    args,
+                    ..
+                },
+            ) = kind_of(member)
+            else {
+                continue;
+            };
+            let written = written_slots(loans, call);
+            if written.contains(&slot) || keeps(*dst) || written.iter().any(|held| keeps(*held)) {
+                continue;
+            }
+            let mut lenders: Vec<usize> = Vec::new();
+            let mut only_borrows = true;
+            for &arg in args.iter().filter(|arg| keeps(**arg)) {
+                let borrow = match self.definers(arg) {
+                    [definer] => Some(*definer),
+                    _ => None,
+                };
+                let lent_here = borrow.is_some_and(|borrow| {
+                    let whole_borrow = matches!(
+                        kind_of(self.members[borrow]),
+                        Some(InstKind::Ref { target, path, .. })
+                            if inst_info::storage(target) == Some(slot) && path.is_empty()
+                    );
+                    whole_borrow && self.readers(arg).iter().all(|reader| *reader == member)
+                });
+                match (borrow, lent_here) {
+                    (Some(borrow), true) => lenders.push(borrow),
+                    _ => only_borrows = false,
+                }
+            }
+            if only_borrows && !lenders.is_empty() {
+                lending.push(at);
+                lending.extend(lenders);
+            }
+        }
+        lending.sort_unstable();
+        lending.dedup();
+        lending
+    }
+
     /// The storages live at the header that a member writes.
     fn written_storages(
         &self,
@@ -2478,12 +2713,18 @@ impl Graph {
     /// element each iteration writes at its counter, holds its writers and
     /// the members between them: a read of it reads what no other
     /// iteration writes.
+    ///
+    /// A storage in `lent` leaves out of its touchers the members that only
+    /// lend its value to a call that neither writes nor keeps it: they read
+    /// its partial (RFC-0093 rule 8). A member between two of the cycle's
+    /// own still joins it.
     fn storage_cycles(
         &self,
         cfg: &CfgBody,
         loans: &Loans<'_>,
         slots: &TargetSlots,
         disjoint: &[ValueId],
+        lent: &[LentStorage],
     ) -> Vec<Held> {
         let storages = self.written_storages(cfg, loans, slots);
         let mut element_writers: Vec<usize> = Vec::new();
@@ -2512,9 +2753,16 @@ impl Graph {
                 self.with(|member| member_storage(cfg, loans, member).touched.contains(&slot));
             let writers =
                 self.with(|member| member_storage(cfg, loans, member).written.contains(&slot));
+            let lending: &[usize] = lent
+                .iter()
+                .find(|held| held.slot == slot)
+                .map_or(&[], |held| held.lending.as_slice());
             let from = match disjoint.contains(&slot) {
                 true => writers.clone(),
-                false => touchers,
+                false => touchers
+                    .into_iter()
+                    .filter(|member| !lending.contains(member))
+                    .collect(),
             };
             let mut members = self.between(&from, &writers);
             members.extend(from);
@@ -3277,6 +3525,8 @@ struct LawReading<'a, 's, 'cfg> {
 struct Scan {
     accumulator: Accumulator,
     readers: Vec<Member>,
+    /// The values the update reaches the state through.
+    chain: FxHashSet<ValueId>,
 }
 
 /// What a `State::Previous` reading reads the state through.
@@ -3574,21 +3824,76 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// are read off the update, where every such read is of a partial, the
     /// parameter as the iteration received it or what the iteration hands
     /// the next; with the members that read them.
+    ///
+    /// A storage the iteration stores whole once, in no nested loop, holds
+    /// at every read of it either what the iteration received or what it
+    /// stored: the body is acyclic, so no read lies both after the store on
+    /// one path and before it on another. Every such read of the whole
+    /// storage is a partial; where the cycle holds the reader, `scanned`
+    /// refuses it, and only a read that lends the value to a call that
+    /// neither writes nor keeps it leaves the cycle (`Graph::lent_reads`).
     fn scan(mut self) -> Option<Scan> {
-        let State::Param { param, index } = self.state else {
-            return None;
+        let (partials, store) = match self.state {
+            State::Param { param, index } => {
+                let loop_ = self
+                    .loops
+                    .iter()
+                    .find(|loop_| loop_.header == self.header)?;
+                let handed_on = loop_.back_arg(self.cfg, index)?;
+                (vec![param, handed_on], None)
+            }
+            State::Slot(slot) => {
+                let (store, stored) = self.single_store(slot)?;
+                (vec![stored], Some(store))
+            }
+            State::Previous(_) => return None,
         };
         let step = self.next_step()?;
-        let loop_ = self
-            .loops
-            .iter()
-            .find(|loop_| loop_.header == self.header)?;
-        let handed_on = loop_.back_arg(self.cfg, index)?;
-        let readers = self.readers_of_partials(&[param, handed_on], None)?;
+        if self.assigned_more_than_once {
+            return None;
+        }
+        let readers = self.readers_of_partials(&partials, store)?;
         Some(Scan {
             accumulator: accumulator_of(step, self.resets),
             readers,
+            chain: self.chain,
         })
+    }
+
+    /// The one store of the whole storage `slot` in an iteration, and the
+    /// value it stores, where no instruction touching the storage lies in a
+    /// nested loop.
+    fn single_store(&self, slot: ValueId) -> Option<(InstAt, ValueId)> {
+        let mut found: Option<(InstAt, ValueId)> = None;
+        for (at, kind) in self.insts() {
+            if !touched_slots(self.loans, kind).contains(&slot) {
+                continue;
+            }
+            if !self.nested_loops_holding(at.block).is_empty() {
+                return None;
+            }
+            if let InstKind::Assign {
+                target,
+                path,
+                value,
+                restores: false,
+            } = kind
+                && inst_info::storage(target) == Some(slot)
+                && path.is_empty()
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some((at, *value));
+            }
+        }
+        found
+    }
+
+    /// Whether a loop nested in this one runs in its body.
+    fn holds_nested_loop(&self) -> bool {
+        self.body()
+            .any(|block| !self.nested_loops_holding(block).is_empty())
     }
 
     /// RFC-0093 rule 8's previous partial: `found`'s loads of the previous
@@ -3629,6 +3934,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         Some(Scan {
             accumulator: accumulator_of(step, self.resets),
             readers,
+            chain: self.chain,
         })
     }
 

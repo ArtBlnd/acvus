@@ -333,7 +333,9 @@ impl LawKind {
             Law::Extremum { op, .. } => LawKind::Extremum(*op),
             Law::OptionLifted(inner) => LawKind::OptionLifted(Box::new(LawKind::of(inner))),
             Law::Product(parts) => {
-                LawKind::Product(parts.iter().map(|(_, acc)| LawKind::of(&acc.law)).collect())
+                LawKind::Product(
+                    parts.iter().map(|(_, part)| LawKind::of(&part.accumulator.law)).collect(),
+                )
             }
             Law::Ordered { op, .. } => LawKind::Ordered(*op),
             Law::First { .. } => LawKind::First,
@@ -1853,14 +1855,32 @@ fn two_tokens_whose_steps_read_no_other_have_the_product_of_their_laws() {
     );
 }
 
+/// RFC-0093 rule 8: `n`'s steps read no other token and have `+`, and `s`'s
+/// step reads it, so `n` is a scan and `s` adds over its partials; the
+/// product is a scan, in order.
 #[test]
-fn two_tokens_one_of_whose_steps_reads_the_other_have_no_law() {
+fn two_tokens_one_of_whose_steps_reads_the_other_scan_the_one_read() {
     let (held, lines) = the_cycle(
         "let v = [5, -3, 8]; let s = 0; let n = 0; \
          for x in &v { if *x >= 0 { s = s + n; n = n + 1; }; } s",
     );
-    assert_eq!(law_of(&held), None, "{lines}");
-    assert_eq!(held.order, Order::InOrder, "{lines}");
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Carried, TokenKind::Carried],
+            Order::InOrder,
+            Some(LawShape {
+                law: LawKind::Product(vec![LawKind::Op(LawOp::Add), LawKind::Op(LawOp::Add)]),
+                exact: true,
+                scan: true,
+            })
+        ),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("Carried(r11): Op(Add) exact commutative, Carried(r12): Op(Add) exact commutative scan"),
+        "the part `s` reads is the scan: {lines}"
+    );
 }
 
 #[test]
