@@ -149,7 +149,8 @@ async fn run_parsed(
         .modules
         .iter()
         .map(|(qref, module)| {
-            let prepared = prepare_module(module, &prepare_ctx);
+            let prepared = prepare_module(module, &prepare_ctx)
+                .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
             (*qref, Executable::Module(std::sync::Arc::new(prepared)))
         })
         .collect();

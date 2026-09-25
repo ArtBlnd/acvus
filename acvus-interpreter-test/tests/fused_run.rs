@@ -158,7 +158,8 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
 
     let mut found = Vec::new();
     for module in cr.modules.values() {
-        let prepared = prepare_module(module, &ctx);
+        let prepared = prepare_module(module, &ctx)
+            .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
         let listings = std::iter::once(body_listing(&prepared.main))
             .chain(prepared.closures.values().map(|code| code_listing(code)));
         for listing in listings {

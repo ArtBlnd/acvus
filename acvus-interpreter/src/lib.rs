@@ -102,7 +102,7 @@ pub use ops::chain::{ChainTy, LeafRead, Node as ChainNode, Nodes as ChainNodes, 
 #[cfg(feature = "tooling")]
 pub use ops::index as index_handlers;
 #[cfg(feature = "tooling")]
-pub use prepare::{PrepareCtx, prepare_module};
+pub use prepare::{BodyRole, FrameRefusal, PrepareCtx, RegisterBound, prepare_module};
 #[cfg(feature = "tooling")]
 pub use runtime::ExternHandler;
 #[cfg(feature = "tooling")]

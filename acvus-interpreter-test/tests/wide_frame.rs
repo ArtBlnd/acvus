@@ -8,9 +8,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use acvus_extern::{ExternType, Registry, extern_fn, extern_registry};
-use acvus_interpreter::{AcvusRuntime, Value};
+use acvus_interpreter::{AcvusRuntime, HostError, Value};
 use acvus_interpreter_test::corpus::{self, Outcome, Stage};
-use acvus_interpreter_test::listing::{ops_of_anywhere, script_listing_with_externs};
+use acvus_interpreter_test::listing::{
+    main_body, ops_of_anywhere, prepared_script_with_externs, script_listing_with_externs,
+};
 use acvus_interpreter_test::{Context, check_graph, execute_compiled};
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::graph::optimize::Opt;
@@ -110,7 +112,16 @@ impl Measured {
     }
 }
 
+static MADE: AtomicUsize = AtomicUsize::new(0);
+
 struct Counted;
+
+impl Counted {
+    fn made() -> Self {
+        MADE.fetch_add(1, Ordering::SeqCst);
+        Counted
+    }
+}
 
 impl Drop for Counted {
     fn drop(&mut self) {
@@ -126,7 +137,7 @@ struct Tracked(Vec<Counted>);
 
 #[extern_fn(effect = pure)]
 fn tracked(n: i64) -> Tracked {
-    Tracked((0..n).map(|_| Counted).collect())
+    Tracked((0..n).map(|_| Counted::made()).collect())
 }
 
 #[extern_fn(effect = pure)]
@@ -134,12 +145,27 @@ fn rank(t: &Tracked) -> i64 {
     t.0.len() as i64
 }
 
+/// `tracked` at an effect, so its calls keep their order around a trap.
+#[extern_fn(effect = opaque)]
+fn tracked_in_order(n: i64) -> Tracked {
+    tracked(n)
+}
+
+/// Its result holds what its argument does (RFC-0079 rule 6).
+#[extern_fn(effect = pure)]
+fn same<T>(x: T) -> T
+where
+    T: acvus_extern::Var<acvus_extern::kind::Type>,
+{
+    x
+}
+
 fn regs() -> Vec<Registry<AcvusRuntime>> {
     let mut regs = acvus_ext::std_registries::<AcvusRuntime>();
     regs.push(extern_registry! {
         ns: "t",
         types: [Tracked],
-        fns: [tracked, rank],
+        fns: [tracked, tracked_in_order, rank, same],
     });
     regs
 }
@@ -227,3 +253,167 @@ fn a_take_above_word_zero_is_disowned_before_its_operation() {
         "a frame of one mark word disowns nothing: {narrow:?}"
     );
 }
+
+// -- Storage slots by live range -------------------------------------------
+
+fn frame_len(source: &str) -> u16 {
+    let i = Interner::new();
+    let prepared = prepared_script_with_externs(&i, source, Context::default(), regs(), Ty::I64);
+    main_body(&prepared).frame_len
+}
+
+/// Before storages were coloured by live range, this body took 404 registers.
+#[test]
+fn two_hundred_lets_read_by_reference_run() {
+    for opt in [Opt::None, Opt::Full] {
+        let measured = Measured::start();
+        assert_eq!(run_tracked(&ranked(200), opt).as_int(), 200);
+        assert_eq!(measured.count(), 200, "200 ranked at {opt:?}");
+    }
+    let len = frame_len(&ranked(200));
+    assert!((200..=216).contains(&len), "a frame of {len}");
+}
+
+fn interleaved(n: usize) -> String {
+    let steps: Vec<String> = (0..n)
+        .map(|i| format!("let t{i} = tracked(1); total = total + rank(&t{i});"))
+        .collect();
+    format!("let total = 0; {} total", steps.join(" "))
+}
+
+#[test]
+fn a_storage_past_its_last_read_shares_its_register() {
+    for opt in [Opt::None, Opt::Full] {
+        let measured = Measured::start();
+        assert_eq!(run_tracked(&interleaved(400), opt).as_int(), 400);
+        assert_eq!(measured.count(), 400, "400 interleaved at {opt:?}");
+    }
+    let len = frame_len(&interleaved(400));
+    assert!(len <= 8, "a frame of {len}");
+}
+
+#[test]
+fn a_storage_a_live_reference_points_into_keeps_its_register() {
+    let held_in_a_let = "let a = tracked(2); let r = &a; \
+        let b = tracked(3); let x = rank(&b); \
+        let c = tracked(5); let y = rank(&c); \
+        rank(r) * 100 + x + y";
+    let held_by_a_call = "let a = tracked(2); let r = same(&a); \
+        let b = tracked(3); let x = rank(&b); \
+        let c = tracked(5); let y = rank(&c); \
+        rank(r) * 100 + x + y";
+    for source in [held_in_a_let, held_by_a_call] {
+        for opt in [Opt::None, Opt::Full] {
+            let measured = Measured::start();
+            assert_eq!(run_tracked(source, opt).as_int(), 208, "{source} at {opt:?}");
+            assert_eq!(measured.count(), 10, "{source} at {opt:?}");
+        }
+    }
+}
+
+// -- The frame's bounds, refused -------------------------------------------
+
+/// `opaque` is effectful, so its calls keep their order and every value is
+/// made before the first is read.
+fn all_live(n: usize) -> String {
+    let lets: Vec<String> = (0..n).map(|i| format!("let a{i} = opaque({i});")).collect();
+    let sums: Vec<String> = (0..n).map(|i| format!("total = total + a{i};")).collect();
+    format!("{} let total = 0; {} total", lets.join(" "), sums.join(" "))
+}
+
+#[test]
+fn a_body_past_the_frame_is_refused() {
+    for opt in [Opt::None, Opt::Full] {
+        match corpus::attempt(&all_live(400), opt, Stage::Run) {
+            Outcome::Refused(message) => assert!(
+                message.contains("registers, past the 320 one frame holds"),
+                "{opt:?}: {message}"
+            ),
+            other => panic!("{opt:?}: {other:?}"),
+        }
+    }
+    assert_eq!(value(&all_live(100)), (0..100).sum::<i64>().to_string());
+}
+
+#[test]
+fn a_call_past_the_argument_cell_is_refused() {
+    let params: Vec<String> = (0..17).map(|i| format!("a{i}")).collect();
+    let args: Vec<String> = (0..17).map(|i| i.to_string()).collect();
+    let source = format!(
+        "let f = |{}| -> {}; f({})",
+        params.join(", "),
+        params.join(" + "),
+        args.join(", ")
+    );
+    for opt in [Opt::None, Opt::Full] {
+        match corpus::attempt(&source, opt, Stage::Run) {
+            Outcome::Refused(message) => assert!(
+                message.contains("this call lays 17 argument registers, past the 16"),
+                "{opt:?}: {message}"
+            ),
+            other => panic!("{opt:?}: {other:?}"),
+        }
+    }
+}
+
+// -- A literal that traps part way -----------------------------------------
+
+fn try_run_tracked(source: &str, opt: Opt) -> Result<Value, HostError> {
+    let i = Interner::new();
+    let parsed = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("the source parses"));
+    let cr = check_graph(
+        &i,
+        parsed,
+        &[],
+        &FxHashMap::default(),
+        regs(),
+        Ty::I64,
+        opt,
+        |_| {},
+    )
+    .unwrap_or_else(|r| panic!("{opt:?} refused:\n  {}", r.messages.join("\n  ")));
+    let (_, mut interp) = execute_compiled(
+        &i,
+        cr,
+        std::collections::HashMap::new(),
+        Arc::new(acvus_interpreter::SequentialExecutor),
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a current-thread runtime");
+    runtime.block_on(interp.execute())
+}
+
+/// A trap releases nothing and is not ordered with effects (RFC-0048 rule 8),
+/// so what this pins is that no element built before the trap is released
+/// twice. When this was written, `Opt::None` built all 70 and released one
+/// value, and `Opt::Full` trapped before building any.
+#[test]
+fn an_element_that_traps_releases_no_built_element_twice() {
+    let elements: Vec<&str> = (0..100)
+        .map(|at| match at {
+            70 => "tracked_in_order(1 / zero)",
+            _ => "tracked_in_order(1)",
+        })
+        .collect();
+    let source = format!(
+        "let one = tracked(1); let zero = rank(&one) - 1; let all = [{}]; all.len() as i64",
+        elements.join(", ")
+    );
+    for opt in [Opt::None, Opt::Full] {
+        let measured = Measured::start();
+        let made_before = MADE.load(Ordering::SeqCst);
+        match try_run_tracked(&source, opt) {
+            Err(HostError::Trapped { message }) => {
+                assert!(message.contains("divide by zero"), "{opt:?}: {message}")
+            }
+            other => panic!("{opt:?}: {other:?}"),
+        }
+        let made = MADE.load(Ordering::SeqCst) - made_before;
+        assert!((1..=71).contains(&made), "{made} made at {opt:?}");
+        let released = measured.count();
+        assert!(released <= made, "{released} released of {made} made at {opt:?}");
+    }
+}
+
+

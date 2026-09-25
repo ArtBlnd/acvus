@@ -409,8 +409,11 @@ Status: Accepted
    `Store::bind(body)` is the only way to reach a frame, and skips laying the
    body's slot kinds and entry constants when the frame already carries them:
    a word register's kind byte survives every word store (rule 5) and an
-   entry constant's register has no writer. The `Vec` does not grow while a
-   chain runs, because every frame below the growth point borrows from it.
+   entry constant's register has no writer. Arguments laid for a callee
+   that binds nothing there, past the bound body's parameters, unbind the
+   window. The `Vec` does not
+   grow while a chain runs, because every frame below the growth point
+   borrows from it.
 
    A call whose future outlives the frame owns its arguments, because its
    future is `'static`: its glue owns a `Store` and lends a window out of it

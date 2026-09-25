@@ -40,7 +40,8 @@ pub fn prepared_script_with_externs(
         access: acvus_mir::graph::Access::Sync,
     };
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
-    Arc::new(prepare_module(module, &ctx))
+    Arc::new(prepare_module(module, &ctx)
+        .unwrap_or_else(|refused| panic!("the body is refused: {refused}")))
 }
 
 pub fn script_listing_with_externs(
@@ -74,7 +75,8 @@ pub fn prepared_script(
         access: acvus_mir::graph::Access::Sync,
     };
     let module = cr.modules.get(&cr.entry_qref).expect("the entry module");
-    Arc::new(prepare_module(module, &ctx))
+    Arc::new(prepare_module(module, &ctx)
+        .unwrap_or_else(|refused| panic!("the body is refused: {refused}")))
 }
 
 pub fn main_body(prepared: &Prepared) -> &Body {

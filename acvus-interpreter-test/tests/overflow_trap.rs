@@ -394,7 +394,8 @@ async fn run(body: OneOperation, ty: IntTy) -> Result<i128, Trapped> {
         instances: &acvus_extern::NoInstances,
         access: acvus_mir::graph::Access::Sync,
     };
-    let prepared = Executable::Module(Arc::new(acvus_interpreter::prepare_module(&module, &ctx)));
+    let prepared = Executable::Module(Arc::new(acvus_interpreter::prepare_module(&module, &ctx)
+        .unwrap_or_else(|refused| panic!("the body is refused: {refused}"))));
     let functions: FxHashMap<QualifiedRef, Executable> =
         std::iter::once((entry, prepared)).collect();
     let shared = InterpreterContext::new(&interner, functions, Arc::new(SequentialExecutor));

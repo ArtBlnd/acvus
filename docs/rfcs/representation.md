@@ -161,14 +161,15 @@ Status: Accepted
    realized (rule 4).
 
 2. **A frame is registers, and an aggregate that needs an address is a run of
-   them.** There is one kind of register. A frame holds as many registers as
-   its body needs, up to 320 in all, scalars below runs. A run holds an
-   aggregate's flat layout (rule 8), placed by its own pass after the scalar
-   colouring, deepest loop first. When runs would pass the bound, aggregates
-   spill to the heap (rule 4), shallowest loop and longest live range first.
-   A mark word covers 64 registers, and the word and bit an operation marks
-   are decided at `prepare`. A run's `Large` fields are released by the sweep
-   as any register's; there is no run bit.
+   them.** A frame holds up to 320 registers, scalars below runs. The scalar
+   colouring gives each value and storage the lowest register free over its
+   live range; a storage lives until the last read of it or of a loan on it,
+   and equal hoisted constants share one. Runs hold flat layouts (rule 8),
+   placed after the scalars, deepest loop first, spilling past the bound to
+   the heap (rule 4), shallowest loop and longest range first. Scalars past
+   the bound, over 64 parameter registers or over 16 laid arguments are
+   refused at compile time with the count. A mark word covers 64 registers;
+   the sweep releases a run's `Large` fields as any register's.
 
 3. **A reference to an aggregate is a projection, and an addressed aggregate
    has one home.** `&agg` / `&mut agg` is one word, `Kind::LargeRef`, pointing
@@ -185,8 +186,7 @@ Status: Accepted
    the frame: in a container or a realized aggregate, into `Commit`, captured
    by value, returned, kept by an extern, handed to `Spawn`, or in a web the
    emitter cannot lower. That realization is the only `Make`; `prepare` emits
-   it, and the type system has no realized/unrealized distinction. A body
-   whose runs do not fit spills (rule 2), never panics. The frame is preferred
+   it, and the type system has no realized/unrealized distinction. The frame is preferred
    to the heap even where native code would run a little faster on it,
    because on wasm the allocation is the cost.
 

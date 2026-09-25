@@ -134,7 +134,7 @@ async fn run_with(
             instances: &acvus_extern::NoInstances,
             access: acvus_mir::graph::Access::Sync,
         },
-    );
+    ).unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
     functions.insert(entry, Executable::Module(Arc::new(prepared)));
 
     let shared = InterpreterContext::new(

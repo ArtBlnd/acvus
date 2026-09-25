@@ -847,6 +847,8 @@ pub struct Body {
     /// call's pair destination receives.
     pub returns_a_view: bool,
     pub params: Box<[Off]>,
+    /// The registers a caller lays its arguments in, `params` at their widths.
+    pub param_run: u16,
     /// The parameter slots whose type owns a `Large`: what the caller gave up
     /// with its own `take_mask`, claimed here in one store.
     pub param_marks: u64,

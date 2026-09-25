@@ -1,0 +1,76 @@
+// expect: 50502
+let n = 12u64;
+let edges_from = vec([0u64, 1u64, 2u64, 2u64, 3u64, 4u64, 5u64, 6u64, 7u64, 5u64, 8u64, 9u64, 7u64, 10u64, 9u64]);
+let edges_to = vec([1u64, 2u64, 0u64, 3u64, 4u64, 3u64, 6u64, 7u64, 6u64, 8u64, 9u64, 5u64, 4u64, 0u64, 11u64]);
+
+let csr = |n, from, to| -> {
+    let degree = filled(n, 0);
+    for e in &from {
+        degree[*e] = degree[*e] + 1;
+    }
+    let offs = vec([0u64]);
+    let run = 0u64;
+    for v in 0u64..n {
+        run = run + (degree[v] as u64);
+        offs.push(run);
+    }
+    let fill = filled(n, 0);
+    let targets = filled(to.len(), 0);
+    for e in 0u64..from.len() {
+        let v = from[e];
+        let at = offs[v] + (fill[v] as u64);
+        targets[at] = to[e] as i64;
+        fill[v] = fill[v] + 1;
+    }
+    { offs: offs, targets: targets, }
+};
+
+let reach = |n, start, offs, targets, part, p| -> {
+    let seen = filled(n, false);
+    seen[start] = true;
+    let frontier = vec([start]);
+    while frontier.len() > 0u64 {
+        let next = vec([]);
+        for u in &frontier {
+            for k in offs[*u]..offs[*u + 1u64] {
+                let w = targets[k] as u64;
+                if part[w] == p && !seen[w] {
+                    seen[w] = true;
+                    next.push(w);
+                };
+            }
+        }
+        frontier = next;
+    }
+    seen
+};
+
+let trimmed = |n, offs, targets, roffs, rtargets, part, p| -> {
+    let dead = filled(n, false);
+    for v in 0u64..n {
+        if part[v] == p {
+            let outs = 0;
+            for k in offs[v]..offs[v + 1u64] {
+                if part[targets[k] as u64] == p {
+                    outs = outs + 1;
+                };
+            }
+            let ins = 0;
+            for k in roffs[v]..roffs[v + 1u64] {
+                if part[rtargets[k] as u64] == p {
+                    ins = ins + 1;
+                };
+            }
+            dead[v] = outs == 0 || ins == 0;
+        };
+    }
+    dead
+};
+
+let fwd = csr(n, &edges_from, &edges_to);
+let bwd = csr(n, &edges_to, &edges_from);
+let part = filled(n, 0);
+let f = reach(n, 0u64, &fwd.offs, &fwd.targets, &part, 0);
+let d = trimmed(n, &fwd.offs, &fwd.targets, &bwd.offs, &bwd.targets, &part, 0);
+let g = reach(n, 0u64, &fwd.offs, &fwd.targets, &part, 0);
+let c = 0; for v in 0u64..n { if d[v] { c = c + 1; }; if f[v] { c = c + 100; }; if g[v] { c = c + 10000; }; } c

@@ -1460,7 +1460,8 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         .map(|(q, h)| (q, Executable::Extern(h)))
         .collect();
     let started = Instant::now();
-    let prepared: Vec<(QualifiedRef, Executable)> = {
+    let mut prepared: Vec<(QualifiedRef, Executable)> = Vec::new();
+    {
         let ctx = PrepareCtx {
             interner,
             externs: &executables,
@@ -1468,12 +1469,23 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
             instances: &instances,
             access,
         };
-        optimized
-            .modules
-            .iter()
-            .map(|(q, m)| (*q, Executable::Module(Arc::new(prepare_module(m, &ctx)))))
-            .collect()
-    };
+        for (q, m) in &optimized.modules {
+            match prepare_module(m, &ctx) {
+                Ok(module) => prepared.push((*q, Executable::Module(Arc::new(module)))),
+                Err(refused) => refusals.push(Refusal {
+                    origin: origin_of(q),
+                    message: refused.to_string(),
+                    span: span_of(refused.span),
+                    primary: None,
+                    labels: Vec::new(),
+                    cause: None,
+                }),
+            }
+        }
+    }
+    if !refusals.is_empty() {
+        return Err(refusals);
+    }
     let prepare = started.elapsed();
     executables.extend(prepared);
     let mut modules = optimized.modules;

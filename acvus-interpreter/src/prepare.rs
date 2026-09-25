@@ -249,9 +249,138 @@ impl InstanceEntryStore {
     }
 }
 
+/// A body this machine cannot give a frame: a count of registers past a bound
+/// the frame's shape fixes (RFC-0050 rule 2). The host refuses the source with
+/// it as it refuses any other compile error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameRefusal {
+    pub body: BodyRole,
+    /// The body's first instruction for [`RegisterBound::Frame`] and
+    /// [`RegisterBound::Parameters`], the call for
+    /// [`RegisterBound::CallArguments`].
+    pub span: acvus_ast::Span,
+    pub bound: RegisterBound,
+    /// The registers the body or the call needs.
+    pub needs: u32,
+}
+
+/// The three counts of registers the frame's shape bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterBound {
+    /// The registers one frame holds: the scalars, the scratch `order_moves`
+    /// may take, and the runs (RFC-0050 rule 2).
+    Frame,
+    /// The argument registers a synchronous call into a body lays in the cell
+    /// its frame keeps above itself (RFC-0052 rule 7).
+    CallArguments,
+    /// The parameter registers a body's entry claims, all in mark word 0
+    /// (`Body::param_marks`).
+    Parameters,
+}
+
+impl RegisterBound {
+    pub fn limit(self) -> u32 {
+        match self {
+            RegisterBound::Frame => u32::from(crate::regs::MAX_FRAME_SLOTS),
+            RegisterBound::CallArguments => u32::from(crate::regs::CELL_SLOTS),
+            RegisterBound::Parameters => u32::from(crate::regs::MARK_WORD_SLOTS),
+        }
+    }
+}
+
+impl std::fmt::Display for FrameRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let body = match self.body {
+            BodyRole::Entry => "this body",
+            BodyRole::Closure => "this lambda's body",
+        };
+        let (needs, limit) = (self.needs, self.bound.limit());
+        match self.bound {
+            RegisterBound::Frame => write!(
+                f,
+                "{body} needs {needs} registers, past the {limit} one frame holds"
+            ),
+            RegisterBound::CallArguments => write!(
+                f,
+                "this call lays {needs} argument registers, past the {limit} one call can lay"
+            ),
+            RegisterBound::Parameters => write!(
+                f,
+                "{body} takes {needs} parameter registers, past the {limit} a body's entry claims"
+            ),
+        }
+    }
+}
+
+impl FrameRefusal {
+    fn of_body(body: &MirBody, role: BodyRole, bound: RegisterBound, needs: u32) -> Self {
+        FrameRefusal {
+            body: role,
+            span: body_span(body, role),
+            bound,
+            needs,
+        }
+    }
+}
+
+fn body_span(body: &MirBody, role: BodyRole) -> acvus_ast::Span {
+    body.insts
+        .first()
+        .unwrap_or_else(|| panic!("body {role:?} holds no instruction, so it cannot return"))
+        .span
+}
+
+/// Refuses what `assign_slots` asserts of the parameters and `Prepare::laid`
+/// of a synchronous call's arguments, before either is reached.
+fn within_call_bounds(body: &MirBody, role: BodyRole) -> Result<(), FrameRefusal> {
+    let width = |id: &ValueId| -> u32 {
+        let ty = body
+            .val_types
+            .get(id)
+            .unwrap_or_else(|| panic!("value {id:?} has no type"));
+        u32::try_from(SlotClass::of(ty).width()).expect("a register class is two wide at most")
+    };
+    let params: u32 = body.params.iter().map(|(_, id)| width(id)).sum();
+    if params > RegisterBound::Parameters.limit() {
+        return Err(FrameRefusal::of_body(
+            body,
+            role,
+            RegisterBound::Parameters,
+            params,
+        ));
+    }
+    for inst in &body.insts {
+        let InstKind::FunctionCall {
+            callee: Callee::Direct(_) | Callee::Indirect(_),
+            callee_ty,
+            args,
+            ..
+        } = &inst.kind
+        else {
+            continue;
+        };
+        if call_task(callee_ty) > Task::Sync {
+            continue;
+        }
+        let laid: u32 = args.iter().map(width).sum();
+        if laid > RegisterBound::CallArguments.limit() {
+            return Err(FrameRefusal {
+                body: role,
+                span: inst.span,
+                bound: RegisterBound::CallArguments,
+                needs: laid,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Every body of a module, prepared: the closures first, so a `MakeClosure`
 /// resolves its body to an `Arc<Code>` at preparation.
-pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
+///
+/// # Errors
+/// A body needs more registers than a frame, a call or an entry holds.
+pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Result<Prepared, FrameRefusal> {
     let bodies = || std::iter::once(&module.main).chain(module.closures.values());
     let literals = Arc::new(Literals::of(bodies().flat_map(|body| literal_texts(body))));
     let entries = RefCell::new(InstanceEntryStore::default());
@@ -277,7 +406,7 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
                 .collect::<Vec<_>>()
         );
         for (label, body) in ready {
-            let code = prepare_closure(body, ctx, &entries, &closures, &literals);
+            let code = prepare_closure(body, ctx, &entries, &closures, &literals)?;
             closures.insert(*label, Arc::new(code));
         }
         remaining.retain(|(label, _)| !closures.contains_key(label));
@@ -289,12 +418,12 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Prepared {
         &entries,
         &closures,
         &literals,
-    ));
-    Prepared {
+    )?);
+    Ok(Prepared {
         main,
         closures,
         instances: entries.into_inner(),
-    }
+    })
 }
 
 pub fn literal_texts(body: &MirBody) -> impl Iterator<Item = &str> {
@@ -318,45 +447,51 @@ pub enum BodyRole {
     Closure,
 }
 
+/// # Errors
+/// The body needs more registers than a frame, a call or an entry holds.
 pub fn prepare_entry(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
     entries: &RefCell<InstanceEntryStore>,
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
-) -> Body {
+) -> Result<Body, FrameRefusal> {
+    within_call_bounds(body, BodyRole::Entry)?;
     let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
     let scalars = prep.hoist_konsts();
-    prep.plan_runs(scalars);
+    prep.plan_runs(scalars, BodyRole::Entry)?;
     let regions = prep.regions();
 
-    framed(prep, literals, &regions, BodyRole::Entry)
+    Ok(framed(prep, literals, &regions, BodyRole::Entry))
 }
 
+/// # Errors
+/// The body needs more registers than a frame, a call or an entry holds.
 pub fn prepare_closure(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
     entries: &RefCell<InstanceEntryStore>,
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
-) -> Code {
+) -> Result<Code, FrameRefusal> {
+    within_call_bounds(body, BodyRole::Closure)?;
     let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
     let scalars = prep.hoist_konsts();
-    prep.plan_runs(scalars);
+    prep.plan_runs(scalars, BodyRole::Closure)?;
     let regions = prep.regions();
 
     if let Some(expr) = prep.expression_body() {
-        return Code::expr(Arc::new(expr));
+        return Ok(Code::expr(Arc::new(expr)));
     }
 
-    Code::body(Arc::new(framed(
+    Ok(Code::body(Arc::new(framed(
         prep,
         literals,
         &regions,
         BodyRole::Closure,
-    )))
+    ))))
 }
 
 fn framed(
@@ -385,7 +520,8 @@ fn framed(
     let captures = body.captures.iter().map(|(_, v)| prep.off(*v)).collect();
     let order_param = body.order_param.map(|id| prep.off(id));
     let entry_konsts = prep.entry_konsts();
-    let slot_kinds = prep.slot_kinds(frame_len, prep.param_run());
+    let param_run = prep.param_run();
+    let slot_kinds = prep.slot_kinds(frame_len, param_run);
     let returns_a_view = body.insts.iter().any(
         |inst| matches!(&inst.kind, InstKind::Return { value, .. } if is_slice(prep.ty(*value))),
     );
@@ -403,14 +539,11 @@ fn framed(
         may_suspend,
         returns_a_view,
         params,
+        param_run,
         param_marks,
         captures,
         order_param,
-        span: body
-            .insts
-            .first()
-            .unwrap_or_else(|| panic!("body {role:?} holds no instruction, so it cannot return"))
-            .span,
+        span: body_span(body, role),
     }
 }
 
@@ -1284,14 +1417,30 @@ impl<'a> Prepare<'a> {
     /// run begins above the scalar registers and above the ones `order_moves`
     /// may still take while the body is being emitted, because a run's `Off` is
     /// written before it takes them.
-    fn plan_runs(&mut self, ScalarsFinal(scalars): ScalarsFinal) {
+    ///
+    /// # Errors
+    /// The scalars and the scratch above them pass the registers one frame
+    /// holds; the runs spill to the heap rather than pass it (RFC-0050 rule 4).
+    fn plan_runs(
+        &mut self,
+        ScalarsFinal(scalars): ScalarsFinal,
+        role: BodyRole,
+    ) -> Result<(), FrameRefusal> {
         assert_eq!(
             scalars, self.scratch,
             "the scalar count grew after it was declared final, so a run would be placed on top \
              of a register the body already colours"
         );
-        self.run_base = Slot::try_from(scalars + u32::from(MAX_SCRATCH_SLOTS))
-            .unwrap_or_else(|_| panic!("a body of {scalars} registers has no run base"));
+        let run_base = scalars + u32::from(MAX_SCRATCH_SLOTS);
+        if run_base > RegisterBound::Frame.limit() {
+            return Err(FrameRefusal::of_body(
+                self.body,
+                role,
+                RegisterBound::Frame,
+                run_base,
+            ));
+        }
+        self.run_base = Slot::try_from(run_base).expect("a base within one frame fits a Slot");
         let written_by_a_call = self.results_written_as_components();
         self.plan = runs::plan(
             self.body,
@@ -1302,12 +1451,14 @@ impl<'a> Prepare<'a> {
             &written_by_a_call,
         );
         let frame = self.run_frame_len();
-        assert!(
-            frame <= crate::regs::MAX_FRAME_SLOTS,
-            "a body's {scalars} scalar registers and {} run registers reach {frame}, past the {}",
-            self.plan.total,
-            crate::regs::MAX_FRAME_SLOTS
-        );
+        if u32::from(frame) > RegisterBound::Frame.limit() {
+            return Err(FrameRefusal::of_body(
+                self.body,
+                role,
+                RegisterBound::Frame,
+                u32::from(frame),
+            ));
+        }
         for slot in self.plan.registers() {
             assert!(
                 slot < frame,
@@ -1315,6 +1466,7 @@ impl<'a> Prepare<'a> {
             );
         }
         self.run_noops = noops(self.body, &self.plan);
+        Ok(())
     }
 
     /// The results a handler writes as an aggregate's components rather than
@@ -6104,8 +6256,31 @@ struct Live {
     entry: ValueSet,
 }
 
+/// What each instruction reads, as `Loans::uses_with_storage` answers it.
+///
+/// Cross-artifact obligation: `optimize::drop_insertion` places a storage's
+/// `Drop` after the last instruction this same list names it at, so the
+/// colouring and the drops agree on where a storage's value ends.
+struct ReadsWithStorage {
+    at: Vec<SmallVec<[ValueId; 4]>>,
+}
+
+impl ReadsWithStorage {
+    fn of(body: &MirBody) -> Self {
+        let cfg = acvus_mir::cfg::promote(body.clone());
+        let loans = acvus_mir::analysis::loans::Loans::build(&cfg);
+        ReadsWithStorage {
+            at: body
+                .insts
+                .iter()
+                .map(|inst| loans.uses_with_storage(&inst.kind))
+                .collect(),
+        }
+    }
+}
+
 impl Live {
-    fn of(edges: &Edges<'_>, values: usize) -> Self {
+    fn of(edges: &Edges<'_>, reads: &ReadsWithStorage, values: usize) -> Self {
         let insts = edges.insts;
         let mut live_in = vec![ValueSet::new(values); insts.len()];
         let mut live_out = vec![ValueSet::new(values); insts.len()];
@@ -6120,7 +6295,7 @@ impl Live {
                 for def in inst_info::defs(&insts[at].kind) {
                     into.remove(def.to_raw());
                 }
-                for used in inst_info::uses(&insts[at].kind) {
+                for used in &reads.at[at] {
                     into.insert(used.to_raw());
                 }
                 if let Some(counter) = edges.for_counter(at) {
@@ -6626,14 +6801,11 @@ impl Slots {
 /// A value takes its coalescing partner's slot, else its argument
 /// window's slot, else the lowest slot free over its live range.
 ///
-/// A storage that a place names directly keeps one slot for the whole
-/// body, and no other value joins it. Two facts about a storage are
-/// outside what `ValueId` liveness can see: `storage::ref_var` builds a
-/// pointer into its register, and how long that pointer is read belongs to
-/// the reference's live range, not the storage's; and a write through a
-/// path reads the storage it writes, which `inst_info` reports as a
-/// definition alone. Until the assignment reads `analysis::loans`, the
-/// conservative range is the body.
+/// A storage that a place names is coloured by its live range as any value
+/// is (RFC-0050 rule 2). `storage::ref_var` builds a pointer into its
+/// register, and every value that pointer reaches holds a loan on the
+/// storage, so reading any of them keeps the storage live. A storage joins no
+/// coalesced class, because its register is an address.
 fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, u32>) -> Slots {
     let values = body.val_factory.len();
     let edges = Edges {
@@ -6641,10 +6813,11 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
         labels,
     };
     let insts = edges.insts;
-    let live = Live::of(&edges, values);
+    let reads = ReadsWithStorage::of(body);
+    let live = Live::of(&edges, &reads, values);
 
     let mut def_sites: Vec<Vec<DefSite>> = vec![Vec::new(); values];
-    let mut pinned = vec![false; values];
+    let mut storages = vec![false; values];
     let mut entry_values: Vec<ValueId> = body
         .params
         .iter()
@@ -6666,7 +6839,7 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
             _ => None,
         };
         if let Some(storage) = place {
-            pinned[storage.to_raw()] = true;
+            storages[storage.to_raw()] = true;
         }
     }
 
@@ -6682,16 +6855,6 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
             touch(&mut ranges, def.to_raw(), at);
         }
     }
-    let whole_body = LiveRange {
-        lo: 0,
-        hi: insts.len().saturating_sub(1),
-    };
-    for (value, held) in pinned.iter().enumerate() {
-        if *held && ranges[value].is_some() {
-            ranges[value] = Some(whole_body);
-        }
-    }
-
     let classes_of: Vec<SlotClass> = (0..values)
         .map(
             |value| match body.val_types.get(&ValueId::from_raw(value)) {
@@ -6708,7 +6871,7 @@ fn assign_slots(body: &MirBody, ctx: &PrepareCtx<'_>, labels: &FxHashMap<Label, 
     };
     for EdgeMove { arg, param } in edge_moves(&edges) {
         let (arg, param) = (arg.to_raw(), param.to_raw());
-        if pinned[arg] || pinned[param] || ranges[arg].is_none() || ranges[param].is_none() {
+        if storages[arg] || storages[param] || ranges[arg].is_none() || ranges[param].is_none() {
             continue;
         }
         if classes_of[arg] != classes_of[param] {
@@ -7183,7 +7346,8 @@ mod recognizer_tests {
                 &RefCell::new(InstanceEntryStore::default()),
                 &FxHashMap::default(),
                 &literals,
-            )))
+            )
+            .unwrap_or_else(|refusal| panic!("a fixture body is refused: {refusal}"))))
         }
 
         fn recognize(&self, insts: Vec<Inst>) -> Vec<Matched> {
@@ -8335,7 +8499,10 @@ impl Prepare<'_> {
         })
     }
 
+    /// One register per distinct constant: an entry constant's register has
+    /// no writer, so every constant of one kind and word reads the same one.
     fn hoist_konsts(&mut self) -> ScalarsFinal {
+        let mut slot_of_word: FxHashMap<(u8, u64), u32> = FxHashMap::default();
         for at in 0..self.body.insts.len() {
             let InstKind::Const { dst, value } = &self.body.insts[at].kind else {
                 continue;
@@ -8347,8 +8514,13 @@ impl Prepare<'_> {
             if !self.every_reader_takes_a_word(dst) {
                 continue;
             }
-            let slot = self.scratch;
-            self.scratch += 1;
+            let slot = *slot_of_word
+                .entry((word.kind() as u8, word.bits()))
+                .or_insert_with(|| {
+                    let slot = self.scratch;
+                    self.scratch += 1;
+                    slot
+                });
             self.konsts.slot_of.insert(dst, slot);
             self.konsts.value_at.insert(slot, word);
             self.konsts.insts.push(at);

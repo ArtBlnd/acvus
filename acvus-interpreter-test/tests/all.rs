@@ -48,6 +48,7 @@ mod integers;
 mod iter_more;
 mod iter_next;
 mod laid_argument_drop;
+mod laid_over_a_bound_frame;
 mod lambda_capture;
 mod lent_iterator;
 mod literal;

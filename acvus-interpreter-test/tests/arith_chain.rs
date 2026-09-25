@@ -43,7 +43,7 @@ fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
     };
     assert_eq!(cr.modules.len(), 1, "these scripts are one module");
     let (_, module) = cr.modules.iter().next().expect("one module");
-    prepare_module(module, &ctx)
+    prepare_module(module, &ctx).unwrap_or_else(|refused| panic!("the body is refused: {refused}"))
 }
 
 fn main_chains(prepared: &Prepared) -> Vec<ChainShape> {

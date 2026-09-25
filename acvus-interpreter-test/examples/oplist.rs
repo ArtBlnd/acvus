@@ -189,7 +189,8 @@ fn main() {
         access: acvus_mir::graph::Access::Sync,
     };
     for (qref, module) in &cr.modules {
-        let prepared = prepare_module(module, &ctx);
+        let prepared = prepare_module(module, &ctx)
+            .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
         dump_body(&format!("{qref:?} main"), &prepared.main);
         for (label, closure) in &prepared.closures {
             dump(&format!("{qref:?} closure {label:?}"), closure);

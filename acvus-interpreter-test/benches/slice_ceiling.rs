@@ -513,7 +513,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
             instances: &acvus_extern::NoInstances,
             access: acvus_mir::graph::Access::Sync,
         },
-    );
+    ).unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
     if shape == Shape::Unchecked {
         let code = Arc::get_mut(&mut prepared.main).expect("the prepared body is not yet shared");
         drop_the_bound_check(code);

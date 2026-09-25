@@ -161,7 +161,7 @@ async fn spawn_eval_basic() {
         Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(
             &module,
             &prepare_ctx,
-        )))
+        ).unwrap_or_else(|refused| panic!("the body is refused: {refused}"))))
     };
     functions.insert(entry_id, prepare(entry_module));
     functions.insert(callee_id, prepare(callee_module));
@@ -298,7 +298,7 @@ async fn spawn_eval_multi_args() {
         Executable::Module(std::sync::Arc::new(acvus_interpreter::prepare_module(
             &module,
             &prepare_ctx,
-        )))
+        ).unwrap_or_else(|refused| panic!("the body is refused: {refused}"))))
     };
     functions.insert(entry_id, prepare(entry_module));
     functions.insert(callee_id, prepare(callee_module));

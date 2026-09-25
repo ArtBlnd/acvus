@@ -123,7 +123,8 @@ fn prepared_entry(source: &str, ret: Ty) -> (Body, MirBody) {
         instances: &cr.instances,
         access: acvus_mir::graph::Access::Sync,
     };
-    let prepared = prepare_module(module, &ctx);
+    let prepared = prepare_module(module, &ctx)
+        .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
     let main = Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"));
     (main, module.main.clone())
 }

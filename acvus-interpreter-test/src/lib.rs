@@ -400,7 +400,8 @@ pub fn execute_compiled(
         .map(|(qref, module)| {
             (
                 *qref,
-                Executable::Module(Arc::new(prepare_module(module, &ctx))),
+                Executable::Module(Arc::new(prepare_module(module, &ctx)
+                    .unwrap_or_else(|refused| panic!("the body is refused: {refused}")))),
             )
         })
         .collect();
@@ -1536,16 +1537,15 @@ pub mod corpus {
                 cr.modules
                     .iter()
                     .map(|(qref, module)| {
-                        (
-                            *qref,
-                            Executable::Module(Arc::new(prepare_module(module, &ctx))),
-                        )
+                        prepare_module(module, &ctx)
+                            .map(|prepared| (*qref, Executable::Module(Arc::new(prepared))))
                     })
-                    .collect::<Vec<(QualifiedRef, Executable)>>()
+                    .collect::<Result<Vec<(QualifiedRef, Executable)>, _>>()
             }))
         };
         let prepared = match prepared {
-            Ok(prepared) => prepared,
+            Ok(Ok(prepared)) => prepared,
+            Ok(Err(refused)) => return Outcome::Refused(format!("prepare: {refused}")),
             Err(panic) => return Outcome::PreparePanicked(message(panic.as_ref())),
         };
         if let Stage::Prepare = stage {

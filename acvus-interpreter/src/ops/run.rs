@@ -395,6 +395,7 @@ mod tests {
             may_suspend: false,
             returns_a_view: false,
             params: Box::new([]),
+            param_run: 0,
             param_marks: 0,
             captures: Box::new([]),
             order_param: None,

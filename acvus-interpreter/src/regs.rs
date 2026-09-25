@@ -109,19 +109,39 @@ pub(crate) const fn cells_for(slots: u16) -> usize {
 const MAX_FRAME_CELLS: usize = cells_for(MAX_FRAME_SLOTS);
 
 /// Which body a frame is bound to, and so whether it already carries that
-/// body's slot kinds and entry constants (`machine::open_frame`).
+/// body's slot kinds and entry constants (`machine::open_frame`) on every
+/// register past its parameter run.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct BoundTo(usize);
+pub struct BoundTo {
+    body: usize,
+    param_run: u16,
+}
 
 impl BoundTo {
-    pub const NONE: BoundTo = BoundTo(0);
+    pub const NONE: BoundTo = BoundTo {
+        body: 0,
+        param_run: 0,
+    };
 
     /// Whether the frame was already bound to `body`, and bound to it now.
     #[inline]
     pub fn rebind(&mut self, body: &Body) -> bool {
-        let key = BoundTo(std::ptr::from_ref(body).addr());
-        debug_assert_ne!(key, BoundTo::NONE, "a body is not at address zero");
+        let key = BoundTo {
+            body: std::ptr::from_ref(body).addr(),
+            param_run: body.param_run,
+        };
+        debug_assert_ne!(key.body, 0, "a body is not at address zero");
         std::mem::replace(self, key) == key
+    }
+
+    /// An argument run of `arity` registers was laid over the frame and no
+    /// body was bound after it. Past the bound body's parameter run the lay
+    /// overwrote registers `open_frame` wrote, so the frame carries no body's.
+    #[inline(always)]
+    fn overlaid(&mut self, arity: u16) {
+        if arity > self.param_run {
+            *self = BoundTo::NONE;
+        }
     }
 }
 
@@ -317,10 +337,12 @@ impl FrameState {
         unsafe { self.at(at).write(value) };
     }
 
-    /// The argument run a caller laid, read where the callee's body is one
-    /// chain and has no frame to read it from (RFC-0044 rule 5).
+    /// The argument run a caller laid, read where the callee binds no frame
+    /// in this window: its body is one chain (RFC-0044 rule 5), or its frame
+    /// does not fit and is rooted in a `Store` of its own.
     #[inline]
-    pub fn laid(&self, arity: u16) -> &[Value] {
+    pub fn laid(&mut self, arity: u16) -> &[Value] {
+        self.bound.overlaid(arity);
         let first = self.at(Off::of(0));
         // SAFETY: `lay` wrote every register of the run, and `at` holds the
         // widest of them inside the cell the window begins with.

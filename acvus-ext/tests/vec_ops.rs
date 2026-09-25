@@ -95,7 +95,8 @@ async fn run_at(interner: &Interner, source: &str, opt: graph_optimize::Opt) -> 
         .modules
         .iter()
         .map(|(qref, module)| {
-            let prepared = prepare_module(module, &prepare_ctx);
+            let prepared = prepare_module(module, &prepare_ctx)
+                .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
             (*qref, Executable::Module(Arc::new(prepared)))
         })
         .collect();
