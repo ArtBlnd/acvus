@@ -1,6 +1,6 @@
 while r16 -> L1 else L2 stages [L0, L1, L3]
 // L0: cycle Storage(r17)+Control in_order {ref, call next, test_variant, while}
 // L1: free {unwrap_variant, cast, const, -, const}
-// L3: cycle Storage(r18) in_order {index, +, index_set}
+// L3: cycle Storage(r18) keyed(r19) any_order law(Op(Add) exact commutative) {index, +, index_set}
 // control chained through L0
 // cost in place: no count on entry
