@@ -330,3 +330,49 @@ fn a_disjoint_stage_runs_apart_and_weighs_its_work() {
         one_row.with_costs
     );
 }
+
+/// `n` is the trip count known on entry. A loop whose every exit is its
+/// header's runs that many iterations; one that can leave from its body
+/// runs at most that many (RFC-0089 rule 5). The two bodies differ only in
+/// the exit.
+#[test]
+fn a_loop_that_can_leave_early_states_its_trip_count_as_a_bound() {
+    let upfront = listed(
+        "let xs = vec([5, 3, 9]); let at = 0; for i in 0u64..xs.len() { at = at + xs[i]; } at",
+        Ty::I64,
+    );
+    let early = listed(
+        "let xs = vec([5, 3, 9]); let at = 0; for i in 0u64..xs.len() { if xs[i] == 9 { at = i as i64; break; }; } at",
+        Ty::I64,
+    );
+    let named = |listing: &str| -> String {
+        let lines = cost_lines(listing);
+        let [line] = lines.as_slice() else {
+            panic!("one cost line:\n{listing}")
+        };
+        let Some((_, named)) = line.split_once(", n ") else {
+            panic!("the loop splits and names its trip count:\n{listing}")
+        };
+        named.to_string()
+    };
+    assert!(
+        upfront.with_costs.contains("control upfront"),
+        "{}",
+        upfront.with_costs
+    );
+    assert!(
+        named(&upfront.with_costs).starts_with("= "),
+        "{}",
+        upfront.with_costs
+    );
+    assert!(
+        early.with_costs.contains("control chained through "),
+        "{}",
+        early.with_costs
+    );
+    assert!(
+        named(&early.with_costs).starts_with("≤ "),
+        "{}",
+        early.with_costs
+    );
+}

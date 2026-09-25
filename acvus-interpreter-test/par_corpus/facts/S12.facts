@@ -4,4 +4,4 @@ for slice(r2) -> L1 else L2 stages [L1, L5, L6, L7]
 // L6: free {unwrap_variant}
 // L7: cycle Carried(r4) any_order law(Op(Add) exact commutative) {+}
 // control chained through L5
-// cost W=8 O=18293 split when n > 73172, n = len(r2)
+// cost W=8 O=18293 split when n > 73172, n ≤ len(r2)

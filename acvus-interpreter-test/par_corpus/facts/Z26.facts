@@ -2,4 +2,4 @@ for slice(r7) -> L1 else L6 stages [L1, L5]
 // L1: free {take, assign, ref, take, const}
 // L5: cycle Order(r10)+Carried(r11)+Control in_order {spawn print, +, eval, branch}
 // control chained through L5
-// cost W=12 O=18281 split when n > 48750, n = len(r7)
+// cost W=12 O=18281 split when n > 48750, n ≤ len(r7)

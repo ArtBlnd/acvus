@@ -6,7 +6,7 @@ use crate::ir::{BinOp, Overflow, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
-use crate::analysis::cost::{CostTable, Costs, InPlace, LoopCost};
+use crate::analysis::cost::{CostTable, Costs, InPlace, LoopCost, TripCount};
 use crate::analysis::loop_deps::{
     Accumulator, BodyDeps, CallIdentity, Control, Cycle, Law, LawOp, LoopDeps, Member,
     Order, Placement, Storage, Token,
@@ -177,16 +177,22 @@ fn fmt_loop_facts(
 }
 
 /// `cost W=4 O=4096 split when n > 32768, n = len(r3)` (RFC-0066 rule 8),
-/// or `cost in place: no stage runs apart`.
+/// with `n ≤ len(r3)` for a loop that can leave early (RFC-0089 rule 5), or
+/// `cost in place: no stage runs apart`.
 fn fmt_cost(cost: LoopCost, trip: Option<String>) -> String {
     match cost {
         LoopCost::Split {
             work,
             overhead,
             threshold,
+            trips,
         } => {
+            let relation = match trips {
+                TripCount::Exact => "=",
+                TripCount::Bound => "≤",
+            };
             let named = match trip {
-                Some(term) => format!(", n = {term}"),
+                Some(term) => format!(", n {relation} {term}"),
                 None => String::new(),
             };
             format!("cost W={work} O={overhead} split when n > {threshold}{named}")

@@ -4,4 +4,4 @@ for slice(r4) -> L1 else L2 stages [L1, L5, L6, L7]
 // L6: free {unwrap_variant}
 // L7: cycle Storage(r5) in_order law(Fold(r5, #7) exact) {ref, call push}
 // control chained through L5
-// cost W=8 O=18293 split when n > 73172, n = len(r4)
+// cost W=8 O=18293 split when n > 73172, n ≤ len(r4)

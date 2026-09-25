@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::loop_deps::{LoopDeps, Order, Placement, StageBlocks};
+use crate::analysis::loop_deps::{Control, LoopDeps, Order, Placement, StageBlocks};
 use crate::analysis::loops::{Invariants, LoopId, LoopKind, LoopNest, Term, Trip};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, ValueId};
@@ -53,6 +53,16 @@ pub enum InPlace {
     NoWork,
 }
 
+/// What the trip count `n` a split compares is (RFC-0089 rule 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TripCount {
+    /// Every exit is the header's: the loop runs `n` iterations.
+    Exact,
+    /// The loop can leave early, from its body: it runs at most `n`
+    /// iterations, and work a split spends past the exit is discarded.
+    Bound,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopCost {
     /// The loop splits when its trip count `n` satisfies `n > threshold`.
@@ -60,6 +70,7 @@ pub enum LoopCost {
         work: u64,
         overhead: u128,
         threshold: u128,
+        trips: TripCount,
     },
     InPlace(InPlace),
 }
@@ -136,7 +147,8 @@ impl<'a> Costs<'a> {
     /// every cycle is `Disjoint`, whose token is absent (RFC-0066 rule 10).
     /// A stage holding an `AnyOrder` or `InOrder` cycle, or a cycle that
     /// crosses into another stage, runs in its order and is not counted.
-    /// With no stage that runs apart the loop runs in place.
+    /// With no stage that runs apart the loop runs in place. A loop whose
+    /// control is chained can leave early, so its trip count is a bound.
     pub fn of_loop(&self, deps: &LoopDeps) -> LoopCost {
         let stages = deps.membership.stages();
         let judged = deps.judge(self.cfg, self.laws);
@@ -166,10 +178,15 @@ impl<'a> Costs<'a> {
             Some(bound) => bound.div_ceil(u128::from(work)),
             None => BEYOND_EVERY_TRIP_COUNT,
         };
+        let trips = match deps.control {
+            Control::Upfront => TripCount::Exact,
+            Control::Chained { .. } => TripCount::Bound,
+        };
         LoopCost::Split {
             work,
             overhead,
             threshold,
+            trips,
         }
     }
 
