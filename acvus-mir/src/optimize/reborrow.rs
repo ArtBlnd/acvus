@@ -103,6 +103,9 @@ fn terminator_uses_mut(t: &mut Terminator) -> Vec<&mut ValueId> {
             .into_iter()
             .chain(exit_args.iter_mut())
             .collect(),
+        Terminator::While {
+            cond, exit_args, ..
+        } => std::iter::once(cond).chain(exit_args.iter_mut()).collect(),
         Terminator::Switch { tag, arms, default } => std::iter::once(tag)
             .chain(arms.iter_mut().flat_map(|(_, _, args)| args.iter_mut()))
             .chain(default.iter_mut().flat_map(|(_, args)| args.iter_mut()))

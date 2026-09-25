@@ -734,6 +734,7 @@ impl<'a> Domain<'a> {
             | InstKind::Diamond { .. }
             | InstKind::Switch { .. }
             | InstKind::For { .. }
+            | InstKind::While { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge => {
                 unreachable!("a block's instructions hold no control flow: {kind:?}")
@@ -1143,6 +1144,22 @@ impl<'a> Domain<'a> {
                 };
                 push(block_of(then_label), then_args, Supplied::Nothing, decided(true));
                 push(block_of(else_label), else_args, Supplied::Nothing, decided(false));
+            }
+            Terminator::While {
+                cond,
+                stages,
+                exit,
+                exit_args,
+            } => {
+                let decided = |taken| {
+                    Some(Decision {
+                        cond: *cond,
+                        taken,
+                    })
+                };
+                let body = stages.body();
+                push(block_of(&body), &[], Supplied::Nothing, decided(true));
+                push(block_of(exit), exit_args, Supplied::Nothing, decided(false));
             }
             Terminator::Switch { arms, default, .. } => {
                 for (_, label, args) in arms {

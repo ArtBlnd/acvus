@@ -39,62 +39,124 @@
 //! before it does not decline: a trap is not ordered with effects
 //! (RFC-0048 rule 8).
 
-use acvus_ast::{Literal, SuffixedInt};
+//!
+//! RFC-0094 adds four spellings of the same traversal. `i <= n` is the
+//! range `b..n + 1` where the interval domain puts `n` below the width's
+//! maximum, the `+ 1` the pass's own wrapping one. `i > n` whose back edges
+//! send `i − 1` is `Range { at: n, hi: b }`. A word-constant step `s ≠ 1`
+//! compared in the direction it moves is a range over a trip count written
+//! above the header: `⌈d / |s|⌉` of the distance `d` read unsigned at the
+//! width, as `(d − 1) / |s| + 1` where the counter has not passed the bound
+//! and zero where it has, so nothing there wraps or traps. `i + c₀ < n` is
+//! `b + c₀ .. n`, the start the header's first `i + c₀` moved to the entry;
+//! the `i + c₀` itself moves to the head of the body, where it can no
+//! longer trap, since its value there is at most `n`. A `Ref` the header
+//! makes of a slot no instruction of the loop writes, lends `&mut`, or lends
+//! to a call that reaches it is a deterministic step. In every form `i`
+//! stays a header parameter advanced by its own step, which keeps its trap,
+//! and IV canonicalization reads it from the counter (RFC-0066 rule 7).
 
-use crate::ir::{BinOp, Overflow};
-use crate::laws::LawTable;
+use acvus_ast::{Literal, SuffixedInt};
+use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::analysis::affine::{AffineValues, Derivation};
+use crate::analysis::affine::{AffineValues, Derivation, Operand as AffineOperand};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
+use crate::analysis::interval::constant_bounds_on_entry;
+use crate::analysis::loans::Loans;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
-use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::analysis::targets::{effect, slots_lent_mutably, touched_slots};
+use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
 use crate::ir::{
-    Callee, ExitTrip, ForSource, Inst, InstKind, Label, Stages, ValOrigin, ValueId,
+    BinOp, Callee, Checked, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, RefTarget,
+    Stages, ValOrigin, ValueId,
 };
+use crate::laws::{LawTable, Reaches};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::{Mutability, Ty};
+use crate::ty::{CastTy, IntTy, Mutability, Ty};
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(interner: &Interner, cfg: &mut CfgBody, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
     let invariants = Invariants::of(cfg);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
     let preds = cfg.predecessors();
     let literals = const_literals(cfg);
-    let counted: Vec<Counted> = nest
-        .iter()
-        .filter_map(|(_, loop_)| {
-            Recognizer {
-                cfg,
-                loop_,
-                invariants: &invariants,
-                laws,
-                preds: &preds,
-                literals: &literals,
-            }
-            .counted()
-        })
-        .collect();
+    let loans = Loans::build(cfg);
+    let mut counted: Vec<Counted> = Vec::new();
+    let mut pulls: Vec<Pull> = Vec::new();
+    for (_, loop_) in nest.iter() {
+        let recognizer = Recognizer {
+            cfg,
+            loop_,
+            invariants: &invariants,
+            laws,
+            loans: &loans,
+            preds: &preds,
+            literals: &literals,
+        };
+        if let Some(found) = recognizer.counted() {
+            counted.push(found);
+        } else if let Some(found) = recognizer.pull(interner) {
+            pulls.push(found);
+        }
+    }
+    let mut labels = LabelFactory::of(cfg);
     for loop_ in counted {
+        loop_.apply(cfg, &mut labels);
+    }
+    for loop_ in pulls {
         loop_.apply(cfg);
     }
 }
 
+/// A pull loop (RFC-0089 rule 1): the header lends one storage `&mut` to
+/// an extern `next` (D10), tests the `Option` it returns, and branches on
+/// that test to the body or out of the loop, which leaves nowhere else.
+/// No instruction outside the header touches the storage or reads through
+/// a loan of it, so no cycle through the pull reaches the body.
+struct Pull {
+    header: Label,
+    cond: ValueId,
+    body: Label,
+    body_args: Vec<ValueId>,
+    exit: Label,
+    exit_args: Vec<ValueId>,
+}
+
 enum Bound {
     Outside(ValueId),
-    Computed { steps: Vec<Step>, value: ValueId },
+    Computed { value: ValueId },
+}
+
+impl Bound {
+    fn value(&self) -> ValueId {
+        match self {
+            Self::Outside(value) | Self::Computed { value } => *value,
+        }
+    }
 }
 
 struct Step {
     header_position: usize,
     dst: ValueId,
     kind: StepKind,
+    emit: Emit,
+}
+
+/// How a step reaches the entering block: the header's instruction moved
+/// there, or, for RFC-0094 rule 4's start, a copy of the header's `i + c₀`
+/// reading the entry value `b` for `i`, the original moving to the body.
+#[derive(Clone, Copy)]
+enum Emit {
+    Move,
+    Start,
 }
 
 enum StepKind {
     Word,
+    Borrow,
     Arith(Arith),
     Call,
 }
@@ -105,7 +167,7 @@ impl StepKind {
     /// `unwrap` is `pure` and panics.
     fn traps(&self) -> bool {
         match self {
-            Self::Word => false,
+            Self::Word | Self::Borrow => false,
             Self::Arith(op) => op.traps(),
             Self::Call => true,
         }
@@ -158,21 +220,93 @@ impl Arith {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Compare {
+    Below,
+    AtMost,
+    Above,
+}
+
+#[derive(Clone, Copy)]
 struct Condition {
-    counter: ValueId,
+    compare: Compare,
+    compared: ValueId,
     bound: ValueId,
 }
 
+/// RFC-0094 rule 4's `i + c₀`, which the header computes and compares.
+#[derive(Clone, Copy)]
+struct Sum {
+    value: ValueId,
+    header_position: usize,
+    offset: ValueId,
+}
+
+struct HeaderSum {
+    position: usize,
+    left: ValueId,
+    right: ValueId,
+}
+
+/// The header parameter the compared value counts with.
+struct Compared {
+    counter: ValueId,
+    sum: Option<Sum>,
+}
+
+struct Counting {
+    init: ValueId,
+    form: Form,
+}
+
+struct SplitSum {
+    counter: ValueId,
+    offset: ValueId,
+}
+
+/// Which spelling of a counted loop the header is, and what its range is.
+#[derive(Clone, Copy)]
+enum Form {
+    /// RFC-0081: `i < n` stepping by one, the range `b..n`.
+    UpTo,
+    /// RFC-0094 rule 1: `i <= n` stepping by one, `b..n + 1`.
+    Through,
+    /// RFC-0094 rule 2: `i > n` stepping by `− 1`, `Range { at: n, hi: b }`.
+    DownTo,
+    /// RFC-0094 rule 3: a word-constant step compared in the direction it
+    /// moves, a range over the trip count.
+    Stepped { ascending: bool, stride: u64 },
+    /// RFC-0094 rule 4: `i + c₀ < n` stepping by one, `b + c₀ .. n`.
+    Offset(Sum),
+}
+
+struct Recognized {
+    form: Form,
+    counter: ValueId,
+    init: ValueId,
+    bound: ValueId,
+    width: IntTy,
+    step_may_trap: bool,
+}
+
 struct Counted {
-    header: BlockIdx,
-    entering: BlockIdx,
+    header: Label,
+    entering: Label,
     body: Label,
-    body_block: BlockIdx,
     body_args: Vec<ValueId>,
     exit: Label,
     exit_args: Vec<ValueId>,
-    at: ValueId,
+    init: ValueId,
+    counter: ValueId,
+    width: IntTy,
     hi: Bound,
+    steps: Vec<Step>,
+    form: Form,
+    /// The value every back edge sends the counter, where the program's
+    /// own step can leave the width on the last iteration: the compare that
+    /// kept it live is gone, so a `Check` at its place keeps its trap
+    /// (RFC-0037 rule 3).
+    kept_step: Option<ValueId>,
 }
 
 struct Recognizer<'a> {
@@ -180,6 +314,7 @@ struct Recognizer<'a> {
     loop_: &'a Loop,
     invariants: &'a Invariants,
     laws: &'a LawTable,
+    loans: &'a Loans<'a>,
     preds: &'a FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>,
     literals: &'a FxHashMap<ValueId, Literal>,
 }
@@ -216,54 +351,274 @@ impl Recognizer<'_> {
             return None;
         }
 
-        let condition = self.condition(header, *cond)?;
         let affine = AffineValues::of(self.cfg, self.loop_, self.invariants, self.laws);
-        let Some(Derivation::Carried { init: at, step }) =
-            affine.get(condition.counter).map(|a| &a.derivation)
-        else {
-            return None;
-        };
-        if !step.invariance.above().is_some_and(|step| self.is_one(step)) {
-            return None;
-        }
-        let hi = self.bound(condition.bound)?;
-        if matches!(hi, Bound::Computed { .. }) && !self.only_enters_the_header(entering) {
-            return None;
-        }
-
-        let ty = self.cfg.val_types[&condition.counter].clone();
-        if !matches!(ty, Ty::Int(_))
-            || self.cfg.val_types[&condition.bound] != ty
-            || self.cfg.val_types[at] != ty
+        let recognized = self
+            .conditions(header, *cond)
+            .into_iter()
+            .find_map(|condition| self.form(&affine, condition, body_block))?;
+        let ty = Ty::Int(recognized.width);
+        if self.cfg.val_types[&recognized.bound] != ty
+            || self.cfg.val_types[&recognized.init] != ty
         {
             return None;
         }
 
+        let mut steps: Vec<Step> = Vec::new();
+        let hi = match self.evaluate(recognized.bound, &mut steps)? {
+            Operand::Outside(value) => Bound::Outside(value),
+            Operand::Step(value) => Bound::Computed { value },
+        };
+        if let Form::Offset(sum) = recognized.form {
+            self.evaluate(sum.offset, &mut steps)?;
+            if !self.read_by_test_and_body_alone(sum.value, *cond) {
+                return None;
+            }
+            steps.push(Step {
+                header_position: sum.header_position,
+                dst: sum.value,
+                kind: StepKind::Arith(Arith::of(self.op_at(header, sum.header_position)?)?),
+                emit: Emit::Start,
+            });
+        }
+        if !self.moves_ahead_unobserved(&steps) {
+            return None;
+        }
+        let writes_above = !steps.is_empty()
+            || matches!(
+                recognized.form,
+                Form::Through | Form::Stepped { .. } | Form::Offset(_)
+            );
+        if writes_above && !self.only_enters_the_header(entering) {
+            return None;
+        }
+        steps.sort_by_key(|step| step.header_position);
+        let counter_index = self.cfg.blocks[header.0]
+            .params
+            .iter()
+            .position(|param| *param == recognized.counter)?;
+        let kept_step = match recognized.step_may_trap {
+            true => Some(natural.back_arg(self.cfg, counter_index)?),
+            false => None,
+        };
+
         Some(Counted {
-            header,
-            entering,
+            header: self.cfg.blocks[header.0].label,
+            entering: self.cfg.blocks[entering.0].label,
             body: *then_label,
-            body_block,
             body_args: then_args.clone(),
             exit: *else_label,
             exit_args: else_args.clone(),
-            at: *at,
+            init: recognized.init,
+            counter: recognized.counter,
+            width: recognized.width,
             hi,
+            steps,
+            form: recognized.form,
+            kept_step,
         })
     }
 
-    fn bound(&self, value: ValueId) -> Option<Bound> {
-        let mut steps = Vec::new();
-        Some(match self.evaluate(value, &mut steps)? {
-            Operand::Outside(value) => Bound::Outside(value),
-            Operand::Step(value) => {
-                if !self.moves_ahead_unobserved(&steps) {
-                    return None;
+    fn conditions(&self, header: BlockIdx, cond: ValueId) -> Vec<Condition> {
+        let test = self.cfg.blocks[header.0]
+            .insts
+            .iter()
+            .find(|inst| inst_info::defs(&inst.kind).contains(&cond));
+        let Some(Inst {
+            kind: InstKind::BinOp {
+                op, left, right, ..
+            },
+            ..
+        }) = test
+        else {
+            return Vec::new();
+        };
+        let reading = |compare, compared: &ValueId, bound: &ValueId| Condition {
+            compare,
+            compared: *compared,
+            bound: *bound,
+        };
+        match op {
+            BinOp::Lt => vec![
+                reading(Compare::Below, left, right),
+                reading(Compare::Above, right, left),
+            ],
+            BinOp::Gt => vec![
+                reading(Compare::Above, left, right),
+                reading(Compare::Below, right, left),
+            ],
+            BinOp::Lte => vec![reading(Compare::AtMost, left, right)],
+            BinOp::Gte => vec![reading(Compare::AtMost, right, left)],
+            _ => Vec::new(),
+        }
+    }
+
+    fn form(
+        &self,
+        affine: &AffineValues,
+        condition: Condition,
+        body_block: BlockIdx,
+    ) -> Option<Recognized> {
+        let Compared { counter, sum } = self.compared(condition.compared)?;
+        let Ty::Int(width) = self.cfg.val_types[&counter] else {
+            return None;
+        };
+        let Counting { init, form } = match (&affine.get(counter)?.derivation, sum) {
+            (Derivation::Carried { init, step }, Some(sum))
+                if condition.compare == Compare::Below && self.is_one(step) =>
+            {
+                Counting {
+                    init: *init,
+                    form: Form::Offset(sum),
                 }
-                steps.sort_by_key(|step| step.header_position);
-                Bound::Computed { steps, value }
+            }
+            (Derivation::Carried { init, step }, None) if self.is_one(step) => Counting {
+                init: *init,
+                form: match condition.compare {
+                    Compare::Below => Form::UpTo,
+                    Compare::AtMost if self.below_the_maximum(condition.bound, width, body_block) => {
+                        Form::Through
+                    }
+                    Compare::AtMost | Compare::Above => return None,
+                },
+            },
+            (Derivation::Carried { init, step }, None) => {
+                let step = width.read(self.step_word(step)? as u64);
+                let ascending = match condition.compare {
+                    Compare::Below if step > 1 => true,
+                    Compare::Above if step < 0 => false,
+                    Compare::Below | Compare::Above | Compare::AtMost => return None,
+                };
+                Counting {
+                    init: *init,
+                    form: Form::Stepped {
+                        ascending,
+                        stride: u64::try_from(step.unsigned_abs()).ok()?,
+                    },
+                }
+            }
+            (Derivation::CountsDown { init, .. }, None) if condition.compare == Compare::Above => {
+                Counting {
+                    init: *init,
+                    form: Form::DownTo,
+                }
+            }
+            _ => return None,
+        };
+        let step_may_trap = match form {
+            Form::UpTo | Form::Through | Form::DownTo => false,
+            Form::Stepped { .. } => true,
+            Form::Offset(sum) => {
+                let offset = self.word_of(sum.offset)?.desugared();
+                let Literal::Int(offset) = offset else {
+                    return None;
+                };
+                width.read(offset as u64) < 0
+            }
+        };
+        Some(Recognized {
+            form,
+            counter,
+            init,
+            bound: condition.bound,
+            width,
+            step_may_trap,
+        })
+    }
+
+    /// The compared value is a header parameter, or the header's integer
+    /// `+` of one and a word constant (RFC-0094 rule 4).
+    fn compared(&self, value: ValueId) -> Option<Compared> {
+        let is_param = |value: ValueId| {
+            self.cfg.blocks[self.loop_.natural.header.0]
+                .params
+                .contains(&value)
+        };
+        if is_param(value) {
+            return Some(Compared {
+                counter: value,
+                sum: None,
+            });
+        }
+        let HeaderSum {
+            position,
+            left,
+            right,
+        } = self.header_sum(value)?;
+        let SplitSum { counter, offset } = match (is_param(left), is_param(right)) {
+            (true, false) => SplitSum {
+                counter: left,
+                offset: right,
+            },
+            (false, true) => SplitSum {
+                counter: right,
+                offset: left,
+            },
+            (true, true) | (false, false) => return None,
+        };
+        self.word_of(offset)?;
+        Some(Compared {
+            counter,
+            sum: Some(Sum {
+                value,
+                header_position: position,
+                offset,
+            }),
+        })
+    }
+
+    fn header_sum(&self, value: ValueId) -> Option<HeaderSum> {
+        let header = self.loop_.natural.header;
+        self.cfg.blocks[header.0]
+            .insts
+            .iter()
+            .enumerate()
+            .find_map(|(position, inst)| match inst.kind {
+                InstKind::BinOp {
+                    dst,
+                    op: BinOp::Add(_),
+                    left,
+                    right,
+                } if dst == value => Some(HeaderSum {
+                    position,
+                    left,
+                    right,
+                }),
+                _ => None,
+            })
+    }
+
+    fn op_at(&self, block: BlockIdx, position: usize) -> Option<BinOp> {
+        match self.cfg.blocks[block.0].insts[position].kind {
+            InstKind::BinOp { op, .. } => Some(op),
+            _ => None,
+        }
+    }
+
+    fn read_by_test_and_body_alone(&self, value: ValueId, cond: ValueId) -> bool {
+        let natural = &self.loop_.natural;
+        let header = natural.header;
+        self.cfg.blocks.iter().enumerate().all(|(at, block)| {
+            let at = BlockIdx(at);
+            let reads = block
+                .insts
+                .iter()
+                .filter(|inst| inst_info::uses(&inst.kind).contains(&value))
+                .map(|inst| inst_info::defs(&inst.kind).into_vec())
+                .collect::<Vec<_>>();
+            let terminator_reads = inst_info::terminator_uses(&block.terminator).contains(&value);
+            match (at == header, natural.contains(at)) {
+                (true, _) => reads.iter().all(|defs| defs[..] == [cond]) && !terminator_reads,
+                (false, true) => true,
+                (false, false) => reads.is_empty() && !terminator_reads,
             }
         })
+    }
+
+    fn below_the_maximum(&self, bound: ValueId, width: IntTy, at: BlockIdx) -> bool {
+        let [bounds] = constant_bounds_on_entry(self.cfg, self.laws, at, &[bound])[..] else {
+            return false;
+        };
+        bounds.hi.is_some_and(|hi| hi < width.max())
     }
 
     fn evaluate(&self, value: ValueId, steps: &mut Vec<Step>) -> Option<Operand> {
@@ -284,6 +639,12 @@ impl Recognizer<'_> {
                 Invariant::Word(_) => StepKind::Word,
                 Invariant::Outside(_) => return None,
             },
+            InstKind::Ref {
+                dst,
+                target,
+                mutability: Mutability::Shared,
+                ..
+            } if self.left_alone(target, *dst) => StepKind::Borrow,
             InstKind::BinOp {
                 op, left, right, ..
             } if matches!(self.cfg.val_types[&value], Ty::Int(_)) => {
@@ -309,6 +670,7 @@ impl Recognizer<'_> {
             header_position,
             dst: value,
             kind,
+            emit: Emit::Move,
         });
         Some(Operand::Step(value))
     }
@@ -321,12 +683,68 @@ impl Recognizer<'_> {
                 }
                 match self.evaluate(arg, steps)? {
                     outside @ Operand::Outside(_) => Some(outside),
-                    Operand::Step(_) => None,
+                    Operand::Step(step) => steps
+                        .iter()
+                        .any(|found| found.dst == step && matches!(found.kind, StepKind::Borrow))
+                        .then_some(Operand::Step(step)),
                 }
             }
             ty if ty.is_scalar() => self.evaluate(arg, steps),
             _ => None,
         }
+    }
+
+    /// RFC-0094 rule 5: the slot a header `Ref` names is one no instruction
+    /// of the loop writes, lends `&mut`, or lends to a call that reaches it
+    /// (RFC-0082 rule 7), and no `for` of the loop traverses `&mut`. A call
+    /// the borrow itself is lent to reads through a shared reference and is
+    /// a step of the bound, which rule 3 of RFC-0081 decides.
+    fn left_alone(&self, target: &RefTarget, borrow: ValueId) -> bool {
+        let Some(slot) = inst_info::storage(target) else {
+            return false;
+        };
+        let lends = |value: &ValueId| {
+            *value != borrow
+                && self
+                    .loans
+                    .holds(*value)
+                    .any(|loan| loan.storage.slot() == Some(slot))
+        };
+        self.loop_.natural.blocks().all(|block| {
+            let held = &self.cfg.blocks[block.0];
+            let insts_leave_it = held.insts.iter().all(|inst| {
+                let kind = &inst.kind;
+                !effect(self.loans, kind).writes.contains(&slot)
+                    && !slots_lent_mutably(self.loans, kind).contains(&slot)
+                    && !self.call_reaches(kind, &lends)
+            });
+            let traversal_leaves_it = match &held.terminator {
+                Terminator::For {
+                    source: ForSource::SliceMut(source),
+                    ..
+                } => !lends(source),
+                _ => true,
+            };
+            insts_leave_it && traversal_leaves_it
+        })
+    }
+
+    fn call_reaches(&self, kind: &InstKind, lends: &impl Fn(&ValueId) -> bool) -> bool {
+        let (InstKind::FunctionCall { callee, args, .. } | InstKind::Spawn { callee, args, .. }) =
+            kind
+        else {
+            return false;
+        };
+        let reached = |param: usize| match callee {
+            Callee::Extern { .. } => match self.laws.reaches_of(callee) {
+                Reaches::Lent => true,
+                Reaches::Places(declared) => declared.iter().any(|place| place.param == param),
+            },
+            Callee::Direct(_) | Callee::Indirect(_) => true,
+        };
+        args.iter()
+            .enumerate()
+            .any(|(param, arg)| lends(arg) && reached(param))
     }
 
     fn moves_ahead_unobserved(&self, steps: &[Step]) -> bool {
@@ -353,33 +771,6 @@ impl Recognizer<'_> {
         )
     }
 
-    fn condition(&self, header: BlockIdx, cond: ValueId) -> Option<Condition> {
-        self.cfg.blocks[header.0]
-            .insts
-            .iter()
-            .find_map(|inst| match inst.kind {
-                InstKind::BinOp {
-                    dst,
-                    op: BinOp::Lt,
-                    left,
-                    right,
-                } if dst == cond => Some(Condition {
-                    counter: left,
-                    bound: right,
-                }),
-                InstKind::BinOp {
-                    dst,
-                    op: BinOp::Gt,
-                    left,
-                    right,
-                } if dst == cond => Some(Condition {
-                    counter: right,
-                    bound: left,
-                }),
-                _ => None,
-            })
-    }
-
     fn only_from_header(&self, block: BlockIdx) -> bool {
         match self.preds.get(&block) {
             Some(preds) => preds[..] == [self.loop_.natural.header],
@@ -404,15 +795,551 @@ impl Recognizer<'_> {
             })
     }
 
-    fn is_one(&self, step: &Invariant) -> bool {
-        let literal = match step {
-            Invariant::Word(literal) => Some(literal),
-            Invariant::Outside(value) => self.literals.get(value),
+    fn word_of(&self, value: ValueId) -> Option<&Literal> {
+        match self.invariants.above(&self.loop_.natural, value)? {
+            Invariant::Word(_) | Invariant::Outside(_) => self.literals.get(&value),
+        }
+    }
+
+    fn step_word(&self, step: &AffineOperand) -> Option<i128> {
+        let literal = match step.invariance.above()? {
+            Invariant::Word(literal) => literal.clone(),
+            Invariant::Outside(value) => self.literals.get(value)?.clone(),
+        };
+        match literal.desugared() {
+            Literal::Int(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    fn is_one(&self, step: &AffineOperand) -> bool {
+        let literal = match step.invariance.above() {
+            Some(Invariant::Word(literal)) => Some(literal),
+            Some(Invariant::Outside(value)) => self.literals.get(value),
+            None => None,
         };
         matches!(
             literal,
             Some(Literal::Int(1) | Literal::IntOf(SuffixedInt { value: 1, .. }))
         )
+    }
+}
+
+impl Recognizer<'_> {
+    fn pull(&self, interner: &Interner) -> Option<Pull> {
+        let LoopKind::While = self.loop_.kind else {
+            return None;
+        };
+        let natural = &self.loop_.natural;
+        let header = natural.header;
+        let Terminator::JumpIf {
+            cond,
+            then_label,
+            then_args,
+            else_label,
+            else_args,
+        } = &self.cfg.blocks[header.0].terminator
+        else {
+            return None;
+        };
+        let body_block = self.cfg.label_to_block[then_label];
+        let exit_block = self.cfg.label_to_block[else_label];
+        if body_block == header
+            || !natural.contains(body_block)
+            || natural.contains(exit_block)
+            || !self.only_from_header(body_block)
+            || !self.leaves_only_from_header()
+        {
+            return None;
+        }
+        let [lend, pull, test] = &self.cfg.blocks[header.0].insts[..] else {
+            return None;
+        };
+        let InstKind::Ref {
+            dst: lent,
+            target,
+            mutability: Mutability::Mut,
+            ..
+        } = &lend.kind
+        else {
+            return None;
+        };
+        let InstKind::FunctionCall {
+            dst: pulled,
+            callee: Callee::Extern { id, .. },
+            args,
+            ..
+        } = &pull.kind
+        else {
+            return None;
+        };
+        let InstKind::TestVariant { dst, src, tag } = &test.kind else {
+            return None;
+        };
+        let storage = inst_info::storage(target)?;
+        let pulls = interner.resolve(id.name) == "next"
+            && args[..] == [*lent]
+            && matches!(self.cfg.val_types.get(pulled), Some(Ty::Option(_)))
+            && src == pulled
+            && interner.resolve(*tag) == "Some"
+            && dst == cond;
+        let lends_the_storage_alone = self
+            .loans
+            .names(*lent)
+            .iter()
+            .all(|loan| loan.storage.slot() == Some(storage));
+        if !pulls || !lends_the_storage_alone || self.touched_past_header(storage) {
+            return None;
+        }
+        Some(Pull {
+            header: self.cfg.blocks[header.0].label,
+            cond: *cond,
+            body: *then_label,
+            body_args: then_args.clone(),
+            exit: *else_label,
+            exit_args: else_args.clone(),
+        })
+    }
+
+    fn touched_past_header(&self, storage: ValueId) -> bool {
+        let natural = &self.loop_.natural;
+        let holds = |value: ValueId| {
+            self.loans
+                .holds(value)
+                .any(|loan| loan.storage.slot() == Some(storage))
+        };
+        natural
+            .blocks()
+            .filter(|block| *block != natural.header)
+            .any(|block| {
+                let held = &self.cfg.blocks[block.0];
+                held.insts.iter().any(|inst| {
+                    touched_slots(self.loans, &inst.kind).contains(&storage)
+                        || inst_info::uses(&inst.kind).into_iter().any(holds)
+                }) || inst_info::terminator_uses(&held.terminator)
+                    .into_iter()
+                    .any(holds)
+            })
+    }
+}
+
+impl Pull {
+    fn apply(self, cfg: &mut CfgBody) {
+        substitute_body_params(cfg, self.body, self.body_args);
+        let header = cfg.label_to_block[&self.header];
+        cfg.blocks[header.0].terminator = Terminator::While {
+            cond: self.cond,
+            stages: Stages::lowered(self.body),
+            exit: self.exit,
+            exit_args: self.exit_args,
+        };
+    }
+}
+
+impl Counted {
+    fn apply(self, cfg: &mut CfgBody, labels: &mut LabelFactory) {
+        let header = cfg.label_to_block[&self.header];
+        let entering = cfg.label_to_block[&self.entering];
+        let ty = Ty::Int(self.width);
+        let mut moved: Vec<Inst> = Vec::with_capacity(self.steps.len());
+        let mut start: Option<ValueId> = None;
+        for step in &self.steps {
+            let mut copied = cfg.blocks[header.0].insts[step.header_position].clone();
+            if let Emit::Start = step.emit {
+                let entry_start = fresh(cfg, &ty);
+                apply_subst(
+                    &mut copied.kind,
+                    &FxHashMap::from_iter([(self.counter, self.init)]),
+                );
+                let InstKind::BinOp { dst, .. } = &mut copied.kind else {
+                    panic!("rule 4's start copies the header's `i + c₀`, a `BinOp`")
+                };
+                *dst = entry_start;
+                start = Some(entry_start);
+            }
+            moved.push(copied);
+        }
+        let mut leaving: Vec<usize> = self
+            .steps
+            .iter()
+            .map(|step| step.header_position)
+            .collect();
+        leaving.sort_unstable();
+        let mut taken: FxHashMap<usize, Inst> = FxHashMap::default();
+        for position in leaving.into_iter().rev() {
+            taken.insert(position, cfg.blocks[header.0].insts.remove(position));
+        }
+        let into_body: Vec<Inst> = self
+            .steps
+            .iter()
+            .filter(|step| matches!(step.emit, Emit::Start))
+            .map(|step| {
+                taken
+                    .remove(&step.header_position)
+                    .expect("every step's instruction was taken out of the header")
+            })
+            .collect();
+        cfg.blocks[entering.0].insts.extend(moved);
+
+        let hi = self.hi.value();
+        let Traversal { source, counter } = match self.form {
+            Form::UpTo => Traversal {
+                source: ForSource::Range {
+                    at: self.init,
+                    hi,
+                },
+                counter: ty,
+            },
+            Form::Through => {
+                let one = constant(cfg, entering, &ty, 1);
+                let past = fresh(cfg, &ty);
+                push(
+                    cfg,
+                    entering,
+                    InstKind::BinOp {
+                        dst: past,
+                        op: BinOp::Add(Overflow::Wrap),
+                        left: hi,
+                        right: one,
+                    },
+                );
+                Traversal {
+                    source: ForSource::Range {
+                        at: self.init,
+                        hi: past,
+                    },
+                    counter: ty,
+                }
+            }
+            Form::DownTo => Traversal {
+                source: ForSource::Range {
+                    at: hi,
+                    hi: self.init,
+                },
+                counter: ty,
+            },
+            Form::Offset(_) => {
+                let Some(at) = start else {
+                    panic!("rule 4's range starts at the entry's copy of its `i + c₀`")
+                };
+                Traversal {
+                    source: ForSource::Range { at, hi },
+                    counter: ty,
+                }
+            }
+            Form::Stepped { ascending, stride } => {
+                let trip = TripCount {
+                    header: self.header,
+                    entering: self.entering,
+                    width: self.width,
+                    init: self.init,
+                    bound: hi,
+                    ascending,
+                    stride,
+                }
+                .write(cfg, labels);
+                Traversal {
+                    source: ForSource::Range {
+                        at: trip.zero,
+                        hi: trip.count,
+                    },
+                    counter: Ty::Int(unsigned(self.width)),
+                }
+            }
+        };
+
+        if let Some(next) = self.kept_step {
+            keep_step_trap(cfg, next);
+        }
+        substitute_body_params(cfg, self.body, self.body_args);
+        let body_block = cfg.label_to_block[&self.body];
+        let head = std::mem::take(&mut cfg.blocks[body_block.0].insts);
+        cfg.blocks[body_block.0].insts = into_body.into_iter().chain(head).collect();
+        let counter = fresh(cfg, &counter);
+        cfg.blocks[body_block.0].params.push(counter);
+        let header = cfg.label_to_block[&self.header];
+        cfg.blocks[header.0].terminator = Terminator::For {
+            source,
+            stages: Stages::lowered(self.body),
+            exit: self.exit,
+            exit_args: self.exit_args,
+            exit_trip: ExitTrip::Absent,
+        };
+    }
+}
+
+/// RFC-0094 rule 3's trip count, written between the entering block and
+/// the header: the entering block branches on whether `b` has passed `n`,
+/// one arm computes `(d − 1) / |s| + 1` from the distance `d` read unsigned
+/// at the width, the other zero, and the block they join passes the count
+/// and the range's start to the header.
+struct TripCount {
+    header: Label,
+    entering: Label,
+    width: IntTy,
+    init: ValueId,
+    bound: ValueId,
+    ascending: bool,
+    stride: u64,
+}
+
+struct Traversal {
+    source: ForSource,
+    counter: Ty,
+}
+
+struct Interval {
+    from: ValueId,
+    to: ValueId,
+}
+
+struct WrittenTrip {
+    zero: ValueId,
+    count: ValueId,
+}
+
+impl TripCount {
+    fn write(self, cfg: &mut CfgBody, labels: &mut LabelFactory) -> WrittenTrip {
+        let width = Ty::Int(self.width);
+        let unsigned_width = unsigned(self.width);
+        let unsigned = Ty::Int(unsigned_width);
+        let then_label = labels.fresh();
+        let else_label = labels.fresh();
+        let join = labels.fresh();
+        let entering = cfg.label_to_block[&self.entering];
+
+        let before = fresh(cfg, &Ty::Bool);
+        let Interval { from, to } = match self.ascending {
+            true => Interval {
+                from: self.init,
+                to: self.bound,
+            },
+            false => Interval {
+                from: self.bound,
+                to: self.init,
+            },
+        };
+        push(
+            cfg,
+            entering,
+            InstKind::BinOp {
+                dst: before,
+                op: BinOp::Lt,
+                left: from,
+                right: to,
+            },
+        );
+        let Terminator::Jump { label, args } = std::mem::replace(
+            &mut cfg.blocks[entering.0].terminator,
+            Terminator::Diamond {
+                cond: before,
+                then_label,
+                then_args: Vec::new(),
+                else_label,
+                else_args: Vec::new(),
+                join,
+            },
+        ) else {
+            panic!("the recognizer admits a computed count only where the entry jumps to the header")
+        };
+        assert_eq!(label, self.header, "the entering block jumps to the header");
+
+        let mut ahead = Vec::new();
+        let distance = fresh(cfg, &width);
+        ahead.push(InstKind::BinOp {
+            dst: distance,
+            op: BinOp::Sub(Overflow::Wrap),
+            left: to,
+            right: from,
+        });
+        let read = match width == unsigned {
+            true => distance,
+            false => {
+                let read = fresh(cfg, &unsigned);
+                ahead.push(InstKind::Cast {
+                    dst: read,
+                    src: distance,
+                    to: CastTy::Int(unsigned_width),
+                });
+                read
+            }
+        };
+        let one = fresh(cfg, &unsigned);
+        ahead.push(InstKind::Const {
+            dst: one,
+            value: Literal::Int(1),
+        });
+        let short = fresh(cfg, &unsigned);
+        ahead.push(InstKind::BinOp {
+            dst: short,
+            op: BinOp::Sub(Overflow::Wrap),
+            left: read,
+            right: one,
+        });
+        let stride = fresh(cfg, &unsigned);
+        ahead.push(InstKind::Const {
+            dst: stride,
+            value: Literal::Int(i128::from(self.stride)),
+        });
+        let quotient = fresh(cfg, &unsigned);
+        ahead.push(InstKind::BinOp {
+            dst: quotient,
+            op: BinOp::Div,
+            left: short,
+            right: stride,
+        });
+        let count_ahead = fresh(cfg, &unsigned);
+        ahead.push(InstKind::BinOp {
+            dst: count_ahead,
+            op: BinOp::Add(Overflow::Wrap),
+            left: quotient,
+            right: one,
+        });
+
+        let none = fresh(cfg, &unsigned);
+        let count = fresh(cfg, &unsigned);
+        let zero = fresh(cfg, &unsigned);
+        let blocks = [
+            Block {
+                label: then_label,
+                params: Vec::new(),
+                insts: ahead.into_iter().map(inst).collect(),
+                terminator: Terminator::Jump {
+                    label: join,
+                    args: vec![count_ahead],
+                },
+            },
+            Block {
+                label: else_label,
+                params: Vec::new(),
+                insts: vec![inst(InstKind::Const {
+                    dst: none,
+                    value: Literal::Int(0),
+                })],
+                terminator: Terminator::Jump {
+                    label: join,
+                    args: vec![none],
+                },
+            },
+            Block {
+                label: join,
+                params: vec![count],
+                insts: vec![inst(InstKind::Const {
+                    dst: zero,
+                    value: Literal::Int(0),
+                })],
+                terminator: Terminator::Jump { label, args },
+            },
+        ];
+        let header = cfg.label_to_block[&self.header];
+        let tail = cfg.blocks.split_off(header.0);
+        cfg.blocks.extend(blocks);
+        cfg.blocks.extend(tail);
+        cfg.label_to_block = cfg
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(at, block)| (block.label, BlockIdx(at)))
+            .collect();
+        WrittenTrip { zero, count }
+    }
+}
+
+/// A `Check` of the program's step that defines `next`, written at its
+/// place.
+fn keep_step_trap(cfg: &mut CfgBody, next: ValueId) {
+    let found = cfg.blocks.iter().enumerate().find_map(|(block, held)| {
+        held.insts
+            .iter()
+            .position(|inst| inst_info::defs(&inst.kind).contains(&next))
+            .map(|at| (BlockIdx(block), at))
+    });
+    let Some((block, at)) = found else {
+        panic!("{next:?} is the counter's step, which an instruction of the loop defines")
+    };
+    let step = &cfg.blocks[block.0].insts[at];
+    let InstKind::BinOp {
+        op, left, right, ..
+    } = step.kind
+    else {
+        panic!("the counter's step is the `BinOp` `analysis::affine` read, not {step:?}")
+    };
+    let Some(op) = Checked::of_trapping(op) else {
+        return;
+    };
+    let check = Inst {
+        span: step.span,
+        kind: InstKind::Check { op, left, right },
+    };
+    cfg.blocks[block.0].insts.insert(at, check);
+}
+
+fn unsigned(width: IntTy) -> IntTy {
+    match width {
+        IntTy::I8 | IntTy::U8 => IntTy::U8,
+        IntTy::I16 | IntTy::U16 => IntTy::U16,
+        IntTy::I32 | IntTy::U32 => IntTy::U32,
+        IntTy::I64 | IntTy::U64 => IntTy::U64,
+    }
+}
+
+fn inst(kind: InstKind) -> Inst {
+    Inst {
+        span: acvus_ast::Span::ZERO,
+        kind,
+    }
+}
+
+fn push(cfg: &mut CfgBody, block: BlockIdx, kind: InstKind) {
+    cfg.blocks[block.0].insts.push(inst(kind));
+}
+
+fn constant(cfg: &mut CfgBody, block: BlockIdx, ty: &Ty, value: i128) -> ValueId {
+    let dst = fresh(cfg, ty);
+    push(
+        cfg,
+        block,
+        InstKind::Const {
+            dst,
+            value: Literal::Int(value),
+        },
+    );
+    dst
+}
+
+fn substitute_body_params(cfg: &mut CfgBody, body: Label, passed: Vec<ValueId>) {
+    let body_block = cfg.label_to_block[&body];
+    let params = std::mem::take(&mut cfg.blocks[body_block.0].params);
+    let subst: FxHashMap<ValueId, ValueId> = params.into_iter().zip(passed).collect();
+    for block in &mut cfg.blocks {
+        for inst in &mut block.insts {
+            apply_subst(&mut inst.kind, &subst);
+        }
+        apply_subst_terminator(&mut block.terminator, &subst);
+    }
+}
+
+struct LabelFactory {
+    next: u32,
+}
+
+impl LabelFactory {
+    fn of(cfg: &CfgBody) -> Self {
+        let next = cfg
+            .blocks
+            .iter()
+            .map(|block| block.label)
+            .filter(|label| *label != ENTRY_LABEL)
+            .map(|label| label.0 + 1)
+            .max()
+            .unwrap_or(0);
+        Self { next }
+    }
+
+    fn fresh(&mut self) -> Label {
+        let label = Label(self.next);
+        self.next += 1;
+        label
     }
 }
 
@@ -425,45 +1352,6 @@ fn const_literals(cfg: &CfgBody) -> FxHashMap<ValueId, Literal> {
             _ => None,
         })
         .collect()
-}
-
-impl Counted {
-    fn apply(self, cfg: &mut CfgBody) {
-        let ty = cfg.val_types[&self.at].clone();
-        let hi = match self.hi {
-            Bound::Outside(hi) => hi,
-            Bound::Computed { steps, value } => {
-                let header = &mut cfg.blocks[self.header.0].insts;
-                let mut moved: Vec<Inst> = Vec::with_capacity(steps.len());
-                for step in steps.iter().rev() {
-                    moved.push(header.remove(step.header_position));
-                }
-                moved.reverse();
-                cfg.blocks[self.entering.0].insts.extend(moved);
-                value
-            }
-        };
-        // The body block's one predecessor is the header, so each of its
-        // parameters is the argument the `then` edge passed, and the body
-        // reads that value by dominance (RFC-0089 rule 1).
-        let passed = std::mem::take(&mut cfg.blocks[self.body_block.0].params);
-        let subst: FxHashMap<ValueId, ValueId> = passed.into_iter().zip(self.body_args).collect();
-        for block in &mut cfg.blocks {
-            for inst in &mut block.insts {
-                apply_subst(&mut inst.kind, &subst);
-            }
-            apply_subst_terminator(&mut block.terminator, &subst);
-        }
-        let counter = fresh(cfg, &ty);
-        cfg.blocks[self.body_block.0].params.push(counter);
-        cfg.blocks[self.header.0].terminator = Terminator::For {
-            source: ForSource::Range { at: self.at, hi },
-            stages: Stages::lowered(self.body),
-            exit: self.exit,
-            exit_args: self.exit_args,
-            exit_trip: ExitTrip::Absent,
-        };
-    }
 }
 
 fn fresh(cfg: &mut CfgBody, ty: &Ty) -> ValueId {

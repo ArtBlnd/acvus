@@ -85,9 +85,9 @@ const ARRAY_OF_OWNERS: &str = "let a = [\"ab\".to_string(), \"cde\".to_string()]
                                for s in a { let n = len(&s) as i64; acc = acc + n; } acc";
 const RANGE_U64: &str = "let n = 4u64; let acc = 0u64; for i in 0u64..n { acc = acc + i; } acc";
 const RANGE_I64: &str = "let n = 4; let acc = 0; for i in 0..n { acc = acc + i; } acc";
-/// Tested with `<=` so that it stays a `while`: RFC-0081 turns `i < 3` into
-/// a range `for`.
-const WHILE: &str = "let i = 0; let acc = 0; while i <= 2 { acc = acc + i; i = i + 1; } acc";
+/// Tested with `!=` so that it stays a `while`: RFC-0081 and RFC-0094 turn
+/// `i < 3` and `i <= 2` into a range `for`.
+const WHILE: &str = "let i = 0; let acc = 0; while i != 3 { acc = acc + i; i = i + 1; } acc";
 
 // -- The four heads produce their values -------------------------------
 

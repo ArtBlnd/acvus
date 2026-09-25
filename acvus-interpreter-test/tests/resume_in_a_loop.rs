@@ -41,10 +41,10 @@ fn registries() -> Vec<Registry<AcvusRuntime>> {
     regs
 }
 
-/// Tested with `<=` so that it stays a `while`: RFC-0081 turns `n < 3` into
-/// a range `for`.
+/// Tested with `!=` so that it stays a `while`: RFC-0081 and RFC-0094 turn
+/// `n < 3` and `n <= 2` into a range `for`.
 const AWAIT_IN_A_WHILE: &str =
-    "let n = 0; let s = 0; while n <= 2 { s = s + fetch_by(n); n = n + 1; } s";
+    "let n = 0; let s = 0; while n != 3 { s = s + fetch_by(n); n = n + 1; } s";
 
 #[tokio::test]
 async fn a_while_around_an_await_is_not_a_loop() {

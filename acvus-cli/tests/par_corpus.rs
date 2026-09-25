@@ -1,9 +1,9 @@
 //! The parallel-loop corpus (`acvus-interpreter-test/par_corpus`) at the
 //! CLI's contract: every case runs to the value its row of `INDEX.md` states,
-//! and `acvus mir` prints, for each of its `For`s, the stages line, the
-//! facts `analysis::loop_deps` computes of each stage and the cost
-//! `analysis::cost` computes against the interpreter's table exactly as the
-//! case's `facts/<id>.facts` holds them. A change in any row's stages,
+//! and `acvus mir` prints, for each of its `For`s and pull loops' `While`s,
+//! the stages line, the facts `analysis::loop_deps` computes of each stage
+//! and the cost `analysis::cost` computes against the interpreter's table
+//! exactly as the case's `facts/<id>.facts` holds them. A change in any row's stages,
 //! cycles, orders, laws or cost shows here as that row's difference.
 //!
 //! A case whose header states `contexts` runs in a space holding the script
@@ -101,8 +101,8 @@ fn printed_stage_facts(listing: &str) -> String {
         };
         let gutter = gutter.trim();
         let printed = printed.trim();
-        let stages =
-            !gutter.is_empty() && printed.starts_with("for ") && printed.contains(" stages [");
+        let staged = printed.starts_with("for ") || printed.starts_with("while ");
+        let stages = !gutter.is_empty() && staged && printed.contains(" stages [");
         let fact = gutter.is_empty() && printed.starts_with("// ");
         if stages || fact {
             kept.push_str(printed);

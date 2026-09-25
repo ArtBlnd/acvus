@@ -2327,6 +2327,60 @@ impl CheckCtx {
                 }
             }
 
+            InstKind::While {
+                cond,
+                stages,
+                exit,
+                exit_args,
+            } => {
+                let cond_ty = ty!(*cond);
+                self.assert_match(pc, span, "While", "cond", &Ty::Bool, cond_ty, errors);
+                let edges = [
+                    BranchEdge {
+                        side: "body",
+                        label: stages.body(),
+                        args: &[],
+                    },
+                    BranchEdge {
+                        side: "exit",
+                        label: *exit,
+                        args: exit_args,
+                    },
+                ];
+                for BranchEdge { side, label, args } in edges {
+                    let Some(params) = self.block_params(&label, insts) else {
+                        continue;
+                    };
+                    let edge = format!("While({side})");
+                    if args.len() != params.len() {
+                        errors.push(ValidationError {
+                            scope: self.scope_name.clone(),
+                            inst_index: pc,
+                            span,
+                            kind: ValidationErrorKind::ArityMismatch {
+                                inst_name: edge,
+                                expected: params.len(),
+                                got: args.len(),
+                            },
+                        });
+                        continue;
+                    }
+                    for (i, (arg, param)) in args.iter().zip(&params).enumerate() {
+                        let param_ty = ty!(*param);
+                        let arg_ty = ty!(*arg);
+                        self.assert_match(
+                            pc,
+                            span,
+                            &edge,
+                            &format!("arg[{i}]"),
+                            param_ty,
+                            arg_ty,
+                            errors,
+                        );
+                    }
+                }
+            }
+
             InstKind::Return { value, order } => {
                 let value_ty = ty!(*value);
                 // `!` has no value, so it satisfies any slot (RFC-0038).
@@ -2388,7 +2442,7 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
                 .chain(default.iter().map(|(to, _)| to))
                 .filter(|to| **to == label)
                 .count(),
-            InstKind::For { stages, exit, .. } => {
+            InstKind::For { stages, exit, .. } | InstKind::While { stages, exit, .. } => {
                 usize::from(stages.body() == label) + usize::from(*exit == label)
             }
             _ => 0,
@@ -2405,6 +2459,7 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
                 | InstKind::Diamond { .. }
                 | InstKind::Switch { .. }
                 | InstKind::For { .. }
+                | InstKind::While { .. }
                 | InstKind::Return { .. }
                 | InstKind::Diverge
         ),

@@ -256,6 +256,9 @@ fn sole_edge_args_mut(term: &mut Terminator, label: Label) -> &mut Vec<ValueId> 
         }
         Terminator::For {
             exit, exit_args, ..
+        }
+        | Terminator::While {
+            exit, exit_args, ..
         } => {
             if *exit == label {
                 edges.push(exit_args);
@@ -375,7 +378,8 @@ impl Scope<'_> {
                     Some(Counted::Index)
                 }
             },
-            Derivation::Scaled { .. }
+            Derivation::CountsDown { .. }
+            | Derivation::Scaled { .. }
             | Derivation::Offset { .. }
             | Derivation::Lowered { .. }
             | Derivation::Reflected { .. }
@@ -773,6 +777,12 @@ fn subst_terminator(term: &mut Terminator, subst: &FxHashMap<ValueId, ValueId>) 
             source, exit_args, ..
         } => {
             source.for_each_use(&mut one);
+            exit_args.iter_mut().for_each(&mut one);
+        }
+        Terminator::While {
+            cond, exit_args, ..
+        } => {
+            one(cond);
             exit_args.iter_mut().for_each(&mut one);
         }
         Terminator::Switch { tag, arms, default } => {

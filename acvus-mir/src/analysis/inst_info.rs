@@ -77,6 +77,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
         | InstKind::Diamond { .. }
         | InstKind::Switch { .. }
         | InstKind::For { .. }
+        | InstKind::While { .. }
         | InstKind::Return { .. }
         | InstKind::Diverge
         | InstKind::Nop => smallvec![],
@@ -244,6 +245,9 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
         InstKind::For {
             source, exit_args, ..
         } => traversal_uses(source, exit_args),
+        InstKind::While {
+            cond, exit_args, ..
+        } => std::iter::once(*cond).chain(exit_args.iter().copied()).collect(),
         // The tag is read once; every edge carries the block arguments
         // its target takes (RFC-0051).
         InstKind::Switch { tag, arms, default } => {
@@ -282,6 +286,9 @@ pub fn terminator_uses(term: &Terminator) -> SmallVec<[ValueId; 4]> {
         Terminator::For {
             source, exit_args, ..
         } => traversal_uses(source, exit_args),
+        Terminator::While {
+            cond, exit_args, ..
+        } => std::iter::once(*cond).chain(exit_args.iter().copied()).collect(),
         Terminator::Switch { tag, arms, default } => std::iter::once(*tag)
             .chain(arms.iter().flat_map(|(_, _, args)| args.iter().copied()))
             .chain(default.iter().flat_map(|(_, args)| args.iter().copied()))
@@ -322,6 +329,7 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
             | InstKind::Jump { .. }
             | InstKind::JumpIf { .. }
             | InstKind::Diamond { .. }
+            | InstKind::While { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
     )

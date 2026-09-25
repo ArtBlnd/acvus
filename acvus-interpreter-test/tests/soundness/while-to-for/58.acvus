@@ -1,0 +1,2 @@
+// expect 4
+let v = vec([1]); let i = 0u64; while i < v.len() { if i < 3u64 { v.push(9); }; i = i + 1u64; } i as i64

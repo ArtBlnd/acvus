@@ -1,0 +1,2 @@
+// expect 1000
+let i = (@n as u64) - 5u64; let s = 0; while i > 0u64 { i = i - 1u64; s = s + (i as i64); } s * 100 + (i as i64)

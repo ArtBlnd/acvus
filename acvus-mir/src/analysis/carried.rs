@@ -33,7 +33,7 @@ impl CarriedState {
             .map(|&param| CarriedParam {
                 param,
                 carried: match affine.get(param).map(|a| &a.derivation) {
-                    Some(Derivation::Carried { .. }) => Carried::Iv,
+                    Some(Derivation::Carried { .. } | Derivation::CountsDown { .. }) => Carried::Iv,
                     _ => Carried::State,
                 },
             })

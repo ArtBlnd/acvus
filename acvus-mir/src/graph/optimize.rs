@@ -424,7 +424,7 @@ fn run_pass2(interner: &Interner, laws: &LawTable, functions: &FunctionSummary, 
     // RFC-0081: after `ssa_pass`, which makes the counter a header
     // parameter, and after the fold, which settles a constant bound; before
     // `dce`, which sweeps the comparison the new terminator leaves unread.
-    optimize::while_to_for::run(cfg, laws);
+    optimize::while_to_for::run(interner, cfg, laws);
     optimize::dce::run(cfg, laws, functions);
     optimize::code_motion::run(cfg);
     // RFC-0066 rule 7: every induction variable of a `for` that anything
@@ -611,6 +611,13 @@ fn debug_validate(cfg: &CfgBody) {
                 source, exit_args, ..
             } => {
                 let mut v = source.uses().to_vec();
+                v.extend(exit_args);
+                v
+            }
+            crate::cfg::Terminator::While {
+                cond, exit_args, ..
+            } => {
+                let mut v = vec![*cond];
                 v.extend(exit_args);
                 v
             }

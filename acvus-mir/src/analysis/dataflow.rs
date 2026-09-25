@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::hash::Hash;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::ir::{Inst, ValueId};
+use crate::ir::{Inst, Label, ValueId};
 use rustc_hash::FxHashMap;
 
 use crate::analysis::domain::SemiLattice;
@@ -280,7 +280,7 @@ pub fn backward_analysis<A: DataflowAnalysis>(
 /// One branch of a `JumpIf`, with whether the condition can take it.
 struct Edge<'a> {
     taken: bool,
-    label: &'a crate::ir::Label,
+    label: crate::ir::Label,
     args: &'a [ValueId],
 }
 
@@ -331,17 +331,51 @@ fn propagate_to_successors<A: DataflowAnalysis>(
             let edges = [
                 Edge {
                     taken: definite != Some(false),
-                    label: then_label,
+                    label: *then_label,
                     args: then_args,
                 },
                 Edge {
                     taken: definite != Some(true),
-                    label: else_label,
+                    label: *else_label,
                     args: else_args,
                 },
             ];
             for Edge { taken, label, args } in edges {
-                if taken && let Some(&t) = cfg.label_to_block.get(label) {
+                if taken && let Some(&t) = cfg.label_to_block.get(&label) {
+                    let changed = analysis.propagate_forward(
+                        exit_state,
+                        &cfg.blocks[t.0].params,
+                        0,
+                        args,
+                        &mut block_entry[t.0],
+                    );
+                    if changed || !visited[t.0] {
+                        worklist.push(t);
+                    }
+                }
+            }
+        }
+        Terminator::While {
+            cond,
+            stages,
+            exit,
+            exit_args,
+        } => {
+            let definite = analysis.eval_branch_cond(exit_state, cond);
+            let edges = [
+                Edge {
+                    taken: definite != Some(false),
+                    label: stages.body(),
+                    args: &[],
+                },
+                Edge {
+                    taken: definite != Some(true),
+                    label: *exit,
+                    args: exit_args,
+                },
+            ];
+            for Edge { taken, label, args } in edges {
+                if taken && let Some(&t) = cfg.label_to_block.get(&label) {
                     let changed = analysis.propagate_forward(
                         exit_state,
                         &cfg.blocks[t.0].params,
@@ -477,6 +511,25 @@ fn propagate_from_successors<A: DataflowAnalysis>(
                     else_args,
                     exit_state,
                 );
+            }
+        }
+        Terminator::While {
+            stages,
+            exit,
+            exit_args,
+            ..
+        } => {
+            let edges: [(Label, &[ValueId]); 2] = [(stages.body(), &[]), (*exit, exit_args)];
+            for (label, args) in edges {
+                if let Some(&t) = cfg.label_to_block.get(&label) {
+                    analysis.propagate_backward(
+                        &block_entry[t.0],
+                        &cfg.blocks[t.0].params,
+                        0,
+                        args,
+                        exit_state,
+                    );
+                }
             }
         }
         Terminator::Switch { arms, default, .. } => {

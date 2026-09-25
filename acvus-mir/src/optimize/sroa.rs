@@ -867,6 +867,16 @@ fn incoming(term: &Terminator, label: Label) -> Vec<Incoming<'_>> {
             (false, _) if stages.body() == label => vec![Incoming::Fills],
             (false, _) => Vec::new(),
         },
+        Terminator::While {
+            stages,
+            exit,
+            exit_args,
+            ..
+        } => [(stages.body(), &[][..]), (*exit, exit_args.as_slice())]
+            .into_iter()
+            .filter(|(to, _)| *to == label)
+            .map(|(_, args)| Incoming::Carries(args))
+            .collect(),
         Terminator::Jump { .. }
         | Terminator::Return { .. }
         | Terminator::Fallthrough
@@ -1006,6 +1016,9 @@ fn retarget(term: &mut Terminator, from: Label, threaded: &Threaded) {
         // and an arm the dispatch was threaded to has no such parameters
         // (RFC-0057).
         Terminator::For {
+            exit, exit_args, ..
+        }
+        | Terminator::While {
             exit, exit_args, ..
         } => leave(exit, exit_args),
         Terminator::Return { .. } | Terminator::Fallthrough | Terminator::Diverge => {}

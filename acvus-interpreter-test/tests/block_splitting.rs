@@ -26,20 +26,20 @@ use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// A `while` whose body holds an `if` and nothing after it that reads an arm.
-/// Both loops here test with `<=` because RFC-0081 turns `n < 6` into a range
-/// `for`, which has no head part. The arm adds floats, which cannot trap, so
+/// The loops here test with `!=` because RFC-0081 and RFC-0094 turn `n < 6`
+/// and `n <= 5` into a range `for`, which has no head part. The arm adds floats, which cannot trap, so
 /// running it on both paths is a `Select`.
 const TAIL_ABOVE_THE_BRANCH: &str = "let acc = 0.0; let n = 0; \
-     while n <= 5 { if n % 2 == 0 { acc = acc + 1.5; }; n = n + 1; } acc";
+     while n != 6 { if n % 2 == 0 { acc = acc + 1.5; }; n = n + 1; } acc";
 
 /// The same shape with the program's integer `+` in the arm, which traps
 /// where it overflows: the select runs it as its overflowing form and traps
 /// only on the path the program takes (RFC-0074 rule 2).
 const TRAPPING_ARM: &str =
-    "let acc = 0; let n = 0; while n <= 5 { if n % 2 == 0 { acc = acc + n; }; n = n + 1; } acc";
+    "let acc = 0; let n = 0; while n != 6 { if n % 2 == 0 { acc = acc + n; }; n = n + 1; } acc";
 
 /// The same loop with a tail that reads what both arms wrote.
-const TAIL_BELOW_THE_JOIN: &str = "let acc = 0; let n = 0; while n <= 5 { \
+const TAIL_BELOW_THE_JOIN: &str = "let acc = 0; let n = 0; while n != 6 { \
      if n % 2 == 0 { acc = acc + n; } else { acc = acc + 1; }; acc = acc * 2; n = n + 1; } acc";
 
 fn ends(blocks: &[BlockListing]) -> Vec<&str> {
@@ -75,7 +75,7 @@ async fn a_regions_head_is_one_operation_list() {
     let blocks = loop_of(TAIL_ABOVE_THE_BRANCH, Ty::Float);
     assert_eq!(
         part_of(one_loop(&blocks), "head").ops,
-        ["Lte<i64, Slot, Slot, R0>"],
+        ["Neq<i64, Slot, Slot, R0>"],
         "the head is the condition alone: no terminator, because the head's \
          `JumpIf` is the `cond` the Loop reads itself — and the head's last \
          operation writes it to the argument register, which `Yield` hands \

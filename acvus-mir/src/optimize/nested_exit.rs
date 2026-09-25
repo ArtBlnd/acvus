@@ -582,6 +582,7 @@ fn retarget(term: &mut Terminator, from: Label, to: Label) {
             }
         }
         Terminator::For { .. }
+        | Terminator::While { .. }
         | Terminator::Return { .. }
         | Terminator::Diverge
         | Terminator::Fallthrough => {}
@@ -623,6 +624,7 @@ fn pass_on_edges_to(term: &mut Terminator, to: Label, arg: ValueId) {
             }
         }
         Terminator::For { .. }
+        | Terminator::While { .. }
         | Terminator::Return { .. }
         | Terminator::Diverge
         | Terminator::Fallthrough => {}

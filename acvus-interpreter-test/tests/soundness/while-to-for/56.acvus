@@ -1,0 +1,2 @@
+// expect 3253
+let n = @m as u8; let c = 0; let i = 250u8; while i + 2u8 < n { c = c + 1; i = i + 1u8; } c * 1000 + (i as i64)

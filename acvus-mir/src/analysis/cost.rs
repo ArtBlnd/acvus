@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
-use crate::analysis::loop_deps::{Control, LoopDeps, Order, Placement, StageBlocks};
+use crate::analysis::loop_deps::{Control, Head, LoopDeps, Order, Placement, StageBlocks};
 use crate::analysis::loops::{Invariants, LoopId, LoopKind, LoopNest, Term, Trip};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, ValueId};
@@ -51,6 +51,8 @@ pub enum InPlace {
     /// No stage is free or holds only `Disjoint` cycles.
     NoStageRunsApart,
     NoWork,
+    /// A pull loop: no count is known on entry (RFC-0089 rule 1).
+    CountUnknown,
 }
 
 /// What the trip count `n` a split compares is (RFC-0089 rule 5).
@@ -150,6 +152,9 @@ impl<'a> Costs<'a> {
     /// With no stage that runs apart the loop runs in place. A loop whose
     /// control is chained can leave early, so its trip count is a bound.
     pub fn of_loop(&self, deps: &LoopDeps) -> LoopCost {
+        if let Head::Pull = deps.membership.head() {
+            return LoopCost::InPlace(InPlace::CountUnknown);
+        }
         let stages = deps.membership.stages();
         let judged = deps.judge(self.cfg, self.laws);
         let runs_apart = |stage: usize| {
@@ -340,7 +345,7 @@ impl<'a> Costs<'a> {
             // A two-way branch or a jump has no row, and rule 8 weighs an
             // operation with no row as nothing; the compare that produced a
             // branch's `Bool` was weighed at its row.
-            Terminator::JumpIf { .. } | Terminator::Diamond { .. } => 0,
+            Terminator::JumpIf { .. } | Terminator::Diamond { .. } | Terminator::While { .. } => 0,
             Terminator::Jump { .. }
             | Terminator::Return { .. }
             | Terminator::Diverge
@@ -450,7 +455,7 @@ impl<'a> Costs<'a> {
             | InstKind::Poison { .. } => 0,
             InstKind::Switch { .. } => table.compare,
             InstKind::For { source, .. } => self.step_weight(*source),
-            InstKind::JumpIf { .. } | InstKind::Diamond { .. } => 0,
+            InstKind::JumpIf { .. } | InstKind::Diamond { .. } | InstKind::While { .. } => 0,
             InstKind::Jump { .. } | InstKind::Return { .. } | InstKind::Diverge => 0,
         }
     }

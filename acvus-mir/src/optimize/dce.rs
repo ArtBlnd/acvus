@@ -354,7 +354,9 @@ fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, removal: &Removal<'_>)
 fn terminator_roots(term: &Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Return { value, order, .. } => std::iter::once(*value).chain(*order).collect(),
-        Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => vec![*cond],
+        Terminator::JumpIf { cond, .. }
+        | Terminator::Diamond { cond, .. }
+        | Terminator::While { cond, .. } => vec![*cond],
         // The tag a `Switch` reads is live wherever the dispatch is.
         Terminator::Switch { tag, .. } => vec![*tag],
         // A `For` reads its source on every iteration, so the source is a
@@ -380,7 +382,9 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
             else_args,
             ..
         } => values.extend(then_args.iter().chain(else_args)),
-        Terminator::For { exit_args, .. } => values.extend(exit_args),
+        Terminator::For { exit_args, .. } | Terminator::While { exit_args, .. } => {
+            values.extend(exit_args)
+        }
         Terminator::Switch { arms, default, .. } => {
             for (_, _, args) in arms {
                 values.extend(args);
@@ -506,6 +510,16 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
                                 .into_iter()
                                 .filter(|(label, _, _)| *label == block_label)
                                 .map(|(_, first, args)| (first, args))
+                                .collect(),
+                            Terminator::While {
+                                stages,
+                                exit,
+                                exit_args,
+                                ..
+                            } => [(stages.body(), &[][..]), (*exit, exit_args.as_slice())]
+                                .into_iter()
+                                .filter(|(label, _)| *label == block_label)
+                                .map(|(_, args)| (0, args))
                                 .collect(),
                             _ => Vec::new(),
                         };
@@ -649,6 +663,13 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
                     let first = exit_trip.supplied_params();
                     let shifted: Vec<usize> = dead.iter().map(|pi| pi - first).collect();
                     prune(exit_args, &shifted);
+                }
+            }
+            Terminator::While {
+                exit, exit_args, ..
+            } => {
+                if let Some(dead) = dead_of(*exit) {
+                    prune(exit_args, dead);
                 }
             }
             Terminator::Switch { arms, default, .. } => {

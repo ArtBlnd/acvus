@@ -131,6 +131,21 @@ fn decide(
                 args: else_args.clone(),
             }),
         },
+        Terminator::While {
+            cond,
+            stages,
+            exit,
+            exit_args,
+        } => match known.bool(*cond)? {
+            true => Some(Taken {
+                label: stages.body(),
+                args: Vec::new(),
+            }),
+            false => Some(Taken {
+                label: *exit,
+                args: exit_args.clone(),
+            }),
+        },
         // A `Switch` without a default is exhaustive over its arms
         // (RFC-0051), so a known key outside them names no edge and the
         // dispatch stands as the source wrote it.

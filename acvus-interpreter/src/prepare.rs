@@ -448,6 +448,71 @@ pub enum BodyRole {
     Closure,
 }
 
+/// A pull loop's `While` (RFC-0089 rule 1) runs in place, as the branch on
+/// its test that `acvus_mir::optimize::while_to_for` promoted it from, over
+/// its stages run as one body: the stages are for a lowerer that splits,
+/// which this machine is not. Each boundary the chain states where one stage
+/// jumps straight into the next is dropped, as `StageChains` steps through a
+/// `For`'s, so the body is the one run the machine recognizes as a loop.
+fn pull_loops_in_place(body: &MirBody) -> Cow<'_, MirBody> {
+    if !body
+        .insts
+        .iter()
+        .any(|inst| matches!(inst.kind, InstKind::While { .. }))
+    {
+        return Cow::Borrowed(body);
+    }
+    let insts = body.insts.as_slice();
+    let mut boundaries: FxHashSet<usize> = FxHashSet::default();
+    for inst in insts {
+        let InstKind::While { stages, .. } = &inst.kind else {
+            continue;
+        };
+        for entry in stages.entries().skip(1) {
+            let Some(entry_at) = insts.iter().position(|held| {
+                matches!(&held.kind, InstKind::BlockLabel { label, params }
+                    if *label == entry && params.is_empty())
+            }) else {
+                continue;
+            };
+            let Some(jump_at) = entry_at.checked_sub(1) else {
+                continue;
+            };
+            let steps_on = matches!(&insts[jump_at].kind,
+                InstKind::Jump { label, args } if *label == entry && args.is_empty())
+                && insts.iter().filter(|held| targets(held, entry)).count() == 1;
+            if steps_on {
+                boundaries.extend([jump_at, entry_at]);
+            }
+        }
+    }
+    let mut in_place = body.clone();
+    in_place.insts = insts
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !boundaries.contains(at))
+        .map(|(_, inst)| match &inst.kind {
+            InstKind::While {
+                cond,
+                stages,
+                exit,
+                exit_args,
+            } => Inst {
+                span: inst.span,
+                kind: InstKind::JumpIf {
+                    cond: *cond,
+                    then_label: stages.body(),
+                    then_args: Vec::new(),
+                    else_label: *exit,
+                    else_args: exit_args.clone(),
+                },
+            },
+            _ => inst.clone(),
+        })
+        .collect();
+    Cow::Owned(in_place)
+}
+
 /// # Errors
 /// The body needs more registers than a frame, a call or an entry holds.
 pub fn prepare_entry(
@@ -457,6 +522,7 @@ pub fn prepare_entry(
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
 ) -> Result<Body, FrameRefusal> {
+    let body = &*pull_loops_in_place(body);
     within_call_bounds(body, BodyRole::Entry)?;
     let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
@@ -476,6 +542,7 @@ pub fn prepare_closure(
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
 ) -> Result<Code, FrameRefusal> {
+    let body = &*pull_loops_in_place(body);
     within_call_bounds(body, BodyRole::Closure)?;
     let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
@@ -1358,7 +1425,9 @@ fn targets(inst: &Inst, label: Label) -> bool {
             arms.iter().any(|(_, named, _)| *named == label)
                 || default.as_ref().is_some_and(|(named, _)| *named == label)
         }
-        InstKind::For { stages, exit, .. } => stages.body() == label || *exit == label,
+        InstKind::For { stages, exit, .. } | InstKind::While { stages, exit, .. } => {
+            stages.body() == label || *exit == label
+        }
         _ => false,
     }
 }
@@ -2400,6 +2469,36 @@ impl<'a> Prepare<'a> {
         self.arm(&arm.region, edge, rides, Ends::Word)
     }
 
+    fn branch_op(
+        &mut self,
+        rides: &Rides,
+        cond: ValueId,
+        (then_label, then_args): (&Label, &[ValueId]),
+        (else_label, else_args): (&Label, &[ValueId]),
+    ) -> Box<dyn Op> {
+        let cond = self.place_of(rides, cond);
+        let on_true = self.target(then_label);
+        let on_false = self.target(else_label);
+        let then_moves = self.move_ops(then_label, then_args);
+        let else_moves = self.move_ops(else_label, else_args);
+        let on_true = self.edge(then_moves, on_true);
+        let on_false = self.edge(else_moves, on_false);
+        match cond {
+            Where::Frame(off) => Box::new(control::JumpIf::<place::Slot> {
+                cond: off,
+                on_true,
+                on_false,
+                at: PhantomData,
+            }) as Box<dyn Op>,
+            Where::Register => Box::new(control::JumpIf::<place::R0> {
+                cond: (),
+                on_true,
+                on_false,
+                at: PhantomData,
+            }),
+        }
+    }
+
     /// A suspending operation is excluded along with the terminators: it
     /// leaves the block for the driver, which the machine's dispatch loop
     /// alone can reach.
@@ -2413,6 +2512,7 @@ impl<'a> Prepare<'a> {
             // is one too (RFC-0057).
             | InstKind::Switch { .. }
             | InstKind::For { .. }
+            | InstKind::While { .. }
             | InstKind::Return { .. }
             | InstKind::Diverge
             | InstKind::Eval { .. }
@@ -4107,27 +4207,25 @@ impl<'a> Prepare<'a> {
                 else_args,
                 ..
             } => {
-                let cond = self.place_of(rides, *cond);
-                let on_true = self.target(then_label);
-                let on_false = self.target(else_label);
-                let then_moves = self.move_ops(then_label, then_args);
-                let else_moves = self.move_ops(else_label, else_args);
-                let on_true = self.edge(then_moves, on_true);
-                let on_false = self.edge(else_moves, on_false);
-                return Some(match cond {
-                    Where::Frame(off) => Box::new(control::JumpIf::<place::Slot> {
-                        cond: off,
-                        on_true,
-                        on_false,
-                        at: PhantomData,
-                    }) as Box<dyn Op>,
-                    Where::Register => Box::new(control::JumpIf::<place::R0> {
-                        cond: (),
-                        on_true,
-                        on_false,
-                        at: PhantomData,
-                    }),
-                });
+                return Some(self.branch_op(
+                    rides,
+                    *cond,
+                    (then_label, then_args),
+                    (else_label, else_args),
+                ));
+            }
+            InstKind::While {
+                cond,
+                stages,
+                exit,
+                exit_args,
+            } => {
+                return Some(self.branch_op(
+                    rides,
+                    *cond,
+                    (&stages.body(), &[]),
+                    (exit, exit_args),
+                ));
             }
             InstKind::Return { value, .. } => {
                 let slot = self.marked(*value);

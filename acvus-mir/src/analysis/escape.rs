@@ -177,6 +177,7 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         | InstKind::Jump { .. }
         | InstKind::JumpIf { .. }
         | InstKind::Diamond { .. }
+        | InstKind::While { .. }
         | InstKind::Switch { .. } => {}
 
         // The source outlives the terminator: every iteration reads an

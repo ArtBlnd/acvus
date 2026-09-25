@@ -240,6 +240,9 @@ fn edges_mut(term: &mut Terminator) -> Vec<EdgeMut<'_>> {
         // (RFC-0057 rule 9).
         Terminator::For {
             exit, exit_args, ..
+        }
+        | Terminator::While {
+            exit, exit_args, ..
         } => vec![EdgeMut {
             to: exit,
             args: exit_args,

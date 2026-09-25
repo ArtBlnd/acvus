@@ -1,0 +1,2 @@
+// expect 7
+let xs = vec([3, 4]); let it = xs.into_iter(); let s = 0; while let Some(x) = it.next() { s = s + x; } s

@@ -1,0 +1,2 @@
+// expect 6
+let v = vec([1, 2, 3]); let t = 0; let i = 0u64; while i < v.len() { t = t + v[i]; i = i + 1u64; } t

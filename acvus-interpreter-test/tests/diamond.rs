@@ -153,11 +153,11 @@ async fn the_dividing_arm_runs_when_it_is_the_one_taken() {
     assert_eq!(v.as_int(), 5);
 }
 
-/// This and the next loop test with `<=` so that they stay `while`s:
-/// RFC-0081 turns `n < 8` into a range `for`.
+/// This and the next loop test with `!=` so that they stay `while`s:
+/// RFC-0081 and RFC-0094 turn `n < 8` and `n <= 7` into a range `for`.
 #[tokio::test]
 async fn a_diamond_in_a_body_leaves_the_while_recognizable() {
-    let source = "let acc = 0; let n = 0; while n <= 7 { if n % 3 == 0 { acc = acc + 1; } else if n % 3 == 1 { acc = acc + 10; } else { acc = acc + 100; }; n = n + 1; } acc";
+    let source = "let acc = 0; let n = 0; while n != 8 { if n % 3 == 0 { acc = acc + 1; } else if n % 3 == 1 { acc = acc + 10; } else { acc = acc + 100; }; n = n + 1; } acc";
     let i = Interner::new();
     let v = run_script(&i, source, Context::default(), Ty::I64).await;
     assert_eq!(v.as_int(), 3 + 30 + 200);
@@ -170,7 +170,7 @@ async fn a_diamond_in_a_body_leaves_the_while_recognizable() {
 
 #[tokio::test]
 async fn a_while_in_an_arm_is_one_operation_inside_the_diamond() {
-    let source = "let acc = 0; if @n > 3 { let k = 0; while k <= @n - 1 { acc = acc + k; k = k + 1; } } else { acc = 1; }; acc";
+    let source = "let acc = 0; if @n > 3 { let k = 0; while k != @n { acc = acc + k; k = k + 1; } } else { acc = 1; }; acc";
     let i = Interner::new();
     let v = run_script(&i, source, int_context(&i, "n", 5), Ty::I64).await;
     assert_eq!(v.as_int(), 10);

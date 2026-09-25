@@ -1,0 +1,2 @@
+// expect attempt to divide by zero
+let xs = vec([3, 2, 5]); let it = xs.into_iter(); let s = 0; while let Some(x) = it.next() { s = s + 10 / (x - 2); } s

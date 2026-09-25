@@ -9,7 +9,8 @@
 //!   `{at, 1}` and a slice's or an array's index is `{0, 1}` (RFC-0057
 //!   rule 3).
 //! - A carried header parameter whose entering edges all send `b` and
-//!   whose back edges all send `p + c`, with `c` invariant, is `{b, c}`.
+//!   whose back edges all send `p + c`, with `c` invariant, is `{b, c}`;
+//!   one whose back edges all send `p − 1` is `{b, −1}` (RFC-0094 rule 2).
 //! - `a·v`, `v + b`, `v − b` and `b − v` of an affine `v`, with `a` and `b`
 //!   invariant, are affine: `{a·base, a·step}`, `{base + b, step}`,
 //!   `{base − b, step}` and `{b − base, 0 − step}` (RFC-0066 rule 4).
@@ -48,12 +49,16 @@
 //! `optimize::lsr` rewrites from that and does not match the instructions
 //! a second time.
 
+use acvus_ast::Literal;
+
 use crate::ir::BinOp;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::loans::Loans;
-use crate::analysis::loops::{Invariance, Invariants, Loop, LoopKind, NaturalLoop, Term};
+use crate::analysis::loops::{
+    Invariance, Invariant, Invariants, Loop, LoopKind, NaturalLoop, Term,
+};
 use crate::analysis::targets;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ForSource, InstKind, RefTarget, ValueId};
@@ -87,6 +92,9 @@ pub enum Derivation {
         init: ValueId,
         step: Operand,
     },
+    /// A header parameter entered as `init` that every back edge sends
+    /// `p − 1`: `{init, −1}` (RFC-0094 rule 2).
+    CountsDown { init: ValueId, one: Operand },
     Scaled {
         of: ValueId,
         factor: Operand,
@@ -160,6 +168,11 @@ impl AffineValues {
             else {
                 continue;
             };
+            if let Some(counted_down) = counts_down(&arithmetic, invariants, natural, param, init, next)
+            {
+                values.insert(param, counted_down);
+                continue;
+            }
             let Some(sum) = arithmetic
                 .get(next)
                 .filter(|a| matches!(a.op, BinOp::Add(_)))
@@ -259,6 +272,39 @@ impl AffineValues {
     pub fn get(&self, value: ValueId) -> Option<&Affine> {
         self.values.get(&value)
     }
+}
+
+/// `param` entered as `init` whose back edges send `next`, where `next` is
+/// `param − 1` with `1` the integer one invariant in the loop.
+fn counts_down(
+    arithmetic: &Arithmetic,
+    invariants: &Invariants,
+    natural: &NaturalLoop,
+    param: ValueId,
+    init: ValueId,
+    next: ValueId,
+) -> Option<Affine> {
+    let difference = arithmetic
+        .get(next)
+        .filter(|a| matches!(a.op, BinOp::Sub(_)) && a.left == param)?;
+    let invariance = invariants.in_loop(natural, difference.right)?;
+    let is_one = match invariance.above()? {
+        Invariant::Word(literal) => literal.desugared() == Literal::Int(1),
+        Invariant::Outside(value) => invariants
+            .word(*value)
+            .is_some_and(|literal| literal.desugared() == Literal::Int(1)),
+    };
+    is_one.then(|| Affine {
+        base: Term::Value(init),
+        step: Term::int(0).sub(Term::from(invariance.clone())),
+        derivation: Derivation::CountsDown {
+            init,
+            one: Operand {
+                value: difference.right,
+                invariance,
+            },
+        },
+    })
 }
 
 /// Where an instruction stands: its block and its index there.

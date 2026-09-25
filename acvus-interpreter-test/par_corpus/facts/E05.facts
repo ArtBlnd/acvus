@@ -1,0 +1,6 @@
+while r10 -> L1 else L2 stages [L0, L1, L3]
+// L0: cycle Storage(r11)+Control in_order {ref, call next, test_variant, while}
+// L1: free {unwrap_variant, assign, ref, as_slice, call upper, drop, assign, ref, as_slice, spawn print, eval, drop}
+// L3: cycle Order(r7) any_order law(Order exact commutative) {merge}
+// control chained through L0
+// cost in place: no count on entry
