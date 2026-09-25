@@ -142,6 +142,43 @@ impl From<SerLeaf> for SerTy {
     }
 }
 
+/// A recorded identity argument, written as its index. A record whose index
+/// is outside the identity space is refused when it is read, so a held
+/// `SerIdentity` is always an [`IdentityId`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "u32", into = "u32")]
+pub struct SerIdentity(IdentityId);
+
+impl SerIdentity {
+    pub fn id(self) -> IdentityId {
+        self.0
+    }
+}
+
+impl From<IdentityId> for SerIdentity {
+    fn from(id: IdentityId) -> Self {
+        SerIdentity(id)
+    }
+}
+
+impl TryFrom<u32> for SerIdentity {
+    type Error = &'static str;
+
+    fn try_from(index: u32) -> Result<Self, Self::Error> {
+        IdentityId::try_from_raw(index as usize)
+            .map(SerIdentity)
+            .ok_or("an identity index is at most u32::MAX - 1")
+    }
+}
+
+impl From<SerIdentity> for u32 {
+    fn from(identity: SerIdentity) -> Self {
+        // An `IdentityId` stores index + 1 as a `NonZero<u32>`, so its
+        // index is below `u32::MAX`.
+        identity.0.to_raw() as u32
+    }
+}
+
 /// An effect argument of a user-defined type, with its representation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "repr", rename_all = "camelCase")]
@@ -285,7 +322,7 @@ pub enum SerTy {
         id: SerQualifiedRef,
         type_args: Vec<SerTypeArg>,
         effect_args: Vec<SerEffectArg>,
-        identity_args: Vec<u32>,
+        identity_args: Vec<SerIdentity>,
         region_params: usize,
     },
     Option {
@@ -371,7 +408,7 @@ impl Ty {
                     .collect(),
                 identity_args: identity_args
                     .iter()
-                    .map(|i| i.get().to_raw() as u32)
+                    .map(|i| SerIdentity::from(i.get()))
                     .collect(),
             },
             Ty::Option(inner) => SerTy::Option {
@@ -469,7 +506,7 @@ impl SerTy {
                     .collect(),
                 identity_args: identity_args
                     .iter()
-                    .map(|i| IdentityTerm::Known(IdentityId::from_raw(*i as usize)))
+                    .map(|i| IdentityTerm::Known(i.id()))
                     .collect(),
             },
             SerTy::Option { inner } => Ty::Option(Box::new(inner.to_ty(interner))),
