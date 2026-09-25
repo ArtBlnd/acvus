@@ -1,0 +1,23 @@
+// app: 12 transcript_concat
+// desc: a chat app builds the prompt transcript from its history with
+// `text = text.concat(...)`, one line per turn with the speaker's label,
+// skipping system notes, and counts the characters it sends
+// expect: User: hi\nBot: hello, how can I help?\nUser: sum 2 and 3\nBot: 5\n(4 turns, 62 chars)
+let history = vec([
+    { role: "user".to_string(), content: "hi".to_string(), },
+    { role: "system".to_string(), content: "note: greeting".to_string(), },
+    { role: "bot".to_string(), content: "hello, how can I help?".to_string(), },
+    { role: "user".to_string(), content: "sum 2 and 3".to_string(), },
+    { role: "bot".to_string(), content: "5".to_string(), },
+]);
+
+let text = "".to_string();
+let turns = 0;
+for m in &history {
+    if m.role != "system" {
+        let label = if m.role == "user" { "User" } else { "Bot" };
+        text = text.concat(label).concat(": ").concat(&m.content).concat("\n");
+        turns = turns + 1;
+    };
+}
+text + "(" + turns.to_string() + " turns, " + text.len().to_string() + " chars)"

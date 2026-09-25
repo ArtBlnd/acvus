@@ -1,0 +1,88 @@
+// app: 06 record_transform
+// desc: parse a line-oriented employee dataset into records, skip comments,
+// malformed lines and inactive rows, then group by department: headcount,
+// payroll and top salary per department, plus the overall mean of the
+// active salaries by an iterator pipeline
+// expect: 7 active of 10 rows (1 malformed); eng n=3 sum=390 top=150; ops n=2 sum=150 top=80; sales n=2 sum=170 top=90; mean 101
+let data = "# name,dept,salary,active
+ana,eng,120,yes
+bo,ops,70,yes
+cy,eng,150,yes
+dee,sales,90,yes
+ed,ops,80,yes
+fay,eng,95,no
+gus,sales,80,yes
+hal,eng,x12,yes
+ivy,eng,120,yes
+jo,ops,60,no";
+
+let lines = data.lines() | collect;
+
+// Every non-comment line as a record; `ok` is false where a field is
+// missing or the salary is not a number.
+let parse = |lines| -> {
+    let parsed = vec([]);
+    for line in &lines {
+        if !line.starts_with("#") {
+            let f = line.split(",") | collect;
+            let ok = f.len() == 4u64;
+            let salary = 0;
+            let active = false;
+            let name = "".to_string();
+            let dept = "".to_string();
+            if ok {
+                match i64::parse(&f[2u64]) {
+                    Ok(s) => {
+                        salary = s;
+                    },
+                    Err(e) => {
+                        ok = false;
+                    },
+                };
+                active = f[3u64] == "yes";
+                name = f[0u64].to_string();
+                dept = f[1u64].to_string();
+            };
+            parsed.push({ name: name, dept: dept, salary: salary, active: active, ok: ok, });
+        };
+    }
+    parsed
+};
+let parsed = parse(&lines);
+
+let malformed = 0;
+let records = vec([]);
+for r in &parsed {
+    if !r.ok {
+        malformed = malformed + 1;
+    } else if r.active {
+        records.push({ dept: r.dept.to_string(), salary: r.salary, });
+    };
+}
+
+// Headcount, payroll and top salary per department.
+let group = |records| -> {
+    let heads = hash_map();
+    let payroll = hash_map();
+    let top = hash_map();
+    for r in &records {
+        let h = or_insert(&mut heads, r.dept.to_string(), 0);
+        *h = *h + 1;
+        let p = or_insert(&mut payroll, r.dept.to_string(), 0);
+        *p = *p + r.salary;
+        let t = or_insert(&mut top, r.dept.to_string(), 0);
+        *t = max(*t, r.salary);
+    }
+    { heads: heads, payroll: payroll, top: top, }
+};
+let g = group(&records);
+
+let mean = (records.as_iter().map(|r| -> r.salary) | sum) / (records.len() as i64);
+
+let depts = keys(&g.heads) | map(|k| -> k.to_string()) | collect;
+depts.sort();
+let shown = "".to_string();
+for d in &depts {
+    shown = shown + "; " + d + " n=" + (*get(&g.heads, d).unwrap()).to_string() + " sum=" + (*get(&g.payroll, d).unwrap()).to_string() + " top=" + (*get(&g.top, d).unwrap()).to_string();
+}
+records.len().to_string() + " active of " + parsed.len().to_string() + " rows (" + malformed.to_string() + " malformed)" + shown + "; mean " + mean.to_string()

@@ -1,0 +1,16 @@
+for slice(r6) -> L1 else L2 stages [L1, L34]
+// L1: free {take, const, ==, const, take, const, ==, const, take, const, ==, const, take, const, ==, const, take, const, ==, const, take, const, ==, const, take, const, ==, const, take, const, ==}
+// L34: cycle Storage(r7) in_order law(Fold(r7, #3) exact) {ref, call push}
+// control upfront
+// cost W=4 O=18281 split when n > 146248, n = len(r6)
+for range(0 (r61)..r53) -> L27 else L28 stages [L27, L33]
+// L27: free {index, const, ==}
+// L33: cycle Storage(r62) in_order {ref, call push, ref, call pop}
+// L33: cycle Storage(r63) in_order {index_set, index_set}
+// control upfront
+// cost W=4 O=18281 split when n > 146248, n = max(r53 - 0 (r61), 0)
+for slice(r71) -> L20 else L21 stages [L20, L24]
+// L20: free {take, const, !=}
+// L24: cycle Storage(r72) any_order law(Op(Add) exact commutative) {take, +, assign}
+// control upfront
+// cost W=4 O=18281 split when n > 146248, n = len(r71)

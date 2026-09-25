@@ -47,7 +47,10 @@ use crate::ops::{
 use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
 
+mod exit_edge;
 pub mod runs;
+
+use exit_edge::ExitEdge;
 
 /// `For`, `ForStart`, `ForAt` and `ForStep` each carry the head as a type
 /// parameter, and they read this one dispatch rather than a copy of it each.
@@ -680,10 +683,11 @@ struct CallHead {
     unwrap: usize,
 }
 
-/// The two parallel moves a `while`'s blocks carry, already lowered.
+/// The parallel moves a `while`'s blocks carry, already lowered.
 struct LoopEdges {
     into_body: Vec<Node>,
     back: Vec<Node>,
+    exit: ExitEdge,
 }
 
 /// One `for` the recognizer matched, as indexes into `MirBody::insts`.
@@ -3119,8 +3123,7 @@ impl<'a> Prepare<'a> {
             cond,
             then_label,
             then_args,
-            else_label,
-            else_args,
+            ..
         } = &body.insts[region.jump_if].kind
         else {
             panic!("a recognized loop's test is not a conditional jump")
@@ -3143,13 +3146,17 @@ impl<'a> Prepare<'a> {
         }
         let driven = self.call_head(region, *cond);
         let into_body = self.move_ops(then_label, then_args);
-        let exit = self.move_ops(else_label, else_args);
+        let exit = ExitEdge::of_while(self, region.jump_if);
         let back = self.move_ops(header, back_args);
 
         if let Some(head) = driven {
-            let node = self.for_call_node(region, head, LoopEdges { into_body, back });
+            let edges = LoopEdges {
+                into_body,
+                back,
+                exit,
+            };
+            let node = self.for_call_node(region, head, edges);
             ops.push(node);
-            ops.extend(exit);
             return;
         }
 
@@ -3173,6 +3180,7 @@ impl<'a> Prepare<'a> {
              which `recognize_loop` admits only where the test above is its one entry"
         );
         let body = chain(into_body, ran);
+        let exit = exit.into_op();
 
         ops.push(made(move |next| match (cond, exits) {
             (Where::Frame(off), Ends::Word) => {
@@ -3180,6 +3188,7 @@ impl<'a> Prepare<'a> {
                     head,
                     cond: off,
                     body,
+                    exit,
                     next,
                     at: PhantomData,
                 }) as Box<dyn Op>
@@ -3189,6 +3198,7 @@ impl<'a> Prepare<'a> {
                     head,
                     cond: off,
                     body,
+                    exit,
                     next,
                     at: PhantomData,
                 })
@@ -3198,6 +3208,7 @@ impl<'a> Prepare<'a> {
                     head,
                     cond: (),
                     body,
+                    exit,
                     next,
                     at: PhantomData,
                 })
@@ -3207,12 +3218,12 @@ impl<'a> Prepare<'a> {
                     head,
                     cond: (),
                     body,
+                    exit,
                     next,
                     at: PhantomData,
                 })
             }
         }));
-        ops.extend(exit);
     }
 
     /// The `while let Some(x) = f(&mut it)` head, as the three instructions
@@ -3353,7 +3364,11 @@ impl<'a> Prepare<'a> {
     /// The region a recognized head drives: the call as the loop's source,
     /// and the body lowered without the unwrap that stood at its head.
     fn for_call_node(&mut self, region: &LoopRegion, head: CallHead, edges: LoopEdges) -> Node {
-        let LoopEdges { into_body, back } = edges;
+        let LoopEdges {
+            into_body,
+            back,
+            exit,
+        } = edges;
         assert!(
             region
                 .body_regions
@@ -3404,6 +3419,7 @@ impl<'a> Prepare<'a> {
                 large,
                 word,
                 body,
+                exit: exit.into_op(),
                 next,
                 ends: exits,
             })
@@ -3439,7 +3455,7 @@ impl<'a> Prepare<'a> {
         let entering = self.move_ops(entered, entering);
         ops.extend(entering);
 
-        let leaving = self.exit_moves(region.terminator);
+        let exit = ExitEdge::of_for(self, region.terminator);
         let (back_to, back_args) = (*back_to, back_args.clone());
         let back = self.back_moves(&back_to, &back_args);
 
@@ -3450,22 +3466,30 @@ impl<'a> Prepare<'a> {
             back,
             exits.node(),
         );
-        ops.push(self.for_node(region.terminator, ran, exits));
-        ops.extend(leaving);
+        ops.push(self.for_node(region.terminator, ran, exit, exits));
     }
 
-    fn for_node(&self, terminator: usize, ran: Box<dyn Op>, exits: Ends) -> Node {
+    fn for_node(
+        &self,
+        terminator: usize,
+        ran: Box<dyn Op>,
+        exit: ExitEdge,
+        exits: Ends,
+    ) -> Node {
+        let exit = exit.into_op();
         for_head!(self, terminator, |src, _Head, _counter| made(move |next| {
             match exits {
                 Ends::Word => Box::new(control::For::<_, control::Rejoins> {
                     src,
                     body: ran,
+                    exit,
                     next,
                     ends: PhantomData,
                 }) as Box<dyn Op>,
                 Ends::Verdict => Box::new(control::For::<_, control::Escapes> {
                     src,
                     body: ran,
+                    exit,
                     next,
                     ends: PhantomData,
                 }),

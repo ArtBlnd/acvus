@@ -177,6 +177,7 @@ pub enum CallShape {
         large: bool,
         word: bool,
         body: Box<dyn Op>,
+        exit: Box<dyn Op>,
         next: Box<dyn Op>,
         ends: Ends,
     },
@@ -543,6 +544,7 @@ struct ForCallSite {
     it: Off,
     x: Marked,
     body: Box<dyn Op>,
+    exit: Box<dyn Op>,
     next: Box<dyn Op>,
     ends: Ends,
 }
@@ -556,6 +558,7 @@ where
         it,
         x,
         body,
+        exit,
         next,
         ends,
     } = site;
@@ -564,12 +567,14 @@ where
         Ends::Word => Box::new(control::For::<_, Rejoins> {
             src,
             body,
+            exit,
             next,
             ends: PhantomData,
         }),
         Ends::Verdict => Box::new(control::For::<_, Escapes> {
             src,
             body,
+            exit,
             next,
             ends: PhantomData,
         }),
@@ -758,6 +763,7 @@ registers!(
         large,
         word,
         body,
+        exit,
         next,
         ends,
     },
@@ -766,6 +772,7 @@ registers!(
             it,
             x,
             body,
+            exit,
             next,
             ends,
         };
