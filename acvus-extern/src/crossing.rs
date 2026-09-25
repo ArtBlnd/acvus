@@ -13,7 +13,7 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-use crate::instance::{Instance, InstanceOf, ReadsItsReceiver, Signature, StepsItsReceiver};
+use crate::instance::{Holds, Instance, InstanceOf, ReadsItsReceiver, Signature, StepsItsReceiver};
 use crate::runtime::Runtime;
 
 pub struct Crossing<'a, Rt>
@@ -65,7 +65,7 @@ where
     #[inline(always)]
     pub unsafe fn instance<'r, S, I, T>(self, value: Rt::Value) -> InstanceOf<'r, S, I, Rt, T>
     where
-        S: Signature<Rt>,
+        S: Signature<Rt, This = I>,
         S::Mode: ReadsItsReceiver,
     {
         // SAFETY: the caller's contract.
@@ -86,6 +86,7 @@ where
     where
         S: Signature<Rt>,
         S::Mode: StepsItsReceiver,
+        R: Holds<Rt, S::This>,
     {
         // SAFETY: the caller's contract.
         unsafe { Instance::own(recv, value) }

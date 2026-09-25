@@ -17,7 +17,7 @@ use futures::future::BoxFuture;
 use crate::crossing::Crossing;
 use crate::ctx::Ctx;
 use crate::instance::InstanceRun;
-use crate::instance::{Instance, InstanceOf, ReadsItsReceiver, Signature, StepsItsReceiver};
+use crate::instance::{Holds, Instance, InstanceOf, ReadsItsReceiver, Signature, StepsItsReceiver};
 use crate::loan::Loan;
 use crate::obj::{
     Cross, Form, FormKind, Nothing, One, OneRegister, OneValue, OptionOf, Returned,
@@ -329,7 +329,7 @@ pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
 
 impl<S, I, T, Rt, const NTH: usize> Arg<Rt> for Required<S, I, T, NTH>
 where
-    S: Signature<Rt> + 'static,
+    S: Signature<Rt, This = I> + 'static,
     S::Mode: ReadsItsReceiver,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
@@ -358,7 +358,7 @@ where
 unsafe impl<'a, 'w, S, I, T, Rt, const NTH: usize> Takes<'a, 'w, Required<S, I, T, NTH>, Rt>
     for InstanceOf<'w, S, I, Rt, T>
 where
-    S: Signature<Rt> + 'static,
+    S: Signature<Rt, This = I> + 'static,
     S::Mode: ReadsItsReceiver,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
@@ -442,7 +442,7 @@ where
     S: Signature<Rt> + 'static,
     S::Mode: StepsItsReceiver,
     T: Send + Sync + 'static,
-    R: Takes<'a, 'w, A, Rt>,
+    R: Takes<'a, 'w, A, Rt> + Holds<Rt, S::This>,
     Rt: Runtime,
 {
     #[inline(always)]

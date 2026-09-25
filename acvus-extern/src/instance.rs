@@ -129,6 +129,7 @@ where
     pub(crate) unsafe fn own(recv: R, value: Rt::Value) -> Self
     where
         S::Mode: StepsItsReceiver,
+        R: Holds<Rt, S::This>,
     {
         Instance {
             recv,
@@ -300,11 +301,29 @@ where
 /// What an `Instance` can hold as its receiver at a signature standing at
 /// `This`: the value itself, or the `&mut` borrow of it its requirer was
 /// lent. Either names the runtime's value the call's receiver is.
-pub trait Holds<Rt, This>
+pub trait Holds<Rt, This>: sealed::Holds<Rt, This>
 where
     Rt: Runtime,
 {
     fn word(&self) -> &Rt::Value;
+}
+
+mod sealed {
+    pub trait Holds<Rt, This> {}
+}
+
+impl<I, Rt> sealed::Holds<Rt, I> for I
+where
+    I: Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
+}
+
+impl<I, Rt> sealed::Holds<Rt, I> for &mut I
+where
+    I: Deref<Target = Rt::Value>,
+    Rt: Runtime,
+{
 }
 
 impl<I, Rt> Holds<Rt, I> for I
@@ -335,7 +354,7 @@ where
 /// type (a map's keys, both sides of `==`).
 pub struct InstanceOf<'r, S, I, Rt, T = Now>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     value: Rt::Value,
@@ -346,7 +365,7 @@ where
 // keeps.
 unsafe impl<'s, S, I, Rt, T> crate::Within<'s> for InstanceOf<'s, S, I, Rt, T>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
 }
@@ -354,14 +373,14 @@ where
 // SAFETY: an `InstanceOf` is one `Rt::Value` at every `S`, `I` and `T`.
 unsafe impl<'r, M, S, I, Rt, T> crate::UniformPayload<M> for InstanceOf<'r, S, I, Rt, T>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
 }
 
 impl<'r, S, I, Rt, T> Clone for InstanceOf<'r, S, I, Rt, T>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     fn clone(&self) -> Self {
@@ -371,14 +390,14 @@ where
 
 impl<'r, S, I, Rt, T> Copy for InstanceOf<'r, S, I, Rt, T>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
 }
 
 impl<'r, S, I, Rt, T> InstanceOf<'r, S, I, Rt, T>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     const ONE_VALUE: () = assert!(
@@ -405,7 +424,7 @@ where
 
 impl<'w, S, I, Rt> InstanceOf<'w, S, I, Rt, Now>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     #[inline(always)]
@@ -419,15 +438,10 @@ where
     /// The result at the requirer's own types: a value as itself, a
     /// borrow at the lifetime of the receiver it was lent from.
     #[inline(always)]
-    pub fn call<'r>(
-        self,
-        ctx: &mut Ctx<'_, Rt>,
-        recv: &'r S::This,
-        rest: S::Rest<'r>,
-    ) -> S::Ret<'r>
+    pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: &'r I, rest: S::Rest<'r>) -> S::Ret<'r>
     where
         S: CrossesRest<Rt> + Signature<Rt, Mode = Shared> + 'r,
-        S::This: Deref<Target = Rt::Value>,
+        I: Deref<Target = Rt::Value>,
     {
         ctx.name_receiver(recv);
         // SAFETY: the rest crosses at the signature's own types, which the
@@ -435,27 +449,22 @@ where
         let words = S::cross_rest(unsafe { Crossing::new(ctx.rt) }, rest);
         // SAFETY: `at`'s contract: the word addresses an entry of an
         // instance of `S` at the type `I` is filled with, and `recv` is at
-        // that type, the signature's `This`.
+        // that type by the impl's bound `S: Signature<Rt, This = I>`.
         unsafe { S::call_now(self.value, ctx, words) }
     }
 }
 
 impl<'w, S, I, Rt> InstanceOf<'w, S, I, Rt, Later>
 where
-    S: Signature<Rt>,
+    S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     /// The call of a `sync =` twin, as `Instance::<_, _, _, Later>::call`'s.
     #[inline(always)]
-    pub fn call<'r>(
-        self,
-        ctx: &mut Ctx<'_, Rt>,
-        recv: &'r S::This,
-        rest: S::Rest<'r>,
-    ) -> S::Ret<'r>
+    pub fn call<'r>(self, ctx: &mut Ctx<'_, Rt>, recv: &'r I, rest: S::Rest<'r>) -> S::Ret<'r>
     where
         S: CrossesRest<Rt> + Signature<Rt, Mode = Shared> + 'r,
-        S::This: Deref<Target = Rt::Value>,
+        I: Deref<Target = Rt::Value>,
     {
         debug_assert_eq!(
             // SAFETY: `at`'s contract: the word addresses an instance's entry.
@@ -474,12 +483,12 @@ where
     pub fn call_await<'a>(
         self,
         ctx: &'a mut Ctx<'_, Rt>,
-        recv: &'a S::This,
+        recv: &'a I,
         rest: S::Rest<'a>,
     ) -> impl Future<Output = S::Ret<'a>> + Send + 'a
     where
         S: CrossesRest<Rt> + Signature<Rt, Mode = Shared> + 'a,
-        S::This: Deref<Target = Rt::Value>,
+        I: Deref<Target = Rt::Value>,
         S::Ret<'a>: Send,
     {
         ctx.name_receiver(recv);

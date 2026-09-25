@@ -1001,24 +1001,26 @@ fn tiny_ctx() -> Ctx<'static, Tiny> {
 /// `InstanceOf` the site makes. An instance that steps its receiver is
 /// reached through a requiring declaration instead, whose glue is the one
 /// maker of the `Instance` that owns that receiver.
-fn call_instance_of<'r, S, R>(
+fn call_instance_of<'r, S, I, R>(
     receiver: &Receiver<'_>,
-    recv: &'r S::This,
+    recv: &'r I,
     rest: S::Rest<'r>,
     read: impl FnOnce(S::Ret<'r>) -> R,
 ) -> R
 where
-    S: acvus_extern::CrossesRest<Tiny> + acvus_extern::Signature<Tiny, Mode = Shared> + 'static,
-    S::This: std::ops::Deref<Target = V>,
+    S: acvus_extern::CrossesRest<Tiny>
+        + acvus_extern::Signature<Tiny, This = I, Mode = Shared>
+        + 'static,
+    I: std::ops::Deref<Target = V> + Send + Sync + 'static,
 {
-    type Site<S> = acvus_extern::Required<S, Place, acvus_extern::Now, 0>;
+    type Site<S, I> = acvus_extern::Required<S, I, acvus_extern::Now, 0>;
     let requires = [Tiny::instance_value(&receiver.entry)];
     let args = [receiver.at];
     // SAFETY: the word is `instance_value` of `receiver.entry`, which
     // outlives this call and is the entry `entry_of` built for `S`'s one
     // requirement at the receiver's type.
     let site = unsafe { acvus_extern::CallSite::new(&args, &requires) };
-    let instance = <Site<S> as acvus_extern::Arg<Tiny>>::site(&site, 0);
+    let instance = <Site<S, I> as acvus_extern::Arg<Tiny>>::site(&site, 0);
     read(instance.call(&mut tiny_ctx(), recv, rest))
 }
 
@@ -1116,7 +1118,7 @@ fn a_mono_glue_runs_the_instance_the_glue_runs() {
     let recv = Place(left);
     let other = erased(7i64);
     let at = receiver_at(&reg, &i, "eq", &on_int, 0);
-    assert!(call_instance_of::<eq<Place, Tiny>, _>(
+    assert!(call_instance_of::<eq<Place, Tiny>, _, _>(
         &at,
         &recv,
         (&Place(other),),

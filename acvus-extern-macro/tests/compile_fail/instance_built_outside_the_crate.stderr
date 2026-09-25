@@ -9,4 +9,5 @@ error[E0624]: associated function `own` is private
    | /     pub(crate) unsafe fn own(recv: R, value: Rt::Value) -> Self
    | |     where
    | |         S::Mode: StepsItsReceiver,
-   | |__________________________________- private associated function defined here
+   | |         R: Holds<Rt, S::This>,
+   | |______________________________- private associated function defined here

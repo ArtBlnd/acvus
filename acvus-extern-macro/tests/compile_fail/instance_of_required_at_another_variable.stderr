@@ -1,0 +1,37 @@
+error[E0271]: type mismatch resolving `<eq<T, Rt> as Signature<Rt>>::This == U`
+  --> tests/compile_fail/instance_of_required_at_another_variable.rs:16:9
+   |
+12 | fn same<T, U, Rt>(
+   |         -  - expected type parameter
+   |         |
+   |         found type parameter
+...
+16 |     eq: InstanceOf<'_, core::eq<T, Rt>, U, Rt>,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected type parameter `U`, found type parameter `T`
+   |
+   = note: expected type parameter `U`
+              found type parameter `T`
+   = note: a type parameter was expected, but a different one was found; you might be missing a type parameter or trait bound
+   = note: for more information, visit https://doc.rust-lang.org/book/ch10-02-traits.html#traits-as-parameters
+note: required by a bound in `InstanceOf`
+  --> $WORKSPACE/acvus-extern/src/instance.rs
+   |
+   | pub struct InstanceOf<'r, S, I, Rt, T = Now>
+   |            ---------- required by a bound in this struct
+   | where
+   |     S: Signature<Rt, This = I>,
+   |                      ^^^^^^^^ required by this bound in `InstanceOf`
+
+error[E0599]: the method `call` exists for struct `InstanceOf<'_, eq<T, Rt>, U, Rt>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/instance_of_required_at_another_variable.rs:23:8
+   |
+23 |     eq.call(ctx, b, (a,))
+   |        ^^^^ method cannot be called on `InstanceOf<'_, eq<T, Rt>, U, Rt>` due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/acvus-extern/src/core.rs
+   |
+   | extern_signature! { ns: "core", fn eq<T>(a: &T, b: &T) -> bool where T: crate::Var<crate::kind::Type>; }
+   | -------------------------------------------------------------------------------------------------------- doesn't satisfy `<eq<T, Rt> as Signature<Rt>>::This = U`
+   |
+   = note: the following trait bounds were not satisfied:
+           `<eq<T, Rt> as Signature<Rt>>::This = U`
