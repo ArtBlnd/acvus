@@ -549,3 +549,16 @@ fn a_float_branch_of_affine_arms_has_no_law() {
     assert_eq!(law_of(held), None, "{}", c.listing);
     assert_eq!(held.order, Order::InOrder, "{}", c.listing);
 }
+
+/// RFC-0093 rule 9 needs every arm to send an affine map: an arm's `max`
+/// is no affine map beside the other's `+`, and the cycle has no law.
+#[test]
+fn a_branch_with_one_arm_not_affine_has_no_law() {
+    let c = Scanned::of(
+        "let v = [1, 5, 2, 7]; let m = 0; \
+         for x in &v { if *x > 4 { m = m + *x; } else { m = max(m, *x); }; } m",
+    );
+    let held = c.carried_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}

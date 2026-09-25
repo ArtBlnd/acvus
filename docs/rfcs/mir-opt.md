@@ -800,12 +800,17 @@ law and runs in its order.
    send it an affine map of it, a value reading none of it counting as
    `0·y + v`, has the law of affine maps (rule 8), at an integer width. A
    token updated as `t[y][x]`, with `t` invariant in the loop, `x` read
-   from the iteration and not from `y`, and every entry of `t` and the
-   token's entry value proven by the interval domain (RFC-0047 rule 7) to
-   lie in `[0, n)` for a constant `n`, has the law of maps over `[0, n)`:
-   a chunk's update is the function it makes of each start state, and
-   chunks compose as functions, in order. The first pass of a chunk runs
-   once per state, so its cost counts `n` times (RFC-0066 rule 8).
+   from the iteration and not from `y`, `t` proven to hold `n` rows for a
+   constant `n`, every row proven longer than every `x`, and every entry
+   of `t` and the token's entry value proven to lie in `[0, n)`, has the
+   law of maps over `[0, n)`: a chunk's update is the function it makes of
+   each start state, and chunks compose as functions, in order. The
+   proofs make the first pass total: it runs from start states the
+   program may never reach, and an index there that could trap would trap
+   where the program does not. The first pass of a chunk runs once per
+   state, so its cost counts `n` times (RFC-0066 rule 8). No fact about a
+   container's row count or entries is stated yet (the interval domain
+   carries integers only), so no loop has this law until one is.
 
 **Why.** A law stated on the loop would be a second statement of what the
 operations already say; read from them, it follows every pass that
