@@ -1,0 +1,5 @@
+error: `payload(o)` is stated over `f(o: Option<T>) -> T`, and `or_zero` is not of that shape (RFC-0082 rule 3)
+ --> tests/compile_fail/payload_not_an_option_read.rs:5:36
+  |
+5 | #[extern_fn(effect = pure, payload(o))]
+  |                                    ^

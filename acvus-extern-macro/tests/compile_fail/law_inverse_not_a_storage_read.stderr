@@ -1,0 +1,5 @@
+error: the law `inverse` is stated over `f(s: &mut S) -> Option<X>`, and `take` is not of that shape (RFC-0082 rule 3)
+ --> tests/compile_fail/law_inverse_not_a_storage_read.rs:5:32
+  |
+5 | #[extern_fn(effect = pure, law(inverse = put))]
+  |                                ^^^^^^^

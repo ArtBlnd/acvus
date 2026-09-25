@@ -62,6 +62,9 @@ struct ExternFnAttr {
     /// `copies(x)`: the result is a value equal to what reference parameter
     /// `x` lends (RFC-0082 rule 10), the author's promise.
     copies: Option<Ident>,
+    /// `payload(o)`: on `f(o: Option<T>) -> T`, `f(Some(x))` is `x` and
+    /// `f(None)` traps (RFC-0082 rule 3), the author's promise.
+    payload: Option<Ident>,
     /// `cost = N`: one call weighs `N` ticks of the backend's table
     /// (RFC-0066 rule 8), in place of its family's row.
     cost: Option<LitInt>,
@@ -98,6 +101,7 @@ impl Parse for ExternFnAttr {
             reaches: None,
             returns: None,
             copies: None,
+            payload: None,
             cost: None,
             dynamic: false,
         };
@@ -187,6 +191,24 @@ impl Parse for ExternFnAttr {
                 }
                 continue;
             }
+            if key == "payload" {
+                if out.payload.is_some() {
+                    return Err(syn::Error::new(key.span(), "`payload(..)` is stated twice"));
+                }
+                let content;
+                syn::parenthesized!(content in input);
+                out.payload = Some(content.parse()?);
+                if !content.is_empty() {
+                    return Err(syn::Error::new(
+                        content.span(),
+                        "`payload(o)` names one parameter",
+                    ));
+                }
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             if key == "reaches" {
                 if out.reaches.is_some() {
                     return Err(syn::Error::new(
@@ -225,7 +247,8 @@ impl Parse for ExternFnAttr {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     `ensures`, `reaches`, `copies`, `returns`, `total`, `cost` or `dynamic`",
+                     `ensures`, `reaches`, `copies`, `payload`, `returns`, `total`, `cost` or \
+                     `dynamic`",
                 ));
             }
             if !input.is_empty() {
@@ -883,6 +906,7 @@ fn dynamic_result(
         attr.law.as_ref().map(|law| (law.first_word().span(), "a law")),
         attr.ensures.as_ref().map(|_| (fn_ident.span(), "`ensures`")),
         attr.copies.as_ref().map(|named| (named.span(), "`copies`")),
+        attr.payload.as_ref().map(|named| (named.span(), "`payload`")),
     ];
     if let Some((span, what)) = stated.into_iter().flatten().next() {
         return Err(syn::Error::new(
@@ -2181,9 +2205,20 @@ fn generate_extern_fn(
         })
         .collect::<syn::Result<_>>()?;
     let declared_ty = signature(None);
-    let laws = match &attr.law {
-        Some(law) => law.checked_laws(fn_ident, &params, &ret, &returning)?,
-        None => quote! { ::acvus_extern::Laws::None },
+    let laws = match (&attr.law, &attr.payload) {
+        (Some(law), Some(named)) => {
+            return Err(syn::Error::new(
+                named.span(),
+                format!(
+                    "`payload` beside the law `{}`: `payload` is stated over \
+                     `f(o: Option<T>) -> T`, which states no other law (RFC-0082 rule 3)",
+                    law.first_word()
+                ),
+            ));
+        }
+        (Some(law), None) => law.checked_laws(fn_ident, &params, &ret, &returning)?,
+        (None, Some(named)) => law::checked_payload(named, fn_ident, &params, &ret, &returning)?,
+        (None, None) => quote! { ::acvus_extern::Laws::None },
     };
     let mut emitted = func.clone();
     let ensures = match &attr.ensures {

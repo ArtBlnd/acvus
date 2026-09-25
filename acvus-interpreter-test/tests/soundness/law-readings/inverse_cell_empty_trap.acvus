@@ -1,0 +1,12 @@
+// expect unwrap: called on None
+let scratch = vec([]);
+let xs = vec([3, 5, 8]);
+let out = vec([]);
+for x in &xs {
+    if *x > 4 {
+        let base = scratch.pop().unwrap();
+        out.push(base + *x);
+        scratch.push(base);
+    };
+}
+out.len()

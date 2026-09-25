@@ -2639,3 +2639,174 @@ fn a_countdown_by_one_is_read_from_the_counter_and_carries_nothing() {
         c.for_lines()
     );
 }
+
+// -- An inverse pair (RFC-0093 rule 6) -----------------------------------
+
+const SCRATCH: &str = "let scratch = vec([10]); let xs = vec([5, 3, 8]); let out = vec([]); ";
+
+/// `source`'s loop, compiled with the standard registries: `vec::pop` states
+/// `inverse = push` and `option::unwrap` states `payload`.
+fn scratch_loop(body: &str) -> Compiled {
+    Compiled::of(&format!("{SCRATCH}for x in &xs {{ {body} }} out.len()"))
+}
+
+/// Whether a storage cycle of the loop holds the call `called`.
+fn a_storage_token_holds(c: &Compiled, called: &str) -> bool {
+    c.for_lines()
+        .lines()
+        .any(|line| line.contains("cycle Storage(") && line.contains(&format!("call {called},")))
+}
+
+/// E07: `pop`, its payload read by `unwrap`, then `push` of that payload,
+/// and no other access of `scratch`, hold `scratch` as one cell of `pop` and
+/// `push`: it is no token, and the facts name the cell.
+#[test]
+fn an_inverse_pair_whose_payload_a_payload_call_reads_is_a_cell() {
+    let c =
+        scratch_loop("let base = scratch.pop().unwrap(); out.push(base + *x); scratch.push(base);");
+    let deps = c.deps();
+    let [cell] = deps.cells() else {
+        panic!("one cell:\n{}", c.for_lines())
+    };
+    let token = Token::Storage(Storage::Slot(cell.slot));
+    assert!(
+        deps.cycles
+            .iter()
+            .all(|cycle| !cycle.tokens.contains(&token)),
+        "the cell's storage is no token:\n{}",
+        c.for_lines()
+    );
+    assert!(!a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+    assert!(
+        c.for_lines()
+            .lines()
+            .any(|line| line.contains("// cell(pop, push) Storage(")),
+        "{}",
+        c.for_lines()
+    );
+}
+
+/// A `Vec<i64>` payload is no word: the cell holds a payload of one word.
+#[test]
+fn an_inverse_pair_over_a_payload_wider_than_a_word_is_no_cell() {
+    let c = Compiled::of(
+        "let scratch = vec([vec([1])]); let xs = vec([5, 3, 8]); let out = vec([]); \
+         for x in &xs { let base = scratch.pop().unwrap(); scratch.push(base); out.push(*x); } \
+         out.len()",
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+}
+
+/// `push` of a value other than the payload changes the storage.
+#[test]
+fn a_restore_of_a_value_other_than_the_payload_is_no_cell() {
+    let c = scratch_loop(
+        "let base = scratch.pop().unwrap(); out.push(base + *x); scratch.push(base + 1);",
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+}
+
+/// `is_empty` between the pair is a second access of `scratch`, which reads
+/// the storage the pair leaves.
+#[test]
+fn a_second_access_of_the_storage_is_no_cell() {
+    let c = scratch_loop(
+        "let base = scratch.pop().unwrap(); if scratch.is_empty() { out.push(base + *x); }; \
+         scratch.push(base);",
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+}
+
+/// `deque::pop_back` states no `inverse`: a pop of a settled item and a push
+/// of it back change the record the journal persists.
+#[test]
+fn a_take_stating_no_inverse_is_no_cell() {
+    let c = Compiled::of(
+        "let d = deque(); d.push_back(10); let xs = vec([5, 3, 8]); let out = vec([]); \
+         for x in &xs { let base = d.pop_back().unwrap(); out.push(base + *x); \
+         d.push_back(base); } out.len()",
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop_back"), "{}", c.for_lines());
+}
+
+/// `or_zero(o: Option<i64>) -> i64` states no `payload`: it gives `0` of a
+/// `None`, so what it gives is not read as the payload.
+#[test]
+fn a_payload_taken_by_a_call_stating_no_payload_is_no_cell() {
+    let c = Compiled::with_registries(
+        &format!(
+            "{SCRATCH}for x in &xs {{ let base = zero::or_zero(scratch.pop()); \
+             out.push(base + *x); scratch.push(base); }} out.len()"
+        ),
+        vec![zero_fx::registry()],
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+}
+
+mod zero_fx {
+    use acvus_extern::{Registry, TypesOnly, extern_fn, extern_registry};
+
+    #[extern_fn(effect = pure)]
+    fn or_zero(o: Option<i64>) -> i64 {
+        let _ = o;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "zero",
+            fns: [or_zero],
+        }
+    }
+}
+
+/// A `push` under a branch does not follow every `pop` that gave a value.
+#[test]
+fn a_restore_some_iterations_skip_is_no_cell() {
+    let c = scratch_loop(
+        "let base = scratch.pop().unwrap(); out.push(base + *x); \
+         if *x > 4 { scratch.push(base); };",
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+}
+
+/// Inside a nested loop the pair runs once per inner iteration: the outer
+/// loop does not hold it as a cell, while the inner loop, where it runs once
+/// per iteration, does.
+#[test]
+fn a_pair_inside_a_nested_loop_is_no_cell_of_the_outer_loop() {
+    let c = scratch_loop(
+        "for y in &xs { let base = scratch.pop().unwrap(); out.push(base + *x + *y); \
+         scratch.push(base); }",
+    );
+    let outer = c.outer_header();
+    assert!(c.deps_of(outer).cells().is_empty(), "{}", c.listing);
+    let inner: Vec<BlockIdx> = (0..c.cfg.blocks.len())
+        .map(BlockIdx)
+        .filter(|at| {
+            *at != outer && matches!(c.cfg.blocks[at.0].terminator, Terminator::For { .. })
+        })
+        .collect();
+    let [inner] = inner[..] else {
+        panic!("one inner `for`:\n{}", c.listing)
+    };
+    assert_eq!(c.deps_of(inner).cells().len(), 1, "{}", c.listing);
+}
+
+/// An assignment of `scratch` is an access that lends no reference: the
+/// storage is written apart from the pair.
+#[test]
+fn an_assignment_of_the_storage_beside_the_pair_is_no_cell() {
+    let c = scratch_loop(
+        "let base = scratch.pop().unwrap(); out.push(base + *x); scratch.push(base); \
+         if *x > 7 { scratch = vec([base, base]); };",
+    );
+    assert!(c.deps().cells().is_empty(), "{}", c.for_lines());
+    assert!(a_storage_token_holds(&c, "pop"), "{}", c.for_lines());
+}

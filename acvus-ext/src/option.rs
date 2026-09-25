@@ -40,7 +40,9 @@ use acvus_extern::{
 use crate::iter::Items;
 use acvus_extern::Ctx;
 
-#[extern_fn(effect = pure)]
+/// `unwrap(Some(x))` is `x`, and `unwrap(None)` traps: `Option::expect`
+/// returns the payload of `Some` and panics on `None`.
+#[extern_fn(effect = pure, payload(val))]
 fn unwrap<T>(val: Option<T>) -> T
 where
     T: Var<kind::Type>,
@@ -423,6 +425,59 @@ pub fn option_registry<R: Runtime>() -> Registry<R> {
 mod tests {
     use super::*;
     use acvus_extern::{Externs, Interner, TypesOnly};
+
+    /// `unwrap`'s `payload(val)` (RFC-0082 rule 3), over sampled words and a
+    /// string: `unwrap(Some(x))` is `x`, and `unwrap(None)` traps.
+    #[test]
+    fn unwrap_reads_the_payload_and_traps_on_none() {
+        let mut sample: u64 = 0x5eed_0a71_0c1a_7e04;
+        let words = [i64::MIN, i64::MAX, 0, 1, -1].into_iter().chain((0..32).map(|_| {
+            sample = sample
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            sample as i64
+        }));
+        for x in words {
+            assert_eq!(unwrap(Some(x)), x);
+        }
+        assert_eq!(unwrap(Some("s".to_string())), "s");
+        let trapped = std::panic::catch_unwind(|| unwrap::<i64>(None));
+        let Err(trap) = trapped else {
+            panic!("unwrap(None) returned")
+        };
+        let message = trap
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| trap.downcast_ref::<&str>().copied());
+        assert_eq!(message, Some("unwrap: called on None"));
+    }
+
+    /// `unwrap` states `payload`, on every instance it declares.
+    #[test]
+    fn unwrap_declares_the_payload_read() {
+        let i = Interner::new();
+        let reg = Externs::combine(
+            vec![
+                crate::iterator_registry::<TypesOnly>(),
+                option_registry::<TypesOnly>(),
+            ],
+            &i,
+        )
+        .expect("registry combines");
+        let qref = acvus_extern::QualifiedRef::qualified(i.intern("std"), i.intern("unwrap"));
+        let function = reg
+            .functions
+            .iter()
+            .find(|f| f.qref == qref)
+            .expect("unwrap is declared");
+        let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
+            panic!("unwrap is an extern")
+        };
+        let generic = instances.generic.iter().map(|generic| &generic.laws);
+        let concrete = instances.concrete.iter().map(|instance| &instance.laws);
+        let declared: Vec<&acvus_extern::Laws> = concrete.chain(generic).collect();
+        assert_eq!(declared, vec![&acvus_extern::Laws::Payload]);
+    }
 
     /// Eighteen entries for nineteen registered functions: `into_iter_option`
     /// is an instance of `iter::into_iter`, whose entry the baseline registry

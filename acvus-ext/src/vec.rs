@@ -172,7 +172,12 @@ where
     c.push(item);
 }
 
-#[extern_fn(effect = pure)]
+/// `pop` undoes `push`: `Vec::push` appends `x` as the last element and
+/// `Vec::pop` removes the last element and gives it, so a pop after a push
+/// gives `Some(x)` and leaves the elements as before the push, and a push of
+/// what a pop gave puts back the element it removed. A pop of an empty vec
+/// gives `None` and removes nothing.
+#[extern_fn(effect = pure, law(inverse = push))]
 fn pop<T>(c: &mut Vec<T>) -> Option<T>
 where
     T: Var<kind::Type>,
@@ -601,6 +606,75 @@ mod tests {
             assert_eq!(after[..len], before[..]);
             assert_eq!(after[len], item);
         }
+    }
+
+    /// `pop`'s `law(inverse = push)` (RFC-0082 rule 3), over sampled vecs of
+    /// every length up to 24 and sampled items: a pop after a push gives
+    /// the item and leaves the vec as before the push; a push of what a pop
+    /// gave leaves the vec as before the pop; a pop of an empty vec gives
+    /// `None` and leaves it empty.
+    #[test]
+    fn pop_is_the_inverse_of_push() {
+        let mut samples = Samples(0x5eed_1b0e_0c1a_7e03);
+        let edges = [i64::MIN, i64::MAX, 0, 1, -1];
+        for len in 0..=24 {
+            let before: Vec<i64> = (0..len).map(|_| samples.next() as i64).collect();
+            let items = edges.into_iter().chain((0..8).map(|_| samples.next() as i64));
+            for item in items {
+                let mut state = before.clone();
+                push(&mut state, item);
+                assert_eq!(pop(&mut state), Some(item), "pop after push onto {before:?}");
+                assert_eq!(state, before, "pop after push of {item} onto {before:?}");
+            }
+            let mut state = before.clone();
+            match pop(&mut state) {
+                Some(item) => {
+                    push(&mut state, item);
+                    assert_eq!(state, before, "push after pop of {before:?}");
+                }
+                None => {
+                    assert!(before.is_empty(), "a pop gives `None` only of an empty vec");
+                    assert_eq!(state, before, "a pop giving `None` leaves {before:?}");
+                }
+            }
+        }
+    }
+
+    /// `pop` states `inverse = push`, which the registry takes at `push`'s
+    /// one instance.
+    #[test]
+    fn pop_declares_push_its_inverse() {
+        use acvus_extern::{Externs, Interner, Laws, QualifiedRef, TypesOnly};
+        let i = Interner::new();
+        let reg = Externs::combine(
+            vec![
+                crate::iterator_registry::<TypesOnly>(),
+                vec_registry::<TypesOnly>(),
+            ],
+            &i,
+        )
+        .expect("registry combines");
+        let laws_of = |name: &str| -> Vec<Laws> {
+            let qref = QualifiedRef::qualified(i.intern("vec"), i.intern(name));
+            let function = reg
+                .functions
+                .iter()
+                .find(|f| f.qref == qref)
+                .expect("declared");
+            let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
+                panic!("{name} is an extern")
+            };
+            let generic = instances.generic.iter().map(|generic| generic.laws.clone());
+            let concrete = instances.concrete.iter().map(|instance| instance.laws.clone());
+            concrete.chain(generic).collect()
+        };
+        assert_eq!(
+            laws_of("pop"),
+            vec![Laws::Inverse(QualifiedRef::qualified(
+                i.intern("vec"),
+                i.intern("push")
+            ))]
+        );
     }
 
     /// `swap`'s `reaches(c[i], c[j])`: over sampled vecs and every pair of

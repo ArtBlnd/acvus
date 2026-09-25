@@ -649,6 +649,40 @@ mod tests {
         assert_eq!(taken(&d), change(1, 0, &[], &[]));
     }
 
+    /// A deque's pop and push are no inverse pair: a pop of a settled item
+    /// and a push of it back leave the record the journal persists changed
+    /// (RFC-0082 rule 3), so neither pop states `inverse`.
+    #[test]
+    fn deque_pops_state_no_inverse() {
+        use acvus_extern::{Externs, Interner, Laws, QualifiedRef, TypesOnly};
+        let i = Interner::new();
+        let reg = Externs::combine(
+            vec![
+                crate::iterator_registry::<TypesOnly>(),
+                crate::vec_registry::<TypesOnly>(),
+                deque_registry::<TypesOnly>(),
+            ],
+            &i,
+        )
+        .expect("registry combines");
+        for name in ["pop_back", "pop_front"] {
+            let qref = QualifiedRef::qualified(i.intern("deque"), i.intern(name));
+            let function = reg
+                .functions
+                .iter()
+                .find(|f| f.qref == qref)
+                .expect("declared");
+            let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
+                panic!("{name} is an extern")
+            };
+            let generic = instances.generic.iter().map(|generic| &generic.laws);
+            let concrete = instances.concrete.iter().map(|instance| &instance.laws);
+            for laws in concrete.chain(generic) {
+                assert_eq!(laws, &Laws::None, "{name}");
+            }
+        }
+    }
+
     /// RFC-0082 rule 5 sampled: a run of `push_back` over `d` reaches the
     /// deque, record and all, that `append` of its parts reaches, each part
     /// pushed from `deque()`, at every split of the run and from deques

@@ -1186,6 +1186,8 @@ impl LawSite<'_> {
             Laws::Binary(_) => "law",
             Laws::Fold(_) => "fold",
             Laws::TotalOrder => "total_order",
+            Laws::Inverse(_) => "inverse",
+            Laws::Payload => "payload",
         };
         let PolyTy::Fn { ret, .. } = self.ty else {
             return Err(self.unshaped(law));
@@ -1223,6 +1225,11 @@ impl LawSite<'_> {
                         "fold identity",
                         "a registered extern with one instance of no argument returning the \
                          folded state",
+                    ),
+                    LawRole::Inverse => (
+                        "inverse",
+                        "a registered extern with one instance `g(s: &mut S, x: X)` over the \
+                         state `S` and the payload `X` of the declaration's `Option<X>`",
                     ),
                 };
                 Err(CombineError::LawNamesUnfitExtern {

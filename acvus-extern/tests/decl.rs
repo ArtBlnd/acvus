@@ -3492,3 +3492,143 @@ fn total_on_an_extern_that_requires_an_instance_is_refused_at_combine() {
         "the refusal names the declaration and what it may state: {written}"
     );
 }
+
+// -- `inverse` names a registered restore of the payload (RFC-0082 rule 3) --
+
+/// Registry fixtures: combining checks the shape `inverse` names, not the
+/// promise, which only tests sample (RFC-0082 rule 5).
+#[extern_fn(effect = pure, law(inverse = put_one))]
+fn take_one(s: &mut i64) -> Option<i64> {
+    (*s > 0).then(|| {
+        *s -= 1;
+        1
+    })
+}
+
+#[extern_fn(effect = pure)]
+fn put_one(s: &mut i64, x: i64) {
+    *s += x;
+}
+
+#[extern_fn(effect = pure, law(inverse = put_nothing))]
+fn take_unrestored(s: &mut i64) -> Option<i64> {
+    (*s > 0).then(|| {
+        *s -= 1;
+        1
+    })
+}
+
+#[extern_fn(effect = pure, law(inverse = put_text))]
+fn take_as_text(s: &mut i64) -> Option<i64> {
+    (*s > 0).then(|| {
+        *s -= 1;
+        1
+    })
+}
+
+#[extern_fn(effect = pure)]
+fn put_text(s: &mut i64, x: String) {
+    *s += x.len() as i64;
+}
+
+fn inverse_registry<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        fns: [take_one, put_one],
+    }
+}
+
+fn inverse_naming_no_extern<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        fns: [take_unrestored],
+    }
+}
+
+fn inverse_naming_another_payload<R: Runtime>() -> Registry<R> {
+    extern_registry! {
+        ns: "t",
+        fns: [take_as_text, put_text],
+    }
+}
+
+#[test]
+fn an_inverse_naming_a_restore_of_the_payload_combines() {
+    let i = Interner::new();
+    let reg = Externs::combine(vec![inverse_registry::<TypesOnly>()], &i)
+        .expect("`put_one(s: &mut i64, x: i64)` restores `take_one`'s payload");
+    let take = reg
+        .functions
+        .iter()
+        .find(|f| i.resolve(f.qref.name) == "take_one")
+        .expect("take_one");
+    let acvus_extern::FnKind::Extern { instances, .. } = &take.kind else {
+        panic!("take_one is an extern")
+    };
+    let declared: Vec<&acvus_extern::Laws> = instances
+        .concrete
+        .iter()
+        .map(|instance| &instance.laws)
+        .chain(instances.generic.iter().map(|generic| &generic.laws))
+        .collect();
+    assert_eq!(
+        declared,
+        vec![&acvus_extern::Laws::Inverse(
+            acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("put_one"))
+        )]
+    );
+}
+
+#[test]
+fn an_inverse_naming_no_registered_extern_is_refused() {
+    let i = Interner::new();
+    let err = Externs::combine(vec![inverse_naming_no_extern::<TypesOnly>()], &i)
+        .err()
+        .expect("`put_nothing` is registered nowhere");
+    assert!(
+        matches!(
+            &err,
+            acvus_extern::CombineError::LawNamesUnfitExtern { law: "inverse", named, .. }
+                if named.contains("put_nothing")
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_inverse_naming_a_restore_of_another_payload_is_refused() {
+    let i = Interner::new();
+    let err = Externs::combine(vec![inverse_naming_another_payload::<TypesOnly>()], &i)
+        .err()
+        .expect("`put_text` restores a `String`, and `take_as_text` gives an `i64`");
+    assert!(
+        matches!(
+            &err,
+            acvus_extern::CombineError::LawNamesUnfitExtern { law: "inverse", named, .. }
+                if named.contains("put_text")
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn inverse_and_payload_on_an_unfit_signature_are_refused() {
+    let i = Interner::new();
+    let named = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("stated"));
+    for (laws, law) in [
+        (acvus_extern::Laws::Inverse(named), "inverse"),
+        (acvus_extern::Laws::Payload, "payload"),
+    ] {
+        let err = Externs::combine(vec![a_nullary_declaration_stating(laws, None)], &i)
+            .err()
+            .expect("`() -> i64` reads no storage and no option");
+        assert!(
+            matches!(
+                &err,
+                acvus_extern::CombineError::LawOnUnfitSignature { law: refused, .. }
+                    if *refused == law
+            ),
+            "{err}"
+        );
+    }
+}
