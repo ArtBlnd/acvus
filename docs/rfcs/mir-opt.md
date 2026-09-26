@@ -1361,6 +1361,16 @@ many small cycles, one per key, each with the law its entry's update has.
 4. **The lowerer's reading** (RFC-0092): each chunk builds its entries from
    `L`'s identity; the join combines per key, in chunk order where rule 3
    says so.
+5. **An entry a call opens.** `#[extern_fn(law(absent = v))]` on
+   `f(x: &mut M, k: K, .., v: V) -> &mut V` whose `reaches` names `x[k]`
+   states that `f` leaves the entry at `k` as it was where `x` holds one,
+   makes it `v` where it holds none, and returns a reference to its
+   value. It is the author's promise (RFC-0082 rule 5), and this rule is
+   its reader. An iteration that opens its entry by one such call, and
+   reads and writes it only through the reference returned or lends it to
+   calls of one instance stating `fold`, touches one key by rule 1. An
+   entry opened at a `v` that is not `L`'s identity has no keyed law:
+   every chunk would open it again (rule 4).
 
 **Why.** The entries are the independent unit, and the law of one entry's
 update is already read by RFC-0093; keying only names the entry.
