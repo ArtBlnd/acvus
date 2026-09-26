@@ -123,6 +123,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0094: a `while` whose exit is a linear bound on one counter of a constant step is a range `for` (Proposed)
 - RFC-0098: a cycle that touches its storage at one key per iteration splits by key (Proposed)
 - RFC-0099: a pipeline consumed where it is built is one pull loop over its source (Proposed)
+- RFC-0103: A lowerer's first shape runs the first stage's heavy or io call ahead, and the rest in place (Proposed)
 
 ### [ownership.md](ownership.md)
 
