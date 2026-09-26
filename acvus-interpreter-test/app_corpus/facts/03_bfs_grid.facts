@@ -18,7 +18,7 @@ while r22 -> L16 else L13 stages [L15, L16, L17]
 // L16: free {unwrap_variant}
 // L17: cycle Storage(r24) in_order law(Fold(r24, #10) exact) {ref, call push}
 // control chained through L15
-// cost in place: no count on entry
+// cost W=3 O=18287 split when n > 195062, n ≤ len(r17)
 // lower in place: inside the loop at L0
 for range(0 (r32)..r2) -> L4 else L5 stages [L4, L18]
 // L4: free {index, const, ==, *, +}

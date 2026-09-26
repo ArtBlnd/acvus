@@ -8,9 +8,9 @@ use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loop_deps::{
     Control, Law, LawOp, LoopDeps, Member, Order, StageMembership, Storage, Token,
 };
-use acvus_mir::analysis::loops::{Invariants, LoopNest, natural_loops_innermost_first};
+use acvus_mir::analysis::loops::{Invariants, LoopNest, Term, natural_loops_innermost_first};
 use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
-use acvus_mir::analysis::cost::{CostTable, Costs, InPlace, LoopCost};
+use acvus_mir::analysis::cost::{CostTable, Costs, InPlace, LoopCost, TripCount};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
@@ -2808,6 +2808,46 @@ fn a_pull_loop_costs_in_place_for_no_count_is_known_on_entry() {
         costs.of_loop(&c.deps_of(c.only_pull_header())),
         LoopCost::InPlace(InPlace::CountUnknown)
     );
+}
+
+/// RFC-0089 rule 1: `chars` states `len(ret) <= len(s)`, so the pull loop
+/// over its result runs at most that many iterations, and the split
+/// compares that bound.
+#[test]
+fn a_pull_loop_over_an_iterator_whose_making_call_bounds_it_costs_by_that_bound() {
+    let c = Compiled::of(
+        "let s = \"hello\".to_string(); let it = s.chars(); let n = 0; \
+         while let Some(ch) = it.next() { n = n + (ch as i64); } n",
+    );
+    let table = CostTable {
+        arithmetic: 1,
+        compare: 1,
+        load: 1,
+        store: 1,
+        allocation: 1,
+        local_call: 1,
+        extern_call: 1,
+        heavy: 1,
+        spawn: 1,
+        merge: 1,
+        chunk_dispatch: 1,
+        buffered_element: 1,
+        k: 1,
+    };
+    let costs = Costs::of(&c.cfg, &c.laws, &table);
+    let header = c.only_pull_header();
+    assert!(
+        matches!(
+            costs.of_loop(&c.deps_of(header)),
+            LoopCost::Split {
+                trips: TripCount::Bound,
+                ..
+            }
+        ),
+        "{}",
+        c.listing
+    );
+    assert!(matches!(costs.count(header), Some(Term::Len(_))), "{}", c.listing);
 }
 
 #[test]

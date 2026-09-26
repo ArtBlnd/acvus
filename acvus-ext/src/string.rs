@@ -304,8 +304,8 @@ fn ge(a: &str, b: &str) -> bool {
 
 // -- Producers ----------------------------------------------------------
 
-/// One Unicode scalar value per step.
-#[extern_fn(effect = pure)]
+/// One Unicode scalar value per step: at most one per byte.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn chars<I, Rt>(s: &str) -> Items<char, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -322,7 +322,7 @@ pub struct CharIndex {
 }
 
 /// One Unicode scalar value per step, each with its own byte offset.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn char_indices<I, Rt>(s: &str) -> Items<CharIndex, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -338,7 +338,9 @@ where
     )
 }
 
-#[extern_fn(effect = pure)]
+/// At most one line per byte: every line but an empty text's one holds a
+/// byte, its own or its terminator.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn lines<I, Rt>(s: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -348,7 +350,7 @@ where
 }
 
 /// One byte per step.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total, ensures(len(ret) = len(s)))]
 fn bytes<I, Rt>(s: &str) -> Items<i64, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -357,7 +359,8 @@ where
     Items::of(s.bytes().map(i64::from).collect())
 }
 
-#[extern_fn(effect = pure)]
+/// At most one word per byte.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn split_whitespace<I, Rt>(s: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -368,7 +371,9 @@ where
 
 // -- Splitting ----------------------------------------------------------
 
-#[extern_fn(effect = pure)]
+/// At most two pieces past one per byte: an empty `pat` splits at every
+/// character boundary, both ends included.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s) + 2))]
 fn split<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -377,7 +382,8 @@ where
     Items::of(s.split(pat).map(str::to_owned).collect())
 }
 
-#[extern_fn(effect = pure)]
+/// As `split`'s, from the end.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s) + 2))]
 fn rsplit<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,

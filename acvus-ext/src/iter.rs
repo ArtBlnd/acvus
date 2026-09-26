@@ -104,7 +104,21 @@ where
     }
 }
 
-#[extern_fn(instance_of = sig::next, effect = pure)]
+/// The most elements `next` yields from it: those it holds.
+impl<T, I, Rt> acvus_extern::ensures::Length for Items<T, I, Rt>
+where
+    T: Var<kind::Type>,
+    I: Var<kind::Identity>,
+    Rt: Runtime,
+{
+    fn length(&self) -> usize {
+        self.0.rest.len()
+    }
+}
+
+/// `total`: a step of a vec's owning iterator neither allocates nor
+/// panics.
+#[extern_fn(instance_of = sig::next, effect = pure, total)]
 pub(crate) fn next_items<T, I, Rt>(it: &mut Items<T, I, Rt>) -> Option<T>
 where
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
@@ -118,7 +132,7 @@ where
 /// Rust type of its own (RFC-0068 rule 8).
 macro_rules! next_items_of {
     (element: $t:ty, next: $next:ident) => {
-        #[::acvus_extern::extern_fn(instance_of = $crate::iter::sig::next, effect = pure)]
+        #[::acvus_extern::extern_fn(instance_of = $crate::iter::sig::next, effect = pure, total)]
         pub(crate) fn $next<I, Rt>(it: &mut $crate::iter::Items<$t, I, Rt>) -> Option<$t>
         where
             I: ::acvus_extern::Var<::acvus_extern::kind::Identity>,

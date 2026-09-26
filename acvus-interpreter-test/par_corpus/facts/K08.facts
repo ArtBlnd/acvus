@@ -9,7 +9,7 @@ while r24 -> L4 else L5 stages [L3, L4, L14]
 // L4: free {unwrap_variant, assign, ref, as_slice, call to_string, drop, array_begin, call vec}
 // L14: cycle Storage(r16) keyed(r17 keys in_order) in_order law(Fold(r16, #7) exact) {ref, call or_insert, call push}
 // control chained through L3
-// cost in place: no count on entry
+// cost W=35 O=18287 split when n > 16720, n ≤ len(r20)
 // lower in place: inside the loop at L0
 while r49 -> L9 else L6 stages [L8, L9, L15]
 // L8: cycle Storage(r50)+Control in_order {ref, call next, test_variant, while}

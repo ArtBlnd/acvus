@@ -3,5 +3,5 @@ while r10 -> L1 else L2 stages [L0, L1, L3]
 // L1: free {unwrap_variant, assign, ref, as_slice, call upper, drop, assign, ref, as_slice, spawn print, eval, drop}
 // L3: cycle Order(r7) any_order law(Order exact commutative) {merge}
 // control chained through L0
-// cost in place: no count on entry
+// cost W=18297 O=18287 split when n > 32, n ≤ len(r3)
 // lower in place: it is a pull loop

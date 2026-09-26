@@ -1245,7 +1245,8 @@ pub enum HeldBack {
 }
 
 /// A `for` terminator is never held back: the operations of its body are
-/// members of the same work, and each is asked for itself.
+/// members of the same work, and each is asked for itself. Nor is a pull
+/// loop whose count its iterator's making call bounds (RFC-0089 rule 5).
 pub struct RunAhead<'a> {
     cfg: &'a CfgBody,
     laws: &'a LawTable,
@@ -1254,12 +1255,22 @@ pub struct RunAhead<'a> {
 
 impl<'a> RunAhead<'a> {
     pub fn of(cfg: &'a CfgBody, laws: &'a LawTable, header: BlockIdx) -> Self {
-        let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
+        let domtree = DomTree::build(cfg);
+        let loops = natural_loops_innermost_first(cfg, &domtree);
         let ours = loop_blocks_of(&loops, header);
-        let in_while = loops
+        let whiles: Vec<&NaturalLoop> = loops
             .iter()
             .filter(|inner| inner.header != header && ours.contains(&inner.header))
             .filter(|inner| inner.is_while(cfg))
+            .collect();
+        let loans = (!whiles.is_empty()).then(|| Loans::build(cfg));
+        let in_while = whiles
+            .into_iter()
+            .filter(|inner| {
+                loans.as_ref().is_none_or(|loans| {
+                    crate::analysis::pull::bound(cfg, laws, loans, &domtree, inner).is_none()
+                })
+            })
             .flat_map(NaturalLoop::blocks)
             .collect();
         Self {

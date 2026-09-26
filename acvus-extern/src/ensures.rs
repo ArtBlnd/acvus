@@ -9,15 +9,22 @@ use crate::len::Arr;
 use crate::ty_arg::{Var, kind};
 
 #[diagnostic::on_unimplemented(
-    message = "`len` in a postcondition reads a slice or a container, and `{Self}` is neither",
-    label = "not a slice or a container",
-    note = "RFC-0082 rule 4: `len(x)` is the element count of a slice or a container parameter, or of `ret`"
+    message = "`len` in a postcondition reads a slice, a container or an iterator, and `{Self}` is none of them",
+    label = "not a slice, a container or an iterator",
+    note = "RFC-0082 rule 4: `len(x)` is the element count of a slice or a container, or the most elements an iterator's `next` yields from it"
 )]
 pub trait Length {
     fn length(&self) -> usize;
 }
 
 impl<T> Length for [T] {
+    fn length(&self) -> usize {
+        self.len()
+    }
+}
+
+/// A text's length is its byte count, as `string::len` reads it.
+impl Length for str {
     fn length(&self) -> usize {
         self.len()
     }

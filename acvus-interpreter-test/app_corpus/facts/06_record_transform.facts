@@ -3,7 +3,7 @@ while r5 -> L14 else L11 stages [L13, L14, L23]
 // L14: free {unwrap_variant}
 // L23: cycle Storage(r7) in_order law(Fold(r7, #3) exact) {ref, call push}
 // control chained through L13
-// cost in place: no count on entry
+// cost W=3 O=18287 split when n > 195062, n ≤ len(r0)
 // lower in place: it is a pull loop
 for slice(r23) -> L1 else L2 stages [L1, L27]
 // L1: free {take, !}
@@ -43,7 +43,7 @@ while r16 -> L13 else L10 stages [L12, L13, L14]
 // L13: free {unwrap_variant}
 // L14: cycle Storage(r18) in_order law(Fold(r18, #3) exact) {ref, call push}
 // control chained through L12
-// cost in place: no count on entry
+// cost W=3 O=18287 split when n > 195062, n ≤ len(r7) + 2
 // lower in place: inside the loop at L0
 for slice(r3) -> L1 else L2 stages [L1, L3, L4, L5, L6, L7]
 // L1: free {ref, as_slice, call to_string, const, const}

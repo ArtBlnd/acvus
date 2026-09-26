@@ -12,7 +12,7 @@ use crate::analysis::loop_deps::{
     Accumulator, BodyDeps, CallIdentity, Control, Cycle, CycleLaw, Guard, InstAt, KeyOrder, Law,
     LawOp, LoopDeps, Member, Order, Placement, Storage, Token,
 };
-use crate::analysis::loops::{Term, Trip};
+use crate::analysis::loops::Term;
 use crate::cfg::{CfgBody, Terminator, promote};
 use crate::ir::{
     Callee, ExitTrip, ForSource, IndexBound, IndexMode, InstKind, Label, MirBody, MirModule,
@@ -718,10 +718,9 @@ fn loop_fact_lines(
         Ok(deps) => {
             let mut lines = fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, vn);
             if let Some(costs) = &readers.costs {
-                let trip = costs.trip(found.header).and_then(|trip| match trip {
-                    Trip::Known(term) => Some(fmt_term(term, vn, consts, texts)),
-                    Trip::Unknown => None,
-                });
+                let trip = costs
+                    .count(found.header)
+                    .map(|term| fmt_term(term, vn, consts, texts));
                 lines.push(fmt_cost(costs.of_loop(deps), trip));
             }
             lines
