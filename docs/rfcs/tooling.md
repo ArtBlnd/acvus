@@ -10,16 +10,17 @@ Status: Accepted
 
 1. `acvus run <file>` compiles and executes; `acvus check <file>` compiles and
    reports; `acvus mir <file>` prints the MIR; `acvus ops <file>` prints the
-   prepared operations. The extension names the mode — `.acvus` a script,
-   `.acvt` a template (RFC-0071) — and `-e <expr>` runs an expression. The mode
-   chooses the pipeline, not the grammar (RFC-0045). `acvus lsp` serves an
-   editor over stdio (RFC-0086) and takes no file.
+   prepared operations. The extension names the mode: `.acvus` a script,
+   `.acvt` a template (RFC-0071). The mode chooses the pipeline, not the
+   grammar (RFC-0045). `acvus lsp` serves an editor over stdio (RFC-0086)
+   and takes no file.
 2. **Contexts come from inits.** A context's type is the graph's, and its
    first value is its init (RFC-0090 rule 1): `ctl space init <space>
-   <key> -e <expr> | -f <file>` stores one per key in the space. The runner
-   reads no context data. A run fills a context the space lacks where it
-   fetches it, by running that key's init, and a fetch of a key with no init
-   ends the run there, naming the command that adds one.
+   <key> -e <text> | -f <file>` stores one per key in the space, `-e` as
+   script text and `-f` from a file. The runner reads no context data. A
+   run fills a context the space lacks where it fetches it, by running that
+   key's init, and a fetch of a key with no init ends the run there, naming
+   the command that adds one.
 3. **A space holds its scripts.** `--space <name>` names a space the active
    ctl context maps to a location (rule 9). The space stores the sources of
    its scripts and inits beside its contexts, so a location carries code and

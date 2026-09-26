@@ -255,7 +255,6 @@ type Brand<'p> = PhantomData<fn(&'p ()) -> &'p ()>;
 pub enum Source<'a> {
     Script(&'a str),
     Template(&'a str),
-    Expr(&'a str),
 }
 
 macro_rules! source_parse {
@@ -263,7 +262,7 @@ macro_rules! source_parse {
         impl Source<'_> {
             $v fn parse(&self, interner: &Interner) -> Parsed {
                 match self {
-                    Source::Script(text) | Source::Expr(text) => {
+                    Source::Script(text) => {
                         Parsed::script(acvus_ast::parse_script(interner, text))
                     }
                     Source::Template(text) => Parsed::template(acvus_ast::parse(interner, text)),

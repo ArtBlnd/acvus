@@ -21,7 +21,6 @@ use acvus_utils::Interner;
 pub enum Mode {
     Script,
     Template,
-    Expr,
 }
 
 /// One source of a compilation, and the path its diagnostics are rendered
@@ -107,7 +106,6 @@ pub fn source(mode: Mode, text: &str) -> Source<'_> {
     match mode {
         Mode::Script => Source::Script(text),
         Mode::Template => Source::Template(text),
-        Mode::Expr => Source::Expr(text),
     }
 }
 
