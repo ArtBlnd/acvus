@@ -1,14 +1,20 @@
-for range(0 (r14)..r6) -> L1 else L2 stages [L1, L11]
+while r5 -> L14 else L11 stages [L13, L14, L15]
+// L13: cycle Storage(r6)+Control in_order {ref, call next, test_variant, while}
+// L14: free {unwrap_variant, assign, ref, as_slice, call parse, drop, call unwrap}
+// L15: cycle Storage(r7) in_order law(Fold(r7, #5) exact) {ref, call push}
+// control chained through L13
+// cost in place: no count on entry
+for range(0 (r27)..r19) -> L1 else L2 stages [L1, L16]
 // L1: free {index, const, +}
-// L11: cycle Storage(r15) in_order law(Op(Add) exact commutative) scan {index, +, index_set}
+// L16: cycle Storage(r28) in_order law(Op(Add) exact commutative) scan {index, +, index_set}
 // control upfront
-// cost W=4 O=18281 split when n > 146248, n = max(r6 - 0 (r14), 0)
-for range(0 (r63)..6 (r54)) -> L4 else L5 stages [L4, L12, L13]
+// cost W=4 O=18281 split when n > 146248, n = max(r19 - 0 (r27), 0)
+for range(0 (r76)..6 (r67)) -> L4 else L5 stages [L4, L17, L18]
 // L4: free {index}
-// L12: cycle Carried(r62) in_order law(Op(Add) exact commutative) scan {+}
-// L13: cycle Storage(r64) in_order {take, ==, const, *, cast, >=, const, assign, branch, jump, jump, branch}
+// L17: cycle Carried(r75) in_order law(Op(Add) exact commutative) scan {+}
+// L18: cycle Storage(r77) in_order {take, ==, const, *, cast, >=, const, assign, branch, jump, jump, branch}
 // control upfront
-// cost W=3 O=18287 split when n > 195062, n = max(6 (r54) - 0 (r63), 0)
+// cost W=3 O=18287 split when n > 195062, n = max(6 (r67) - 0 (r76), 0)
 for range(0 (r12)..r4) -> L1 else L2 stages [L1, L3]
 // L1: free {index, index, index, index, -}
 // L3: cycle Storage(r13) disjoint {index_set}
@@ -19,3 +25,9 @@ for slice(r3) -> L1 else L2 stages [L1, L3]
 // L3: cycle Storage(r7) keyed(r8) any_order law(Op(Add) exact commutative) {index, +, index_set}
 // control upfront
 // cost W=7 O=18281 split when n > 83571, n = len(r3)
+while r7 -> L3 else L0 stages [L2, L3, L4]
+// L2: cycle Storage(r8)+Control in_order {ref, call next, test_variant, while}
+// L3: free {unwrap_variant, take, assign, ref, call to_string}
+// L4: cycle Storage(r9) in_order law(Fold(r9, #5) exact) {ref, call push}
+// control chained through L2
+// cost in place: no count on entry

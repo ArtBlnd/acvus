@@ -47,7 +47,10 @@ const OPTION_ELEMENTS: &str = "let v = vec([Some(1), None, Some(3)]); \
                                } \
                                seen * 100 + acc";
 
-const BREAKS: &str = "let v = range(0, 10) | collect; \
+/// The input is a literal: a `range(..) | collect` is a pipeline RFC-0099
+/// fuses into a call-driven loop of its own, and these tests count the
+/// loops of the program.
+const BREAKS: &str = "let v = vec([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]); \
                       let it = as_iter(&v); \
                       let acc = 0; \
                       while let Some(x) = next(&mut it) { \
@@ -56,7 +59,7 @@ const BREAKS: &str = "let v = range(0, 10) | collect; \
                       } \
                       acc";
 
-const RETURNS: &str = "let v = range(0, 10) | collect; \
+const RETURNS: &str = "let v = vec([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]); \
                        let it = as_iter(&v); \
                        let acc = 0; \
                        while let Some(x) = next(&mut it) { \

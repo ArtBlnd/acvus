@@ -56,6 +56,37 @@ fn outer_storage_cycle_at(source: &str, opt: Opt) -> StorageCycle {
     }
 }
 
+struct KeyedJudgement {
+    keyed: bool,
+    listing: String,
+}
+
+/// Whether any staged loop of the program has a one-storage cycle judged
+/// keyed. A program renders its result after its loop, and RFC-0099 fuses
+/// that render into a loop of its own, whose one storage is a `push`
+/// folded in order.
+fn any_keyed_storage_cycle(source: &str) -> KeyedJudgement {
+    let interner = Interner::new();
+    let compiled = compile_script_at(&interner, source, &FxHashMap::default(), Opt::Full)
+        .unwrap_or_else(|e| panic!("{source}\n{e}"));
+    let listing = dump_with_facts(&interner, &compiled.module, &compiled.laws);
+    let cfg = promote(compiled.module.main.clone());
+    let mut keyed = false;
+    for loop_ in natural_loops_innermost_first(&cfg, &DomTree::build(&cfg))
+        .iter()
+        .filter(|loop_| Head::of(&cfg.blocks[loop_.header.0].terminator).is_some())
+    {
+        let deps = LoopDeps::of(&cfg, &compiled.laws, loop_.header)
+            .unwrap_or_else(|fault| panic!("{}:\n{listing}", fault.shown()));
+        let judged = deps.judge(&cfg, &compiled.laws);
+        keyed |= deps.cycles.iter().zip(judged).any(|(cycle, judged)| {
+            matches!(cycle.tokens[..], [Token::Storage(Storage::Slot(_))])
+                && matches!(judged.order, Order::Keyed { .. })
+        });
+    }
+    KeyedJudgement { keyed, listing }
+}
+
 fn is_remainder(cfg: &CfgBody, value: ValueId) -> bool {
     cfg.blocks.iter().flat_map(|block| &block.insts).any(|inst| {
         matches!(inst.kind, InstKind::BinOp { dst, op: BinOp::Mod, .. } if dst == value)
@@ -382,13 +413,13 @@ fn every_keyed_soundness_program_is_judged_as_listed() {
     assert_eq!(names, listed);
     for (program, &(_, keyed)) in programs.iter().zip(KEYED_SOUNDNESS_PROGRAMS) {
         let source = std::fs::read_to_string(program).expect("the program");
-        let c = outer_storage_cycle(&source);
+        let judged = any_keyed_storage_cycle(&source);
         assert_eq!(
-            matches!(c.order, Order::Keyed { .. }),
+            judged.keyed,
             keyed,
             "{}:\n{}",
             program.display(),
-            c.listing
+            judged.listing
         );
     }
 }

@@ -471,7 +471,9 @@ fn may_suspend(body: &Body) -> bool {
 
 #[tokio::test]
 async fn a_while_let_over_a_sync_iterator_is_one_loop_operation() {
-    let source = "let v = range(0, 8) | collect; let it = as_iter(&v); let acc = 0; \
+    // A literal input: `range(..) | collect` is a pipeline RFC-0099 fuses
+    // into a loop of its own.
+    let source = "let v = vec([0, 1, 2, 3, 4, 5, 6, 7]); let it = as_iter(&v); let acc = 0; \
                   while let Some(x) = next(&mut it) { acc = acc + *x; } acc";
     let (main, _) = prepared_entry(source, Ty::I64);
     assert!(

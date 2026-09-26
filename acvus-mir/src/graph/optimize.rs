@@ -90,6 +90,12 @@ pub fn optimize(
                 for closure in module.closures.values_mut() {
                     run_pass1_body(laws, &functions, closure);
                 }
+                // RFC-0099 rule 5: before the inliner, which then splices
+                // each closure the fused loop alone calls (RFC-0060).
+                // A declined pipeline runs its handlers, the program the
+                // source wrote.
+                let _declined: Vec<optimize::fusion::Declined> =
+                    optimize::fusion::run(interner, laws, module);
             }
             inliner::inline(&ssa_modules, &recursive)
         }

@@ -1,19 +1,43 @@
-for slice(r13) -> L1 else L2 stages [L1, L12]
+while r5 -> L14 else L11 stages [L13, L14, L23]
+// L13: cycle Storage(r6)+Control in_order {ref, call next, test_variant, while}
+// L14: free {unwrap_variant}
+// L23: cycle Storage(r7) in_order law(Fold(r7, #3) exact) {ref, call push}
+// control chained through L13
+// cost in place: no count on entry
+for slice(r23) -> L1 else L2 stages [L1, L27]
 // L1: free {take, !}
-// L12: cycle Storage(r14) any_order law(Op(Add) exact commutative) {take, +, assign}
-// L12: cycle Storage(r15) in_order law(Fold(r15, #4) exact) {ref, call push}
+// L27: cycle Storage(r24) any_order law(Op(Add) exact commutative) {take, +, assign}
+// L27: cycle Storage(r25) in_order law(Fold(r25, #3) exact) {ref, call push}
 // control upfront
-// cost W=4 O=18281 split when n > 146248, n = len(r13)
-for slice(r54) -> L9 else L10 stages [L9, L11]
+// cost W=4 O=18281 split when n > 146248, n = len(r23)
+while r51 -> L18 else L15 stages [L17, L18, L24]
+// L17: cycle Storage(r52)+Control in_order {ref, call next, test_variant, while}
+// L18: free {unwrap_variant, take}
+// L24: cycle Carried(r48) any_order law(Op(Add) exact commutative) {+%}
+// control chained through L17
+// cost in place: no count on entry
+while r66 -> L22 else L19 stages [L21, L22, L25]
+// L21: cycle Storage(r67)+Control in_order {ref, call next, test_variant, while}
+// L22: free {unwrap_variant, as_slice, call to_string}
+// L25: cycle Storage(r68) in_order law(Fold(r68, #3) exact) {ref, call push}
+// control chained through L21
+// cost in place: no count on entry
+for slice(r82) -> L9 else L10 stages [L9, L26]
 // L9: free {const_str, const_str, ref, call get, call unwrap, take, assign, ref, call to_string, assign, ref, const_str, ref, call get, call unwrap, take, assign, ref, call to_string, assign, ref, const_str, ref, call get, call unwrap, take, assign, ref, call to_string, assign, ref}
-// L11: cycle Storage(r56) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
+// L26: cycle Storage(r83) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
 // control upfront
-// cost W=63 O=18281 split when n > 9286, n = len(r54)
-for slice(r2) -> L1 else L2 stages [L1, L10]
+// cost W=63 O=18281 split when n > 9286, n = len(r82)
+for slice(r2) -> L1 else L2 stages [L1, L15]
 // L1: free {as_slice, const_str, call starts_with, !}
-// L10: cycle Storage(r4) in_order law(Fold(r4, #4) exact) {ref, call push}
+// L15: cycle Storage(r4) in_order law(Fold(r4, #3) exact) {ref, call push}
 // control upfront
 // cost W=5 O=18281 split when n > 116999, n = len(r2)
+while r16 -> L13 else L10 stages [L12, L13, L14]
+// L12: cycle Storage(r17)+Control in_order {ref, call next, test_variant, while}
+// L13: free {unwrap_variant}
+// L14: cycle Storage(r18) in_order law(Fold(r18, #3) exact) {ref, call push}
+// control chained through L12
+// cost in place: no count on entry
 for slice(r3) -> L1 else L2 stages [L1, L3, L4, L5, L6, L7]
 // L1: free {ref, as_slice, call to_string, const, const}
 // L3: cycle Storage(r5) keyed(r6 keys in_order) any_order law(Op(Add) exact commutative) {ref, call or_insert, take, +, assign}

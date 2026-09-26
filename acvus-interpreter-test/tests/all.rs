@@ -118,6 +118,7 @@ mod soundness;
 mod space;
 mod spawn_eval;
 mod stages;
+mod step_fusion;
 mod strength_reduction;
 mod string_std;
 mod structural_eq_clone;

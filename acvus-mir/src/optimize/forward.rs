@@ -134,8 +134,9 @@ fn forwarded_edge(cfg: &CfgBody, bi: usize, shape: &LoopShape) -> Option<Edge> {
 
 /// Every block a loop is made of, by label.
 struct LoopShape {
-    /// The header, the block that enters it, and the blocks the loop leaves
-    /// for: a block here is never removed.
+    /// The header, the block that enters it, the blocks the loop leaves
+    /// for, and each stage entry a `For` or `While` names, whose edge
+    /// `edges_mut` never redirects: a block here is never removed.
     held: FxHashSet<Label>,
     /// The headers alone: a header never gains a second way in, so no edge
     /// is redirected to one.
@@ -163,6 +164,13 @@ impl LoopShape {
                     .chain(leaving)
                     .map(|block| cfg.blocks[block.0].label),
             );
+        }
+        for block in &cfg.blocks {
+            if let Terminator::For { stages, .. } | Terminator::While { stages, .. } =
+                &block.terminator
+            {
+                shape.held.extend(stages.entries());
+            }
         }
         shape
     }

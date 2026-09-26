@@ -1,0 +1,19 @@
+error: `n` is moved once, and a per-element step runs many times: move it in the state's start or `finish`
+ --> tests/compile_fail/step_moves_a_parameter_per_element.rs:5:55
+  |
+5 | #[extern_fn(effect = pure, step(state s = 0; s = s +% n; finish s))]
+  |                                                       ^
+
+warning: unused imports: `Closure`, `Cross`, `Instance`, `Later`, `PassedByValue`, `Runtime`, `Stored`, `Var`, and `kind`
+ --> tests/compile_fail/step_moves_a_parameter_per_element.rs:2:20
+  |
+2 | use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^^^  ^^^^^  ^^^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `acvus_ext::iter_sig::next`
+ --> tests/compile_fail/step_moves_a_parameter_per_element.rs:3:5
+  |
+3 | use acvus_ext::iter_sig::next;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -427,7 +427,7 @@ impl FoldAttr {
 
 /// `g` is the extern `g` in the namespace the registry declares this
 /// function under, and `ns::g` the extern `g` in `ns`.
-fn qref_of(path: &Path) -> syn::Result<proc_macro2::TokenStream> {
+pub(crate) fn qref_of(path: &Path) -> syn::Result<proc_macro2::TokenStream> {
     let refused = || {
         syn::Error::new_spanned(
             path,
