@@ -1147,6 +1147,16 @@ fn grown_effects(
         .collect()
 }
 
+fn body_span(parsed: &ParsedSource) -> acvus_ast::Span {
+    match parsed {
+        ParsedSource::Script(script) => script.span,
+        ParsedSource::Template(template) => template.span,
+        ParsedSource::Recovered(RecoveredAst::Script(script)) => script.span,
+        ParsedSource::Recovered(RecoveredAst::Template(template)) => template.span,
+        ParsedSource::Fn(lifted) => lifted.decl.name().span,
+    }
+}
+
 pub fn infer_scc(
     interner: &Interner,
     scc: &[QualifiedRef],
@@ -1289,9 +1299,20 @@ impl Component<'_> {
         let mut resolved_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> = FxHashMap::default();
         let mut outcomes: FxHashMap<QualifiedRef, FnInferOutcome> = FxHashMap::default();
         for &fid in scc {
-            let ret = solver
-                .freeze_ty(&solver.resolve_ty(&own.ret[&fid]))
-                .unwrap_or_else(|_| Ty::error());
+            let (ret, open_ret) = match solver.close_ty(&solver.resolve_ty(&own.ret[&fid])) {
+                Ok(ret) => (ret, None),
+                Err(_) => (
+                    Ty::error(),
+                    Some(crate::error::MirError {
+                        kind: crate::error::MirErrorKind::MemberResultOpen { member: fid },
+                        span: self
+                            .parsed
+                            .get(&fid)
+                            .map_or(acvus_ast::Span::ZERO, |parsed| body_span(parsed)),
+                        labels: Vec::new(),
+                    }),
+                ),
+            };
             let member = checked.remove(&fid);
             let (signature, effect, checked) = match member {
                 Some(MemberCheck {
@@ -1324,30 +1345,50 @@ impl Component<'_> {
                 params: signature.params,
                 inputs: signature.inputs,
             };
-            let outcome = match checked {
-                Some(Checked {
-                    resolution: Ok(resolution),
-                    view,
-                    probe: _,
-                }) => FnInferOutcome::Complete {
+            let outcome = match (checked, open_ret) {
+                (
+                    Some(Checked {
+                        resolution: Ok(resolution),
+                        view,
+                        probe: _,
+                    }),
+                    None,
+                ) => FnInferOutcome::Complete {
                     tail_ty: resolution.tail_ty.clone(),
                     resolution,
                     meta,
                     view,
                 },
-                Some(Checked {
-                    resolution: Err(errors),
-                    view,
-                    probe: _,
-                }) => FnInferOutcome::Incomplete {
+                (
+                    Some(Checked {
+                        resolution: Ok(_),
+                        view,
+                        probe: _,
+                    }),
+                    Some(open_ret),
+                ) => FnInferOutcome::Incomplete {
+                    meta,
+                    errors: vec![open_ret],
+                    view: Some(view),
+                },
+                // A refused body adds no refusal for its open result. Its
+                // own refusals already say why the result is open, and
+                // RFC-0078 rule 5 keeps poison from repeating them.
+                (
+                    Some(Checked {
+                        resolution: Err(errors),
+                        view,
+                        probe: _,
+                    }),
+                    _,
+                ) => FnInferOutcome::Incomplete {
                     meta,
                     errors,
                     view: Some(view),
                 },
-                // A member with no parsed body was not checked.
-                None => FnInferOutcome::Incomplete {
+                (None, open_ret) => FnInferOutcome::Incomplete {
                     meta,
-                    errors: Vec::new(),
+                    errors: open_ret.into_iter().collect(),
                     view: None,
                 },
             };

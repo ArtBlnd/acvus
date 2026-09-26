@@ -322,6 +322,9 @@ pub enum MirErrorKind {
     ResultCarriesIdentity {
         callee: QualifiedRef,
     },
+    MemberResultOpen {
+        member: QualifiedRef,
+    },
     UnificationFailure {
         expected: Ty,
         got: Ty,
@@ -787,6 +790,14 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                      carries a source's identity; a value from outside the script comes from no \
                      source the script holds (RFC-0097 rule 3)",
                     qualified(interner, *callee)
+                )
+            }
+            MirErrorKind::MemberResultOpen { member } => {
+                write!(
+                    f,
+                    "the result of `{}` is left open where its signature is published: part of \
+                     it has no least element to close to",
+                    qualified(interner, *member)
                 )
             }
             MirErrorKind::AmbiguousType { resolved_ty } => {

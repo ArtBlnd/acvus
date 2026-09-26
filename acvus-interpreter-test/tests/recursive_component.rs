@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use acvus_interpreter::Value;
+use acvus_interpreter::{HostError, Value};
 use acvus_interpreter_test::{
     Helper, Refusal, check_graph, execute_compiled, int_context, split_context,
 };
@@ -51,6 +51,17 @@ fn compile_and_run(
     ret: Ty,
     opt: Opt,
 ) -> Result<Ran, Refusal> {
+    compile_and_execute(i, helpers, main, ret, opt)
+        .map(|ran| ran.expect("the seeds hold every context the run fetches"))
+}
+
+fn compile_and_execute(
+    i: &Interner,
+    helpers: &[Helper<'_>],
+    main: &str,
+    ret: Ty,
+    opt: Opt,
+) -> Result<Result<Ran, HostError>, Refusal> {
     let (context_types, snapshot) = split_context(i, int_context(i, "c", 5));
     let parsed = ParsedAst::Script(acvus_ast::parse_script(i, main).expect("main parses"));
     let cr = check_graph(
@@ -68,18 +79,32 @@ fn compile_and_run(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime");
-    let value = runtime
-        .block_on(interp.execute())
-        .expect("the seeds hold every context the run fetches");
-    let committed = interp
-        .take_writes()
-        .into_iter()
-        .map(|write| Committed {
-            context: write.key,
-            value: write.value.as_int(),
-        })
-        .collect();
-    Ok(Ran { value, committed })
+    let executed = runtime.block_on(interp.execute());
+    Ok(executed.map(|value| Ran {
+        value,
+        committed: interp
+            .take_writes()
+            .into_iter()
+            .map(|write| Committed {
+                context: write.key,
+                value: write.value.as_int(),
+            })
+            .collect(),
+    }))
+}
+
+/// The message both optimization levels trap with.
+fn trap_at_both_levels(i: &Interner, helpers: &[Helper<'_>], main: &str) -> String {
+    let [none, full] = [Opt::None, Opt::Full].map(|opt| {
+        match compile_and_execute(i, helpers, main, Ty::I64, opt) {
+            Ok(Err(HostError::Trapped { message })) => message,
+            Ok(Err(other)) => panic!("{opt:?} ended with {other:?}, not a trap"),
+            Ok(Ok(ran)) => panic!("{opt:?} ran to {:?}", ran.value),
+            Err(r) => panic!("{opt:?} refused:\n  {}", r.messages.join("\n  ")),
+        }
+    });
+    assert_eq!(none, full, "the two optimization levels trap alike");
+    none
 }
 
 fn ran_at_both_levels(i: &Interner, helpers: &[Helper<'_>], main: &str, ret: Ty) -> Vec<Ran> {
@@ -374,4 +399,26 @@ fn a_write_reached_only_through_recursion_is_bracketed_at_the_caller() {
             }]
         );
     }
+}
+
+// -- A result no path gives a value --------------------------------------
+
+#[test]
+fn a_host_function_that_only_panics_traps_with_its_message_also_as_an_operand() {
+    let i = Interner::new();
+    let helpers = [helper(&i, "f", "panic(\"no\".to_string())")];
+    for main in ["f(0)", "f(0) + 1", "1 + f(0)"] {
+        assert_eq!(trap_at_both_levels(&i, &helpers, main), "no", "{main}");
+    }
+}
+
+#[test]
+fn a_mutually_recursive_pair_with_a_base_runs() {
+    let i = Interner::new();
+    let helpers = [
+        helper(&i, "ping", "if $n > 3 { 7 } else { pong($n + 1) }"),
+        helper(&i, "pong", "ping($n + 1)"),
+    ];
+    assert_eq!(integer_at_both_levels(&i, &helpers, "ping(0)"), 7);
+    assert_eq!(integer_at_both_levels(&i, &helpers, "pong(0)"), 7);
 }

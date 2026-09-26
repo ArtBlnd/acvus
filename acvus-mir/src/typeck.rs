@@ -7457,6 +7457,7 @@ where
     ) -> InferTy {
         let resolved = self.solver.resolve_ty(operand);
         let inner = match &resolved {
+            TyTerm::Never => return self.solver.fresh_ty_var(),
             TyTerm::Ref(_, inner) => inner,
             TyTerm::Var(var) if self.solver.bound_of_var(*var).admits_a_reference() => {
                 return self.named_by_open_operand(operand, op, span);
