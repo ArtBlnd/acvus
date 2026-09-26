@@ -33,7 +33,7 @@
 33 acvus-extern/src/lend.rs
 33 acvus-extern/src/loan.rs
 58 acvus-extern/src/obj.rs
-4 acvus-extern/src/output.rs
+5 acvus-extern/src/output.rs
 4 acvus-extern/src/owned.rs
 50 acvus-extern/src/projection.rs
 17 acvus-extern/src/reference.rs
@@ -81,6 +81,7 @@
 1 acvus-interpreter-test/tests/tuple_crossing.rs
 19 acvus-interpreter/src/code.rs
 2 acvus-interpreter/src/executor.rs
+5 acvus-interpreter/src/hook.rs
 11 acvus-interpreter/src/host.rs
 1 acvus-interpreter/src/init.rs
 1 acvus-interpreter/src/interpreter.rs
