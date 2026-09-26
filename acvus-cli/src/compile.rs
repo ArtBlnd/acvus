@@ -88,9 +88,11 @@ impl Stopwatch {
     }
 }
 
-/// The entry a lone source compiles to.
+/// The entry a lone file or expression compiles to, with no space around it.
+pub const LONE_ENTRY: &str = "main";
+
 pub fn entry_ref(interner: &Interner) -> QualifiedRef {
-    QualifiedRef::root(interner.intern("main"))
+    QualifiedRef::root(interner.intern(LONE_ENTRY))
 }
 
 pub fn combine_refusal(error: &CombineError) -> String {

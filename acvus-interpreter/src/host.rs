@@ -1948,9 +1948,6 @@ macro_rules! scope_tooling {
         where
             A: Access,
         {
-            /// An entry the tooling runs whatever it declares, whose result
-            /// it reads by the settled type; one that still requires a `$`
-            /// input is refused.
             $v fn untyped_entry(self, name: &str) -> Result<UntypedEntry<'p, A>, HostError> {
                 let program = self.program;
                 let compiled = program.compiled(name)?;
@@ -2429,7 +2426,6 @@ impl<R> Output<'_, R> {
     }
 }
 
-/// An entry the runtime's tooling runs and reads by the settled type.
 pub struct UntypedEntry<'p, A = SyncAccess> {
     compiled: &'p CompiledEntry,
     access: PhantomData<fn() -> A>,
@@ -2438,7 +2434,6 @@ pub struct UntypedEntry<'p, A = SyncAccess> {
 
 pub struct UntypedOutput<'p> {
     value: Owned<AcvusRuntime>,
-    compiled: &'p CompiledEntry,
     brand: Brand<'p>,
 }
 
@@ -2455,7 +2450,6 @@ macro_rules! untyped_run {
                     // SAFETY: the run moved its result out to this caller,
                     // and no other holder owns it.
                     value: unsafe { Owned::from_value(Holding::new(), value) },
-                    compiled: self.compiled,
                     brand: PhantomData,
                 })
             }
@@ -2465,9 +2459,9 @@ macro_rules! untyped_run {
         impl UntypedOutput<'_> {
             $v fn with_value<O, F>(&self, f: F) -> O
             where
-                F: FnOnce(&Value, &Ty) -> O,
+                F: FnOnce(&Value) -> O,
             {
-                f(&self.value, &self.compiled.ret)
+                f(&self.value)
             }
         }
     };

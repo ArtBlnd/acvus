@@ -35,9 +35,10 @@ Status: Accepted
 5. stdout carries the result and nothing else: a template's text as it is, a
    script's value as JSON, a bare string without quotes.
 6. Every diagnostic — parse, inference, lowering, validation — goes to stderr
-   in one span-rendered shape, all at once. A run-time failure is a panic,
-   caught at the top of the process and printed as `error: <message>` with no
-   span (RFC-0044).
+   in one span-rendered shape, all at once. A run-time failure is a panic
+   (RFC-0044) that the host hands back as its trap (RFC-0090 rule 4), printed
+   as `error: <message>` with no span. A panic outside a run is a fault in
+   acvus itself, printed as `error: acvus panicked: <message>`.
 7. Exit status: 0 on success, 1 when compilation fails, 2 when the run fails,
    64 for a usage error. A refusal names the command that resolves it.
 8. Which registries the runner registers is this host's choice, as it is any

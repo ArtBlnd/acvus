@@ -24,7 +24,7 @@ use acvus_utils::Interner;
 
 use acvus_mir::graph::optimize::Opt;
 
-use crate::compile::{Binding, Diagnostic, Mode, Refused, Role, Stopwatch, Timed, Unit};
+use crate::compile::{Binding, Diagnostic, LONE_ENTRY, Mode, Refused, Role, Stopwatch, Timed, Unit};
 use crate::ctl::{
     ConfigFile, CtlError, Defaults, Layers, OptLevel, Parallel, ResolvedSpace, SpaceChoice,
     SpaceSource, Timing,
@@ -37,9 +37,6 @@ const EXIT_USAGE: u8 = 64;
 /// The Language Server Protocol has a server that exits without a prior
 /// `shutdown` exit with 1; `acvus lsp` ends every other failure the same way.
 const EXIT_LSP_FAILED: u8 = 1;
-
-/// The entry a lone file or expression compiles to, with no space around it.
-const LONE_ENTRY: &str = "main";
 
 const USAGE: &str = "\
 usage: acvus run   <file.acvus|file.acvt|script> [name=literal]... [--space S] [--parallel[=P]] [--opt L] [--time[=T]]
@@ -423,12 +420,11 @@ fn ms(duration: Duration) -> f64 {
     duration.as_micros() as f64 / 1_000.0
 }
 
-/// A run-time failure is a panic, and this is where the process stops
-/// being a Rust program and becomes a script runner: the operation's
-/// message on one `error:` line, the same form every other failure here
-/// prints, and `EXIT_RUN`. The default hook's `thread 'main' panicked at
-/// acvus-interpreter/src/...` names this compiler's source, which is not
-/// where a script author looks; `RUST_BACKTRACE` puts it back.
+/// The default hook prints `thread 'main' panicked at acvus-interpreter/src/...`
+/// where a trap is raised, before the host catches it into
+/// `HostError::Trapped` (RFC-0090 rule 4). That names this compiler's source,
+/// which is not where a script author looks, so the hook is silenced unless
+/// `RUST_BACKTRACE` is set.
 fn main() -> ExitCode {
     if std::env::var_os("RUST_BACKTRACE").is_none() {
         std::panic::set_hook(Box::new(|_| {}));
@@ -440,7 +436,7 @@ fn main() -> ExitCode {
     match catch_unwind(AssertUnwindSafe(|| runtime.block_on(cli()))) {
         Ok(code) => code,
         Err(panic) => {
-            eprintln!("error: {}", panic_message(panic.as_ref()));
+            eprintln!("error: acvus panicked: {}", panic_message(panic.as_ref()));
             ExitCode::from(EXIT_RUN)
         }
     }
@@ -452,7 +448,7 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
     }
     match panic.downcast_ref::<String>() {
         Some(message) => message,
-        None => "the run panicked with a payload that is not a message",
+        None => "a payload that is not a message",
     }
 }
 
@@ -883,7 +879,7 @@ impl Run<'_> {
             timings.run = watch.stop();
         }
         let interner = self.program.interner();
-        Ok(output.with_value(|value, _| Printed::of(interner, value, self.mode)))
+        Ok(output.with_value(|value| Printed::of(interner, value, self.mode)))
     }
 }
 

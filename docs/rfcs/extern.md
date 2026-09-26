@@ -1326,8 +1326,8 @@ glue at the type the checker settled.
      and the compilation that made it, and a load refuses another
      compilation's or another type's, so a wrong storage is refused and never
      read at another type.
-   - The CLI is the runtime's own tooling and reads by the settled `Ty`; no
-     public reader by `Ty` is offered.
+   - The CLI is the runtime's tooling and reads by kind (RFC-0054
+     rule 5); no public reader by `Ty` is offered.
 
 **Why.** The burden falls on the language's developers first, then on the
 authors of externs and hosts, who take care but meet no trap. The script's
