@@ -87,6 +87,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0097: A dynamic extern meets data from outside the checker at one sealed gate (Proposed)
 - RFC-0101: A host of this interpreter binds a hook, a dynamic extern whose body is a closure (Proposed)
 - RFC-0102: `unsafe` is written only as a primitive of a boundary module (Proposed)
+- RFC-0104: An extern states what a call computes as a term, the first fragment of its model (Proposed)
 
 ### [identity.md](identity.md)
 

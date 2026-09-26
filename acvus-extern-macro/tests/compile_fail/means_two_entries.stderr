@@ -1,0 +1,13 @@
+error: a term names one entry `x[k]` (RFC-0104 rule 1)
+ --> tests/compile_fail/means_two_entries.rs:4:76
+  |
+4 | #[extern_fn(effect = pure, reaches(xs[a], xs[b]), means(let first = xs[a]; xs[b]))]
+  |                                                                            ^^
+
+warning: unused imports: `Var` and `kind`
+ --> tests/compile_fail/means_two_entries.rs:2:20
+  |
+2 | use acvus_extern::{Var, extern_fn, kind};
+  |                    ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

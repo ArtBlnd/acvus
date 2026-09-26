@@ -36,6 +36,22 @@ extern_signature! { ns: "core", fn hash<T>(a: &T) -> u64 where T: crate::Var<cra
 // the template's text as `out` (RFC-0070 rule 5, RFC-0071 rule 3).
 extern_signature! { ns: "core", fn display<T>(a: &T, out: &mut String) where T: crate::Var<crate::kind::Type>; }
 
+// An obligation across artifacts: `acvus-mir` reads a `while` whose header
+// lends a storage `&mut` to an instance of this signature and tests the
+// `Option` it returns as a pull loop (RFC-0089 rule 1), and a step's
+// stream is pulled through it (RFC-0099 rule 3). Its language name stays
+// `iter::next`.
+extern_signature! {
+    ns: "iter",
+    effect = E,
+    fn next<I, T, E, Rt>(it: &mut I) -> Option<T>
+    where
+        I: crate::Var<crate::kind::Type>,
+        T: crate::Var<crate::kind::Type>,
+        E: crate::Var<crate::kind::Effect>,
+        Rt: crate::Runtime;
+}
+
 /// An obligation across artifacts. `acvus-mir`'s `slice_coercion` takes
 /// this declaration out of the environment's machine set to lower a
 /// `&String` argument at a `&str` parameter (RFC-0062 rule 3), so the
@@ -55,7 +71,7 @@ where
     extern_registry! {
         ns: "core",
         types: [crate::keying::Equiv, crate::keying::Opaque],
-        signatures: [clone, eq, cmp, add, sub, mul, div, rem, neg, hash, display],
+        signatures: [clone, eq, cmp, add, sub, mul, div, rem, neg, hash, display, next],
         fns: [as_str],
     }
 }

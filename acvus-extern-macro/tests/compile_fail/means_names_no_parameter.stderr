@@ -1,0 +1,5 @@
+error: `b` names no parameter of `same` and no `let` or `match` binding (RFC-0104 rule 1)
+ --> tests/compile_fail/means_names_no_parameter.rs:5:35
+  |
+5 | #[extern_fn(effect = pure, means(*b))]
+  |                                   ^

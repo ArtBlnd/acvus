@@ -1180,7 +1180,21 @@ where
     extreme_by_key_now(ctx, it, f, Extreme::Min)
 }
 
-#[extern_fn(effect = E, sync = min_by_key_now)]
+/// First wins on a tie: the step replaces the held element on a strict
+/// `<` only, as the handler does.
+#[extern_fn(
+    effect = E,
+    sync = min_by_key_now,
+    step(
+        state s = None;
+        let k = f(&x);
+        s = match s {
+            None => Some({ value: x, key: k }),
+            Some(b) => if k < b.key { Some({ value: x, key: k }) } else { Some(b) },
+        };
+        finish match s { None => None, Some(b) => Some(b.value) }
+    )
+)]
 async fn min_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -1209,7 +1223,21 @@ where
     extreme_by_key_now(ctx, it, f, Extreme::Max)
 }
 
-#[extern_fn(effect = E, sync = max_by_key_now)]
+/// First wins on a tie: the step replaces the held element on a strict
+/// `>` only, as the handler does.
+#[extern_fn(
+    effect = E,
+    sync = max_by_key_now,
+    step(
+        state s = None;
+        let k = f(&x);
+        s = match s {
+            None => Some({ value: x, key: k }),
+            Some(b) => if k > b.key { Some({ value: x, key: k }) } else { Some(b) },
+        };
+        finish match s { None => None, Some(b) => Some(b.value) }
+    )
+)]
 async fn max_by_key<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -1240,7 +1268,7 @@ where
             Chain<_, _, _, _, Rt>,
             Flatten<_, _, _, _, Rt>, FlatMap<_, _, _, _, Rt>,
         ],
-        signatures: [sig::next, sig::into_iter, sig::as_iter],
+        signatures: [sig::into_iter, sig::as_iter],
         fns: [
             into_iter_vec, next_items, into_iter_array,
             as_iter_vec, next_refs_vec, as_iter_array, next_refs_array,

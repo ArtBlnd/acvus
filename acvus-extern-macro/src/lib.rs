@@ -21,6 +21,7 @@ mod reaches;
 mod flows;
 mod generics;
 mod law;
+mod means;
 mod step;
 mod subst;
 
@@ -61,9 +62,9 @@ struct ExternFnAttr {
     /// `returns` or `total` (RFC-0082 rules 8 and 9). Either is the
     /// author's promise, which nothing here checks.
     returns: Option<StatedReturn>,
-    /// `copies(x)`: the result is a value equal to what reference parameter
-    /// `x` lends (RFC-0082 rule 10), the author's promise.
-    copies: Option<Ident>,
+    /// `means(..)`: what a call computes, as a term (RFC-0104), the
+    /// author's promise the model checker holds the handler to.
+    means: Option<means::MeansAttr>,
     /// `payload(o)`: on `f(o: Option<T>) -> T`, `f(Some(x))` is `x` and
     /// `f(None)` traps (RFC-0082 rule 3), the author's promise.
     payload: Option<Ident>,
@@ -103,7 +104,7 @@ impl Parse for ExternFnAttr {
             ensures: None,
             reaches: None,
             returns: None,
-            copies: None,
+            means: None,
             payload: None,
             cost: None,
             dynamic: false,
@@ -186,19 +187,11 @@ impl Parse for ExternFnAttr {
                 }
                 continue;
             }
-            if key == "copies" {
-                if out.copies.is_some() {
-                    return Err(syn::Error::new(key.span(), "`copies(..)` is stated twice"));
+            if key == "means" {
+                if out.means.is_some() {
+                    return Err(syn::Error::new(key.span(), "`means(..)` is stated twice"));
                 }
-                let content;
-                syn::parenthesized!(content in input);
-                out.copies = Some(content.parse()?);
-                if !content.is_empty() {
-                    return Err(syn::Error::new(
-                        content.span(),
-                        "`copies(x)` names one reference parameter",
-                    ));
-                }
+                out.means = Some(means::MeansAttr::parse_after(key, input)?);
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -235,6 +228,17 @@ impl Parse for ExternFnAttr {
                 }
                 continue;
             }
+            let unknown = || {
+                syn::Error::new(
+                    key.span(),
+                    "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
+                     `step`, `ensures`, `reaches`, `means`, `payload`, `returns`, `total`, `cost` \
+                     or `dynamic`",
+                )
+            };
+            if !["name", "instance_of", "effect", "sync", "cost"].contains(&key.to_string().as_str()) {
+                return Err(unknown());
+            }
             input.parse::<Token![=]>()?;
             if key == "name" {
                 out.name = Some(input.parse()?);
@@ -257,12 +261,7 @@ impl Parse for ExternFnAttr {
                 })?;
                 out.cost = Some(weight);
             } else {
-                return Err(syn::Error::new(
-                    key.span(),
-                    "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     `step`, `ensures`, `reaches`, `copies`, `payload`, `returns`, `total`, `cost` \
-                     or `dynamic`",
-                ));
+                return Err(unknown());
             }
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
@@ -920,7 +919,7 @@ fn dynamic_result(
     let stated = [
         attr.law.as_ref().map(|law| (law.first_word().span(), "a law")),
         attr.ensures.as_ref().map(|_| (fn_ident.span(), "`ensures`")),
-        attr.copies.as_ref().map(|named| (named.span(), "`copies`")),
+        attr.means.as_ref().map(|means| (means.keyword().span(), "`means`")),
         attr.payload.as_ref().map(|named| (named.span(), "`payload`")),
     ];
     if let Some((span, what)) = stated.into_iter().flatten().next() {
@@ -1113,14 +1112,15 @@ fn refuse_args_beside(
              names, and an `Args` member names none (RFC-0023 rule 8, RFC-0097 rule 1)",
         ));
     }
-    if let Some(named) = &attr.copies
-        && *named == view.ident
+    if let Some(means) = &attr.means
+        && means.names(&view.ident)
     {
         return Err(syn::Error::new(
-            named.span(),
+            means.keyword().span(),
             format!(
-                "`copies({named})` names an `Args`, which lends no reference the result could \
-                 copy: its members are taken by value (RFC-0082 rule 10, RFC-0097 rule 1)"
+                "`means` names `{}`, an `Args`, whose members a term cannot name \
+                 (RFC-0104 rule 1, RFC-0097 rule 1)",
+                view.ident
             ),
         ));
     }
@@ -2310,9 +2310,6 @@ fn generate_extern_fn(
             &ret,
             &returning,
             attr.instance_of.as_ref(),
-            attr.reaches
-                .as_ref()
-                .and_then(|reaches| reaches.keyed_param(&params, &is_type_var)),
         )?,
         (None, Some(named), None) => {
             law::checked_payload(named, fn_ident, &params, &ret, &returning)?
@@ -2338,38 +2335,13 @@ fn generate_extern_fn(
         Some(stated) => stated.declared(fn_ident, &params, &is_type_var)?,
         None => quote! { ::acvus_extern::Reaches::Lent },
     };
-    let copies = match &attr.copies {
-        Some(named) => {
-            let Some(at) = params.iter().position(|param| *named == param.name) else {
-                return Err(syn::Error::new(
-                    named.span(),
-                    format!("`{named}` names no parameter of `{fn_ident}` (RFC-0082 rule 10)"),
-                ));
-            };
-            // The text a `&str` lends is a `String`'s value (RFC-0070 rule
-            // 5), as `acvus_mir::laws::copies_fits` reads it.
-            let lent = quote::ToTokens::to_token_stream(&params[at].ty).to_string();
-            let returned = quote::ToTokens::to_token_stream(&ret).to_string();
-            let lends_the_result = matches!(returning, Returning::Value)
-                && match params[at].mode {
-                    Mode::Borrow => lent == returned,
-                    Mode::Str => returned == "String",
-                    _ => false,
-                };
-            if !lends_the_result {
-                return Err(syn::Error::new(
-                    named.span(),
-                    format!(
-                        "`copies({named})` is stated over `f(.., {named}: &T, ..) -> T` or \
-                         `f(.., {named}: &str, ..) -> String`, and `{fn_ident}` is not of that \
-                         shape (RFC-0082 rule 10)"
-                    ),
-                ));
-            }
-            quote! {
-                ::core::option::Option::Some(::acvus_extern::Copies { param: #at })
-            }
-        }
+    let means = match &attr.means {
+        Some(stated) => stated.checked(&means::Declaration {
+            fn_ident,
+            params: &params,
+            reaches: attr.reaches.as_ref(),
+            is_type_var: &is_type_var,
+        })?,
         None => quote! { ::core::option::Option::None },
     };
     let returns = match attr.returns {
@@ -2440,7 +2412,7 @@ fn generate_extern_fn(
                     ensures: #ensures,
                     reaches: #reaches,
                     returns: #returns,
-                    copies: #copies,
+                    means: #means,
                     cost: #cost,
                 },
                 instances: __instances,

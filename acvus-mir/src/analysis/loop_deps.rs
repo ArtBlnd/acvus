@@ -32,6 +32,7 @@ use crate::laws::{
     ExternInstance, LawTable, ReachedElement, ReachedPlace, Reaches, ResolvedBinary, ResolvedFold,
     ResolvedIdentity, ResolvedLaws,
 };
+use crate::means::{EntryAccess, EntryReading, Stored, Term as MeansTerm};
 use crate::ty::{Mutability, Ty};
 
 // -- Stage membership (rule 1) ----------------------------------------
@@ -251,17 +252,30 @@ pub fn loop_blocks_of(loops: &[NaturalLoop], header: BlockIdx) -> Vec<BlockIdx> 
     }
 }
 
+/// How a pull loop's control joins its pulls (RFC-0089 rules 1 and 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PullExits {
+    /// The loop leaves at its header alone: the header, its call and its
+    /// test are the control token's cycle.
+    AtTheHeader,
+    /// The loop leaves from its body too, and its pulls run ahead of that
+    /// exit: the iterator's cycle does not join the control token.
+    AheadOfABodyExit,
+}
+
 /// RFC-0089 rule 1's pull: the header holds a `Ref` lending one storage
 /// `&mut`, an extern call of that reference alone returning an `Option`, and
 /// the test of that `Option`'s `Some`, which its branch decides by; and no
-/// other block of the loop leaves it. Which externs pull is
-/// `optimize::while_to_for`'s to decide; this is the shape it wrote.
+/// other block of the loop leaves it, or the pulls run ahead of the body's
+/// exit (rule 5). Which externs pull is `optimize::while_to_for`'s to
+/// decide; this is the shape it wrote.
 fn pull_shape(
     cfg: &CfgBody,
     loans: &Loans<'_>,
+    laws: &LawTable,
     header: BlockIdx,
     loop_blocks: &[BlockIdx],
-) -> Result<(), ShapeFault> {
+) -> Result<PullExits, ShapeFault> {
     let block = &cfg.blocks[header.0];
     let Terminator::While { cond, .. } = &block.terminator else {
         return Err(ShapeFault::HeaderIsNoPull);
@@ -325,8 +339,11 @@ fn pull_shape(
                 .any(|succ| !loop_blocks.contains(succ))
         });
     match leaves_elsewhere {
+        false => Ok(PullExits::AtTheHeader),
+        true if crate::analysis::pull::runs_ahead(cfg, laws, loans, header, loop_blocks) => {
+            Ok(PullExits::AheadOfABodyExit)
+        }
         true => Err(ShapeFault::PullLeavesElsewhere),
-        false => Ok(()),
     }
 }
 
@@ -534,9 +551,10 @@ impl LoopDeps {
             panic!("block {} heads no `For` and no `While`", header.0)
         };
         let membership = StageMembership::of(cfg, header, head, stages, loop_blocks)?;
-        if let Head::Pull = head {
-            pull_shape(cfg, loans, header, loop_blocks)?;
-        }
+        let pull_exits = match head {
+            Head::Pull => Some(pull_shape(cfg, loans, laws, header, loop_blocks)?),
+            Head::For(_) => None,
+        };
         let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body(), head);
         let slots = TargetSlots::of(loans, head.source(), loop_blocks);
         let cells = inverse_cells(
@@ -579,6 +597,7 @@ impl LoopDeps {
                     lent,
                     header,
                     loop_blocks,
+                    pull_exits,
                 )
                 .into_iter()
                 .map(|found| place(found, &stage_of))
@@ -1244,7 +1263,8 @@ pub enum HeldBack {
 }
 
 /// A `for` terminator is never held back: the operations of its body are
-/// members of the same work, and each is asked for itself.
+/// members of the same work, and each is asked for itself. Nor is a pull
+/// loop whose count its iterator's making call bounds (RFC-0089 rule 5).
 pub struct RunAhead<'a> {
     cfg: &'a CfgBody,
     laws: &'a LawTable,
@@ -1253,12 +1273,22 @@ pub struct RunAhead<'a> {
 
 impl<'a> RunAhead<'a> {
     pub fn of(cfg: &'a CfgBody, laws: &'a LawTable, header: BlockIdx) -> Self {
-        let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
+        let domtree = DomTree::build(cfg);
+        let loops = natural_loops_innermost_first(cfg, &domtree);
         let ours = loop_blocks_of(&loops, header);
-        let in_while = loops
+        let whiles: Vec<&NaturalLoop> = loops
             .iter()
             .filter(|inner| inner.header != header && ours.contains(&inner.header))
             .filter(|inner| inner.is_while(cfg))
+            .collect();
+        let loans = (!whiles.is_empty()).then(|| Loans::build(cfg));
+        let in_while = whiles
+            .into_iter()
+            .filter(|inner| {
+                loans.as_ref().is_none_or(|loans| {
+                    crate::analysis::pull::bound(cfg, laws, loans, &domtree, inner).is_none()
+                })
+            })
             .flat_map(NaturalLoop::blocks)
             .collect();
         Self {
@@ -1378,6 +1408,12 @@ pub enum Law {
     /// `Some` of `⊕`'s identity, or from `None` adjoined once more as
     /// identity where `⊕` has none in the payload's type (RFC-0093 rule 4).
     OptionAbsorbing(Box<Law>),
+    /// The law `f(a: T, b: T) -> Option<T>` states over its extension to
+    /// `Option<T>` (RFC-0082 rule 2): `Some(a) · Some(b)` is `f(a, b)`, and
+    /// `None` absorbs from either side. Its identity is `Some` of the one
+    /// `f` states at `T`. A switch on the token whose `None` arm leaves it
+    /// and whose `Some(b)` arm sends `f(b, y)` reads it (RFC-0093 rule 4).
+    Extension(CallLaw),
     /// A record token chosen whole by a strict compare of its field `field`
     /// with a value of the iteration, the other arm leaving it: `a · b` is
     /// `b` where `b.field` wins the strict compare `op` (`Max` or `Min`)
@@ -1599,6 +1635,14 @@ enum Reach {
     Whole,
 }
 
+/// A place read through a shared reference: `path` below what
+/// `reference` lends.
+#[derive(Debug, Clone, PartialEq)]
+struct LentPlace {
+    reference: ValueId,
+    path: Vec<PathSeg>,
+}
+
 /// The element parameter of a `for` body over a slice is the source's
 /// element at the counter parameter beside it.
 #[derive(Clone, Copy)]
@@ -1695,37 +1739,68 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             InstKind::FunctionCall {
                 dst, callee, args, ..
             } => self.entry_returned(*dst, callee, args),
+            // The payload of an entry's borrowed view is a reference to the
+            // entry's value.
+            InstKind::UnwrapVariant { src, .. } => {
+                let Some(src_at) = self.defs.get(src) else {
+                    return None;
+                };
+                match &self.cfg.blocks[src_at.block.0].insts[src_at.at].kind {
+                    InstKind::FunctionCall {
+                        dst,
+                        callee,
+                        args,
+                        ..
+                    } if matches!(
+                        self.laws.entry_access(callee),
+                        Some(EntryReading {
+                            access: EntryAccess::Views(_),
+                            ..
+                        })
+                    ) =>
+                    {
+                        self.entry_returned(*dst, callee, args)
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
 
-    /// The entry a call stating `law(absent = v)` returns a reference to:
-    /// the one place `x[k]` its declaration reaches, where the loans the
-    /// result names are all of the storage `x`'s argument lends (RFC-0079).
+    /// The entry a call's term returns a reference to or a view of
+    /// (RFC-0104, RFC-0098 rule 5): the place `x[k]` its declaration
+    /// reaches, where the loans the result names are all of the storage
+    /// `x`'s argument lends (RFC-0079).
     fn entry_returned(&self, result: ValueId, callee: &Callee, args: &[ValueId]) -> Option<Place> {
-        let ResolvedLaws::Absent { .. } = self.laws.of_callee(callee) else {
+        let EntryReading {
+            entry,
+            access: EntryAccess::Opens { .. } | EntryAccess::Views(_),
+        } = self.laws.entry_access(callee)?
+        else {
             return None;
         };
         let Reaches::Places(declared) = self.laws.reaches_of(callee) else {
             return None;
         };
-        let [
-            ReachedPlace {
-                param,
-                element: Some(ReachedElement::Key(key)),
-            },
-        ] = declared[..]
-        else {
+        let reaches_the_entry = declared.iter().any(|place| {
+            *place
+                == ReachedPlace {
+                    param: entry.table,
+                    element: Some(ReachedElement::Key(entry.key)),
+                }
+        });
+        if !reaches_the_entry {
             return None;
-        };
-        let table = self.named_by(*args.get(param)?)?;
+        }
+        let table = self.named_by(*args.get(entry.table)?)?;
         let named = self.loans.names(result);
         let into_the_table =
             !named.is_empty() && named.iter().all(|loan| loan.storage.slot() == Some(table.slot));
         if !into_the_table {
             return None;
         }
-        Some(table.below([Component::Key(*args.get(key)?)]))
+        Some(table.below([Component::Key(*args.get(entry.key)?)]))
     }
 
     /// RFC-0098 rule 1: whether the program shows the key values `a` and
@@ -1737,6 +1812,9 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
     fn one_key(&self, a: ValueId, b: ValueId) -> bool {
         if a == b {
             return true;
+        }
+        if let (Some(a), Some(b)) = (self.key_read(a), self.key_read(b)) {
+            return a == b;
         }
         let (Some(a_at), Some(b_at)) = (self.defs.get(&a), self.defs.get(&b)) else {
             return false;
@@ -1817,6 +1895,69 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
                     && same_literal(a_value, b_value)
             }
             _ => false,
+        }
+    }
+
+    /// The place through a shared reference whose value a key is: a key
+    /// at a `&K` parameter is the value it lends, a read of a place through
+    /// a shared reference is that place's value, and a call whose term is
+    /// `*x` is what its argument `x` lends (RFC-0098 rule 1). No write
+    /// reaches such a place while the reference lives (RFC-0028).
+    fn key_read(&self, key: ValueId) -> Option<LentPlace> {
+        let lent_through = |value: ValueId| -> Option<LentPlace> {
+            let at = self.defs.get(&value)?;
+            match &self.cfg.blocks[at.block.0].insts[at.at].kind {
+                InstKind::Ref {
+                    target: RefTarget::Through(reference),
+                    path,
+                    mutability: Mutability::Shared,
+                    ..
+                } => Some(LentPlace {
+                    reference: *reference,
+                    path: path.clone(),
+                }),
+                InstKind::AsSlice {
+                    container,
+                    mutability: Mutability::Shared,
+                    ..
+                } => self.key_read_of_reference(*container),
+                _ => None,
+            }
+        };
+        let read = match self.cfg.val_types.get(&key)? {
+            Ty::Ref(Mutability::Shared, _) => lent_through(key)?,
+            Ty::Ref(Mutability::Mut, _) => return None,
+            _ => {
+                let at = self.defs.get(&key)?;
+                match &self.cfg.blocks[at.block.0].insts[at.at].kind {
+                    InstKind::Take {
+                        target: RefTarget::Through(reference),
+                        path,
+                        taken_out: false,
+                        ..
+                    } => LentPlace {
+                        reference: *reference,
+                        path: path.clone(),
+                    },
+                    InstKind::FunctionCall { callee, args, .. } => {
+                        let lent = self.laws.lent_value_of(callee)?;
+                        self.key_read_of_reference(*args.get(lent)?)?
+                    }
+                    _ => return None,
+                }
+            }
+        };
+        matches!(
+            self.cfg.val_types.get(&read.reference),
+            Some(Ty::Ref(Mutability::Shared, _))
+        )
+        .then_some(read)
+    }
+
+    fn key_read_of_reference(&self, reference: ValueId) -> Option<LentPlace> {
+        match self.cfg.val_types.get(&reference)? {
+            Ty::Ref(Mutability::Shared, _) => self.key_read(reference),
+            _ => None,
         }
     }
 
@@ -2262,11 +2403,17 @@ fn runs_before_the_iteration_ends(
 }
 
 /// Read over an integer, a `String` or a `Bool` operation, a declared
-/// constant, or a call of no argument of the declared extern; any other
-/// value is no identity here.
-fn is_identity(cfg: &CfgBody, law: &Law, value: ValueId) -> bool {
+/// constant, or the value of the declared extern of no argument: a call of
+/// it, or a value its term is (RFC-0104 rule 3); any other value is no
+/// identity here.
+fn is_identity(cfg: &CfgBody, laws: &LawTable, law: &Law, value: ValueId) -> bool {
     let called = |named: ExternInstance| {
-        cfg.blocks
+        let as_its_term = laws
+            .means_of_instance(named)
+            .and_then(|means| means.closed())
+            .is_some_and(|term| is_term(cfg, value, term));
+        let a_call_of_it = cfg
+            .blocks
             .iter()
             .flat_map(|block| &block.insts)
             .any(|inst| match &inst.kind {
@@ -2284,7 +2431,8 @@ fn is_identity(cfg: &CfgBody, law: &Law, value: ValueId) -> bool {
                         } == named
                 }
                 _ => false,
-            })
+            });
+        as_its_term || a_call_of_it
     };
     let constant = constant_of(cfg, value);
     let int = match constant {
@@ -2316,6 +2464,52 @@ fn is_identity(cfg: &CfgBody, law: &Law, value: ValueId) -> bool {
             ..
         }) => called(*named),
         Law::Fold(FoldAccumulator { fold, .. }) => called(fold.identity),
+        _ => false,
+    }
+}
+
+/// Whether the program computes `value` as `term` states it: a call of the
+/// extern the term names on arguments that are its argument terms, an
+/// array, a variant or a constant. A call the term holds is read as the
+/// call it is, never by what it computes.
+fn is_term(cfg: &CfgBody, value: ValueId, term: &MeansTerm) -> bool {
+    let Some(kind) = def_of(cfg, value) else {
+        return false;
+    };
+    let is_option = |dst: &ValueId| matches!(cfg.val_types.get(dst), Some(Ty::Option(_)));
+    match (term, kind) {
+        (
+            MeansTerm::Call { name, args },
+            InstKind::FunctionCall {
+                callee: Callee::Extern { id, .. },
+                args: passed,
+                ..
+            },
+        ) => {
+            id == name
+                && args.len() == passed.len()
+                && args
+                    .iter()
+                    .zip(passed)
+                    .all(|(term, passed)| is_term(cfg, *passed, term))
+        }
+        (MeansTerm::Array(items), InstKind::ArrayBegin { .. }) => items.is_empty(),
+        (MeansTerm::Array(items), InstKind::ArrayPush { array, value, .. }) => {
+            let Some((last, rest)) = items.split_last() else {
+                return false;
+            };
+            is_term(cfg, *value, last) && is_term(cfg, *array, &MeansTerm::Array(rest.to_vec()))
+        }
+        (MeansTerm::Const(literal), InstKind::Const { value, .. }) => same_literal(literal, value),
+        (MeansTerm::None, InstKind::MakeVariant { dst, payload: None, .. }) => is_option(dst),
+        (
+            MeansTerm::Some(inner),
+            InstKind::MakeVariant {
+                dst,
+                payload: Some(held),
+                ..
+            },
+        ) => is_option(dst) && is_term(cfg, *held, inner),
         _ => false,
     }
 }
@@ -2357,11 +2551,12 @@ struct EntryFold {
 #[derive(Debug, Clone, Copy)]
 enum KeyedPart {
     Element,
-    Entry(EntryOpened),
+    Entry(Option<EntryOpened>),
 }
 
-/// The one call stating `law(absent = v)` that opens a table's entry, which
-/// it makes `default` where the table held none.
+/// The value an iteration reads its entry at where the table held none:
+/// the `default` of a call whose term opens the entry (`or_insert`), or
+/// the value a switch on the entry's view sends where it holds none.
 #[derive(Debug, Clone, Copy)]
 struct EntryOpened {
     at: InstAt,
@@ -2395,7 +2590,212 @@ struct ElementLoad {
 #[derive(Debug, Clone, Copy)]
 struct ElementStore {
     at: InstAt,
-    stored: ValueId,
+    stored: StoredValue,
+    /// The result of the call whose term stores, which the iteration does
+    /// not read (`keyed_storage` refuses one it reads).
+    call_result: Option<ValueId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoredValue {
+    Value(ValueId),
+    /// A set's `true`, which a call's term stores.
+    Marked,
+}
+
+/// `match get(&m, &k) { Some(v) => *v, None => d }` read through `get`'s
+/// term `&m[k]`: the join receives the entry's value, or `d` where the
+/// table holds none, which is the value `or_insert`'s term opens an entry
+/// at (RFC-0104 rule 3).
+struct ViewedLoad {
+    loaded: ValueId,
+    default: ValueId,
+    switch: BlockIdx,
+    unwrap: InstAt,
+    take: InstAt,
+}
+
+fn viewed_load(
+    cfg: &CfgBody,
+    tags: crate::ty::OptionTags,
+    call: InstAt,
+    view: ValueId,
+) -> Option<ViewedLoad> {
+    let Terminator::Switch { tag, arms, default } = &cfg.blocks[call.block.0].terminator else {
+        return None;
+    };
+    if *tag != view {
+        return None;
+    }
+    let targets: Vec<SwitchTarget<'_>> = arms
+        .iter()
+        .map(|(key, label, args)| SwitchTarget {
+            key: Some(key),
+            label: *label,
+            args,
+        })
+        .chain(default.iter().map(|(label, args)| SwitchTarget {
+            key: None,
+            label: *label,
+            args,
+        }))
+        .collect();
+    let [first, second] = &targets[..] else {
+        return None;
+    };
+    let keyed = |target: &SwitchTarget<'_>, tag| target.key == Some(&crate::ir::SwitchKey::Tag(tag));
+    let none_keyed = |target: &SwitchTarget<'_>| target.key.is_none() || keyed(target, tags.none);
+    let (some, none) = match keyed(first, tags.some) {
+        true => (first, second),
+        false => (second, first),
+    };
+    if !keyed(some, tags.some) || !none_keyed(none) || !some.args.is_empty() || !none.args.is_empty()
+    {
+        return None;
+    }
+    let some_block = *cfg.label_to_block.get(&some.label)?;
+    let none_block = *cfg.label_to_block.get(&none.label)?;
+    let preds = cfg.predecessors();
+    let only_from = |block: BlockIdx, from: &[BlockIdx]| {
+        let mut found: Vec<BlockIdx> = preds.get(&block).map(|p| p.to_vec()).unwrap_or_default();
+        found.sort_unstable();
+        let mut wanted = from.to_vec();
+        wanted.sort_unstable();
+        found == wanted
+    };
+    if some_block == none_block
+        || !only_from(some_block, &[call.block])
+        || !only_from(none_block, &[call.block])
+    {
+        return None;
+    }
+    let [unwrap, take] = &cfg.blocks[some_block.0].insts[..] else {
+        return None;
+    };
+    let InstKind::UnwrapVariant { dst: payload, src } = &unwrap.kind else {
+        return None;
+    };
+    let InstKind::Take {
+        dst: read,
+        target: RefTarget::Through(through),
+        path,
+        taken_out: false,
+    } = &take.kind
+    else {
+        return None;
+    };
+    if src != tag || through != payload || !path.is_empty() {
+        return None;
+    }
+    let none_holds_constants = cfg.blocks[none_block.0]
+        .insts
+        .iter()
+        .all(|inst| matches!(inst.kind, InstKind::Const { .. }));
+    let (
+        Terminator::Jump {
+            label: some_join,
+            args: some_args,
+        },
+        Terminator::Jump {
+            label: none_join,
+            args: none_args,
+        },
+    ) = (
+        &cfg.blocks[some_block.0].terminator,
+        &cfg.blocks[none_block.0].terminator,
+    )
+    else {
+        return None;
+    };
+    if !none_holds_constants || some_join != none_join || some_args.len() != none_args.len() {
+        return None;
+    }
+    let join = *cfg.label_to_block.get(some_join)?;
+    if !only_from(join, &[some_block, none_block]) {
+        return None;
+    }
+    let [index] = some_args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| **arg == *read)
+        .map(|(at, _)| at)
+        .collect::<Vec<_>>()[..]
+    else {
+        return None;
+    };
+    let others_agree = some_args
+        .iter()
+        .zip(none_args)
+        .enumerate()
+        .all(|(at, (some, none))| at == index || some == none);
+    let default = none_args[index];
+    let default_is_constant = matches!(
+        def_of(cfg, default),
+        Some(InstKind::Const { .. })
+    );
+    let used_once = |value: ValueId, wanted: usize| uses_of(cfg, value) == wanted;
+    let read_only_here = used_once(*tag, 2) && used_once(*payload, 1) && used_once(*read, 1);
+    (others_agree && default_is_constant && read_only_here).then_some(ViewedLoad {
+        loaded: *cfg.blocks[join.0].params.get(index)?,
+        default,
+        switch: call.block,
+        unwrap: InstAt {
+            block: some_block,
+            at: 0,
+        },
+        take: InstAt {
+            block: some_block,
+            at: 1,
+        },
+    })
+}
+
+struct SwitchTarget<'t> {
+    key: Option<&'t crate::ir::SwitchKey>,
+    label: Label,
+    args: &'t [ValueId],
+}
+
+fn def_of(cfg: &CfgBody, value: ValueId) -> Option<&InstKind> {
+    cfg.blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .map(|inst| &inst.kind)
+        .find(|kind| inst_info::defs(kind).contains(&value))
+}
+
+/// How many instructions and terminators of the body read `value`, one
+/// count per reading member.
+fn uses_of(cfg: &CfgBody, value: ValueId) -> usize {
+    let by_insts = cfg
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst_info::uses(&inst.kind).contains(&value))
+        .count();
+    let by_terms = cfg
+        .blocks
+        .iter()
+        .filter(|block| inst_info::terminator_uses(&block.terminator).contains(&value))
+        .count();
+    by_insts + by_terms
+}
+
+/// Whether nothing but a `drop` reads `value`.
+fn read_only_by_drops(cfg: &CfgBody, value: ValueId) -> bool {
+    let read_by_other = cfg
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(|inst| {
+            !matches!(inst.kind, InstKind::Drop { .. })
+                && inst_info::uses(&inst.kind).contains(&value)
+        });
+    let read_by_term = cfg
+        .blocks
+        .iter()
+        .any(|block| inst_info::terminator_uses(&block.terminator).contains(&value));
+    !read_by_other && !read_by_term
 }
 
 fn keyed_storages(
@@ -2436,7 +2836,11 @@ fn keyed_storages(
 /// Every place in the iteration is one `[At(κ)]` or one `[Key(κ)]`, each
 /// `κ` computed once per iteration and one key with the first. An element is
 /// read by an `Index` copy and written by an `IndexSet`; an entry is read and
-/// written whole through the reference its opening call returns.
+/// written by calls whose terms say what each does to it (RFC-0098 rule 5):
+/// one opening call and the reference it returns, read and written whole or
+/// lent to calls of one instance stating `fold`; a view of it read by a
+/// switch ([`viewed_load`]); and calls that store a value whatever the entry
+/// held, whose results the iteration does not read.
 fn keyed_storage(
     cfg: &CfgBody,
     laws: &LawTable,
@@ -2451,12 +2855,38 @@ fn keyed_storage(
     let mut loads: Vec<ElementLoad> = Vec::new();
     let mut stores: Vec<ElementStore> = Vec::new();
     let mut folds: Vec<EntryFold> = Vec::new();
+    let mut viewed: Vec<ViewedLoad> = Vec::new();
+    for &block in loop_blocks {
+        for (at, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
+            let InstKind::FunctionCall { dst, callee, .. } = &inst.kind else {
+                continue;
+            };
+            let Some(EntryReading {
+                access: EntryAccess::Views(Mutability::Shared),
+                ..
+            }) = laws.entry_access(callee)
+            else {
+                continue;
+            };
+            if places.reach_of_inst(&inst.kind, slot).is_none() {
+                continue;
+            }
+            let tags = laws.option_tags()?;
+            viewed.push(viewed_load(cfg, tags, InstAt { block, at }, *dst)?);
+        }
+    }
+    let covered = |at: InstAt| viewed.iter().any(|view| view.unwrap == at || view.take == at);
     for &block in loop_blocks {
         let held = &cfg.blocks[block.0];
-        if places.reach_of_term(&held.terminator, slot).is_some() {
+        let switch_on_view = viewed.iter().any(|view| view.switch == block);
+        if !switch_on_view && places.reach_of_term(&held.terminator, slot).is_some() {
             return None;
         }
         for (at, inst) in held.insts.iter().enumerate() {
+            let at = InstAt { block, at };
+            if covered(at) {
+                continue;
+            }
             let Some(reach) = places.reach_of_inst(&inst.kind, slot) else {
                 continue;
             };
@@ -2478,7 +2908,6 @@ fn keyed_storage(
             {
                 return None;
             }
-            let at = InstAt { block, at };
             match (&inst.kind, keyed_place) {
                 (
                     InstKind::Index {
@@ -2489,7 +2918,11 @@ fn keyed_storage(
                     KeyedPlace::Element,
                 ) => loads.push(ElementLoad { at, loaded: *dst }),
                 (InstKind::IndexSet { value, .. }, KeyedPlace::Element) => {
-                    stores.push(ElementStore { at, stored: *value })
+                    stores.push(ElementStore {
+                        at,
+                        stored: StoredValue::Value(*value),
+                        call_result: None,
+                    })
                 }
                 (
                     InstKind::Take {
@@ -2508,16 +2941,57 @@ fn keyed_storage(
                         restores: false,
                     },
                     KeyedPlace::Entry,
-                ) if path.is_empty() => stores.push(ElementStore { at, stored: *value }),
-                (InstKind::FunctionCall { callee, args, .. }, KeyedPlace::Entry) => {
-                    match (laws.of_callee(callee), opened) {
-                        (ResolvedLaws::Absent { value }, None) => {
+                ) if path.is_empty() => stores.push(ElementStore {
+                    at,
+                    stored: StoredValue::Value(*value),
+                    call_result: None,
+                }),
+                (InstKind::FunctionCall { dst, callee, args, .. }, KeyedPlace::Entry) => {
+                    let access = laws.entry_access(callee).map(|reading| reading.access);
+                    match (access, &laws.of_callee(callee), opened) {
+                        (Some(EntryAccess::Opens { default }), _, None) => {
                             opened = Some(EntryOpened {
                                 at,
-                                default: *args.get(*value)?,
+                                default: *args.get(default)?,
                             });
                         }
-                        (ResolvedLaws::Fold(_), Some(_)) => {
+                        (Some(EntryAccess::Views(Mutability::Shared)), _, None) => {
+                            let view = viewed.iter().find(|view| view.switch == block)?;
+                            opened = Some(EntryOpened {
+                                at,
+                                default: view.default,
+                            });
+                            loads.push(ElementLoad {
+                                at,
+                                loaded: view.loaded,
+                            });
+                        }
+                        (
+                            Some(EntryAccess::Stores {
+                                stored,
+                                result_reads_entry,
+                            }),
+                            _,
+                            _,
+                        ) => {
+                            if result_reads_entry && !read_only_by_drops(cfg, *dst) {
+                                return None;
+                            }
+                            let stored = match stored {
+                                Stored::Payload(param) => StoredValue::Value(*args.get(param)?),
+                                Stored::Marked => StoredValue::Marked,
+                                // Taking an entry out moves the key's place
+                                // among the table's keys where it comes back,
+                                // which no join by key keeps.
+                                Stored::Absent => return None,
+                            };
+                            stores.push(ElementStore {
+                                at,
+                                stored,
+                                call_result: Some(*dst),
+                            });
+                        }
+                        (None, ResolvedLaws::Fold(_), Some(_)) => {
                             let call = places.entry_fold(&inst.kind, slot)?;
                             folds.push(EntryFold { at, call });
                         }
@@ -2531,7 +3005,6 @@ fn keyed_storage(
     let part = match reached? {
         KeyedPlace::Element => KeyedPart::Element,
         KeyedPlace::Entry => {
-            let opened = opened?;
             if !keyed_by_equivalence(cfg, laws, slot) {
                 return None;
             }
@@ -3349,10 +3822,15 @@ impl Graph {
         lent: &[LentStorage],
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
+        pull_exits: Option<PullExits>,
     ) -> Vec<Found> {
         let mut found: Vec<Held> = self.carried_cycles(cfg, header, loop_blocks);
         found.extend(self.storage_cycles(cfg, loans, slots, disjoint, cells, lent));
+        // RFC-0089 rule 5: a pull running ahead of a body exit decides its
+        // header's exit ahead too, as a `for`'s header does.
+        let header_decides_ahead = pull_exits == Some(PullExits::AheadOfABodyExit);
         let exits = self.with(|member| match member {
+            Member::Term(block) if header_decides_ahead && block == header => false,
             Member::Term(block) => {
                 matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
                     || cfg
@@ -3367,7 +3845,7 @@ impl Graph {
             members.extend(exits);
             // RFC-0089 rule 1: a pull loop's header, its call and its test
             // are the control token's cycle.
-            if let Some((Head::Pull, _)) = Head::of(&cfg.blocks[header.0].terminator) {
+            if pull_exits == Some(PullExits::AtTheHeader) {
                 members.extend(self.with(|member| member.block() == header));
             }
             found.push(Held {
@@ -4197,6 +4675,12 @@ enum Step<'a> {
         inner: Lifted<'a>,
         none: AdjoinedNone,
     },
+    /// `f(b, y)` for an `f` stating a law over its `Option` result, the
+    /// `Some(b)` arm of a switch on the token whose `None` arm leaves it.
+    Extension {
+        callee: ExternInstance,
+        law: &'a ResolvedBinary,
+    },
     Ordered {
         op: LawOp,
         order: ExternInstance,
@@ -4259,7 +4743,7 @@ impl<'a> Lifted<'a> {
             Step::AffineMap => Self::AffineMap,
             Step::StateMap { table } => Self::StateMap { table },
             Step::FieldExtremum { op, field } => Self::FieldExtremum { op, field },
-            Step::OptionLifted { .. } => return None,
+            Step::OptionLifted { .. } | Step::Extension { .. } => return None,
         })
     }
 
@@ -4287,6 +4771,17 @@ impl Step<'_> {
             },
             Self::Call { callee, law } => Accumulator {
                 law: Law::Call(CallLaw {
+                    callee,
+                    identity: match &law.identity {
+                        Some(identity) => CallIdentity::Declared(identity.clone()),
+                        None => CallIdentity::OptionLifted,
+                    },
+                }),
+                exact: true,
+                commutative: law.commutative,
+            },
+            Self::Extension { callee, law } => Accumulator {
+                law: Law::Extension(CallLaw {
                     callee,
                     identity: match &law.identity {
                         Some(identity) => CallIdentity::Declared(identity.clone()),
@@ -4720,9 +5215,16 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 for def in inst_info::defs(kind) {
                     changed |= dependent.insert(def);
                 }
-                // A storage given a value that reads the state holds it.
-                for slot in effect(self.loans, kind)
-                    .writes
+                // A storage given a value that reads the state holds it. A
+                // take moves the value out and gives the storage none: no
+                // read follows a move until a store gives it one again.
+                let stores = match kind {
+                    InstKind::Take {
+                        taken_out: false, ..
+                    } => Default::default(),
+                    _ => effect(self.loans, kind).writes,
+                };
+                for slot in stores
                     .into_iter()
                     .chain(slots_lent_mutably(self.loans, kind))
                     .chain(match kind {
@@ -5003,9 +5505,16 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// and a keyed join would apply the reset at every key.
     fn keyed_law(mut self, keyed: &KeyedStorage) -> Option<Accumulator> {
         if let (KeyedPart::Entry(opened), [first, ..]) = (keyed.part, &keyed.folds[..]) {
-            return self.keyed_fold(keyed, opened, first.call);
+            return self.keyed_fold(keyed, opened?, first.call);
         }
-        let [ElementStore { at: store, stored }] = keyed.stores[..] else {
+        let [
+            ElementStore {
+                at: store,
+                stored,
+                call_result,
+            },
+        ] = keyed.stores[..]
+        else {
             return None;
         };
         let once = |block: BlockIdx| self.nested_loops_holding(block).is_empty();
@@ -5013,12 +5522,12 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             true => at.at < store.at,
             false => !self.reaches_in_iteration(store.block, at.block),
         };
-        let opened_once = match keyed.part {
-            KeyedPart::Element => true,
-            KeyedPart::Entry(opened) => once(opened.at.block),
+        let opened = match keyed.part {
+            KeyedPart::Element => None,
+            KeyedPart::Entry(opened) => opened,
         };
         let runs_so = once(store.block)
-            && opened_once
+            && opened.is_none_or(|opened| once(opened.at.block))
             && keyed
                 .loads
                 .iter()
@@ -5026,26 +5535,39 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if !runs_so {
             return None;
         }
+        let stored = match stored {
+            StoredValue::Value(stored) => stored,
+            // RFC-0093 rule 5: a store on every path of a value reading
+            // none of the entry is `last`.
+            StoredValue::Marked => {
+                let unconditional = self.deciders.get(&store.block).is_none_or(Vec::is_empty);
+                return (keyed.loads.is_empty() && unconditional)
+                    .then(|| accumulator_of(Step::Last, false));
+            }
+        };
         self.placed = Some(Placed {
             loads: keyed.loads.iter().map(|load| load.loaded).collect(),
             store,
             stored,
         });
         self.dependent = self.values_reading_state(None);
+        self.chain.extend(call_result);
         let cfg = self.cfg;
+        let laws = self.laws;
         let update = self.update()?;
         if update.resets {
             return None;
         }
         let accumulator = update.accumulator();
-        match keyed.part {
-            KeyedPart::Element => Some(accumulator),
+        match (keyed.part, opened) {
+            (KeyedPart::Element, _) => Some(accumulator),
             // RFC-0098 rule 4: a chunk builds its entries from the law's
-            // identity, so an entry the call makes where the table held
-            // none is that identity, or the chunk would count it again.
-            KeyedPart::Entry(opened) => {
-                is_identity(cfg, &accumulator.law, opened.default).then_some(accumulator)
+            // identity, so an entry read where the table held none is read
+            // at that identity, or the chunk would count it again.
+            (KeyedPart::Entry(_), Some(opened)) => {
+                is_identity(cfg, laws, &accumulator.law, opened.default).then_some(accumulator)
             }
+            (KeyedPart::Entry(_), None) => keyed.loads.is_empty().then_some(accumulator),
         }
     }
 
@@ -5074,7 +5596,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             callee: first.callee,
             fold: first.fold,
         });
-        is_identity(self.cfg, &law, opened.default).then_some(Accumulator {
+        is_identity(self.cfg, self.laws, &law, opened.default).then_some(Accumulator {
             law,
             exact: true,
             commutative: first.fold.commutative,
@@ -5892,9 +6414,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 args,
                 ..
             } => {
-                // RFC-0082 rule 10: the result is the value the argument lends.
-                if let Some(copied) = self.laws.copies_of(callee) {
-                    return self.form(*args.get(copied)?);
+                // RFC-0104 rule 5: a term `*x` is the value the argument lends.
+                if let Some(lent) = self.laws.lent_value_of(callee) {
+                    return self.form(*args.get(lent)?);
                 }
                 let ResolvedLaws::Binary(
                     law @ ResolvedBinary {
@@ -6707,6 +7229,30 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             some_arm: some_arm.arm,
         });
         view.dependent = view.values_reading_state(None);
+        // RFC-0093 rule 4's second reading: `f(b, y)` for an `f` stating a
+        // law over its `Option` result, `None` absorbing.
+        if let Some((callee, law, first, second)) = self.extension_call(some_arm.value) {
+            if none != AdjoinedNone::Absorbing || !law.associative {
+                return None;
+            }
+            let step = Step::Extension { callee, law };
+            let Form::Combined(read) =
+                view.combined_with_free(some_arm.value, first, second, step, law.commutative)?
+            else {
+                return None;
+            };
+            if read != step || view.resets {
+                return None;
+            }
+            let built_in_arms: Vec<ValueId> = [none_arm.value, some_arm.value]
+                .into_iter()
+                .flat_map(|value| self.update_support(value))
+                .collect();
+            self.chain.extend(view.chain);
+            self.chain.extend(built_in_arms);
+            self.chain.insert(tag);
+            return Some(Form::Combined(step));
+        }
         let Form::Combined(step) = view.form(some_arm.value)? else {
             return None;
         };
@@ -6753,6 +7299,40 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         })
     }
 
+    /// A call `f(a, b)` defining `value`, `f`'s instance stating a law over
+    /// its extension to `Option` (RFC-0082 rule 2).
+    fn extension_call(
+        &self,
+        value: ValueId,
+    ) -> Option<(ExternInstance, &'a ResolvedBinary, ValueId, ValueId)> {
+        let Some(Def::Inst(at)) = self.defs.get(&value) else {
+            return None;
+        };
+        let InstKind::FunctionCall {
+            callee: callee @ Callee::Extern { id, instance, .. },
+            args,
+            ..
+        } = self.inst(*at)
+        else {
+            return None;
+        };
+        let ResolvedLaws::Extension(law) = self.laws.of_callee(callee) else {
+            return None;
+        };
+        let &[first, second] = args.as_slice() else {
+            return None;
+        };
+        Some((
+            ExternInstance {
+                id: *id,
+                instance: *instance,
+            },
+            law,
+            first,
+            second,
+        ))
+    }
+
     fn made_option(&self, value: ValueId) -> Option<MadeOption> {
         let Some(Def::Inst(at)) = self.defs.get(&value) else {
             return None;
@@ -6784,7 +7364,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         };
         let law = inner.step().accumulator();
         let identity_beside = |identity: ValueId, other: ValueId| {
-            is_identity(self.cfg, &law.law, identity) && self.one_value(other, y)
+            is_identity(self.cfg, self.laws, &law.law, identity) && self.one_value(other, y)
         };
         lifted == inner && (identity_beside(left, right) || identity_beside(right, left))
     }
@@ -7170,8 +7750,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     }
 
     /// Whether two values of the iteration are one value: [`Self::same_value`],
-    /// two copies of what one reference lends, or two records or variants
-    /// built of one value each.
+    /// two copies of what one reference lends, two reads of one assignment
+    /// to a local, or two records or variants built of one value each.
     fn one_value(&self, a: ValueId, b: ValueId) -> bool {
         if self.same_value(a, b) {
             return true;
@@ -7179,6 +7759,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if let (Some(a), Some(b)) = (self.copy_of(a), self.copy_of(b))
             && a == b
         {
+            return true;
+        }
+        if self.read_of_one_assignment(a, b) {
             return true;
         }
         let built = |value: ValueId| match self.defs.get(&value) {
@@ -7220,6 +7803,56 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         }
     }
 
+    /// Whether `a` and `b` each read the whole of one local of the
+    /// iteration that the iteration assigns once, ahead of both, and lends
+    /// mutably nowhere: both read the value that assignment stored. The
+    /// element a fused step lends and then moves on either arm of a select
+    /// is such a local.
+    fn read_of_one_assignment(&self, a: ValueId, b: ValueId) -> bool {
+        let read = |value: ValueId| match self.defs.get(&value) {
+            Some(&Def::Inst(at)) => match self.inst(at) {
+                InstKind::Take {
+                    target: RefTarget::Var(slot),
+                    path,
+                    taken_out: false,
+                    ..
+                } if path.is_empty() => Some((*slot, at)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let (Some((slot, a_at)), Some((other, b_at))) = (read(a), read(b)) else {
+            return false;
+        };
+        if slot != other || !self.is_local(slot) {
+            return false;
+        }
+        let mut assigned: Option<InstAt> = None;
+        for (at, kind) in self.insts() {
+            match kind {
+                InstKind::Assign { target, .. } if inst_info::storage(target) == Some(slot) => {
+                    if assigned.replace(at).is_some() {
+                        return false;
+                    }
+                }
+                InstKind::Ref {
+                    target,
+                    mutability: Mutability::Mut,
+                    ..
+                } if inst_info::storage(target) == Some(slot) => return false,
+                _ => {}
+            }
+        }
+        let Some(assigned) = assigned else {
+            return false;
+        };
+        let ahead_of = |read: InstAt| match assigned.block == read.block {
+            true => assigned.at < read.at,
+            false => self.domtree.dominates(assigned.block, read.block),
+        };
+        ahead_of(a_at) && ahead_of(b_at)
+    }
+
     /// The reference whose lent value `reference` lends: itself, or the
     /// container a shared view is taken of.
     fn lent(&self, reference: ValueId) -> ValueId {
@@ -7238,7 +7871,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     /// The reference whose lent value `value` equals: a read of the whole
     /// value through it, the language's clone of the `String` it lends, or a
-    /// call of an instance stating `copies(x)` (RFC-0082 rule 10) with it as
+    /// call of an instance whose term is `*x` (RFC-0104 rule 5) with it as
     /// `x`.
     fn copy_of(&self, value: ValueId) -> Option<ValueId> {
         let Some(Def::Inst(at)) = self.defs.get(&value) else {
@@ -7253,8 +7886,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             } if path.is_empty() => Some(self.lent(*reference)),
             InstKind::StringClone { src, .. } => Some(self.lent(*src)),
             InstKind::FunctionCall { callee, args, .. } => {
-                let copied = self.laws.copies_of(callee)?;
-                Some(self.lent(*args.get(copied)?))
+                let lent = self.laws.lent_value_of(callee)?;
+                Some(self.lent(*args.get(lent)?))
             }
             _ => None,
         }

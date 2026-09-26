@@ -1,0 +1,5 @@
+error: `a` is not taken by value: a term reads a reference parameter as `*a`, and calls no closure (RFC-0104 rule 1)
+ --> tests/compile_fail/means_reads_a_reference_by_value.rs:5:34
+  |
+5 | #[extern_fn(effect = pure, means(a))]
+  |                                  ^

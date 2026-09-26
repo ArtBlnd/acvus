@@ -337,7 +337,7 @@ impl Declaring<'_> {
                 ensures: Vec::new(),
                 reaches: Reaches::Lent,
                 returns: Returns::Unstated,
-                copies: None,
+                means: None,
                 cost: None,
             },
             instances: Instances::generic(ExternHandler::awaited(handler)),

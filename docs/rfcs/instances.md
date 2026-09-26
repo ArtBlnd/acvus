@@ -346,7 +346,7 @@ Status: Accepted
      stands at no `str` (a two-word receiver has no mono glue, RFC-0067
      rule 8) and at no `String`, whose text is itself. The owned copy of
      text, `"…".to_string()` and `s.to_string()` (RFC-0062 rule 2), is
-     `string::to_string(a: &str) -> String`, which `copies(a)`; a `String`
+     `string::to_string(a: &str) -> String`, which `means(*a)`; a `String`
      reaches it as a view. The generic's `T` ranges over the types
      `display` stands at (RFC-0067 rule 2), which hold neither, so a text
      receiver leaves it (RFC-0043).

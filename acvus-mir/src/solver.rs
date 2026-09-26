@@ -5628,7 +5628,7 @@ mod requirement_tests {
                     ensures: Vec::new(),
                     reaches: crate::laws::Reaches::Lent,
                     returns: crate::laws::Returns::Unstated,
-                    copies: None,
+                    means: None,
                     cost: None,
                 })
                 .collect(),

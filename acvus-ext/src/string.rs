@@ -35,10 +35,10 @@ use crate::iter::Items;
 /// conversion, not a text, so it is no instance of `core::display`, which
 /// stands at no `str` and no `String` (RFC-0070 rule 5). A `&str` reaches a
 /// `String` parameter only through this. Its result is the text `a` lends
-/// (RFC-0082 rule 10). `total`: `str::to_owned` copies the bytes into a
+/// (RFC-0104 rule 2). `total`: `str::to_owned` copies the bytes into a
 /// fresh allocation and has no panicking path, and an allocation failure
 /// aborts the process rather than trapping the run.
-#[extern_fn(effect = pure, total, copies(a))]
+#[extern_fn(effect = pure, total, means(*a))]
 fn to_string(a: &str) -> String {
     a.to_owned()
 }
@@ -304,8 +304,8 @@ fn ge(a: &str, b: &str) -> bool {
 
 // -- Producers ----------------------------------------------------------
 
-/// One Unicode scalar value per step.
-#[extern_fn(effect = pure)]
+/// One Unicode scalar value per step: at most one per byte.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn chars<I, Rt>(s: &str) -> Items<char, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -322,7 +322,7 @@ pub struct CharIndex {
 }
 
 /// One Unicode scalar value per step, each with its own byte offset.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn char_indices<I, Rt>(s: &str) -> Items<CharIndex, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -338,7 +338,9 @@ where
     )
 }
 
-#[extern_fn(effect = pure)]
+/// At most one line per byte: every line but an empty text's one holds a
+/// byte, its own or its terminator.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn lines<I, Rt>(s: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -348,7 +350,7 @@ where
 }
 
 /// One byte per step.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, total, ensures(len(ret) = len(s)))]
 fn bytes<I, Rt>(s: &str) -> Items<i64, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -357,7 +359,8 @@ where
     Items::of(s.bytes().map(i64::from).collect())
 }
 
-#[extern_fn(effect = pure)]
+/// At most one word per byte.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s)))]
 fn split_whitespace<I, Rt>(s: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -368,7 +371,9 @@ where
 
 // -- Splitting ----------------------------------------------------------
 
-#[extern_fn(effect = pure)]
+/// At most two pieces past one per byte: an empty `pat` splits at every
+/// character boundary, both ends included.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s) + 2))]
 fn split<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -377,7 +382,8 @@ where
     Items::of(s.split(pat).map(str::to_owned).collect())
 }
 
-#[extern_fn(effect = pure)]
+/// As `split`'s, from the end.
+#[extern_fn(effect = pure, total, ensures(len(ret) <= len(s) + 2))]
 fn rsplit<I, Rt>(s: &str, pat: &str) -> Items<String, I, Rt>
 where
     I: Var<kind::Identity>,
@@ -577,11 +583,11 @@ mod tests {
     use super::*;
     use acvus_extern::{Externs, Interner, TypesOnly};
 
-    /// RFC-0082 rule 10 sampled: the owned copy of text is the text it was
-    /// lent, byte for byte, and it is the one function of this registry
-    /// stating `copies`.
+    /// RFC-0104 rule 4 sampled: the owned copy of text is the text it was
+    /// lent, byte for byte, and it is the one function of `string::` whose
+    /// term is `*a` (`vec`'s `clone` states it too).
     #[test]
-    fn copies_holds_over_the_owned_copy_of_text() {
+    fn the_term_holds_over_the_owned_copy_of_text() {
         for text in ["", "a", "é\0", "\u{10FFFF}"] {
             assert_eq!(to_string(text), text);
             assert_eq!(to_string(&text.to_string()), text);
@@ -599,12 +605,16 @@ mod tests {
         let copying: Vec<acvus_extern::QualifiedRef> = reg
             .functions
             .iter()
+            .filter(|function| function.qref.namespace == Some(i.intern("string")))
             .filter(|function| {
                 let acvus_extern::FnKind::Extern { instances, .. } = &function.kind else {
                     return false;
                 };
-                instances.concrete.iter().any(|at| at.copies.is_some())
-                    || instances.generic.as_ref().is_some_and(|at| at.copies.is_some())
+                let lends = |means: Option<&acvus_extern::means::Means>| {
+                    means.and_then(acvus_extern::means::Means::lent_value).is_some()
+                };
+                instances.concrete.iter().any(|at| lends(at.means.as_ref()))
+                    || instances.generic.as_ref().is_some_and(|at| lends(at.means.as_ref()))
             })
             .map(|function| function.qref)
             .collect();

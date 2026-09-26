@@ -1,4 +1,4 @@
-//! A term is a call, a constant, `x`, `s`, a lend or `+%`: `*` is none (RFC-0099 rule 1).
+//! A term is a call, a constant, `x`, `s`, a local, a record, an `Option`, a lend, `+%`, a comparison, an `if` or a `match`: `*` is none (RFC-0099 rule 1).
 use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
 use acvus_ext::iter_sig::next;
 

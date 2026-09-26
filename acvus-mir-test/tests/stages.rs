@@ -8,9 +8,9 @@ use acvus_mir::analysis::loans::Loans;
 use acvus_mir::analysis::loop_deps::{
     Control, Law, LawOp, LoopDeps, Member, Order, StageMembership, Storage, Token,
 };
-use acvus_mir::analysis::loops::{Invariants, LoopNest, natural_loops_innermost_first};
+use acvus_mir::analysis::loops::{Invariants, LoopNest, Term, natural_loops_innermost_first};
 use acvus_mir::analysis::targets::{effect, slots_lent_mutably};
-use acvus_mir::analysis::cost::{CostTable, Costs, InPlace, LoopCost};
+use acvus_mir::analysis::cost::{CostTable, Costs, InPlace, LoopCost, TripCount};
 use acvus_mir::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
@@ -316,6 +316,7 @@ enum LawKind {
     Extremum(LawOp),
     OptionLifted(Box<LawKind>),
     OptionAbsorbing(Box<LawKind>),
+    Extension,
     FieldExtremum(LawOp),
     Product(Vec<LawKind>),
     Ordered(LawOp),
@@ -336,6 +337,7 @@ impl LawKind {
             Law::Extremum { op, .. } => LawKind::Extremum(*op),
             Law::OptionLifted(inner) => LawKind::OptionLifted(Box::new(LawKind::of(inner))),
             Law::OptionAbsorbing(inner) => LawKind::OptionAbsorbing(Box::new(LawKind::of(inner))),
+            Law::Extension(_) => LawKind::Extension,
             Law::FieldExtremum { op, .. } => LawKind::FieldExtremum(*op),
             Law::Product(parts) => {
                 LawKind::Product(
@@ -2062,6 +2064,66 @@ fn a_checked_add_over_i64_at_its_edge_values_has_no_law() {
     assert_eq!(law_of(&held), None, "{lines}");
 }
 
+/// Corpus row R21: `checked_add` over `u64` states its law over its
+/// extension to `Option<u64>`, `None` absorbing (RFC-0082 rule 2), and the
+/// switch whose `None` arm leaves the token and whose `Some(v)` arm sends
+/// `checked_add(v, x)` reads it (RFC-0093 rule 4).
+#[test]
+fn a_checked_add_over_u64_reads_as_its_extension_with_none_absorbing() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64, 8u64, 1u64]); let p = Some(0u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_add(*x), None => None, }; } \
+         p.unwrap()",
+    );
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Storage], Order::AnyOrder, exact(LawKind::Extension)),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("any_order law(Extension(Call(#"),
+        "{lines}"
+    );
+    assert!(lines.contains(", identity), None absorbing) exact commutative)"), "{lines}");
+}
+
+/// A `None` arm restarting at `Some(x)` adjoins `None` as an identity, and
+/// `checked_add`'s `None` is its overflow: a run past `MAX` would restart
+/// its sum there, so no law is read.
+#[test]
+fn a_checked_add_whose_none_arm_restarts_the_sum_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([18446744073709551615u64, 1u64, 2u64]); let p = Some(0u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_add(*x), None => Some(*x), }; } \
+         p.unwrap()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `checked_add(v, v)` combines the state with itself, no value of the
+/// iteration.
+#[test]
+fn a_checked_add_of_the_state_with_itself_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64]); let p = Some(1u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_add(v), None => None, }; } \
+         p.unwrap()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `checked_mul` over `u64` states no law: `2^32 · 2^32 · 0` is `None` in
+/// order and `Some(0)` grouped from the right.
+#[test]
+fn a_checked_mul_over_u64_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([4294967296u64, 4294967296u64, 0u64]); let p = Some(1u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_mul(*x), None => None, }; } \
+         p.is_none()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
 /// `f06_rec_for`: a record chosen by a strict compare of its field `k`
 /// carries its other field; a tie keeps the earlier record, so the law is
 /// in order (RFC-0093 rule 5).
@@ -2127,6 +2189,116 @@ fn an_option_of_a_record_chosen_by_one_field_is_the_lifted_left_biased_extremum(
         "{lines}"
     );
     assert!(lines.contains("in_order law(Option(Extremum(Max, field k)) exact)"), "{lines}");
+}
+
+/// `f06_opt_for` with the element moved into the record on both arms, as
+/// a local the iteration assigns once: both moves are that one value, and a
+/// move out of the local gives it nothing of the state.
+#[test]
+fn an_option_of_a_record_moving_one_local_on_both_arms_is_the_lifted_left_biased_extremum() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+         let best = None; \
+         for s in &xs { let x = s.to_string(); let k = x.len() as i64; \
+           best = match best { \
+             None => Some({ v: x, k: k, }), \
+             Some(b) => if k > b.k { Some({ v: x, k: k, }) } else { Some(b) }, }; } \
+         best.unwrap().v",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::InOrder,
+            exact(LawKind::OptionLifted(Box::new(LawKind::FieldExtremum(LawOp::Max))))
+        ),
+        "{lines}"
+    );
+}
+
+/// A local the iteration assigns twice holds two values: the record the
+/// `None` arm builds of it before the second store is not the one the
+/// select builds after it, so the `None` arm is no step of the law.
+#[test]
+fn an_option_of_a_record_moving_a_local_stored_twice_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+         let best = None; \
+         for s in &xs { let x = s.to_string(); let k = x.len() as i64; \
+           best = match best { \
+             None => Some({ v: x, k: k, }), \
+             Some(b) => { x = \"z\".to_string(); \
+               if k > b.k { Some({ v: x, k: k, }) } else { Some(b) } }, }; } \
+         best.unwrap().v",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// A store under a branch that reads the state gives the local the state,
+/// a move out of it does not: the sum reading the stored local is no law.
+#[test]
+fn a_store_to_a_local_under_a_branch_reading_the_state_gives_it_the_state() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"apple\".to_string()]); let n = 0u64; \
+         for s in &xs { let t = s.to_string(); if n > 3u64 { t = \"\".to_string(); }; \
+           n = n + t.len(); } n",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// Corpus row F06 as the fused `max_by_key` writes it (RFC-0099 rule 1):
+/// the step's state is the handler's `Option` of the held element and its
+/// key, replaced on a strict compare only, so the pull loop's cycle on it
+/// is the lifted left-biased extremum; `min_by_key` is its mirror.
+#[test]
+fn a_fused_max_or_min_by_key_is_the_lifted_left_biased_extremum_of_the_key() {
+    for (consumer, op) in [("max_by_key", LawOp::Max), ("min_by_key", LawOp::Min)] {
+        let c = Compiled::of(&format!(
+            "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+             xs.into_iter().{consumer}(|s| -> s.len() as i64).unwrap()"
+        ));
+        let header = c.only_pull_header();
+        let shapes = c.shapes_of(header);
+        let lawful: Vec<&CycleShape> = shapes
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Cycles(cycles) => cycles.iter().collect(),
+                Shape::Free => Vec::new(),
+            })
+            .filter(|cycle| cycle.law.is_some())
+            .collect();
+        assert_eq!(
+            lawful,
+            vec![&cycle(
+                vec![TokenKind::Storage],
+                Order::InOrder,
+                exact(LawKind::OptionLifted(Box::new(LawKind::FieldExtremum(op))))
+            )],
+            "{consumer}: {}",
+            c.listing
+        );
+    }
+}
+
+/// The tie order (F06's adversarial case): `kiwi` and `pear` share the
+/// greatest key, and the first wins. A reading that took the extremum as
+/// commutative would join chunks in any order and could keep `pear`; the
+/// fused loop's cycle stays in order.
+#[test]
+fn a_fused_max_by_key_over_a_tie_keeps_its_cycle_in_order() {
+    let c = Compiled::of(
+        "let xs = vec([\"kiwi\".to_string(), \"pear\".to_string(), \"fig\".to_string()]); \
+         xs.into_iter().max_by_key(|s| -> s.len() as i64).unwrap()",
+    );
+    let header = c.only_pull_header();
+    for shape in c.shapes_of(header) {
+        let Shape::Cycles(cycles) = shape else {
+            continue;
+        };
+        for cycle in cycles {
+            assert_eq!(cycle.order, Order::InOrder, "{}", c.listing);
+        }
+    }
 }
 
 /// Both values are computed before the switch, so only their being one
@@ -2748,6 +2920,46 @@ fn a_pull_loop_costs_in_place_for_no_count_is_known_on_entry() {
     );
 }
 
+/// RFC-0089 rule 1: `chars` states `len(ret) <= len(s)`, so the pull loop
+/// over its result runs at most that many iterations, and the split
+/// compares that bound.
+#[test]
+fn a_pull_loop_over_an_iterator_whose_making_call_bounds_it_costs_by_that_bound() {
+    let c = Compiled::of(
+        "let s = \"hello\".to_string(); let it = s.chars(); let n = 0; \
+         while let Some(ch) = it.next() { n = n + (ch as i64); } n",
+    );
+    let table = CostTable {
+        arithmetic: 1,
+        compare: 1,
+        load: 1,
+        store: 1,
+        allocation: 1,
+        local_call: 1,
+        extern_call: 1,
+        heavy: 1,
+        spawn: 1,
+        merge: 1,
+        chunk_dispatch: 1,
+        buffered_element: 1,
+        k: 1,
+    };
+    let costs = Costs::of(&c.cfg, &c.laws, &table);
+    let header = c.only_pull_header();
+    assert!(
+        matches!(
+            costs.of_loop(&c.deps_of(header)),
+            LoopCost::Split {
+                trips: TripCount::Bound,
+                ..
+            }
+        ),
+        "{}",
+        c.listing
+    );
+    assert!(matches!(costs.count(header), Some(Term::Len(_))), "{}", c.listing);
+}
+
 #[test]
 fn a_pull_loop_s_header_holds_no_drop() {
     let c = Compiled::of(
@@ -2792,11 +3004,78 @@ fn a_while_whose_header_is_no_pull_is_refused() {
     );
 }
 
+/// Corpus row F04 as the fused `any` writes it: `next` over an owning
+/// iterator states `total` and no effect, and nothing reads the iterator
+/// after the loop, so the pull runs ahead of the `break` (RFC-0089 rule 5):
+/// its storage's cycle is the header's alone, the predicate is free, and
+/// the exit is the control token's cycle.
 #[test]
-fn a_pull_loop_that_leaves_from_its_body_is_refused() {
+fn a_pull_run_ahead_of_a_body_exit_keeps_its_storage_cycle_apart_from_the_control_token() {
+    let c = Compiled::of(
+        "let xs = vec([5, 3, 8, 1]); let it = xs.into_iter(); let found = false; \
+         while let Some(x) = it.next() { if x > 7 { found = true; break; }; } found",
+    );
+    let header = c.only_pull_header();
+    let deps = c.deps_of(header);
+    assert!(matches!(deps.control, Control::Chained { .. }), "{}", c.listing);
+    assert_eq!(
+        c.shapes_of(header),
+        vec![
+            Shape::Cycles(vec![CycleShape {
+                tokens: vec![TokenKind::Storage],
+                order: Order::InOrder,
+                law: None,
+            }]),
+            Shape::Free,
+            Shape::Cycles(vec![CycleShape {
+                tokens: vec![TokenKind::Control],
+                order: Order::InOrder,
+                law: None,
+            }]),
+        ],
+        "{}",
+        c.listing
+    );
+}
+
+/// Z26 over a pull: a print before the `break` keeps its place in the
+/// exiting stage, whatever the pull runs ahead of.
+#[test]
+fn a_print_before_a_pull_loops_body_exit_waits_for_the_control_token() {
+    let c = Compiled::with_io(
+        "let xs = vec([5, 3, 8, 1]); let it = xs.into_iter(); let found = false; \
+         while let Some(x) = it.next() { io::print(&x.to_string()); if x > 7 { found = true; break; }; } \
+         found",
+    );
+    let header = c.only_pull_header();
+    let shapes = c.shapes_of(header);
+    let exiting = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Cycles(cycles) => cycles
+                .iter()
+                .find(|cycle| cycle.tokens.contains(&TokenKind::Control)),
+            Shape::Free => None,
+        })
+        .unwrap_or_else(|| panic!("an exiting stage:\n{}", c.listing));
+    assert!(exiting.tokens.contains(&TokenKind::Order), "{}", c.listing);
+}
+
+/// A pull loop leaving from its body whose iterator is read after it: its
+/// pulls may not run ahead of that exit (RFC-0089 rule 5), so it is no pull
+/// loop.
+#[test]
+fn a_pull_loop_that_leaves_from_its_body_and_whose_iterator_is_read_after_it_is_refused() {
     let interner = Interner::new();
-    let mut compiled = compile_script_at(&interner, PULL_PUSH, &FxHashMap::default(), Opt::Full)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let mut compiled = compile_script_at(
+        &interner,
+        "let xs = vec([5, 3, 8]); let it = xs.into_iter(); let out = vec([]); \
+         while let Some(x) = it.next() { out.push(x * 2); } \
+         out.len() + it.next().unwrap_or(0) as u64",
+        &FxHashMap::default(),
+        Opt::Full,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     let mut cfg = promote(compiled.module.main.clone());
     let header = (0..cfg.blocks.len())
         .map(BlockIdx)

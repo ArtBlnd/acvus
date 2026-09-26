@@ -53,7 +53,7 @@ fn eq_decimal(a: &Decimal, b: &Decimal) -> bool {
     a.0 == b.0
 }
 
-#[extern_fn(instance_of = acvus_extern::core::clone, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::clone, effect = pure, means(*a))]
 fn clone_decimal(a: &Decimal) -> Decimal {
     a.clone()
 }

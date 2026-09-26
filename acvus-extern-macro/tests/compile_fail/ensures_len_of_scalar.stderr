@@ -1,17 +1,18 @@
-error[E0277]: `len` in a postcondition reads a slice or a container, and `u64` is neither
+error[E0277]: `len` in a postcondition reads a slice, a container or an iterator, and `u64` is none of them
  --> tests/compile_fail/ensures_len_of_scalar.rs:5:1
   |
 5 | #[extern_fn(effect = pure, ensures(ret = len(n)))]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a slice or a container
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a slice, a container or an iterator
   |
   = help: the trait `acvus_extern::ensures::Length` is not implemented for `u64`
-  = note: RFC-0082 rule 4: `len(x)` is the element count of a slice or a container parameter, or of `ret`
+  = note: RFC-0082 rule 4: `len(x)` is the element count of a slice or a container, or the most elements an iterator's `next` yields from it
   = help: the following other types implement trait `acvus_extern::ensures::Length`:
             &T
             &mut T
             Arr<T, N>
             Vec<T>
             [T]
+            str
 note: required by a bound in `len_of`
  --> $WORKSPACE/acvus-extern/src/ensures.rs
   |

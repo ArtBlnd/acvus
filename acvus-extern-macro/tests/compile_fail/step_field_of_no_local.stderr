@@ -1,0 +1,19 @@
+error: `s` is no local: a field is read of a local a `let` or a `match` arm binds
+ --> tests/compile_fail/step_field_of_no_local.rs:5:64
+  |
+5 | #[extern_fn(effect = pure, step(state s = None; s = if f(&x) > s.key { None } else { None }; finish s))]
+  |                                                                ^
+
+warning: unused imports: `Closure`, `Cross`, `Instance`, `Later`, `PassedByValue`, `Runtime`, `Stored`, `Var`, and `kind`
+ --> tests/compile_fail/step_field_of_no_local.rs:2:20
+  |
+2 | use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^^^  ^^^^^  ^^^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `acvus_ext::iter_sig::next`
+ --> tests/compile_fail/step_field_of_no_local.rs:3:5
+  |
+3 | use acvus_ext::iter_sig::next;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^

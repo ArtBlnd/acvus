@@ -15,6 +15,7 @@ use rustc_hash::FxHashMap;
 
 use crate::graph::{FnKind, Function, QualifiedRef};
 use crate::ir::Callee;
+use crate::means::{EntryReading, Means, Named, Stmt as MeansStmt, Term as MeansTerm};
 use crate::step::Step;
 use crate::ty::{Mutability, PolyTy, Task, View, Viewed, matches_pattern};
 
@@ -49,12 +50,6 @@ pub enum Laws {
     /// requirement naming [`NamedLaw::Equivalence`] is resolved only by an
     /// instance stating it (RFC-0070 rule 6).
     Equivalence,
-    /// `#[extern_fn(law(absent = v))]` on `f(x: &mut M, k: K, .., v: V) ->
-    /// &mut V` that reaches `x[k]` alone through `x`: `f` leaves `x`'s entry
-    /// at `k` as it was where `x` holds one, makes it `v` where `x` holds
-    /// none, and returns a reference to that entry's value. `value` numbers
-    /// `v` as [`PostTerm::Param`] numbers a parameter.
-    Absent { value: usize },
     /// `#[extern_fn(step(..))]` on a stream adaptor or consumer (RFC-0099
     /// rule 1).
     Step(Step),
@@ -158,14 +153,6 @@ pub enum Subject {
     Ret,
 }
 
-/// `#[extern_fn(copies(x))]` (RFC-0082 rule 10): `ret` is a value equal to
-/// what reference parameter `param` lends, numbered as [`PostTerm::Param`]
-/// numbers it, so a reader may read the result as that value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Copies {
-    pub param: usize,
-}
-
 /// `#[extern_fn(reaches(p, ..))]` (RFC-0082 rule 7): what a call reaches
 /// of the storages its reference arguments lend, which `analysis::loop_deps`
 /// reads (RFC-0089 rule 4).
@@ -246,6 +233,12 @@ pub enum ResolvedLaws {
     #[default]
     None,
     Binary(ResolvedBinary),
+    /// A law stated on `f(a: T, b: T) -> Option<T>`: the law of `f`'s
+    /// extension to `Option<T>`, `Some(a) · Some(b)` being `f(a, b)` and
+    /// `None` absorbing from either side, its identity `Some` of the one
+    /// stated at `T` (RFC-0082 rule 2). No reader reads it as a law over
+    /// `T`.
+    Extension(ResolvedBinary),
     Fold(ResolvedFold),
     TotalOrder,
     /// `inverse = g`, with `g` taken at the instance whose state and payload
@@ -253,7 +246,6 @@ pub enum ResolvedLaws {
     Inverse(ExternInstance),
     Payload,
     Equivalence,
-    Absent { value: usize },
     Step(Step),
 }
 
@@ -325,7 +317,6 @@ pub fn resolve<'a>(
             | Laws::Inverse(_)
             | Laws::Payload
             | Laws::Equivalence
-            | Laws::Absent { .. }
             | Laws::Step(_) => Err(Unresolved::UnfitDeclaration),
         };
     };
@@ -366,22 +357,30 @@ pub fn resolve<'a>(
             commutative,
             identity,
         }) => {
-            if !binary_fits(params, ret) {
-                return Err(Unresolved::UnfitDeclaration);
-            }
-            Ok(ResolvedLaws::Binary(ResolvedBinary {
-            associative: *associative,
-            commutative: *commutative,
-            identity: match identity {
-                None => None,
-                Some(Identity::Const(constant)) => Some(ResolvedIdentity::Const(constant.clone())),
-                Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(instance_of(
-                    LawRole::Identity,
-                    *named,
-                    &Wanted::Returning((**ret).clone()),
-                )?)),
-            },
-            }))
+            let (value, extension) = match (binary_fits(params, ret), extension_of(params, ret)) {
+                (true, _) => ((**ret).clone(), false),
+                (false, Some(value)) => (value, true),
+                (false, None) => return Err(Unresolved::UnfitDeclaration),
+            };
+            let resolved = ResolvedBinary {
+                associative: *associative,
+                commutative: *commutative,
+                identity: match identity {
+                    None => None,
+                    Some(Identity::Const(constant)) => {
+                        Some(ResolvedIdentity::Const(constant.clone()))
+                    }
+                    Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(instance_of(
+                        LawRole::Identity,
+                        *named,
+                        &Wanted::Returning(value),
+                    )?)),
+                },
+            };
+            Ok(match extension {
+                false => ResolvedLaws::Binary(resolved),
+                true => ResolvedLaws::Extension(resolved),
+            })
         }
         Laws::Fold(FoldLaw {
             combine,
@@ -456,20 +455,6 @@ pub fn resolve<'a>(
                 false => Err(Unresolved::UnfitDeclaration),
             }
         }
-        Laws::Absent { value } => {
-            let lends_the_entry = match (params.first().map(|p| &p.ty), params.get(*value), &**ret) {
-                (
-                    Some(PolyTy::Ref(Mutability::Mut, _)),
-                    Some(default),
-                    PolyTy::Ref(Mutability::Mut, entry),
-                ) => *value > 0 && *entry.ty() == default.ty,
-                _ => false,
-            };
-            match lends_the_entry {
-                true => Ok(ResolvedLaws::Absent { value: *value }),
-                false => Err(Unresolved::UnfitDeclaration),
-            }
-        }
         Laws::Step(step) => {
             if !step_fits(step, params) {
                 return Err(Unresolved::UnfitDeclaration);
@@ -526,20 +511,53 @@ fn binary_fits(params: &[crate::ty::PolyParam], ret: &PolyTy) -> bool {
     over_values || over_string_views
 }
 
-/// Whether `copies`, declared on an instance of type `declaring`, names a
-/// shared reference parameter lending a value of the result's type, or the
-/// text of a `String` result as a `&str` (RFC-0082 rule 10, RFC-0070 rule 5).
-pub fn copies_fits(copies: Copies, declaring: &PolyTy) -> bool {
-    let PolyTy::Fn { params, ret, .. } = declaring else {
+/// RFC-0082 rule 2's `f(a: T, b: T) -> Option<T>`: `T`, the type a law
+/// stated there is `f`'s extension's over.
+fn extension_of(params: &[crate::ty::PolyParam], ret: &PolyTy) -> Option<PolyTy> {
+    let [a, b] = params else {
+        return None;
+    };
+    let PolyTy::Option(payload) = ret else {
+        return None;
+    };
+    (a.ty == b.ty && a.ty == **payload).then(|| a.ty.clone())
+}
+
+/// Whether `means`, declared on an instance of type `declaring`, reads each
+/// parameter as its type lends it (RFC-0104 rule 1): `*x` of a reference
+/// parameter, a parameter by value, and the entry `x[k]` of a `&` or `&mut`
+/// table at a parameter by value or by `&`. What else the term computes is
+/// typed where the model checker runs it.
+pub fn means_fits(means: &Means, declaring: &PolyTy) -> bool {
+    let PolyTy::Fn { params, .. } = declaring else {
         return false;
     };
-    match params.get(copies.param).map(|param| &param.ty) {
-        Some(PolyTy::Ref(Mutability::Shared, lent)) => {
-            let lent = lent.ty();
-            *lent == **ret || (*lent == PolyTy::Str && **ret == PolyTy::String)
-        }
-        _ => false,
+    let is_ref = |at: usize| matches!(params.get(at).map(|p| &p.ty), Some(PolyTy::Ref(..)));
+    let is_value = |at: usize| params.get(at).is_some_and(|p| !matches!(p.ty, PolyTy::Ref(..)));
+    let entry_fits = means
+        .entry
+        .is_none_or(|entry| is_ref(entry.table) && entry.key < params.len() && entry.key != entry.table);
+    let mut reads_fit = true;
+    let terms = means
+        .stmts
+        .iter()
+        .map(|stmt| match stmt {
+            MeansStmt::Let { value, .. } | MeansStmt::Store(value) => value,
+        })
+        .chain([&means.result]);
+    for term in terms {
+        term.visit(&mut |term| {
+            reads_fit &= match term {
+                MeansTerm::Lent(at) => is_ref(*at),
+                MeansTerm::Param(at) => is_value(*at),
+                MeansTerm::Entry | MeansTerm::LendEntry(_) => means.entry.is_some(),
+                _ => true,
+            };
+        });
     }
+    let stores_fit = means.entry.is_some()
+        || !means.stmts.iter().any(|stmt| matches!(stmt, MeansStmt::Store(_)));
+    entry_fits && reads_fit && stores_fit
 }
 
 /// The type a law asks of an extern it names, at the declaring instance's
@@ -590,7 +608,7 @@ struct DeclaredAt<'a> {
     ensures: &'a [Postcondition],
     reaches: &'a Reaches,
     returns: Returns,
-    copies: Option<Copies>,
+    means: Option<&'a Means>,
     cost: Option<u64>,
     task: Task,
 }
@@ -602,7 +620,7 @@ struct Declared {
     ensures: Vec<Postcondition>,
     reaches: Reaches,
     returns: Returns,
-    copies: Option<Copies>,
+    means: Option<Means>,
     cost: Option<u64>,
     task: Task,
 }
@@ -628,6 +646,8 @@ pub struct LawTable {
     /// The declaration of the `Equiv` keying marker (RFC-0098 rule 2),
     /// where the registries declared it.
     equiv: Option<QualifiedRef>,
+    option_tags: Option<crate::ty::OptionTags>,
+    pull_signature: Option<QualifiedRef>,
 }
 
 impl LawTable {
@@ -658,7 +678,7 @@ impl LawTable {
                         ensures: &instance.ensures,
                         reaches: &instance.reaches,
                         returns: instance.returns,
-                        copies: instance.copies,
+                        means: instance.means.as_ref(),
                         cost: instance.cost,
                         task: instance.task,
                     })
@@ -668,7 +688,7 @@ impl LawTable {
                         ensures: &generic.ensures,
                         reaches: &generic.reaches,
                         returns: generic.returns,
-                        copies: generic.copies,
+                        means: generic.means.as_ref(),
                         cost: generic.cost,
                         task: generic.task,
                     }));
@@ -679,7 +699,7 @@ impl LawTable {
                              ensures,
                              reaches,
                              returns,
-                             copies,
+                             means,
                              cost,
                              task,
                          }| Declared {
@@ -694,14 +714,15 @@ impl LawTable {
                         ensures: ensures.to_vec(),
                         reaches: reaches.clone(),
                         returns,
-                        copies: copies.inspect(|copies| {
+                        means: means.inspect(|means| {
                             assert!(
-                                copies_fits(*copies, ty),
-                                "`copies` of {:?} names no shared reference parameter lending \
-                                 its result's type, and combining the registries refuses it",
+                                means_fits(means, ty),
+                                "the `means` of {:?} reads a parameter as its type does not \
+                                 lend it, and combining the registries refuses it",
                                 function.qref
                             )
-                        }),
+                        })
+                        .cloned(),
                         cost,
                         task,
                     })
@@ -757,6 +778,8 @@ impl LawTable {
             instance_types,
             shared_slice_views,
             equiv: types.keying().map(|markers| markers.equiv),
+            option_tags: types.option_tags(),
+            pull_signature: types.pull_signature(),
         }
     }
 
@@ -783,6 +806,17 @@ impl LawTable {
     /// registries named from its Rust type, not by how a script spells it.
     pub fn is_equiv(&self, id: QualifiedRef) -> bool {
         self.equiv == Some(id)
+    }
+
+    /// The tags of an `Option`'s variants, where the registries combined.
+    pub fn option_tags(&self) -> Option<crate::ty::OptionTags> {
+        self.option_tags
+    }
+
+    /// Whether a call names an instance of `iter::next`, the signature a
+    /// pull loop's header calls (RFC-0089 rule 1).
+    pub fn pulls(&self, callee: &Callee) -> bool {
+        matches!(callee, Callee::Extern { id, .. } if Some(*id) == self.pull_signature)
     }
 
     pub fn of_callee(&self, callee: &Callee) -> &ResolvedLaws {
@@ -813,14 +847,49 @@ impl LawTable {
         }
     }
 
-    /// The argument whose lent value the result of the instance a call names
-    /// equals (`copies(x)`, RFC-0082 rule 10), numbered as a call's
-    /// arguments are; `None` where it states none, and for a call of a local
-    /// function or through a value.
-    pub fn copies_of(&self, callee: &Callee) -> Option<usize> {
-        self.declared(callee)
-            .and_then(|declared| declared.copies)
-            .map(|copies| copies.param)
+    /// The term the instance a call names states (RFC-0104); a call of a
+    /// local function or through a value states none.
+    pub fn means_of(&self, callee: &Callee) -> Option<&Means> {
+        self.declared(callee)?.means.as_ref()
+    }
+
+    pub fn means_of_instance(&self, instance: ExternInstance) -> Option<&Means> {
+        self.by_instance
+            .get(&instance.id)?
+            .get(instance.instance)?
+            .means
+            .as_ref()
+    }
+
+    /// The argument whose lent value the result of the instance a call
+    /// names is, where its term is `*x` alone (RFC-0104 rule 5).
+    pub fn lent_value_of(&self, callee: &Callee) -> Option<usize> {
+        self.means_of(callee)?.lent_value()
+    }
+
+    /// What a call of the instance does to the entry its term names
+    /// (RFC-0098 rule 5).
+    pub fn entry_access(&self, callee: &Callee) -> Option<EntryReading> {
+        let means = self.means_of(callee)?;
+        crate::means::entry_access(means, &|named| self.named_reading(named))
+    }
+
+    /// How a term reads a call of `named` it holds: by the one term every
+    /// instance of `named` states, or by the `payload` law every instance
+    /// states. Instances that state different terms leave the call opaque,
+    /// since a term names an extern and not its instance.
+    fn named_reading(&self, named: QualifiedRef) -> Option<Named<'_>> {
+        let instances = self.by_instance.get(&named)?;
+        let (first, rest) = instances.split_first()?;
+        if let Some(means) = &first.means
+            && rest.iter().all(|other| other.means.as_ref() == Some(means))
+        {
+            return Some(Named::Means(means));
+        }
+        instances
+            .iter()
+            .all(|declared| declared.means.is_none() && declared.laws == ResolvedLaws::Payload)
+            .then_some(Named::Payload)
     }
 
     pub fn returns_of(&self, callee: &Callee) -> Returns {

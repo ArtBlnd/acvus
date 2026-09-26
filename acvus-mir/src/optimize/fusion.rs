@@ -12,13 +12,14 @@ use crate::analysis::inst_info;
 use crate::cfg::{self, Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
 use crate::ir::{
     BinOp, Callee, ExitTrip, ExternInstance, ForSource, Inst, InstKind, Label, MirBody,
-    MirModule, Overflow, RefTarget, Stages, ValOrigin, ValueId,
+    MirModule, Overflow, PathSeg, RefTarget, Stages, SwitchKey, ValOrigin, ValueId,
 };
 use crate::laws::LawTable;
 use crate::step::{
-    AdaptorFlow, ConsumerBlock, ConsumerStmt, RunCall, Step, StreamParam, Term, closures_called,
+    AdaptorFlow, Comparison, ConsumerBlock, ConsumerStmt, RunCall, Step, StreamParam, Term,
+    closures_called,
 };
-use crate::ty::{Mutability, PolyTy, Ty, TypeArg};
+use crate::ty::{Mutability, ObjectTy, PolyTy, Ty, TypeArg};
 use scheme::Bindings;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,10 @@ pub enum Declined {
     NestOverNoWordSlice(Ty),
     AdaptorYieldsNothing,
     LastBlockFallsThrough,
+    /// A comparison of other than two numbers of one type.
+    ComparesNoNumbers(Ty),
+    /// A field the record a local holds does not have.
+    NoField { ty: Ty, field: acvus_utils::Astr },
 }
 
 pub fn run(interner: &Interner, laws: &LawTable, module: &mut MirModule) -> Vec<Declined> {
@@ -309,10 +314,28 @@ impl Element {
     }
 }
 
+/// A local a `let` or a `match` arm binds, held in a slot as the lowering
+/// holds a `let` and a pattern's binding; typed only while the state's type
+/// is found.
+#[derive(Debug, Clone)]
+enum Local {
+    Typed(Ty),
+    Held(Slot),
+}
+
+impl Local {
+    fn ty(&self) -> &Ty {
+        match self {
+            Local::Typed(ty) | Local::Held(Slot { ty, .. }) => ty,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Scope {
     link: usize,
     element: Option<Element>,
+    locals: Vec<(usize, Local)>,
 }
 
 impl Scope {
@@ -320,7 +343,23 @@ impl Scope {
         Scope {
             link,
             element: None,
+            locals: Vec::new(),
         }
+    }
+
+    fn with_local(&self, local: usize, bound: Local) -> Scope {
+        let mut scope = self.clone();
+        scope.locals.push((local, bound));
+        scope
+    }
+
+    fn local(&self, local: usize) -> Result<&Local, Declined> {
+        self.locals
+            .iter()
+            .rev()
+            .find(|(bound, _)| *bound == local)
+            .map(|(_, bound)| bound)
+            .ok_or(Declined::UntypedTerm)
     }
 }
 
@@ -667,6 +706,7 @@ impl<'p> Fusion<'p> {
             let scope = Scope {
                 link,
                 element: Some(Element::Typed(types[link].clone())),
+                locals: Vec::new(),
             };
             let out = self
                 .flow_output_ty(&adaptor.flow, &scope)?
@@ -717,7 +757,11 @@ impl<'p> Fusion<'p> {
             element: Some(Element::Typed(
                 self.element_type_per_link[consumer_link].clone(),
             )),
+            locals: Vec::new(),
         };
+        if let Some(ty) = self.set_ty(&consumer.body, &scope) {
+            return Ok(ty);
+        }
         let mut calls: Vec<RunCall<'_>> = consumer.body.runs();
         for term in consumer.terms() {
             term.visit(&mut |term| {
@@ -748,6 +792,38 @@ impl<'p> Fusion<'p> {
         Err(Declined::UntypedTerm)
     }
 
+    /// The type of the first update `s = e` of the block whose `e` types
+    /// without the state's own type: a `match s` whose `None` arm builds
+    /// the state it starts.
+    fn set_ty(&self, block: &ConsumerBlock, scope: &Scope) -> Option<Ty> {
+        let mut scope = scope.clone();
+        for stmt in &block.stmts {
+            match stmt {
+                ConsumerStmt::Let { local, value } => {
+                    let ty = self.type_of(value, None, &scope).ok()?;
+                    scope = scope.with_local(*local, Local::Typed(ty));
+                }
+                ConsumerStmt::Set(term) => {
+                    if let Ok(ty) = self.type_of(term, None, &scope) {
+                        return Some(ty);
+                    }
+                }
+                ConsumerStmt::Run { .. } => {}
+                ConsumerStmt::If {
+                    then, otherwise, ..
+                } => {
+                    if let Some(ty) = self
+                        .set_ty(then, &scope)
+                        .or_else(|| self.set_ty(otherwise, &scope))
+                    {
+                        return Some(ty);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     // -- Writing the loop -------------------------------------------------
 
     fn link(&mut self, link: usize, element: ValueId) -> Result<(), Declined> {
@@ -772,6 +848,7 @@ impl<'p> Fusion<'p> {
         let scope = Scope {
             link,
             element: Some(element),
+            locals: Vec::new(),
         };
         match self.pipeline.adaptors_from_source.get(link) {
             Some(adaptor) => self.flow(link, &adaptor.flow, &scope),
@@ -915,8 +992,16 @@ impl<'p> Fusion<'p> {
     }
 
     fn block(&mut self, block: &'p ConsumerBlock, scope: &Scope) -> Result<BlockEnd, Declined> {
+        let mut scope = scope.clone();
+        let scope = &mut scope;
         for stmt in &block.stmts {
             match stmt {
+                ConsumerStmt::Let { local, value } => {
+                    let value = self.term(value, None, scope)?;
+                    let held = self.slot(value.ty.clone(), "local");
+                    self.assign(&held, value.value);
+                    *scope = scope.with_local(*local, Local::Held(held));
+                }
                 ConsumerStmt::Set(term) => {
                     let state = self.state.clone().ok_or(Declined::UntypedTerm)?;
                     let next = self.term(term, Some(&state.ty), scope)?;
@@ -1078,6 +1163,126 @@ impl<'p> Fusion<'p> {
                 });
                 Typed { value: dst, ty }
             }
+            Term::Local(local) => match scope.local(*local)? {
+                Local::Held(held) => {
+                    let held = held.clone();
+                    self.take(&held)
+                }
+                Local::Typed(_) => return Err(Declined::UntypedTerm),
+            },
+            Term::Field { local, field } => {
+                let Local::Held(held) = scope.local(*local)?.clone() else {
+                    return Err(Declined::UntypedTerm);
+                };
+                let ty = field_ty(&held.ty, *field)?;
+                let dst = self.value(ty.clone());
+                self.push(InstKind::Take {
+                    dst,
+                    target: RefTarget::Var(held.slot),
+                    path: vec![PathSeg::Field(*field)],
+                    taken_out: false,
+                });
+                Typed { value: dst, ty }
+            }
+            Term::Record(fields) => {
+                let ty = self.type_of(term, expected, scope)?;
+                let mut values = Vec::with_capacity(fields.len());
+                for (name, field) in fields {
+                    let field_ty = field_ty(&ty, *name)?;
+                    values.push((*name, self.term(field, Some(&field_ty), scope)?.value));
+                }
+                let dst = self.value(ty.clone());
+                self.push(InstKind::MakeObject {
+                    dst,
+                    fields: values,
+                });
+                Typed { value: dst, ty }
+            }
+            Term::Some(payload) => {
+                let wanted = match expected {
+                    Some(Ty::Option(payload)) => Some(&**payload),
+                    _ => None,
+                };
+                let payload = self.term(payload, wanted, scope)?;
+                let ty = Ty::Option(Box::new(payload.ty));
+                let dst = self.value(ty.clone());
+                self.push(InstKind::MakeVariant {
+                    dst,
+                    tag: self.interner.intern("Some"),
+                    payload: Some(payload.value),
+                });
+                Typed { value: dst, ty }
+            }
+            Term::None => {
+                let ty = match expected {
+                    Some(ty @ Ty::Option(_)) => ty.clone(),
+                    _ => return Err(Declined::UntypedTerm),
+                };
+                let dst = self.value(ty.clone());
+                self.push(InstKind::MakeVariant {
+                    dst,
+                    tag: self.interner.intern("None"),
+                    payload: None,
+                });
+                Typed { value: dst, ty }
+            }
+            Term::Compare { op, left, right } => {
+                let ty = self.compared_ty(left, right, scope)?;
+                let left = self.term(left, Some(&ty), scope)?;
+                let right = self.term(right, Some(&ty), scope)?;
+                let dst = self.value(Ty::Bool);
+                self.push(InstKind::BinOp {
+                    dst,
+                    op: match op {
+                        Comparison::Lt => BinOp::Lt,
+                        Comparison::Gt => BinOp::Gt,
+                        Comparison::Lte => BinOp::Lte,
+                        Comparison::Gte => BinOp::Gte,
+                        Comparison::Eq => BinOp::Eq,
+                        Comparison::Neq => BinOp::Neq,
+                    },
+                    left: left.value,
+                    right: right.value,
+                });
+                Typed {
+                    value: dst,
+                    ty: Ty::Bool,
+                }
+            }
+            Term::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                let ty = self.type_of(term, expected, scope)?;
+                let cond = self.term(cond, Some(&Ty::Bool), scope)?;
+                let then_label = self.fresh_label();
+                let else_label = self.fresh_label();
+                let join = self.fresh_label();
+                self.close(Terminator::Diamond {
+                    cond: cond.value,
+                    then_label,
+                    then_args: Vec::new(),
+                    else_label,
+                    else_args: Vec::new(),
+                    join,
+                });
+                self.start(then_label, Vec::new());
+                let then = self.term(then, Some(&ty), scope)?;
+                self.jump(join, vec![then.value]);
+                self.start(else_label, Vec::new());
+                let otherwise = self.term(otherwise, Some(&ty), scope)?;
+                self.jump(join, vec![otherwise.value]);
+                let joined = self.value(ty.clone());
+                self.start(join, vec![joined]);
+                Typed { value: joined, ty }
+            }
+            Term::Match {
+                scrutinee,
+                some,
+                then,
+                none,
+            } => self.match_option(scrutinee, *some, then, none, expected, scope)?,
         };
         match expected {
             Some(wanted) if *wanted != typed.ty => Err(Declined::Mismatch {
@@ -1117,6 +1322,67 @@ impl<'p> Fusion<'p> {
             }
             Term::WrappingAdd { left, right } => {
                 self.shared_operand_ty(left, right, expected, scope)?
+            }
+            Term::Local(local) => scope.local(*local)?.ty().clone(),
+            Term::Field { local, field } => field_ty(scope.local(*local)?.ty(), *field)?,
+            Term::Record(fields) => {
+                let mut typed = FxHashMap::default();
+                for (name, field) in fields {
+                    let wanted = match expected {
+                        Some(Ty::Object(object)) => object.get(name),
+                        _ => None,
+                    };
+                    typed.insert(*name, self.type_of(field, wanted, scope)?);
+                }
+                Ty::Object(ObjectTy::written(typed))
+            }
+            Term::Some(payload) => {
+                let wanted = match expected {
+                    Some(Ty::Option(payload)) => Some(&**payload),
+                    _ => None,
+                };
+                Ty::Option(Box::new(self.type_of(payload, wanted, scope)?))
+            }
+            Term::None => match expected {
+                Some(ty @ Ty::Option(_)) => ty.clone(),
+                _ => return Err(Declined::UntypedTerm),
+            },
+            Term::Compare { left, right, .. } => {
+                self.compared_ty(left, right, scope)?;
+                Ty::Bool
+            }
+            Term::If {
+                then, otherwise, ..
+            } => self
+                .type_of(then, expected, scope)
+                .or_else(|_| self.type_of(otherwise, expected, scope))?,
+            Term::Match {
+                scrutinee,
+                some,
+                then,
+                none,
+            } => {
+                let payload = match self.type_of(scrutinee, None, scope) {
+                    Ok(Ty::Option(payload)) => Some(*payload),
+                    Ok(other) => {
+                        return Err(Declined::Mismatch {
+                            wanted: Ty::Option(Box::new(other.clone())),
+                            found: other,
+                        });
+                    }
+                    Err(_) => None,
+                };
+                let typed_then = payload.and_then(|payload| {
+                    let arm = match some {
+                        Some(local) => scope.with_local(*local, Local::Typed(payload)),
+                        None => scope.clone(),
+                    };
+                    self.type_of(then, expected, &arm).ok()
+                });
+                match typed_then {
+                    Some(ty) => ty,
+                    None => self.type_of(none, expected, scope)?,
+                }
             }
         };
         match expected {
@@ -1158,6 +1424,119 @@ impl<'p> Fusion<'p> {
                 found: other,
             }),
         }
+    }
+
+    /// The one number type both operands of a comparison have.
+    fn compared_ty(&self, left: &Term, right: &Term, scope: &Scope) -> Result<Ty, Declined> {
+        let left_ty = self.type_of(left, None, scope);
+        let right_ty = self.type_of(right, None, scope);
+        let ty = match (left_ty, right_ty) {
+            (Ok(left), Ok(right)) if left != right => {
+                return Err(Declined::Mismatch {
+                    wanted: left,
+                    found: right,
+                });
+            }
+            (Ok(ty), _) | (Err(_), Ok(ty)) => ty,
+            (Err(why), Err(_)) => return Err(why),
+        };
+        match ty {
+            Ty::Int(_) | Ty::Float => Ok(ty),
+            other => Err(Declined::ComparesNoNumbers(other)),
+        }
+    }
+
+    /// `match t { None => a, Some(b) => c }` as the lowering writes a
+    /// `match` on an `Option` it holds: a switch on a shared reference to
+    /// the holding slot (the state's own, or one `t` is put in), the `Some`
+    /// arm taking the payload into the slot `b` names.
+    fn match_option(
+        &mut self,
+        scrutinee: &Term,
+        some: Option<usize>,
+        then: &Term,
+        none: &Term,
+        expected: Option<&Ty>,
+        scope: &Scope,
+    ) -> Result<Typed, Declined> {
+        let ty = self.type_of(
+            &Term::Match {
+                scrutinee: Box::new(scrutinee.clone()),
+                some,
+                then: Box::new(then.clone()),
+                none: Box::new(none.clone()),
+            },
+            expected,
+            scope,
+        )?;
+        let holder = match scrutinee {
+            Term::State => self.state.clone().ok_or(Declined::UntypedTerm)?,
+            other => {
+                let value = self.term(other, None, scope)?;
+                let held = self.slot(value.ty.clone(), "matched");
+                self.assign(&held, value.value);
+                held
+            }
+        };
+        let Ty::Option(payload_ty) = holder.ty.clone() else {
+            return Err(Declined::Mismatch {
+                wanted: Ty::Option(Box::new(holder.ty.clone())),
+                found: holder.ty,
+            });
+        };
+        let lent = self.value(Ty::Ref(
+            Mutability::Shared,
+            Box::new(TypeArg::uniform(holder.ty.clone())),
+        ));
+        self.push(InstKind::Ref {
+            dst: lent,
+            target: RefTarget::Var(holder.slot),
+            path: Vec::new(),
+            mutability: Mutability::Shared,
+        });
+        let none_label = self.fresh_label();
+        let some_label = self.fresh_label();
+        let join = self.fresh_label();
+        self.close(Terminator::Switch {
+            tag: lent,
+            arms: vec![
+                (
+                    SwitchKey::Tag(self.interner.intern("None")),
+                    none_label,
+                    Vec::new(),
+                ),
+                (
+                    SwitchKey::Tag(self.interner.intern("Some")),
+                    some_label,
+                    Vec::new(),
+                ),
+            ],
+            default: None,
+        });
+        self.start(none_label, Vec::new());
+        let otherwise = self.term(none, Some(&ty), scope)?;
+        self.jump(join, vec![otherwise.value]);
+        self.start(some_label, Vec::new());
+        let arm = match some {
+            Some(local) => {
+                let payload = self.value((*payload_ty).clone());
+                self.push(InstKind::Take {
+                    dst: payload,
+                    target: RefTarget::Var(holder.slot),
+                    path: vec![PathSeg::Payload],
+                    taken_out: false,
+                });
+                let held = self.slot(*payload_ty, "payload");
+                self.assign(&held, payload);
+                scope.with_local(local, Local::Held(held))
+            }
+            None => scope.clone(),
+        };
+        let then = self.term(then, Some(&ty), &arm)?;
+        self.jump(join, vec![then.value]);
+        let joined = self.value(ty.clone());
+        self.start(join, vec![joined]);
+        Ok(Typed { value: joined, ty })
     }
 
     fn call_extern(
@@ -1368,6 +1747,17 @@ impl<'p> Fusion<'p> {
 
     fn jump(&mut self, label: Label, args: Vec<ValueId>) {
         self.close(Terminator::Jump { label, args });
+    }
+}
+
+fn field_ty(record: &Ty, field: acvus_utils::Astr) -> Result<Ty, Declined> {
+    let no_field = || Declined::NoField {
+        ty: record.clone(),
+        field,
+    };
+    match record {
+        Ty::Object(object) => object.get(&field).cloned().ok_or_else(no_field),
+        _ => Err(no_field()),
     }
 }
 

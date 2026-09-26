@@ -76,8 +76,8 @@ fn to_ascii_lowercase(c: char) -> char {
 }
 
 /// The value `c` carries as a digit in base `radix`, or `None` where it
-/// carries none. A `radix` above 36 is refused.
-#[extern_fn(effect = pure)]
+/// carries none. A `radix` above 36 is refused: it returns or traps.
+#[extern_fn(effect = pure, returns)]
 fn to_digit(c: char, radix: u32) -> Option<u32> {
     c.to_digit(checked_radix("to_digit", radix))
 }

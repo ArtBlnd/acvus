@@ -1,0 +1,5 @@
+error: expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, `step`, `ensures`, `reaches`, `means`, `payload`, `returns`, `total`, `cost` or `dynamic`
+ --> tests/compile_fail/copies_is_no_keyword.rs:4:28
+  |
+4 | #[extern_fn(effect = pure, copies(a))]
+  |                            ^^^^^^

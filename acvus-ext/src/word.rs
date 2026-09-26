@@ -85,7 +85,7 @@ macro_rules! instances_of {
             Word::equals(a, b)
         }
 
-        #[extern_fn(instance_of = acvus_extern::core::clone, effect = pure, total, copies(a))]
+        #[extern_fn(instance_of = acvus_extern::core::clone, effect = pure, total, means(*a))]
         fn $clone(a: &$t) -> $t {
             a.clone()
         }
@@ -121,7 +121,7 @@ fn eq_string(a: &String, b: &String) -> bool {
 
 /// Not `total`: the clone allocates, and an allocation Rust cannot make
 /// ends the process through `handle_alloc_error`.
-#[extern_fn(instance_of = acvus_extern::core::clone, effect = pure, copies(a))]
+#[extern_fn(instance_of = acvus_extern::core::clone, effect = pure, means(*a))]
 fn clone_string(a: &String) -> String {
     a.clone()
 }
@@ -156,7 +156,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Copies, Externs, FnKind, Interner, Laws, PolyTy, QualifiedRef, TypesOnly};
+    use acvus_extern::{Externs, FnKind, Interner, Laws, PolyTy, QualifiedRef, TypesOnly};
 
     /// A fixed-seed linear congruential sequence (Knuth's MMIX constants),
     /// so a failing sample names the same inputs on every run.
@@ -328,10 +328,10 @@ mod tests {
         assert!(!eq_float(&f64::NAN, &payload));
     }
 
-    /// RFC-0082 rule 10 sampled: each clone is the value its argument lends,
-    /// under the type's own `==` (bit equality on a `Float`).
+    /// RFC-0104 rule 4 sampled: each clone is the value its argument lends,
+    /// its term `*a`, under the type's own `==` (bit equality on a `Float`).
     #[test]
-    fn copies_holds_over_the_declared_clone_instances() {
+    fn the_term_holds_over_the_declared_clone_instances() {
         for word in samples(64) {
             let int = word as i64;
             assert!(eq_int(&clone_int(&int), &int));
@@ -375,7 +375,8 @@ mod tests {
         let clones = instances_of("clone");
         assert_eq!(clones.len(), 6);
         for instance in &clones {
-            assert_eq!(instance.copies, Some(Copies { param: 0 }), "{:?}", instance.ty);
+            let lent = instance.means.as_ref().and_then(acvus_extern::means::Means::lent_value);
+            assert_eq!(lent, Some(0), "{:?}", instance.ty);
         }
         let cmps = instances_of("cmp");
         assert_eq!(cmps.len(), 6);

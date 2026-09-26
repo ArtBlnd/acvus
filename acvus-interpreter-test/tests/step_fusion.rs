@@ -10,7 +10,7 @@ use acvus_extern::{
 };
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter_test::corpus::Outcome;
-use acvus_interpreter_test::step_model::{self, Broken, ExternName, Ran};
+use acvus_interpreter_test::step_model::{self, Broken, ExternName, Ran, means as means_model};
 use acvus_mir::graph::optimize::Opt;
 use acvus_utils::Interner;
 
@@ -94,6 +94,136 @@ fn a_step_its_handler_does_not_keep_is_caught() {
     assert!(
         broken.iter().all(|case| matches!(case, Broken::Differ { .. })) && !broken.is_empty(),
         "the fused loop runs the step, the handler counts one more: {broken:#?}"
+    );
+}
+
+#[test]
+fn every_declared_term_holds_against_its_handler() {
+    let interner = Interner::new();
+    let declarations = means_model::meaning_declarations(&interner, acvus_ext::std_registries());
+    let plans: Vec<means_model::Plan> = declarations
+        .iter()
+        .map(|declaration| {
+            means_model::plan(declaration).unwrap_or_else(|why| {
+                panic!("`{}` has no plan: {why}", declaration.extern_name.name)
+            })
+        })
+        .collect();
+    let mut checked: Vec<&str> = plans.iter().map(|plan| plan.declaration.as_str()).collect();
+    checked.dedup();
+    for wanted in [
+        "new", "to_string", "clone", "or_insert", "get", "get_mut", "insert", "remove",
+        "contains_key", "contains", "unwrap_or", "is_some",
+    ] {
+        assert!(checked.contains(&wanted), "`{wanted}` states no term: {checked:?}");
+    }
+    for plan in &plans {
+        eprintln!(
+            "{:?}: {} cases\n  {}",
+            plan.cases.first().map(|case| &case.declaration),
+            plan.cases.len(),
+            plan.positions.join("\n  ")
+        );
+    }
+    let broken = means_model::check(&plans, acvus_ext::std_registries, WORKERS);
+    assert!(
+        broken.is_empty(),
+        "{} cases break the promise; the first ones: {:#?}",
+        broken.len(),
+        &broken[..broken.len().min(5)]
+    );
+}
+
+/// `*a + 1`, trapping where the language's `+` does.
+#[extern_fn(effect = pure, means(*a + 1))]
+fn one_more(a: &i64) -> i64 {
+    match a.checked_add(1) {
+        Some(sum) => sum,
+        None => panic!("the sum leaves i64"),
+    }
+}
+
+fn with_an_operator_term() -> Vec<Registry<AcvusRuntime>> {
+    let mut registries = acvus_ext::std_registries();
+    registries.push(extern_registry! {
+        ns: "ops",
+        fns: [one_more],
+    });
+    registries
+}
+
+/// A term's operator is the language's, overflow trap included: at
+/// `i64::MAX` the handler and the term both trap.
+#[test]
+fn an_operator_term_its_handler_keeps_holds() {
+    let interner = Interner::new();
+    let declaration = means_model::meaning_declarations(&interner, with_an_operator_term())
+        .into_iter()
+        .find(|declaration| declaration.extern_name.name == "one_more")
+        .expect("the registry holds the declaration");
+    let plan = means_model::plan(&declaration).expect("a plan");
+    let broken = means_model::check(&[plan], with_an_operator_term, WORKERS);
+    assert!(broken.is_empty(), "{broken:#?}");
+}
+
+/// States `clone`'s term `*a` and returns one more.
+#[extern_fn(effect = pure, means(*a))]
+fn copies_one_more(a: &i64) -> i64 {
+    *a + 1
+}
+
+fn with_a_lying_term() -> Vec<Registry<AcvusRuntime>> {
+    let mut registries = acvus_ext::std_registries();
+    registries.push(extern_registry! {
+        ns: "lies",
+        fns: [copies_one_more],
+    });
+    registries
+}
+
+#[test]
+fn a_term_its_handler_does_not_keep_is_caught() {
+    let interner = Interner::new();
+    let lying = means_model::meaning_declarations(&interner, with_a_lying_term())
+        .into_iter()
+        .find(|declaration| declaration.extern_name.name == "copies_one_more")
+        .expect("the registry holds the lying declaration");
+    let plan = means_model::plan(&lying).expect("a plan");
+    let broken = means_model::check(&[plan], with_a_lying_term, WORKERS);
+    assert!(
+        !broken.is_empty()
+            && broken
+                .iter()
+                .all(|case| matches!(case, means_model::Broken::Differ { .. })),
+        "the term reads the argument, the handler adds one: {broken:#?}"
+    );
+}
+
+/// `insert`'s handler held to `remove`'s term: every case the key is
+/// present or the value is stored tells them apart.
+#[test]
+fn an_entry_term_its_handler_does_not_keep_is_caught() {
+    let interner = Interner::new();
+    let declarations = means_model::meaning_declarations(&interner, acvus_ext::std_registries());
+    let term_of = |namespace: &str, name: &str| {
+        declarations
+            .iter()
+            .find(|declaration| {
+                declaration.extern_name.namespace.as_deref() == Some(namespace)
+                    && declaration.extern_name.name == name
+            })
+            .unwrap_or_else(|| panic!("`{namespace}::{name}` states a term"))
+    };
+    let removing = term_of("map", "remove").means().clone();
+    let lying = term_of("map", "insert").clone().held_to(removing);
+    let plan = means_model::plan(&lying).expect("a plan");
+    let broken = means_model::check(&[plan], acvus_ext::std_registries, WORKERS);
+    assert!(
+        !broken.is_empty()
+            && broken
+                .iter()
+                .all(|case| matches!(case, means_model::Broken::Differ { .. })),
+        "insert stores the value, the term takes the entry out: {broken:#?}"
     );
 }
 
@@ -218,4 +348,27 @@ fn a_capturing_closure_is_called_once_per_element_through_its_storage() {
          values.as_iter().map(|row| -> row.as_iter().map(|x| -> half + *x).sum()).sum()\n",
     );
     fuses(&full, &["map", "sum"]);
+}
+
+/// F06's adversarial case at the consumer's contract: `kiwi` and `pear`
+/// tie on the greatest key and `fig` and `pea` on the least; the fused
+/// loop keeps the first of each, as the handler does.
+#[test]
+fn a_fused_max_or_min_by_key_keeps_the_first_of_a_tie() {
+    for (source, consumer) in [
+        (
+            "let xs = vec([\"kiwi\".to_string(), \"pear\".to_string(), \"fig\".to_string()]);\n\
+             xs.into_iter().max_by_key(|s| -> s.len() as i64).unwrap() == \"kiwi\".to_string()\n",
+            "max_by_key",
+        ),
+        (
+            "let xs = vec([\"kiwi\".to_string(), \"fig\".to_string(), \"pea\".to_string()]);\n\
+             xs.into_iter().min_by_key(|s| -> s.len() as i64).unwrap() == \"fig\".to_string()\n",
+            "min_by_key",
+        ),
+    ] {
+        let full = at_both_levels(source);
+        fuses(&full, &[consumer]);
+        assert_eq!(full.outcome, Outcome::Value("true".to_string()), "{consumer}");
+    }
 }

@@ -1,0 +1,12 @@
+// expect 12|9
+// K06: `get` views the entry at `r.k`, `insert` stores at `to_string(&r.k)`, one key by `to_string`'s term `*a`.
+let rows = vec([{ k: "a".to_string(), v: 3, }, { k: "b".to_string(), v: 7, }, { k: "a".to_string(), v: 9, }, { k: "b".to_string(), v: 2, }]);
+let m = hash_map();
+for r in &rows {
+    let old = match get(&m, &r.k) {
+        Some(v) => *v,
+        None => 0,
+    };
+    insert(&mut m, r.k.to_string(), old + r.v);
+}
+(*get(&m, &"a".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"b".to_string()).unwrap()).to_string()

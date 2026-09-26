@@ -18,6 +18,7 @@ use rustc_hash::FxHashSet;
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::interval::{InstAt, untrapping};
+use crate::analysis::loans::Loans;
 use crate::analysis::loops::natural_loops_innermost_first;
 use crate::cfg::{self, CfgBody};
 use crate::graph::QualifiedRef;
@@ -161,10 +162,18 @@ impl FunctionSummary {
             })
         };
         let raises = insts().any(|(at, kind)| removal.can_raise(at, kind));
-        let finishes = natural_loops_innermost_first(&cfg, &DomTree::build(&cfg))
+        let domtree = DomTree::build(&cfg);
+        let loops = natural_loops_innermost_first(&cfg, &domtree);
+        let loans = loops
             .iter()
-            .all(|loop_| !loop_.is_while(&cfg))
-            && insts().all(|(_, kind)| finishes(kind, laws, self));
+            .any(|loop_| loop_.is_while(&cfg))
+            .then(|| Loans::build(&cfg));
+        let finishes = loops.iter().all(|loop_| {
+            !loop_.is_while(&cfg)
+                || loans.as_ref().is_some_and(|loans| {
+                    crate::analysis::pull::bound(&cfg, laws, loans, &domtree, loop_).is_some()
+                })
+        }) && insts().all(|(_, kind)| finishes(kind, laws, self));
         if !raises {
             self.untrapping.insert(function);
         }

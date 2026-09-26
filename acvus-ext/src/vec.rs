@@ -65,7 +65,7 @@ pub(crate) fn as_len(n: u64) -> usize {
 
 /// The empty vec, `Vec::new`. It is the fold identity of `push` and of
 /// `extend`.
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, means(std::vec([])))]
 fn new<T>() -> Vec<T>
 where
     T: Var<kind::Type>,
@@ -463,7 +463,7 @@ where
     true
 }
 
-#[extern_fn(instance_of = core::clone, effect = pure)]
+#[extern_fn(instance_of = core::clone, effect = pure, means(*a))]
 fn clone_vec<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &Vec<T>,

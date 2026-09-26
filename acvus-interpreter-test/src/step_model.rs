@@ -34,6 +34,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::corpus::{Outcome, render};
 
+pub mod means;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Carrier {
     Parametric,
@@ -381,7 +383,7 @@ pub fn domain(carrier: &Carrier, bound: &Bound) -> Domain {
     }
 }
 
-fn sequences<T: Clone>(items: &[T], max: usize) -> Vec<Vec<T>> {
+pub(crate) fn sequences<T: Clone>(items: &[T], max: usize) -> Vec<Vec<T>> {
     let mut all: Vec<Vec<T>> = vec![Vec::new()];
     let mut last: Vec<Vec<T>> = vec![Vec::new()];
     for _ in 0..max {
@@ -394,7 +396,7 @@ fn sequences<T: Clone>(items: &[T], max: usize) -> Vec<Vec<T>> {
     all
 }
 
-fn product<T: Clone>(sets: &[Vec<T>]) -> Vec<Vec<T>> {
+pub(crate) fn product<T: Clone>(sets: &[Vec<T>]) -> Vec<Vec<T>> {
     let mut rows: Vec<Vec<T>> = vec![Vec::new()];
     for set in sets {
         rows = rows

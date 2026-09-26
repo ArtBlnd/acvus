@@ -1,0 +1,9 @@
+// expect 8|1
+// The iterator is read after the loop, so its pulls stay behind the `break`: the pull after the loop takes the element the loop left.
+let xs = vec([5, 3, 8, 1]);
+let it = xs.into_iter();
+let found = 0;
+while let Some(x) = it.next() {
+    if x > 7 { found = x; break; };
+}
+found.to_string() + "|" + it.next().unwrap().to_string()
