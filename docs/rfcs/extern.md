@@ -1049,11 +1049,11 @@ Status: Accepted
    length the record's `u16` holds. A `Vec` rebuilt at another element
    type takes `same_layout!`'s witness, which with `where F` is made, and
    checked, only where the constant `F::HOLDS`. A slice rebuilt from raw
-   parts and a pointer made from an address are casts too. A dereference
-   of a raw pointer at its own type is not: its `unsafe` block names the
-   fact that keeps the place live. acvus-utils holds no runtime's storage,
-   so the interner's one lifetime extension is its own. No `transmute`,
-   `transmute_copy` or pointer cast between types is written outside the
+   parts and a pointer made from an address are casts too, and so is a
+   dereference of a raw pointer: each is the body of a primitive
+   (RFC-0102). acvus-utils holds no runtime's storage, so the interner's
+   one lifetime extension is its own. No `transmute`, `transmute_copy`,
+   pointer cast, raw dereference or `unsafe` block is written outside the
    boundary modules, and `repr_boundary` scans every source for one.
 
 **Why.** A safe trait or a public field that unsafe code trusts lets safe
@@ -1530,3 +1530,58 @@ new closure kind.
   that knows `τ` fails at the first wrong leaf.
 - Laying the arguments out as bytes a second run decodes (`encode`,
   `run_encoded`) — owned bytes outlive the call, so a value leaves it.
+
+## RFC-0102: `unsafe` is written only as a primitive of a boundary module
+
+Status: Proposed
+
+An `unsafe` block at a call site restates, at every caller, a fact the
+checker or prepare established once, and a comment is all that ties the
+two. The fact is carried instead by a type from where it is established,
+so omitting it is a compile error and the places a fact enters the
+program can be counted.
+
+1. **A primitive.** A primitive is a type of a boundary module (RFC-0080
+   rule 5) with one fact, private fields, and constructors that check the
+   fact or take a value whose type carries it; its methods are safe.
+2. **The closed list.**
+   - `acvus_extern::repr`: `Crossed` (the checker settled a word at `T`,
+     and the loans `T` names are live for its lifetime; a reference word
+     is `Lent`, a `Crossed` at `&T`); `Owned::adopt` (a word left its
+     unique holder); `SameLayout` (two types are one layout and one value,
+     made only from an `unsafe impl` a derive or acvus-extern writes);
+     `Encoded` (a word is `into_word` of an inline type); `Ctx`'s pinned
+     frame.
+   - The interpreter's `repr`: `Operand` (a register lies in its frame
+     and is defined), `Typed` (the checker typed an operand), the window,
+     `Large`, `Record`, `Linked`, `Filled`, `ProvenIndex`, `Gate`.
+   A primitive is added to the list with its fact and its module.
+3. **Where each fact enters.** `Crossed::settled` and `Owned::adopt` are
+   the contract's only `unsafe fn`s, called only from a runtime's boundary
+   module; a stand-in runtime in a test keeps its own. The interpreter's
+   `Operand`, `Typed` and `ProvenIndex` are made in prepare, which reads
+   the MIR it trusts, by `repr`'s safe constructors that compare what the
+   MIR settled with the type asked for.
+4. **No `unsafe fn` in a trait.** A method's precondition is a parameter
+   type. A fact of a type's own structure is an `unsafe impl` (RFC-0080
+   rule 2), and an `unsafe impl` of `GlobalAlloc` or `Send` holds its own
+   items.
+5. **Counted.** `repr_boundary` counts every `unsafe` outside the boundary
+   modules, and the count is zero.
+
+**Why.** The checker and prepare prove each fact once; a type carries it
+to every use, where a comment would be restated and could drift.
+**Cost.** The contract's traits change signature together, with the
+macro's glue and every runtime. A runtime keeps a small boundary module
+of its own. The hot operations keep their instruction counts; where a
+primitive cannot, the cost is measured and stated here.
+**Rejected.**
+- An `unsafe` assertion per operand in prepare — prepare can check what
+  the MIR settled, off the hot path; an assertion restates it outside
+  the boundary.
+- An evidence type in acvus-mir — the interpreter reads the MIR it
+  trusts; the checker needs no type of the runtime's.
+- Checking a value's kind at every read — a load and a compare on the
+  hot path for a fact the checker proved.
+- Generative-lifetime brands for `Ctx` — they do not cross into the
+  `'static` futures a rooted `Ctx` lives in; `Pin` carries the same fact.
