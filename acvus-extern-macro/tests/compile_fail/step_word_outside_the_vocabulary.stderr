@@ -1,0 +1,19 @@
+error: `drop` is no end of an adaptor's flow: a flow ends in `yield e`, `skip`, `done` or `nest e` (RFC-0099 rule 1)
+ --> tests/compile_fail/step_word_outside_the_vocabulary.rs:5:61
+  |
+5 | #[extern_fn(effect = pure, step(if f(&x) { yield x } else { drop }))]
+  |                                                             ^^^^
+
+warning: unused imports: `Closure`, `Cross`, `Instance`, `Later`, `PassedByValue`, `Runtime`, `Stored`, `Var`, and `kind`
+ --> tests/compile_fail/step_word_outside_the_vocabulary.rs:2:20
+  |
+2 | use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^^^  ^^^^^  ^^^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `acvus_ext::iter_sig::next`
+ --> tests/compile_fail/step_word_outside_the_vocabulary.rs:3:5
+  |
+3 | use acvus_ext::iter_sig::next;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^

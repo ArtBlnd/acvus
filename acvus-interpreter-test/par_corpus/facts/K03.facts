@@ -1,5 +1,17 @@
-for slice(r16) -> L1 else L2 stages [L1, L3]
+for slice(r16) -> L1 else L2 stages [L1, L11]
 // L1: free {as_slice, const, const, call substring, call to_string, array_begin, call vec, string_clone, drop, call to_string}
-// L3: cycle Storage(r17) in_order {ref, call or_insert, call push}
+// L11: cycle Storage(r17) in_order {ref, call or_insert, call push}
 // control upfront
 // cost W=49 O=18281 split when n > 11939, n = len(r16)
+while r46 -> L6 else L3 stages [L5, L6, L12]
+// L5: cycle Storage(r47)+Control in_order {ref, call next, test_variant, while}
+// L6: free {unwrap_variant, as_slice, call to_string}
+// L12: cycle Storage(r48) in_order law(Fold(r48, #5) exact) {ref, call push}
+// control chained through L5
+// cost in place: no count on entry
+while r74 -> L10 else L7 stages [L9, L10, L13]
+// L9: cycle Storage(r75)+Control in_order {ref, call next, test_variant, while}
+// L10: free {unwrap_variant, as_slice, call to_string}
+// L13: cycle Storage(r76) in_order law(Fold(r76, #5) exact) {ref, call push}
+// control chained through L9
+// cost in place: no count on entry

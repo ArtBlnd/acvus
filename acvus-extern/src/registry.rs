@@ -1213,6 +1213,7 @@ impl LawSite<'_> {
             Laws::Payload => "payload",
             Laws::Equivalence => "equivalence",
             Laws::Absent { .. } => "absent",
+            Laws::Step(_) => "step",
         };
         let over_eq = self.function
             == <crate::core::eq as crate::registry::SharedSignature>::qref(self.interner);
@@ -1261,6 +1262,7 @@ impl LawSite<'_> {
                         "a registered extern with one instance `g(s: &mut S, x: X)` over the \
                          state `S` and the payload `X` of the declaration's `Option<X>`",
                     ),
+                    LawRole::Step => ("step", "a registered extern"),
                 };
                 Err(CombineError::LawNamesUnfitExtern {
                     function: written(self.interner, self.function),

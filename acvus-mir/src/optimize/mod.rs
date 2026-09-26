@@ -11,6 +11,7 @@ pub mod empty_loop;
 pub mod stages;
 pub mod fold;
 pub mod forward;
+pub mod fusion;
 pub mod gvn;
 pub mod iv_canon;
 pub mod lsr;

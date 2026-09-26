@@ -101,15 +101,21 @@ fn a_nested_store_is_disjoint_in_each_loop_by_the_component_of_its_counter() {
 
 #[test]
 fn a_store_two_iterations_can_both_reach_stays_in_order() {
-    let cases = [
+    // RFC-0093 rule 5: an unconditional store of a value reading none of
+    // the slot is `last`, so these are keyed, in order within a key.
+    for source in [
         "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]);
          for i in 0u64..xs.len() { out[0u64] = xs[i]; }
          out.len()",
-        "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]); let c = 1u64;
-         for i in 0u64..xs.len() { out[i * 0u64 + c] = xs[i]; }
-         out.len()",
         "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]); let z = (xs[0u64] as u64) - 5u64;
          for i in 0u64..xs.len() { out[i * z] = xs[i]; }
+         out.len()",
+    ] {
+        assert_keyed_last(source);
+    }
+    let cases = [
+        "let xs = vec([5, 3, 8, 1]); let out = vec([0, 0]); let c = 1u64;
+         for i in 0u64..xs.len() { out[i * 0u64 + c] = xs[i]; }
          out.len()",
         "let v = vec([5, 3, 8, 1, 7]);
          for i in 0u64..(v.len() - 1u64) { v[i] = v[i + 1u64]; }
@@ -281,12 +287,18 @@ fn a_store_at_the_length_an_unconditional_push_grows_is_disjoint() {
         ["disjoint", "in_order"],
         "`out` in order through its push, `pos` disjoint"
     );
+    // Not disjoint: two iterations may store at one length. Each stores a
+    // value reading none of `pos`, so `pos` is keyed `last` (RFC-0093 rule 5).
     for body in [
         "pos[out.len()] = *x; if *x > 2 { out.push(*x); };",
         "pos[out.len()] = *x; out.push(*x); out.push(*x);",
         "pos[out.len()] = *x; out.push(*x); out.pop();",
     ] {
-        assert_eq!(orders(body), ["in_order", "in_order"], "{body}");
+        let found = orders(body);
+        assert!(
+            matches!(&found[..], [out, pos] if out == "in_order" && pos.starts_with("keyed(")),
+            "{body}: {found:?}"
+        );
     }
 }
 
@@ -324,13 +336,31 @@ fn bases_as_far_apart_as_the_least_stride_stay_in_order() {
     assert_eq!(storage_orders(source), ["in_order"], "{}", listing(source));
 }
 
-/// A step the interval domain puts in `[0, 4]` may be zero.
+/// A step the interval domain puts in `[0, 4]` may be zero, so the stores
+/// are not disjoint; each stores a value reading none of `cur`, so they are
+/// keyed `last`, in order within a key (RFC-0093 rule 5).
 #[test]
-fn a_stride_that_may_be_zero_stays_in_order() {
+fn a_stride_that_may_be_zero_is_not_disjoint() {
     let source = "let v = vec([1, 2]);
          let w = if v.len() > 5u64 { 0u64 } else { 4u64 };
          let cur = filled(32u64, 0);
          for r in 0u64..5u64 { cur[r * w] = 100; }
          cur.len()";
-    assert_eq!(storage_orders(source), ["in_order"], "{}", listing(source));
+    assert_keyed_last(source);
+}
+
+/// The one storage cycle of `source` is keyed, in order within a key, by
+/// `last`.
+fn assert_keyed_last(source: &str) {
+    let orders = storage_orders(source);
+    assert!(
+        matches!(&orders[..], [order] if order.starts_with("keyed(")),
+        "{}",
+        listing(source)
+    );
+    let cycle = facts(source)
+        .into_iter()
+        .find(|fact| fact.contains("cycle Storage("))
+        .expect("the store's cycle");
+    assert!(cycle.contains(" in_order law(Last exact) {index_set}"), "{cycle}");
 }
