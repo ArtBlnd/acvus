@@ -25,6 +25,7 @@ use crate::machine::{call_module, call_module_rooted};
 #[cfg(feature = "tooling")]
 use crate::port::ContextWrite;
 use crate::port::{Held, Port, ended};
+use crate::regs::Depth;
 use crate::runtime::{AcvusRuntime, ExternHandler};
 use crate::value::Value;
 
@@ -88,10 +89,10 @@ impl Init {
 
     /// Run from an operation that cannot wait; `Host::compile` admits a
     /// script init under synchronous access only where its body cannot
-    /// suspend.
-    pub(crate) fn run_now(&self, rt: &AcvusRuntime) -> Held {
+    /// suspend. A script init's frame runs at `depth`.
+    pub(crate) fn run_now(&self, rt: &AcvusRuntime, depth: Depth) -> Held {
         let value = match &self.body {
-            InitBody::Script(function) => owned_result(call_module_rooted(rt, *function)),
+            InitBody::Script(function) => owned_result(call_module_rooted(rt, *function, depth)),
             InitBody::Rust(make) => make.make(rt),
         };
         Held::new(value, Arc::clone(&self.ty), rt.shared.compilation)
@@ -171,7 +172,13 @@ impl InterpreterContext {
     }
 
     pub(crate) fn runtime_over(&self, port: Arc<Port>) -> AcvusRuntime {
-        AcvusRuntime::new(Arc::new(self.clone()), port, Flight::new(), Tally::outermost())
+        AcvusRuntime::new(
+            Arc::new(self.clone()),
+            port,
+            Flight::new(),
+            Tally::outermost(),
+            Depth::ROOT,
+        )
     }
 }
 
@@ -199,6 +206,10 @@ pub struct Interpreter {
     port: Arc<Port>,
     flight: Arc<Flight>,
     tally: Arc<Tally>,
+    /// The depth the entry's frame runs at: the root for a host's run, and
+    /// the spawning frame's callee depth for a spawned one, which an executor
+    /// may poll inside the spawner's own poll.
+    depth: Depth,
     args: Vec<Value>,
     _flying: Option<Flying>,
 }
@@ -231,21 +242,23 @@ impl Interpreter {
             port,
             flight: Flight::new(),
             tally: Tally::outermost(),
+            depth: Depth::ROOT,
             args,
             _flying: None,
         }
     }
 
     /// The deferred run a `Spawn` of a module issues: the spawning run's
-    /// runtime, whose frame the new run's frames run within, and the
-    /// arguments it passed.
-    pub(crate) fn spawned(rt: &AcvusRuntime, entry: QualifiedRef, args: Vec<Value>) -> AsyncJob {
+    /// runtime, whose frame the new run's frames run within, the depth the
+    /// spawning frame's callee runs at, and the arguments it passed.
+    pub(crate) fn spawned(rt: &AcvusRuntime, depth: Depth, entry: QualifiedRef, args: Vec<Value>) -> AsyncJob {
         let mut run = Self {
             shared: Arc::clone(&rt.shared),
             entry,
             port: Arc::clone(&rt.port),
             flight: Arc::clone(&rt.flight),
             tally: Arc::clone(&rt.tally),
+            depth,
             args,
             _flying: Some(rt.flight.start()),
         };
@@ -258,6 +271,7 @@ impl Interpreter {
             Arc::clone(&self.port),
             Arc::clone(&self.flight),
             Arc::clone(&self.tally),
+            self.depth,
         )
     }
 

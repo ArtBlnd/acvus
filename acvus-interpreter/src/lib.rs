@@ -84,6 +84,7 @@ pub use host::{
 pub use hook::{HookArity, HookArgs, HookEffect, HookFinished, HookOutput, HookParams, HookPart};
 pub use host_graph::HostGraph;
 pub use port::Held;
+pub use regs::DEPTH_TRAP;
 pub use runtime::AcvusRuntime;
 pub use space::{
     Commit, Committed, DirStore, Head, Identity, Log, MemoryStore, Mode, Node, NodeKind, Plain,

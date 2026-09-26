@@ -551,6 +551,98 @@ pub fn first_element<T>(run: &[T]) -> NonNull<T> {
     NonNull::from(run).cast::<T>()
 }
 
+// -- The running thread's native stack ----------------------------------------
+
+/// `regs::Depth::enter` compares `position` against a `ThreadStack` as a
+/// stack that grows down, which it does on every target the `compile_error!`
+/// below admits.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native_stack {
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    compile_error!(
+        "acvus-interpreter reads a thread's stack from pthread_getattr_np, which this target \
+         does not have (RFC-0100 rule 5)"
+    );
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct ThreadStack {
+        low: usize,
+        high: usize,
+    }
+
+    impl ThreadStack {
+        pub fn low(self) -> usize {
+            self.low
+        }
+
+        pub fn high(self) -> usize {
+            self.high
+        }
+
+        /// glibc, musl and bionic state a thread's usable stack through
+        /// `pthread_getattr_np`, the main thread's included, with the guard
+        /// pages below `low`.
+        pub fn of_this_thread() -> Option<ThreadStack> {
+            let mut attr = std::mem::MaybeUninit::<libc::pthread_attr_t>::uninit();
+            // SAFETY: `pthread_getattr_np` initializes `attr` when it answers
+            // 0, and only then is `attr` read and destroyed.
+            unsafe {
+                if libc::pthread_getattr_np(libc::pthread_self(), attr.as_mut_ptr()) != 0 {
+                    return None;
+                }
+                let mut stack: *mut libc::c_void = std::ptr::null_mut();
+                let mut size: libc::size_t = 0;
+                let got = libc::pthread_attr_getstack(attr.as_ptr(), &mut stack, &mut size);
+                libc::pthread_attr_destroy(attr.as_mut_ptr());
+                if got != 0 {
+                    return None;
+                }
+                let low = stack.addr();
+                Some(ThreadStack {
+                    low,
+                    high: low.checked_add(size)?,
+                })
+            }
+        }
+    }
+
+    /// The stack pointer, read in place so that no frame is made for a
+    /// local to take the address of, and a caller that tail-calls keeps its
+    /// tail call.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    pub fn position() -> usize {
+        let sp: usize;
+        // SAFETY: the instruction copies `rsp` into a register and reads or
+        // writes nothing else.
+        unsafe {
+            std::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags));
+        }
+        sp
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    pub fn position() -> usize {
+        let sp: usize;
+        // SAFETY: the instruction copies `sp` into a register and reads or
+        // writes nothing else.
+        unsafe {
+            std::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
+        }
+        sp
+    }
+
+    /// The address of a local of the frame this is inlined into, which is
+    /// at or above the stack pointer.
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[inline(always)]
+    pub fn position() -> usize {
+        let here = 0u8;
+        std::ptr::from_ref(&here).addr()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

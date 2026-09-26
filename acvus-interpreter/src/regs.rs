@@ -139,6 +139,258 @@ pub(crate) const fn cells_for(slots: u16) -> usize {
 /// callee can ask of a window, and the cap `above_cap` is read against.
 const MAX_FRAME_CELLS: usize = cells_for(MAX_FRAME_SLOTS);
 
+/// How deep in a call chain a frame is bound, which a depth trap names
+/// (RFC-0100 rule 5): the frame at the root of a chain is at `ROOT`, and a
+/// frame bound in a window is one deeper than the frame the window sits
+/// above. Every depth counts a `Machine` whose call chain holds at least one
+/// native frame, so a `usize` holds any depth a stack reaches.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Depth(usize);
+
+impl Depth {
+    pub const ROOT: Depth = Depth(0);
+
+    /// The frames a chain at this depth has entered, itself included.
+    pub fn frames(self) -> usize {
+        self.0 + 1
+    }
+
+    /// A frame is about to run at this depth. Only an entered depth has a
+    /// depth above it, so every frame a chain reaches passed the guard.
+    #[inline(always)]
+    pub(crate) fn enter(self) -> Entered {
+        guard(self.frames());
+        Entered(self)
+    }
+
+    /// Checks the stack of the frame whose window is at this depth, for a
+    /// `StackGuard` between two framed bodies whose `stack_admits` refused.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn guard_under(self) {
+        guard(self.0);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use native::stack_admits;
+
+/// The frames a body's operations may nest between two checks of the stack:
+/// `prepare` puts a `StackGuard` where more would. A region's part nests in
+/// its region's operation's frame; where a build calls an operation's
+/// successor rather than jumping to it, a debug build, every operation of a
+/// chain nests in the one before it too.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const GUARD_EVERY: usize = native::GUARD_EVERY;
+
+/// A depth `Depth::enter` admitted.
+#[derive(Clone, Copy)]
+pub struct Entered(Depth);
+
+impl Entered {
+    /// The depth of a frame bound in the window above this one.
+    #[inline(always)]
+    fn above(self) -> Depth {
+        Depth(self.0.0 + 1)
+    }
+}
+
+/// The text a depth trap's message begins with.
+pub const DEPTH_TRAP: &str = "call depth past the machine's bound";
+
+#[cfg(not(target_arch = "wasm32"))]
+use native::guard;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use std::cell::Cell;
+
+    use super::DEPTH_TRAP;
+    use crate::repr::native_stack::{self, ThreadStack};
+
+    /// What the stack below a check that passed may take before the next
+    /// check has run and, where it traps, finished unwinding: the headroom
+    /// the entry line keeps above the thread's `low`.
+    struct Spend {
+        /// The most a trapping recursion's stack reached below the line,
+        /// with the default panic hook printing a backtrace: over the direct,
+        /// one-stage and three-stage extern and awaited paths, each at 250
+        /// root positions, read by painting the stack.
+        trap: usize,
+        /// The most one level of a recursion takes, over the same paths:
+        /// the stack between a thread's first frame and the line, over the
+        /// frames a trap names.
+        level: usize,
+        /// The largest frame any of the `GUARD_EVERY + 1` nested frames
+        /// between two checks takes: a region's operation where the build
+        /// jumps to a successor, any operation's where it calls one. Read
+        /// from the prologue of every `Op::run` in the probe's binary.
+        unit: usize,
+        /// An extern handler's own frames between its call and a function
+        /// value it calls back. This is the extern contract's figure
+        /// (RFC-0100 rule 5), not a measurement.
+        handler: usize,
+    }
+
+    pub(super) const GUARD_EVERY: usize = 32;
+
+    #[cfg(not(debug_assertions))]
+    const SPEND: Spend = Spend {
+        trap: 20_719,
+        level: 1457,
+        unit: 192,
+        handler: 32 << 10,
+    };
+
+    /// Cargo's default `dev` profile, whose full debuginfo gives an
+    /// unoptimized frame a slot per variable, is the costliest debug build.
+    #[cfg(debug_assertions)]
+    const SPEND: Spend = Spend {
+        trap: 35_432,
+        level: 12_728,
+        unit: 4104,
+        handler: 32 << 10,
+    };
+
+    const HEADROOM: usize =
+        SPEND.trap + SPEND.level + (GUARD_EVERY + 1) * SPEND.unit + SPEND.handler;
+
+    /// Where a framed body may start on this thread: at or above `line` and
+    /// below `line + span`, the top of the thread's stack.
+    #[derive(Clone, Copy)]
+    struct EntryLine {
+        line: usize,
+        span: usize,
+    }
+
+    impl EntryLine {
+        const UNREAD: EntryLine = EntryLine { line: 0, span: 0 };
+
+        /// A stack no larger than the headroom admits no frame.
+        fn of(stack: ThreadStack) -> EntryLine {
+            let line = stack.low().saturating_add(HEADROOM);
+            EntryLine {
+                line,
+                span: stack.high().saturating_sub(line),
+            }
+        }
+
+        #[inline(always)]
+        fn admits(self, at: usize) -> bool {
+            at.wrapping_sub(self.line) < self.span
+        }
+    }
+
+    std::thread_local! {
+        static ENTRY: Cell<EntryLine> = const { Cell::new(EntryLine::UNREAD) };
+    }
+
+    #[inline(always)]
+    pub(super) fn guard(frames: usize) {
+        let at = native_stack::position();
+        if !ENTRY.get().admits(at) {
+            unadmitted(frames, at);
+        }
+    }
+
+    /// Whether this thread's line admits a frame here: the compare alone,
+    /// for a caller that keeps its tail call by leaving the refusal to a
+    /// cold path.
+    #[inline(always)]
+    pub(crate) fn stack_admits() -> bool {
+        ENTRY.get().admits(native_stack::position())
+    }
+
+    /// A thread's first framed body reads the thread's stack here, and a
+    /// body the line refuses traps.
+    #[cold]
+    #[inline(never)]
+    fn unadmitted(frames: usize, at: usize) {
+        let Some(stack) = ThreadStack::of_this_thread() else {
+            panic!("the OS states no stack for this thread, so no frame can run on it (RFC-0100 rule 5)")
+        };
+        let entry = EntryLine::of(stack);
+        ENTRY.set(entry);
+        if entry.admits(at) {
+            return;
+        }
+        if (stack.low()..stack.high()).contains(&at) {
+            panic!(
+                "{DEPTH_TRAP}: a call nests {frames} frames deep, past the stack its thread has \
+                 left (RFC-0100 rule 5)"
+            )
+        }
+        panic!(
+            "a frame runs at {at:#x}, outside its thread's stack {:#x}..{:#x}, which no guard \
+             can bound (RFC-0100 rule 5)",
+            stack.low(),
+            stack.high()
+        )
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+use wasm::guard;
+
+/// A wasm32 stack overflow is the engine's trap (RFC-0100 rule 5), and the
+/// bound traps first to name the depth.
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use super::DEPTH_TRAP;
+
+    /// The stack a call chain spends first on one build, and what one
+    /// counted frame was measured to spend of it.
+    struct Spent {
+        stack: usize,
+        /// What of `stack` a chain does not spend: the host's frames below
+        /// the chain's root, and the panic a trap raises at the deepest frame.
+        headroom: usize,
+        /// The most stack a counted frame was measured to cost over the
+        /// paths a recursion takes.
+        frame: usize,
+    }
+
+    /// Release (the `wasm` profile, `opt-level = "z"`): the engine's own
+    /// stack, V8's default 984 KiB, which holds an engine frame for each wasm
+    /// call and so one per region too; the most is the seven nested
+    /// regions'.
+    #[cfg(not(debug_assertions))]
+    const SPENT: Spent = Spent {
+        stack: 984 << 10,
+        headroom: 128 << 10,
+        frame: 2464,
+    };
+
+    /// Debug: the linear memory's stack, 1 MiB, the linker's default; the
+    /// most is the three stages'.
+    #[cfg(debug_assertions)]
+    const SPENT: Spent = Spent {
+        stack: 1 << 20,
+        headroom: 128 << 10,
+        frame: 8296,
+    };
+
+    /// A frame is charged the most measured and half again.
+    const BOUND: usize = (SPENT.stack - SPENT.headroom) / (SPENT.frame * 3 / 2);
+
+    #[inline(always)]
+    pub(super) fn guard(frames: usize) {
+        if frames > BOUND {
+            past_the_bound(frames)
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn past_the_bound(frames: usize) -> ! {
+        panic!(
+            "{DEPTH_TRAP}: a call nests {frames} frames deep, and a call chain nests at most \
+             {BOUND} (RFC-0100 rule 5)"
+        )
+    }
+}
+
 /// Which body a frame is bound to, and so whether it already carries that
 /// body's slot kinds and entry constants (`machine::open_frame`) on every
 /// register past its parameter run.
@@ -241,11 +493,14 @@ pub struct RootFrame {
 }
 
 impl RootFrame {
-    pub fn new() -> RootFrame {
+    /// Cells for the widest frame, at the root of a chain whose first frame
+    /// runs at `depth`.
+    pub fn new(depth: Depth) -> RootFrame {
         let mut store = Store::new();
         store.widen(MAX_FRAME_SLOTS);
         let mut state = std::mem::replace(&mut store.root, FrameState::UNBOUND);
         state.cells = NonNull::from(&mut store.cells[..]);
+        state.depth = depth;
         RootFrame {
             state,
             cells: RootCells { _kept: store },
@@ -274,6 +529,8 @@ impl RootFrame {
 pub struct FrameState {
     cells: NonNull<[Cell]>,
     bound: BoundTo,
+    /// The depth a frame bound in these cells runs at.
+    depth: Depth,
 }
 
 // SAFETY: the state names cells a `&mut [Cell]` named before it, and `Cell` is
@@ -298,17 +555,25 @@ impl FrameState {
     pub const UNBOUND: FrameState = FrameState {
         cells: NonNull::slice_from_raw_parts(NonNull::dangling(), 0),
         bound: BoundTo::NONE,
+        depth: Depth::ROOT,
     };
 
     /// # Safety
     /// `cells` are live and unmoved, and named by no other handle, for as long
     /// as this state is.
     #[inline(always)]
-    unsafe fn of(cells: NonNull<[Cell]>) -> FrameState {
+    unsafe fn of(cells: NonNull<[Cell]>, depth: Depth) -> FrameState {
         FrameState {
             cells,
             bound: BoundTo::NONE,
+            depth,
         }
+    }
+
+    /// The depth a frame bound in this window runs at.
+    #[inline(always)]
+    pub fn depth(&self) -> Depth {
+        self.depth
     }
 
     #[inline(always)]
@@ -473,9 +738,10 @@ impl<'f> Regs<'f> {
     /// The cells above this frame, taken out of it as the handle its calls lend
     /// a handler. Taking is what keeps the two apart: afterwards this `Regs`
     /// reaches its registers and nothing above them, and a second take finds
-    /// no cells left.
+    /// no cells left. `at` is the depth this frame was entered at, and a
+    /// frame bound in the window runs one deeper.
     #[inline(always)]
-    pub fn take_window(&mut self) -> FrameState {
+    pub fn take_window(&mut self, at: Entered) -> FrameState {
         let own = usize::from(self.own);
         let end = own + usize::from(self.above_cells);
         let cells = std::mem::take(&mut self.cells);
@@ -485,7 +751,7 @@ impl<'f> Regs<'f> {
         // SAFETY: `above` is a live `&mut [Cell]` that this `Regs` no longer
         // reaches and no other handle names, borrowed from the same cells the
         // frame below lent, which outlive the frame.
-        unsafe { FrameState::of(NonNull::from(above)) }
+        unsafe { FrameState::of(NonNull::from(above), at.above()) }
     }
 
     /// The register's first byte. No arithmetic: the operation's field is

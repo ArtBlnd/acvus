@@ -412,14 +412,35 @@ is a graph function, typed, called and inlined as a host function is.
    tests', takes the nodes from there.
 5. **Cost and depth.** A call of a `fn` costs its site's one call row, and
    recursion computes no summary; the compiled size grows with the calls
-   from outside a component, one copy each. A recursion past the machine's depth
-   bound traps (RFC-0048) rather than overflowing the native stack.
+   from outside a component, one copy each. A recursion that would run its
+   thread's native stack out traps (RFC-0048) rather than overflowing it.
+   Every framed body runs in a `Machine`, whose making compares the stack's
+   position with the running thread's line: the lowest usable byte of its
+   stack, read once per thread from the OS, plus a headroom. `prepare` puts
+   a `StackGuard`, the same compare, where a body's operations nest
+   `GUARD_EVERY` frames past the last check: a region's parts nest in the
+   region's operation, and in a debug build, which calls an operation's
+   successor rather than jumping to it, so does each operation of a chain.
+   The headroom holds a trap's panic and unwind with the default hook
+   printing a backtrace, one level of the costliest recursion, those nested
+   frames, and an extern handler's own frames up to 32 KiB before it calls a
+   function value back. Each is measured per build but the handler's, which
+   is the extern contract. The trap's message names the depth, carried in
+   the window a call lays its callee in and in the runtime a frame hands
+   off. On `wasm32` an overflow is the engine's trap: V8's stack ends in a
+   `RangeError`, and the linear memory's stack, laid below the data, in an
+   out-of-bounds access that leaves data and heap as they were; either ends
+   the instance, as a panic does there. A depth bound derived per build from
+   the stack a frame was measured to cost traps first, to name the depth.
 
 **Why.** A function with no environment needs no closure record, no
 capture analysis and no rule for what a caller forwards: it is the graph
 function the host already declares, written in the script.
 **Cost.** A new statement form and one refusal; the checker's component
-typing already exists.
+typing already exists. A stack position read, a thread-local load and one
+compare per framed body, and a depth word in each window and in each
+runtime a frame hands off. A `StackGuard` is an operation only in a body
+that nests past `GUARD_EVERY`. The OS query runs once per thread.
 **Rejected.**
 - Reading `$` and `@` in a body, forwarded from each caller — a capture by
   another name: the function would carry its caller's environment.
@@ -428,3 +449,14 @@ typing already exists.
 - A lift in each graph builder — four copies kept equal by hand.
 - `fn` in templates — a template's statements are a script's lines; one
   place to declare functions is enough.
+- A depth count as the native guard — a count bounds frames, not bytes: a
+  call under more nested regions, a handler with a larger frame or a
+  thread with a smaller stack overflows under any count.
+- A check at every region's entry — a compare on every branch and every
+  iteration, where a guard at `GUARD_EVERY` costs a body that nests less
+  nothing.
+- The line in the runtime a frame hands off — an awaited frame may be
+  polled on another thread, whose stack is another.
+- `stacker`'s `remaining_stack` — an out-of-line call for the stack
+  pointer and a lazily initialized thread-local per check, and no extent
+  to refuse a position outside the thread's stack by.
