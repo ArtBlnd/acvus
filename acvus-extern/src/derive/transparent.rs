@@ -1,11 +1,10 @@
 //! An extension type is stored as its payload's canonical form and read
 //! back through it (RFC-0039, RFC-0076). These six functions are the whole
-//! crossing. Each casts through `repr::SameLayout`, whose witness `layout`
-//! makes from `Transparent`, which the derive implements only for a
-//! `#[repr(transparent)]` struct.
+//! crossing. Each casts through `repr::SameLayout`, whose witness
+//! `repr::transparent_layout` makes from `Transparent`, which the derive
+//! implements only for a `#[repr(transparent)]` struct.
 
-use crate::canonical::same_layout;
-use crate::repr::SameLayout;
+use crate::repr::{self, SameLayout};
 use crate::runtime::Runtime;
 
 /// `Self` is stored as a `P`.
@@ -20,16 +19,12 @@ use crate::runtime::Runtime;
 /// `unsafe(uniform_payload)` asserts it.
 pub unsafe trait Transparent<P>: Sized {}
 
-/// The layout `Transparent<P>` proves.
 #[inline(always)]
 fn layout<T, P>() -> SameLayout<T, P>
 where
     T: Transparent<P>,
 {
-    // SAFETY: `Transparent<P>`'s contract: `T` is `repr(transparent)` over
-    // `P`'s field, which differs from `P` only as `Canonical` lets a type
-    // and its canonical form differ, under its three layers.
-    unsafe { same_layout!(T, P) }
+    repr::transparent_layout::<T, P>()
 }
 
 pub fn erase<T, P, Rt>(value: T, rt: crate::Crossing<'_, Rt>) -> Rt::Value

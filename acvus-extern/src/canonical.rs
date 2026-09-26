@@ -46,20 +46,3 @@ where
     /// there again.
     type Canon: Var<K> + Canonical<K, Canon = Self::Canon> + 'static;
 }
-
-/// The witness `repr::SameLayout<$a, $b>`, whose constructor checks at each
-/// instantiation that the two are of one size and alignment. The macro is
-/// the only caller of that constructor; its caller writes the `unsafe` and
-/// names the fact that gives the rest of one layout. With `where $fact`, the
-/// witness is `Some` where the `repr::Fact` `$fact` holds, and the check is
-/// made only there.
-macro_rules! same_layout {
-    ($a:ty, $b:ty) => {
-        $crate::repr::SameLayout::<$a, $b>::vouched()
-    };
-    ($a:ty, $b:ty, where $fact:ty) => {
-        $crate::repr::SameLayout::<$a, $b>::vouched_where::<$fact>()
-    };
-}
-
-pub(crate) use same_layout;

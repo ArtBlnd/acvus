@@ -464,18 +464,19 @@ impl Words {
 /// validity as the other's, so that a place holding a valid `A` holds a
 /// valid `B` and the reverse.
 ///
-/// Only `same_layout!` makes one. Its constructor, private to acvus-extern,
-/// checks the size and the alignment when the instantiation is compiled, and
-/// the macro's caller answers for the rest with the fact that proves it — a
-/// `repr(transparent)` wrapper and its field, a type and its `Canonical`
-/// form, a derive's `Transparent` impl. Outside acvus-extern a witness is
-/// only ever handed out: the field is private and the constructor is
-/// `pub(crate)`.
+/// It is made only by the constructors below this type, each bound by the
+/// `unsafe impl` that proves the layout — a derive's `Transparent`, a type's
+/// `Canonical`, a `TransparentOver` the runtime's value, a `OneValue` stored
+/// as that value — and each checks the size and the alignment when the
+/// instantiation is compiled. The field and the body the constructors share,
+/// `vouched`, are private to this module, so no other names two types one
+/// layout without the `unsafe impl` that proves it.
 ///
 /// The witness speaks of layout and of nothing else. What a type promises
-/// beyond its bytes — who releases what it holds, the lifetimes it names, an
-/// invariant its constructor keeps — is not in it, so each cast below is
-/// `unsafe` and its caller names that part.
+/// beyond its bytes — who releases what it holds, the lifetimes it names, the
+/// type an `Erased` claims — is not in it, so each cast below is `unsafe` and
+/// its caller names that part. Two types that are one value as well are
+/// `SameValue`'s.
 pub struct SameLayout<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
 
 impl<A, B> Clone for SameLayout<A, B> {
@@ -488,8 +489,8 @@ impl<A, B> Clone for SameLayout<A, B> {
 impl<A, B> Copy for SameLayout<A, B> {}
 
 impl<A, B> SameLayout<A, B> {
-    /// `same_layout!`'s. The size and the alignment are checked here, at
-    /// each instantiation, so no witness names two types that differ in
+    /// The constructors' body. The size and the alignment are checked here,
+    /// at each instantiation, so no witness names two types that differ in
     /// either.
     ///
     /// # Safety
@@ -497,7 +498,7 @@ impl<A, B> SameLayout<A, B> {
     /// `B`'s, so a place holding a valid `A` holds a valid `B` and the
     /// reverse.
     #[inline(always)]
-    pub(crate) const unsafe fn vouched() -> Self {
+    const unsafe fn vouched() -> Self {
         const {
             assert!(
                 Layout::new::<A>().size() == Layout::new::<B>().size()
@@ -508,14 +509,14 @@ impl<A, B> SameLayout<A, B> {
         SameLayout(PhantomData)
     }
 
-    /// `same_layout!`'s, where the fact that gives the rest of one layout is
+    /// As `vouched`, where the fact that gives the rest of one layout is
     /// `F`'s: the witness where `F::HOLDS`, and `None` where not. The size
     /// and the alignment are checked at each instantiation where `F::HOLDS`.
     ///
     /// # Safety
     /// Where `F::HOLDS`, as `vouched`'s.
     #[inline(always)]
-    pub(crate) const unsafe fn vouched_where<F>() -> Option<Self>
+    const unsafe fn vouched_where<F>() -> Option<Self>
     where
         F: Fact,
     {
@@ -611,9 +612,126 @@ impl<A, B> SameLayout<A, B> {
 }
 
 /// A fact of a type that a constant answers, which `SameLayout::vouched_where`
-/// reads. It is acvus-extern's: no other crate states one.
-pub(crate) trait Fact {
+/// reads. It is this module's: no other states one.
+trait Fact {
     const HOLDS: bool;
+}
+
+/// The layout `Transparent<P>` proves.
+#[inline(always)]
+pub(crate) fn transparent_layout<T, P>() -> SameLayout<T, P>
+where
+    T: crate::Transparent<P>,
+{
+    // SAFETY: `Transparent<P>`'s contract: `T` is `repr(transparent)` over
+    // `P`'s field, which differs from `P` only as `Canonical` lets a type and
+    // its canonical form differ, under its three layers.
+    unsafe { SameLayout::vouched() }
+}
+
+/// The layout `Canonical` proves.
+#[inline(always)]
+pub(crate) fn canonical_layout<T>() -> SameLayout<T, T::Canon>
+where
+    T: crate::Canonical<crate::kind::Type>,
+{
+    // SAFETY: `Canonical`'s contract: `T::Canon` is `T` with each uniform
+    // part's `X` at `Never` and each lifetime at `'static`, one layout under
+    // its three layers.
+    unsafe { SameLayout::vouched() }
+}
+
+/// The layout `TransparentOver` proves: a `T` is one `Rt::Value`.
+#[inline(always)]
+pub(crate) fn value_layout<T, Rt>() -> SameLayout<T, Rt::Value>
+where
+    T: crate::obj::TransparentOver<Rt>,
+    Rt: crate::Runtime,
+{
+    // SAFETY: `TransparentOver`'s contract: `T` is `repr(transparent)` with
+    // `Rt::Value` as its one non-zero-sized field.
+    unsafe { SameLayout::vouched() }
+}
+
+/// `T::STORED_AS_VALUE`: `T` is the runtime's value or another name for it,
+/// with its layout.
+struct StoredAsValue<T, Rt>(PhantomData<fn() -> (T, Rt)>);
+
+impl<T, Rt> Fact for StoredAsValue<T, Rt>
+where
+    T: crate::OneValue<Rt>,
+    Rt: crate::Runtime,
+{
+    const HOLDS: bool = T::STORED_AS_VALUE;
+}
+
+/// The layout a `T` stored as the runtime's value shares with an `Owned`:
+/// `Some` where `T::STORED_AS_VALUE`.
+#[inline(always)]
+pub(crate) fn stored_value_layout<T, Rt>() -> Option<SameLayout<T, crate::Owned<Rt>>>
+where
+    T: crate::OneValue<Rt>,
+    Rt: crate::Runtime,
+{
+    // SAFETY: where `T::STORED_AS_VALUE`, `T` is the runtime's value or
+    // `repr(transparent)` over it (`OneValue`'s contract), and `Owned<Rt>` is
+    // `repr(transparent)` over it, so each byte of the one is the other's.
+    unsafe { SameLayout::vouched_where::<StoredAsValue<T, Rt>>() }
+}
+
+// -- Two types of one value ---------------------------------------------------
+
+/// A wrapper that is its field and nothing else.
+///
+/// # Safety
+/// `Self` is `#[repr(transparent)]` over a field of type `F`, its every other
+/// field is a `PhantomData`, and it keeps no invariant of its own: every `F`
+/// is a `Self`, and every `Self` an `F`.
+pub(crate) unsafe trait Wraps<F> {}
+
+/// The witness that `A` and `B` are one value: one layout, and each promises
+/// what the other does, so a cast either way is safe. `wrapped` makes one.
+pub(crate) struct SameValue<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
+
+impl<A, B> Clone for SameValue<A, B> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<A, B> Copy for SameValue<A, B> {}
+
+impl<A, B> SameValue<A, B> {
+    /// The place `a` names, named as a `B` for as long.
+    #[inline(always)]
+    pub(crate) fn cast_ref(self, a: &A) -> &B {
+        // SAFETY: the witness: `B` is `A`'s layout and value.
+        unsafe { &*std::ptr::from_ref(a).cast::<B>() }
+    }
+
+    /// As `cast_ref`, exclusively.
+    #[inline(always)]
+    pub(crate) fn cast_mut(self, a: &mut A) -> &mut B {
+        // SAFETY: as `cast_ref`'s; a `B` written is an `A` again.
+        unsafe { &mut *std::ptr::from_mut(a).cast::<B>() }
+    }
+}
+
+/// The value `Wraps<F>` proves: a `W` is its `F`.
+#[inline(always)]
+pub(crate) fn wrapped<W, F>() -> SameValue<F, W>
+where
+    W: Wraps<F>,
+{
+    const {
+        assert!(
+            Layout::new::<F>().size() == Layout::new::<W>().size()
+                && Layout::new::<F>().align() == Layout::new::<W>().align(),
+            "a wrapper is its field's size and alignment"
+        )
+    };
+    SameValue(PhantomData)
 }
 
 // -- One type under two names -------------------------------------------------
@@ -987,6 +1105,21 @@ mod tests {
         // SAFETY: as above, per element; the buffer is the one `run` held.
         let strings = unsafe { layout.flip().cast_vec(run) };
         assert_eq!(strings, ["a", "bc"]);
+    }
+
+    #[test]
+    fn a_wrapper_is_named_over_its_field_both_ways() {
+        #[repr(transparent)]
+        struct Name(String, PhantomData<u8>);
+        // SAFETY: `Name` is `repr(transparent)` over its `String`, its other
+        // field a `PhantomData`, and keeps no invariant of its own.
+        unsafe impl Wraps<String> for Name {}
+
+        let same = wrapped::<Name, String>();
+        let mut text = String::from("héllo");
+        assert_eq!(same.cast_ref(&text).0, "héllo");
+        same.cast_mut(&mut text).0.push('!');
+        assert_eq!(text, "héllo!");
     }
 
     #[test]

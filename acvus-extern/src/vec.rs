@@ -4,30 +4,16 @@
 //! is a value in place, element by element when the element converts. In a
 //! `#` slot it crosses as one box holding the Rust `Vec<T>` itself.
 
-use std::marker::PhantomData;
-
 use acvus_mir::ty::{Poly, Ty, TypeArg};
 
-use crate::canonical::{Canonical, same_layout};
+use crate::canonical::Canonical;
 use crate::obj::{InPlaceElement, OneValue};
 use crate::owned::Owned;
 use crate::registry::ExternTypeDecl;
-use crate::repr::{Fact, SameLayout};
+use crate::repr::SameLayout;
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, SlotRepr, TyArg, Var, kind};
 use crate::{Interner, PolyTy, QualifiedRef, TyVarBound, UserDefinedDecl};
-
-/// `T::STORED_AS_VALUE`: `T` is the runtime's value or another name for it,
-/// with its layout.
-struct StoredAsValue<T, Rt>(PhantomData<fn() -> (T, Rt)>);
-
-impl<T, Rt> Fact for StoredAsValue<T, Rt>
-where
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    const HOLDS: bool = T::STORED_AS_VALUE;
-}
 
 /// The witness a `Vec<T>` crosses by as the runtime's `Vec<Owned<Rt>>`, the
 /// whole buffer at once: `Some` where `T` is stored as the runtime's value.
@@ -36,10 +22,7 @@ where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    // SAFETY: where `T::STORED_AS_VALUE`, `T` is the runtime's value or
-    // `repr(transparent)` over it (`OneValue`'s contract), and `Owned<Rt>` is
-    // `repr(transparent)` over it, so each byte of the one is the other's.
-    unsafe { same_layout!(T, Owned<Rt>, where StoredAsValue<T, Rt>) }
+    crate::repr::stored_value_layout::<T, Rt>()
 }
 
 crate::cross_one_value!(Vec<T>, T: crate::OneValue<__Rt>);

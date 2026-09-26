@@ -8,7 +8,7 @@ use std::mem::ManuallyDrop;
 use acvus_mir::ty::{Poly, PolyTy, TypeArg};
 use acvus_utils::Interner;
 
-use crate::canonical::{Canonical, same_layout};
+use crate::canonical::Canonical;
 use crate::crossing::{Crossing, Holding};
 use crate::obj::{InPlaceElement, Inline, OneValue, Stored, TransparentOver};
 use crate::owned::{Owned, Release};
@@ -43,10 +43,7 @@ where
     #[doc(hidden)]
     #[inline(always)]
     pub fn over_value() -> crate::repr::SameLayout<R::Value, Self> {
-        // SAFETY: `Erased<R, T>` is `repr(transparent)` with
-        // `ManuallyDrop<R::Value>`, itself `repr(transparent)` over
-        // `R::Value`, as its one non-zero-sized field.
-        unsafe { same_layout!(R::Value, Self) }
+        crate::repr::value_layout::<Self, R>().flip()
     }
 
     pub(crate) fn held_mut(&mut self) -> &mut R::Value {
@@ -360,9 +357,7 @@ where
     R: Runtime,
 {
     fn in_place<'v>(_: Holding<'_, R>, values: &'v Vec<Owned<R>>) -> &'v Vec<Self> {
-        // SAFETY: `Owned<R>` is this type's canonical form, and the two
-        // `Vec`s differ in nothing else (`Canonical`).
-        let layout = unsafe { same_layout!(Vec<Owned<R>>, Vec<Self>) };
+        let layout = crate::repr::canonical_layout::<Vec<Self>>().flip();
         // SAFETY: an `Erased<R, T>` differs from an `Owned<R>` in `T` alone,
         // which a `PhantomData` holds, so the elements keep their holders'
         // promises.
@@ -370,8 +365,7 @@ where
     }
 
     fn in_place_mut<'v>(_: Holding<'_, R>, values: &'v mut Vec<Owned<R>>) -> &'v mut Vec<Self> {
-        // SAFETY: as `in_place`'s.
-        let layout = unsafe { same_layout!(Vec<Owned<R>>, Vec<Self>) };
+        let layout = crate::repr::canonical_layout::<Vec<Self>>().flip();
         // SAFETY: as `in_place`'s, both ways; `&mut` is the exclusive name.
         unsafe { layout.cast_mut(values) }
     }

@@ -1506,9 +1506,7 @@ where
         // SAFETY: the caller's contract names the storage a crossing wrote
         // at this type.
         let items = T::in_place(unsafe { crate::Holding::new() }, &stored.0);
-        // SAFETY: `Arr<T, N>` names its `Vec<T>` alone, and `N` is a
-        // `PhantomData`'s.
-        unsafe { Self::over_items().cast_ref(items) }
+        Self::over_items().cast_ref(items)
     }
 
     unsafe fn deref_mut<'a>(rt: &Rt, reference: &'a Rt::Value) -> &'a mut Self {
@@ -1517,7 +1515,6 @@ where
         let stored = unsafe { rt.deref_mut::<Arr<Owned<Rt>, ()>>(reference) };
         // SAFETY: as `deref`'s.
         let items = T::in_place_mut(unsafe { crate::Holding::new() }, &mut stored.0);
-        // SAFETY: as `deref`'s, both ways.
-        unsafe { Self::over_items().cast_mut(items) }
+        Self::over_items().cast_mut(items)
     }
 }
