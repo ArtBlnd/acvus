@@ -436,13 +436,10 @@ pub async fn run(interner: &Interner, source: &str, context: Context) -> String 
     let result = interp.execute().await.expect("the seeds hold every context the run fetches");
 
     // A template yields a String; an empty one yields unit.
-    match &result {
-        v if v.is_string() => {
-            // SAFETY: the witness is String.
-            unsafe { v.as_str() }.to_owned()
-        }
-        v if v.kind().is_inline() => String::new(),
-        other => format!("{other:?}"),
+    match result.get::<String>() {
+        Some(text) => text.clone(),
+        None if result.kind().is_inline() => String::new(),
+        None => format!("{result:?}"),
     }
 }
 
@@ -794,8 +791,8 @@ pub mod corpus {
     use std::time::Duration;
 
     use acvus_interpreter::{
-        Composite, Executable, Executor, Interpreter, InterpreterContext, Kind,
-        PrepareCtx, SequentialExecutor, TokioExecutor, Value, prepare_module,
+        Array, Executable, Executor, Interpreter, InterpreterContext, Kind, Object, PrepareCtx,
+        SequentialExecutor, TokioExecutor, Tuple, Value, VariantValue, prepare_module,
     };
     use acvus_mir::graph::{ParsedAst, QualifiedRef};
     use acvus_mir::ty::{IntTy, Ty};
@@ -1826,46 +1823,39 @@ pub mod corpus {
 
     fn composite(interner: &Interner, value: &Value) -> serde_json::Value {
         use serde_json::{Map, Value as Json};
-        // SAFETY, every arm: the vtable's `Composite` is the runtime's own
-        // witness of the type behind the pointer.
-        match value.composite() {
-            Some(Composite::String) => Json::from(unsafe { value.as_str() }),
-            Some(Composite::Array) => Json::Array(
-                unsafe { value.as_array() }
-                    .iter()
-                    .map(|v| render(interner, v))
-                    .collect(),
-            ),
-            Some(Composite::Tuple) => Json::Array(
-                unsafe { value.as_tuple() }
-                    .iter()
-                    .map(|v| render(interner, v))
-                    .collect(),
-            ),
-            Some(Composite::Object) => {
-                let mut fields: Vec<(String, Json)> = unsafe { value.as_shape() }
-                    .names()
-                    .iter()
-                    .zip(unsafe { value.as_object() })
-                    .map(|(k, v)| (interner.resolve(*k).to_string(), render(interner, v)))
-                    .collect();
-                fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-                Json::Object(fields.into_iter().collect())
-            }
-            Some(Composite::Variant) => {
-                let variant = unsafe { value.as_variant() };
-                // SAFETY: the same witness — a variant's first register is its tag.
-                let tag = interner
-                    .resolve(unsafe { variant.tag().as_tag() })
-                    .to_string();
-                match variant.payload().kind() {
-                    Kind::Undef => Json::from(tag),
-                    _ => Json::Object(Map::from_iter([(tag, render(interner, variant.payload()))])),
-                }
-            }
-            Some(Composite::Fn | Composite::Handle) | None => {
-                Json::from(format!("<{}>", (value.vtable().name)()))
-            }
+        let items = |items: &[acvus_extern::Owned<acvus_interpreter::AcvusRuntime>]| {
+            Json::Array(items.iter().map(|v| render(interner, v)).collect())
+        };
+        if let Some(text) = value.get::<String>() {
+            return Json::from(text.as_str());
         }
+        if let Some(array) = value.get::<Array>() {
+            return items(&array.0);
+        }
+        if let Some(tuple) = value.get::<Tuple>() {
+            return items(&tuple.0);
+        }
+        if let Some(object) = value.get::<Object>() {
+            let mut fields: Vec<(String, Json)> = object
+                .shape
+                .names()
+                .iter()
+                .zip(object.values.iter())
+                .map(|(k, v)| (interner.resolve(*k).to_string(), render(interner, v)))
+                .collect();
+            fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+            return Json::Object(fields.into_iter().collect());
+        }
+        if let Some(variant) = value.get::<VariantValue>() {
+            let tag = interner
+                .resolve(acvus_extern::repr::tag_of_word(variant.tag().bits()))
+                .to_string();
+            return match variant.payload().kind() {
+                Kind::Undef => Json::from(tag),
+                _ => Json::Object(Map::from_iter([(tag, render(interner, variant.payload()))])),
+            };
+        }
+        let vtable = value.vtable().expect("a value of kind Large has a vtable");
+        Json::from(format!("<{}>", vtable.name()))
     }
 }

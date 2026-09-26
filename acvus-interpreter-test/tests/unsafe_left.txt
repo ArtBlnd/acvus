@@ -1,7 +1,6 @@
 # RFC-0102 rule 5: the `unsafe` blocks and `unsafe fn` items each file outside
 # the two boundary modules holds, as `repr_boundary` counts them.
-9 acvus-cli/src/json.rs
-2 acvus-cli/src/main.rs
+1 acvus-cli/src/json.rs
 1 acvus-ext-net/tests/e2e.rs
 1 acvus-ext/src/iter.rs
 2 acvus-ext/src/map.rs
@@ -51,7 +50,7 @@
 2 acvus-interpreter-test/benches/logs.rs
 2 acvus-interpreter-test/benches/slice_ceiling.rs
 9 acvus-interpreter-test/examples/asm_probe.rs
-16 acvus-interpreter-test/src/lib.rs
+8 acvus-interpreter-test/src/lib.rs
 3 acvus-interpreter-test/tests/classify.rs
 2 acvus-interpreter-test/tests/container_read.rs
 1 acvus-interpreter-test/tests/conversion.rs
@@ -105,6 +104,5 @@
 25 acvus-interpreter/src/regs.rs
 57 acvus-interpreter/src/runtime.rs
 20 acvus-interpreter/src/space.rs
-105 acvus-interpreter/src/value.rs
-2 acvus-interpreter/src/vtable.rs
+85 acvus-interpreter/src/value.rs
 1 acvus-utils/src/astr.rs

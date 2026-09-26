@@ -1,9 +1,9 @@
 //! The interpreter's own casts (RFC-0080 rule 5): where a register lies in
-//! a frame and a frame's cells as its registers, the head a `Large`'s slot
-//! begins with, and a closure record's trailing captures. These are facts of
-//! this runtime's storage, which `acvus_extern::repr` does not hold; that
-//! module keeps the casts the extern contract makes. Outside the two,
-//! `repr_boundary` refuses a cast.
+//! a frame and a frame's cells as its registers, a `Large`'s allocation and
+//! the vtable that frees it, and a closure record's trailing captures. These
+//! are facts of this runtime's storage, which `acvus_extern::repr` does not
+//! hold; that module keeps the casts the extern contract makes. Outside the
+//! two, `repr_boundary` refuses a cast.
 
 #![allow(
     clippy::disallowed_methods,
@@ -11,15 +11,18 @@
 )]
 
 use std::alloc::{self, Layout};
+use std::any::TypeId;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::{self, MaybeUninit};
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 use std::slice;
 
+use acvus_extern::repr::{self as word, PtrWord};
+
 use crate::regs::{CELL_SLOTS, Cell};
-use crate::value::Value;
-use crate::vtable::{Header, Slot};
+use crate::value::{Kind, Value};
+use crate::vtable::{Composite, NameFn};
 
 // -- A slot's place in a run ------------------------------------------------
 
@@ -457,6 +460,403 @@ pub fn slot_header<T>() -> Prefix<Slot<T>, Header> {
     head_at_zero!(Slot<T>, header: Header)
 }
 
+/// A closure record begins with its header too.
+#[inline(always)]
+pub fn record_header<H>() -> Prefix<RecordHead<H>, Header> {
+    head_at_zero!(RecordHead<H>, header: Header)
+}
+
+// -- A `Large`'s allocation and its vtable (RFC-0102: `Large`, `Record`) ------
+
+/// What every `Large` allocation begins with: the vtable that says what
+/// follows and how it is freed.
+#[repr(C)]
+pub struct Header {
+    vtable: &'static Vtable,
+}
+
+/// The allocation of a `Large` of one value: `Large::new`'s `Box<Slot<T>>`.
+#[repr(C)]
+pub struct Slot<T> {
+    header: Header,
+    value: T,
+}
+
+impl<T> Slot<T> {
+    #[inline(always)]
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    #[inline(always)]
+    pub fn value_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+
+    #[inline(always)]
+    pub fn into_value(self) -> T {
+        self.value
+    }
+}
+
+/// The head of a closure record: its header, its own value, and the length
+/// of the tail of elements that follows it from `HeadAndTail`'s `TAIL`.
+#[repr(C)]
+pub struct RecordHead<H> {
+    header: Header,
+    value: H,
+    len: u16,
+}
+
+impl<H> RecordHead<H> {
+    #[inline(always)]
+    pub fn value(&self) -> &H {
+        &self.value
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> u16 {
+        self.len
+    }
+}
+
+/// The type a record vtable names: no `Slot<T>` is of it, so a checked read
+/// of a slot (`Large::get`) never takes a record for one.
+struct RecordOfHeadAndTail<H, E>(PhantomData<fn() -> (H, E)>);
+
+/// How a composite prints inside a `Value`'s `Debug`.
+pub trait Show {
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+}
+
+/// The vtable a `Large` carries in its header. Its fields are private, and
+/// a vtable is made only as a `SlotVtable<T>` or a `RecordVtable<H, E>`,
+/// whose constructors pair the drop and the print with the allocation they
+/// read, so the `TypeId` a vtable states is the allocation its `drop` frees:
+/// a `Slot<T>` at `T`'s, a record at its `RecordOfHeadAndTail`'s.
+pub struct Vtable {
+    type_id: TypeId,
+    name: NameFn,
+    composite: Option<Composite>,
+    drop: unsafe fn(NonNull<Header>),
+    debug: Option<unsafe fn(NonNull<Header>, &mut fmt::Formatter<'_>) -> fmt::Result>,
+}
+
+impl PartialEq for Vtable {
+    fn eq(&self, other: &Self) -> bool {
+        self.type_id == other.type_id
+    }
+}
+
+impl Vtable {
+    #[inline(always)]
+    pub fn type_id(&self) -> TypeId {
+        self.type_id
+    }
+
+    #[inline(always)]
+    pub fn name(&self) -> &'static str {
+        (self.name)()
+    }
+
+    #[inline(always)]
+    pub fn composite(&self) -> Option<Composite> {
+        self.composite
+    }
+}
+
+/// The vtable of a `Slot<T>`: `Large::new::<T>` takes one, so the header it
+/// writes names the drop and the print of the slot it allocates.
+#[repr(transparent)]
+pub struct SlotVtable<T>(Vtable, PhantomData<fn() -> T>);
+
+impl<T> SlotVtable<T>
+where
+    T: 'static,
+{
+    /// A `Slot<T>` no composite names, printed as its type's name.
+    pub const fn drop_only() -> SlotVtable<T> {
+        SlotVtable(
+            Vtable {
+                type_id: TypeId::of::<T>(),
+                name: std::any::type_name::<T>,
+                composite: None,
+                drop: drop_slot::<T>,
+                debug: None,
+            },
+            PhantomData,
+        )
+    }
+
+    /// A composite's `Slot<T>`, printed as its name.
+    pub const fn named(name: NameFn, composite: Composite) -> SlotVtable<T> {
+        SlotVtable(
+            Vtable {
+                type_id: TypeId::of::<T>(),
+                name,
+                composite: Some(composite),
+                drop: drop_slot::<T>,
+                debug: None,
+            },
+            PhantomData,
+        )
+    }
+
+    /// A composite's `Slot<T>`, printed by `T`'s `Show`.
+    pub const fn shown(name: NameFn, composite: Composite) -> SlotVtable<T>
+    where
+        T: Show,
+    {
+        SlotVtable(
+            Vtable {
+                type_id: TypeId::of::<T>(),
+                name,
+                composite: Some(composite),
+                drop: drop_slot::<T>,
+                debug: Some(show_slot::<T>),
+            },
+            PhantomData,
+        )
+    }
+
+    /// `vtable` as a `Slot<T>`'s, where it is one: a vtable of `T`'s
+    /// `TypeId` is made only by a `SlotVtable<T>`, since a record's names a
+    /// type private to this module.
+    #[inline(always)]
+    pub fn of(vtable: &'static Vtable) -> Option<&'static SlotVtable<T>> {
+        (vtable.type_id == TypeId::of::<T>()).then(|| {
+            // SAFETY: the vtable is a `SlotVtable<T>`'s (above), which is
+            // `repr(transparent)` over it.
+            unsafe { &*ptr::from_ref(vtable).cast::<SlotVtable<T>>() }
+        })
+    }
+
+    #[inline(always)]
+    pub const fn vtable(&self) -> &Vtable {
+        &self.0
+    }
+}
+
+/// The vtable of a closure record of head `H` and tail elements `E`:
+/// `Record::new` takes one, as `Large::new` takes a `SlotVtable`.
+#[repr(transparent)]
+pub struct RecordVtable<H, E>(Vtable, PhantomData<fn() -> (H, E)>);
+
+impl<H, E> RecordVtable<H, E>
+where
+    H: 'static,
+    E: 'static,
+{
+    /// Printed as its name and its tail's length.
+    pub const fn new(name: NameFn, composite: Composite) -> RecordVtable<H, E> {
+        RecordVtable(
+            Vtable {
+                type_id: TypeId::of::<RecordOfHeadAndTail<H, E>>(),
+                name,
+                composite: Some(composite),
+                drop: drop_record::<H, E>,
+                debug: Some(show_record::<H>),
+            },
+            PhantomData,
+        )
+    }
+
+    #[inline(always)]
+    pub const fn vtable(&self) -> &Vtable {
+        &self.0
+    }
+}
+
+/// An iterator that yields exactly its `len` elements, which `Record::new`
+/// writes into a tail of that many without counting them.
+///
+/// # Safety
+/// `next` yields `Some` exactly `len()` times, `len()` read before the first.
+pub unsafe trait ExactLen: ExactSizeIterator {}
+
+// SAFETY: a `Map` calls its closure once per element of the slice iterator
+// and yields what it returns, and a slice iterator yields its length.
+unsafe impl<'a, T, F, B> ExactLen for std::iter::Map<slice::Iter<'a, T>, F> where F: FnMut(&'a T) -> B {}
+
+// SAFETY: `Once` yields its one element, and its `len` is 1 until it does.
+unsafe impl<T> ExactLen for std::iter::Once<T> {}
+
+/// # Safety
+/// `header` begins a live `Box<Slot<T>>`, freed here and not named after.
+unsafe fn drop_slot<T>(header: NonNull<Header>) {
+    // SAFETY: the caller's contract.
+    drop(unsafe { Box::from_raw(slot_header::<T>().whole(header).as_ptr()) });
+}
+
+/// # Safety
+/// `header` begins a live `Slot<T>`.
+unsafe fn show_slot<T>(header: NonNull<Header>, f: &mut fmt::Formatter<'_>) -> fmt::Result
+where
+    T: Show,
+{
+    // SAFETY: the caller's contract.
+    unsafe { slot_header::<T>().whole(header).as_ref() }.value.show(f)
+}
+
+/// # Safety
+/// `header` begins a live record `Record::new` wrote at `H` and `E`, freed
+/// here and not named after.
+unsafe fn drop_record<H, E>(header: NonNull<Header>) {
+    // SAFETY: the caller's contract: `Record::new` wrote the head and `len`
+    // elements after it, in an allocation of `RecordOf::<H, E>::layout(len)`.
+    unsafe {
+        let head = record_header::<H>().whole(header);
+        let len = head.as_ref().len;
+        ptr::drop_in_place(RecordOf::<H, E>::tail_run_mut(head, len));
+        ptr::drop_in_place(&raw mut (*head.as_ptr()).value);
+        RecordOf::<H, E>::dealloc(head, len);
+    }
+}
+
+/// # Safety
+/// `header` begins a live record `Record::new` wrote at `H`.
+unsafe fn show_record<H>(header: NonNull<Header>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    // SAFETY: the caller's contract.
+    let head = unsafe { record_header::<H>().whole(header).as_ref() };
+    write!(f, "{}({} captures)", head.header.vtable.name(), head.len)
+}
+
+type RecordOf<H, E> = HeadAndTail<RecordHead<H>, E>;
+
+/// A `Large`'s allocation, as a `Value` of kind `Large` names it for `'v`.
+///
+/// `Large::of` trusts two facts of the `Value` it reads, which the code that
+/// writes values keeps and no type yet carries: the word of a value of kind
+/// `Large` is one `Large::new` or `Record::new` gave, and the allocation is
+/// live until the one `Owned` that holds the value releases it.
+///
+/// NOTE: `Value::inline` checks that its kind is inline only in a debug
+/// build, and `Value` is `Copy` with a safe `Release`, so safe tooling code
+/// can break either fact today. The machine keeps both because `prepare`
+/// gives `Value::inline` inline kinds and the checker's ownership rules
+/// release a value once; the sweep's second part carries them in types.
+#[derive(Clone, Copy)]
+pub struct Large<'v>(NonNull<Header>, PhantomData<&'v Value>);
+
+impl Large<'_> {
+    /// A `Box<Slot<T>>` holding what `make` returns, as the word a `Value` of
+    /// kind `Large` holds. The slot is allocated before `make` runs and its
+    /// value is written where the slot lies, so a constructor that reads its
+    /// parts inside `make` writes them straight into the heap.
+    ///
+    /// `make` is the one thing that runs while the slot is uninitialized. If
+    /// it unwinds, the slot is still a `Box<MaybeUninit<Slot<T>>>`, whose
+    /// drop frees the allocation and runs no `Drop` of `T`.
+    ///
+    pub fn new<T, F>(vtable: &'static SlotVtable<T>, make: F) -> PtrWord
+    where
+        T: 'static,
+        F: FnOnce() -> T,
+    {
+        let mut slot = Box::<Slot<T>>::new_uninit();
+        let at = slot.as_mut_ptr();
+        // SAFETY: `at` is the allocation `slot` owns, sized and aligned for a
+        // `Slot<T>`. `&raw mut` names each field without reading the
+        // uninitialized memory or making a reference to it, and each write
+        // puts a valid value in its field.
+        unsafe {
+            (&raw mut (*at).header).write(Header { vtable: vtable.vtable() });
+            (&raw mut (*at).value).write(make());
+        }
+        // SAFETY: `header` and `value` are both written above, and `Slot<T>`
+        // has no other field.
+        let slot = unsafe { slot.assume_init() };
+        let header = slot_header::<T>().head(NonNull::from(Box::leak(slot)));
+        word::word_of_ptr(header.as_ptr())
+    }
+}
+
+impl<'v> Large<'v> {
+    /// The allocation `value` names, where its kind is `Large`.
+    #[inline(always)]
+    pub fn of(value: &'v Value) -> Option<Large<'v>> {
+        (value.kind() == Kind::Large).then(|| {
+            let header = word::ptr_of_word::<Header>(PtrWord::from_word(value.word_of_any_kind()));
+            // SAFETY: a `Large` word is `Large::new`'s or `Record::new`'s, the
+            // address of a live allocation, which is not null.
+            Large(unsafe { NonNull::new_unchecked(header.cast_mut()) }, PhantomData)
+        })
+    }
+
+    #[inline(always)]
+    pub fn vtable(self) -> &'static Vtable {
+        // SAFETY: the allocation is live and begins with its header.
+        unsafe { self.0.as_ref() }.vtable
+    }
+
+    /// Frees the allocation through its vtable.
+    #[inline(always)]
+    pub fn release(self) {
+        // SAFETY: the vtable's `drop` frees the allocation its constructor
+        // paired it with, which is this one, and the value that named it is
+        // released once.
+        unsafe { (self.vtable().drop)(self.0) }
+    }
+
+    pub fn fmt(self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let vtable = self.vtable();
+        match vtable.debug {
+            // SAFETY: the vtable's print reads the allocation its constructor
+            // paired it with, which is this one.
+            Some(show) => unsafe { show(self.0, f) },
+            None => write!(f, "<{}>", vtable.name()),
+        }
+    }
+
+    /// The value, where the allocation is a `Slot<T>`.
+    #[inline]
+    pub fn get<T>(self) -> Option<&'v T>
+    where
+        T: 'static,
+    {
+        (self.vtable().type_id == TypeId::of::<T>()).then(|| {
+            // SAFETY: the vtable is a `Slot<T>`'s, so the allocation is one,
+            // live for `'v`.
+            &unsafe { slot_header::<T>().whole(self.0).as_ref() }.value
+        })
+    }
+}
+
+/// A closure record: a head, then a run of elements, in one allocation.
+pub struct Record;
+
+impl Record {
+    /// A record of `head` and the elements `tail` yields, as the word a
+    /// `Value` of kind `Large` holds.
+    ///
+    /// # Panics
+    /// `tail` holds more than `u16::MAX` elements.
+    #[inline(always)]
+    pub fn new<H, E>(vtable: &'static RecordVtable<H, E>, head: H, tail: &mut dyn ExactLen<Item = E>) -> PtrWord
+    where
+        H: 'static,
+        E: 'static,
+    {
+        let len = u16::try_from(tail.len()).expect("a closure captures at most u16::MAX registers");
+        let at = RecordOf::<H, E>::alloc(len);
+        // SAFETY: `at` is `alloc(len)`'s, unwritten. The head is written
+        // first, then the `len` elements `tail` yields (`ExactLen`), in
+        // order, each below `len` and so inside the allocation.
+        unsafe {
+            at.as_ptr().write(RecordHead {
+                header: Header { vtable: vtable.vtable() },
+                value: head,
+                len,
+            });
+            let first = RecordOf::<H, E>::tail(at).as_ptr();
+            for (index, element) in tail.enumerate() {
+                first.add(index).write(element);
+            }
+        }
+        word::word_of_ptr(record_header::<H>().head(at).as_ptr())
+    }
+}
+
 // -- A frame's cells as its registers -----------------------------------------
 
 const _: () = assert!(
@@ -636,10 +1036,10 @@ mod tests {
 
     #[test]
     fn a_slot_is_named_through_its_header_and_back() {
-        static VTABLE: crate::vtable::Vtable = crate::vtable::Vtable::drop_only::<u64>();
+        static VTABLE: SlotVtable<u64> = SlotVtable::drop_only();
         let prefix = slot_header::<u64>();
         let whole = NonNull::from(Box::leak(Box::new(Slot {
-            header: Header { vtable: &VTABLE },
+            header: Header { vtable: VTABLE.vtable() },
             value: 7u64,
         })));
         let head = prefix.head(whole);
