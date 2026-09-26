@@ -35,8 +35,6 @@ futures = "0.3"
 # spans' locations.
 proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", features = ["full", "visit"] }
-# `value_forge` compiles programs that must not compile.
-trybuild = "1.0.121"
 
 # A process has one global allocator, and these three count through it:
 # a run's allocations are what they assert. Sharing a binary with tests

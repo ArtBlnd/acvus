@@ -2,6 +2,49 @@
 //! `Value`'s `Kind` says what Rust type it was erased from; the MIR type
 //! the interpreter carries beside it says what the program reads it as.
 
+#![cfg_attr(
+    feature = "tooling",
+    doc = r#"
+A value of a kind that is not inline is made only by the runtime, from an
+allocation or a place it holds, and never from bits (RFC-0102 rule 2,
+`Large`), even under the `tooling` feature. Each program below would put a
+word of its choosing under a kind that `Release` or a safe reader follows.
+Not by `Value::inline`, whose kind is checked only in a debug build,
+
+```compile_fail,E0624
+use acvus_interpreter::{Kind, Value};
+
+let _ = Value::inline(Kind::Large, 8);
+```
+
+not by a write through `bits_mut`, which keeps the kind,
+
+```compile_fail,E0624
+use acvus_interpreter::Value;
+
+let mut value = Value::string("x");
+*value.bits_mut() = 8;
+```
+
+not by `large_ref`, which names any address,
+
+```compile_fail,E0624
+use acvus_interpreter::Value;
+
+let _ = Value::large_ref(std::ptr::dangling_mut());
+```
+
+and not by a constant's `Word`, which names any kind.
+
+```compile_fail,E0624
+use acvus_interpreter::Kind;
+use acvus_interpreter::code::Konst;
+
+let _ = Konst::Word(Kind::Large, 8).value();
+```
+"#
+)]
+
 use std::any::TypeId;
 use std::fmt;
 use std::any::Any;

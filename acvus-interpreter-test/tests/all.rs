@@ -132,7 +132,6 @@ mod undeclared_context;
 mod unordered;
 mod unread_store_drop;
 mod unused_trap;
-mod value_forge;
 mod weaker_admissions;
 mod while_let_call;
 mod wide_frame;
