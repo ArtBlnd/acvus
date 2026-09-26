@@ -18,7 +18,8 @@ use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
 /// The operations that hold no successor — `code.rs`'s terminators, the node
-/// that ends a region's part, and the calls that leave through the driver.
+/// that ends a region's part, and the calls and waited storage accesses that
+/// leave through the driver.
 /// A `ret` ends one of these; every other `Op::run` ends in a `jmp`.
 const NO_SUCCESSOR: &[&str] = &[
     "control::Goto",
@@ -42,6 +43,8 @@ const NO_SUCCESSOR: &[&str] = &[
     "call::CallDirectAsync",
     "call::CallIndirectAsync",
     "call::Eval",
+    "storage::FetchWaited",
+    "storage::CommitWaited",
 ];
 
 /// One family that may end in `call` + `ret`, and the stack address that is
@@ -211,6 +214,18 @@ const HOLDS_A_STACK_ADDRESS: &[Exception] = &[
         handler: Some("__extern_fn_panic"),
         stack_address: "the message `String` the handler materializes, by address into the \
                         panic's formatting",
+    },
+    Exception {
+        family: "control::For",
+        handler: Some("iter::__extern_fn_next_dedup"),
+        stack_address: "the two elements `DedupBody::absorb` compares, `&last` as the `eq` \
+                        instance's receiver and `&item` as its argument (RFC-0070)",
+    },
+    Exception {
+        family: "call::CallExtern1",
+        handler: Some("conversion::__extern_fn_to_string"),
+        stack_address: "the `String` `to_string` fills, `&mut out` into the `display` \
+                        instance (RFC-0070)",
     },
 ];
 

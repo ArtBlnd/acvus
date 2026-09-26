@@ -2084,7 +2084,7 @@ impl<const LARGE: bool> Op for CallHeavy<LARGE> {
             flying,
         );
         let unevaluated = m.ctx.rt.tally.spawned();
-        let job = BlockingJob::new(Box::new(move || work.run()));
+        let job = BlockingJob::new(move || work.run());
         let id = job.id();
         let handle = executor.spawn_blocking(job);
         m.suspend::<LARGE>(
@@ -2338,7 +2338,7 @@ impl Op for SpawnExternSync {
             flying,
         );
         let unevaluated = m.ctx.rt.tally.spawned();
-        let job = BlockingJob::new(Box::new(move || work.run()));
+        let job = BlockingJob::new(move || work.run());
         let launched = Launched {
             job: job.id(),
             handle: m.shared().executor.spawn_blocking(job),
