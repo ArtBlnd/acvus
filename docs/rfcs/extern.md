@@ -1015,29 +1015,34 @@ Status: Accepted
    trusts (RFC-0013). An extension library is written for the users of its
    own language, and its author answers for its soundness.
 
-5. **A layout identity is a witness, and a cast is repr's.** A cast
-   between two types of one layout (a `repr(transparent)` wrapper and its
-   field, a box's two forms) is a call into `acvus_extern::repr` taking a
-   witness that only `same_layout!` or the derive that proved the layout
-   makes. A tag's word and its `Astr` are not one layout; repr converts
-   between them by safe arithmetic (`word_of_tag`, `tag_of_word`). A cast between two types a
-   `TypeId` shows equal is repr's too, checked there. A lifetime erased
-   for a value the runtime keeps is repr's, with the fact that bounds it.
-   A register's place in a frame is repr's `Disp<S>`, the byte offset of a
-   slot of a run of `S`, bounded when made. `Disp::of` checks a constant.
-   Any other index is repr's value type `Below<N>`, whose private field
-   holds it below the constant `N`. It is made by a check where the index
-   is assigned (`new`, `of`, `first`), or composed with no check from
+5. **A layout identity is a witness, and a cast is its crate's boundary
+   module's.** acvus-extern serves every runtime, so `acvus_extern::repr`
+   holds the casts the contract makes and no fact of one runtime's
+   storage; a runtime keeps its own in a private module (the
+   interpreter's `repr`). A cast between two types of one layout (a
+   `repr(transparent)` wrapper and its field, a box's two forms) is a call
+   into its boundary module taking a witness that only `same_layout!` or
+   the derive that proved the layout makes. A tag's word and its `Astr`
+   are not one layout; `acvus_extern::repr` converts between them by safe
+   arithmetic (`word_of_tag`, `tag_of_word`). A cast between two types a
+   `TypeId` shows equal is `acvus_extern::repr`'s too, checked there. A
+   lifetime erased for a value the runtime keeps is its boundary
+   module's, with the fact that bounds it. A register's place in a frame
+   is the interpreter's `Disp<S>`, the byte offset of a slot of a run of
+   `S`, bounded when made. `Disp::of` checks a constant. Any other index
+   is the interpreter's value type `Below<N>`, whose private field holds
+   it below the constant `N`. It is made by a check where the index is
+   assigned (`new`, `of`, `first`), or composed with no check from
    indices whose types already bound it: `masked` keeps a word's low bits
    below a power of two, and `compose` makes `hi * B + lo` below `N` under
    a constant assertion that `W * B <= N`. `Disp::of_below` and
    `Disp::after` make a displacement from a `Below<N>` with no check,
    since a constant assertion fits `N`'s displacement in the `u16`, and
    `DispBelow<S, N>` keeps that bound beside a displacement so the slot
-   after it needs none. No trait lets another crate state a bound that
-   repr trusts. A read at a displacement or at
-   a mark word is repr's `at` or `word_at`. No `transmute`, `transmute_copy` or pointer cast between types is
-   written outside repr.
+   after it needs none. No trait lets another crate state a bound that a
+   boundary module trusts. A read at a displacement or at a mark word is
+   the interpreter's `at` or `word_at`. No `transmute`, `transmute_copy`
+   or pointer cast between types is written outside the boundary modules.
 
 **Why.** A safe trait or a public field that unsafe code trusts lets safe
 code break the trust: an `Inline` impl outside the list, a `Ctx` frame
