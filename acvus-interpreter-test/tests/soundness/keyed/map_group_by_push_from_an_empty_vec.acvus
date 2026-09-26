@@ -1,0 +1,10 @@
+// expect apple,avocado|banana,blueberry
+// K03: the entry opens at `vec([])`, the value `new`'s term states (RFC-0104 rule 3).
+let words = vec(["apple".to_string(), "banana".to_string(), "avocado".to_string(), "blueberry".to_string()]);
+let g = hash_map();
+for w in &words {
+    let k = w.substring(0u64, 1u64).to_string();
+    let bucket = or_insert(&mut g, k, vec([]));
+    bucket.push(w.to_string());
+}
+get(&g, &"a".to_string()).unwrap().as_iter().map(|s| -> s.to_string()).join(",".to_string()) + "|" + get(&g, &"b".to_string()).unwrap().as_iter().map(|s| -> s.to_string()).join(",".to_string())

@@ -398,8 +398,8 @@ pub struct GenericSig {
     pub ensures: Vec<crate::laws::Postcondition>,
     pub reaches: crate::laws::Reaches,
     pub returns: crate::laws::Returns,
-    /// `copies(x)` (RFC-0082 rule 10), or `None`.
-    pub copies: Option<crate::laws::Copies>,
+    /// `means(..)` (RFC-0104), or `None`.
+    pub means: Option<crate::means::Means>,
     /// The weight `cost = N` states (RFC-0066 rule 8), or `None`.
     pub cost: Option<u64>,
     /// `acvus_extern::ExternHandler::task` of the generic handler, as
@@ -432,8 +432,8 @@ pub struct InstanceSig {
     pub ensures: Vec<crate::laws::Postcondition>,
     pub reaches: crate::laws::Reaches,
     pub returns: crate::laws::Returns,
-    /// `copies(x)` (RFC-0082 rule 10), or `None`.
-    pub copies: Option<crate::laws::Copies>,
+    /// `means(..)` (RFC-0104), or `None`.
+    pub means: Option<crate::means::Means>,
     /// The weight in ticks `#[extern_fn(cost = N)]` states of one call
     /// (RFC-0066 rule 8), or `None` when the declaration states none and a
     /// call weighs its family's row.
@@ -452,7 +452,7 @@ impl InstanceSig {
             ensures: Vec::new(),
             reaches: crate::laws::Reaches::Lent,
             returns: crate::laws::Returns::Unstated,
-            copies: None,
+            means: None,
             cost: None,
         }
     }
@@ -1650,6 +1650,25 @@ pub struct TypeRegistry {
     machine_views: FxHashMap<QualifiedRef, Viewed>,
     sliced: FxHashSet<SlicedStorage>,
     keying: Option<KeyingMarkers>,
+    option_tags: Option<OptionTags>,
+}
+
+/// The tags an `Option`'s two variants carry. The language fixes them
+/// (RFC-0039), so a reader that has no interner reads them here, interned
+/// where the registries combine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptionTags {
+    pub some: Astr,
+    pub none: Astr,
+}
+
+impl OptionTags {
+    pub fn of(interner: &Interner) -> Self {
+        OptionTags {
+            some: interner.intern("Some"),
+            none: interner.intern("None"),
+        }
+    }
 }
 
 /// The declarations of the keying markers a map or a set carries as its
@@ -1816,6 +1835,14 @@ impl TypeRegistry {
             );
         }
         self.keying = Some(markers);
+    }
+
+    pub fn register_option_tags(&mut self, tags: OptionTags) {
+        self.option_tags = Some(tags);
+    }
+
+    pub fn option_tags(&self) -> Option<OptionTags> {
+        self.option_tags
     }
 
     /// The keying markers' declarations, where a registry declared them.

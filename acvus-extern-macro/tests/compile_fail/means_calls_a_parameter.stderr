@@ -1,0 +1,5 @@
+error: `a` is no extern, and a term calls only registered externs
+ --> tests/compile_fail/means_calls_a_parameter.rs:4:34
+  |
+4 | #[extern_fn(effect = pure, means(a(b)))]
+  |                                  ^

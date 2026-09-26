@@ -197,7 +197,7 @@ fn sync_or_async(i: &Interner) -> Function {
                         ensures: Vec::new(),
                         reaches: Default::default(),
                         returns: Default::default(),
-                        copies: None,
+                        means: None,
                         cost: None,
                     },
                     InstanceSig {
@@ -210,7 +210,7 @@ fn sync_or_async(i: &Interner) -> Function {
                         ensures: Vec::new(),
                         reaches: Default::default(),
                         returns: Default::default(),
-                        copies: None,
+                        means: None,
                         cost: None,
                     },
                 ],

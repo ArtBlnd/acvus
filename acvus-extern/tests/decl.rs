@@ -2856,7 +2856,7 @@ fn a_heavy_handler_under_a_pure_declaration() -> Registry<Tiny> {
                     ensures: Vec::new(),
                     reaches: acvus_extern::Reaches::Lent,
                     returns: acvus_extern::Returns::Unstated,
-                    copies: None,
+                    means: None,
                     cost: None,
                 }],
             },
@@ -2892,13 +2892,13 @@ fn a_pure_declaration_over_a_heavy_handler_is_refused() {
     );
 }
 
-// -- `copies` and `total_order` are refused on an unfit type (RFC-0082) ---
+// -- `means` and `total_order` are refused on an unfit type (RFC-0082, RFC-0104)
 
 /// Built by hand: `#[extern_fn]` refuses both declarations before a
 /// registry exists.
 fn a_nullary_declaration_stating(
     laws: acvus_extern::Laws,
-    copies: Option<acvus_extern::Copies>,
+    means: Option<acvus_extern::means::Means>,
 ) -> Registry<Tiny> {
     Registry::new(move |i: &Interner| {
         let qref = acvus_extern::QualifiedRef::qualified(i.intern("t"), i.intern("stated"));
@@ -2928,7 +2928,7 @@ fn a_nullary_declaration_stating(
                     ensures: Vec::new(),
                     reaches: acvus_extern::Reaches::Lent,
                     returns: acvus_extern::Returns::Unstated,
-                    copies,
+                    means: means.clone(),
                     cost: None,
                 }],
             },
@@ -2942,19 +2942,23 @@ fn a_nullary_declaration_stating(
 }
 
 #[test]
-fn copies_naming_no_reference_parameter_is_refused() {
+fn a_term_reading_no_reference_parameter_is_refused() {
     let i = Interner::new();
     let registry = a_nullary_declaration_stating(
         acvus_extern::Laws::None,
-        Some(acvus_extern::Copies { param: 0 }),
+        Some(acvus_extern::means::Means {
+            entry: None,
+            stmts: Vec::new(),
+            result: acvus_extern::means::Term::Lent(0),
+        }),
     );
     let err = Externs::combine(vec![registry], &i)
         .err()
-        .expect("`() -> i64` has no parameter to copy");
+        .expect("`() -> i64` has no parameter to lend");
     assert!(
         matches!(
             err,
-            acvus_extern::CombineError::LawOnUnfitSignature { law: "copies", .. }
+            acvus_extern::CombineError::LawOnUnfitSignature { law: "means", .. }
         ),
         "{err}"
     );

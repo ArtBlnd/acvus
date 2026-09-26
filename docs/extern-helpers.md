@@ -406,7 +406,7 @@ repository root at `0d308c5e`.
    instance is declared at `str`. None is declared at `String` either,
    whose text is itself: the owned copy of text, a `&str` or a `String`
    lent as one, is `string::to_string(a: &str) -> String`, a conversion
-   that states `copies(a)` (RFC-0070 rule 5).
+   that states `means(*a)` (RFC-0070 rule 5, RFC-0104 rule 2).
    `acvus-interpreter-test/tests/instance_entry.rs` pins that every
    synchronous instance of a shared signature has a mono glue.
 

@@ -5,7 +5,7 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::laws::{
-    BinaryLaws, Copies, Identity, LawRole, Laws, NamedLaw, Postcondition, Reaches, Returns, Unresolved,
+    BinaryLaws, Identity, LawRole, Laws, NamedLaw, Postcondition, Reaches, Returns, Unresolved,
 };
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
@@ -47,9 +47,8 @@ pub struct FnDecl {
     /// rule 7).
     pub reaches: Reaches,
     pub returns: Returns,
-    /// `copies(x)`: the result equals what reference parameter `x` lends
-    /// (RFC-0082 rule 10).
-    pub copies: Option<Copies>,
+    /// `means(..)`: what a call computes, as a term (RFC-0104).
+    pub means: Option<acvus_mir::means::Means>,
     /// The weight in ticks of one call, when the declaration states it
     /// (`cost = N`, RFC-0066 rule 8); a declaration that states none weighs
     /// its family's row of the backend's table.
@@ -205,7 +204,7 @@ where
             ensures: Vec::new(),
             reaches: Reaches::Lent,
             returns: Returns::Unstated,
-            copies: None,
+            means: None,
             cost: None,
         },
         instances: Instances {
@@ -336,7 +335,7 @@ where
             ensures: decl.ensures,
             reaches: decl.reaches,
             returns: decl.returns,
-            copies: decl.copies,
+            means: decl.means,
             cost: decl.cost,
         },
         instances: Instances {
@@ -886,7 +885,7 @@ struct LawfulInstance<R: Runtime> {
     ensures: Vec<Postcondition>,
     reaches: Reaches,
     returns: Returns,
-    copies: Option<Copies>,
+    means: Option<acvus_mir::means::Means>,
     cost: Option<u64>,
 }
 
@@ -919,6 +918,7 @@ impl<R: Runtime> Externs<R> {
             equiv: type_names.core_declaration::<crate::keying::Equiv>(interner),
             opaque: type_names.core_declaration::<crate::keying::Opaque>(interner),
         });
+        types.register_option_tags(acvus_mir::ty::OptionTags::of(interner));
         for c in &contributions {
             for sig in &c.manifest.signatures {
                 if !names.insert(sig.qref) {
@@ -1045,7 +1045,7 @@ impl<R: Runtime> Externs<R> {
                         &decl.ensures,
                         &decl.reaches,
                         decl.returns,
-                        decl.copies,
+                        decl.means.as_ref(),
                         decl.cost,
                     ),
                     requires: decl
@@ -1100,7 +1100,7 @@ impl<R: Runtime> Externs<R> {
                                 arm.ensures.clone(),
                                 arm.reaches.clone(),
                                 arm.returns,
-                                arm.copies,
+                                arm.means.as_ref(),
                                 arm.cost,
                             )
                     })
@@ -1137,19 +1137,32 @@ impl<R: Runtime> Externs<R> {
             let concrete = instances
                 .concrete
                 .iter()
-                .map(|at| (&at.ty, &at.laws, at.returns, at.copies, at.requires.first()));
+                .map(|at| (&at.ty, &at.laws, at.returns, at.means.as_ref(), at.requires.first()));
             let generic = instances
                 .generic
                 .as_ref()
-                .map(|at| (&function.ty, &at.laws, at.returns, at.copies, None));
-            for (ty, laws, returns, copies, own_requirement) in concrete.chain(generic) {
-                if let Some(copies) = copies
-                    && !acvus_mir::laws::copies_fits(copies, ty)
-                {
-                    return Err(CombineError::LawOnUnfitSignature {
-                        function: written(interner, function.qref),
-                        law: "copies",
-                    });
+                .map(|at| (&function.ty, &at.laws, at.returns, at.means.as_ref(), None));
+            for (ty, laws, returns, means, own_requirement) in concrete.chain(generic) {
+                if let Some(means) = means {
+                    if !acvus_mir::laws::means_fits(means, ty) {
+                        return Err(CombineError::LawOnUnfitSignature {
+                            function: written(interner, function.qref),
+                            law: "means",
+                        });
+                    }
+                    for named in means.named_externs() {
+                        if !matches!(
+                            declared.get(&named).map(|found| &found.kind),
+                            Some(FnKind::Extern { .. })
+                        ) {
+                            return Err(CombineError::LawNamesUnfitExtern {
+                                function: written(interner, function.qref),
+                                law: "means",
+                                named: written(interner, named),
+                                expected: "a registered extern",
+                            });
+                        }
+                    }
                 }
                 if returns == Returns::Total && takes_a_function_value(ty) {
                     return Err(CombineError::TotalOverFunctionArgument {
@@ -1212,7 +1225,6 @@ impl LawSite<'_> {
             Laws::Inverse(_) => "inverse",
             Laws::Payload => "payload",
             Laws::Equivalence => "equivalence",
-            Laws::Absent { .. } => "absent",
             Laws::Step(_) => "step",
         };
         let over_eq = self.function
@@ -1396,7 +1408,7 @@ fn add_instance<R: Runtime>(
             ensures: decl.ensures.clone(),
             reaches: decl.reaches.clone(),
             returns: decl.returns,
-            copies: decl.copies,
+            means: decl.means.clone(),
             cost: decl.cost,
         }));
     Ok(())

@@ -1,0 +1,13 @@
+error: the entry `xs[key]` is no entry the declaration's `reaches` names: a term reads and writes only an entry `reaches` states (RFC-0104 rule 1)
+ --> tests/compile_fail/means_entry_no_reaches_names.rs:5:35
+  |
+5 | #[extern_fn(effect = pure, means(&xs[key]))]
+  |                                   ^^
+
+warning: unused imports: `Var` and `kind`
+ --> tests/compile_fail/means_entry_no_reaches_names.rs:3:20
+  |
+3 | use acvus_extern::{Var, extern_fn, kind};
+  |                    ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

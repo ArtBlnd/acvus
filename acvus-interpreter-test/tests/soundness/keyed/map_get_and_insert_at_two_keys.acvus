@@ -1,0 +1,9 @@
+// expect 10|3
+// `get` at `r.k` and `insert` at `r.j`: two places, so two keys.
+let rows = vec([{ k: "a".to_string(), j: "b".to_string(), v: 3, }, { k: "b".to_string(), j: "a".to_string(), v: 7, }]);
+let m = hash_map();
+for r in &rows {
+    let old = match get(&m, &r.k) { Some(v) => *v, None => 0, };
+    insert(&mut m, r.j.to_string(), old + r.v);
+}
+(*get(&m, &"a".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"b".to_string()).unwrap()).to_string()

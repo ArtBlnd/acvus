@@ -1,0 +1,5 @@
+error: a term's block is `let` bindings and stores `x[k] = t;`, each ending in `;`, then the term the call returns (RFC-0104 rule 1)
+ --> tests/compile_fail/means_operator_outside_the_vocabulary.rs:5:36
+  |
+5 | #[extern_fn(effect = pure, means(a ^ b))]
+  |                                    ^

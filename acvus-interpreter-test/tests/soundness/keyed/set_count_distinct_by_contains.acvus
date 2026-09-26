@@ -1,0 +1,12 @@
+// expect 3
+// K09: `contains` reads the entry outside any update of it, and the count is another token that reads it.
+let xs = vec([4, 1, 4, 3, 1, 4]);
+let s = hash_set();
+let distinct = 0;
+for x in &xs {
+    if !s.contains(x) {
+        s.insert(*x);
+        distinct = distinct + 1;
+    };
+}
+distinct

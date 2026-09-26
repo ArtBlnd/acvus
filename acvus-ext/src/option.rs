@@ -61,7 +61,7 @@ where
     inner
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, means(match val { Some(x) => x, None => default }))]
 fn unwrap_or<T>(val: Option<T>, default: T) -> T
 where
     T: Var<kind::Type>,
@@ -69,7 +69,7 @@ where
     val.unwrap_or(default)
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, means(match val { Some(_) => true, None => false }))]
 fn is_some<T>(val: Option<T>) -> bool
 where
     T: Var<kind::Type>,

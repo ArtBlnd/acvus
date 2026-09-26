@@ -1,5 +1,0 @@
-error: the law `absent` is stated over `f(x: &mut M, k: K, v: V) -> &mut V` whose `reaches` names `x[k]`, and `first` is not of that shape
- --> tests/compile_fail/law_absent_without_a_key.rs:5:32
-  |
-5 | #[extern_fn(effect = pure, law(absent = value))]
-  |                                ^^^^^^

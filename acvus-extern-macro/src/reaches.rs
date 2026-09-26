@@ -46,20 +46,24 @@ impl ReachesAttr {
             .find(|named| *named == param)
     }
 
-    /// The reference parameter a stated place names an entry of at a key.
-    pub(crate) fn keyed_param(
+    /// Whether a stated place is the entry `table[key]`, `key` a key
+    /// parameter.
+    pub(crate) fn names_entry(
         &self,
+        table: &Ident,
+        key: &Ident,
         params: &[&ExternParam],
         is_type_var: &dyn Fn(&Type) -> bool,
-    ) -> Option<&Ident> {
-        self.places.iter().find_map(|place| {
-            let element = place.element.as_ref()?;
-            let taken = params.iter().find(|param| *element == param.name)?;
-            match part_named_by(taken, is_type_var)? {
-                Part::Key => Some(&place.of),
-                Part::Index => None,
-            }
-        })
+    ) -> bool {
+        let is_key = params
+            .iter()
+            .find(|param| *key == param.name)
+            .is_some_and(|taken| matches!(part_named_by(taken, is_type_var), Some(Part::Key)));
+        is_key
+            && self
+                .places
+                .iter()
+                .any(|place| place.of == *table && place.element.as_ref() == Some(key))
     }
 
     pub(crate) fn parse_after(keyword: &Ident, input: ParseStream) -> syn::Result<Self> {

@@ -842,7 +842,7 @@ impl Scope<'_> {
     }
 }
 
-fn constant(negative: bool, lit: &Lit) -> syn::Result<proc_macro2::TokenStream> {
+pub(crate) fn constant(negative: bool, lit: &Lit) -> syn::Result<proc_macro2::TokenStream> {
     match lit {
         Lit::Int(int) => {
             let magnitude: i128 = int.base10_parse()?;

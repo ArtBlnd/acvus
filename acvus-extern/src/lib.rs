@@ -122,9 +122,10 @@ pub use acvus_extern_macro::{
 };
 
 pub use acvus_mir::graph::{FnKind, Function};
+pub use acvus_mir::means;
 pub use acvus_mir::step;
 pub use acvus_mir::laws::{
-    BinaryLaws, Copies, FoldLaw, Identity, Laws, NamedLaw, PostTerm, Postcondition, Reaches,
+    BinaryLaws, FoldLaw, Identity, Laws, NamedLaw, PostTerm, Postcondition, Reaches,
     ReachedElement, ReachedPlace, Relation, Returns, Subject,
 };
 pub use acvus_mir::ty::{
