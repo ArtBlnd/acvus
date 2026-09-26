@@ -1548,13 +1548,19 @@ program can be counted.
    - `acvus_extern::repr`: `Crossed` (the checker settled a word at `T`,
      and the loans `T` names are live for its lifetime; a reference word
      is `Lent`, a `Crossed` at `&T`); `Owned::adopt` (a word left its
-     unique holder); `SameLayout` (two types are one layout and one value,
-     made only from an `unsafe impl` a derive or acvus-extern writes);
+     unique holder); `SameLayout` (two types are one layout, made
+     only by a constructor bound by the `unsafe impl` that proves it; a
+     cast through it names the value fact the witness does not carry, the
+     type an `Erased` claims, a lifetime at `'static` or a release, which
+     `Crossed`, `Lent` or `Owned::adopt` carries); `SameValue` (two types
+     are one value, made only from `Wraps`), whose casts are safe;
      `Encoded` (a word is `into_word` of an inline type); `Ctx`'s pinned
      frame.
    - The interpreter's `repr`: `Operand` (a register lies in its frame
      and is defined), `Typed` (the checker typed an operand), the window,
-     `Large`, `Record`, `Linked`, `Filled`, `ProvenIndex`, `Gate`.
+     `Large` (a `Value` of kind `Large` addresses a live allocation its
+     vtable describes, read at a kind prepare settles and released by
+     `Owned` alone), `Record`, `Linked`, `Filled`, `ProvenIndex`, `Gate`.
    A primitive is added to the list with its fact and its module.
 3. **Where each fact enters.** `Crossed::settled` and `Owned::adopt` are
    the contract's only `unsafe fn`s, called only from a runtime's boundary
