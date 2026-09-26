@@ -1021,8 +1021,8 @@ Status: Accepted
    storage; a runtime keeps its own in a private module (the
    interpreter's `repr`). A cast between two types of one layout (a
    `repr(transparent)` wrapper and its field, a box's two forms) is a call
-   into its boundary module taking a witness that only `same_layout!` or
-   the derive that proved the layout makes. A tag's word and its `Astr`
+   into its boundary module taking a witness only a constructor bound by
+   the `unsafe impl` that proves the layout makes (RFC-0102 rule 2). A tag's word and its `Astr`
    are not one layout; `acvus_extern::repr` converts between them by safe
    arithmetic (`word_of_tag`, `tag_of_word`). A cast between two types a
    `TypeId` shows equal is `acvus_extern::repr`'s too, checked there. A
@@ -1047,8 +1047,7 @@ Status: Accepted
    `Prefix`, which only `head_at_zero!` makes, asserting the field's
    offset; a closure record's captures are its `HeadAndTail` tail, whose
    length the record's `u16` holds. A `Vec` rebuilt at another element
-   type takes `same_layout!`'s witness, which with `where F` is made, and
-   checked, only where the constant `F::HOLDS`. A slice rebuilt from raw
+   type takes that witness at its element. A slice rebuilt from raw
    parts and a pointer made from an address are casts too, and so is a
    dereference of a raw pointer: each is the body of a primitive
    (RFC-0102). acvus-utils holds no runtime's storage, so the interner's
@@ -1622,8 +1621,10 @@ program can be counted.
      vtable describes, read at a kind prepare settles and released by
      `Owned` alone), `Record`, `Linked`, `Filled`, `ProvenIndex`, `Gate`.
    A primitive is added to the list with its fact and its module.
-3. **Where each fact enters.** `Crossed::settled` and `Owned::adopt` are
-   the contract's only `unsafe fn`s, called only from a runtime's boundary
+3. **Where each fact enters.** A release takes a token only `Owned`
+   makes, so a copy of a word is never released. `Crossed::settled`,
+   `Owned::adopt` and the casts through `SameLayout` are the contract's
+   only `unsafe fn`s, called only from a runtime's boundary
    module; a stand-in runtime in a test keeps its own. The interpreter's
    `Operand`, `Typed` and `ProvenIndex` are made in prepare, which reads
    the MIR it trusts, by `repr`'s safe constructors that compare what the
