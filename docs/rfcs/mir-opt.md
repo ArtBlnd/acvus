@@ -759,15 +759,22 @@ law and runs in its order.
    one of them reads as that law.
 3. **Several tokens.** A cycle of several tokens whose steps read no other token has the
    product of their laws, `AnyOrder` when each commutes.
-4. **Option.** A switch on an `Option` token whose `None` arm sends `Some(y)` and
-   whose `Some(b)` arm sends `Some(b ⊕ y)` is `⊕` lifted over `Option`.
+4. **Option.** A switch on an `Option` token whose `Some(b)` arm sends
+   `Some` of `b` updated by a law `L` these rules read, and whose `None`
+   arm sends `Some(y)` or `Some(e ⊕ y)`, `y` what the update combines and
+   `e` `L`'s identity, is `L` with `None` adjoined as its identity. One
+   whose `None` arm leaves the token and whose `Some(b)` arm sends
+   `Some(b ⊕ y)` is `⊕` with `None` absorbing.
 5. **Last, first, extremum, reset.** An arm that sends a token a value reading none of it, the other arm
    leaving it, is `last`; a compare and select by a strict order that
    also carries other tokens is the left-biased maximum or minimum;
    both are associative, not commutative, `InOrder`. `first` is `last`
    guarded by a `||` token the arm sets. An arm taken only at `k = 0`
    that sends a value reading none of the token resets it: its law's
-   join takes no entry value.
+   join takes no entry value. An unconditional store of a value reading
+   none of the token is `last` too. A compare of one field of a record
+   token and a select of a record the iteration builds is that field's
+   extremum, carrying the other fields.
 6. **An inverse pair.** A storage every access of which in an iteration
    is `f(s)` giving an `Option`, its payload taken by a call stating
    `payload` or by a `Some` match, then `g(s, x)` of that payload, `f`
@@ -1345,7 +1352,11 @@ many small cycles, one per key, each with the law its entry's update has.
    same value, a copy through one shared reference (whose referent no
    write reaches while it lives, RFC-0028), or the same language operation
    over operands that are one key, an operation reading nothing but its
-   operands. A call is none of these.
+   operands. A call is none of these. An iteration may touch several keys
+   where it touches the storage only inside a nested loop whose own cycle
+   on it is keyed by `L`, and nothing else in the iteration reads the
+   storage: the outer cycle is then keyed by `L`, as RFC-0093 rule 1
+   reads a law through a nested loop.
 2. **A map's keys meet by an equivalence.** `HashMap` and `HashSet` carry
    a keying marker as their last type argument, `Equiv` or `Opaque`,
    acvus-extern's sealed types that the checker knows by their
