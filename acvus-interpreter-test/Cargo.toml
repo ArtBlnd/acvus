@@ -35,6 +35,11 @@ futures = "0.3"
 # spans' locations.
 proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", features = ["full", "visit"] }
+# `wasm_probe` builds `acvus-wasm-probe` for `wasm32`, reads the module,
+# and prepares the same body natively to count its operations.
+acvus-wasm-probe = { path = "../acvus-wasm-probe" }
+rustc-demangle = "0.1"
+wasmparser = "0.244"
 
 # A process has one global allocator, and these three count through it:
 # a run's allocations are what they assert. Sharing a binary with tests
@@ -73,6 +78,12 @@ path = "tests/sleep.rs"
 
 [[test]]
 name = "fixtures"
+harness = false
+
+# RFC-0105 rule 3. It builds the `wasm32` module in a cargo of its own and
+# reads it; its one assertion stream is not a set of `#[test]`s.
+[[test]]
+name = "wasm_probe"
 harness = false
 
 [[bench]]

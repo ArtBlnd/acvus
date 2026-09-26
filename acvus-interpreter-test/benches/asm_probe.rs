@@ -19,39 +19,10 @@ use acvus_interpreter_test::listing::prepared_script;
 use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
 
-/// The operations that hold no successor — `code.rs`'s terminators, the node
-/// that ends a region's part, and the calls and waited storage accesses that
-/// leave through the driver.
-/// A `ret` ends one of these; every other `Op::run` ends in a `jmp`.
-/// `control::ForAhead` is `ForAt` of a loop lowered ahead (RFC-0103): it
-/// returns the block to enter as `ForAt` does, and the prefix chain it runs
-/// is a part it calls, not a successor it could jump to.
-const NO_SUCCESSOR: &[&str] = &[
-    "control::Goto",
-    "control::JumpIf",
-    "control::ForAt",
-    "control::ForAhead",
-    "switch::Switch",
-    "switch::SwitchOption",
-    "switch::SwitchWord",
-    "string::SwitchStr",
-    "run::SwitchRun",
-    "control::Return",
-    "control::Diverge",
-    "control::Poison",
-    "control::Yield",
-    "control::Fall",
-    "control::Break",
-    "control::Continue",
-    "call::CallExternAsync",
-    "call::CallStateAsync",
-    "call::CallHeavy",
-    "call::CallDirectAsync",
-    "call::CallIndirectAsync",
-    "call::Eval",
-    "storage::FetchWaited",
-    "storage::CommitWaited",
-];
+#[path = "common/no_successor.rs"]
+mod no_successor;
+
+use no_successor::NO_SUCCESSOR;
 
 /// One family that may end in `call` + `ret`, and the stack address that is
 /// why. Both fields are text and neither reads as the other, so each is

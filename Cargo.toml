@@ -13,6 +13,7 @@ members = [
     "acvus-lsp",
     "acvus-extern",
     "acvus-extern-macro",
+    "acvus-wasm-probe",
 ]
 
 [workspace.package]

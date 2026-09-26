@@ -1,0 +1,28 @@
+[package]
+name = "acvus-wasm-probe"
+version = "0.1.0"
+edition = "2024"
+license-file.workspace = true
+publish = false
+
+# The module `acvus-interpreter-test`'s `wasm_probe` bench builds for
+# `wasm32-unknown-unknown` and reads (RFC-0105 rule 3): `cdylib` is the
+# module, `rlib` hands the bench the same source and registry natively.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+acvus-ast = { path = "../acvus-ast" }
+acvus-ext = { path = "../acvus-ext" }
+acvus-extern = { path = "../acvus-extern" }
+# `tooling` for `Interpreter::new`: `Host::compile` reads the clock, which
+# `wasm32-unknown-unknown`'s std does not have, so the module runs the
+# pipeline below the host.
+acvus-interpreter = { path = "../acvus-interpreter", features = ["tooling"] }
+acvus-mir = { path = "../acvus-mir" }
+acvus-utils = { path = "../acvus-utils" }
+futures = "0.3"
+rustc-hash = { workspace = true }
+
+[lints]
+workspace = true

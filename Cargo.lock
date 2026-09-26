@@ -138,15 +138,18 @@ dependencies = [
  "acvus-interpreter",
  "acvus-mir",
  "acvus-utils",
+ "acvus-wasm-probe",
  "futures",
  "glob",
  "libtest-mimic",
  "proc-macro2",
+ "rustc-demangle",
  "rustc-hash",
  "serde_json",
  "syn 2.0.117",
  "tempfile",
  "tokio",
+ "wasmparser",
 ]
 
 [[package]]
@@ -203,6 +206,20 @@ dependencies = [
  "serde_json",
  "stacker",
  "tokio",
+]
+
+[[package]]
+name = "acvus-wasm-probe"
+version = "0.1.0"
+dependencies = [
+ "acvus-ast",
+ "acvus-ext",
+ "acvus-extern",
+ "acvus-interpreter",
+ "acvus-mir",
+ "acvus-utils",
+ "futures",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -898,6 +915,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "foldhash",
+ "serde",
 ]
 
 [[package]]
@@ -1841,6 +1859,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc-demangle"
+version = "0.1.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2657,6 +2681,7 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "semver",
+ "serde",
 ]
 
 [[package]]

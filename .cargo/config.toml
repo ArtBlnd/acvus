@@ -1,0 +1,7 @@
+# RFC-0105. A module an embedder builds from these crates outside this
+# workspace does not read this file, and needs the same two flags.
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "target-feature=+tail-call",
+    "-C", "link-arg=-zstack-size=16777216",
+]
