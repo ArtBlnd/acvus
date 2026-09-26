@@ -1353,8 +1353,6 @@ async fn to_string_is_total_over_each_display_type_s_edges() {
     for (source, expected) in cases {
         let i = Interner::new();
         let result = run_ext(&i, source, TypedContext::default(), vec![]).await;
-        assert!(result.is_string(), "{source}: {result:?}");
-        // SAFETY: the witness is String.
-        assert_eq!(unsafe { result.as_str() }, expected, "{source}");
+        assert_str(&result, &expected);
     }
 }
