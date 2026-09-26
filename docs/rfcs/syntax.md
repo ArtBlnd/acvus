@@ -381,3 +381,50 @@ not at the read.
   input is refused while its head is open.
 - A value with no type refused in each body — one refusal per body that
   reads the input, at no span.
+
+## RFC-0100: A script declares a function with `fn`, and it captures nothing
+
+Status: Proposed
+
+A script names a function it calls from several places, or from itself,
+with `fn name(a, b) { body }`. A declared function has no environment: its
+body reads its parameters, the script's other functions and what the
+registry and the host declare, and nothing of the script around it. So it
+is a graph function, typed, called and inlined as a host function is.
+
+1. **Where it stands.** A `fn` stands wherever a statement may, in any
+   block of a script. Every `fn` of a script is visible throughout that
+   script, before and after its declaration, and in no other script. Two
+   of one name in a script are refused, and so is one that shadows a name
+   the host declares. A template declares none (RFC-0071).
+2. **No capture.** The body reads a parameter by its name, `n`, and calls
+   the script's functions, the registry's externs and the host's
+   functions. A read of a local of the script, a `$` input or an `@`
+   context is refused as `CapturesOutside`, naming what it read and where
+   that is declared.
+3. **Typed as a lambda.** No parameter or result type is written. The
+   checker infers them as it infers a lambda's: each call from outside a
+   `fn`'s component gets its own copy of the component, typed with the
+   calling body, and functions that call each other are one component
+   typed together (RFC-0042 rule 5).
+4. **Lifted once.** acvus-mir's graph construction lifts each `fn` into
+   function nodes, one per member of each copy; every graph builder, the host's, the LSP's and the
+   tests', takes the nodes from there.
+5. **Cost and depth.** A call of a `fn` costs its site's one call row, and
+   recursion computes no summary; the compiled size grows with the calls
+   from outside a component, one copy each. A recursion past the machine's depth
+   bound traps (RFC-0048) rather than overflowing the native stack.
+
+**Why.** A function with no environment needs no closure record, no
+capture analysis and no rule for what a caller forwards: it is the graph
+function the host already declares, written in the script.
+**Cost.** A new statement form and one refusal; the checker's component
+typing already exists.
+**Rejected.**
+- Reading `$` and `@` in a body, forwarded from each caller — a capture by
+  another name: the function would carry its caller's environment.
+- Written parameter and result types — inference already types a lambda,
+  and a type grammar is new surface for no reader.
+- A lift in each graph builder — four copies kept equal by hand.
+- `fn` in templates — a template's statements are a script's lines; one
+  place to declare functions is enough.

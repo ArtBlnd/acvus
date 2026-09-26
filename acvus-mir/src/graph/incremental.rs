@@ -13,10 +13,10 @@ use crate::laws::LawTable;
 use crate::ty::{InputParam, PolyTy, Sources, Ty, TypeRegistry, lift_to_poly};
 use crate::typeck::ProbeProduct;
 
-use super::extract::{ParsedSource, extract, extract_one};
+use super::extract::{ParsedSource, extract, extract_one, lift_one};
 use super::infer::{
     CallTargets, FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc,
-    solve_contexts, tarjan_scc,
+    solve_contexts, tarjan_scc, typed_together,
 };
 use super::lower::{inputs_of, lower_one};
 use super::optimize::{Opt, optimize};
@@ -60,6 +60,10 @@ pub struct IncrementalGraph {
 
     // -- Source data --
     functions: FxHashMap<QualifiedRef, Function>,
+    /// The functions the lift made of the scripts' `fn`s (`graph::lift`),
+    /// kept apart from `functions`, which are the ones the host gave.
+    lifted: FxHashMap<QualifiedRef, Function>,
+    facts: FxHashMap<QualifiedRef, LiftFacts>,
     contexts: FxHashMap<QualifiedRef, Context>,
     /// `contexts` with each open one at the type the whole graph solves it
     /// to, which every component is inferred against.
@@ -108,6 +112,8 @@ impl IncrementalGraph {
             bindings,
             access,
             functions: functions.iter().map(|f| (f.qref, f.clone())).collect(),
+            lifted: FxHashMap::default(),
+            facts: FxHashMap::default(),
             contexts: contexts.iter().map(|c| (c.qref, c.clone())).collect(),
             solved,
             entries,
@@ -121,7 +127,8 @@ impl IncrementalGraph {
             optimized: FxHashMap::default(),
             diagnostics: FxHashMap::default(),
         };
-        let qrefs: Vec<QualifiedRef> = this.functions.keys().copied().collect();
+        this.relift_every_script();
+        let qrefs: Vec<QualifiedRef> = this.all_functions().map(|f| f.qref).collect();
         for qref in qrefs {
             this.run_extract(qref);
         }
@@ -132,25 +139,87 @@ impl IncrementalGraph {
 
     // -- Registration ------------------------------------------------
 
+    /// A function the host adds may take a name a script's `fn` has, so
+    /// every script is lifted again.
     pub fn add_function(&mut self, func: Function) {
         let qref = func.qref;
         self.functions.insert(qref, func);
         self.run_extract(qref);
+        self.relift_every_script();
         self.redraw_call_edges();
         self.rebuild_graph();
     }
 
     pub fn remove_function(&mut self, qref: QualifiedRef) {
         if self.functions.remove(&qref).is_some() {
-            self.extract_cache.remove(&qref);
-            self.call_edges.remove(&qref);
-            self.diagnostics.remove(&qref);
-            self.lower_cache.remove(&qref);
-            self.optimized.remove(&qref);
-            self.remove_reverse_edges(qref);
+            self.forget(qref);
+            self.relift_every_script();
             self.redraw_call_edges();
             self.rebuild_graph();
         }
+    }
+
+    fn forget(&mut self, qref: QualifiedRef) {
+        self.extract_cache.remove(&qref);
+        self.call_edges.remove(&qref);
+        self.diagnostics.remove(&qref);
+        self.lower_cache.remove(&qref);
+        self.optimized.remove(&qref);
+        self.facts.remove(&qref);
+        self.remove_reverse_edges(qref);
+    }
+
+    /// The functions the host gave and the ones the lift made.
+    fn all_functions(&self) -> impl Iterator<Item = &Function> {
+        self.functions.values().chain(self.lifted.values())
+    }
+
+    /// Every script the graph holds, and every one whose instances it still
+    /// holds after the script itself was removed.
+    fn relift_every_script(&mut self) {
+        let mut scripts: Vec<QualifiedRef> = self
+            .functions
+            .keys()
+            .copied()
+            .chain(self.lifted.keys().filter_map(|qref| qref.declaring_script()))
+            .collect();
+        scripts.sort();
+        scripts.dedup();
+        for script in scripts {
+            self.relift(script);
+        }
+    }
+
+    /// Replace what the lift made of `script` with a lift of its body as
+    /// it is now; whether the script has or had a `fn`.
+    fn relift(&mut self, script: QualifiedRef) -> bool {
+        let stale: Vec<QualifiedRef> = self
+            .lifted
+            .keys()
+            .copied()
+            .filter(|qref| qref.declaring_script() == Some(script))
+            .collect();
+        let had = !stale.is_empty();
+        for qref in stale {
+            self.lifted.remove(&qref);
+            self.forget(qref);
+        }
+        self.facts.remove(&script);
+        let Some(func) = self.functions.get(&script) else {
+            return had;
+        };
+        let declared: Vec<QualifiedRef> = self.functions.keys().copied().collect();
+        let Some(lift) = lift_one(&self.interner, func, &declared, &self.types) else {
+            return had;
+        };
+        let has = !lift.functions.is_empty();
+        self.facts.extend(lift.facts);
+        for instance in lift.functions {
+            let qref = instance.qref;
+            self.lifted.insert(qref, instance);
+            self.run_extract(qref);
+        }
+        had || has
     }
 
     // -- Source update (main incremental entry point) ----------------
@@ -162,6 +231,12 @@ impl IncrementalGraph {
         match &mut func.kind {
             FnKind::Local(existing, _) => *existing = ast,
             FnKind::Extern { .. } => return,
+        }
+        if self.relift(qref) {
+            self.run_extract(qref);
+            self.redraw_call_edges();
+            self.rebuild_graph();
+            return;
         }
 
         // 1. Re-extract.
@@ -263,8 +338,16 @@ impl IncrementalGraph {
         self.outcome(qref)?.view()
     }
 
+    /// A function the host gave, or one the lift made of a script's `fn`.
     pub fn function(&self, qref: QualifiedRef) -> Option<&Function> {
-        self.functions.get(&qref)
+        self.functions.get(&qref).or_else(|| self.lifted.get(&qref))
+    }
+
+    /// The instances the lift made of `script`'s `fn`s.
+    pub fn instances_of(&self, script: QualifiedRef) -> impl Iterator<Item = &Function> {
+        self.lifted
+            .values()
+            .filter(move |function| function.qref.declaring_script() == Some(script))
     }
 
     pub fn interner(&self) -> &Interner {
@@ -324,20 +407,53 @@ impl IncrementalGraph {
             return None;
         }
         let parsed = extract_one(&self.interner, &probed)?;
-
-        let mut call_edges = self.call_edges.clone();
-        call_edges.insert(
-            qref,
-            extract_call_edges(&parsed, &self.root_fn_names(), qref),
-        );
-        let local_qrefs: Vec<QualifiedRef> = self
-            .functions
-            .values()
-            .filter(|f| f.qref != qref && matches!(f.kind, FnKind::Local(..)))
-            .map(|f| f.qref)
-            .chain(std::iter::once(qref))
+        let declared: Vec<QualifiedRef> = self.functions.keys().copied().collect();
+        let lift = lift_one(&self.interner, &probed, &declared, &self.types);
+        let (instances, lift_facts) = match lift {
+            Some(lift) => (lift.functions, lift.facts),
+            None => (Vec::new(), FxHashMap::default()),
+        };
+        let replaced = |member: &QualifiedRef| {
+            *member == qref || member.declaring_script() == Some(qref)
+        };
+        let mut facts: FxHashMap<QualifiedRef, LiftFacts> = self
+            .facts
+            .iter()
+            .filter(|(member, _)| !replaced(member))
+            .map(|(&member, facts)| (member, facts.clone()))
+            .chain(lift_facts)
             .collect();
-        let scc_order = tarjan_scc(&local_qrefs, &call_edges);
+        let probed_parsed: FxHashMap<QualifiedRef, ParsedSource> = instances
+            .iter()
+            .filter_map(|instance| Some((instance.qref, extract_one(&self.interner, instance)?)))
+            .chain(std::iter::once((qref, parsed)))
+            .collect();
+
+        let names = self.root_fn_names();
+        let mut call_edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>> = self
+            .call_edges
+            .iter()
+            .filter(|(member, _)| !replaced(member))
+            .map(|(&member, edges)| (member, edges.clone()))
+            .collect();
+        for (&member, source) in &probed_parsed {
+            call_edges.insert(
+                member,
+                extract_call_edges(source, &names, member, facts.get(&member)),
+            );
+        }
+        facts.retain(|member, _| {
+            self.functions.contains_key(member)
+                || self.lifted.contains_key(member) && !replaced(member)
+                || probed_parsed.contains_key(member)
+        });
+        let local_qrefs: Vec<QualifiedRef> = self
+            .all_functions()
+            .filter(|f| !replaced(&f.qref) && matches!(f.kind, FnKind::Local(..)))
+            .map(|f| f.qref)
+            .chain(probed_parsed.keys().copied())
+            .collect();
+        let scc_order = tarjan_scc(&local_qrefs, &typed_together(&call_edges, &facts));
         let at = scc_order
             .iter()
             .position(|scc| scc.contains(&qref))
@@ -348,7 +464,9 @@ impl IncrementalGraph {
         let mut resolved_fn_types = self.extern_fn_types();
         let mut resolved_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> = FxHashMap::default();
         for member in scc_order[..at].iter().flatten() {
-            let settled = self.fn_to_scc[member];
+            let Some(&settled) = self.fn_to_scc.get(member) else {
+                continue;
+            };
             let inferred = self.infer_cache[settled]
                 .as_ref()
                 .expect("every SCC was inferred by the last settle");
@@ -357,17 +475,17 @@ impl IncrementalGraph {
         }
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
-            .functions
-            .iter()
-            .filter(|(member, f)| **member != qref && matches!(f.kind, FnKind::Local(..)))
-            .map(|(&member, f)| (member, f))
+            .all_functions()
+            .filter(|f| !replaced(&f.qref) && matches!(f.kind, FnKind::Local(..)))
+            .map(|f| (f.qref, f))
+            .chain(instances.iter().map(|instance| (instance.qref, instance)))
             .chain(std::iter::once((qref, &probed)))
             .collect();
         let parsed_for_scc: FxHashMap<QualifiedRef, &ParsedSource> = scc_order[at]
             .iter()
-            .filter_map(|&member| match member == qref {
-                true => Some((member, &parsed)),
-                false => self
+            .filter_map(|&member| match probed_parsed.get(&member) {
+                Some(source) => Some((member, source)),
+                None => self
                     .extract_cache
                     .get(&member)
                     .map(|entry| (member, &entry.parsed)),
@@ -386,6 +504,7 @@ impl IncrementalGraph {
             &resolved_fn_types,
             &resolved_inputs,
             &super::infer::declared_bounds(self.functions.values()),
+            &facts,
             &mut sources,
             &self.types,
             probe,
@@ -396,13 +515,14 @@ impl IncrementalGraph {
     // -- Internal: Extract -------------------------------------------
 
     fn run_extract(&mut self, qref: QualifiedRef) {
-        let Some(func) = self.functions.get(&qref) else {
+        let Some(func) = self.function(qref) else {
             return;
         };
 
         // Run extract.
         if let Some(parsed) = extract_one(&self.interner, func) {
-            let new_edges = extract_call_edges(&parsed, &self.root_fn_names(), qref);
+            let new_edges =
+                extract_call_edges(&parsed, &self.root_fn_names(), qref, self.facts.get(&qref));
             self.remove_reverse_edges(qref);
             for &callee in &new_edges {
                 self.reverse_edges.entry(callee).or_default().push(qref);
@@ -422,10 +542,9 @@ impl IncrementalGraph {
     // For now, only unqualified (root) names are resolved.
     fn root_fn_names(&self) -> CallTargets {
         CallTargets::of(
-            self.functions
-                .iter()
-                .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
-                .map(|(q, _)| q),
+            self.all_functions()
+                .filter(|f| matches!(f.kind, FnKind::Local(..)))
+                .map(|f| &f.qref),
         )
     }
 
@@ -437,7 +556,10 @@ impl IncrementalGraph {
         let call_edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>> = self
             .extract_cache
             .iter()
-            .map(|(&caller, entry)| (caller, extract_call_edges(&entry.parsed, &names, caller)))
+            .map(|(&caller, entry)| {
+                let edges = extract_call_edges(&entry.parsed, &names, caller, self.facts.get(&caller));
+                (caller, edges)
+            })
             .collect();
         self.reverse_edges.clear();
         for (&caller, callees) in &call_edges {
@@ -469,13 +591,12 @@ impl IncrementalGraph {
 
     fn order_sccs(&mut self) {
         let local_qrefs: Vec<QualifiedRef> = self
-            .functions
-            .values()
+            .all_functions()
             .filter(|f| matches!(f.kind, FnKind::Local(..)))
             .map(|f| f.qref)
             .collect();
 
-        self.scc_order = tarjan_scc(&local_qrefs, &self.call_edges);
+        self.scc_order = tarjan_scc(&local_qrefs, &typed_together(&self.call_edges, &self.facts));
         self.fn_to_scc.clear();
         for (idx, scc) in self.scc_order.iter().enumerate() {
             for &fid in scc {
@@ -499,9 +620,10 @@ impl IncrementalGraph {
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
-            .iter()
-            .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
-            .map(|(&qref, f)| (qref, f))
+            .values()
+            .chain(self.lifted.values())
+            .filter(|f| matches!(f.kind, FnKind::Local(..)))
+            .map(|f| (f.qref, f))
             .collect();
 
         let extract_parsed: FxHashMap<QualifiedRef, &ParsedSource> = self
@@ -542,6 +664,7 @@ impl IncrementalGraph {
                 &resolved_fn_types,
                 &resolved_inputs,
                 &super::infer::declared_bounds(self.functions.values()),
+                &self.facts,
                 &mut self.sources,
                 &self.types,
                 None,
@@ -573,9 +696,10 @@ impl IncrementalGraph {
 
         let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
             .functions
-            .iter()
-            .filter(|(_, f)| matches!(f.kind, FnKind::Local(..)))
-            .map(|(&qref, f)| (qref, f))
+            .values()
+            .chain(self.lifted.values())
+            .filter(|f| matches!(f.kind, FnKind::Local(..)))
+            .map(|f| (f.qref, f))
             .collect();
 
         let extract_parsed: FxHashMap<QualifiedRef, &ParsedSource> = self
@@ -637,6 +761,7 @@ impl IncrementalGraph {
                 &resolved_fn_types,
                 &resolved_inputs,
                 &super::infer::declared_bounds(self.functions.values()),
+                &self.facts,
                 &mut self.sources,
                 &self.types,
                 None,
@@ -690,17 +815,27 @@ impl IncrementalGraph {
     /// set read at a lower level would be wider than the one the batch
     /// path reports.
     fn settle(&mut self) {
+        // A script and the instances of its `fn`s are one source, which
+        // `acvus check` refuses at typeck when any of them is refused, so
+        // none of them is lowered then.
+        let refused_sources: FxHashSet<QualifiedRef> = self
+            .infer_cache
+            .iter()
+            .flatten()
+            .flat_map(|scc| scc.errors())
+            .map(|(qref, _)| qref.written_in())
+            .collect();
         let lowerable: FxHashSet<QualifiedRef> = self
             .extract_cache
             .keys()
             .copied()
             .filter(|&qref| matches!(self.outcome(qref), Some(FnInferOutcome::Complete { .. })))
+            .filter(|qref| !refused_sources.contains(&qref.written_in()))
             .collect();
         self.lower_cache.retain(|qref, _| lowerable.contains(qref));
 
-        let to_lower: Vec<QualifiedRef> = self
-            .extract_cache
-            .keys()
+        let to_lower: Vec<QualifiedRef> = lowerable
+            .iter()
             .copied()
             .filter(|qref| !self.lower_cache.contains_key(qref))
             .collect();
@@ -770,31 +905,53 @@ impl IncrementalGraph {
         self.rebuild_diagnostics();
     }
 
+    /// Each refusal is the diagnostic of the function whose source it is
+    /// written in: an instance's, of the script that declares the `fn`.
+    /// Every instance is checked on its own (`graph::lift`), so one fault
+    /// of a `fn`'s body is refused by each; the script holds it once.
     fn rebuild_diagnostics(&mut self) {
-        let stages = self
-            .infer_cache
-            .iter()
-            .flatten()
-            .flat_map(|scc| scc.errors())
-            .map(|(qref, errors)| {
-                let refusals: Vec<Refusal> = errors.iter().cloned().map(Refusal::Mir).collect();
-                (qref, refusals)
-            });
-        let mut diagnostics: FxHashMap<QualifiedRef, Vec<Refusal>> = stages.collect();
-        for (&qref, entry) in &self.lower_cache {
-            diagnostics
-                .entry(qref)
-                .or_default()
-                .extend(entry.refusals.iter().cloned());
-        }
-        for (&qref, entry) in &self.optimized {
-            diagnostics
-                .entry(qref)
-                .or_default()
-                .extend(entry.refusals.iter().cloned());
+        let by_function = |stage: Vec<(QualifiedRef, Vec<Refusal>)>| {
+            let mut stage = stage;
+            stage.sort_by_key(|(qref, _)| *qref);
+            stage
+        };
+        let checked = by_function(
+            self.infer_cache
+                .iter()
+                .flatten()
+                .flat_map(|scc| scc.errors())
+                .map(|(qref, errors)| (qref, errors.iter().cloned().map(Refusal::Mir).collect()))
+                .collect(),
+        );
+        let lowered = by_function(
+            self.lower_cache
+                .iter()
+                .map(|(&qref, entry)| (qref, entry.refusals.clone()))
+                .collect(),
+        );
+        let optimized = by_function(
+            self.optimized
+                .iter()
+                .map(|(&qref, entry)| (qref, entry.refusals.clone()))
+                .collect(),
+        );
+        let mut diagnostics: FxHashMap<QualifiedRef, Vec<Refusal>> = FxHashMap::default();
+        for (qref, refusals) in checked.into_iter().chain(lowered).chain(optimized) {
+            let held = diagnostics.entry(qref.written_in()).or_default();
+            for refusal in refusals {
+                if !held.iter().any(|earlier| self.same_fault(earlier, &refusal)) {
+                    held.push(refusal);
+                }
+            }
         }
         diagnostics.retain(|_, refusals| !refusals.is_empty());
         self.diagnostics = diagnostics;
+    }
+
+    fn same_fault(&self, left: &Refusal, right: &Refusal) -> bool {
+        left.span() == right.span()
+            && left.labels() == right.labels()
+            && left.display(&self.interner).to_string() == right.display(&self.interner).to_string()
     }
 
     // -- Helpers -----------------------------------------------------

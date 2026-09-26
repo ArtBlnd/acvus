@@ -173,6 +173,34 @@ where
     S::resumed(errors, Reported::one(error)).map_err(stopped::<S>)
 }
 
+/// Whether the source being parsed declares functions: a script does, and a
+/// template or a bound literal does not (RFC-0100 rule 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Declares {
+    Functions,
+    Nothing,
+}
+
+/// A `fn` where `declares` admits one, and a refusal where it does not.
+pub(crate) fn fn_declared<S>(
+    errors: &mut Vec<ParseError>,
+    declares: Declares,
+    decl: FnDecl<S>,
+) -> Result<Stmt<S>, GrammarError>
+where
+    S: Recover,
+{
+    match declares {
+        Declares::Functions => Ok(Stmt::FnDecl(decl)),
+        Declares::Nothing => refused::<S>(
+            errors,
+            ParseError::new(ParseErrorKind::FnOutsideScript, decl.name.span),
+            decl.span,
+        )
+        .map(Stmt::Error),
+    }
+}
+
 /// `x in head`: what the `for` of a `% for` line is followed by.
 pub struct ForLine<S> {
     pub binder: Binder,
@@ -215,7 +243,7 @@ where
 pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
     ExprParser::new()
-        .parse(interner, &mut Vec::new(), tokenizer)
+        .parse(interner, &mut Vec::new(), Declares::Nothing, tokenizer)
         .map_err(convert_lalrpop_error)
 }
 
@@ -227,7 +255,7 @@ pub fn parse_script(
     source: &str,
 ) -> Result<Script, Recovered<Script<ErrorNode>>> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
-    match ScriptParser::new().parse(interner, &mut Vec::new(), tokenizer) {
+    match ScriptParser::new().parse(interner, &mut Vec::new(), Declares::Functions, tokenizer) {
         Ok(script) => Ok(script),
         Err(_) => Err(recover_script(interner, source)),
     }
@@ -237,7 +265,7 @@ fn recover_script(interner: &Interner, source: &str) -> Recovered<Script<ErrorNo
     let mut errors = Vec::new();
     let tokenizer = ExprTokenizer::new(source, 0, interner);
     let whole = Span::new(0, source.len());
-    let tree = match ScriptParser::new().parse(interner, &mut errors, tokenizer) {
+    let tree = match ScriptParser::new().parse(interner, &mut errors, Declares::Functions, tokenizer) {
         Ok(script) => script,
         Err(error) => {
             let Ok(node) = ErrorNode::recovered(
@@ -441,7 +469,7 @@ where
                     self.interner,
                     self.errors,
                     |interner, errors, tokenizer| {
-                        ExprParser::new().parse(interner, errors, tokenizer)
+                        ExprParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                     },
                 );
                 let expr = match parsed {
@@ -479,12 +507,13 @@ where
             };
             let pattern =
                 head.parse(self.interner, self.errors, |interner, errors, tokenizer| {
-                    ArmLineParser::new().parse(interner, errors, tokenizer)
+                    ArmLineParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                 })?;
             return Ok(Head::Arm { pattern, span });
         }
 
         match first {
+            Token::Fn => Err(ParseError::new(ParseErrorKind::FnOutsideScript, span)),
             Token::Else => self.else_head(&tokens, rest(first_end), span),
             Token::If => Ok(Head::Open(Open::If(IfChain {
                 first: self.if_arm(&tokens, rest(first_end), span)?,
@@ -497,7 +526,7 @@ where
                     self.interner,
                     self.errors,
                     |interner, errors, tokenizer| {
-                        ForLineParser::new().parse(interner, errors, tokenizer)
+                        ForLineParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                     },
                 )?;
                 Ok(Head::Open(Open::For {
@@ -515,7 +544,7 @@ where
                         self.interner,
                         self.errors,
                         |interner, errors, tokenizer| {
-                            BindLineParser::new().parse(interner, errors, tokenizer)
+                            BindLineParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                         },
                     )?;
                     Ok(Head::Open(Open::WhileLet {
@@ -530,7 +559,7 @@ where
                         self.interner,
                         self.errors,
                         |interner, errors, tokenizer| {
-                            ExprParser::new().parse(interner, errors, tokenizer)
+                            ExprParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                         },
                     )?,
                     body: Vec::new(),
@@ -542,7 +571,7 @@ where
                     self.interner,
                     self.errors,
                     |interner, errors, tokenizer| {
-                        ExprParser::new().parse(interner, errors, tokenizer)
+                        ExprParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                     },
                 )?,
                 arms: Vec::new(),
@@ -561,7 +590,7 @@ where
                     self.interner,
                     self.errors,
                     |interner, errors, tokenizer| {
-                        TemplateStmtParser::new().parse(interner, errors, tokenizer)
+                        TemplateStmtParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                     },
                 )?,
             )),
@@ -584,7 +613,7 @@ where
                     self.interner,
                     self.errors,
                     |interner, errors, tokenizer| {
-                        BindLineParser::new().parse(interner, errors, tokenizer)
+                        BindLineParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                     },
                 )?;
                 IfHead::Bind {
@@ -595,7 +624,7 @@ where
             _ => IfHead::Cond(rest.parse(
                 self.interner,
                 self.errors,
-                |interner, errors, tokenizer| ExprParser::new().parse(interner, errors, tokenizer),
+                |interner, errors, tokenizer| ExprParser::new().parse(interner, errors, Declares::Nothing, tokenizer),
             )?),
         };
         Ok(IfArm {
@@ -807,6 +836,7 @@ where
         | Stmt::Continue { span, .. }
         | Stmt::WhileLet { span, .. }
         | Stmt::Anyorder { span, .. }
+        | Stmt::FnDecl(FnDecl { span, .. })
         | Stmt::Append { span, .. } => *span,
         Stmt::Expr(expr) => expr.span(),
         Stmt::Error(node) => node.node().span,
@@ -1245,6 +1275,58 @@ mod tests {
             panic!("{stmt:?}");
         };
         text
+    }
+
+    fn script(src: &str) -> Script {
+        let interner = Interner::new();
+        parse_script(&interner, src).unwrap_or_else(|e| panic!("{src}: {:?}", e.errors))
+    }
+
+    fn at(src: &str, written: &str) -> Span {
+        let start = src.find(written).expect("written in the source");
+        Span::new(start, start + written.len())
+    }
+
+    #[test]
+    fn a_fn_is_a_statement_whose_name_and_parameters_have_spans() {
+        let src = "fn add(left, right) { left + right }\nadd(1, 2)";
+        let parsed = script(src);
+        let [Stmt::FnDecl(decl)] = parsed.stmts.as_slice() else {
+            panic!("{:?}", parsed.stmts);
+        };
+        assert_eq!(decl.name.span, at(src, "add"));
+        let spans: Vec<Span> = decl.params.iter().map(|param| param.span).collect();
+        assert_eq!(spans, vec![at(src, "left"), at(src, "right")]);
+        assert!(decl.body.is_empty());
+        assert!(matches!(decl.tail.as_deref(), Some(Expr::BinaryOp { .. })));
+        assert!(parsed.tail.is_some());
+    }
+
+    #[test]
+    fn a_fn_stands_in_any_block() {
+        let parsed = script("if true { fn f() { 1 } f() } else { 0 }");
+        let Some(Expr::If { then_body, .. }) = parsed.tail.as_deref() else {
+            panic!("{:?}", parsed.tail);
+        };
+        assert!(matches!(then_body.as_slice(), [Stmt::FnDecl(_)]));
+        let nested = script("fn outer() { fn inner() { 1 } inner() }");
+        let [Stmt::FnDecl(outer)] = nested.stmts.as_slice() else {
+            panic!("{:?}", nested.stmts);
+        };
+        assert!(matches!(outer.body.as_slice(), [Stmt::FnDecl(_)]));
+    }
+
+    #[test]
+    fn a_semicolon_after_a_fn_is_refused() {
+        let interner = Interner::new();
+        let error = first_error(parse_script(&interner, "fn f() { 1 };").expect_err("refused"));
+        assert_eq!(error.kind, ParseErrorKind::SemicolonAfterBlock(BlockStatement::Fn));
+    }
+
+    #[test]
+    fn a_template_refuses_a_fn_on_its_line_and_in_a_tag_s_block() {
+        assert_eq!(refusal("% fn f() { 1 }\n"), ParseErrorKind::FnOutsideScript);
+        assert_eq!(refusal("{{ { fn f() { 1 } f() } }}"), ParseErrorKind::FnOutsideScript);
     }
 
     /// A line that does not begin with `%` is text, its newline included

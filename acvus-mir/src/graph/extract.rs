@@ -1,12 +1,15 @@
 //! Phase 0: Extract
 //!
-//! Parse source ASTs and cache them for later phases.
+//! Parse source ASTs and cache them for later phases, and lift each
+//! script's `fn`s into functions of their own (`graph::lift`).
 //! Context dependency tracking is handled by the infer phase, not here.
 
-use acvus_utils::Interner;
+use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
+use super::lift::{Lift, lift};
 use super::types::*;
+use crate::ty::TypeRegistry;
 
 // -- Phase 0 output --------------------------------------------------
 
@@ -15,6 +18,15 @@ use super::types::*;
 pub struct ExtractResult {
     /// Parsed ASTs cached for later phases (avoid re-parsing).
     pub parsed: FxHashMap<QualifiedRef, ParsedSource>,
+    pub lifted: Vec<Function>,
+    pub facts: FxHashMap<QualifiedRef, LiftFacts>,
+}
+
+impl ExtractResult {
+    /// The graph's functions and the ones the lift added.
+    pub fn functions<'g>(&'g self, graph: &'g CompilationGraph) -> impl Iterator<Item = &'g Function> {
+        graph.functions.iter().chain(&self.lifted)
+    }
 }
 
 /// Cached parsed AST.
@@ -23,6 +35,7 @@ pub enum ParsedSource {
     Script(acvus_ast::Script),
     Template(acvus_ast::Template),
     Recovered(RecoveredAst),
+    Fn(LiftedFn),
 }
 
 // -- Extraction -----------------------------------------------------
@@ -30,14 +43,63 @@ pub enum ParsedSource {
 /// Run Phase 0: parse and cache ASTs for all local functions.
 pub fn extract(interner: &Interner, graph: &CompilationGraph) -> ExtractResult {
     let mut parsed = FxHashMap::default();
+    let mut lifted = Vec::new();
+    let mut facts = FxHashMap::default();
 
     for func in graph.functions.iter() {
         if let Some(parsed_source) = extract_one(interner, func) {
             parsed.insert(func.qref, parsed_source);
         }
+        let declared: Vec<QualifiedRef> = graph.functions.iter().map(|f| f.qref).collect();
+        let Some(lift) = lift_one(interner, func, &declared, &graph.types) else {
+            continue;
+        };
+        for instance in lift.functions {
+            let source = extract_one(interner, &instance).expect("an instance of a `fn` has a body");
+            parsed.insert(instance.qref, source);
+            lifted.push(instance);
+        }
+        facts.extend(lift.facts);
     }
 
-    ExtractResult { parsed }
+    ExtractResult {
+        parsed,
+        lifted,
+        facts,
+    }
+}
+
+/// `script`'s `fn`s lifted beside `declared`, the functions the host put
+/// in the graph. A `fn` may not take a name by which a bare call of the
+/// script reaches one of them, as `TypeEnv::resolve_fn` reaches it.
+pub fn lift_one(
+    interner: &Interner,
+    script: &Function,
+    declared: &[QualifiedRef],
+    registry: &TypeRegistry,
+) -> Option<Lift> {
+    let host = script.qref.host;
+    lift(interner, script, |name: Astr| {
+        let written = QualifiedRef::root(name);
+        let mut reached: Vec<String> = declared
+            .iter()
+            .copied()
+            .filter(|qref| {
+                qref.scope.is_none()
+                    && qref.name == name
+                    && registry.machine_view(*qref).is_none()
+                    && (*qref == written.in_host(host)
+                        || *qref == written
+                        || (qref.namespace.is_some() && qref.host.is_none()))
+            })
+            .map(|qref| match qref.namespace {
+                Some(ns) => format!("{}::{}", interner.resolve(ns), interner.resolve(qref.name)),
+                None => interner.resolve(qref.name).to_owned(),
+            })
+            .collect();
+        reached.sort();
+        reached
+    })
 }
 
 /// Parse a single local function. Returns None for Extern functions.
@@ -53,6 +115,7 @@ pub fn extract_one(_interner: &Interner, func: &Function) -> Option<ParsedSource
                 Some(ParsedSource::Template(template.clone()))
             }
             ParsedAst::Recovered(recovered) => Some(ParsedSource::Recovered(recovered.clone())),
+            ParsedAst::Fn(lifted) => Some(ParsedSource::Fn(lifted.clone())),
         },
         FnKind::Extern { .. } => None,
     }

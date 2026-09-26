@@ -2,6 +2,7 @@ pub mod bind;
 pub mod extract;
 pub mod incremental;
 pub mod infer;
+pub mod lift;
 pub mod inliner;
 pub mod lower;
 pub mod optimize;

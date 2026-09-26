@@ -283,6 +283,16 @@ pub struct MirError {
     pub labels: Vec<Label>,
 }
 
+/// What a `fn`'s body read outside it (RFC-0100 rule 2). A local's
+/// declaration is the refusal's label; an input and a context are declared
+/// by the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outside {
+    Local,
+    Input,
+    Context,
+}
+
 #[derive(Debug, Clone)]
 pub enum MirErrorKind {
     // Type errors
@@ -503,6 +513,20 @@ pub enum MirErrorKind {
     ExternParamAssign(String),
     /// One pattern binds a name twice.
     NameBoundTwice(String),
+    /// Two `fn`s of one name in one script (RFC-0100 rule 1). A label
+    /// marks the first.
+    FnDeclaredTwice(String),
+    /// A `fn` whose name a bare call of the script already reaches: the
+    /// functions the host declares under that name (RFC-0100 rule 1).
+    FnShadows {
+        name: String,
+        shadowed: Vec<String>,
+    },
+    /// A `fn`'s body reads what is outside it (RFC-0100 rule 2).
+    CapturesOutside {
+        name: String,
+        outside: Outside,
+    },
     /// An operator checked where its operand's type was still open, whose
     /// operand settled to a type the operator on words does not take.
     OperatorDecidedBeforeItsOperand {
@@ -1272,6 +1296,31 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
             MirErrorKind::NameBoundTwice(name) => {
                 write!(f, "`{name}` is bound twice in one pattern")
             }
+            MirErrorKind::FnDeclaredTwice(name) => {
+                write!(f, "the function `{name}` is declared twice in this script")
+            }
+            MirErrorKind::FnShadows { name, shadowed } => {
+                let listed: Vec<String> = shadowed.iter().map(|name| format!("`{name}`")).collect();
+                write!(
+                    f,
+                    "the `fn` `{name}` would shadow {}, which the host declares and a script calls as `{name}`",
+                    listed.join(", ")
+                )
+            }
+            MirErrorKind::CapturesOutside { name, outside } => match outside {
+                Outside::Local => write!(
+                    f,
+                    "a `fn` captures nothing: its body reads `{name}`, a local of the script"
+                ),
+                Outside::Input => write!(
+                    f,
+                    "a `fn` captures nothing: its body reads `${name}`, an input of the script; pass it as an argument"
+                ),
+                Outside::Context => write!(
+                    f,
+                    "a `fn` captures nothing: its body names `@{name}`, a context the host declares; pass it as an argument"
+                ),
+            },
             MirErrorKind::ExternParamAssign(name) => {
                 write!(
                     f,

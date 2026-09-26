@@ -6,12 +6,12 @@ use crate::token::Token;
 use crate::error::{BlockStatement, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
 use crate::parser::{
-    BindLine, ForLine, Recover, block_closed, build_assign, build_call, literal_of, pattern_of,
-    recovered, resumed, stated,
+    BindLine, Declares, ForLine, Recover, block_closed, build_assign, build_call, fn_declared,
+    literal_of, pattern_of, recovered, resumed, stated,
 };
 use crate::literal::{self, IntWidth, SuffixedInt};
 
-grammar<'err, S>(interner: &Interner, errors: &'err mut Vec<ParseError>) where S: Recover;
+grammar<'err, S>(interner: &Interner, errors: &'err mut Vec<ParseError>, declares: Declares) where S: Recover;
 
 extern {
     type Location = usize;
@@ -45,6 +45,7 @@ extern {
         "continue" => Token::Continue,
         "return" => Token::Return,
         "anyorder" => Token::Anyorder,
+        "fn" => Token::Fn,
         "match" => Token::Match,
         "mut" => Token::Mut,
         "as" => Token::As,
@@ -276,6 +277,18 @@ Stmt: Stmt<S> = {
         Stmt::Break { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) },
     <l:@L> "continue" <r:@R> <end:StatementEnd> =>
         Stmt::Continue { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) },
+    // fn name(a, b) { body } -- a function of the script (RFC-0100)
+    <l:@L> "fn" <name:Binder> "(" <params:CommaSep<Binder>> ")" "{" <body:Body> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
+        block_closed::<S>(errors, BlockStatement::Fn, semicolon)?;
+        fn_declared::<S>(errors, declares, FnDecl {
+            id: AstId::alloc(),
+            name,
+            params,
+            body: body.0,
+            tail: body.1.map(Box::new),
+            span: Span::new(l, r),
+        })
+    },
     // anyorder { body }
     <l:@L> "anyorder" "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed::<S>(errors, BlockStatement::Anyorder, semicolon)?;

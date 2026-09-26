@@ -64,6 +64,33 @@ impl Nodes {
         nodes
     }
 
+    pub fn of_fn<S>(decl: &FnDecl<S>) -> Self
+    where
+        S: Slot,
+    {
+        let mut nodes = Self {
+            preorder: Vec::new(),
+            names: Vec::new(),
+        };
+        nodes.fn_decl(decl);
+        nodes
+    }
+
+    fn fn_decl<S>(&mut self, decl: &FnDecl<S>)
+    where
+        S: Slot,
+    {
+        self.push(decl.id, decl.span, None);
+        self.binder(&decl.name);
+        for param in &decl.params {
+            self.binder(param);
+        }
+        self.stmts(&decl.body);
+        if let Some(tail) = &decl.tail {
+            self.expr(tail);
+        }
+    }
+
     /// The nodes whose span holds `offset`, `start <= offset < end`,
     /// innermost first.
     pub fn at(&self, offset: usize) -> Vec<Node> {
@@ -262,6 +289,7 @@ impl Nodes {
                 self.push(*id, *span, None);
                 self.stmts(body);
             }
+            Stmt::FnDecl(decl) => self.fn_decl(decl),
             Stmt::Append { id, expr, span } => {
                 self.push(*id, *span, None);
                 self.expr(expr);

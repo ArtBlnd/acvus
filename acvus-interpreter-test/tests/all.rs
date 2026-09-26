@@ -38,6 +38,7 @@ mod erased;
 mod extern_aggregate_result;
 mod extern_call_forms;
 mod extern_fn;
+mod fn_decl;
 mod fold_agreement;
 mod for_loop;
 mod fused_run;
