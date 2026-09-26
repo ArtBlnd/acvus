@@ -107,6 +107,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0069: A closure is a code word beside its captures
 - RFC-0073: A capture is read in place (Proposed)
 - RFC-0074: A diamond of two pure arms is a select
+- RFC-0105: `wasm32` is built with tail calls and a 16 MiB linear stack (Proposed)
 
 ### [mir-opt.md](mir-opt.md)
 

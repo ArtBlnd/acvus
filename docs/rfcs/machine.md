@@ -604,3 +604,32 @@ a cost a closure called in a loop pays per iteration for values that do not
 move.
 **Cost.** The capture read becomes an operation of its own, reading from the
 block address rather than from a register.
+
+## RFC-0105: `wasm32` is built with tail calls and a 16 MiB linear stack
+
+Status: Proposed
+
+A chain's operations tail-call their successor (RFC-0052 rule 1). On
+`wasm32` that call is `return_call_indirect`, which exists only with the
+target's `tail-call` feature; without it every operation of a chain nests a
+frame on the engine's own stack, which a page cannot size, so a long body
+alone runs it out.
+
+1. **Tail calls.** The workspace builds `wasm32` with `tail-call`, and a
+   module an embedder links is built the same way; the docs name the flags.
+2. **The linear stack.** The linear-memory stack is linked at 16 MiB, a
+   size an embedder may raise.
+3. **Checked in the module.** A probe of the built module checks that every
+   operation's `run` ends in `return_call_indirect`, as `asm_probe` checks
+   `jmp` natively, and a straight body of many thousand operations runs in
+   an engine at constant depth.
+
+**Why.** The engine's stack is the browser's: only the calls that nest can
+be controlled, and a chain need not nest.
+**Cost.** An engine without tail calls cannot run the module; it is named
+unsupported rather than served a build that nests.
+**Rejected.**
+- Building without tail calls and bounding a body's length — every long
+  body would be refused for a limit the engine sets.
+- A trampoline loop in place of the tail call — a return and a dispatch per
+  operation on every target that has tail calls.
