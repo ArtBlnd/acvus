@@ -1549,7 +1549,9 @@ the channel every runtime shares, gains nothing for it.
    that may capture the host's state. It takes the call's arguments as
    RFC-0097 rule 1's view, lent and never taken, and fills the result
    through rule 3's `Output`. A program with an unbound hook refuses to
-   run, naming it.
+   run, naming it. A hook a host of a graph declares (RFC-0095) is a hook
+   of the graph's program, in that host's scope as its entries are, and is
+   bound by that host and its name.
 3. **It forwards, and reaches no context.** The hook hands the closure the
    arguments and nothing else: no context and no storage of the caller or
    of any program. A context a pass promoted to a register (mem2reg) stays
