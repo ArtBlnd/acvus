@@ -1,0 +1,8 @@
+// expect 8|7
+let words = vec(["a".to_string(), "b".to_string(), "a".to_string(), "b".to_string(), "a".to_string()]);
+let m = hash_map();
+for w in &words {
+    let n = or_insert(&mut m, w.to_string(), 5);
+    *n = *n + 1;
+}
+(*get(&m, &"a".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"b".to_string()).unwrap()).to_string()

@@ -77,10 +77,10 @@ impl Word for f64 {
 
 macro_rules! instances_of {
     ($(
-        $t:ty => eq: $eq:ident, clone: $clone:ident, cmp: $cmp:ident $(($($total_order:tt)*))?,
-            hash: $hash:ident
+        $t:ty => eq: $eq:ident $(($($equivalence:tt)*))?, clone: $clone:ident,
+            cmp: $cmp:ident $(($($total_order:tt)*))?, hash: $hash:ident
     );* $(;)?) => {$(
-        #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure, total)]
+        #[extern_fn(instance_of = acvus_extern::core::eq, effect = pure, total, $($($equivalence)*)?)]
         fn $eq(a: &$t, b: &$t) -> bool {
             Word::equals(a, b)
         }
@@ -103,14 +103,18 @@ macro_rules! instances_of {
 }
 
 instances_of! {
-    i64 => eq: eq_int, clone: clone_int, cmp: cmp_int (law(total_order)), hash: hash_int;
+    i64 => eq: eq_int (law(equivalence)), clone: clone_int,
+        cmp: cmp_int (law(total_order)), hash: hash_int;
     f64 => eq: eq_float, clone: clone_float, cmp: cmp_float (law(total_order)), hash: hash_float;
-    bool => eq: eq_bool, clone: clone_bool, cmp: cmp_bool (law(total_order)), hash: hash_bool;
-    u8 => eq: eq_byte, clone: clone_byte, cmp: cmp_byte (law(total_order)), hash: hash_byte;
-    char => eq: eq_char, clone: clone_char, cmp: cmp_char (law(total_order)), hash: hash_char;
+    bool => eq: eq_bool (law(equivalence)), clone: clone_bool,
+        cmp: cmp_bool (law(total_order)), hash: hash_bool;
+    u8 => eq: eq_byte (law(equivalence)), clone: clone_byte,
+        cmp: cmp_byte (law(total_order)), hash: hash_byte;
+    char => eq: eq_char (law(equivalence)), clone: clone_char,
+        cmp: cmp_char (law(total_order)), hash: hash_char;
 }
 
-#[extern_fn(instance_of = acvus_extern::core::eq, effect = pure, total)]
+#[extern_fn(instance_of = acvus_extern::core::eq, effect = pure, total, law(equivalence))]
 fn eq_string(a: &String, b: &String) -> bool {
     Word::equals(a, b)
 }
@@ -152,7 +156,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acvus_extern::{Copies, Externs, FnKind, Interner, Laws, QualifiedRef, TypesOnly};
+    use acvus_extern::{Copies, Externs, FnKind, Interner, Laws, PolyTy, QualifiedRef, TypesOnly};
 
     /// A fixed-seed linear congruential sequence (Knuth's MMIX constants),
     /// so a failing sample names the same inputs on every run.
@@ -229,6 +233,85 @@ mod tests {
         .chain(raw.iter().map(|&word| f64::from_bits(word)))
         .collect();
         total_order_holds(&floats, cmp_float, eq_float);
+    }
+
+    /// RFC-0082 rule 11 sampled: `eq` is reflexive, symmetric and transitive,
+    /// and `hash` agrees with it.
+    fn equivalence_holds<T>(words: &[T], eq: fn(&T, &T) -> bool, hash: fn(&T) -> u64)
+    where
+        T: std::fmt::Debug,
+    {
+        for a in words {
+            assert!(eq(a, a), "reflexive at {a:?}");
+            for b in words {
+                assert_eq!(eq(a, b), eq(b, a), "symmetric at {a:?}, {b:?}");
+                if eq(a, b) {
+                    assert_eq!(hash(a), hash(b), "hashed alike at {a:?}, {b:?}");
+                }
+                for c in words.iter().take(16) {
+                    if eq(a, b) && eq(b, c) {
+                        assert!(eq(a, c), "transitive at {a:?}, {b:?}, {c:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn equivalence_holds_over_the_declared_eq_instances() {
+        let raw = samples(48);
+        let ints: Vec<i64> = [i64::MIN, i64::MAX, 0, 1, -1, 1]
+            .into_iter()
+            .chain(raw.iter().map(|&word| word as i64))
+            .chain(raw.iter().take(8).map(|&word| word as i64))
+            .collect();
+        let bytes: Vec<u8> = (0..=u8::MAX).chain([0, 7, u8::MAX]).collect();
+        let chars: Vec<char> = ['\0', 'a', 'z', 'é', '\u{10FFFF}', 'a']
+            .into_iter()
+            .chain(raw.iter().filter_map(|&word| char::from_u32((word >> 43) as u32)))
+            .collect();
+        let strings: Vec<String> = ["", "a", "ab", "b", "é", "a\0", "a", ""]
+            .into_iter()
+            .map(str::to_string)
+            .chain(raw.iter().map(|word| format!("{:x}", word % 64)))
+            .collect();
+        equivalence_holds(&ints, eq_int, hash_int);
+        equivalence_holds(&[false, true, false, true], eq_bool, hash_bool);
+        equivalence_holds(&bytes, eq_byte, hash_byte);
+        equivalence_holds(&chars, eq_char, hash_char);
+        equivalence_holds(&strings, eq_string, hash_string);
+    }
+
+    /// Every `eq` states `law(equivalence)` but `f64`'s (RFC-0082 rule 11).
+    #[test]
+    fn equivalence_is_declared_by_every_eq_but_the_floats() {
+        let i = Interner::new();
+        let reg = Externs::combine(vec![word_registry::<TypesOnly>()], &i)
+            .expect("registries combine");
+        let eq = QualifiedRef::qualified(i.intern("core"), i.intern("eq"));
+        let function = reg
+            .functions
+            .iter()
+            .find(|f| f.qref == eq)
+            .expect("the signature is declared");
+        let FnKind::Extern { instances, .. } = &function.kind else {
+            panic!("eq is an extern")
+        };
+        assert_eq!(instances.concrete.len(), 6);
+        for instance in &instances.concrete {
+            let over_float = matches!(
+                &instance.ty,
+                PolyTy::Fn { params, .. } if matches!(
+                    params.first().map(|param| &param.ty),
+                    Some(PolyTy::Ref(_, lent)) if *lent.ty() == PolyTy::Float
+                )
+            );
+            let expected = match over_float {
+                true => Laws::None,
+                false => Laws::Equivalence,
+            };
+            assert_eq!(instance.laws, expected, "{:?}", instance.ty);
+        }
     }
 
     /// `total_cmp` orders what `<` on reals leaves unordered or equal: `-0.0`

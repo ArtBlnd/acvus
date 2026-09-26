@@ -119,7 +119,7 @@ async fn run_parsed(
     // slot is written again. A run here is the run the CLI does.
     let result = graph_optimize::optimize(
         interner,
-        &acvus_mir::laws::LawTable::of(graph.functions.iter()),
+        &acvus_mir::laws::LawTable::of(graph.functions.iter(), &graph.types),
         lowered.modules.into_iter().collect(),
         graph_optimize::Opt::Full,
     );

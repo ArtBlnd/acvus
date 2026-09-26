@@ -16,7 +16,7 @@ error[E0271]: type mismatch resolving `<eq<T, Rt> as Signature<Rt>>::This == U`
 note: required by a bound in `InstanceOf`
   --> $WORKSPACE/acvus-extern/src/instance.rs
    |
-   | pub struct InstanceOf<'r, S, I, Rt, T = Now>
+   | pub struct InstanceOf<'r, S, I, Rt, T = Now, L = crate::law::Unnamed>
    |            ---------- required by a bound in this struct
    | where
    |     S: Signature<Rt, This = I>,

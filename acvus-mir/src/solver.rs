@@ -17,6 +17,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::types::QualifiedRef;
 use crate::ir::Intrinsic;
+use crate::laws::NamedLaw;
 use crate::pvec::PVec;
 use crate::structural::{Component, StructuralSignature, components};
 use crate::ty::{
@@ -2016,6 +2017,9 @@ pub enum Decision {
         /// The signature a requirement asked an instance of (RFC-0068 rule 5);
         /// a call's own decision is named by its site.
         required: Option<QualifiedRef>,
+        /// The law the requirement names (RFC-0070 rule 6): every candidate
+        /// states it, and a refusal names it.
+        law: Option<NamedLaw>,
         tie: InstanceTie,
         structural: Option<Rc<ComponentOffer>>,
     },
@@ -2404,6 +2408,7 @@ pub enum Unsettled {
         call: InferTy,
         instances: Vec<PolyTy>,
         required: Option<QualifiedRef>,
+        law: Option<NamedLaw>,
     },
     /// The one remaining instance's signature does not join the call type.
     InstanceMismatch {
@@ -2603,6 +2608,39 @@ enum Progress {
 pub struct BegunSource {
     pub decision: DecisionId,
     pub source: IdentityId,
+}
+
+/// The candidates a requirement is decided among: the signature's
+/// instances whose body runs at no task above the one the requirement calls
+/// at and, where it names a law, that state it (RFC-0070 rule 6). An
+/// instance's own requirements at the same signature name that law too, so
+/// `eq` over `Vec<T>` is an equivalence exactly where `T`'s is.
+fn required_candidates(instances: &Instances, requirement: &RequirementSig) -> Vec<Candidate> {
+    instances
+        .concrete
+        .iter()
+        .enumerate()
+        .filter(|(_, sig)| sig.task <= requirement.calls)
+        .filter(|(_, sig)| requirement.law.is_none_or(|law| law.stated_by(&sig.laws)))
+        .map(|(instance, sig)| Candidate {
+            instance: InstanceKind::Extern(instance),
+            ty: sig.ty.clone(),
+            admits: sig.admits,
+            requires: sig
+                .requires
+                .iter()
+                .cloned()
+                .map(|own| match own.signature == requirement.signature {
+                    true => RequirementSig {
+                        law: own.law.or(requirement.law),
+                        ..own
+                    },
+                    false => own,
+                })
+                .collect(),
+            effect_bounds: sig.effect_bounds.clone(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3231,9 +3269,10 @@ impl<'src> Solver<'src> {
                 candidates,
                 generic,
                 required,
+                law,
                 tie,
                 structural,
-            } => self.step_instance(id, &call, candidates, generic, required, tie, structural),
+            } => self.step_instance(id, &call, candidates, generic, required, law, tie, structural),
             Decision::Conversion { from, to } => self.step_conversion(id, &from, &to),
             Decision::Signature {
                 name,
@@ -4034,6 +4073,7 @@ impl<'src> Solver<'src> {
                         .concrete
                         .iter()
                         .filter(|sig| sig.task <= requirement.calls)
+                        .filter(|sig| requirement.law.is_none_or(|law| law.stated_by(&sig.laws)))
                         .any(|sig| self.terms.would_take(&call, &sig.ty, bound, self.registry));
                 if taken {
                     return None;
@@ -4233,6 +4273,7 @@ impl<'src> Solver<'src> {
         candidates: Vec<Candidate>,
         generic: Option<GenericInstance>,
         required: Option<QualifiedRef>,
+        law: Option<NamedLaw>,
         tie: InstanceTie,
         structural: Option<Rc<ComponentOffer>>,
     ) -> Progress {
@@ -4273,6 +4314,7 @@ impl<'src> Solver<'src> {
                 call: ty,
                 instances: candidates.iter().map(|c| c.ty.clone()).collect(),
                 required,
+                law,
             }),
             ([], Some(generic)) => {
                 let instance = self.instantiate_open(&generic.ty);
@@ -4420,6 +4462,7 @@ impl<'src> Solver<'src> {
                 candidates: offer.candidates.clone(),
                 generic: None,
                 required: Some(offer.signature),
+                law: None,
                 tie: InstanceTie::Types,
                 structural: Some(Rc::clone(&offer)),
             });
@@ -4846,21 +4889,10 @@ impl<'src> Solver<'src> {
             });
             let id = self.decide(Decision::Instance {
                 call: called_at(pattern, requirement.calls),
-                candidates: instances
-                    .concrete
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, sig)| sig.task <= requirement.calls)
-                    .map(|(instance, sig)| Candidate {
-                        instance: InstanceKind::Extern(instance),
-                        ty: sig.ty.clone(),
-                        admits: sig.admits,
-                        requires: sig.requires.clone(),
-                        effect_bounds: sig.effect_bounds.clone(),
-                    })
-                    .collect(),
+                candidates: required_candidates(instances, &requirement),
                 generic: None,
                 required: Some(signature),
+                law: requirement.law,
                 tie: InstanceTie::Types,
                 structural: None,
             });
@@ -4947,22 +4979,18 @@ impl<'src> Solver<'src> {
                 let call = called_at(call, req.calls);
                 let id = self.decide(Decision::Instance {
                     call,
-                    candidates: req
-                        .instances
-                        .concrete
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, sig)| sig.task <= req.calls)
-                        .map(|(instance, sig)| Candidate {
-                            instance: InstanceKind::Extern(instance),
-                            ty: sig.ty.clone(),
-                            admits: sig.admits,
-                            requires: sig.requires.clone(),
-                            effect_bounds: sig.effect_bounds.clone(),
-                        })
-                        .collect(),
+                    candidates: required_candidates(
+                        &req.instances,
+                        &RequirementSig {
+                            signature: req.signature,
+                            pattern: req.pattern.clone(),
+                            calls: req.calls,
+                            law: req.law,
+                        },
+                    ),
                     generic: None,
                     required: Some(req.signature),
+                    law: req.law,
                     tie: InstanceTie::Types,
                     structural: None,
                 });
@@ -5004,6 +5032,7 @@ impl<'src> Solver<'src> {
                     ty: scheme.ty.clone(),
                 }),
                 required: None,
+                law: None,
                 tie: InstanceTie::Types,
                 structural: structural.map(Rc::new),
             });
@@ -5577,6 +5606,7 @@ mod requirement_tests {
                 signature,
                 pattern: own,
                 calls: Task::Sync,
+                law: None,
             }],
             effect_bounds: Vec::new(),
         }
@@ -5588,6 +5618,7 @@ mod requirement_tests {
             candidates: vec![candidate],
             generic: None,
             required: None,
+            law: None,
             tie: InstanceTie::Types,
             structural: None,
         }

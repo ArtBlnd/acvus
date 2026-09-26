@@ -335,7 +335,9 @@ fn fmt_term(
 /// `scan` beside the law of a scan (RFC-0093 rule 8):
 /// `cycle Carried(r3) in_order law(Op(Add) exact commutative) scan {+}`, and
 /// a keyed cycle's key and its order within one key (RFC-0098):
-/// `cycle Storage(r4) keyed(r9) any_order law(Op(Add) exact commutative) {index, +, index_set}`.
+/// `cycle Storage(r4) keyed(r9) any_order law(Op(Add) exact commutative) {index, +, index_set}`,
+/// with `keys in_order` after the key where the keys join in chunk order
+/// (rule 3): `keyed(r9 keys in_order)`.
 fn fmt_cycle(
     cycle: &Cycle,
     order: Order,
@@ -353,12 +355,20 @@ fn fmt_cycle(
         Order::Disjoint => "disjoint".to_string(),
         Order::AnyOrder => "any_order".to_string(),
         Order::InOrder => "in_order".to_string(),
-        Order::Keyed { key, within } => {
+        Order::Keyed {
+            key,
+            within,
+            across,
+        } => {
             let within = match within {
                 KeyOrder::AnyOrder => "any_order",
                 KeyOrder::InOrder => "in_order",
             };
-            format!("keyed({}) {within}", vn.fmt_val(key))
+            let across = match across {
+                KeyOrder::AnyOrder => "",
+                KeyOrder::InOrder => " keys in_order",
+            };
+            format!("keyed({}{across}) {within}", vn.fmt_val(key))
         }
     };
     let law = match law {

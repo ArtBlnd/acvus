@@ -142,6 +142,7 @@ fn drain_fn(i: &Interner) -> Function {
                 signature: advance_ref(i),
                 pattern: signature(t.clone()),
                 calls: Task::Sync,
+                law: None,
             }],
         },
         ty: signature(t),

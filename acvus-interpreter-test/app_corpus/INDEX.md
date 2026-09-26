@@ -6,12 +6,12 @@ Every app is `<nn>_<name>.acvus`. Its header states `app`, `desc` and `expect` (
 
 A row's class is `matches` (the facts state the expected grain, or the expected sequential structure), `under-claim` (the facts state less parallelism than the expected structure; the missing rule, declaration or decision is named), or `OVER-CLAIM` (the facts state more than is sound). A stage the facts print as `disjoint` or with a law runs apart (RFC-0092 rules 1 and 2), whatever else its region holds; a `While` or an iterator pipeline prints no stages and runs in place.
 
-The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved; and again with a token compared with a constant no write sends as its own `first` guard, `string::concat`'s law over the views of a `String`, `deque::push_back`'s fold law and `total_order` on `f64`'s `cmp`, where 03:49 (`queue` gains `Fold`) and 12:16 moved; and again with RFC-0093 rule 8's scan, its previous partial and its affine map law, where 01:19, 02:21, 08:11 and 08:42 moved; and again with RFC-0098 rule 1's keyed cycle, where 04:35 and 08:31 moved; and again with RFC-0098 rule 1's one key by value (two key values the program shows equal), where 01:14 and 02:16 moved.
+The facts were read at beb6edba (master), with the binary built from this tree, and read again on the branch that adds RFC-0089 rule 4's readings through chains of assignments, over `Bool`, over several tokens, lifted over `Option`, `last` and the left-biased extremum, and the invariant stride; the rows that moved say so. They were read again with `first`, the first-iteration reset, `copies` and `total_order`, and no row's facts moved; and again with a token compared with a constant no write sends as its own `first` guard, `string::concat`'s law over the views of a `String`, `deque::push_back`'s fold law and `total_order` on `f64`'s `cmp`, where 03:49 (`queue` gains `Fold`) and 12:16 moved; and again with RFC-0093 rule 8's scan, its previous partial and its affine map law, where 01:19, 02:21, 08:11 and 08:42 moved; and again with RFC-0098 rule 1's keyed cycle, where 04:35 and 08:31 moved; and again with RFC-0098 rule 1's one key by value (two key values the program shows equal), where 01:14 and 02:16 moved; and again with RFC-0098 rule 2's keyed map entry at `Equiv`, where 05:21 and 06:68 moved.
 
 ## Summary
 
 - Apps: 12; all run to their expected output at `--opt full` and `--opt none` (24 of 24 runs).
-- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 54, `under-claim` 21, `OVER-CLAIM` 0.
+- Loops classified: 75 (64 `for`/`while` loops and 11 iterator pipelines). `matches` 55, `under-claim` 20, `OVER-CLAIM` 0.
 - No over-claim was found. Every `disjoint` stage was checked against every place its storage is read or written in the loop, every `any_order` law against whether the combined value's order is observed, and every free stage against the tokens it reads (the reading is in each row).
 
 | missing rule, declaration or decision | under-claims |
@@ -20,7 +20,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | cycle split by key over `seen`'s test-and-set: its key is one value, and no RFC-0093 law is read of the update at it | 2 |
 | cycle split by key with a scan per key (RFC-0089 Open) | 2 |
 | affine analysis one loop deep (RFC-0066 rule 4): a row loop over an inner column range | 2 |
-| `or_insert`'s fold law on an `Equiv` map (D8, decided, not declared) | 2 |
+| an `or_insert` entry opened at a value other than the per-key law's identity (RFC-0098 rule 4) | 1 |
 | first-hit select `if x == none && p { x = k }` read as `first` (RFC-0093 rule 7): its guarded test can trap where the program skips it, and no rule discards a trap a chunk raises behind a guard an earlier chunk set | 2 |
 
 ## Loops
@@ -66,7 +66,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | 04 | 64 | render sizes (separator under `if`) | Concat InOrder | `stages [L4, L9]`; L9 Storage in_order Op(Concat) | matches |
 | [05](05_word_freq_topk.acvus) | 9 | `split_whitespace() \| collect` | Stream copy, Fold(push) | no `For` | under-claim: pipeline |
 | 05 | 13 | normalize tokens | free text work; Fold(push) InOrder | `stages [L1, L18]`; L1 free {lower, trim_end_matches ×4, …}; L18 Storage in_order Fold | matches |
-| 05 | 21 | count `*or_insert(&mut counts, w, 0) += 1` | Storage InOrder, fold law (partial maps merged in chunk order) | `stages [L6, L16]`; L16 Storage in_order no law | under-claim: D8 `or_insert` fold law |
+| 05 | 21 | count `*or_insert(&mut counts, w, 0) += 1` | Storage InOrder, fold law (partial maps merged in chunk order) | `stages [L6, L16]`; L16 Storage keyed(`w.to_string()`, keys in_order) any_order Op(Add) | matches: the map is at `Equiv`, `or_insert` opens the entry at `+`'s identity `0`, and the keys join in chunk order (RFC-0098 rules 1 to 3) |
 | 05 | 27 | `keys \| map \| collect` | Stream map, Fold(push) | no `For` | under-claim: pipeline |
 | 05 | 29 | rows | free `get`, object; Fold(push) | `stages [L9, L17]`; L9 free; L17 Storage in_order Fold | matches |
 | 05 | 43 | top-k render and `covered` | Concat InOrder; `+` AnyOrder | `stages [L12, L19, L20, L21]`; L19 Storage in_order Op(Concat); L21 Storage any_order Op(Add) | matches |
@@ -74,7 +74,7 @@ The facts were read at beb6edba (master), with the binary built from this tree, 
 | 06 | 25 | parse lines | parsing apart; Fold(push) InOrder | `stages [L1, L10]`; L1 free; L10 Storage in_order Fold; the parse lies in L10 under `if !starts_with` | matches: the fold law runs the stage apart |
 | 06 | 27 | `split(",") \| collect` | Stream copy, Fold(push) | no `For` | under-claim: pipeline |
 | 06 | 55 | filter | `+` AnyOrder; Fold(push) InOrder | `stages [L1, L12]`; L12 Storage any_order Op(Add); L12 Storage in_order Fold | matches |
-| 06 | 68 | group by department (three `or_insert`s) | three maps InOrder with fold laws | `stages [L1, L3, L4, L5, L6, L7]`; L3, L5, L7 Storage in_order no law | under-claim: D8 `or_insert` fold law |
+| 06 | 68 | group by department (three `or_insert`s) | three maps InOrder with fold laws | `stages [L1, L3, L4, L5, L6, L7]`; L3, L5 Storage keyed(`r.dept.to_string()`, keys in_order) any_order Op(Add); L7 Storage in_order no law | under-claim: `top`'s entry opens at `0`, not `max`'s identity `i64::MIN`, and RFC-0098 rule 4 builds a chunk's entries from the identity |
 | 06 | 80 | `as_iter() \| map \| sum` | Stream map, AnyOrder `+` | no `For` | under-claim: pipeline |
 | 06 | 82 | `keys \| map \| collect` | Stream map, Fold(push) | no `For` | under-claim: pipeline |
 | 06 | 85 | render | Concat InOrder | `stages [L9, L11]`; L11 Storage in_order Op(Concat) | matches |

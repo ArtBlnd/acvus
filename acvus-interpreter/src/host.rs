@@ -1549,7 +1549,7 @@ pub(crate) fn compile(
     }
 
     let started = Instant::now();
-    let laws = acvus_mir::laws::LawTable::of(graph.functions.iter());
+    let laws = acvus_mir::laws::LawTable::of(graph.functions.iter(), &graph.types);
     let optimized = optimize::optimize(interner, &laws, lowered.modules, opt);
     let optimize = started.elapsed();
     refusals.extend(optimized.errors.into_iter().flat_map(|(qref, errs)| {

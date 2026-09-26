@@ -474,7 +474,7 @@ fn a_key_of_another_type_is_refused() {
         Ty::I64,
     );
     assert!(
-        messages.contains("no `get` takes a call of type Fn(&HashMap<i64, i64, Pure>, &String)"),
+        messages.contains("no `get` takes a call of type Fn(&HashMap<i64, i64, Opaque, Pure>, &String)"),
         "the refusal names the key the map does not hold: {messages}"
     );
 }
@@ -487,7 +487,7 @@ fn a_value_of_another_type_is_refused() {
     );
     assert!(
         messages.contains(
-            "no `insert` takes a call of type Fn(&mut HashMap<i64, i64, Pure>, i64, String)"
+            "no `insert` takes a call of type Fn(&mut HashMap<i64, i64, Opaque, Pure>, i64, String)"
         ),
         "the refusal names the value the map does not hold: {messages}"
     );
@@ -652,4 +652,78 @@ fn union_refuses_a_set_of_another_key_type() {
         !messages.is_empty(),
         "a union of two sets of different key types compiled"
     );
+}
+
+// -- The keying marker (RFC-0070 rule 6, RFC-0098 rule 2) ---------------
+
+#[test]
+fn a_float_keyed_map_over_the_key_s_own_instances_is_refused_naming_the_law() {
+    let messages = refusal_at_both(
+        "let m = hash_map(); insert(&mut m, 1.5, 10); len(&m)",
+        Ty::U64,
+    );
+    assert!(
+        messages.contains("no instance of core::eq stating law::Equivalence required by map::hash_map"),
+        "{messages}"
+    );
+}
+
+#[test]
+fn a_float_keyed_map_by_lambdas_is_admitted() {
+    assert_eq!(
+        count(&with_map("insert(&mut m, 1.5, 10); insert(&mut m, 1.5, 20); len(&m)")),
+        1
+    );
+}
+
+#[test]
+fn a_vec_keyed_map_over_the_key_s_own_instances_states_the_element_s_equivalence() {
+    assert_eq!(
+        count(
+            "let m = hash_map(); insert(&mut m, vec([1, 2]), 10); insert(&mut m, vec([1, 2]), 20); \
+             insert(&mut m, vec([2, 1]), 30); len(&m)"
+        ),
+        2
+    );
+    let messages = refusal_at_both(
+        "let m = hash_map(); insert(&mut m, vec([1.5]), 10); len(&m)",
+        Ty::U64,
+    );
+    assert!(
+        messages.contains("stating law::Equivalence"),
+        "`eq` over `Vec<f64>` is no equivalence, as `f64`'s is none: {messages}"
+    );
+}
+
+#[test]
+fn a_map_over_instances_and_one_over_lambdas_are_two_types() {
+    let messages = refusal_at_both(
+        &format!(
+            "let c = true; let m = if c {{ hash_map() }} else {{ hash_map_by({KEYING}) }}; \
+             insert(&mut m, 1, 10); len(&m)"
+        ),
+        Ty::U64,
+    );
+    assert!(messages.contains("Equiv") && messages.contains("Opaque"), "{messages}");
+}
+
+/// RFC-0082 rule 11 sampled at `Vec<i64>`, whose `eq` states the law over
+/// `i64`'s: `==` is reflexive, symmetric and transitive over the sample, and
+/// `hash` agrees with it. `equal` counts the equal pairs, so the sample
+/// holds some beyond each value with itself.
+#[test]
+fn equivalence_holds_over_eq_at_a_vec_of_integers() {
+    let source = "let vs = vec([vec([1, 2]), vec([1, 2]), vec([2, 1]), vec([]), vec([1]), \
+                  vec([1, 2, 3]), vec([]), vec([2, 1]), vec([-9223372036854775807, 0])]); \
+                  let bad = 0; let equal = 0; \
+                  for a in &vs { \
+                      if !(a == a) { bad = bad + 1; } \
+                      for b in &vs { \
+                          if (a == b) != (b == a) { bad = bad + 1; } \
+                          if a == b { equal = equal + 1; if hash(a) != hash(b) { bad = bad + 1; } } \
+                          for c in &vs { if a == b && b == c && !(a == c) { bad = bad + 1; } } \
+                      } \
+                  } \
+                  bad * 100 + equal";
+    assert_eq!(int(source), 15);
 }

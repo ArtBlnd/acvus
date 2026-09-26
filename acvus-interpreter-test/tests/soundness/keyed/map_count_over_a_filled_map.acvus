@@ -1,0 +1,11 @@
+// expect 13|2|1|b,a,c
+let words = vec(["a".to_string(), "b".to_string(), "a".to_string(), "c".to_string(), "b".to_string(), "a".to_string()]);
+let m = hash_map();
+insert(&mut m, "b".to_string(), 0);
+insert(&mut m, "a".to_string(), 10);
+for w in &words {
+    let n = or_insert(&mut m, w.to_string(), 0);
+    *n = *n + 1;
+}
+let order = keys(&m) | map(|k| -> k.to_string()) | join(",".to_string());
+(*get(&m, &"a".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"b".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"c".to_string()).unwrap()).to_string() + "|" + order

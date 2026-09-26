@@ -141,7 +141,7 @@ fn run_pipeline(
         return Err(msgs.join("\n"));
     }
 
-    let laws = crate::laws::LawTable::of(graph.functions.iter());
+    let laws = crate::laws::LawTable::of(graph.functions.iter(), &graph.types);
 
     // SSA -> DCE.
     {

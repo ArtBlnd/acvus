@@ -123,7 +123,7 @@ fn run_pipeline(
     }
 
     let validation_errors =
-        acvus_mir::validate::validate(&module, &LawTable::of(graph.functions.iter()));
+        acvus_mir::validate::validate(&module, &LawTable::of(graph.functions.iter(), &graph.types));
     if !validation_errors.is_empty() {
         let msgs: Vec<String> = validation_errors
             .iter()
@@ -553,7 +553,7 @@ fn lower_script_returning(
         .ok_or_else(|| "no module produced for target".to_string())?;
     Ok(LoweredScript {
         module,
-        laws: LawTable::of(graph.functions.iter()),
+        laws: LawTable::of(graph.functions.iter(), &graph.types),
     })
 }
 
@@ -617,7 +617,7 @@ pub fn optimized_script(
         return Err(errors.join("\n"));
     }
 
-    let laws = LawTable::of(graph.functions.iter());
+    let laws = LawTable::of(graph.functions.iter(), &graph.types);
     let opt = acvus_mir::graph::optimize::optimize(interner, &laws, result.modules, Opt::Full);
     for (qref, errs) in &opt.errors {
         let fn_name = interner.resolve(qref.name);
@@ -719,7 +719,7 @@ pub fn compile_script_at(
         return Err(errors.join("\n"));
     }
 
-    let laws = LawTable::of(graph.functions.iter());
+    let laws = LawTable::of(graph.functions.iter(), &graph.types);
     let opt_result = acvus_mir::graph::optimize::optimize(interner, &laws, result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
@@ -858,7 +858,7 @@ pub fn refuse_script_mode_optimized(
         return Err(refusals);
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, Opt::Full);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter(), &graph.types), result.modules, Opt::Full);
 
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
@@ -1262,7 +1262,7 @@ pub fn multi_fn_module_at(
         return Err(errors.join("\n"));
     }
 
-    let laws = LawTable::of(graph.functions.iter());
+    let laws = LawTable::of(graph.functions.iter(), &graph.types);
     let opt_result = acvus_mir::graph::optimize::optimize(interner, &laws, result.modules, opt);
 
     for (qref, errs) in &opt_result.errors {
@@ -1379,7 +1379,7 @@ fn compile_bound(
         return Err(errors.join("\n"));
     }
 
-    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter()), result.modules, opt);
+    let opt_result = acvus_mir::graph::optimize::optimize(interner, &LawTable::of(graph.functions.iter(), &graph.types), result.modules, opt);
     for (qref, errs) in &opt_result.errors {
         let fn_name = interner.resolve(qref.name);
         for e in errs {

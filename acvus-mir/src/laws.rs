@@ -42,6 +42,43 @@ pub enum Laws {
     /// is `x` and `f(None)` traps (RFC-0082 rule 3). The signature it is
     /// stated over states no other law, so it is one of this enum's forms.
     Payload,
+    /// `#[extern_fn(law(equivalence))]` on a `core::eq` instance: it is
+    /// reflexive, symmetric and transitive, and the `core::hash` instance at
+    /// its type hashes values it calls equal alike (RFC-0082 rule 11). A
+    /// requirement naming [`NamedLaw::Equivalence`] is resolved only by an
+    /// instance stating it (RFC-0070 rule 6).
+    Equivalence,
+    /// `#[extern_fn(law(absent = v))]` on `f(x: &mut M, k: K, .., v: V) ->
+    /// &mut V` that reaches `x[k]` alone through `x`: `f` leaves `x`'s entry
+    /// at `k` as it was where `x` holds one, makes it `v` where `x` holds
+    /// none, and returns a reference to that entry's value. `value` numbers
+    /// `v` as [`PostTerm::Param`] numbers a parameter.
+    Absent { value: usize },
+}
+
+/// A law a requirement names at its type (RFC-0070 rule 6), which only an
+/// instance stating it resolves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NamedLaw {
+    /// `law::Equivalence`: a `core::eq` instance stating `law(equivalence)`
+    /// (RFC-0082 rule 11).
+    Equivalence,
+}
+
+impl NamedLaw {
+    /// Whether an instance declaring `laws` states this law.
+    pub fn stated_by(self, laws: &Laws) -> bool {
+        match self {
+            NamedLaw::Equivalence => matches!(laws, Laws::Equivalence),
+        }
+    }
+
+    /// The law as a declaration names it.
+    pub fn written(self) -> &'static str {
+        match self {
+            NamedLaw::Equivalence => "law::Equivalence",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,13 +206,25 @@ impl Returns {
     }
 }
 
-/// `x`, the whole of what reference parameter `x` lends, or `x[i]`, its
-/// element at the `u64` parameter `i`. A parameter is numbered as
-/// [`PostTerm::Param`] numbers it.
+/// `x`, the whole of what reference parameter `x` lends, `x[i]`, its
+/// element at the `u64` parameter `i`, or `x[k]`, a map or set's entry at
+/// the key parameter `k`. A parameter is numbered as [`PostTerm::Param`]
+/// numbers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReachedPlace {
     pub param: usize,
-    pub element: Option<usize>,
+    pub element: Option<ReachedElement>,
+}
+
+/// What names the part of a reached place (RFC-0082 rule 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReachedElement {
+    /// The element at the `u64` parameter this numbers.
+    Index(usize),
+    /// The entry at the key parameter this numbers, which meets other keys
+    /// by the map's equivalence where its type carries `Equiv` (RFC-0098
+    /// rule 2).
+    Key(usize),
 }
 
 /// An extern and one of its instances, numbered as `Callee::Extern`
@@ -199,6 +248,8 @@ pub enum ResolvedLaws {
     /// are the declaring instance's.
     Inverse(ExternInstance),
     Payload,
+    Equivalence,
+    Absent { value: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,7 +315,9 @@ pub fn resolve<'a>(
             | Laws::Fold(_)
             | Laws::TotalOrder
             | Laws::Inverse(_)
-            | Laws::Payload => Err(Unresolved::UnfitDeclaration),
+            | Laws::Payload
+            | Laws::Equivalence
+            | Laws::Absent { .. } => Err(Unresolved::UnfitDeclaration),
         };
     };
     let instance_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
@@ -379,6 +432,35 @@ pub fn resolve<'a>(
             }
             _ => Err(Unresolved::UnfitDeclaration),
         },
+        Laws::Equivalence => {
+            let compares = match params.as_slice() {
+                [a, b] => match (&a.ty, &b.ty) {
+                    (PolyTy::Ref(Mutability::Shared, a), PolyTy::Ref(Mutability::Shared, b)) => {
+                        a.ty() == b.ty()
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            match compares && **ret == PolyTy::Bool {
+                true => Ok(ResolvedLaws::Equivalence),
+                false => Err(Unresolved::UnfitDeclaration),
+            }
+        }
+        Laws::Absent { value } => {
+            let lends_the_entry = match (params.first().map(|p| &p.ty), params.get(*value), &**ret) {
+                (
+                    Some(PolyTy::Ref(Mutability::Mut, _)),
+                    Some(default),
+                    PolyTy::Ref(Mutability::Mut, entry),
+                ) => *value > 0 && *entry.ty() == default.ty,
+                _ => false,
+            };
+            match lends_the_entry {
+                true => Ok(ResolvedLaws::Absent { value: *value }),
+                false => Err(Unresolved::UnfitDeclaration),
+            }
+        }
     }
 }
 
@@ -477,6 +559,9 @@ struct Declared {
 #[derive(Debug, Default)]
 pub struct LawTable {
     by_instance: FxHashMap<QualifiedRef, Vec<Declared>>,
+    /// The declaration of the `Equiv` keying marker (RFC-0098 rule 2),
+    /// where the registries declared it.
+    equiv: Option<QualifiedRef>,
 }
 
 impl LawTable {
@@ -484,7 +569,10 @@ impl LawTable {
     /// If a law names an extern with no instance of the types it asks:
     /// `acvus_extern::Externs::combine` refuses such a registry by the same
     /// [`resolve`].
-    pub fn of<'a>(functions: impl IntoIterator<Item = &'a Function>) -> Self {
+    pub fn of<'a>(
+        functions: impl IntoIterator<Item = &'a Function>,
+        types: &crate::ty::TypeRegistry,
+    ) -> Self {
         let functions: FxHashMap<QualifiedRef, &Function> = functions
             .into_iter()
             .map(|function| (function.qref, function))
@@ -554,7 +642,17 @@ impl LawTable {
                 Some((function.qref, declared))
             })
             .collect();
-        Self { by_instance }
+        Self {
+            by_instance,
+            equiv: types.keying().map(|markers| markers.equiv),
+        }
+    }
+
+    /// Whether `id` is the declaration of the `Equiv` keying marker
+    /// (RFC-0098 rule 2): the marker is known by the declaration the
+    /// registries named from its Rust type, not by how a script spells it.
+    pub fn is_equiv(&self, id: QualifiedRef) -> bool {
+        self.equiv == Some(id)
     }
 
     pub fn of_callee(&self, callee: &Callee) -> &ResolvedLaws {

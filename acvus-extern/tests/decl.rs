@@ -1027,7 +1027,7 @@ where
         + 'static,
     I: std::ops::Deref<Target = V> + Send + Sync + 'static,
 {
-    type Site<S, I> = acvus_extern::Required<S, I, acvus_extern::Now, 0>;
+    type Site<S, I> = acvus_extern::Required<S, I, acvus_extern::Now, acvus_extern::law::Unnamed, 0>;
     let requires = [Tiny::instance_value(&receiver.entry)];
     let args = [receiver.at];
     // SAFETY: the word is `instance_value` of `receiver.entry`, which

@@ -16,8 +16,26 @@ struct Place {
     element: Option<Ident>,
 }
 
-const PLACES: &str = "a place is `x`, a reference parameter, or `x[i]`, its element at the \
-                      `u64` parameter `i` (RFC-0082 rule 7)";
+const PLACES: &str = "a place is `x`, a reference parameter, `x[i]`, its element at the `u64` \
+                      parameter `i`, or `x[k]`, a map or set's entry at the key parameter `k` \
+                      (RFC-0082 rule 7)";
+
+/// What `x[e]` names by `e`'s parameter: an index is a `u64` taken by value,
+/// and a key is a parameter at one of the declaration's type variables,
+/// taken by value or by `&`.
+enum Part {
+    Index,
+    Key,
+}
+
+fn part_named_by(taken: &ExternParam, is_type_var: &dyn Fn(&Type) -> bool) -> Option<Part> {
+    let is_u64 = matches!(&taken.ty, Type::Path(path) if path.path.is_ident("u64"));
+    match taken.mode {
+        Mode::Value if is_u64 => Some(Part::Index),
+        Mode::Value | Mode::Borrow if is_type_var(&taken.ty) => Some(Part::Key),
+        _ => None,
+    }
+}
 
 impl ReachesAttr {
     /// The name in a stated place that is `param`, as written.
@@ -26,6 +44,22 @@ impl ReachesAttr {
             .iter()
             .flat_map(|place| std::iter::once(&place.of).chain(&place.element))
             .find(|named| *named == param)
+    }
+
+    /// The reference parameter a stated place names an entry of at a key.
+    pub(crate) fn keyed_param(
+        &self,
+        params: &[&ExternParam],
+        is_type_var: &dyn Fn(&Type) -> bool,
+    ) -> Option<&Ident> {
+        self.places.iter().find_map(|place| {
+            let element = place.element.as_ref()?;
+            let taken = params.iter().find(|param| *element == param.name)?;
+            match part_named_by(taken, is_type_var)? {
+                Part::Key => Some(&place.of),
+                Part::Index => None,
+            }
+        })
     }
 
     pub(crate) fn parse_after(keyword: &Ident, input: ParseStream) -> syn::Result<Self> {
@@ -67,7 +101,12 @@ impl ReachesAttr {
         Ok(ReachesAttr { places })
     }
 
-    pub(crate) fn declared(&self, fn_ident: &Ident, params: &[&ExternParam]) -> syn::Result<TokenStream> {
+    pub(crate) fn declared(
+        &self,
+        fn_ident: &Ident,
+        params: &[&ExternParam],
+        is_type_var: &dyn Fn(&Type) -> bool,
+    ) -> syn::Result<TokenStream> {
         let mut declared = Vec::new();
         for place in &self.places {
             let (param, taken) = param_at(&place.of, fn_ident, params)?;
@@ -82,19 +121,26 @@ impl ReachesAttr {
                 ));
             }
             let element = match &place.element {
-                Some(index) => {
-                    let (at, taken) = param_at(index, fn_ident, params)?;
-                    let is_u64 = matches!(&taken.ty, Type::Path(path) if path.path.is_ident("u64"));
-                    if taken.mode != Mode::Value || !is_u64 {
+                Some(named) => {
+                    let (at, taken) = param_at(named, fn_ident, params)?;
+                    let Some(part) = part_named_by(taken, is_type_var) else {
                         return Err(syn::Error::new(
-                            index.span(),
+                            named.span(),
                             format!(
-                                "`{index}` is not a `u64` taken by value, and an element is \
-                                 named by its index (RFC-0082 rule 7)"
+                                "`{named}` is neither a `u64` taken by value, which names an \
+                                 element, nor a key at one of the declaration's type variables, \
+                                 which names an entry (RFC-0082 rule 7)"
                             ),
                         ));
+                    };
+                    match part {
+                        Part::Index => quote! {
+                            ::core::option::Option::Some(::acvus_extern::ReachedElement::Index(#at))
+                        },
+                        Part::Key => quote! {
+                            ::core::option::Option::Some(::acvus_extern::ReachedElement::Key(#at))
+                        },
                     }
-                    quote! { ::core::option::Option::Some(#at) }
                 }
                 None => quote! { ::core::option::Option::None },
             };

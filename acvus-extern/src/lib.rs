@@ -32,6 +32,8 @@ mod func;
 mod handler;
 mod identity;
 mod instance;
+pub mod keying;
+pub mod law;
 pub mod laid;
 mod len;
 mod lend;
@@ -121,8 +123,8 @@ pub use acvus_extern_macro::{
 
 pub use acvus_mir::graph::{FnKind, Function};
 pub use acvus_mir::laws::{
-    BinaryLaws, Copies, FoldLaw, Identity, Laws, PostTerm, Postcondition, Reaches, ReachedPlace, Relation,
-    Returns, Subject,
+    BinaryLaws, Copies, FoldLaw, Identity, Laws, NamedLaw, PostTerm, Postcondition, Reaches,
+    ReachedElement, ReachedPlace, Relation, Returns, Subject,
 };
 pub use acvus_mir::ty::{
     Alignment, CastRule, Effect, EffectArg, EffectTerm, EffectVarBound, Flow, FlowEnd, Flows, HeldTy, Home, IdentityTerm,

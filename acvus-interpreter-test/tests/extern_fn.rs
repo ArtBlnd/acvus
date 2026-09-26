@@ -1242,10 +1242,11 @@ async fn a_vec_of_an_extension_type_is_read_by_value() {
 /// declaration naming `i64` or `Pure` there names another box, and its
 /// argument is held (`#i64`, `#Pure`), so the two meet as two types.
 #[extern_fn(effect = pure)]
-fn keys_at_pure<K, V, I, Rt>(_k: &mut acvus_ext::Keys<'_, K, V, acvus_extern::Pure, I, Rt>) -> i64
+fn keys_at_pure<K, V, Q, I, Rt>(_k: &mut acvus_ext::Keys<'_, K, V, Q, acvus_extern::Pure, I, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,
+    Q: acvus_extern::Var<acvus_extern::kind::Type>,
     I: acvus_extern::Var<acvus_extern::kind::Identity>,
     Rt: acvus_extern::Runtime,
 {
@@ -1253,10 +1254,11 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn keys_at_pure_by_value<K, V, I, Rt>(_k: acvus_ext::Keys<'_, K, V, acvus_extern::Pure, I, Rt>) -> i64
+fn keys_at_pure_by_value<K, V, Q, I, Rt>(_k: acvus_ext::Keys<'_, K, V, Q, acvus_extern::Pure, I, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,
+    Q: acvus_extern::Var<acvus_extern::kind::Type>,
     I: acvus_extern::Var<acvus_extern::kind::Identity>,
     Rt: acvus_extern::Runtime,
 {
@@ -1264,8 +1266,9 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn map_at_ints_by_value<Rt>(_m: acvus_ext::HashMap<'_, i64, i64, acvus_extern::Pure, Rt>) -> i64
+fn map_at_ints_by_value<Q, Rt>(_m: acvus_ext::HashMap<'_, i64, i64, Q, acvus_extern::Pure, Rt>) -> i64
 where
+    Q: acvus_extern::Var<acvus_extern::kind::Type>,
     Rt: acvus_extern::Runtime,
 {
     3
@@ -1290,23 +1293,25 @@ fn deque_at_ints_width(d: &acvus_ext::Deque<i64>) -> i64 {
     d.len() as i64
 }
 
-/// `HashMap<K, V, Pure, Rt>` with its key and value variables: the effect
-/// alone is written concrete.
+/// `HashMap<K, V, Q, Pure, Rt>` with its key, value and keying variables:
+/// the effect alone is written concrete.
 #[extern_fn(effect = pure)]
-fn map_at_pure<K, V, Rt>(_m: &acvus_ext::HashMap<'_, K, V, acvus_extern::Pure, Rt>) -> i64
+fn map_at_pure<K, V, Q, Rt>(_m: &acvus_ext::HashMap<'_, K, V, Q, acvus_extern::Pure, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,
+    Q: acvus_extern::Var<acvus_extern::kind::Type>,
     Rt: acvus_extern::Runtime,
 {
     4
 }
 
 #[extern_fn(effect = pure)]
-fn map_at_pure_by_value<K, V, Rt>(_m: acvus_ext::HashMap<'_, K, V, acvus_extern::Pure, Rt>) -> i64
+fn map_at_pure_by_value<K, V, Q, Rt>(_m: acvus_ext::HashMap<'_, K, V, Q, acvus_extern::Pure, Rt>) -> i64
 where
     K: acvus_extern::Var<acvus_extern::kind::Type>,
     V: acvus_extern::Var<acvus_extern::kind::Type>,
+    Q: acvus_extern::Var<acvus_extern::kind::Type>,
     Rt: acvus_extern::Runtime,
 {
     5
@@ -1358,7 +1363,7 @@ fn a_derived_type_at_a_known_effect_is_not_the_one_a_generic_constructor_made() 
         "{MAP_OF_INTS} let k = keys(&m); keys_at_pure(&mut k)"
     ));
     assert!(
-        messages.contains("expected &mut Keys<i64, i64, #Pure>, got &mut Keys<i64, i64, Pure>"),
+        messages.contains("expected &mut Keys<i64, i64, Opaque, #Pure>, got &mut Keys<i64, i64, Opaque, Pure>"),
         "{messages}"
     );
 }
@@ -1369,7 +1374,7 @@ fn a_derived_type_at_a_known_effect_by_value_is_not_the_one_a_generic_constructo
         "{MAP_OF_INTS} let k = keys(&m); keys_at_pure_by_value(k)"
     ));
     assert!(
-        messages.contains("expected Keys<i64, i64, #Pure>, got Keys<i64, i64, Pure>"),
+        messages.contains("expected Keys<i64, i64, Opaque, #Pure>, got Keys<i64, i64, Opaque, Pure>"),
         "{messages}"
     );
 }
@@ -1378,7 +1383,7 @@ fn a_derived_type_at_a_known_effect_by_value_is_not_the_one_a_generic_constructo
 fn a_map_at_concrete_types_by_value_is_not_the_one_a_generic_constructor_made() {
     let messages = held_refusal(&format!("{MAP_OF_INTS} map_at_ints_by_value(m)"));
     assert!(
-        messages.contains("expected HashMap<#i64, #i64, #Pure>, got HashMap<i64, i64, Pure>"),
+        messages.contains("expected HashMap<#i64, #i64, Opaque, #Pure>, got HashMap<i64, i64, Opaque, Pure>"),
         "{messages}"
     );
 }
@@ -1398,7 +1403,7 @@ fn a_deque_at_a_concrete_type_by_value_is_not_the_one_a_generic_constructor_made
 fn a_map_at_a_known_effect_by_reference_is_not_the_one_a_generic_constructor_made() {
     let messages = held_refusal(&format!("{MAP_OF_INTS} map_at_pure(&m)"));
     assert!(
-        messages.contains("expected &HashMap<i64, i64, #Pure>, got &HashMap<i64, i64, Pure>"),
+        messages.contains("expected &HashMap<i64, i64, Opaque, #Pure>, got &HashMap<i64, i64, Opaque, Pure>"),
         "{messages}"
     );
 }
@@ -1407,7 +1412,7 @@ fn a_map_at_a_known_effect_by_reference_is_not_the_one_a_generic_constructor_mad
 fn a_map_at_a_known_effect_by_value_is_not_the_one_a_generic_constructor_made() {
     let messages = held_refusal(&format!("{MAP_OF_INTS} map_at_pure_by_value(m)"));
     assert!(
-        messages.contains("expected HashMap<i64, i64, #Pure>, got HashMap<i64, i64, Pure>"),
+        messages.contains("expected HashMap<i64, i64, Opaque, #Pure>, got HashMap<i64, i64, Opaque, Pure>"),
         "{messages}"
     );
 }

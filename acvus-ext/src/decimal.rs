@@ -48,7 +48,7 @@ fn decimal_to_float(a: &Decimal) -> f64 {
     f
 }
 
-#[extern_fn(instance_of = acvus_extern::core::eq, effect = pure)]
+#[extern_fn(instance_of = acvus_extern::core::eq, effect = pure, law(equivalence))]
 fn eq_decimal(a: &Decimal, b: &Decimal) -> bool {
     a.0 == b.0
 }
@@ -105,5 +105,33 @@ pub fn decimal_registry<R: Runtime>() -> Registry<R> {
             eq_decimal, clone_decimal, cmp_decimal,
             add_decimal, sub_decimal, mul_decimal, div_decimal, rem_decimal, neg_decimal,
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RFC-0082 rule 11 sampled over values of one number at several scales:
+    /// `eq` is reflexive, symmetric and transitive. No `core::hash` instance
+    /// stands at `Decimal`, so no hash is held to agree with it.
+    #[test]
+    fn equivalence_holds_over_eq_decimal() {
+        let values: Vec<Decimal> = ["0", "0.0", "-0", "1", "1.0", "1.00", "-1", "0.1", "0.10", "3.14159", "1000", "1000.0"]
+            .into_iter()
+            .map(|text| Decimal(text.parse().expect("a decimal literal")))
+            .collect();
+        for a in &values {
+            assert!(eq_decimal(a, a), "reflexive at {}", a.0);
+            for b in &values {
+                assert_eq!(eq_decimal(a, b), eq_decimal(b, a), "symmetric at {}, {}", a.0, b.0);
+                for c in &values {
+                    if eq_decimal(a, b) && eq_decimal(b, c) {
+                        assert!(eq_decimal(a, c), "transitive at {}, {}, {}", a.0, b.0, c.0);
+                    }
+                }
+            }
+        }
+        assert!(eq_decimal(&values[3], &values[5]), "1 and 1.00 are one number");
     }
 }

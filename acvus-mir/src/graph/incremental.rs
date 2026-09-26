@@ -743,7 +743,7 @@ impl IncrementalGraph {
             .filter(|(_, entry)| entry.refusals.is_empty())
             .map(|(&qref, entry)| (qref, entry.module.clone()))
             .collect();
-        let laws = LawTable::of(self.functions.values());
+        let laws = LawTable::of(self.functions.values(), &self.types);
         let result = optimize(&self.interner, &laws, modules, Opt::Full);
 
         let mut refused: FxHashMap<QualifiedRef, Vec<Refusal>> = FxHashMap::default();

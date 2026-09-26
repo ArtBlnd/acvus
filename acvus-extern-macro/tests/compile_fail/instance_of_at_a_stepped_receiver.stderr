@@ -11,11 +11,11 @@ help: the trait `ReadsItsReceiver` is implemented for `acvus_extern::Shared`
    |
    | impl ReadsItsReceiver for Shared {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: required for `Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>` to implement `Arg<__R>`
-   = note: required for `(ByValue<Erased<__R, !>>, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>)` to implement `Parameters<__R>`
+   = note: required for `Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, Unnamed, 0>` to implement `Arg<__R>`
+   = note: required for `(ByValue<Erased<__R, !>>, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, Unnamed, 0>)` to implement `Parameters<__R>`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>, __R>`, but its trait bounds were not satisfied
+error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, Unnamed, 0>, __R>`, but its trait bounds were not satisfied
   --> tests/compile_fail/instance_of_at_a_stepped_receiver.rs:11:1
    |
 11 | #[extern_fn(effect = pure)]
@@ -26,8 +26,8 @@ error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_,
    | pub struct Pending<'a, 'w, A, Rt>
    | --------------------------------- doesn't satisfy `_: Iterator`
 ...
-   | pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
-   | ---------------------------------------------- doesn't satisfy `_: Arg<__R>`
+   | pub struct Required<S, I, T, L, const NTH: usize>(PhantomData<fn() -> (S, I, T, L)>);
+   | ------------------------------------------------- doesn't satisfy `_: Arg<__R>`
    |
   ::: $WORKSPACE/acvus-extern/src/loan.rs
    |
@@ -36,7 +36,7 @@ error[E0599]: the method `take` exists for struct `acvus_extern::Pending<'_, '_,
    |
    = note: the following trait bounds were not satisfied:
            `acvus_extern::Mut: ReadsItsReceiver`
-           which is required by `Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>: Arg<__R>`
-           `acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>, __R>: Iterator`
-           which is required by `&mut acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, 0>, __R>: Iterator`
+           which is required by `Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, Unnamed, 0>: Arg<__R>`
+           `acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, Unnamed, 0>, __R>: Iterator`
+           which is required by `&mut acvus_extern::Pending<'_, '_, Required<advance<Erased<__R, !>, __R>, Erased<__R, !>, acvus_extern::Now, Unnamed, 0>, __R>: Iterator`
    = note: this error originates in the attribute macro `extern_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

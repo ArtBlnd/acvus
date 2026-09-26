@@ -9,7 +9,8 @@ use crate::{ExternParam, Mode, Returning};
 
 /// `law(associative, commutative, identity = e)`,
 /// `law(fold(combine = g, identity = e), commutative)`,
-/// `law(total_order)` or `law(inverse = g)`.
+/// `law(total_order)`, `law(inverse = g)`, `law(equivalence)` or
+/// `law(absent = v)`.
 pub(crate) struct LawAttr {
     first_word: Ident,
     associative: Option<Ident>,
@@ -18,6 +19,13 @@ pub(crate) struct LawAttr {
     fold: Option<FoldAttr>,
     total_order: Option<Ident>,
     inverse: Option<InverseAttr>,
+    equivalence: Option<Ident>,
+    absent: Option<AbsentAttr>,
+}
+
+struct AbsentAttr {
+    keyword: Ident,
+    value: Ident,
 }
 
 struct InverseAttr {
@@ -57,6 +65,8 @@ impl LawAttr {
         let mut fold = None;
         let mut total_order = None;
         let mut inverse = None;
+        let mut equivalence = None;
+        let mut absent = None;
         while !content.is_empty() {
             let word: Ident = content.parse()?;
             let stated_twice = match word.to_string().as_str() {
@@ -81,13 +91,24 @@ impl LawAttr {
                     };
                     inverse.replace(stated).is_some()
                 }
+                "equivalence" => equivalence.replace(word.clone()).is_some(),
+                "absent" => {
+                    content.parse::<Token![=]>()?;
+                    let value: Ident = content.parse()?;
+                    let stated = AbsentAttr {
+                        keyword: word.clone(),
+                        value,
+                    };
+                    absent.replace(stated).is_some()
+                }
                 other => {
                     return Err(syn::Error::new(
                         word.span(),
                         format!(
                             "unknown law `{other}`: a law is `associative`, `commutative`, \
                              `identity = e`, `fold(combine = g, identity = e)`, \
-                             `total_order`, or `inverse = g` (RFC-0082)"
+                             `total_order`, `inverse = g`, `equivalence`, or `absent = v` \
+                             (RFC-0082)"
                         ),
                     ));
                 }
@@ -139,6 +160,31 @@ impl LawAttr {
                  one form (RFC-0082)",
             ));
         }
+        let alone = [
+            equivalence.as_ref(),
+            absent.as_ref().map(|stated| &stated.keyword),
+        ];
+        for stated in alone.into_iter().flatten() {
+            let others = [
+                associative.is_some(),
+                commutative.is_some(),
+                identity.is_some(),
+                fold.is_some(),
+                total_order.is_some(),
+                inverse.is_some(),
+                equivalence.is_some(),
+                absent.is_some(),
+            ];
+            if others.into_iter().filter(|stated| *stated).count() > 1 {
+                return Err(syn::Error::new(
+                    stated.span(),
+                    format!(
+                        "the law `{stated}` is stated alone: a declaration states one form \
+                         (RFC-0082)"
+                    ),
+                ));
+            }
+        }
         Ok(LawAttr {
             first_word,
             associative,
@@ -147,6 +193,8 @@ impl LawAttr {
             fold,
             total_order,
             inverse,
+            equivalence,
+            absent,
         })
     }
 
@@ -156,7 +204,15 @@ impl LawAttr {
         params: &[&ExternParam],
         ret: &Type,
         returning: &Returning,
+        instance_of: Option<&Path>,
+        keyed_by: Option<&Ident>,
     ) -> syn::Result<proc_macro2::TokenStream> {
+        if let Some(stated) = &self.equivalence {
+            return checked_equivalence(stated, fn_ident, params, ret, returning, instance_of);
+        }
+        if let Some(stated) = &self.absent {
+            return checked_absent(stated, fn_ident, params, ret, keyed_by);
+        }
         let commutative = self.commutative.is_some();
         if let Some(inverse) = &self.inverse {
             let reads_storage = match params {
@@ -425,6 +481,92 @@ pub(crate) fn checked_payload(
         ));
     }
     Ok(quote! { ::acvus_extern::Laws::Payload })
+}
+
+/// `law(equivalence)` on a `core::eq` instance `f(a: &T, b: &T) -> bool`
+/// (RFC-0082 rule 11). That the signature is `core::eq` is Rust's to check:
+/// the declaration names `law::stated_over` at its `instance_of`, whose
+/// bound only `core::eq` meets.
+fn checked_equivalence(
+    stated: &Ident,
+    fn_ident: &Ident,
+    params: &[&ExternParam],
+    ret: &Type,
+    returning: &Returning,
+    instance_of: Option<&Path>,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let Some(signature) = instance_of else {
+        return Err(syn::Error::new(
+            stated.span(),
+            format!(
+                "`law(equivalence)` is stated on a `core::eq` instance, and `{fn_ident}` is no \
+                 signature's instance (RFC-0082 rule 11)"
+            ),
+        ));
+    };
+    let compares = match params {
+        [a, b] => a.mode == Mode::Borrow && b.mode == Mode::Borrow && same_type(&a.ty, &b.ty),
+        _ => false,
+    };
+    let answers = matches!(returning, Returning::Value)
+        && matches!(ret, Type::Path(path) if path.path.is_ident("bool"));
+    if !compares || !answers {
+        return Err(syn::Error::new(
+            stated.span(),
+            format!(
+                "the law `equivalence` is stated over `f(a: &T, b: &T) -> bool`, and \
+                 `{fn_ident}` is not of that shape (RFC-0082 rule 11)"
+            ),
+        ));
+    }
+    Ok(quote! {
+        {
+            const _: () = ::acvus_extern::law::stated_over::<#signature>();
+            ::acvus_extern::Laws::Equivalence
+        }
+    })
+}
+
+/// `law(absent = v)` on `f(x: &mut M, .., v: V) -> &mut V` whose `reaches`
+/// names `x[k]` for its first parameter `x`.
+fn checked_absent(
+    stated: &AbsentAttr,
+    fn_ident: &Ident,
+    params: &[&ExternParam],
+    ret: &Type,
+    keyed_by: Option<&Ident>,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let shape = || {
+        syn::Error::new(
+            stated.keyword.span(),
+            format!(
+                "the law `absent` is stated over `f(x: &mut M, k: K, v: V) -> &mut V` whose \
+                 `reaches` names `x[k]`, and `{fn_ident}` is not of that shape"
+            ),
+        )
+    };
+    let Some(at) = params.iter().position(|param| stated.value == param.name) else {
+        return Err(syn::Error::new(
+            stated.value.span(),
+            format!("`{}` names no parameter of `{fn_ident}`", stated.value),
+        ));
+    };
+    let default = params[at];
+    let lends_the_entry = match (params.first(), ret) {
+        (Some(map), Type::Reference(entry)) => {
+            map.mode == Mode::BorrowMut
+                && at > 0
+                && default.mode == Mode::Value
+                && entry.mutability.is_some()
+                && same_type(&entry.elem, &default.ty)
+                && keyed_by.is_some_and(|keyed| *keyed == map.name)
+        }
+        _ => false,
+    };
+    if !lends_the_entry {
+        return Err(shape());
+    }
+    Ok(quote! { ::acvus_extern::Laws::Absent { value: #at } })
 }
 
 /// `X` of a type written `Option<X>`.

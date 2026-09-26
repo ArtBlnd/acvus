@@ -471,6 +471,9 @@ pub struct RequirementSig {
     pub signature: QualifiedRef,
     pub pattern: PolyTy,
     pub calls: Task,
+    /// The law the requirement names at its type, which only an instance
+    /// stating it resolves (RFC-0070 rule 6); `None` names none.
+    pub law: Option<crate::laws::NamedLaw>,
 }
 
 /// What a declaration says about one of its effect variables: a floor on
@@ -532,6 +535,7 @@ pub struct Requirement {
     pub signature: QualifiedRef,
     pub pattern: PolyTy,
     pub calls: Task,
+    pub law: Option<crate::laws::NamedLaw>,
     pub instances: Instances,
 }
 
@@ -1642,6 +1646,20 @@ pub struct TypeRegistry {
     pub(crate) to_rules: FxHashMap<QualifiedRef, Vec<CastRule>>,
     machine_views: FxHashMap<QualifiedRef, Viewed>,
     sliced: FxHashSet<SlicedStorage>,
+    keying: Option<KeyingMarkers>,
+}
+
+/// The declarations of the keying markers a map or a set carries as its
+/// last type argument (RFC-0098 rule 2), found by the Rust type that
+/// declares each, never by its spelling: `acvus_extern::Externs::combine`
+/// names them from `acvus_extern::keying`'s declaration forms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyingMarkers {
+    /// `Equiv`: a table made from an `eq` requirement naming
+    /// `law::Equivalence` (RFC-0070 rule 6).
+    pub equiv: QualifiedRef,
+    /// `Opaque`: a table keyed by closures, whose keys meet by no law.
+    pub opaque: QualifiedRef,
 }
 
 /// A coercion rule: `from` can be implicitly converted to `to`.
@@ -1784,6 +1802,22 @@ impl TypeRegistry {
 
     pub fn iter(&self) -> impl Iterator<Item = (&QualifiedRef, &UserDefinedDecl)> {
         self.decls.iter()
+    }
+
+    /// Names the keying markers' declarations, each registered here.
+    pub fn register_keying(&mut self, markers: KeyingMarkers) {
+        for marker in [markers.equiv, markers.opaque] {
+            assert!(
+                self.decls.contains_key(&marker),
+                "{marker:?}: a keying marker is a registered declaration"
+            );
+        }
+        self.keying = Some(markers);
+    }
+
+    /// The keying markers' declarations, where a registry declared them.
+    pub fn keying(&self) -> Option<KeyingMarkers> {
+        self.keying
     }
 
     /// Whether the `index`-th type argument of `qref` is a specializing

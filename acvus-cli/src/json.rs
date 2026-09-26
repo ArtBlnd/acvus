@@ -101,8 +101,9 @@ fn by_composite(interner: &Interner, value: &Value) -> Json {
 /// container's box at its element's canonical form, `Owned` over the runtime
 /// (RFC-0039 rule 5, RFC-0076). A change to that key moves this type with it.
 type ResultElement = Owned<AcvusRuntime>;
-type ResultMap = HashMap<'static, ResultElement, ResultElement, (), AcvusRuntime>;
-type ResultSet = HashSet<'static, ResultElement, (), AcvusRuntime>;
+type ResultKeying = Owned<AcvusRuntime>;
+type ResultMap = HashMap<'static, ResultElement, ResultElement, ResultKeying, (), AcvusRuntime>;
+type ResultSet = HashSet<'static, ResultElement, ResultKeying, (), AcvusRuntime>;
 
 fn by_extension(interner: &Interner, value: &Value) -> Json {
     if let Some(items) = payload_of::<Vec<ResultElement>>(value) {

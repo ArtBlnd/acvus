@@ -29,7 +29,7 @@ use crate::ir::{
     BinOp, Callee, ForSource, IndexMode, InstKind, Label, PathSeg, RefTarget, Stages, ValueId,
 };
 use crate::laws::{
-    ExternInstance, LawTable, ReachedPlace, Reaches, ResolvedBinary, ResolvedFold,
+    ExternInstance, LawTable, ReachedElement, ReachedPlace, Reaches, ResolvedBinary, ResolvedFold,
     ResolvedIdentity, ResolvedLaws,
 };
 use crate::ty::{Mutability, Ty};
@@ -892,6 +892,7 @@ impl LoopDeps {
             Some(KeyedLaw {
                 key: keyed.key,
                 law,
+                across: keyed.part.across(),
             })
         };
         self.cycles
@@ -1178,6 +1179,7 @@ impl FoldReading<'_, '_> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 struct FoldCall {
     lender: ValueId,
     callee: ExternInstance,
@@ -1299,7 +1301,11 @@ pub enum Order {
     /// RFC-0098 rule 1: updates at one value of `key` combine by the
     /// cycle's law, `within` one another, and updates at two values are
     /// disjoint.
-    Keyed { key: ValueId, within: KeyOrder },
+    Keyed {
+        key: ValueId,
+        within: KeyOrder,
+        across: KeyOrder,
+    },
 }
 
 /// How updates at one key of a keyed cycle are joined (RFC-0098 rule 3).
@@ -1309,10 +1315,10 @@ pub enum KeyOrder {
     InOrder,
 }
 
-/// A keyed storage's key and the law of the updates at its element.
 struct KeyedLaw {
     key: ValueId,
     law: Accumulator,
+    across: KeyOrder,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1496,14 +1502,18 @@ fn judge(
     if let ([Token::Storage(Storage::Slot(slot))], Some(keyed_law)) =
         (&cycle.tokens[..], keyed_law)
         && !disjoint.contains(slot)
-        && let Some(KeyedLaw { key, law }) = keyed_law(*slot)
+        && let Some(KeyedLaw { key, law, across }) = keyed_law(*slot)
     {
         let within = match law.exact && law.commutative {
             true => KeyOrder::AnyOrder,
             false => KeyOrder::InOrder,
         };
         return Judged {
-            order: Order::Keyed { key, within },
+            order: Order::Keyed {
+                key,
+                within,
+                across,
+            },
             law: Some(CycleLaw {
                 accumulator: law,
                 scan: false,
@@ -1542,6 +1552,10 @@ fn judge(
 enum Component {
     Named(PathSeg),
     At(ValueId),
+    /// A map or set's entry at a key value (RFC-0082 rule 7's `x[k]`),
+    /// which meets another key only by the map's own equality: no two keys
+    /// are known apart, and none is an index.
+    Key(ValueId),
 }
 
 #[derive(Debug, Clone)]
@@ -1655,8 +1669,40 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
                 mode: IndexMode::Ref,
                 ..
             } => Some(self.named_by(*slice)?.below([Component::At(*index)])),
+            InstKind::FunctionCall {
+                dst, callee, args, ..
+            } => self.entry_returned(*dst, callee, args),
             _ => None,
         }
+    }
+
+    /// The entry a call stating `law(absent = v)` returns a reference to:
+    /// the one place `x[k]` its declaration reaches, where the loans the
+    /// result names are all of the storage `x`'s argument lends (RFC-0079).
+    fn entry_returned(&self, result: ValueId, callee: &Callee, args: &[ValueId]) -> Option<Place> {
+        let ResolvedLaws::Absent { .. } = self.laws.of_callee(callee) else {
+            return None;
+        };
+        let Reaches::Places(declared) = self.laws.reaches_of(callee) else {
+            return None;
+        };
+        let [
+            ReachedPlace {
+                param,
+                element: Some(ReachedElement::Key(key)),
+            },
+        ] = declared[..]
+        else {
+            return None;
+        };
+        let table = self.named_by(*args.get(param)?)?;
+        let named = self.loans.names(result);
+        let into_the_table =
+            !named.is_empty() && named.iter().all(|loan| loan.storage.slot() == Some(table.slot));
+        if !into_the_table {
+            return None;
+        }
+        Some(table.below([Component::Key(*args.get(key)?)]))
     }
 
     /// RFC-0098 rule 1: whether the program shows the key values `a` and
@@ -1749,6 +1795,33 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             }
             _ => false,
         }
+    }
+
+    /// A call of an instance stating a `fold` law whose first argument lends
+    /// `slot` and whose others lend none of it.
+    fn entry_fold(&self, kind: &InstKind, slot: ValueId) -> Option<FoldCall> {
+        let InstKind::FunctionCall {
+            callee: callee @ Callee::Extern { id, instance, .. },
+            args,
+            ..
+        } = kind
+        else {
+            return None;
+        };
+        let ResolvedLaws::Fold(fold) = self.laws.of_callee(callee) else {
+            return None;
+        };
+        let (&lender, rest) = args.split_first()?;
+        let lent_by_the_entry_alone =
+            self.holds(lender, slot) && !rest.iter().any(|arg| self.holds(*arg, slot));
+        lent_by_the_entry_alone.then_some(FoldCall {
+            lender,
+            callee: ExternInstance {
+                id: *id,
+                instance: *instance,
+            },
+            fold: *fold,
+        })
     }
 
     /// An operand of no reference type: an operation over it reads nothing
@@ -1869,7 +1942,10 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             };
             for place in stated {
                 places.push(match place.element {
-                    Some(index) => lent.clone().below([Component::At(args[index])]),
+                    Some(ReachedElement::Index(index)) => {
+                        lent.clone().below([Component::At(args[index])])
+                    }
+                    Some(ReachedElement::Key(key)) => lent.clone().below([Component::Key(args[key])]),
                     None => lent.clone(),
                 });
             }
@@ -2162,6 +2238,65 @@ fn runs_before_the_iteration_ends(
     true
 }
 
+/// Read over an integer, a `String` or a `Bool` operation, a declared
+/// constant, or a call of no argument of the declared extern; any other
+/// value is no identity here.
+fn is_identity(cfg: &CfgBody, law: &Law, value: ValueId) -> bool {
+    let called = |named: ExternInstance| {
+        cfg.blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .any(|inst| match &inst.kind {
+                InstKind::FunctionCall {
+                    dst,
+                    callee: Callee::Extern { id, instance, .. },
+                    args,
+                    ..
+                } => {
+                    *dst == value
+                        && args.is_empty()
+                        && ExternInstance {
+                            id: *id,
+                            instance: *instance,
+                        } == named
+                }
+                _ => false,
+            })
+    };
+    let constant = constant_of(cfg, value);
+    let int = match constant {
+        Some(Literal::Int(held)) => Some(*held),
+        Some(Literal::IntOf(suffixed)) => Some(suffixed.value),
+        _ => None,
+    };
+    let width = match cfg.val_types.get(&value) {
+        Some(Ty::Int(width)) => Some(*width),
+        _ => None,
+    };
+    match law {
+        Law::Op(op) => match (op, width, int, constant) {
+            (LawOp::Add, Some(_), Some(held), _) => held == 0,
+            (LawOp::Mul, Some(_), Some(held), _) => held == 1,
+            (LawOp::Min, Some(width), Some(held), _) => held == width.max(),
+            (LawOp::Max, Some(width), Some(held), _) => held == width.min(),
+            (LawOp::Concat, _, _, Some(Literal::String(text))) => text.is_empty(),
+            (LawOp::Or | LawOp::Xor, _, _, Some(Literal::Bool(held))) => !*held,
+            (LawOp::And, _, _, Some(Literal::Bool(held))) => *held,
+            _ => false,
+        },
+        Law::Call(CallLaw {
+            identity: CallIdentity::Declared(ResolvedIdentity::Const(declared)),
+            ..
+        }) => constant.is_some_and(|constant| same_literal(constant, declared)),
+        Law::Call(CallLaw {
+            identity: CallIdentity::Declared(ResolvedIdentity::Extern(named)),
+            ..
+        }) => called(*named),
+        Law::Fold(FoldAccumulator { fold, .. }) => called(fold.identity),
+        _ => false,
+    }
+}
+
 /// Two literals of one value: a float's by its bits, so `0.0` and `-0.0`,
 /// which `==` holds equal, are two values.
 fn same_literal(a: &Literal, b: &Literal) -> bool {
@@ -2182,8 +2317,50 @@ fn same_literal(a: &Literal, b: &Literal) -> bool {
 struct KeyedStorage {
     slot: ValueId,
     key: ValueId,
+    part: KeyedPart,
     loads: Vec<ElementLoad>,
     stores: Vec<ElementStore>,
+    folds: Vec<EntryFold>,
+}
+
+/// A call of an instance stating a `fold` law that lends a keyed entry
+/// through its first argument and no other (RFC-0082 rule 6, at one key).
+#[derive(Debug, Clone, Copy)]
+struct EntryFold {
+    at: InstAt,
+    call: FoldCall,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum KeyedPart {
+    Element,
+    Entry(EntryOpened),
+}
+
+/// The one call stating `law(absent = v)` that opens a table's entry, which
+/// it makes `default` where the table held none.
+#[derive(Debug, Clone, Copy)]
+struct EntryOpened {
+    at: InstAt,
+    default: ValueId,
+}
+
+/// Which part of a storage a place names at its key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyedPlace {
+    Element,
+    Entry,
+}
+
+impl KeyedPart {
+    /// RFC-0098 rule 3: a table iterates in insertion order, so its keys
+    /// join in chunk order and a key takes its first chunk's position.
+    fn across(self) -> KeyOrder {
+        match self {
+            KeyedPart::Element => KeyOrder::AnyOrder,
+            KeyedPart::Entry(_) => KeyOrder::InOrder,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2229,22 +2406,28 @@ fn keyed_storages(
         .collect();
     candidates
         .into_iter()
-        .filter_map(|slot| keyed_storage(cfg, &places, loop_blocks, &computed_once, slot))
+        .filter_map(|slot| keyed_storage(cfg, laws, &places, loop_blocks, &computed_once, slot))
         .collect()
 }
 
-/// A storage whose every place in the iteration is `[At(κ)]`, each `κ`
-/// computed once per iteration and one key with the first.
+/// Every place in the iteration is one `[At(κ)]` or one `[Key(κ)]`, each
+/// `κ` computed once per iteration and one key with the first. An element is
+/// read by an `Index` copy and written by an `IndexSet`; an entry is read and
+/// written whole through the reference its opening call returns.
 fn keyed_storage(
     cfg: &CfgBody,
+    laws: &LawTable,
     places: &Places<'_, '_>,
     loop_blocks: &[BlockIdx],
     computed_once: &FxHashSet<ValueId>,
     slot: ValueId,
 ) -> Option<KeyedStorage> {
     let mut key: Option<ValueId> = None;
+    let mut reached: Option<KeyedPlace> = None;
+    let mut opened: Option<EntryOpened> = None;
     let mut loads: Vec<ElementLoad> = Vec::new();
     let mut stores: Vec<ElementStore> = Vec::new();
+    let mut folds: Vec<EntryFold> = Vec::new();
     for &block in loop_blocks {
         let held = &cfg.blocks[block.0];
         if places.reach_of_term(&held.terminator, slot).is_some() {
@@ -2260,31 +2443,96 @@ fn keyed_storage(
             let [place] = &found[..] else {
                 return None;
             };
-            let [Component::At(index)] = place.path[..] else {
-                return None;
+            let (index, keyed_place) = match place.path[..] {
+                [Component::At(index)] => (index, KeyedPlace::Element),
+                [Component::Key(index)] => (index, KeyedPlace::Entry),
+                _ => return None,
             };
+            if *reached.get_or_insert(keyed_place) != keyed_place {
+                return None;
+            }
             if !computed_once.contains(&index) || !places.one_key(*key.get_or_insert(index), index)
             {
                 return None;
             }
             let at = InstAt { block, at };
-            match &inst.kind {
-                InstKind::Index {
-                    dst,
-                    mode: IndexMode::Copy,
-                    ..
-                } => loads.push(ElementLoad { at, loaded: *dst }),
-                InstKind::IndexSet { value, .. } => stores.push(ElementStore { at, stored: *value }),
+            match (&inst.kind, keyed_place) {
+                (
+                    InstKind::Index {
+                        dst,
+                        mode: IndexMode::Copy,
+                        ..
+                    },
+                    KeyedPlace::Element,
+                ) => loads.push(ElementLoad { at, loaded: *dst }),
+                (InstKind::IndexSet { value, .. }, KeyedPlace::Element) => {
+                    stores.push(ElementStore { at, stored: *value })
+                }
+                (
+                    InstKind::Take {
+                        dst,
+                        target: RefTarget::Through(_),
+                        path,
+                        taken_out: false,
+                    },
+                    KeyedPlace::Entry,
+                ) if path.is_empty() => loads.push(ElementLoad { at, loaded: *dst }),
+                (
+                    InstKind::Assign {
+                        target: RefTarget::Through(_),
+                        path,
+                        value,
+                        restores: false,
+                    },
+                    KeyedPlace::Entry,
+                ) if path.is_empty() => stores.push(ElementStore { at, stored: *value }),
+                (InstKind::FunctionCall { callee, args, .. }, KeyedPlace::Entry) => {
+                    match (laws.of_callee(callee), opened) {
+                        (ResolvedLaws::Absent { value }, None) => {
+                            opened = Some(EntryOpened {
+                                at,
+                                default: *args.get(*value)?,
+                            });
+                        }
+                        (ResolvedLaws::Fold(_), Some(_)) => {
+                            let call = places.entry_fold(&inst.kind, slot)?;
+                            folds.push(EntryFold { at, call });
+                        }
+                        _ => return None,
+                    }
+                }
                 _ => return None,
             }
         }
     }
+    let part = match reached? {
+        KeyedPlace::Element => KeyedPart::Element,
+        KeyedPlace::Entry => {
+            let opened = opened?;
+            if !keyed_by_equivalence(cfg, laws, slot) {
+                return None;
+            }
+            KeyedPart::Entry(opened)
+        }
+    };
     Some(KeyedStorage {
         slot,
         key: key?,
+        part,
         loads,
         stores,
+        folds,
     })
+}
+
+fn keyed_by_equivalence(cfg: &CfgBody, laws: &LawTable, slot: ValueId) -> bool {
+    let Some(Ty::UserDefined { type_args, .. }) = cfg.val_types.get(&slot) else {
+        return false;
+    };
+    matches!(
+        type_args.last().map(|marker| marker.ty()).as_deref(),
+        Some(Ty::UserDefined { id, .. }) if laws.is_equiv(*id)
+    )
 }
 
 /// A storage the loop reaches only by copying an element out and by one
@@ -2497,7 +2745,7 @@ fn one_affine_component(reached: &[Place], affine: &AffineValues, proven: &Prove
         Component::At(index) => affine
             .get(*index)
             .and_then(|found| Some((&found.base, stride(&found.step, proven)?))),
-        Component::Named(_) => None,
+        Component::Named(_) | Component::Key(_) => None,
     };
     (0..shortest).any(|position| {
         let terms: Option<Vec<(&Term, Stride)>> = reached
@@ -4538,6 +4786,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// law. That arm resets the element at the first iteration's key alone,
     /// and a keyed join would apply the reset at every key.
     fn keyed_law(mut self, keyed: &KeyedStorage) -> Option<Accumulator> {
+        if let (KeyedPart::Entry(opened), [first, ..]) = (keyed.part, &keyed.folds[..]) {
+            return self.keyed_fold(keyed, opened, first.call);
+        }
         let [ElementStore { at: store, stored }] = keyed.stores[..] else {
             return None;
         };
@@ -4546,7 +4797,12 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             true => at.at < store.at,
             false => !self.reaches_in_iteration(store.block, at.block),
         };
+        let opened_once = match keyed.part {
+            KeyedPart::Element => true,
+            KeyedPart::Entry(opened) => once(opened.at.block),
+        };
         let runs_so = once(store.block)
+            && opened_once
             && keyed
                 .loads
                 .iter()
@@ -4560,11 +4816,53 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             stored,
         });
         self.dependent = self.values_reading_state(None);
+        let cfg = self.cfg;
         let update = self.update()?;
-        match update.resets {
-            true => None,
-            false => Some(update.accumulator()),
+        if update.resets {
+            return None;
         }
+        let accumulator = update.accumulator();
+        match keyed.part {
+            KeyedPart::Element => Some(accumulator),
+            // RFC-0098 rule 4: a chunk builds its entries from the law's
+            // identity, so an entry the call makes where the table held
+            // none is that identity, or the chunk would count it again.
+            KeyedPart::Entry(opened) => {
+                is_identity(cfg, &accumulator.law, opened.default).then_some(accumulator)
+            }
+        }
+    }
+
+    /// An entry every update of which is a call of one instance stating a
+    /// `fold` law, lending the entry alone (RFC-0082 rule 6, at one key):
+    /// the per-key law is that fold's.
+    fn keyed_fold(
+        &self,
+        keyed: &KeyedStorage,
+        opened: EntryOpened,
+        first: FoldCall,
+    ) -> Option<Accumulator> {
+        let once = |block: BlockIdx| self.nested_loops_holding(block).is_empty();
+        let one_instance = keyed.loads.is_empty()
+            && keyed.stores.is_empty()
+            && once(opened.at.block)
+            && keyed
+                .folds
+                .iter()
+                .all(|entry| entry.call.callee == first.callee && once(entry.at.block));
+        if !one_instance {
+            return None;
+        }
+        let law = Law::Fold(FoldAccumulator {
+            storage: keyed.slot,
+            callee: first.callee,
+            fold: first.fold,
+        });
+        is_identity(self.cfg, &law, opened.default).then_some(Accumulator {
+            law,
+            exact: true,
+            commutative: first.fold.commutative,
+        })
     }
 
     fn reaches_in_iteration(&self, from: BlockIdx, to: BlockIdx) -> bool {

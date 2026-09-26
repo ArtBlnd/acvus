@@ -1,7 +1,17 @@
-error[E0133]: call to unsafe function `CallSite::<'a, Rt>::new` is unsafe and requires unsafe block
-  --> tests/compile_fail/instance_site_built_without_unsafe.rs:16:16
+error[E0107]: struct takes 5 generic arguments but 4 generic arguments were supplied
+  --> tests/compile_fail/instance_site_built_without_unsafe.rs:10:18
    |
-16 |     let site = CallSite::<Rt>::new(&[], words);
-   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+10 | type Forge<Rt> = Required<eq<Owned<Rt>, Rt>, Owned<Rt>, Now, 0>;
+   |                  ^^^^^^^^ -----------------  ---------  ---  - supplied 4 generic arguments
+   |                  |
+   |                  expected 5 generic arguments
    |
-   = note: consult the function's documentation for information on how to avoid undefined behavior
+note: struct defined here, with 5 generic parameters: `S`, `I`, `T`, `L`, `NTH`
+  --> $WORKSPACE/acvus-extern/src/handler.rs
+   |
+   | pub struct Required<S, I, T, L, const NTH: usize>(PhantomData<fn() -> (S, I, T, L)>);
+   |            ^^^^^^^^ -  -  -  -  ----------------
+help: add missing generic argument
+   |
+10 | type Forge<Rt> = Required<eq<Owned<Rt>, Rt>, Owned<Rt>, Now, 0, NTH>;
+   |                                                               +++++

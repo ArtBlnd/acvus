@@ -1,0 +1,5 @@
+error: `law(equivalence)` is stated on a `core::eq` instance, and `same` is no signature's instance (RFC-0082 rule 11)
+ --> tests/compile_fail/law_equivalence_no_signature.rs:5:32
+  |
+5 | #[extern_fn(effect = pure, law(equivalence))]
+  |                                ^^^^^^^^^^^

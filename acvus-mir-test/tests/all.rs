@@ -29,6 +29,7 @@ mod exclusion;
 mod fold;
 mod for_loop;
 mod keyed;
+mod keyed_map;
 mod scan;
 mod stages;
 mod gvn;
