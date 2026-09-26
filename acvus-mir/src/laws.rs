@@ -15,7 +15,8 @@ use rustc_hash::FxHashMap;
 
 use crate::graph::{FnKind, Function, QualifiedRef};
 use crate::ir::Callee;
-use crate::ty::{Mutability, PolyTy, matches_pattern};
+use crate::step::Step;
+use crate::ty::{Mutability, PolyTy, Task, View, Viewed, matches_pattern};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Laws {
@@ -54,6 +55,9 @@ pub enum Laws {
     /// none, and returns a reference to that entry's value. `value` numbers
     /// `v` as [`PostTerm::Param`] numbers a parameter.
     Absent { value: usize },
+    /// `#[extern_fn(step(..))]` on a stream adaptor or consumer (RFC-0099
+    /// rule 1).
+    Step(Step),
 }
 
 /// A law a requirement names at its type (RFC-0070 rule 6), which only an
@@ -250,6 +254,7 @@ pub enum ResolvedLaws {
     Payload,
     Equivalence,
     Absent { value: usize },
+    Step(Step),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -285,6 +290,9 @@ pub enum LawRole {
     /// An inverse's `g`: `g(s: &mut S, x: X)` at the declaration's `S` and
     /// `X`.
     Inverse,
+    /// An extern a step's term calls, whose instance the call's argument
+    /// types choose where the step runs.
+    Step,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,7 +325,8 @@ pub fn resolve<'a>(
             | Laws::Inverse(_)
             | Laws::Payload
             | Laws::Equivalence
-            | Laws::Absent { .. } => Err(Unresolved::UnfitDeclaration),
+            | Laws::Absent { .. }
+            | Laws::Step(_) => Err(Unresolved::UnfitDeclaration),
         };
     };
     let instance_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
@@ -461,7 +470,47 @@ pub fn resolve<'a>(
                 false => Err(Unresolved::UnfitDeclaration),
             }
         }
+        Laws::Step(step) => {
+            if !step_fits(step, params) {
+                return Err(Unresolved::UnfitDeclaration);
+            }
+            for named in step.named_externs() {
+                let unfit = Unresolved::NoFittingInstance {
+                    role: LawRole::Step,
+                    named,
+                };
+                match function(named).map(|found| &found.kind) {
+                    Some(FnKind::Extern { .. }) => {}
+                    Some(FnKind::Local(..)) | None => return Err(unfit),
+                }
+            }
+            Ok(ResolvedLaws::Step(step.clone()))
+        }
     }
+}
+
+/// RFC-0099 rule 1, over the declaration's type: the stream is a parameter,
+/// a closure a step calls is a parameter of function type, and a value
+/// parameter it reads is one of neither.
+fn step_fits(step: &Step, params: &[crate::ty::PolyParam]) -> bool {
+    let stream = step.stream().param;
+    let is_fn = |at: usize| matches!(params.get(at).map(|p| &p.ty), Some(PolyTy::Fn { .. }));
+    let mut values = Vec::new();
+    for term in step.terms() {
+        term.visit(&mut |term| {
+            if let crate::step::Term::ValueParam(at) = term {
+                values.push(*at);
+            }
+        });
+    }
+    stream < params.len()
+        && step
+            .called_closures()
+            .into_iter()
+            .all(|at| at != stream && is_fn(at))
+        && values
+            .into_iter()
+            .all(|at| at != stream && at < params.len() && !is_fn(at))
 }
 
 /// RFC-0082 rule 2.
@@ -543,6 +592,7 @@ struct DeclaredAt<'a> {
     returns: Returns,
     copies: Option<Copies>,
     cost: Option<u64>,
+    task: Task,
 }
 
 /// What one instance of an extern declares.
@@ -554,11 +604,27 @@ struct Declared {
     returns: Returns,
     copies: Option<Copies>,
     cost: Option<u64>,
+    task: Task,
+}
+
+/// One instance of an extern: its type, and whether its declaration
+/// requires an instance of a signature (RFC-0067), which a call names in
+/// `Callee::Extern::required`.
+#[derive(Debug, Clone)]
+pub struct InstanceType {
+    pub ty: PolyTy,
+    pub requires: bool,
+    pub generic: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct LawTable {
     by_instance: FxHashMap<QualifiedRef, Vec<Declared>>,
+    /// Numbered as `Callee::Extern` numbers an extern's instances.
+    instance_types: FxHashMap<QualifiedRef, Vec<InstanceType>>,
+    /// The declarations the registries made the machine's shared slice view
+    /// of a container (RFC-0047 rule 3).
+    shared_slice_views: Vec<QualifiedRef>,
     /// The declaration of the `Equiv` keying marker (RFC-0098 rule 2),
     /// where the registries declared it.
     equiv: Option<QualifiedRef>,
@@ -594,6 +660,7 @@ impl LawTable {
                         returns: instance.returns,
                         copies: instance.copies,
                         cost: instance.cost,
+                        task: instance.task,
                     })
                     .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
                         ty: &function.ty,
@@ -603,6 +670,7 @@ impl LawTable {
                         returns: generic.returns,
                         copies: generic.copies,
                         cost: generic.cost,
+                        task: generic.task,
                     }));
                 let mut declared: Vec<Declared> = declared_at
                     .map(|DeclaredAt {
@@ -613,6 +681,7 @@ impl LawTable {
                              returns,
                              copies,
                              cost,
+                             task,
                          }| Declared {
                         laws: resolve(laws, ty, |named| functions.get(&named).copied())
                             .unwrap_or_else(|unresolved| {
@@ -634,6 +703,7 @@ impl LawTable {
                             )
                         }),
                         cost,
+                        task,
                     })
                     .collect();
                 if declared.is_empty() {
@@ -642,10 +712,70 @@ impl LawTable {
                 Some((function.qref, declared))
             })
             .collect();
+        let instance_types = functions
+            .values()
+            .filter_map(|function| {
+                let FnKind::Extern {
+                    instances,
+                    requires,
+                    ..
+                } = &function.kind
+                else {
+                    return None;
+                };
+                let mut typed: Vec<InstanceType> = instances
+                    .concrete
+                    .iter()
+                    .map(|instance| InstanceType {
+                        ty: instance.ty.clone(),
+                        requires: !instance.requires.is_empty(),
+                        generic: false,
+                    })
+                    .collect();
+                if instances.generic.is_some() || typed.is_empty() {
+                    typed.push(InstanceType {
+                        ty: function.ty.clone(),
+                        requires: !requires.is_empty(),
+                        generic: true,
+                    });
+                }
+                Some((function.qref, typed))
+            })
+            .collect();
+        let shared = Viewed {
+            view: View::Slice,
+            mutability: Mutability::Shared,
+        };
+        let mut shared_slice_views: Vec<QualifiedRef> = functions
+            .keys()
+            .filter(|qref| types.machine_view(**qref) == Some(shared))
+            .copied()
+            .collect();
+        shared_slice_views.sort_unstable();
         Self {
             by_instance,
+            instance_types,
+            shared_slice_views,
             equiv: types.keying().map(|markers| markers.equiv),
         }
+    }
+
+    /// The step the instance a call names states (RFC-0099 rule 1); a call
+    /// of a local function or through a value states none.
+    pub fn step_of(&self, callee: &Callee) -> Option<&Step> {
+        match &self.declared(callee)?.laws {
+            ResolvedLaws::Step(step) => Some(step),
+            _ => None,
+        }
+    }
+
+    /// Each instance of the extern `id`, or none where `id` is no extern.
+    pub fn instance_types(&self, id: QualifiedRef) -> &[InstanceType] {
+        self.instance_types.get(&id).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn shared_slice_views(&self) -> &[QualifiedRef] {
+        &self.shared_slice_views
     }
 
     /// Whether `id` is the declaration of the `Equiv` keying marker
@@ -704,6 +834,13 @@ impl LawTable {
     /// a value, which no declaration weighs.
     pub fn cost_of(&self, callee: &Callee) -> Option<u64> {
         self.declared(callee).and_then(|declared| declared.cost)
+    }
+
+    /// The task the handler of the instance a call names runs at, as its
+    /// declaration named it; `None` for a call of a local function or
+    /// through a value.
+    pub fn task_of(&self, callee: &Callee) -> Option<Task> {
+        self.declared(callee).map(|declared| declared.task)
     }
 
     fn declared(&self, callee: &Callee) -> Option<&Declared> {

@@ -467,6 +467,7 @@ impl EntryStorage {
         Loan {
             storage: self.storage(value),
             mutability,
+            taken: mutability,
         }
     }
 }
@@ -474,7 +475,14 @@ impl EntryStorage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Loan {
     pub storage: LoanStorage,
+    /// What the holder may do through the loan: a `&T` position holds it
+    /// `Shared` whatever it was taken as (`read_only_shared`).
     pub mutability: Mutability,
+    /// How the loan was taken at its storage. A shared reborrow of a `&mut`,
+    /// and a `&T` a call returns from one, hold the exclusive loan read-only:
+    /// its holder reads through it, and the place itself is still not read or
+    /// written while it lives (RFC-0018 rule 8).
+    pub taken: Mutability,
 }
 
 /// One position's loans.
@@ -824,6 +832,13 @@ fn padded(mut positions: Vec<Region>, width: usize) -> Vec<Region> {
 pub struct StorageEffect {
     pub reads: SmallVec<[ValueId; 2]>,
     pub writes: SmallVec<[ValueId; 2]>,
+    /// The storages among `reads` reached through a loan taken `&mut` and
+    /// held read-only: a shared reborrow of a `&mut`, or a `&T` a call
+    /// returned from one.
+    pub held: SmallVec<[ValueId; 2]>,
+    /// The storages among `reads` and `writes` touched at the place itself,
+    /// not through a reference.
+    pub placed: SmallVec<[ValueId; 2]>,
 }
 
 impl StorageEffect {
@@ -831,14 +846,33 @@ impl StorageEffect {
         self.reads.is_empty() && self.writes.is_empty()
     }
 
+    /// Whether the two keep their order. Two reads commute, except a touch
+    /// of a place and a read through a loan taken `&mut` on it: moved past
+    /// one another, the place is touched while that loan lives, which
+    /// RFC-0018 rule 8 excludes however the loan is held.
     pub fn conflicts(&self, other: &StorageEffect) -> bool {
         let hits = |a: &[ValueId], b: &[ValueId]| a.iter().any(|s| b.contains(s));
         hits(&self.writes, &other.reads)
             || hits(&self.writes, &other.writes)
             || hits(&self.reads, &other.writes)
+            || hits(&self.held, &other.placed)
+            || hits(&self.placed, &other.held)
     }
 
-    fn add(&mut self, storage: LoanStorage, mutability: Mutability) {
+    fn add(&mut self, loan: Loan) {
+        let Some(slot) = loan.storage.slot() else {
+            return;
+        };
+        match loan.mutability {
+            Mutability::Shared => self.reads.push(slot),
+            Mutability::Mut => self.writes.push(slot),
+        }
+        if loan.mutability == Mutability::Shared && loan.taken == Mutability::Mut {
+            self.held.push(slot);
+        }
+    }
+
+    fn add_placed(&mut self, storage: LoanStorage, mutability: Mutability) {
         let Some(slot) = storage.slot() else {
             return;
         };
@@ -846,6 +880,7 @@ impl StorageEffect {
             Mutability::Shared => self.reads.push(slot),
             Mutability::Mut => self.writes.push(slot),
         }
+        self.placed.push(slot);
     }
 }
 
@@ -1407,6 +1442,7 @@ impl RegionAnalysis<'_> {
                             loans: vec![Loan {
                                 storage,
                                 mutability: *mutability,
+                                taken: *mutability,
                             }],
                         };
                         let held = state.get(*s).through(*s);
@@ -2156,7 +2192,7 @@ impl<'cfg> Loans<'cfg> {
 
     fn add_holds(&self, effect: &mut StorageEffect, value: ValueId) {
         for loan in self.holds(value) {
-            effect.add(loan.storage, loan.mutability);
+            effect.add(*loan);
         }
     }
 
@@ -2275,11 +2311,20 @@ impl<'cfg> Loans<'cfg> {
     /// `ops::storage::take_through` reads the referent through a `&Value`
     /// and copies the word out of it, while `take_var` reaches its slot by
     /// `&mut` and may empty it.
+    ///
+    /// A `Var`, and a parameter held by value, is the place itself; a
+    /// reference parameter's slot is what it lends, reached through it.
     fn touch(&self, effect: &mut StorageEffect, target: &RefTarget, mutability: Mutability) {
         match target {
-            RefTarget::Var(s) | RefTarget::Param(s) => {
-                effect.add(self.storage_of(*s), mutability)
-            }
+            RefTarget::Var(s) => effect.add_placed(self.storage_of(*s), mutability),
+            RefTarget::Param(s) => match self.cfg.val_types.get(s) {
+                Some(Ty::Ref(..) | Ty::Fn { .. }) => effect.add(Loan {
+                    storage: self.storage_of(*s),
+                    mutability,
+                    taken: mutability,
+                }),
+                _ => effect.add_placed(self.storage_of(*s), mutability),
+            },
             RefTarget::Through(r) => self.touch_named(effect, *r, mutability),
         }
     }
@@ -2291,7 +2336,10 @@ impl<'cfg> Loans<'cfg> {
                 (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
                 (Mutability::Shared, _) | (_, Mutability::Shared) => Mutability::Shared,
             };
-            effect.add(loan.storage, bounded);
+            effect.add(Loan {
+                mutability: bounded,
+                ..*loan
+            });
         }
     }
 }
@@ -2319,6 +2367,7 @@ fn entry_regions(storage: &EntryStorage, value: ValueId, ty: &Ty) -> Regions {
                         position,
                     }),
                     mutability,
+                    taken: mutability,
                 },
             };
             Region { loans: vec![loan] }

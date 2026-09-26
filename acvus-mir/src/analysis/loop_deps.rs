@@ -886,14 +886,16 @@ impl LoopDeps {
                 .map(kept)
                 .or_else(|| scanned_product(tokens, &state_of, &reading_of)),
         };
-        let keyed_law = |slot: ValueId| {
-            let keyed = self.keyed.iter().find(|keyed| keyed.slot == slot)?;
-            let law = reading_of(State::Keyed(slot)).keyed_law(keyed)?;
-            Some(KeyedLaw {
-                key: keyed.key,
-                law,
-                across: keyed.part.across(),
-            })
+        let keyed_law = |slot: ValueId| match self.keyed.iter().find(|keyed| keyed.slot == slot) {
+            Some(keyed) => {
+                let law = reading_of(State::Keyed(slot)).keyed_law(keyed)?;
+                Some(KeyedLaw {
+                    key: keyed.key,
+                    law,
+                    across: keyed.part.across(),
+                })
+            }
+            None => keyed_through_nested_loop(cfg, &loans, laws, self.header, &loop_blocks, slot),
         };
         self.cycles
             .iter()
@@ -1365,8 +1367,29 @@ pub enum Law {
         carried: Vec<Token>,
     },
     /// `None · Some(y)` is `Some(y)` and `Some(b) · Some(y)` is
-    /// `Some(b ⊕ y)`, `⊕` the inner law.
+    /// `Some(b ⊕ y)`, `⊕` the inner law: `None` adjoined as its identity
+    /// (RFC-0093 rule 4).
     OptionLifted(Box<Law>),
+    /// `None · x` and `x · None` are `None`, and `Some(b) · Some(y)` is
+    /// `Some(b ⊕ y)`, `⊕` the inner law: `None` adjoined as a zero, which
+    /// absorbs from either side. Associative where `⊕` is: a product of
+    /// three holding a `None` is `None` in both groupings, and one holding
+    /// none is `⊕`'s. It commutes where `⊕` does. A chunk's run starts from
+    /// `Some` of `⊕`'s identity, or from `None` adjoined once more as
+    /// identity where `⊕` has none in the payload's type (RFC-0093 rule 4).
+    OptionAbsorbing(Box<Law>),
+    /// A record token chosen whole by a strict compare of its field `field`
+    /// with a value of the iteration, the other arm leaving it: `a · b` is
+    /// `b` where `b.field` wins the strict compare `op` (`Max` or `Min`)
+    /// against `a.field`, and `a` otherwise, so a tie keeps the earlier
+    /// record and the other fields ride with the field that won. The
+    /// left-biased maximum or minimum of a key, associative, not
+    /// commutative (RFC-0093 rule 5). It has no identity in the record's
+    /// type: a chunk's partial is `Option` of it with `None` as identity.
+    FieldExtremum {
+        op: LawOp,
+        field: acvus_utils::Astr,
+    },
     /// Each token combined by its own law. A part marked `scan` is a token
     /// whose steps read no other token and whose partials another token's
     /// step reads, whose law is read over them (RFC-0093 rule 8).
@@ -2523,6 +2546,80 @@ fn keyed_storage(
         stores,
         folds,
     })
+}
+
+/// RFC-0098 rule 1's nested reading: an iteration that touches `slot` only
+/// inside one loop nested in it, whose own cycle on `slot` is keyed by `L`,
+/// is keyed by `L` too. Each entry's updates run in the program's order
+/// inside each nested run, and those runs in the outer loop's order, so a
+/// split of the outer loop keeps each entry's updates in order within a
+/// chunk and joins chunks as the nested loop's own split does.
+fn keyed_through_nested_loop(
+    cfg: &CfgBody,
+    loans: &Loans<'_>,
+    laws: &LawTable,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+    slot: ValueId,
+) -> Option<KeyedLaw> {
+    let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
+    let nested: Vec<&NaturalLoop> = loops
+        .iter()
+        .filter(|inner| inner.header != header && loop_blocks.contains(&inner.header))
+        .collect();
+    let one_level_down: Vec<&NaturalLoop> = nested
+        .iter()
+        .copied()
+        .filter(|inner| {
+            !nested
+                .iter()
+                .any(|other| other.header != inner.header && other.contains(inner.header))
+        })
+        .collect();
+    let places = Places::of(loans, laws);
+    let mut holding: Option<BlockIdx> = None;
+    for &block in loop_blocks {
+        let held = &cfg.blocks[block.0];
+        let touches = places.reach_of_term(&held.terminator, slot).is_some()
+            || held
+                .insts
+                .iter()
+                .any(|inst| places.reach_of_inst(&inst.kind, slot).is_some());
+        if !touches {
+            continue;
+        }
+        let [inner] = one_level_down
+            .iter()
+            .filter(|inner| inner.contains(block))
+            .collect::<Vec<_>>()[..]
+        else {
+            return None;
+        };
+        if *holding.get_or_insert(inner.header) != inner.header {
+            return None;
+        }
+    }
+    let inner = holding?;
+    Head::of(&cfg.blocks[inner.0].terminator)?;
+    let deps = LoopDeps::with(cfg, loans, laws, inner, &loop_blocks_of(&loops, inner)).ok()?;
+    let token = Token::Storage(Storage::Slot(slot));
+    deps.cycles
+        .iter()
+        .zip(deps.judge(cfg, laws))
+        .find_map(|(cycle, judged)| match (&cycle.tokens[..], judged) {
+            (
+                [only],
+                Judged {
+                    order: Order::Keyed { key, across, .. },
+                    law: Some(CycleLaw { accumulator, scan: false }),
+                },
+            ) if *only == token => Some(KeyedLaw {
+                key,
+                law: accumulator,
+                across,
+            }),
+            _ => None,
+        })
 }
 
 fn keyed_by_equivalence(cfg: &CfgBody, laws: &LawTable, slot: ValueId) -> bool {
@@ -4096,7 +4193,10 @@ enum Step<'a> {
     },
     Order,
     Last,
-    OptionLifted(Lifted<'a>),
+    OptionLifted {
+        inner: Lifted<'a>,
+        none: AdjoinedNone,
+    },
     Ordered {
         op: LawOp,
         order: ExternInstance,
@@ -4104,6 +4204,21 @@ enum Step<'a> {
     /// `a·y + x` over an integer (RFC-0093 rule 8).
     AffineMap,
     StateMap { table: ValueId },
+    FieldExtremum {
+        op: LawOp,
+        field: acvus_utils::Astr,
+    },
+}
+
+/// How an `Option` token's `None` joins the law its payload combines
+/// through (RFC-0093 rule 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdjoinedNone {
+    /// `None` is the identity: the `None` arm sends `Some(y)` or
+    /// `Some(e ⊕ y)`.
+    Identity,
+    /// `None` is a zero: the `None` arm leaves the token.
+    Absorbing,
 }
 
 /// A law an `Option` token's payload combines through.
@@ -4117,13 +4232,47 @@ enum Lifted<'a> {
         callee: ExternInstance,
         law: &'a ResolvedBinary,
     },
+    Order,
+    Last,
+    Ordered {
+        op: LawOp,
+        order: ExternInstance,
+    },
+    AffineMap,
+    StateMap {
+        table: ValueId,
+    },
+    FieldExtremum {
+        op: LawOp,
+        field: acvus_utils::Astr,
+    },
 }
 
 impl<'a> Lifted<'a> {
+    fn of(step: Step<'a>) -> Option<Lifted<'a>> {
+        Some(match step {
+            Step::Op { op, exact } => Self::Op { op, exact },
+            Step::Call { callee, law } => Self::Call { callee, law },
+            Step::Order => Self::Order,
+            Step::Last => Self::Last,
+            Step::Ordered { op, order } => Self::Ordered { op, order },
+            Step::AffineMap => Self::AffineMap,
+            Step::StateMap { table } => Self::StateMap { table },
+            Step::FieldExtremum { op, field } => Self::FieldExtremum { op, field },
+            Step::OptionLifted { .. } => return None,
+        })
+    }
+
     fn step(self) -> Step<'a> {
         match self {
             Self::Op { op, exact } => Step::Op { op, exact },
             Self::Call { callee, law } => Step::Call { callee, law },
+            Self::Order => Step::Order,
+            Self::Last => Step::Last,
+            Self::Ordered { op, order } => Step::Ordered { op, order },
+            Self::AffineMap => Step::AffineMap,
+            Self::StateMap { table } => Step::StateMap { table },
+            Self::FieldExtremum { op, field } => Step::FieldExtremum { op, field },
         }
     }
 }
@@ -4157,18 +4306,27 @@ impl Step<'_> {
                 exact: true,
                 commutative: false,
             },
-            Self::OptionLifted(inner) => {
+            Self::OptionLifted { inner, none } => {
                 let Accumulator {
                     law,
                     exact,
                     commutative,
                 } = inner.step().accumulator();
+                let law = match none {
+                    AdjoinedNone::Identity => Law::OptionLifted(Box::new(law)),
+                    AdjoinedNone::Absorbing => Law::OptionAbsorbing(Box::new(law)),
+                };
                 Accumulator {
-                    law: Law::OptionLifted(Box::new(law)),
+                    law,
                     exact,
                     commutative,
                 }
             }
+            Self::FieldExtremum { op, field } => Accumulator {
+                law: Law::FieldExtremum { op, field },
+                exact: true,
+                commutative: false,
+            },
             Self::Ordered { op, order } => Accumulator {
                 law: Law::Ordered { op, order },
                 exact: true,
@@ -4308,6 +4466,35 @@ struct OrderedCompare {
     right: ValueId,
 }
 
+/// A compare of the record state's field `field`, read by `field_read`,
+/// with a value `y` of the iteration: `y op s.field` where `y_first`, and
+/// `s.field op y` otherwise.
+struct FieldCompare {
+    op: BinOp,
+    field: acvus_utils::Astr,
+    field_read: ValueId,
+    y: ValueId,
+    y_first: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ArmSent<'k> {
+    key: Option<&'k crate::ir::SwitchKey>,
+    arm: BlockIdx,
+    value: ValueId,
+}
+
+struct LiftArms<'k> {
+    none_arm: ArmSent<'k>,
+    some_arm: ArmSent<'k>,
+    none: AdjoinedNone,
+}
+
+struct MadeOption {
+    tag: acvus_utils::Astr,
+    payload: Option<ValueId>,
+}
+
 /// The side of a compare and select that yields a value of the iteration,
 /// not the state.
 struct Select {
@@ -4352,6 +4539,18 @@ struct LawReading<'a, 's, 'cfg> {
     /// it as its own guard (RFC-0093 rule 7).
     sentinel: Option<i128>,
     placed: Option<Placed>,
+    payload_view: Option<PayloadView>,
+    single_step_operand: FxHashMap<ValueId, ValueId>,
+}
+
+/// The `Some` arm runs only where the state is `Some`, so within it the
+/// switch decides nothing.
+#[derive(Debug, Clone, Copy)]
+struct PayloadView {
+    token: ValueId,
+    switch: BlockIdx,
+    tag: ValueId,
+    some_arm: BlockIdx,
 }
 
 /// A law read as a scan (RFC-0093 rule 8), and the members that read its
@@ -4429,6 +4628,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             resets: false,
             sentinel: None,
             placed: None,
+            payload_view: None,
+            single_step_operand: FxHashMap::default(),
         };
         reading.dependent = reading.values_reading_state(None);
         reading
@@ -4537,6 +4738,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             for block in self.body().collect::<Vec<_>>() {
                 let term = &self.cfg.blocks[block.0].terminator;
                 let decides_by_state = Some(block) != excused
+                    && !self.viewed_switch(block)
                     && Self::decision(term)
                         .iter()
                         .any(|value| dependent.contains(value));
@@ -4564,6 +4766,16 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         }
     }
 
+    fn of_viewed_option_type(&self, value: ValueId) -> bool {
+        self.payload_view.is_some_and(|view| {
+            self.cfg.val_types.get(&value) == self.cfg.val_types.get(&view.token)
+        })
+    }
+
+    fn viewed_switch(&self, block: BlockIdx) -> bool {
+        self.payload_view.is_some_and(|view| view.switch == block)
+    }
+
     fn state_slot(&self) -> Option<ValueId> {
         match self.state {
             State::Slot(slot) | State::Previous(slot) | State::Keyed(slot) => Some(slot),
@@ -4582,7 +4794,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             .get(&block)
             .into_iter()
             .flatten()
-            .filter(|decider| Some(**decider) != excused)
+            .filter(|decider| Some(**decider) != excused && !self.viewed_switch(**decider))
             .any(|decider| {
                 Self::decision(&self.cfg.blocks[decider.0].terminator)
                     .iter()
@@ -4619,9 +4831,13 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 self.stored_at(store, stored)?
             }
         };
-        match next {
-            Form::Combined(step) => Some(step),
-            Form::Free | Form::State => None,
+        match (next, self.state) {
+            (Form::Combined(step), _) => Some(step),
+            // RFC-0093 rule 5: every path of the iteration stores the
+            // storage a value reading none of it, which is `last`. A path
+            // that stored nothing would hand on the state, which reads it.
+            (Form::Free, State::Slot(_) | State::Keyed(_)) => Some(Step::Last),
+            (Form::Free, State::Param { .. } | State::Previous(_)) | (Form::State, _) => None,
         }
     }
 
@@ -5036,9 +5252,16 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     mutability: crate::ty::Mutability::Shared,
                     ..
                 } if inst_info::storage(target) == Some(slot) => {
-                    let whole_or_payload =
-                        path.is_empty() || matches!(path[..], [crate::ir::PathSeg::Payload]);
-                    if !whole_or_payload || written.contains(&slot) {
+                    let read_through = matches!(
+                        path[..],
+                        [] | [PathSeg::Payload]
+                            | [PathSeg::Field(_)]
+                            | [PathSeg::Payload, PathSeg::Field(_)]
+                    );
+                    // A take that moves the state out writes the slot only
+                    // by emptying it: what it gives is the state, which the
+                    // update accounts for or refuses like any read of it.
+                    if !read_through {
                         return None;
                     }
                 }
@@ -5209,7 +5432,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 by.push(from);
             }
             for decider in by {
-                if !own.contains(&decider) && !deciders.contains(&decider) {
+                if !own.contains(&decider)
+                    && !deciders.contains(&decider)
+                    && !self.viewed_switch(decider)
+                {
                     deciders.push(decider);
                 }
             }
@@ -5397,7 +5623,14 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     fn form(&mut self, value: ValueId) -> Option<Form<'a>> {
         if !self.dependent.contains(&value) {
-            return Some(Form::Free);
+            // A free value of the token's `Option` type is no payload.
+            return match self.of_viewed_option_type(value) {
+                false => Some(Form::Free),
+                true => self
+                    .made_option(value)
+                    .and_then(|made| made.payload)
+                    .map(|_| Form::Free),
+            };
         }
         if let Some(known) = self.forms.get(&value) {
             return *known;
@@ -5413,15 +5646,20 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     }
 
     fn computed_form(&mut self, value: ValueId) -> Option<Form<'a>> {
-        if matches!(self.state, State::Param { param, .. } if param == value) {
-            return Some(Form::State);
-        }
-        if self
-            .placed
-            .as_ref()
-            .is_some_and(|placed| placed.loads.contains(&value))
-        {
-            return Some(Form::State);
+        let whole_state = matches!(self.state, State::Param { param, .. } if param == value)
+            || self
+                .placed
+                .as_ref()
+                .is_some_and(|placed| placed.loads.contains(&value));
+        match (whole_state, self.payload_view) {
+            (true, None) => return Some(Form::State),
+            // Under the payload view the whole token is the `Option`, not
+            // the payload the view reads as the state.
+            (true, Some(_)) => return None,
+            (false, Some(view)) if self.payload_read(value, view.tag, view.some_arm) => {
+                return Some(Form::State);
+            }
+            (false, _) => {}
         }
         let def = *self.defs.get(&value)?;
         let block = match def {
@@ -5531,10 +5769,13 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 mutability: crate::ty::Mutability::Shared,
                 ..
             } => match inst_info::storage(target) {
-                Some(_) if self.is_state_slot(target, path) => match self.assigned_more_than_once {
-                    true => self.held_before(at),
-                    false => Some(Form::State),
-                },
+                Some(_) if self.is_state_slot(target, path) => {
+                    match (self.payload_view, self.assigned_more_than_once) {
+                        (Some(_), _) => None,
+                        (None, true) => self.held_before(at),
+                        (None, false) => Some(Form::State),
+                    }
+                }
                 Some(slot) if self.is_local(slot) && path.is_empty() => self.held(slot),
                 Some(_) => None,
                 None => {
@@ -5559,10 +5800,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     _ => LawOp::Xor,
                 };
                 let step = Step::Op { op, exact: true };
-                match (self.form(*left)?, self.form(*right)?) {
-                    (state, Form::Free) | (Form::Free, state) => state.then(step),
-                    _ => None,
-                }
+                self.combined_with_free(inst_info::defs(kind)[0], *left, *right, step, true)
             }
             // `!p` is `p != true`.
             InstKind::UnaryOp {
@@ -5582,7 +5820,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     Ty::Float => false,
                     _ => return None,
                 };
-                let (left, right) = (self.form(*left)?, self.form(*right)?);
+                let (left_form, right_form) = (self.form(*left)?, self.form(*right)?);
                 // An integer `+` or `*` of either kind is one law: on every
                 // run that goes past a trapping one its result is the
                 // integer one, and modulo `2^width` that is the wrapping
@@ -5591,11 +5829,13 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 let law = match op {
                     BinOp::Add(_) => LawOp::Add,
                     BinOp::Mul(_) => LawOp::Mul,
+                    BinOp::Min => LawOp::Min,
+                    BinOp::Max => LawOp::Max,
                     // `a - b` is `a + (-b)`, exactly at every width and in
                     // floats alike.
                     BinOp::Sub(_) => {
-                        return match right {
-                            Form::Free => left.then(Step::Op {
+                        return match right_form {
+                            Form::Free => left_form.then(Step::Op {
                                 op: LawOp::Add,
                                 exact,
                             }),
@@ -5605,18 +5845,18 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     _ => return None,
                 };
                 let step = Step::Op { op: law, exact };
-                match (left, right) {
-                    (state, Form::Free) | (Form::Free, state) => state.then(step),
-                    _ => None,
-                }
+                self.combined_with_free(inst_info::defs(kind)[0], *left, *right, step, true)
             }
-            InstKind::StringConcat { parts, .. } => {
+            InstKind::StringConcat { dst, parts } => {
                 let (&first, rest) = parts.split_first()?;
                 let first = self.form(first)?;
                 for part in rest {
                     if self.form(*part)? != Form::Free {
                         return None;
                     }
+                }
+                if let (Form::State, [part]) = (first, rest) {
+                    self.single_step_operand.insert(*dst, *part);
                 }
                 first.then(Step::Op {
                     op: LawOp::Concat,
@@ -5676,14 +5916,42 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     },
                     law,
                 };
-                match (self.form(first)?, self.form(second)?) {
-                    (state, Form::Free) => state.then(step),
-                    (Form::Free, state) if *commutative => state.then(step),
-                    _ => None,
-                }
+                self.combined_with_free(inst_info::defs(kind)[0], first, second, step, *commutative)
+            }
+            InstKind::MakeVariant {
+                dst,
+                payload: Some(payload),
+                ..
+            } if self.payload_view.is_some()
+                && matches!(self.cfg.val_types.get(dst), Some(Ty::Option(_))) =>
+            {
+                self.form(*payload)
             }
             _ => None,
         }
+    }
+
+    /// `left ⊕ right` through `step`, one of them reading the state and the
+    /// other not: the state's side combined once more, where `commutes`
+    /// allows the state on the right. Records `y` for `b ⊕ y` where the
+    /// state's side is the state itself.
+    fn combined_with_free(
+        &mut self,
+        result: ValueId,
+        left: ValueId,
+        right: ValueId,
+        step: Step<'a>,
+        commutes: bool,
+    ) -> Option<Form<'a>> {
+        let (state, free) = match (self.form(left)?, self.form(right)?) {
+            (state, Form::Free) if state != Form::Free => (state, right),
+            (Form::Free, state) if state != Form::Free && commutes => (state, left),
+            _ => return None,
+        };
+        if state == Form::State {
+            self.single_step_operand.insert(result, free);
+        }
+        state.then(step)
     }
 
     /// RFC-0093 rule 9: `row[column]` where `row` is a shared view of
@@ -5791,11 +6059,34 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         }
         let (chosen, chosen_on) =
             self.chosen_over_state(branch, [(first_side, first.2), (second_side, second.2)])?;
-        self.select(&Select {
+        let form = self.select(&Select {
             branch,
             chosen,
             chosen_on,
-        })
+        })?;
+        let param = self.cfg.blocks[block.0].params[index];
+        let operand = self.viewed_payload(chosen);
+        self.single_step_operand.insert(param, operand);
+        Some(form)
+    }
+
+    /// Under the payload view, the payload of a `Some(p)` the iteration
+    /// makes; otherwise the value itself.
+    fn viewed_payload(&self, value: ValueId) -> ValueId {
+        if self.payload_view.is_none() {
+            return value;
+        }
+        match self.defs.get(&value) {
+            Some(Def::Inst(at)) => match self.inst(*at) {
+                InstKind::MakeVariant {
+                    dst,
+                    payload: Some(payload),
+                    ..
+                } if matches!(self.cfg.val_types.get(dst), Some(Ty::Option(_))) => *payload,
+                _ => value,
+            },
+            _ => value,
+        }
     }
 
     /// Of the two values a join receives from the two sides of `branch`,
@@ -6346,17 +6637,19 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             })
     }
 
-    /// A switch on an `Option` token whose `None` arm sends `Some(y)` and
-    /// whose `Some(b)` arm sends `Some(b ⊕ y)`, `y` reading nothing of the
-    /// token but through the switch and `⊕` a law, is `⊕` lifted over
-    /// `Option` (RFC-0089 rule 4).
+    /// RFC-0093 rule 4: a switch on an `Option` token whose `Some(b)` arm
+    /// sends `Some` of `b` updated by a law `L` these readings read, with
+    /// `b` read as the state ([`PayloadView`]). A `None` arm that sends
+    /// `Some(y)` or `Some(e ⊕ y)`, `y` what one step of `L` combines `b`
+    /// with and `e` `L`'s identity, adjoins `None` as `L`'s identity; one
+    /// that sends `None` leaves the token, and `None` absorbs.
     fn option_lift(&mut self, switch: BlockIdx, sent: &[(BlockIdx, Side, ValueId)]) -> Option<Form<'a>> {
         let Terminator::Switch { tag, arms, default } = &self.cfg.blocks[switch.0].terminator
         else {
             return None;
         };
         let tag = *tag;
-        if self.form(tag)? != Form::State {
+        if self.payload_view.is_some() || self.placed.is_some() || self.form(tag)? != Form::State {
             return None;
         }
         let targets: Vec<(Option<&crate::ir::SwitchKey>, BlockIdx)> = arms
@@ -6371,8 +6664,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if targets.len() != 2 {
             return None;
         }
-        // Each value the join receives, with the arm it is sent from.
-        let mut from_arms: Vec<(Option<&crate::ir::SwitchKey>, BlockIdx, ValueId)> = Vec::new();
+        let mut from_arms: Vec<ArmSent<'_>> = Vec::new();
         for &(from, _, value) in sent {
             let [(key, arm)] = targets
                 .iter()
@@ -6382,65 +6674,119 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             else {
                 return None;
             };
-            from_arms.push((key, arm, value));
+            from_arms.push(ArmSent { key, arm, value });
         }
-        let [(first_key, first_arm, first), (second_key, second_arm, second)] = from_arms[..]
-        else {
+        let [first, second] = from_arms[..] else {
             return None;
         };
-        if first_arm == second_arm {
+        if first.arm == second.arm {
             return None;
         }
-        let payload_of = |value: ValueId| match self.defs.get(&value) {
-            Some(Def::Inst(at)) => match self.inst(*at) {
-                InstKind::MakeVariant {
-                    tag,
-                    payload: Some(payload),
-                    ..
-                } => Some((*tag, *payload)),
-                _ => None,
+        let LiftArms {
+            none_arm,
+            some_arm,
+            none,
+        } = self
+            .lift_arms(first, second)
+            .or_else(|| self.lift_arms(second, first))?;
+        let mut view = LawReading::of(
+            self.loans,
+            self.laws,
+            self.slots,
+            self.header,
+            &self.blocks,
+            self.state,
+        );
+        view.payload_view = Some(PayloadView {
+            token: match self.state {
+                State::Param { param, .. } => param,
+                State::Slot(slot) | State::Previous(slot) | State::Keyed(slot) => slot,
             },
+            switch,
+            tag,
+            some_arm: some_arm.arm,
+        });
+        view.dependent = view.values_reading_state(None);
+        let Form::Combined(step) = view.form(some_arm.value)? else {
+            return None;
+        };
+        let inner = Lifted::of(step)?;
+        if view.resets {
+            return None;
+        }
+        if let AdjoinedNone::Identity = none {
+            let payload = self.made_option(none_arm.value)?.payload?;
+            let &combined_with = view
+                .single_step_operand
+                .get(&view.viewed_payload(some_arm.value))?;
+            let reads_token = self.values_reading_state(Some(switch)).contains(&payload);
+            if reads_token || !view.names_one_step(inner, payload, combined_with) {
+                return None;
+            }
+        }
+        let built_in_arms: Vec<ValueId> = [none_arm.value, some_arm.value]
+            .into_iter()
+            .flat_map(|value| self.update_support(value))
+            .collect();
+        self.chain.extend(view.chain);
+        self.chain.extend(built_in_arms);
+        self.chain.insert(tag);
+        Some(Form::Combined(Step::OptionLifted { inner, none }))
+    }
+
+    /// `none_arm` as the `None` arm and `some_arm` as the `Some` one, where
+    /// `none_arm` sends a `None` its own key names, or a `Some` the other
+    /// arm's key names.
+    fn lift_arms<'k>(&self, none_arm: ArmSent<'k>, some_arm: ArmSent<'k>) -> Option<LiftArms<'k>> {
+        let MadeOption { tag, payload } = self.made_option(none_arm.value)?;
+        let keyed_by =
+            |key: Option<&crate::ir::SwitchKey>| key == Some(&crate::ir::SwitchKey::Tag(tag));
+        let none = match payload {
+            None if keyed_by(none_arm.key) => AdjoinedNone::Absorbing,
+            Some(_) if !keyed_by(none_arm.key) && keyed_by(some_arm.key) => AdjoinedNone::Identity,
+            _ => return None,
+        };
+        Some(LiftArms {
+            none_arm,
+            some_arm,
+            none,
+        })
+    }
+
+    fn made_option(&self, value: ValueId) -> Option<MadeOption> {
+        let Some(Def::Inst(at)) = self.defs.get(&value) else {
+            return None;
+        };
+        match self.inst(*at) {
+            InstKind::MakeVariant { dst, tag, payload }
+                if matches!(self.cfg.val_types.get(dst), Some(Ty::Option(_))) =>
+            {
+                Some(MadeOption {
+                    tag: *tag,
+                    payload: *payload,
+                })
+            }
             _ => None,
-        };
-        let ((first_tag, first_payload), (second_tag, second_payload)) =
-            (payload_of(first)?, payload_of(second)?);
-        let is_option = matches!(self.cfg.val_types.get(&first), Some(Ty::Option(_)));
-        if first_tag != second_tag || !is_option {
-            return None;
         }
-        let some = crate::ir::SwitchKey::Tag(first_tag);
-        let (y, combined, some_arm) = match (first_key == Some(&some), second_key == Some(&some)) {
-            (false, true) => (first_payload, second_payload, second_arm),
-            (true, false) => (second_payload, first_payload, first_arm),
-            _ => return None,
-        };
-        let excused = self.values_reading_state(Some(switch));
-        if excused.contains(&y) {
-            return None;
+    }
+
+    /// Whether `value` is `y` or `e ⊕ y` through `inner`, `e` its identity:
+    /// what the `None` arm of an identity-adjoined lift sends in `Some`.
+    fn names_one_step(&self, inner: Lifted<'a>, value: ValueId, y: ValueId) -> bool {
+        if self.one_value(value, y) {
+            return true;
         }
-        let Some(&Def::Inst(at)) = self.defs.get(&combined) else {
-            return None;
+        let Some(&Def::Inst(at)) = self.defs.get(&value) else {
+            return false;
         };
-        let (lifted, left, right) = self.binary_law(self.inst(at))?;
-        let is_payload = |value: ValueId| self.payload_read(value, tag, some_arm);
-        let (payload, other, commutes_needed) = match (is_payload(left), is_payload(right)) {
-            (true, false) => (left, right, false),
-            (false, true) => (right, left, true),
-            _ => return None,
+        let Some((lifted, left, right)) = self.binary_law(self.inst(at)) else {
+            return false;
         };
-        let commutes = match lifted {
-            Lifted::Op { op, .. } => op.commutes(),
-            Lifted::Call { law, .. } => law.commutative,
+        let law = inner.step().accumulator();
+        let identity_beside = |identity: ValueId, other: ValueId| {
+            is_identity(self.cfg, &law.law, identity) && self.one_value(other, y)
         };
-        if (commutes_needed && !commutes)
-            || !self.same_value(y, other)
-            || excused.contains(&other)
-        {
-            return None;
-        }
-        self.chain
-            .extend([tag, y, other, payload, combined, first, second]);
-        Some(Form::Combined(Step::OptionLifted(lifted)))
+        lifted == inner && (identity_beside(left, right) || identity_beside(right, left))
     }
 
     /// Whether `value` reads the payload of the `Option` token the switch on
@@ -6545,6 +6891,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if let Some(ordered) = self.ordered_compare(op, left, right) {
             return self.ordered_select(select, *cond, ordered);
         }
+        if let Some(compare) = self.field_compare(op, left, right) {
+            return self.field_select(select, *cond, compare);
+        }
         if !matches!(self.cfg.val_types.get(&left), Some(Ty::Int(_))) {
             return None;
         }
@@ -6555,7 +6904,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             _ => return None,
         };
         let compared = if y_first { left } else { right };
-        if !self.same_value(compared, select.chosen) {
+        if !self.same_value(compared, self.viewed_payload(select.chosen)) {
             return None;
         }
         // Whether `y` is chosen when `y < s` (a minimum) or when `y > s`.
@@ -6645,7 +6994,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             _ => return None,
         };
         let compared = if y_first { left } else { right };
-        if self.copy_of(select.chosen) != Some(self.lent(compared)) {
+        if self.copy_of(self.viewed_payload(select.chosen)) != Some(self.lent(compared)) {
             return None;
         }
         let y_less_when_true = match (op, y_first) {
@@ -6662,6 +7011,213 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             op: if minimum { LawOp::Min } else { LawOp::Max },
             order,
         }))
+    }
+
+    fn field_compare(&mut self, op: BinOp, left: ValueId, right: ValueId) -> Option<FieldCompare> {
+        match (self.state_field(left), self.state_field(right)) {
+            (Some(field), None) => Some(FieldCompare {
+                op,
+                field,
+                field_read: left,
+                y: right,
+                y_first: false,
+            }),
+            (None, Some(field)) => Some(FieldCompare {
+                op,
+                field,
+                field_read: right,
+                y: left,
+                y_first: true,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The field of the record state `value` reads whole: a read of it
+    /// through the state's storage, through a local holding the state, or
+    /// of the state's value.
+    fn state_field(&mut self, value: ValueId) -> Option<acvus_utils::Astr> {
+        let Some(&Def::Inst(at)) = self.defs.get(&value) else {
+            return None;
+        };
+        match self.inst(at) {
+            InstKind::Take {
+                target,
+                path,
+                taken_out: false,
+                ..
+            } => {
+                let slot = inst_info::storage(target);
+                let on_state = slot.is_some() && slot == self.state_slot();
+                let through_tag = self
+                    .payload_view
+                    .is_some_and(|view| *target == RefTarget::Through(view.tag));
+                match (&path[..], self.payload_view) {
+                    ([PathSeg::Field(field)], None) if on_state => Some(*field),
+                    ([PathSeg::Payload, PathSeg::Field(field)], Some(view))
+                        if (on_state || through_tag)
+                            && (at.block == view.some_arm
+                                || self.domtree.dominates(view.some_arm, at.block)) =>
+                    {
+                        Some(*field)
+                    }
+                    ([PathSeg::Field(field)], _)
+                        if slot.is_some_and(|slot| self.is_local(slot))
+                            && self.held(slot?) == Some(Form::State) =>
+                    {
+                        Some(*field)
+                    }
+                    _ => None,
+                }
+            }
+            InstKind::FieldGet {
+                object,
+                field,
+                rest,
+                ..
+            } if rest.is_empty() => {
+                let field = *field;
+                let object = *object;
+                (self.form(object)? == Form::State).then_some(field)
+            }
+            InstKind::ObjectGet { object, key, .. } => {
+                let key = *key;
+                let object = *object;
+                (self.form(object)? == Form::State).then_some(key)
+            }
+            _ => None,
+        }
+    }
+
+    /// RFC-0093 rule 5: `if y > s.f { s = r }` and its mirror images, `r` a
+    /// record the iteration builds whose field `f` is `y`, by a strict
+    /// order only: a tie keeps the earlier record, and a non-strict compare
+    /// would keep the later.
+    fn field_select(&mut self, select: &Select, cond: ValueId, compare: FieldCompare) -> Option<Form<'a>> {
+        let FieldCompare {
+            op,
+            field,
+            field_read,
+            y,
+            y_first,
+        } = compare;
+        if self.form(y)? != Form::Free || !matches!(self.cfg.val_types.get(&y), Some(Ty::Int(_))) {
+            return None;
+        }
+        let y_less_when_true = match (op, y_first) {
+            (BinOp::Lt, true) | (BinOp::Gt, false) => true,
+            (BinOp::Gt, true) | (BinOp::Lt, false) => false,
+            _ => return None,
+        };
+        let record = self.viewed_payload(select.chosen);
+        let Some(&Def::Inst(built)) = self.defs.get(&record) else {
+            return None;
+        };
+        let InstKind::MakeObject { fields, .. } = self.inst(built) else {
+            return None;
+        };
+        let &(_, keyed_by) = fields.iter().find(|(name, _)| *name == field)?;
+        if !self.one_value(keyed_by, y) {
+            return None;
+        }
+        let minimum = match select.chosen_on {
+            Side::Then => y_less_when_true,
+            Side::Else => !y_less_when_true,
+        };
+        let built_in_arm = self.update_support(select.chosen);
+        self.chain.extend(built_in_arm);
+        self.chain.extend([cond, field_read, select.chosen, record]);
+        Some(Form::Combined(Step::FieldExtremum {
+            op: if minimum { LawOp::Min } else { LawOp::Max },
+            field,
+        }))
+    }
+
+    /// What `value` is computed from, itself included, among the values the
+    /// reading counts as reading the state: the operands of each, the values
+    /// the edges into a join send its parameter, and what each branch
+    /// deciding them decides by.
+    fn update_support(&self, value: ValueId) -> Vec<ValueId> {
+        let mut seen: FxHashSet<ValueId> = FxHashSet::default();
+        let mut work = vec![value];
+        let mut found: Vec<ValueId> = Vec::new();
+        while let Some(value) = work.pop() {
+            if !self.dependent.contains(&value) || !seen.insert(value) {
+                continue;
+            }
+            found.push(value);
+            let block = match self.defs.get(&value) {
+                Some(&Def::Inst(at)) => {
+                    work.extend(inst_info::uses(self.inst(at)));
+                    at.block
+                }
+                Some(&Def::Param { block, index }) => {
+                    if let Some(Sent { sent, deciders }) = self.sent_to(block, index) {
+                        work.extend(sent.iter().map(|&(_, _, sent)| sent));
+                        for decider in deciders {
+                            work.extend(Self::decision(&self.cfg.blocks[decider.0].terminator));
+                        }
+                    }
+                    block
+                }
+                None => continue,
+            };
+            for decider in self.deciders.get(&block).into_iter().flatten() {
+                work.extend(Self::decision(&self.cfg.blocks[decider.0].terminator));
+            }
+        }
+        found
+    }
+
+    /// Whether two values of the iteration are one value: [`Self::same_value`],
+    /// two copies of what one reference lends, or two records or variants
+    /// built of one value each.
+    fn one_value(&self, a: ValueId, b: ValueId) -> bool {
+        if self.same_value(a, b) {
+            return true;
+        }
+        if let (Some(a), Some(b)) = (self.copy_of(a), self.copy_of(b))
+            && a == b
+        {
+            return true;
+        }
+        let built = |value: ValueId| match self.defs.get(&value) {
+            Some(Def::Inst(at)) => Some(self.inst(*at)),
+            _ => None,
+        };
+        match (built(a), built(b)) {
+            (
+                Some(InstKind::MakeObject { fields: first, .. }),
+                Some(InstKind::MakeObject { fields: second, .. }),
+            ) => {
+                first.len() == second.len()
+                    && first.iter().all(|(name, held)| {
+                        second
+                            .iter()
+                            .any(|(other, value)| other == name && self.one_value(*held, *value))
+                    })
+            }
+            (
+                Some(InstKind::MakeVariant {
+                    tag: first_tag,
+                    payload: first,
+                    ..
+                }),
+                Some(InstKind::MakeVariant {
+                    tag: second_tag,
+                    payload: second,
+                    ..
+                }),
+            ) => {
+                first_tag == second_tag
+                    && match (first, second) {
+                        (Some(first), Some(second)) => self.one_value(*first, *second),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
     }
 
     /// The reference whose lent value `reference` lends: itself, or the

@@ -4,3 +4,4 @@ for slice(r19) -> L1 else L2 stages [L1, L8]
 // L8: cycle Storage(r22) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost W=3 O=18281 split when n > 194998, n = len(r19)
+// lower in place: its first stage spawns no heavy or io call before it waits

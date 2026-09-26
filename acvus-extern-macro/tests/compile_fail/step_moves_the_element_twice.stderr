@@ -1,0 +1,19 @@
+error: a step moves the element `x` once on each path: lend it with `&x` where it reads it again
+ --> tests/compile_fail/step_moves_the_element_twice.rs:6:4
+  |
+6 | fn pairs<'a, I, T, U, E, Rt>(
+  |    ^^^^^
+
+warning: unused imports: `Closure`, `Cross`, `Instance`, `Later`, `PassedByValue`, `Runtime`, `Stored`, `Var`, and `kind`
+ --> tests/compile_fail/step_moves_the_element_twice.rs:2:20
+  |
+2 | use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^^^  ^^^^^  ^^^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `acvus_ext::iter_sig::next`
+ --> tests/compile_fail/step_moves_the_element_twice.rs:3:5
+  |
+3 | use acvus_ext::iter_sig::next;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^

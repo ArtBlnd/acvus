@@ -5,3 +5,4 @@ for slice(r2) -> L1 else L2 stages [L1, L5, L6, L7]
 // L7: cycle Carried(r5) any_order law(Op(Add) exact commutative) {const, +, branch, jump}
 // control upfront
 // cost W=7 O=18293 split when n > 83626, n = len(r2)
+// lower in place: its first stage spawns no heavy or io call before it waits

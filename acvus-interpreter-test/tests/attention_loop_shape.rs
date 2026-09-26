@@ -62,6 +62,10 @@ fn attention_loops() -> Vec<LoopShape> {
 /// `AsSlice` and no drop — a slice is a register pair the frame never owns
 /// (RFC-0047 rule 6).
 ///
+/// Between the two nests stand the pipelines `map(exp) | collect` and
+/// `map(*w) | sum`, each a pull loop RFC-0099 writes (`body 5`, `body 2`);
+/// `max` states no step and stays a call.
+///
 /// No back edge carries a move: a counter the body reads is computed from
 /// the `for` counter (RFC-0066 rule 7), so nothing is carried to the head
 /// but what the terminator advances.
@@ -76,6 +80,8 @@ fn each_loop_runs_only_what_its_own_nesting_level_holds() {
         [
             "body 3 back 0",
             "body 8 back 0",
+            "body 5 back 0",
+            "body 2 back 0",
             "body 6 back 0",
             "body 5 back 0",
         ],

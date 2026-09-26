@@ -28,6 +28,7 @@ mod code;
 pub mod cost;
 pub mod executor;
 mod flight;
+mod hook;
 mod host;
 mod host_graph;
 mod init;
@@ -80,6 +81,7 @@ pub use host::{
     CompileTimes, InputListing, Listing, UntypedEntry, UntypedOutput, context_refs, environment,
     untyped_entry_ty,
 };
+pub use hook::{Call, HookEffect, HookPart, Lent, LentInputs, Names, Ran};
 pub use host_graph::HostGraph;
 pub use port::Held;
 pub use regs::DEPTH_TRAP;

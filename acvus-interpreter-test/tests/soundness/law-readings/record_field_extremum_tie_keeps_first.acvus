@@ -1,0 +1,9 @@
+// expect kiwi
+let xs = vec(["kiwi".to_string(), "pear".to_string(), "fig".to_string()]);
+let best = { v: "".to_string(), k: -1, };
+for s in &xs {
+    let k = s.len() as i64;
+    let t = s.to_string();
+    best = if k > best.k { { v: t, k: k, } } else { best };
+}
+best.v

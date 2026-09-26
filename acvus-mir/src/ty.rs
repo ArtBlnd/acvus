@@ -402,6 +402,9 @@ pub struct GenericSig {
     pub copies: Option<crate::laws::Copies>,
     /// The weight `cost = N` states (RFC-0066 rule 8), or `None`.
     pub cost: Option<u64>,
+    /// `acvus_extern::ExternHandler::task` of the generic handler, as
+    /// [`InstanceSig::task`] is a concrete instance's.
+    pub task: Task,
 }
 
 impl Instances {

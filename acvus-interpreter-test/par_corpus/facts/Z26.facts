@@ -3,3 +3,4 @@ for slice(r11) -> L1 else L6 stages [L1, L5]
 // L5: cycle Order(r14)+Carried(r15)+Control in_order {spawn print, +, eval, branch}
 // control chained through L5
 // cost W=12 O=18281 split when n > 48750, n ≤ len(r11)
+// lower in place: its first stage spawns no heavy or io call before it waits

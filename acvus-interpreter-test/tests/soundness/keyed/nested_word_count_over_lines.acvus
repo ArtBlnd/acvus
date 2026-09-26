@@ -1,0 +1,10 @@
+// expect 2|2
+let lines = vec([vec(["x".to_string(), "y".to_string()]), vec(["z".to_string()]), vec(["x".to_string(), "z".to_string()])]);
+let m = hash_map();
+for i in 0u64..lines.len() {
+    for w in &lines[i] {
+        let e = or_insert(&mut m, w.to_string(), 0);
+        *e = *e + 1;
+    }
+}
+(*get(&m, &"x".to_string()).unwrap()).to_string() + "|" + (*get(&m, &"z".to_string()).unwrap()).to_string()

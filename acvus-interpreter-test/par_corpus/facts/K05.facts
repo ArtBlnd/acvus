@@ -3,3 +3,4 @@ for slice(r24) -> L1 else L2 stages [L1, L3]
 // L3: cycle Storage(r25) keyed(r26 keys in_order) any_order law(Call(#5, identity) exact commutative) {ref, call or_insert, take, call max, assign}
 // control upfront
 // cost W=11 O=18281 split when n > 53182, n = len(r24)
+// lower in place: its first stage spawns no heavy or io call before it waits

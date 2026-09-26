@@ -3,3 +3,4 @@ for slice(r9) -> L1 else L2 stages [L1, L3]
 // L3: cycle Order(r11) in_order {spawn print, eval}
 // control upfront
 // cost W=19 O=18281 split when n > 30790, n = len(r9)
+// lower in place: its first stage spawns no heavy or io call before it waits

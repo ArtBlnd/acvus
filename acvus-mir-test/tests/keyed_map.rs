@@ -196,3 +196,15 @@ fn an_entry_opened_at_another_value_than_the_identity_is_not_keyed() {
          len(&m)"
     )));
 }
+
+/// `k03_vec1` (remaining-rows survey): a group-by opened at `vec(["x"])`
+/// holds `x` before the first push, which a chunk run from `push`'s
+/// identity would drop from every chunk after the first.
+#[test]
+fn a_group_by_push_opened_at_a_non_empty_vec_is_not_keyed() {
+    assert_not_keyed(&at_both_levels(&format!(
+        "{WORDS} let g = hash_map();
+         for w in &words {{ let bucket = or_insert(&mut g, w.to_string(), vec([\"x\".to_string()])); bucket.push(w.to_string()); }}
+         len(&g)"
+    )));
+}

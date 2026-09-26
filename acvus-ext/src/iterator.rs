@@ -179,7 +179,7 @@ where
     Range::of(start, end, step)
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, step(yield f(x)))]
 fn map<'a, I, T, U, E, Rt>(
     it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (T,), U, E, Rt>,
@@ -215,7 +215,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, step(if f(&x) { yield x } else { skip }))]
 fn filter<'a, I, T, E, Rt>(
     it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
@@ -282,7 +282,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, step(if f(&x) { yield x } else { done }))]
 fn take_while<'a, I, T, E, Rt>(
     it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (Ref<'a, T, Shared, Rt>,), bool, E, Rt>,
@@ -402,7 +402,7 @@ where
     })
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, step(nest f(x)))]
 fn flat_map<'a, I, T, U, E, Rt>(
     it: Instance<'a, sig::next<I, T, E, Rt>, I, Rt, Later>,
     f: Closure<'a, (T,), Vec<U>, E, Rt>,
@@ -439,7 +439,11 @@ where
     items
 }
 
-#[extern_fn(effect = E, sync = collect_now)]
+#[extern_fn(
+    effect = E,
+    sync = collect_now,
+    step(state s = vec::new(); vec::push(&mut s, x); finish s)
+)]
 async fn collect<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -456,6 +460,13 @@ where
         items.push(x);
     }
     items
+}
+
+/// `join`'s last step: the parts it drew, in order, with `sep` between
+/// neighbours.
+#[extern_fn(effect = pure)]
+fn join_parts(parts: Vec<String>, sep: String) -> String {
+    parts.join(&sep)
 }
 
 fn join_now<I, E, Rt>(
@@ -477,7 +488,11 @@ where
     parts.join(&sep)
 }
 
-#[extern_fn(effect = E, sync = join_now)]
+#[extern_fn(
+    effect = E,
+    sync = join_now,
+    step(state s = vec::new(); vec::push(&mut s, x); finish join_parts(s, sep))
+)]
 async fn join<I, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, Erased<Rt, String>, E, Rt>, I, Rt, Later>,
@@ -641,7 +656,7 @@ where
     acc
 }
 
-#[extern_fn(effect = E, sync = fold_now)]
+#[extern_fn(effect = E, sync = fold_now, step(state s = init; s = f(s, x); finish s))]
 async fn fold<I, T, U, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -683,7 +698,7 @@ where
     false
 }
 
-#[extern_fn(effect = E, sync = any_now)]
+#[extern_fn(effect = E, sync = any_now, step(if f(&x) { break true }; finish false))]
 async fn any<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -724,7 +739,11 @@ where
     true
 }
 
-#[extern_fn(effect = E, sync = all_now)]
+#[extern_fn(
+    effect = E,
+    sync = all_now,
+    step(if f(&x) {} else { break false }; finish true)
+)]
 async fn all<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -756,14 +775,14 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    let mut n = 0;
+    let mut n: i64 = 0;
     while it.call(ctx, ()).is_some() {
-        n += 1;
+        n = n.wrapping_add(1);
     }
     n
 }
 
-#[extern_fn(effect = E, sync = count_now)]
+#[extern_fn(effect = E, sync = count_now, step(state s = 0; s = s +% 1; finish s))]
 async fn count<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, T, E, Rt>, I, Rt, Later>,
@@ -775,9 +794,9 @@ where
     Rt: Runtime,
 {
     let mut it = it;
-    let mut n = 0;
+    let mut n: i64 = 0;
     while it.call_await(ctx, ()).await.is_some() {
-        n += 1;
+        n = n.wrapping_add(1);
     }
     n
 }
@@ -920,7 +939,7 @@ where
     acc
 }
 
-#[extern_fn(effect = E, sync = sum_now)]
+#[extern_fn(effect = E, sync = sum_now, step(state s = 0; s = s +% x; finish s))]
 async fn sum<I, T, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     it: Instance<'_, sig::next<I, Erased<Rt, T>, E, Rt>, I, Rt, Later>,
@@ -1233,7 +1252,7 @@ where
             chain, next_chain,
             flatten, next_flatten_vecs, flatten_arrays, next_flatten_arrays,
             flat_map, next_flat_map,
-            collect, join, contains, find, reduce, fold, any, all,
+            collect, join, join_parts, contains, find, reduce, fold, any, all,
             count, last, nth, position, sum, product, min, max,
             min_by_key, max_by_key,
         ],

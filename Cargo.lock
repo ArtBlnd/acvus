@@ -107,6 +107,7 @@ name = "acvus-interpreter"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-ext",
  "acvus-extern",
  "acvus-mir",
  "acvus-utils",

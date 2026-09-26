@@ -1,0 +1,11 @@
+// expect apple
+let xs = vec(["fig".to_string(), "apple".to_string(), "kiwi".to_string()]);
+let best = None;
+for s in &xs {
+    let k = s.len() as i64;
+    best = match best {
+        None => Some({ v: s.to_string(), k: k, }),
+        Some(b) => if k > b.k { Some({ v: s.to_string(), k: k, }) } else { Some(b) },
+    };
+}
+best.unwrap().v

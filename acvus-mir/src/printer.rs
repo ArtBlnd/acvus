@@ -6,10 +6,11 @@ use crate::ir::{BinOp, Overflow, UnaryOp};
 use acvus_utils::{Astr, Interner};
 use rustc_hash::FxHashMap;
 
+use crate::analysis::ahead::{Lowerer, Lowering, Refused, RefusedSource};
 use crate::analysis::cost::{CostTable, Costs, InPlace, LoopCost, TripCount};
 use crate::analysis::loop_deps::{
-    Accumulator, BodyDeps, CallIdentity, Control, Cycle, CycleLaw, Guard, KeyOrder, Law, LawOp,
-    LoopDeps, Member, Order, Placement, Storage, Token,
+    Accumulator, BodyDeps, CallIdentity, Control, Cycle, CycleLaw, Guard, InstAt, KeyOrder, Law,
+    LawOp, LoopDeps, Member, Order, Placement, Storage, Token,
 };
 use crate::analysis::loops::{Term, Trip};
 use crate::cfg::{CfgBody, Terminator, promote};
@@ -78,7 +79,9 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 /// `Op(Add) exact commutative`, `Call(#0, option-lifted) exact`,
 /// `Fold(r3, #1) exact`, `Order exact commutative`, `Last exact`,
 /// `Extremum(Max, Carried(r3), carrying Carried(r4)) exact`,
-/// `Option(Call(#1, identity)) exact commutative`,
+/// `Option(Call(#1, identity)) exact commutative` (`None` adjoined as the
+/// identity), `Option(Op(Add), None absorbing) exact commutative`,
+/// `Extremum(Max, field k) exact` (a record chosen by its field `k`),
 /// `Ordered(Max, #2) exact commutative`,
 /// `First(Carried(r3), guarding Carried(r4)) exact`,
 /// `Reset(Op(Concat)) exact`, `AffineMap exact`, `StateMap(len(r3)) exact`,
@@ -135,6 +138,14 @@ fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
             )
         }
         Law::OptionLifted(inner) => format!("Option({})", fmt_law(inner, ctx, vn)),
+        Law::OptionAbsorbing(inner) => {
+            format!("Option({}, None absorbing)", fmt_law(inner, ctx, vn))
+        }
+        Law::FieldExtremum { op, field } => format!(
+            "Extremum({}, field {})",
+            fmt_law_op(*op),
+            ctx.interner.resolve(*field)
+        ),
         Law::Product(parts) => {
             let parts: Vec<String> = parts
                 .iter()
@@ -668,11 +679,17 @@ struct Computed<'a> {
     costs: Option<&'a CostTable>,
 }
 
-/// The comment lines under the loop headed at `header`: its stages' facts
-/// and, with a backend's table, its cost.
+/// The readers of a body's loops beside `analysis::loop_deps`.
+struct LoopReaders<'c> {
+    costs: Option<Costs<'c>>,
+    lowerer: Lowerer<'c>,
+}
+
+/// The comment lines under the loop headed at `header`: its stages' facts,
+/// with a backend's table its cost, and its lowering.
 fn loop_fact_lines(
     computed: &Computed<'_>,
-    costs: Option<&Costs<'_>>,
+    readers: &LoopReaders<'_>,
     header: Label,
     ctx: &PrintCtx<'_>,
     vn: &mut ValNormalizer,
@@ -685,10 +702,10 @@ fn loop_fact_lines(
         .iter()
         .find(|found| computed.cfg.blocks[found.header.0].label == header)
         .expect("promoting a body keeps each loop terminator at the end of its block");
-    match &found.deps {
+    let mut lines = match &found.deps {
         Ok(deps) => {
             let mut lines = fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, vn);
-            if let Some(costs) = costs {
+            if let Some(costs) = &readers.costs {
                 let trip = costs.trip(found.header).and_then(|trip| match trip {
                     Trip::Known(term) => Some(fmt_term(term, vn, consts, texts)),
                     Trip::Unknown => None,
@@ -698,7 +715,56 @@ fn loop_fact_lines(
             lines
         }
         Err(fault) => vec![format!("stages refused: {}", fault.shown())],
-    }
+    };
+    lines.push(fmt_lowering(
+        &readers.lowerer.lowering(found),
+        &computed.cfg,
+        ctx,
+        vn,
+    ));
+    lines
+}
+
+/// `lower ahead {spawn f}` (RFC-0103), or `lower in place: ` and the first
+/// condition of RFC-0103 rule 1 the loop fails.
+fn fmt_lowering(
+    lowering: &Lowering,
+    cfg: &CfgBody,
+    ctx: &PrintCtx<'_>,
+    vn: &mut ValNormalizer,
+) -> String {
+    let named = |at: InstAt| mnemonic(&cfg.blocks[at.block.0].insts[at.at].kind, ctx);
+    let refused = match lowering {
+        Lowering::Ahead(plan) => {
+            let spawns: Vec<String> = plan.spawns.iter().map(|spawn| named(spawn.at)).collect();
+            return format!("lower ahead {{{}}}", spawns.join(", "));
+        }
+        Lowering::InPlace(refused) => refused,
+    };
+    let why = match refused {
+        Refused::Enclosed { by } => {
+            format!("inside the loop at {}", fmt_label(cfg.blocks[by.0].label))
+        }
+        Refused::Source(RefusedSource::SliceMut) => "its source is a `&mut` slice".to_string(),
+        Refused::Source(RefusedSource::Array) => "its source is an array".to_string(),
+        Refused::Source(RefusedSource::Pull) => "it is a pull loop".to_string(),
+        Refused::Unstaged(_) => "its stages are refused".to_string(),
+        Refused::FirstStageNotFree => "its first stage is not free".to_string(),
+        Refused::CycleCrosses => "a cycle crosses its stages".to_string(),
+        Refused::NoAheadSpawn => {
+            "its first stage spawns no heavy or io call before it waits".to_string()
+        }
+        Refused::MayTrap(at) => format!("the prefix may trap at {}", named(*at)),
+        Refused::ReadsLoopValue { value, .. } => format!(
+            "the prefix reads {}, which the loop defines outside it",
+            vn.fmt_val(*value)
+        ),
+        Refused::EffectBeforeExit(at) => format!(
+            "the prefix has an effect at {} and the loop can leave from its body",
+            named(*at)
+        ),
+    };
+    format!("lower in place: {why}")
 }
 
 fn write_body(
@@ -720,10 +786,11 @@ fn write_body(
             })
         }
     };
-    let costs = computed.as_ref().and_then(|computed| {
-        computed
+    let readers = computed.as_ref().map(|computed| LoopReaders {
+        costs: computed
             .costs
-            .map(|table| Costs::of(&computed.cfg, computed.laws, table))
+            .map(|table| Costs::of(&computed.cfg, computed.laws, table)),
+        lowerer: Lowerer::of(&computed.cfg, computed.laws),
     });
     let mut block = crate::cfg::ENTRY_LABEL;
 
@@ -1288,9 +1355,9 @@ fn write_body(
                     fmt_label(stages_body),
                     entries.join(", ")
                 )?;
-                if let Some(computed) = &computed {
+                if let (Some(computed), Some(readers)) = (&computed, &readers) {
                     let lines =
-                        loop_fact_lines(computed, costs.as_ref(), block, ctx, &mut vn, &consts, &texts);
+                        loop_fact_lines(computed, readers, block, ctx, &mut vn, &consts, &texts);
                     for line in lines {
                         writeln!(f, "{indent}     |     // {line}")?;
                     }
@@ -1323,9 +1390,9 @@ fn write_body(
                     fmt_label(stages.body()),
                     entries.join(", ")
                 )?;
-                if let Some(computed) = &computed {
+                if let (Some(computed), Some(readers)) = (&computed, &readers) {
                     let lines =
-                        loop_fact_lines(computed, costs.as_ref(), block, ctx, &mut vn, &consts, &texts);
+                        loop_fact_lines(computed, readers, block, ctx, &mut vn, &consts, &texts);
                     for line in lines {
                         writeln!(f, "{indent}     |     // {line}")?;
                     }

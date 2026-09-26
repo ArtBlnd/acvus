@@ -3,3 +3,4 @@ for slice(r10) -> L1 else L2 stages [L1, L3]
 // L3: cycle Storage(r11) in_order law(Fold(r11, #2) exact) {ref, call push_back}
 // control upfront
 // cost W=4 O=18281 split when n > 146248, n = len(r10)
+// lower in place: its first stage spawns no heavy or io call before it waits

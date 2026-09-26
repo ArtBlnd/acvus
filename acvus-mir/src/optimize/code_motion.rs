@@ -56,8 +56,9 @@
 //! including one that reaches the storage only through a reference, which
 //! `Loans::touch` resolves to the loans that reference's region holds. A
 //! `Ref &mut` is not one of them: it writes nothing, and `storage_effect`
-//! reads it as a read. A value live in such a block that holds a `&mut`
-//! loan on the storage bars the move as a write does.
+//! reads it as a read. A value live in such a block that holds a loan taken
+//! `&mut` on the storage bars the move as a write does, a shared reborrow of
+//! that `&mut` included.
 //!
 //! `Ref &mut`, a `Ref` through a reference and a `Ref` with a path stay
 //! where they are: the first takes a loan that conflicts with every other,
@@ -510,8 +511,8 @@ impl ReachingBlocks {
 }
 
 /// The storages each block writes (`Loans::storage_effect`), and the ones a
-/// value live in it holds a `&mut` loan on: a shared borrow does not live
-/// across either (RFC-0018 rule 8).
+/// value live in it holds a loan taken `&mut` on, however it holds it: a
+/// shared borrow does not live across either (RFC-0018 rule 8).
 struct StorageWrites {
     per_block: Vec<SmallVec<[ValueId; 4]>>,
 }
@@ -523,7 +524,7 @@ impl StorageWrites {
         let held_mutably = |value: ValueId| {
             loans
                 .holds(value)
-                .filter(|loan| loan.mutability == Mutability::Mut)
+                .filter(|loan| loan.taken == Mutability::Mut)
                 .filter_map(|loan| loan.storage.slot())
                 .collect::<SmallVec<[ValueId; 2]>>()
         };
@@ -662,6 +663,7 @@ fn hoistable(loans: &Loans<'_>, kind: &InstKind) -> Hoistable {
                 Loan {
                     storage,
                     mutability: Mutability::Shared,
+                    ..
                 },
             ] => match storage.slot() {
                 Some(storage) => Hoistable::SharedBorrow { storage },

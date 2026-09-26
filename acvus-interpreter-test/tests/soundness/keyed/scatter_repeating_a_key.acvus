@@ -1,0 +1,8 @@
+// expect 0,8,1,3
+let xs = vec([5, 3, 8, 1]);
+let p = vec([1u64, 3u64, 1u64, 2u64]);
+let out = vec([0, 0, 0, 0]);
+for i in 0u64..xs.len() {
+    out[p[i]] = xs[i];
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

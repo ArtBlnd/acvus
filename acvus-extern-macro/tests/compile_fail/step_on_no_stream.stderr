@@ -1,0 +1,5 @@
+error: a step is stated on a declaration that pulls one stream, one `Instance` parameter, and `plain` pulls 0 (RFC-0099 rule 1)
+ --> tests/compile_fail/step_on_no_stream.rs:4:28
+  |
+4 | #[extern_fn(effect = pure, step(yield x))]
+  |                            ^^^^

@@ -1,0 +1,7 @@
+// expect 0,1,0,1,1
+let xs = vec([4u64, 1u64, 4u64, 3u64, 1u64, 4u64]);
+let seen = vec([false, false, false, false, false]);
+for x in &xs {
+    seen[*x] = true;
+}
+seen.into_iter().map(|x| -> if x { "1".to_string() } else { "0".to_string() }).join(",".to_string())
