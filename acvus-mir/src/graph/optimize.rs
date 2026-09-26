@@ -45,6 +45,15 @@ pub fn optimize(
     modules: FxHashMap<QualifiedRef, MirModule>,
     opt: Opt,
 ) -> OptimizeResult {
+    acvus_utils::grow(|| optimize_level(interner, laws, modules, opt))
+}
+
+fn optimize_level(
+    interner: &Interner,
+    laws: &LawTable,
+    modules: FxHashMap<QualifiedRef, MirModule>,
+    opt: Opt,
+) -> OptimizeResult {
     // -- Pass 0: moves, borrows and exhaustiveness as the source wrote
     // them (RFC-0029, RFC-0051) --
 

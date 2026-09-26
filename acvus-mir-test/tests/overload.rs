@@ -188,6 +188,73 @@ mod fx_temp {
     }
 }
 
+/// `fx_shown::show`, a signature of `display`'s shape with one concrete
+/// instance at `i64`, and `fx_shown::shown`, which requires it as
+/// `std::to_string` requires `display`.
+mod fx_shown {
+    use std::ops::Deref;
+
+    use acvus_extern::{
+        Borrowable, Ctx, InstanceOf, Registry, Runtime, TypesOnly, Var, extern_fn, extern_registry,
+        extern_signature, kind,
+    };
+
+    extern_signature! {
+        ns: "fx_shown",
+        fn show<T>(a: &T, out: &mut String)
+        where
+            T: Var<kind::Type>;
+    }
+
+    #[extern_fn(instance_of = show, effect = pure)]
+    fn show_int(a: &i64, out: &mut String) {
+        let _ = (a, out);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(effect = pure)]
+    fn shown<T, Rt>(
+        ctx: &mut Ctx<'_, Rt>,
+        a: &T,
+        shows: InstanceOf<'_, show<T, Rt>, T, Rt>,
+    ) -> String
+    where
+        T: Var<kind::Type> + Borrowable<Rt> + Deref<Target = Rt::Value>,
+        Rt: Runtime,
+    {
+        let _ = (ctx, a, shows);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx_shown",
+            signatures: [show],
+            fns: [show_int, shown],
+        }
+    }
+}
+
+/// A second `shown`, at `&str`, so that `shown` is a name several
+/// namespaces declare, as `to_string` is `std::to_string` and
+/// `string::to_string` (RFC-0043).
+mod fx_shown_text {
+    use acvus_extern::{Registry, TypesOnly, extern_fn, extern_registry};
+
+    #[extern_fn(effect = pure)]
+    fn shown(a: &str) -> String {
+        let _ = a;
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx_shown_text",
+            fns: [shown],
+        }
+    }
+}
+
 // -- Harness ----------------------------------------------------------------
 
 fn script_fn(i: &Interner, source: &str) -> Function {
@@ -648,6 +715,64 @@ fn a_refusal_names_the_display_instance_the_generic_to_string_lacked() {
         vec![
             "no `to_string` takes a call of type Fn({a: i64}) -> _; std::to_string requires \
              core::display, which has no instance for {a: i64}"
+                .to_string()
+        ]
+    );
+}
+
+/// The standard registries, `fx_shown` and `fx_shown_text`, with `fx_shown::show` given a
+/// generic instance beside its concrete one.
+fn with_a_generic_show(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
+    let mut registries = acvus_ext::std_registries::<TypesOnly>();
+    registries.extend([fx_shown::registry(), fx_shown_text::registry()]);
+    let Externs {
+        mut functions,
+        types,
+        ..
+    } = Externs::combine(registries, i).expect("registries combine");
+    let show = QualifiedRef::qualified(i.intern("fx_shown"), i.intern("show"));
+    let Some(FnKind::Extern { instances, .. }) = functions
+        .iter_mut()
+        .find(|function| function.qref == show)
+        .map(|function| &mut function.kind)
+    else {
+        panic!("fx_shown declares `show`");
+    };
+    assert!(
+        instances.generic.is_none(),
+        "Externs::combine writes no generic instance on a signature; the fixture adds it"
+    );
+    instances.generic = Some(Default::default());
+    check_functions(i, types, functions, source)
+}
+
+/// A requirement is decided among its signature's concrete instances only:
+/// the generic instance of `fx_shown::show` resolves no requirement, so a
+/// call at `i64` takes the concrete instance and a call at `{a: i64}` is
+/// refused.
+#[test]
+fn a_requirement_resolves_by_a_concrete_instance_beside_a_generic_one() {
+    let i = Interner::new();
+    let c = with_a_generic_show(&i, "shown(&1)").unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(c.ret, Ty::String);
+    assert_eq!(c.callees, vec!["fx_shown::shown"]);
+}
+
+/// RFC-0043: the refusal draws the lacked instance from the candidates the
+/// requirement is decided among, so a generic instance the decision does
+/// not take leaves the lacked instance named.
+#[test]
+fn a_refusal_names_the_instance_lacked_beside_a_generic_instance() {
+    let i = Interner::new();
+    let errors = match with_a_generic_show(&i, "let o = { a: 1, }; shown(&o)") {
+        Ok(c) => panic!("checked to {:?} calling {:?}", c.ret, c.callees),
+        Err(e) => e,
+    };
+    assert_eq!(
+        errors,
+        vec![
+            "no `shown` takes a call of type Fn(&{a: i64}) -> _; fx_shown::shown requires \
+             fx_shown::show, which has no instance for {a: i64}"
                 .to_string()
         ]
     );

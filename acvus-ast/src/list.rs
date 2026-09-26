@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::error::{ParseError, ParseErrorKind};
+use crate::nesting::{Level, Nested};
 use crate::parser::{GrammarError, Recover, refused};
 use crate::span::Span;
 
@@ -13,16 +14,17 @@ pub enum ListElem<S> {
 /// Returns LALRPOP-compatible error type.
 pub(crate) fn build_list<S>(
     errors: &mut Vec<ParseError>,
-    items: Vec<ListElem<S>>,
+    items: Vec<Nested<ListElem<S>>>,
     span: Span,
-) -> Result<Expr<S>, GrammarError>
+) -> Result<Nested<Expr<S>>, GrammarError>
 where
     S: Recover,
 {
+    let mut level = Level::new();
     let mut head = Vec::new();
     let mut rest = None;
     let mut tail = Vec::new();
-    for item in items {
+    for item in level.all(items) {
         match item {
             ListElem::Expr(e) => {
                 if rest.is_some() {
@@ -41,17 +43,20 @@ where
                         ),
                         span,
                     )
-                    .map(Expr::Error);
+                    .map(|node| Nested::leaf(Expr::Error(node)));
                 }
                 rest = Some(s);
             }
         }
     }
-    Ok(Expr::List {
-        id: AstId::alloc(),
-        head,
-        rest,
-        tail,
+    level.node(
+        Expr::List {
+            id: AstId::alloc(),
+            head,
+            rest,
+            tail,
+            span,
+        },
         span,
-    })
+    )
 }

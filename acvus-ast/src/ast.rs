@@ -223,6 +223,10 @@ impl<S> PlaceExpr<S> {
     }
 
     fn names_a_place(expr: &Expr<S>) -> bool {
+        acvus_utils::grow(|| Self::names_a_place_level(expr))
+    }
+
+    fn names_a_place_level(expr: &Expr<S>) -> bool {
         match expr {
             Expr::Ident {
                 ref_kind: RefKind::Value | RefKind::ExternParam,
@@ -243,6 +247,10 @@ where
     S: Slot,
 {
     pub fn of(expr: Expr<S>) -> Option<Self> {
+        acvus_utils::grow(|| Self::of_level(expr))
+    }
+
+    fn of_level(expr: Expr<S>) -> Option<Self> {
         match expr {
             Expr::FieldAccess {
                 id,
@@ -279,6 +287,10 @@ where
     S: Slot,
 {
     fn of(expr: Expr<S>) -> Option<Self> {
+        acvus_utils::grow(|| Self::of_level(expr))
+    }
+
+    fn of_level(expr: Expr<S>) -> Option<Self> {
         match expr {
             Expr::Ident {
                 id,
@@ -898,6 +910,10 @@ impl ContextRefs {
 }
 
 fn walk_stmts<S>(stmts: &[Stmt<S>], refs: &mut ContextRefs) {
+    acvus_utils::grow(|| walk_stmts_level::<S>(stmts, refs))
+}
+
+fn walk_stmts_level<S>(stmts: &[Stmt<S>], refs: &mut ContextRefs) {
     for stmt in stmts {
         match stmt {
             Stmt::Store { place, expr, .. } => {
@@ -970,6 +986,10 @@ fn template_context_refs<S>(
 }
 
 fn walk_pattern<S>(pattern: &Pattern<S>, refs: &mut ContextRefs) {
+    acvus_utils::grow(|| walk_pattern_level::<S>(pattern, refs))
+}
+
+fn walk_pattern_level<S>(pattern: &Pattern<S>, refs: &mut ContextRefs) {
     match pattern {
         Pattern::ContextBind { name, .. } => {
             refs.set.insert(*name);
@@ -1008,6 +1028,10 @@ fn walk_pattern<S>(pattern: &Pattern<S>, refs: &mut ContextRefs) {
 }
 
 fn walk_place<S>(place: &Place<S>, refs: &mut ContextRefs) {
+    acvus_utils::grow(|| walk_place_level::<S>(place, refs))
+}
+
+fn walk_place_level<S>(place: &Place<S>, refs: &mut ContextRefs) {
     match place {
         Place::Field { object, .. } => walk_place(object, refs),
         Place::Base(PlaceBase::Root {
@@ -1027,6 +1051,10 @@ fn walk_place<S>(place: &Place<S>, refs: &mut ContextRefs) {
 }
 
 fn walk_expr<S>(expr: &Expr<S>, refs: &mut ContextRefs) {
+    acvus_utils::grow(|| walk_expr_level::<S>(expr, refs))
+}
+
+fn walk_expr_level<S>(expr: &Expr<S>, refs: &mut ContextRefs) {
     match expr {
         Expr::ContextRef { name, .. } => {
             refs.set.insert(*name);

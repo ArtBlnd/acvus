@@ -17,6 +17,10 @@ enum LiteralKey {
 
 impl LiteralKey {
     fn from_literal(lit: &Literal) -> Self {
+        acvus_utils::grow(|| Self::from_literal_level(lit))
+    }
+
+    fn from_literal_level(lit: &Literal) -> Self {
         match lit {
             Literal::Int(v) => LiteralKey::Int(*v),
             Literal::Float(v) => LiteralKey::Float(v.to_bits()),

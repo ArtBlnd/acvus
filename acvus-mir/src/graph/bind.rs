@@ -73,6 +73,12 @@ pub struct BoundValueDisplay<'a> {
 
 impl fmt::Display for BoundValueDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        acvus_utils::grow(|| self.fmt_level(f))
+    }
+}
+
+impl BoundValueDisplay<'_> {
+    fn fmt_level(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let interner = self.interner;
         let shown = |value: &'_ BoundValue| -> String { value.display(interner).to_string() };
         match self.value {
@@ -167,6 +173,10 @@ impl BoundValue {
     /// qualified call of one argument is a variant with a payload, as the
     /// checker reads one.
     pub fn from_expr(interner: &Interner, expr: &Expr) -> Result<BoundValue, NotABoundValue> {
+        acvus_utils::grow(|| Self::from_expr_level(interner, expr))
+    }
+
+    fn from_expr_level(interner: &Interner, expr: &Expr) -> Result<BoundValue, NotABoundValue> {
         let each = |elements: &[Expr]| -> Result<Vec<BoundValue>, NotABoundValue> {
             elements
                 .iter()
@@ -404,6 +414,15 @@ fn type_at(
     standing: Standing,
     deferred: &mut Vec<DeferredJoin>,
 ) -> Result<InferTy, BindingRefused> {
+    acvus_utils::grow(|| type_at_level(solver, value, standing, deferred))
+}
+
+fn type_at_level(
+    solver: &mut Solver<'_>,
+    value: &BoundValue,
+    standing: Standing,
+    deferred: &mut Vec<DeferredJoin>,
+) -> Result<InferTy, BindingRefused> {
     let ty = match value {
         BoundValue::Int(_) => TyTerm::I64,
         BoundValue::IntOf { value, width } => {
@@ -579,6 +598,16 @@ struct Mismatch;
 /// `Mismatch`: an object the body read a field of it lacks, or an integer
 /// the width does not fit.
 fn constant(
+    interner: &Interner,
+    body: &mut MirBody,
+    ty: &Ty,
+    value: &BoundValue,
+    insts: &mut Vec<Inst>,
+) -> Result<ValueId, Mismatch> {
+    acvus_utils::grow(|| constant_level(interner, body, ty, value, insts))
+}
+
+fn constant_level(
     interner: &Interner,
     body: &mut MirBody,
     ty: &Ty,

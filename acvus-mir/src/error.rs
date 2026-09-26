@@ -1370,6 +1370,10 @@ const USE_STRING_CMP: &str = "; use `string::cmp`, `lt`, `le`, `gt` or `ge`";
 
 /// `str`, or a reference to it: what a string literal is.
 fn is_text_view(ty: &Ty) -> bool {
+    acvus_utils::grow(|| is_text_view_level(ty))
+}
+
+fn is_text_view_level(ty: &Ty) -> bool {
     match ty {
         Ty::Str => true,
         Ty::Ref(_, inner) => is_text_view(&inner.ty()),
@@ -1381,6 +1385,10 @@ fn is_text_view(ty: &Ty) -> bool {
 /// mismatch between two of these is the one `.to_string()` settles; a
 /// mismatch between text and a number is not.
 fn holds_text(ty: &Ty) -> bool {
+    acvus_utils::grow(|| holds_text_level(ty))
+}
+
+fn holds_text_level(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
         Ty::Ref(_, inner) => holds_text(&inner.ty()),
@@ -1391,6 +1399,10 @@ fn holds_text(ty: &Ty) -> bool {
 /// A payload still in its wrapper where a plain value was wanted: the
 /// spelling that opens it.
 fn open_payload(ty: &Ty) -> Option<String> {
+    acvus_utils::grow(|| open_payload_level(ty))
+}
+
+fn open_payload_level(ty: &Ty) -> Option<String> {
     match ty {
         Ty::Option(_) => {
             Some("; an Option is not its payload -- write `.unwrap()`, `?` or match it".to_string())
@@ -1428,6 +1440,10 @@ fn view_in(ty: &Ty) -> &'static str {
 }
 
 fn mentions_view(ty: &Ty) -> bool {
+    acvus_utils::grow(|| mentions_view_level(ty))
+}
+
+fn mentions_view_level(ty: &Ty) -> bool {
     match ty {
         Ty::Str => true,
         Ty::Ref(_, inner) => mentions_view(&inner.ty()),

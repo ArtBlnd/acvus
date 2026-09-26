@@ -24,7 +24,7 @@ use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarBound, EffectVarId,
     ErrorToken, FieldSet, FlowTerm, FlowVarId, Flows, HeldTy, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy,
     Instances, Instancing, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly,
-    PolyTy, Repr, ReprVarId, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
+    PolyTy, Repr, ReprVarId, Requirement, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
     TypeBoundId, TypeRegistry, View, Viewed, could_match_pattern, effect_bound_at, matches_pattern,
 };
 
@@ -372,6 +372,10 @@ impl Terms {
     /// with the flows it states: an instantiated signature meets the types
     /// at its call, and a fixed term could not take theirs.
     fn open_flows(&mut self, ty: &mut InferTy) {
+        acvus_utils::grow(|| self.open_flows_level(ty))
+    }
+
+    fn open_flows_level(&mut self, ty: &mut InferTy) {
         if let TyTerm::Fn { flows, .. } = ty
             && let FlowTerm::Known(known) = flows
         {
@@ -444,6 +448,10 @@ impl Terms {
     }
 
     fn unstale_in_place(&self, ty: &mut InferTy) {
+        acvus_utils::grow(|| self.unstale_in_place_level(ty))
+    }
+
+    fn unstale_in_place_level(&self, ty: &mut InferTy) {
         if let Some(home) = ty.home() {
             *ty = TyTerm::Var(home);
             return;
@@ -469,6 +477,10 @@ impl Terms {
     }
 
     fn shallow_resolve_ty(&self, ty: &InferTy) -> InferTy {
+        acvus_utils::grow(|| self.shallow_resolve_ty_level(ty))
+    }
+
+    fn shallow_resolve_ty_level(&self, ty: &InferTy) -> InferTy {
         let Some(root) = self.root_var(ty) else {
             return ty.clone();
         };
@@ -482,6 +494,10 @@ impl Terms {
     }
 
     fn resolve_ty(&self, ty: &InferTy) -> InferTy {
+        acvus_utils::grow(|| self.resolve_ty_level(ty))
+    }
+
+    fn resolve_ty_level(&self, ty: &InferTy) -> InferTy {
         self.unstale(ty).map(
             &mut |id: TypeBoundId| {
                 let root = self.find_ty_root(id);
@@ -501,6 +517,10 @@ impl Terms {
     }
 
     fn occurs_in(&self, id: TypeBoundId, ty: &InferTy) -> bool {
+        acvus_utils::grow(|| self.occurs_in_level(id, ty))
+    }
+
+    fn occurs_in_level(&self, id: TypeBoundId, ty: &InferTy) -> bool {
         match ty {
             TyTerm::Var(other) => {
                 let root = self.find_ty_root(*other);
@@ -926,6 +946,10 @@ impl Terms {
     }
 
     fn resolve_held(&self, held: &HeldTy<Infer>) -> HeldTy<Infer> {
+        acvus_utils::grow(|| self.resolve_held_level(held))
+    }
+
+    fn resolve_held_level(&self, held: &HeldTy<Infer>) -> HeldTy<Infer> {
         held.map(
             &mut |id: TypeBoundId| self.resolve_ty(&TyTerm::Var(id)),
             &mut |id: IdentityVarId| self.resolve_identity(&IdentityTerm::Var(id)),
@@ -974,6 +998,15 @@ impl Terms {
     }
 
     fn meet_reprs(
+        &mut self,
+        a: &TypeArg<Infer>,
+        b: &TypeArg<Infer>,
+        kind: JoinKind,
+    ) -> Result<(), MismatchReason> {
+        acvus_utils::grow(|| self.meet_reprs_level(a, b, kind))
+    }
+
+    fn meet_reprs_level(
         &mut self,
         a: &TypeArg<Infer>,
         b: &TypeArg<Infer>,
@@ -1066,6 +1099,17 @@ impl Terms {
     /// and there the effect runs both ways: the caller runs what the callee
     /// does (RFC-0046).
     fn join(
+        &mut self,
+        a: &InferTy,
+        b: &InferTy,
+        position: Position,
+        kind: JoinKind,
+        registry: &TypeRegistry,
+    ) -> Result<(), Mismatch> {
+        acvus_utils::grow(|| self.join_level(a, b, position, kind, registry))
+    }
+
+    fn join_level(
         &mut self,
         a: &InferTy,
         b: &InferTy,
@@ -1736,6 +1780,10 @@ fn integer_bound_refuses(bound: &TyVarBound, term: &InferTy) -> bool {
 }
 
 fn collect_open_vars(ty: &InferTy, out: &mut Vec<TypeBoundId>) {
+    acvus_utils::grow(|| collect_open_vars_level(ty, out))
+}
+
+fn collect_open_vars_level(ty: &InferTy, out: &mut Vec<TypeBoundId>) {
     if let TyTerm::Var(var) = ty {
         out.push(*var);
     }
@@ -2614,8 +2662,10 @@ pub struct BegunSource {
 }
 
 /// The candidates a requirement is decided among: the signature's
-/// instances whose body runs at no task above the one the requirement calls
-/// at and, where it names a law, that state it (RFC-0070 rule 6). An
+/// concrete instances whose body runs at no task above the one the
+/// requirement calls at and, where it names a law, that state it (RFC-0070
+/// rule 6). The generic instance is none of them: a requirement's decision
+/// has no generic fallback. An
 /// instance's own requirements at the same signature name that law too, so
 /// `eq` over `Vec<T>` is an equivalence exactly where `T`'s is.
 fn required_candidates(instances: &Instances, requirement: &RequirementSig) -> Vec<Candidate> {
@@ -2644,6 +2694,21 @@ fn required_candidates(instances: &Instances, requirement: &RequirementSig) -> V
             effect_bounds: sig.effect_bounds.clone(),
         })
         .collect()
+}
+
+/// [`required_candidates`] for a scheme's requirement, from the instances it
+/// carries: the candidates its decision is opened with, and the ones a
+/// refusal reads to name the instance a call lacked (RFC-0043).
+fn requirement_candidates(requirement: &Requirement) -> Vec<Candidate> {
+    required_candidates(
+        &requirement.instances,
+        &RequirementSig {
+            signature: requirement.signature,
+            pattern: requirement.pattern.clone(),
+            calls: requirement.calls,
+            law: requirement.law,
+        },
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4048,8 +4113,9 @@ impl<'src> Solver<'src> {
 
     /// The instances `scheme` lacked at a call of `args` (RFC-0043,
     /// RFC-0070): where the call's arguments join its parameters with every
-    /// variable left unbounded, each requirement no instance of its
-    /// signature takes at the types that join gives it, with the
+    /// variable left unbounded, each requirement none of whose candidates
+    /// ([`requirement_candidates`], the ones its decision is opened with)
+    /// takes at the types that join gives it, with the
     /// requirement's call type there, as written. Empty where an argument
     /// does not join even so, since the candidate then left by more than a
     /// requirement. The terms are put back as they were: the trial keeps
@@ -4108,14 +4174,10 @@ impl<'src> Solver<'src> {
             .filter_map(|(requirement, pattern)| {
                 let call = called_at(pattern, requirement.calls);
                 let bound = EffectBoundedBy::of(Some(requirement.signature));
-                let taken = requirement.instances.generic.is_some()
-                    || requirement
-                        .instances
-                        .concrete
-                        .iter()
-                        .filter(|sig| sig.task <= requirement.calls)
-                        .filter(|sig| requirement.law.is_none_or(|law| law.stated_by(&sig.laws)))
-                        .any(|sig| self.terms.would_take(&call, &sig.ty, bound, self.registry));
+                let taken = requirement_candidates(requirement).iter().any(|candidate| {
+                    self.terms
+                        .would_take(&call, &candidate.ty, bound, self.registry)
+                });
                 if taken {
                     return None;
                 }
@@ -4708,6 +4770,10 @@ impl<'src> Solver<'src> {
     }
 
     fn freeze_ty_with(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
+        acvus_utils::grow(|| self.freeze_ty_with_level(ty, open))
+    }
+
+    fn freeze_ty_with_level(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
         self.terms.unstale(ty).try_map(
             &mut |id: TypeBoundId| self.freeze_ty_var(id, open),
             &mut |id: IdentityVarId| {
@@ -4760,6 +4826,10 @@ impl<'src> Solver<'src> {
     }
 
     fn freeze_repr(&self, id: ReprVarId, open: Open) -> Result<Repr<Concrete>, FreezeError> {
+        acvus_utils::grow(|| self.freeze_repr_level(id, open))
+    }
+
+    fn freeze_repr_level(&self, id: ReprVarId, open: Open) -> Result<Repr<Concrete>, FreezeError> {
         match self.terms.resolve_repr(id) {
             Repr::Uniform => Ok(Repr::Uniform),
             Repr::Specialized(held) => held
@@ -5020,15 +5090,7 @@ impl<'src> Solver<'src> {
                 let call = called_at(call, req.calls);
                 let id = self.decide(Decision::Instance {
                     call,
-                    candidates: required_candidates(
-                        &req.instances,
-                        &RequirementSig {
-                            signature: req.signature,
-                            pattern: req.pattern.clone(),
-                            calls: req.calls,
-                            law: req.law,
-                        },
-                    ),
+                    candidates: requirement_candidates(req),
                     generic: None,
                     required: Some(req.signature),
                     law: req.law,
@@ -5310,6 +5372,15 @@ fn conversion_rules(
     from: &InferTy,
     to: &InferTy,
 ) -> Vec<CastRule> {
+    acvus_utils::grow(|| conversion_rules_level(terms, registry, from, to))
+}
+
+fn conversion_rules_level(
+    terms: &Terms,
+    registry: &TypeRegistry,
+    from: &InferTy,
+    to: &InferTy,
+) -> Vec<CastRule> {
     let from_r = terms.resolve_ty(from);
     let to_r = terms.resolve_ty(to);
     if let Some(references) = ReferencePair::of(&from_r, &to_r) {
@@ -5427,7 +5498,15 @@ impl<'a> ReferencePair<'a> {
 /// (hash-types.md R1) set `Uniform`: their representation is not a fact
 /// of the type.
 fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
+    acvus_utils::grow(|| uniform_slots_level(ty, registry))
+}
+
+fn uniform_slots_level(ty: InferTy, registry: &TypeRegistry) -> InferTy {
     fn arg(a: TypeArg<Infer>, specializing: bool, registry: &TypeRegistry) -> TypeArg<Infer> {
+        acvus_utils::grow(|| arg_level(a, specializing, registry))
+    }
+
+    fn arg_level(a: TypeArg<Infer>, specializing: bool, registry: &TypeRegistry) -> TypeArg<Infer> {
         let mut a = match a {
             TypeArg::Open(..) | TypeArg::Specialized(_) if !specializing => {
                 TypeArg::Uniform(a.into_ty())

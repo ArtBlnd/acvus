@@ -317,6 +317,10 @@ struct BranchEdge<'a> {
 /// invariant variance.  `Ty::Error` matches anything (poison).
 /// `Ty::Var(Infallible)` is uninhabitable for concrete types.
 fn types_match(expected: &Ty, actual: &Ty) -> bool {
+    acvus_utils::grow(|| types_match_level(expected, actual))
+}
+
+fn types_match_level(expected: &Ty, actual: &Ty) -> bool {
     match (expected, actual) {
         // Poison - accept anything.
         (Ty::Error(_), _) | (_, Ty::Error(_)) => true,

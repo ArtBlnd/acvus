@@ -462,3 +462,49 @@ that nests past `GUARD_EVERY`. The OS query runs once per thread.
 - `stacker`'s `remaining_stack` — an out-of-line call for the stack
   pointer and a lazily initialized thread-local per check, and no extent
   to refuse a position outside the thread's stack by.
+
+## RFC-0106: A script nests at most a bound, and the compiler's walks grow their stack
+
+Status: Proposed
+
+The parser, the checker and the lowerer each walk a script by recursion
+over its nesting, so a deep enough script runs the compiling thread's stack
+out. That stack is the embedder's: a CLI's main thread, a worker, or a wasm
+module's linear stack.
+
+1. **A bound, at parse.** A script whose nesting (an expression, block,
+   lambda, statement or pattern inside another, one binary operator of a
+   chain each) exceeds `NESTING_MAX` is refused
+   where it is parsed, as `NestingTooDeep`, naming the bound and the span
+   where it was passed. No pass after the parser meets a deeper script, so
+   no pass counts on its own. The bound is one number on every target: a
+   script compiles on `wasm32` exactly where it compiles natively. The
+   bound is on the script's nesting: a type's depth, which a flat script
+   can grow, is not bounded by it.
+2. **The bound fits the smallest stack.** `NESTING_MAX` is chosen so that
+   every walk at that depth fits in the linear stack `wasm32` is linked
+   with, minus the runtime's headroom, measured by an example that
+   compiles a script at the bound on `wasm32` (docs/nesting.md).
+3. **Native walks grow their stack.** On a native target, each recursive
+   walk enters its recursion through `stacker::maybe_grow`, so a script
+   within the bound compiles on any thread the embedder gives it, however
+   small. On `wasm32`, where the stack cannot grow, rule 2's measurement
+   stands in. The runtime does not grow its stack: a chain tail-calls
+   (RFC-0052), and a recursion traps (RFC-0100 rule 5).
+
+**Why.** A compiler that overflows aborts the process that embeds it, with
+no message. A bound checked once where the nesting is read makes the
+failure a diagnostic, and makes it the same on every target.
+**Cost.** A depth counter in the parser. A `maybe_grow` call, which reads
+the stack pointer, at each recursive entry of a walk on native targets. A
+script nested past the bound is refused although a native thread could
+compile it.
+**Rejected.**
+- A bound per pass: several counters kept equal by hand, and a script could
+  pass one pass and fail the next.
+- Growing the stack without a bound: `wasm32` cannot grow, so a script would
+  compile natively and fail in the browser.
+- Rewriting every walk as an explicit-stack loop: every pass would be
+  rewritten, for the one case the bound already refuses.
+- `maybe_grow` in the runtime: a chain's frames are tail calls, and a deep
+  recursion is the script's own, which RFC-0100 rule 5 traps.

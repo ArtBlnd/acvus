@@ -87,6 +87,10 @@ impl LeafPaths {
 }
 
 fn leaf_paths(ty: &Ty) -> Vec<FieldPath> {
+    acvus_utils::grow(|| leaf_paths_level(ty))
+}
+
+fn leaf_paths_level(ty: &Ty) -> Vec<FieldPath> {
     let Ty::Object(object) = ty else {
         return vec![Vec::new()];
     };

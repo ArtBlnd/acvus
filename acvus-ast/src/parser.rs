@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use acvus_utils::{Interner, QualifiedRef};
+use acvus_utils::{Astr, Interner, QualifiedRef};
 use lalrpop_util::{ErrorRecovery, ParseError as LalrpopError};
 
 use crate::ast::*;
@@ -9,6 +9,7 @@ use crate::grammar::{
     ArmLineParser, BindLineParser, ExprParser, ForLineParser, ScriptParser, TemplateStmtParser,
 };
 use crate::lexer::{ExprTokenizer, Line, Piece, TagEnd, scan_template};
+use crate::nesting::{Level, Nested};
 use crate::span::Span;
 use crate::token::Token;
 
@@ -202,16 +203,16 @@ where
 }
 
 /// `x in head`: what the `for` of a `% for` line is followed by.
-pub struct ForLine<S> {
-    pub binder: Binder,
-    pub head: ForHead<S>,
+pub(crate) struct ForLine<S> {
+    pub(crate) binder: Binder,
+    pub(crate) head: Nested<ForHead<S>>,
 }
 
 /// `pattern = source`: what the `let` of a `% if let` or `% while let`
 /// line is followed by.
-pub struct BindLine<S> {
-    pub pattern: Pattern<S>,
-    pub source: Expr<S>,
+pub(crate) struct BindLine<S> {
+    pub(crate) pattern: Nested<Pattern<S>>,
+    pub(crate) source: Nested<Expr<S>>,
 }
 
 pub(crate) fn literal_of<S, T, F>(
@@ -219,31 +220,36 @@ pub(crate) fn literal_of<S, T, F>(
     decoded: Result<T, LiteralErrorKind>,
     span: Span,
     value: F,
-) -> Result<Expr<S>, GrammarError>
+) -> Result<Nested<Expr<S>>, GrammarError>
 where
     S: Recover,
     F: FnOnce(T) -> Literal,
 {
     match decoded {
-        Ok(decoded) => Ok(Expr::Literal {
+        Ok(decoded) => Ok(Nested::leaf(Expr::Literal {
             id: AstId::alloc(),
             value: value(decoded),
             span,
-        }),
+        })),
         Err(kind) => refused::<S>(
             errors,
             ParseError::new(ParseErrorKind::BadLiteral(kind), span),
             span,
         )
-        .map(Expr::Error),
+        .map(|node| Nested::leaf(Expr::Error(node))),
     }
 }
 
 /// Parse a single expression.
 pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError> {
+    acvus_utils::grow(|| parse_expr_level(interner, source))
+}
+
+fn parse_expr_level(interner: &Interner, source: &str) -> Result<Expr, ParseError> {
     let tokenizer = ExprTokenizer::new(source, 0, interner);
     ExprParser::new()
         .parse(interner, &mut Vec::new(), Declares::Nothing, tokenizer)
+        .map(Nested::root)
         .map_err(convert_lalrpop_error)
 }
 
@@ -251,6 +257,13 @@ pub fn parse_expr(interner: &Interner, source: &str) -> Result<Expr, ParseError>
 /// `x = e;` assigns the `x` in scope, and `if`/`while`/`anyorder` are
 /// statements of the same rule in every block.
 pub fn parse_script(
+    interner: &Interner,
+    source: &str,
+) -> Result<Script, Recovered<Script<ErrorNode>>> {
+    acvus_utils::grow(|| parse_script_level(interner, source))
+}
+
+fn parse_script_level(
     interner: &Interner,
     source: &str,
 ) -> Result<Script, Recovered<Script<ErrorNode>>> {
@@ -289,14 +302,34 @@ pub fn parse_template(
     interner: &Interner,
     source: &str,
 ) -> Result<Template, Recovered<Template<ErrorNode>>> {
+    acvus_utils::grow(|| parse_template_level(interner, source))
+}
+
+fn parse_template_level(
+    interner: &Interner,
+    source: &str,
+) -> Result<Template, Recovered<Template<ErrorNode>>> {
     let lines = scan_template(source);
     let span = Span::new(0, source.len());
     match Builder::<Clean>::new(interner, &mut Vec::new()).template(&lines, span) {
         Ok(template) => Ok(template),
         Err(_) => {
             let mut errors = Vec::new();
-            let Ok(template) =
-                Builder::<ErrorNode>::new(interner, &mut errors).template(&lines, span);
+            let recovered = Builder::<ErrorNode>::new(interner, &mut errors).template(&lines, span);
+            let template = match recovered {
+                Ok(template) => template,
+                Err(too_deep) => {
+                    errors.push(too_deep);
+                    Template {
+                        id: AstId::alloc(),
+                        body: vec![Stmt::Error(ErrorNode {
+                            id: AstId::alloc(),
+                            span,
+                        })],
+                        span,
+                    }
+                }
+            };
             Err(Recovered::new(template, errors))
         }
     }
@@ -310,23 +343,22 @@ enum Open<S> {
         id: AstId,
         callee_id: AstId,
         binder: Binder,
-        head: ForHead<S>,
-        body: Vec<Stmt<S>>,
+        head: Nested<ForHead<S>>,
+        body: Nested<Vec<Stmt<S>>>,
         span: Span,
     },
     While {
-        cond: Expr<S>,
-        body: Vec<Stmt<S>>,
+        cond: Nested<Expr<S>>,
+        body: Nested<Vec<Stmt<S>>>,
         span: Span,
     },
     WhileLet {
-        pattern: Pattern<S>,
-        source: Expr<S>,
-        body: Vec<Stmt<S>>,
+        bind: BindLine<S>,
+        body: Nested<Vec<Stmt<S>>>,
         span: Span,
     },
     Anyorder {
-        body: Vec<Stmt<S>>,
+        body: Nested<Vec<Stmt<S>>>,
         span: Span,
     },
 }
@@ -341,27 +373,30 @@ struct IfChain<S> {
 
 struct IfArm<S> {
     head: IfHead<S>,
-    body: Vec<Stmt<S>>,
+    body: Nested<Vec<Stmt<S>>>,
     span: Span,
 }
 
 struct ElseArm<S> {
-    body: Vec<Stmt<S>>,
+    body: Nested<Vec<Stmt<S>>>,
     span: Span,
 }
 
 enum IfHead<S> {
-    Cond(Expr<S>),
-    Bind {
-        pattern: Pattern<S>,
-        source: Expr<S>,
-    },
+    Cond(Nested<Expr<S>>),
+    Bind(BindLine<S>),
 }
 
 /// The `% match` scrutinee and the `% pattern =>` arms opened under it.
 struct MatchChain<S> {
-    scrutinee: Expr<S>,
-    arms: Vec<MatchExprArm<S>>,
+    scrutinee: Nested<Expr<S>>,
+    arms: Vec<OpenArm<S>>,
+    span: Span,
+}
+
+struct OpenArm<S> {
+    pattern: Nested<Pattern<S>>,
+    body: Nested<Vec<Stmt<S>>>,
     span: Span,
 }
 
@@ -370,9 +405,9 @@ enum Head<S> {
     Open(Open<S>),
     Else(ElseArm<S>),
     ElseIf(IfArm<S>),
-    Arm { pattern: Pattern<S>, span: Span },
+    Arm { pattern: Nested<Pattern<S>>, span: Span },
     End(Span),
-    Plain(Stmt<S>),
+    Plain(Nested<Stmt<S>>),
     Comment,
 }
 
@@ -380,7 +415,7 @@ struct Builder<'a, 'e, S> {
     interner: &'a Interner,
     errors: &'e mut Vec<ParseError>,
     open: Vec<Open<S>>,
-    body: Vec<Stmt<S>>,
+    body: Nested<Vec<Stmt<S>>>,
 }
 
 impl<'a, 'e, S> Builder<'a, 'e, S>
@@ -392,22 +427,25 @@ where
             interner,
             errors,
             open: Vec::new(),
-            body: Vec::new(),
+            body: Nested::empty(Vec::new()),
         }
     }
 
-    fn template(mut self, lines: &[Line], span: Span) -> Result<Template<S>, S::Stop> {
+    fn template(mut self, lines: &[Line], span: Span) -> Result<Template<S>, ParseError> {
         for line in lines {
             self.line(line)?;
         }
         self.finish(span)
     }
 
-    fn refused(&mut self, error: ParseError, span: Span) -> Result<S, S::Stop> {
-        S::recovered(self.errors, Reported::one(error), span)
+    fn refused(&mut self, error: ParseError, span: Span) -> Result<S, ParseError> {
+        match error.kind {
+            ParseErrorKind::NestingTooDeep { .. } => Err(error),
+            _ => S::recovered(self.errors, Reported::one(error), span).map_err(Into::into),
+        }
     }
 
-    fn line(&mut self, line: &Line) -> Result<(), S::Stop> {
+    fn line(&mut self, line: &Line) -> Result<(), ParseError> {
         match line {
             Line::Text { pieces, .. } => {
                 for piece in pieces {
@@ -419,7 +457,9 @@ where
             Line::Stmt { content, span } => {
                 let head = match self.head(content, *span) {
                     Ok(head) => head,
-                    Err(error) => Head::Plain(Stmt::Error(self.refused(error, *span)?)),
+                    Err(error) => {
+                        Head::Plain(Nested::leaf(Stmt::Error(self.refused(error, *span)?)))
+                    }
                 };
                 match head {
                     Head::Comment => Ok(()),
@@ -438,16 +478,16 @@ where
     }
 
     /// One piece of a text line, as the append it is (RFC-0071 rule 2).
-    fn append_of(&mut self, piece: &Piece) -> Result<Stmt<S>, S::Stop> {
+    fn append_of(&mut self, piece: &Piece) -> Result<Nested<Stmt<S>>, ParseError> {
         match piece {
-            Piece::Text { value, span } => Ok(append(
-                Expr::Literal {
+            Piece::Text { value, span } => append(
+                Nested::leaf(Expr::Literal {
                     id: AstId::alloc(),
                     value: Literal::String(value.clone()),
                     span: *span,
-                },
+                }),
                 *span,
-            )),
+            ),
             Piece::Tag {
                 content,
                 span,
@@ -459,7 +499,8 @@ where
                     TagEnd::LineEnd => S::resumed(
                         self.errors,
                         Reported::one(ParseError::new(ParseErrorKind::UnclosedTag, *span)),
-                    )?,
+                    )
+                    .map_err(Into::into)?,
                 }
                 let parsed = Rest {
                     text: content,
@@ -474,9 +515,9 @@ where
                 );
                 let expr = match parsed {
                     Ok(expr) => expr,
-                    Err(error) => Expr::Error(self.refused(error, *inner_span)?),
+                    Err(error) => Nested::leaf(Expr::Error(self.refused(error, *inner_span)?)),
                 };
-                Ok(append(expr, *span))
+                append(expr, *span)
             }
         }
     }
@@ -534,7 +575,7 @@ where
                     callee_id: AstId::alloc(),
                     binder: line.binder,
                     head: line.head,
-                    body: Vec::new(),
+                    body: Nested::empty(Vec::new()),
                     span,
                 }))
             }
@@ -548,9 +589,8 @@ where
                         },
                     )?;
                     Ok(Head::Open(Open::WhileLet {
-                        pattern: bind.pattern,
-                        source: bind.source,
-                        body: Vec::new(),
+                        bind,
+                        body: Nested::empty(Vec::new()),
                         span,
                     }))
                 }
@@ -562,7 +602,7 @@ where
                             ExprParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                         },
                     )?,
-                    body: Vec::new(),
+                    body: Nested::empty(Vec::new()),
                     span,
                 })),
             },
@@ -578,7 +618,7 @@ where
                 span,
             }))),
             Token::Anyorder if tokens.len() == 1 => Ok(Head::Open(Open::Anyorder {
-                body: Vec::new(),
+                body: Nested::empty(Vec::new()),
                 span,
             })),
             _ => Ok(Head::Plain(
@@ -616,10 +656,7 @@ where
                         BindLineParser::new().parse(interner, errors, Declares::Nothing, tokenizer)
                     },
                 )?;
-                IfHead::Bind {
-                    pattern: bind.pattern,
-                    source: bind.source,
-                }
+                IfHead::Bind(bind)
             }
             _ => IfHead::Cond(rest.parse(
                 self.interner,
@@ -629,7 +666,7 @@ where
         };
         Ok(IfArm {
             head,
-            body: Vec::new(),
+            body: Nested::empty(Vec::new()),
             span,
         })
     }
@@ -642,7 +679,7 @@ where
     ) -> Result<Head<S>, ParseError> {
         match tokens.get(1).map(|t| &t.1) {
             None => Ok(Head::Else(ElseArm {
-                body: Vec::new(),
+                body: Nested::empty(Vec::new()),
                 span,
             })),
             Some(Token::If) => Ok(Head::ElseIf(self.if_arm(
@@ -659,7 +696,7 @@ where
 
     /// The body the next statement joins: the innermost open block's, or
     /// the template's own.
-    fn body_mut(&mut self) -> &mut Vec<Stmt<S>> {
+    fn body_mut(&mut self) -> &mut Nested<Vec<Stmt<S>>> {
         for open in self.open.iter_mut().rev() {
             match open {
                 Open::If(chain) => {
@@ -681,14 +718,14 @@ where
         &mut self.body
     }
 
-    fn push(&mut self, stmt: Stmt<S>) -> Result<(), S::Stop> {
+    fn push(&mut self, stmt: Nested<Stmt<S>>) -> Result<(), ParseError> {
         let stmt = match self.open.last() {
             Some(Open::Match(chain)) if chain.arms.is_empty() => {
-                let span = stmt_span(&stmt);
-                Stmt::Error(self.refused(
+                let span = stmt_span(stmt.get());
+                Nested::leaf(Stmt::Error(self.refused(
                     ParseError::new(ParseErrorKind::MatchBodyBeforeArm, span),
                     span,
-                )?)
+                )?))
             }
             Some(_) | None => stmt,
         };
@@ -696,7 +733,7 @@ where
         Ok(())
     }
 
-    fn else_if(&mut self, arm: IfArm<S>, span: Span) -> Result<(), S::Stop> {
+    fn else_if(&mut self, arm: IfArm<S>, span: Span) -> Result<(), ParseError> {
         let refusal = match self.if_chain_mut() {
             None => ParseErrorKind::ElseOutsideIf,
             Some(chain) if chain.otherwise.is_some() => ParseErrorKind::ElseAfterElse,
@@ -706,10 +743,10 @@ where
             }
         };
         let node = self.refused(ParseError::new(refusal, span), span)?;
-        self.push(Stmt::Error(node))
+        self.push(Nested::leaf(Stmt::Error(node)))
     }
 
-    fn otherwise(&mut self, arm: ElseArm<S>, span: Span) -> Result<(), S::Stop> {
+    fn otherwise(&mut self, arm: ElseArm<S>, span: Span) -> Result<(), ParseError> {
         let refusal = match self.if_chain_mut() {
             None => ParseErrorKind::ElseOutsideIf,
             Some(chain) if chain.otherwise.is_some() => ParseErrorKind::ElseAfterElse,
@@ -719,7 +756,7 @@ where
             }
         };
         let node = self.refused(ParseError::new(refusal, span), span)?;
-        self.push(Stmt::Error(node))
+        self.push(Nested::leaf(Stmt::Error(node)))
     }
 
     fn if_chain_mut(&mut self) -> Option<&mut IfChain<S>> {
@@ -729,32 +766,30 @@ where
         }
     }
 
-    fn arm(&mut self, pattern: Pattern<S>, span: Span) -> Result<(), S::Stop> {
+    fn arm(&mut self, pattern: Nested<Pattern<S>>, span: Span) -> Result<(), ParseError> {
         let Some(Open::Match(chain)) = self.open.last_mut() else {
             let node =
                 self.refused(ParseError::new(ParseErrorKind::ArmOutsideMatch, span), span)?;
-            return self.push(Stmt::Error(node));
+            return self.push(Nested::leaf(Stmt::Error(node)));
         };
-        chain.arms.push(MatchExprArm {
-            id: AstId::alloc(),
+        chain.arms.push(OpenArm {
             pattern,
-            body: Vec::new(),
-            tail: None,
+            body: Nested::empty(Vec::new()),
             span,
         });
         Ok(())
     }
 
-    fn close(&mut self, span: Span) -> Result<(), S::Stop> {
+    fn close(&mut self, span: Span) -> Result<(), ParseError> {
         let Some(open) = self.open.pop() else {
             let node = self.refused(ParseError::new(ParseErrorKind::UnmatchedEnd, span), span)?;
-            return self.push(Stmt::Error(node));
+            return self.push(Nested::leaf(Stmt::Error(node)));
         };
-        let stmt = closed(open, span);
+        let stmt = closed(open, span)?;
         self.push(stmt)
     }
 
-    fn finish(mut self, span: Span) -> Result<Template<S>, S::Stop> {
+    fn finish(mut self, span: Span) -> Result<Template<S>, ParseError> {
         let end = Span::new(span.end, span.end);
         while let Some(open) = self.open.pop() {
             S::resumed(
@@ -763,13 +798,14 @@ where
                     ParseErrorKind::UnclosedBlock,
                     open_span(&open),
                 )),
-            )?;
-            let stmt = closed(open, end);
+            )
+            .map_err(Into::into)?;
+            let stmt = closed(open, end)?;
             self.push(stmt)?;
         }
         Ok(Template {
             id: AstId::alloc(),
-            body: std::mem::take(&mut self.body),
+            body: self.body.root(),
             span,
         })
     }
@@ -801,12 +837,17 @@ impl Rest<'_> {
     }
 }
 
-fn append<S>(expr: Expr<S>, span: Span) -> Stmt<S> {
-    Stmt::Append {
-        id: AstId::alloc(),
-        expr,
+fn append<S>(expr: Nested<Expr<S>>, span: Span) -> Result<Nested<Stmt<S>>, ParseError> {
+    let mut level = Level::new();
+    let expr = level.take(expr);
+    level.node(
+        Stmt::Append {
+            id: AstId::alloc(),
+            expr,
+            span,
+        },
         span,
-    }
+    )
 }
 
 fn open_span<S>(open: &Open<S>) -> Span {
@@ -844,15 +885,32 @@ where
 }
 
 /// The statement a `% end` closes the block into.
-fn closed<S>(open: Open<S>, end: Span) -> Stmt<S> {
+fn closed<S>(open: Open<S>, end: Span) -> Result<Nested<Stmt<S>>, ParseError>
+where
+    S: Slot,
+{
+    let mut level = Level::new();
     match open {
-        Open::If(chain) => Stmt::Expr(if_expr_of(chain, end)),
-        Open::Match(chain) => Stmt::Expr(Expr::Match {
-            id: AstId::alloc(),
-            scrutinee: Box::new(chain.scrutinee),
-            arms: chain.arms,
-            span: chain.span.merge(end),
-        }),
+        Open::If(chain) => expr_stmt(if_expr_of(chain, end)?),
+        Open::Match(chain) => {
+            let span = chain.span.merge(end);
+            let scrutinee = level.boxed(chain.scrutinee);
+            let arms = chain
+                .arms
+                .into_iter()
+                .map(|arm| level.take(match_arm(arm.pattern, arm.body, None, arm.span)))
+                .collect();
+            let expr = level.node::<_, ParseError>(
+                Expr::Match {
+                    id: AstId::alloc(),
+                    scrutinee,
+                    arms,
+                    span,
+                },
+                span,
+            )?;
+            expr_stmt(expr)
+        }
         Open::For {
             id,
             callee_id,
@@ -860,75 +918,114 @@ fn closed<S>(open: Open<S>, end: Span) -> Stmt<S> {
             head,
             body,
             span,
-        } => Stmt::For {
-            id,
-            callee_id,
-            binder,
-            head,
-            body,
-            span: span.merge(end),
-        },
-        Open::While { cond, body, span } => Stmt::While {
-            id: AstId::alloc(),
-            cond,
-            body,
-            span: span.merge(end),
-        },
-        Open::WhileLet {
-            pattern,
-            source,
-            body,
-            span,
-        } => Stmt::WhileLet {
-            id: AstId::alloc(),
-            pattern,
-            source,
-            body,
-            span: span.merge(end),
-        },
-        Open::Anyorder { body, span } => Stmt::Anyorder {
-            id: AstId::alloc(),
-            body,
-            span: span.merge(end),
-        },
+        } => {
+            let span = span.merge(end);
+            let head = level.take(head);
+            let body = level.take(body);
+            level.node(
+                Stmt::For {
+                    id,
+                    callee_id,
+                    binder,
+                    head,
+                    body,
+                    span,
+                },
+                span,
+            )
+        }
+        Open::While { cond, body, span } => {
+            let span = span.merge(end);
+            let cond = level.take(cond);
+            let body = level.take(body);
+            level.node(
+                Stmt::While {
+                    id: AstId::alloc(),
+                    cond,
+                    body,
+                    span,
+                },
+                span,
+            )
+        }
+        Open::WhileLet { bind, body, span } => {
+            let span = span.merge(end);
+            let pattern = level.take(bind.pattern);
+            let source = level.take(bind.source);
+            let body = level.take(body);
+            level.node(
+                Stmt::WhileLet {
+                    id: AstId::alloc(),
+                    pattern,
+                    source,
+                    body,
+                    span,
+                },
+                span,
+            )
+        }
+        Open::Anyorder { body, span } => {
+            let span = span.merge(end);
+            let body = level.take(body);
+            level.node(
+                Stmt::Anyorder {
+                    id: AstId::alloc(),
+                    body,
+                    span,
+                },
+                span,
+            )
+        }
     }
 }
 
-fn if_expr_of<S>(chain: IfChain<S>, end: Span) -> Expr<S> {
+fn if_expr_of<S>(chain: IfChain<S>, end: Span) -> Result<Nested<Expr<S>>, ParseError> {
     let mut branch = chain.otherwise.map(|arm| {
-        Box::new(ElseBranch::Else {
-            body: arm.body,
+        let mut level = Level::new();
+        let body = level.take(arm.body);
+        level.part(ElseBranch::Else {
+            body,
             tail: None,
             span: arm.span.merge(end),
         })
     });
     for arm in chain.else_ifs.into_iter().rev() {
-        branch = Some(Box::new(ElseBranch::ElseIf(if_arm_expr(arm, branch, end))));
+        let mut level = Level::new();
+        let expr = level.take(if_arm_expr(arm, branch, end)?);
+        branch = Some(level.part(ElseBranch::ElseIf(expr)));
     }
     if_arm_expr(chain.first, branch, end)
 }
 
-fn if_arm_expr<S>(arm: IfArm<S>, branch: Option<Box<ElseBranch<S>>>, end: Span) -> Expr<S> {
+fn if_arm_expr<S>(
+    arm: IfArm<S>,
+    branch: Option<Nested<ElseBranch<S>>>,
+    end: Span,
+) -> Result<Nested<Expr<S>>, ParseError> {
     let span = arm.span.merge(end);
-    match arm.head {
+    let mut level = Level::new();
+    let then_body = level.take(arm.body);
+    let else_branch = level.opt_boxed(branch);
+    let expr = match arm.head {
         IfHead::Cond(cond) => Expr::If {
             id: AstId::alloc(),
-            cond: Box::new(cond),
-            then_body: arm.body,
+            cond: level.boxed(cond),
+            then_body,
             then_tail: None,
-            else_branch: branch,
+            else_branch,
             span,
         },
-        IfHead::Bind { pattern, source } => Expr::IfLet {
+        IfHead::Bind(bind) => Expr::IfLet {
             id: AstId::alloc(),
-            pattern,
-            source: Box::new(source),
-            then_body: arm.body,
+            pattern: level.take(bind.pattern),
+            source: level.boxed(bind.source),
+            then_body,
             then_tail: None,
-            else_branch: branch,
+            else_branch,
             span,
         },
-    }
+    };
+    level.node(expr, span)
 }
 
 /// Convert a LALRPOP error to our ParseError. The `expected` set arrives as
@@ -993,50 +1090,62 @@ fn convert_lalrpop_error(error: GrammarError) -> ParseError {
 /// the enclosing lambda captured, against the bindings in scope.
 pub(crate) fn build_assign<S>(
     errors: &mut Vec<ParseError>,
-    lhs: Expr<S>,
-    rhs: Expr<S>,
+    lhs: Nested<Expr<S>>,
+    rhs: Nested<Expr<S>>,
     span: Span,
-) -> Result<Stmt<S>, GrammarError>
+) -> Result<Nested<Stmt<S>>, GrammarError>
 where
     S: Recover,
 {
+    let mut level = Level::new();
+    let lhs = level.take(lhs);
+    let rhs = level.take(rhs);
     match lhs {
         Expr::Ident {
             name,
             ref_kind: RefKind::Value,
             span: name_span,
             ..
-        } => Ok(Stmt::Assign {
-            id: AstId::alloc(),
-            name: name.name,
-            name_span,
-            expr: rhs,
+        } => level.node(
+            Stmt::Assign {
+                id: AstId::alloc(),
+                name: name.name,
+                name_span,
+                expr: rhs,
+                span,
+            },
             span,
-        }),
+        ),
         Expr::UnaryOp {
             op: UnaryOp::Deref,
             operand,
             ..
-        } => Ok(Stmt::DerefStore {
-            id: AstId::alloc(),
-            target: operand,
-            expr: rhs,
-            span,
-        }),
-        Expr::Error(target) => Ok(Stmt::Error(target.widened(span))),
-        lhs => match Place::of(lhs) {
-            Some(place) => Ok(Stmt::Store {
+        } => level.node(
+            Stmt::DerefStore {
                 id: AstId::alloc(),
-                place,
+                target: operand,
                 expr: rhs,
                 span,
-            }),
+            },
+            span,
+        ),
+        Expr::Error(target) => Ok(Nested::leaf(Stmt::Error(target.widened(span)))),
+        lhs => match Place::of(lhs) {
+            Some(place) => level.node(
+                Stmt::Store {
+                    id: AstId::alloc(),
+                    place,
+                    expr: rhs,
+                    span,
+                },
+                span,
+            ),
             None => refused::<S>(
                 errors,
                 ParseError::new(ParseErrorKind::InvalidAssignTarget, span),
                 span,
             )
-            .map(Stmt::Error),
+            .map(|node| Nested::leaf(Stmt::Error(node))),
         },
     }
 }
@@ -1061,17 +1170,158 @@ where
 
 /// Statements whose last `if` or `match` a following statement or tail
 /// made a statement of its own.
-pub(crate) fn stated<S>((mut stmts, last): (Vec<Stmt<S>>, Expr<S>)) -> Vec<Stmt<S>> {
-    stmts.push(Stmt::Expr(last));
-    stmts
+pub(crate) fn stated<S>(
+    (mut stmts, last): (Nested<Vec<Stmt<S>>>, Nested<Expr<S>>),
+) -> Result<Nested<Vec<Stmt<S>>>, GrammarError>
+where
+    S: Slot,
+{
+    stmts.push(expr_stmt::<_, ParseError>(last)?);
+    Ok(stmts)
+}
+
+pub(crate) fn expr_stmt<S, E>(expr: Nested<Expr<S>>) -> Result<Nested<Stmt<S>>, E>
+where
+    S: Slot,
+    E: From<ParseError>,
+{
+    let span = expr.get().span();
+    let mut level = Level::new();
+    let expr = level.take(expr);
+    level.node(Stmt::Expr(expr), span)
+}
+
+pub(crate) fn let_bind<S>(
+    binder: Binder,
+    expr: Nested<Expr<S>>,
+    span: Span,
+) -> Result<Nested<Stmt<S>>, GrammarError> {
+    let mut level = Level::new();
+    let expr = level.take(expr);
+    level.node(
+        Stmt::LetBind {
+            id: AstId::alloc(),
+            binder,
+            expr,
+            span,
+        },
+        span,
+    )
+}
+
+pub(crate) fn holding_one<S, F>(
+    inner: Nested<Expr<S>>,
+    span: Span,
+    build: F,
+) -> Result<Nested<Expr<S>>, GrammarError>
+where
+    F: FnOnce(Box<Expr<S>>, Span) -> Expr<S>,
+{
+    let mut level = Level::new();
+    let inner = level.boxed(inner);
+    level.node(build(inner, span), span)
+}
+
+pub(crate) fn holding_two<S, F>(
+    first: Nested<Expr<S>>,
+    second: Nested<Expr<S>>,
+    span: Span,
+    build: F,
+) -> Result<Nested<Expr<S>>, GrammarError>
+where
+    F: FnOnce(Box<Expr<S>>, Box<Expr<S>>, Span) -> Expr<S>,
+{
+    let mut level = Level::new();
+    let first = level.boxed(first);
+    let second = level.boxed(second);
+    level.node(build(first, second, span), span)
+}
+
+pub(crate) fn binary<S>(
+    left: Nested<Expr<S>>,
+    op: BinOp,
+    right: Nested<Expr<S>>,
+    span: Span,
+) -> Result<Nested<Expr<S>>, GrammarError> {
+    holding_two(left, right, span, |left, right, span| Expr::BinaryOp {
+        id: AstId::alloc(),
+        left,
+        op,
+        right,
+        span,
+    })
+}
+
+pub(crate) fn match_arm<S>(
+    pattern: Nested<Pattern<S>>,
+    body: Nested<Vec<Stmt<S>>>,
+    tail: Option<Nested<Expr<S>>>,
+    span: Span,
+) -> Nested<MatchExprArm<S>> {
+    let mut level = Level::new();
+    let pattern = level.take(pattern);
+    let body = level.take(body);
+    let tail = level.opt_boxed(tail);
+    level.part(MatchExprArm {
+        id: AstId::alloc(),
+        pattern,
+        body,
+        tail,
+        span,
+    })
+}
+
+pub(crate) fn object_field<S>(
+    key: Astr,
+    value: Nested<Expr<S>>,
+    span: Span,
+) -> Nested<ObjectExprField<S>> {
+    let mut level = Level::new();
+    let value = level.take(value);
+    level.part(ObjectExprField {
+        id: AstId::alloc(),
+        key,
+        value,
+        span,
+    })
+}
+
+pub(crate) fn paren_or_tuple<S>(
+    items: Vec<Nested<TupleElem<S>>>,
+    span: Span,
+) -> Result<Nested<Expr<S>>, GrammarError> {
+    let mut level = Level::new();
+    let expr = match <[TupleElem<S>; 1]>::try_from(level.all(items)) {
+        Ok([TupleElem::Expr(inner)]) => Expr::Paren {
+            id: AstId::alloc(),
+            inner: Box::new(inner),
+            span,
+        },
+        Ok([TupleElem::Wildcard(_)]) => Expr::Tuple {
+            id: AstId::alloc(),
+            elements: vec![TupleElem::Wildcard(span)],
+            span,
+        },
+        Err(elements) => Expr::Tuple {
+            id: AstId::alloc(),
+            elements,
+            span,
+        },
+    };
+    level.node(expr, span)
 }
 
 /// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
 /// The callee covers `ns::f`, where the name is written, and not the call.
-pub(crate) fn build_call<S>(func: Expr<S>, args: Vec<Expr<S>>, span: Span) -> Expr<S> {
-    let func = match func {
+pub(crate) fn build_call<S>(
+    func: Nested<Expr<S>>,
+    args: Vec<Nested<Expr<S>>>,
+    span: Span,
+) -> Result<Nested<Expr<S>>, GrammarError> {
+    let mut level = Level::new();
+    let func = match level.take(func) {
         Expr::Variant {
             enum_name: Some(namespace),
             tag,
@@ -1086,86 +1336,103 @@ pub(crate) fn build_call<S>(func: Expr<S>, args: Vec<Expr<S>>, span: Span) -> Ex
         },
         other => other,
     };
-    Expr::FuncCall {
-        id: AstId::alloc(),
-        func: Box::new(func),
-        args,
+    let args = level.all(args);
+    level.node(
+        Expr::FuncCall {
+            id: AstId::alloc(),
+            func: Box::new(func),
+            args,
+            span,
+        },
         span,
-    }
+    )
 }
 
 /// Convert an expression (parsed from the LHS of `=`) to a pattern.
 pub(crate) fn pattern_of<S>(
     errors: &mut Vec<ParseError>,
     expr: &Expr<S>,
-) -> Result<Pattern<S>, GrammarError>
+) -> Result<Nested<Pattern<S>>, GrammarError>
 where
     S: Recover,
 {
-    match expr {
+    acvus_utils::grow(|| pattern_of_node(errors, expr))
+}
+
+fn pattern_of_node<S>(
+    errors: &mut Vec<ParseError>,
+    expr: &Expr<S>,
+) -> Result<Nested<Pattern<S>>, GrammarError>
+where
+    S: Recover,
+{
+    let mut level = Level::new();
+    let pattern = match expr {
         Expr::Ident {
             name,
             ref_kind,
             span,
             ..
-        } => Ok(Pattern::Binding {
+        } => Pattern::Binding {
             id: AstId::alloc(),
             name: name.name,
             ref_kind: *ref_kind,
             span: *span,
-        }),
-        Expr::ContextRef { name, span, .. } => Ok(Pattern::ContextBind {
+        },
+        Expr::ContextRef { name, span, .. } => Pattern::ContextBind {
             id: AstId::alloc(),
             name: *name,
             span: *span,
-        }),
-        Expr::Literal { value, span, .. } => Ok(Pattern::Literal {
+        },
+        Expr::Literal { value, span, .. } => Pattern::Literal {
             id: AstId::alloc(),
             value: value.clone(),
             span: *span,
-        }),
+        },
         Expr::List {
             head,
             rest,
             tail,
             span,
             ..
-        } => Ok(Pattern::List {
+        } => Pattern::List {
             id: AstId::alloc(),
-            head: patterns_of(errors, head)?,
+            head: patterns_of(errors, &mut level, head)?,
             rest: *rest,
-            tail: patterns_of(errors, tail)?,
+            tail: patterns_of(errors, &mut level, tail)?,
             span: *span,
-        }),
+        },
         Expr::Object { fields, span, .. } => {
             let mut pattern_fields = Vec::with_capacity(fields.len());
             for field in fields {
                 pattern_fields.push(ObjectPatternField {
                     id: AstId::alloc(),
                     key: field.key,
-                    pattern: pattern_of(errors, &field.value)?,
+                    pattern: level.take(pattern_of(errors, &field.value)?),
                     span: field.span,
                 });
             }
-            Ok(Pattern::Object {
+            Pattern::Object {
                 id: AstId::alloc(),
                 fields: pattern_fields,
                 span: *span,
-            })
+            }
         }
         Expr::Tuple { elements, span, .. } => {
             let mut elems = Vec::with_capacity(elements.len());
             for elem in elements {
                 elems.push(match elem {
                     TupleElem::Wildcard(s) => TuplePatternElem::Wildcard(*s),
-                    TupleElem::Expr(e) => TuplePatternElem::Pattern(pattern_of(errors, e)?),
+                    TupleElem::Expr(e) => {
+                        TuplePatternElem::Pattern(level.take(pattern_of(errors, e)?))
+                    }
                 });
             }
-            Ok(Pattern::Tuple {
+            Pattern::Tuple {
                 id: AstId::alloc(),
                 elements: elems,
                 span: *span,
-            })
+            }
         }
         // `Enum::Tag(inner)` parses as a qualified call (RFC-0030); as a
         // pattern it is the variant.
@@ -1185,13 +1452,13 @@ where
             let Expr::Ident { name, .. } = func.as_ref() else {
                 unreachable!("matched above")
             };
-            Ok(Pattern::Variant {
+            Pattern::Variant {
                 id: AstId::alloc(),
                 enum_name: name.namespace,
                 tag: name.name,
-                payload: Some(Box::new(pattern_of(errors, &args[0])?)),
+                payload: Some(level.boxed(pattern_of(errors, &args[0])?)),
                 span: *span,
-            })
+            }
         }
         Expr::Variant {
             enum_name,
@@ -1201,38 +1468,46 @@ where
             ..
         } => {
             let pat_payload = match payload {
-                Some(inner) => Some(Box::new(pattern_of(errors, inner)?)),
+                Some(inner) => Some(level.boxed(pattern_of(errors, inner)?)),
                 None => None,
             };
-            Ok(Pattern::Variant {
+            Pattern::Variant {
                 id: AstId::alloc(),
                 enum_name: *enum_name,
                 tag: *tag,
                 payload: pat_payload,
                 span: *span,
-            })
+            }
         }
-        Expr::Error(node) => Ok(Pattern::Error(node.clone())),
-        other => refused::<S>(
-            errors,
-            ParseError::new(
-                ParseErrorKind::InvalidPattern("expression cannot be used as a pattern".into()),
+        Expr::Error(node) => return Ok(Nested::leaf(Pattern::Error(node.clone()))),
+        other => {
+            return refused::<S>(
+                errors,
+                ParseError::new(
+                    ParseErrorKind::InvalidPattern("expression cannot be used as a pattern".into()),
+                    other.span(),
+                ),
                 other.span(),
-            ),
-            other.span(),
-        )
-        .map(Pattern::Error),
-    }
+            )
+            .map(|node| Nested::leaf(Pattern::Error(node)));
+        }
+    };
+    let span = pattern.span();
+    level.node(pattern, span)
 }
 
 fn patterns_of<S>(
     errors: &mut Vec<ParseError>,
+    level: &mut Level,
     exprs: &[Expr<S>],
 ) -> Result<Vec<Pattern<S>>, GrammarError>
 where
     S: Recover,
 {
-    exprs.iter().map(|expr| pattern_of(errors, expr)).collect()
+    exprs
+        .iter()
+        .map(|expr| Ok(level.take(pattern_of(errors, expr)?)))
+        .collect()
 }
 #[cfg(test)]
 mod tests {

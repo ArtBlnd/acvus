@@ -513,6 +513,10 @@ fn fmt_str(text: &str) -> String {
 }
 
 fn fmt_literal(lit: &Literal) -> String {
+    acvus_utils::grow(|| fmt_literal_level(lit))
+}
+
+fn fmt_literal_level(lit: &Literal) -> String {
     match lit {
         Literal::Int(n) => n.to_string(),
         Literal::Float(f) => format!("{f:?}"),
@@ -1769,6 +1773,15 @@ fn write_order_tree(
 }
 
 fn write_order_node(
+    f: &mut fmt::Formatter<'_>,
+    node: &OrderNode,
+    indent: &str,
+    depth: usize,
+) -> fmt::Result {
+    acvus_utils::grow(|| write_order_node_level(f, node, indent, depth))
+}
+
+fn write_order_node_level(
     f: &mut fmt::Formatter<'_>,
     node: &OrderNode,
     indent: &str,

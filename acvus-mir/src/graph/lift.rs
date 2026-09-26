@@ -485,12 +485,26 @@ fn walk_stmts<'a, S, V>(stmts: &'a [Stmt<S>], visit: &mut V)
 where
     V: Visit<'a, S>,
 {
+    acvus_utils::grow(|| walk_stmts_level::<S, V>(stmts, visit))
+}
+
+fn walk_stmts_level<'a, S, V>(stmts: &'a [Stmt<S>], visit: &mut V)
+where
+    V: Visit<'a, S>,
+{
     for stmt in stmts {
         walk_stmt(stmt, visit);
     }
 }
 
 fn walk_stmt<'a, S, V>(stmt: &'a Stmt<S>, visit: &mut V)
+where
+    V: Visit<'a, S>,
+{
+    acvus_utils::grow(|| walk_stmt_level::<S, V>(stmt, visit))
+}
+
+fn walk_stmt_level<'a, S, V>(stmt: &'a Stmt<S>, visit: &mut V)
 where
     V: Visit<'a, S>,
 {
@@ -552,6 +566,13 @@ fn walk_place<'a, S, V>(place: &'a Place<S>, visit: &mut V)
 where
     V: Visit<'a, S>,
 {
+    acvus_utils::grow(|| walk_place_level::<S, V>(place, visit))
+}
+
+fn walk_place_level<'a, S, V>(place: &'a Place<S>, visit: &mut V)
+where
+    V: Visit<'a, S>,
+{
     match place {
         Place::Field { object, .. } => walk_place(object, visit),
         Place::Base(PlaceBase::Root { .. }) => {}
@@ -565,6 +586,13 @@ where
 }
 
 fn walk_pattern<'a, S, V>(pattern: &'a Pattern<S>, visit: &mut V)
+where
+    V: Visit<'a, S>,
+{
+    acvus_utils::grow(|| walk_pattern_level::<S, V>(pattern, visit))
+}
+
+fn walk_pattern_level<'a, S, V>(pattern: &'a Pattern<S>, visit: &mut V)
 where
     V: Visit<'a, S>,
 {
@@ -643,6 +671,13 @@ where
 }
 
 fn walk_expr<'a, S, V>(expr: &'a Expr<S>, visit: &mut V)
+where
+    V: Visit<'a, S>,
+{
+    acvus_utils::grow(|| walk_expr_level::<S, V>(expr, visit))
+}
+
+fn walk_expr_level<'a, S, V>(expr: &'a Expr<S>, visit: &mut V)
 where
     V: Visit<'a, S>,
 {

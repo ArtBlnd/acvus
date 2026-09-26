@@ -738,6 +738,15 @@ fn chosen_slots(
     chosen: &[u32],
     found: &mut FxHashMap<u32, ChosenSlot>,
 ) {
+    acvus_utils::grow(|| chosen_slots_level(pattern, ty, chosen, found))
+}
+
+fn chosen_slots_level(
+    pattern: &PolyTy,
+    ty: &PolyTy,
+    chosen: &[u32],
+    found: &mut FxHashMap<u32, ChosenSlot>,
+) {
     match (pattern, ty) {
         (TyTerm::Array(p, _), TyTerm::Array(t, _))
         | (TyTerm::Option(p), TyTerm::Option(t))
@@ -803,6 +812,15 @@ fn chosen_arg(
 }
 
 fn chosen_held(
+    pattern: &HeldTy<Poly>,
+    ty: &HeldTy<Poly>,
+    chosen: &[u32],
+    found: &mut FxHashMap<u32, ChosenSlot>,
+) {
+    acvus_utils::grow(|| chosen_held_level(pattern, ty, chosen, found))
+}
+
+fn chosen_held_level(
     pattern: &HeldTy<Poly>,
     ty: &HeldTy<Poly>,
     chosen: &[u32],
@@ -930,6 +948,19 @@ where
     where
         P: Phase + PartialEq,
     {
+        acvus_utils::grow(|| held_matches_level::<P>(held, pat, seen, unknowns, reprs))
+    }
+
+    fn held_matches_level<P>(
+        held: &HeldTy<P>,
+        pat: &HeldTy<Poly>,
+        seen: &mut FxHashMap<u32, TyTerm<P>>,
+        unknowns: Unknowns,
+        reprs: Reprs,
+    ) -> bool
+    where
+        P: Phase + PartialEq,
+    {
         match (held, pat) {
             (_, HeldTy::Held(v)) => {
                 held.is_full(unknowns == Unknowns::Open)
@@ -969,6 +1000,19 @@ where
         }
     }
     fn go<P>(
+        ty: &TyTerm<P>,
+        pat: &PolyTy,
+        seen: &mut FxHashMap<u32, TyTerm<P>>,
+        unknowns: Unknowns,
+        reprs: Reprs,
+    ) -> bool
+    where
+        P: Phase + PartialEq,
+    {
+        acvus_utils::grow(|| go_level::<P>(ty, pat, seen, unknowns, reprs))
+    }
+
+    fn go_level<P>(
         ty: &TyTerm<P>,
         pat: &PolyTy,
         seen: &mut FxHashMap<u32, TyTerm<P>>,
@@ -1182,6 +1226,10 @@ struct PatternSubst {
 
 impl PatternSubst {
     fn walk(&self, t: &PolyTy) -> PolyTy {
+        acvus_utils::grow(|| self.walk_level(t))
+    }
+
+    fn walk_level(&self, t: &PolyTy) -> PolyTy {
         match t {
             TyTerm::Var(v) => match self.ty.get(v) {
                 Some(bound) => self.walk(bound),
@@ -1192,6 +1240,10 @@ impl PatternSubst {
     }
 
     fn occurs(&self, v: u32, t: &PolyTy) -> bool {
+        acvus_utils::grow(|| self.occurs_level(v, t))
+    }
+
+    fn occurs_level(&self, v: u32, t: &PolyTy) -> bool {
         let mut found = false;
         let _ = t.map::<Poly>(
             &mut |x| {
@@ -1230,6 +1282,10 @@ impl PatternSubst {
     }
 
     fn meet_held(&mut self, a: &HeldTy<Poly>, b: &HeldTy<Poly>) -> bool {
+        acvus_utils::grow(|| self.meet_held_level(a, b))
+    }
+
+    fn meet_held_level(&mut self, a: &HeldTy<Poly>, b: &HeldTy<Poly>) -> bool {
         match (a, b) {
             (HeldTy::Tuple(xs), HeldTy::Tuple(ys)) => {
                 xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| self.meet_reprs(x, y))
@@ -1304,6 +1360,10 @@ impl PatternSubst {
     }
 
     fn unify(&mut self, a: &PolyTy, b: &PolyTy) -> bool {
+        acvus_utils::grow(|| self.unify_level(a, b))
+    }
+
+    fn unify_level(&mut self, a: &PolyTy, b: &PolyTy) -> bool {
         let (a, b) = (self.walk(a), self.walk(b));
         match (&a, &b) {
             (TyTerm::Var(x), TyTerm::Var(y)) if x == y => true,
@@ -1417,6 +1477,10 @@ impl PatternSubst {
     }
 
     fn apply(&self, t: &PolyTy) -> PolyTy {
+        acvus_utils::grow(|| self.apply_level(t))
+    }
+
+    fn apply_level(&self, t: &PolyTy) -> PolyTy {
         t.map::<Poly>(
             &mut |v| match self.ty.get(&v) {
                 Some(bound) => self.apply(bound),
@@ -1436,6 +1500,10 @@ impl PatternSubst {
     }
 
     fn apply_repr(&self, v: u32) -> Repr<Poly> {
+        acvus_utils::grow(|| self.apply_repr_level(v))
+    }
+
+    fn apply_repr_level(&self, v: u32) -> Repr<Poly> {
         match self.repr.get(&v) {
             None => Repr::Var(v),
             Some(Repr::Var(w)) => self.apply_repr(*w),
@@ -1453,6 +1521,10 @@ impl PatternSubst {
     }
 
     fn apply_held(&self, held: &HeldTy<Poly>) -> HeldTy<Poly> {
+        acvus_utils::grow(|| self.apply_held_level(held))
+    }
+
+    fn apply_held_level(&self, held: &HeldTy<Poly>) -> HeldTy<Poly> {
         held.map::<Poly>(
             &mut |v| match self.ty.get(&v) {
                 Some(bound) => self.apply(bound),
@@ -1482,6 +1554,10 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
         var
     }
     fn walk(a: &PolyTy, b: &PolyTy, next: &mut u32) -> PolyTy {
+        acvus_utils::grow(|| walk_level(a, b, next))
+    }
+
+    fn walk_level(a: &PolyTy, b: &PolyTy, next: &mut u32) -> PolyTy {
         match (a, b) {
             (TyTerm::Ref(ma, x), TyTerm::Ref(mb, y)) if ma == mb => {
                 TyTerm::Ref(*ma, Box::new(walk_arg(x, y, next)))
@@ -1581,6 +1657,10 @@ pub fn generalize_patterns(a: &PolyTy, b: &PolyTy) -> PolyTy {
         }
     }
     fn walk_held(a: &HeldTy<Poly>, b: &HeldTy<Poly>, next: &mut u32) -> Option<HeldTy<Poly>> {
+        acvus_utils::grow(|| walk_held_level(a, b, next))
+    }
+
+    fn walk_held_level(a: &HeldTy<Poly>, b: &HeldTy<Poly>, next: &mut u32) -> Option<HeldTy<Poly>> {
         match (a, b) {
             (HeldTy::Tuple(xs), HeldTy::Tuple(ys)) if xs.len() == ys.len() => Some(HeldTy::Tuple(
                 xs.iter()
@@ -1736,6 +1816,10 @@ enum ArgHead {
 }
 
 fn arg_head(arg: &TypeArg<Poly>) -> ArgHead {
+    acvus_utils::grow(|| arg_head_level(arg))
+}
+
+fn arg_head_level(arg: &TypeArg<Poly>) -> ArgHead {
     match arg {
         TypeArg::Uniform(_) => ArgHead::Uniform,
         TypeArg::Open(..) => ArgHead::Open,
@@ -2375,6 +2459,10 @@ impl TyTerm<Concrete> {
     /// one. An extension type is data; how it is written down is the
     /// host's declaration, not the checker's.
     pub fn is_data(&self) -> bool {
+        acvus_utils::grow(|| self.is_data_level())
+    }
+
+    fn is_data_level(&self) -> bool {
         match self {
             Ty::Int(_) | Ty::Float | Ty::Char | Ty::String | Ty::Bool | Ty::Unit | Ty::Never => {
                 true
@@ -2573,6 +2661,15 @@ where
     V: Phase,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        acvus_utils::grow(|| self.fmt_level(f))
+    }
+}
+
+impl<'a, V> TyDisplay<'a, V>
+where
+    V: Phase,
+{
+    fn fmt_level(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.ty {
             TyTerm::Int(k) => write!(f, "{}", k.name()),
             TyTerm::Order => write!(f, "Order"),
@@ -3268,6 +3365,10 @@ impl<V: Phase> TypeArg<V> {
     /// `rewrite` on each type this argument holds: a `#` leaf or a `Held`
     /// node is rewritten as its type, and becomes the rewritten type's node.
     pub fn rewrite_types(&mut self, rewrite: &mut impl FnMut(&mut TyTerm<V>)) {
+        acvus_utils::grow(|| self.rewrite_types_level(rewrite))
+    }
+
+    fn rewrite_types_level(&mut self, rewrite: &mut impl FnMut(&mut TyTerm<V>)) {
         match self {
             TypeArg::Uniform(ty) | TypeArg::Open(_, ty) => rewrite(ty),
             TypeArg::Specialized(held) => held.rewrite_types(rewrite),
@@ -3286,6 +3387,10 @@ impl<V: Phase> TypeArg<V> {
     /// Whether this argument is `#` at every part, or could still be where
     /// `open` lets an open representation stand for `#`.
     fn is_full(&self, open: bool) -> bool {
+        acvus_utils::grow(|| self.is_full_level(open))
+    }
+
+    fn is_full_level(&self, open: bool) -> bool {
         match self {
             TypeArg::Uniform(_) => false,
             TypeArg::Open(..) => open,
@@ -3300,6 +3405,14 @@ impl<V: Phase> TypeArg<V> {
         other: &Self,
         same: &mut impl FnMut(&TyTerm<V>, &TyTerm<V>) -> bool,
     ) -> bool {
+        acvus_utils::grow(|| self.same_by_level(other, same))
+    }
+
+    fn same_by_level(
+        &self,
+        other: &Self,
+        same: &mut impl FnMut(&TyTerm<V>, &TyTerm<V>) -> bool,
+    ) -> bool {
         match (self, other) {
             (TypeArg::Uniform(a), TypeArg::Uniform(b)) => same(a, b),
             (TypeArg::Open(x, a), TypeArg::Open(y, b)) => x == y && same(a, b),
@@ -3309,6 +3422,20 @@ impl<V: Phase> TypeArg<V> {
     }
 
     pub fn map<W: Phase>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> IdentityTerm<W>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
+        on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
+    ) -> TypeArg<W> {
+        acvus_utils::grow(|| {
+            self.map_level(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
+        })
+    }
+
+    fn map_level<W: Phase>(
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
         on_identity: &mut impl FnMut(V::IdentityVar) -> IdentityTerm<W>,
@@ -3337,6 +3464,20 @@ impl<V: Phase> TypeArg<V> {
     }
 
     pub fn try_map<W: Phase, E>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
+        on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> Result<FlowTerm<W>, E>,
+    ) -> Result<TypeArg<W>, E> {
+        acvus_utils::grow(|| {
+            self.try_map_level(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
+        })
+    }
+
+    fn try_map_level<W: Phase, E>(
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
         on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
@@ -3374,6 +3515,10 @@ impl<V: Phase> HeldTy<V> {
     /// The fully specialized tree of `ty`: every part `#`, a variable's
     /// part `Held`.
     pub fn of(ty: TyTerm<V>) -> Self {
+        acvus_utils::grow(|| Self::of_level(ty))
+    }
+
+    fn of_level(ty: TyTerm<V>) -> Self {
         match ty {
             TyTerm::Tuple(elems) => {
                 HeldTy::Tuple(elems.into_iter().map(TypeArg::specialized).collect())
@@ -3406,6 +3551,10 @@ impl<V: Phase> HeldTy<V> {
     }
 
     pub fn ty(&self) -> TyTerm<V> {
+        acvus_utils::grow(|| self.ty_level())
+    }
+
+    fn ty_level(&self) -> TyTerm<V> {
         match self {
             HeldTy::Tuple(parts) => {
                 TyTerm::Tuple(parts.iter().map(|p| p.ty().into_owned()).collect())
@@ -3438,6 +3587,10 @@ impl<V: Phase> HeldTy<V> {
     }
 
     fn rewrite_types(&mut self, rewrite: &mut impl FnMut(&mut TyTerm<V>)) {
+        acvus_utils::grow(|| self.rewrite_types_level(rewrite))
+    }
+
+    fn rewrite_types_level(&mut self, rewrite: &mut impl FnMut(&mut TyTerm<V>)) {
         match self {
             HeldTy::Tuple(parts) => {
                 for part in parts {
@@ -3464,6 +3617,10 @@ impl<V: Phase> HeldTy<V> {
     /// type. A Rust array is not, since `of` writes an array as the
     /// language's.
     pub fn is_full(&self, open: bool) -> bool {
+        acvus_utils::grow(|| self.is_full_level(open))
+    }
+
+    fn is_full_level(&self, open: bool) -> bool {
         match self {
             HeldTy::RustArray(..) => false,
             HeldTy::Tuple(_)
@@ -3476,6 +3633,14 @@ impl<V: Phase> HeldTy<V> {
     }
 
     fn same_by(&self, other: &Self, same: &mut impl FnMut(&TyTerm<V>, &TyTerm<V>) -> bool) -> bool {
+        acvus_utils::grow(|| self.same_by_level(other, same))
+    }
+
+    fn same_by_level(
+        &self,
+        other: &Self,
+        same: &mut impl FnMut(&TyTerm<V>, &TyTerm<V>) -> bool,
+    ) -> bool {
         match (self, other) {
             (HeldTy::Tuple(a), HeldTy::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same_by(y, same))
@@ -3519,6 +3684,20 @@ impl<V: Phase> HeldTy<V> {
         on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
         on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
     ) -> HeldTy<W> {
+        acvus_utils::grow(|| {
+            self.map_level(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
+        })
+    }
+
+    fn map_level<W: Phase>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> IdentityTerm<W>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
+        on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
+    ) -> HeldTy<W> {
         let mut part =
             |p: &TypeArg<V>| p.map(on_var, on_identity, on_effect, on_len, on_repr, on_flow);
         match self {
@@ -3544,6 +3723,20 @@ impl<V: Phase> HeldTy<V> {
     }
 
     pub fn try_map<W: Phase, E>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
+        on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> Result<FlowTerm<W>, E>,
+    ) -> Result<HeldTy<W>, E> {
+        acvus_utils::grow(|| {
+            self.try_map_level(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
+        })
+    }
+
+    fn try_map_level<W: Phase, E>(
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
         on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
@@ -4117,6 +4310,10 @@ impl<V: Phase> TyTerm<V> {
     /// `None` is a word counting the `Some`s around it. A host that gave an
     /// option a box would have to move this arm with it.
     pub fn is_word(&self) -> Option<bool> {
+        acvus_utils::grow(|| self.is_word_level())
+    }
+
+    fn is_word_level(&self) -> Option<bool> {
         match self {
             TyTerm::Ref(..) => Some(true),
             TyTerm::Option(payload) => payload.is_word(),
@@ -4251,6 +4448,10 @@ impl<V: Phase> TyTerm<V> {
     }
 
     pub fn mentions_error(&self) -> bool {
+        acvus_utils::grow(|| self.mentions_error_level())
+    }
+
+    fn mentions_error_level(&self) -> bool {
         matches!(self, TyTerm::Error(_)) || self.children().iter().any(|c| c.mentions_error())
     }
 
@@ -4272,6 +4473,10 @@ impl<V: Phase> TyTerm<V> {
 
     /// Every identity argument in the type, in `for_each_source`'s order.
     pub fn for_each_identity(&self, on_identity: &mut impl FnMut(&IdentityTerm<V>)) {
+        acvus_utils::grow(|| self.for_each_identity_level(on_identity))
+    }
+
+    fn for_each_identity_level(&self, on_identity: &mut impl FnMut(&IdentityTerm<V>)) {
         match self {
             TyTerm::Int(_)
             | TyTerm::Float
@@ -4349,6 +4554,13 @@ impl<V: Phase> TyTerm<V> {
     /// this, and `TyDisplay` -- which drops identity arguments -- stays a
     /// rendering.
     pub fn same_erased(&self, other: &Self) -> bool
+    where
+        V: PartialEq,
+    {
+        acvus_utils::grow(|| self.same_erased_level(other))
+    }
+
+    fn same_erased_level(&self, other: &Self) -> bool
     where
         V: PartialEq,
     {
@@ -4498,6 +4710,20 @@ impl<V: Phase> TyTerm<V> {
         on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
         on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
     ) -> TyTerm<W> {
+        acvus_utils::grow(|| {
+            self.map_level(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
+        })
+    }
+
+    fn map_level<W: Phase>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> TyTerm<W>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> IdentityTerm<W>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> EffectTerm<W>,
+        on_len: &mut impl FnMut(V::LenVar) -> LenTerm<W>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Repr<W>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> FlowTerm<W>,
+    ) -> TyTerm<W> {
         match self {
             TyTerm::Int(k) => TyTerm::Int(*k),
             TyTerm::Float => TyTerm::Float,
@@ -4636,6 +4862,20 @@ impl<V: Phase> TyTerm<V> {
 
     /// Fallible version of `map` - short-circuits on first error.
     pub fn try_map<W: Phase, E>(
+        &self,
+        on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
+        on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
+        on_effect: &mut impl FnMut(V::EffectVar) -> Result<EffectTerm<W>, E>,
+        on_len: &mut impl FnMut(V::LenVar) -> Result<LenTerm<W>, E>,
+        on_repr: &mut impl FnMut(V::ReprVar) -> Result<Repr<W>, E>,
+        on_flow: &mut impl FnMut(V::FlowVar) -> Result<FlowTerm<W>, E>,
+    ) -> Result<TyTerm<W>, E> {
+        acvus_utils::grow(|| {
+            self.try_map_level(on_var, on_identity, on_effect, on_len, on_repr, on_flow)
+        })
+    }
+
+    fn try_map_level<W: Phase, E>(
         &self,
         on_var: &mut impl FnMut(V::TyVar) -> Result<TyTerm<W>, E>,
         on_identity: &mut impl FnMut(V::IdentityVar) -> Result<IdentityTerm<W>, E>,
@@ -4833,6 +5073,10 @@ pub fn lift_to_poly(ty: &Ty) -> PolyTy {
 /// minted it, never in a declaration.
 pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
     fn arg(a: &TypeArg<Concrete>, builder: &mut PolyBuilder) -> TypeArg<Poly> {
+        acvus_utils::grow(|| arg_level(a, builder))
+    }
+
+    fn arg_level(a: &TypeArg<Concrete>, builder: &mut PolyBuilder) -> TypeArg<Poly> {
         match a {
             TypeArg::Uniform(ty) => TypeArg::Uniform(go(ty, builder)),
             TypeArg::Open(v, _) => match *v {},
@@ -4857,6 +5101,10 @@ pub fn lift_declaration(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
         a.map(&mut |v: Infallible| match v {})
     }
     fn go(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
+        acvus_utils::grow(|| go_level(ty, builder))
+    }
+
+    fn go_level(ty: &Ty, builder: &mut PolyBuilder) -> PolyTy {
         match ty {
             Ty::Int(k) => TyTerm::Int(*k),
             Ty::Float => TyTerm::Float,

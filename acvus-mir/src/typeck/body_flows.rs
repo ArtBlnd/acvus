@@ -426,12 +426,20 @@ where
     }
 
     fn stmts(&mut self, stmts: &[Stmt<S>]) {
+        acvus_utils::grow(|| self.stmts_level(stmts))
+    }
+
+    fn stmts_level(&mut self, stmts: &[Stmt<S>]) {
         for stmt in stmts {
             self.stmt(stmt);
         }
     }
 
     fn stmt(&mut self, stmt: &Stmt<S>) {
+        acvus_utils::grow(|| self.stmt_level(stmt))
+    }
+
+    fn stmt_level(&mut self, stmt: &Stmt<S>) {
         match stmt {
             Stmt::Store { place, expr, .. } => {
                 let value = any(&self.value(expr));
@@ -511,6 +519,10 @@ where
     /// The local a store writes into, if its root is one; the index
     /// expressions on the way are walked.
     fn place(&mut self, place: &Place<S>) -> Option<AstId> {
+        acvus_utils::grow(|| self.place_level(place))
+    }
+
+    fn place_level(&mut self, place: &Place<S>) -> Option<AstId> {
         match place {
             Place::Field { object, .. } => self.place(object),
             Place::Base(PlaceBase::Root { id, root, .. }) => match root {
@@ -542,6 +554,10 @@ where
     /// part the place reaches. A step through storage takes what storage
     /// holds.
     fn place_value(&mut self, place: &Expr<S>) -> Origin {
+        acvus_utils::grow(|| self.place_value_level(place))
+    }
+
+    fn place_value_level(&mut self, place: &Expr<S>) -> Origin {
         match place {
             Expr::Paren { inner, .. } => self.place_value(inner),
             Expr::FieldAccess { object, .. }
@@ -577,6 +593,10 @@ where
     }
 
     fn bind(&mut self, pattern: &Pattern<S>, from: &Origin) {
+        acvus_utils::grow(|| self.bind_level(pattern, from))
+    }
+
+    fn bind_level(&mut self, pattern: &Pattern<S>, from: &Origin) {
         match pattern {
             Pattern::Binding { id, .. } => {
                 self.state
@@ -628,6 +648,10 @@ where
     }
 
     fn else_branch(&mut self, branch: Option<&ElseBranch<S>>) -> Origin {
+        acvus_utils::grow(|| self.else_branch_level(branch))
+    }
+
+    fn else_branch_level(&mut self, branch: Option<&ElseBranch<S>>) -> Origin {
         match branch {
             None => Origin::new(),
             Some(ElseBranch::ElseIf(expr)) => self.value(expr),
@@ -646,6 +670,10 @@ where
     }
 
     fn value_unfiltered(&mut self, expr: &Expr<S>) -> Origin {
+        acvus_utils::grow(|| self.value_unfiltered_level(expr))
+    }
+
+    fn value_unfiltered_level(&mut self, expr: &Expr<S>) -> Origin {
         match expr {
             Expr::Ident {
                 id, name, ref_kind, ..
@@ -1022,12 +1050,30 @@ fn scope_stmts<'e, S>(
     scopes: &mut Scopes,
     lambdas: &mut Vec<LambdaSite<'e, S>>,
 ) {
+    acvus_utils::grow(|| scope_stmts_level::<S>(stmts, at, scopes, lambdas))
+}
+
+fn scope_stmts_level<'e, S>(
+    stmts: &'e [Stmt<S>],
+    at: Option<AstId>,
+    scopes: &mut Scopes,
+    lambdas: &mut Vec<LambdaSite<'e, S>>,
+) {
     for stmt in stmts {
         scope_stmt(stmt, at, scopes, lambdas);
     }
 }
 
 fn scope_stmt<'e, S>(
+    stmt: &'e Stmt<S>,
+    at: Option<AstId>,
+    scopes: &mut Scopes,
+    lambdas: &mut Vec<LambdaSite<'e, S>>,
+) {
+    acvus_utils::grow(|| scope_stmt_level::<S>(stmt, at, scopes, lambdas))
+}
+
+fn scope_stmt_level<'e, S>(
     stmt: &'e Stmt<S>,
     at: Option<AstId>,
     scopes: &mut Scopes,
@@ -1091,6 +1137,15 @@ fn scope_place<'e, S>(
     scopes: &mut Scopes,
     lambdas: &mut Vec<LambdaSite<'e, S>>,
 ) {
+    acvus_utils::grow(|| scope_place_level::<S>(place, at, scopes, lambdas))
+}
+
+fn scope_place_level<'e, S>(
+    place: &'e Place<S>,
+    at: Option<AstId>,
+    scopes: &mut Scopes,
+    lambdas: &mut Vec<LambdaSite<'e, S>>,
+) {
     match place {
         Place::Field { object, .. } => scope_place(object, at, scopes, lambdas),
         Place::Base(PlaceBase::Root { .. }) => {}
@@ -1104,6 +1159,10 @@ fn scope_place<'e, S>(
 }
 
 fn scope_pattern<S>(pattern: &Pattern<S>, at: Option<AstId>, scopes: &mut Scopes) {
+    acvus_utils::grow(|| scope_pattern_level::<S>(pattern, at, scopes))
+}
+
+fn scope_pattern_level<S>(pattern: &Pattern<S>, at: Option<AstId>, scopes: &mut Scopes) {
     match pattern {
         Pattern::Binding { id, .. } => {
             scopes.owner.insert(*id, at);
@@ -1143,6 +1202,15 @@ fn scope_else<'e, S>(
     scopes: &mut Scopes,
     lambdas: &mut Vec<LambdaSite<'e, S>>,
 ) {
+    acvus_utils::grow(|| scope_else_level::<S>(branch, at, scopes, lambdas))
+}
+
+fn scope_else_level<'e, S>(
+    branch: &'e ElseBranch<S>,
+    at: Option<AstId>,
+    scopes: &mut Scopes,
+    lambdas: &mut Vec<LambdaSite<'e, S>>,
+) {
     match branch {
         ElseBranch::ElseIf(expr) => scope_expr(expr, at, scopes, lambdas),
         ElseBranch::Else { body, tail, .. } => {
@@ -1155,6 +1223,15 @@ fn scope_else<'e, S>(
 }
 
 fn scope_expr<'e, S>(
+    expr: &'e Expr<S>,
+    at: Option<AstId>,
+    scopes: &mut Scopes,
+    lambdas: &mut Vec<LambdaSite<'e, S>>,
+) {
+    acvus_utils::grow(|| scope_expr_level::<S>(expr, at, scopes, lambdas))
+}
+
+fn scope_expr_level<'e, S>(
     expr: &'e Expr<S>,
     at: Option<AstId>,
     scopes: &mut Scopes,
@@ -1284,6 +1361,10 @@ fn children<S>(expr: &Expr<S>) -> Vec<&Expr<S>> {
 // -- Names a lambda reads ----------------------------------------------
 
 fn reads_in_stmts<S>(stmts: &[Stmt<S>], reads: &mut Vec<Read>) {
+    acvus_utils::grow(|| reads_in_stmts_level::<S>(stmts, reads))
+}
+
+fn reads_in_stmts_level<S>(stmts: &[Stmt<S>], reads: &mut Vec<Read>) {
     for stmt in stmts {
         match stmt {
             Stmt::Store { place, expr, .. } => {
@@ -1327,6 +1408,10 @@ fn reads_in_stmts<S>(stmts: &[Stmt<S>], reads: &mut Vec<Read>) {
 }
 
 fn reads_in_place<S>(place: &Place<S>, reads: &mut Vec<Read>) {
+    acvus_utils::grow(|| reads_in_place_level::<S>(place, reads))
+}
+
+fn reads_in_place_level<S>(place: &Place<S>, reads: &mut Vec<Read>) {
     match place {
         Place::Field { object, .. } => reads_in_place(object, reads),
         Place::Base(PlaceBase::Root { root, .. }) => {
@@ -1347,6 +1432,10 @@ fn reads_in_place<S>(place: &Place<S>, reads: &mut Vec<Read>) {
 /// assignment is the assigned binding's, which a lambda may not assign when
 /// it captured it, so only reads are gathered.
 fn reads_in_expr<S>(expr: &Expr<S>, reads: &mut Vec<Read>) {
+    acvus_utils::grow(|| reads_in_expr_level::<S>(expr, reads))
+}
+
+fn reads_in_expr_level<S>(expr: &Expr<S>, reads: &mut Vec<Read>) {
     match expr {
         Expr::Ident {
             id, name, ref_kind, ..

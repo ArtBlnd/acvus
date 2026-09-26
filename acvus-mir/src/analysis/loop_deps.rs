@@ -3035,6 +3035,19 @@ fn keyed_through_nested_loop(
     loop_blocks: &[BlockIdx],
     slot: ValueId,
 ) -> Option<KeyedLaw> {
+    acvus_utils::grow(|| {
+        keyed_through_nested_loop_level(cfg, loans, laws, header, loop_blocks, slot)
+    })
+}
+
+fn keyed_through_nested_loop_level(
+    cfg: &CfgBody,
+    loans: &Loans<'_>,
+    laws: &LawTable,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+    slot: ValueId,
+) -> Option<KeyedLaw> {
     let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
     let nested: Vec<&NaturalLoop> = loops
         .iter()
@@ -6240,6 +6253,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// nothing back to this loop. The tests in `acvus-mir-test/tests/stages.rs`
     /// that name an inner loop leaving early pin each of these cases.
     fn through_nested_loop(&mut self, nested: usize, index: usize) -> Option<Form<'a>> {
+        acvus_utils::grow(|| self.through_nested_loop_level(nested, index))
+    }
+
+    fn through_nested_loop_level(&mut self, nested: usize, index: usize) -> Option<Form<'a>> {
         let cfg = self.cfg;
         let nested = &self.loops[nested];
         let header = nested.header;

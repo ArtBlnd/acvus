@@ -105,6 +105,15 @@ pub fn structural_leaves<'t>(ty: &'t Ty, interner: &Interner) -> Vec<Leaf<'t>> {
 }
 
 fn walk<'t>(ty: &'t Ty, interner: &Interner, path: &mut Vec<Component>, out: &mut Vec<Leaf<'t>>) {
+    acvus_utils::grow(|| walk_level(ty, interner, path, out))
+}
+
+fn walk_level<'t>(
+    ty: &'t Ty,
+    interner: &Interner,
+    path: &mut Vec<Component>,
+    out: &mut Vec<Leaf<'t>>,
+) {
     let Some(parts) = ordered_components(ty, interner) else {
         return;
     };
