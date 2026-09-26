@@ -400,8 +400,9 @@ Status: Accepted
 5. **A component is typed together.** The functions of one call-graph
    component are checked with shared type variables: a call to a member
    of the caller's own component is typed at that member's own variables,
-   not at a fresh instance, and the component's types generalize after
-   every member is checked.
+   not at a fresh instance. The component's types do not generalize: a
+   script's `fn` is copied, with its component, for each call from
+   outside the component and typed with the calling body (RFC-0100 rule 3).
 
 The body is checked in one pass that only creates variables, joins and
 opens decisions (`check`); decisions read resolved terms inside `settle`

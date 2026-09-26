@@ -155,6 +155,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0058: A literal says its type
 - RFC-0071: A template is a script whose text lines are output
 - RFC-0087: A bound `$` holds any value a literal writes, and its uses decide its enums (Proposed)
+- RFC-0100: A script declares a function with `fn`, and it captures nothing (Proposed)
 
 ### [tooling.md](tooling.md)
 

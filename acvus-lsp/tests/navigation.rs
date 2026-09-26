@@ -933,3 +933,73 @@ fn a_caller_opened_before_its_callee_is_checked_after_it() {
         assert_eq!(session.diagnostics(caller), [], "pair {pair}");
     }
 }
+
+#[test]
+fn a_call_of_a_fn_goes_to_its_declaration() {
+    let i = Interner::new();
+    let source = "let a = inc(1);\nfn inc(x) { x + 1 }\na";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(session.diagnostics(doc).is_empty(), "{:?}", session.diagnostics(doc));
+    let declared = nth(source, "inc", 1);
+    assert_eq!(
+        session.definition(doc, nth(source, "inc", 0)),
+        Some(Definition::Declared {
+            span: Span::new(declared, declared + 3),
+        })
+    );
+    assert_eq!(
+        session.definition(doc, declared),
+        Some(Definition::Declared {
+            span: Span::new(declared, declared + 3),
+        })
+    );
+}
+
+#[test]
+fn a_call_in_another_fn_goes_to_its_declaration() {
+    let i = Interner::new();
+    let source = "fn g(x) { f(x) }\nfn f(y) { y }\ng(1)";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    assert!(session.diagnostics(doc).is_empty(), "{:?}", session.diagnostics(doc));
+    let declared = nth(source, "fn f", 0) + 3;
+    assert_eq!(
+        session.definition(doc, nth(source, "f(x)", 0)),
+        Some(Definition::Declared {
+            span: Span::new(declared, declared + 1),
+        })
+    );
+}
+
+#[test]
+fn hover_answers_at_a_fn_s_call_and_in_its_body() {
+    let i = Interner::new();
+    let source = "fn inc(x) { x + 1 }\ninc(1)";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    let read = nth(source, "x", 1);
+    assert_eq!(
+        session.hover(doc, read),
+        Some(Hover {
+            span: Span::new(read, read + 1),
+            ty: Ty::I64.display(&i).to_string(),
+        })
+    );
+    let call = nth(source, "inc", 1);
+    let hover = session.hover(doc, call).expect("the call has a type");
+    assert_eq!(hover.span, Span::new(call, call + 3));
+}
+
+#[test]
+fn a_fn_s_refusal_is_its_script_s_diagnostic() {
+    let i = Interner::new();
+    let source = "let y = 1;\nfn f() { y }\nf() + f()";
+    let (session, doc) = open(&i, bare(vec![]), Mode::Script, source);
+    let messages: Vec<String> = session
+        .diagnostics(doc)
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+    assert_eq!(
+        messages,
+        vec!["a `fn` captures nothing: its body reads `y`, a local of the script".to_string()]
+    );
+}

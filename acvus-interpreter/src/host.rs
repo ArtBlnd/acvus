@@ -677,6 +677,10 @@ macro_rules! tooling_graph {
                 ParsedAst::Recovered(RecoveredAst::Template(template)) => {
                     acvus_ast::extract_template_context_refs(template)
                 }
+                // Empty because acvus-mir's checker refuses every `@` in a
+                // `fn`'s body as `CapturesOutside` (RFC-0100 rule 2); were
+                // that refusal lifted, this set would have to walk the body.
+                ParsedAst::Fn(_) => FxHashSet::default(),
             }
         }
     };
@@ -866,6 +870,7 @@ impl GraphName {
                 .map(|namespace| interner.intern(namespace)),
             name: interner.intern(&self.name),
             host: self.host.as_deref().map(|host| interner.intern(host)),
+            scope: None,
         }
     }
 }
@@ -1506,11 +1511,14 @@ pub(crate) fn compile(
         access,
         entries: entry_refs,
     };
-    let origin_of = |qref: &QualifiedRef| match scripts.get(qref) {
-        Some(name) => Some(Origin::Entry(name.clone())),
-        None => declared_inits
-            .key_of(qref)
-            .map(|key| Origin::Init(key.stored())),
+    let origin_of = |qref: &QualifiedRef| {
+        let written_in = qref.written_in();
+        match scripts.get(&written_in) {
+            Some(name) => Some(Origin::Entry(name.clone())),
+            None => declared_inits
+                .key_of(&written_in)
+                .map(|key| Origin::Init(key.stored())),
+        }
     };
 
     let started = Instant::now();
@@ -1545,7 +1553,7 @@ pub(crate) fn compile(
         })
     }));
     if !refusals.is_empty() {
-        return Err(refusals);
+        return Err(each_fault_once(refusals));
     }
 
     let started = Instant::now();
@@ -1564,7 +1572,7 @@ pub(crate) fn compile(
         })
     }));
     if !refusals.is_empty() {
-        return Err(refusals);
+        return Err(each_fault_once(refusals));
     }
 
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
@@ -1601,7 +1609,7 @@ pub(crate) fn compile(
         }
     }
     if !refusals.is_empty() {
-        return Err(refusals);
+        return Err(each_fault_once(refusals));
     }
     let prepare = started.elapsed();
     executables.extend(prepared);
@@ -1705,6 +1713,26 @@ pub(crate) fn compile(
 /// RFC-0043): every one of that name, in any namespace or at the root, that
 /// the registries declared a function rather than a machine coercion; each
 /// written with its namespace, in name order.
+/// Every instance of a script's `fn` is checked, lowered and optimized as a
+/// function of its own (RFC-0100 rule 3), so a fault of the `fn`'s body is
+/// refused once by each instance, at one span and in one message. A reader
+/// is shown it once, where it first came.
+fn each_fault_once(refusals: Vec<Refusal>) -> Vec<Refusal> {
+    let mut shown: Vec<Refusal> = Vec::with_capacity(refusals.len());
+    for refusal in refusals {
+        let repeated = shown.iter().any(|earlier| {
+            earlier.origin == refusal.origin
+                && earlier.span == refusal.span
+                && earlier.message == refusal.message
+                && earlier.labels == refusal.labels
+        });
+        if !repeated {
+            shown.push(refusal);
+        }
+    }
+    shown
+}
+
 fn bare_callable(
     interner: &Interner,
     extern_fns: &[Function],

@@ -258,6 +258,7 @@ impl BoundValue {
                                 namespace: Some(enum_name),
                                 name: tag,
                                 host: None,
+                                scope: None,
                             },
                         ref_kind: RefKind::Value,
                         ..

@@ -515,6 +515,30 @@ impl<'a> Lowerer<'a> {
         self.build_module()
     }
 
+    /// One instance of a script's `fn` (RFC-0100): the body reads each
+    /// parameter by its name, so each is a local the call's argument
+    /// initializes.
+    pub fn lower_fn(mut self, decl: &acvus_ast::FnDecl) -> MirModule {
+        let effect = self.resolution.effect.clone();
+        self.enter_body_order(effect, decl.span);
+        let arguments: Vec<ValueId> = self.body.params.iter().map(|(_, reg)| *reg).collect();
+        for (param, argument) in decl.params.iter().zip(arguments) {
+            let ty = self.type_of_id(param.id);
+            let slot = self.define_var(param.name, ty);
+            self.emit_assign(param.span, RefTarget::Var(slot), vec![], argument);
+        }
+        for stmt in &decl.body {
+            self.lower_stmt(stmt);
+        }
+        let val = match &decl.tail {
+            Some(tail) => self.lower_expr(tail),
+            None => self.emit_unit(decl.span),
+        };
+        self.emit_return(decl.span, val);
+        self.skip_assigned_fetches();
+        self.build_module()
+    }
+
     /// RFC-0025 rule 2 on the body just lowered: each commit's `wrote`, and
     /// no entry fetch of a context every path assigns first.
     fn skip_assigned_fetches(&mut self) {
@@ -848,6 +872,9 @@ impl<'a> Lowerer<'a> {
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match stmt {
+            // Its instances are lowered as functions of their own
+            // (`graph::lift`).
+            Stmt::FnDecl(_) => {}
             Stmt::Store {
                 place, expr, span, ..
             } => {
