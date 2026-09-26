@@ -40,7 +40,7 @@ for range(0 (r45)..r38) -> L7 else L8 stages [L7, L12, L13, L14]
 // L7: free {index, index, index, cast, const}
 // L12: cycle Storage(r46) in_order {index, index, +, index_set}
 // L13: free {cast, +}
-// L14: cycle Storage(r47) in_order {index_set}
+// L14: cycle Storage(r47) keyed(r48) in_order law(Last exact) {index_set}
 // control upfront
 // cost W=12 O=18293 split when n > 48782, n = max(r38 - 0 (r45), 0)
 for slice(r25) -> L4 else L5 stages [L4, L15]
