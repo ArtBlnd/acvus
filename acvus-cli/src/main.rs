@@ -16,8 +16,8 @@ use acvus_ast::Span;
 use acvus_ast::report::{LineIndex, Report, Severity};
 use acvus_extern::Registry;
 use acvus_interpreter::{
-    AcvusRuntime, CompileTimes, Composite, Executor, HostError, InputListing, Kind, MemoryStorage,
-    Page, Part, Program, SequentialExecutor, Space, SpaceStorage, Storage, TokioExecutor,
+    AcvusRuntime, CompileTimes, Executor, HostError, InputListing, Kind, MemoryStorage, Page,
+    Part, Program, SequentialExecutor, Space, SpaceStorage, Storage, TokioExecutor, Tuple,
     UntypedEntry, Value, hex,
 };
 use acvus_utils::Interner;
@@ -898,19 +898,17 @@ enum Printed {
 
 impl Printed {
     fn of(interner: &Interner, value: &Value, mode: Mode) -> Self {
-        match value.composite() {
-            // SAFETY, both arms: the vtable is the runtime's witness of the
-            // type behind the pointer.
-            Some(Composite::String) => {
-                let text = unsafe { value.as_str() }.to_owned();
-                match mode {
-                    Mode::Template => Printed::Text(text),
-                    Mode::Script | Mode::Expr => Printed::Line(text),
-                }
-            }
-            Some(Composite::Tuple) if unsafe { value.as_tuple() }.is_empty() => Printed::Nothing,
-            _ if value.kind() == Kind::Unit => Printed::Nothing,
-            _ => Printed::Line(json::by_kind(interner, value).to_string()),
+        if let Some(text) = value.get::<String>() {
+            let text = text.clone();
+            return match mode {
+                Mode::Template => Printed::Text(text),
+                Mode::Script | Mode::Expr => Printed::Line(text),
+            };
+        }
+        let unit = value.kind() == Kind::Unit || value.get::<Tuple>().is_some_and(|tuple| tuple.0.is_empty());
+        match unit {
+            true => Printed::Nothing,
+            false => Printed::Line(json::by_kind(interner, value).to_string()),
         }
     }
 

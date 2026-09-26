@@ -13,7 +13,7 @@
 
 use std::cell::Cell;
 
-use acvus_extern::repr::{self, Word};
+use acvus_extern::repr::{self, TotalWord};
 use acvus_extern::{NodeHash, ObjectShape, Owned, SpaceError, SpaceHooks, SpaceResult};
 use acvus_mir::graph::QualifiedRef;
 use acvus_mir::ty::{IntTy, LenTerm, Ty, TypeArg};
@@ -185,17 +185,15 @@ pub fn encode(
     match ty {
         Ty::Int(k) => {
             let word = value.bits();
-            // SAFETY (each arm): a value of type `Int(k)` holds `into_word` of
-            // an integer of that width.
             match k {
-                IntTy::I8 => out.extend_from_slice(&unsafe { i8::from_word(word) }.to_le_bytes()),
-                IntTy::I16 => out.extend_from_slice(&unsafe { i16::from_word(word) }.to_le_bytes()),
-                IntTy::I32 => out.extend_from_slice(&unsafe { i32::from_word(word) }.to_le_bytes()),
-                IntTy::I64 => out.extend_from_slice(&unsafe { i64::from_word(word) }.to_le_bytes()),
-                IntTy::U8 => out.extend_from_slice(&unsafe { u8::from_word(word) }.to_le_bytes()),
-                IntTy::U16 => out.extend_from_slice(&unsafe { u16::from_word(word) }.to_le_bytes()),
-                IntTy::U32 => out.extend_from_slice(&unsafe { u32::from_word(word) }.to_le_bytes()),
-                IntTy::U64 => out.extend_from_slice(&unsafe { u64::from_word(word) }.to_le_bytes()),
+                IntTy::I8 => out.extend_from_slice(&i8::from_word(word).to_le_bytes()),
+                IntTy::I16 => out.extend_from_slice(&i16::from_word(word).to_le_bytes()),
+                IntTy::I32 => out.extend_from_slice(&i32::from_word(word).to_le_bytes()),
+                IntTy::I64 => out.extend_from_slice(&i64::from_word(word).to_le_bytes()),
+                IntTy::U8 => out.extend_from_slice(&u8::from_word(word).to_le_bytes()),
+                IntTy::U16 => out.extend_from_slice(&u16::from_word(word).to_le_bytes()),
+                IntTy::U32 => out.extend_from_slice(&u32::from_word(word).to_le_bytes()),
+                IntTy::U64 => out.extend_from_slice(&u64::from_word(word).to_le_bytes()),
             }
         }
         Ty::Float => out.extend_from_slice(&value.as_float().to_bits().to_le_bytes()),

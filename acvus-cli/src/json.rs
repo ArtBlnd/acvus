@@ -1,16 +1,14 @@
 //! A runtime value as JSON.
 
-use std::any::TypeId;
-
 use acvus_ext::{Deque, HashMap, HashSet};
-use acvus_extern::Owned;
-use acvus_interpreter::{AcvusRuntime, Composite, Kind, Value};
+use acvus_extern::{Owned, repr};
+use acvus_interpreter::{AcvusRuntime, Array, Kind, Object, Tuple, Value, VariantValue, Vtable};
 use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 use serde_json::{Map, Value as Json};
 
 /// A value read without a type: its `Kind` is the witness for a word, and
-/// the vtable's `Composite` for an allocation.
+/// the vtable's type for an allocation (`Value::get`).
 ///
 /// RFC-0054: a host that declares `!` states no return type, so it has no
 /// `Ty` for the value that comes back.
@@ -34,7 +32,11 @@ pub fn by_kind(interner: &Interner, value: &Value) -> Json {
         Kind::Ref => by_kind(interner, unsafe { value.target() }),
         Kind::Undef => Json::from("<undef>"),
         Kind::LargeRef => Json::from("<projection>"),
-        Kind::Large => by_composite(interner, value),
+        Kind::Large => by_composite(
+            interner,
+            value,
+            value.vtable().expect("a value of kind Large has a vtable"),
+        ),
     }
 }
 
@@ -53,48 +55,40 @@ fn int(kind: IntTy, value: &Value) -> Json {
     }
 }
 
-fn by_composite(interner: &Interner, value: &Value) -> Json {
-    // SAFETY, every arm: the vtable's `Composite` is the runtime's own
-    // witness of the type behind the pointer.
-    match value.composite() {
-        Some(Composite::String) => Json::from(unsafe { value.as_str() }),
-        Some(Composite::Array) => Json::Array(
-            unsafe { value.as_array() }
-                .iter()
-                .map(|v| by_kind(interner, v))
-                .collect(),
-        ),
-        Some(Composite::Tuple) => Json::Array(
-            unsafe { value.as_tuple() }
-                .iter()
-                .map(|v| by_kind(interner, v))
-                .collect(),
-        ),
-        Some(Composite::Object) => Json::Object(
-            unsafe { value.as_shape() }
+fn by_composite(interner: &Interner, value: &Value, vtable: &Vtable) -> Json {
+    if let Some(text) = value.get::<String>() {
+        return Json::from(text.as_str());
+    }
+    if let Some(items) = value.get::<Array>() {
+        return items_array(interner, items.0.iter());
+    }
+    if let Some(items) = value.get::<Tuple>() {
+        return items_array(interner, items.0.iter());
+    }
+    if let Some(object) = value.get::<Object>() {
+        return Json::Object(
+            object
+                .shape
                 .names()
                 .iter()
-                .zip(unsafe { value.as_object() })
+                .zip(object.values.iter())
                 .map(|(k, v)| (interner.resolve(*k).to_string(), by_kind(interner, v)))
                 .collect(),
-        ),
-        Some(Composite::Variant) => {
-            let variant = unsafe { value.as_variant() };
-            // SAFETY: the same witness — a variant's first register is its tag.
-            let tag = interner
-                .resolve(unsafe { variant.tag().as_tag() })
-                .to_string();
-            match variant.payload().kind() {
-                Kind::Undef => Json::from(tag),
-                _ => Json::Object(Map::from_iter([(
-                    tag,
-                    by_kind(interner, variant.payload()),
-                )])),
-            }
-        }
-        None => by_extension(interner, value),
-        Some(Composite::Fn | Composite::Handle) => named(value),
+        );
     }
+    if let Some(variant) = value.get::<VariantValue>() {
+        let tag = interner
+            .resolve(repr::tag_of_word(variant.tag().bits()))
+            .to_string();
+        return match variant.payload().kind() {
+            Kind::Undef => Json::from(tag),
+            _ => Json::Object(Map::from_iter([(
+                tag,
+                by_kind(interner, variant.payload()),
+            )])),
+        };
+    }
+    by_extension(interner, value, vtable)
 }
 
 /// A result leaves a run through a uniform slot, where acvus-extern keys a
@@ -105,14 +99,14 @@ type ResultKeying = Owned<AcvusRuntime>;
 type ResultMap = HashMap<'static, ResultElement, ResultElement, ResultKeying, (), AcvusRuntime>;
 type ResultSet = HashSet<'static, ResultElement, ResultKeying, (), AcvusRuntime>;
 
-fn by_extension(interner: &Interner, value: &Value) -> Json {
-    if let Some(items) = payload_of::<Vec<ResultElement>>(value) {
+fn by_extension(interner: &Interner, value: &Value, vtable: &Vtable) -> Json {
+    if let Some(items) = value.get::<Vec<ResultElement>>() {
         return items_array(interner, items.iter());
     }
-    if let Some(items) = payload_of::<Deque<ResultElement>>(value) {
+    if let Some(items) = value.get::<Deque<ResultElement>>() {
         return items_array(interner, items.iter());
     }
-    if let Some(map) = payload_of::<ResultMap>(value) {
+    if let Some(map) = value.get::<ResultMap>() {
         return Json::Array(
             map.iter()
                 .map(|(key, item)| {
@@ -121,21 +115,10 @@ fn by_extension(interner: &Interner, value: &Value) -> Json {
                 .collect(),
         );
     }
-    if let Some(keys) = payload_of::<ResultSet>(value) {
+    if let Some(keys) = value.get::<ResultSet>() {
         return items_array(interner, keys.iter());
     }
-    named(value)
-}
-
-fn payload_of<T>(value: &Value) -> Option<&T>
-where
-    T: 'static,
-{
-    (value.vtable().type_id == TypeId::of::<T>()).then(|| {
-        // SAFETY: the header's `type_id` is the runtime's own witness that the
-        // payload is a `T`.
-        unsafe { value.peek::<T>() }
-    })
+    Json::from(format!("<{}>", vtable.name()))
 }
 
 fn items_array<'v, I>(interner: &Interner, items: I) -> Json
@@ -143,8 +126,4 @@ where
     I: Iterator<Item = &'v ResultElement>,
 {
     Json::Array(items.map(|item| by_kind(interner, item)).collect())
-}
-
-fn named(value: &Value) -> Json {
-    Json::from(format!("<{}>", (value.vtable().name)()))
 }

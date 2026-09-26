@@ -91,7 +91,7 @@ pub use obj::{
     TransparentOver, Tup, Variant,
 };
 pub use output::{ByOutput, Finished, Output, OutputSite, Place, RetFinished};
-pub use owned::{Owned, Release, lend_run};
+pub use owned::{Owned, Release, Releasing, lend_run};
 pub use projection::{
     Borrowed, BorrowedWhole, ByProjection, Fields, Lent, Nested, ObjectAt, OwnStorage, Project, Projected,
     Reach, VariantAt, object, object_fields_at, payload_at, variant, variant_tags_at,

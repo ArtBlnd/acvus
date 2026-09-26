@@ -40,7 +40,6 @@ use std::marker::PhantomData;
 use acvus_mir::ty::{PolyTy, TypeArg};
 use acvus_utils::Interner;
 
-use crate::canonical::same_layout;
 use crate::handler::Borrowable;
 use crate::loan::{Loan, Mut, Shared};
 use crate::obj::TransparentOver;
@@ -264,16 +263,13 @@ where
     }
 }
 
-/// The layout `TransparentOver` proves: a `T` is one `Rt::Value`.
 #[inline(always)]
 fn over_value<T, Rt>() -> SameLayout<T, Rt::Value>
 where
     T: TransparentOver<Rt>,
     Rt: Runtime,
 {
-    // SAFETY: `TransparentOver`'s contract: `T` is `repr(transparent)` with
-    // `Rt::Value` as its one non-zero-sized field.
-    unsafe { same_layout!(T, Rt::Value) }
+    crate::repr::value_layout::<T, Rt>()
 }
 
 /// A `T`'s place is the value's, so its address is the value's.

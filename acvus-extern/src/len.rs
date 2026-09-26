@@ -24,10 +24,10 @@ unsafe impl Canonical<kind::Length> for () {
 /// `Array<T, N>` with N a length variable. Holds the elements at runtime.
 ///
 /// `Borrowable::deref` in `obj.rs` reads the runtime's `Vec` as an
-/// `Arr<T, N>` through `over_items`, whose witness rests on this
-/// `repr(transparent)`. `same_layout!` checks size and alignment, not the
-/// attribute: drop it and the crate still compiles while the read stands on
-/// nothing the language promises.
+/// `Arr<T, N>` through `over_items`, whose witness rests on the `Wraps` impl
+/// below and so on this `repr(transparent)`. `repr::wrapped` checks size and
+/// alignment, not the attribute: drop it and the crate still compiles while
+/// the read stands on nothing the language promises.
 #[repr(transparent)]
 pub struct Arr<T, N>(pub Vec<T>, PhantomData<N>)
 where
@@ -47,14 +47,17 @@ impl<T, N> Arr<T, N>
 where
     N: Var<kind::Length>,
 {
-    /// The layout `repr(transparent)` gives: an `Arr` is its `Vec`.
+    /// An `Arr` is its `Vec`.
     #[inline(always)]
-    pub(crate) fn over_items() -> crate::repr::SameLayout<Vec<T>, Self> {
-        // SAFETY: `Arr<T, N>` is `repr(transparent)` with `Vec<T>` as its one
-        // non-zero-sized field.
-        unsafe { crate::canonical::same_layout!(Vec<T>, Self) }
+    pub(crate) fn over_items() -> crate::repr::SameValue<Vec<T>, Self> {
+        crate::repr::wrapped::<Self, Vec<T>>()
     }
 }
+
+// SAFETY: `Arr<T, N>` is `repr(transparent)` with `Vec<T>` as its one
+// non-zero-sized field, the other a `PhantomData`, and it keeps no invariant
+// of its own: the `Vec` is its public field.
+unsafe impl<T, N> crate::repr::Wraps<Vec<T>> for Arr<T, N> where N: Var<kind::Length> {}
 
 impl<T, N> IntoIterator for Arr<T, N>
 where

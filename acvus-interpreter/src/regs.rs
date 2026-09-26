@@ -8,10 +8,64 @@
 //! `Vec` — a stage whose closure is a `CodeBody::Expr` never binds one and
 //! pays nothing for it.
 
+#![cfg_attr(
+    feature = "tooling",
+    doc = r#"
+Under `tooling` no code outside the runtime writes a register or binds a
+frame (RFC-0102 rule 2, `Operand`).
+
+```compile_fail,E0624
+use acvus_interpreter::regs::Regs;
+
+let _ = Regs::set_word;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::regs::Regs;
+
+let _ = Regs::put;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::regs::Regs;
+
+let _ = Regs::peek_mut;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::regs::Regs;
+
+let _ = Regs::claim;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::regs::Store;
+
+let _ = Store::bind;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::regs::FrameState;
+
+let _ = FrameState::bind;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::regs::FrameState;
+
+let _ = FrameState::lay;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::regs::{Depth, RootFrame};
+
+let _ = RootFrame::new(Depth::ROOT);
+```
+"#
+)]
+
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
-
-use acvus_extern::Release;
 
 use crate::code::{Body, Marked, Off, WordMask};
 use crate::repr::{self, Apart, Registers};
@@ -401,14 +455,14 @@ pub struct BoundTo {
 }
 
 impl BoundTo {
-    pub const NONE: BoundTo = BoundTo {
+    pub(crate) const NONE: BoundTo = BoundTo {
         body: 0,
         param_run: 0,
     };
 
     /// Whether the frame was already bound to `body`, and bound to it now.
     #[inline]
-    pub fn rebind(&mut self, body: &Body) -> bool {
+    pub(crate) fn rebind(&mut self, body: &Body) -> bool {
         let key = BoundTo {
             body: std::ptr::from_ref(body).addr(),
             param_run: body.param_run,
@@ -437,7 +491,7 @@ pub struct Store {
 
 impl Store {
     /// A frame bound to no body: no cells, no allocation.
-    pub fn new() -> Store {
+    pub(crate) fn new() -> Store {
         Store {
             cells: Vec::new(),
             root: FrameState::UNBOUND,
@@ -455,7 +509,7 @@ impl Store {
     /// `body.frame_len` is above `MAX_FRAME_SLOTS`, which `prepare` must not
     /// emit.
     #[inline]
-    pub fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
+    pub(crate) fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
         let same = self.root.bound.rebind(body);
         if !same {
             self.widen(body.frame_len);
@@ -488,14 +542,14 @@ pub struct RootCells {
 /// A frame at the root of a call chain of its own: the state a call runs in,
 /// and the cells that state names.
 pub struct RootFrame {
-    pub state: FrameState,
-    pub cells: RootCells,
+    pub(crate) state: FrameState,
+    pub(crate) cells: RootCells,
 }
 
 impl RootFrame {
     /// Cells for the widest frame, at the root of a chain whose first frame
     /// runs at `depth`.
-    pub fn new(depth: Depth) -> RootFrame {
+    pub(crate) fn new(depth: Depth) -> RootFrame {
         let mut store = Store::new();
         store.widen(MAX_FRAME_SLOTS);
         let mut state = std::mem::replace(&mut store.root, FrameState::UNBOUND);
@@ -552,7 +606,7 @@ const _: fn() = || {
 
 impl FrameState {
     /// No cells and no body: what a `Store` holds until it is widened.
-    pub const UNBOUND: FrameState = FrameState {
+    pub(crate) const UNBOUND: FrameState = FrameState {
         cells: NonNull::slice_from_raw_parts(NonNull::dangling(), 0),
         bound: BoundTo::NONE,
         depth: Depth::ROOT,
@@ -572,7 +626,7 @@ impl FrameState {
 
     /// The depth a frame bound in this window runs at.
     #[inline(always)]
-    pub fn depth(&self) -> Depth {
+    pub(crate) fn depth(&self) -> Depth {
         self.depth
     }
 
@@ -585,7 +639,7 @@ impl FrameState {
     }
 
     #[inline(always)]
-    pub fn fits(&self, callee: &Body) -> bool {
+    pub(crate) fn fits(&self, callee: &Body) -> bool {
         usize::from(callee.frame_cells) + ARG_CELLS <= self.cells.len()
     }
 
@@ -597,7 +651,7 @@ impl FrameState {
     /// The window is narrower than `body`, which `fits` answers before this
     /// is reached.
     #[inline]
-    pub fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
+    pub(crate) fn bind(&mut self, body: &Body) -> (Regs<'_>, bool) {
         let same = self.bound.rebind(body);
         (Regs::of(self.cells(), body), same)
     }
@@ -621,7 +675,7 @@ impl FrameState {
     /// One argument of a call, written to the register the callee reads it
     /// from (RFC-0052 rule 7).
     #[inline(always)]
-    pub fn lay(&mut self, at: Off, value: Value) {
+    pub(crate) fn lay(&mut self, at: Off, value: Value) {
         // SAFETY: as `at`. The callee's frame is unbound until the call, so
         // nothing owns what this overwrites.
         unsafe { self.at(at).write(value) };
@@ -631,7 +685,7 @@ impl FrameState {
     /// in this window: its body is one chain (RFC-0044 rule 5), or its frame
     /// does not fit and is rooted in a `Store` of its own.
     #[inline]
-    pub fn laid(&mut self, arity: u16) -> &[Value] {
+    pub(crate) fn laid(&mut self, arity: u16) -> &[Value] {
         self.bound.overlaid(arity);
         let run = Registers {
             at: const { Off::of(0) },
@@ -648,7 +702,7 @@ impl FrameState {
     /// `AcvusRuntime::call_now` proves the bound below at its own
     /// monomorphization, out of `IntoRun::WIDTH` (RFC-0059).
     #[inline]
-    pub fn run_mut(&mut self, width: usize) -> &mut [Value] {
+    pub(crate) fn run_mut(&mut self, width: usize) -> &mut [Value] {
         debug_assert!(
             width <= MAX_ARG_SLOTS,
             "a call lays {width} arguments, past the {MAX_ARG_SLOTS} the cell a window begins \
@@ -741,7 +795,7 @@ impl<'f> Regs<'f> {
     /// no cells left. `at` is the depth this frame was entered at, and a
     /// frame bound in the window runs one deeper.
     #[inline(always)]
-    pub fn take_window(&mut self, at: Entered) -> FrameState {
+    pub(crate) fn take_window(&mut self, at: Entered) -> FrameState {
         let own = usize::from(self.own);
         let end = own + usize::from(self.above_cells);
         let cells = std::mem::take(&mut self.cells);
@@ -819,45 +873,45 @@ impl<'f> Regs<'f> {
     /// closure-heavy body takes per element. This runs from
     /// `machine::open_frame` instead, once per window and body, which is also
     /// where the kind bytes are written.
-    pub fn open_marks(&mut self, mark_words: MarkWords) {
+    pub(crate) fn open_marks(&mut self, mark_words: MarkWords) {
         for word in 1..usize::from(mark_words.last().get()) + 1 {
             self.mark(word * size_of::<u64>(), 0);
         }
     }
 
     #[inline(always)]
-    pub fn read(&self, off: Off) -> Value {
+    pub(crate) fn read(&self, off: Off) -> Value {
         // SAFETY: the two proofs stated on `Regs`.
         unsafe { self.at(off).read() }
     }
 
     #[inline(always)]
-    pub fn peek(&self, off: Off) -> &Value {
+    pub(crate) fn peek(&self, off: Off) -> &Value {
         // SAFETY: the two proofs stated on `Regs`.
         unsafe { &*self.at(off) }
     }
 
     #[inline(always)]
-    pub fn peek_mut(&mut self, off: Off) -> &mut Value {
+    pub(crate) fn peek_mut(&mut self, off: Off) -> &mut Value {
         // SAFETY: the two proofs stated on `Regs`.
         unsafe { &mut *self.at_mut(off) }
     }
 
     #[inline(always)]
-    pub fn projection(&mut self, off: Off) -> Value {
+    pub(crate) fn projection(&mut self, off: Off) -> Value {
         Value::large_ref(self.at_mut(off))
     }
 
     /// One 8-byte load: the kind byte was written when the frame was made and
     /// no run of a word-typed register changes it (RFC-0052 rule 5).
     #[inline(always)]
-    pub fn word(&self, off: Off) -> u64 {
+    pub(crate) fn word(&self, off: Off) -> u64 {
         self.peek(off).bits()
     }
 
     /// One 8-byte store, the other half of `word`.
     #[inline(always)]
-    pub fn set_word(&mut self, off: Off, bits: u64) {
+    pub(crate) fn set_word(&mut self, off: Off, bits: u64) {
         *self.peek_mut(off).bits_mut() = bits;
     }
 
@@ -865,7 +919,7 @@ impl<'f> Regs<'f> {
     /// a register whose kind the frame opened holds no `Large`, so there is
     /// no mark bit to clear (RFC-0052 rule 5).
     #[inline(always)]
-    pub fn take_word(&mut self, at: Marked) -> u64 {
+    pub(crate) fn take_word(&mut self, at: Marked) -> u64 {
         debug_assert!(
             self.marked(at.word_byte()) & at.mask() == 0,
             "a word-typed register carries the frame's claim on a Large"
@@ -876,7 +930,7 @@ impl<'f> Regs<'f> {
     /// One store, and one `or` on the frame's mark word where the operation's
     /// type says the value owns a `Large` (RFC-0048 rule 4).
     #[inline(always)]
-    pub fn define<const LARGE: bool>(&mut self, at: Marked, value: Value) {
+    pub(crate) fn define<const LARGE: bool>(&mut self, at: Marked, value: Value) {
         // SAFETY: `check_assignment`, as stated on `Regs`. A register this
         // overwrites was released by a drop instruction or never owned
         // (RFC-0018, RFC-0048 rule 6), so no value is lost here.
@@ -891,14 +945,14 @@ impl<'f> Regs<'f> {
     /// operation's type says the value owns no `Large`, so there is no mark
     /// bit to set and no mark word to name (RFC-0048 rule 4).
     #[inline(always)]
-    pub fn put(&mut self, at: Off, value: Value) {
+    pub(crate) fn put(&mut self, at: Off, value: Value) {
         // SAFETY: as `define`.
         unsafe { self.at_mut(at).write(value) };
     }
 
     /// The store a call's result takes (RFC-0052 rule 5).
     #[inline(always)]
-    pub fn store<const LARGE: bool, const WORD: bool>(&mut self, at: Marked, value: Value) {
+    pub(crate) fn store<const LARGE: bool, const WORD: bool>(&mut self, at: Marked, value: Value) {
         const {
             assert!(
                 !(LARGE && WORD),
@@ -914,7 +968,7 @@ impl<'f> Regs<'f> {
     /// The frame's first write of a word-typed register, which fixes its kind
     /// for every `set_word` after it (RFC-0052 rule 5).
     #[inline]
-    pub fn open(&mut self, off: Off, value: Value) {
+    pub(crate) fn open(&mut self, off: Off, value: Value) {
         // SAFETY: `check_assignment`, as stated on `Regs`; this is the
         // frame's first write of the register.
         unsafe { self.at_mut(off).write(value) };
@@ -924,7 +978,7 @@ impl<'f> Regs<'f> {
     /// it dropped. A word operand touches neither register nor mark word
     /// (RFC-0052 rule 5).
     #[inline(always)]
-    pub fn take<const LARGE: bool>(&mut self, at: Marked) -> Value {
+    pub(crate) fn take<const LARGE: bool>(&mut self, at: Marked) -> Value {
         let value = self.read(at.at());
         if LARGE {
             let word = at.word_byte();
@@ -937,12 +991,12 @@ impl<'f> Regs<'f> {
     /// operation consumes in mark word 0 (RFC-0048 rule 5). `prepare::Takes`
     /// puts a `control::Disown` just before the operation for the ones above it.
     #[inline(always)]
-    pub fn take_mask(&mut self, mask: u64) {
+    pub(crate) fn take_mask(&mut self, mask: u64) {
         self.take_mask_of(WordMask { word_byte: 0, mask });
     }
 
     #[inline(always)]
-    pub fn take_mask_of(&mut self, WordMask { word_byte, mask }: WordMask) {
+    pub(crate) fn take_mask_of(&mut self, WordMask { word_byte, mask }: WordMask) {
         let word_byte = word_byte as usize;
         let marked = self.marked(word_byte);
         debug_assert!(
@@ -953,12 +1007,12 @@ impl<'f> Regs<'f> {
     }
 
     /// RFC-0045: the old value is released before the new one lands.
-    pub fn assign<const LARGE: bool>(&mut self, at: Marked, value: Value) {
+    pub(crate) fn assign<const LARGE: bool>(&mut self, at: Marked, value: Value) {
         let one = at.mask();
         let word = at.word_byte();
         let marked = self.marked(word);
         if marked & one != 0 {
-            self.read(at.at()).release();
+            self.read(at.at()).release_owned();
         }
         // SAFETY: `check_assignment`, as stated on `Regs`, with the previous
         // owner released just above.
@@ -978,7 +1032,7 @@ impl<'f> Regs<'f> {
     /// displacement and bit base fold, was measured at **+10.8 %** instead:
     /// `sweep` inlines into every return site, and a second copy of the release
     /// path costs more than the count does.
-    pub fn sweep(&mut self, mark_words: MarkWords) {
+    pub(crate) fn sweep(&mut self, mark_words: MarkWords) {
         let last = mark_words.last();
         let mut word = const { repr::Below::<MAX_MARK_WORDS>::of(0) };
         loop {
@@ -993,7 +1047,7 @@ impl<'f> Regs<'f> {
                     slot.get() < self.len,
                     "a set mark bit is a register index, which its frame holds"
                 );
-                self.read(Off::of_below(slot)).release();
+                self.read(Off::of_below(slot)).release_owned();
                 live &= live - 1;
             }
             self.mark(word_byte, 0);
@@ -1007,7 +1061,7 @@ impl<'f> Regs<'f> {
     /// The registers an extern call's arguments sit in, lent to the handler
     /// (RFC-0044 rule 2).
     #[inline]
-    pub fn run_of(&self, at: Off, arity: u16) -> &[Value] {
+    pub(crate) fn run_of(&self, at: Off, arity: u16) -> &[Value] {
         // SAFETY: `prepare` allocated the run contiguously in this frame and
         // every register of it is defined at the call.
         unsafe { run_in(self.cells, at, arity, self.len) }
@@ -1017,7 +1071,7 @@ impl<'f> Regs<'f> {
     /// lent to the handler (RFC-0050 rules 5 and 6). The caller cleared every
     /// register of the run that held a `Large`, so a write here loses nothing.
     #[inline]
-    pub fn run_of_mut(&mut self, at: Off, width: u16) -> &mut [Value] {
+    pub(crate) fn run_of_mut(&mut self, at: Off, width: u16) -> &mut [Value] {
         let from = at.index();
         let to = from + usize::from(width);
         debug_assert!(
@@ -1036,7 +1090,7 @@ impl<'f> Regs<'f> {
     /// # Safety
     /// The two runs share no register.
     #[inline(always)]
-    pub unsafe fn run_and_run_of_mut(&mut self, args: Registers, out: Registers) -> Apart<'_> {
+    pub(crate) unsafe fn run_and_run_of_mut(&mut self, args: Registers, out: Registers) -> Apart<'_> {
         debug_assert!(
             args.at.index() + usize::from(args.len) <= usize::from(self.len)
                 && out.at.index() + usize::from(out.len) <= usize::from(self.len),
@@ -1057,7 +1111,7 @@ impl<'f> Regs<'f> {
     /// itself: an aggregate-returning call's handler wrote the `Large` into
     /// the lent run, and the frame takes ownership of it here (RFC-0048 rule 4).
     #[inline]
-    pub fn claim(&mut self, at: Marked) {
+    pub(crate) fn claim(&mut self, at: Marked) {
         let word = at.word_byte();
         self.mark(word, self.marked(word) | at.mask());
     }
@@ -1065,17 +1119,13 @@ impl<'f> Regs<'f> {
     /// The frame's first register, which a chain's pre-multiplied leaf offsets
     /// are byte displacements from.
     #[inline]
-    pub fn first_register(&self) -> NonNull<Value> {
+    pub(crate) fn first_register(&self) -> NonNull<Value> {
         repr::first_register(NonNull::from(&*self.cells))
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         usize::from(self.len)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
     }
 }
 

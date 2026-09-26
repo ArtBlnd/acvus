@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Owned};
-use acvus_interpreter::code::{Body, Op, substitute};
+use acvus_interpreter::code::{Body, Op};
 use acvus_interpreter::{
     AcvusRuntime, Executable, Interpreter, InterpreterContext, PrepareCtx,
     SequentialExecutor, Value, prepare_module,
@@ -381,36 +381,6 @@ fn body_of(interner: &Interner, shape: Shape) -> MirBody {
 
 // -- Running one shape -----------------------------------------------
 
-/// Every `Index` handler in a prepared body, swapped for the unchecked
-/// form of the same mode (RFC-0047 rule 7).
-fn drop_the_bound_check(body: &mut Body) {
-    let swapped: usize = body.heads.iter_mut().map(swap_in_chain).sum();
-    assert_eq!(swapped, 2, "both element reads lost their bound check");
-}
-
-/// Every checked `Index` of this chain and of the chains its regions hold,
-/// replaced by the unchecked form of the same read, carrying the successor
-/// the node it replaces held.
-fn swap_in_chain(head: &mut Box<dyn Op>) -> usize {
-    let mut swapped = 0;
-    let mut at = head;
-    loop {
-        if let Some(read) = at.index_read() {
-            substitute(at, |next| {
-                acvus_interpreter::index_handlers::unchecked(IndexMode::Copy, read, next)
-            });
-            swapped += 1;
-        }
-        for owned in at.owns_mut() {
-            swapped += swap_in_chain(owned);
-        }
-        match at.successor_mut() {
-            Some(next) => at = next,
-            None => return swapped,
-        }
-    }
-}
-
 /// The page each run reads, at the types `body` fetches it at.
 fn page(interner: &Interner, n: usize) -> HashMap<String, (Ty, Owned<AcvusRuntime>)> {
     let container = acvus_extern::vec_ty(interner, Ty::Float);
@@ -447,7 +417,7 @@ struct Timing {
 /// The operations one iteration runs: the loop's head and its body, which
 /// is what a band is built from.
 fn dispatches_per_iteration(body: &Body) -> usize {
-    body.heads
+    body.heads()
         .iter()
         .flat_map(|head| chain_of(head.as_ref()))
         .flat_map(|op| op.owns())
@@ -515,10 +485,9 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
         },
     ).unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
     if shape == Shape::Unchecked {
-        let code = Arc::get_mut(&mut prepared.main).expect("the prepared body is not yet shared");
-        drop_the_bound_check(code);
+        assert_eq!(prepared.drop_bound_checks(), 2, "both element reads lost their bound check");
     }
-    let dispatches = dispatches_per_iteration(&prepared.main);
+    let dispatches = dispatches_per_iteration(prepared.main());
     functions.insert(entry, Executable::Module(Arc::new(prepared)));
 
     let shared = InterpreterContext::new(&interner, functions, Arc::new(SequentialExecutor))

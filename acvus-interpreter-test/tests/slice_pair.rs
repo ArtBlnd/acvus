@@ -26,14 +26,14 @@ a[n]";
 
 fn reads_of(body: &Body) -> Vec<Read> {
     let mut found = Vec::new();
-    for head in &body.heads {
+    for head in body.heads() {
         walk(head.as_ref(), &mut found);
     }
     found
 }
 
 fn walk(op: &dyn Op, found: &mut Vec<Read>) {
-    if let Some(read) = op.index_read() {
+    if let Some((_, read)) = op.index_read() {
         found.push(read);
     }
     for owned in op.owns() {
@@ -68,7 +68,7 @@ async fn a_slice_is_two_adjacent_registers_of_one_word_class() {
     );
 
     let opened: Vec<usize> = body
-        .slot_kinds
+        .slot_kinds()
         .iter()
         .filter(|k| k.slot == ptr || k.slot == len)
         .map(|k| k.slot.index())
@@ -78,14 +78,14 @@ async fn a_slice_is_two_adjacent_registers_of_one_word_class() {
         [ptr.index(), len.index()],
         "both registers of the pair are opened by the frame, in a frame of {} \
          whose word class is {:?}",
-        body.frame_len,
-        body.slot_kinds
+        body.frame_len(),
+        body.slot_kinds()
             .iter()
             .map(|k| (k.slot.index(), k.kind))
             .collect::<Vec<_>>()
     );
     assert!(
-        body.slot_kinds
+        body.slot_kinds()
             .iter()
             .filter(|k| k.slot == ptr || k.slot == len)
             .all(|k| k.kind.is_inline()),

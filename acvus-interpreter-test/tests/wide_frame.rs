@@ -320,7 +320,7 @@ fn a_take_above_word_zero_is_disowned_before_its_operation() {
 fn frame_len(source: &str) -> u16 {
     let i = Interner::new();
     let prepared = prepared_script_with_externs(&i, source, Context::default(), regs(), Ty::I64);
-    main_body(&prepared).frame_len
+    main_body(&prepared).frame_len()
 }
 
 /// Before storages were coloured by live range, this body took 404 registers.
