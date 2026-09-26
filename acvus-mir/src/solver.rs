@@ -24,7 +24,7 @@ use crate::ty::{
     CastRule, Concrete, Effect, EffectConflict, EffectTerm, EffectVarBound, EffectVarId,
     ErrorToken, FieldSet, FlowTerm, FlowVarId, Flows, HeldTy, Home, IdentityId, IdentityTerm, IdentityVarId, Infer, InferTy,
     Instances, Instancing, IntTy, LenTerm, LenVarId, Mutability, ObjectMeet, ObjectTy, ParamTerm, Phase, Poly,
-    PolyTy, Repr, ReprVarId, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
+    PolyTy, Repr, ReprVarId, Requirement, RequirementSig, Scheme, Task, Ty, TyTerm, TyVarBound, TypeArg,
     TypeBoundId, TypeRegistry, View, Viewed, could_match_pattern, effect_bound_at, matches_pattern,
 };
 
@@ -2662,8 +2662,10 @@ pub struct BegunSource {
 }
 
 /// The candidates a requirement is decided among: the signature's
-/// instances whose body runs at no task above the one the requirement calls
-/// at and, where it names a law, that state it (RFC-0070 rule 6). An
+/// concrete instances whose body runs at no task above the one the
+/// requirement calls at and, where it names a law, that state it (RFC-0070
+/// rule 6). The generic instance is none of them: a requirement's decision
+/// has no generic fallback. An
 /// instance's own requirements at the same signature name that law too, so
 /// `eq` over `Vec<T>` is an equivalence exactly where `T`'s is.
 fn required_candidates(instances: &Instances, requirement: &RequirementSig) -> Vec<Candidate> {
@@ -2692,6 +2694,21 @@ fn required_candidates(instances: &Instances, requirement: &RequirementSig) -> V
             effect_bounds: sig.effect_bounds.clone(),
         })
         .collect()
+}
+
+/// [`required_candidates`] for a scheme's requirement, from the instances it
+/// carries: the candidates its decision is opened with, and the ones a
+/// refusal reads to name the instance a call lacked (RFC-0043).
+fn requirement_candidates(requirement: &Requirement) -> Vec<Candidate> {
+    required_candidates(
+        &requirement.instances,
+        &RequirementSig {
+            signature: requirement.signature,
+            pattern: requirement.pattern.clone(),
+            calls: requirement.calls,
+            law: requirement.law,
+        },
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4096,8 +4113,9 @@ impl<'src> Solver<'src> {
 
     /// The instances `scheme` lacked at a call of `args` (RFC-0043,
     /// RFC-0070): where the call's arguments join its parameters with every
-    /// variable left unbounded, each requirement no instance of its
-    /// signature takes at the types that join gives it, with the
+    /// variable left unbounded, each requirement none of whose candidates
+    /// ([`requirement_candidates`], the ones its decision is opened with)
+    /// takes at the types that join gives it, with the
     /// requirement's call type there, as written. Empty where an argument
     /// does not join even so, since the candidate then left by more than a
     /// requirement. The terms are put back as they were: the trial keeps
@@ -4156,14 +4174,10 @@ impl<'src> Solver<'src> {
             .filter_map(|(requirement, pattern)| {
                 let call = called_at(pattern, requirement.calls);
                 let bound = EffectBoundedBy::of(Some(requirement.signature));
-                let taken = requirement.instances.generic.is_some()
-                    || requirement
-                        .instances
-                        .concrete
-                        .iter()
-                        .filter(|sig| sig.task <= requirement.calls)
-                        .filter(|sig| requirement.law.is_none_or(|law| law.stated_by(&sig.laws)))
-                        .any(|sig| self.terms.would_take(&call, &sig.ty, bound, self.registry));
+                let taken = requirement_candidates(requirement).iter().any(|candidate| {
+                    self.terms
+                        .would_take(&call, &candidate.ty, bound, self.registry)
+                });
                 if taken {
                     return None;
                 }
@@ -5076,15 +5090,7 @@ impl<'src> Solver<'src> {
                 let call = called_at(call, req.calls);
                 let id = self.decide(Decision::Instance {
                     call,
-                    candidates: required_candidates(
-                        &req.instances,
-                        &RequirementSig {
-                            signature: req.signature,
-                            pattern: req.pattern.clone(),
-                            calls: req.calls,
-                            law: req.law,
-                        },
-                    ),
+                    candidates: requirement_candidates(req),
                     generic: None,
                     required: Some(req.signature),
                     law: req.law,
