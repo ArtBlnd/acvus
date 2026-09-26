@@ -1170,13 +1170,13 @@ Status: Proposed
    all `f` runs, a call it makes of a function value it was handed
    included, so an `f` that calls one cannot state it: combining the
    registries refuses `total` on an instance a parameter of which holds a
-   function type, at any depth, and on an instance that requires an
-   instance of a signature (RFC-0067), whose call runs whichever instance
-   resolves the requirement. It is the author's
+   function type, at any depth. An instance with requirements (RFC-0070)
+   states it of its own body; a call is total where every instance of its
+   chosen tree states it. It is the author's
    promise (rule 5), sampled by tests that call each declared handler over
    its width's edges and a fixed sample of words. `analysis::raise` reads
-   it, by the instance a call names, so a call whose value nothing reads
-   is removed only where its instance states it (RFC-0048 rule 8); the
+   it over a call's chosen tree, so a call whose value nothing reads
+   is removed only where it holds (RFC-0048 rule 8); the
    declaration is an instance's, so `num::pow` states it over an unsigned
    width and not over a signed one, where a negative exponent traps.
 10. **Orders.** `law(total_order)` on

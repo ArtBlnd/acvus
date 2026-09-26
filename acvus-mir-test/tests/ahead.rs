@@ -50,10 +50,28 @@ mod fx {
         unreachable!("a type-only fixture is never run")
     }
 
+    /// A type whose `display` states no `total`: `std::to_string` still
+    /// resolves at it, and a call of it is not total (RFC-0082 rule 9).
+    #[derive(acvus_extern::ExternType)]
+    #[repr(transparent)]
+    pub struct Tag(i64);
+
+    #[extern_fn(effect = pure)]
+    pub fn tag(n: i64) -> Tag {
+        Tag(n)
+    }
+
+    #[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+    pub fn display_tag(a: &Tag, out: &mut String) {
+        let _ = (a, out);
+        unreachable!("a type-only fixture is never run")
+    }
+
     pub fn registry() -> Registry<TypesOnly> {
         extern_registry! {
             ns: "fx",
-            fns: [parse_heavy, crunch, fetch_io, fetch_pure, fetch_plain],
+            types: [Tag],
+            fns: [parse_heavy, crunch, fetch_io, fetch_pure, fetch_plain, tag, display_tag],
         }
     }
 }
@@ -240,6 +258,66 @@ fn a_request_formatted_before_the_call_runs_ahead_with_it() {
         .collect();
     assert!(!slots.is_empty(), "the `let` slot is assigned in the prefix");
     assert!(slots.iter().all(|slot| plan.written.contains(slot)));
+}
+
+fn called_ahead<'a>(decided: &'a Decided, plan: &Plan) -> Vec<&'a str> {
+    plan.prefix
+        .iter()
+        .filter_map(|member| match decided.kind(*member) {
+            Some(InstKind::FunctionCall { callee, .. }) => Some(decided.callee_name(callee)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `std::to_string` states `total` of its own body and chooses `i64`'s
+/// `display`, which states it too, so the call is total over its chosen
+/// tree (RFC-0082 rule 9) and an integer formatted into the request runs
+/// ahead with the spawn.
+#[test]
+fn an_integer_formatted_into_the_request_runs_ahead_with_it() {
+    let decided = Decided::of(
+        r#"let ids = vec([1, 2, 3]);
+           let out = vec([]);
+           for id in &ids {
+               let url = "https://api.example/items/" + id.to_string() + "?fields=name";
+               out.push(fx::fetch_pure(url.to_string()));
+           }
+           out.len()"#,
+    );
+    let plan = decided.plan();
+    assert_eq!(spawn_tasks(&plan), [Task::Async], "{}", decided.listing);
+    assert!(
+        called_ahead(&decided, &plan).contains(&"to_string"),
+        "{}",
+        decided.listing
+    );
+    decided.prints("lower ahead {spawn fetch_pure}");
+}
+
+/// The same loop over a type whose `display` states no `total`: `to_string`
+/// resolves at it as before, its chosen tree holds an instance that may
+/// trap, and the prefix runs in place at that call.
+#[test]
+fn a_request_formatted_through_a_display_that_may_trap_runs_in_place() {
+    let decided = Decided::of(
+        r#"let tags = vec([fx::tag(1), fx::tag(2), fx::tag(3)]);
+           let out = vec([]);
+           for t in &tags {
+               let url = "https://api.example/items/" + t.to_string() + "?fields=name";
+               out.push(fx::fetch_pure(url.to_string()));
+           }
+           out.len()"#,
+    );
+    let Refused::MayTrap(at) = decided.refused() else {
+        panic!("{:?}:\n{}", decided.refused(), decided.listing)
+    };
+    let InstKind::FunctionCall { callee, .. } = &decided.cfg.blocks[at.block.0].insts[at.at].kind
+    else {
+        panic!("a call:\n{}", decided.listing)
+    };
+    assert_eq!(decided.callee_name(callee), "to_string", "{}", decided.listing);
+    decided.prints("lower in place: the prefix may trap at call to_string");
 }
 
 /// Unwrapping, scaling and summing the result run in place after the

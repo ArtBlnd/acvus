@@ -51,7 +51,8 @@ fn append(out: &mut String, a: &dyn std::fmt::Display) {
 
 macro_rules! display_ints {
     ($($name:ident: $t:ty),* $(,)?) => {$(
-        #[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+        /// `total`: an integer's `Display` into a `String` fails on no value.
+        #[extern_fn(instance_of = acvus_extern::core::display, effect = pure, total)]
         fn $name(a: &$t, out: &mut String) {
             append(out, a);
         }
@@ -63,17 +64,21 @@ display_ints! {
     display_u8: u8, display_u16: u16, display_u32: u32, display_u64: u64,
 }
 
-#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+/// `total`: `f64`'s `Display` into a `String` fails on no value, NaN and
+/// the infinities among them.
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure, total)]
 fn display_float(a: &f64, out: &mut String) {
     append(out, a);
 }
 
-#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+/// `total`: pushing a `char` onto a `String` fails on no value.
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure, total)]
 fn display_char(a: &char, out: &mut String) {
     out.push(*a);
 }
 
-#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+/// `total`: `bool`'s `Display` into a `String` fails on no value.
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure, total)]
 fn display_bool(a: &bool, out: &mut String) {
     append(out, a);
 }
@@ -84,7 +89,10 @@ fn display_bool(a: &bool, out: &mut String) {
 /// the types `display` stands at, which hold neither `str` nor `String`, so
 /// `"…".to_string()` and `s.to_string()` reach `string::to_string` alone
 /// (RFC-0043).
-#[extern_fn(effect = pure)]
+///
+/// `total` states this body alone, which allocates the `String` and runs the
+/// chosen `display`; that instance answers for itself.
+#[extern_fn(effect = pure, total)]
 fn to_string<T, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     a: &T,
@@ -302,6 +310,112 @@ mod tests {
         });
         assert_eq!(at_text.count(), 0);
         assert_eq!(instances.concrete.len(), 11);
+    }
+
+    /// A fixed-seed linear congruential sequence (Knuth's MMIX constants),
+    /// so a failing sample names the same inputs on every run.
+    fn samples(count: usize) -> Vec<u64> {
+        let mut state: u64 = 0x5eed_d15b_0c1a_7e00;
+        (0..count)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                state
+            })
+            .collect()
+    }
+
+    /// RFC-0082 rule 9 sampled over each width's edges and a fixed sample of
+    /// its words.
+    #[test]
+    fn total_holds_over_the_declared_display_instances() {
+        let raw = samples(256);
+        macro_rules! sampled {
+            ($display:ident: $t:ty) => {{
+                let edges = [<$t>::MIN, <$t>::MAX, 0, 1, <$t>::MAX / 2, <$t>::MIN.wrapping_sub(1)];
+                for a in edges.into_iter().chain(raw.iter().map(|&word| word as $t)) {
+                    let mut out = String::new();
+                    $display(&a, &mut out);
+                    assert_eq!(out, a.to_string());
+                }
+            }};
+        }
+        sampled!(display_i8: i8);
+        sampled!(display_i16: i16);
+        sampled!(display_i32: i32);
+        sampled!(display_int: i64);
+        sampled!(display_u8: u8);
+        sampled!(display_u16: u16);
+        sampled!(display_u32: u32);
+        sampled!(display_u64: u64);
+        let floats = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            f64::MAX,
+            f64::MIN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            -f64::NAN,
+        ];
+        for a in floats.into_iter().chain(raw.iter().map(|&word| f64::from_bits(word))) {
+            let mut out = String::new();
+            display_float(&a, &mut out);
+            assert_eq!(out, a.to_string());
+        }
+        let chars = ['\0', 'a', '\u{7f}', '\u{80}', 'é', '\u{d7ff}', '\u{e000}', '\u{10ffff}'];
+        let sampled_chars = raw.iter().filter_map(|&word| char::from_u32((word >> 43) as u32));
+        for a in chars.into_iter().chain(sampled_chars) {
+            let mut out = String::new();
+            display_char(&a, &mut out);
+            assert_eq!(out, a.to_string());
+        }
+        for a in [false, true] {
+            let mut out = String::new();
+            display_bool(&a, &mut out);
+            assert_eq!(out, a.to_string());
+        }
+    }
+
+    /// RFC-0082 rule 9: every `display` instance here and `to_string`'s
+    /// own body state `total`; `to_string` keeps its one `display`
+    /// requirement, which every type with a `display` resolves.
+    #[test]
+    fn every_display_and_to_string_is_declared_total() {
+        let i = Interner::new();
+        let reg = Externs::combine(vec![conversion_registry::<TypesOnly>()], &i)
+            .expect("registry combines");
+        let named = |ns: &str, name: &str| {
+            let qref = acvus_extern::QualifiedRef::qualified(i.intern(ns), i.intern(name));
+            let function = reg
+                .functions
+                .iter()
+                .find(|f| f.qref == qref)
+                .expect("the function is declared");
+            let acvus_extern::FnKind::Extern {
+                instances,
+                requires,
+                ..
+            } = &function.kind
+            else {
+                panic!("{ns}::{name} is an extern")
+            };
+            (instances.clone(), requires.clone())
+        };
+        let (display, _) = named("core", "display");
+        assert_eq!(display.concrete.len(), 11);
+        for instance in &display.concrete {
+            assert_eq!(instance.returns, acvus_extern::Returns::Total, "{:?}", instance.ty);
+        }
+        let (to_string, requires) = named("std", "to_string");
+        let generic = to_string.generic.expect("`to_string` is generic");
+        assert_eq!(generic.returns, acvus_extern::Returns::Total);
+        assert_eq!(requires.len(), 1, "{requires:?}");
     }
 
     #[test]

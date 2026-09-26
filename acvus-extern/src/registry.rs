@@ -566,13 +566,6 @@ pub enum CombineError {
         function: String,
         ty: PolyTy,
     },
-    /// `total` on an instance that requires an instance of a signature,
-    /// whichever instance a call resolves it to (RFC-0082 rule 9).
-    TotalOverRequiredInstance {
-        function: String,
-        ty: PolyTy,
-        signature: String,
-    },
 }
 
 impl fmt::Display for CombineError {
@@ -677,17 +670,6 @@ impl fmt::Display for CombineError {
                 "{function} declares `total` at {ty:?}, which takes a function value: a call \
                  of it runs that function too, and no declaration of {function} can promise \
                  that function never traps. Declare `returns` instead, or nothing."
-            ),
-            Self::TotalOverRequiredInstance {
-                function,
-                ty,
-                signature,
-            } => write!(
-                f,
-                "{function} declares `total` at {ty:?}, which requires an instance of \
-                 {signature}: a call of it runs whichever instance the call resolves, and no \
-                 declaration of {function} can promise that instance never traps. Declare \
-                 `returns` instead, or nothing."
             ),
         }
     }
@@ -1128,23 +1110,18 @@ impl<R: Runtime> Externs<R> {
         let declared: FxHashMap<QualifiedRef, &Function> =
             functions.iter().map(|f| (f.qref, f)).collect();
         for function in &functions {
-            let FnKind::Extern {
-                instances,
-                requires,
-                ..
-            } = &function.kind
-            else {
+            let FnKind::Extern { instances, .. } = &function.kind else {
                 continue;
             };
             let concrete = instances
                 .concrete
                 .iter()
-                .map(|at| (&at.ty, &at.laws, at.returns, at.means.as_ref(), at.requires.first()));
+                .map(|at| (&at.ty, &at.laws, at.returns, at.means.as_ref()));
             let generic = instances
                 .generic
                 .as_ref()
-                .map(|at| (&function.ty, &at.laws, at.returns, at.means.as_ref(), None));
-            for (ty, laws, returns, means, own_requirement) in concrete.chain(generic) {
+                .map(|at| (&function.ty, &at.laws, at.returns, at.means.as_ref()));
+            for (ty, laws, returns, means) in concrete.chain(generic) {
                 if let Some(means) = means {
                     if !acvus_mir::laws::means_fits(means, ty) {
                         return Err(CombineError::LawOnUnfitSignature {
@@ -1170,15 +1147,6 @@ impl<R: Runtime> Externs<R> {
                     return Err(CombineError::TotalOverFunctionArgument {
                         function: written(interner, function.qref),
                         ty: ty.clone(),
-                    });
-                }
-                if returns == Returns::Total
-                    && let Some(required) = own_requirement.or(requires.first())
-                {
-                    return Err(CombineError::TotalOverRequiredInstance {
-                        function: written(interner, function.qref),
-                        ty: ty.clone(),
-                        signature: written(interner, required.signature),
                     });
                 }
                 LawSite {
