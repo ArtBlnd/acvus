@@ -1,0 +1,7 @@
+// expect 2
+let rows = vec([vec([4u64, 1u64]), vec([8u64]), vec([3u64, 6u64, 7u64])]);
+let h = vec([0, 0, 0, 0]);
+for i in 0u64..rows.len() {
+    for x in &rows[i] { let b = *x % 4u64; h[b] = h[b] + 1; }
+}
+h[0]
