@@ -2061,13 +2061,14 @@ impl<R: Runtime> Instances<R> {
                     )
                 })
                 .collect(),
-            generic: self.generic.as_ref().map(|_| acvus_mir::ty::GenericSig {
+            generic: self.generic.as_ref().map(|handler| acvus_mir::ty::GenericSig {
                 laws: laws.clone(),
                 ensures: ensures.to_vec(),
                 reaches: reaches.clone(),
                 returns,
                 copies,
                 cost,
+                task: handler.task(),
             }),
         }
     }

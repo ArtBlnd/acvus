@@ -469,12 +469,16 @@ mod tests {
         let reg = Externs::combine(
             vec![
                 crate::iterator_registry::<TypesOnly>(),
+                crate::vec_registry::<TypesOnly>(),
                 result_registry::<TypesOnly>(),
             ],
             &i,
         )
         .expect("registry combines");
-        let base = Externs::combine(vec![crate::iterator_registry::<TypesOnly>()], &i)
+        let base = Externs::combine(vec![
+            crate::iterator_registry::<TypesOnly>(),
+            crate::vec_registry::<TypesOnly>(),
+        ], &i)
             .expect("the baseline combines");
         assert_eq!(reg.functions.len() - base.functions.len(), 21);
         assert_eq!(reg.handlers.len() - base.handlers.len(), 21);

@@ -234,18 +234,32 @@ fn value_refs(parsed: &ParsedSource) -> Vec<QualifiedRef> {
         ParsedSource::Recovered(RecoveredAst::Template(template)) => {
             collect_value_refs_template(template)
         }
+        ParsedSource::Fn(lifted) => match &lifted.decl {
+            FnBody::Parsed(decl) => collect_value_refs_fn(decl),
+            FnBody::Recovered(decl) => collect_value_refs_fn(decl),
+        },
     }
 }
 
 /// Whether a component's members name one another: more than one member,
 /// or one whose body names itself, which the call graph's edges leave out.
-fn is_cyclic(scc: &[QualifiedRef], parsed: &FxHashMap<QualifiedRef, &ParsedSource>) -> bool {
+fn is_cyclic(
+    scc: &[QualifiedRef],
+    parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
+    facts: &FxHashMap<QualifiedRef, LiftFacts>,
+) -> bool {
     match scc {
-        [only] => parsed.get(only).is_some_and(|body| {
-            value_refs(body)
-                .iter()
-                .any(|written| written.name == only.name)
-        }),
+        [only] => {
+            let calls_itself = facts
+                .get(only)
+                .is_some_and(|facts| facts.calls.values().any(|callee| callee == only));
+            calls_itself
+                || parsed.get(only).is_some_and(|body| {
+                    value_refs(body)
+                        .iter()
+                        .any(|written| written.name == only.name)
+                })
+        }
         _ => true,
     }
 }
@@ -295,7 +309,7 @@ impl CallTargets {
     {
         let mut bare = FxHashMap::default();
         let mut hosted = FxHashSet::default();
-        for local in locals {
+        for local in locals.into_iter().filter(|local| local.scope.is_none()) {
             if local.namespace.is_none() {
                 bare.insert((local.host, local.name), *local);
             }
@@ -314,21 +328,45 @@ impl CallTargets {
     }
 }
 
+/// The functions a body calls: those its written names reach, and the
+/// instances the lift resolved its calls of a script's `fn`s to.
 pub fn extract_call_edges(
     parsed: &ParsedSource,
     targets: &CallTargets,
     self_id: QualifiedRef,
+    facts: Option<&LiftFacts>,
 ) -> Vec<QualifiedRef> {
+    let written = value_refs(parsed)
+        .into_iter()
+        .filter_map(|written| targets.written_in(self_id, written));
+    let mut lifted: Vec<QualifiedRef> = facts
+        .into_iter()
+        .flat_map(|facts| facts.calls.values().copied())
+        .collect();
+    lifted.sort();
     let mut callees = Vec::new();
-    for written in value_refs(parsed) {
-        if let Some(callee_id) = targets.written_in(self_id, written)
-            && callee_id != self_id
-            && !callees.contains(&callee_id)
-        {
+    for callee_id in written.chain(lifted) {
+        if callee_id != self_id && !callees.contains(&callee_id) {
             callees.push(callee_id);
         }
     }
     callees
+}
+
+/// The edges components are drawn over: the call edges, and an edge from
+/// each instance of a `fn` back to the body it is typed with, which puts
+/// the two in one component (RFC-0100 rule 3).
+pub fn typed_together(
+    call_edges: &FxHashMap<QualifiedRef, Vec<QualifiedRef>>,
+    facts: &FxHashMap<QualifiedRef, LiftFacts>,
+) -> FxHashMap<QualifiedRef, Vec<QualifiedRef>> {
+    let mut edges = call_edges.clone();
+    for (&instance, facts) in facts {
+        if let Some(caller) = facts.typed_with {
+            edges.entry(instance).or_default().push(caller);
+        }
+    }
+    edges
 }
 
 /// Build a call graph: for each local function, which other local functions
@@ -338,22 +376,22 @@ fn build_call_graph(
     extract: &ExtractResult,
 ) -> FxHashMap<QualifiedRef, Vec<QualifiedRef>> {
     let targets = CallTargets::of(
-        graph
-            .functions
-            .iter()
+        extract
+            .functions(graph)
             .filter(|f| matches!(f.kind, FnKind::Local(..)))
             .map(|f| &f.qref),
     );
 
     let mut edges: FxHashMap<QualifiedRef, Vec<QualifiedRef>> = FxHashMap::default();
-    for func in graph.functions.iter() {
+    for func in extract.functions(graph) {
         if matches!(func.kind, FnKind::Extern { .. }) {
             continue;
         }
         let Some(parsed) = extract.parsed.get(&func.qref) else {
             continue;
         };
-        edges.insert(func.qref, extract_call_edges(parsed, &targets, func.qref));
+        let facts = extract.facts.get(&func.qref);
+        edges.insert(func.qref, extract_call_edges(parsed, &targets, func.qref, facts));
     }
     edges
 }
@@ -395,6 +433,7 @@ fn collect_value_refs_stmts<S>(stmts: &[acvus_ast::Stmt<S>], refs: &mut Vec<Qual
                 collect_value_refs_stmts(body, refs);
             }
             Stmt::Anyorder { body, .. } => collect_value_refs_stmts(body, refs),
+            Stmt::FnDecl(_) => {}
             Stmt::Append { expr, .. } => collect_value_refs_expr(expr, refs),
             Stmt::Error(_) => {}
         }
@@ -406,6 +445,15 @@ fn collect_value_refs_script<S>(script: &acvus_ast::Script<S>) -> Vec<QualifiedR
     let mut refs = Vec::new();
     collect_value_refs_stmts(&script.stmts, &mut refs);
     if let Some(tail) = &script.tail {
+        collect_value_refs_expr(tail, &mut refs);
+    }
+    refs
+}
+
+fn collect_value_refs_fn<S>(decl: &acvus_ast::FnDecl<S>) -> Vec<QualifiedRef> {
+    let mut refs = Vec::new();
+    collect_value_refs_stmts(&decl.body, &mut refs);
+    if let Some(tail) = &decl.tail {
         collect_value_refs_expr(tail, &mut refs);
     }
     refs
@@ -819,10 +867,17 @@ struct BodyCheck<'c> {
     probe: Option<acvus_ast::AstId>,
     expected_tail: InferTy,
     crossing: ResultCrossing,
+    lifted: Option<&'c LiftFacts>,
 }
 
 impl BodyCheck<'_> {
     fn check(self, solver: &mut Solver<'_>, parsed: &ParsedSource) -> Checked {
+        let checked = self.check_body(solver, parsed);
+        let refused_by_lift = self.lifted.into_iter().flat_map(|facts| &facts.refusals);
+        refused_by_lift.fold(checked, |checked, refusal| with_refusal(checked, refusal.clone()))
+    }
+
+    fn check_body(&self, solver: &mut Solver<'_>, parsed: &ParsedSource) -> Checked {
         match parsed {
             ParsedSource::Script(script) => {
                 let expected_tail = Some(self.expected_tail.clone());
@@ -847,7 +902,63 @@ impl BodyCheck<'_> {
             ParsedSource::Recovered(RecoveredAst::Template(template)) => {
                 refused(self.checker(solver).check_template(template))
             }
+            ParsedSource::Fn(lifted) => {
+                let expected_tail = Some(self.expected_tail.clone());
+                let outside = lifted.outside.clone();
+                match &lifted.decl {
+                    FnBody::Parsed(decl) => self.fn_checker(solver).check_fn(
+                        decl,
+                        outside,
+                        expected_tail,
+                        self.crossing,
+                    ),
+                    FnBody::Recovered(decl) => refused(self.fn_checker(solver).check_fn(
+                        decl,
+                        outside,
+                        expected_tail,
+                        self.crossing,
+                    )),
+                }
+            }
         }
+    }
+
+    /// A `fn`'s instance joined with no decision settled; nothing else is
+    /// joined this way. The decisions it opened are withdrawn, and the
+    /// instance's own check opens and reports them.
+    fn join(&self, solver: &mut Solver<'_>, lifted: &LiftedFn) {
+        let expected_tail = Some(self.expected_tail.clone());
+        let outside = lifted.outside.clone();
+        let mark = solver.open_mark();
+        match &lifted.decl {
+            FnBody::Parsed(decl) => {
+                self.fn_checker::<acvus_ast::Clean>(solver)
+                    .join_fn(decl, outside, expected_tail, self.crossing)
+            }
+            FnBody::Recovered(decl) => {
+                self.fn_checker::<acvus_ast::ErrorNode>(solver)
+                    .join_fn(decl, outside, expected_tail, self.crossing)
+            }
+        }
+        solver.withdraw_since(mark);
+    }
+
+    /// A `fn`'s instance reads no `$` a host bound (RFC-0100 rule 2).
+    fn fn_checker<'s, 'src, S>(&self, solver: &'s mut Solver<'src>) -> TypeChecker<'_, 's, 'src, S>
+    where
+        S: Checks,
+    {
+        self.probed(
+            TypeChecker::new(
+                self.interner,
+                self.env,
+                solver,
+                self.inputs,
+                self.declared_params.clone(),
+            )
+            .with_host(self.host)
+            .with_body_effect(self.effect.clone()),
+        )
     }
 
     /// A template's result is its text, joined into the return a call
@@ -877,16 +988,31 @@ impl BodyCheck<'_> {
     where
         S: Checks,
     {
-        let checker = TypeChecker::new(
-            self.interner,
-            self.env,
-            solver,
-            self.inputs,
-            self.declared_params.clone(),
+        self.probed(
+            TypeChecker::new(
+                self.interner,
+                self.env,
+                solver,
+                self.inputs,
+                self.declared_params.clone(),
+            )
+            .with_host(self.host)
+            .with_bound_inputs(self.bindings.in_host(self.host))
+            .with_body_effect(self.effect.clone()),
         )
-        .with_host(self.host)
-        .with_bound_inputs(self.bindings.in_host(self.host))
-        .with_body_effect(self.effect.clone());
+    }
+
+    fn probed<'b, 's, 'src, S>(
+        &self,
+        checker: TypeChecker<'b, 's, 'src, S>,
+    ) -> TypeChecker<'b, 's, 'src, S>
+    where
+        S: Checks,
+    {
+        let checker = match self.lifted {
+            Some(facts) => checker.with_lifted_calls(facts.calls.clone()),
+            None => checker,
+        };
         match self.probe {
             Some(marker) => checker.with_probe(marker),
             None => checker,
@@ -1031,6 +1157,7 @@ pub fn infer_scc(
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
     resolved_inputs: &FxHashMap<QualifiedRef, Vec<InputParam>>,
     declared: &FxHashMap<QualifiedRef, Declared>,
+    facts: &FxHashMap<QualifiedRef, LiftFacts>,
     sources: &mut Sources,
     registry: &TypeRegistry,
     probe: Option<Probe>,
@@ -1049,6 +1176,7 @@ pub fn infer_scc(
         resolved_fn_types,
         resolved_inputs,
         declared,
+        facts,
         registry,
         probe,
         access,
@@ -1070,6 +1198,7 @@ struct Component<'c> {
     resolved_fn_types: &'c FxHashMap<QualifiedRef, PolyTy>,
     resolved_inputs: &'c FxHashMap<QualifiedRef, Vec<InputParam>>,
     declared: &'c FxHashMap<QualifiedRef, Declared>,
+    facts: &'c FxHashMap<QualifiedRef, LiftFacts>,
     registry: &'c TypeRegistry,
     probe: Option<Probe>,
     access: Access,
@@ -1085,7 +1214,7 @@ impl Component<'_> {
     /// RFC-0025 rule 5 name. Each only grows with what the calls read, so
     /// the rounds climb from none and stop.
     fn check(&self, solver: &mut Solver<'_>, scc: &[QualifiedRef]) -> SccInferResult {
-        let before = is_cyclic(scc, self.parsed).then(|| solver.snapshot());
+        let before = is_cyclic(scc, self.parsed, self.facts).then(|| solver.snapshot());
         let mut member_flows: FxHashMap<QualifiedRef, Flows> =
             scc.iter().map(|fid| (*fid, Flows::none())).collect();
         let mut member_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> =
@@ -1100,8 +1229,32 @@ impl Component<'_> {
             // other member is checked once before it: each variable the
             // members share is then joined with every body that uses it
             // before any member's types are taken (RFC-0042 rule 5).
-            for &fid in scc.iter().skip(1) {
-                self.constrain(solver, &env, &own, fid);
+            //
+            // A component that holds a `fn`'s instances is typed as a body
+            // with lambdas in it is: every instance is joined first, with no
+            // decision settled, and then every other body is checked once,
+            // so that a caller's settle already reads both the arguments it
+            // passes and what each instance returns from them. Settling an
+            // instance before its caller would close what the arguments
+            // decide, a width or a text, at its least element; settling a
+            // caller before the instance's result is joined would close what
+            // the caller does with that result.
+            let instances: Vec<QualifiedRef> =
+                scc.iter().copied().filter(|fid| fid.scope.is_some()).collect();
+            match instances.is_empty() {
+                true => {
+                    for &fid in scc.iter().skip(1) {
+                        self.constrain(solver, &env, &own, fid);
+                    }
+                }
+                false => {
+                    for &fid in &instances {
+                        self.join_instance(solver, &env, &own, fid);
+                    }
+                    for &fid in scc.iter().filter(|fid| fid.scope.is_none()) {
+                        self.constrain(solver, &env, &own, fid);
+                    }
+                }
             }
             let mut checked: FxHashMap<QualifiedRef, MemberCheck> = FxHashMap::default();
             let mut probed: Option<ProbeProduct> = None;
@@ -1301,6 +1454,55 @@ impl Component<'_> {
         drop(self.check_member(solver, env, own, fid));
     }
 
+    fn join_instance(
+        &self,
+        solver: &mut Solver<'_>,
+        env: &crate::ty::TypeEnv,
+        own: &MemberTypes,
+        fid: QualifiedRef,
+    ) {
+        let Some(ParsedSource::Fn(lifted)) = self.parsed.get(&fid) else {
+            return;
+        };
+        self.body_check(solver, env, own, fid, Inputs::Declared)
+            .join(solver, lifted);
+    }
+
+    fn body_check<'b>(
+        &'b self,
+        solver: &mut Solver<'_>,
+        env: &'b crate::ty::TypeEnv,
+        own: &MemberTypes,
+        fid: QualifiedRef,
+        inputs: Inputs,
+    ) -> BodyCheck<'b> {
+        let func = self.fn_by_id[&fid];
+        let TyTerm::Fn {
+            ret: ref fn_ret, ..
+        } = func.ty
+        else {
+            unreachable!("local function ty must be Fn");
+        };
+        let effect = solver.fresh_effect_var();
+        let expected_tail = self.known.expected_tail(solver, fid, fn_ret, own);
+        BodyCheck {
+            interner: self.interner,
+            env,
+            declared_params: own.params[&fid].clone(),
+            inputs,
+            host: fid.host,
+            bindings: self.bindings,
+            effect,
+            probe: self
+                .probe
+                .filter(|probe| probe.body == fid.written_in())
+                .map(|probe| probe.marker),
+            expected_tail,
+            crossing: crossing_of(self.entries, fid),
+            lifted: self.facts.get(&fid),
+        }
+    }
+
     /// `None` where `fid` has no parsed body to check.
     fn check_member(
         &self,
@@ -1313,30 +1515,9 @@ impl Component<'_> {
         let (Some(parsed), FnKind::Local(_, inputs)) = (self.parsed.get(&fid), &func.kind) else {
             return None;
         };
-        let TyTerm::Fn {
-            ret: ref fn_ret, ..
-        } = func.ty
-        else {
-            unreachable!("local function ty must be Fn");
-        };
-        let effect = solver.fresh_effect_var();
-        let expected_tail = self.known.expected_tail(solver, fid, fn_ret, own);
-        let checked = BodyCheck {
-            interner: self.interner,
-            env,
-            declared_params: own.params[&fid].clone(),
-            inputs: *inputs,
-            host: fid.host,
-            bindings: self.bindings,
-            effect: effect.clone(),
-            probe: self
-                .probe
-                .filter(|probe| probe.body == fid)
-                .map(|probe| probe.marker),
-            expected_tail,
-            crossing: crossing_of(self.entries, fid),
-        }
-        .check(solver, parsed);
+        let body_check = self.body_check(solver, env, own, fid, *inputs);
+        let effect = body_check.effect.clone();
+        let checked = body_check.check(solver, parsed);
 
         let signature = match &checked.resolution {
             Ok(resolution) => {
@@ -1442,19 +1623,17 @@ fn infer_at(
 
     let known = KnownContexts::instantiate(&mut solver, contexts);
 
-    let fn_by_id: FxHashMap<QualifiedRef, &Function> = graph
-        .functions
-        .iter()
+    let fn_by_id: FxHashMap<QualifiedRef, &Function> = extract
+        .functions(graph)
         .filter(|f| matches!(f.kind, FnKind::Local(..)))
         .map(|f| (f.qref, f))
         .collect();
 
     // Every component is checked on the one solver, after the components
     // it calls, so a context's variable is held across all of them.
-    let call_graph = build_call_graph(graph, extract);
-    let local_ids: Vec<QualifiedRef> = graph
-        .functions
-        .iter()
+    let call_graph = typed_together(&build_call_graph(graph, extract), &extract.facts);
+    let local_ids: Vec<QualifiedRef> = extract
+        .functions(graph)
         .filter(|f| matches!(f.kind, FnKind::Local(..)))
         .map(|f| f.qref)
         .collect();
@@ -1473,6 +1652,7 @@ fn infer_at(
             resolved_fn_types: &resolved_fn_types,
             resolved_inputs: &resolved_inputs,
             declared: &declared,
+            facts: &extract.facts,
             registry: &graph.types,
             probe: None,
             access: graph.access,

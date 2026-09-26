@@ -383,6 +383,24 @@ fn within_call_bounds(body: &MirBody, role: BodyRole) -> Result<(), FrameRefusal
 /// # Errors
 /// A body needs more registers than a frame, a call or an entry holds.
 pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Result<Prepared, FrameRefusal> {
+    prepare_module_with(module, ctx, ParamRelease::ByFrame)
+}
+
+pub(crate) fn prepare_lent_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Result<Prepared, FrameRefusal> {
+    prepare_module_with(module, ctx, ParamRelease::ByCaller)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ParamRelease {
+    ByFrame,
+    ByCaller,
+}
+
+fn prepare_module_with(
+    module: &MirModule,
+    ctx: &PrepareCtx<'_>,
+    params: ParamRelease,
+) -> Result<Prepared, FrameRefusal> {
     let bodies = || std::iter::once(&module.main).chain(module.closures.values());
     let literals = Arc::new(Literals::of(bodies().flat_map(|body| literal_texts(body))));
     let entries = RefCell::new(InstanceEntryStore::default());
@@ -420,6 +438,7 @@ pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Result<Prepar
         &entries,
         &closures,
         &literals,
+        params,
     )?);
     Ok(Prepared {
         main,
@@ -516,12 +535,13 @@ fn pull_loops_in_place(body: &MirBody) -> Cow<'_, MirBody> {
 
 /// # Errors
 /// The body needs more registers than a frame, a call or an entry holds.
-pub fn prepare_entry(
+fn prepare_entry(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
     entries: &RefCell<InstanceEntryStore>,
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
+    params: ParamRelease,
 ) -> Result<Body, FrameRefusal> {
     let body = &*pull_loops_in_place(body);
     within_call_bounds(body, BodyRole::Entry)?;
@@ -531,7 +551,7 @@ pub fn prepare_entry(
     prep.plan_runs(scalars, BodyRole::Entry)?;
     let regions = prep.regions();
 
-    Ok(framed(prep, literals, &regions, BodyRole::Entry))
+    Ok(framed(prep, literals, &regions, BodyRole::Entry, params))
 }
 
 /// # Errors
@@ -560,6 +580,7 @@ pub fn prepare_closure(
         literals,
         &regions,
         BodyRole::Closure,
+        ParamRelease::ByFrame,
     ))))
 }
 
@@ -568,9 +589,15 @@ fn framed(
     literals: &Arc<Literals>,
     regions: &[Region],
     role: BodyRole,
+    params: ParamRelease,
 ) -> Body {
     let body = prep.body;
-    let blocks = prep.blocks(0..body.insts.len(), regions);
+    #[cfg_attr(not(all(debug_assertions, not(target_arch = "wasm32"))), expect(unused_mut))]
+    let mut blocks = prep.blocks(0..body.insts.len(), regions);
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    for head in &mut blocks {
+        guard_calls(head, 0);
+    }
     // RFC-0046 asked for equality here. It does not hold, and
     // `io_in_iteration` (acvus-interpreter-test/tests/extern_fn.rs)
     // measures the gap: a closure demoted to the parameter's effect is
@@ -584,7 +611,10 @@ fn framed(
 
     let frame_len = prep.frame_len();
     let param_ids: Vec<ValueId> = body.params.iter().map(|(_, v)| *v).collect();
-    let param_marks = prep.param_marks(&param_ids);
+    let param_marks = match params {
+        ParamRelease::ByFrame => prep.param_marks(&param_ids),
+        ParamRelease::ByCaller => 0,
+    };
     let params = param_ids.iter().map(|id| prep.off(*id)).collect();
     let captures = body.captures.iter().map(|(_, v)| prep.off(*v)).collect();
     let order_param = body.order_param.map(|id| prep.off(id));
@@ -613,6 +643,34 @@ fn framed(
         captures,
         order_param,
         span: body_span(body, role),
+    }
+}
+
+/// A debug build calls each operation's successor rather than jumping to
+/// it, so every operation of a chain nests in the frame of the one before
+/// it, and a region's parts in the region's. `chain` is the head of a chain
+/// run under `nested` such frames since the last check of the stack; a
+/// `StackGuard` goes where one more would pass `regs::GUARD_EVERY`
+/// (RFC-0100 rule 5).
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+fn guard_calls(mut chain: &mut Box<dyn Op>, mut nested: usize) {
+    loop {
+        if nested == crate::regs::GUARD_EVERY {
+            let op = mem::replace(chain, Box::new(control::Fall));
+            *chain = Box::new(control::StackGuard { next: op });
+            nested = 1;
+            chain = chain
+                .successor_mut()
+                .expect("a `StackGuard` holds the operation it guards");
+        }
+        nested += 1;
+        for part in chain.owns_mut() {
+            guard_calls(part, nested);
+        }
+        match chain.successor_mut() {
+            Some(next) => chain = next,
+            None => return,
+        }
     }
 }
 
@@ -830,6 +888,12 @@ struct Prepare<'a> {
     def_inst: Vec<Option<usize>>,
     use_counts: Vec<u32>,
     konsts: Konsts,
+    /// The region operations whose frames the part being emitted nests in
+    /// since the last `StackGuard` (RFC-0100 rule 5). A release build jumps
+    /// from an operation to its successor, so a region's part is the one
+    /// frame a chain adds.
+    #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
+    nested: usize,
 }
 
 /// Where each instruction of the block array under construction begins.
@@ -1503,6 +1567,8 @@ impl<'a> Prepare<'a> {
             def_inst,
             use_counts,
             konsts: Konsts::default(),
+            #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
+            nested: 0,
         }
     }
 
@@ -3372,6 +3438,13 @@ impl<'a> Prepare<'a> {
         leaving: Vec<Node>,
         hands: Option<ValueId>,
     ) -> (Vec<Node>, bool) {
+        #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
+        let outer = self.nested;
+        #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
+        let guarded = {
+            self.nested = (outer + 1) % crate::regs::GUARD_EVERY;
+            self.nested == 0
+        };
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
         let mut units = self.layout(range, nested, &runs, &chains);
@@ -3397,6 +3470,13 @@ impl<'a> Prepare<'a> {
             );
         }
         ops.extend(leaving);
+        #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
+        {
+            self.nested = outer;
+            if guarded {
+                ops.insert(0, node(|next| control::StackGuard { next }));
+            }
+        }
         (ops, rode)
     }
 
@@ -7591,6 +7671,7 @@ mod recognizer_tests {
                 &RefCell::new(InstanceEntryStore::default()),
                 &FxHashMap::default(),
                 &literals,
+                ParamRelease::ByFrame,
             )
             .unwrap_or_else(|refusal| panic!("a fixture body is refused: {refusal}"))))
         }

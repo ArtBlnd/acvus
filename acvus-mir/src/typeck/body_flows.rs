@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 
 use acvus_ast::{
-    AstId, ElseBranch, Expr, ForHead, MatchExprArm, ObjectExprField, Pattern, Place, PlaceBase,
+    AstId, Binder, ElseBranch, Expr, ForHead, MatchExprArm, ObjectExprField, Pattern, Place, PlaceBase,
     RefKind, Root, Slot, Stmt, TupleElem, TuplePatternElem, UnaryOp,
 };
 use acvus_utils::Astr;
@@ -76,11 +76,13 @@ struct LambdaSite<'e, S> {
     body: &'e Expr<S>,
 }
 
-/// A body to walk: a script's statements and tail, or a template's
-/// statements.
+/// A body to walk: a script's statements and tail, a template's
+/// statements, or a `fn`'s statements and tail with the binders of its
+/// parameters.
 pub(super) struct Body<'e, S> {
     pub stmts: &'e [Stmt<S>],
     pub tail: Option<&'e Expr<S>>,
+    pub params: &'e [Binder],
 }
 
 fn any(origin: &Origin) -> Origin {
@@ -109,6 +111,9 @@ where
     pub(super) fn infer_flows(&mut self, body: Body<'_, S>) -> Flows {
         let mut scopes = Scopes::default();
         let mut lambdas: Vec<LambdaSite<'_, S>> = Vec::new();
+        for param in body.params {
+            scopes.owner.insert(param.id, None);
+        }
         scope_stmts(body.stmts, None, &mut scopes, &mut lambdas);
         if let Some(tail) = body.tail {
             scope_expr(tail, None, &mut scopes, &mut lambdas);
@@ -196,7 +201,12 @@ where
     fn whole_body_flows(&self, body: &Body<'_, S>, scopes: &Scopes) -> Flows {
         let frame = Frame {
             lambda: None,
-            params: FxHashMap::default(),
+            params: body
+                .params
+                .iter()
+                .enumerate()
+                .map(|(index, binder)| (binder.id, index))
+                .collect(),
             inputs: self
                 .param_types
                 .iter()
@@ -493,6 +503,7 @@ where
                 self.stmts(body);
             }
             Stmt::Anyorder { body, .. } => self.stmts(body),
+            Stmt::FnDecl(_) => {}
             Stmt::Error(_) => {}
         }
     }
@@ -1069,6 +1080,7 @@ fn scope_stmt<'e, S>(
             scope_stmts(body, at, scopes, lambdas);
         }
         Stmt::Anyorder { body, .. } => scope_stmts(body, at, scopes, lambdas),
+        Stmt::FnDecl(_) => {}
         Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Error(_) => {}
     }
 }
@@ -1305,6 +1317,7 @@ fn reads_in_stmts<S>(stmts: &[Stmt<S>], reads: &mut Vec<Read>) {
                 reads_in_stmts(body, reads);
             }
             Stmt::Anyorder { body, .. } => reads_in_stmts(body, reads),
+            Stmt::FnDecl(_) => {}
             Stmt::LetUninit { .. }
             | Stmt::Break { .. }
             | Stmt::Continue { .. }

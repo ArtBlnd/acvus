@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 pub mod listing;
 pub mod scripts;
+pub mod step_model;
 
 use acvus_extern::{Externs, Owned, Registry};
 use acvus_interpreter::AcvusRuntime;

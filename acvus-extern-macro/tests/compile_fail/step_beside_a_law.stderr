@@ -1,0 +1,19 @@
+error: the law `commutative` beside a step: a stream adaptor or consumer states its step alone (RFC-0099 rule 1)
+ --> tests/compile_fail/step_beside_a_law.rs:5:32
+  |
+5 | #[extern_fn(effect = pure, law(commutative), step(state s = 0; s = s +% 1; finish s))]
+  |                                ^^^^^^^^^^^
+
+warning: unused imports: `Closure`, `Cross`, `Instance`, `Later`, `PassedByValue`, `Runtime`, `Stored`, `Var`, and `kind`
+ --> tests/compile_fail/step_beside_a_law.rs:2:20
+  |
+2 | use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^^^  ^^^^^  ^^^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `acvus_ext::iter_sig::next`
+ --> tests/compile_fail/step_beside_a_law.rs:3:5
+  |
+3 | use acvus_ext::iter_sig::next;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^

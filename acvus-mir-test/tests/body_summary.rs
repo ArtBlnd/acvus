@@ -2,7 +2,11 @@
 //! borrow, what a caller holds once it has one, and what a body in a cycle of
 //! the call graph leaves with.
 
-use acvus_mir::ty::{LenTerm, Mutability, ParamTerm, Poly, PolyParam, Ty, TypeArg, lift_to_poly};
+use acvus_mir::graph::{FnKind, Function, QualifiedRef};
+use acvus_mir::ty::{
+    Effect, Flows, LenTerm, Mutability, ParamTerm, Poly, PolyParam, Ty, TyTerm, TypeArg,
+    lift_to_poly,
+};
 use acvus_mir_test::compile_multi_fn_optimized;
 use acvus_utils::Interner;
 
@@ -119,6 +123,9 @@ fn writing_the_argument_while_the_result_lives_is_refused() {
     );
 }
 
+/// The refusal is the caller's: `first`'s own body reads its parameter and
+/// is admitted, and `main` reads `v` while `r`, the `&i64` `first` returned
+/// from the `&mut v` it was lent, is live (RFC-0018 rule 8).
 #[test]
 fn a_mutable_summary_excludes_a_read_of_the_argument() {
     let i = Interner::new();
@@ -129,10 +136,135 @@ fn a_mutable_summary_excludes_a_read_of_the_argument() {
             main: "let v = [1, 2, 3];\nlet r = first(&mut v);\nlet s = v[0];\nr + s\n",
         },
     );
+    assert_refused_in_main_reading_v(&refusal);
+}
+
+fn assert_refused_in_main_reading_v(refusal: &str) {
     assert!(
-        refusal.contains("while a reference to it is live"),
+        refusal.contains("[validate:main]")
+            && refusal.contains("`v` is read here while a reference to it is live"),
         "{refusal}"
     );
+    assert!(
+        !refusal.contains("[validate:first]"),
+        "the helper's own body is admitted: {refusal}"
+    );
+}
+
+// -- An exclusive loan held read-only (RFC-0018 rule 8) ---------------
+
+#[test]
+fn a_mutable_parameter_is_read_in_its_own_body() {
+    let i = Interner::new();
+    admits(
+        &i,
+        Program {
+            helpers: vec![Helper {
+                name: "bump",
+                body: "*$n + 1",
+                takes: sig(&i, &[("n", borrow(Mutability::Mut, Ty::I64))]),
+            }],
+            main: "let n = 1;\nbump(&mut n)\n",
+        },
+    );
+}
+
+#[test]
+fn the_argument_is_read_once_the_result_is_dead() {
+    let i = Interner::new();
+    admits(
+        &i,
+        Program {
+            helpers: vec![first("&$xs[0]", lends(&i, Mutability::Mut))],
+            main: "let v = [1, 2, 3];\nlet r = first(&mut v);\nlet x = r + 0;\nlet s = v[0];\nx + s\n",
+        },
+    );
+}
+
+#[test]
+fn a_mutable_summary_excludes_a_write_of_the_argument() {
+    let i = Interner::new();
+    let refusal = refuses(
+        &i,
+        Program {
+            helpers: vec![first("&$xs[0]", lends(&i, Mutability::Mut))],
+            main: "let v = [1, 2, 3];\nlet r = first(&mut v);\nv = [4, 5, 6];\nr + 0\n",
+        },
+    );
+    assert!(
+        refusal.contains("[validate:main]")
+            && refusal.contains("`v` is written here while a reference to it is live"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_reference_passed_on_to_a_second_call_still_excludes_the_read() {
+    let i = Interner::new();
+    let refusal = refuses(
+        &i,
+        Program {
+            helpers: vec![
+                first("&$xs[0]", lends(&i, Mutability::Mut)),
+                Helper {
+                    name: "pass",
+                    body: "$r",
+                    takes: sig(&i, &[("r", borrow(Mutability::Shared, Ty::I64))]),
+                },
+            ],
+            main: "let v = [1, 2, 3];\nlet r = first(&mut v);\nlet t = pass(r);\nlet s = v[0];\nt + s\n",
+        },
+    );
+    assert_refused_in_main_reading_v(&refusal);
+}
+
+/// The helper as a script's `fn` (RFC-0100), typed with the body that calls it.
+#[test]
+fn a_mutable_summary_of_a_script_fn_excludes_a_read_of_the_argument() {
+    let i = Interner::new();
+    let refusal = refuses(
+        &i,
+        Program {
+            helpers: vec![],
+            main: "fn head(xs) { &xs[0] }\nlet v = [1, 2, 3];\nlet r = head(&mut v);\nlet s = v[0];\nr + s\n",
+        },
+    );
+    assert!(
+        refusal.contains("`v` is read here while a reference to it is live"),
+        "{refusal}"
+    );
+}
+
+/// The helper as a host function: an extern states no summary, so its
+/// result holds every argument's loan (RFC-0064 rule 6), the `&mut v` too.
+#[test]
+fn a_host_function_returning_from_a_mutable_argument_excludes_a_read_of_it() {
+    let i = Interner::new();
+    let first_of = Function {
+        qref: QualifiedRef::root(i.intern("first_of")),
+        kind: FnKind::Extern {
+            bounds: vec![],
+            effect_bounds: vec![],
+            instances: Default::default(),
+            requires: vec![],
+        },
+        ty: TyTerm::Fn {
+            params: sig(&i, &[("xs", borrow(Mutability::Mut, numbers()))]),
+            ret: Box::new(lift_to_poly(&borrow(Mutability::Shared, Ty::I64))),
+            captures: vec![],
+            effect: Effect::PURE.into(),
+            flows: Flows::Every.into(),
+        },
+    };
+    let refusal = compile_multi_fn_optimized(
+        &i,
+        ("main", "let v = [1, 2, 3];\nlet r = first_of(&mut v);\nlet s = v[0];\nr + s\n"),
+        &[],
+        &[],
+        &[first_of],
+    )
+    .expect_err("`r` holds the `&mut v` loan where `v` is read");
+    assert_refused_in_main_reading_v(&refusal);
 }
 
 // -- A summary over two parameters ------------------------------------

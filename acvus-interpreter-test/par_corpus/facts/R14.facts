@@ -3,3 +3,4 @@ for range(0 (r19)..r14) -> L1 else L2 stages [L1, L5]
 // L5: cycle Carried(r17)+Carried(r18) in_order law(Extremum(Max, Carried(r17), carrying Carried(r18)) exact) {>, index, branch, jump}
 // control upfront
 // cost W=3 O=18281 split when n > 194998, n = max(r14 - 0 (r19), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits

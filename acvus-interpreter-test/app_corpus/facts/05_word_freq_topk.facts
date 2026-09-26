@@ -1,22 +1,40 @@
-for slice(r6) -> L1 else L2 stages [L1, L18]
+while r5 -> L19 else L16 stages [L18, L19, L24]
+// L18: cycle Storage(r6)+Control in_order {ref, call next, test_variant, while}
+// L19: free {unwrap_variant}
+// L24: cycle Storage(r7) in_order law(Fold(r7, #3) exact) {ref, call push}
+// control chained through L18
+// cost in place: no count on entry
+// lower in place: it is a pull loop
+for slice(r16) -> L1 else L2 stages [L1, L28]
 // L1: free {as_slice, call lower, assign, ref, as_slice, const_str, call trim_end_matches, const_str, call trim_end_matches, const_str, call trim_end_matches, const_str, call trim_end_matches, call to_string, drop, assign, ref, as_slice, call is_empty, !}
-// L18: cycle Storage(r7) in_order law(Fold(r7, #7) exact) {ref, call push}
+// L28: cycle Storage(r17) in_order law(Fold(r17, #3) exact) {ref, call push}
 // control upfront
-// cost W=29 O=18281 split when n > 20173, n = len(r6)
-for slice(r35) -> L6 else L7 stages [L6, L16]
+// cost W=29 O=18281 split when n > 20173, n = len(r16)
+// lower in place: its first stage spawns no heavy or io call before it waits
+for slice(r45) -> L6 else L7 stages [L6, L25]
 // L6: free {as_slice, call to_string, const, const}
-// L16: cycle Storage(r36) keyed(r37 keys in_order) any_order law(Op(Add) exact commutative) {ref, call or_insert, take, +, assign}
+// L25: cycle Storage(r46) keyed(r47 keys in_order) any_order law(Op(Add) exact commutative) {ref, call or_insert, take, +, assign}
 // control upfront
-// cost W=4 O=18281 split when n > 146248, n = len(r35)
-for slice(r55) -> L9 else L10 stages [L9, L17]
+// cost W=4 O=18281 split when n > 146248, n = len(r45)
+// lower in place: its first stage spawns no heavy or io call before it waits
+while r62 -> L23 else L20 stages [L22, L23, L26]
+// L22: cycle Storage(r63)+Control in_order {ref, call next, test_variant, while}
+// L23: free {unwrap_variant, as_slice, call to_string}
+// L26: cycle Storage(r64) in_order law(Fold(r64, #3) exact) {ref, call push}
+// control chained through L22
+// cost in place: no count on entry
+// lower in place: it is a pull loop
+for slice(r75) -> L9 else L10 stages [L9, L27]
 // L9: free {as_slice, call to_string, call get, call unwrap, take, make_object}
-// L17: cycle Storage(r56) in_order law(Fold(r56, #7) exact) {ref, call push}
+// L27: cycle Storage(r76) in_order law(Fold(r76, #3) exact) {ref, call push}
 // control upfront
-// cost W=30 O=18281 split when n > 19500, n = len(r55)
-for range(0 (r79)..r73) -> L12 else L13 stages [L12, L19, L20, L21]
+// cost W=30 O=18281 split when n > 19500, n = len(r75)
+// lower in place: its first stage spawns no heavy or io call before it waits
+for range(0 (r99)..r93) -> L12 else L13 stages [L12, L29, L30, L31]
 // L12: free {const, >, index, ref, const_str, ref, call to_string, assign, ref}
-// L19: cycle Storage(r80) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
-// L20: free {take}
-// L21: cycle Storage(r81) any_order law(Op(Add) exact commutative) {take, +, assign}
+// L29: cycle Storage(r100) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
+// L30: free {take}
+// L31: cycle Storage(r101) any_order law(Op(Add) exact commutative) {take, +, assign}
 // control upfront
-// cost W=20 O=18293 split when n > 29269, n = max(r73 - 0 (r79), 0)
+// cost W=20 O=18293 split when n > 29269, n = max(r93 - 0 (r99), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits

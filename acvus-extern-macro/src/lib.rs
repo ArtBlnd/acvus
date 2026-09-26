@@ -21,6 +21,7 @@ mod reaches;
 mod flows;
 mod generics;
 mod law;
+mod step;
 mod subst;
 
 use generics::{VarKind, Vars, signature_path};
@@ -54,6 +55,7 @@ struct ExternFnAttr {
     /// signature (RFC-0046).
     sync: Option<Ident>,
     law: Option<law::LawAttr>,
+    step: Option<step::StepAttr>,
     ensures: Option<ensures::EnsuresAttr>,
     reaches: Option<reaches::ReachesAttr>,
     /// `returns` or `total` (RFC-0082 rules 8 and 9). Either is the
@@ -97,6 +99,7 @@ impl Parse for ExternFnAttr {
             heavy: false,
             sync: None,
             law: None,
+            step: None,
             ensures: None,
             reaches: None,
             returns: None,
@@ -155,6 +158,16 @@ impl Parse for ExternFnAttr {
                     return Err(syn::Error::new(key.span(), "`law(..)` is stated twice"));
                 }
                 out.law = Some(law::LawAttr::parse_after(key, input)?);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
+            if key == "step" {
+                if out.step.is_some() {
+                    return Err(syn::Error::new(key.span(), "`step(..)` is stated twice"));
+                }
+                out.step = Some(step::StepAttr::parse_after(key, input)?);
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -247,8 +260,8 @@ impl Parse for ExternFnAttr {
                 return Err(syn::Error::new(
                     key.span(),
                     "expected `name`, `instance_of`, `effect`, `commutative`, `heavy`, `sync`, `law`, \
-                     `ensures`, `reaches`, `copies`, `payload`, `returns`, `total`, `cost` or \
-                     `dynamic`",
+                     `step`, `ensures`, `reaches`, `copies`, `payload`, `returns`, `total`, `cost` \
+                     or `dynamic`",
                 ));
             }
             if !input.is_empty() {
@@ -1196,6 +1209,27 @@ impl RequirementIndex {
         }
         index
     }
+}
+
+fn pulled_streams(rust_params: &[RustParam]) -> Vec<step::PulledStream> {
+    let mut pulled = Vec::new();
+    let mut acvus_param = 0;
+    let mut requirement = 0;
+    for p in rust_params {
+        match p {
+            RustParam::Owning { .. } => {
+                pulled.push(step::PulledStream {
+                    acvus_param,
+                    requirement,
+                });
+                requirement += 1;
+            }
+            RustParam::Required(_) => requirement += 1,
+            RustParam::Acvus(_) | RustParam::Args(_) | RustParam::State(_) | RustParam::Output(_) => {}
+        }
+        acvus_param += p.acvus().len();
+    }
+    pulled
 }
 
 /// Two `Instance`s cannot own one receiver (RFC-0067 rule 1).
@@ -2240,8 +2274,27 @@ fn generate_extern_fn(
                     matches!(vars.lookup(ident), Some((VarKind::Ty, _)))
                 }))
     };
-    let laws = match (&attr.law, &attr.payload) {
-        (Some(law), Some(named)) => {
+    let pulled = pulled_streams(&rust_params);
+    let laws = match (&attr.law, &attr.payload, &attr.step) {
+        (Some(law), _, Some(_)) => {
+            return Err(syn::Error::new(
+                law.first_word().span(),
+                format!(
+                    "the law `{}` beside a step: a stream adaptor or consumer states its step \
+                     alone (RFC-0099 rule 1)",
+                    law.first_word()
+                ),
+            ));
+        }
+        (None, Some(named), Some(_)) => {
+            return Err(syn::Error::new(
+                named.span(),
+                "`payload` beside a step: a stream adaptor or consumer states its step alone \
+                 (RFC-0099 rule 1)",
+            ));
+        }
+        (None, None, Some(step)) => step.checked(fn_ident, &params, &pulled, &returning)?,
+        (Some(law), Some(named), None) => {
             return Err(syn::Error::new(
                 named.span(),
                 format!(
@@ -2251,7 +2304,7 @@ fn generate_extern_fn(
                 ),
             ));
         }
-        (Some(law), None) => law.checked_laws(
+        (Some(law), None, None) => law.checked_laws(
             fn_ident,
             &params,
             &ret,
@@ -2261,8 +2314,10 @@ fn generate_extern_fn(
                 .as_ref()
                 .and_then(|reaches| reaches.keyed_param(&params, &is_type_var)),
         )?,
-        (None, Some(named)) => law::checked_payload(named, fn_ident, &params, &ret, &returning)?,
-        (None, None) => quote! { ::acvus_extern::Laws::None },
+        (None, Some(named), None) => {
+            law::checked_payload(named, fn_ident, &params, &ret, &returning)?
+        }
+        (None, None, None) => quote! { ::acvus_extern::Laws::None },
     };
     let mut emitted = func.clone();
     let ensures = match &attr.ensures {
@@ -2624,6 +2679,7 @@ fn qref_expr(name: &str) -> proc_macro2::TokenStream {
             namespace: __ns.map(|__n| __i.intern(__n)),
             name: __i.intern(#name),
             host: None,
+            scope: None,
         }
     }
 }

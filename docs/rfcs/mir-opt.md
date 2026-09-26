@@ -759,15 +759,22 @@ law and runs in its order.
    one of them reads as that law.
 3. **Several tokens.** A cycle of several tokens whose steps read no other token has the
    product of their laws, `AnyOrder` when each commutes.
-4. **Option.** A switch on an `Option` token whose `None` arm sends `Some(y)` and
-   whose `Some(b)` arm sends `Some(b ⊕ y)` is `⊕` lifted over `Option`.
+4. **Option.** A switch on an `Option` token whose `Some(b)` arm sends
+   `Some` of `b` updated by a law `L` these rules read, and whose `None`
+   arm sends `Some(y)` or `Some(e ⊕ y)`, `y` what the update combines and
+   `e` `L`'s identity, is `L` with `None` adjoined as its identity. One
+   whose `None` arm leaves the token and whose `Some(b)` arm sends
+   `Some(b ⊕ y)` is `⊕` with `None` absorbing.
 5. **Last, first, extremum, reset.** An arm that sends a token a value reading none of it, the other arm
    leaving it, is `last`; a compare and select by a strict order that
    also carries other tokens is the left-biased maximum or minimum;
    both are associative, not commutative, `InOrder`. `first` is `last`
    guarded by a `||` token the arm sets. An arm taken only at `k = 0`
    that sends a value reading none of the token resets it: its law's
-   join takes no entry value.
+   join takes no entry value. An unconditional store of a value reading
+   none of the token is `last` too. A compare of one field of a record
+   token and a select of a record the iteration builds is that field's
+   extremum, carrying the other fields.
 6. **An inverse pair.** A storage every access of which in an iteration
    is `f(s)` giving an `Option`, its payload taken by a call stating
    `payload` or by a `Some` match, then `g(s, x)` of that payload, `f`
@@ -1345,7 +1352,11 @@ many small cycles, one per key, each with the law its entry's update has.
    same value, a copy through one shared reference (whose referent no
    write reaches while it lives, RFC-0028), or the same language operation
    over operands that are one key, an operation reading nothing but its
-   operands. A call is none of these.
+   operands. A call is none of these. An iteration may touch several keys
+   where it touches the storage only inside a nested loop whose own cycle
+   on it is keyed by `L`, and nothing else in the iteration reads the
+   storage: the outer cycle is then keyed by `L`, as RFC-0093 rule 1
+   reads a law through a nested loop.
 2. **A map's keys meet by an equivalence.** `HashMap` and `HashSet` carry
    a keying marker as their last type argument, `Equiv` or `Opaque`,
    acvus-extern's sealed types that the checker knows by their
@@ -1379,3 +1390,104 @@ tables.
 **Rejected.**
 - Keying a map by its key's spelled type — equality of a key is its `eq`
   instance's, which only a declaration states.
+
+## RFC-0099: a pipeline consumed where it is built is one pull loop over its source
+
+Status: Proposed
+
+A consumer called on a chain of adaptors over a source runs its loop inside
+Rust handlers, where no MIR pass sees it. When the chain is built and
+consumed in one body, the loop is written in MIR instead, and every loop
+reader reads it as it reads a `for` or a `while`.
+
+1. **A step, stated once per declaration.** An adaptor or a consumer states
+   what it does to one element by `#[extern_fn(step(..))]`, in a closed
+   term language over the element `x`, the declaration's own closure
+   parameters and one state it names:
+   - an adaptor's step ends in `yield e` (pass `e` on), `skip` (take the
+     next element), `done` (end the stream), or `nest e` (pass on each
+     element of the stream `e`, then continue);
+   - a consumer's step updates its state `s`, and may end in `break r`
+     (the consumer returns `r`); at the stream's end it returns `finish`,
+     a term over `s`;
+   - a term is a call of a closure parameter, a registered extern named
+     as RFC-0082 rule 2 names one, a constant, `x`, `s`, and `if` over a
+     term of `bool`.
+   `map` is `yield f(x)`, `filter` is `if p(&x) { yield x } else { skip }`,
+   `take_while` is `if p(&x) { yield x } else { done }`, `flat_map` is
+   `nest f(x)`, `fold` is `s = g(s, x)`, `any` is `if p(&x) { break true }`
+   with `finish = false`. It is the author's promise (RFC-0082 rule 5),
+   checked per declaration: the handler and the fused loop agree on every
+   pipeline up to a bound, each type variable at a small finite type,
+   since a declaration generic in `T` cannot inspect it; a concretely
+   typed position is sampled, its width's edges included.
+2. **The form fused.** A consumer call whose pipeline argument is a value
+   the same body built by a call stating a step, recursively down to a
+   source that states none; each link's value has one reader, the next
+   link; each closure argument has no other reader.
+3. **The rewrite.** The call becomes a pull loop over the source (RFC-0089
+   rule 1): the header lends the source `&mut`, calls its `next` instance,
+   and tests `Some`. The body runs the steps innermost first, `skip`
+   continuing at the header, `done` and `break` leaving, `nest` as an
+   inner pull over the nested stream; the result is the consumer's
+   `finish` at the exit, or its `break` value. The adaptor values and their
+   drops are removed; the source is dropped where the consumer dropped it.
+4. **Same program.** The handler and the fused loop make the same calls in
+   the same order per element: the source's `next`, each step innermost
+   first, the consumer's step. Arithmetic in a step is the handler's
+   (`+%` where the handler wraps), so a run traps where the handler did.
+5. **Placement.** After pass 1 and before the inliner, so each closure,
+   now called only in the loop, is spliced by RFC-0060, and before SSA,
+   `while_to_for` and the stage pass, which read the loop like any other.
+
+**Why.** A pipeline is the loop a script most often writes without `for`.
+Stating a step as `yield`/`skip`/`done`/`nest` over one element fuses any
+adaptor that fits it, an extension's included, rather than a fixed list of
+words; fused, the loop needs no new reader.
+**Cost.** Each declaration states its per-element semantics beside its Rust
+handler, which still runs for a pipeline that escapes; a differential test
+per declaration. A pull loop's cost stays in place until its source bounds
+its pulls.
+**Rejected.**
+- A rewrite per adaptor word (`map`, `filter`, ..) — the list decides what
+  fuses, and an extension's adaptor never does.
+- Adaptors written in acvus and fused by inlining alone — the most
+  general, but it moves the standard iterators out of Rust and needs a
+  scalar replacement of the adaptor values that no pass does today.
+- Stages declared on the call for `loop_deps` to read — a second statement
+  of what the tokens say (RFC-0089 Rejected).
+
+## RFC-0103: A lowerer's first shape runs the first stage's heavy or io call ahead, and the rest in place
+
+Status: Proposed
+
+The first shape a lowerer admits under RFC-0092: a chunk of one iteration, one stage run apart, no law.
+
+1. **The form.** A `For` is lowered ahead where every one of these holds:
+   - it lies in no other loop of its body;
+   - its source is a shared slice or a range;
+   - its first stage is free and no cycle crosses;
+   - the first stage's straight run from the body entry to its last `Spawn` before a joint (the prefix) spawns an extern whose declaration is `heavy` or an `async fn`, read by the instance the call names; a joint is an evaluation, a call that suspends, or a branch other than an `if` whose arms rejoin in the stage;
+   - every other instruction of the prefix cannot trap and finishes (RFC-0048 rule 8, RFC-0089 rule 5), read from the body alone;
+   - the prefix reads no value the loop defines outside it, a header parameter among them;
+   - where the loop can leave from its body, no instruction of the prefix has an effect.
+   `analysis::ahead` decides it from `analysis::loop_deps` and `analysis::raise`, and names the first condition that fails.
+2. **The run.** On entering the loop and at each header, the lowerer runs the prefix of the iterations up to a bound ahead, each laid at its own index. Each spawn thereby starts its work. The registers the prefix writes and later instructions read are moved out, by index, into a buffer the frame owns. Each iteration then takes its own back and runs the rest of the body in place, in index order: its evaluations, the rest of its first stage and every later stage.
+3. **The executor decides.** The spawn the handler already takes decides threads or concurrent futures. The executor states the bound per task (`Executor::ahead`). A body in this form suspends, so the wait is its evaluations. RFC-0092 rule 3's synchronous branch is not reached.
+4. **What holds.**
+   - Every register the prefix writes is dead at the body's entry, apart from the element and the counter, so one frame serves every iteration in flight. `prepare` asserts it.
+   - A job's trap is resumed at its evaluation, in index order, so the reported trap is the program's least (RFC-0089 rule 5).
+   - Work spawned past an exit is dropped unevaluated, and its frame's cells wait for it (RFC-0046 rule 3).
+
+**Why.** A loop that calls a heavy or an io extern per element already spawns and awaits each call. Issuing the spawns early is the whole gain, and adds no dispatch the loop did not pay. Every other stage stays the program as written.
+**Cost.**
+- Two operations and a buffer register in the interpreter.
+- One declared fact carried to MIR (the declaration's own task).
+- `total` on the conversions a prefix spells.
+- A prefix that can trap, or that reads a header parameter, runs in place.
+- An io call with an effect, where `anyorder` released its order, may be issued for a later iteration before an earlier one traps: that is what `anyorder` gives up (RFC-0007 rule 2).
+**Rejected.**
+- Rewriting the loop in MIR: the bound and the buffer are the lowerer's (RFC-0066 rule 1), and MIR has no value for handles by index.
+- Running the whole first stage as a spawned job per iteration: it costs a second spawn per element, and outlining, for work the declaration did not call heavy. It is the next shape when a need arises.
+- Recognizing the call by its callee type's task: an effectful plain `fn` and an `async fn` share it.
+- Requiring exactly one free stage: a free stage after an exit (M09's `unwrap`) runs in place and costs nothing.

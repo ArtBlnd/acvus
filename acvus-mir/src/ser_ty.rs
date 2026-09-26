@@ -28,6 +28,9 @@ pub struct SerQualifiedRef {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// The declaring script and the instance, for a script's `fn`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<(String, u32)>,
 }
 
 fn qref_to_ser(r: &QualifiedRef, interner: &Interner) -> SerQualifiedRef {
@@ -35,6 +38,9 @@ fn qref_to_ser(r: &QualifiedRef, interner: &Interner) -> SerQualifiedRef {
         namespace: r.namespace.map(|ns| interner.resolve(ns).to_string()),
         name: interner.resolve(r.name).to_string(),
         host: r.host.map(|host| interner.resolve(host).to_string()),
+        scope: r
+            .scope
+            .map(|scope| (interner.resolve(scope.script).to_string(), scope.instance)),
     }
 }
 
@@ -43,6 +49,10 @@ fn ser_to_qref(r: &SerQualifiedRef, interner: &Interner) -> QualifiedRef {
         namespace: r.namespace.as_ref().map(|ns| interner.intern(ns)),
         name: interner.intern(&r.name),
         host: r.host.as_ref().map(|host| interner.intern(host)),
+        scope: r.scope.as_ref().map(|(script, instance)| acvus_utils::FnScope {
+            script: interner.intern(script),
+            instance: *instance,
+        }),
     }
 }
 
@@ -467,6 +477,7 @@ impl SerTy {
                             namespace: namespace.as_deref().map(|ns| interner.intern(ns)),
                             name: interner.intern(name),
                             host: None,
+                            scope: None,
                         },
                         fields,
                     ),
@@ -522,6 +533,7 @@ impl SerTy {
                     namespace: namespace.as_deref().map(|ns| interner.intern(ns)),
                     name: interner.intern(name),
                     host: None,
+                    scope: None,
                 },
                 variants: variants
                     .iter()

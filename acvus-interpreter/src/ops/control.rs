@@ -220,6 +220,38 @@ impl Op for Continue {
     }
 }
 
+/// A check of the running thread's stack where a body's operations nest
+/// `regs::GUARD_EVERY` frames past the last check (RFC-0100 rule 5).
+#[cfg(not(target_arch = "wasm32"))]
+pub struct StackGuard {
+    pub next: Box<dyn Op>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Op for StackGuard {
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        match crate::regs::stack_admits() {
+            true => self.next.run(m, r0),
+            false => self.refused(m, r0),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StackGuard {
+    /// A thread's first check and a trap: out of `run`, whose hot path is
+    /// the compare and the tail call.
+    #[cold]
+    #[inline(never)]
+    fn refused(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        m.window().depth().guard_under();
+        self.next.run(m, r0)
+    }
+}
+
 /// Obligation across artifacts: this is a type and not a `const` parameter so
 /// that the demangled `Op::run` symbol names it. `benches/asm_probe.rs` reads
 /// `Escapes` out of the symbol to know which operations have two ends — a

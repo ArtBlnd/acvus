@@ -1,4 +1,5 @@
 pub mod affine;
+pub mod ahead;
 pub mod carried;
 pub mod cost;
 pub mod dataflow;

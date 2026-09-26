@@ -402,6 +402,9 @@ pub struct GenericSig {
     pub copies: Option<crate::laws::Copies>,
     /// The weight `cost = N` states (RFC-0066 rule 8), or `None`.
     pub cost: Option<u64>,
+    /// `acvus_extern::ExternHandler::task` of the generic handler, as
+    /// [`InstanceSig::task`] is a concrete instance's.
+    pub task: Task,
 }
 
 impl Instances {
@@ -2878,7 +2881,9 @@ impl TypeEnv {
         let mut candidates: Vec<QualifiedRef> = self
             .functions
             .keys()
-            .filter(|q| q.name == name.name && q.namespace.is_some() && q.host.is_none())
+            .filter(|q| {
+                q.name == name.name && q.namespace.is_some() && q.host.is_none() && q.scope.is_none()
+            })
             .copied()
             .collect();
         candidates.sort();

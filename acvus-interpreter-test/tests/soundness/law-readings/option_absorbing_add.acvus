@@ -1,0 +1,10 @@
+// expect 17
+let xs = vec([5u64, 3u64, 8u64, 1u64]);
+let p = Some(0u64);
+for x in &xs {
+    p = match p {
+        Some(v) => Some(v + *x),
+        None => None,
+    };
+}
+p.unwrap()

@@ -9,15 +9,16 @@ use acvus_extern::{Ctx, Owned, Runtime, Variant, repr};
 use crate::flight::{Flight, Tally};
 use crate::interpreter::InterpreterContext;
 use crate::ops::call;
-use crate::regs::{FrameState, RootCells, RootFrame};
+use crate::regs::{Depth, FrameState, RootCells, RootFrame};
 use crate::value::{Kind, Value, VariantValue};
 
 pub type ExternHandler = acvus_extern::ExternHandler<AcvusRuntime>;
 
 /// One run as a `Runtime`: the state its functions read, the port its
 /// contexts are loaded and stored through (RFC-0090 rule 3), the `Flight`
-/// its spawned tasks count in, and the `Tally` of the frame a spawn through
-/// it counts in. `Interpreter`
+/// its spawned tasks count in, the `Tally` of the frame a spawn through
+/// it counts in, and the depth a frame rooted from it runs at (RFC-0100
+/// rule 5). `Interpreter`
 /// makes the first three and a spawned run is handed its parent's; each
 /// suspending frame runs on a copy naming its own tally. A closure value
 /// carries none of them (RFC-0069 rule 1): every caller of one holds a
@@ -33,6 +34,7 @@ macro_rules! acvus_runtime {
             pub(crate) port: Arc<crate::port::Port>,
             pub(crate) flight: Arc<Flight>,
             pub(crate) tally: Arc<Tally>,
+            depth: Depth,
         }
     };
 }
@@ -44,12 +46,27 @@ impl AcvusRuntime {
         port: Arc<crate::port::Port>,
         flight: Arc<Flight>,
         tally: Arc<Tally>,
+        depth: Depth,
     ) -> AcvusRuntime {
         AcvusRuntime {
             shared,
             port,
             flight,
             tally,
+            depth,
+        }
+    }
+
+    /// The depth a frame rooted from this runtime runs at.
+    pub(crate) fn depth(&self) -> Depth {
+        self.depth
+    }
+
+    /// This runtime, for frames rooted at `depth`.
+    pub(crate) fn at(&self, depth: Depth) -> AcvusRuntime {
+        AcvusRuntime {
+            depth,
+            ..self.clone()
         }
     }
 }
@@ -125,7 +142,7 @@ pub struct RootedCtx<'a> {
 
 impl<'a> RootedCtx<'a> {
     fn new(rt: &'a AcvusRuntime) -> RootedCtx<'a> {
-        let RootFrame { state, cells } = RootFrame::new();
+        let RootFrame { state, cells } = RootFrame::new(rt.depth);
         RootedCtx {
             // SAFETY: `state` names `cells`, which this `RootedCtx` keeps
             // beside the `Ctx` for as long as the `Ctx` lives, and nothing

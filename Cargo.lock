@@ -107,11 +107,13 @@ name = "acvus-interpreter"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
+ "acvus-ext",
  "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "blake3",
  "futures",
+ "libc",
  "parking_lot",
  "rust_decimal",
  "rustc-hash",

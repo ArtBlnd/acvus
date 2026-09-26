@@ -726,7 +726,7 @@ where
         }
         let (loaded, id) = self.open_in_first(path)?;
         match loaded.session.definition(id, offset)? {
-            Definition::Local { span } => Some(Location {
+            Definition::Local { span } | Definition::Declared { span } => Some(Location {
                 path: path.to_path_buf(),
                 span,
             }),

@@ -4,3 +4,4 @@ while r16 -> L1 else L2 stages [L0, L1, L3]
 // L3: cycle Carried(r13) any_order law(Op(Add) exact commutative) {+}
 // control chained through L0
 // cost in place: no count on entry
+// lower in place: it is a pull loop

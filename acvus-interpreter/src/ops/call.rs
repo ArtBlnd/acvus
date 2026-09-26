@@ -2043,7 +2043,7 @@ pub struct CallExternAsync<const LARGE: bool> {
 
 impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
-        let rt = m.ctx.rt.clone();
+        let rt = m.callee_runtime();
         let Lent { run, .. } = self.window.lend(m);
         // SAFETY: `prepare` built this operation from this handler's width,
         // and the future owns the arguments it is given.
@@ -2067,7 +2067,7 @@ pub struct CallHeavy<const LARGE: bool> {
 impl<const LARGE: bool> Op for CallHeavy<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let args = self.window.own(m);
-        let rt = m.ctx.rt.clone();
+        let rt = m.callee_runtime();
         let f = Arc::clone(&self.f);
         let executor = Arc::clone(&m.shared().executor);
         let flying = rt.flight.start();
@@ -2161,7 +2161,7 @@ impl<const LARGE: bool, const PAIR: bool> Op for CallDirectAsync<LARGE, PAIR> {
             )
         }
         let args = staged(m, &self.args, self.takes);
-        let rt = m.ctx.rt.clone();
+        let rt = m.callee_runtime();
         match PAIR {
             true => {
                 let fut = Box::pin(call_module::<Words>(rt, self.callee, args));
@@ -2255,7 +2255,7 @@ pub struct CallIndirectAsync<const LARGE: bool, const THROUGH: bool> {
 impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THROUGH> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let mut args = staged(m, &self.args, self.takes);
-        let rt = m.ctx.rt.clone();
+        let rt = m.callee_runtime();
         // A closure value is one word beside its kind: copied into the future
         // it names the same record, which under `THROUGH` the register keeps
         // live for the call and otherwise the future owns.
@@ -2323,7 +2323,7 @@ impl Op for SpawnExternSync {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = self.window.own(m);
-        let rt = m.ctx.rt.clone();
+        let rt = m.callee_runtime();
         let f = Arc::clone(&self.f);
         let flying = rt.flight.start();
         // SAFETY: as `CallHeavy`'s.
@@ -2361,7 +2361,7 @@ impl Op for SpawnExternAsync {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = self.window.own(m);
-        let rt = m.ctx.rt.clone();
+        let rt = m.callee_runtime();
         let flying = rt.flight.start();
         // SAFETY: as `CallExternAsync`'s; the spawned future owns `args`.
         let fut = unsafe { self.f.call_async(rt, &args) };
@@ -2390,7 +2390,8 @@ impl Op for SpawnModule {
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let args = staged(m, &self.args, self.takes);
-        let job = crate::interpreter::Interpreter::spawned(m.ctx.rt, self.callee, args);
+        let depth = m.window().depth();
+        let job = crate::interpreter::Interpreter::spawned(m.ctx.rt, depth, self.callee, args);
         let unevaluated = m.ctx.rt.tally.spawned();
         let launched = Launched {
             job: job.id(),

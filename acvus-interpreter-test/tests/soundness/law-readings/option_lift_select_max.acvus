@@ -1,0 +1,11 @@
+// expect 18
+let xs = vec([3, 9, 4]);
+let best = None;
+for s in &xs {
+    let k = *s * 2;
+    best = match best {
+        None => Some(k),
+        Some(b) => if k > b { Some(k) } else { Some(b) },
+    };
+}
+best.unwrap()

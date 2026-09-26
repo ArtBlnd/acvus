@@ -5,4 +5,4 @@ pub use freeze::Freeze;
 mod astr;
 pub use astr::*;
 mod qualified_ref;
-pub use qualified_ref::QualifiedRef;
+pub use qualified_ref::{FnScope, QualifiedRef};

@@ -62,6 +62,10 @@ pub enum ParseErrorKind {
     /// A `;` after the `}` closing a `for`, `while` or `anyorder` block:
     /// such a block is a statement, not an expression a `;` ends.
     SemicolonAfterBlock(BlockStatement),
+    /// A `fn` outside a script: in a template's `%` line or in a block a
+    /// template or a bound literal holds. Only a script declares a function
+    /// (RFC-0100 rule 1).
+    FnOutsideScript,
 }
 
 /// A statement that ends at the `}` closing its block, as a diagnostic
@@ -71,6 +75,7 @@ pub enum BlockStatement {
     For,
     While,
     Anyorder,
+    Fn,
 }
 
 impl BlockStatement {
@@ -79,6 +84,7 @@ impl BlockStatement {
             BlockStatement::For => "a `for` block",
             BlockStatement::While => "a `while` block",
             BlockStatement::Anyorder => "an `anyorder` block",
+            BlockStatement::Fn => "a `fn` declaration",
         }
     }
 }
@@ -124,6 +130,10 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::SemicolonAfterBlock(block) => {
                 write!(f, "`;` is not allowed after {}", block.spoken())
             }
+            ParseErrorKind::FnOutsideScript => write!(
+                f,
+                "only a script (`.acvus`) declares a `fn`; a template declares none"
+            ),
         }
     }
 }
@@ -330,6 +340,7 @@ pub enum Terminal {
     Continue,
     Return,
     Anyorder,
+    Fn,
     Match,
     Mut,
     As,
@@ -412,6 +423,7 @@ const STATEMENT_KEYWORDS: &[Terminal] = &[
     Terminal::Break,
     Terminal::Continue,
     Terminal::Anyorder,
+    Terminal::Fn,
 ];
 
 const LITERALS: [Terminal; 7] = [
@@ -425,7 +437,7 @@ const LITERALS: [Terminal; 7] = [
 ];
 
 impl Terminal {
-    pub const ALL: [Terminal; 66] = [
+    pub const ALL: [Terminal; 67] = [
         Terminal::Int,
         Terminal::IntOf,
         Terminal::Char,
@@ -453,6 +465,7 @@ impl Terminal {
         Terminal::Continue,
         Terminal::Return,
         Terminal::Anyorder,
+        Terminal::Fn,
         Terminal::Match,
         Terminal::Mut,
         Terminal::As,
@@ -523,6 +536,7 @@ impl Terminal {
             Token::Continue => Terminal::Continue,
             Token::Return => Terminal::Return,
             Token::Anyorder => Terminal::Anyorder,
+            Token::Fn => Terminal::Fn,
             Token::Match => Terminal::Match,
             Token::Mut => Terminal::Mut,
             Token::As => Terminal::As,
@@ -598,6 +612,7 @@ impl Terminal {
             Terminal::Continue => "continue",
             Terminal::Return => "return",
             Terminal::Anyorder => "anyorder",
+            Terminal::Fn => "fn",
             Terminal::Match => "match",
             Terminal::Mut => "mut",
             Terminal::As => "as",
@@ -735,6 +750,7 @@ mod tests {
             Token::Continue,
             Token::Return,
             Token::Anyorder,
+            Token::Fn,
             Token::Match,
             Token::Mut,
             Token::As,
@@ -799,7 +815,7 @@ mod tests {
         // `let x = 1; }`
         assert_eq!(
             spoken(&format!(
-                r#"{operand} "|" "let" "while" "for" "break" "continue" "anyorder""#
+                r#"{operand} "|" "let" "while" "for" "break" "continue" "anyorder" "fn""#
             )),
             "a statement"
         );

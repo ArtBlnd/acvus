@@ -323,7 +323,7 @@ fn check_and_mir_compile_without_running() {
 }
 
 #[test]
-fn mir_prints_the_stage_facts_and_the_cost_under_each_for() {
+fn mir_prints_the_stage_facts_the_cost_and_the_lowering_under_each_for() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "sum.acvus", "let s = 0;\nfor x in [1, 2, 3] { s = s + x; }\ns\n");
     let out = acvus(dir.path(), &["mir", "sum.acvus"]);
@@ -339,6 +339,7 @@ fn mir_prints_the_stage_facts_and_the_cost_under_each_for() {
             "L1: cycle Carried(r8) any_order law(Op(Add) exact commutative) {+}",
             "control upfront",
             "cost in place: no stage runs apart",
+            "lower in place: its source is an array",
         ],
         "{dump}"
     );

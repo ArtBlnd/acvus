@@ -3,3 +3,4 @@ for slice(r24) -> L1 else L2 stages [L1, L6]
 // L6: cycle Storage(r25) in_order {ref, call get, unwrap_variant, take, const, ref, +, call insert, switch, jump, jump}
 // control upfront
 // cost W=13 O=18281 split when n > 45000, n = len(r24)
+// lower in place: its first stage spawns no heavy or io call before it waits

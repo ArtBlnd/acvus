@@ -31,6 +31,7 @@ pub use iter::{
     Chain, Chunks, Dedup, Filter, FlatMap, Flatten, Items, Map, Range, Refs, Skip, SkipWhile,
     StepBy, Take, TakeWhile,
 };
+pub use iter::sig as iter_sig;
 pub use iterator::iterator_registry;
 pub use map::{HashMap, HashSet, Keys, map_registry, set_registry};
 pub use num::{num_constant_registries, num_registry, num_width_registries};

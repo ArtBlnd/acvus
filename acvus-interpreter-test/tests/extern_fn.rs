@@ -123,6 +123,7 @@ async fn regex_match_via_extern() {
 
     let registries = vec![
         acvus_ext::iterator_registry(),
+        acvus_ext::vec_registry(),
         acvus_ext::regex_registry(),
         acvus_ext::conversion_registry(),
         acvus_ext::string_registry(),

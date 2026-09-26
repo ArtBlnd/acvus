@@ -85,6 +85,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0090: A host reads and writes values through the Rust types it declares, and never names a runtime value (Proposed)
 - RFC-0095: A host graph compiles several hosts into one solve, and a host calls another's entry as a function along a DAG (Proposed)
 - RFC-0097: A dynamic extern meets data from outside the checker at one sealed gate (Proposed)
+- RFC-0101: A host binds a declared hook to another program's entry, which runs within the call on the lent arguments (Proposed)
 - RFC-0102: `unsafe` is written only as a primitive of a boundary module (Proposed)
 
 ### [identity.md](identity.md)
@@ -123,6 +124,8 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0093: a cycle's law is read from what it computes (Proposed)
 - RFC-0094: a `while` whose exit is a linear bound on one counter of a constant step is a range `for` (Proposed)
 - RFC-0098: a cycle that touches its storage at one key per iteration splits by key (Proposed)
+- RFC-0099: a pipeline consumed where it is built is one pull loop over its source (Proposed)
+- RFC-0103: A lowerer's first shape runs the first stage's heavy or io call ahead, and the rest in place (Proposed)
 
 ### [ownership.md](ownership.md)
 
@@ -156,6 +159,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0058: A literal says its type
 - RFC-0071: A template is a script whose text lines are output
 - RFC-0087: A bound `$` holds any value a literal writes, and its uses decide its enums (Proposed)
+- RFC-0100: A script declares a function with `fn`, and it captures nothing (Proposed)
 
 ### [tooling.md](tooling.md)
 
