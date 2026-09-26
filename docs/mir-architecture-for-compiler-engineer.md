@@ -24,10 +24,6 @@ acvus-mir            type system, IR, analysis, optimization, validation
   |     +-- acvus-ext            the standard library of ExternFns
   |     +-- acvus-ext-net        HTTP
   |     +-- acvus-interpreter    the register machine
-  |           |
-  |           +-- pomollu-core         TOML specs into the same graph
-  |
-  +-- kovac-interpreter    a second runtime over the same MIR
   |
 acvus-lsp            language server, over the same pipeline
 ```

@@ -122,7 +122,6 @@ pub fn lower_one(
     callee_inputs: &FxHashMap<QualifiedRef, Vec<InputParam>>,
 ) -> Option<Lowered> {
     let resolution = outcome.resolution()?;
-    let host = resolution.host;
     let ret = match &outcome.meta().ty {
         crate::ty::Ty::Fn { ret, .. } => (**ret).clone(),
         other => other.clone(),
@@ -142,12 +141,8 @@ pub fn lower_one(
         }) => return None,
     };
 
-    let mut errors = super::bind::substitute(
-        interner,
-        &mut module.main,
-        module.declared_params,
-        bindings.in_host(host),
-    );
+    let mut errors =
+        super::bind::substitute(interner, &mut module.main, module.declared_params, bindings);
 
     // Definite assignment reads the pre-SSA shape the source wrote, so it
     // runs here and not in `validate`, which sees the optimized body.

@@ -298,8 +298,7 @@ fn grown_inputs(
 }
 
 pub struct CallTargets {
-    bare: FxHashMap<(Option<Astr>, Astr), QualifiedRef>,
-    hosted: FxHashSet<QualifiedRef>,
+    bare: FxHashMap<Astr, QualifiedRef>,
 }
 
 impl CallTargets {
@@ -308,23 +307,16 @@ impl CallTargets {
         I: IntoIterator<Item = &'f QualifiedRef>,
     {
         let mut bare = FxHashMap::default();
-        let mut hosted = FxHashSet::default();
         for local in locals.into_iter().filter(|local| local.scope.is_none()) {
             if local.namespace.is_none() {
-                bare.insert((local.host, local.name), *local);
-            }
-            if local.host.is_some() {
-                hosted.insert(*local);
+                bare.insert(local.name, *local);
             }
         }
-        CallTargets { bare, hosted }
+        CallTargets { bare }
     }
 
-    fn written_in(&self, caller: QualifiedRef, written: QualifiedRef) -> Option<QualifiedRef> {
-        match written.host {
-            Some(_) => self.hosted.get(&written).copied(),
-            None => self.bare.get(&(caller.host, written.name)).copied(),
-        }
+    fn named(&self, written: QualifiedRef) -> Option<QualifiedRef> {
+        self.bare.get(&written.name).copied()
     }
 }
 
@@ -338,7 +330,7 @@ pub fn extract_call_edges(
 ) -> Vec<QualifiedRef> {
     let written = value_refs(parsed)
         .into_iter()
-        .filter_map(|written| targets.written_in(self_id, written));
+        .filter_map(|written| targets.named(written));
     let mut lifted: Vec<QualifiedRef> = facts
         .into_iter()
         .flat_map(|facts| facts.calls.values().copied())
@@ -861,7 +853,6 @@ struct BodyCheck<'c> {
     env: &'c crate::ty::TypeEnv,
     declared_params: Vec<ParamTerm<Infer>>,
     inputs: Inputs,
-    host: Option<Astr>,
     bindings: &'c Bindings,
     effect: EffectTerm<Infer>,
     probe: Option<acvus_ast::AstId>,
@@ -956,7 +947,6 @@ impl BodyCheck<'_> {
                 self.inputs,
                 self.declared_params.clone(),
             )
-            .with_host(self.host)
             .with_body_effect(self.effect.clone()),
         )
     }
@@ -996,8 +986,7 @@ impl BodyCheck<'_> {
                 self.inputs,
                 self.declared_params.clone(),
             )
-            .with_host(self.host)
-            .with_bound_inputs(self.bindings.in_host(self.host))
+            .with_bound_inputs(self.bindings)
             .with_body_effect(self.effect.clone()),
         )
     }
@@ -1490,7 +1479,6 @@ impl Component<'_> {
             env,
             declared_params: own.params[&fid].clone(),
             inputs,
-            host: fid.host,
             bindings: self.bindings,
             effect,
             probe: self

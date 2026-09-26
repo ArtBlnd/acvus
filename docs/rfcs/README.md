@@ -53,6 +53,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0036
 - RFC-0053
 - RFC-0065
+- RFC-0095
 
 ## Index
 
@@ -83,7 +84,6 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0080: A fact unsafe code relies on is held by a type or asserted with `unsafe`
 - RFC-0082: An extern states its laws and its postconditions in a closed vocabulary, and a pass reads each (Proposed)
 - RFC-0090: A host reads and writes values through the Rust types it declares, and never names a runtime value (Proposed)
-- RFC-0095: A host graph compiles several hosts into one solve, and a host calls another's entry as a function along a DAG (Proposed)
 - RFC-0097: A dynamic extern meets data from outside the checker at one sealed gate (Proposed)
 - RFC-0101: A host of this interpreter binds a hook, a dynamic extern whose body is a closure (Proposed)
 - RFC-0102: `unsafe` is written only as a primitive of a boundary module (Proposed)

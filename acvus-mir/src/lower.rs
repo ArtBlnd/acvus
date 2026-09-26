@@ -565,11 +565,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn enter_contexts(&mut self, named: FxHashSet<QualifiedRef>, span: Span) {
-        let host = self.resolution.host;
-        let named: BTreeSet<QualifiedRef> = named
-            .into_iter()
-            .map(|written| written.in_host(host))
-            .collect();
+        let named: BTreeSet<QualifiedRef> = named.into_iter().collect();
         for qref in named {
             let ty = self
                 .resolution
@@ -584,8 +580,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn context_slot(&self, written: QualifiedRef) -> ValueId {
-        let qref = written.in_host(self.resolution.host);
+    fn context_slot(&self, qref: QualifiedRef) -> ValueId {
         *self
             .context_slots
             .get(&qref)

@@ -228,7 +228,7 @@ pub struct ContextInfo {
 /// (RFC-0087 rule 3).
 #[derive(Debug, Clone, Default)]
 pub struct Bindings {
-    by_name: FxHashMap<QualifiedRef, BoundValue>,
+    by_name: FxHashMap<Astr, BoundValue>,
 }
 
 impl Bindings {
@@ -238,25 +238,24 @@ impl Bindings {
 
     /// Refuses a value that has no type, before any body is checked
     /// (RFC-0087 rule 3).
-    pub fn bind(&mut self, name: QualifiedRef, value: BoundValue) -> Result<(), BindingRefused> {
+    pub fn bind(&mut self, name: Astr, value: BoundValue) -> Result<(), BindingRefused> {
         super::bind::admit(&value)?;
         self.by_name.insert(name, value);
         Ok(())
     }
 
-    pub fn get(&self, name: QualifiedRef) -> Option<&BoundValue> {
+    pub fn get(&self, name: Astr) -> Option<&BoundValue> {
         self.by_name.get(&name)
     }
 
     /// By name, so that what two runs of one compilation write is one
     /// program: the order this yields is the order the constants enter the
     /// body.
-    pub fn in_host(&self, host: Option<Astr>) -> impl Iterator<Item = (Astr, &BoundValue)> {
+    pub fn iter(&self) -> impl Iterator<Item = (Astr, &BoundValue)> {
         let mut held: Vec<(Astr, &BoundValue)> = self
             .by_name
             .iter()
-            .filter(|(name, _)| name.host == host)
-            .map(|(name, value)| (name.name, value))
+            .map(|(name, value)| (*name, value))
             .collect();
         held.sort_by_key(|(name, _)| name.bits());
         held.into_iter()

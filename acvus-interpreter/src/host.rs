@@ -231,7 +231,7 @@ use acvus_mir::graph::{
 };
 use acvus_mir::ir::{MirModule, ValueId};
 use acvus_mir::ty::{
-    Effect, Flows, ParamTerm, Poly, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration,
+    Effect, Flows, ParamTerm, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration,
     try_freeze_poly,
 };
 use acvus_utils::{Astr, Freeze, Interner};
@@ -239,8 +239,8 @@ use futures::FutureExt;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::executor::Executor;
-use crate::hook::{CompiledHook, DeclaredHook, HookDecl, HookEffect, HookName, HookPart};
-use crate::init::{DeclaredInits, GraphParts, InitGiven, InitKey, InitSource, RustInit};
+use crate::hook::{CompiledHook, HookDecl, HookEffect, HookPart};
+use crate::init::{DeclaredInits, GraphParts, InitGiven, InitSource, RustInit};
 use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
 use crate::ops::storage::{fetch_now, fetch_waited};
 use crate::port::{Gate, Held, Port, ended, serve};
@@ -303,10 +303,7 @@ pub enum Cause {
     /// bare name, which reaches these extern functions, each written with
     /// its namespace (RFC-0043).
     Shadows { externs: Vec<String> },
-    /// The exposures of a host graph hold this cycle of hosts, each calling
-    /// the next and the last calling the first (RFC-0095 rule 3).
-    Cycle { hosts: Vec<String> },
-    Hook { hook: HookName, part: HookPart },
+    Hook { hook: String, part: HookPart },
 }
 
 impl Refusal {
@@ -329,7 +326,7 @@ impl Refusal {
 pub enum Named {
     Entry(String),
     Context(String),
-    Hook(HookName),
+    Hook(String),
 }
 
 /// Where a declared type and an asked one differ.
@@ -350,7 +347,7 @@ pub enum HostError {
     Unfilled { key: String },
     Storage(StorageError),
     Trapped { message: String },
-    Unbound { hook: HookName },
+    Unbound { hook: String },
 }
 
 impl fmt::Display for HostError {
@@ -371,7 +368,7 @@ impl fmt::Display for HostError {
             } => write!(f, "the compilation has no `@{key}`"),
             HostError::NotInGraph {
                 what: Named::Hook(name),
-            } => write!(f, "the compilation declares no hook {name}"),
+            } => write!(f, "the compilation declares no hook `{name}`"),
             HostError::Mismatched {
                 what: Part::Context(key),
                 held,
@@ -400,8 +397,8 @@ impl fmt::Display for HostError {
             HostError::Trapped { message } => write!(f, "the run trapped: {message}"),
             HostError::Unbound { hook } => write!(
                 f,
-                "the hook {hook} is unbound, so the program does not run; `Program::bind` binds it, \
-                 or `Program::bind_in` for a hook of a graph's host (RFC-0101 rule 2)"
+                "the hook `{hook}` is unbound, so the program does not run; `Program::bind` binds it \
+                 (RFC-0101 rule 2)"
             ),
         }
     }
@@ -738,9 +735,8 @@ impl fmt::Debug for InputShape {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct ResolvedShape {
-    pub(crate) fields: Vec<(Astr, PolyTy)>,
+struct ResolvedShape {
+    fields: Vec<(Astr, PolyTy)>,
 }
 
 impl ResolvedShape {
@@ -857,99 +853,47 @@ impl fmt::Debug for Inputs {
     }
 }
 
-pub(crate) enum EntryDeclaration {
+enum EntryDeclaration {
     Typed { inputs: ResolvedShape, declared: PolyTy },
     Untyped,
     /// A body scripts call and no host runs: its return is what its body
     /// settles, and its `$` inputs are the ones it reads (RFC-0071 rule 4).
     Function,
-    Positional { params: Vec<ParamTerm<Poly>>, ret: PolyTy },
 }
 
-#[derive(Clone)]
-pub(crate) struct GraphName {
-    pub(crate) host: Option<String>,
-    pub(crate) namespace: Option<String>,
-    pub(crate) name: String,
-}
-
-impl GraphName {
-    pub(crate) fn qref(&self, interner: &Interner) -> QualifiedRef {
-        QualifiedRef {
-            namespace: self
-                .namespace
-                .as_deref()
-                .map(|namespace| interner.intern(namespace)),
-            name: interner.intern(&self.name),
-            host: self.host.as_deref().map(|host| interner.intern(host)),
-            scope: None,
-        }
-    }
-}
-
-/// The key a program's caller names an entry or a context by, and a
-/// refusal's origin shows: `host/name` for a host of a graph. Storage holds
-/// a context under this key.
-pub(crate) fn program_key(host: Option<&str>, name: &str) -> String {
-    match host {
-        Some(host) => format!("{host}/{name}"),
-        None => name.to_owned(),
-    }
-}
-
-fn program_key_of(interner: &Interner, qref: QualifiedRef) -> String {
-    let name = match qref.namespace {
-        Some(namespace) => format!(
-            "{}::{}",
-            interner.resolve(namespace),
-            interner.resolve(qref.name)
-        ),
-        None => interner.resolve(qref.name).to_owned(),
-    };
-    program_key(qref.host.map(|host| interner.resolve(host)), &name)
-}
-
-pub(crate) struct EntryDecl {
-    pub(crate) name: GraphName,
-    pub(crate) ast: ParsedAst,
-    pub(crate) declaration: EntryDeclaration,
+struct EntryDecl {
+    name: String,
+    ast: ParsedAst,
+    declaration: EntryDeclaration,
 }
 
 /// The entries, inits and bindings of one compilation graph, so a context's
 /// type is solved from every body that stores, reads or initializes it
 /// (RFC-0090 rule 1).
 pub struct Host<A = SyncAccess> {
-    pub(crate) parts: HostParts,
+    parts: HostParts,
     access: PhantomData<fn() -> A>,
 }
 
-pub(crate) struct HostParts {
-    pub(crate) interner: Interner,
-    pub(crate) registries: Vec<Registry<AcvusRuntime>>,
-    pub(crate) bindings: Bindings,
-    pub(crate) entries: Vec<EntryDecl>,
-    pub(crate) inits: Vec<InitSource>,
-    pub(crate) parse_refusals: Vec<Refusal>,
-    pub(crate) refusals: Vec<Refusal>,
-    pub(crate) opt: Opt,
-    pub(crate) lower: Lower,
-    pub(crate) parse: Duration,
-    pub(crate) hooks: Vec<HookDecl>,
+struct HostParts {
+    interner: Interner,
+    registries: Vec<Registry<AcvusRuntime>>,
+    bindings: Bindings,
+    entries: Vec<EntryDecl>,
+    inits: Vec<InitSource>,
+    parse_refusals: Vec<Refusal>,
+    refusals: Vec<Refusal>,
+    opt: Opt,
+    lower: Lower,
+    parse: Duration,
+    hooks: Vec<HookDecl>,
 }
 
 impl Host<SyncAccess> {
     pub fn new(registries: Vec<Registry<AcvusRuntime>>) -> Self {
-        Host::over(Interner::new(), registries)
-    }
-
-    pub(crate) fn in_graph(interner: &Interner) -> Self {
-        Host::over(interner.clone(), Vec::new())
-    }
-
-    fn over(interner: Interner, registries: Vec<Registry<AcvusRuntime>>) -> Self {
         Host {
             parts: HostParts {
-                interner,
+                interner: Interner::new(),
                 registries,
                 bindings: Bindings::default(),
                 entries: Vec::new(),
@@ -994,10 +938,7 @@ where
     pub fn init(mut self, key: &str, source: Source<'_>) -> Self {
         let ast = self.parsed(Origin::Init(key.to_owned()), source);
         self.parts.inits.push(InitSource {
-            key: InitKey {
-                host: None,
-                written: key.to_owned(),
-            },
+            key: key.to_owned(),
             given: InitGiven::Source(ast),
         });
         self
@@ -1013,10 +954,7 @@ where
         let declared = T::declared(&self.parts.interner);
         let make = Box::new(move |crossing: Crossing<'_, AcvusRuntime>| Owned::erased(crossing, make()));
         self.parts.inits.push(InitSource {
-            key: InitKey {
-                host: None,
-                written: key.to_owned(),
-            },
+            key: key.to_owned(),
             given: InitGiven::Rust(RustInit::new(declared, make)),
         });
         self
@@ -1072,31 +1010,15 @@ where
         self.declare_entry(name, source, EntryDeclaration::Typed { inputs, declared })
     }
 
-    fn declare_entry(
-        mut self,
-        name: &str,
-        source: Source<'_>,
-        declaration: EntryDeclaration,
-    ) -> Self {
+    fn declare_entry(mut self, name: &str, source: Source<'_>, declaration: EntryDeclaration) -> Self {
         let origin = Origin::Entry(name.to_owned());
-        if self
-            .parts
-            .entries
-            .iter()
-            .any(|entry| entry.name.name == name)
-        {
+        if self.parts.entries.iter().any(|entry| entry.name == name) {
             let message = format!("the entry `{name}` is given twice");
-            self.parts
-                .refusals
-                .push(Refusal::of(Some(origin.clone()), message));
+            self.parts.refusals.push(Refusal::of(Some(origin.clone()), message));
         }
         let ast = self.parsed(origin, source);
         self.parts.entries.push(EntryDecl {
-            name: GraphName {
-                host: None,
-                namespace: None,
-                name: name.to_owned(),
-            },
+            name: name.to_owned(),
             ast,
             declaration,
         });
@@ -1126,7 +1048,7 @@ where
         })?;
         self.parts
             .bindings
-            .bind(QualifiedRef::root(interner.intern(name)), value)
+            .bind(interner.intern(name), value)
             .map_err(|e| refused(format!("${name}: {e}")))?;
         Ok(self)
     }
@@ -1135,8 +1057,11 @@ where
     where
         E: Executor + 'static,
     {
-        compile(self.parts, A::GRAPH, Arc::new(executor), &[])
-            .map(Program::of)
+        compile(self.parts, A::GRAPH, Arc::new(executor))
+            .map(|compiled| Program {
+                compiled,
+                access: PhantomData,
+            })
             .map_err(HostError::Refused)
     }
 }
@@ -1342,12 +1267,7 @@ impl CompileTimes {
     }
 }
 
-pub(crate) fn compile(
-    host: HostParts,
-    access: GraphAccess,
-    executor: Arc<dyn Executor>,
-    exposed: &[crate::host_graph::Exposed],
-) -> Result<Compiled, Vec<Refusal>> {
+fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) -> Result<Compiled, Vec<Refusal>> {
     let HostParts {
         interner,
         registries,
@@ -1362,9 +1282,8 @@ pub(crate) fn compile(
         hooks,
     } = host;
     let interner = &interner;
-    let hooks: Vec<DeclaredHook> = hooks.into_iter().map(HookDecl::declared).collect();
     let mut registries = registries;
-    registries.extend(hooks.iter().map(DeclaredHook::registry));
+    registries.extend(hooks.iter().map(HookDecl::registry));
     // A recovered tree is checked for what parsed and never lowered, so its
     // parse errors and those refusals are reported together (RFC-0078
     // rule 5); a structural refusal ends the compilation before typeck.
@@ -1395,32 +1314,22 @@ pub(crate) fn compile(
     let mut scripts: FxHashMap<QualifiedRef, String> = FxHashMap::default();
     let mut functions: Vec<Function> = Vec::with_capacity(entries.len() + extern_fns.len());
     for EntryDecl {
-        name: written,
+        name,
         ast,
         declaration,
     } in entries
     {
-        let qref = written.qref(interner);
-        let name = program_key_of(interner, qref);
+        let qref = QualifiedRef::root(interner.intern(&name));
         let origin = Some(Origin::Entry(name.clone()));
-        let bare = written.namespace.is_none().then_some(written.name.as_str());
-        let shadowed = match bare {
-            Some(bare) => bare_callable(
-                interner,
-                &extern_fns,
-                &types,
-                QualifiedRef::root(interner.intern(bare)).in_host(qref.host),
-            ),
-            None => Vec::new(),
-        };
-        if let (Some(bare), false) = (bare, shadowed.is_empty()) {
+        let shadowed = bare_callable(interner, &extern_fns, &types, qref);
+        if !shadowed.is_empty() {
             let listed: Vec<String> = shadowed.iter().map(|name| format!("`{name}`")).collect();
             let what = match declaration {
-                EntryDeclaration::Function | EntryDeclaration::Positional { .. } => "function",
+                EntryDeclaration::Function => "function",
                 EntryDeclaration::Typed { .. } | EntryDeclaration::Untyped => "entry",
             };
             let message = format!(
-                "the {what} `{name}` would shadow {}, which a script calls as `{bare}`",
+                "the {what} `{name}` would shadow {}, which a script calls as `{name}`",
                 listed.join(", ")
             );
             refusals.push(Refusal {
@@ -1428,11 +1337,7 @@ pub(crate) fn compile(
                 ..Refusal::of(origin.clone(), message)
             });
         }
-        named.extend(
-            context_refs(&ast)
-                .into_iter()
-                .map(|context| context.in_host(qref.host)),
-        );
+        named.extend(context_refs(&ast));
         let local = match declaration {
             EntryDeclaration::Typed { inputs, declared } => {
                 refusals.extend(inputs.repeated_names().into_iter().map(|repeated| {
@@ -1446,7 +1351,7 @@ pub(crate) fn compile(
                     inputs
                         .fields
                         .iter()
-                        .filter(|(field, _)| bindings.get(QualifiedRef::root(*field).in_host(qref.host)).is_some())
+                        .filter(|(field, _)| bindings.get(*field).is_some())
                         .map(|(field, _)| {
                             let message = format!(
                                 "the input `${}` of the entry `{name}` is already fixed by a binding",
@@ -1478,17 +1383,6 @@ pub(crate) fn compile(
                 kind: FnKind::Local(ast, GraphInputs::FromReads),
                 ty: untyped_entry_ty(),
                 shape: Some(EntryShape::Untyped),
-            },
-            EntryDeclaration::Positional { params, ret } => LocalFunction {
-                kind: FnKind::Local(ast, GraphInputs::Declared),
-                ty: TyTerm::Fn {
-                    params,
-                    ret: Box::new(ret),
-                    captures: vec![],
-                    effect: Effect::OPAQUE.into(),
-                    flows: Flows::Every.into(),
-                },
-                shape: None,
             },
             EntryDeclaration::Function => LocalFunction {
                 kind: FnKind::Local(ast, GraphInputs::FromReads),
@@ -1527,10 +1421,7 @@ pub(crate) fn compile(
         Ok(declared) => declared,
         Err(refused) => {
             refusals.extend(refused.into_iter().map(|refusal| {
-                Refusal::of(
-                    Some(Origin::Init(refusal.key().stored())),
-                    refusal.to_string(),
-                )
+                Refusal::of(Some(Origin::Init(refusal.key().to_owned())), refusal.to_string())
             }));
             return Err(refusals);
         }
@@ -1558,7 +1449,7 @@ pub(crate) fn compile(
             Some(name) => Some(Origin::Entry(name.clone())),
             None => declared_inits
                 .key_of(&written_in)
-                .map(|key| Origin::Init(key.stored())),
+                .map(|key| Origin::Init(key.to_owned())),
         }
     };
 
@@ -1566,7 +1457,6 @@ pub(crate) fn compile(
     let ext = extract::extract(interner, &graph);
     let inf = infer::infer(interner, &graph, &ext);
     let typeck = started.elapsed();
-    refusals.extend(crate::host_graph::crossing_refusals(interner, &graph.types, &inf, exposed));
     refusals.extend(inf.errors().into_iter().flat_map(|(qref, errs)| {
         let origin = origin_of(&qref);
         errs.iter().map(move |e| Refusal {
@@ -1616,15 +1506,12 @@ pub(crate) fn compile(
         return Err(each_fault_once(refusals));
     }
 
-    let hooks: HashMap<HookName, CompiledHook> = hooks
+    let hooks: HashMap<String, CompiledHook> = hooks
         .into_iter()
-        .map(|hook| (hook.name().clone(), hook.compiled()))
+        .map(|hook| (hook.name().to_owned(), hook.compiled()))
         .collect();
-    let context_names: FxHashMap<QualifiedRef, Astr> = graph
-        .contexts
-        .iter()
-        .map(|c| (c.qref, interner.intern(&program_key_of(interner, c.qref))))
-        .collect();
+    let context_names: FxHashMap<QualifiedRef, Astr> =
+        graph.contexts.iter().map(|c| (c.qref, c.qref.name)).collect();
     let mut executables: FxHashMap<QualifiedRef, Executable> = handlers
         .into_iter()
         .map(|(q, h)| (q, Executable::Extern(h)))
@@ -1700,21 +1587,18 @@ pub(crate) fn compile(
             let Some(ty) = inf.context_types.get(&c.qref) else {
                 panic!("inference settles a type for every context of the graph")
             };
-            (program_key_of(interner, c.qref), Arc::new(ty.clone()))
+            (interner.resolve(c.qref.name).to_owned(), Arc::new(ty.clone()))
         })
         .collect();
-    let init_functions: Vec<(InitKey, QualifiedRef)> = declared_inits
+    let init_functions: Vec<(String, QualifiedRef)> = declared_inits
         .functions()
-        .map(|(key, function)| (key.clone(), function))
+        .map(|(key, function)| (key.to_owned(), function))
         .collect();
     let inits = match declared_inits.solved(interner, &solved) {
         Ok(inits) => inits,
         Err(refused) => {
             refusals.extend(refused.into_iter().map(|refusal| {
-                Refusal::of(
-                    Some(Origin::Init(refusal.key().stored())),
-                    refusal.to_string(),
-                )
+                Refusal::of(Some(Origin::Init(refusal.key().to_owned())), refusal.to_string())
             }));
             return Err(refusals);
         }
@@ -1731,12 +1615,11 @@ pub(crate) fn compile(
                 .filter(|(_, function)| lookup_module(&shared, function).main.may_suspend)
                 .map(|(key, _)| {
                     let message = format!(
-                        "the init of `@{}` can wait, and a program compiled for synchronous access \
+                        "the init of `@{key}` can wait, and a program compiled for synchronous access \
                          runs an init inside the fetch that finds its key absent, which cannot wait; \
-                         compile with `Host::async_access`",
-                        key.written
+                         compile with `Host::async_access`"
                     );
-                    Refusal::of(Some(Origin::Init(key.stored())), message)
+                    Refusal::of(Some(Origin::Init(key.clone())), message)
                 }),
         );
         if !refusals.is_empty() {
@@ -1796,11 +1679,7 @@ fn bare_callable(
 ) -> Vec<String> {
     let mut reached: Vec<String> = extern_fns
         .iter()
-        .filter(|f| {
-            f.qref.name == name.name
-                && (f.qref.host.is_none() || f.qref.host == name.host)
-                && types.machine_view(f.qref).is_none()
-        })
+        .filter(|f| f.qref.name == name.name && types.machine_view(f.qref).is_none())
         .map(|f| match f.qref.namespace {
             Some(ns) => format!("{}::{}", interner.resolve(ns), interner.resolve(f.qref.name)),
             None => interner.resolve(f.qref.name).to_owned(),
@@ -1817,7 +1696,7 @@ pub(crate) struct Compiled {
     shared: InterpreterContext,
     rt: AcvusRuntime,
     entries: HashMap<String, CompiledEntry>,
-    pub(crate) hooks: HashMap<HookName, CompiledHook>,
+    pub(crate) hooks: HashMap<String, CompiledHook>,
     solved: BTreeMap<String, Arc<Ty>>,
     #[cfg(feature = "tooling")]
     listing_laws: acvus_mir::laws::LawTable,
@@ -1832,20 +1711,15 @@ impl Compiled {
         &self.shared.interner
     }
 
-    fn unbound_hook(&self) -> Option<&HookName> {
-        let mut unbound: Vec<&HookName> = self
+    fn unbound_hook(&self) -> Option<&str> {
+        let mut unbound: Vec<&str> = self
             .hooks
             .iter()
             .filter(|(_, hook)| !hook.is_bound())
-            .map(|(name, _)| name)
+            .map(|(name, _)| name.as_str())
             .collect();
         unbound.sort_unstable();
         unbound.first().copied()
-    }
-
-    pub(crate) fn running(mut self, runs: &FxHashSet<String>) -> Self {
-        self.entries.retain(|name, _| runs.contains(name));
-        self
     }
 
     fn codec(&self) -> Codec<'_> {
@@ -1874,7 +1748,7 @@ impl Compiled {
 
     async fn run_over(&self, entry: QualifiedRef, port: Arc<Port>, args: Vec<Value>) -> Result<Value, HostError> {
         if let Some(hook) = self.unbound_hook() {
-            return Err(HostError::Unbound { hook: hook.clone() });
+            return Err(HostError::Unbound { hook: hook.to_owned() });
         }
         Interpreter::on_port(self.shared.clone(), entry, port, args)
             .ended_or_ran()
@@ -1891,13 +1765,6 @@ impl<A> Program<A>
 where
     A: Access,
 {
-    pub(crate) fn of(compiled: Compiled) -> Self {
-        Program {
-            compiled,
-            access: PhantomData,
-        }
-    }
-
     /// Every context of the compilation, in key order.
     pub fn contexts(&self) -> impl Iterator<Item = &str> {
         self.compiled.solved.keys().map(String::as_str)
@@ -2106,9 +1973,6 @@ macro_rules! scope_tooling {
         where
             A: Access,
         {
-            /// An entry the tooling runs whatever it declares, whose result
-            /// it reads by the settled type; one that still requires a `$`
-            /// input is refused.
             $v fn untyped_entry(self, name: &str) -> Result<UntypedEntry<'p, A>, HostError> {
                 let program = self.program;
                 let compiled = program.compiled(name)?;
@@ -2587,7 +2451,6 @@ impl<R> Output<'_, R> {
     }
 }
 
-/// An entry the runtime's tooling runs and reads by the settled type.
 pub struct UntypedEntry<'p, A = SyncAccess> {
     compiled: &'p CompiledEntry,
     access: PhantomData<fn() -> A>,
@@ -2596,7 +2459,6 @@ pub struct UntypedEntry<'p, A = SyncAccess> {
 
 pub struct UntypedOutput<'p> {
     value: Owned<AcvusRuntime>,
-    compiled: &'p CompiledEntry,
     brand: Brand<'p>,
 }
 
@@ -2613,7 +2475,6 @@ macro_rules! untyped_run {
                     // SAFETY: the run moved its result out to this caller,
                     // and no other holder owns it.
                     value: unsafe { Owned::from_value(Holding::new(), value) },
-                    compiled: self.compiled,
                     brand: PhantomData,
                 })
             }
@@ -2623,9 +2484,9 @@ macro_rules! untyped_run {
         impl UntypedOutput<'_> {
             $v fn with_value<O, F>(&self, f: F) -> O
             where
-                F: FnOnce(&Value, &Ty) -> O,
+                F: FnOnce(&Value) -> O,
             {
-                f(&self.value, &self.compiled.ret)
+                f(&self.value)
             }
         }
     };
