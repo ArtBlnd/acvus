@@ -9,10 +9,10 @@ optimizes, and validates the result before a register machine runs it.
 ## Run
 
 ```sh
-cargo run -p acvus-cli -- run   script.acvus  [name=literal]... [--space S] [--parallel] [--opt none|full] [--time]
-cargo run -p acvus-cli -- check script.acvus [--json] [--opt none|full] [--time]
-cargo run -p acvus-cli -- mir   script.acvus [--json] [--opt none|full] [--time]
-cargo run -p acvus-cli -- ops   script.acvus [--json] [--opt none|full] [--time]
+cargo run -p acvus-cli -- run   script.acvus  [name=literal]... [--space S] [--parallel] [--opt none|full] [--time] [--stack MiB]
+cargo run -p acvus-cli -- check script.acvus [--json] [--opt none|full] [--time] [--stack MiB]
+cargo run -p acvus-cli -- mir   script.acvus [--json] [--opt none|full] [--time] [--stack MiB]
+cargo run -p acvus-cli -- ops   script.acvus [--json] [--opt none|full] [--time] [--stack MiB]
 ```
 
 A `.acvus` file is a script, a `.acvt` file a template; both go through the
@@ -88,6 +88,11 @@ loads, stores and inits its fetches and commits make; the space's commit
 after the run is not. The lines go to stderr; under `--json`
 they are a trailing `{"time": …}` object on stdout instead, the same
 milliseconds as numbers. Without the flag no clock is read.
+
+`acvus` compiles and runs on a thread of 64 MiB, and every thread of its
+runtime has the same stack; `--stack <MiB>` sets them all. A recursion
+deeper than its thread's stack admits traps with `call depth past the
+machine's bound`, so a larger stack admits a deeper one.
 
 A run that fails prints one `error: <message>` line: a trap names the
 operation in Rust's words (`attempt to divide by zero`), and a context the
@@ -297,6 +302,12 @@ async fn run() -> Result<(), HostError> {
   refusal.
 - `bind(name, literal)` fixes `$name` for the whole graph, which is what
   `acvus run`'s `name=literal` does.
+- Natively a recursion traps before the stack of the thread it runs on
+  runs out, so how deep a script may recurse is set by the threads the
+  embedder compiles and runs it on.
+- The host reads no clock, so it compiles on `wasm32-unknown-unknown` as
+  it does natively; `acvus-interpreter/examples/clockless_host.rs` runs one
+  under node.
 
 ## Crates
 

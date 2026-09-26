@@ -7,7 +7,6 @@ mod location;
 mod lsp_host;
 mod oplist;
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -39,10 +38,10 @@ const EXIT_USAGE: u8 = 64;
 const EXIT_LSP_FAILED: u8 = 1;
 
 const USAGE: &str = "\
-usage: acvus run   <file.acvus|file.acvt|script> [name=literal]... [--space S] [--parallel[=P]] [--opt L] [--time[=T]]
-       acvus check <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
-       acvus mir   <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
-       acvus ops   <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
+usage: acvus run   <file.acvus|file.acvt|script> [name=literal]... [--space S] [--parallel[=P]] [--opt L] [--time[=T]] [--stack M]
+       acvus check <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]] [--stack M]
+       acvus mir   <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]] [--stack M]
+       acvus ops   <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]] [--stack M]
        acvus ctl   ...                           (`acvus ctl` lists its commands)
        acvus lsp
 
@@ -74,6 +73,9 @@ usage: acvus run   <file.acvus|file.acvt|script> [name=literal]... [--space S] [
              parse, typeck, lower and optimize; prepare; run -- in
              milliseconds; under --json a trailing {\"time\": ...} object on
              stdout instead. --time=off (the default) prints none
+  --stack    the stack, in MiB, of the thread the command compiles and runs
+             on and of every thread of its runtime: 64 by default. A deeper
+             recursion needs a larger one; past its stack a call traps
   A flag overrides `acvus ctl set` on the space, which overrides the ctl
   context's, which overrides the default.";
 
@@ -86,6 +88,7 @@ enum Command {
 
 struct Args {
     command: Command,
+    stack: Stack,
     /// Without a space the positional is a file; with one it is the name of
     /// a script the space holds.
     source: String,
@@ -93,6 +96,41 @@ struct Args {
     json: bool,
     flags: Defaults,
     space: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct Stack {
+    mib: usize,
+    bytes: usize,
+}
+
+impl Stack {
+    const DEFAULT: Stack = Stack {
+        mib: 64,
+        bytes: 64 << 20,
+    };
+
+    fn parse(written: Option<&str>) -> Result<Stack, String> {
+        let refused = || match written {
+            Some(written) => format!("--stack takes a positive whole number of MiB, not `{written}`"),
+            None => "--stack takes a positive whole number of MiB".to_string(),
+        };
+        let mib: usize = written.and_then(|written| written.parse().ok()).ok_or_else(refused)?;
+        if mib == 0 {
+            return Err(refused());
+        }
+        let bytes = mib.checked_mul(1 << 20).ok_or_else(refused)?;
+        Ok(Stack { mib, bytes })
+    }
+}
+
+impl Invocation {
+    fn stack(&self) -> Stack {
+        match self {
+            Invocation::Compile(args) => args.stack,
+            Invocation::Lsp | Invocation::Ctl(_) => Stack::DEFAULT,
+        }
+    }
 }
 
 fn level(opt: Opt) -> &'static str {
@@ -130,13 +168,19 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
     let mut json = false;
     let mut flags = Defaults::default();
     let mut space = None;
+    let mut stack = Stack::DEFAULT;
     while let Some(arg) = it.next() {
         if let Some(set) = ctl::run_flag(&mut flags, arg, &mut || it.next().cloned()) {
             set?;
             continue;
         }
+        if let Some(written) = arg.strip_prefix("--stack=") {
+            stack = Stack::parse(Some(written))?;
+            continue;
+        }
         match arg.as_str() {
             "--json" => json = true,
+            "--stack" => stack = Stack::parse(it.next().map(String::as_str))?,
             "--space" => {
                 let name = it.next().ok_or("--space takes a space name")?;
                 space = Some(name.clone());
@@ -159,6 +203,7 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
     let source = source.ok_or("no source")?;
     Ok(Invocation::Compile(Args {
         command,
+        stack,
         source,
         bindings,
         json,
@@ -321,16 +366,13 @@ struct Timings {
 }
 
 impl Timings {
-    fn of(timed: Timed, stages: &CompileTimes) -> Option<Self> {
-        match timed {
-            Timed::On => Some(Timings {
-                compile: stages.check(),
-                stages: *stages,
-                prepare: None,
-                run: None,
-            }),
-            Timed::Off => None,
-        }
+    fn of(stages: Option<&CompileTimes>) -> Option<Self> {
+        stages.map(|stages| Timings {
+            compile: stages.check(),
+            stages: *stages,
+            prepare: None,
+            run: None,
+        })
     }
 
     fn report(&self, rendering: &Rendering) {
@@ -412,21 +454,51 @@ fn ms(duration: Duration) -> f64 {
 /// `HostError::Trapped` (RFC-0090 rule 4). That names this compiler's source,
 /// which is not where a script author looks, so the hook is silenced unless
 /// `RUST_BACKTRACE` is set.
+///
+/// The command runs on a spawned thread rather than the main thread, whose
+/// stack the OS sets rather than `--stack` (RFC-0107 rule 1). A panic that
+/// escapes the command ends that thread and `join` hands its payload here,
+/// so no `catch_unwind` is needed.
 fn main() -> ExitCode {
     if std::env::var_os("RUST_BACKTRACE").is_none() {
         std::panic::set_hook(Box::new(|_| {}));
     }
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("a multi-thread tokio runtime");
-    match catch_unwind(AssertUnwindSafe(|| runtime.block_on(cli()))) {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let invocation = match parse_args(&argv) {
+        Ok(invocation) => invocation,
+        Err(e) => {
+            eprintln!("error: {e}\n{USAGE}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    let stack = invocation.stack();
+    let spawned = std::thread::Builder::new()
+        .name("acvus".to_string())
+        .stack_size(stack.bytes)
+        .spawn(move || command(invocation, stack));
+    let running = match spawned {
+        Ok(running) => running,
+        Err(error) => {
+            eprintln!("error: no thread of a {} MiB stack: {error}", stack.mib);
+            return ExitCode::from(EXIT_RUN);
+        }
+    };
+    match running.join() {
         Ok(code) => code,
         Err(panic) => {
             eprintln!("error: acvus panicked: {}", panic_message(panic.as_ref()));
             ExitCode::from(EXIT_RUN)
         }
     }
+}
+
+fn command(invocation: Invocation, stack: Stack) -> ExitCode {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(stack.bytes)
+        .build()
+        .expect("a multi-thread tokio runtime");
+    runtime.block_on(cli(invocation))
 }
 
 fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
@@ -439,16 +511,11 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
     }
 }
 
-async fn cli() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    let args = match parse_args(&argv) {
-        Ok(Invocation::Compile(args)) => args,
-        Ok(Invocation::Lsp) => return lsp(),
-        Ok(Invocation::Ctl(rest)) => return ctl(&rest).await,
-        Err(e) => {
-            eprintln!("error: {e}\n{USAGE}");
-            return ExitCode::from(EXIT_USAGE);
-        }
+async fn cli(invocation: Invocation) -> ExitCode {
+    let args = match invocation {
+        Invocation::Compile(args) => args,
+        Invocation::Lsp => return lsp(),
+        Invocation::Ctl(rest) => return ctl(&rest).await,
     };
     match compile_command(args).await {
         Ok(code) => code,
@@ -487,7 +554,7 @@ async fn fill_space(args: &[String]) -> Result<(), Stop> {
         source: SpaceSource::Flag,
     })?;
     let units = space_units(&space)?;
-    let program = match compile::compile(&units, None, &[], cli_registries(), Opt::Full, SequentialExecutor) {
+    let program = match compile::compile(&units, None, &[], cli_registries(), Opt::Full, Timed::Off, SequentialExecutor) {
         Ok(program) => program,
         Err(Refused::Usage(message)) => return Err(Stop::usage(message)),
         Err(Refused::Diagnostics(diagnostics)) => {
@@ -646,7 +713,7 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
         Parallel::Tokio => Box::new(TokioExecutor),
         Parallel::Sequential => Box::new(SequentialExecutor),
     };
-    let program = match compile::compile(&units, Some(target), &args.bindings, cli_registries(), opt, executor) {
+    let program = match compile::compile(&units, Some(target), &args.bindings, cli_registries(), opt, timed, executor) {
         Ok(program) => program,
         Err(Refused::Usage(message)) => return Err(Stop::usage(message)),
         Err(Refused::Diagnostics(diagnostics)) => {
@@ -654,7 +721,7 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
             return Ok(ExitCode::from(EXIT_COMPILE));
         }
     };
-    let mut timings = Timings::of(timed, program.times());
+    let mut timings = Timings::of(program.times());
     let Role::Entry(entry) = &units[target].role else {
         panic!("a command's target is a script, an entry")
     };
@@ -684,7 +751,7 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
                 false => oplist::Form::Text,
             };
             if let Some(timings) = &mut timings {
-                timings.prepare = Some(program.times().prepare);
+                timings.prepare = Some(timings.stages.prepare);
             }
             let text = oplist::dump(about.prepared, form)
                 .map_err(|e| Stop::run(format!("the listing does not serialize: {e}")))?;
@@ -705,7 +772,7 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
                 return Ok(ExitCode::from(EXIT_COMPILE));
             }
             if let Some(timings) = &mut timings {
-                timings.prepare = Some(program.times().prepare);
+                timings.prepare = Some(timings.stages.prepare);
             }
             let run = Run {
                 program: &program,

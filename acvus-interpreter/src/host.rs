@@ -214,7 +214,7 @@ use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use acvus_ast::Span;
 use acvus_ast::report::Label;
@@ -884,12 +884,92 @@ struct HostParts {
     refusals: Vec<Refusal>,
     opt: Opt,
     lower: Lower,
-    parse: Duration,
+    timer: Option<Timer>,
     hooks: Vec<HookDecl>,
+}
+
+/// A clock an embedder gives the host: the time since an origin of its
+/// choosing, which never goes back (RFC-0107 rule 2).
+type Clock = Box<dyn Fn() -> Duration + Send + Sync>;
+
+#[derive(Clone, Copy)]
+enum Stage {
+    Parse,
+    Typeck,
+    Lower,
+    Optimize,
+    Prepare,
+}
+
+#[derive(Default)]
+struct Spent {
+    parse: Duration,
+    typeck: Duration,
+    lower: Duration,
+    optimize: Duration,
+    prepare: Duration,
+}
+
+impl Spent {
+    fn on(&mut self, stage: Stage) -> &mut Duration {
+        match stage {
+            Stage::Parse => &mut self.parse,
+            Stage::Typeck => &mut self.typeck,
+            Stage::Lower => &mut self.lower,
+            Stage::Optimize => &mut self.optimize,
+            Stage::Prepare => &mut self.prepare,
+        }
+    }
+}
+
+struct Timer {
+    clock: Clock,
+    spent: Spent,
+}
+
+impl Timer {
+    fn time<T>(&mut self, stage: Stage, work: impl FnOnce() -> T) -> T {
+        let started = (self.clock)();
+        let done = work();
+        let took = (self.clock)()
+            .checked_sub(started)
+            .expect("the host's clock went back; a clock given to `Host::with_clock` never goes back");
+        *self.spent.on(stage) += took;
+        done
+    }
+
+    fn times(self, opt: Opt) -> CompileTimes {
+        let Spent {
+            parse,
+            typeck,
+            lower,
+            optimize,
+            prepare,
+        } = self.spent;
+        CompileTimes {
+            opt,
+            parse,
+            typeck,
+            lower,
+            optimize,
+            prepare,
+        }
+    }
+}
+
+fn timed<T>(timer: &mut Option<Timer>, stage: Stage, work: impl FnOnce() -> T) -> T {
+    match timer {
+        Some(timer) => timer.time(stage, work),
+        None => work(),
+    }
 }
 
 impl Host<SyncAccess> {
     pub fn new(registries: Vec<Registry<AcvusRuntime>>) -> Self {
+        Host::built(registries, None)
+    }
+
+    fn built(registries: Vec<Registry<AcvusRuntime>>, timer: Option<Timer>) -> Self {
         Host {
             parts: HostParts {
                 interner: Interner::new(),
@@ -901,7 +981,7 @@ impl Host<SyncAccess> {
                 refusals: Vec::new(),
                 opt: Opt::Full,
                 lower: Lower::Ahead,
-                parse: Duration::ZERO,
+                timer,
                 hooks: Vec::new(),
             },
             access: PhantomData,
@@ -918,15 +998,36 @@ impl Host<SyncAccess> {
     }
 }
 
+macro_rules! host_clock {
+    ($v:vis) => {
+        #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+        impl Host<SyncAccess> {
+            /// The clock is a constructor's argument, not a builder
+            /// method's, because a source is parsed when it is added: a
+            /// clock given after one would leave that parse out of the
+            /// times.
+            $v fn with_clock<F>(registries: Vec<Registry<AcvusRuntime>>, clock: F) -> Self
+            where
+                F: Fn() -> Duration + Send + Sync + 'static,
+            {
+                let timer = Timer {
+                    clock: Box::new(clock),
+                    spent: Spent::default(),
+                };
+                Host::built(registries, Some(timer))
+            }
+        }
+    };
+}
+tooling_vis!(host_clock);
+
 impl<A> Host<A>
 where
     A: Access,
 {
     fn parsed(&mut self, origin: Origin, source: Source<'_>) -> ParsedAst {
         let parts = &mut self.parts;
-        let started = Instant::now();
-        let Parsed { ast, errors } = source.parse(&parts.interner);
-        parts.parse += started.elapsed();
+        let Parsed { ast, errors } = timed(&mut parts.timer, Stage::Parse, || source.parse(&parts.interner));
         parts.parse_refusals.extend(errors.iter().map(|e| Refusal {
             span: span_of(e.span),
             ..Refusal::of(Some(origin.clone()), e.kind.to_string())
@@ -1277,7 +1378,7 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         refusals: structural,
         opt,
         lower: lowered_ahead,
-        parse,
+        mut timer,
         hooks,
     } = host;
     let interner = &interner;
@@ -1452,10 +1553,11 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         }
     };
 
-    let started = Instant::now();
-    let ext = extract::extract(interner, &graph);
-    let inf = infer::infer(interner, &graph, &ext);
-    let typeck = started.elapsed();
+    let (ext, inf) = timed(&mut timer, Stage::Typeck, || {
+        let ext = extract::extract(interner, &graph);
+        let inf = infer::infer(interner, &graph, &ext);
+        (ext, inf)
+    });
     refusals.extend(inf.errors().into_iter().flat_map(|(qref, errs)| {
         let origin = origin_of(&qref);
         errs.iter().map(move |e| Refusal {
@@ -1468,9 +1570,7 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         })
     }));
 
-    let started = Instant::now();
-    let lowered = lower::lower(interner, &graph, &ext.view(), &inf);
-    let lower = started.elapsed();
+    let lowered = timed(&mut timer, Stage::Lower, || lower::lower(interner, &graph, &ext.view(), &inf));
     refusals.extend(lowered.errors.iter().flat_map(|le| {
         let origin = origin_of(&le.fn_id);
         le.errors.iter().map(move |e| Refusal {
@@ -1486,10 +1586,11 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         return Err(each_fault_once(refusals));
     }
 
-    let started = Instant::now();
-    let laws = acvus_mir::laws::LawTable::of(graph.functions.iter(), &graph.types);
-    let optimized = optimize::optimize(interner, &laws, lowered.modules, opt);
-    let optimize = started.elapsed();
+    let (laws, optimized) = timed(&mut timer, Stage::Optimize, || {
+        let laws = acvus_mir::laws::LawTable::of(graph.functions.iter(), &graph.types);
+        let optimized = optimize::optimize(interner, &laws, lowered.modules, opt);
+        (laws, optimized)
+    });
     refusals.extend(optimized.errors.into_iter().flat_map(|(qref, errs)| {
         let origin = origin_of(&qref);
         errs.into_iter().map(move |e| Refusal {
@@ -1515,10 +1616,9 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         .into_iter()
         .map(|(q, h)| (q, Executable::Extern(h)))
         .collect();
-    let started = Instant::now();
     let mut prepared: Vec<(QualifiedRef, Executable)> = Vec::new();
     let declines = Declines::default();
-    {
+    timed(&mut timer, Stage::Prepare, || {
         let ctx = PrepareCtx {
             interner,
             externs: &executables,
@@ -1546,11 +1646,10 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
                 }),
             }
         }
-    }
+    });
     if !refusals.is_empty() {
         return Err(each_fault_once(refusals));
     }
-    let prepare = started.elapsed();
     executables.extend(prepared);
     let mut modules = optimized.modules;
     let mut required = optimized.inputs;
@@ -1635,14 +1734,7 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         #[cfg(feature = "tooling")]
         listing_laws: laws,
         declined: declines.take(),
-        times: CompileTimes {
-            opt,
-            parse,
-            typeck,
-            lower,
-            optimize,
-            prepare,
-        },
+        times: timer.map(|timer| timer.times(opt)),
     })
 }
 
@@ -1700,7 +1792,7 @@ pub(crate) struct Compiled {
     #[cfg(feature = "tooling")]
     listing_laws: acvus_mir::laws::LawTable,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
-    times: CompileTimes,
+    times: Option<CompileTimes>,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     declined: Vec<Declined>,
 }
@@ -1817,8 +1909,8 @@ macro_rules! program_tooling {
                 self.compiled.interner()
             }
 
-            $v fn times(&self) -> &CompileTimes {
-                &self.compiled.times
+            $v fn times(&self) -> Option<&CompileTimes> {
+                self.compiled.times.as_ref()
             }
 
             /// The loops `analysis::ahead` lowered and `prepare` ran in place.
@@ -2491,3 +2583,63 @@ macro_rules! untyped_run {
     };
 }
 tooling_vis!(untyped_run);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use super::{Host, Source};
+    use crate::{MemoryStorage, SequentialExecutor};
+
+    const SCRIPT: &str = "fn f(n) { if n == 0 { 0 } else { n + f(n - 1) } }\nf(10)";
+
+    fn ran(program: &super::Program) -> i64 {
+        futures::executor::block_on(program.scope(async |scope| {
+            let mut storage = MemoryStorage::new();
+            let mut page = scope.open(&mut storage);
+            let entry = scope.entry::<(), i64>("main")?;
+            let out = entry.run(&mut page, ()).await?;
+            out.with(|n: &i64| *n)
+        }))
+        .expect("the script runs")
+    }
+
+    #[test]
+    fn a_host_without_a_clock_compiles_runs_and_has_no_times() {
+        let program = Host::new(Vec::new())
+            .entry::<(), i64>("main", Source::Script(SCRIPT))
+            .compile(SequentialExecutor)
+            .expect("the script compiles");
+        assert!(program.times().is_none());
+        assert_eq!(ran(&program), 55);
+    }
+
+    #[test]
+    fn a_host_given_a_clock_times_each_stage_by_it() {
+        let reads = Arc::new(AtomicU64::new(0));
+        let counted = Arc::clone(&reads);
+        let clock = move || Duration::from_millis(counted.fetch_add(1, Ordering::Relaxed));
+        let program = Host::with_clock(Vec::new(), clock)
+            .entry::<(), i64>("main", Source::Script(SCRIPT))
+            .compile(SequentialExecutor)
+            .expect("the script compiles");
+        let times = program.times().expect("a clocked host's program has its times");
+        let one = Duration::from_millis(1);
+        assert_eq!(
+            [times.parse, times.typeck, times.lower, times.optimize, times.prepare],
+            [one; 5]
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 10, "two readings a stage, and no other");
+        assert_eq!(ran(&program), 55);
+    }
+
+    #[test]
+    #[should_panic(expected = "the host's clock went back")]
+    fn a_clock_that_goes_back_is_refused_by_a_panic() {
+        let reads = AtomicU64::new(100);
+        let clock = move || Duration::from_millis(reads.fetch_sub(1, Ordering::Relaxed));
+        let _ = Host::with_clock(Vec::new(), clock).entry::<(), i64>("main", Source::Script(SCRIPT));
+    }
+}

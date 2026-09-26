@@ -123,12 +123,20 @@ pub fn compile<E>(
     bindings: &[Binding],
     registries: Vec<Registry<AcvusRuntime>>,
     opt: Opt,
+    timed: Timed,
     executor: E,
 ) -> Result<Program, Refused>
 where
     E: Executor + 'static,
 {
-    let mut host = Host::new(registries).opt(opt);
+    let host = match timed {
+        Timed::On => {
+            let origin = Instant::now();
+            Host::with_clock(registries, move || origin.elapsed())
+        }
+        Timed::Off => Host::new(registries),
+    };
+    let mut host = host.opt(opt);
     for Binding { name, text } in bindings {
         host = host.bind(name, text).map_err(|error| Refused::Usage(usage_of(error)))?;
     }
