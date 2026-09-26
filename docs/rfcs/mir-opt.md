@@ -1475,7 +1475,8 @@ The first shape a lowerer admits under RFC-0092: a chunk of one iteration, one s
 2. **The run.** On entering the loop and at each header, the lowerer runs the prefix of the iterations up to a bound ahead, each laid at its own index. Each spawn thereby starts its work. The registers the prefix writes and later instructions read are moved out, by index, into a buffer the frame owns. Each iteration then takes its own back and runs the rest of the body in place, in index order: its evaluations, the rest of its first stage and every later stage.
 3. **The executor decides.** The spawn the handler already takes decides threads or concurrent futures. The executor states the bound per task (`Executor::ahead`). A body in this form suspends, so the wait is its evaluations. RFC-0092 rule 3's synchronous branch is not reached.
 4. **What holds.**
-   - Every register the prefix writes is dead at the body's entry, apart from the element and the counter, so one frame serves every iteration in flight. `prepare` asserts it.
+   - Every register the prefix writes, the element, the counter and a call's argument window among them, is dead at the body's entry, so one frame serves every iteration in flight; `prepare` checks it, and a loop that fails runs in place with the reason recorded.
+   - A spawn is lent no value the prefix itself defines, since the next index's prefix writes that register while the job reads it; and where the loop can leave from its body, no spawn is lent anything, since what follows the exit may release it. Either runs in place.
    - A job's trap is resumed at its evaluation, in index order, so the reported trap is the program's least (RFC-0089 rule 5).
    - Work spawned past an exit is dropped unevaluated, and its frame's cells wait for it (RFC-0046 rule 3).
 
