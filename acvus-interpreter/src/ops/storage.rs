@@ -5,7 +5,7 @@
 //! facts `prepare` reads off the types at every storage instruction; nothing
 //! in this file re-derives them, so a wrong one is a defect in `prepare`.
 
-use acvus_extern::{FieldAt, Owned, Release};
+use acvus_extern::{FieldAt, Owned};
 
 use std::marker::PhantomData;
 use std::mem;
@@ -22,7 +22,7 @@ use crate::port::{Held, end_run, refusal_of};
 use crate::runtime::AcvusRuntime;
 use crate::ops::arith::Unary;
 use crate::ops::variant::scrutinee;
-use crate::regs::Regs;
+use crate::regs::{Depth, Regs};
 use crate::value::{Kind, Place, PlaceMut, Value};
 
 // -- Segments ---------------------------------------------------------
@@ -378,7 +378,7 @@ fn overwrite<const LARGE: bool>(at: &mut Value, value: Value) {
     let replaced = *at;
     *at = value;
     if LARGE {
-        replaced.release();
+        replaced.release_owned();
     }
 }
 
@@ -700,7 +700,8 @@ impl<const LARGE: bool> Op for Fetch<LARGE> {
     successor!();
 
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        let held = fetch_now(m.ctx.rt, &self.key, &self.settled);
+        let depth = m.window().depth();
+        let held = fetch_at(m.ctx.rt, depth, &self.key, &self.settled);
         m.regs().define::<LARGE>(self.dst, held.into_word());
         self.next.run(m, r0)
     }
@@ -744,7 +745,7 @@ pub struct FetchWaited<const LARGE: bool> {
 
 impl<const LARGE: bool> Op for FetchWaited<LARGE> {
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
-        let rt = m.ctx.rt.clone();
+        let rt = m.callee_runtime();
         let key = self.key.clone();
         let settled = Arc::clone(&self.settled);
         m.suspend::<LARGE>(
@@ -789,11 +790,20 @@ fn committed<const LARGE: bool>(m: &mut Machine<'_>, src: Marked, settled: &Arc<
     Held::new(value, Arc::clone(settled), m.ctx.rt.shared.compilation)
 }
 
+/// A load outside any frame, as a host's read of a page makes it: an init
+/// it runs roots its frame at the runtime's own depth.
 pub(crate) fn fetch_now(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
+    fetch_at(rt, rt.depth(), key, settled)
+}
+
+/// A load whose init, where one runs, roots its frame at `depth`: from a
+/// `Fetch`, the depth its frame's callee runs at, which `rt` does not carry
+/// for a frame entered synchronously (RFC-0100 rule 5).
+fn fetch_at(rt: &AcvusRuntime, depth: Depth, key: &str, settled: &Ty) -> Held {
     let port = &rt.port;
     let held = match port.load(rt, key) {
         Ok(Some(held)) => held,
-        Ok(None) => fill_now(rt, key),
+        Ok(None) => fill_now(rt, depth, key),
         Err(error) => end_run(error),
     };
     let Some(refused) = refusal_of(rt, key, &held, settled) else {
@@ -805,8 +815,8 @@ pub(crate) fn fetch_now(rt: &AcvusRuntime, key: &str, settled: &Ty) -> Held {
     end_run(refused)
 }
 
-fn fill_now(rt: &AcvusRuntime, key: &str) -> Held {
-    let made = init_of(rt, key).run_now(rt);
+fn fill_now(rt: &AcvusRuntime, depth: Depth, key: &str) -> Held {
+    let made = init_of(rt, key).run_now(rt, depth);
     let port = &rt.port;
     if let Err(error) = port.store(key, made) {
         end_run(error);

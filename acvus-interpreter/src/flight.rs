@@ -202,6 +202,7 @@ impl FrameCells {
             Arc::clone(&rt.port),
             Arc::clone(&rt.flight),
             Arc::clone(&cells.tally),
+            rt.depth(),
         );
         (cells, within)
     }

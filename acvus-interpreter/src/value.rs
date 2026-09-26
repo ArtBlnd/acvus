@@ -2,23 +2,101 @@
 //! `Value`'s `Kind` says what Rust type it was erased from; the MIR type
 //! the interpreter carries beside it says what the program reads it as.
 
+#![cfg_attr(
+    feature = "tooling",
+    doc = r#"
+A value of a kind that is not inline is made only by the runtime, from an
+allocation or a place it holds, and never from bits (RFC-0102 rule 2,
+`Large`), even under the `tooling` feature. Each program below would put a
+word of its choosing under a kind that `Release` or a safe reader follows.
+Not by `Value::inline`, whose kind is checked only in a debug build,
+
+```compile_fail,E0624
+use acvus_interpreter::{Kind, Value};
+
+let _ = Value::inline(Kind::Large, 8);
+```
+
+not by a write through `bits_mut`, which keeps the kind,
+
+```compile_fail,E0624
+use acvus_interpreter::Value;
+
+let mut value = Value::string("x");
+*value.bits_mut() = 8;
+```
+
+not by `large_ref`, which names any address,
+
+```compile_fail,E0624
+use acvus_interpreter::Value;
+
+let _ = Value::large_ref(std::ptr::dangling_mut());
+```
+
+and not by a constant's `Word`, which names any kind.
+
+```compile_fail,E0624
+use acvus_interpreter::Kind;
+use acvus_interpreter::code::Konst;
+
+let _ = Konst::Word(Kind::Large, 8).value();
+```
+"#
+)]
+#![cfg_attr(
+    feature = "tooling",
+    doc = r#"
+A value is released by the one holder that owns it (RFC-0102 rule 3): not by
+a copy while its holder still owns it, not by the runtime's own release, and
+not by a token another runtime's holder gave.
+
+```compile_fail,E0061
+use acvus_extern::Release;
+use acvus_interpreter::Value;
+
+let value = Value::string("probe");
+let copy = value;
+value.release();
+copy.release();
+```
+
+```compile_fail,E0624
+use acvus_interpreter::Value;
+
+Value::string("probe").release_owned();
+```
+
+```compile_fail,E0308
+use acvus_extern::{Release, Releasing, TypesOnly};
+use acvus_interpreter::Value;
+
+fn release_with_another_runtimes_token(token: Releasing<TypesOnly>) {
+    Value::string("probe").release(token);
+}
+```
+"#
+)]
+
 use std::any::TypeId;
 use std::fmt;
 use std::any::Any;
 use std::mem;
 use std::ops::Deref;
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
 use std::sync::Arc;
 
-use acvus_extern::repr::{self, PtrWord, Word};
-use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
+use acvus_extern::repr::{self, PtrWord, TotalWord, Word};
+use acvus_extern::{FieldAt, ObjectShape, Owned, Release, Releasing};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
 
 use crate::flight::Launched;
-use crate::repr::{HeadAndTail, slot_header};
+use crate::repr::{
+    ExactLen, HeadAndTail, Large, Record, RecordHead, RecordVtable, Show, SlotVtable, record_header, slot_header,
+};
 use crate::runtime::AcvusRuntime;
-use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
+use crate::vtable::{Composite, HasVtable, Header, Vtable};
 
 // -- Kind -------------------------------------------------------------
 
@@ -94,6 +172,20 @@ impl Kind {
     }
 }
 
+/// An inline word read back at its type. Every inline type but `char` reads
+/// any word (`repr::TotalWord`); a `Char` word is a scalar value only because
+/// `inline_of`'s caller vouches it was `into_word` of a `char`.
+macro_rules! word_as {
+    (Char: $t:ty, $word:expr) => {
+        // SAFETY: `inline_of`'s contract: the word is `into_word` of a
+        // `char`, its scalar value zero-extended.
+        unsafe { char::from_u32_unchecked(u32::from_word($word)) }
+    };
+    ($name:ident: $t:ty, $word:expr) => {
+        <$t as TotalWord>::from_word($word)
+    };
+}
+
 /// An `Inline` value is its kind and its one word (`repr::Word`), and these
 /// are the readers and writers that dispatch a `T` known only by its
 /// `TypeId` to that word.
@@ -133,9 +225,7 @@ macro_rules! inline_words {
                         "materialize: {self:?} is not a {}",
                         stringify!($t)
                     );
-                    // SAFETY: the caller's contract: the word is `into_word`
-                    // of a `$t`.
-                    *slot = Some(unsafe { <$t as Word>::from_word(self.word) });
+                    *slot = Some(word_as!($name: $t, self.word));
                 })*
                 out
             }
@@ -202,46 +292,27 @@ impl Default for Value {
 unsafe impl Send for Value {}
 unsafe impl Sync for Value {}
 
-impl Release for Value {
-    fn release(self) {
-        if self.kind == Kind::Large {
-            let p = self.payload();
-            // SAFETY: the payload is live and is not used after this.
-            unsafe { (p.as_ref().vtable.drop)(p) }
+impl Release<AcvusRuntime> for Value {
+    fn release(self, _: Releasing<AcvusRuntime>) {
+        if let Some(large) = Large::of(&self) {
+            large.release()
         }
     }
 }
 
-/// A `Large` holding what `make` returns. The slot is allocated before `make`
-/// runs and its value is written where the slot lies, so a constructor that
-/// reads its parts inside `make` writes them straight into the heap, rather
-/// than building the value on the stack and copying it in after `malloc`.
-///
-/// `make` is the one thing that runs while the slot is uninitialized. If it
-/// unwinds, the slot is still a `Box<MaybeUninit<Slot<T>>>`, whose drop frees
-/// the allocation and runs no `Drop` of `T`; a closure cannot return from
-/// here early.
-fn large<T, F>(vtable: &'static Vtable, make: F) -> Value
+/// A `Large` holding what `make` returns, written in place (`Large::allocate`), so
+/// a constructor that reads its parts inside `make` writes them straight into
+/// the heap rather than building the value on the stack and copying it in
+/// after `malloc`.
+#[inline(always)]
+fn large<T, F>(vtable: &'static SlotVtable<T>, make: F) -> Value
 where
+    T: 'static,
     F: FnOnce() -> T,
 {
-    let mut slot = Box::<Slot<T>>::new_uninit();
-    let at = slot.as_mut_ptr();
-    // SAFETY: `at` is the allocation `slot` owns, sized and aligned for a
-    // `Slot<T>`. `&raw mut` names each field without reading the
-    // uninitialized memory or making a reference to it, and each write puts a
-    // valid value in its field.
-    unsafe {
-        (&raw mut (*at).header).write(Header { vtable });
-        (&raw mut (*at).value).write(make());
-    }
-    // SAFETY: `header` and `value` are both written above, and `Slot<T>` has
-    // no other field.
-    let slot = unsafe { slot.assume_init() };
-    let header = slot_header::<T>().head(NonNull::from(Box::leak(slot)));
     Value {
         kind: Kind::Large,
-        word: repr::word_of_ptr(header.as_ptr()).word(),
+        word: Large::allocate::<T, F>(vtable, make).word(),
     }
 }
 
@@ -262,8 +333,14 @@ macro_rules! value_word {
                 word: 0,
             };
 
+            /// A value of an inline kind from its word. It is the runtime's
+            /// alone, even under `tooling`: its kind is checked only in a
+            /// debug build, so it would make a `Large` of any bits, which
+            /// `Release` then frees. The runtime gives it kinds `prepare`
+            /// settled; the tooling makes an inline value by its type
+            /// (`Value::int`, `Value::from_bits`, `Value::char_`, …).
             #[inline]
-            $v fn inline(kind: Kind, bits: u64) -> Value {
+            pub(crate) fn inline(kind: Kind, bits: u64) -> Value {
                 debug_assert!(kind.is_inline(), "inline: {kind:?} does not carry bits");
                 Value { kind, word: bits }
             }
@@ -303,16 +380,15 @@ macro_rules! value_word {
                     Some(inline) => inline,
                     None => {
                         debug_assert_eq!(
-                            self.header().vtable.type_id,
-                            TypeId::of::<T>(),
+                            self.vtable().map(Vtable::type_id),
+                            Some(TypeId::of::<T>()),
                             "materialize: value is not a {}",
                             std::any::type_name::<T>()
                         );
                         let p = self.payload();
                         // SAFETY: the payload was allocated by `large` as Box<Slot<T>>.
                         let slot = unsafe { Box::from_raw(slot_header::<T>().whole(p).as_ptr()) };
-                        let Slot { value, .. } = *slot;
-                        value
+                        slot.into_value()
                     }
                 }
             }
@@ -330,22 +406,24 @@ macro_rules! value_word {
                 unsafe { NonNull::new_unchecked(self.ptr::<Header>().cast_mut()) }
             }
 
-            fn header(&self) -> &Header {
-                // SAFETY: the header is live for as long as the value.
-                unsafe { self.payload().as_ref() }
-            }
-
-            /// The vtable a `Large` payload was erased through.
-            $v fn vtable(&self) -> &'static Vtable {
-                self.header().vtable
+            /// The vtable a `Large` payload was erased through; `None` for a
+            /// value of any other kind.
+            $v fn vtable(&self) -> Option<&'static Vtable> {
+                Large::of(self).map(Large::vtable)
             }
 
             $v fn composite(&self) -> Option<Composite> {
-                if self.kind == Kind::Large {
-                    self.header().vtable.composite
-                } else {
-                    None
-                }
+                Large::of(self).and_then(|large| large.vtable().composite())
+            }
+
+            /// The `T` a `Large` holds, where it holds one: the kind and the
+            /// vtable's type are compared, so a reader that knows no type
+            /// asks with this.
+            $v fn get<T>(&self) -> Option<&T>
+            where
+                T: 'static,
+            {
+                Large::of(self)?.get::<T>()
             }
 
             /// Read a `Large` payload in place.
@@ -353,9 +431,9 @@ macro_rules! value_word {
             /// # Safety
             /// `T` is the type this value was erased from.
             $v unsafe fn peek<T: 'static>(&self) -> &T {
-                debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
+                debug_assert_eq!(self.vtable().map(Vtable::type_id), Some(TypeId::of::<T>()));
                 // SAFETY: the payload is a live Slot<T>.
-                unsafe { &slot_header::<T>().whole(self.payload()).as_ref().value }
+                unsafe { slot_header::<T>().whole(self.payload()).as_ref().value() }
             }
 
             /// Mutate a `Large` payload in place.
@@ -363,9 +441,9 @@ macro_rules! value_word {
             /// # Safety
             /// `T` is the type this value was erased from.
             $v unsafe fn peek_mut<T: 'static>(&mut self) -> &mut T {
-                debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
+                debug_assert_eq!(self.vtable().map(Vtable::type_id), Some(TypeId::of::<T>()));
                 // SAFETY: the payload is a live Slot<T> and we hold &mut self.
-                unsafe { &mut slot_header::<T>().whole(self.payload()).as_mut().value }
+                unsafe { slot_header::<T>().whole(self.payload()).as_mut().value_mut() }
             }
 
             /// The bits an `Inline` type was erased into.
@@ -379,7 +457,9 @@ macro_rules! value_word {
                 self.word
             }
 
-            #[cfg(test)]
+            /// The word, whatever the kind: `Large::of` reads it after the
+            /// kind.
+            #[inline(always)]
             pub(crate) fn word_of_any_kind(&self) -> u64 {
                 self.word
             }
@@ -391,9 +471,11 @@ macro_rules! value_word {
                 &self.word
             }
 
-            /// As `bits`, in place and exclusively.
+            /// As `bits`, in place and exclusively. The runtime's alone, as
+            /// `inline` is: a write through it would put any bits under a
+            /// `Large`'s kind.
             #[inline]
-            $v fn bits_mut(&mut self) -> &mut u64 {
+            pub(crate) fn bits_mut(&mut self) -> &mut u64 {
                 debug_assert!(self.kind.is_inline(), "bits_mut: {self:?} carries no bits");
                 &mut self.word
             }
@@ -490,8 +572,10 @@ macro_rules! value_word {
             /// The read and write through a projection are RFC-0050 rule 3's one
             /// family over a run and a heap `Large` alike, and they arrive with the
             /// flat heap object.
+            ///
+            /// The runtime's alone, as `inline` is: it names any address.
             #[inline]
-            $v fn large_ref(base: *mut Value) -> Value {
+            pub(crate) fn large_ref(base: *mut Value) -> Value {
                 Value {
                     kind: Kind::LargeRef,
                     word: repr::word_of_ptr(base).word(),
@@ -520,8 +604,7 @@ macro_rules! value_word {
             /// `Instance`, `InstanceAwait` or `Code`.
             #[inline(always)]
             unsafe fn ptr<T>(&self) -> *const T {
-                // SAFETY: the caller's contract.
-                repr::ptr_of_word(unsafe { PtrWord::from_word(self.word) })
+                repr::ptr_of_word(PtrWord::from_word(self.word))
             }
         }
     };
@@ -547,15 +630,10 @@ impl fmt::Debug for Value {
             Kind::InstanceAwait => write!(f, "InstanceAwait({:#x})", self.word),
             Kind::Code => write!(f, "<fn {:#x}>", self.word),
             Kind::LargeRef => write!(f, "LargeRef({:#x})", self.word),
-            Kind::Large => {
-                let vtable = self.header().vtable;
-                match vtable.debug {
-                    // SAFETY: the payload is a live value of the witnessed type.
-                    Some(dbg) => unsafe { dbg(self.payload(), f) },
-                    None => write!(f, "<{}>", (vtable.name)()),
-                }
-            }
-            kind => write!(f, "{kind:?}({:#x})", self.word),
+            kind => match Large::of(self) {
+                Some(large) => large.fmt(f),
+                None => write!(f, "{kind:?}({:#x})", self.word),
+            },
         }
     }
 }
@@ -622,41 +700,17 @@ pub type VariantValue = acvus_extern::Variant<Owned<AcvusRuntime>>;
 /// record at all (`Kind::Code`).
 pub struct FnValue {
     pub code: crate::code::CodeRef,
-    /// A `u16` because it counts capture registers, which `prepare` colours
-    /// out of one frame.
-    pub len: u16,
 }
 
 /// A closure record: the head, then its captures from the offset
 /// `Layout::extend` gives, so the captures sit at their own alignment on
-/// every target.
-type ClosureRecord = HeadAndTail<Slot<FnValue>, Owned<AcvusRuntime>>;
+/// every target. The record's head counts its captures in a `u16`, since
+/// they are capture registers, which `prepare` colours out of one frame.
+type ClosureRecord = HeadAndTail<RecordHead<FnValue>, Owned<AcvusRuntime>>;
 
 /// `ClosureRecord::TAIL` holds its own layout assertion; naming it here has
 /// the check evaluate it with the crate, not only where a record is built.
 const _: usize = ClosureRecord::TAIL;
-
-impl FnValue {
-    /// # Safety
-    /// `head` is the head of a live closure record.
-    unsafe fn captures<'a>(head: NonNull<Slot<FnValue>>) -> &'a [Owned<AcvusRuntime>] {
-        // SAFETY: the caller's contract, and `ClosureRecord::layout`: `len`
-        // captures follow the head at `ClosureRecord::TAIL`.
-        unsafe { ClosureRecord::tail_run(head, head.as_ref().value.len) }
-    }
-}
-
-/// # Safety
-/// `p` is the header of a live closure record, not used after this.
-unsafe fn drop_closure(p: NonNull<Header>) {
-    // SAFETY: the caller's contract.
-    unsafe {
-        let head = slot_header::<FnValue>().whole(p);
-        let len = head.as_ref().value.len;
-        ptr::drop_in_place(ClosureRecord::tail_run_mut(head, len));
-        ClosureRecord::dealloc(head, len);
-    }
-}
 
 impl fmt::Debug for FnValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -666,67 +720,55 @@ impl fmt::Debug for FnValue {
 
 // -- Composite vtables ------------------------------------------------
 
-const fn vtable<T: 'static>(name: NameFn, composite: Composite, debug: Option<DebugFn>) -> Vtable {
-    Vtable {
-        type_id: TypeId::of::<T>(),
-        name,
-        composite: Some(composite),
-        drop: drop_slot::<T>,
-        debug,
+impl Show for String {
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
     }
 }
 
-macro_rules! typed_debug_fn {
-    ($T:ty; $dg:ident = |$d:ident, $f:ident| $dg_body:expr;) => {
-        unsafe fn $dg(p: NonNull<Header>, $f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            // SAFETY: p is the header of a live Slot<$T>.
-            let $d = unsafe { &slot_header::<$T>().whole(p).as_ref().value };
-            $dg_body
-        }
-    };
+impl Show for Array {
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.0.iter()).finish()
+    }
 }
 
-typed_debug_fn! { String; dbg_string = |d, f| write!(f, "{d:?}"); }
-typed_debug_fn! { Array; dbg_array = |d, f| f.debug_list().entries(d.0.iter()).finish(); }
-typed_debug_fn! { Tuple;
-    dbg_tuple = |d, f| {
+impl Show for Tuple {
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut dt = f.debug_tuple("");
-        for v in d.0.iter() {
+        for v in self.0.iter() {
             dt.field(v);
         }
         dt.finish()
-    };
+    }
 }
-typed_debug_fn! { Object; dbg_object = |d, f| f.debug_map().entries(d.fields()).finish(); }
-typed_debug_fn! { VariantValue;
-    dbg_variant = |d, f| {
-        let tag = repr::tag_of_word(d.tag().bits());
-        match d.payload().kind() {
-            Kind::Undef => write!(f, "{tag:?}"),
-            _ => write!(f, "{tag:?}({:?})", d.payload()),
-        }
-    };
-}
-typed_debug_fn! { FnValue; dbg_fn = |d, f| write!(f, "Fn({} captures)", d.len); }
 
-static STRING: Vtable = vtable::<String>(|| "String", Composite::String, Some(dbg_string));
-static ARRAY: Vtable = vtable::<Array>(|| "Array", Composite::Array, Some(dbg_array));
-static TUPLE: Vtable = vtable::<Tuple>(|| "Tuple", Composite::Tuple, Some(dbg_tuple));
-static OBJECT: Vtable = vtable::<Object>(|| "Object", Composite::Object, Some(dbg_object));
-static VARIANT: Vtable =
-    vtable::<VariantValue>(|| "Variant", Composite::Variant, Some(dbg_variant));
-static FN: Vtable = Vtable {
-    type_id: TypeId::of::<FnValue>(),
-    name: || "Fn",
-    composite: Some(Composite::Fn),
-    drop: drop_closure,
-    debug: Some(dbg_fn),
-};
-static HANDLE: Vtable = vtable::<Launched>(|| "Handle", Composite::Handle, None);
+impl Show for Object {
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.fields()).finish()
+    }
+}
+
+impl Show for VariantValue {
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tag = repr::tag_of_word(self.tag().bits());
+        match self.payload().kind() {
+            Kind::Undef => write!(f, "{tag:?}"),
+            _ => write!(f, "{tag:?}({:?})", self.payload()),
+        }
+    }
+}
+
+static STRING: SlotVtable<String> = SlotVtable::shown(|| "String", Composite::String);
+static ARRAY: SlotVtable<Array> = SlotVtable::shown(|| "Array", Composite::Array);
+static TUPLE: SlotVtable<Tuple> = SlotVtable::shown(|| "Tuple", Composite::Tuple);
+static OBJECT: SlotVtable<Object> = SlotVtable::shown(|| "Object", Composite::Object);
+static VARIANT: SlotVtable<VariantValue> = SlotVtable::shown(|| "Variant", Composite::Variant);
+static FN: RecordVtable<FnValue, Owned<AcvusRuntime>> = RecordVtable::new(|| "Fn", Composite::Fn);
+static HANDLE: SlotVtable<Launched> = SlotVtable::named(|| "Handle", Composite::Handle);
 
 /// The vtable `T` is erased through: a composite's own static, else the
 /// drop-only constant every type has.
-pub fn vtable_of<T>() -> &'static Vtable
+pub fn vtable_of<T>() -> &'static SlotVtable<T>
 where
     T: 'static,
 {
@@ -734,14 +776,13 @@ where
 }
 
 /// The `TypeId` chain folds at the monomorphization, as `Kind::of` does.
-fn composite_vtable<T>() -> Option<&'static Vtable>
+fn composite_vtable<T>() -> Option<&'static SlotVtable<T>>
 where
     T: 'static,
 {
-    let id = TypeId::of::<T>();
-    for vtable in [&STRING, &ARRAY, &TUPLE, &OBJECT, &VARIANT, &FN, &HANDLE] {
-        if id == vtable.type_id {
-            return Some(vtable);
+    for vtable in [STRING.vtable(), ARRAY.vtable(), TUPLE.vtable(), OBJECT.vtable(), VARIANT.vtable(), HANDLE.vtable()] {
+        if let Some(typed) = SlotVtable::of(vtable) {
+            return Some(typed);
         }
     }
     None
@@ -793,18 +834,14 @@ macro_rules! value_constructors {
             /// The word read as an `i64`: an integer of any width, sign- or
             /// zero-extended as its encoding is.
             $v fn as_int(&self) -> i64 {
-                // SAFETY: every word is `into_word` of some `i64`.
-                unsafe { i64::from_word(self.bits()) }
+                i64::from_word(self.bits())
             }
             $v fn as_float(&self) -> f64 {
-                // SAFETY: every word is `into_word` of some `f64`.
-                unsafe { f64::from_word(self.bits()) }
+                f64::from_word(self.bits())
             }
             /// The scalar value this word spells.
             $v fn as_char(&self) -> u32 {
-                // SAFETY: every word of a `Char` is its scalar value
-                // zero-extended, which is `into_word` of that `u32`.
-                let code = unsafe { u32::from_word(self.bits()) };
+                let code = u32::from_word(self.bits());
                 debug_assert!(
                     char::from_u32(code).is_some(),
                     "a char's word is a Unicode scalar value, found {code:#x}; every way into a `Char` \
@@ -813,8 +850,7 @@ macro_rules! value_constructors {
                 code
             }
             $v fn as_bool(&self) -> bool {
-                // SAFETY: a `Bool`'s word is `into_word` of its `bool`.
-                unsafe { bool::from_word(self.bits()) }
+                bool::from_word(self.bits())
             }
 
             $v fn string(s: impl Into<String>) -> Self {
@@ -948,27 +984,12 @@ macro_rules! value_constructors {
             /// captures is `Value::code`.
             $v fn closure(
                 code: crate::code::CodeRef,
-                captures: &mut dyn ExactSizeIterator<Item = Owned<AcvusRuntime>>,
+                captures: &mut dyn ExactLen<Item = Owned<AcvusRuntime>>,
             ) -> Self {
-                let len =
-                    u16::try_from(captures.len()).expect("a closure captures at most u16::MAX registers");
-                debug_assert!(len > 0, "a closure of no captures is `Value::code`");
-                let head = ClosureRecord::alloc(len);
-                // SAFETY: `head` is `ClosureRecord::alloc(len)`'s, unwritten:
-                // the head is written first, then each capture in order.
-                unsafe {
-                    head.as_ptr().write(Slot {
-                        header: Header { vtable: &FN },
-                        value: FnValue { code, len },
-                    });
-                    let first = ClosureRecord::tail(head).as_ptr();
-                    for (at, capture) in captures.enumerate() {
-                        first.add(at).write(capture);
-                    }
-                }
+                debug_assert!(captures.len() > 0, "a closure of no captures is `Value::code`");
                 Value {
                     kind: Kind::Large,
-                    word: repr::word_of_ptr(slot_header::<FnValue>().head(head).as_ptr()).word(),
+                    word: Record::allocate(&FN, FnValue { code }, captures).word(),
                 }
             }
 
@@ -1103,7 +1124,7 @@ macro_rules! value_constructors {
                     Kind::Code => unsafe { crate::code::CodeRef::of_address(self.ptr::<crate::code::Code>()) },
                     // SAFETY: the caller's contract: a closure that is not
                     // `Kind::Code` is a boxed `FnValue`.
-                    _ => unsafe { slot_header::<FnValue>().whole(self.payload()).as_ref().value.code },
+                    _ => unsafe { record_header::<FnValue>().whole(self.payload()).as_ref().value().code },
                 }
             }
 
@@ -1115,7 +1136,10 @@ macro_rules! value_constructors {
                     Kind::Code => &[],
                     // SAFETY: the caller's contract, as `code_of`: a boxed closure
                     // is a record `Value::closure` laid.
-                    _ => unsafe { FnValue::captures(slot_header::<FnValue>().whole(self.payload())) },
+                    _ => unsafe {
+                        let head = record_header::<FnValue>().whole(self.payload());
+                        ClosureRecord::tail_run(head, head.as_ref().len())
+                    },
                 }
             }
         }
@@ -1127,9 +1151,13 @@ tooling_vis!(value_constructors);
 mod tests {
     use super::*;
 
-    fn assert_composite(vtable: &Vtable, composite: Composite, name: &str) {
-        assert_eq!(vtable.composite, Some(composite));
-        assert_eq!((vtable.name)(), name);
+    fn assert_composite<T>(vtable: &SlotVtable<T>, composite: Composite, name: &str)
+    where
+        T: 'static,
+    {
+        let vtable = vtable.vtable();
+        assert_eq!(vtable.composite(), Some(composite));
+        assert_eq!(vtable.name(), name);
     }
 
     #[test]
@@ -1139,17 +1167,24 @@ mod tests {
         assert_composite(vtable_of::<Tuple>(), Composite::Tuple, "Tuple");
         assert_composite(vtable_of::<Object>(), Composite::Object, "Object");
         assert_composite(vtable_of::<VariantValue>(), Composite::Variant, "Variant");
-        assert_composite(vtable_of::<FnValue>(), Composite::Fn, "Fn");
+        assert_eq!(FN.vtable().composite(), Some(Composite::Fn));
+        assert_eq!(FN.vtable().name(), "Fn");
         assert_composite(vtable_of::<Launched>(), Composite::Handle, "Handle");
+    }
+
+    #[test]
+    fn a_closure_head_erased_alone_is_a_slot_and_not_a_record() {
+        assert!(*vtable_of::<FnValue>().vtable() == *SlotVtable::<FnValue>::drop_only().vtable());
+        assert!(*vtable_of::<FnValue>().vtable() != *FN.vtable());
     }
 
     #[test]
     fn a_type_the_language_does_not_name_reaches_the_drop_only_constant() {
         struct Extension;
-        let vtable = vtable_of::<Extension>();
-        assert_eq!(vtable.composite, None);
-        assert_eq!(vtable.type_id, TypeId::of::<Extension>());
-        assert!(*vtable == Vtable::drop_only::<Extension>());
+        let vtable = vtable_of::<Extension>().vtable();
+        assert_eq!(vtable.composite(), None);
+        assert_eq!(vtable.type_id(), TypeId::of::<Extension>());
+        assert!(*vtable == *SlotVtable::<Extension>::drop_only().vtable());
     }
 
     #[test]
@@ -1235,7 +1270,7 @@ mod tests {
     fn erased_string_is_the_composite_string() {
         let v = unsafe { Value::erase(String::from("hi")) };
         assert!(v.is_string());
-        assert_eq!(unsafe { v.as_str() }, "hi");
+        assert_eq!(v.get::<String>().map(String::as_str), Some("hi"));
         let r = Value::reference(&v);
         assert_eq!(unsafe { r.target().as_str() }, "hi");
     }
@@ -1285,12 +1320,16 @@ mod tests {
 
         let mut s = unsafe { Value::erase(String::from("x")) };
         s.settle_inline();
-        assert_eq!(unsafe { s.as_str() }, "x", "a value of no inline kind is left as it is");
+        assert_eq!(
+            s.get::<String>().map(String::as_str),
+            Some("x"),
+            "a value of no inline kind is left as it is"
+        );
     }
 
     #[test]
     fn a_closure_record_lays_its_captures_where_layout_extend_puts_them() {
-        let head = std::alloc::Layout::new::<Slot<FnValue>>();
+        let head = std::alloc::Layout::new::<RecordHead<FnValue>>();
         let capture = std::alloc::Layout::new::<Owned<AcvusRuntime>>();
         let (_, tail) = head.extend(capture).expect("a head and a capture are a layout");
         assert_eq!(ClosureRecord::TAIL, tail);
@@ -1345,7 +1384,7 @@ mod tests {
             let _copy = large;
         }
         assert_eq!(Arc::strong_count(&alive), 2);
-        large.release();
+        large.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 
@@ -1375,22 +1414,20 @@ mod tests {
         let v = Value::variant_with(tag, || counted(&alive));
         assert_eq!(v.composite(), Some(Composite::Variant));
         assert_eq!(Arc::strong_count(&alive), 2);
-        // SAFETY: `variant_with` wrote a variant.
-        let held = unsafe { v.as_variant() };
+        let held = v.get::<VariantValue>().expect("`variant_with` wrote a variant");
         assert_eq!(**held.tag(), tag);
         assert_eq!(held.payload().kind(), Kind::Large);
-        v.release();
+        v.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
 
         let unit = Value::variant_with(tag, || unsafe {
             // SAFETY: `UNDEF` owns nothing.
             Owned::from_value(acvus_extern::Holding::new(), Value::UNDEF)
         });
-        // SAFETY: `variant_with` wrote a variant.
-        let held = unsafe { unit.as_variant() };
+        let held = unit.get::<VariantValue>().expect("`variant_with` wrote a variant");
         assert_eq!(**held.tag(), tag);
         assert_eq!(held.payload().kind(), Kind::Undef);
-        unit.release();
+        unit.release_owned();
     }
 
     #[test]
@@ -1398,23 +1435,21 @@ mod tests {
         let alive = Arc::new(());
         let a = Value::array_with(|| vec![int(1), counted(&alive), int(3)]);
         assert!(a.is_array());
-        // SAFETY: `array_with` wrote an array.
-        let items = unsafe { a.as_array() };
+        let items = &a.get::<Array>().expect("`array_with` wrote an array").0;
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].as_int(), 1);
         assert_eq!(items[1].kind(), Kind::Large);
         assert_eq!(items[2].as_int(), 3);
         assert_eq!(Arc::strong_count(&alive), 2);
-        a.release();
+        a.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
 
         let t = Value::tuple_with(|| vec![counted(&alive), int(7)]);
         assert_eq!(t.composite(), Some(Composite::Tuple));
-        // SAFETY: `tuple_with` wrote a tuple.
-        let items = unsafe { t.as_tuple() };
+        let items = &t.get::<Tuple>().expect("`tuple_with` wrote a tuple").0;
         assert_eq!(items[1].as_int(), 7);
         assert_eq!(Arc::strong_count(&alive), 2);
-        t.release();
+        t.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 
@@ -1426,15 +1461,13 @@ mod tests {
 
         let o = Value::object_with(&shape, || [int(4), counted(&alive)].into());
         assert_eq!(o.composite(), Some(Composite::Object));
-        // SAFETY: `object_with` wrote an object.
-        unsafe {
-            assert!(Arc::ptr_eq(o.as_shape(), &shape));
-            assert_eq!(o.as_object()[0].as_int(), 4);
-            assert_eq!(o.as_object()[1].kind(), Kind::Large);
-        }
+        let held = o.get::<Object>().expect("`object_with` wrote an object");
+        assert!(Arc::ptr_eq(&held.shape, &shape));
+        assert_eq!(held.values[0].as_int(), 4);
+        assert_eq!(held.values[1].kind(), Kind::Large);
         assert_eq!(Arc::strong_count(&shape), 2);
         assert_eq!(Arc::strong_count(&alive), 2);
-        o.release();
+        o.release_owned();
         assert_eq!(Arc::strong_count(&shape), 1);
         assert_eq!(Arc::strong_count(&alive), 1);
 
@@ -1442,15 +1475,47 @@ mod tests {
             0 => counted(&alive),
             _ => int(9),
         });
-        // SAFETY: `object_filled` wrote an object.
-        unsafe {
-            assert!(Arc::ptr_eq(f.as_shape(), &shape));
-            assert_eq!(f.as_object()[0].kind(), Kind::Large);
-            assert_eq!(f.as_object()[1].as_int(), 9);
-        }
+        let held = f.get::<Object>().expect("`object_filled` wrote an object");
+        assert!(Arc::ptr_eq(&held.shape, &shape));
+        assert_eq!(held.values[0].kind(), Kind::Large);
+        assert_eq!(held.values[1].as_int(), 9);
         assert_eq!(Arc::strong_count(&alive), 2);
-        f.release();
+        f.release_owned();
         assert_eq!(Arc::strong_count(&shape), 1);
+        assert_eq!(Arc::strong_count(&alive), 1);
+    }
+
+    #[test]
+    fn a_checked_read_answers_only_the_type_a_large_holds() {
+        let s = Value::string("x");
+        assert_eq!(s.get::<String>().map(String::as_str), Some("x"));
+        assert!(s.get::<Array>().is_none());
+        assert!(s.get::<u64>().is_none());
+        assert!(Value::int(3).get::<String>().is_none(), "an inline value holds no allocation");
+        assert!(Value::int(3).vtable().is_none());
+        s.release_owned();
+    }
+
+    #[test]
+    fn a_record_frees_its_head_and_tail_through_its_vtable() {
+        struct Head(#[allow(dead_code, reason = "held for its drop, which the count shows")] Arc<()>);
+        static RECORD: RecordVtable<Head, Counted> = RecordVtable::new(|| "Record", Composite::Fn);
+        let alive = Arc::new(());
+        let tail = [(); 2];
+        let record = Value {
+            kind: Kind::Large,
+            word: Record::allocate(
+                &RECORD,
+                Head(Arc::clone(&alive)),
+                &mut tail.iter().map(|()| Counted { _alive: Arc::clone(&alive) }),
+            )
+            .word(),
+        };
+        assert_eq!(Arc::strong_count(&alive), 4);
+        assert_eq!(format!("{record:?}"), "Record(2 captures)");
+        assert!(record.get::<Head>().is_none(), "a record is no `Slot` of its head");
+        assert_eq!(record.composite(), Some(Composite::Fn));
+        record.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 
@@ -1458,9 +1523,8 @@ mod tests {
     fn a_string_built_in_place_reads_back_and_drops() {
         let s = Value::string("in place");
         assert!(s.is_string());
-        // SAFETY: `string` wrote a string.
-        assert_eq!(unsafe { s.as_str() }, "in place");
-        s.release();
+        assert_eq!(s.get::<String>().map(String::as_str), Some("in place"));
+        s.release_owned();
     }
 
     /// The one thing between the allocation and the last write is `make`. If

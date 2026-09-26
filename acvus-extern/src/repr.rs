@@ -39,8 +39,11 @@ use std::ptr::NonNull;
 
 mod sealed {
     /// Unnameable outside this module: `Word`'s impls are the ones below,
-    /// one per type `for_each_inline!` lists.
-    pub trait Sealed {}
+    /// one per type `for_each_inline!` lists, and `decode` is callable only
+    /// through `Encoded::get`.
+    pub trait Sealed: Sized {
+        fn decode(encoded: super::Encoded<Self>) -> Self;
+    }
 }
 
 /// The one encoding of an `Inline` value in the runtime's value word
@@ -58,93 +61,113 @@ mod sealed {
 /// bytes under this encoding, which is what `view` reads.
 pub trait Word: sealed::Sealed + Copy + Send + Sync + 'static {
     fn into_word(self) -> u64;
+}
 
-    /// # Safety
-    /// `word` is `into_word` of some value of this type.
-    unsafe fn from_word(word: u64) -> Self;
+/// A `Word` type of which every `u64` reads as some value, so reading one
+/// back needs no fact about where the word came from. `char` is the inline
+/// type that is not one: its word is read through `Encoded<char>`.
+pub trait TotalWord: Word {
+    fn from_word(word: u64) -> Self;
+}
+
+macro_rules! total {
+    ($t:ty, |$value:ident| $into:expr, |$word:ident| $from:expr) => {
+        impl sealed::Sealed for $t {
+            #[inline(always)]
+            fn decode(encoded: Encoded<Self>) -> Self {
+                <$t as TotalWord>::from_word(encoded.word())
+            }
+        }
+        impl Word for $t {
+            #[inline(always)]
+            fn into_word(self) -> u64 {
+                let $value = self;
+                $into
+            }
+        }
+        impl TotalWord for $t {
+            #[inline(always)]
+            fn from_word($word: u64) -> Self {
+                $from
+            }
+        }
+    };
 }
 
 macro_rules! signed {
     ($($t:ty),*) => { $(
-        impl sealed::Sealed for $t {}
-        impl Word for $t {
-            #[inline(always)]
-            fn into_word(self) -> u64 {
-                i64::from(self).cast_unsigned()
-            }
-            #[inline(always)]
-            unsafe fn from_word(word: u64) -> Self {
-                word as $t
-            }
-        }
+        total!($t, |value| i64::from(value).cast_unsigned(), |word| word as $t);
     )* };
 }
 
 macro_rules! unsigned {
     ($($t:ty),*) => { $(
-        impl sealed::Sealed for $t {}
-        impl Word for $t {
-            #[inline(always)]
-            fn into_word(self) -> u64 {
-                u64::from(self)
-            }
-            #[inline(always)]
-            unsafe fn from_word(word: u64) -> Self {
-                word as $t
-            }
-        }
+        total!($t, |value| u64::from(value), |word| word as $t);
     )* };
 }
 
 signed!(i8, i16, i32, i64);
 unsigned!(u8, u16, u32, u64);
+total!(f64, |value| value.to_bits(), |word| f64::from_bits(word));
+total!(bool, |value| u64::from(value), |word| word != 0);
+total!((), |_value| 0, |_word| ());
 
-impl sealed::Sealed for f64 {}
-impl Word for f64 {
+impl sealed::Sealed for char {
     #[inline(always)]
-    fn into_word(self) -> u64 {
-        self.to_bits()
-    }
-    #[inline(always)]
-    unsafe fn from_word(word: u64) -> Self {
-        f64::from_bits(word)
+    fn decode(encoded: Encoded<Self>) -> Self {
+        // SAFETY: `Encoded::of` is the one maker of an `Encoded<char>`, and
+        // it wrote the scalar value zero-extended, so the low 32 bits are
+        // that scalar value.
+        unsafe { char::from_u32_unchecked(encoded.word() as u32) }
     }
 }
-
-impl sealed::Sealed for char {}
 impl Word for char {
     #[inline(always)]
     fn into_word(self) -> u64 {
         u64::from(u32::from(self))
     }
-    #[inline(always)]
-    unsafe fn from_word(word: u64) -> Self {
-        // SAFETY: the caller's contract: the word is a scalar value
-        // zero-extended, so its low 32 bits are that scalar value.
-        unsafe { char::from_u32_unchecked(word as u32) }
-    }
 }
 
-impl sealed::Sealed for bool {}
-impl Word for bool {
-    #[inline(always)]
-    fn into_word(self) -> u64 {
-        u64::from(self)
-    }
-    #[inline(always)]
-    unsafe fn from_word(word: u64) -> Self {
-        word != 0
-    }
-}
+/// A word that is `into_word` of a `T` (RFC-0102): `of` is its one maker, so
+/// reading it back as a `T`, or naming its first bytes as one, is safe at
+/// every inline type, `char` and `bool` among them.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct Encoded<T>(u64, PhantomData<fn() -> T>);
 
-impl sealed::Sealed for () {}
-impl Word for () {
+impl<T> Encoded<T>
+where
+    T: Word,
+{
     #[inline(always)]
-    fn into_word(self) -> u64 {
-        0
+    pub fn of(value: T) -> Encoded<T> {
+        Encoded(value.into_word(), PhantomData)
     }
+
     #[inline(always)]
-    unsafe fn from_word(_: u64) -> Self {}
+    pub fn word(self) -> u64 {
+        self.0
+    }
+
+    #[inline(always)]
+    pub fn get(self) -> T {
+        <T as sealed::Sealed>::decode(self)
+    }
+
+    /// The value, read where the word holds it.
+    #[inline(always)]
+    pub fn view(&self) -> &T {
+        const {
+            assert!(
+                mem::size_of::<T>() <= mem::size_of::<u64>() && mem::align_of::<T>() <= mem::align_of::<u64>(),
+                "an inline value's bytes fit its word's first bytes"
+            )
+        };
+        // SAFETY: the word is `into_word` of a `T` (`of`), whose first bytes
+        // are that `T`'s own on a little-endian target, the only kind this
+        // module builds for; the assertion above fits them in the word.
+        unsafe { &*std::ptr::from_ref(&self.0).cast::<T>() }
+    }
 }
 
 macro_rules! listed {
@@ -280,10 +303,10 @@ impl PtrWord {
         self.0
     }
 
-    /// # Safety
-    /// `word` is `PtrWord::word` of some `PtrWord`.
+    /// A word read back as the address it holds. Any word is some address;
+    /// what reads through the pointer answers for it.
     #[inline(always)]
-    pub const unsafe fn from_word(word: u64) -> PtrWord {
+    pub const fn from_word(word: u64) -> PtrWord {
         PtrWord(word)
     }
 }
@@ -441,18 +464,19 @@ impl Words {
 /// validity as the other's, so that a place holding a valid `A` holds a
 /// valid `B` and the reverse.
 ///
-/// Only `same_layout!` makes one. Its constructor, private to acvus-extern,
-/// checks the size and the alignment when the instantiation is compiled, and
-/// the macro's caller answers for the rest with the fact that proves it — a
-/// `repr(transparent)` wrapper and its field, a type and its `Canonical`
-/// form, a derive's `Transparent` impl. Outside acvus-extern a witness is
-/// only ever handed out: the field is private and the constructor is
-/// `pub(crate)`.
+/// It is made only by the constructors below this type, each bound by the
+/// `unsafe impl` that proves the layout — a derive's `Transparent`, a type's
+/// `Canonical`, a `TransparentOver` the runtime's value, a `OneValue` stored
+/// as that value — and each checks the size and the alignment when the
+/// instantiation is compiled. The field and the body the constructors share,
+/// `vouched`, are private to this module, so no other names two types one
+/// layout without the `unsafe impl` that proves it.
 ///
 /// The witness speaks of layout and of nothing else. What a type promises
-/// beyond its bytes — who releases what it holds, the lifetimes it names, an
-/// invariant its constructor keeps — is not in it, so each cast below is
-/// `unsafe` and its caller names that part.
+/// beyond its bytes — who releases what it holds, the lifetimes it names, the
+/// type an `Erased` claims — is not in it, so each cast below is `unsafe` and
+/// its caller names that part. Two types that are one value as well are
+/// `SameValue`'s.
 pub struct SameLayout<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
 
 impl<A, B> Clone for SameLayout<A, B> {
@@ -465,8 +489,8 @@ impl<A, B> Clone for SameLayout<A, B> {
 impl<A, B> Copy for SameLayout<A, B> {}
 
 impl<A, B> SameLayout<A, B> {
-    /// `same_layout!`'s. The size and the alignment are checked here, at
-    /// each instantiation, so no witness names two types that differ in
+    /// The constructors' body. The size and the alignment are checked here,
+    /// at each instantiation, so no witness names two types that differ in
     /// either.
     ///
     /// # Safety
@@ -474,7 +498,7 @@ impl<A, B> SameLayout<A, B> {
     /// `B`'s, so a place holding a valid `A` holds a valid `B` and the
     /// reverse.
     #[inline(always)]
-    pub(crate) const unsafe fn vouched() -> Self {
+    const unsafe fn vouched() -> Self {
         const {
             assert!(
                 Layout::new::<A>().size() == Layout::new::<B>().size()
@@ -485,14 +509,14 @@ impl<A, B> SameLayout<A, B> {
         SameLayout(PhantomData)
     }
 
-    /// `same_layout!`'s, where the fact that gives the rest of one layout is
+    /// As `vouched`, where the fact that gives the rest of one layout is
     /// `F`'s: the witness where `F::HOLDS`, and `None` where not. The size
     /// and the alignment are checked at each instantiation where `F::HOLDS`.
     ///
     /// # Safety
     /// Where `F::HOLDS`, as `vouched`'s.
     #[inline(always)]
-    pub(crate) const unsafe fn vouched_where<F>() -> Option<Self>
+    const unsafe fn vouched_where<F>() -> Option<Self>
     where
         F: Fact,
     {
@@ -588,9 +612,126 @@ impl<A, B> SameLayout<A, B> {
 }
 
 /// A fact of a type that a constant answers, which `SameLayout::vouched_where`
-/// reads. It is acvus-extern's: no other crate states one.
-pub(crate) trait Fact {
+/// reads. It is this module's: no other states one.
+trait Fact {
     const HOLDS: bool;
+}
+
+/// The layout `Transparent<P>` proves.
+#[inline(always)]
+pub(crate) fn transparent_layout<T, P>() -> SameLayout<T, P>
+where
+    T: crate::Transparent<P>,
+{
+    // SAFETY: `Transparent<P>`'s contract: `T` is `repr(transparent)` over
+    // `P`'s field, which differs from `P` only as `Canonical` lets a type and
+    // its canonical form differ, under its three layers.
+    unsafe { SameLayout::vouched() }
+}
+
+/// The layout `Canonical` proves.
+#[inline(always)]
+pub(crate) fn canonical_layout<T>() -> SameLayout<T, T::Canon>
+where
+    T: crate::Canonical<crate::kind::Type>,
+{
+    // SAFETY: `Canonical`'s contract: `T::Canon` is `T` with each uniform
+    // part's `X` at `Never` and each lifetime at `'static`, one layout under
+    // its three layers.
+    unsafe { SameLayout::vouched() }
+}
+
+/// The layout `TransparentOver` proves: a `T` is one `Rt::Value`.
+#[inline(always)]
+pub(crate) fn value_layout<T, Rt>() -> SameLayout<T, Rt::Value>
+where
+    T: crate::obj::TransparentOver<Rt>,
+    Rt: crate::Runtime,
+{
+    // SAFETY: `TransparentOver`'s contract: `T` is `repr(transparent)` with
+    // `Rt::Value` as its one non-zero-sized field.
+    unsafe { SameLayout::vouched() }
+}
+
+/// `T::STORED_AS_VALUE`: `T` is the runtime's value or another name for it,
+/// with its layout.
+struct StoredAsValue<T, Rt>(PhantomData<fn() -> (T, Rt)>);
+
+impl<T, Rt> Fact for StoredAsValue<T, Rt>
+where
+    T: crate::OneValue<Rt>,
+    Rt: crate::Runtime,
+{
+    const HOLDS: bool = T::STORED_AS_VALUE;
+}
+
+/// The layout a `T` stored as the runtime's value shares with an `Owned`:
+/// `Some` where `T::STORED_AS_VALUE`.
+#[inline(always)]
+pub(crate) fn stored_value_layout<T, Rt>() -> Option<SameLayout<T, crate::Owned<Rt>>>
+where
+    T: crate::OneValue<Rt>,
+    Rt: crate::Runtime,
+{
+    // SAFETY: where `T::STORED_AS_VALUE`, `T` is the runtime's value or
+    // `repr(transparent)` over it (`OneValue`'s contract), and `Owned<Rt>` is
+    // `repr(transparent)` over it, so each byte of the one is the other's.
+    unsafe { SameLayout::vouched_where::<StoredAsValue<T, Rt>>() }
+}
+
+// -- Two types of one value ---------------------------------------------------
+
+/// A wrapper that is its field and nothing else.
+///
+/// # Safety
+/// `Self` is `#[repr(transparent)]` over a field of type `F`, its every other
+/// field is a `PhantomData`, and it keeps no invariant of its own: every `F`
+/// is a `Self`, and every `Self` an `F`.
+pub(crate) unsafe trait Wraps<F> {}
+
+/// The witness that `A` and `B` are one value: one layout, and each promises
+/// what the other does, so a cast either way is safe. `wrapped` makes one.
+pub(crate) struct SameValue<A, B>(PhantomData<(fn(A) -> A, fn(B) -> B)>);
+
+impl<A, B> Clone for SameValue<A, B> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<A, B> Copy for SameValue<A, B> {}
+
+impl<A, B> SameValue<A, B> {
+    /// The place `a` names, named as a `B` for as long.
+    #[inline(always)]
+    pub(crate) fn cast_ref(self, a: &A) -> &B {
+        // SAFETY: the witness: `B` is `A`'s layout and value.
+        unsafe { &*std::ptr::from_ref(a).cast::<B>() }
+    }
+
+    /// As `cast_ref`, exclusively.
+    #[inline(always)]
+    pub(crate) fn cast_mut(self, a: &mut A) -> &mut B {
+        // SAFETY: as `cast_ref`'s; a `B` written is an `A` again.
+        unsafe { &mut *std::ptr::from_mut(a).cast::<B>() }
+    }
+}
+
+/// The value `Wraps<F>` proves: a `W` is its `F`.
+#[inline(always)]
+pub(crate) fn wrapped<W, F>() -> SameValue<F, W>
+where
+    W: Wraps<F>,
+{
+    const {
+        assert!(
+            Layout::new::<F>().size() == Layout::new::<W>().size()
+                && Layout::new::<F>().align() == Layout::new::<W>().align(),
+            "a wrapper is its field's size and alignment"
+        )
+    };
+    SameValue(PhantomData)
 }
 
 // -- One type under two names -------------------------------------------------
@@ -795,13 +936,35 @@ mod tests {
     #[test]
     fn a_word_reads_back_as_its_value() {
         for v in [i8::MIN, -1, 0, 1, i8::MAX] {
-            // SAFETY: the word is `into_word` of an `i8`.
-            assert_eq!(unsafe { i8::from_word(v.into_word()) }, v);
+            assert_eq!(i8::from_word(v.into_word()), v);
+            assert_eq!(Encoded::of(v).get(), v);
         }
-        // SAFETY: as above, at `char`.
-        assert_eq!(unsafe { char::from_word('é'.into_word()) }, 'é');
+        assert_eq!(Encoded::of('é').get(), 'é');
+        assert_eq!(Encoded::of('\u{10FFFF}').word(), 0x10FFFF);
         assert!(is_inline::<char>());
         assert!(!is_inline::<String>());
+    }
+
+    #[test]
+    fn every_word_reads_as_a_value_of_a_total_type() {
+        for word in [0, 1, 2, 0x7F, 0x80, 0xFFFF_FFFF, 0xD800, u64::MAX] {
+            assert_eq!(i8::from_word(word), word as i8);
+            assert_eq!(u32::from_word(word), word as u32);
+            assert_eq!(f64::from_word(word).to_bits(), word);
+            assert_eq!(bool::from_word(word), word != 0);
+            let () = <()>::from_word(word);
+        }
+    }
+
+    #[test]
+    fn an_encoded_word_is_viewed_as_its_value() {
+        assert_eq!(*Encoded::of(-2i16).view(), -2);
+        assert_eq!(*Encoded::of(u64::MAX).view(), u64::MAX);
+        assert_eq!(*Encoded::of(1.5f64).view(), 1.5);
+        assert_eq!(*Encoded::of('\u{10FFFF}').view(), '\u{10FFFF}');
+        assert!(*Encoded::of(true).view());
+        assert!(!*Encoded::of(false).view());
+        let () = *Encoded::of(()).view();
     }
 
     #[test]
@@ -857,8 +1020,7 @@ mod tests {
         #[cfg(target_pointer_width = "64")]
         round_trip(std::ptr::without_provenance::<u8>(0xFEDC_BA98_7654_3210));
 
-        // SAFETY: the word is `word_of_ptr`'s, stored bare.
-        let again = unsafe { PtrWord::from_word(word_of_ptr(&word).word()) };
+        let again = PtrWord::from_word(word_of_ptr(&word).word());
         // SAFETY: the pointer is `&word`'s, which is live.
         assert_eq!(unsafe { *ptr_of_word::<u64>(again) }, 7);
     }
@@ -943,6 +1105,21 @@ mod tests {
         // SAFETY: as above, per element; the buffer is the one `run` held.
         let strings = unsafe { layout.flip().cast_vec(run) };
         assert_eq!(strings, ["a", "bc"]);
+    }
+
+    #[test]
+    fn a_wrapper_is_named_over_its_field_both_ways() {
+        #[repr(transparent)]
+        struct Name(String, PhantomData<u8>);
+        // SAFETY: `Name` is `repr(transparent)` over its `String`, its other
+        // field a `PhantomData`, and keeps no invariant of its own.
+        unsafe impl Wraps<String> for Name {}
+
+        let same = wrapped::<Name, String>();
+        let mut text = String::from("héllo");
+        assert_eq!(same.cast_ref(&text).0, "héllo");
+        same.cast_mut(&mut text).0.push('!');
+        assert_eq!(text, "héllo!");
     }
 
     #[test]

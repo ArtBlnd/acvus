@@ -5,6 +5,49 @@
 //! that reaches a `run` as anything but a field or a type parameter is a
 //! defect in `prepare`, not in the operation.
 
+#![cfg_attr(
+    feature = "tooling",
+    doc = r#"
+Under `tooling` a `Body` and a `Code` are `prepare`'s alone: none is built
+or edited outside the runtime, so a register opens only at a kind `prepare`
+settled.
+
+```compile_fail,E0451
+use acvus_interpreter::code::Body;
+
+let _ = Body { heads: Box::new([]), ..todo!() };
+```
+
+```compile_fail,E0616
+use acvus_interpreter::code::Prepared;
+
+fn edit(prepared: &mut Prepared) {
+    let _ = std::sync::Arc::get_mut(&mut prepared.main);
+}
+```
+
+```compile_fail,E0616
+use acvus_interpreter::code::Body;
+
+fn edit(body: &mut Body) {
+    body.slot_kinds = Box::new([]);
+}
+```
+
+```compile_fail,E0624
+use acvus_interpreter::code::{Body, Code};
+
+let _ = Code::body(std::sync::Arc::<Body>::new(todo!()));
+```
+
+```compile_fail,E0624
+use acvus_interpreter::code::Code;
+
+let _ = Code::expr;
+```
+"#
+)]
+
 use std::sync::Arc;
 
 use acvus_ast::Span;
@@ -212,11 +255,11 @@ pub trait Op: Named + Send + Sync {
         None
     }
 
-    /// The registers a **bound-checked** indexed read names, so that a probe
+    /// The mode and registers of a **bound-checked** indexed read, so that a probe
     /// can put the unchecked form of the same read in its place (RFC-0047
     /// rule 7). Nothing else answers it, and the unchecked form answers `None`,
     /// so a substitution cannot run twice.
-    fn index_read(&self) -> Option<crate::ops::index::Read> {
+    fn index_read(&self) -> Option<(acvus_mir::ir::IndexMode, crate::ops::index::Read)> {
         None
     }
 
@@ -251,22 +294,16 @@ pub trait Op: Named + Send + Sync {
 
 /// Put `make`'s node in `slot`'s place, carrying the successor the node
 /// there held (RFC-0047 rule 7's probe, now that a successor is a field).
-#[cfg(all(feature = "tooling", any(debug_assertions, feature = "probe")))]
-pub fn substitute<F>(slot: &mut Box<dyn Op>, make: F)
+#[cfg(all(feature = "tooling", feature = "probe"))]
+fn substitute<F>(slot: &mut Box<dyn Op>, make: F)
 where
     F: FnOnce(Box<dyn Op>) -> Box<dyn Op>,
 {
-    // SAFETY: `read` copies the one owning pointer out of `slot`;
-    // `take_successor` consumes that copy, which is the old node's only
-    // drop; `write` then stores the new node without dropping the copy. On
-    // every path `slot` owns exactly one node.
-    unsafe {
-        let old = std::ptr::read(slot);
-        let successor = old
-            .take_successor()
-            .expect("the node a probe substitutes holds a successor");
-        std::ptr::write(slot, make(successor));
-    }
+    let old = std::mem::replace(slot, Box::new(crate::ops::control::Poison));
+    let successor = old
+        .take_successor()
+        .expect("the node a probe substitutes holds a successor");
+    *slot = make(successor);
 }
 
 #[cfg(any(debug_assertions, feature = "probe"))]
@@ -375,7 +412,8 @@ pub enum Konst {
 }
 
 impl Konst {
-    pub fn value(&self) -> Value {
+    /// The runtime's alone, as `Value::inline` is: a `Word` names any kind.
+    pub(crate) fn value(&self) -> Value {
         match self {
             Konst::Word(kind, bits) => Value::inline(*kind, *bits),
             Konst::Str(s) => Value::string(s.as_str()),
@@ -699,7 +737,7 @@ pub(crate) fn rust_fn(callee: acvus_extern::RustCallee<AcvusRuntime>) -> Value {
 
 impl Code {
     /// A framed body: the entry binds a frame in the caller's window.
-    pub fn body(body: Arc<Body>) -> Code {
+    pub(crate) fn body(body: Arc<Body>) -> Code {
         Code {
             entry: crate::machine::entry_body,
             body: CodeBody::Body(body),
@@ -708,7 +746,7 @@ impl Code {
 
     /// One chain, or one argument handed back: the entry is the one the
     /// `Expr` carries, chosen by `prepare` from the shape it built.
-    pub fn expr(expr: Arc<Expr>) -> Code {
+    pub(crate) fn expr(expr: Arc<Expr>) -> Code {
         Code {
             entry: expr.entry,
             body: CodeBody::Expr(expr),
@@ -749,6 +787,7 @@ pub struct Expr {
     /// read of the body sound.
     pub entry: Entry,
     pub body: ExprBody,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     pub span: Span,
 }
 
@@ -809,45 +848,133 @@ pub struct SlotKind {
 pub struct Body {
     /// One chain head per joint. `Machine::run` enters here and nowhere
     /// else: a straight run is a chain inside one of these.
-    pub heads: Box<[Box<dyn Op>]>,
-    pub entry: BlockId,
+    pub(crate) heads: Box<[Box<dyn Op>]>,
+    pub(crate) entry: BlockId,
     /// A call out of this body takes its callee's frame from the window above
     /// this many slots (RFC-0052 rule 7).
-    pub frame_len: u16,
+    pub(crate) frame_len: u16,
     /// These two are fields rather than expressions over `frame_len` because
     /// three earlier attempts at RFC-0050 rule 2 computed them where they are
     /// read, and every one of them regressed the closure-binding benchmarks —
     /// `map cap | sum` by 7.6 % in the last of the three, which binds a frame
     /// per element. A bind, a window's `fits` and a sweep are the readers, and
     /// all three run per call.
-    pub frame_cells: u16,
-    pub mark_words: MarkWords,
-    pub entry_konsts: Box<[EntryKonst]>,
+    pub(crate) frame_cells: u16,
+    pub(crate) mark_words: MarkWords,
+    pub(crate) entry_konsts: Box<[EntryKonst]>,
     /// The module's literals, held here because an operation of this body
     /// names their bytes by address.
-    pub literals: Arc<Literals>,
-    pub slot_kinds: Box<[SlotKind]>,
-    pub may_suspend: bool,
+    #[allow(dead_code, reason = "held for its drop")]
+    pub(crate) literals: Arc<Literals>,
+    pub(crate) slot_kinds: Box<[SlotKind]>,
+    pub(crate) may_suspend: bool,
     /// The result is the register pair of RFC-0047 rule 6, which only a
     /// call's pair destination receives.
-    pub returns_a_view: bool,
-    pub params: Box<[Off]>,
+    pub(crate) returns_a_view: bool,
+    pub(crate) params: Box<[Off]>,
     /// The registers a caller lays its arguments in, `params` at their widths.
-    pub param_run: u16,
+    pub(crate) param_run: u16,
     /// The parameter slots whose type owns a `Large`: what the caller gave up
     /// with its own `take_mask`, claimed here in one store.
-    pub param_marks: u64,
-    pub captures: Box<[Off]>,
-    pub order_param: Option<Off>,
-    pub span: Span,
+    pub(crate) param_marks: u64,
+    pub(crate) captures: Box<[Off]>,
+    pub(crate) order_param: Option<Off>,
+    pub(crate) span: Span,
 }
 
 /// Each body here was prepared once, when the module was loaded (RFC-0044);
 /// a `MakeClosure` copies an `Arc`.
 pub struct Prepared {
-    pub main: Arc<Body>,
-    pub closures: FxHashMap<Label, Arc<Code>>,
-    pub instances: crate::prepare::InstanceEntryStore,
+    pub(crate) main: Arc<Body>,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code, reason = "held for its drop"))]
+    pub(crate) closures: FxHashMap<Label, Arc<Code>>,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code, reason = "held for its drop"))]
+    pub(crate) instances: crate::prepare::InstanceEntryStore,
+}
+
+#[cfg(feature = "tooling")]
+impl Body {
+    pub fn heads(&self) -> &[Box<dyn Op>] {
+        &self.heads
+    }
+
+    pub fn entry(&self) -> BlockId {
+        self.entry
+    }
+
+    pub fn frame_len(&self) -> u16 {
+        self.frame_len
+    }
+
+    pub fn params(&self) -> &[Off] {
+        &self.params
+    }
+
+    pub fn captures(&self) -> &[Off] {
+        &self.captures
+    }
+
+    pub fn slot_kinds(&self) -> &[SlotKind] {
+        &self.slot_kinds
+    }
+
+    pub fn entry_konsts(&self) -> &[EntryKonst] {
+        &self.entry_konsts
+    }
+
+    pub fn may_suspend(&self) -> bool {
+        self.may_suspend
+    }
+}
+
+#[cfg(feature = "tooling")]
+impl Prepared {
+    pub fn main(&self) -> &Body {
+        &self.main
+    }
+
+    pub fn closures(&self) -> &FxHashMap<Label, Arc<Code>> {
+        &self.closures
+    }
+
+    pub fn instances(&self) -> &crate::prepare::InstanceEntryStore {
+        &self.instances
+    }
+
+    /// RFC-0047 rule 7's probe.
+    ///
+    /// This is safe although a run of the result reads past a slice its
+    /// inputs index out of range: the `probe` feature exists to price the
+    /// check on inputs that stay in range, and `index_handlers::unchecked` is
+    /// public under it already. The bound becomes a type with RFC-0102's
+    /// `ProvenIndex`, and this probe takes one then.
+    ///
+    /// # Panics
+    /// The entry body is shared, which it is not before the `Prepared` is.
+    #[cfg(all(feature = "tooling", feature = "probe"))]
+    pub fn drop_bound_checks(&mut self) -> usize {
+        let body = Arc::get_mut(&mut self.main).expect("the prepared body is not yet shared");
+        body.heads.iter_mut().map(drop_bound_checks_in).sum()
+    }
+}
+
+#[cfg(all(feature = "tooling", feature = "probe"))]
+fn drop_bound_checks_in(head: &mut Box<dyn Op>) -> usize {
+    let mut dropped = 0;
+    let mut at = head;
+    loop {
+        if let Some((mode, read)) = at.index_read() {
+            substitute(at, |next| crate::ops::index::unchecked(mode, read, next));
+            dropped += 1;
+        }
+        for owned in at.owns_mut() {
+            dropped += drop_bound_checks_in(owned);
+        }
+        match at.successor_mut() {
+            Some(next) => at = next,
+            None => return dropped,
+        }
+    }
 }
 
 #[cfg(test)]

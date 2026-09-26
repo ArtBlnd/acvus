@@ -18,7 +18,7 @@ use acvus_extern::{
     Closure, ClosureFn, Cross, Ctx, ExternType, Instance, Later, PassedByValue, Pure, Ref,
     Registry, Runtime, Shared, Stored, TransparentOver, Var, extern_fn, extern_registry, kind,
 };
-use acvus_interpreter::code::Body;
+use acvus_interpreter::code::Prepared;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, prepare_module};
 use acvus_interpreter_test::*;
 use acvus_mir::graph::ParsedAst;
@@ -277,7 +277,7 @@ async fn run_i64(source: &str) -> i64 {
         .as_int()
 }
 
-fn prepared_entry(source: &str, opt: Opt) -> Body {
+fn prepared_entry(source: &str, opt: Opt) -> Prepared {
     let i = Interner::new();
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
     let cr = check_source(
@@ -300,7 +300,7 @@ fn prepared_entry(source: &str, opt: Opt) -> Body {
     };
     let prepared = prepare_module(module, &ctx)
         .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
-    Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"))
+    prepared
 }
 
 /// The same program at one optimization level: the async tests assert a
@@ -342,7 +342,7 @@ async fn a_pipeline_of_instances_yields_what_the_stages_say() {
 fn a_pure_pipeline_suspends_nowhere() {
     for opt in [Opt::None, Opt::Full] {
         assert!(
-            !prepared_entry(THREE_STAGE, opt).may_suspend,
+            !prepared_entry(THREE_STAGE, opt).main().may_suspend(),
             "every call in the pipeline is pure at {opt:?}"
         );
     }
@@ -372,7 +372,7 @@ async fn an_async_instance_is_driven_through_call_await() {
 fn the_task_of_a_pipeline_is_its_stages() {
     for opt in [Opt::None, Opt::Full] {
         assert!(
-            prepared_entry(AWAITED_SLOWED, opt).may_suspend,
+            prepared_entry(AWAITED_SLOWED, opt).main().may_suspend(),
             "`nslowed`'s instance is an `async fn` at {opt:?}"
         );
     }

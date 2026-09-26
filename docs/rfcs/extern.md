@@ -1021,8 +1021,8 @@ Status: Accepted
    storage; a runtime keeps its own in a private module (the
    interpreter's `repr`). A cast between two types of one layout (a
    `repr(transparent)` wrapper and its field, a box's two forms) is a call
-   into its boundary module taking a witness that only `same_layout!` or
-   the derive that proved the layout makes. A tag's word and its `Astr`
+   into its boundary module taking a witness only a constructor bound by
+   the `unsafe impl` that proves the layout makes (RFC-0102 rule 2). A tag's word and its `Astr`
    are not one layout; `acvus_extern::repr` converts between them by safe
    arithmetic (`word_of_tag`, `tag_of_word`). A cast between two types a
    `TypeId` shows equal is `acvus_extern::repr`'s too, checked there. A
@@ -1047,13 +1047,12 @@ Status: Accepted
    `Prefix`, which only `head_at_zero!` makes, asserting the field's
    offset; a closure record's captures are its `HeadAndTail` tail, whose
    length the record's `u16` holds. A `Vec` rebuilt at another element
-   type takes `same_layout!`'s witness, which with `where F` is made, and
-   checked, only where the constant `F::HOLDS`. A slice rebuilt from raw
-   parts and a pointer made from an address are casts too. A dereference
-   of a raw pointer at its own type is not: its `unsafe` block names the
-   fact that keeps the place live. acvus-utils holds no runtime's storage,
-   so the interner's one lifetime extension is its own. No `transmute`,
-   `transmute_copy` or pointer cast between types is written outside the
+   type takes that witness at its element. A slice rebuilt from raw
+   parts and a pointer made from an address are casts too, and so is a
+   dereference of a raw pointer: each is the body of a primitive
+   (RFC-0102). acvus-utils holds no runtime's storage, so the interner's
+   one lifetime extension is its own. No `transmute`, `transmute_copy`,
+   pointer cast, raw dereference or `unsafe` block is written outside the
    boundary modules, and `repr_boundary` scans every source for one.
 
 **Why.** A safe trait or a public field that unsafe code trusts lets safe
@@ -1504,18 +1503,17 @@ call site, with every mismatch an explicit `None`.
    result is a new source (RFC-0012 rule 4): a call whose result's settled
    type carries an identity argument is refused, naming the call, since its
    use would tie the host's value to a source it is not from.
-4. **Another entry within the call.** An entry run from inside a call
-   takes the call's arguments as rule 1 lends them and gives its result
-   through rule 3's `Output`: nothing it is lent or gives leaves the call.
-   A call reaches the entry through a hook the host binds (RFC-0101).
+4. **A body the host binds.** A hook (RFC-0101) is a dynamic extern whose
+   body is a closure the host binds: it takes rule 1's view and fills rule
+   3's `Output`, and nothing it is lent leaves the call.
 
 **Why.** Outside data is untyped wherever it comes from; the one honest
 place to check it is where it enters, against the type the checker settled
 there. Sealing the gate keeps every other crossing the checker's own
-(RFC-0068), and lending only keeps runtime values uncloned. An entry run
-within the call on lent arguments is the plainest sound shape: no value
-leaves the call, and no byte format is promised that the layout would then
-have to keep.
+(RFC-0068), and lending only keeps runtime values uncloned. A body that is lent the
+arguments and fills the output in place is the plainest sound shape: no
+value leaves the call, and no byte format is promised that the layout would
+then have to keep.
 **Cost.** A site-settled result needs a must-settle bound and the call
 site's result type in the prepared site; a Rust-bodied function value is a
 new closure kind.
@@ -1530,66 +1528,113 @@ new closure kind.
 - Laying the arguments out as bytes a second run decodes (`encode`,
   `run_encoded`) — owned bytes outlive the call, so a value leaves it.
 
-## RFC-0101: A host binds a declared hook to another program's entry, which runs within the call on the lent arguments
+## RFC-0101: A host of this interpreter binds a hook, a dynamic extern whose body is a closure
 
 Status: Proposed
 
-A host that loads programs it did not compile together (a manifest names
-them at run time) still has one program call another. RFC-0095 joins
-hosts compiled as one graph; here the two programs are prepared apart, so
-the call meets at a gate the host binds once both are prepared, and
-nothing crosses it but lent arguments and a result written in place
-(RFC-0097 rule 4).
+An extern's body is a Rust function the macro declares, so it captures
+nothing; a host that must reach its own state from a script (a manifest's
+model client, another program it keeps) has no way in. A hook relaxes only
+that: it is a dynamic extern whose body is a closure the host binds. It is
+this interpreter's host feature, not the extern contract: acvus-extern,
+the channel every runtime shares, gains nothing for it.
 
-1. **A hook is declared.** A host declares a hook by name as a dynamic
-   extern (RFC-0097): its arguments arrive as rule 1's view and its
-   result is rule 3's `Output`, settled at each call site. A program
-   whose hook is unbound refuses to run, naming the hook.
-2. **The host binds it to a lent entry.** An entry declared lent takes
-   each input lent: its body reads an input and never takes or writes it
-   unless the input is `&mut`, which compiling its program checks, and it
-   runs only from a hook. Once both programs are prepared, the host binds
-   the hook to a closure of a sealed `call`, which runs one lent entry
-   with the call's own arguments. The entry may wait; the call suspends
-   its caller until the entry ends. The entry's result, a value it made,
-   moves into the call's `Output`, and a write through a `&mut` argument
-   stores in the caller's storage; nothing the entry is lent outlives the
-   call. While it waits, the entry's contexts are its own program's
-   storage, held by the call until the entry ends.
-3. **Types are compared at binding.** A value carries its program's
-   names (an enum's tags, an object's fields), so both programs are
-   compiled over one table of names, and binding refuses two. At every
-   call site of the hook, each argument's settled type must be within the
-   entry's input, and the entry's result within the site's settled result:
-   an enum within one of more variants laid out at the same width, as
-   structural types meet by union (RFC-0042 rule 1); an object only with
-   the same fields, since its layout is its field set and no union joins
-   two programs' objects; a type behind `&mut` the same on both sides; a mismatch refuses the
-   binding, naming the site and the position. Only the language's own
-   types cross: no extension type, function value, task handle or view,
-   and a reference only as a whole argument.
-4. **Effects and re-entry.** The caller does not see the entry's
-   contexts: a read of one counts as idempotent and a write as opaque,
-   and the entry's effects are within the hook's declared effect, or the
-   binding is refused. A call that would run an entry of a program
-   already running on the same call stack traps (RFC-0048). A binding
-   holds its entry's program weakly, so two programs bound to each other
-   are each released with its host, and a hook whose entry's program was
-   released is unbound again.
+1. **Declared before compiling.** A host declares a hook by name, arity
+   and effect. Its call sites are checked as a dynamic extern's
+   (RFC-0097): each argument's type and the result `Option<T>` are settled
+   where the script calls it, and the caller reads the call's effect as
+   declared.
+2. **Bound to a closure.** The host binds the hook to an async closure
+   that may capture the host's state. It takes the call's arguments as
+   RFC-0097 rule 1's view, lent and never taken, and fills the result
+   through rule 3's `Output`. A program with an unbound hook refuses to
+   run, naming it. A hook a host of a graph declares (RFC-0095) is a hook
+   of the graph's program, in that host's scope as its entries are, and is
+   bound by that host and its name.
+3. **It forwards, and reaches no context.** The hook hands the closure the
+   arguments and nothing else: no context and no storage of the caller or
+   of any program. A context a pass promoted to a register (mem2reg) stays
+   valid across the call, as across any extern's. What the closure does
+   with what it is lent, a `&mut` argument included, is the host's.
 
-**Why.** A lent argument and an in-place result are the plainest sound
-shape for two programs no checker saw together: no value leaves the call,
-no byte format is promised, and each program's own checks stand. Types
-meet at binding, the first moment both are known.
-**Cost.** A structural comparison per call site at binding; a re-entry
-check per hook call.
+**Why.** An extern that captures is all a host needs to join its own state
+to a script; the view, the output and the effect are the extern
+contract's own, so the hook adds no rule of its own to what crosses.
+Giving it contexts would make every hook call opaque over every context
+and store them all before it, undoing mem2reg.
+**Cost.** A closure call per hook call beside the glue an extern has.
 **Rejected.**
-- Encoding the arguments as bytes the other program decodes — owned
-  bytes outlive the call (RFC-0097).
-- Comparing types at each call — every call pays for what binding
-  settles once.
-- Refusing a program cycle before running — programs prepared apart have
-  no shared graph to find it in.
+- A hook that runs another program's entry over a storage it is handed —
+  a storage reachable from a call breaks mem2reg, and running programs is
+  the host's, which it does with what the closure captures.
+- Hook types in acvus-extern — the contract is every runtime's, and a
+  hook is this interpreter's.
+- Parameters declared with Rust types — a manifest names its hooks'
+  arguments where the script writes them; the dynamic view settles them
+  at each site.
+
+## RFC-0102: `unsafe` is written only as a primitive of a boundary module
+
+Status: Proposed
+
+An `unsafe` block at a call site restates, at every caller, a fact the
+checker or prepare established once, and a comment is all that ties the
+two. The fact is carried instead by a type from where it is established,
+so omitting it is a compile error and the places a fact enters the
+program can be counted.
+
+1. **A primitive.** A primitive is a type of a boundary module (RFC-0080
+   rule 5) with one fact, private fields, and constructors that check the
+   fact or take a value whose type carries it; its methods are safe.
+2. **The closed list.**
+   - `acvus_extern::repr`: `Crossed` (the checker settled a word at `T`,
+     and the loans `T` names are live for its lifetime; a reference word
+     is `Lent`, a `Crossed` at `&T`); `Owned::adopt` (a word left its
+     unique holder); `SameLayout` (two types are one layout, made
+     only by a constructor bound by the `unsafe impl` that proves it; a
+     cast through it names the value fact the witness does not carry, the
+     type an `Erased` claims, a lifetime at `'static` or a release, which
+     `Crossed`, `Lent` or `Owned::adopt` carries); `SameValue` (two types
+     are one value, made only from `Wraps`), whose casts are safe;
+     `Encoded` (a word is `into_word` of an inline type); `Ctx`'s pinned
+     frame.
+   - The interpreter's `repr`: `Operand` (a register lies in its frame
+     and is defined), `Typed` (the checker typed an operand), the window,
+     `Large` (a `Value` of kind `Large` addresses a live allocation its
+     vtable describes, read at a kind prepare settles and released by
+     `Owned` alone), `Record`, `Linked`, `Filled`, `ProvenIndex`, `Gate`.
+   A primitive is added to the list with its fact and its module.
+3. **Where each fact enters.** A release takes a token only `Owned`
+   makes, so a copy of a word is never released. `Crossed::settled`,
+   `Owned::adopt` and the casts through `SameLayout` are the contract's
+   only `unsafe fn`s, called only from a runtime's boundary
+   module; a stand-in runtime in a test keeps its own. The interpreter's
+   `Operand`, `Typed` and `ProvenIndex` are made in prepare, which reads
+   the MIR it trusts, by `repr`'s safe constructors that compare what the
+   MIR settled with the type asked for.
+4. **No `unsafe fn` in a trait.** A method's precondition is a parameter
+   type. A fact of a type's own structure is an `unsafe impl` (RFC-0080
+   rule 2), and an `unsafe impl` of `GlobalAlloc` or `Send` holds its own
+   items.
+5. **Counted.** `repr_boundary` counts every `unsafe` outside the boundary
+   modules, and the count is zero.
+
+**Why.** The checker and prepare prove each fact once; a type carries it
+to every use, where a comment would be restated and could drift.
+**Cost.** The contract's traits change signature together, with the
+macro's glue and every runtime. A runtime keeps a small boundary module
+of its own. The hot operations keep their instruction counts; where a
+primitive cannot, the cost is measured and stated here.
+**Rejected.**
+- An `unsafe` assertion per operand in prepare — prepare can check what
+  the MIR settled, off the hot path; an assertion restates it outside
+  the boundary.
+- An evidence type in acvus-mir — the interpreter reads the MIR it
+  trusts; the checker needs no type of the runtime's.
+- Checking a value's kind at every read — a load and a compare on the
+  hot path for a fact the checker proved.
+- Generative-lifetime brands for `Ctx` — they do not cross into the
+  `'static` futures a rooted `Ctx` lives in; `Pin` carries the same fact.
 
 ## RFC-0104: An extern states what a call computes as a term, the first fragment of its model
 

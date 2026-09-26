@@ -356,7 +356,7 @@ mod tests {
     use crate::executor::SequentialExecutor;
     use crate::interpreter::InterpreterContext;
     use crate::ops::control::Fall;
-    use crate::regs::{FrameSlot, MarkWords, Store, cells_for};
+    use crate::regs::{Depth, FrameSlot, MarkWords, Store, cells_for};
     use crate::value::Kind;
 
     const FRAME: u16 = 8;
@@ -446,7 +446,7 @@ mod tests {
                 }
             }
         }
-        let mut m = Machine::new(&body, regs, &rt);
+        let mut m = Machine::new(&body, regs, &rt, Depth::ROOT);
         assert_eq!(
             op.run(&mut m, 0),
             FALL,

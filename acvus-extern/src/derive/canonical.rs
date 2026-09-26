@@ -1,21 +1,17 @@
 //! A type stored as itself is boxed at its canonical form and read back
 //! through it (`Canonical`).
 
-use crate::canonical::{Canonical, same_layout};
-use crate::repr::SameLayout;
+use crate::canonical::Canonical;
+use crate::repr::{self, SameLayout};
 use crate::runtime::Runtime;
 use crate::ty_arg::kind;
 
-/// The layout `Canonical` proves.
 #[inline(always)]
 fn layout<T>() -> SameLayout<T, T::Canon>
 where
     T: Canonical<kind::Type>,
 {
-    // SAFETY: `Canonical`'s contract: `T::Canon` is `T` with each uniform
-    // part's `X` at `Never` and each lifetime at `'static`, one layout under
-    // its three layers.
-    unsafe { same_layout!(T, T::Canon) }
+    repr::canonical_layout::<T>()
 }
 
 pub fn erase<T, Rt>(rt: crate::Crossing<'_, Rt>, value: T) -> Rt::Value

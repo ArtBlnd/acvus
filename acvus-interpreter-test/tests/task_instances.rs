@@ -11,7 +11,7 @@ use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 use acvus_extern::{Externs, Registry, extern_fn, extern_registry};
-use acvus_interpreter::code::Body;
+use acvus_interpreter::code::{Body, Prepared};
 use acvus_interpreter::listing::body_listing;
 use acvus_interpreter::{AcvusRuntime, PrepareCtx, TokioExecutor, Value, prepare_module};
 use acvus_interpreter_test::listing::{family_of, ops_of_anywhere};
@@ -111,7 +111,7 @@ async fn run_on_tokio(source: &str, ret: Ty) -> Value {
 }
 
 /// The entry body of `source`, prepared, with the closures it makes.
-fn prepared_entry(source: &str, ret: Ty) -> (Body, MirBody) {
+fn prepared_entry(source: &str, ret: Ty) -> (Prepared, MirBody) {
     let i = Interner::new();
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("parse error"));
     let cr = compile_source_with_externs(&i, ast, &FxHashMap::default(), registries(), ret);
@@ -125,8 +125,7 @@ fn prepared_entry(source: &str, ret: Ty) -> (Body, MirBody) {
     };
     let prepared = prepare_module(module, &ctx)
         .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
-    let main = Arc::try_unwrap(prepared.main).unwrap_or_else(|_| panic!("one reference to main"));
-    (main, module.main.clone())
+    (prepared, module.main.clone())
 }
 
 // -- The registry holds two instances per consumer ----------------------
@@ -466,7 +465,7 @@ fn loop_count(body: &Body) -> usize {
 }
 
 fn may_suspend(body: &Body) -> bool {
-    body.may_suspend
+    body.may_suspend()
 }
 
 #[tokio::test]
@@ -477,11 +476,11 @@ async fn a_while_let_over_a_sync_iterator_is_one_loop_operation() {
                   while let Some(x) = next(&mut it) { acc = acc + *x; } acc";
     let (main, _) = prepared_entry(source, Ty::I64);
     assert!(
-        !may_suspend(&main),
+        !may_suspend(main.main()),
         "every call in the body is synchronous, so the body is"
     );
     assert_eq!(
-        loop_count(&main),
+        loop_count(main.main()),
         1,
         "the `while let` head is one loop operation"
     );
@@ -494,11 +493,11 @@ async fn a_while_let_over_an_async_iterator_stays_asynchronous() {
                   while let Some(x) = next(&mut it) { acc = acc + x; } acc";
     let (main, _) = prepared_entry(source, Ty::I64);
     assert!(
-        may_suspend(&main),
+        may_suspend(main.main()),
         "a stage of the pipeline suspends, so the head does, so the body does"
     );
     assert_eq!(
-        loop_count(&main),
+        loop_count(main.main()),
         0,
         "a head that may suspend is no loop operation"
     );

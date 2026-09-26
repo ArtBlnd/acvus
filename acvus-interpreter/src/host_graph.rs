@@ -16,6 +16,7 @@ use acvus_utils::Interner;
 use rustc_hash::FxHashSet;
 
 use crate::executor::Executor;
+use crate::hook::HookDecl;
 use crate::host::{
     Access, AsyncAccess, Cause, EntryDecl, EntryDeclaration, GraphName, Host, HostError, HostParts,
     Origin, Program, Refusal, ResolvedShape, SyncAccess, compile, program_key,
@@ -381,6 +382,7 @@ fn merge(
     let mut bindings = Bindings::default();
     let mut entries: Vec<EntryDecl> = Vec::new();
     let mut inits: Vec<InitSource> = Vec::new();
+    let mut hooks: Vec<HookDecl> = Vec::new();
     let mut parse_refusals: Vec<Refusal> = Vec::new();
     let mut refusals: Vec<Refusal> = Vec::new();
     let mut parse = Duration::ZERO;
@@ -415,14 +417,7 @@ fn merge(
         );
         parse_refusals.extend(under_host(&host, parts.parse_refusals));
         refusals.extend(under_host(&host, parts.refusals));
-        refusals.extend(parts.hooks.iter().map(|hook| {
-            let message = format!(
-                "the host `{host}` declares the hook `{}`; a graph's hosts call one another as \
-                 functions, and a hook is a separately compiled program's (RFC-0101)",
-                hook.name
-            );
-            Refusal::of(None, message)
-        }));
+        hooks.extend(parts.hooks.into_iter().map(|hook| hook.in_host(&host)));
         parse += parts.parse;
     }
 
@@ -476,17 +471,6 @@ fn merge(
         });
     }
 
-    refusals.extend(entries.iter().filter_map(|declared| {
-        let EntryDeclaration::Lent { .. } = declared.declaration else {
-            return None;
-        };
-        let name = program_key(declared.name.host.as_deref(), &declared.name.name);
-        let message = format!(
-            "the lent entry `{name}` is declared in a graph; a lent entry runs from a hook of a \
-             separately compiled program (RFC-0101)"
-        );
-        Some(Refusal::of(Some(Origin::Entry(name)), message))
-    }));
     let merged = HostParts {
         interner: interner.clone(),
         registries,
@@ -497,7 +481,7 @@ fn merge(
         refusals,
         opt: Opt::Full,
         parse,
-        hooks: Vec::new(),
+        hooks,
     };
     (merged, exposed)
 }

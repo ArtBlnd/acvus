@@ -24,13 +24,14 @@ macro_rules! declare_id {
         $vis struct $name(std::num::NonZero<usize>);
 
         impl $name {
+            /// # Panics
+            /// Every `usize` id is taken.
             pub fn alloc() -> Self {
-                use std::sync::atomic::{AtomicUsize, Ordering};
-                static NEXT: AtomicUsize = AtomicUsize::new(0);
-                let id = NEXT.fetch_add(1, Ordering::Relaxed);
-                // SAFETY: id + 1 is always >= 1 (id < usize::MAX by assertion).
-                assert!(id < usize::MAX, "Id space exhausted");
-                $name(unsafe { std::num::NonZero::new_unchecked(id + 1) })
+                static NEXT: $crate::NextIdUsize = $crate::NextIdUsize::new();
+                let id = NEXT
+                    .take()
+                    .unwrap_or_else(|| panic!("{}::alloc: every usize id is taken", stringify!($name)));
+                $name(id)
             }
 
             /// Raw numeric index for display purposes only.
@@ -46,6 +47,38 @@ macro_rules! declare_id {
         }
     };
 }
+
+macro_rules! next_id {
+    ($name:ident, $atomic:ty, $int:ty) => {
+        /// A process-wide counter of ids from 1. Once every id is taken it
+        /// answers `None` and stays at its last value, so no id is handed
+        /// out twice.
+        pub struct $name($atomic);
+
+        impl $name {
+            #[allow(clippy::new_without_default, reason = "a counter is a `static`, made in a const context")]
+            pub const fn new() -> Self {
+                Self(<$atomic>::new(0))
+            }
+
+            #[cfg(test)]
+            const fn after(taken: $int) -> Self {
+                Self(<$atomic>::new(taken))
+            }
+
+            pub fn take(&self) -> Option<std::num::NonZero<$int>> {
+                use std::sync::atomic::Ordering;
+                let taken = self
+                    .0
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |taken| taken.checked_add(1))
+                    .ok()?;
+                std::num::NonZero::<$int>::MIN.checked_add(taken)
+            }
+        }
+    };
+}
+next_id!(NextId32, std::sync::atomic::AtomicU32, u32);
+next_id!(NextIdUsize, std::sync::atomic::AtomicUsize, usize);
 
 // -- Local indexed Id -------------------------------------------------
 
@@ -219,7 +252,26 @@ impl<I: LocalIdOps, V: Clone> Clone for LocalVec<I, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::LocalIdOps;
+    use super::{LocalIdOps, NextId32, NextIdUsize};
+
+    #[test]
+    fn a_counter_hands_out_ids_from_one() {
+        let next = NextId32::new();
+        assert_eq!(next.take().map(|id| id.get()), Some(1));
+        assert_eq!(next.take().map(|id| id.get()), Some(2));
+    }
+
+    #[test]
+    fn a_counter_at_its_last_id_refuses_rather_than_wrap() {
+        let next = NextId32::after(u32::MAX - 1);
+        assert_eq!(next.take().map(|id| id.get()), Some(u32::MAX));
+        assert_eq!(next.take(), None);
+        assert_eq!(next.take(), None, "the counter stays at its last value");
+
+        let next = NextIdUsize::after(usize::MAX - 1);
+        assert_eq!(next.take().map(|id| id.get()), Some(usize::MAX));
+        assert_eq!(next.take(), None);
+    }
 
     crate::declare_local_id!(TestId);
 

@@ -74,15 +74,21 @@ enum V {
 unsafe impl Send for V {}
 unsafe impl Sync for V {}
 
-impl Release for V {
-    fn release(self) {
+impl V {
+    fn release_owned(self) {
         match self {
             V::None | V::Reference(_) => {}
             // SAFETY: `some` leaked this cell and nothing else releases it.
-            V::Some(cell) => unsafe { *Box::from_raw(cell) }.release(),
+            V::Some(cell) => unsafe { *Box::from_raw(cell) }.release_owned(),
             // SAFETY: `erase` leaked this cell and nothing else frees it.
             V::Boxed(cell) => drop(unsafe { Box::from_raw(cell) }),
         }
+    }
+}
+
+impl Release<Counted> for V {
+    fn release(self, _: acvus_extern::Releasing<Counted>) {
+        self.release_owned()
     }
 }
 

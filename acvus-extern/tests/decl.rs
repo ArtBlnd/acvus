@@ -42,16 +42,22 @@ enum V {
 unsafe impl Send for V {}
 unsafe impl Sync for V {}
 
-impl acvus_extern::Release for V {
-    fn release(self) {
+impl V {
+    fn release_owned(self) {
         match self {
             // SAFETY: an owning pointer comes from `Box::into_raw` and
             // reaches `release` once (RFC-0048).
-            V::Some(payload) => (*unsafe { Box::from_raw(payload) }).release(),
+            V::Some(payload) => (*unsafe { Box::from_raw(payload) }).release_owned(),
             V::Erased(any) => drop(unsafe { Box::from_raw(any) }),
             V::Closure(c) => drop(unsafe { Box::from_raw(c.0) }),
             V::Taken | V::None | V::Undef | V::Tag(_) | V::Reference(_) | V::Instance(_) => {}
         }
+    }
+}
+
+impl acvus_extern::Release<Tiny> for V {
+    fn release(self, _: acvus_extern::Releasing<Tiny>) {
+        self.release_owned()
     }
 }
 
