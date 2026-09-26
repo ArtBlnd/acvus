@@ -4,42 +4,42 @@
 //! is a value in place, element by element when the element converts. In a
 //! `#` slot it crosses as one box holding the Rust `Vec<T>` itself.
 
-use std::mem::ManuallyDrop;
+use std::marker::PhantomData;
 
 use acvus_mir::ty::{Poly, Ty, TypeArg};
 
-use crate::canonical::Canonical;
-use crate::obj::{InPlaceElement, OneValue, stored_as_container_of};
+use crate::canonical::{Canonical, same_layout};
+use crate::obj::{InPlaceElement, OneValue};
 use crate::owned::Owned;
 use crate::registry::ExternTypeDecl;
+use crate::repr::{Fact, SameLayout};
 use crate::runtime::Runtime;
 use crate::ty_arg::{PolyVars, SlotRepr, TyArg, Var, kind};
 use crate::{Interner, PolyTy, QualifiedRef, TyVarBound, UserDefinedDecl};
 
-/// # Safety
-/// `stored_as_container_of::<T, Rt>()`.
-unsafe fn into_values<T, Rt>(items: Vec<T>) -> Vec<Owned<Rt>>
+/// `T::STORED_AS_VALUE`: `T` is the runtime's value or another name for it,
+/// with its layout.
+struct StoredAsValue<T, Rt>(PhantomData<fn() -> (T, Rt)>);
+
+impl<T, Rt> Fact for StoredAsValue<T, Rt>
 where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    let mut items = ManuallyDrop::new(items);
-    // SAFETY: `T` is `Value` or `repr(transparent)` over it, and `Owned<Rt>`
-    // is `repr(transparent)` over `Value`, so all three element types share
-    // size and alignment and the buffer came from one allocator.
-    unsafe { Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity()) }
+    const HOLDS: bool = T::STORED_AS_VALUE;
 }
 
-/// # Safety
-/// As `into_values`.
-unsafe fn from_values<T, Rt>(items: Vec<Owned<Rt>>) -> Vec<T>
+/// The witness a `Vec<T>` crosses by as the runtime's `Vec<Owned<Rt>>`, the
+/// whole buffer at once: `Some` where `T` is stored as the runtime's value.
+fn over_values<T, Rt>() -> Option<SameLayout<T, Owned<Rt>>>
 where
     T: OneValue<Rt>,
     Rt: Runtime,
 {
-    let mut items = ManuallyDrop::new(items);
-    // SAFETY: as in `into_values`.
-    unsafe { Vec::from_raw_parts(items.as_mut_ptr().cast(), items.len(), items.capacity()) }
+    // SAFETY: where `T::STORED_AS_VALUE`, `T` is the runtime's value or
+    // `repr(transparent)` over it (`OneValue`'s contract), and `Owned<Rt>` is
+    // `repr(transparent)` over it, so each byte of the one is the other's.
+    unsafe { same_layout!(T, Owned<Rt>, where StoredAsValue<T, Rt>) }
 }
 
 crate::cross_one_value!(Vec<T>, T: crate::OneValue<__Rt>);
@@ -53,11 +53,11 @@ where
     Rt: Runtime,
 {
     fn erase(self, rt: crate::Crossing<'_, Rt>) -> Rt::Value {
-        let items: Vec<Owned<Rt>> = if stored_as_container_of::<T, Rt>() {
-            // SAFETY: the branch condition is `into_values`'s contract.
-            unsafe { into_values::<T, Rt>(self) }
-        } else {
-            self.into_iter().map(|v| Owned::erased(rt, v)).collect()
+        let items: Vec<Owned<Rt>> = match over_values::<T, Rt>() {
+            // SAFETY: an `Owned<Rt>` holds the value a `T` of the runtime's
+            // value names, and releases what the `T` would.
+            Some(layout) => unsafe { layout.cast_vec(self) },
+            None => self.into_iter().map(|v| Owned::erased(rt, v)).collect(),
         };
         // SAFETY: `Vec<T>` is stored as `Vec<Owned<Rt>>` (RFC-0039 rule 5,
         // RFC-0048 rule 7).
@@ -67,9 +67,10 @@ where
     unsafe fn materialize(rt: crate::Crossing<'_, Rt>, value: Rt::Value) -> Self {
         // SAFETY: the caller's contract, and `erase` boxes a `Vec<Owned<Rt>>`.
         let items = unsafe { rt.materialize::<Vec<Owned<Rt>>>(value) };
-        if stored_as_container_of::<T, Rt>() {
-            // SAFETY: the branch condition is `from_values`'s contract.
-            unsafe { from_values::<T, Rt>(items) }
+        if let Some(layout) = over_values::<T, Rt>() {
+            // SAFETY: as in `erase`, the other way: each element was erased
+            // from a `T`.
+            unsafe { layout.flip().cast_vec(items) }
         } else {
             // SAFETY: the caller's contract, forwarded: `erase` erased every
             // element from a `T`.

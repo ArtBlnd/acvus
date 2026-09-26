@@ -23,3 +23,6 @@ acvus-extern = { path = "../acvus-extern" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }
+
+[lints]
+workspace = true

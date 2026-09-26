@@ -17,3 +17,6 @@ tokio = { version = "1", features = ["macros", "rt"] }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "visit"] }
+
+[lints]
+workspace = true

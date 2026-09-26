@@ -237,6 +237,10 @@ impl Interner {
     ///
     /// # Panics
     /// Panics if the Astr was created by a different Interner.
+    #[expect(
+        clippy::ref_as_ptr,
+        reason = "the interner's own lifetime extension; acvus-utils holds no runtime's storage, so RFC-0080 rule 5's boundary modules are not its, and `repr_boundary` lists the site"
+    )]
     pub fn resolve(&self, astr: Astr) -> &str {
         assert_eq!(
             astr.interner_id, self.id,

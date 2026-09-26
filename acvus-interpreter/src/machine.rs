@@ -23,6 +23,7 @@ use crate::code::{
 use crate::flight::FrameCells;
 use crate::interpreter::{InterpreterContext, lookup_module};
 use crate::regs::{FrameSlot, FrameState, Regs, RootFrame, Store};
+use crate::repr::{Apart, Registers};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -210,13 +211,14 @@ impl<'c> Machine<'c> {
                 || at.index() + usize::from(width) <= args.index(),
             "an argument run and a destination run overlap"
         );
-        let run = self.regs.run_of(args, arity);
+        let args = Registers { at: args, len: arity };
+        let out = Registers { at, len: width };
         // SAFETY: the caller's contract, which the `debug_assert!` above
-        // re-checks in a debug build: the two slices name disjoint registers.
-        let run = unsafe { std::slice::from_raw_parts(run.as_ptr(), run.len()) };
+        // re-checks in a debug build: the two runs name disjoint registers.
+        let Apart { read, written } = unsafe { self.regs.run_and_run_of_mut(args, out) };
         LentCall {
-            run,
-            out: self.regs.run_of_mut(at, width),
+            run: read,
+            out: written,
             ctx: &mut self.ctx,
         }
     }

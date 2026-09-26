@@ -31,6 +31,10 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] 
 libtest-mimic = "0.8"
 glob = "0.3"
 futures = "0.3"
+# `repr_boundary` reads every source's syntax; its line numbers need the
+# spans' locations.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
 
 # A process has one global allocator, and these three count through it:
 # a run's allocations are what they assert. Sharing a binary with tests
@@ -106,3 +110,6 @@ harness = false
 [[bench]]
 name = "logs"
 harness = false
+
+[lints]
+workspace = true

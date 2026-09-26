@@ -20,6 +20,19 @@ members = [
 # file rather than a `license` expression.
 license-file = "LICENSE"
 
+# RFC-0080 rule 5: a cast is its crate's boundary module's. Each boundary
+# module (`acvus_extern::repr`, the interpreter's `repr`) allows
+# `disallowed_methods` for itself; `clippy.toml` names the methods, and
+# `acvus-interpreter-test`'s `repr_boundary` scans every source, the crates
+# that do not take these lints included.
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+ptr_as_ptr = "deny"
+ref_as_ptr = "deny"
+ptr_cast_constness = "deny"
+cast_ptr_alignment = "deny"
+transmute_ptr_to_ptr = "deny"
+
 [workspace.dependencies]
 rustc-hash = "2"
 uuid = { version = "1", features = ["v4", "js"] }

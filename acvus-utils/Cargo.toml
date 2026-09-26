@@ -15,3 +15,6 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
 serde_json = "1"
 rustc-hash = { workspace = true }
+
+[lints]
+workspace = true

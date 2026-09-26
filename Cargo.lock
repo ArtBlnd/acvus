@@ -139,8 +139,10 @@ dependencies = [
  "futures",
  "glob",
  "libtest-mimic",
+ "proc-macro2",
  "rustc-hash",
  "serde_json",
+ "syn 2.0.117",
  "tempfile",
  "tokio",
 ]

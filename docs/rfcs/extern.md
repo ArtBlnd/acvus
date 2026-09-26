@@ -1041,8 +1041,20 @@ Status: Accepted
    `DispBelow<S, N>` keeps that bound beside a displacement so the slot
    after it needs none. No trait lets another crate state a bound that a
    boundary module trusts. A read at a displacement or at a mark word is
-   the interpreter's `at` or `word_at`. No `transmute`, `transmute_copy`
-   or pointer cast between types is written outside the boundary modules.
+   the interpreter's `at` or `word_at`, and a run of a frame's registers
+   its `registers`, bounded by the borrow of the frame's cells. A head at
+   byte 0 of a record (a `Large` slot's `Header`) is the interpreter's
+   `Prefix`, which only `head_at_zero!` makes, asserting the field's
+   offset; a closure record's captures are its `HeadAndTail` tail, whose
+   length the record's `u16` holds. A `Vec` rebuilt at another element
+   type takes `same_layout!`'s witness, which with `where F` is made, and
+   checked, only where the constant `F::HOLDS`. A slice rebuilt from raw
+   parts and a pointer made from an address are casts too. A dereference
+   of a raw pointer at its own type is not: its `unsafe` block names the
+   fact that keeps the place live. acvus-utils holds no runtime's storage,
+   so the interner's one lifetime extension is its own. No `transmute`,
+   `transmute_copy` or pointer cast between types is written outside the
+   boundary modules, and `repr_boundary` scans every source for one.
 
 **Why.** A safe trait or a public field that unsafe code trusts lets safe
 code break the trust: an `Inline` impl outside the list, a `Ctx` frame

@@ -1,0 +1,15 @@
+# RFC-0080 rule 5: a cast is written in its crate's boundary module
+# (`acvus_extern::repr`, the interpreter's `repr`) and nowhere else. A raw
+# pointer's own `cast` has no path this list can name; `repr_boundary`
+# refuses it.
+disallowed-methods = [
+    { path = "core::ptr::NonNull::cast", reason = "a pointer cast between types is a boundary module's (RFC-0080 rule 5)" },
+    { path = "core::mem::transmute", reason = "a transmute is a boundary module's (RFC-0080 rule 5)" },
+    { path = "core::mem::transmute_copy", reason = "a transmute is a boundary module's (RFC-0080 rule 5)" },
+    { path = "core::slice::from_raw_parts", reason = "a run rebuilt from raw parts is a boundary module's (RFC-0080 rule 5)" },
+    { path = "core::slice::from_raw_parts_mut", reason = "a run rebuilt from raw parts is a boundary module's (RFC-0080 rule 5)" },
+    { path = "alloc::vec::Vec::from_raw_parts", reason = "a buffer rebuilt at a type is a boundary module's (RFC-0080 rule 5)" },
+    { path = "alloc::string::String::from_raw_parts", reason = "a buffer rebuilt at a type is a boundary module's (RFC-0080 rule 5)" },
+    { path = "core::ptr::with_exposed_provenance", reason = "a pointer made from an address is a boundary module's (RFC-0080 rule 5)" },
+    { path = "core::ptr::with_exposed_provenance_mut", reason = "a pointer made from an address is a boundary module's (RFC-0080 rule 5)" },
+]

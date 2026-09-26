@@ -157,7 +157,7 @@ impl acvus_extern::Borrowable<Counted> for V {
             panic!("not a reference: {reference:?}")
         };
         // SAFETY: the target is live and, by the checker, exclusively named.
-        unsafe { &mut *(*target as *mut V) }
+        unsafe { &mut *(*target).cast_mut() }
     }
 }
 
@@ -370,7 +370,7 @@ impl Runtime for Counted {
     }
 
     unsafe fn reference(&self, target: &V) -> V {
-        V::Reference(target as *const V)
+        V::Reference(std::ptr::from_ref(target))
     }
     fn rust_fn(&self, _: acvus_extern::RustBody<Self>) -> V {
         panic!("Counted makes no Rust function value")

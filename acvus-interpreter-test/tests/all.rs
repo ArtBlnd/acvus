@@ -91,6 +91,7 @@ mod reference_coercion;
 mod regex;
 mod register_reuse_across_kinds;
 mod regression_0041;
+mod repr_boundary;
 mod result;
 mod result_form;
 mod result_methods;

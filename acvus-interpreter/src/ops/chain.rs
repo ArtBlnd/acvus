@@ -6,9 +6,7 @@
 use std::marker::PhantomData;
 use std::mem::{MaybeUninit, size_of};
 use std::ptr::NonNull;
-use std::slice;
 
-use acvus_extern::repr;
 use acvus_mir::ty::IntTy;
 
 use crate::code::{
@@ -19,6 +17,7 @@ use crate::ops::arith::{Int, for_int_ty, trapping};
 use crate::ops::cast::AsNum;
 use crate::ops::place::Place;
 use crate::regs::{FrameState, Regs};
+use crate::repr;
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -289,7 +288,7 @@ impl<'a> Operands<'a> {
     #[inline(always)]
     pub fn of(values: &'a [Value]) -> Operands<'a> {
         Operands {
-            base: NonNull::from(values).cast::<Value>(),
+            base: repr::first_element(values),
             len: values.len(),
             borrow: PhantomData,
         }
@@ -1008,7 +1007,7 @@ impl OperandSpace {
         // outnumber `ExprChain::MAX_OPERANDS`, and `chain_of` asserts the
         // call brought the arity that body was prepared with, so `of` wrote
         // exactly `len` values into an array that holds them.
-        unsafe { slice::from_raw_parts(self.values.as_ptr().cast::<Value>(), self.len) }
+        unsafe { self.values.get_unchecked(..self.len).assume_init_ref() }
     }
 }
 
