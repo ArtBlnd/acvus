@@ -512,6 +512,7 @@ fn run_shape(shape: Shape, n: usize) -> Timing {
             context_names: &context_names,
             instances: &acvus_extern::NoInstances,
             access: acvus_mir::graph::Access::Sync,
+            lowering: acvus_interpreter::Lowering::InPlace,
         },
     ).unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
     if shape == Shape::Unchecked {

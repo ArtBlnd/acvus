@@ -1,0 +1,6 @@
+for range(0 (r2)..32 (r3)) -> L1 else L2 stages [L1, L3]
+// L1: free {const, *, const, +, spawn weigh, eval}
+// L3: cycle Carried(r1) any_order law(Op(Add) exact commutative) {+}
+// control upfront
+// cost W=36550 O=18281 split when n > 17, n = max(32 (r3) - 0 (r2), 0)
+// lower ahead {spawn weigh}

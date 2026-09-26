@@ -226,6 +226,11 @@ impl Executor for Parking {
     fn sleep(&self, d: std::time::Duration) -> BoxFuture<'static, ()> {
         Box::pin(async move { std::thread::sleep(d) })
     }
+
+    /// The test lends one call and takes the one job it parks.
+    fn ahead(&self, _task: acvus_mir::ty::Task) -> std::num::NonZeroUsize {
+        std::num::NonZeroUsize::MIN
+    }
 }
 
 fn park_at_eval(run: &mut Pin<Box<dyn Future<Output = Value> + '_>>) {

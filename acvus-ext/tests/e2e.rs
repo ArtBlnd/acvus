@@ -144,6 +144,7 @@ async fn run_parsed(
         context_names: &context_names,
         instances: &instances,
         access: acvus_mir::graph::Access::Sync,
+        lowering: acvus_interpreter::Lowering::InPlace,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules

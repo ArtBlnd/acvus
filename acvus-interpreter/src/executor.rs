@@ -7,7 +7,9 @@
 //!
 //! Both return a `Handle` the executor fills with its own state, and `eval`
 //! of it gives the `Done` the job produced. `sleep` is the timer
-//! `Runtime::sleep` waits on (RFC-0075 rule 4).
+//! `Runtime::sleep` waits on (RFC-0075 rule 4), and `ahead` is how many
+//! jobs of one task a loop lowered ahead may hold unevaluated (RFC-0103
+//! rule 3).
 //!
 //! The trait is safe, and that is what the opaque types are for. A job's
 //! value is crossed at the type the checker settled for its spawn, and only
@@ -18,7 +20,10 @@
 //! run read a value at another type.
 //!
 //! ```
+//! use std::num::NonZeroUsize;
+//!
 //! use acvus_interpreter::{AsyncJob, BlockingJob, Done, Executor, Handle};
+//! use acvus_mir::ty::Task;
 //! use futures::future::BoxFuture;
 //!
 //! /// Runs every job on the awaiting task when it is evaluated.
@@ -51,6 +56,12 @@
 //!     fn sleep(&self, d: std::time::Duration) -> BoxFuture<'static, ()> {
 //!         Box::pin(async move { std::thread::sleep(d) })
 //!     }
+//!
+//!     /// Every job waits for its `eval`, so issuing more of them early
+//!     /// runs nothing sooner.
+//!     fn ahead(&self, _task: Task) -> NonZeroUsize {
+//!         NonZeroUsize::MIN
+//!     }
 //! }
 //! ```
 //!
@@ -70,6 +81,7 @@
 
 use std::any::Any;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::panic::resume_unwind;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,6 +89,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use acvus_extern::{Holding, Owned};
+use acvus_mir::ty::Task;
 use futures::future::BoxFuture;
 use sync_wrapper::SyncWrapper;
 
@@ -257,6 +270,14 @@ pub trait Executor: Send + Sync {
 
     /// A future that waits `d`.
     fn sleep(&self, d: Duration) -> BoxFuture<'static, ()>;
+
+    /// How many spawns of `task` one loop lowered ahead holds issued and not
+    /// yet evaluated (RFC-0103 rule 3): the iteration being run and those
+    /// issued past it. A loop asks it once, on entering, with `Heavy` where
+    /// any of its spawns is heavy and `Async` otherwise; `Sync` is never
+    /// asked, because a spawn that runs apart is above it. One is the
+    /// iteration's own spawn, issued where the loop in place issues it.
+    fn ahead(&self, task: Task) -> NonZeroUsize;
 }
 
 impl<E> Executor for Box<E>
@@ -277,6 +298,10 @@ where
 
     fn sleep(&self, d: Duration) -> BoxFuture<'static, ()> {
         (**self).sleep(d)
+    }
+
+    fn ahead(&self, task: Task) -> NonZeroUsize {
+        (**self).ahead(task)
     }
 }
 
@@ -316,6 +341,15 @@ impl Executor for SequentialExecutor {
     fn sleep(&self, d: Duration) -> BoxFuture<'static, ()> {
         Box::pin(async move { std::thread::sleep(d) })
     }
+
+    /// Every job runs at its `eval`, in the order the evaluations come, so
+    /// a bound above one runs nothing sooner; it is four so that a loop
+    /// lowered ahead holds several iterations' registers in its buffer at
+    /// once under this executor too, deterministically.
+    fn ahead(&self, _task: Task) -> NonZeroUsize {
+        const FOUR: NonZeroUsize = NonZeroUsize::new(4).expect("four is not zero");
+        FOUR
+    }
 }
 
 // -- TokioExecutor ----------------------------------------------------
@@ -351,5 +385,22 @@ impl Executor for TokioExecutor {
 
     fn sleep(&self, d: Duration) -> BoxFuture<'static, ()> {
         Box::pin(tokio::time::sleep(d))
+    }
+
+    /// A heavy job takes a thread of the blocking pool, so as many as the
+    /// machine runs at once, and one where the system does not say how many
+    /// that is; an io job is a task that mostly waits, and
+    /// thirty-two in flight is what this executor asks of a remote on the
+    /// host's behalf. A host that knows its remote better brings its own
+    /// executor.
+    fn ahead(&self, task: Task) -> NonZeroUsize {
+        const IO: NonZeroUsize = NonZeroUsize::new(32).expect("thirty-two is not zero");
+        match task {
+            Task::Heavy => {
+                std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
+            }
+            Task::Async => IO,
+            Task::Sync => NonZeroUsize::MIN,
+        }
     }
 }

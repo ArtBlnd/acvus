@@ -19,6 +19,7 @@ use std::marker::PhantomData;
 
 use acvus_extern::{Handler, InRegisters, One, OneRegister, OptionOf, Owned};
 
+use crate::ahead::{Crossing, Ring, Stash};
 use crate::runtime::AcvusRuntime;
 
 use crate::code::{
@@ -942,6 +943,148 @@ where
                 self.exit.into()
             }
         }
+    }
+}
+
+pub trait Seek: Source {
+    fn index(cursor: &Self::Cursor) -> u64;
+
+    fn seek(cursor: &mut Self::Cursor, index: u64);
+}
+
+impl Seek for Slice {
+    #[inline(always)]
+    fn index(cursor: &Counted<u64>) -> u64 {
+        cursor.at
+    }
+
+    #[inline(always)]
+    fn seek(cursor: &mut Counted<u64>, index: u64) {
+        cursor.at = index;
+    }
+}
+
+impl<T> Seek for Range<T>
+where
+    T: Int,
+{
+    #[inline(always)]
+    fn index(cursor: &Counted<T>) -> u64 {
+        cursor.at
+    }
+
+    #[inline(always)]
+    fn seek(cursor: &mut Counted<T>, index: u64) {
+        cursor.at = index;
+    }
+}
+
+pub struct ForAheadStart<S>
+where
+    S: Seek,
+{
+    pub src: S,
+    pub counter: Off,
+    pub ring: Marked,
+    pub task: acvus_mir::ty::Task,
+    pub next: Box<dyn Op>,
+}
+
+impl<S> Op for ForAheadStart<S>
+where
+    S: Seek,
+{
+    successor!();
+
+    #[inline]
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let first = self.src.start(m);
+        let bound = m.shared().executor.ahead(self.task);
+        let regs = m.regs();
+        S::store(regs, self.counter, first);
+        regs.assign::<true>(self.ring, Ring::new(bound, S::index(&first)).into_value());
+        self.next.run(m, r0)
+    }
+}
+
+/// `ForAt` of a loop lowered ahead (RFC-0103 rule 2).
+///
+/// Cross-artifact obligation: running a later index's prefix here is sound
+/// because `prepare` refused the lowering unless every register the prefix
+/// writes is dead at the body's entry, apart from the element and the
+/// counter this operation lays again (RFC-0103 rule 4). `benches/asm_probe.rs`
+/// lists `control::ForAhead` in `NO_SUCCESSOR`: like `ForAt` it ends in a
+/// `ret` of the block to enter, and `prefix` is a part it runs, not its
+/// successor.
+pub struct ForAhead<S>
+where
+    S: Seek,
+{
+    pub src: S,
+    pub counter: Off,
+    pub ring: Marked,
+    pub prefix: Box<dyn Op>,
+    pub crossing: Box<[Crossing]>,
+    pub body: BlockId,
+    pub exit: BlockId,
+}
+
+impl<S> ForAhead<S>
+where
+    S: Seek,
+{
+    fn ring<'r>(&self, m: &'r mut Machine<'_>) -> &'r mut Ring {
+        // SAFETY: `ForAheadStart` defined this loop's ring register on the
+        // loop's entry edge, which every path into this header takes first,
+        // and only this operation takes it back.
+        unsafe { Ring::held(m.regs(), self.ring.at()) }
+    }
+
+    fn issue(&self, m: &mut Machine<'_>, from: S::Cursor, r0: u64) {
+        while let Some(index) = self.ring(m).issuable() {
+            let mut cursor = from;
+            S::seek(&mut cursor, index);
+            if !self.src.probe(m, &mut cursor) {
+                return;
+            }
+            self.prefix.run(m, r0);
+            let stash = Stash::take(m.regs(), index, &self.crossing);
+            S::step(&mut cursor);
+            self.ring(m).push_issued(stash, S::index(&cursor));
+        }
+    }
+}
+
+impl<S> Op for ForAhead<S>
+where
+    S: Seek,
+{
+    fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
+        let mut cursor = self.src.load(m, self.counter);
+        if !self.src.probe(m, &mut cursor) {
+            use acvus_extern::Release;
+            self.src.ended(m, cursor);
+            m.regs().take::<true>(self.ring).release();
+            return self.exit.into();
+        }
+        self.issue(m, cursor, r0);
+        let own = self.ring(m).take_oldest(S::index(&cursor));
+        self.src.probe(m, &mut cursor);
+        own.restore(m.regs());
+        self.body.into()
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns(&self) -> Vec<OwnedOps<'_>> {
+        vec![OwnedOps {
+            part: "prefix",
+            head: self.prefix.as_ref(),
+        }]
+    }
+
+    #[cfg(any(debug_assertions, feature = "probe"))]
+    fn owns_mut(&mut self) -> Vec<&mut Box<dyn Op>> {
+        vec![&mut self.prefix]
     }
 }
 

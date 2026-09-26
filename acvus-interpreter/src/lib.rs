@@ -21,6 +21,7 @@ macro_rules! tooling_vis {
     };
 }
 
+mod ahead;
 #[cfg(feature = "tooling")]
 pub mod code;
 #[cfg(not(feature = "tooling"))]
@@ -108,7 +109,10 @@ pub use ops::chain::{ChainTy, LeafRead, Node as ChainNode, Nodes as ChainNodes, 
 #[cfg(feature = "tooling")]
 pub use ops::index as index_handlers;
 #[cfg(feature = "tooling")]
-pub use prepare::{BodyRole, FrameRefusal, PrepareCtx, RegisterBound, prepare_module};
+pub use prepare::{
+    BodyRole, Decline, Declined, Declines, FrameRefusal, Lower, Lowering, PrepareCtx, RegisterBound,
+    prepare_module,
+};
 #[cfg(feature = "tooling")]
 pub use runtime::ExternHandler;
 #[cfg(feature = "tooling")]

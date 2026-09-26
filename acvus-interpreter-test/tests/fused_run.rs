@@ -154,6 +154,7 @@ fn run_shapes(source: &str) -> Vec<RunShape> {
         context_names: &cr.context_names,
         instances: &cr.instances,
         access: acvus_mir::graph::Access::Sync,
+        lowering: acvus_interpreter::Lowering::InPlace,
     };
 
     let mut found = Vec::new();

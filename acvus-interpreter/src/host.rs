@@ -244,7 +244,7 @@ use crate::init::{DeclaredInits, GraphParts, InitGiven, InitKey, InitSource, Rus
 use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
 use crate::ops::storage::{fetch_now, fetch_waited};
 use crate::port::{Gate, Held, Port, ended, serve};
-use crate::prepare::{PrepareCtx, prepare_module};
+use crate::prepare::{Declined, Declines, Lower, Lowering, PrepareCtx, prepare_module};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -932,6 +932,7 @@ pub(crate) struct HostParts {
     pub(crate) parse_refusals: Vec<Refusal>,
     pub(crate) refusals: Vec<Refusal>,
     pub(crate) opt: Opt,
+    pub(crate) lower: Lower,
     pub(crate) parse: Duration,
     pub(crate) hooks: Vec<HookDecl>,
 }
@@ -956,6 +957,7 @@ impl Host<SyncAccess> {
                 parse_refusals: Vec::new(),
                 refusals: Vec::new(),
                 opt: Opt::Full,
+                lower: Lower::Ahead,
                 parse: Duration::ZERO,
                 hooks: Vec::new(),
             },
@@ -1148,6 +1150,12 @@ macro_rules! host_tooling {
         {
             $v fn opt(mut self, opt: Opt) -> Self {
                 self.parts.opt = opt;
+                self
+            }
+
+            /// The same MIR, run with or without RFC-0103's lowering.
+            $v fn lower(mut self, lower: Lower) -> Self {
+                self.parts.lower = lower;
                 self
             }
 
@@ -1349,6 +1357,7 @@ pub(crate) fn compile(
         parse_refusals,
         refusals: structural,
         opt,
+        lower: lowered_ahead,
         parse,
         hooks,
     } = host;
@@ -1621,6 +1630,7 @@ pub(crate) fn compile(
         .collect();
     let started = Instant::now();
     let mut prepared: Vec<(QualifiedRef, Executable)> = Vec::new();
+    let declines = Declines::default();
     {
         let ctx = PrepareCtx {
             interner,
@@ -1628,6 +1638,13 @@ pub(crate) fn compile(
             context_names: &context_names,
             instances: &instances,
             access,
+            lowering: match lowered_ahead {
+                Lower::Ahead => Lowering::Ahead {
+                    laws: &laws,
+                    declined: &declines,
+                },
+                Lower::InPlace => Lowering::InPlace,
+            },
         };
         for (q, m) in &optimized.modules {
             match prepare_module(m, &ctx) {
@@ -1734,6 +1751,7 @@ pub(crate) fn compile(
         hooks,
         #[cfg(feature = "tooling")]
         listing_laws: laws,
+        declined: declines.take(),
         times: CompileTimes {
             opt,
             parse,
@@ -1800,6 +1818,8 @@ pub(crate) struct Compiled {
     listing_laws: acvus_mir::laws::LawTable,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     times: CompileTimes,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+    declined: Vec<Declined>,
 }
 
 impl Compiled {
@@ -1928,6 +1948,11 @@ macro_rules! program_tooling {
 
             $v fn times(&self) -> &CompileTimes {
                 &self.compiled.times
+            }
+
+            /// The loops `analysis::ahead` lowered and `prepare` ran in place.
+            $v fn declined(&self) -> &[Declined] {
+                &self.compiled.declined
             }
         }
     };

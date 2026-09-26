@@ -683,6 +683,7 @@ pub fn run_at(source: &str, opt: Opt, registries: fn() -> Vec<Registry<AcvusRunt
             context_names: &cr.context_names,
             instances: &cr.instances,
             access: acvus_mir::graph::Access::Sync,
+            lowering: acvus_interpreter::Lowering::InPlace,
         };
         catch_unwind(AssertUnwindSafe(|| {
             cr.modules

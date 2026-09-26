@@ -1,0 +1,6 @@
+for slice(r15) -> L1 else L2 stages [L1, L3]
+// L1: free {as_slice, call to_string, assign, ref, const_str, concat, drop, assign, ref, as_slice, call to_string, spawn crunch, const_str, concat, drop, assign, ref, eval, call unwrap, assign, ref, call to_string, assign, ref, concat, drop, drop, assign, ref, as_slice}
+// L3: cycle Order(r17) in_order {spawn emit, eval}
+// control upfront
+// cost W=36660 O=18281 split when n > 16, n = len(r15)
+// lower ahead {spawn crunch}

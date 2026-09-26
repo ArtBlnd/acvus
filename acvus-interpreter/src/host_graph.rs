@@ -485,6 +485,7 @@ fn merge(
         parse_refusals,
         refusals,
         opt: Opt::Full,
+        lower: crate::prepare::Lower::Ahead,
         parse,
         hooks: Vec::new(),
     };

@@ -1,0 +1,11 @@
+// id: H02
+// family: heavy
+// desc: a heavy kernel per index of a range, summed
+// registry: ahead
+// returns: i64
+// expect: 145642
+let total = 0;
+for i in 0..32 {
+    total = total + ah::weigh(i * 3 + 1);
+}
+total

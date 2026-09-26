@@ -133,6 +133,7 @@ async fn run_with(
             context_names: &context_names,
             instances: &acvus_extern::NoInstances,
             access: acvus_mir::graph::Access::Sync,
+            lowering: acvus_interpreter::Lowering::InPlace,
         },
     ).unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
     functions.insert(entry, Executable::Module(Arc::new(prepared)));

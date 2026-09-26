@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use acvus_ast::Literal;
 use acvus_extern::{ArgAt, FieldAt, FormKind, InstanceEntry, ObjectShape, RequiredInstance, Width};
+use acvus_mir::analysis::ahead::{Lowerer, Lowering as Decided};
 use acvus_mir::analysis::inst_info;
+use acvus_mir::analysis::loop_deps::{BodyDeps, Control, Member};
 use acvus_mir::graph::{Access, QualifiedRef};
 use acvus_mir::ir::{
     BinOp, Callee, Chosen, ExitTrip, ForSource, IndexBound, Inst, InstKind, Label, MirBody, MirModule, Overflow,
@@ -35,6 +37,7 @@ use crate::code::{
     ExprBody, ExprChain, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared, Root, Shape,
     SlicePair, Slot, SlotKind, Step, Where, WordMask, chain, made, node,
 };
+use crate::ahead::Crossing;
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Int, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
@@ -156,6 +159,64 @@ macro_rules! for_head {
     }};
 }
 
+/// `for_head!`'s two sources a loop lowered ahead reads, and `None` for the
+/// two it does not: an array's elements are moved out as they are laid, and
+/// a `&mut` slice lends each element once (RFC-0103 rule 1).
+macro_rules! ahead_head {
+    ($prep:expr, $at:expr, |$src:ident, $counter:ident| $make:expr) => {{
+        let prep: &Prepare<'_> = $prep;
+        let terminator: usize = $at;
+        let InstKind::For {
+            source,
+            stages,
+            exit_trip,
+            ..
+        } = &prep.body.insts[terminator].kind
+        else {
+            panic!("instruction {terminator} is not a `For`")
+        };
+        let params: &[ValueId] = prep.block_params(&stages.body());
+        let $counter: Off = prep.off(params[source.counter_param()]);
+        let trip: Option<Off> = match exit_trip {
+            ExitTrip::Absent => None,
+            ExitTrip::Defined => Some($counter),
+        };
+        match source {
+            ForSource::Slice(slice) => {
+                let $src = control::Slice {
+                    slice: prep.pair(*slice),
+                    elem: prep.off(params[0]),
+                    index: $counter,
+                    trip,
+                };
+                Some($make)
+            }
+            ForSource::Range { at, hi } => {
+                let Ty::Int(width) = prep.ty(*at) else {
+                    panic!(
+                        "a `for` over a range names the bound type {:?}; RFC-0057 rule 1 \
+                         admits one integer width and no other",
+                        prep.ty(*at)
+                    )
+                };
+                let from = prep.off(*at);
+                let hi = prep.off(*hi);
+                for_int_ty!(*width, |T| {
+                    let $src = control::Range::<T> {
+                        hi,
+                        elem: $counter,
+                        from,
+                        trip,
+                        width: PhantomData,
+                    };
+                    Some($make)
+                })
+            }
+            ForSource::SliceMut(_) | ForSource::Array(_) => None,
+        }
+    }};
+}
+
 /// The registers `order_moves` may break a cycle through, which a run's base is
 /// placed above. It is two rather than one because a cycle carrying a slice moves
 /// the pair through the scratch (`Moved::Pair`), and `scratch_used` grows while
@@ -184,6 +245,108 @@ pub struct PrepareCtx<'a> {
     /// Under `Access::Async` a `Fetch` and a `Commit` wait, so each ends its
     /// block (RFC-0090 rule 3).
     pub access: Access,
+    pub lowering: Lowering<'a>,
+}
+
+/// A host's choice between `Lowering`'s two, before it holds the law table
+/// the first reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Lower {
+    Ahead,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+    InPlace,
+}
+
+/// Whether `prepare` builds RFC-0103's lowering for the loops
+/// `analysis::ahead` decides it for. The same MIR runs in place under either.
+#[derive(Clone, Copy)]
+pub enum Lowering<'a> {
+    InPlace,
+    Ahead {
+        laws: &'a acvus_mir::laws::LawTable,
+        declined: &'a Declines,
+    },
+}
+
+/// The loops `analysis::ahead` lowers and `prepare` runs in place instead,
+/// with the condition of its own each failed.
+#[derive(Default)]
+pub struct Declines(RefCell<Vec<Declined>>);
+
+impl Declines {
+    pub fn take(&self) -> Vec<Declined> {
+        mem::take(&mut *self.0.borrow_mut())
+    }
+
+    fn push(&self, declined: Declined) {
+        self.0.borrow_mut().push(declined);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declined {
+    pub header: Label,
+    pub why: Decline,
+}
+
+/// What `prepare` reads of a plan beside `analysis::ahead`'s conditions
+/// (RFC-0103 rule 4), in the order it checks them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decline {
+    /// The prefix is not one run of instructions this pass emits as a
+    /// chain: it crosses a jump or a branch it does not recognize, or the
+    /// plan names an instruction this body does not hold where it says.
+    NotStraight,
+    /// The loop's source is no shared slice and no range.
+    Source,
+    /// The handler a spawn reaches runs at another task than the one the
+    /// plan read off its declaration.
+    HandlerTask { spawn: ValueId },
+    /// A register the prefix writes, or the header lays an element or a
+    /// counter in, holds `value`, live at the body's entry.
+    CrossesLive { value: ValueId },
+    /// `value` lives in an addressed aggregate's run of registers.
+    InRun { value: ValueId },
+    /// A spawn's argument holds a loan the prefix made, which a later
+    /// index's prefix would overwrite while the job reads it.
+    LendsPrefix { value: ValueId },
+    /// A spawn's argument holds a loan, and the loop can leave from its
+    /// body with that job unevaluated.
+    LoanPastExit { value: ValueId },
+    /// `value` is live where the rest starts, and neither the prefix nor
+    /// anything before the loop defines it.
+    Unaccounted { value: ValueId },
+}
+
+impl std::fmt::Display for Decline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Decline::NotStraight => write!(f, "the prefix is not one straight run"),
+            Decline::Source => write!(f, "the source is no shared slice and no range"),
+            Decline::HandlerTask { spawn } => write!(
+                f,
+                "the handler of spawn {spawn:?} runs at another task than its declaration"
+            ),
+            Decline::CrossesLive { value } => write!(
+                f,
+                "a register the prefix or the header's lay writes holds {value:?}, live at the \
+                 body's entry"
+            ),
+            Decline::InRun { value } => write!(f, "{value:?} lives in a run of registers"),
+            Decline::LendsPrefix { value } => write!(
+                f,
+                "a spawn's argument {value:?} holds a loan the prefix made"
+            ),
+            Decline::LoanPastExit { value } => write!(
+                f,
+                "a spawn's argument {value:?} holds a loan and the loop can leave from its body"
+            ),
+            Decline::Unaccounted { value } => write!(
+                f,
+                "{value:?} is live where the rest starts and the prefix does not define it"
+            ),
+        }
+    }
 }
 
 impl PrepareCtx<'_> {
@@ -527,9 +690,11 @@ pub fn prepare_entry(
     within_call_bounds(body, BodyRole::Entry)?;
     let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
+    prep.claim_rings();
     let scalars = prep.hoist_konsts();
     prep.plan_runs(scalars, BodyRole::Entry)?;
     let regions = prep.regions();
+    prep.settle_rings(&regions);
 
     Ok(framed(prep, literals, &regions, BodyRole::Entry))
 }
@@ -547,9 +712,11 @@ pub fn prepare_closure(
     within_call_bounds(body, BodyRole::Closure)?;
     let mut prep = Prepare::new(body, ctx, entries, closures, literals, label_map(body));
 
+    prep.claim_rings();
     let scalars = prep.hoist_konsts();
     prep.plan_runs(scalars, BodyRole::Closure)?;
     let regions = prep.regions();
+    prep.settle_rings(&regions);
 
     if let Some(expr) = prep.expression_body() {
         return Ok(Code::expr(Arc::new(expr)));
@@ -863,6 +1030,8 @@ struct Prepare<'a> {
     def_inst: Vec<Option<usize>>,
     use_counts: Vec<u32>,
     konsts: Konsts,
+    planned: Vec<Planned>,
+    ahead: FxHashMap<usize, AheadLoop>,
     /// The region operations whose frames the part being emitted nests in
     /// since the last `StackGuard` (RFC-0100 rule 5). A release build jumps
     /// from an operation to its successor, so a region's part is the one
@@ -896,6 +1065,38 @@ impl Konsts {
     fn holds_inst(&self, at: usize) -> bool {
         self.insts.contains(&at)
     }
+}
+
+/// A loop `analysis::ahead` lowers, read onto this body's instruction
+/// indexes, with the register its ring was given.
+struct Planned {
+    header: Label,
+    for_at: usize,
+    body_label_at: usize,
+    rest_at: usize,
+    members: FxHashSet<usize>,
+    spawns: Vec<(usize, Task)>,
+    laid: [ValueId; 2],
+    leaves_from_body: bool,
+    task: Task,
+    ring: Slot,
+}
+
+type AheadStart = Box<dyn FnOnce(Box<dyn Op>) -> Box<dyn Op>>;
+type AheadHeader = Box<dyn FnOnce(AheadEdges) -> Box<dyn Op>>;
+
+struct AheadEdges {
+    prefix: Box<dyn Op>,
+    body: BlockId,
+    exit: BlockId,
+}
+
+/// A loop this body runs lowered ahead (RFC-0103 rule 2). The two
+/// operations are built once each, by the loop's entry edge and its header.
+struct AheadLoop {
+    prefix: Range<usize>,
+    start: Option<AheadStart>,
+    header: Option<AheadHeader>,
 }
 
 /// One `while` the recognizer matched, as indexes into `MirBody::insts`.
@@ -1426,6 +1627,31 @@ impl Prepare<'_> {
     }
 }
 
+fn register_width(ty: &Ty) -> u32 {
+    u32::try_from(SlotClass::of(ty).width()).expect("a register class is two wide at most")
+}
+
+fn unit_span(unit: &Unit<'_>) -> Range<usize> {
+    match unit {
+        Unit::Inst(at) => *at..*at + 1,
+        Unit::Region(region) => region.start()..region.end(),
+        Unit::Fused(region) => region.insts.clone(),
+        Unit::Chain(run) => run.insts.clone(),
+    }
+}
+
+/// Whether a value of this type can hold an address: a reference, a view,
+/// or an aggregate or function value that may carry one.
+fn holds_loan(ty: &Ty) -> bool {
+    match ty {
+        Ty::Int(_) | Ty::Float | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never | Ty::Order => false,
+        Ty::String => false,
+        Ty::Option(inner) | Ty::Array(inner, ..) | Ty::Handle(inner) => holds_loan(inner),
+        Ty::Tuple(items) => items.iter().any(holds_loan),
+        _ => true,
+    }
+}
+
 fn block_heads(units: &[Unit<'_>], split: &Split) -> FxHashMap<usize, BlockId> {
     units
         .iter()
@@ -1542,6 +1768,8 @@ impl<'a> Prepare<'a> {
             def_inst,
             use_counts,
             konsts: Konsts::default(),
+            planned: Vec::new(),
+            ahead: FxHashMap::default(),
             #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
             nested: 0,
         }
@@ -3302,7 +3530,8 @@ impl<'a> Prepare<'a> {
     fn blocks(&mut self, range: Range<usize>, nested: &[Region]) -> Box<[Box<dyn Op>]> {
         let runs = self.fused_in(range.clone(), nested);
         let chains = self.chains_in(range.clone(), nested);
-        let units = self.layout(range, nested, &runs, &chains);
+        let mut units = self.layout(range, nested, &runs, &chains);
+        units.retain(|unit| !self.in_ahead_prefix(unit));
         let split = self.split(&units);
         let rides = self.rides_in(&units, Some(&split));
         self.level = Level {
@@ -3903,6 +4132,19 @@ impl<'a> Prepare<'a> {
         let exit_target = self.target(&exit);
         let on_exit = self.edge(into_exit, exit_target);
 
+        if let Some(ahead) = self.ahead.get_mut(&at)
+            && let Some(header) = ahead.header.take()
+        {
+            let range = ahead.prefix.clone();
+            let regions = self.straight_run(range.start, range.end, None).regions;
+            let prefix = self.straight(range, &regions, Vec::new(), Box::new(control::Yield));
+            return header(AheadEdges {
+                prefix,
+                body: on_body,
+                exit: on_exit,
+            });
+        }
+
         for_head!(self, at, |src, _Head, counter| Box::new(control::ForAt {
             src,
             counter,
@@ -3911,7 +4153,320 @@ impl<'a> Prepare<'a> {
         }) as Box<dyn Op>)
     }
 
-    fn counter_op(&self, header: usize, from: usize) -> Node {
+    /// Gives each loop `analysis::ahead` lowers a register for its ring.
+    /// This runs before `hoist_konsts` makes the scalar count final, which
+    /// is why a loop `settle_rings` declines keeps a register it never
+    /// writes.
+    fn claim_rings(&mut self) {
+        let Lowering::Ahead { laws, declined } = self.ctx.lowering else {
+            return;
+        };
+        if !self
+            .body
+            .insts
+            .iter()
+            .any(|inst| matches!(inst.kind, InstKind::For { .. }))
+        {
+            return;
+        }
+        let cfg = acvus_mir::cfg::promote(self.body.clone());
+        let deps = BodyDeps::of(&cfg, laws);
+        let lowerer = Lowerer::of(&cfg, laws);
+        for found in &deps.loops {
+            let (Decided::Ahead(plan), Ok(loop_deps)) = (lowerer.lowering(found), &found.deps)
+            else {
+                continue;
+            };
+            let header = cfg.blocks[found.header.0].label;
+            let Some(planned) = self.planned_of(&cfg, header, &plan, &loop_deps.control) else {
+                declined.push(Declined {
+                    header,
+                    why: Decline::NotStraight,
+                });
+                continue;
+            };
+            self.planned.push(planned);
+        }
+    }
+
+    /// The plan on this body's instruction indexes, where every block it
+    /// names begins at a label of the body.
+    fn planned_of(
+        &mut self,
+        cfg: &acvus_mir::cfg::CfgBody,
+        header: Label,
+        plan: &acvus_mir::analysis::ahead::Plan,
+        control: &Control,
+    ) -> Option<Planned> {
+        let first = |block: acvus_mir::cfg::BlockIdx| -> Option<usize> {
+            let label = cfg.blocks[block.0].label;
+            self.labels.get(&label).map(|at| *at as usize + 1)
+        };
+        let inst_at = |at: acvus_mir::analysis::loop_deps::InstAt| Some(first(at.block)? + at.at);
+        let term_at = |block: acvus_mir::cfg::BlockIdx| {
+            Some(first(block)? + cfg.blocks[block.0].insts.len())
+        };
+        let for_at = *self.labels.get(&header)? as usize + 1;
+        if !matches!(self.body.insts.get(for_at)?.kind, InstKind::For { .. }) {
+            return None;
+        }
+        let rest_at = match plan.rest {
+            acvus_mir::analysis::ahead::RestStart::Inst(at) => inst_at(at)?,
+            acvus_mir::analysis::ahead::RestStart::Terminator(block) => term_at(block)?,
+        };
+        let members = plan
+            .prefix
+            .iter()
+            .map(|member| match member {
+                Member::Inst(at) => inst_at(*at),
+                Member::Term(block) => term_at(*block),
+            })
+            .collect::<Option<FxHashSet<usize>>>()?;
+        let spawns = plan
+            .spawns
+            .iter()
+            .map(|spawn| Some((inst_at(spawn.at)?, spawn.task)))
+            .collect::<Option<Vec<(usize, Task)>>>()?;
+        let body_label_at = first(plan.body)? - 1;
+        let ring = Slot::try_from(self.scratch).unwrap_or_else(|_| {
+            panic!("a body of {} registers has no register for a ring within a frame", self.scratch)
+        });
+        self.scratch += 1;
+        Some(Planned {
+            header,
+            for_at,
+            body_label_at,
+            rest_at,
+            members,
+            spawns,
+            laid: [plan.laid.element, plan.laid.counter],
+            leaves_from_body: matches!(control, Control::Chained { .. }),
+            task: plan.task,
+            ring,
+        })
+    }
+
+    /// `prepare`'s own reading of each planned loop (RFC-0103 rule 4): a
+    /// loop that fails it runs in place, and the reason is recorded.
+    fn settle_rings(&mut self, regions: &[Region]) {
+        let Lowering::Ahead { declined, .. } = self.ctx.lowering else {
+            return;
+        };
+        if self.planned.is_empty() {
+            return;
+        }
+        let planned = mem::take(&mut self.planned);
+        let edges = Edges {
+            insts: self.body.insts.as_slice(),
+            labels: &self.labels,
+        };
+        let live = Live::of(&edges, &ReadsWithStorage::of(self.body));
+        let whole = 0..self.body.insts.len();
+        let runs = self.fused_in(whole.clone(), regions);
+        let chains = self.chains_in(whole.clone(), regions);
+        let units = self.layout(whole, regions, &runs, &chains);
+        let settled: Vec<(Planned, Result<AheadLoop, Decline>)> = planned
+            .into_iter()
+            .map(|plan| {
+                let settled = self.settled(&plan, &live, &units);
+                (plan, settled)
+            })
+            .collect();
+        for (plan, settled) in settled {
+            match settled {
+                Ok(ahead) => {
+                    self.ahead.insert(plan.for_at, ahead);
+                }
+                Err(why) => declined.push(Declined {
+                    header: plan.header,
+                    why,
+                }),
+            }
+        }
+    }
+
+    fn settled(&self, plan: &Planned, live: &Live, units: &[Unit<'_>]) -> Result<AheadLoop, Decline> {
+        let insts = self.body.insts.as_slice();
+        let prefix = plan.body_label_at + 1..plan.rest_at;
+        let straight = prefix.start <= prefix.end
+            && self.straight_run(prefix.start, prefix.end, None).stops_at == prefix.end
+            && plan.members.iter().all(|at| prefix.contains(at))
+            && prefix
+                .clone()
+                .all(|at| plan.members.contains(&at) || block_label(&insts[at]).is_some())
+            && units.iter().all(|unit| {
+                let span = unit_span(unit);
+                let cuts = |at: usize| span.start < at && at < span.end;
+                !cuts(prefix.start) && !cuts(prefix.end)
+            });
+        if !straight {
+            return Err(Decline::NotStraight);
+        }
+
+        for &(at, task) in &plan.spawns {
+            let InstKind::Spawn {
+                dst,
+                callee: Callee::Extern { id, instance, .. },
+                ..
+            } = &insts[at].kind
+            else {
+                return Err(Decline::NotStraight);
+            };
+            if self.ctx.handler(id, *instance).task() != task {
+                return Err(Decline::HandlerTask { spawn: *dst });
+            }
+        }
+
+        let mut defined: FxHashSet<ValueId> = FxHashSet::default();
+        let mut written: FxHashSet<u32> = plan
+            .laid
+            .iter()
+            .flat_map(|laid| self.registers_of(*laid))
+            .collect();
+        for at in prefix.clone() {
+            if self.konsts.holds_inst(at) || self.run_noops.contains(&at) {
+                continue;
+            }
+            for def in inst_info::defs(&insts[at].kind) {
+                if self.plan.of(def).is_some() {
+                    return Err(Decline::InRun { value: def });
+                }
+                defined.insert(def);
+                written.extend(self.registers_of(def));
+            }
+            if let Some(window) = self.slots.windows.get(&at) {
+                let laid: u32 = window_args(&insts[at], self.ctx)
+                    .into_iter()
+                    .flatten()
+                    .map(|arg| register_width(self.ty(*arg)))
+                    .sum();
+                written.extend(window.base..window.base + window.arity.max(laid));
+            }
+        }
+
+        let at_entry = &live.live_in[plan.body_label_at];
+        for raw in at_entry.iter() {
+            let value = ValueId::from_raw(raw);
+            if self.registers_of(value).any(|register| written.contains(&register)) {
+                return Err(Decline::CrossesLive { value });
+            }
+        }
+
+        for &(at, _) in &plan.spawns {
+            let InstKind::Spawn { args, .. } = &insts[at].kind else {
+                return Err(Decline::NotStraight);
+            };
+            for &value in args.iter().filter(|arg| holds_loan(self.ty(**arg))) {
+                if defined.contains(&value) {
+                    return Err(Decline::LendsPrefix { value });
+                }
+                if plan.leaves_from_body {
+                    return Err(Decline::LoanPastExit { value });
+                }
+            }
+        }
+
+        let mut crossing: Vec<Crossing> = Vec::new();
+        for raw in live.live_in[plan.rest_at].iter() {
+            let value = ValueId::from_raw(raw);
+            if at_entry.contains(raw)
+                || plan.laid.contains(&value)
+                || self.konsts.slot_of.contains_key(&value)
+            {
+                continue;
+            }
+            if self.plan.of(value).is_some() {
+                return Err(Decline::InRun { value });
+            }
+            if !defined.contains(&value) {
+                return Err(Decline::Unaccounted { value });
+            }
+            let ty = self.ty(value);
+            match SlotClass::of(ty) {
+                SlotClass::Slice => {
+                    let pair = self.pair(value);
+                    crossing.extend([Crossing::Plain(pair.ptr), Crossing::Plain(pair.len)]);
+                }
+                SlotClass::Word(_) => crossing.push(Crossing::Plain(self.off(value))),
+                SlotClass::Whole => crossing.push(match owns_large(ty) {
+                    true => Crossing::Owning(self.marked(value)),
+                    false => Crossing::Plain(self.off(value)),
+                }),
+            }
+        }
+
+        let ring = Marked::of(FrameSlot::of(plan.ring));
+        let task = plan.task;
+        let crossing: Box<[Crossing]> = crossing.into_boxed_slice();
+        let start = ahead_head!(self, plan.for_at, |src, counter| Box::new(move |next| {
+            Box::new(control::ForAheadStart {
+                src,
+                counter,
+                ring,
+                task,
+                next,
+            }) as Box<dyn Op>
+        }) as AheadStart);
+        let header = ahead_head!(self, plan.for_at, |src, counter| {
+            let crossing = crossing.clone();
+            Box::new(move |edges: AheadEdges| {
+                Box::new(control::ForAhead {
+                    src,
+                    counter,
+                    ring,
+                    prefix: edges.prefix,
+                    crossing,
+                    body: edges.body,
+                    exit: edges.exit,
+                }) as Box<dyn Op>
+            }) as AheadHeader
+        });
+        let (Some(start), Some(header)) = (start, header) else {
+            return Err(Decline::Source);
+        };
+        Ok(AheadLoop {
+            prefix,
+            start: Some(start),
+            header: Some(header),
+        })
+    }
+
+    /// The scalar registers `value` occupies: none for an entry constant,
+    /// which is written once on entry, for a value no operation names, or
+    /// for a value in a run, whose registers lie above every scalar and
+    /// window register (`plan_runs`).
+    fn registers_of(&self, value: ValueId) -> impl Iterator<Item = u32> {
+        let raw = self.slots.raw(value);
+        let held = raw != NO_SLOT
+            && !self.konsts.slot_of.contains_key(&value)
+            && self.plan.of(value).is_none();
+        let width = match held {
+            true => register_width(self.ty(value)),
+            false => 0,
+        };
+        let end = match held {
+            true => raw + width,
+            false => raw,
+        };
+        raw..end
+    }
+
+    fn in_ahead_prefix(&self, unit: &Unit<'_>) -> bool {
+        let span = unit_span(unit);
+        self.ahead
+            .values()
+            .any(|ahead| ahead.prefix.start <= span.start && span.end <= ahead.prefix.end)
+    }
+
+    fn counter_op(&mut self, header: usize, from: usize) -> Node {
+        if from < header
+            && let Some(start) = self
+                .ahead
+                .get_mut(&(header + 1))
+                .and_then(|ahead| ahead.start.take())
+        {
+            return made(start);
+        }
         match from < header {
             true => for_head!(self, header + 1, |src, _Head, counter| made(
                 move |next| Box::new(control::ForStart { src, counter, next }) as Box<dyn Op>
@@ -7623,6 +8178,7 @@ mod recognizer_tests {
                 context_names: &context_names,
                 instances: &acvus_extern::NoInstances,
                 access: Access::Sync,
+                lowering: Lowering::InPlace,
             };
             let mut body = body_of(insts);
             body.task = task;
@@ -7658,6 +8214,7 @@ mod recognizer_tests {
                 context_names: &context_names,
                 instances: &acvus_extern::NoInstances,
                 access: Access::Sync,
+                lowering: Lowering::InPlace,
             };
             let closures = FxHashMap::default();
             let body = body_of(insts);
@@ -8150,6 +8707,7 @@ mod assignment_tests {
             context_names: &context_names,
             instances: &acvus_extern::NoInstances,
             access: Access::Sync,
+            lowering: Lowering::InPlace,
         };
         assign_slots(&body, &ctx, &labels)
     }

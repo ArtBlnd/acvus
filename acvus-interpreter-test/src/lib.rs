@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod ahead;
 pub mod listing;
 pub mod scripts;
 pub mod step_model;
@@ -388,12 +389,17 @@ pub fn execute_compiled(
     executor: Arc<dyn acvus_interpreter::Executor>,
 ) -> (InterpreterContext, Interpreter) {
     let mut functions = cr.extern_executables;
+    let declines = acvus_interpreter::Declines::default();
     let ctx = PrepareCtx {
         interner,
         externs: &functions,
         context_names: &cr.context_names,
         instances: &cr.instances,
         access: acvus_mir::graph::Access::Sync,
+        lowering: acvus_interpreter::Lowering::Ahead {
+            laws: &cr.laws,
+            declined: &declines,
+        },
     };
     let prepared: Vec<(QualifiedRef, Executable)> = cr
         .modules
@@ -1533,6 +1539,7 @@ pub mod corpus {
                 context_names: &cr.context_names,
                 instances: &cr.instances,
                 access: acvus_mir::graph::Access::Sync,
+                lowering: acvus_interpreter::Lowering::InPlace,
             };
             catch_unwind(AssertUnwindSafe(|| {
                 cr.modules

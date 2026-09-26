@@ -393,6 +393,7 @@ async fn run(body: OneOperation, ty: IntTy) -> Result<i128, Trapped> {
         context_names: &no_contexts,
         instances: &acvus_extern::NoInstances,
         access: acvus_mir::graph::Access::Sync,
+        lowering: acvus_interpreter::Lowering::InPlace,
     };
     let prepared = Executable::Module(Arc::new(acvus_interpreter::prepare_module(&module, &ctx)
         .unwrap_or_else(|refused| panic!("the body is refused: {refused}"))));
