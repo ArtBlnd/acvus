@@ -6094,8 +6094,27 @@ where
                 self.error(MirErrorKind::CannotIndex { ty }, span);
                 continue;
             }
-            let Ok(element) = self.solver.freeze_ty(&element) else {
-                continue;
+            // The solve has run, so this is the final freeze: an element
+            // nothing constrained closes to `!` (RFC-0042 rule 3, RFC-0038
+            // rule 2).
+            let element = match self.solver.close_ty(&element) {
+                Ok(element) => element,
+                Err(crate::ty::FreezeError::OutOfBound { ty, bound, .. }) => {
+                    self.error(MirErrorKind::TypeOutOfBound { ty, bound }, span);
+                    continue;
+                }
+                Err(
+                    crate::ty::FreezeError::UnresolvedType(_)
+                    | crate::ty::FreezeError::UnresolvedLen(_)
+                    | crate::ty::FreezeError::UnresolvedIdentity(_)
+                    | crate::ty::FreezeError::UnresolvedRepr(_),
+                ) => {
+                    self.open_decisions.push(OpenDecision {
+                        open: element,
+                        span,
+                    });
+                    continue;
+                }
             };
             let moves = crate::validate::is_move_only(&element) == Some(true);
             self.index_access.insert(
