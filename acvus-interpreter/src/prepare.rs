@@ -37,7 +37,7 @@ use crate::code::{
     ExprBody, ExprChain, Konst, LentText, Literals, Marked, Node, Off, Op, Prepared, Root, Shape,
     SlicePair, Slot, SlotKind, Step, Where, WordMask, chain, made, node,
 };
-use crate::ahead::Crossing;
+use crate::ahead::{Crossing, Ring};
 use crate::interpreter::Executable;
 use crate::ops::arith::{self, Int, Unary, for_int_ty};
 use crate::ops::chain::{self, ChainTy, LeafRead, Plan, Reads};
@@ -49,6 +49,7 @@ use crate::ops::{
     string, structural, switch, variant,
 };
 use crate::regs::{FrameSlot, MarkWords};
+use crate::repr::Claimed;
 use crate::runtime::ExternHandler;
 use crate::value::{Kind, Value};
 
@@ -1079,7 +1080,20 @@ struct Planned {
     laid: [ValueId; 2],
     leaves_from_body: bool,
     task: Task,
-    ring: Slot,
+    ring: Claimed<Ring>,
+}
+
+pub(crate) struct ScratchClaim(FrameSlot);
+
+impl ScratchClaim {
+    pub(crate) fn slot(self) -> FrameSlot {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn of_test_frame(slot: FrameSlot) -> ScratchClaim {
+        ScratchClaim(slot)
+    }
 }
 
 type AheadStart = Box<dyn FnOnce(Box<dyn Op>) -> Box<dyn Op>>;
@@ -4232,6 +4246,7 @@ impl<'a> Prepare<'a> {
             panic!("a body of {} registers has no register for a ring within a frame", self.scratch)
         });
         self.scratch += 1;
+        let ring = Claimed::of(ScratchClaim(FrameSlot::of(ring)));
         Some(Planned {
             header,
             for_at,
@@ -4395,7 +4410,7 @@ impl<'a> Prepare<'a> {
             }
         }
 
-        let ring = Marked::of(FrameSlot::of(plan.ring));
+        let ring = plan.ring;
         let task = plan.task;
         let crossing: Box<[Crossing]> = crossing.into_boxed_slice();
         let start = ahead_head!(self, plan.for_at, |src, counter| Box::new(move |next| {

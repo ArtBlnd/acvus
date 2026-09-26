@@ -10,7 +10,6 @@
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 
-
 use crate::code::{Marked, Off};
 use crate::regs::Regs;
 use crate::value::Value;
@@ -34,21 +33,6 @@ impl Ring {
             next_issue: first,
             stashes: VecDeque::with_capacity(bound.get()),
         }
-    }
-
-    pub(crate) fn into_value(self) -> Value {
-        // SAFETY: `Ring::held` is the one reader of the value, at `Ring`, and
-        // the frame releases it through the vtable `erase` gave it.
-        unsafe { Value::erase(self) }
-    }
-
-    /// # Safety
-    /// `at` is the register `prepare` claimed for this loop's ring, which
-    /// `ForAheadStart` defined with `into_value` on entering the loop and no
-    /// operation outside the loop's header names.
-    pub(crate) unsafe fn held<'r>(regs: &'r mut Regs<'_>, at: Off) -> &'r mut Ring {
-        // SAFETY: the caller's contract: the register holds a `Ring`.
-        unsafe { regs.peek_mut(at).peek_mut::<Ring>() }
     }
 
     pub(crate) fn issuable(&self) -> Option<u64> {
@@ -136,13 +120,12 @@ mod tests {
     use acvus_ast::Span;
 
     use crate::code::{Body, Literals};
+    use crate::prepare::ScratchClaim;
     use crate::regs::{FrameSlot, MarkWords, Store, cells_for};
+    use crate::repr::Claimed;
+    use crate::repr::test_values::counted;
 
     const REGISTERS: u16 = 8;
-
-    struct Counted {
-        _alive: Arc<()>,
-    }
 
     fn body() -> Body {
         Body {
@@ -165,16 +148,6 @@ mod tests {
         }
     }
 
-    fn counted(alive: &Arc<()>) -> Value {
-        // SAFETY: the word is never materialized; `release` drops it as the
-        // `Counted` it was erased from.
-        unsafe {
-            Value::erase(Counted {
-                _alive: Arc::clone(alive),
-            })
-        }
-    }
-
     fn marked(slot: u16) -> Marked {
         Marked::of(FrameSlot::of(slot))
     }
@@ -182,6 +155,10 @@ mod tests {
     const OWNING: u16 = 2;
     const PLAIN: u16 = 3;
     const RING: u16 = 5;
+
+    fn ring() -> Claimed<Ring> {
+        Claimed::of(ScratchClaim::of_test_frame(FrameSlot::of(RING)))
+    }
 
     /// A stash moved into the ring takes the frame's claim with it, so the
     /// frame's sweep releases the value once, through the ring.
@@ -196,14 +173,13 @@ mod tests {
         }
         let alive = Arc::new(());
         let two = NonZeroUsize::new(2).expect("two is not zero");
-        regs.assign::<true>(marked(RING), Ring::new(two, 0).into_value());
+        ring().define(&mut regs, Ring::new(two, 0));
         regs.define::<true>(marked(OWNING), counted(&alive));
         regs.put(marked(PLAIN).at(), Value::int(7));
 
         let crossing = [Crossing::Owning(marked(OWNING)), Crossing::Plain(marked(PLAIN).at())];
         let stash = Stash::take(&mut regs, 0, &crossing);
-        // SAFETY: the ring register was defined with `into_value` above.
-        let ring = unsafe { Ring::held(&mut regs, marked(RING).at()) };
+        let ring = ring().held(&mut regs);
         assert_eq!(ring.issuable(), Some(0));
         ring.push_issued(stash, 1);
         assert_eq!(ring.issuable(), Some(1));
@@ -226,15 +202,14 @@ mod tests {
         }
         let alive = Arc::new(());
         let one = NonZeroUsize::MIN;
-        regs.assign::<true>(marked(RING), Ring::new(one, 4).into_value());
+        ring().define(&mut regs, Ring::new(one, 4));
         regs.define::<true>(marked(OWNING), counted(&alive));
         regs.put(marked(PLAIN).at(), Value::int(7));
 
         let crossing = [Crossing::Owning(marked(OWNING)), Crossing::Plain(marked(PLAIN).at())];
         let stash = Stash::take(&mut regs, 4, &crossing);
         regs.put(marked(PLAIN).at(), Value::int(9));
-        // SAFETY: the ring register was defined with `into_value` above.
-        let ring = unsafe { Ring::held(&mut regs, marked(RING).at()) };
+        let ring = ring().held(&mut regs);
         ring.push_issued(stash, 5);
         assert_eq!(ring.issuable(), None, "a ring of one is full");
         let own = ring.take_oldest(4);

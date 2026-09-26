@@ -20,6 +20,7 @@ use std::marker::PhantomData;
 use acvus_extern::{Handler, InRegisters, One, OneRegister, OptionOf, Owned};
 
 use crate::ahead::{Crossing, Ring, Stash};
+use crate::repr::Claimed;
 use crate::runtime::AcvusRuntime;
 
 use crate::code::{
@@ -985,7 +986,7 @@ where
 {
     pub src: S,
     pub counter: Off,
-    pub ring: Marked,
+    pub ring: Claimed<Ring>,
     pub task: acvus_mir::ty::Task,
     pub next: Box<dyn Op>,
 }
@@ -1002,7 +1003,7 @@ where
         let bound = m.shared().executor.ahead(self.task);
         let regs = m.regs();
         S::store(regs, self.counter, first);
-        regs.assign::<true>(self.ring, Ring::new(bound, S::index(&first)).into_value());
+        self.ring.define(regs, Ring::new(bound, S::index(&first)));
         self.next.run(m, r0)
     }
 }
@@ -1022,7 +1023,7 @@ where
 {
     pub src: S,
     pub counter: Off,
-    pub ring: Marked,
+    pub ring: Claimed<Ring>,
     pub prefix: Box<dyn Op>,
     pub crossing: Box<[Crossing]>,
     pub body: BlockId,
@@ -1034,10 +1035,7 @@ where
     S: Seek,
 {
     fn ring<'r>(&self, m: &'r mut Machine<'_>) -> &'r mut Ring {
-        // SAFETY: `ForAheadStart` defined this loop's ring register on the
-        // loop's entry edge, which every path into this header takes first,
-        // and only this operation takes it back.
-        unsafe { Ring::held(m.regs(), self.ring.at()) }
+        self.ring.held(m.regs())
     }
 
     fn issue(&self, m: &mut Machine<'_>, from: S::Cursor, r0: u64) {
@@ -1063,7 +1061,7 @@ where
         let mut cursor = self.src.load(m, self.counter);
         if !self.src.probe(m, &mut cursor) {
             self.src.ended(m, cursor);
-            m.regs().take::<true>(self.ring).release_owned();
+            self.ring.release(m.regs());
             return self.exit.into();
         }
         self.issue(m, cursor, r0);

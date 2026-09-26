@@ -1138,11 +1138,7 @@ mod tests {
     use acvus_ast::Span;
 
     use crate::code::Literals;
-
-    /// A `Large` whose drop the count of `alive` shows.
-    struct Counted {
-        _alive: Arc<()>,
-    }
+    use crate::repr::test_values::counted;
 
     fn body_of(frame_len: u16) -> Body {
         Body {
@@ -1180,14 +1176,7 @@ mod tests {
         let alive = Arc::new(());
         let claimed: [u16; 5] = [3, 256, 300, 318, 319];
         for index in claimed {
-            // SAFETY: the word is never materialized; `release` drops it as the
-            // `Counted` it was erased from.
-            let value = unsafe {
-                Value::erase(Counted {
-                    _alive: Arc::clone(&alive),
-                })
-            };
-            regs.assign::<true>(Marked::of(FrameSlot::of(index)), value);
+            regs.assign::<true>(Marked::of(FrameSlot::of(index)), counted(&alive));
         }
         assert_eq!(Arc::strong_count(&alive), 1 + claimed.len());
         assert_eq!(regs.mark_word(0), 1 << 3);
