@@ -1447,8 +1447,8 @@ call site, with every mismatch an explicit `None`.
    `Some` exactly when the closure's parameter type, a borrow or a
    projection, is the argument's settled type (the check of
    `acvus_extern::lend`). No method returns a value, a
-   `Ty` or a word. `len()` counts the arguments; `encode()` lays them out by
-   their types (RFC-0033) as `Encoded` bytes, owned and `'static`.
+   `Ty` or a word, and nothing it lends outlives the call. `len()` counts
+   the arguments.
 2. **A Rust closure as a function value.** An extern may return
    `RustFn<P, R, Rt>`, a script function value of type `Fn(P…) -> R`
    whose body is a Rust closure `Fn(&mut Ctx, Args<'call, P, Rt>) -> R`,
@@ -1478,9 +1478,11 @@ call site, with every mismatch an explicit `None`.
    result is a new source (RFC-0012 rule 4): a call whose result's settled
    type carries an identity argument is refused, naming the call, since its
    use would tie the host's value to a source it is not from.
-4. **Decoding at an expected type.** `Entry::run_encoded(Encoded)` decodes
-   an entry's inputs at their types (RFC-0033, untrusted), refusing on any
-   mismatch, and runs it.
+4. **Another entry within the call.** An entry run from inside a call
+   takes the call's arguments as rule 1 lends them and gives its result
+   through rule 3's `Output`: nothing it is lent or gives leaves the call.
+   How a call reaches the entry is the interpreter's hook, not yet
+   decided.
 
 **Why.** Outside data is untyped wherever it comes from; the one honest
 place to check it is where it enters, against the type the checker settled
@@ -1497,3 +1499,5 @@ new closure kind.
   already typed Rust values; a second data model adds a conversion.
 - Checking at the end by comparing a built type with `τ` — an `Output`
   that knows `τ` fails at the first wrong leaf.
+- Laying the arguments out as bytes a second run decodes (`encode`,
+  `run_encoded`) — owned bytes outlive the call, so a value leaves it.
