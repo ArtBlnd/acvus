@@ -1237,14 +1237,13 @@ glue at the type the checker settled.
    `Option`'s or `Result`'s projection (RFC-0050 rule 6), and a `Ctx`
    carrying the runtime, written first (RFC-0023 rule 2). There is no second
    crossing and no host-only view.
-   - A page is a program's view of one storage, opened by the program and
-     borrowing it, so no page exists without a compilation and none serves
-     another: `Program::scope` brands the pages and entries its closure
+   - A page is a program's view of one storage, borrowing it, so none
+     exists without a compilation or serves another: `Program::scope` brands the pages and entries its closure
      makes with a lifetime no other scope shares, so an entry takes only
      its own scope's page and neither leaves the closure.
      A page holds no value itself: the storage is read at a load and
-     written at a store, exactly where the program or the host does one
-     (RFC-0025 rule 2), and nowhere else. Opening a page reads nothing. A run
+     written at a store, where the program or the host does one
+     (RFC-0025 rule 2), nowhere else. Opening a page reads nothing. A run
      takes the page exclusively.
    - The storage is trusted to give back what it was given. A storage whose
      access can wait is declared when the host compiles
@@ -1253,7 +1252,9 @@ glue at the type the checker settled.
      for synchronous access opens only a synchronous storage, a mismatch the
      Rust types refuse. Only a load and a commit wait: handing a holder
      back (`store`, `restore`) is synchronous even to a waiting storage, so
-     no dropped future ever holds one.
+     no dropped future ever holds one. The runtime promises only when each
+     call is made: what a cancelled run or an orphaned spawn leaves is
+     unspecified, and memory stays safe.
    - Running the entry gives an `Output`, which borrows the program as a
      page does. It owns the value, releases it when dropped, and offers
      `with(|p| …)` and `with_mut(|p| …)`; no value leaves it except through
@@ -1271,9 +1272,8 @@ glue at the type the checker settled.
      is touched. Every error a host meets is
      one `HostError`, a run's trap (`Trapped`, an init's included) and a
      storage's failure among them: the run ends there and releases nothing
-     (RFC-0048 rule 8). Page operations are
-     not ordered with effects (RFC-0025 rule 10), so the effects before
-     it are not stated: the host handles it.
+     (RFC-0048 rule 8). The effects before
+     it are the host's (RFC-0025 rule 10).
    - A loaded holder whose type differs from the solved one, as after a
      script changed, is a mismatch at that load. What to do with it is the
      host's.
