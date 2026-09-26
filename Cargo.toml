@@ -47,12 +47,17 @@ debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3
-lto = "fat"
 codegen-units = 1
 
 [profile.bench]
 inherits = "release"
 
-[profile.wasm]
+# Deployment and timing benches only: whole-program LTO costs memory and
+# link time no probe or judgment needs.
+[profile.dist]
 inherits = "release"
+lto = "fat"
+
+[profile.wasm]
+inherits = "dist"
 opt-level = 'z'
