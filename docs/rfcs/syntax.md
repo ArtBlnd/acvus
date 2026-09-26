@@ -403,14 +403,16 @@ is a graph function, typed, called and inlined as a host function is.
    context is refused as `CapturesOutside`, naming what it read and where
    that is declared.
 3. **Typed as a lambda.** No parameter or result type is written. The
-   checker infers them as it infers a lambda's, one instance per call
-   site, and functions that call each other are one component typed
-   together (RFC-0042 rule 5).
-4. **Lifted once.** acvus-mir's graph construction lifts each `fn` into a
-   function node; every graph builder, the host's, the LSP's and the
+   checker infers them as it infers a lambda's: each call from outside a
+   `fn`'s component gets its own copy of the component, typed with the
+   calling body, and functions that call each other are one component
+   typed together (RFC-0042 rule 5).
+4. **Lifted once.** acvus-mir's graph construction lifts each `fn` into
+   function nodes, one per member of each copy; every graph builder, the host's, the LSP's and the
    tests', takes the nodes from there.
 5. **Cost and depth.** A call of a `fn` costs its site's one call row, and
-   recursion computes no summary. A recursion past the machine's depth
+   recursion computes no summary; the compiled size grows with the calls
+   from outside a component, one copy each. A recursion past the machine's depth
    bound traps (RFC-0048) rather than overflowing the native stack.
 
 **Why.** A function with no environment needs no closure record, no
