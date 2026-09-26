@@ -4,6 +4,7 @@ pub mod lexer;
 pub mod list;
 pub mod literal;
 pub mod locate;
+mod nesting;
 pub mod parser;
 pub mod report;
 pub mod span;
@@ -25,6 +26,7 @@ mod grammar {
 pub use acvus_utils::{LocalFactory, LocalIdOps};
 pub use ast::*;
 pub use error::ParseError;
+pub use nesting::NESTING_MAX;
 pub use parser::{Recovered, parse_expr, parse_script, parse_template};
 pub use span::{Span, Spanned};
 

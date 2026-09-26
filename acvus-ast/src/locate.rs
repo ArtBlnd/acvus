@@ -196,6 +196,13 @@ impl Nodes {
     where
         S: Slot,
     {
+        acvus_utils::grow(|| self.stmt_level::<S>(stmt))
+    }
+
+    fn stmt_level<S>(&mut self, stmt: &Stmt<S>)
+    where
+        S: Slot,
+    {
         match stmt {
             Stmt::Store {
                 id,
@@ -302,6 +309,13 @@ impl Nodes {
     where
         S: Slot,
     {
+        acvus_utils::grow(|| self.place_level::<S>(place))
+    }
+
+    fn place_level<S>(&mut self, place: &Place<S>)
+    where
+        S: Slot,
+    {
         match place {
             Place::Base(PlaceBase::Root { id, span, .. }) => {
                 self.push(*id, *span, None);
@@ -328,6 +342,13 @@ impl Nodes {
     }
 
     fn expr<S>(&mut self, expr: &Expr<S>)
+    where
+        S: Slot,
+    {
+        acvus_utils::grow(|| self.expr_level::<S>(expr))
+    }
+
+    fn expr_level<S>(&mut self, expr: &Expr<S>)
     where
         S: Slot,
     {
@@ -566,6 +587,13 @@ impl Nodes {
     }
 
     fn pattern<S>(&mut self, pattern: &Pattern<S>)
+    where
+        S: Slot,
+    {
+        acvus_utils::grow(|| self.pattern_level::<S>(pattern))
+    }
+
+    fn pattern_level<S>(&mut self, pattern: &Pattern<S>)
     where
         S: Slot,
     {

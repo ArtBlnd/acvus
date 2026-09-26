@@ -97,6 +97,10 @@ pub fn lift_one(
 
 /// Parse a single local function. Returns None for Extern functions.
 pub fn extract_one(_interner: &Interner, func: &Function) -> Option<ParsedSource> {
+    acvus_utils::grow(|| extract_one_level(_interner, func))
+}
+
+fn extract_one_level(_interner: &Interner, func: &Function) -> Option<ParsedSource> {
     match &func.kind {
         FnKind::Local(ast, _) => match ast {
             ParsedAst::Script(script) => {

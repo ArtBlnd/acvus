@@ -5,9 +5,11 @@ use crate::span::Span;
 use crate::token::Token;
 use crate::error::{BlockStatement, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
+use crate::nesting::{Level, Nested};
 use crate::parser::{
-    BindLine, Declares, ForLine, Recover, block_closed, build_assign, build_call, fn_declared,
-    literal_of, pattern_of, recovered, resumed, stated,
+    BindLine, Declares, ForLine, Recover, binary, block_closed, build_assign, build_call,
+    expr_stmt, fn_declared, holding_one, holding_two, let_bind, literal_of, match_arm,
+    object_field, paren_or_tuple, pattern_of, recovered, resumed, stated,
 };
 use crate::literal::{self, IntWidth, SuffixedInt};
 
@@ -96,7 +98,7 @@ extern {
 
 pub Script: Script<S> = {
     <l:@L> <body:Body> <r:@R> =>
-        Script { id: AstId::alloc(), stmts: body.0, tail: body.1.map(Box::new), span: Span::new(l, r) }
+        Script { id: AstId::alloc(), stmts: body.0.root(), tail: body.1.map(|tail| Box::new(tail.root())), span: Span::new(l, r) }
 };
 
 // ── Bodies ─────────────────────────────────────────────────────────────
@@ -114,53 +116,53 @@ pub Script: Script<S> = {
 
 // Statements and an optional tail: a script, an `if` or `else` block.
 #[inline]
-Body: (Vec<Stmt<S>>, Option<Expr<S>>) = {
-    => (vec![], None),
+Body: (Nested<Vec<Stmt<S>>>, Option<Nested<Expr<S>>>) = {
+    => (Nested::empty(vec![]), None),
     <stmts:Stmts> => (stmts, None),
     <body:TailedBody> => (body.0, Some(body.1)),
 };
 
 // Statements and a tail: a block expression.
 #[inline]
-TailedBody: (Vec<Stmt<S>>, Expr<S>) = {
-    <tail:StmtExpr> => (vec![], tail),
+TailedBody: (Nested<Vec<Stmt<S>>>, Nested<Expr<S>>) = {
+    <tail:StmtExpr> => (Nested::empty(vec![]), tail),
     <stmts:Stmts> <tail:StmtExpr> => (stmts, tail),
-    <open:Open> <tail:StmtExpr> => (stated(open), tail),
+    <open:Open> <tail:StmtExpr> =>? Ok((stated(open)?, tail)),
     Open,
-    <tail:Unparsed> => (vec![], Expr::Error(tail)),
-    <stmts:Stmts> <tail:Unparsed> => (stmts, Expr::Error(tail)),
-    <open:Open> <tail:Unparsed> => (stated(open), Expr::Error(tail)),
+    <tail:Unparsed> => (Nested::empty(vec![]), Nested::leaf(Expr::Error(tail))),
+    <stmts:Stmts> <tail:Unparsed> => (stmts, Nested::leaf(Expr::Error(tail))),
+    <open:Open> <tail:Unparsed> =>? Ok((stated(open)?, Nested::leaf(Expr::Error(tail)))),
 };
 
 // Statements and no tail: a `while`, `for` or `anyorder` block.
 #[inline]
-LoopBody: Vec<Stmt<S>> = {
-    => vec![],
+LoopBody: Nested<Vec<Stmt<S>>> = {
+    => Nested::empty(vec![]),
     Stmts,
-    <open:Open> => stated(open),
-    <last:Unparsed> => vec![Stmt::Error(last)],
-    <mut stmts:Stmts> <last:Unparsed> => { stmts.push(Stmt::Error(last)); stmts },
-    <open:Open> <last:Unparsed> => { let mut stmts = stated(open); stmts.push(Stmt::Error(last)); stmts },
+    <open:Open> =>? stated(open),
+    <last:Unparsed> => Nested::one(Nested::leaf(Stmt::Error(last))),
+    <mut stmts:Stmts> <last:Unparsed> => { stmts.push(Nested::leaf(Stmt::Error(last))); stmts },
+    <open:Open> <last:Unparsed> =>? { let mut stmts = stated(open)?; stmts.push(Nested::leaf(Stmt::Error(last))); Ok(stmts) },
 };
 
 // Statements that end in a `;` or in a `while`, `for` or `anyorder` block.
-Stmts: Vec<Stmt<S>> = {
-    <stmt:Stmt> => vec![stmt],
+Stmts: Nested<Vec<Stmt<S>>> = {
+    <stmt:Stmt> => Nested::one(stmt),
     <mut stmts:Stmts> <stmt:Stmt> => { stmts.push(stmt); stmts },
-    <open:Open> <stmt:Stmt> => { let mut stmts = stated(open); stmts.push(stmt); stmts },
+    <open:Open> <stmt:Stmt> =>? { let mut stmts = stated(open)?; stmts.push(stmt); Ok(stmts) },
 };
 
 // Statements that end in an `if` or a `match` with no `;` after it, whose
 // place the next token decides.
-Open: (Vec<Stmt<S>>, Expr<S>) = {
-    <last:BranchExpr> => (vec![], last),
+Open: (Nested<Vec<Stmt<S>>>, Nested<Expr<S>>) = {
+    <last:BranchExpr> => (Nested::empty(vec![]), last),
     <stmts:Stmts> <last:BranchExpr> => (stmts, last),
-    <open:Open> <last:BranchExpr> => (stated(open), last),
+    <open:Open> <last:BranchExpr> =>? Ok((stated(open)?, last)),
 };
 
 // The expressions that stand as a statement without `;`. A block is not
 // one: a statement that begins with `{` reads on, so `{ [5, 6] }[1]` is `6`.
-BranchExpr: Expr<S> = {
+BranchExpr: Nested<Expr<S>> = {
     MatchExpr,
     IfExpr,
 };
@@ -171,139 +173,158 @@ BranchExpr: Expr<S> = {
 // `e` (RFC-0051): the scrutinee is evaluated once, every arm has the type
 // of the whole, and exhaustiveness is decided in `validate`.
 
-MatchExpr: Expr<S> = {
-    <l:@L> "match" <scrutinee:Expr> "{" <arms:CommaSep<MatchArmRule>> "}" <r:@R> =>
-        Expr::Match {
-            id: AstId::alloc(),
-            scrutinee: Box::new(scrutinee),
-            arms,
-            span: Span::new(l, r),
-        },
+MatchExpr: Nested<Expr<S>> = {
+    <l:@L> "match" <scrutinee:Expr> "{" <arms:CommaSep<MatchArmRule>> "}" <r:@R> =>? {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let scrutinee = level.boxed(scrutinee);
+        let arms = level.all(arms);
+        level.node(Expr::Match { id: AstId::alloc(), scrutinee, arms, span }, span)
+    },
 };
 
-MatchArmRule: MatchExprArm<S> = {
+MatchArmRule: Nested<MatchExprArm<S>> = {
     // `P => { stmts; }` — an arm run for its effect; its type is Unit.
     <l:@L> <pattern:ArmPattern> "=>" "{" <body:Stmts> "}" <r:@R> =>
-        MatchExprArm { id: AstId::alloc(), pattern, body, tail: None, span: Span::new(l, r) },
+        match_arm(pattern, body, None, Span::new(l, r)),
     // `P => e` — including `P => { stmts; tail }`, which is a block expression.
     <l:@L> <pattern:ArmPattern> "=>" <e:Expr> <r:@R> =>
-        MatchExprArm { id: AstId::alloc(), pattern, body: vec![], tail: Some(Box::new(e)), span: Span::new(l, r) },
+        match_arm(pattern, Nested::empty(vec![]), Some(e), Span::new(l, r)),
     <l:@L> <pattern:ArmPattern> "=>" <value:Unparsed> <r:@R> =>
-        MatchExprArm { id: AstId::alloc(), pattern, body: vec![], tail: Some(Box::new(Expr::Error(value))), span: Span::new(l, r) },
+        match_arm(pattern, Nested::empty(vec![]), Some(Nested::leaf(Expr::Error(value))), Span::new(l, r)),
 };
 
 // An arm's pattern: every pattern the grammar already has, plus `_`.
-ArmPattern: Pattern<S> = {
-    <l:@L> "_" <r:@R> => Pattern::Wildcard { id: AstId::alloc(), span: Span::new(l, r) },
+ArmPattern: Nested<Pattern<S>> = {
+    <l:@L> "_" <r:@R> => Nested::leaf(Pattern::Wildcard { id: AstId::alloc(), span: Span::new(l, r) }),
     PatternRule,
 };
 
-PatternRule: Pattern<S> = {
-    <e:Expr> =>? pattern_of::<S>(errors, &e),
-    <node:Unparsed> => Pattern::Error(node),
+PatternRule: Nested<Pattern<S>> = {
+    <e:Expr> =>? pattern_of::<S>(errors, &e.root()),
+    <node:Unparsed> => Nested::leaf(Pattern::Error(node)),
 };
 
 Unparsed: S = <l:@L> <e:!> <r:@R> =>? recovered::<S>(errors, e, Span::new(l, r));
 
 // If expression (recursive via else-if chain).
-IfExpr: Expr<S> = {
+IfExpr: Nested<Expr<S>> = {
     // if cond { body; tail } else ...
     <l:@L> "if" <cond:Expr> "{" <body:Body> "}"
-        <eb:ElseBranch?> <r:@R> =>
-        Expr::If {
-            id: AstId::alloc(),
-            cond: Box::new(cond),
-            then_body: body.0,
-            then_tail: body.1.map(Box::new),
-            else_branch: eb.map(Box::new),
-            span: Span::new(l, r),
-        },
+        <eb:ElseBranch?> <r:@R> =>? {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let cond = level.boxed(cond);
+        let then_body = level.take(body.0);
+        let then_tail = level.opt_boxed(body.1);
+        let else_branch = level.opt_boxed(eb);
+        level.node(Expr::If { id: AstId::alloc(), cond, then_body, then_tail, else_branch, span }, span)
+    },
     // if let pattern = source { body; tail } else ...
     <l:@L> "if" "let" <pattern:PatternRule> "=" <rhs:Expr> "{" <body:Body> "}"
-        <eb:ElseBranch?> <r:@R> =>
-        Expr::IfLet {
-            id: AstId::alloc(),
-            pattern,
-            source: Box::new(rhs),
-            then_body: body.0,
-            then_tail: body.1.map(Box::new),
-            else_branch: eb.map(Box::new),
-            span: Span::new(l, r),
-        },
+        <eb:ElseBranch?> <r:@R> =>? {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let pattern = level.take(pattern);
+        let source = level.boxed(rhs);
+        let then_body = level.take(body.0);
+        let then_tail = level.opt_boxed(body.1);
+        let else_branch = level.opt_boxed(eb);
+        level.node(Expr::IfLet { id: AstId::alloc(), pattern, source, then_body, then_tail, else_branch, span }, span)
+    },
 };
 
-ElseBranch: ElseBranch<S> = {
-    "else" <e:IfExpr> => ElseBranch::ElseIf(e),
-    <l:@L> "else" "{" <body:Body> "}" <r:@R> =>
-        ElseBranch::Else {
-            body: body.0,
-            tail: body.1.map(Box::new),
-            span: Span::new(l, r),
-        },
+ElseBranch: Nested<ElseBranch<S>> = {
+    "else" <e:IfExpr> => {
+        let mut level = Level::new();
+        let e = level.take(e);
+        level.part(ElseBranch::ElseIf(e))
+    },
+    <l:@L> "else" "{" <body:Body> "}" <r:@R> => {
+        let mut level = Level::new();
+        let stmts = level.take(body.0);
+        let tail = level.opt_boxed(body.1);
+        level.part(ElseBranch::Else { body: stmts, tail, span: Span::new(l, r) })
+    },
 };
 
-Stmt: Stmt<S> = {
+Stmt: Nested<Stmt<S>> = {
     // let x = expr;
-    <l:@L> "let" <binder:Binder> "=" <expr:Expr> <r:@R> <end:StatementEnd> =>
-        Stmt::LetBind { id: AstId::alloc(), binder, expr, span: Span::new(l, end.unwrap_or(r)) },
-    <l:@L> "let" <binder:Binder> "=" <value:Unparsed> <er:@R> <end:ClosingSemi?> =>
-        Stmt::LetBind { id: AstId::alloc(), binder, expr: Expr::Error(value), span: Span::new(l, end.unwrap_or(er)) },
+    <l:@L> "let" <binder:Binder> "=" <expr:Expr> <r:@R> <end:StatementEnd> =>?
+        let_bind(binder, expr, Span::new(l, end.unwrap_or(r))),
+    <l:@L> "let" <binder:Binder> "=" <value:Unparsed> <er:@R> <end:ClosingSemi?> =>?
+        let_bind(binder, Nested::leaf(Expr::Error(value)), Span::new(l, end.unwrap_or(er))),
     // let x;
     <l:@L> "let" <binder:Binder> <r:@R> <end:StatementEnd> =>
-        Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, end.unwrap_or(r)) },
+        Nested::leaf(Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, end.unwrap_or(r)) }),
     // while cond { body }
     <l:@L> "while" <cond:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed::<S>(errors, BlockStatement::While, semicolon)?;
-        Ok(Stmt::While { id: AstId::alloc(), cond, body, span: Span::new(l, r) })
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let cond = level.take(cond);
+        let body = level.take(body);
+        level.node(Stmt::While { id: AstId::alloc(), cond, body, span }, span)
     },
     // while let pattern = source { body }
     <l:@L> "while" "let" <pattern:PatternRule> "=" <rhs:Expr> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed::<S>(errors, BlockStatement::While, semicolon)?;
-        Ok(Stmt::WhileLet {
-            id: AstId::alloc(),
-            pattern,
-            source: rhs,
-            body,
-            span: Span::new(l, r),
-        })
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let pattern = level.take(pattern);
+        let source = level.take(rhs);
+        let body = level.take(body);
+        level.node(Stmt::WhileLet { id: AstId::alloc(), pattern, source, body, span }, span)
     },
     // for x in &v { body } | for x in a { body } | for i in lo..hi { body }
     <l:@L> "for" <binder:Binder> "in" <head:ForHead> "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed::<S>(errors, BlockStatement::For, semicolon)?;
-        Ok(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binder, head, body, span: Span::new(l, r) })
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let head = level.take(head);
+        let body = level.take(body);
+        level.node(Stmt::For { id: AstId::alloc(), callee_id: AstId::alloc(), binder, head, body, span }, span)
     },
     // break; | continue;  -- the innermost loop, no labels (RFC-0057 rule 4)
     <l:@L> "break" <r:@R> <end:StatementEnd> =>
-        Stmt::Break { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) },
+        Nested::leaf(Stmt::Break { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) }),
     <l:@L> "continue" <r:@R> <end:StatementEnd> =>
-        Stmt::Continue { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) },
+        Nested::leaf(Stmt::Continue { id: AstId::alloc(), span: Span::new(l, end.unwrap_or(r)) }),
     // fn name(a, b) { body } -- a function of the script (RFC-0100)
     <l:@L> "fn" <name:Binder> "(" <params:CommaSep<Binder>> ")" "{" <body:Body> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed::<S>(errors, BlockStatement::Fn, semicolon)?;
-        fn_declared::<S>(errors, declares, FnDecl {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let stmts = level.take(body.0);
+        let tail = level.opt_boxed(body.1);
+        let stmt = fn_declared::<S>(errors, declares, FnDecl {
             id: AstId::alloc(),
             name,
             params,
-            body: body.0,
-            tail: body.1.map(Box::new),
-            span: Span::new(l, r),
-        })
+            body: stmts,
+            tail,
+            span,
+        })?;
+        level.node(stmt, span)
     },
     // anyorder { body }
     <l:@L> "anyorder" "{" <body:LoopBody> "}" <r:@R> <semicolon:StraySemicolon?> =>? {
         block_closed::<S>(errors, BlockStatement::Anyorder, semicolon)?;
-        Ok(Stmt::Anyorder { id: AstId::alloc(), body, span: Span::new(l, r) })
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let body = level.take(body);
+        level.node(Stmt::Anyorder { id: AstId::alloc(), body, span }, span)
     },
     // `place = e;` — a place is a name, an `@context` or a `$parameter`
     // under any path of `.field` and `[index]` steps (RFC-0047).
     <l:@L> <lhs:StmtExpr> "=" <rhs:Expr> <r:@R> <end:StatementEnd> =>?
         build_assign::<S>(errors, lhs, rhs, Span::new(l, end.unwrap_or(r))),
     <l:@L> <lhs:StmtExpr> "=" <value:Unparsed> <er:@R> <end:ClosingSemi?> =>?
-        build_assign::<S>(errors, lhs, Expr::Error(value), Span::new(l, end.unwrap_or(er))),
+        build_assign::<S>(errors, lhs, Nested::leaf(Expr::Error(value)), Span::new(l, end.unwrap_or(er))),
     // expression statement
-    <e:StmtExpr> StatementEnd => Stmt::Expr(e),
-    <e:BranchExpr> ";" => Stmt::Expr(e),
-    <node:Unparsed> ";" => Stmt::Error(node),
+    <e:StmtExpr> StatementEnd =>? expr_stmt(e),
+    <e:BranchExpr> ";" =>? expr_stmt(e),
+    <node:Unparsed> ";" => Nested::leaf(Stmt::Error(node)),
 };
 
 StatementEnd: Option<usize> = {
@@ -320,9 +341,18 @@ StraySemicolon: Span = <l:@L> ";" <r:@R> => Span::new(l, r);
 
 // `lo..hi` is a `for` head and not a value: there is no `Range` type, so
 // `..` appears in no expression rule (RFC-0057 rule 1).
-pub ForHead: ForHead<S> = {
-    <lo:Expr> ".." <hi:Expr> => ForHead::Range { lo, hi },
-    <e:Expr> => ForHead::Value(e),
+pub ForHead: Nested<ForHead<S>> = {
+    <lo:Expr> ".." <hi:Expr> => {
+        let mut level = Level::new();
+        let lo = level.take(lo);
+        let hi = level.take(hi);
+        level.part(ForHead::Range { lo, hi })
+    },
+    <e:Expr> => {
+        let mut level = Level::new();
+        let e = level.take(e);
+        level.part(ForHead::Value(e))
+    },
 };
 
 // ── Template lines (RFC-0071) ──────────────────────────────────────────
@@ -333,17 +363,17 @@ pub ForHead: ForHead<S> = {
 // tell a block head from a complete statement.
 
 // A `%` line that opens no block.
-pub TemplateStmt: Stmt<S> = {
-    <l:@L> "let" <binder:Binder> "=" <expr:Expr> <r:@R> =>
-        Stmt::LetBind { id: AstId::alloc(), binder, expr, span: Span::new(l, r) },
+pub TemplateStmt: Nested<Stmt<S>> = {
+    <l:@L> "let" <binder:Binder> "=" <expr:Expr> <r:@R> =>?
+        let_bind(binder, expr, Span::new(l, r)),
     <l:@L> "let" <binder:Binder> <r:@R> =>
-        Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, r) },
+        Nested::leaf(Stmt::LetUninit { id: AstId::alloc(), binder, span: Span::new(l, r) }),
     <l:@L> "break" <r:@R> =>
-        Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) },
+        Nested::leaf(Stmt::Break { id: AstId::alloc(), span: Span::new(l, r) }),
     <l:@L> "continue" <r:@R> =>
-        Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) },
+        Nested::leaf(Stmt::Continue { id: AstId::alloc(), span: Span::new(l, r) }),
     <l:@L> <lhs:Expr> "=" <rhs:Expr> <r:@R> =>? build_assign::<S>(errors, lhs, rhs, Span::new(l, r)),
-    <e:Expr> => Stmt::Expr(e),
+    <e:Expr> =>? expr_stmt(e),
 };
 
 // `x in head`, what follows the `for` of a `% for` line.
@@ -358,7 +388,7 @@ pub BindLine: BindLine<S> = {
 };
 
 // The pattern of a `% pattern =>` arm line, `_` included.
-pub ArmLine: Pattern<S> = {
+pub ArmLine: Nested<Pattern<S>> = {
     ArmPattern,
 };
 
@@ -367,43 +397,33 @@ pub ArmLine: Pattern<S> = {
 // Each level is written once over `Lead`, the primary its leftmost operand
 // may be. An operand anywhere else is the full level.
 
-pub Expr: Expr<S> = {
+pub Expr: Nested<Expr<S>> = {
     ExprFrom<PrimaryExpr>,
 };
 
 // The expression a statement or a tail begins with: its leftmost operand is
 // no `if` or `match`, since such an expression is a statement of its own
 // (`Open` above).
-StmtExpr: Expr<S> = {
+StmtExpr: Nested<Expr<S>> = {
     ExprFrom<PlainPrimary>,
 };
 
-ExprFrom<Lead>: Expr<S> = {
+ExprFrom<Lead>: Nested<Expr<S>> = {
     // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
-    <l:@L> "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>
-        Expr::Lambda {
-            id: AstId::alloc(),
-            params,
-            body: Box::new(body),
-            span: Span::new(l, r),
-        },
+    <l:@L> "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>?
+        holding_one(body, Span::new(l, r), |body, span| Expr::Lambda { id: AstId::alloc(), params, body, span }),
     // An expression and not a statement, so that it stands where a value is
     // read; `return e;` is then the expression-statement rule. There is no
     // `return;`: every body returns a value (RFC-0054).
-    <l:@L> "return" <e:Expr> <r:@R> =>
-        Expr::Return { id: AstId::alloc(), value: Box::new(e), span: Span::new(l, r) },
+    <l:@L> "return" <e:Expr> <r:@R> =>?
+        holding_one(e, Span::new(l, r), |value, span| Expr::Return { id: AstId::alloc(), value, span }),
     PipeExpr<Lead>,
 };
 
 // Pipe: left-associative (lowest precedence among non-lambda)
-PipeExpr<Lead>: Expr<S> = {
-    <l:@L> <left:PipeExpr<Lead>> "|" <right:OrExpr<PrimaryExpr>> <r:@R> =>
-        Expr::Pipe {
-            id: AstId::alloc(),
-            left: Box::new(left),
-            right: Box::new(right),
-            span: Span::new(l, r),
-        },
+PipeExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:PipeExpr<Lead>> "|" <right:OrExpr<PrimaryExpr>> <r:@R> =>?
+        holding_two(left, right, Span::new(l, r), |left, right, span| Expr::Pipe { id: AstId::alloc(), left, right, span }),
     OrExpr<Lead>,
 };
 
@@ -412,123 +432,115 @@ Binder: Binder = {
 };
 
 // Logical Or: left-associative
-OrExpr<Lead>: Expr<S> = {
-    <l:@L> <left:OrExpr<Lead>> "||" <right:AndExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Or, right: Box::new(right), span: Span::new(l, r) },
+OrExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:OrExpr<Lead>> "||" <right:AndExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Or, right, Span::new(l, r)),
     AndExpr<Lead>,
 };
 
 // Logical And: left-associative
-AndExpr<Lead>: Expr<S> = {
-    <l:@L> <left:AndExpr<Lead>> "&&" <right:CompExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::And, right: Box::new(right), span: Span::new(l, r) },
+AndExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:AndExpr<Lead>> "&&" <right:CompExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::And, right, Span::new(l, r)),
     CompExpr<Lead>,
 };
 
 // Comparison: ==, !=, <, >, <=, >=
-CompExpr<Lead>: Expr<S> = {
-    <l:@L> <left:CompExpr<Lead>> "==" <right:AddExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Eq, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr<Lead>> "!=" <right:AddExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Neq, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr<Lead>> "<" <right:AddExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lt, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr<Lead>> ">" <right:AddExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gt, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr<Lead>> "<=" <right:AddExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Lte, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:CompExpr<Lead>> ">=" <right:AddExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Gte, right: Box::new(right), span: Span::new(l, r) },
+CompExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:CompExpr<Lead>> "==" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Eq, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "!=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Neq, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "<" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lt, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> ">" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gt, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "<=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lte, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> ">=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gte, right, Span::new(l, r)),
     AddExpr<Lead>,
 };
 
 // Add/Sub: left-associative
-AddExpr<Lead>: Expr<S> = {
-    <l:@L> <left:AddExpr<Lead>> "+" <right:MulExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Add, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:AddExpr<Lead>> "-" <right:MulExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Sub, right: Box::new(right), span: Span::new(l, r) },
+AddExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:AddExpr<Lead>> "+" <right:MulExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Add, right, Span::new(l, r)),
+    <l:@L> <left:AddExpr<Lead>> "-" <right:MulExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Sub, right, Span::new(l, r)),
     MulExpr<Lead>,
 };
 
 // Mul/Div: left-associative
-MulExpr<Lead>: Expr<S> = {
-    <l:@L> <left:MulExpr<Lead>> "*" <right:CastExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:MulExpr<Lead>> "/" <right:CastExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Div, right: Box::new(right), span: Span::new(l, r) },
-    <l:@L> <left:MulExpr<Lead>> "%" <right:CastExpr<PrimaryExpr>> <r:@R> =>
-        Expr::BinaryOp { id: AstId::alloc(), left: Box::new(left), op: BinOp::Mod, right: Box::new(right), span: Span::new(l, r) },
+MulExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:MulExpr<Lead>> "*" <right:CastExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Mul, right, Span::new(l, r)),
+    <l:@L> <left:MulExpr<Lead>> "/" <right:CastExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Div, right, Span::new(l, r)),
+    <l:@L> <left:MulExpr<Lead>> "%" <right:CastExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Mod, right, Span::new(l, r)),
     CastExpr<Lead>,
 };
 
 // Cast: `e as T`, left-associative, between the unary operators and `*`,
 // exactly where Rust binds it (RFC-0049).
-CastExpr<Lead>: Expr<S> = {
-    <l:@L> <e:CastExpr<Lead>> "as" <tl:@L> <target:"ident"> <r:@R> =>
-        Expr::Cast {
+CastExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <e:CastExpr<Lead>> "as" <tl:@L> <target:"ident"> <r:@R> =>?
+        holding_one(e, Span::new(l, r), |expr, span| Expr::Cast {
             id: AstId::alloc(),
-            expr: Box::new(e),
+            expr,
             target,
             target_span: Span::new(tl, r),
-            span: Span::new(l, r),
-        },
+            span,
+        }),
     UnaryExpr<Lead>,
 };
 
 // Unary: -x, !x, *r, &place, &mut place (RFC-0018)
-UnaryExpr<Lead>: Expr<S> = {
-    <l:@L> "-" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
-        Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Neg, operand: Box::new(e), span: Span::new(l, r) },
-    <l:@L> "!" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
-        Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Not, operand: Box::new(e), span: Span::new(l, r) },
-    <l:@L> "*" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>
-        Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Deref, operand: Box::new(e), span: Span::new(l, r) },
-    <l:@L> "&" "mut" <place:UnaryExpr<PrimaryExpr>> <r:@R> =>
-        Expr::Borrow { id: AstId::alloc(), mutable: true, place: Box::new(place), span: Span::new(l, r) },
-    <l:@L> "&" <place:UnaryExpr<PrimaryExpr>> <r:@R> =>
-        Expr::Borrow { id: AstId::alloc(), mutable: false, place: Box::new(place), span: Span::new(l, r) },
+UnaryExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> "-" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>?
+        holding_one(e, Span::new(l, r), |operand, span| Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Neg, operand, span }),
+    <l:@L> "!" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>?
+        holding_one(e, Span::new(l, r), |operand, span| Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Not, operand, span }),
+    <l:@L> "*" <e:UnaryExpr<PrimaryExpr>> <r:@R> =>?
+        holding_one(e, Span::new(l, r), |operand, span| Expr::UnaryOp { id: AstId::alloc(), op: UnaryOp::Deref, operand, span }),
+    <l:@L> "&" "mut" <place:UnaryExpr<PrimaryExpr>> <r:@R> =>?
+        holding_one(place, Span::new(l, r), |place, span| Expr::Borrow { id: AstId::alloc(), mutable: true, place, span }),
+    <l:@L> "&" <place:UnaryExpr<PrimaryExpr>> <r:@R> =>?
+        holding_one(place, Span::new(l, r), |place, span| Expr::Borrow { id: AstId::alloc(), mutable: false, place, span }),
     PostfixExpr<Lead>,
 };
 
 // Postfix: field access `.field` and function call `f(args)`
 // A field is never a callee: `recv.f(args)` is a method call, and a
 // closure held in a field is called as `(recv.f)(args)` (RFC-0030).
-PostfixExpr<Lead>: Expr<S> = {
-    <l:@L> <obj:PostfixExpr<Lead>> "." <f:"ident"> <r:@R> =>
-        Expr::FieldAccess { id: AstId::alloc(), object: Box::new(obj), field: f, span: Span::new(l, r) },
+PostfixExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <obj:PostfixExpr<Lead>> "." <f:"ident"> <r:@R> =>?
+        holding_one(obj, Span::new(l, r), |object, span| Expr::FieldAccess { id: AstId::alloc(), object, field: f, span }),
     // `e?`: the Ok or Some payload, or an early return of the Err or None (RFC-0038).
-    <l:@L> <inner:PostfixExpr<Lead>> "?" <r:@R> =>
-        Expr::Try { id: AstId::alloc(), inner: Box::new(inner), span: Span::new(l, r) },
+    <l:@L> <inner:PostfixExpr<Lead>> "?" <r:@R> =>?
+        holding_one(inner, Span::new(l, r), |inner, span| Expr::Try { id: AstId::alloc(), inner, span }),
     // `a[i]`: a place, binding like `.field` (RFC-0047). A statement that
     // begins with `[` is an array literal; every statement ends in `;` or
     // in a block, so the two never meet.
-    <l:@L> <obj:PostfixExpr<Lead>> "[" <index:Expr> "]" <r:@R> =>
-        Expr::Index {
+    <l:@L> <obj:PostfixExpr<Lead>> "[" <index:Expr> "]" <r:@R> =>?
+        holding_two(obj, index, Span::new(l, r), |object, index, span| Expr::Index {
             id: AstId::alloc(),
             callee_id: AstId::alloc(),
-            object: Box::new(obj),
-            index: Box::new(index),
-            span: Span::new(l, r),
-        },
+            object,
+            index,
+            span,
+        }),
     CalleeExpr<Lead>,
 };
 
-CalleeExpr<Lead>: Expr<S> = {
-    <l:@L> <recv:PostfixExpr<Lead>> "." <nl:@L> <name:"ident"> <nr:@R> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
-        Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver: Box::new(recv), name, name_span: Span::new(nl, nr), args, span: Span::new(l, r) },
-    <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>
+CalleeExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <recv:PostfixExpr<Lead>> "." <nl:@L> <name:"ident"> <nr:@R> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>? {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let receiver = level.boxed(recv);
+        let args = level.all(args);
+        level.node(Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver, name, name_span: Span::new(nl, nr), args, span }, span)
+    },
+    <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>?
         build_call(func, args, Span::new(l, r)),
     Lead,
 };
 
-CallArg: Expr<S> = {
+CallArg: Nested<Expr<S>> = {
     Expr,
-    <node:Unparsed> => Expr::Error(node),
+    <node:Unparsed> => Nested::leaf(Expr::Error(node)),
 };
 
 // Primary expressions
-PrimaryExpr: Expr<S> = {
+PrimaryExpr: Nested<Expr<S>> = {
     PlainPrimary,
     // `match` and `if` are operands: an operator's side, a call argument, a
     // list element, a field value, a pipe stage — wherever an expression
@@ -537,22 +549,22 @@ PrimaryExpr: Expr<S> = {
 };
 
 // Every primary but an `if` or a `match`.
-PlainPrimary: Expr<S> = {
+PlainPrimary: Nested<Expr<S>> = {
     // `Enum::Tag`, and the callee of `ns::f(args)`: the checker tells a
     // namespace from an enum name (RFC-0030). It is a primary, so every
     // postfix — `?` included — follows a qualified call.
     <l:@L> <ename:"ident"> "::" <tag:"ident"> <r:@R> =>
-        Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) },
+        Nested::leaf(Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) }),
     <l:@L> <name:"ident"> <r:@R> =>
-        Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::Value, span: Span::new(l, r) },
+        Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::Value, span: Span::new(l, r) }),
     <l:@L> <name:"$ref"> <r:@R> =>
-        Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::ExternParam, span: Span::new(l, r) },
+        Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::ExternParam, span: Span::new(l, r) }),
     <l:@L> <name:"@ref"> <r:@R> =>
-        Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span: Span::new(l, r) },
+        Nested::leaf(Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span: Span::new(l, r) }),
     <l:@L> <n:"int"> <r:@R> =>
-        Expr::Literal { id: AstId::alloc(), value: Literal::Int(n), span: Span::new(l, r) },
+        Nested::leaf(Expr::Literal { id: AstId::alloc(), value: Literal::Int(n), span: Span::new(l, r) }),
     <l:@L> <n:"int_of"> <r:@R> =>
-        Expr::Literal { id: AstId::alloc(), value: Literal::IntOf(n), span: Span::new(l, r) },
+        Nested::leaf(Expr::Literal { id: AstId::alloc(), value: Literal::IntOf(n), span: Span::new(l, r) }),
     <l:@L> <t:"char"> <r:@R> =>?
         literal_of(errors, literal::decode_char(&t), Span::new(l, r), Literal::Char),
     <l:@L> <t:"byte"> <r:@R> =>?
@@ -561,54 +573,53 @@ PlainPrimary: Expr<S> = {
     <l:@L> <t:"bytes"> <r:@R> =>?
         literal_of(errors, literal::decode_bytes(&t), Span::new(l, r), Literal::Bytes),
     <l:@L> <n:"float"> <r:@R> =>
-        Expr::Literal { id: AstId::alloc(), value: Literal::Float(n), span: Span::new(l, r) },
+        Nested::leaf(Expr::Literal { id: AstId::alloc(), value: Literal::Float(n), span: Span::new(l, r) }),
     <l:@L> <s:"string"> <r:@R> =>?
         literal_of(errors, literal::decode_str(&s), Span::new(l, r), Literal::String),
     <l:@L> "true" <r:@R> =>
-        Expr::Literal { id: AstId::alloc(), value: Literal::Bool(true), span: Span::new(l, r) },
+        Nested::leaf(Expr::Literal { id: AstId::alloc(), value: Literal::Bool(true), span: Span::new(l, r) }),
     <l:@L> "false" <r:@R> =>
-        Expr::Literal { id: AstId::alloc(), value: Literal::Bool(false), span: Span::new(l, r) },
+        Nested::leaf(Expr::Literal { id: AstId::alloc(), value: Literal::Bool(false), span: Span::new(l, r) }),
 
     // Variant constructors: Some(expr) and None
-    <l:@L> "Some" "(" <inner:Expr> ")" <r:@R> =>
-        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Some"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
+    <l:@L> "Some" "(" <inner:Expr> ")" <r:@R> =>?
+        holding_one(inner, Span::new(l, r), |payload, span| Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Some"), payload: Some(payload), span }),
     <l:@L> "None" <r:@R> =>
-        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("None"), payload: None, span: Span::new(l, r) },
-    <l:@L> "Ok" "(" <inner:Expr> ")" <r:@R> =>
-        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Ok"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
-    <l:@L> "Err" "(" <inner:Expr> ")" <r:@R> =>
-        Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Err"), payload: Some(Box::new(inner)), span: Span::new(l, r) },
+        Nested::leaf(Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("None"), payload: None, span: Span::new(l, r) }),
+    <l:@L> "Ok" "(" <inner:Expr> ")" <r:@R> =>?
+        holding_one(inner, Span::new(l, r), |payload, span| Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Ok"), payload: Some(payload), span }),
+    <l:@L> "Err" "(" <inner:Expr> ")" <r:@R> =>?
+        holding_one(inner, Span::new(l, r), |payload, span| Expr::Variant { id: AstId::alloc(), enum_name: None, tag: interner.intern("Err"), payload: Some(payload), span }),
 
     // Parenthesized expression or tuple
-    <l:@L> "(" <items:CommaSep<TupleElemRule>> ")" <r:@R> => {
-        let span = Span::new(l, r);
-        // Single non-wildcard element → Paren (grouping)
-        if items.len() == 1 {
-            match items.into_iter().next().unwrap() {
-                TupleElem::Expr(e) => Expr::Paren { id: AstId::alloc(), inner: Box::new(e), span },
-                TupleElem::Wildcard(_) => Expr::Tuple { id: AstId::alloc(), elements: vec![TupleElem::Wildcard(span)], span },
-            }
-        } else {
-            Expr::Tuple { id: AstId::alloc(), elements: items, span }
-        }
-    },
+    <l:@L> "(" <items:CommaSep<TupleElemRule>> ")" <r:@R> =>?
+        paren_or_tuple(items, Span::new(l, r)),
 
     // List: [a, b, c], [a, b, ..], [.., a, b], [a, .., b]
     <l:@L> "[" <items:CommaSep<ListElem>> "]" <r:@R> =>?
         build_list::<S>(errors, items, Span::new(l, r)),
 
     // Block expression: { stmt; stmt; expr } or { expr }
-    <l:@L> "{" <body:TailedBody> "}" <r:@R> =>
-        Expr::Block { id: AstId::alloc(), stmts: body.0, tail: Box::new(body.1), span: Span::new(l, r) },
+    <l:@L> "{" <body:TailedBody> "}" <r:@R> =>? {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let stmts = level.take(body.0);
+        let tail = level.boxed(body.1);
+        level.node(Expr::Block { id: AstId::alloc(), stmts, tail, span }, span)
+    },
 
     // Object literal: { field1, $field2, } — trailing comma required (empty {} allowed)
-    <l:@L> "{" <fields:(<ObjectField> ",")*> "}" <r:@R> =>
-        Expr::Object { id: AstId::alloc(), fields, span: Span::new(l, r) },
+    <l:@L> "{" <fields:(<ObjectField> ",")*> "}" <r:@R> =>? {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let fields = level.all(fields);
+        level.node(Expr::Object { id: AstId::alloc(), fields, span }, span)
+    },
 
     // Format string: "hello {{ name }}, age {{ age | to_string }}"
     // Desugars to BinOp::Add chain: "hello " + name + ", age " + (age | to_string)
     <sl:@L> <start:"fmt_start"> <sr:@R> <first:Expr> <rest:FmtMidPair*> <el:@L> <end:"fmt_end"> <er:@R> =>? {
-        let mut parts: Vec<Expr<S>> = Vec::new();
+        let mut parts: Vec<Nested<Expr<S>>> = Vec::new();
 
         // Start text segment (span = start token position)
         let start_span = Span::new(sl, sr);
@@ -635,70 +646,57 @@ PlainPrimary: Expr<S> = {
         let mut iter = parts.into_iter();
         let mut acc = iter.next().unwrap();
         for part in iter {
-            let merged = acc.span().merge(part.span());
-            acc = Expr::BinaryOp {
-                id: AstId::alloc(),
-                left: Box::new(acc),
-                op: BinOp::Add,
-                right: Box::new(part),
-                span: merged,
-            };
+            let merged = acc.get().span().merge(part.get().span());
+            acc = binary(acc, BinOp::Add, part, merged)?;
         }
         Ok(acc)
     },
 };
 
 // Format string mid segment: captures token span for the text literal.
-FmtMidPair: (Span, String, Expr<S>) = {
+FmtMidPair: (Span, String, Nested<Expr<S>>) = {
     <ml:@L> <mid:"fmt_mid"> <mr:@R> <expr:Expr> => (Span::new(ml, mr), mid, expr),
 };
 
 // Tuple element: an expression or `_`
-TupleElemRule: TupleElem<S> = {
-    <e:Expr> => TupleElem::Expr(e),
-    <l:@L> "_" <r:@R> => TupleElem::Wildcard(Span::new(l, r)),
-    <node:Unparsed> => TupleElem::Expr(Expr::Error(node)),
+TupleElemRule: Nested<TupleElem<S>> = {
+    <e:Expr> => {
+        let mut level = Level::new();
+        let e = level.take(e);
+        level.part(TupleElem::Expr(e))
+    },
+    <l:@L> "_" <r:@R> => Nested::empty(TupleElem::Wildcard(Span::new(l, r))),
+    <node:Unparsed> => Nested::leaf(TupleElem::Expr(Expr::Error(node))),
 };
 
 // List element: an expression or `..`
-ListElem: ListElem<S> = {
-    <e:Expr> => ListElem::Expr(e),
-    <l:@L> ".." <r:@R> => ListElem::Rest(Span::new(l, r)),
-    <node:Unparsed> => ListElem::Expr(Expr::Error(node)),
+ListElem: Nested<ListElem<S>> = {
+    <e:Expr> => {
+        let mut level = Level::new();
+        let e = level.take(e);
+        level.part(ListElem::Expr(e))
+    },
+    <l:@L> ".." <r:@R> => Nested::empty(ListElem::Rest(Span::new(l, r))),
+    <node:Unparsed> => Nested::leaf(ListElem::Expr(Expr::Error(node))),
 };
 
 // Object field: `key: expr`, or shorthand `name`, `$name`, `@name`
-ObjectField: ObjectExprField<S> = {
+ObjectField: Nested<ObjectExprField<S>> = {
     <l:@L> <key:"ident"> ":" <value:Expr> <r:@R> =>
-        ObjectExprField { id: AstId::alloc(), key, value, span: Span::new(l, r) },
+        object_field(key, value, Span::new(l, r)),
     <l:@L> <key:"ident"> ":" <value:Unparsed> <r:@R> =>
-        ObjectExprField { id: AstId::alloc(), key, value: Expr::Error(value), span: Span::new(l, r) },
+        object_field(key, Nested::leaf(Expr::Error(value)), Span::new(l, r)),
     <l:@L> <name:"ident"> <r:@R> => {
         let span = Span::new(l, r);
-        ObjectExprField {
-            id: AstId::alloc(),
-            key: name,
-            value: Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::Value, span },
-            span,
-        }
+        object_field(name, Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::Value, span }), span)
     },
     <l:@L> <name:"$ref"> <r:@R> => {
         let span = Span::new(l, r);
-        ObjectExprField {
-            id: AstId::alloc(),
-            key: name,
-            value: Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::ExternParam, span },
-            span,
-        }
+        object_field(name, Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::ExternParam, span }), span)
     },
     <l:@L> <name:"@ref"> <r:@R> => {
         let span = Span::new(l, r);
-        ObjectExprField {
-            id: AstId::alloc(),
-            key: name,
-            value: Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span },
-            span,
-        }
+        object_field(name, Nested::leaf(Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span }), span)
     },
 };
 

@@ -25,6 +25,10 @@ fn unfixed_repr() -> Repr<Concrete> {
 
 impl Bindings {
     pub(super) fn bind(&mut self, pattern: &PolyTy, ty: &Ty) -> bool {
+        acvus_utils::grow(|| self.bind_level(pattern, ty))
+    }
+
+    fn bind_level(&mut self, pattern: &PolyTy, ty: &Ty) -> bool {
         match (pattern, ty) {
             (TyTerm::Var(v), _) => match self.tys.get(v) {
                 Some(bound) => bound == ty,

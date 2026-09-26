@@ -77,6 +77,10 @@ pub enum Laid {
 
 impl Laid {
     pub fn segment_count(&self) -> usize {
+        acvus_utils::grow(|| self.segment_count_level())
+    }
+
+    fn segment_count_level(&self) -> usize {
         match self {
             Laid::NoPosition => 0,
             Laid::Var | Laid::Unread => 1,
@@ -92,6 +96,10 @@ impl Laid {
     /// stand for: the declared form of what a call matches against the
     /// resolved type (`analysis::loans::segments`).
     pub fn fits<V: Phase>(&self, ty: &TyTerm<V>) -> bool {
+        acvus_utils::grow(|| self.fits_level::<V>(ty))
+    }
+
+    fn fits_level<V: Phase>(&self, ty: &TyTerm<V>) -> bool {
         match (self, ty) {
             (Laid::Var | Laid::Unread, _) => true,
             (Laid::NoPosition, ty) => has_no_position(ty),
@@ -121,6 +129,10 @@ impl Laid {
 
 /// Whether a value of `ty` has no position whatever its variables are.
 fn has_no_position<V: Phase>(ty: &TyTerm<V>) -> bool {
+    acvus_utils::grow(|| has_no_position_level::<V>(ty))
+}
+
+fn has_no_position_level<V: Phase>(ty: &TyTerm<V>) -> bool {
     match ty {
         TyTerm::Ref(..) | TyTerm::Fn { .. } | TyTerm::Handle(_) | TyTerm::Var(_) => false,
         TyTerm::UserDefined {

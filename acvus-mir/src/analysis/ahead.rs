@@ -388,6 +388,10 @@ fn straight_run(cfg: &CfgBody, stage: &StageBlocks) -> Vec<RunStep> {
 
 impl Region {
     fn rejoining(cfg: &CfgBody, stage: &StageBlocks, branch: BlockIdx) -> Option<Region> {
+        acvus_utils::grow(|| Self::rejoining_level(cfg, stage, branch))
+    }
+
+    fn rejoining_level(cfg: &CfgBody, stage: &StageBlocks, branch: BlockIdx) -> Option<Region> {
         let Terminator::Diamond {
             then_label,
             else_label,

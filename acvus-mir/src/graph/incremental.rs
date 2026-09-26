@@ -96,6 +96,10 @@ pub struct IncrementalGraph {
 
 impl IncrementalGraph {
     pub fn new(interner: &Interner, graph: CompilationGraph) -> Self {
+        acvus_utils::grow(|| Self::new_level(interner, graph))
+    }
+
+    fn new_level(interner: &Interner, graph: CompilationGraph) -> Self {
         let solved = solve_contexts(interner, &graph, &extract(interner, &graph));
         let CompilationGraph {
             functions,
@@ -142,6 +146,10 @@ impl IncrementalGraph {
     /// A function the host adds may take a name a script's `fn` has, so
     /// every script is lifted again.
     pub fn add_function(&mut self, func: Function) {
+        acvus_utils::grow(|| self.add_function_level(func))
+    }
+
+    fn add_function_level(&mut self, func: Function) {
         let qref = func.qref;
         self.functions.insert(qref, func);
         self.run_extract(qref);
@@ -151,6 +159,10 @@ impl IncrementalGraph {
     }
 
     pub fn remove_function(&mut self, qref: QualifiedRef) {
+        acvus_utils::grow(|| self.remove_function_level(qref))
+    }
+
+    fn remove_function_level(&mut self, qref: QualifiedRef) {
         if self.functions.remove(&qref).is_some() {
             self.forget(qref);
             self.relift_every_script();
@@ -225,6 +237,10 @@ impl IncrementalGraph {
     // -- Source update (main incremental entry point) ----------------
 
     pub fn update_ast(&mut self, qref: QualifiedRef, ast: ParsedAst) {
+        acvus_utils::grow(|| self.update_ast_level(qref, ast))
+    }
+
+    fn update_ast_level(&mut self, qref: QualifiedRef, ast: ParsedAst) {
         let Some(func) = self.functions.get_mut(&qref) else {
             return;
         };
@@ -377,6 +393,10 @@ impl IncrementalGraph {
     /// does not parse, and the rest of the graph as it stands. `None` where
     /// `qref` is an extern or `probed` is not local.
     pub fn probe(&self, probed: Function, marker: acvus_ast::AstId) -> Option<ProbeProduct> {
+        acvus_utils::grow(|| self.probe_level(probed, marker))
+    }
+
+    fn probe_level(&self, probed: Function, marker: acvus_ast::AstId) -> Option<ProbeProduct> {
         let qref = probed.qref;
         self.check_as(probed, Some(Probe { body: qref, marker }))?
             .probe
@@ -387,6 +407,10 @@ impl IncrementalGraph {
     /// replaced, while the graph keeps the body it holds. `None` where
     /// `qref` is an extern or `probed` is not local.
     pub fn view_as(&self, probed: Function) -> Option<Freeze<crate::typeck::BodyView>> {
+        acvus_utils::grow(|| self.view_as_level(probed))
+    }
+
+    fn view_as_level(&self, probed: Function) -> Option<Freeze<crate::typeck::BodyView>> {
         let qref = probed.qref;
         self.check_as(probed, None)?
             .outcomes

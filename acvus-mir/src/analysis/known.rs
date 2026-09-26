@@ -150,6 +150,10 @@ fn register_word(n: i128) -> u64 {
 
 impl Known {
     fn at(&self, path: &[PathSeg]) -> Option<Known> {
+        acvus_utils::grow(|| self.at_level(path))
+    }
+
+    fn at_level(&self, path: &[PathSeg]) -> Option<Known> {
         let Some((seg, rest)) = path.split_first() else {
             return Some(self.clone());
         };

@@ -191,6 +191,10 @@ pub struct Loan {
 
 impl Loan {
     pub fn of<S>(expr: &Expr<S>) -> Option<Self> {
+        acvus_utils::grow(|| Self::of_level::<S>(expr))
+    }
+
+    fn of_level<S>(expr: &Expr<S>) -> Option<Self> {
         let Projected { base, fields } = projected(expr);
         let mut loan = match Storage::of(base) {
             Some(root) => Self {

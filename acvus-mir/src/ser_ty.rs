@@ -206,6 +206,10 @@ fn arg_to_ser(arg: &TypeArg<Concrete>, interner: &Interner) -> SerTypeArg {
 }
 
 fn held_to_ser(held: &HeldTy<Concrete>, interner: &Interner) -> SerHeld {
+    acvus_utils::grow(|| held_to_ser_level(held, interner))
+}
+
+fn held_to_ser_level(held: &HeldTy<Concrete>, interner: &Interner) -> SerHeld {
     let part = |p: &TypeArg<Concrete>| Box::new(arg_to_ser(p, interner));
     match held {
         HeldTy::Tuple(parts) => SerHeld::Tuple {
@@ -239,6 +243,10 @@ fn ser_to_arg(arg: &SerTypeArg, interner: &Interner) -> TypeArg<Concrete> {
 }
 
 fn ser_to_held(held: &SerHeld, interner: &Interner) -> HeldTy<Concrete> {
+    acvus_utils::grow(|| ser_to_held_level(held, interner))
+}
+
+fn ser_to_held_level(held: &SerHeld, interner: &Interner) -> HeldTy<Concrete> {
     let part = |p: &SerTypeArg| Box::new(ser_to_arg(p, interner));
     match held {
         SerHeld::Tuple { parts } => {
@@ -350,6 +358,10 @@ pub enum SerTy {
 impl Ty {
     /// Convert to a serializable representation by resolving all interned strings.
     pub fn to_ser(&self, interner: &Interner) -> SerTy {
+        acvus_utils::grow(|| self.to_ser_level(interner))
+    }
+
+    fn to_ser_level(&self, interner: &Interner) -> SerTy {
         match self {
             Ty::Int(k) => SerTy::Int { width: *k },
             Ty::Order => SerTy::Order,
@@ -449,6 +461,10 @@ impl Ty {
 impl SerTy {
     /// Convert back to [`Ty`] by re-interning all strings.
     pub fn to_ty(&self, interner: &Interner) -> Ty {
+        acvus_utils::grow(|| self.to_ty_level(interner))
+    }
+
+    fn to_ty_level(&self, interner: &Interner) -> Ty {
         match self {
             SerTy::Int { width } => Ty::Int(*width),
             SerTy::Order => Ty::Order,

@@ -389,6 +389,10 @@ impl Dispatch {
 /// `String` or `str`, or a reference to either: what `StringConcat` and
 /// `StringEq` read (RFC-0062 rule 3).
 fn holds_text(ty: &Ty) -> bool {
+    acvus_utils::grow(|| holds_text_level(ty))
+}
+
+fn holds_text_level(ty: &Ty) -> bool {
     match ty {
         Ty::String | Ty::Str => true,
         Ty::Ref(_, inner) => holds_text(&inner.ty()),
@@ -397,6 +401,10 @@ fn holds_text(ty: &Ty) -> bool {
 }
 
 fn pattern_is_irrefutable<S>(pattern: &Pattern<S>) -> bool {
+    acvus_utils::grow(|| pattern_is_irrefutable_level::<S>(pattern))
+}
+
+fn pattern_is_irrefutable_level<S>(pattern: &Pattern<S>) -> bool {
     match pattern {
         Pattern::Binding { .. }
         | Pattern::Wildcard { .. }
@@ -866,6 +874,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
+        acvus_utils::grow(|| self.lower_stmt_level(stmt))
+    }
+
+    fn lower_stmt_level(&mut self, stmt: &Stmt) {
         match stmt {
             // Its instances are lowered as functions of their own
             // (`graph::lift`).
@@ -1679,6 +1691,15 @@ impl<'a> Lowerer<'a> {
 
     /// Lower an else branch, returning the value it produces.
     fn lower_else_branch(&mut self, eb: &ElseBranch, span: Span, _merge_label: Label) -> ValueId {
+        acvus_utils::grow(|| self.lower_else_branch_level(eb, span, _merge_label))
+    }
+
+    fn lower_else_branch_level(
+        &mut self,
+        eb: &ElseBranch,
+        span: Span,
+        _merge_label: Label,
+    ) -> ValueId {
         match eb {
             ElseBranch::ElseIf(expr) => self.lower_expr(expr),
             ElseBranch::Else { body, tail, .. } => {
@@ -1713,6 +1734,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn place_or_temporary(&mut self, place: &Expr) -> Place {
+        acvus_utils::grow(|| self.place_or_temporary_level(place))
+    }
+
+    fn place_or_temporary_level(&mut self, place: &Expr) -> Place {
         let Projected { base, fields } = projected(place);
         let target = match self.base_target(base) {
             Some(target) => target,
@@ -1743,6 +1768,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn store_target(&mut self, place: &acvus_ast::Place) -> Place {
+        acvus_utils::grow(|| self.store_target_level(place))
+    }
+
+    fn store_target_level(&mut self, place: &acvus_ast::Place) -> Place {
         let (base, fields) = projected_store(place);
         let target = match self.place_base(base.id()) {
             PlaceBase::Storage(storage) => self.storage(storage),
@@ -1768,6 +1797,10 @@ impl<'a> Lowerer<'a> {
 
     /// An operator operand borrowed for the expression (RFC-0020).
     fn lend_operand(&mut self, operand: &Expr) -> ValueId {
+        acvus_utils::grow(|| self.lend_operand_level(operand))
+    }
+
+    fn lend_operand_level(&mut self, operand: &Expr) -> ValueId {
         if let Passing::AsIs = self.passing(operand) {
             return self.lower_expr(operand);
         }
@@ -1906,6 +1939,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn base_target(&mut self, base: &Expr) -> Option<RefTarget> {
+        acvus_utils::grow(|| self.base_target_level(base))
+    }
+
+    fn base_target_level(&mut self, base: &Expr) -> Option<RefTarget> {
         match self.place_base(base.id()) {
             PlaceBase::Storage(storage) => Some(self.storage(storage)),
             PlaceBase::ThroughReferenceIn(storage) => {
@@ -2492,6 +2529,10 @@ impl<'a> Lowerer<'a> {
 
     /// Lower an expression to a value.
     fn lower_expr(&mut self, expr: &Expr) -> ValueId {
+        acvus_utils::grow(|| self.lower_expr_level(expr))
+    }
+
+    fn lower_expr_level(&mut self, expr: &Expr) -> ValueId {
         let val = self.lower_before_coercion(expr);
         self.maybe_cast(expr.id(), expr.span(), val)
     }
@@ -4088,6 +4129,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_pattern_test(&mut self, pattern: &Pattern, src: &PatSrc, span: Span) -> ValueId {
+        acvus_utils::grow(|| self.lower_pattern_test_level(pattern, src, span))
+    }
+
+    fn lower_pattern_test_level(&mut self, pattern: &Pattern, src: &PatSrc, span: Span) -> ValueId {
         match pattern {
             Pattern::ContextBind { .. } | Pattern::Binding { .. } | Pattern::Wildcard { .. } => {
                 self.emit_const_bool(span, true)
@@ -4151,6 +4196,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_pattern_bind(&mut self, pattern: &Pattern, src: &PatSrc, span: Span) {
+        acvus_utils::grow(|| self.lower_pattern_bind_level(pattern, src, span))
+    }
+
+    fn lower_pattern_bind_level(&mut self, pattern: &Pattern, src: &PatSrc, span: Span) {
         match pattern {
             Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
             Pattern::Binding {

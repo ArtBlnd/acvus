@@ -14,6 +14,12 @@ autotests = false
 name = "all"
 path = "tests/all.rs"
 
+# RFC-0106 rule 2: the module `examples/nesting_wasm.mjs` measures on
+# wasm32; docs/nesting.md names the command.
+[[example]]
+name = "nesting_wasm"
+crate-type = ["cdylib"]
+
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
 acvus-ext = { path = "../acvus-ext" }

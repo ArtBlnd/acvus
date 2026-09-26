@@ -42,6 +42,10 @@ pub enum PositionKind {
 
 /// How many positions a value of `ty` has.
 pub fn positions(ty: &Ty) -> usize {
+    acvus_utils::grow(|| positions_level(ty))
+}
+
+fn positions_level(ty: &Ty) -> usize {
     match ty {
         Ty::Ref(_, inner) => 1 + positions(&inner.ty()),
         Ty::Array(inner, _) | Ty::Option(inner) | Ty::Slice(inner) => positions(inner),
@@ -121,6 +125,10 @@ fn lay_out(ty: &Ty, out: &mut Vec<PositionKind>) {
 }
 
 fn lay_out_under(ty: &Ty, access: Access, out: &mut Vec<PositionKind>) {
+    acvus_utils::grow(|| lay_out_under_level(ty, access, out))
+}
+
+fn lay_out_under_level(ty: &Ty, access: Access, out: &mut Vec<PositionKind>) {
     match ty {
         Ty::Ref(mutability, inner) => {
             let mutability = access.bound(*mutability);
@@ -335,6 +343,10 @@ pub fn held_positions(slot: &Ty, path: &[PathSeg], taken: &Ty) -> Vec<(usize, Mu
 /// position `k` is a reference.
 fn pointee_at(ty: &Ty, k: usize) -> Option<Ty> {
     fn walk(ty: &Ty, k: usize) -> Result<Option<Ty>, usize> {
+        acvus_utils::grow(|| walk_level(ty, k))
+    }
+
+    fn walk_level(ty: &Ty, k: usize) -> Result<Option<Ty>, usize> {
         match ty {
             Ty::Ref(_, inner) => match k {
                 0 => Ok(Some(inner.ty().into_owned())),
@@ -1894,6 +1906,15 @@ pub fn segments(laid: &Laid, ty: &Ty) -> Option<Vec<Range<usize>>> {
 }
 
 fn lay_segments(laid: &Laid, ty: &Ty, at: &mut usize, out: &mut Vec<Range<usize>>) -> Option<()> {
+    acvus_utils::grow(|| lay_segments_level(laid, ty, at, out))
+}
+
+fn lay_segments_level(
+    laid: &Laid,
+    ty: &Ty,
+    at: &mut usize,
+    out: &mut Vec<Range<usize>>,
+) -> Option<()> {
     match (laid, ty) {
         (Laid::NoPosition, ty) => (positions(ty) == 0).then_some(()),
         (Laid::Var | Laid::Unread, _) => {

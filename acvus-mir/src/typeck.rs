@@ -122,6 +122,10 @@ enum SourceMode {
 
 /// Every name a pattern binds, once per binding.
 fn bound_names<S>(pattern: &Pattern<S>, on_name: &mut impl FnMut(Astr)) {
+    acvus_utils::grow(|| bound_names_level(pattern, on_name))
+}
+
+fn bound_names_level<S>(pattern: &Pattern<S>, on_name: &mut impl FnMut(Astr)) {
     match pattern {
         Pattern::Binding { name, .. } => on_name(*name),
         Pattern::ContextBind { .. }
@@ -772,6 +776,10 @@ pub type CallMap = FxHashMap<AstId, CallTarget>;
 /// type is not searched: its parameters and return are a signature, not
 /// storage this run holds.
 fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
+    acvus_utils::grow(|| reference_in_result_level(ty))
+}
+
+fn reference_in_result_level(ty: &InferTy) -> Option<&InferTy> {
     match ty {
         TyTerm::Ref(..) => Some(ty),
         TyTerm::Array(inner, _) | TyTerm::Slice(inner) | TyTerm::Option(inner) => {
@@ -795,6 +803,10 @@ fn reference_in_result(ty: &InferTy) -> Option<&InferTy> {
 /// stops at a function type because a signature is not storage; a capture
 /// list is, and this is where it is walked.
 fn holds_a_loan(ty: &InferTy) -> bool {
+    acvus_utils::grow(|| holds_a_loan_level(ty))
+}
+
+fn holds_a_loan_level(ty: &InferTy) -> bool {
     let TyTerm::Fn { captures, .. } = ty else {
         return false;
     };
@@ -855,6 +867,10 @@ impl ResultCrossing {
 
 /// A view inside a result's data, walked as `reference_in_result` walks it.
 fn view_in_result(ty: &InferTy) -> Option<&InferTy> {
+    acvus_utils::grow(|| view_in_result_level(ty))
+}
+
+fn view_in_result_level(ty: &InferTy) -> Option<&InferTy> {
     match ty {
         TyTerm::Ref(_, target) => is_view(&target.ty()).then_some(ty),
         TyTerm::Array(inner, _) | TyTerm::Slice(inner) | TyTerm::Option(inner) => {
@@ -874,6 +890,10 @@ fn view_in_result(ty: &InferTy) -> Option<&InferTy> {
 /// A closure anywhere in a result's data, walked as `reference_in_result`
 /// walks it.
 fn closure_in_result(ty: &InferTy) -> Option<&InferTy> {
+    acvus_utils::grow(|| closure_in_result_level(ty))
+}
+
+fn closure_in_result_level(ty: &InferTy) -> Option<&InferTy> {
     match ty {
         TyTerm::Fn { .. } => Some(ty),
         TyTerm::Array(inner, _) | TyTerm::Slice(inner) | TyTerm::Option(inner) => {
@@ -927,6 +947,13 @@ fn view_argument<'t>(
     ty: &'t InferTy,
     argument_of: Option<&'t InferTy>,
 ) -> Option<ViewArgument<'t>> {
+    acvus_utils::grow(|| view_argument_level(ty, argument_of))
+}
+
+fn view_argument_level<'t>(
+    ty: &'t InferTy,
+    argument_of: Option<&'t InferTy>,
+) -> Option<ViewArgument<'t>> {
     if let Some(taker) = argument_of
         && is_pair(ty)
     {
@@ -958,6 +985,13 @@ fn view_argument<'t>(
 
 /// A `#` part over a type variable is no view, as the variable is not.
 fn view_in_arg<'t>(
+    arg: &'t TypeArg<Infer>,
+    argument_of: Option<&'t InferTy>,
+) -> Option<ViewArgument<'t>> {
+    acvus_utils::grow(|| view_in_arg_level(arg, argument_of))
+}
+
+fn view_in_arg_level<'t>(
     arg: &'t TypeArg<Infer>,
     argument_of: Option<&'t InferTy>,
 ) -> Option<ViewArgument<'t>> {
@@ -995,6 +1029,10 @@ fn is_pair(ty: &InferTy) -> bool {
 /// a type admitted here that it calls a pair returns into one register and
 /// loses its length.
 fn is_view(ty: &InferTy) -> bool {
+    acvus_utils::grow(|| is_view_level(ty))
+}
+
+fn is_view_level(ty: &InferTy) -> bool {
     match ty {
         TyTerm::Slice(_) | TyTerm::Str => true,
         TyTerm::Ref(_, target) => is_view(&target.ty()),
@@ -3915,6 +3953,10 @@ where
     /// exclusive -- the loan the slice holds is the write's, so a container
     /// already held shared is refused there and a root holding `&T` here.
     fn store_place(&mut self, place: &acvus_ast::Place<S>, span: Span) -> InferTy {
+        acvus_utils::grow(|| self.store_place_level(place, span))
+    }
+
+    fn store_place_level(&mut self, place: &acvus_ast::Place<S>, span: Span) -> InferTy {
         match place {
             acvus_ast::Place::Field {
                 id, object, field, ..
@@ -7538,6 +7580,10 @@ where
 
     /// Type-check a single script statement.
     fn check_stmt(&mut self, stmt: &acvus_ast::Stmt<S>) {
+        acvus_utils::grow(|| self.check_stmt_level(stmt))
+    }
+
+    fn check_stmt_level(&mut self, stmt: &acvus_ast::Stmt<S>) {
         match stmt {
             acvus_ast::Stmt::Append { id, expr, span } => self.check_append(*id, expr, *span),
             acvus_ast::Stmt::Store {
@@ -8026,6 +8072,10 @@ where
     /// A demand reaches a place and the places it projects from; any other
     /// expression, and every operand inside it, is read as a value.
     fn check_expr(&mut self, expr: &Expr<S>) -> InferTy {
+        acvus_utils::grow(|| self.check_expr_level(expr))
+    }
+
+    fn check_expr_level(&mut self, expr: &Expr<S>) -> InferTy {
         if names_a_place(expr) {
             return self.check_expr_at_demand(expr);
         }
@@ -9235,6 +9285,16 @@ where
         source: PatternSource,
         span: Span,
     ) {
+        acvus_utils::grow(|| self.check_pattern_level(pattern, source_ty, source, span))
+    }
+
+    fn check_pattern_level(
+        &mut self,
+        pattern: &Pattern<S>,
+        source_ty: &InferTy,
+        source: PatternSource,
+        span: Span,
+    ) {
         if let PatternSource::Expr(_) = source {
             self.refuse_names_bound_twice(pattern, span);
         }
@@ -9474,6 +9534,10 @@ where
     /// poison, so a use of one is not refused a second time (docs/solver.md,
     /// Poison).
     fn bind_as_poison(&mut self, pattern: &Pattern<S>, span: Span) {
+        acvus_utils::grow(|| self.bind_as_poison_level(pattern, span))
+    }
+
+    fn bind_as_poison_level(&mut self, pattern: &Pattern<S>, span: Span) {
         self.check_pattern_inner(pattern, &Self::infer_error(), PatternSource::Member, span);
     }
 
@@ -9947,6 +10011,10 @@ where
     }
 
     fn literal_ty(&mut self, lit: &Literal, span: Span) -> InferTy {
+        acvus_utils::grow(|| self.literal_ty_level(lit, span))
+    }
+
+    fn literal_ty_level(&mut self, lit: &Literal, span: Span) -> InferTy {
         match lit {
             Literal::Int(n) => self.int_literal(*n, span),
             Literal::IntOf(n) => self.suffixed_int_literal(*n, span),
@@ -9979,6 +10047,10 @@ fn is_text(ty: &InferTy) -> bool {
 /// Whether this type is one of the two representations of text, or a
 /// reference to one: `String`, `&String`, `str`, `&str`.
 fn holds_text(ty: &InferTy) -> bool {
+    acvus_utils::grow(|| holds_text_level(ty))
+}
+
+fn holds_text_level(ty: &InferTy) -> bool {
     match ty {
         TyTerm::String | TyTerm::Str => true,
         TyTerm::Ref(_, inner) => holds_text(&inner.ty()),

@@ -372,6 +372,10 @@ impl Terms {
     /// with the flows it states: an instantiated signature meets the types
     /// at its call, and a fixed term could not take theirs.
     fn open_flows(&mut self, ty: &mut InferTy) {
+        acvus_utils::grow(|| self.open_flows_level(ty))
+    }
+
+    fn open_flows_level(&mut self, ty: &mut InferTy) {
         if let TyTerm::Fn { flows, .. } = ty
             && let FlowTerm::Known(known) = flows
         {
@@ -444,6 +448,10 @@ impl Terms {
     }
 
     fn unstale_in_place(&self, ty: &mut InferTy) {
+        acvus_utils::grow(|| self.unstale_in_place_level(ty))
+    }
+
+    fn unstale_in_place_level(&self, ty: &mut InferTy) {
         if let Some(home) = ty.home() {
             *ty = TyTerm::Var(home);
             return;
@@ -469,6 +477,10 @@ impl Terms {
     }
 
     fn shallow_resolve_ty(&self, ty: &InferTy) -> InferTy {
+        acvus_utils::grow(|| self.shallow_resolve_ty_level(ty))
+    }
+
+    fn shallow_resolve_ty_level(&self, ty: &InferTy) -> InferTy {
         let Some(root) = self.root_var(ty) else {
             return ty.clone();
         };
@@ -482,6 +494,10 @@ impl Terms {
     }
 
     fn resolve_ty(&self, ty: &InferTy) -> InferTy {
+        acvus_utils::grow(|| self.resolve_ty_level(ty))
+    }
+
+    fn resolve_ty_level(&self, ty: &InferTy) -> InferTy {
         self.unstale(ty).map(
             &mut |id: TypeBoundId| {
                 let root = self.find_ty_root(id);
@@ -501,6 +517,10 @@ impl Terms {
     }
 
     fn occurs_in(&self, id: TypeBoundId, ty: &InferTy) -> bool {
+        acvus_utils::grow(|| self.occurs_in_level(id, ty))
+    }
+
+    fn occurs_in_level(&self, id: TypeBoundId, ty: &InferTy) -> bool {
         match ty {
             TyTerm::Var(other) => {
                 let root = self.find_ty_root(*other);
@@ -926,6 +946,10 @@ impl Terms {
     }
 
     fn resolve_held(&self, held: &HeldTy<Infer>) -> HeldTy<Infer> {
+        acvus_utils::grow(|| self.resolve_held_level(held))
+    }
+
+    fn resolve_held_level(&self, held: &HeldTy<Infer>) -> HeldTy<Infer> {
         held.map(
             &mut |id: TypeBoundId| self.resolve_ty(&TyTerm::Var(id)),
             &mut |id: IdentityVarId| self.resolve_identity(&IdentityTerm::Var(id)),
@@ -974,6 +998,15 @@ impl Terms {
     }
 
     fn meet_reprs(
+        &mut self,
+        a: &TypeArg<Infer>,
+        b: &TypeArg<Infer>,
+        kind: JoinKind,
+    ) -> Result<(), MismatchReason> {
+        acvus_utils::grow(|| self.meet_reprs_level(a, b, kind))
+    }
+
+    fn meet_reprs_level(
         &mut self,
         a: &TypeArg<Infer>,
         b: &TypeArg<Infer>,
@@ -1066,6 +1099,17 @@ impl Terms {
     /// and there the effect runs both ways: the caller runs what the callee
     /// does (RFC-0046).
     fn join(
+        &mut self,
+        a: &InferTy,
+        b: &InferTy,
+        position: Position,
+        kind: JoinKind,
+        registry: &TypeRegistry,
+    ) -> Result<(), Mismatch> {
+        acvus_utils::grow(|| self.join_level(a, b, position, kind, registry))
+    }
+
+    fn join_level(
         &mut self,
         a: &InferTy,
         b: &InferTy,
@@ -1736,6 +1780,10 @@ fn integer_bound_refuses(bound: &TyVarBound, term: &InferTy) -> bool {
 }
 
 fn collect_open_vars(ty: &InferTy, out: &mut Vec<TypeBoundId>) {
+    acvus_utils::grow(|| collect_open_vars_level(ty, out))
+}
+
+fn collect_open_vars_level(ty: &InferTy, out: &mut Vec<TypeBoundId>) {
     if let TyTerm::Var(var) = ty {
         out.push(*var);
     }
@@ -4708,6 +4756,10 @@ impl<'src> Solver<'src> {
     }
 
     fn freeze_ty_with(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
+        acvus_utils::grow(|| self.freeze_ty_with_level(ty, open))
+    }
+
+    fn freeze_ty_with_level(&self, ty: &InferTy, open: Open) -> Result<Ty, FreezeError> {
         self.terms.unstale(ty).try_map(
             &mut |id: TypeBoundId| self.freeze_ty_var(id, open),
             &mut |id: IdentityVarId| {
@@ -4760,6 +4812,10 @@ impl<'src> Solver<'src> {
     }
 
     fn freeze_repr(&self, id: ReprVarId, open: Open) -> Result<Repr<Concrete>, FreezeError> {
+        acvus_utils::grow(|| self.freeze_repr_level(id, open))
+    }
+
+    fn freeze_repr_level(&self, id: ReprVarId, open: Open) -> Result<Repr<Concrete>, FreezeError> {
         match self.terms.resolve_repr(id) {
             Repr::Uniform => Ok(Repr::Uniform),
             Repr::Specialized(held) => held
@@ -5310,6 +5366,15 @@ fn conversion_rules(
     from: &InferTy,
     to: &InferTy,
 ) -> Vec<CastRule> {
+    acvus_utils::grow(|| conversion_rules_level(terms, registry, from, to))
+}
+
+fn conversion_rules_level(
+    terms: &Terms,
+    registry: &TypeRegistry,
+    from: &InferTy,
+    to: &InferTy,
+) -> Vec<CastRule> {
     let from_r = terms.resolve_ty(from);
     let to_r = terms.resolve_ty(to);
     if let Some(references) = ReferencePair::of(&from_r, &to_r) {
@@ -5427,7 +5492,15 @@ impl<'a> ReferencePair<'a> {
 /// (hash-types.md R1) set `Uniform`: their representation is not a fact
 /// of the type.
 fn uniform_slots(ty: InferTy, registry: &TypeRegistry) -> InferTy {
+    acvus_utils::grow(|| uniform_slots_level(ty, registry))
+}
+
+fn uniform_slots_level(ty: InferTy, registry: &TypeRegistry) -> InferTy {
     fn arg(a: TypeArg<Infer>, specializing: bool, registry: &TypeRegistry) -> TypeArg<Infer> {
+        acvus_utils::grow(|| arg_level(a, specializing, registry))
+    }
+
+    fn arg_level(a: TypeArg<Infer>, specializing: bool, registry: &TypeRegistry) -> TypeArg<Infer> {
         let mut a = match a {
             TypeArg::Open(..) | TypeArg::Specialized(_) if !specializing => {
                 TypeArg::Uniform(a.into_ty())

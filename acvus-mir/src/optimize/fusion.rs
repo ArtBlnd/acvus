@@ -717,6 +717,14 @@ impl<'p> Fusion<'p> {
     }
 
     fn flow_output_ty(&self, flow: &AdaptorFlow, scope: &Scope) -> Result<Option<Ty>, Declined> {
+        acvus_utils::grow(|| self.flow_output_ty_level(flow, scope))
+    }
+
+    fn flow_output_ty_level(
+        &self,
+        flow: &AdaptorFlow,
+        scope: &Scope,
+    ) -> Result<Option<Ty>, Declined> {
         match flow {
             AdaptorFlow::Yield(term) => self.type_of(term, None, scope).map(Some),
             AdaptorFlow::Nest(term) => {
@@ -796,6 +804,10 @@ impl<'p> Fusion<'p> {
     /// without the state's own type: a `match s` whose `None` arm builds
     /// the state it starts.
     fn set_ty(&self, block: &ConsumerBlock, scope: &Scope) -> Option<Ty> {
+        acvus_utils::grow(|| self.set_ty_level(block, scope))
+    }
+
+    fn set_ty_level(&self, block: &ConsumerBlock, scope: &Scope) -> Option<Ty> {
         let mut scope = scope.clone();
         for stmt in &block.stmts {
             match stmt {
@@ -827,6 +839,10 @@ impl<'p> Fusion<'p> {
     // -- Writing the loop -------------------------------------------------
 
     fn link(&mut self, link: usize, element: ValueId) -> Result<(), Declined> {
+        acvus_utils::grow(|| self.link_level(link, element))
+    }
+
+    fn link_level(&mut self, link: usize, element: ValueId) -> Result<(), Declined> {
         let ty = self.element_type_per_link[link].clone();
         let terms = match self.pipeline.adaptors_from_source.get(link) {
             Some(adaptor) => adaptor.flow.terms(),

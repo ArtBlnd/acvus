@@ -66,6 +66,9 @@ pub enum ParseErrorKind {
     /// template or a bound literal holds. Only a script declares a function
     /// (RFC-0100 rule 1).
     FnOutsideScript,
+    NestingTooDeep {
+        max: u32,
+    },
 }
 
 /// A statement that ends at the `}` closing its block, as a diagnostic
@@ -133,6 +136,11 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::FnOutsideScript => write!(
                 f,
                 "only a script (`.acvus`) declares a `fn`; a template declares none"
+            ),
+            ParseErrorKind::NestingTooDeep { max } => write!(
+                f,
+                "this nests deeper than {max} levels, the most a source nests; \
+                 a level is an expression, a statement or a pattern inside another"
             ),
         }
     }

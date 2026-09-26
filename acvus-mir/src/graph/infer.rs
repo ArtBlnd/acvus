@@ -389,6 +389,10 @@ fn build_call_graph(
 }
 
 fn collect_value_refs_stmts<S>(stmts: &[acvus_ast::Stmt<S>], refs: &mut Vec<QualifiedRef>) {
+    acvus_utils::grow(|| collect_value_refs_stmts_level::<S>(stmts, refs))
+}
+
+fn collect_value_refs_stmts_level<S>(stmts: &[acvus_ast::Stmt<S>], refs: &mut Vec<QualifiedRef>) {
     use acvus_ast::*;
     for stmt in stmts {
         match stmt {
@@ -458,6 +462,10 @@ fn collect_value_refs_template<S>(template: &acvus_ast::Template<S>) -> Vec<Qual
 }
 
 fn collect_value_refs_place<S>(place: &acvus_ast::Place<S>, refs: &mut Vec<QualifiedRef>) {
+    acvus_utils::grow(|| collect_value_refs_place_level::<S>(place, refs))
+}
+
+fn collect_value_refs_place_level<S>(place: &acvus_ast::Place<S>, refs: &mut Vec<QualifiedRef>) {
     use acvus_ast::*;
     match place {
         Place::Field { object, .. } => collect_value_refs_place(object, refs),
@@ -476,6 +484,10 @@ fn collect_value_refs_place<S>(place: &acvus_ast::Place<S>, refs: &mut Vec<Quali
 }
 
 fn collect_value_refs_expr<S>(expr: &acvus_ast::Expr<S>, refs: &mut Vec<QualifiedRef>) {
+    acvus_utils::grow(|| collect_value_refs_expr_level::<S>(expr, refs))
+}
+
+fn collect_value_refs_expr_level<S>(expr: &acvus_ast::Expr<S>, refs: &mut Vec<QualifiedRef>) {
     use acvus_ast::*;
     match expr {
         Expr::Ident {
@@ -1540,6 +1552,14 @@ impl Component<'_> {
 ///    - After an SCC is done: resolve ret vars -> concrete Ty::Fn.
 ///    - Next SCC sees concrete types -> instantiation is safe.
 pub fn infer(
+    interner: &Interner,
+    graph: &CompilationGraph,
+    extract: &ExtractResult,
+) -> InferResult {
+    acvus_utils::grow(|| infer_level(interner, graph, extract))
+}
+
+fn infer_level(
     interner: &Interner,
     graph: &CompilationGraph,
     extract: &ExtractResult,

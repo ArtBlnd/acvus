@@ -58,6 +58,15 @@ pub fn lower(
     parsed: &ParsedView<'_>,
     infer_result: &InferResult,
 ) -> LowerResult {
+    acvus_utils::grow(|| lower_level(interner, graph, parsed, infer_result))
+}
+
+fn lower_level(
+    interner: &Interner,
+    graph: &CompilationGraph,
+    parsed: &ParsedView<'_>,
+    infer_result: &InferResult,
+) -> LowerResult {
     let mut modules = FxHashMap::default();
     let mut errors = Vec::new();
     let callee_inputs = inputs_of(infer_result.outcomes.iter());
