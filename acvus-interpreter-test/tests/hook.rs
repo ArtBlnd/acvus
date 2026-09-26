@@ -380,14 +380,14 @@ fn a_context_is_promoted_across_a_hook_call_as_across_an_extern_call() {
     let hooked = compiled(
         host()
             .hook("ask", 1, HookEffect::Opaque)
-            .init("n", Source::Expr("0"))
+            .init("n", Source::Script("0"))
             .entry::<(), i64>("main", Source::Script(AROUND_A_CALL)),
     );
     let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
     registries.push(extern_registry! { ns: "stand_in", fns: [ask], });
     let externed = compiled(
         Host::new(registries)
-            .init("n", Source::Expr("0"))
+            .init("n", Source::Script("0"))
             .entry::<(), i64>("main", Source::Script(AROUND_A_CALL)),
     );
     let hooked = listed(&hooked);

@@ -29,7 +29,7 @@ use crate::ctl::{
     ConfigFile, CtlError, Defaults, Layers, OptLevel, Parallel, ResolvedSpace, SpaceChoice,
     SpaceSource, Timing,
 };
-use crate::location::{EXPR_ENTRY, ScriptKind};
+use crate::location::ScriptKind;
 
 const EXIT_COMPILE: u8 = 1;
 const EXIT_RUN: u8 = 2;
@@ -40,23 +40,22 @@ const EXIT_LSP_FAILED: u8 = 1;
 
 const USAGE: &str = "\
 usage: acvus run   <file.acvus|file.acvt|script> [name=literal]... [--space S] [--parallel[=P]] [--opt L] [--time[=T]]
-       acvus run   -e <expr>                     [name=literal]... [--space S] [--parallel[=P]] [--opt L] [--time[=T]]
-       acvus check <file|script> | -e <expr>     [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
-       acvus mir   <file|script> | -e <expr>     [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
-       acvus ops   <file|script> | -e <expr>     [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
+       acvus check <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
+       acvus mir   <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
+       acvus ops   <file|script>                 [name=literal]... [--space S] [--json] [--opt L] [--time[=T]]
        acvus ctl   ...                           (`acvus ctl` lists its commands)
        acvus lsp
 
-  .acvus is script mode, .acvt is a template; -e runs one expression.
+  .acvus is script mode, .acvt is a template.
   name=literal  binds the input `$name` to the value the literal writes, in
              the script's own syntax: 10, '\"jun\"', Some(1), [1, 2],
              { a: 1, }, a variant; the code it decides against is gone, and
              the inputs it alone read are no longer required
   --space    a space the active ctl context maps to a location: its scripts
              and inits compile as one graph, the positional names the script
-             to run, -e compiles beside them, and the run commits its writes
-             to it. A context the run fetches and the space lacks gets its
-             first value from its init, which `acvus ctl space init` stores.
+             to run, and the run commits its writes to it. A context the run
+             fetches and the space lacks gets its first value from its init,
+             which `acvus ctl space init` stores.
              Without --space the nearest .acvus/ above the working directory
              names the space; with neither, a source that names no context
              runs alone
@@ -87,7 +86,9 @@ enum Command {
 
 struct Args {
     command: Command,
-    source: Source,
+    /// Without a space the positional is a file; with one it is the name of
+    /// a script the space holds.
+    source: String,
     bindings: Vec<Binding>,
     json: bool,
     flags: Defaults,
@@ -99,13 +100,6 @@ fn level(opt: Opt) -> &'static str {
         Opt::None => "none",
         Opt::Full => "full",
     }
-}
-
-/// Without a space the positional is a file; with one it is the name of a
-/// script the space holds.
-enum Source {
-    Positional(String),
-    Expr(String),
 }
 
 enum Invocation {
@@ -142,13 +136,6 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
             continue;
         }
         match arg.as_str() {
-            "-e" => {
-                let expr = it.next().ok_or("-e takes an expression")?;
-                if source.is_some() {
-                    return Err("one source at a time".to_string());
-                }
-                source = Some(Source::Expr(expr.clone()));
-            }
             "--json" => json = true,
             "--space" => {
                 let name = it.next().ok_or("--space takes a space name")?;
@@ -161,7 +148,7 @@ fn parse_args(argv: &[String]) -> Result<Invocation, String> {
                     if source.is_some() {
                         return Err("one source at a time".to_string());
                     }
-                    source = Some(Source::Positional(word.to_string()));
+                    source = Some(word.to_string());
                 }
             },
         }
@@ -588,16 +575,6 @@ fn lone_file(path: &Path) -> Result<Sources, Stop> {
     })
 }
 
-fn expr_unit(entry: &str, text: &str) -> Unit {
-    Unit {
-        role: Role::Entry(entry.to_string()),
-        space: None,
-        path: "<expr>".to_string(),
-        mode: Mode::Expr,
-        text: text.to_string(),
-    }
-}
-
 /// Every script the space holds, one entry each, and every init it holds
 /// (RFC-0031 rule 3).
 fn space_units(space: &ResolvedSpace<'_>) -> Result<Vec<Unit>, Stop> {
@@ -620,26 +597,19 @@ fn space_units(space: &ResolvedSpace<'_>) -> Result<Vec<Unit>, Stop> {
     Ok(scripts.chain(inits).collect())
 }
 
-/// The space's units, and the script named or `-e`'s expression beside
-/// them as the target.
-fn space_sources(space: &ResolvedSpace<'_>, source: &Source) -> Result<Sources, Stop> {
-    let mut units = space_units(space)?;
-    let target = match source {
-        Source::Positional(name) => match units
-            .iter()
-            .position(|unit| matches!(&unit.role, Role::Entry(held) if held == name))
-        {
-            Some(at) => at,
-            None => {
-                return Err(Stop::usage(format!(
-                    "space `{}` holds no script `{name}`; `acvus ctl space add-script {} <file>` stores one",
-                    space.name, space.name
-                )));
-            }
-        },
-        Source::Expr(text) => {
-            units.push(expr_unit(EXPR_ENTRY, text));
-            units.len() - 1
+/// The space's units, and the script named as the target.
+fn space_sources(space: &ResolvedSpace<'_>, name: &str) -> Result<Sources, Stop> {
+    let units = space_units(space)?;
+    let target = match units
+        .iter()
+        .position(|unit| matches!(&unit.role, Role::Entry(held) if held == name))
+    {
+        Some(at) => at,
+        None => {
+            return Err(Stop::usage(format!(
+                "space `{}` holds no script `{name}`; `acvus ctl space add-script {} <file>` stores one",
+                space.name, space.name
+            )));
         }
     };
     Ok(Sources { units, target })
@@ -658,13 +628,9 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
         context: config.context_defaults(),
     }
     .settle();
-    let Sources { units, target } = match (&space, &args.source) {
-        (Some(space), source) => space_sources(space, source)?,
-        (None, Source::Positional(path)) => lone_file(Path::new(path))?,
-        (None, Source::Expr(text)) => Sources {
-            units: vec![expr_unit(LONE_ENTRY, text)],
-            target: 0,
-        },
+    let Sources { units, target } = match &space {
+        Some(space) => space_sources(space, &args.source)?,
+        None => lone_file(Path::new(&args.source))?,
     };
 
     let rendering = Rendering::of(args.json);
@@ -690,7 +656,7 @@ async fn compile_command(args: Args) -> Result<ExitCode, Stop> {
     };
     let mut timings = Timings::of(timed, program.times());
     let Role::Entry(entry) = &units[target].role else {
-        panic!("a command's target is a script or an expression, each an entry")
+        panic!("a command's target is a script, an entry")
     };
     let about = program.listing(entry).map_err(|e| Stop::run(e.to_string()))?;
     match args.command {
@@ -778,7 +744,7 @@ fn lsp() -> ExitCode {
 fn page_refusal(space: &str, error: HostError) -> Stop {
     match error {
         HostError::Unfilled { key } => Stop::run(format!(
-            "`@{key}` is not in space `{space}` yet and has no init; `acvus ctl space init {space} {key} -e <expr>` stores one"
+            "`@{key}` is not in space `{space}` yet and has no init; `acvus ctl space init {space} {key} -e <text>` stores one"
         )),
         HostError::Mismatched {
             what: Part::Context(key),
@@ -898,7 +864,7 @@ impl Printed {
             let text = text.clone();
             return match mode {
                 Mode::Template => Printed::Text(text),
-                Mode::Script | Mode::Expr => Printed::Line(text),
+                Mode::Script => Printed::Line(text),
             };
         }
         let unit = value.kind() == Kind::Unit || value.get::<Tuple>().is_some_and(|tuple| tuple.0.is_empty());

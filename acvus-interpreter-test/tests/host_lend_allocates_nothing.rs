@@ -47,7 +47,7 @@ static ALLOCATOR: Counting = Counting;
 
 fn program() -> Program {
     let host = Host::new(acvus_ext::std_registries::<AcvusRuntime>())
-        .init("log", Source::Expr("vec([])"))
+        .init("log", Source::Script("vec([])"))
         .entry::<(), ()>("one", Source::Script(r#"@log.push("one".to_string());"#))
         .entry::<(), ()>("two", Source::Script(r#"@log.push("two".to_string());"#));
     match host.compile(SequentialExecutor) {

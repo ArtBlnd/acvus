@@ -1,17 +1,15 @@
 # Acvus
 
-A statically typed scripting language, embedded in Rust. Scripts,
-templates and single expressions share one compiler: types are inferred
-from use, state the host keeps is named as `@context` values, and
-functions the host registers from Rust are called like any other. The
-compiler lowers to an SSA form, optimizes, and validates the result before
-a register machine runs it.
+A statically typed scripting language, embedded in Rust. Scripts and
+templates share one compiler: types are inferred from use, state the host
+keeps is named as `@context` values, and functions the host registers from
+Rust are called like any other. The compiler lowers to an SSA form,
+optimizes, and validates the result before a register machine runs it.
 
 ## Run
 
 ```sh
 cargo run -p acvus-cli -- run   script.acvus  [name=literal]... [--space S] [--parallel] [--opt none|full] [--time]
-cargo run -p acvus-cli -- run   -e '[1, 2, 3] | map(|x| -> x * 2) | sum'
 cargo run -p acvus-cli -- check script.acvus [--json] [--opt none|full] [--time]
 cargo run -p acvus-cli -- mir   script.acvus [--json] [--opt none|full] [--time]
 cargo run -p acvus-cli -- ops   script.acvus [--json] [--opt none|full] [--time]
@@ -240,16 +238,16 @@ pub struct Visit {
 
 async fn run() -> Result<(), HostError> {
     let program = Host::new(acvus_ext::std_registries::<AcvusRuntime>())
-        .init("seen", Source::Expr("vec([])"))
+        .init("seen", Source::Script("vec([])"))
         .entry::<Visit, String>(
             "visit",
             Source::Script(r#"@seen.push($who.clone()); "hello, {{ &$who }}""#),
         )
-        .entry::<(), u64>("visits", Source::Expr("@seen.len()"))
+        .entry::<(), u64>("visits", Source::Script("@seen.len()"))
         .entry_shaped::<i64>(
             "plus",
             InputShape::new().field::<i64>("a").field::<i64>("b"),
-            Source::Expr("$a + $b"),
+            Source::Script("$a + $b"),
         )
         .compile(SequentialExecutor)?;
 

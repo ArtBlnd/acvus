@@ -497,7 +497,7 @@ struct Options {
 
 /// How `ctl space init` is given the init's source.
 enum InitGiven {
-    Expr(String),
+    Text(String),
     File(String),
     Remove,
 }
@@ -541,7 +541,7 @@ fn options(args: &[String], admits: &[Admits]) -> Ctl<Options> {
                 options.space = Some(value("--space")?)
             }
             "-e" if admitted(|a| matches!(a, Admits::InitSource)) => {
-                given(InitGiven::Expr(value("-e")?))?
+                given(InitGiven::Text(value("-e")?))?
             }
             "-f" if admitted(|a| matches!(a, Admits::InitSource)) => {
                 given(InitGiven::File(value("-f")?))?
@@ -570,7 +570,7 @@ usage: acvus ctl use <context>
        acvus ctl space mark <space>
        acvus ctl space add-script <space> <file>...
        acvus ctl space rm-script <space> <script>
-       acvus ctl space init <space> <key> -e <expr> | -f <file>
+       acvus ctl space init <space> <key> -e <text> | -f <file>
        acvus ctl space init --rm <space> <key>
        acvus ctl space fill <space>
 
@@ -578,7 +578,7 @@ usage: acvus ctl use <context>
   and makes it where the config has none by that name. A location is
   dir:<path>, a directory holding the space's scripts, inits and contexts.
   `mark` names the space for every command under the working directory.
-  `init` stores the init of `@key`: the expression or file whose value is
+  `init` stores the init of `@key`: the script text or file whose value is
   the context's first value, run when a run fetches `@key` and the space
   lacks it; `fill` runs every init whose context the space lacks.
   keys: parallel (sequential | tokio), opt (full | none), time (on | off);
@@ -787,7 +787,7 @@ fn space_mark(options: &Options, cwd: &Path) -> Ctl<()> {
 }
 
 fn space_init(file: &ConfigFile, options: &Options) -> Ctl<()> {
-    const SHAPE: &str = "space init <space> <key> -e <expr> | -f <file>, or space init --rm <space> <key>";
+    const SHAPE: &str = "space init <space> <key> -e <text> | -f <file>, or space init --rm <space> <key>";
     let [space, key] = exactly(options, SHAPE)?;
     let key = ContextKey::new(&key).map_err(CtlError::Refused)?;
     let Some(given) = &options.init else {
@@ -798,7 +798,7 @@ fn space_init(file: &ConfigFile, options: &Options) -> Ctl<()> {
         source: SpaceSource::Flag,
     })?;
     let stored = match given {
-        InitGiven::Expr(text) => resolved.location.put_init(&key, ScriptKind::Script, text),
+        InitGiven::Text(text) => resolved.location.put_init(&key, ScriptKind::Script, text),
         InitGiven::File(source) => {
             let Some(kind) = ScriptKind::of_path(Path::new(source)) else {
                 return refused(format!(

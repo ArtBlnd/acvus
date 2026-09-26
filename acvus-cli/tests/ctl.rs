@@ -100,7 +100,7 @@ fn a_run_on_an_empty_space_fills_the_context_from_its_init_and_commits_it() {
     let refusal = sandbox.refused(&["run", "turn", "--space", "notes", "note=\"first\""], 2);
     assert_eq!(
         refusal,
-        "error: `@notes` is not in space `notes` yet and has no init; `acvus ctl space init notes notes -e <expr>` stores one\n"
+        "error: `@notes` is not in space `notes` yet and has no init; `acvus ctl space init notes notes -e <text>` stores one\n"
     );
     let listing = sandbox.ok(&["ctl", "space", "ls", "notes"]);
     assert!(log_lines(&listing).is_empty(), "the refused run committed nothing:\n{listing}");
@@ -171,18 +171,22 @@ fn a_script_that_calls_another_script_passes_it_the_input_it_was_run_with() {
 }
 
 #[test]
-fn an_init_is_stored_from_an_expression_or_a_file_and_removed() {
+fn an_init_is_stored_from_script_text_or_a_file_and_removed() {
     let sandbox = Sandbox::new();
     let init = sandbox.write("elsewhere/greeting.acvus", "let g = \"hi\".to_string();\ng\n");
     sandbox.ok(&["ctl", "use", "work"]);
     sandbox.ok(&["ctl", "space", "add", "s", "dir:store"]);
     sandbox.ok(&["ctl", "space", "init", "s", "n", "-e", "41"]);
     sandbox.ok(&["ctl", "space", "init", "s", "greeting", "-f", init.to_str().unwrap()]);
+    sandbox.write("bump.acvus", "@n + 1\n");
+    sandbox.write("greet.acvus", "@greeting\n");
+    sandbox.write("held.acvus", "@n\n");
+    sandbox.ok(&["ctl", "space", "add-script", "s", "bump.acvus", "greet.acvus", "held.acvus"]);
     std::fs::remove_dir_all(sandbox.work().join("elsewhere")).expect("remove the source");
 
     assert_eq!(
         std::fs::read_to_string(sandbox.work().join("store/inits/n.acvus"))
-            .expect("the space holds the expression"),
+            .expect("the space holds the text"),
         "41"
     );
     assert_eq!(
@@ -190,14 +194,14 @@ fn an_init_is_stored_from_an_expression_or_a_file_and_removed() {
             .expect("the space holds the file's source"),
         "let g = \"hi\".to_string();\ng\n"
     );
-    assert_eq!(sandbox.ok(&["run", "-e", "@n + 1", "--space", "s"]), "42\n");
-    assert_eq!(sandbox.ok(&["run", "-e", "@greeting", "--space", "s"]), "hi\n");
+    assert_eq!(sandbox.ok(&["run", "bump", "--space", "s"]), "42\n");
+    assert_eq!(sandbox.ok(&["run", "greet", "--space", "s"]), "hi\n");
 
     assert_eq!(
         sandbox.ok(&["ctl", "space", "init", "s", "n", "-e", "7"]),
         "space `s` holds the init of `@n`, replacing the one it held\n"
     );
-    assert_eq!(sandbox.ok(&["run", "-e", "@n", "--space", "s"]), "41\n", "a held value is kept");
+    assert_eq!(sandbox.ok(&["run", "held", "--space", "s"]), "41\n", "a held value is kept");
     sandbox.ok(&["ctl", "space", "init", "--rm", "s", "greeting"]);
     let listing = sandbox.ok(&["ctl", "space", "ls", "s"]);
     assert!(listing.contains("init @n (acvus)\n"), "{listing}");
@@ -265,12 +269,14 @@ fn the_nearest_acvus_directory_names_the_space() {
     sandbox.ok(&["ctl", "use", "work"]);
     sandbox.ok(&["ctl", "space", "add", "s", "dir:store"]);
     sandbox.ok(&["ctl", "space", "init", "s", "n", "-e", "5"]);
+    sandbox.write("bump.acvus", "@n + 1\n");
+    sandbox.ok(&["ctl", "space", "add-script", "s", "bump.acvus"]);
     let project = sandbox.work().join("project");
     let deep = project.join("deep").join("er");
     std::fs::create_dir_all(&deep).expect("make the subdirectory");
     sandbox.ok_in(&project, &["ctl", "space", "mark", "s"]);
 
-    assert_eq!(sandbox.ok_in(&deep, &["run", "-e", "@n + 1"]), "6\n");
+    assert_eq!(sandbox.ok_in(&deep, &["run", "bump"]), "6\n");
     let shown = sandbox.ok_in(&deep, &["ctl", "show"]);
     assert!(
         shown.contains(&format!(
@@ -285,20 +291,22 @@ fn the_nearest_acvus_directory_names_the_space() {
 /// A script that stores its context keeps today's rules: it gives the value
 /// on a page that lacks it, and no init is involved.
 #[test]
-fn an_expression_that_stores_a_context_compiles_beside_the_space_s_scripts() {
+fn a_script_that_stores_a_context_compiles_beside_the_space_s_scripts() {
     let sandbox = Sandbox::new();
     sandbox.write("turn.acvus", TURN);
+    sandbox.write("reset.acvus", "@notes = deque();\n");
+    sandbox.write("note_count.acvus", "@notes.len()\n");
     sandbox.ok(&["ctl", "use", "work"]);
     sandbox.ok(&["ctl", "space", "add", "notes", "dir:notes"]);
-    sandbox.ok(&["ctl", "space", "add-script", "notes", "turn.acvus"]);
+    sandbox.ok(&["ctl", "space", "add-script", "notes", "turn.acvus", "reset.acvus", "note_count.acvus"]);
     sandbox.ok(&["ctl", "space", "init", "notes", "notes", "-e", "deque()"]);
 
-    sandbox.ok(&["run", "-e", "@notes = deque();", "--space", "notes"]);
+    sandbox.ok(&["run", "reset", "--space", "notes"]);
     assert_eq!(
         sandbox.ok(&["run", "turn", "--space", "notes", "note=\"x\""]),
         "1\n"
     );
-    assert_eq!(sandbox.ok(&["run", "-e", "@notes.len()", "--space", "notes"]), "1\n");
+    assert_eq!(sandbox.ok(&["run", "note_count", "--space", "notes"]), "1\n");
 }
 
 #[test]
@@ -339,11 +347,13 @@ fn a_space_s_default_is_shown_with_its_source_and_a_flag_overrides_it() {
     assert!(shown.contains("parallel = sequential (built-in)\n"), "{shown}");
 
     sandbox.ok(&["ctl", "set", "time", "on", "--space", "s"]);
-    let timed = sandbox.acvus(&["run", "-e", "1", "--space", "s"]);
+    sandbox.write("one.acvus", "1\n");
+    sandbox.ok(&["ctl", "space", "add-script", "s", "one.acvus"]);
+    let timed = sandbox.acvus(&["run", "one", "--space", "s"]);
     assert_eq!(timed.status.code(), Some(0), "{}", text(&timed.stderr));
     assert!(text(&timed.stderr).contains("time: compile "), "{}", text(&timed.stderr));
     assert!(text(&timed.stderr).contains(" at opt none "), "{}", text(&timed.stderr));
-    let untimed = sandbox.acvus(&["run", "-e", "1", "--space", "s", "--time=off"]);
+    let untimed = sandbox.acvus(&["run", "one", "--space", "s", "--time=off"]);
     assert_eq!(untimed.status.code(), Some(0), "{}", text(&untimed.stderr));
     assert_eq!(text(&untimed.stderr), "");
 
@@ -378,10 +388,11 @@ fn every_refusal_names_the_command_that_resolves_it() {
     let no_init = sandbox.refused(&["run", "reads", "--space", "s"], 2);
     assert_eq!(
         no_init,
-        "error: `@n` is not in space `s` yet and has no init; `acvus ctl space init s n -e <expr>` stores one\n"
+        "error: `@n` is not in space `s` yet and has no init; `acvus ctl space init s n -e <text>` stores one\n"
     );
 
-    let unbound = sandbox.refused(&["run", "-e", "$x + 1"], 1);
+    sandbox.write("unbound.acvus", "$x + 1\n");
+    let unbound = sandbox.refused(&["run", "unbound.acvus"], 1);
     assert!(unbound.contains("`x=<literal>` binds it"), "{unbound}");
 
     let removed = sandbox.refused(&["ctl", "space", "rm-script", "s", "nope"], 64);
@@ -391,7 +402,7 @@ fn every_refusal_names_the_command_that_resolves_it() {
     assert!(twice.contains("`acvus ctl space rm s`"), "{twice}");
 
     let no_source = sandbox.refused(&["ctl", "space", "init", "s", "n"], 64);
-    assert!(no_source.contains("usage: acvus ctl space init <space> <key> -e <expr>"), "{no_source}");
+    assert!(no_source.contains("usage: acvus ctl space init <space> <key> -e <text>"), "{no_source}");
     let bad_key = sandbox.refused(&["ctl", "space", "init", "s", "1n", "-e", "1"], 64);
     assert!(bad_key.contains("is not a context's name"), "{bad_key}");
     let marked = sandbox.refused(&["ctl", "space", "init", "s"], 64);
@@ -403,6 +414,5 @@ fn a_context_free_source_runs_without_any_config() {
     let sandbox = Sandbox::new();
     sandbox.write("pure.acvus", "let xs = [1, 2];\nxs.len() * 10\n");
     assert_eq!(sandbox.ok(&["run", "pure.acvus"]), "20\n");
-    assert_eq!(sandbox.ok(&["run", "-e", "1 + 2"]), "3\n");
     assert!(!sandbox.config().exists(), "a run wrote a config");
 }
