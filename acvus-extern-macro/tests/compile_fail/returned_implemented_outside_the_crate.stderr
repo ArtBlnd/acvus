@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `Forged<Rt>: acvus_extern::ret::sealed::Returned<acvus_extern::ret::Concrete<i64>, Rt>` is not satisfied
+  --> tests/compile_fail/returned_implemented_outside_the_crate.rs:10:49
+   |
+10 | unsafe impl<Rt> Returned<Concrete<i64>, Rt> for Forged<Rt>
+   |                                                 ^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `acvus_extern::ret::sealed::Returned<acvus_extern::ret::Concrete<i64>, Rt>` is not implemented for `Forged<Rt>`
+  --> tests/compile_fail/returned_implemented_outside_the_crate.rs:6:1
+   |
+ 6 | struct Forged<Rt>(Rt::Value)
+   | ^^^^^^^^^^^^^^^^^
+   = note: `Forged<Rt>` implements similarly named trait `acvus_extern::ret::Returned`, but not `acvus_extern::ret::sealed::Returned<acvus_extern::ret::Concrete<i64>, Rt>`
+help: the trait `acvus_extern::ret::sealed::Returned<acvus_extern::ret::OptionOfVar, Rt>` is implemented for `std::option::Option<T>`
+  --> $WORKSPACE/acvus-extern/src/ret.rs
+   |
+   | / impl<T, Rt> sealed::Returned<OptionOfVar, Rt> for Option<T>
+   | | where
+   | |     T: OneValue<Rt>,
+   | |     Rt: Runtime,
+   | |________________^
+note: required by a bound in `acvus_extern::ret::Returned`
+  --> $WORKSPACE/acvus-extern/src/ret.rs
+   |
+   | pub unsafe trait Returned<S, Rt>: sealed::Returned<S, Rt> + Sized
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Returned`
+   = note: `Returned` is a "sealed trait", because to implement it you also need to implement `acvus_extern::ret::sealed::Returned`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+   = help: the following types implement the trait:
+             T
+             T
+             std::option::Option<T>
