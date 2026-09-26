@@ -1554,14 +1554,17 @@ nothing crosses it but lent arguments and a result written in place
    its caller until the entry ends. The entry's result, a value it made,
    moves into the call's `Output`, and a write through a `&mut` argument
    stores in the caller's storage; nothing the entry is lent outlives the
-   call.
+   call. While it waits, the entry's contexts are its own program's
+   storage, held by the call until the entry ends.
 3. **Types are compared at binding.** A value carries its program's
    names (an enum's tags, an object's fields), so both programs are
    compiled over one table of names, and binding refuses two. At every
    call site of the hook, each argument's settled type must be within the
-   entry's input (an enum the site builds may have fewer variants than the
-   entry takes, as structural types meet by union, RFC-0042 rule 1), and the
-   entry's result within the site's settled result; a mismatch refuses the
+   entry's input, and the entry's result within the site's settled result:
+   an enum within one of more variants laid out at the same width, as
+   structural types meet by union (RFC-0042 rule 1); an object only with
+   the same fields, since its layout is its field set and no union joins
+   two programs' objects; a type behind `&mut` the same on both sides; a mismatch refuses the
    binding, naming the site and the position. Only the language's own
    types cross: no extension type, function value, task handle or view,
    and a reference only as a whole argument.
@@ -1569,9 +1572,10 @@ nothing crosses it but lent arguments and a result written in place
    contexts: a read of one counts as idempotent and a write as opaque,
    and the entry's effects are within the hook's declared effect, or the
    binding is refused. A call that would run an entry of a program
-   already running on the same call stack traps (RFC-0048). Two programs
-   bound to each other hold no strong cycle: each is released with its
-   host.
+   already running on the same call stack traps (RFC-0048). A binding
+   holds its entry's program weakly, so two programs bound to each other
+   are each released with its host, and a hook whose entry's program was
+   released is unbound again.
 
 **Why.** A lent argument and an in-place result are the plainest sound
 shape for two programs no checker saw together: no value leaves the call,
