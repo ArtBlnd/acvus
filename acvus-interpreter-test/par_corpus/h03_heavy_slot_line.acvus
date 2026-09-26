@@ -1,0 +1,13 @@
+// id: H03
+// family: heavy
+// desc: a request text built in a `let` slot, parsed heavy, and the slot read again after the call for a line per element
+// registry: ahead
+// returns: u64
+// expect: 10:10191\n20:20650\n30:30504\n40:40912\n4
+let xs = vec(["1".to_string(), "2".to_string(), "3".to_string(), "4".to_string()]);
+for s in &xs {
+    let t = s.to_string() + "0";
+    let v = ah::crunch(t.to_string()).unwrap();
+    ah::emit(&(t + ":" + v.to_string()));
+}
+xs.len()

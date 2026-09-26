@@ -1,0 +1,12 @@
+// id: H01
+// family: heavy
+// desc: a heavy parser per element, each result pushed in index order
+// registry: ahead
+// returns: String
+// expect: 12745,7109,40912,3461,18845,25804
+let xs = vec(["12".to_string(), "7".to_string(), "40".to_string(), "3".to_string(), "18".to_string(), "25".to_string()]);
+let out = vec([]);
+for s in &xs {
+    out.push(ah::crunch(s.to_string()).unwrap());
+}
+out.into_iter().map(|x| -> x.to_string()).join(",".to_string())

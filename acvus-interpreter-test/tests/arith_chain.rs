@@ -40,6 +40,7 @@ fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
         context_names: &cr.context_names,
         instances: &cr.instances,
         access: acvus_mir::graph::Access::Sync,
+        lowering: acvus_interpreter::Lowering::InPlace,
     };
     assert_eq!(cr.modules.len(), 1, "these scripts are one module");
     let (_, module) = cr.modules.iter().next().expect("one module");

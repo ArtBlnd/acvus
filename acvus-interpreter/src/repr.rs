@@ -21,7 +21,9 @@ use std::slice;
 use acvus_extern::repr::{self as word, PtrWord};
 use acvus_extern::{Holding, Owned};
 
-use crate::regs::{CELL_SLOTS, Cell};
+use crate::code::Marked;
+use crate::prepare::ScratchClaim;
+use crate::regs::{CELL_SLOTS, Cell, Regs};
 use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 use crate::vtable::{Composite, NameFn};
@@ -876,6 +878,56 @@ impl Record {
     }
 }
 
+// -- A register prepare claimed for one type (RFC-0102: `Claimed`) ----------
+
+/// Cross-artifact obligation: the `ScratchClaim` that `of` consumes is made
+/// where `prepare` advances its scratch count, so the register lies past every
+/// register the MIR names, and no other claim or operation names it.
+pub(crate) struct Claimed<T>(Marked, PhantomData<fn() -> T>);
+
+impl<T> Clone for Claimed<T> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Claimed<T> {}
+
+impl<T> Claimed<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub(crate) fn of(claim: ScratchClaim) -> Claimed<T> {
+        Claimed(Marked::of(claim.slot()), PhantomData)
+    }
+
+    #[inline(always)]
+    pub(crate) fn define(self, regs: &mut Regs<'_>, value: T) {
+        // SAFETY: only `held` reads the register, at this handle's `T`, and
+        // the frame's sweep and `release` free it through the vtable `erase`
+        // gives it.
+        regs.assign::<true>(self.0, unsafe { Value::erase(value) });
+    }
+
+    /// Cross-artifact obligation: `prepare` lays the operation that calls
+    /// `define` on every path before the operations that call this, and
+    /// `release` runs only as the last of them leaves the register. The
+    /// machine trusts that layout as it trusts every register's kind
+    /// (RFC-0102 rule 3).
+    #[inline(always)]
+    pub(crate) fn held<'r>(self, regs: &'r mut Regs<'_>) -> &'r mut T {
+        // SAFETY: the register is this handle's alone, and by the obligation
+        // above `define` wrote it at `T` before this read.
+        unsafe { regs.peek_mut(self.0.at()).peek_mut::<T>() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn release(self, regs: &mut Regs<'_>) {
+        regs.take::<true>(self.0).release_owned();
+    }
+}
+
 // -- A frame's cells as its registers -----------------------------------------
 
 const _: () = assert!(
@@ -1064,6 +1116,28 @@ pub mod native_stack {
     pub fn position() -> usize {
         let here = 0u8;
         std::ptr::from_ref(&here).addr()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_values {
+    use std::sync::Arc;
+
+    use crate::value::Value;
+
+    struct Counted {
+        _alive: Arc<()>,
+    }
+
+    /// A `Large` that holds a count of `alive` until it is released.
+    pub(crate) fn counted(alive: &Arc<()>) -> Value {
+        // SAFETY: no reader materializes the value; its release drops it
+        // through the vtable `erase` gives it, as the `Counted` it was.
+        unsafe {
+            Value::erase(Counted {
+                _alive: Arc::clone(alive),
+            })
+        }
     }
 }
 

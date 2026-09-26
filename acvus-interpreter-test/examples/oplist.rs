@@ -188,6 +188,7 @@ fn main() {
         context_names: &cr.context_names,
         instances: &cr.instances,
         access: acvus_mir::graph::Access::Sync,
+        lowering: acvus_interpreter::Lowering::InPlace,
     };
     for (qref, module) in &cr.modules {
         let prepared = prepare_module(module, &ctx)
