@@ -1,0 +1,14 @@
+// id: I02
+// family: io
+// desc: an effectful io call per element under `anyorder`, which gives up its order, each answer pushed in index order
+// registry: ahead
+// returns: String
+// expect:  0 , 3 , 6 , 9 , 12 , 15 
+let urls = vec(["u/0".to_string(), "u/1".to_string(), "u/2".to_string(), "u/3".to_string(), "u/4".to_string(), "u/5".to_string()]);
+let out = vec([]);
+anyorder {
+    for u in &urls {
+        out.push(ah::post(u.to_string()));
+    }
+}
+out.into_iter().join(",".to_string())

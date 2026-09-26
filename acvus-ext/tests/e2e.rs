@@ -144,6 +144,7 @@ async fn run_parsed(
         context_names: &context_names,
         instances: &instances,
         access: acvus_mir::graph::Access::Sync,
+        lowering: acvus_interpreter::Lowering::InPlace,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = result
         .modules
@@ -1314,4 +1315,44 @@ async fn a_str_parameter_reads_the_borrowed_string_s_own_bytes() {
         97,
         "the first byte of the string the script made"
     );
+}
+
+/// RFC-0082 rule 9 sampled: `to_string`'s own handler over each `display`
+/// type's edges.
+#[tokio::test]
+async fn to_string_is_total_over_each_display_type_s_edges() {
+    let cases: Vec<(&str, String)> = vec![
+        ("(-128i8).to_string()", i8::MIN.to_string()),
+        ("127i8.to_string()", i8::MAX.to_string()),
+        ("(-32768i16).to_string()", i16::MIN.to_string()),
+        ("32767i16.to_string()", i16::MAX.to_string()),
+        ("(-2147483648i32).to_string()", i32::MIN.to_string()),
+        ("2147483647i32.to_string()", i32::MAX.to_string()),
+        ("(-9223372036854775807 - 1).to_string()", i64::MIN.to_string()),
+        ("9223372036854775807.to_string()", i64::MAX.to_string()),
+        ("0.to_string()", 0.to_string()),
+        ("255u8.to_string()", u8::MAX.to_string()),
+        ("65535u16.to_string()", u16::MAX.to_string()),
+        ("4294967295u32.to_string()", u32::MAX.to_string()),
+        ("18446744073709551615u64.to_string()", u64::MAX.to_string()),
+        ("0u64.to_string()", 0u64.to_string()),
+        ("(-0.0).to_string()", (-0.0f64).to_string()),
+        ("(1.0 / 0.0).to_string()", f64::INFINITY.to_string()),
+        ("(0.0 / 0.0).to_string()", f64::NAN.to_string()),
+        ("'é'.to_string()", 'é'.to_string()),
+        ("false.to_string()", false.to_string()),
+        (
+            r#"decimal("79228162514264337593543950335".to_string()).unwrap().to_string()"#,
+            "79228162514264337593543950335".to_string(),
+        ),
+        (
+            r#"decimal("-0.0000000000000000000000000001".to_string()).unwrap().to_string()"#,
+            "-0.0000000000000000000000000001".to_string(),
+        ),
+    ];
+    for (source, expected) in cases {
+        let i = Interner::new();
+        let result = run_ext(&i, source, TypedContext::default(), vec![]).await;
+        assert_str(&result, &expected);
+    }
 }

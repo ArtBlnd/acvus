@@ -36,6 +36,11 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+fn snippet(dir: &Path, source: &str) -> &'static str {
+    std::fs::write(dir.join("snippet.acvus"), source).expect("write a fixture");
+    "snippet.acvus"
+}
+
 #[test]
 fn a_script_prints_its_value_as_json() {
     let dir = tempfile::tempdir().unwrap();
@@ -51,14 +56,12 @@ fn a_script_prints_its_value_as_json() {
 }
 
 #[test]
-fn a_template_prints_its_text_and_an_expression_prints_its_value() {
+fn a_template_prints_its_text() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "hi.acvt", "Hello {{ $name }}!");
     let out = acvus(dir.path(), &["run", "hi.acvt", "name=\"acvus\""]);
     assert_eq!(text(&out.stdout), "Hello acvus!");
     assert_eq!(text(&out.stderr), "");
-    let out = acvus(dir.path(), &["run", "-e", "let xs = [1, 2]; xs.len() * 10"]);
-    assert_eq!(text(&out.stdout), "20\n");
 }
 
 /// RFC-0071 rule 3 at the CLI: which of text or `core::display` a tag is is
@@ -104,7 +107,7 @@ fn a_closure_parameter_lent_to_a_str_parameter_runs() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
         dir.path(),
-        &["run", "-e", "let f = |x| -> concat(\"q\", &x); f(\"z\")"],
+        &["run", snippet(dir.path(), "let f = |x| -> concat(\"q\", &x); f(\"z\")")],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "qz\n");
@@ -197,7 +200,7 @@ fn an_unused_division_that_can_panic_panics_at_every_level() {
     ];
     for opt in ["none", "full"] {
         for case in &cases {
-            let args = [&["run", "--opt", opt, "-e"], case.args].concat();
+            let args = [&["run", "--opt", opt, snippet(dir.path(), case.args[0])], &case.args[1..]].concat();
             let out = acvus(dir.path(), &args);
             assert_eq!(out.status.code(), Some(2), "at {opt}: {:?}", case.args);
             assert_eq!(text(&out.stdout), "", "at {opt}: {:?}", case.args);
@@ -230,7 +233,7 @@ fn an_unused_operation_that_can_trap_traps_at_every_level() {
     ];
     for opt in ["none", "full"] {
         for case in &cases {
-            let args = [&["run", "--opt", opt, "-e"], case.args].concat();
+            let args = [&["run", "--opt", opt, snippet(dir.path(), case.args[0])], &case.args[1..]].concat();
             let out = acvus(dir.path(), &args);
             assert_eq!(out.status.code(), Some(2), "at {opt}: {:?}", case.args);
             assert_eq!(text(&out.stdout), "", "at {opt}: {:?}", case.args);
@@ -254,7 +257,7 @@ fn an_unused_operation_that_cannot_trap_runs_past() {
     ];
     for opt in ["none", "full"] {
         for source in sources {
-            let out = acvus(dir.path(), &["run", "--opt", opt, "-e", source]);
+            let out = acvus(dir.path(), &["run", "--opt", opt, snippet(dir.path(), source)]);
             assert_eq!(out.status.code(), Some(0), "at {opt}: {source}: {}", text(&out.stderr));
             assert_eq!(text(&out.stdout), "5\n", "at {opt}: {source}");
         }
@@ -272,7 +275,7 @@ fn an_unused_division_that_cannot_panic_and_an_unused_overflow_run_past() {
     ];
     for opt in ["none", "full"] {
         for source in &values {
-            let args = [&["run", "--opt", opt, "-e"], source.as_slice()].concat();
+            let args = [&["run", "--opt", opt, snippet(dir.path(), source[0])], &source[1..]].concat();
             let out = acvus(dir.path(), &args);
             assert_eq!(out.status.code(), Some(0), "at {opt}: {source:?}: {}", text(&out.stderr));
             assert_eq!(text(&out.stdout), "5\n", "at {opt}: {source:?}");
@@ -971,8 +974,7 @@ fn regex_and_datetime_need_no_flag() {
         dir.path(),
         &[
             "run",
-            "-e",
-            "let re = regex(\"a+\")?; is_match(&re, \"baaad\")",
+            snippet(dir.path(), "let re = regex(\"a+\")?; is_match(&re, \"baaad\")"),
         ],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
@@ -982,8 +984,7 @@ fn regex_and_datetime_need_no_flag() {
         dir.path(),
         &[
             "run",
-            "-e",
-            "let d = parse_date(\"2026-09-19T09:58:03\", \"%Y-%m-%dT%H:%M:%S\")?; timestamp(d)",
+            snippet(dir.path(), "let d = parse_date(\"2026-09-19T09:58:03\", \"%Y-%m-%dT%H:%M:%S\")?; timestamp(d)"),
         ],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
@@ -997,7 +998,7 @@ fn print_writes_its_lines_before_the_result_and_the_times_follow_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
         dir.path(),
-        &["run", "-e", "print(\"x\"); print(\"y\"); 1", "--time"],
+        &["run", snippet(dir.path(), "print(\"x\"); print(\"y\"); 1"), "--time"],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), "x\ny\n1\n");
@@ -1099,6 +1100,20 @@ fn a_level_the_compiler_does_not_have_is_a_usage_error() {
     }
 }
 
+#[test]
+fn e_is_an_unknown_flag_and_the_usage_names_the_sources_a_command_takes() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = crate::sandbox::acvus()
+        .current_dir(dir.path())
+        .args(["run", "-e", "1"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(out.status.code(), Some(64), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "");
+    let stderr = text(&out.stderr);
+    assert!(stderr.starts_with("error: unknown flag `-e`\nusage: acvus run   <file.acvus|file.acvt|script>"), "{stderr}");
+}
+
 /// Each shape the checker used to admit and the machine could not run: the
 /// refusal is the checker's, at `check`, and `run` never reaches `prepare`.
 #[test]
@@ -1157,7 +1172,7 @@ fn a_vec_and_a_deque_print_as_the_json_array_of_their_items() {
     ];
     for (source, expected) in cases {
         for level in ["full", "none"] {
-            let out = acvus(dir.path(), &["run", "-e", source, "--opt", level]);
+            let out = acvus(dir.path(), &["run", snippet(dir.path(), source), "--opt", level]);
             assert_eq!(out.status.code(), Some(0), "{source}: {}", text(&out.stderr));
             assert_eq!(text(&out.stdout), expected, "{source} at opt {level}");
         }
@@ -1198,7 +1213,7 @@ fn a_map_prints_as_its_key_value_pairs_and_a_set_as_its_keys_in_insertion_order(
     ];
     for (source, expected) in cases {
         for level in ["full", "none"] {
-            let out = acvus(dir.path(), &["run", "-e", source, "--opt", level]);
+            let out = acvus(dir.path(), &["run", snippet(dir.path(), source), "--opt", level]);
             assert_eq!(out.status.code(), Some(0), "{source}: {}", text(&out.stderr));
             assert_eq!(text(&out.stdout), expected, "{source} at opt {level}");
         }
@@ -1210,7 +1225,7 @@ fn a_value_with_no_data_view_prints_its_name_and_a_closure_never_reaches_the_pri
     let dir = tempfile::tempdir().unwrap();
     let out = acvus(
         dir.path(),
-        &["run", "-e", "match regex(\"a+\") { Ok(r) => r, Err(e) => panic(\"no\".to_string()), }"],
+        &["run", snippet(dir.path(), "match regex(\"a+\") { Ok(r) => r, Err(e) => panic(\"no\".to_string()), }")],
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     let printed = text(&out.stdout);
@@ -1218,7 +1233,7 @@ fn a_value_with_no_data_view_prints_its_name_and_a_closure_never_reaches_the_pri
         printed.starts_with("\"<") && printed.ends_with(">\"\n") && printed.contains("Regex"),
         "{printed}"
     );
-    let out = acvus(dir.path(), &["run", "-e", "(1, |x| -> x + 1)"]);
+    let out = acvus(dir.path(), &["run", snippet(dir.path(), "(1, |x| -> x + 1)")]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     assert!(
         text(&out.stderr).contains("a closure does not leave the run it was made in"),

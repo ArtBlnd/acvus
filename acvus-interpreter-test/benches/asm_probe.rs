@@ -23,10 +23,14 @@ use acvus_utils::Interner;
 /// that ends a region's part, and the calls and waited storage accesses that
 /// leave through the driver.
 /// A `ret` ends one of these; every other `Op::run` ends in a `jmp`.
+/// `control::ForAhead` is `ForAt` of a loop lowered ahead (RFC-0103): it
+/// returns the block to enter as `ForAt` does, and the prefix chain it runs
+/// is a part it calls, not a successor it could jump to.
 const NO_SUCCESSOR: &[&str] = &[
     "control::Goto",
     "control::JumpIf",
     "control::ForAt",
+    "control::ForAhead",
     "switch::Switch",
     "switch::SwitchOption",
     "switch::SwitchWord",

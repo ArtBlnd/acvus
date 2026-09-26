@@ -1,5 +1,6 @@
 //! One binary: `cargo test -p acvus-interpreter-test --test all <file>::<test>`.
 
+mod ahead_run;
 mod anyorder_closure;
 mod args_view;
 mod arith_chain;
@@ -84,6 +85,7 @@ mod option_form;
 mod option_methods;
 mod option_payload_drop;
 mod option_string_drop;
+mod par_corpus_ahead;
 mod pattern_sources;
 mod pattern_through;
 mod place_forms;

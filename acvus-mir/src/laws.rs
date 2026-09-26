@@ -14,7 +14,7 @@ use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
 use crate::graph::{FnKind, Function, QualifiedRef};
-use crate::ir::Callee;
+use crate::ir::{Callee, Chosen};
 use crate::means::{EntryReading, Means, Named, Stmt as MeansStmt, Term as MeansTerm};
 use crate::step::Step;
 use crate::ty::{Mutability, PolyTy, Task, View, Viewed, matches_pattern};
@@ -167,7 +167,8 @@ pub enum Reaches {
 }
 
 /// How a call of the instance ends, as its declaration states it (RFC-0082
-/// rules 8 and 9): the author's promise, read by the instance a call names.
+/// rules 8 and 9): the author's promise. A call reads it through
+/// [`LawTable::returns_of`], over the instance tree it chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Returns {
     #[default]
@@ -175,9 +176,10 @@ pub enum Returns {
     /// `#[extern_fn(returns)]`: every call returns or traps. RFC-0089 rule 5
     /// reads it to run the call ahead of its iteration's control token.
     Stated,
-    /// `#[extern_fn(total)]`: every call returns a value and never traps.
-    /// `analysis::raise` reads it to let a call whose value nothing reads go
-    /// (RFC-0048 rule 8).
+    /// `#[extern_fn(total)]`: the instance's own body returns a value and
+    /// never traps. An instance with requirements states it of that body
+    /// alone, and the instances its requirements choose answer for
+    /// themselves.
     Total,
 }
 
@@ -193,6 +195,14 @@ impl Returns {
         match self {
             Returns::Unstated | Returns::Stated => false,
             Returns::Total => true,
+        }
+    }
+
+    fn meet(self, other: Returns) -> Returns {
+        match (self, other) {
+            (Returns::Unstated, _) | (_, Returns::Unstated) => Returns::Unstated,
+            (Returns::Stated, _) | (_, Returns::Stated) => Returns::Stated,
+            (Returns::Total, Returns::Total) => Returns::Total,
         }
     }
 }
@@ -892,9 +902,31 @@ impl LawTable {
             .then_some(Named::Payload)
     }
 
+    /// How a call ends, read over the instance tree it chose (RFC-0082
+    /// rule 9). A `returns` instance is not descended into: RFC-0082 rule 8
+    /// makes `returns` a promise of the whole call, read by the instance the
+    /// call names.
     pub fn returns_of(&self, callee: &Callee) -> Returns {
-        self.declared(callee)
-            .map_or(Returns::Unstated, |declared| declared.returns)
+        let Callee::Extern {
+            id,
+            instance,
+            required,
+        } = callee
+        else {
+            return Returns::Unstated;
+        };
+        self.returns_over(*id, *instance, required)
+    }
+
+    fn returns_over(&self, id: QualifiedRef, instance: usize, required: &[Chosen]) -> Returns {
+        match self.declared_at(id, instance).returns {
+            Returns::Unstated => Returns::Unstated,
+            Returns::Stated => Returns::Stated,
+            Returns::Total => required
+                .iter()
+                .map(|chosen| self.returns_over(chosen.signature, chosen.instance, &chosen.required))
+                .fold(Returns::Total, Returns::meet),
+        }
     }
 
     /// The weight in ticks the instance a call names states of one call
@@ -916,15 +948,19 @@ impl LawTable {
         let Callee::Extern { id, instance, .. } = callee else {
             return None;
         };
-        let Some(instances) = self.by_instance.get(id) else {
+        Some(self.declared_at(*id, *instance))
+    }
+
+    fn declared_at(&self, id: QualifiedRef, instance: usize) -> &Declared {
+        let Some(instances) = self.by_instance.get(&id) else {
             panic!("the law table was built without the extern {id:?} a call names")
         };
-        let Some(declared) = instances.get(*instance) else {
+        let Some(declared) = instances.get(instance) else {
             panic!(
                 "the extern {id:?} has {} instances, and a call names instance {instance}",
                 instances.len()
             )
         };
-        Some(declared)
+        declared
     }
 }

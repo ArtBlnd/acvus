@@ -50,14 +50,16 @@ fn cells(row: &str) -> Vec<String> {
 }
 
 /// Every case `INDEX.md` lists, with the expected result its last column
-/// states (`\n` between lines).
+/// states (`\n` between lines). A case whose header states `registry`
+/// calls externs `acvus run` does not hold; `acvus-interpreter-test`'s
+/// `par_corpus_ahead` runs those.
 fn cases() -> Vec<Case> {
     let dir = corpus_dir();
     let index = std::fs::read_to_string(dir.join("INDEX.md")).expect("the corpus index");
     let found: Vec<Case> = index
         .lines()
         .filter(|line| line.starts_with("| ["))
-        .map(|row| {
+        .filter_map(|row| {
             let cells = cells(row);
             let (id, file) = cells[0]
                 .trim_start_matches('[')
@@ -71,12 +73,15 @@ fn cases() -> Vec<Case> {
                 .replace("\\n", "\n");
             let path = dir.join(file);
             let source = std::fs::read_to_string(&path).expect("the case's file");
-            Case {
+            if source.lines().any(|line| line.starts_with("// registry:")) {
+                return None;
+            }
+            Some(Case {
                 id: id.to_string(),
                 contexts: source.lines().any(|line| line.starts_with("// contexts:")),
                 path,
                 expected,
-            }
+            })
         })
         .collect();
     assert_eq!(

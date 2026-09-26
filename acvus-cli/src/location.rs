@@ -64,10 +64,6 @@ impl ScriptKind {
     }
 }
 
-/// The entry an `-e` expression compiles to beside a space's scripts; no
-/// `ScriptName` spells it.
-pub const EXPR_ENTRY: &str = "-e";
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ScriptName(String);
 
@@ -337,15 +333,5 @@ impl fmt::Display for Location {
         match self {
             Location::Dir(path) => write!(f, "dir:{}", path.display()),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_script_is_named_as_the_expression_entry() {
-        assert!(ScriptName::new(EXPR_ENTRY).is_err());
     }
 }

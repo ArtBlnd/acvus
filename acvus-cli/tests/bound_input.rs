@@ -26,6 +26,11 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+fn snippet(dir: &Path, source: &str) -> &'static str {
+    std::fs::write(dir.join("snippet.acvus"), source).expect("write a fixture");
+    "snippet.acvus"
+}
+
 fn written(dir: &Path) -> &Path {
     std::fs::write(dir.join("prompt.acvt"), BY_MODE).expect("write a fixture");
     dir
@@ -120,14 +125,14 @@ fn a_binding_whose_value_has_no_type_is_a_usage_error() {
 }
 
 #[test]
-fn an_unbound_input_of_an_expression_is_refused_rather_than_read() {
+fn an_unbound_input_of_a_script_is_refused_rather_than_read() {
     let dir = tempfile::tempdir().unwrap();
-    let out = acvus(dir.path(), &["run", "-e", "$x + 1"]);
+    let out = acvus(dir.path(), &["run", snippet(dir.path(), "$x + 1")]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(text(&out.stdout), "");
     assert_eq!(text(&out.stderr), "error: `$x` is required and not bound; `x=<literal>` binds it\n");
 
-    let bound = acvus(dir.path(), &["run", "-e", "$x + 1", "x=41"]);
+    let bound = acvus(dir.path(), &["run", snippet(dir.path(), "$x + 1"), "x=41"]);
     assert_eq!(bound.status.code(), Some(0), "{}", text(&bound.stderr));
     assert_eq!(text(&bound.stdout), "42\n");
 }
@@ -323,7 +328,7 @@ fn each_kind_of_literal_binds_as_the_script_writes_it() {
         ),
     ];
     for (expr, binding, shown) in cases {
-        let out = acvus(dir.path(), &["run", "-e", expr, binding]);
+        let out = acvus(dir.path(), &["run", snippet(dir.path(), expr), binding]);
         assert_eq!(out.status.code(), Some(0), "{binding}: {}", text(&out.stderr));
         assert_eq!(text(&out.stdout), shown, "{binding}");
     }
@@ -332,7 +337,7 @@ fn each_kind_of_literal_binds_as_the_script_writes_it() {
 #[test]
 fn an_operator_is_not_a_literal_and_is_a_usage_error() {
     let dir = tempfile::tempdir().unwrap();
-    let out = acvus(dir.path(), &["run", "-e", "$x", "x=a+b"]);
+    let out = acvus(dir.path(), &["run", snippet(dir.path(), "$x"), "x=a+b"]);
     assert_eq!(out.status.code(), Some(64));
     assert_eq!(text(&out.stdout), "");
     assert_eq!(
@@ -397,7 +402,7 @@ fn a_binding_of_n_leaves_every_local_named_n_to_the_program() {
         for probe in NAMESAKE_PROBES {
             let out = acvus(
                 dir.path(),
-                &["run", "--opt", opt, "-e", probe.source, "n=100"],
+                &["run", "--opt", opt, snippet(dir.path(), probe.source), "n=100"],
             );
             assert_eq!(
                 (out.status.code(), text(&out.stdout)),

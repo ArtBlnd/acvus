@@ -1,17 +1,15 @@
 # Acvus
 
-A statically typed scripting language, embedded in Rust. Scripts,
-templates and single expressions share one compiler: types are inferred
-from use, host data enters as `@context` values, and functions the host
-registers from Rust are called like any other. The compiler lowers to an
-SSA form, optimizes, and validates the result before a register machine
-runs it.
+A statically typed scripting language, embedded in Rust. Scripts and
+templates share one compiler: types are inferred from use, state the host
+keeps is named as `@context` values, and functions the host registers from
+Rust are called like any other. The compiler lowers to an SSA form,
+optimizes, and validates the result before a register machine runs it.
 
 ## Run
 
 ```sh
-cargo run -p acvus-cli -- run   script.acvus  [name=literal]... [--opt none|full] [--time]
-cargo run -p acvus-cli -- run   -e '[1, 2, 3] | map(|x| -> x * 2) | sum'
+cargo run -p acvus-cli -- run   script.acvus  [name=literal]... [--space S] [--parallel] [--opt none|full] [--time]
 cargo run -p acvus-cli -- check script.acvus [--json] [--opt none|full] [--time]
 cargo run -p acvus-cli -- mir   script.acvus [--json] [--opt none|full] [--time]
 cargo run -p acvus-cli -- ops   script.acvus [--json] [--opt none|full] [--time]
@@ -19,7 +17,10 @@ cargo run -p acvus-cli -- ops   script.acvus [--json] [--opt none|full] [--time]
 
 A `.acvus` file is a script, a `.acvt` file a template; both go through the
 same stages. `name=literal` binds the input `$name` to a value written in
-the script's own syntax.
+the script's own syntax: the whole graph is compiled with that value, the
+code it decides against is removed, and a `$` still unbound stops `run`
+with the binding to give. `check` lists the `$` inputs a source still
+requires, each with its type.
 
 A script that names an `@context` runs in a space, which `acvus ctl` keeps:
 the space holds its scripts, one init per context, and the contexts
@@ -88,6 +89,12 @@ after the run is not. The lines go to stderr; under `--json`
 they are a trailing `{"time": …}` object on stdout instead, the same
 milliseconds as numbers. Without the flag no clock is read.
 
+A run that fails prints one `error: <message>` line: a trap names the
+operation in Rust's words (`attempt to divide by zero`), and a context the
+space can neither give nor fill names the command that adds its init. A
+line that reads `error: acvus panicked: …` is a fault in acvus itself, not
+in the script.
+
 Exit status: `0` success, `1` a diagnostic, `2` a refusal at run time, `64`
 a usage error.
 
@@ -133,9 +140,11 @@ label
   tag. There is no block comment.
 - `print(s)` writes one line to stdout while the script runs; the result
   line follows everything it printed.
-- Regular expressions and dates are in the set `acvus run` registers:
-  `regex`, `is_match`, `find`, `captures`, `named`, `replace_all`, and
-  `parse_date`, `format_date`, `timestamp`, `add_days`.
+- `acvus run` registers the standard library, regular expressions
+  (`regex`, `is_match`, `find`, `captures`, `named`, `replace_all`), dates
+  (`parse_date`, `format_date`, `timestamp`, `add_days`), `print`, and HTTP
+  (`get_text`, a `Client`, requests and responses). Each module is
+  described under [`docs/std/`](docs/std/).
 
 ## Expressions and pipes
 
@@ -176,9 +185,10 @@ out the rest of its line. Inline branching is the expression grammar's:
 ## Types
 
 Every value has a static type; none is written in a script. `@items`'s
-type comes from the host's context, a lambda's from its use, a literal's
-from itself. Objects are structural — `{ name: String, age: i64 }` is a
-type, and any value with those fields has it. Effects are part of a
+type is solved from every script and init that reads or stores it, a
+lambda's from its use, a literal's from itself. Objects are structural —
+`{ name: String, age: i64 }` is a type, and any value with those fields
+has it. Effects are part of a
 function's type: a call that reaches outside the program (IO, an LLM,
 a heavy computation) is known to the compiler, and independent such
 calls run concurrently without the script saying so.
@@ -208,16 +218,97 @@ what the function does (`pure`, or an effect the compiler must order);
 `heavy` marks a computation to run on a worker thread; `async fn` marks
 IO. A `#[state]` parameter carries Rust state into the function.
 
+## Embedding
+
+A Rust program runs scripts through `acvus_interpreter::Host`. It names
+each entry with the Rust types of its `$` inputs and its result, gives
+each context its init, and compiles them all as one graph, so a context
+has one type in every entry.
+
+```rust
+use acvus_extern::TyArg;
+use acvus_interpreter::{
+    AcvusRuntime, Host, HostError, InputShape, Inputs, MemoryStorage, SequentialExecutor, Source,
+};
+
+#[derive(TyArg)]
+pub struct Visit {
+    who: String,
+}
+
+async fn run() -> Result<(), HostError> {
+    let program = Host::new(acvus_ext::std_registries::<AcvusRuntime>())
+        .init("seen", Source::Script("vec([])"))
+        .entry::<Visit, String>(
+            "visit",
+            Source::Script(r#"@seen.push($who.clone()); "hello, {{ &$who }}""#),
+        )
+        .entry::<(), u64>("visits", Source::Script("@seen.len()"))
+        .entry_shaped::<i64>(
+            "plus",
+            InputShape::new().field::<i64>("a").field::<i64>("b"),
+            Source::Script("$a + $b"),
+        )
+        .compile(SequentialExecutor)?;
+
+    program
+        .scope(async |scope| {
+            let mut storage = MemoryStorage::new();
+            let mut page = scope.open(&mut storage);
+
+            let visit = scope.entry::<Visit, String>("visit")?;
+            let greeting = visit.run(&mut page, Visit { who: "ann".to_string() }).await?;
+            assert_eq!(greeting.with(|s: &str| s.to_owned())?, "hello, ann");
+
+            let visits = scope.entry::<(), u64>("visits")?;
+            assert_eq!(visits.run(&mut page, ()).await?.with(|n: &u64| *n)?, 1);
+
+            let plus = scope.entry_shaped::<i64>("plus")?;
+            let sum = plus.run(&mut page, Inputs::new().set("a", 1i64).set("b", 2i64)).await?;
+            assert_eq!(sum.with(|n: &i64| *n)?, 3);
+
+            page.commit().await
+        })
+        .await
+}
+```
+
+- An entry's inputs are a shape of named fields: a `#[derive(TyArg)]`
+  struct (`entry::<I, R>`), `()` for none, or a shape built from data
+  (`entry_shaped::<R>` with an `InputShape`, run with `Inputs`). A `$` the
+  entry reads that its shape lacks is refused at compile, and `Inputs` is
+  checked field by field before any value crosses.
+- No one declares a context's type: the graph solves it from every body
+  that reads or stores it. Its first value is its init, a source (`init`)
+  or a Rust function (`init_with`), run at the first load that finds the
+  storage without it.
+- A result or a context is read only by lending it to a closure whose
+  parameter is typed as an extern handler's is: `Output::with`, and
+  `Page::with` and `with_mut` for a context. `Page::insert` stores a Rust
+  value at the context's solved type. A type that differs is a `HostError`
+  before any value is touched, and so are a script's trap and a storage's
+  failure.
+- A page reads and writes its storage exactly where a run fetches and
+  commits. `MemoryStorage` keeps holders in memory and `SpaceStorage` in a
+  space; `Host::async_access` compiles for an `AsyncStorage` whose access
+  can wait.
+- An entry's name differs from every function a script calls by a bare
+  name: the registries' `count` and `add` make an entry of either name a
+  refusal.
+- `bind(name, literal)` fixes `$name` for the whole graph, which is what
+  `acvus run`'s `name=literal` does.
+
 ## Crates
 
 ```
+acvus-utils         the interner and the shared small types
 acvus-ast           parser: template, script, expression
 acvus-mir           types, inference, SSA lowering, optimization, validation
-acvus-interpreter   the register machine
+acvus-interpreter   the register machine, and `Host`, the embedding surface
 acvus-extern        the Rust-side ABI: values, ownership, registries
+acvus-extern-macro  `#[extern_fn]`, `extern_registry!` and the derives
 acvus-ext           the standard library
 acvus-ext-net       HTTP
-pomollu-core        TOML specs compiled into the same graph
 acvus-lsp           language server
 acvus-cli           `acvus run | check | mir | ops | ctl | lsp`
 ```

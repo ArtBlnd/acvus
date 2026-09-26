@@ -25,7 +25,11 @@ fn decimal(text: String) -> Result<Decimal, DecimalError> {
         .map_err(|_| DecimalError::Unparsable(text))
 }
 
-#[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+/// `total` rests on rust_decimal 1.40.0: its `Display` writes into a 32-byte
+/// buffer that panics when full, and its documented bound of scale 28 over a
+/// 96-bit mantissa keeps the text within 31 bytes. A change of that
+/// dependency re-opens this.
+#[extern_fn(instance_of = acvus_extern::core::display, effect = pure, total)]
 fn display_decimal(a: &Decimal, out: &mut String) {
     use std::fmt::Write;
     // `String`'s `write_str` returns `Ok` on every path, and
@@ -111,6 +115,38 @@ pub fn decimal_registry<R: Runtime>() -> Registry<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RFC-0082 rule 9 sampled over the widest mantissas at every scale and
+    /// a fixed-seed sample of parts.
+    #[test]
+    fn total_holds_over_display_decimal() {
+        let mut state: u64 = 0x5eed_dec1_0c1a_7e00;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let mut values = Vec::new();
+        for scale in 0..=rust_decimal::Decimal::MAX_SCALE {
+            for negative in [false, true] {
+                for (lo, mid, hi) in [(0, 0, 0), (1, 0, 0), (u32::MAX, u32::MAX, u32::MAX)] {
+                    values.push(rust_decimal::Decimal::from_parts(lo, mid, hi, negative, scale));
+                }
+            }
+        }
+        for _ in 0..256 {
+            let word = next();
+            let scale = (word % u64::from(rust_decimal::Decimal::MAX_SCALE + 1)) as u32;
+            let (lo, mid, hi) = (next() as u32, next() as u32, next() as u32);
+            values.push(rust_decimal::Decimal::from_parts(lo, mid, hi, word & 1 == 1, scale));
+        }
+        for value in values {
+            let mut out = String::new();
+            display_decimal(&Decimal(value), &mut out);
+            assert_eq!(out, value.to_string());
+        }
+    }
 
     /// RFC-0082 rule 11 sampled over values of one number at several scales:
     /// `eq` is reflexive, symmetric and transitive. No `core::hash` instance

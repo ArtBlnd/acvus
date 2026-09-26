@@ -1,0 +1,12 @@
+// id: I01
+// family: io
+// desc: a pure io call per element whose calls complete out of order, each answer pushed in index order
+// registry: ahead
+// returns: String
+// expect:  0 , 3 , 6 , 9 , 12 , 15 , 18 , 21 
+let urls = vec(["u/0".to_string(), "u/1".to_string(), "u/2".to_string(), "u/3".to_string(), "u/4".to_string(), "u/5".to_string(), "u/6".to_string(), "u/7".to_string()]);
+let out = vec([]);
+for u in &urls {
+    out.push(ah::fetch(u.to_string()));
+}
+out.into_iter().join(",".to_string())

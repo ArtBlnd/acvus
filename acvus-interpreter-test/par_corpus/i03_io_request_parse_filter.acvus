@@ -1,0 +1,17 @@
+// id: I03
+// family: io
+// desc: a request formatted from the element, fetched, and the answer trimmed, parsed and filtered into a joined text
+// registry: ahead
+// returns: String
+// expect: 0+6+12+18
+let urls = vec(["u/0".to_string(), "u/1".to_string(), "u/2".to_string(), "u/3".to_string(), "u/4".to_string(), "u/5".to_string(), "u/6".to_string(), "u/7".to_string()]);
+let out = vec([]);
+for u in &urls {
+    let request = u.to_string() + "?page=" + "1";
+    let body = ah::fetch(request);
+    let n = i64::from_str(body.trim()).unwrap();
+    if n % 2 == 0 {
+        out.push(n.to_string());
+    }
+}
+out.into_iter().join("+".to_string())

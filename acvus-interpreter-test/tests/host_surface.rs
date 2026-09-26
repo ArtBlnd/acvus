@@ -265,7 +265,7 @@ const STORE_LOG: &str = r#"@log = vec([]); @log.push("x".to_string());"#;
 fn log_program() -> Program {
     compiled(
         host()
-            .init("log", Source::Expr("vec([])"))
+            .init("log", Source::Script("vec([])"))
             .entry::<(), ()>("init", Source::Script(INIT_LOG))
             .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
     )
@@ -1068,7 +1068,7 @@ async fn a_context_assigned_on_one_branch_only_is_fetched_and_refused_on_an_empt
 
     let program = compiled(
         host()
-            .init("x", Source::Expr("5"))
+            .init("x", Source::Script("5"))
             .entry::<(), i64>("main", Source::Script("if coin() { @x = 1; } @x")),
     );
     program
@@ -1096,7 +1096,7 @@ async fn a_whole_assignment_inside_a_callee_does_not_spare_the_callers_fetch() {
 
     let program = compiled(
         host()
-            .init("x", Source::Expr("7"))
+            .init("x", Source::Script("7"))
             .entry::<(), ()>("set_x", Source::Script("@x = 1;"))
             .entry::<(), i64>("main", Source::Script("set_x(); @x")),
     );
@@ -1130,7 +1130,7 @@ async fn a_call_that_writes_a_context_before_the_body_assigns_it_makes_the_body_
 
     let program = compiled(
         host()
-            .init("x", Source::Expr("7"))
+            .init("x", Source::Script("7"))
             .entry::<(), ()>("set_x", Source::Script("@x = 1;"))
             .entry::<(), i64>("main", Source::Script("set_x(); @x = 2; @x")),
     );
@@ -1158,7 +1158,7 @@ async fn a_call_that_writes_a_context_before_the_body_assigns_it_makes_the_body_
 async fn a_callee_reads_what_its_caller_assigned_before_the_call() {
     let program = compiled(
         host()
-            .init("x", Source::Expr("0"))
+            .init("x", Source::Script("0"))
             .entry::<(), i64>("read_x", Source::Script("@x"))
             .entry::<(), i64>("main", Source::Script("@x = 3; read_x()")),
     );
@@ -1256,7 +1256,7 @@ async fn an_element_edited_in_place_is_what_the_next_run_reads() {
 async fn a_derived_context_is_edited_through_its_projection_and_the_next_run_reads_the_edit() {
     let program = compiled(
         host()
-            .init("p", Source::Expr(r#"profile("bob".to_string(), 1)"#))
+            .init("p", Source::Script(r#"profile("bob".to_string(), 1)"#))
             .entry::<(), ()>("init", Source::Script(r#"@p = profile("ann".to_string(), 41);"#))
             .entry::<(), i64>("age", Source::Script("@p.age")),
     );
@@ -1781,10 +1781,10 @@ fn init_counted() -> MutexGuard<'static, ()> {
 /// Opening reads nothing, so the init runs where the turn's fetch finds the
 /// storage lacks `@log`.
 #[tokio::test]
-async fn a_turn_over_an_empty_storage_runs_the_expression_init_at_its_fetch_and_pushes_to_it() {
+async fn a_turn_over_an_empty_storage_runs_the_init_at_its_fetch_and_pushes_to_it() {
     let program = compiled(
         host()
-            .init("log", Source::Expr("vec([])"))
+            .init("log", Source::Script("vec([])"))
             .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
     );
     assert_eq!(solved(&program, "log"), "Vec<String>");
@@ -1834,7 +1834,7 @@ async fn an_init_runs_once_and_a_second_run_reads_what_the_first_left() {
     let _counted = init_counted();
     let program = compiled(
         host()
-            .init("log", Source::Expr("init_ran(vec([]))"))
+            .init("log", Source::Script("init_ran(vec([]))"))
             .entry::<(), ()>("turn", Source::Script(PUSH_LOG)),
     );
     let before = INIT_RUNS.load(Ordering::SeqCst);
@@ -1857,12 +1857,12 @@ async fn a_storage_that_holds_the_key_never_runs_its_init() {
     let space = Space::new(Plain);
     let seeding = compiled(
         host()
-            .init("log", Source::Expr("init_ran(deque())"))
+            .init("log", Source::Script("init_ran(deque())"))
             .entry::<(), ()>("seed", Source::Script(STORE_DEQUE)),
     );
     let program = compiled(
         host()
-            .init("log", Source::Expr("init_ran(deque())"))
+            .init("log", Source::Script("init_ran(deque())"))
             .entry::<(), ()>("turn", Source::Script(PUSH_DEQUE))
             .entry::<(), u64>("size", Source::Script("@log.len()")),
     );
@@ -1901,7 +1901,7 @@ async fn a_key_with_no_value_and_no_init_ends_the_run_at_its_fetch_before_any_op
 fn an_init_that_names_a_context_is_refused_at_compile_naming_its_key() {
     let refusals = refused(
         host()
-            .init("a", Source::Expr("@x + 1"))
+            .init("a", Source::Script("@x + 1"))
             .entry::<(), i64>("main", Source::Script("@a + @x")),
     );
     let [refusal] = refusals.as_slice() else {
@@ -1918,8 +1918,8 @@ fn an_init_that_names_a_context_is_refused_at_compile_naming_its_key() {
 fn a_second_init_for_one_key_is_refused() {
     let refusals = refused(
         host()
-            .init("a", Source::Expr("1"))
-            .init("a", Source::Expr("2"))
+            .init("a", Source::Script("1"))
+            .init("a", Source::Script("2"))
             .entry::<(), i64>("main", Source::Script("@a")),
     );
     let [refusal] = refusals.as_slice() else {
@@ -1934,7 +1934,7 @@ fn a_second_init_for_one_key_is_refused() {
 fn an_init_that_reads_an_input_is_refused_at_compile() {
     let refusals = refused(
         host()
-            .init("a", Source::Expr("$n + 1"))
+            .init("a", Source::Script("$n + 1"))
             .entry::<(), i64>("main", Source::Script("@a")),
     );
     let [refusal] = refusals.as_slice() else {
@@ -1952,7 +1952,7 @@ async fn an_identity_carrying_context_takes_its_init_and_refuses_a_turns_new_sou
     let turn = "@h.record(7); @h.recorded()";
     let program = compiled(
         host()
-            .init("h", Source::Expr("history()"))
+            .init("h", Source::Script("history()"))
             .entry::<(), i64>("turn", Source::Script(turn)),
     );
     program
@@ -1969,7 +1969,7 @@ async fn an_identity_carrying_context_takes_its_init_and_refuses_a_turns_new_sou
 
     let refusals = refused(
         host()
-            .init("h", Source::Expr("history()"))
+            .init("h", Source::Script("history()"))
             .entry::<(), i64>("turn", Source::Script(turn))
             .entry::<(), ()>("reset", Source::Script("@h = history();")),
     );
@@ -1993,7 +1993,7 @@ async fn an_empty_space_is_filled_by_a_run_committed_reopened_and_run_without_it
     let space = Space::new(Plain);
     let program = compiled(
         host()
-            .init("name", Source::Expr(r#"init_ran("ann".to_string())"#))
+            .init("name", Source::Script(r#"init_ran("ann".to_string())"#))
             .entry::<(), String>("name", Source::Script("@name")),
     );
     let before = INIT_RUNS.load(Ordering::SeqCst);
@@ -2098,7 +2098,7 @@ where
 async fn a_storage_that_fails_to_load_ends_the_run_at_the_load() {
     let program = compiled(
         host()
-            .init("n", Source::Expr("1"))
+            .init("n", Source::Script("1"))
             .entry::<(), i64>("main", Source::Script("@n")),
     );
     let ran = main_over(&program, &mut Unreadable).await;
@@ -2360,7 +2360,7 @@ async fn a_fetch_that_finds_nothing_runs_the_init_there_and_the_run_goes_on() {
     let _logged = access_logged();
     let program = compiled(
         host()
-            .init("b", Source::Expr(r#"mark("init b".to_string(), 5)"#))
+            .init("b", Source::Script(r#"mark("init b".to_string(), 5)"#))
             .entry::<(), i64>("total", Source::Script("let x = @a; x + @b")),
     );
     let mut storage = Logged::default();
@@ -2500,8 +2500,8 @@ fn counter_host<A>(host: Host<A>) -> Host<A>
 where
     A: acvus_interpreter::Access,
 {
-    host.init("n", Source::Expr("40"))
-        .init("c", Source::Expr("0"))
+    host.init("n", Source::Script("40"))
+        .init("c", Source::Script("0"))
         .entry::<(), ()>("set_c", Source::Script("@c = 100;"))
         .entry::<(), i64>("main", Source::Script(COUNTER))
 }
@@ -2824,7 +2824,7 @@ async fn an_identity_carrying_rust_init_is_a_source_and_a_turns_new_source_is_re
 fn a_script_init_and_a_rust_init_of_one_key_are_refused() {
     let refusals = refused(
         host()
-            .init("a", Source::Expr("1"))
+            .init("a", Source::Script("1"))
             .init_with("a", || 2_i64)
             .entry::<(), i64>("main", Source::Script("@a")),
     );
@@ -2838,7 +2838,7 @@ fn a_script_init_and_a_rust_init_of_one_key_are_refused() {
 fn logged_inits_program() -> Program {
     compiled(
         host()
-            .init("b", Source::Expr(r#"mark("init b".to_string(), 5)"#))
+            .init("b", Source::Script(r#"mark("init b".to_string(), 5)"#))
             .init_with("r", || {
                 logged("make r".to_owned());
                 5_i64
@@ -2914,7 +2914,7 @@ async fn an_insert_on_an_empty_storage_runs_no_init_and_is_what_a_later_load_rea
     let _counted = init_counted();
     let program = compiled(
         host()
-            .init("log", Source::Expr("init_ran(vec([]))"))
+            .init("log", Source::Script("init_ran(vec([]))"))
             .init_with("n", || {
                 RUST_INIT_RUNS.fetch_add(1, Ordering::SeqCst);
                 0_i64
@@ -3042,7 +3042,7 @@ fn panic_program<A>(host: Host<A>) -> Host<A>
 where
     A: acvus_interpreter::Access,
 {
-    host.init("n", Source::Expr("init_ran(0)"))
+    host.init("n", Source::Script("init_ran(0)"))
         .entry::<(), i64>("main", Source::Script("@n"))
 }
 

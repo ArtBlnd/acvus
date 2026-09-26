@@ -244,7 +244,7 @@ use crate::init::{DeclaredInits, GraphParts, InitGiven, InitSource, RustInit};
 use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
 use crate::ops::storage::{fetch_now, fetch_waited};
 use crate::port::{Gate, Held, Port, ended, serve};
-use crate::prepare::{PrepareCtx, prepare_module};
+use crate::prepare::{Declined, Declines, Lower, Lowering, PrepareCtx, prepare_module};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -255,7 +255,6 @@ type Brand<'p> = PhantomData<fn(&'p ()) -> &'p ()>;
 pub enum Source<'a> {
     Script(&'a str),
     Template(&'a str),
-    Expr(&'a str),
 }
 
 macro_rules! source_parse {
@@ -263,7 +262,7 @@ macro_rules! source_parse {
         impl Source<'_> {
             $v fn parse(&self, interner: &Interner) -> Parsed {
                 match self {
-                    Source::Script(text) | Source::Expr(text) => {
+                    Source::Script(text) => {
                         Parsed::script(acvus_ast::parse_script(interner, text))
                     }
                     Source::Template(text) => Parsed::template(acvus_ast::parse(interner, text)),
@@ -884,6 +883,7 @@ struct HostParts {
     parse_refusals: Vec<Refusal>,
     refusals: Vec<Refusal>,
     opt: Opt,
+    lower: Lower,
     parse: Duration,
     hooks: Vec<HookDecl>,
 }
@@ -900,6 +900,7 @@ impl Host<SyncAccess> {
                 parse_refusals: Vec::new(),
                 refusals: Vec::new(),
                 opt: Opt::Full,
+                lower: Lower::Ahead,
                 parse: Duration::ZERO,
                 hooks: Vec::new(),
             },
@@ -1073,6 +1074,12 @@ macro_rules! host_tooling {
         {
             $v fn opt(mut self, opt: Opt) -> Self {
                 self.parts.opt = opt;
+                self
+            }
+
+            /// The same MIR, run with or without RFC-0103's lowering.
+            $v fn lower(mut self, lower: Lower) -> Self {
+                self.parts.lower = lower;
                 self
             }
 
@@ -1269,6 +1276,7 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         parse_refusals,
         refusals: structural,
         opt,
+        lower: lowered_ahead,
         parse,
         hooks,
     } = host;
@@ -1509,6 +1517,7 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         .collect();
     let started = Instant::now();
     let mut prepared: Vec<(QualifiedRef, Executable)> = Vec::new();
+    let declines = Declines::default();
     {
         let ctx = PrepareCtx {
             interner,
@@ -1516,6 +1525,13 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
             context_names: &context_names,
             instances: &instances,
             access,
+            lowering: match lowered_ahead {
+                Lower::Ahead => Lowering::Ahead {
+                    laws: &laws,
+                    declined: &declines,
+                },
+                Lower::InPlace => Lowering::InPlace,
+            },
         };
         for (q, m) in &optimized.modules {
             match prepare_module(m, &ctx) {
@@ -1618,6 +1634,7 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         hooks,
         #[cfg(feature = "tooling")]
         listing_laws: laws,
+        declined: declines.take(),
         times: CompileTimes {
             opt,
             parse,
@@ -1684,6 +1701,8 @@ pub(crate) struct Compiled {
     listing_laws: acvus_mir::laws::LawTable,
     #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
     times: CompileTimes,
+    #[cfg_attr(not(feature = "tooling"), allow(dead_code))]
+    declined: Vec<Declined>,
 }
 
 impl Compiled {
@@ -1800,6 +1819,11 @@ macro_rules! program_tooling {
 
             $v fn times(&self) -> &CompileTimes {
                 &self.compiled.times
+            }
+
+            /// The loops `analysis::ahead` lowered and `prepare` ran in place.
+            $v fn declined(&self) -> &[Declined] {
+                &self.compiled.declined
             }
         }
     };
@@ -1948,9 +1972,6 @@ macro_rules! scope_tooling {
         where
             A: Access,
         {
-            /// An entry the tooling runs whatever it declares, whose result
-            /// it reads by the settled type; one that still requires a `$`
-            /// input is refused.
             $v fn untyped_entry(self, name: &str) -> Result<UntypedEntry<'p, A>, HostError> {
                 let program = self.program;
                 let compiled = program.compiled(name)?;
@@ -2429,7 +2450,6 @@ impl<R> Output<'_, R> {
     }
 }
 
-/// An entry the runtime's tooling runs and reads by the settled type.
 pub struct UntypedEntry<'p, A = SyncAccess> {
     compiled: &'p CompiledEntry,
     access: PhantomData<fn() -> A>,
@@ -2438,7 +2458,6 @@ pub struct UntypedEntry<'p, A = SyncAccess> {
 
 pub struct UntypedOutput<'p> {
     value: Owned<AcvusRuntime>,
-    compiled: &'p CompiledEntry,
     brand: Brand<'p>,
 }
 
@@ -2455,7 +2474,6 @@ macro_rules! untyped_run {
                     // SAFETY: the run moved its result out to this caller,
                     // and no other holder owns it.
                     value: unsafe { Owned::from_value(Holding::new(), value) },
-                    compiled: self.compiled,
                     brand: PhantomData,
                 })
             }
@@ -2465,9 +2483,9 @@ macro_rules! untyped_run {
         impl UntypedOutput<'_> {
             $v fn with_value<O, F>(&self, f: F) -> O
             where
-                F: FnOnce(&Value, &Ty) -> O,
+                F: FnOnce(&Value) -> O,
             {
-                f(&self.value, &self.compiled.ret)
+                f(&self.value)
             }
         }
     };

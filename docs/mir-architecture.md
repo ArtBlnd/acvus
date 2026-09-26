@@ -2,10 +2,9 @@
 
 `acvus-mir` is the compiler between the parser and a runtime: it infers
 every type, records every effect, lowers to an SSA form, optimizes it, and
-validates the result. A template's `{{ }}`, a script and a single `-e`
-expression reach it as the same typed AST and leave it as the same
-`MirModule`. `acvus-mir` names no runtime; `acvus-interpreter` and
-`kovac-interpreter` depend on it, never the reverse.
+validates the result. A template's `{{ }}` and a script reach it as the
+same typed AST and leave it as the same `MirModule`. `acvus-mir` names no runtime; `acvus-interpreter` depends on
+it, never the reverse.
 
 The reader's order here is the pipeline's. What each pass does at the
 instruction level, and what breaks when it is changed, is

@@ -101,7 +101,7 @@
 11 acvus-interpreter/src/port.rs
 6 acvus-interpreter/src/prepare.rs
 3 acvus-interpreter/src/prepare/runs.rs
-25 acvus-interpreter/src/regs.rs
+24 acvus-interpreter/src/regs.rs
 57 acvus-interpreter/src/runtime.rs
 20 acvus-interpreter/src/space.rs
 85 acvus-interpreter/src/value.rs

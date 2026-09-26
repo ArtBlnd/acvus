@@ -3,8 +3,9 @@
 A host runs the language by signing one trait (RFC-0059). The contract
 carries no value taxonomy: a value is opaque to it, extraction and
 construction are one `transmute`-based pair, a reference is a value the host
-makes, and a closure is run by three calls. `acvus-interpreter` is one host;
-kovac is another, signing the same trait with its own representation.
+makes, and a closure is run by three calls. `acvus-interpreter` signs it as
+`AcvusRuntime`, the host that runs programs; `TypesOnly` signs it for a host
+that registers declarations and runs nothing.
 
 ## The contract
 
