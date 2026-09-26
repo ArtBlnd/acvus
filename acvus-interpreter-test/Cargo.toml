@@ -80,12 +80,6 @@ path = "tests/sleep.rs"
 name = "fixtures"
 harness = false
 
-# RFC-0105 rule 3. It builds the `wasm32` module in a cargo of its own and
-# reads it; its one assertion stream is not a set of `#[test]`s.
-[[test]]
-name = "wasm_probe"
-harness = false
-
 [[bench]]
 name = "attention"
 harness = false
@@ -112,6 +106,13 @@ harness = false
 
 [[bench]]
 name = "asm_probe"
+harness = false
+
+# RFC-0105 rules 3 and 4. It builds the `wasm32` module with the `wasm`
+# profile in a cargo of its own and reads it; a bench, so that its fat-LTO
+# build stays out of `cargo test`.
+[[bench]]
+name = "wasm_probe"
 harness = false
 
 [[bench]]

@@ -154,6 +154,9 @@ pub fn run_straight_body(steps: u32) -> Finished {
         context_names: &context_names,
         instances: &instances,
         access: Access::Sync,
+        // The straight body has no loop to lower ahead, and `wasm_probe`
+        // counts the operations of the same body prepared in place.
+        lowering: acvus_interpreter::Lowering::InPlace,
     };
     let prepared: Vec<(QualifiedRef, Executable)> = optimized
         .modules

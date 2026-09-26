@@ -6,7 +6,7 @@
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
-use crate::code::{BlockId, Exit, Marked, Off, Op, successor};
+use crate::code::{BlockId, Exit, Marked, Off, Op, holds_no_chain, successor};
 use crate::machine::Machine;
 use crate::value::Value;
 
@@ -278,6 +278,8 @@ pub struct SwitchRun {
 }
 
 impl Op for SwitchRun {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let tag = m.regs().word(self.src);
@@ -304,7 +306,18 @@ pub struct SwitchRunRegion {
 }
 
 impl Op for SwitchRunRegion {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            src: _,
+            arms,
+            default,
+            next,
+        } = *self;
+        links.extend(arms.into_iter().map(|arm| arm.head));
+        links.extend([default, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
@@ -683,6 +696,8 @@ mod tests {
     }
 
     impl Op for KonstsFirst {
+        crate::code::holds_no_chain!();
+
         fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
             let regs = m.regs();
             regs.assign::<false>(self.konst.at, self.konst.value);

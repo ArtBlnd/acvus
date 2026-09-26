@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use acvus_mir::ty::Ty;
 
-use crate::code::{BlockId, Exit, Marked, Op, SUSPEND, Step, successor};
+use crate::code::{BlockId, Exit, Marked, Op, SUSPEND, Step, holds_no_chain, successor};
 use crate::host::{HostError, StorageError};
 use crate::interpreter::Init;
 use crate::machine::Machine;
@@ -744,6 +744,8 @@ pub struct FetchWaited<const LARGE: bool> {
 }
 
 impl<const LARGE: bool> Op for FetchWaited<LARGE> {
+    holds_no_chain!();
+
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let rt = m.callee_runtime();
         let key = self.key.clone();
@@ -766,6 +768,8 @@ pub struct CommitWaited<const LARGE: bool> {
 }
 
 impl<const LARGE: bool> Op for CommitWaited<LARGE> {
+    holds_no_chain!();
+
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let held = committed::<LARGE>(m, self.src, &self.settled);
         let handed = m.ctx.rt.port.store_waited(&self.key, held, self.wrote);

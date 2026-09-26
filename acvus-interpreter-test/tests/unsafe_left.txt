@@ -106,3 +106,4 @@
 20 acvus-interpreter/src/space.rs
 85 acvus-interpreter/src/value.rs
 1 acvus-utils/src/astr.rs
+1 acvus-wasm-probe/src/lib.rs

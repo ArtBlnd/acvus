@@ -332,6 +332,9 @@ impl Reads {
         }
     }
 
+    /// The per-leaf reads, for a listing that reads a chain through
+    /// `ChainProbe`, which exists under the same cfg.
+    #[cfg(any(debug_assertions, feature = "probe"))]
     pub fn leafwise(self) -> [LeafRead; ChainBounds::MAX_LEAVES] {
         match self {
             Reads::Own => [LeafRead::Own; ChainBounds::MAX_LEAVES],

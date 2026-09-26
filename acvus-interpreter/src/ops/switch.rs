@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
-use crate::code::{BlockId, Exit, Off, Op, successor};
+use crate::code::{BlockId, Exit, Off, Op, holds_no_chain, successor};
 use crate::machine::Machine;
 use crate::ops::arith::Int;
 use crate::ops::variant::scrutinee;
@@ -42,6 +42,8 @@ pub struct Switch<const THROUGH: bool> {
 }
 
 impl<const THROUGH: bool> Op for Switch<THROUGH> {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let source = scrutinee::<THROUGH>(m.regs().peek(self.src));
@@ -65,6 +67,8 @@ pub struct SwitchOption<const THROUGH: bool> {
 }
 
 impl<const THROUGH: bool> Op for SwitchOption<THROUGH> {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         match scrutinee::<THROUGH>(m.regs().peek(self.src)).is_none() {
@@ -93,7 +97,18 @@ pub struct SwitchRegion<const THROUGH: bool> {
 }
 
 impl<const THROUGH: bool> Op for SwitchRegion<THROUGH> {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            src: _,
+            arms,
+            default,
+            next,
+        } = *self;
+        links.extend(arms.into_iter().map(|arm| arm.head));
+        links.extend([default, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
@@ -143,7 +158,17 @@ pub struct SwitchOptionRegion<const THROUGH: bool> {
 }
 
 impl<const THROUGH: bool> Op for SwitchOptionRegion<THROUGH> {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            src: _,
+            on_some,
+            on_none,
+            next,
+        } = *self;
+        links.extend([on_some, on_none, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
@@ -211,6 +236,8 @@ impl<T> Op for SwitchWord<T>
 where
     T: Int,
 {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let word = T::read(m.regs().word(self.src)).word();
@@ -258,7 +285,19 @@ impl<T> Op for SwitchWordRegion<T>
 where
     T: Int,
 {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            src: _,
+            arms,
+            default,
+            next,
+            width: _,
+        } = *self;
+        links.extend(arms.into_iter().map(|arm| arm.head));
+        links.extend([default, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {

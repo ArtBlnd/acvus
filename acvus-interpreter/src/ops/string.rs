@@ -5,7 +5,9 @@ use acvus_extern::{StrView, Words};
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
-use crate::code::{BlockId, ConcatPart, Exit, LentText, Marked, Off, Op, successor};
+use crate::code::{
+    BlockId, ConcatPart, Exit, LentText, Marked, Off, Op, holds_no_chain, successor,
+};
 use crate::machine::Machine;
 use crate::ops::arith::Unary;
 use crate::regs::Regs;
@@ -199,6 +201,8 @@ pub struct SwitchStr {
 }
 
 impl Op for SwitchStr {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         // SAFETY: the checker keeps the scrutinee live over this operation.
@@ -227,7 +231,18 @@ pub struct SwitchStrRegion {
 }
 
 impl Op for SwitchStrRegion {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            src: _,
+            arms,
+            default,
+            next,
+        } = *self;
+        links.extend(arms.into_iter().map(|arm| arm.head));
+        links.extend([default, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {

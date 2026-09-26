@@ -37,6 +37,16 @@ let _ = Code::start;
 "#
 )]
 
+// RFC-0105 rule 1: on `wasm32` an operation's tail call to its successor is
+// `return_call_indirect`, which exists only with the `tail-call` target
+// feature. Without it every operation nests an engine frame, so the build is
+// refused rather than served.
+#[cfg(all(target_arch = "wasm32", not(target_feature = "tail-call")))]
+compile_error!(
+    "acvus-interpreter on wasm32 needs the `tail-call` target feature: build with \
+     `-C target-feature=+tail-call` (RFC-0105, docs/wasm.md)"
+);
+
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;

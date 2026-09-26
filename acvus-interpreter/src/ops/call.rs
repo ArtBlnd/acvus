@@ -21,7 +21,9 @@ use acvus_mir::graph::QualifiedRef;
 use futures::future::BoxFuture;
 use smallvec::SmallVec;
 
-use crate::code::{BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, successor};
+use crate::code::{
+    BlockId, Deref, Exit, Marked, Off, Op, SUSPEND, SlicePair, holds_no_chain, successor,
+};
 use crate::executor::{AsyncJob, BlockingJob};
 use crate::flight::{Aloft, Launched};
 use crate::interpreter::lookup_module;
@@ -2041,6 +2043,8 @@ pub struct CallExternAsync<const LARGE: bool> {
 }
 
 impl<const LARGE: bool> Op for CallExternAsync<LARGE> {
+    holds_no_chain!();
+
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let rt = m.callee_runtime();
         let Lent { run, .. } = self.window.lend(m);
@@ -2064,6 +2068,8 @@ pub struct CallHeavy<const LARGE: bool> {
 }
 
 impl<const LARGE: bool> Op for CallHeavy<LARGE> {
+    holds_no_chain!();
+
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let args = self.window.own(m);
         let rt = m.callee_runtime();
@@ -2152,6 +2158,8 @@ pub struct CallDirectAsync<const LARGE: bool, const PAIR: bool> {
 }
 
 impl<const LARGE: bool, const PAIR: bool> Op for CallDirectAsync<LARGE, PAIR> {
+    holds_no_chain!();
+
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         const {
             assert!(
@@ -2252,6 +2260,8 @@ pub struct CallIndirectAsync<const LARGE: bool, const THROUGH: bool> {
 }
 
 impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THROUGH> {
+    holds_no_chain!();
+
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let mut args = staged(m, &self.args, self.takes);
         let rt = m.callee_runtime();
@@ -2284,6 +2294,8 @@ pub struct Eval<const LARGE: bool> {
 }
 
 impl<const LARGE: bool> Op for Eval<LARGE> {
+    holds_no_chain!();
+
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         // SAFETY: the type checker admits only a handle value here.
         let Launched {

@@ -24,7 +24,8 @@ use crate::repr::Claimed;
 use crate::runtime::AcvusRuntime;
 
 use crate::code::{
-    AGAIN, BlockId, Exit, FALL, LEAVE, Marked, Off, Op, RETURN, SlicePair, WordMask, successor,
+    AGAIN, BlockId, Exit, FALL, LEAVE, Marked, Off, Op, RETURN, SlicePair, WordMask,
+    holds_no_chain, successor,
 };
 use crate::machine::Machine;
 use crate::ops::arith::Int;
@@ -105,6 +106,8 @@ pub struct Goto {
 }
 
 impl Op for Goto {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         self.target.into()
@@ -128,6 +131,8 @@ impl<C> Op for JumpIf<C>
 where
     C: Place,
 {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         match C::read(m.regs(), self.cond, r0) != 0 {
@@ -148,6 +153,8 @@ pub struct Return<const WORD: bool, const PAIR: bool> {
 }
 
 impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         const {
@@ -189,6 +196,8 @@ impl<const WORD: bool, const PAIR: bool> Op for Return<WORD, PAIR> {
 pub struct Yield;
 
 impl Op for Yield {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, _: &mut Machine<'_>, r0: u64) -> Exit {
         r0
@@ -198,6 +207,8 @@ impl Op for Yield {
 pub struct Fall;
 
 impl Op for Fall {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         FALL
@@ -207,6 +218,8 @@ impl Op for Fall {
 pub struct Break;
 
 impl Op for Break {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         LEAVE
@@ -216,6 +229,8 @@ impl Op for Break {
 pub struct Continue;
 
 impl Op for Continue {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         AGAIN
@@ -256,10 +271,11 @@ impl StackGuard {
 
 /// Obligation across artifacts: this is a type and not a `const` parameter so
 /// that the demangled `Op::run` symbol names it. `benches/asm_probe.rs` reads
-/// `Escapes` out of the symbol to know which operations have two ends — a
-/// tail `jmp` to their successor and a `ret` carrying a verdict past it — and
-/// a `bool` would reach the symbol as `true`, indistinguishable from any
-/// other `true` an operation is monomorphized over.
+/// `Escapes` out of the symbol to know which operations have two ends — the
+/// successor for the path that rejoins and `PAST` for the verdict that
+/// travels past the region, one tail call either way — and a `bool` would
+/// reach the symbol as `true`, indistinguishable from any other `true` an
+/// operation is monomorphized over.
 pub trait Ending {
     const ESCAPES: bool;
 }
@@ -285,6 +301,18 @@ impl Ending for Rejoins {
 impl Ending for Escapes {
     const ESCAPES: bool = true;
 }
+
+/// Where a region whose part escaped sends the verdict: `Yield` hands its
+/// word back to whatever ran this chain, which is what a bare return of the
+/// verdict does.
+///
+/// A region ends in one call, of the successor with the word that rejoins or
+/// of this with the verdict, so that the call is the only one feeding
+/// `run`'s return (RFC-0105 rule 3). Where a successor call and a returned
+/// verdict, or two calls, meet at one return, the WebAssembly backend emits
+/// a `call_indirect` that nests, since it decides the tail call before it
+/// duplicates the return.
+const PAST: &dyn Op = &Yield;
 
 /// What a loop does with the word its body chain handed back.
 enum Handed {
@@ -326,14 +354,26 @@ impl<C, const ARM_ON: bool> Op for Escape<C, ARM_ON>
 where
     C: Place,
 {
-    successor!();
+    successor!(region);
 
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            cond: _,
+            arm,
+            next,
+            at: _,
+        } = *self;
+        links.extend([arm, next]);
+    }
+
+    /// One call of the chosen chain, as `PAST` states.
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        match (C::read(m.regs(), self.cond, r0) != 0) == ARM_ON {
-            true => self.arm.run(m, r0),
-            false => self.next.run(m, r0),
-        }
+        let to = match (C::read(m.regs(), self.cond, r0) != 0) == ARM_ON {
+            true => self.arm.as_ref(),
+            false => self.next.as_ref(),
+        };
+        to.run(m, r0)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -385,23 +425,35 @@ where
     C: Place,
     E: Ending,
 {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            head,
+            cond: _,
+            body,
+            exit,
+            next,
+            at: _,
+        } = *self;
+        links.extend([head, body, exit, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        loop {
+        let (to, word) = loop {
             let word = self.head.run(m, r0);
             if C::read(m.regs(), self.cond, word) == 0 {
                 self.exit.run(m, r0);
-                break;
+                break (self.next.as_ref(), r0);
             }
             match handed::<E>(self.body.run(m, r0)) {
                 Handed::Iterate => {}
-                Handed::Leave => break,
-                Handed::Over(word) => return word,
+                Handed::Leave => break (self.next.as_ref(), r0),
+                Handed::Over(word) => break (PAST, word),
             }
-        }
-        self.next.run(m, r0)
+        };
+        to.run(m, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -847,22 +899,36 @@ where
     S: Source,
     E: Ending,
 {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            src: _,
+            body,
+            exit,
+            next,
+            ends: _,
+        } = *self;
+        links.extend([body, exit, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let mut cursor = self.src.start(m);
-        while self.src.probe(m, &mut cursor) {
+        let (to, word) = loop {
+            if !self.src.probe(m, &mut cursor) {
+                self.src.ended(m, cursor);
+                self.exit.run(m, r0);
+                break (self.next.as_ref(), r0);
+            }
             match handed::<E>(self.body.run(m, r0)) {
                 Handed::Iterate => {}
-                Handed::Leave => return self.next.run(m, r0),
-                Handed::Over(word) => return word,
+                Handed::Leave => break (self.next.as_ref(), r0),
+                Handed::Over(word) => break (PAST, word),
             }
             S::step(&mut cursor);
-        }
-        self.src.ended(m, cursor);
-        self.exit.run(m, r0);
-        self.next.run(m, r0)
+        };
+        to.run(m, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -934,6 +1000,8 @@ impl<S> Op for ForAt<S>
 where
     S: Source,
 {
+    holds_no_chain!();
+
     #[inline]
     fn run(&self, m: &mut Machine<'_>, _: u64) -> Exit {
         let mut cursor = self.src.load(m, self.counter);
@@ -1057,6 +1125,19 @@ impl<S> Op for ForAhead<S>
 where
     S: Seek,
 {
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            src: _,
+            counter: _,
+            ring: _,
+            prefix,
+            crossing: _,
+            body: _,
+            exit: _,
+        } = *self;
+        links.push(prefix);
+    }
+
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let mut cursor = self.src.load(m, self.counter);
         if !self.src.probe(m, &mut cursor) {
@@ -1135,7 +1216,18 @@ where
     C: Place,
     E: Ending,
 {
-    successor!();
+    successor!(region);
+
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>) {
+        let Self {
+            cond: _,
+            on_true,
+            on_false,
+            next,
+            at: _,
+        } = *self;
+        links.extend([on_true, on_false, next]);
+    }
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
@@ -1144,10 +1236,11 @@ where
             false => self.on_false.as_ref(),
         };
         let word = arm.run(m, r0);
-        match (E::ESCAPES, word) {
-            (true, FALL) | (false, _) => self.next.run(m, word),
-            (true, verdict) => verdict,
-        }
+        let to = match (E::ESCAPES, word) {
+            (true, FALL) | (false, _) => self.next.as_ref(),
+            (true, _) => PAST,
+        };
+        to.run(m, word)
     }
 
     #[cfg(any(debug_assertions, feature = "probe"))]
@@ -1176,6 +1269,8 @@ where
 pub struct Diverge;
 
 impl Op for Diverge {
+    holds_no_chain!();
+
     fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         panic!("a call typed `!` returned: its handler must panic")
     }
@@ -1293,6 +1388,8 @@ impl Op for DropValue {
 pub struct Poison;
 
 impl Op for Poison {
+    holds_no_chain!();
+
     fn run(&self, _: &mut Machine<'_>, _: u64) -> Exit {
         panic!("reached poison instruction")
     }

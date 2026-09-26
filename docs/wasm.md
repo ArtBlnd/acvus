@@ -23,7 +23,8 @@ rustflags = [
 
 - `-C target-feature=+tail-call` compiles a chain's tail call as
   `return_call_indirect`. The pinned stable toolchain (1.97.1) accepts it;
-  no nightly is needed.
+  no nightly is needed. A `wasm32` build of `acvus-interpreter` without it
+  is refused by a `compile_error!` that names the flag.
 - `-C link-arg=-zstack-size=16777216` links the linear-memory stack at
   16 MiB instead of the linker's 1 MiB. The target links the stack first,
   so `__stack_pointer` starts at 16777216. An embedder may link a larger
@@ -33,6 +34,11 @@ rustflags = [
   flags in the variable.
 - A tool that rewrites the module after it is linked must accept the
   tail-call proposal, since the module holds `return_call_indirect`.
+- No other target feature is needed. `multivalue` is on by default in
+  this toolchain, and turning it off changes nothing the probe reads: it
+  lets a function return several values, but the wasm32 ABI still returns
+  a value wider than one word through a slot in the caller's frame, and
+  the module holds no function type with two results either way.
 
 ## Engines
 
@@ -52,33 +58,40 @@ feature table (`features.json` in `WebAssembly/website`), both read on
 
 ## What a module does today
 
-- A straight body of arithmetic chains and one-word extern calls runs at
-  constant engine depth and leaves the linear stack pointer where it found
-  it; 20 000 steps were run under node 26.
-- An operation that hands a callee the address of a slot on the linear
-  stack does not tail-call its successor. On `wasm32` a result wider than
-  one value comes back through such a slot, so this holds for many extern
-  calls and for `For`, `Fused` and the direct and indirect body calls. A
-  region that can escape, whose successor call and escape exit share one
-  return, does not either. A long run of those still nests one engine
-  frame per operation.
-- Dropping a prepared body nests one engine frame per operation of a
-  chain, so a body of about 16 000 operations or more runs node's default
-  stack out when it is dropped.
+- A straight body of more than 40 000 operations runs at constant engine
+  depth and leaves the linear stack pointer where it found it, under
+  node 26.
+- Every operation's `run` ends in `return_call_indirect` to its
+  successor, or ends a chain, or is of a family that holds the address of
+  a slot in its linear-stack frame across a callee. LLVM does not
+  tail-call out of a function whose frame a callee may still reach. Those
+  families are extern calls (the handler takes its argument run and result
+  slot by reference), body and closure calls, `Fused`, spawns,
+  `MakeClosure`, storage `Fetch` and `Commit`, the path writes `SetStep`
+  and `SetPath`, and `Concat`.
+  `wasm_probe` lists each with the address and the callee it reaches. A
+  long run of those still nests one engine frame per operation.
+- A region whose part can escape (a `break`, `continue`, `?` or `return`
+  inside it) ends in one call, of its successor or of `Yield` with the
+  verdict, so it tail-calls on both paths.
+- Dropping a prepared body is a loop over its operations, so a body that
+  runs also drops.
 
 ## Checking a build
 
-`cargo test -p acvus-interpreter-test --test wasm_probe`, part of
-`cargo test --workspace`, builds `acvus-wasm-probe` for
-`wasm32-unknown-unknown` with `--release` and reads the module; the
-`wasm32-unknown-unknown` target must be installed. It fails when
-`__stack_pointer` does not start at 16 MiB, and when an operation's `run`
-calls its successor instead of tail-calling it, naming the operation.
-Where `/usr/bin/node` exists, it runs a straight body of more than 20 000
-operations, which must reach its last operation at the engine depth and
-linear stack pointer of a body of one step; where it does not, it says so.
-`RUSTFLAGS= cargo test -p acvus-interpreter-test --test wasm_probe` builds
-the module without the flags, and the probe fails.
+`cargo bench -p acvus-interpreter-test --bench wasm_probe` builds
+`acvus-wasm-probe` for `wasm32-unknown-unknown` with the `wasm` profile,
+the one an embedder deploys (fat LTO, `opt-level = "z"`), in a cargo of
+its own, and reads the module. The `wasm32-unknown-unknown` target must
+be installed. It is a bench so that `cargo test` never builds a fat-LTO
+module. It fails:
 
-With the flags it fails today too, on the operations the section above
-names; the straight body and the stack size pass.
+- when `__stack_pointer` does not start at 16 MiB;
+- when an operation's `run` calls its successor and is neither a chain's
+  end nor an instance, holding a linear-stack frame, of a listed family.
+
+It prints the counts as tail calls, chain ends and listed instances.
+Where `/usr/bin/node` exists, it runs a straight body of more than 40 000
+operations, which must reach its last operation at the engine depth and
+linear stack pointer of a body of one step, and then drops it; where node
+does not exist, it says so.

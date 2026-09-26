@@ -251,6 +251,14 @@ where
 pub trait Op: Named + Send + Sync {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit;
 
+    /// Hands every chain this operation holds, its successor and the head
+    /// of each part it owns, to `links`, and drops the rest of itself.
+    /// `Body`'s drop is the one caller and a loop over `links`, so dropping
+    /// a chain nests no frame per operation (RFC-0105 rule 4). It has no
+    /// default: each operation states the chains it holds, through
+    /// `successor!` or `holds_no_chain!` or by naming its parts.
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>);
+
     fn chain(&self) -> Option<ChainProbe<'_>> {
         None
     }
@@ -321,12 +329,29 @@ pub struct OwnedOps<'o> {
 #[cfg(not(any(debug_assertions, feature = "probe")))]
 pub trait Op: Send + Sync {
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit;
+
+    /// Hands every chain this operation holds, its successor and the head
+    /// of each part it owns, to `links`, and drops the rest of itself.
+    /// `Body`'s drop is the one caller and a loop over `links`, so dropping
+    /// a chain nests no frame per operation (RFC-0105 rule 4). It has no
+    /// default: each operation states the chains it holds, through
+    /// `successor!` or `holds_no_chain!` or by naming its parts.
+    fn release(self: Box<Self>, links: &mut Vec<Box<dyn Op>>);
 }
 
 /// The one writer of the three probe methods, over the `next` field the tail
-/// call reads.
+/// call reads. `successor!()` also writes `release` for an operation whose
+/// one chain is `next`; `successor!(region)` leaves `release` to a region,
+/// which names its parts beside `next`.
 macro_rules! successor {
     () => {
+        $crate::code::successor!(region);
+
+        fn release(self: Box<Self>, links: &mut Vec<Box<dyn $crate::code::Op>>) {
+            links.push(self.next);
+        }
+    };
+    (region) => {
         #[cfg(any(debug_assertions, feature = "probe"))]
         fn successor(&self) -> Option<&dyn $crate::code::Op> {
             Some(self.next.as_ref())
@@ -345,6 +370,16 @@ macro_rules! successor {
 }
 
 pub(crate) use successor;
+
+/// The `release` of an operation that holds no chain: a terminator, whose
+/// fields name blocks and registers.
+macro_rules! holds_no_chain {
+    () => {
+        fn release(self: Box<Self>, _: &mut Vec<Box<dyn $crate::code::Op>>) {}
+    };
+}
+
+pub(crate) use holds_no_chain;
 
 /// An operation `prepare` has decided on and not yet linked: `prepare` emits
 /// a body's operations in the order they run, and `chain` links them from the
@@ -880,6 +915,18 @@ pub struct Body {
     pub(crate) captures: Box<[Off]>,
     pub(crate) order_param: Option<Off>,
     pub(crate) span: Span,
+}
+
+/// RFC-0105 rule 4: the chains are released by a loop, each operation handing
+/// on the chains it holds, so no drop recurses through a successor and a body
+/// of any length drops on any stack.
+impl Drop for Body {
+    fn drop(&mut self) {
+        let mut links: Vec<Box<dyn Op>> = std::mem::take(&mut self.heads).into_vec();
+        while let Some(op) = links.pop() {
+            op.release(&mut links);
+        }
+    }
 }
 
 /// Each body here was prepared once, when the module was loaded (RFC-0044);
