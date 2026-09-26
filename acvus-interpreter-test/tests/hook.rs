@@ -1,12 +1,21 @@
 //! RFC-0101 at the host's contract: a hook one program declares, bound to a
 //! lent entry of another program compiled apart, runs that entry within the
-//! call on the call's own arguments.
+//! call on the call's own arguments; an entry that waits suspends the caller
+//! until it ends.
 
-use acvus_extern::TyArg;
+use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use acvus_extern::{Registry, TyArg, extern_fn, extern_registry};
 use acvus_interpreter::{
-    Cause, Host, HookEffect, HookPart, HostError, InputShape, LentInputs, MemoryStorage, Names, Program, Refusal,
-    SequentialExecutor, Source,
+    AcvusRuntime, Cause, Host, HookEffect, HookPart, HostError, InputShape, LentInputs, MemoryStorage, Names,
+    Program, Refusal, SequentialExecutor, Source,
 };
+use futures::channel::oneshot;
+use futures::lock::Mutex;
 
 #[derive(TyArg)]
 pub struct Pair {
@@ -18,6 +27,50 @@ pub struct Pair {
 pub enum Mode {
     Idle,
     Busy,
+}
+
+/// `Mode` with one variant, for an entry narrower than its caller.
+mod narrow {
+    use acvus_extern::TyArg;
+
+    #[derive(TyArg)]
+    pub enum Mode {
+        Busy,
+    }
+}
+
+#[derive(TyArg)]
+pub enum Shape {
+    Dot,
+    Spot(Pair),
+}
+
+/// Stands for a model's answer: it waits before it gives `x` back.
+#[extern_fn(effect = opaque)]
+async fn slow(x: i64) -> i64 {
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    x
+}
+
+/// Answers once the test sends the word: the entry waits on the test itself.
+#[extern_fn(effect = opaque)]
+async fn released(#[state] gate: &Arc<StdMutex<Option<oneshot::Receiver<i64>>>>) -> i64 {
+    let receiver = gate.lock().expect("the gate").take().expect("`released` is called once");
+    receiver.await.expect("the test sends the word")
+}
+
+fn waiting_registries() -> Vec<Registry<AcvusRuntime>> {
+    let mut registries = acvus_ext::std_registries();
+    registries.push(extern_registry! { ns: "wait", fns: [slow], });
+    registries
+}
+
+fn waiting_host(names: &Names) -> Host {
+    Host::with_names(names, waiting_registries())
+}
+
+fn storage() -> Arc<Mutex<MemoryStorage>> {
+    Arc::new(Mutex::new(MemoryStorage::new()))
 }
 
 fn compiled(host: Host) -> Program {
@@ -55,7 +108,7 @@ async fn run_string(program: &Program) -> Result<String, HostError> {
 
 fn bind_over_fresh_storage(caller: &Program, hook: &str, callee: &Program, entry: &str) -> Result<(), HostError> {
     let lent = callee.lent(entry)?;
-    caller.bind(hook, &lent, |call| call.run(&mut MemoryStorage::new()))
+    caller.bind(hook, &lent, |call| call.run(&storage()))
 }
 
 fn refusals(error: HostError) -> Vec<Refusal> {
@@ -221,14 +274,10 @@ async fn an_entry_that_writes_its_context_is_refused_under_a_pure_hook_and_bound
     assert_eq!(parts(&refused), [HookPart::Effect]);
 
     let opaque = count_caller(&names, HookEffect::Opaque);
-    let storage = std::sync::Arc::new(std::sync::Mutex::new(MemoryStorage::new()));
-    let kept = std::sync::Arc::clone(&storage);
+    let kept = storage();
     let lent = callee.lent("tally").expect("`tally` is lent");
     opaque
-        .bind("count", &lent, move |call| {
-            let mut storage = kept.lock().expect("no call panicked holding the storage");
-            call.run(&mut *storage)
-        })
+        .bind("count", &lent, move |call| call.run(&kept))
         .expect("an opaque hook admits a write");
     assert_eq!(run_i64(&opaque).await.expect("the run ends"), 1);
     assert_eq!(run_i64(&opaque).await.expect("the run ends"), 2, "the callee's storage kept `@count`");
@@ -405,8 +454,8 @@ match classify(m) {
     assert_eq!(run_i64(&caller).await.expect("the run ends"), -4, "`Busy` is `Err(\"busy\")`");
 }
 
-#[test]
-fn an_entry_that_calls_an_opaque_hook_can_wait_and_is_refused() {
+#[tokio::test]
+async fn an_entry_that_calls_another_hook_runs() {
     let names = Names::new();
     let a = compiled(
         host(&names)
@@ -416,9 +465,249 @@ fn an_entry_that_calls_an_opaque_hook_can_wait_and_is_refused() {
     let b = compiled(host(&names).hook("to_c", 1, HookEffect::Opaque).lent_entry::<i64>(
         "forward",
         LentInputs::new().field::<i64>("n"),
-        Source::Script("match to_c($n + 1) { Some(n) => n, None => -1 }"),
+        Source::Script("match to_c($n + 1) { Some(n) => n * 10, None => -1 }"),
     ));
-    let refused = refusals(bind_over_fresh_storage(&a, "to_b", &b, "forward").expect_err("the spawned call waits"));
-    assert_eq!(parts(&refused), [HookPart::Effect]);
-    assert!(refused[0].message.contains("can wait"), "{}", refused[0].message);
+    let c = compiled(waiting_host(&names).lent_entry::<i64>(
+        "answer",
+        LentInputs::new().field::<i64>("n"),
+        Source::Script("slow($n + 100)"),
+    ));
+    bind_over_fresh_storage(&a, "to_b", &b, "forward").expect("an entry that calls a hook may wait");
+    bind_over_fresh_storage(&b, "to_c", &c, "answer").expect("an entry that waits is bound");
+    assert_eq!(run_i64(&a).await.expect("the run ends"), 1020, "(1 + 1 + 100) * 10");
+}
+
+// -- A waiting entry (RFC-0101 rule 2) ------------------------------------
+
+#[tokio::test]
+async fn an_entry_that_waits_runs_and_the_caller_waits_for_it() {
+    let names = Names::new();
+    let caller = compiled(host(&names).hook("ask", 1, HookEffect::Opaque).entry::<(), i64>(
+        "main",
+        Source::Script("match ask(20) { Some(n) => n + 1, None => -1 }"),
+    ));
+    let callee = compiled(waiting_host(&names).lent_entry::<i64>(
+        "ask",
+        LentInputs::new().field::<i64>("n"),
+        Source::Script("slow($n * 2)"),
+    ));
+    bind_over_fresh_storage(&caller, "ask", &callee, "ask").expect("an entry that waits is bound");
+    assert_eq!(run_i64(&caller).await.expect("the run ends"), 41);
+}
+
+/// The caller's run is polled while the entry waits on a word only the test
+/// sends: it is pending, not polled once and given up, and it ends with the
+/// entry's answer once the word arrives.
+#[tokio::test]
+async fn the_hook_call_suspends_the_caller_until_the_entry_ends() {
+    let names = Names::new();
+    let (send, receive) = oneshot::channel();
+    let gate = Arc::new(StdMutex::new(Some(receive)));
+    let mut registries = acvus_ext::std_registries();
+    registries.push(extern_registry! { ns: "wait", fns: [released(Arc::clone(&gate))], });
+    let caller = compiled(host(&names).hook("ask", 0, HookEffect::Opaque).entry::<(), i64>(
+        "main",
+        Source::Script("match ask() { Some(n) => n + 1, None => -1 }"),
+    ));
+    let callee = compiled(
+        Host::with_names(&names, registries).lent_entry::<i64>("ask", LentInputs::new(), Source::Script("released()")),
+    );
+    bind_over_fresh_storage(&caller, "ask", &callee, "ask").expect("an entry that waits is bound");
+
+    let mut run = Box::pin(run_i64(&caller));
+    let waker = futures::task::noop_waker();
+    let mut polling = Context::from_waker(&waker);
+    for _ in 0..3 {
+        assert!(
+            matches!(run.as_mut().poll(&mut polling), Poll::Pending),
+            "the caller waits while the entry does"
+        );
+    }
+    send.send(41).expect("the entry is waiting on the word");
+    assert_eq!(run.await.expect("the run ends"), 42);
+}
+
+#[tokio::test]
+async fn two_hook_calls_in_one_caller_each_wait_for_their_entry() {
+    let names = Names::new();
+    let caller = compiled(host(&names).hook("ask", 1, HookEffect::Opaque).entry::<(), i64>(
+        "main",
+        Source::Script(
+            r#"let a = match ask(1) { Some(n) => n, None => -1 };
+let b = match ask(2) { Some(n) => n, None => -1 };
+a * 100 + b"#,
+        ),
+    ));
+    let callee = compiled(waiting_host(&names).lent_entry::<i64>(
+        "ask",
+        LentInputs::new().field::<i64>("n"),
+        Source::Script("slow($n * 3)"),
+    ));
+    bind_over_fresh_storage(&caller, "ask", &callee, "ask").expect("an entry that waits is bound");
+    assert_eq!(run_i64(&caller).await.expect("the run ends"), 306);
+}
+
+#[tokio::test]
+async fn a_cycle_through_a_waiting_entry_traps_where_it_closes() {
+    let names = Names::new();
+    let a = compiled(
+        host(&names)
+            .hook("to_b", 1, HookEffect::Opaque)
+            .entry::<(), i64>("main", Source::Script("match to_b(1) { Some(n) => n, None => -1 }"))
+            .lent_entry::<i64>("back", LentInputs::new().field::<i64>("n"), Source::Script("$n * 10")),
+    );
+    let b = compiled(waiting_host(&names).hook("to_a", 1, HookEffect::Opaque).lent_entry::<i64>(
+        "forward",
+        LentInputs::new().field::<i64>("n"),
+        Source::Script("let m = slow($n + 1);\nmatch to_a(m) { Some(n) => n, None => -1 }"),
+    ));
+    bind_over_fresh_storage(&a, "to_b", &b, "forward").expect("the types match");
+    bind_over_fresh_storage(&b, "to_a", &a, "back").expect("the types match");
+    let Err(HostError::Trapped { message }) = run_i64(&a).await else {
+        panic!("`back` is `a`'s, which is running below the waiting `forward`");
+    };
+    assert!(message.contains("to_a") && message.contains("already running"), "{message}");
+}
+
+// -- Types within (RFC-0101 rule 3) ---------------------------------------
+
+#[tokio::test]
+async fn a_site_building_one_variant_passes_it_to_an_entry_taking_more() {
+    let names = Names::new();
+    let caller = compiled(host(&names).hook("classify", 1, HookEffect::Pure).entry::<(), i64>(
+        "main",
+        Source::Script("match classify(Mode::Busy) { Some(n) => n, None => -1 }"),
+    ));
+    let callee = compiled(host(&names).lent_entry::<i64>(
+        "classify",
+        LentInputs::new().field::<Mode>("m"),
+        Source::Script("match &$m { Mode::Idle => 1, Mode::Busy => 2 }"),
+    ));
+    bind_over_fresh_storage(&caller, "classify", &callee, "classify").expect("`Mode{Busy}` is within `Mode{Busy, Idle}`");
+    assert_eq!(run_i64(&caller).await.expect("the run ends"), 2);
+}
+
+#[tokio::test]
+async fn a_site_building_more_variants_than_the_entry_takes_is_refused_naming_the_site_and_position() {
+    let names = Names::new();
+    let source = r#"let m = if 1 > 2 { Mode::Idle } else { Mode::Busy };
+match classify(m) { Some(n) => n, None => -1 }"#;
+    let caller = compiled(host(&names).hook("classify", 1, HookEffect::Pure).entry::<(), i64>("main", Source::Script(source)));
+    let callee = compiled(host(&names).lent_entry::<i64>(
+        "classify",
+        LentInputs::new().field::<narrow::Mode>("m"),
+        Source::Script("match &$m { Mode::Busy => 2 }"),
+    ));
+    let refused =
+        refusals(bind_over_fresh_storage(&caller, "classify", &callee, "classify").expect_err("`Idle` is not the entry's"));
+    assert_eq!(parts(&refused), [HookPart::Argument(0)]);
+    let refusal = &refused[0];
+    assert_eq!(refusal.origin, Some(acvus_interpreter::Origin::Entry("main".to_owned())));
+    let span = refusal.span.expect("the refusal points at the call");
+    assert!(source[span.start..span.end].contains("classify(m)"), "{:?}", &source[span.start..span.end]);
+    assert!(refusal.message.contains("argument 0") && refusal.message.contains("not within"), "{}", refusal.message);
+}
+
+#[tokio::test]
+async fn an_entry_result_with_fewer_variants_is_within_the_sites() {
+    let names = Names::new();
+    let caller = compiled(host(&names).hook("mode", 0, HookEffect::Pure).entry::<(), i64>(
+        "main",
+        Source::Script("match mode() { Some(m) => match m { Mode::Idle => 1, Mode::Busy => 2 }, None => -1 }"),
+    ));
+    let callee = compiled(host(&names).lent_entry::<narrow::Mode>("mode", LentInputs::new(), Source::Script("Mode::Busy")));
+    bind_over_fresh_storage(&caller, "mode", &callee, "mode").expect("`Mode{Busy}` is within `Mode{Busy, Idle}`");
+    assert_eq!(run_i64(&caller).await.expect("the run ends"), 2);
+
+    let narrow_site = compiled(host(&names).hook("mode", 0, HookEffect::Pure).entry::<(), i64>(
+        "main",
+        Source::Script("match mode() { Some(m) => match m { Mode::Busy => 2 }, None => -1 }"),
+    ));
+    let wide = compiled(host(&names).lent_entry::<Mode>("mode", LentInputs::new(), Source::Script("Mode::Busy")));
+    let refused = refusals(bind_over_fresh_storage(&narrow_site, "mode", &wide, "mode").expect_err("`Idle` has no arm"));
+    assert_eq!(parts(&refused), [HookPart::Result]);
+}
+
+#[tokio::test]
+async fn an_enum_laid_at_another_width_is_refused() {
+    let names = Names::new();
+    let caller = compiled(host(&names).hook("area", 1, HookEffect::Pure).entry::<(), i64>(
+        "main",
+        Source::Script("match area(Shape::Dot) { Some(n) => n, None => -1 }"),
+    ));
+    let callee = compiled(host(&names).lent_entry::<i64>(
+        "area",
+        LentInputs::new().field::<Shape>("s"),
+        Source::Script("match &$s { Shape::Dot => 0, Shape::Spot(p) => p.x * p.y }"),
+    ));
+    let refused = refusals(bind_over_fresh_storage(&caller, "area", &callee, "area").expect_err("`Spot` widens the layout"));
+    assert_eq!(parts(&refused), [HookPart::Argument(0)]);
+    assert!(refused[0].message.contains("width"), "{}", refused[0].message);
+}
+
+#[tokio::test]
+async fn behind_a_mut_reference_an_enum_is_the_same_on_both_sides() {
+    let names = Names::new();
+    let caller = compiled(host(&names).hook("flip", 1, HookEffect::Opaque).entry::<(), i64>(
+        "main",
+        Source::Script("let m = Mode::Busy;\nmatch flip(&mut m) { Some(n) => n, None => -1 }"),
+    ));
+    let callee = compiled(host(&names).lent_entry::<i64>(
+        "flip",
+        LentInputs::new().field_mut::<Mode>("m"),
+        Source::Script("*$m = Mode::Idle;\n0"),
+    ));
+    let refused = refusals(
+        bind_over_fresh_storage(&caller, "flip", &callee, "flip").expect_err("the entry could write `Idle` into `Mode{Busy}`"),
+    );
+    assert_eq!(parts(&refused), [HookPart::Argument(0)]);
+}
+
+// -- No strong cycle (RFC-0101 rule 4) ------------------------------------
+
+/// Counts its drops: a binding's closure owns one, so it is released exactly
+/// when the program holding the binding is.
+struct Dropped(Arc<AtomicUsize>);
+
+impl Drop for Dropped {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn two_programs_bound_to_each_other_are_both_released_with_their_hosts() {
+    let names = Names::new();
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let program = |hook: &str, entry: &str| {
+        compiled(
+            host(&names)
+                .hook(hook, 1, HookEffect::Pure)
+                .entry::<(), i64>("main", Source::Script(&format!("match {hook}(1) {{ Some(n) => n, None => -1 }}")))
+                .lent_entry::<i64>(entry, LentInputs::new().field::<i64>("n"), Source::Script("$n + 1")),
+        )
+    };
+    let a = program("to_b", "from_b");
+    let b = program("to_a", "from_a");
+    for (caller, hook, callee, entry) in [(&a, "to_b", &b, "from_a"), (&b, "to_a", &a, "from_b")] {
+        let lent = callee.lent(entry).expect("the entry is lent");
+        let kept = Dropped(Arc::clone(&dropped));
+        let over = storage();
+        caller
+            .bind(hook, &lent, move |call| {
+                let _owned = &kept;
+                call.run(&over)
+            })
+            .expect("the types match");
+    }
+    assert_eq!(run_i64(&a).await.expect("the run ends"), 2);
+    assert_eq!(dropped.load(Ordering::SeqCst), 0, "both programs are held");
+    drop(a);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1, "`a`'s binding is released with `a`");
+    let Err(HostError::Unbound { hook }) = run_i64(&b).await else {
+        panic!("`b`'s hook is bound to `a`, which the host released");
+    };
+    assert_eq!(hook, "to_a");
+    drop(b);
+    assert_eq!(dropped.load(Ordering::SeqCst), 2, "`b`'s binding is released with `b`");
 }

@@ -400,8 +400,8 @@ impl fmt::Display for HostError {
             HostError::Trapped { message } => write!(f, "the run trapped: {message}"),
             HostError::Unbound { hook } => write!(
                 f,
-                "the hook `{hook}` is unbound, so the program does not run; `Program::bind` binds it \
-                 (RFC-0101 rule 1)"
+                "the hook `{hook}` is unbound, or bound to an entry whose program the host released, \
+                 so the program does not run; `Program::bind` binds it (RFC-0101 rule 1)"
             ),
         }
     }
@@ -1905,7 +1905,6 @@ impl Compiled {
             qref: compiled.qref,
             shape,
             ret: &compiled.ret,
-            suspends: lookup_module(&self.shared, &compiled.qref).main.may_suspend,
         })
     }
 

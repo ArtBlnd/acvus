@@ -247,15 +247,26 @@ pub(crate) struct Port {
     reaches: Reaches,
     /// The keys whose init a fetch ran, in the order it ran them.
     filled: Mutex<Vec<String>>,
+    /// The programs whose hook calls this run is within (RFC-0101 rule 4).
+    callers: Callers,
 }
+
+/// The programs a run is within, outermost first: the caller of each hook
+/// call that led to it. Empty for a run a host started.
+pub(crate) type Callers = Arc<[Compilation]>;
 
 pub(crate) type Loaded = Result<Option<Held>, HostError>;
 
 impl Port {
     fn of(reaches: Reaches) -> Arc<Port> {
+        Port::within(reaches, Arc::new([]))
+    }
+
+    fn within(reaches: Reaches, callers: Callers) -> Arc<Port> {
         Arc::new(Port {
             reaches,
             filled: Mutex::new(Vec::new()),
+            callers,
         })
     }
 
@@ -265,6 +276,15 @@ impl Port {
 
     pub(crate) fn gate(gate: Gate) -> Arc<Port> {
         Port::of(Reaches::Gate(gate))
+    }
+
+    /// A gate for the run of a hook's entry, within `callers`.
+    pub(crate) fn gate_within(gate: Gate, callers: Callers) -> Arc<Port> {
+        Port::within(Reaches::Gate(gate), callers)
+    }
+
+    pub(crate) fn callers(&self) -> &Callers {
+        &self.callers
     }
 
     pub(crate) fn queue() -> (Arc<Port>, Requests) {
