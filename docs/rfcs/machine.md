@@ -619,13 +619,18 @@ alone runs it out.
    module an embedder links is built the same way; the docs name the flags.
 2. **The linear stack.** The linear-memory stack is linked at 16 MiB, a
    size an embedder may raise.
-3. **Checked in the module.** A probe of the built module checks that every
-   operation's `run` ends in `return_call_indirect`, as `asm_probe` checks
-   `jmp` natively, and a straight body of many thousand operations runs in
-   an engine at constant depth.
+3. **Checked in the module.** A probe of the built module reads every
+   operation's `run`: it ends in `return_call_indirect` to its successor,
+   or ends a chain, or is of a listed family that holds a linear-stack
+   address across the call, each listed with the reason the address must
+   reach the callee, as `asm_probe` lists its own natively. A straight body
+   of many thousand operations runs in an engine at constant depth.
+4. **Dropping a body nests nothing.** A prepared body is released by a
+   loop over its operations, never by a drop that recurses through each
+   successor, so a body that runs is a body that drops.
 
 **Why.** The engine's stack is the browser's: only the calls that nest can
-be controlled, and a chain need not nest.
+be controlled, and a chain need not nest; a drop spends it as a run does.
 **Cost.** An engine without tail calls cannot run the module; it is named
 unsupported rather than served a build that nests.
 **Rejected.**
@@ -633,3 +638,5 @@ unsupported rather than served a build that nests.
   body would be refused for a limit the engine sets.
 - A trampoline loop in place of the tail call — a return and a dispatch per
   operation on every target that has tail calls.
+- A probe that lists every family calling today — it records the gap
+  rather than closing it.
