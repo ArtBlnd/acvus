@@ -64,7 +64,6 @@
 //! header's test to the exit, which makes such an edge.
 
 use acvus_ast::{Literal, SuffixedInt};
-use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
@@ -73,6 +72,7 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::interval::constant_bounds_on_entry;
 use crate::analysis::loans::Loans;
+use crate::analysis::pull;
 use crate::analysis::loops::{Invariant, Invariants, Loop, LoopKind, LoopNest};
 use crate::analysis::targets::{effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
@@ -87,7 +87,7 @@ use crate::ty::{CastTy, IntTy, Mutability, Ty};
 
 mod leave;
 
-pub fn run(interner: &Interner, cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     leave::run(cfg, laws);
     let domtree = DomTree::build(cfg);
     let invariants = Invariants::of(cfg);
@@ -109,7 +109,7 @@ pub fn run(interner: &Interner, cfg: &mut CfgBody, laws: &LawTable) {
         };
         if let Some(found) = recognizer.counted() {
             counted.push(found);
-        } else if let Some(found) = recognizer.pull(interner) {
+        } else if let Some(found) = recognizer.pull() {
             pulls.push(found);
         }
     }
@@ -916,7 +916,7 @@ impl Recognizer<'_> {
 }
 
 impl Recognizer<'_> {
-    fn pull(&self, interner: &Interner) -> Option<Pull> {
+    fn pull(&self) -> Option<Pull> {
         let LoopKind::While = self.loop_.kind else {
             return None;
         };
@@ -938,7 +938,14 @@ impl Recognizer<'_> {
             || !natural.contains(body_block)
             || natural.contains(exit_block)
             || !self.only_from_header(body_block)
-            || !self.leaves_only_from_header()
+        {
+            return None;
+        }
+        // RFC-0089 rule 1: a pull loop leaves at its header, or from a later
+        // stage where rule 5 runs its pulls ahead.
+        let loop_blocks: Vec<BlockIdx> = natural.blocks().collect();
+        if !self.leaves_only_from_header()
+            && !pull::runs_ahead(self.cfg, self.laws, self.loans, header, &loop_blocks)
         {
             return None;
         }
@@ -956,7 +963,7 @@ impl Recognizer<'_> {
         };
         let InstKind::FunctionCall {
             dst: pulled,
-            callee: Callee::Extern { id, .. },
+            callee,
             args,
             ..
         } = &pull.kind
@@ -967,11 +974,12 @@ impl Recognizer<'_> {
             return None;
         };
         let storage = inst_info::storage(target)?;
-        let pulls = interner.resolve(id.name) == "next"
+        let some = self.laws.option_tags()?.some;
+        let pulls = self.laws.pulls(callee)
             && args[..] == [*lent]
             && matches!(self.cfg.val_types.get(pulled), Some(Ty::Option(_)))
             && src == pulled
-            && interner.resolve(*tag) == "Some"
+            && *tag == some
             && dst == cond;
         let lends_the_storage_alone = self
             .loans

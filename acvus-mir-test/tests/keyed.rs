@@ -526,11 +526,18 @@ const KEYED_SOUNDNESS_PROGRAMS: &[(&str, bool)] = &[
     ("map_count_by_lambdas.acvus", false),
     ("map_count_from_five.acvus", false),
     ("map_count_over_a_filled_map.acvus", true),
+    ("map_get_and_insert_at_two_keys.acvus", false),
+    ("map_group_by_push_from_a_held_vec.acvus", false),
+    ("map_group_by_push_from_an_empty_vec.acvus", true),
     ("map_group_by_push_from_new.acvus", true),
+    ("map_insert_old_value_read.acvus", false),
     ("map_max_per_key.acvus", true),
+    ("map_remove_in_the_loop.acvus", false),
+    ("map_sum_by_get_then_insert.acvus", true),
     ("map_word_count_or_insert.acvus", true),
     ("marks_stored_last.acvus", true),
     ("nested_histogram_over_rows.acvus", true),
+    ("nested_inverted_index_by_pull.acvus", true),
     // The outer loop of these two is refused (tested by
     // `a_table_the_outer_iteration_reads_outside_one_keyed_nested_loop_is_not_keyed_there`);
     // each word loop inside is itself a keyed count.
@@ -538,6 +545,9 @@ const KEYED_SOUNDNESS_PROGRAMS: &[(&str, bool)] = &[
     ("nested_word_count_over_lines.acvus", true),
     ("nested_word_count_read_by_lookup.acvus", true),
     ("scatter_repeating_a_key.acvus", true),
+    ("set_count_distinct_by_contains.acvus", false),
+    ("set_dedup_by_insert.acvus", true),
+    ("set_insert_result_read.acvus", false),
     ("two_references_to_one_element.acvus", false),
     ("u8_bucket_past_255.acvus", true),
     ("u8_bucket_past_255_two_takes.acvus", true),

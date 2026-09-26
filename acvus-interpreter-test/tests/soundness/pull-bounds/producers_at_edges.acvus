@@ -1,0 +1,15 @@
+// expect 0,0,0,0,0,2|1,1,1,1,0,3|4,4,3,4,2,6|1,1,1,2,1,3|6,6,1,6,2,8
+// Each text producer's stated `len(ret)` bound, checked at its return in a debug build, over edge texts: empty, a lone terminator, an empty line, a two-byte scalar, spaces around words. The last column splits by the empty pattern, two past one piece per byte at `a\n\nb` and ` a  b `.
+let texts = vec(["".to_string(), "\n".to_string(), "a\n\nb".to_string(), "é".to_string(), " a  b ".to_string()]);
+let rows = vec([]);
+for t in &texts {
+    let n = [0, 0, 0, 0, 0, 0];
+    let a = t.chars(); while let Some(x) = a.next() { n[0] = n[0] + 1; }
+    let b = t.char_indices(); while let Some(x) = b.next() { n[1] = n[1] + 1; }
+    let c = t.lines(); while let Some(x) = c.next() { n[2] = n[2] + 1; }
+    let d = t.bytes(); while let Some(x) = d.next() { n[3] = n[3] + 1; }
+    let e = t.split_whitespace(); while let Some(x) = e.next() { n[4] = n[4] + 1; }
+    let f = t.split(""); while let Some(x) = f.next() { n[5] = n[5] + 1; }
+    rows.push(n.as_iter().map(|k| -> (*k).to_string()).join(",".to_string()));
+}
+rows.as_iter().map(|r| -> r.to_string()).join("|".to_string())

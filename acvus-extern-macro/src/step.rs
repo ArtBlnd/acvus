@@ -1,7 +1,7 @@
 //! `#[extern_fn(step(..))]`: RFC-0099 rule 1's step, parsed into
 //! `acvus_extern::step`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use quote::quote;
 use syn::parse::ParseStream;
@@ -43,6 +43,7 @@ struct Block {
 }
 
 enum Stmt {
+    Let { name: Ident, value: Expr },
     Set { state: Ident, value: Expr },
     Run { callee: Path, args: Vec<Expr> },
     If {
@@ -58,6 +59,36 @@ enum Expr {
     Lit { negative: bool, lit: Lit },
     Lend { mutable: bool, of: Box<Expr> },
     WrappingAdd { left: Box<Expr>, right: Box<Expr> },
+    Field { of: Ident, field: Ident },
+    Record(Vec<(Ident, Expr)>),
+    Some(Box<Expr>),
+    None,
+    Compare {
+        op: Comparison,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    If {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        otherwise: Box<Expr>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        some: Ident,
+        then: Box<Expr>,
+        none: Box<Expr>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum Comparison {
+    Lt,
+    Gt,
+    Lte,
+    Gte,
+    Eq,
+    Neq,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -233,7 +264,8 @@ fn parse_block(input: ParseStream, closer: BlockCloser) -> syn::Result<Block> {
             return Err(syn::Error::new(
                 input.span(),
                 "a term is a call of a closure or a registered extern, a constant, `x`, the \
-                 state, a parameter, `&x`, `&s`, or `a +% b` (RFC-0099 rule 1)",
+                 state, a parameter, a local, a record or its field, `Some`, `None`, `&x`, \
+                 `&s`, `a +% b`, a comparison, an `if` or a `match` (RFC-0099 rule 1)",
             ));
         }
     }
@@ -275,6 +307,15 @@ fn parse_stmt(input: ParseStream) -> syn::Result<Stmt> {
              consumer's: it ends in `finish e`",
         ));
     }
+    if input.peek(Token![let]) {
+        input.parse::<Token![let]>()?;
+        let name: Ident = input.parse()?;
+        input.parse::<Token![=]>()?;
+        return Ok(Stmt::Let {
+            name,
+            value: parse_expr(input)?,
+        });
+    }
     let callee: Path = input.parse()?;
     if input.peek(Token![=]) {
         input.parse::<Token![=]>()?;
@@ -296,12 +337,56 @@ fn parse_stmt(input: ParseStream) -> syn::Result<Stmt> {
     }
     Err(syn::Error::new_spanned(
         callee,
-        "a consumer's statement is `s = e`, a call `g(&mut s, ..)`, an `if`, or a closing \
-         `break e` (RFC-0099 rule 1)",
+        "a consumer's statement is `let b = e`, `s = e`, a call `g(&mut s, ..)`, an `if`, or \
+         a closing `break e` (RFC-0099 rule 1)",
     ))
 }
 
 fn parse_expr(input: ParseStream) -> syn::Result<Expr> {
+    let left = parse_sum(input)?;
+    let Some(op) = parse_comparison(input)? else {
+        return Ok(left);
+    };
+    let right = parse_sum(input)?;
+    if parse_comparison(&input.fork())?.is_some() {
+        return Err(syn::Error::new(
+            input.span(),
+            "a comparison compares two terms: `a < b < c` is no term",
+        ));
+    }
+    Ok(Expr::Compare {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn parse_comparison(input: ParseStream) -> syn::Result<Option<Comparison>> {
+    let op = if input.peek(Token![<=]) {
+        input.parse::<Token![<=]>()?;
+        Comparison::Lte
+    } else if input.peek(Token![>=]) {
+        input.parse::<Token![>=]>()?;
+        Comparison::Gte
+    } else if input.peek(Token![==]) {
+        input.parse::<Token![==]>()?;
+        Comparison::Eq
+    } else if input.peek(Token![!=]) {
+        input.parse::<Token![!=]>()?;
+        Comparison::Neq
+    } else if input.peek(Token![<]) {
+        input.parse::<Token![<]>()?;
+        Comparison::Lt
+    } else if input.peek(Token![>]) {
+        input.parse::<Token![>]>()?;
+        Comparison::Gt
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(op))
+}
+
+fn parse_sum(input: ParseStream) -> syn::Result<Expr> {
     let mut expr = parse_primary(input)?;
     while input.peek(Token![+]) && input.peek2(Token![%]) {
         input.parse::<Token![+]>()?;
@@ -332,6 +417,15 @@ fn parse_primary(input: ParseStream) -> syn::Result<Expr> {
         syn::parenthesized!(inner in input);
         return parse_expr(&inner);
     }
+    if input.peek(Token![if]) {
+        return parse_if(input);
+    }
+    if input.peek(Token![match]) {
+        return parse_match(input);
+    }
+    if input.peek(syn::token::Brace) {
+        return parse_record(input);
+    }
     let negative = input.peek(Token![-]);
     if negative {
         input.parse::<Token![-]>()?;
@@ -342,13 +436,36 @@ fn parse_primary(input: ParseStream) -> syn::Result<Expr> {
             lit: input.parse()?,
         });
     }
-    let callee: Path = input.parse()?;
+    // Mod style: `k < b` is a comparison, not a path with generic
+    // arguments.
+    let callee = input.call(Path::parse_mod_style)?;
     if input.peek(syn::token::Paren) {
         let args;
         syn::parenthesized!(args in input);
-        return Ok(Expr::Call {
-            callee,
-            args: parse_args(&args)?,
+        let mut args = parse_args(&args)?;
+        if callee.is_ident("Some") {
+            let (Some(payload), true) = (args.pop(), args.is_empty()) else {
+                return Err(syn::Error::new_spanned(callee, "`Some` holds one term"));
+            };
+            return Ok(Expr::Some(Box::new(payload)));
+        }
+        return Ok(Expr::Call { callee, args });
+    }
+    if callee.is_ident("None") {
+        return Ok(Expr::None);
+    }
+    if input.peek(Token![.]) {
+        input.parse::<Token![.]>()?;
+        let field: Ident = input.parse()?;
+        let Some(of) = callee.get_ident() else {
+            return Err(syn::Error::new_spanned(
+                callee,
+                "a field is read of a local, `b.f`",
+            ));
+        };
+        return Ok(Expr::Field {
+            of: of.clone(),
+            field,
         });
     }
     match callee.get_ident() {
@@ -358,6 +475,116 @@ fn parse_primary(input: ParseStream) -> syn::Result<Expr> {
             "a path names an extern, which a step calls: `ns::g(..)`",
         )),
     }
+}
+
+/// `{ e }`, an arm of an `if` or a `match` term.
+fn parse_arm(input: ParseStream) -> syn::Result<Expr> {
+    let arm;
+    syn::braced!(arm in input);
+    let expr = parse_expr(&arm)?;
+    if !arm.is_empty() {
+        return Err(syn::Error::new(arm.span(), "an arm of a term holds one term"));
+    }
+    Ok(expr)
+}
+
+fn parse_if(input: ParseStream) -> syn::Result<Expr> {
+    input.parse::<Token![if]>()?;
+    let cond = parse_expr(input)?;
+    let then = parse_arm(input)?;
+    if !input.peek(Token![else]) {
+        return Err(syn::Error::new(
+            input.span(),
+            "an `if` term has an `else`: its value is one arm's",
+        ));
+    }
+    input.parse::<Token![else]>()?;
+    let otherwise = parse_arm(input)?;
+    Ok(Expr::If {
+        cond: Box::new(cond),
+        then: Box::new(then),
+        otherwise: Box::new(otherwise),
+    })
+}
+
+/// `match t { None => a, Some(b) => c }`, the arms in either order.
+fn parse_match(input: ParseStream) -> syn::Result<Expr> {
+    let keyword = input.parse::<Token![match]>()?;
+    let scrutinee = parse_expr(input)?;
+    let arms;
+    syn::braced!(arms in input);
+    let mut none: Option<Expr> = None;
+    let mut some: Option<(Ident, Expr)> = None;
+    while !arms.is_empty() {
+        let pattern: Ident = arms.parse()?;
+        let bound = match pattern.to_string().as_str() {
+            "None" => None,
+            "Some" => {
+                let inner;
+                syn::parenthesized!(inner in arms);
+                let bound: Ident = inner.parse()?;
+                if !inner.is_empty() {
+                    return Err(syn::Error::new(inner.span(), "`Some(b)` binds one name"));
+                }
+                Some(bound)
+            }
+            _ => {
+                return Err(syn::Error::new(
+                    pattern.span(),
+                    "a `match` term's arms are `None => a` and `Some(b) => c`",
+                ));
+            }
+        };
+        arms.parse::<Token![=>]>()?;
+        let value = parse_expr(&arms)?;
+        let doubled = match bound {
+            None => none.replace(value).is_some(),
+            Some(bound) => some.replace((bound, value)).is_some(),
+        };
+        if doubled {
+            return Err(syn::Error::new(pattern.span(), "a `match` term states each arm once"));
+        }
+        if !arms.is_empty() {
+            arms.parse::<Token![,]>()?;
+        }
+    }
+    let (Some(none), Some((bound, then))) = (none, some) else {
+        return Err(syn::Error::new(
+            keyword.span,
+            "a `match` term states both arms, `None => a` and `Some(b) => c`",
+        ));
+    };
+    Ok(Expr::Match {
+        scrutinee: Box::new(scrutinee),
+        some: bound,
+        then: Box::new(then),
+        none: Box::new(none),
+    })
+}
+
+fn parse_record(input: ParseStream) -> syn::Result<Expr> {
+    let content;
+    let brace = syn::braced!(content in input);
+    let mut fields: Vec<(Ident, Expr)> = Vec::new();
+    while !content.is_empty() {
+        let name: Ident = content.parse()?;
+        content.parse::<Token![:]>()?;
+        let value = parse_expr(&content)?;
+        if fields.iter().any(|(seen, _)| *seen == name) {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("the record names `{name}` twice"),
+            ));
+        }
+        fields.push((name, value));
+        if !content.is_empty() {
+            content.parse::<Token![,]>()?;
+        }
+    }
+    if fields.is_empty() {
+        return Err(syn::Error::new(brace.span.join(), "a record has a field"));
+    }
+    Ok(Expr::Record(fields))
 }
 
 fn parse_args(input: ParseStream) -> syn::Result<Vec<Expr>> {
@@ -378,6 +605,7 @@ enum Named {
     ValueParam(usize),
     Closure { param: usize, arity: usize },
     Stream,
+    Local(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -409,13 +637,40 @@ struct Scope<'a> {
     stream: usize,
     state: Option<&'a Ident>,
     moved_value_params: RefCell<Vec<usize>>,
+    /// The locals in scope, innermost last, each with its number.
+    locals: RefCell<Vec<(Ident, usize)>>,
+    next_local: Cell<usize>,
 }
 
-/// How many times one path of the step moves the element and the state.
-#[derive(Clone, Copy, Default)]
+/// How many times one path of the step moves the element, the state, and
+/// each local, by its number.
+#[derive(Clone, Default)]
 struct Moves {
     element: usize,
     state: usize,
+    locals: Vec<usize>,
+}
+
+impl Moves {
+    /// The most either of two paths moved each.
+    fn most_of(&mut self, other: &Moves) {
+        self.element = self.element.max(other.element);
+        self.state = self.state.max(other.state);
+        if self.locals.len() < other.locals.len() {
+            self.locals.resize(other.locals.len(), 0);
+        }
+        for (mine, theirs) in self.locals.iter_mut().zip(&other.locals) {
+            *mine = (*mine).max(*theirs);
+        }
+    }
+
+    fn move_local(&mut self, local: usize) -> usize {
+        if self.locals.len() <= local {
+            self.locals.resize(local + 1, 0);
+        }
+        self.locals[local] += 1;
+        self.locals[local]
+    }
 }
 
 impl StepAttr {
@@ -465,6 +720,8 @@ impl StepAttr {
             stream: stream.acvus_param,
             state: state_name,
             moved_value_params: RefCell::new(Vec::new()),
+            locals: RefCell::new(Vec::new()),
+            next_local: Cell::new(0),
         };
         let param_at = stream.acvus_param;
         let requirement = stream.requirement;
@@ -509,6 +766,9 @@ impl StepAttr {
 
 impl Scope<'_> {
     fn lookup(&self, name: &Ident) -> Option<Named> {
+        if let Some((_, local)) = self.locals.borrow().iter().rev().find(|(bound, _)| bound == name) {
+            return Some(Named::Local(*local));
+        }
         if name == ELEMENT {
             return Some(Named::Element);
         }
@@ -530,11 +790,27 @@ impl Scope<'_> {
             syn::Error::new(
                 name.span(),
                 format!(
-                    "`{name}` names no parameter of `{}`, the element `x`, or the state",
+                    "`{name}` names no parameter of `{}`, the element `x`, the state, or a \
+                     local in scope",
                     self.fn_ident
                 ),
             )
         })
+    }
+
+    /// Binds `name` as a new local, refused where it would shadow a name the
+    /// step already reads.
+    fn bind(&self, name: &Ident) -> syn::Result<usize> {
+        if self.lookup(name).is_some() {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("`{name}` is already a name of the step: a local shadows none"),
+            ));
+        }
+        let local = self.next_local.get();
+        self.next_local.set(local + 1);
+        self.locals.borrow_mut().push((name.clone(), local));
+        Ok(local)
     }
 
     fn flow(&self, flow: &Flow, moves: Moves) -> syn::Result<proc_macro2::TokenStream> {
@@ -557,7 +833,7 @@ impl Scope<'_> {
                 otherwise,
             } => {
                 let cond = self.per_element(cond, &mut moves, StateMoves::None)?;
-                let then = self.flow(then, moves)?;
+                let then = self.flow(then, moves.clone())?;
                 let otherwise = self.flow(otherwise, moves)?;
                 quote! {
                     #path::If {
@@ -571,9 +847,25 @@ impl Scope<'_> {
     }
 
     fn block(&self, block: &Block, moves: &mut Moves) -> syn::Result<proc_macro2::TokenStream> {
+        let in_scope = self.locals.borrow().len();
+        let block = self.block_in_scope(block, moves);
+        self.locals.borrow_mut().truncate(in_scope);
+        block
+    }
+
+    fn block_in_scope(
+        &self,
+        block: &Block,
+        moves: &mut Moves,
+    ) -> syn::Result<proc_macro2::TokenStream> {
         let mut stmts = Vec::new();
         for stmt in &block.stmts {
             stmts.push(match stmt {
+                Stmt::Let { name, value } => {
+                    let value = self.per_element(value, moves, StateMoves::None)?;
+                    let local = self.bind(name)?;
+                    quote! { ::acvus_extern::step::ConsumerStmt::Let { local: #local, value: #value } }
+                }
                 Stmt::Set { state, value } => {
                     if !matches!(self.named(state)?, Named::State) {
                         return Err(syn::Error::new(
@@ -619,11 +911,13 @@ impl Scope<'_> {
                     otherwise,
                 } => {
                     let cond = self.per_element(cond, moves, StateMoves::None)?;
-                    let mut then_moves = *moves;
+                    let mut then_moves = moves.clone();
                     let then = self.block(then, &mut then_moves)?;
-                    let mut otherwise_moves = *moves;
+                    let mut otherwise_moves = moves.clone();
                     let otherwise = self.block(otherwise, &mut otherwise_moves)?;
-                    moves.element = then_moves.element.max(otherwise_moves.element);
+                    then_moves.most_of(&otherwise_moves);
+                    moves.element = then_moves.element;
+                    moves.locals = then_moves.locals;
                     quote! {
                         ::acvus_extern::step::ConsumerStmt::If {
                             cond: #cond,
@@ -670,6 +964,7 @@ impl Scope<'_> {
         let mut here = Moves {
             element: moves.element,
             state: 0,
+            locals: moves.locals.clone(),
         };
         let term = self.walk(e, Site::PerElement, &mut here, Use::Moved)?;
         self.state_moved_within(here.state, state_moves)?;
@@ -681,6 +976,7 @@ impl Scope<'_> {
             ));
         }
         moves.element = here.element;
+        moves.locals = here.locals;
         Ok(term)
     }
 
@@ -748,6 +1044,12 @@ impl Scope<'_> {
                     name.span(),
                     format!("`{name}` is the stream the step pulls, which no term reads"),
                 )),
+                Named::Local(local) => {
+                    if used == Use::Moved {
+                        self.move_local(name, local, moves)?;
+                    }
+                    Ok(quote! { #term::Local(#local) })
+                }
             },
             Expr::Call { callee, args } => {
                 let args = args
@@ -774,7 +1076,11 @@ impl Scope<'_> {
                         ),
                     )),
                     Some(
-                        Named::Element | Named::State | Named::ValueParam(_) | Named::Stream,
+                        Named::Element
+                        | Named::State
+                        | Named::ValueParam(_)
+                        | Named::Stream
+                        | Named::Local(_),
                     ) => Err(syn::Error::new(
                         name.span(),
                         format!(
@@ -820,6 +1126,114 @@ impl Scope<'_> {
                     }
                 })
             }
+            Expr::Field { of, field } => {
+                let Named::Local(local) = self.named(of)? else {
+                    return Err(syn::Error::new(
+                        of.span(),
+                        format!(
+                            "`{of}` is no local: a field is read of a local a `let` or a \
+                             `match` arm binds"
+                        ),
+                    ));
+                };
+                if used == Use::Moved {
+                    self.move_local(of, local, moves)?;
+                }
+                let field = field.to_string();
+                Ok(quote! { #term::Field { local: #local, field: __i.intern(#field) } })
+            }
+            Expr::Record(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|(name, value)| {
+                        let value = self.walk(value, site, moves, Use::Moved)?;
+                        let name = name.to_string();
+                        Ok(quote! { (__i.intern(#name), #value) })
+                    })
+                    .collect::<syn::Result<Vec<_>>>()?;
+                Ok(quote! { #term::Record(vec![#(#fields),*]) })
+            }
+            Expr::Some(payload) => {
+                let payload = self.walk(payload, site, moves, Use::Moved)?;
+                Ok(quote! { #term::Some(::std::boxed::Box::new(#payload)) })
+            }
+            Expr::None => Ok(quote! { #term::None }),
+            Expr::Compare { op, left, right } => {
+                // A comparison reads its operands where they stand: it
+                // compares two numbers, which the fused loop copies.
+                let left = self.walk(left, site, moves, Use::Lent)?;
+                let right = self.walk(right, site, moves, Use::Lent)?;
+                let op = match op {
+                    Comparison::Lt => quote! { Lt },
+                    Comparison::Gt => quote! { Gt },
+                    Comparison::Lte => quote! { Lte },
+                    Comparison::Gte => quote! { Gte },
+                    Comparison::Eq => quote! { Eq },
+                    Comparison::Neq => quote! { Neq },
+                };
+                Ok(quote! {
+                    #term::Compare {
+                        op: ::acvus_extern::step::Comparison::#op,
+                        left: ::std::boxed::Box::new(#left),
+                        right: ::std::boxed::Box::new(#right),
+                    }
+                })
+            }
+            Expr::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                let cond = self.walk(cond, site, moves, Use::Moved)?;
+                let mut then_moves = moves.clone();
+                let then = self.walk(then, site, &mut then_moves, Use::Moved)?;
+                let otherwise = self.walk(otherwise, site, moves, Use::Moved)?;
+                moves.most_of(&then_moves);
+                Ok(quote! {
+                    #term::If {
+                        cond: ::std::boxed::Box::new(#cond),
+                        then: ::std::boxed::Box::new(#then),
+                        otherwise: ::std::boxed::Box::new(#otherwise),
+                    }
+                })
+            }
+            Expr::Match {
+                scrutinee,
+                some,
+                then,
+                none,
+            } => {
+                let scrutinee = self.walk(scrutinee, site, moves, Use::Moved)?;
+                let mut then_moves = moves.clone();
+                let in_scope = self.locals.borrow().len();
+                let bound = self.bind(some)?;
+                let then = self.walk(then, site, &mut then_moves, Use::Moved);
+                self.locals.borrow_mut().truncate(in_scope);
+                let then = then?;
+                let none = self.walk(none, site, moves, Use::Moved)?;
+                moves.most_of(&then_moves);
+                Ok(quote! {
+                    #term::Match {
+                        scrutinee: ::std::boxed::Box::new(#scrutinee),
+                        some: ::core::option::Option::Some(#bound),
+                        then: ::std::boxed::Box::new(#then),
+                        none: ::std::boxed::Box::new(#none),
+                    }
+                })
+            }
+        }
+    }
+
+    fn move_local(&self, name: &Ident, local: usize, moves: &mut Moves) -> syn::Result<()> {
+        match moves.move_local(local) {
+            1 => Ok(()),
+            _ => Err(syn::Error::new(
+                name.span(),
+                format!(
+                    "`{name}` is moved twice on one path: a local is moved once, and a \
+                     comparison reads it"
+                ),
+            )),
         }
     }
 
@@ -842,7 +1256,7 @@ impl Scope<'_> {
     }
 }
 
-fn constant(negative: bool, lit: &Lit) -> syn::Result<proc_macro2::TokenStream> {
+pub(crate) fn constant(negative: bool, lit: &Lit) -> syn::Result<proc_macro2::TokenStream> {
     match lit {
         Lit::Int(int) => {
             let magnitude: i128 = int.base10_parse()?;

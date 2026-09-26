@@ -1,0 +1,10 @@
+// expect 2
+// The old value `insert` returns is read outside the entry's cycle: the table is an ordinary token.
+let words = vec(["a".to_string(), "b".to_string(), "a".to_string(), "a".to_string()]);
+let m = hash_map();
+let again = 0;
+for w in &words {
+    let old = insert(&mut m, w.to_string(), 1);
+    if old.is_some() { again = again + 1; };
+}
+again

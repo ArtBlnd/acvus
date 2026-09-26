@@ -3,5 +3,5 @@ while r11 -> L1 else L2 stages [L0, L1, L3]
 // L1: free {unwrap_variant, assign, ref, as_slice, call from_str, drop, call unwrap}
 // L3: cycle Carried(r8) any_order law(Op(Add) exact commutative) {+}
 // control chained through L0
-// cost in place: no count on entry
+// cost W=14 O=18287 split when n > 41799, n ≤ len(r3) + 2
 // lower in place: it is a pull loop

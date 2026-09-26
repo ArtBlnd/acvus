@@ -1,0 +1,11 @@
+// expect true
+// The sum passes `MAX` at the second term and stays `None`, whatever follows.
+let xs = vec([18446744073709551615u64, 1u64, 0u64, 2u64]);
+let p = Some(0u64);
+for x in &xs {
+    p = match p {
+        Some(v) => v.checked_add(*x),
+        None => None,
+    };
+}
+p.is_none()

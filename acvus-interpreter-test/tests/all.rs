@@ -80,6 +80,7 @@ mod object_field_drop;
 mod one_name_one_type;
 mod operators;
 mod overflow_trap;
+mod pull_bound;
 mod option_form;
 mod option_methods;
 mod option_payload_drop;

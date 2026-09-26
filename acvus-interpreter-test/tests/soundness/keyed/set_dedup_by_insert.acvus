@@ -1,0 +1,8 @@
+// expect 4,1,3
+// K04: a set's `insert` stores `true` whatever the entry held; its result is dropped.
+let xs = vec([4, 1, 4, 3, 1, 4]);
+let s = hash_set();
+for x in &xs {
+    s.insert(*x);
+}
+s.as_iter().map(|k| -> (*k).to_string()).join(",".to_string())

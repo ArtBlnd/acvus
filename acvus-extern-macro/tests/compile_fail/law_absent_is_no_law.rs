@@ -1,5 +1,5 @@
-//! `absent` is stated over a call whose `reaches` names the entry `x[k]`
-//! the reference it returns lends.
+//! `law(absent = v)` is no law: what a call does to an entry is its
+//! `means(..)` (RFC-0104 rule 5).
 use acvus_extern::extern_fn;
 
 #[extern_fn(effect = pure, law(absent = value))]

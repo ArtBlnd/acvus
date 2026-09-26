@@ -905,7 +905,12 @@ where
     m.0.put_now(ctx, Binding { key, value })
 }
 
-#[extern_fn(effect = E, sync = insert_now, reaches(m[key]))]
+#[extern_fn(
+    effect = E,
+    sync = insert_now,
+    reaches(m[key]),
+    means(let old = m[key]; m[key] = Some(value); old)
+)]
 async fn insert<K, V, Q, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     m: &mut HashMap<'_, K, V, Q, E, Rt>,
@@ -926,7 +931,7 @@ where
 /// RFC-0068 rule 4), so the declaration runs at `Task::Sync`: there is no
 /// awaited form of a result that names the frame the call laid its
 /// arguments on.
-#[extern_fn(effect = E, reaches(m[key], key))]
+#[extern_fn(effect = E, reaches(m[key], key), means(&m[key]))]
 fn get<'m, K, V, Q, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     m: &'m HashMap<'_, K, V, Q, E, Rt>,
@@ -945,7 +950,7 @@ where
 
 /// As `get`'s, with the exclusive loan the boundary carries one key at a
 /// time.
-#[extern_fn(effect = E, reaches(m[key], key))]
+#[extern_fn(effect = E, reaches(m[key], key), means(&mut m[key]))]
 fn get_mut<'m, K, V, Q, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     m: &'m mut HashMap<'_, K, V, Q, E, Rt>,
@@ -973,7 +978,12 @@ where
     m.0.seek_now(ctx, key).at.is_some()
 }
 
-#[extern_fn(effect = E, sync = contains_key_now, reaches(m[key], key))]
+#[extern_fn(
+    effect = E,
+    sync = contains_key_now,
+    reaches(m[key], key),
+    means(std::is_some(&m[key]))
+)]
 async fn contains_key<K, V, Q, E, Rt>(ctx: &mut Ctx<'_, Rt>, m: &HashMap<'_, K, V, Q, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -1001,7 +1011,12 @@ where
     Some(m.0.take_out(at).binding.value)
 }
 
-#[extern_fn(effect = E, sync = remove_now, reaches(m[key], key))]
+#[extern_fn(
+    effect = E,
+    sync = remove_now,
+    reaches(m[key], key),
+    means(let old = m[key]; m[key] = None; old)
+)]
 async fn remove<K, V, Q, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     m: &mut HashMap<'_, K, V, Q, E, Rt>,
@@ -1020,7 +1035,11 @@ where
 
 /// As `get_mut`'s: the result is a borrow of the map, so the declaration
 /// runs at `Task::Sync`.
-#[extern_fn(effect = E, reaches(m[key]), law(absent = value))]
+#[extern_fn(
+    effect = E,
+    reaches(m[key]),
+    means(m[key] = Some(std::unwrap_or(m[key], value)); std::unwrap(&mut m[key]))
+)]
 fn or_insert<'m, K, V, Q, E, Rt>(
     ctx: &mut Ctx<'_, Rt>,
     m: &'m mut HashMap<'_, K, V, Q, E, Rt>,
@@ -1291,7 +1310,13 @@ where
         .is_none()
 }
 
-#[extern_fn(name = "insert", effect = E, sync = set_insert_now, reaches(s[key]))]
+#[extern_fn(
+    name = "insert",
+    effect = E,
+    sync = set_insert_now,
+    reaches(s[key]),
+    means(let was = s[key]; s[key] = true; !was)
+)]
 async fn set_insert<K, Q, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<'_, K, Q, E, Rt>, key: K) -> bool
 where
     K: Var<kind::Type> + OneValue<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -1316,7 +1341,7 @@ where
     s.table().seek_now(ctx, key).at.is_some()
 }
 
-#[extern_fn(effect = E, sync = contains_now, reaches(s[key], key))]
+#[extern_fn(effect = E, sync = contains_now, reaches(s[key], key), means(s[key]))]
 async fn contains<K, Q, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &HashSet<'_, K, Q, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,
@@ -1343,7 +1368,13 @@ where
     true
 }
 
-#[extern_fn(name = "remove", effect = E, sync = set_remove_now, reaches(s[key], key))]
+#[extern_fn(
+    name = "remove",
+    effect = E,
+    sync = set_remove_now,
+    reaches(s[key], key),
+    means(let was = s[key]; s[key] = false; was)
+)]
 async fn set_remove<K, Q, E, Rt>(ctx: &mut Ctx<'_, Rt>, s: &mut HashSet<'_, K, Q, E, Rt>, key: &K) -> bool
 where
     K: Var<kind::Type> + Borrowable<Rt> + TransparentOver<Rt> + Deref<Target = Rt::Value>,

@@ -7,7 +7,7 @@
 //! is the order of a call's arguments.
 
 use acvus_ast::Literal;
-use acvus_utils::QualifiedRef;
+use acvus_utils::{Astr, QualifiedRef};
 
 use crate::ty::Mutability;
 
@@ -56,6 +56,12 @@ pub struct ConsumerBlock {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConsumerStmt {
+    /// `let name = t;`, bound as [`Term::Local`] `local` for the rest of
+    /// the block.
+    Let {
+        local: usize,
+        value: Term,
+    },
     Set(Term),
     Run {
         name: QualifiedRef,
@@ -88,6 +94,48 @@ pub enum Term {
     /// `Add(Overflow::Wrap)`: what `acvus-ext`'s `Num::add` computes for
     /// `sum`, wrapping at an integer width and IEEE addition at `f64`.
     WrappingAdd { left: Box<Term>, right: Box<Term> },
+    /// A `let` binding, or the payload a `match` arm binds.
+    Local(usize),
+    /// `b.f`: a field of the record a local holds.
+    Field { local: usize, field: Astr },
+    /// `{ f: t, .. }`: a record, its fields named as the language names
+    /// them.
+    Record(Vec<(Astr, Term)>),
+    /// The language's `Option`.
+    Some(Box<Term>),
+    None,
+    /// `a < b` and the language's other comparisons, over two numbers of
+    /// one type. The operands are read where they stand, not moved.
+    Compare {
+        op: Comparison,
+        left: Box<Term>,
+        right: Box<Term>,
+    },
+    /// `if c { a } else { b }`: the value of the arm `c` chooses.
+    If {
+        cond: Box<Term>,
+        then: Box<Term>,
+        otherwise: Box<Term>,
+    },
+    /// `match t { None => a, Some(b) => c }`, `b` bound as `some` where the
+    /// arm names it.
+    Match {
+        scrutinee: Box<Term>,
+        some: Option<usize>,
+        then: Box<Term>,
+        none: Box<Term>,
+    },
+}
+
+/// The language's comparisons, as `acvus_ast::BinOp` names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Comparison {
+    Lt,
+    Gt,
+    Lte,
+    Gte,
+    Eq,
+    Neq,
 }
 
 impl Step {
@@ -191,7 +239,7 @@ impl ConsumerBlock {
     fn collect_runs<'a>(&'a self, found: &mut Vec<RunCall<'a>>) {
         for stmt in &self.stmts {
             match stmt {
-                ConsumerStmt::Set(_) => {}
+                ConsumerStmt::Let { .. } | ConsumerStmt::Set(_) => {}
                 ConsumerStmt::Run { name, args } => found.push(RunCall { name: *name, args }),
                 ConsumerStmt::If {
                     then, otherwise, ..
@@ -206,7 +254,7 @@ impl ConsumerBlock {
     fn collect_terms<'a>(&'a self, found: &mut Vec<&'a Term>) {
         for stmt in &self.stmts {
             match stmt {
-                ConsumerStmt::Set(term) => found.push(term),
+                ConsumerStmt::Let { value: term, .. } | ConsumerStmt::Set(term) => found.push(term),
                 ConsumerStmt::Run { args, .. } => found.extend(args),
                 ConsumerStmt::If {
                     cond,
@@ -227,16 +275,46 @@ impl Term {
     pub fn visit<'t>(&'t self, on: &mut impl FnMut(&'t Term)) {
         on(self);
         match self {
-            Term::Elem | Term::State | Term::ValueParam(_) | Term::Const(_) => {}
+            Term::Elem
+            | Term::State
+            | Term::ValueParam(_)
+            | Term::Const(_)
+            | Term::Local(_)
+            | Term::Field { .. }
+            | Term::None => {}
             Term::CallClosure { args, .. } | Term::CallExtern { args, .. } => {
                 for arg in args {
                     arg.visit(on);
                 }
             }
-            Term::Lend(_, term) => term.visit(on),
-            Term::WrappingAdd { left, right } => {
+            Term::Lend(_, term) | Term::Some(term) => term.visit(on),
+            Term::WrappingAdd { left, right } | Term::Compare { left, right, .. } => {
                 left.visit(on);
                 right.visit(on);
+            }
+            Term::Record(fields) => {
+                for (_, field) in fields {
+                    field.visit(on);
+                }
+            }
+            Term::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                cond.visit(on);
+                then.visit(on);
+                otherwise.visit(on);
+            }
+            Term::Match {
+                scrutinee,
+                then,
+                none,
+                ..
+            } => {
+                scrutinee.visit(on);
+                then.visit(on);
+                none.visit(on);
             }
         }
     }

@@ -1093,7 +1093,8 @@ Status: Proposed
    A law may also be stated on `f(a: &V, b: &V) -> T` where `V` is `T`'s
    borrowed view (`&str` of `String`, a slice of a `Vec`): the law is
    `f`'s over `T`, and a reader reads a call on a state it lends as that
-   view.
+   view. On `f(a: T, b: T) -> Option<T>` a law extends to `Option<T>`
+   with `None` absorbing (`num::checked_add`, unsigned).
 3. **Laws of a storage write.** `#[extern_fn(law(fold(combine = g,
    identity = e)))]` on `f(s: &mut S, x: X)` returning nothing states that
    a run of `f` over `s` equals `g` applied to the states that runs over
@@ -1115,7 +1116,8 @@ Status: Proposed
    parameter, the result `ret`, `len(x)` of a parameter or of `ret`, and
    `+`, `−`, `×` and `max` of terms, and `old(t)`, the term `t` as it stood
    when the call began, for a `&mut` parameter's state. `len(x)` is the
-   element count of a slice or a container; a parameter or `ret` read as a number is an
+   element count of a slice or a container, or the most elements an
+   iterator's `next` yields from it; a parameter or `ret` read as a number is an
    integer. There is no quantifier, no condition and no function of the
    author's. Rust's lexer refuses `≤`, `−` and `×` before a macro reads
    them, so a declaration writes `<=`, `-` and `*`.
@@ -1177,13 +1179,11 @@ Status: Proposed
    is removed only where its instance states it (RFC-0048 rule 8); the
    declaration is an instance's, so `num::pow` states it over an unsigned
    width and not over a signed one, where a negative exponent traps.
-10. **Copies and orders.** `#[extern_fn(copies(x))]` states that `ret` is
-   a value equal to what reference parameter `x` lends, so a reader may
-   read it as that value (RFC-0093). `law(total_order)` on
+10. **Orders.** `law(total_order)` on
    `f(a: &T, b: &T) -> i64` states that `f`'s sign is a total order's
    comparison under which equal values are one value; a select on its
-   sign reads as that order's maximum or minimum. Both are the author's
-   promise (rule 5), sampled by tests, and name their extern by instance.
+   sign reads as that order's maximum or minimum. It is the author's
+   promise (rule 5), sampled by tests, and names its extern by instance.
 11. **An equivalence.** `law(equivalence)` on a `core::eq` instance
    states that it is reflexive, symmetric and transitive, and that the
    `core::hash` instance at its type hashes values it calls equal alike.
@@ -1635,3 +1635,66 @@ primitive cannot, the cost is measured and stated here.
   hot path for a fact the checker proved.
 - Generative-lifetime brands for `Ctx` — they do not cross into the
   `'static` futures a rooted `Ctx` lives in; `Pin` carries the same fact.
+
+## RFC-0104: An extern states what a call computes as a term, the first fragment of its model
+
+Status: Proposed
+
+An extern's handler is Rust, opaque to every pass. Where a pass needs what
+one call computes, the value it returns or what it does to the entry of a
+table it reaches, the declaration states it once as a term, and each reader
+reads the term. It is the first fragment of a declaration's model: a
+capture-free acvus function a small checker runs against the handler.
+
+1. **The form.** `#[extern_fn(means(..))]` states a block of `let`
+   bindings and assignments to an entry `x[k]` the declaration's `reaches`
+   names (RFC-0082 rule 7), ending in a term, the call's result. A term is
+   RFC-0099 rule 1's, with the language's operators, `Some`, `None`, `*x`
+   (the value reference parameter `x` lends) and the entry `x[k]`: a map's
+   as `Option<V>`, a set's as `bool`, lent by `&x[k]` or `&mut x[k]` as its
+   borrowed view `Option<&V>` (RFC-0082 rule 2). The term states values;
+   the effect stays the declaration's (RFC-0080 rule 3). `#[extern_fn]`
+   refuses an entry no `reaches` names and a parameter the term does not
+   type.
+2. **The standard declarations.** `vec::new` is `vec([])`;
+   `string::to_string(a: &str)` and each `core::clone` instance are `*a`.
+   A map's `or_insert` is `m[key] = Some(unwrap_or(m[key], value));
+   unwrap(&mut m[key])`, `get` `&m[key]`, `get_mut` `&mut m[key]`,
+   `insert` `let old = m[key]; m[key] = Some(value); old`, `remove` the
+   same with `None`, `contains_key` `is_some(&m[key])`. A set's `insert` is
+   `let was = s[key]; s[key] = true; !was`, `contains` `s[key]`, `remove`
+   the same as `insert` with `false`, returning `was`.
+3. **The readers.** RFC-0098 rule 1 reads a key and an entry through it,
+   and RFC-0098 rule 4 the value an entry opens at: `new()` and `vec([])`
+   are one value because `new`'s term is the other. A reader reads a call
+   as its term with the call's arguments for the parameters, and only
+   where every call the term names is read the same way; the call still
+   runs.
+4. **Checked as a model.** It is the author's promise (RFC-0082 rule 5),
+   held by RFC-0099 rule 1's harness: the handler and the term agree on
+   every input up to a bound, each type variable at a small finite type (a
+   table of at most three entries over a three-valued key with an `Equiv`
+   `eq`), a concretely typed position sampled with its width's edges. The
+   harness enumerates the registry, so a declaration it does not cover
+   fails a test.
+5. **What it replaces.** `copies(x)` is `means(*x)`, and RFC-0098 rule 5's
+   `law(absent = v)` is `or_insert`'s term; both forms are removed.
+
+**Why.** One statement of what a call computes serves every pass that
+needs a piece of it, in the language the model will use. A keyword per fact
+(`copies`, `absent`, and the `lookup`, `store` and `mark` that `get`,
+`insert` and a set's `insert` would each need) leaves the facts between two
+keywords unstated: `insert` both stores and returns the old value.
+**Cost.** A term interpreter in the harness; an entry reader in
+`analysis::loop_deps`; every standard map, set and vec constructor states
+its term.
+**Rejected.**
+- A law word per entry-touching call — five forms for one fact, a reader
+  each, and a call that does two of them needs a sixth.
+- `new()` and `vec([])` equal by `len = 0` — sound for a `Vec`, not for a
+  table made from closures, where two empty tables differ by their
+  closures.
+- Any two calls of equal arguments as one value — a call may read hidden
+  state; only a stated term shows what it computes.
+- A whole function body with loops — no reader needs one yet, and the
+  checker that would run it is not built.

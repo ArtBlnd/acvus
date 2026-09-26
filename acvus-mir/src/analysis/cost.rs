@@ -17,7 +17,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
 use crate::analysis::loop_deps::{Control, Head, LoopDeps, Order, Placement, StageBlocks};
-use crate::analysis::loops::{Invariants, LoopId, LoopKind, LoopNest, Term, Trip};
+use crate::analysis::loans::Loans;
+use crate::analysis::loops::{
+    Invariants, LoopId, LoopKind, LoopNest, NaturalLoop, Term, Trip, natural_loops_innermost_first,
+};
+use crate::analysis::pull;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, ValueId};
 use crate::laws::LawTable;
@@ -51,7 +55,8 @@ pub enum InPlace {
     /// No stage is free or holds only `Disjoint` cycles.
     NoStageRunsApart,
     NoWork,
-    /// A pull loop: no count is known on entry (RFC-0089 rule 1).
+    /// A pull loop whose iterator's making call bounds no count (RFC-0089
+    /// rule 1).
     CountUnknown,
 }
 
@@ -103,6 +108,8 @@ pub struct Costs<'a> {
     /// The atoms a constant trip count reads. A value some other
     /// definition also writes, as a reused register is, is none of them.
     integers: FxHashMap<ValueId, i128>,
+    /// Each bounded pull loop's count, by header (RFC-0089 rule 1).
+    pull_counts: FxHashMap<BlockIdx, Term>,
 }
 
 impl<'a> Costs<'a> {
@@ -130,12 +137,14 @@ impl<'a> Costs<'a> {
                 _ => None,
             })
             .collect();
+        let pull_counts = pull_counts(cfg, laws);
         Self {
             cfg,
             laws,
             table,
             nest,
             integers,
+            pull_counts,
         }
     }
 
@@ -145,6 +154,15 @@ impl<'a> Costs<'a> {
             .map(|id| &self.nest.get(id).trip)
     }
 
+    /// The `n` a split compares: a `for`'s trip count, or the most
+    /// iterations a bounded pull loop runs.
+    pub fn count(&self, header: BlockIdx) -> Option<&Term> {
+        match self.trip(header) {
+            Some(Trip::Known(term)) => Some(term),
+            Some(Trip::Unknown) | None => self.pull_counts.get(&header),
+        }
+    }
+
     /// `W` sums the stages that run apart: the free ones, and those whose
     /// every cycle is `Disjoint`, whose token is absent (RFC-0092).
     /// A stage holding an `AnyOrder` or `InOrder` cycle, or a cycle that
@@ -152,7 +170,8 @@ impl<'a> Costs<'a> {
     /// With no stage that runs apart the loop runs in place. A loop whose
     /// control is chained can leave early, so its trip count is a bound.
     pub fn of_loop(&self, deps: &LoopDeps) -> LoopCost {
-        if let Head::Pull = deps.membership.head() {
+        let pulls = matches!(deps.membership.head(), Head::Pull);
+        if pulls && !self.pull_counts.contains_key(&deps.header) {
             return LoopCost::InPlace(InPlace::CountUnknown);
         }
         let stages = deps.membership.stages();
@@ -183,9 +202,9 @@ impl<'a> Costs<'a> {
             Some(bound) => bound.div_ceil(u128::from(work)),
             None => BEYOND_EVERY_TRIP_COUNT,
         };
-        let trips = match deps.control {
-            Control::Upfront => TripCount::Exact,
-            Control::Chained { .. } => TripCount::Bound,
+        let trips = match (pulls, deps.control) {
+            (false, Control::Upfront) => TripCount::Exact,
+            (true, _) | (_, Control::Chained { .. }) => TripCount::Bound,
         };
         LoopCost::Split {
             work,
@@ -494,4 +513,23 @@ fn integer(literal: &Literal) -> Option<i128> {
         | Literal::List(_)
         | Literal::Unit => None,
     }
+}
+
+fn pull_counts(cfg: &CfgBody, laws: &LawTable) -> FxHashMap<BlockIdx, Term> {
+    let domtree = DomTree::build(cfg);
+    let pulls: Vec<NaturalLoop> = natural_loops_innermost_first(cfg, &domtree)
+        .into_iter()
+        .filter(|natural| matches!(cfg.blocks[natural.header.0].terminator, Terminator::While { .. }))
+        .collect();
+    if pulls.is_empty() {
+        return FxHashMap::default();
+    }
+    let loans = Loans::build(cfg);
+    pulls
+        .iter()
+        .filter_map(|natural| {
+            let bound = pull::bound(cfg, laws, &loans, &domtree, natural)?;
+            Some((natural.header, bound.count))
+        })
+        .collect()
 }

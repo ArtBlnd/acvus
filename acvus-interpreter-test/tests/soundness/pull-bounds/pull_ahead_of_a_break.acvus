@@ -1,0 +1,15 @@
+// expect true|false
+// F04's fused shape: the pull runs ahead of the `break` (RFC-0089 rule 5), and a loop the break never takes leaves at its header.
+let xs = vec([5, 3, 8, 1]);
+let it = xs.into_iter();
+let found = false;
+while let Some(x) = it.next() {
+    if x > 7 { found = true; break; };
+}
+let ys = vec([5, 3]);
+let jt = ys.into_iter();
+let missed = false;
+while let Some(y) = jt.next() {
+    if y > 7 { missed = true; break; };
+}
+found.to_string() + "|" + missed.to_string()

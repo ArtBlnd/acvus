@@ -42,7 +42,7 @@ use acvus_extern::Ctx;
 
 /// `unwrap(Some(x))` is `x`, and `unwrap(None)` traps: `Option::expect`
 /// returns the payload of `Some` and panics on `None`.
-#[extern_fn(effect = pure, payload(val))]
+#[extern_fn(effect = pure, returns, payload(val))]
 fn unwrap<T>(val: Option<T>) -> T
 where
     T: Var<kind::Type>,
@@ -61,7 +61,7 @@ where
     inner
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, means(match val { Some(x) => x, None => default }))]
 fn unwrap_or<T>(val: Option<T>, default: T) -> T
 where
     T: Var<kind::Type>,
@@ -69,7 +69,7 @@ where
     val.unwrap_or(default)
 }
 
-#[extern_fn(effect = pure)]
+#[extern_fn(effect = pure, means(match val { Some(_) => true, None => false }))]
 fn is_some<T>(val: Option<T>) -> bool
 where
     T: Var<kind::Type>,

@@ -1,0 +1,11 @@
+// expect true
+// `i64` states no law: `[MAX, 1, -1]` is `None` in order.
+let xs = vec([9223372036854775807, 1, -1]);
+let p = Some(0);
+for x in &xs {
+    p = match p {
+        Some(v) => v.checked_add(*x),
+        None => None,
+    };
+}
+p.is_none()

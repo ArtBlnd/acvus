@@ -1,0 +1,13 @@
+error: `xs` is lent `&`, and a term writes an entry only through `&mut`
+ --> tests/compile_fail/means_writes_through_a_shared_table.rs:4:52
+  |
+4 | #[extern_fn(effect = pure, reaches(xs[key]), means(xs[key] = None; true))]
+  |                                                    ^^
+
+warning: unused imports: `Var` and `kind`
+ --> tests/compile_fail/means_writes_through_a_shared_table.rs:2:20
+  |
+2 | use acvus_extern::{Var, extern_fn, kind};
+  |                    ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

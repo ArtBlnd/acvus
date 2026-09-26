@@ -1,4 +1,4 @@
-error: unknown law `idempotent`: a law is `associative`, `commutative`, `identity = e`, `fold(combine = g, identity = e)`, `total_order`, `inverse = g`, `equivalence`, or `absent = v` (RFC-0082)
+error: unknown law `idempotent`: a law is `associative`, `commutative`, `identity = e`, `fold(combine = g, identity = e)`, `total_order`, `inverse = g` or `equivalence` (RFC-0082); what a call computes is its `means(..)` (RFC-0104)
  --> tests/compile_fail/law_unknown_word.rs:5:45
   |
 5 | #[extern_fn(effect = pure, law(associative, idempotent))]

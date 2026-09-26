@@ -6,6 +6,7 @@ pub mod flows;
 pub mod graph;
 pub mod ir;
 pub mod laws;
+pub mod means;
 pub mod step;
 pub mod lower;
 pub mod optimize;
