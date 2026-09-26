@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use acvus_ext_net::Header;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
 
 /// How long `/slow` takes, which a test's `timeout_ms` must sit under.
@@ -78,12 +78,34 @@ pub async fn start() -> Server {
     Server { port, task }
 }
 
-/// A port nothing listens on: bound to learn a free one, then released.
-pub async fn closed_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let port = listener.local_addr().expect("bound address").port();
-    drop(listener);
-    port
+/// A `TcpSocket` that is bound but never `listen`ed reserves its port
+/// without accepting connections: on Linux a connect to it is refused,
+/// the same as to a genuinely closed port. The simpler alternative —
+/// bind to learn a free port, drop the listener, return the number — is
+/// racy under this crate's parallel test run: another test's
+/// `bind("127.0.0.1:0")` can claim the freed port before this test
+/// connects to it, turning a refused connection into a successful one.
+pub struct ClosedPort {
+    port: u16,
+    _socket: TcpSocket,
+}
+
+impl ClosedPort {
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+pub async fn closed_port() -> ClosedPort {
+    let socket = TcpSocket::new_v4().expect("a v4 socket");
+    socket
+        .bind("127.0.0.1:0".parse().expect("an address"))
+        .expect("bind");
+    let port = socket.local_addr().expect("bound address").port();
+    ClosedPort {
+        port,
+        _socket: socket,
+    }
 }
 
 async fn serve(mut socket: TcpStream) {
