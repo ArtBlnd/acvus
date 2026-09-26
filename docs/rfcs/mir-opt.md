@@ -803,18 +803,16 @@ law and runs in its order.
 9. **Maps as values.** A token updated through a branch whose arms each
    send it an affine map of it, a value reading none of it counting as
    `0·y + v`, has the law of affine maps (rule 8), at an integer width. A
-   token updated as `t[y][x]`, with `t` invariant in the loop, `x` read
-   from the iteration and not from `y`, `t` proven to hold `n` rows for a
-   constant `n`, every row proven longer than every `x`, and every entry
-   of `t` and the token's entry value proven to lie in `[0, n)`, has the
-   law of maps over `[0, n)`: a chunk's update is the function it makes of
-   each start state, and chunks compose as functions, in order. The
-   proofs make the first pass total: it runs from start states the
-   program may never reach, and an index there that could trap would trap
-   where the program does not. The first pass of a chunk runs once per
-   state, so its cost counts `n` times (RFC-0066 rule 8). No fact about a
-   container's row count or entries is stated yet (the interval domain
-   carries integers only), so no loop has this law until one is.
+   token updated as `t[y][x]`, with `t` invariant in the loop and `x`
+   read from the iteration and not from `y`, has the law of maps over the
+   states `[0, n)`, `n` the length of `t` read on entry: a chunk's first
+   pass runs its updates from each start state and records the state each
+   ends in, or that it traps, and chunks compose as functions in order, a
+   trap absorbing. The first pass reads the table without trapping (RFC-0092
+   rule 5); the second runs the program's own updates from each chunk's
+   offset and traps where the program does. No fact about the table's
+   entries is needed. The first pass runs once per state, so its cost
+   counts `len(t)` times (RFC-0066 rule 8).
 
 **Why.** A law stated on the loop would be a second statement of what the
 operations already say; read from them, it follows every pass that
@@ -936,6 +934,8 @@ place. This is the contract a lowerer is held to.
    The second pass computes every partial the program computes, with the
    program's operations, so it traps exactly where the program does; the
    first pass and the offsets combine with the wrapping operation (rule 2).
+   A map's first pass (RFC-0093 rule 9) reads an index that would trap as
+   a value, `Trap`, which composing carries to the chunk it starts.
 
 **Why.** The stages say what may run apart and the cost what it is worth;
 how chunks move is the lowerer's, and stating it apart from the analyses
