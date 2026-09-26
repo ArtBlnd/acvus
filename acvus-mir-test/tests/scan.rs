@@ -13,7 +13,9 @@ use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::ir::{BinOp, InstKind};
 use acvus_mir::printer::dump_with_facts;
-use acvus_mir::ty::{Effect, Flows, Mutability, ParamTerm, Ty, TyTerm, TypeArg, lift_to_poly};
+use acvus_mir::ty::{
+    Effect, Flows, LenTerm, Mutability, ParamTerm, Ty, TyTerm, TypeArg, lift_to_poly,
+};
 use acvus_mir_test::{LoweredScript, compile_script_at, multi_fn_module_at};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
@@ -34,6 +36,18 @@ impl Scanned {
     fn of(source: &str) -> Self {
         let interner = Interner::new();
         let compiled = compile_script_at(&interner, source, &FxHashMap::default(), Opt::Full)
+            .unwrap_or_else(|e| panic!("{source}\n{e}"));
+        Self::judged(&interner, compiled)
+    }
+
+    /// `of`, with `contexts` declared at their types.
+    fn with_contexts(source: &str, contexts: &[(&str, Ty)]) -> Self {
+        let interner = Interner::new();
+        let context: FxHashMap<_, _> = contexts
+            .iter()
+            .map(|(name, ty)| (interner.intern(name), ty.clone()))
+            .collect();
+        let compiled = compile_script_at(&interner, source, &context, Opt::Full)
             .unwrap_or_else(|e| panic!("{source}\n{e}"));
         Self::judged(&interner, compiled)
     }
@@ -557,6 +571,118 @@ fn a_branch_with_one_arm_not_affine_has_no_law() {
     let c = Scanned::of(
         "let v = [1, 5, 2, 7]; let m = 0; \
          for x in &v { if *x > 4 { m = m + *x; } else { m = max(m, *x); }; } m",
+    );
+    let held = c.carried_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}
+
+const DFA_TABLE: &str = "let t = vec([vec([0u64, 1u64]), vec([2u64, 0u64]), vec([1u64, 2u64])]); \
+     let bs = \"110011\".to_string().to_bytes(); let s = 0u64;";
+
+fn dfa(body: &str) -> Scanned {
+    Scanned::of(&format!("{DFA_TABLE} {body} s"))
+}
+
+/// Corpus row P03 (RFC-0093 rule 9): `s = t[s][d]`, `t` invariant and `d`
+/// reading nothing of `s`, is the law of maps over `len(t)` states, which
+/// does not commute.
+#[test]
+fn a_table_indexed_by_the_state_then_by_a_free_column_has_the_state_map_law() {
+    let c = dfa("for b in &bs { let d = (*b - b'0') as u64; s = t[s][d]; }");
+    let held = c.carried_cycle();
+    let Some(CycleLaw { accumulator, scan: false }) = &held.law else {
+        panic!("a law: {}", c.listing);
+    };
+    assert!(matches!(accumulator.law, Law::StateMap { .. }), "{}", c.listing);
+    assert!(accumulator.exact && !accumulator.commutative, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+    assert_eq!(held.holds, ["index", "as_slice", "index"], "{}", c.listing);
+    assert!(c.listing.contains("law(StateMap(len("), "{}", c.listing);
+}
+
+/// RFC-0093 rule 9 needs `t` invariant in the loop: a table the loop writes
+/// is a token of the cycle beside the state, and no law is read.
+#[test]
+fn a_table_the_loop_writes_gives_no_state_map() {
+    let c = dfa("for b in &bs { let d = (*b - b'0') as u64; s = t[s][d]; t[0][0] = d; }");
+    let held = c.cycle_where(|tokens| tokens.iter().any(|token| matches!(token, Token::Carried(_))));
+    assert_eq!(held.law, None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}
+
+/// RFC-0093 rule 9 needs `x` read not from `y`: `t[s][s]` has no law.
+#[test]
+fn a_column_reading_the_state_gives_no_state_map() {
+    let c = dfa("for b in &bs { s = t[s][s]; }");
+    let held = c.carried_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}
+
+/// RFC-0093 rule 9 reads an update that is the entry itself: `t[s][d] + 1`
+/// combines the entry through `+`, and no law covers the two.
+#[test]
+fn an_entry_combined_further_gives_no_state_map() {
+    let c = dfa("for b in &bs { let d = (*b - b'0') as u64; s = t[s][d] + 1u64; }");
+    let held = c.carried_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}
+
+/// RFC-0093 rule 9 needs `t` invariant in the loop: a reference the
+/// iteration chooses between two tables is no invariant value, though
+/// neither table is written.
+#[test]
+fn a_table_the_iteration_chooses_gives_no_state_map() {
+    let c = dfa(
+        "let u = vec([vec([1u64, 0u64]), vec([0u64, 2u64]), vec([2u64, 1u64])]); \
+         for b in &bs { let d = (*b - b'0') as u64; let r = if d == 1u64 { &t } else { &u }; \
+         s = r[s][d]; }",
+    );
+    let held = c.carried_cycle();
+    assert_eq!(law_of(held), None, "{}", c.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", c.listing);
+}
+
+fn dfa_on_context(body: &str) -> Scanned {
+    let row = Ty::Array(Box::new(Ty::U64), LenTerm::Known(2));
+    let table = Ty::Array(Box::new(row), LenTerm::Known(3));
+    Scanned::with_contexts(
+        &format!("let bs = \"110011\".to_string().to_bytes(); let s = 0u64; {body} s"),
+        &[("t", table)],
+    )
+}
+
+/// A context is fetched into its slot once, above the loop: a table the
+/// loop does not write is invariant in it (RFC-0093 rule 9), and one it
+/// writes is a token beside the state, with no law.
+#[test]
+fn a_context_table_has_the_state_map_law_only_where_the_loop_leaves_it() {
+    let read = dfa_on_context("for b in &bs { let d = (*b - b'0') as u64; s = @t[s][d]; }");
+    let held = read.carried_cycle();
+    assert!(
+        matches!(law_of(held), Some((Law::StateMap { .. }, false))),
+        "{}",
+        read.listing
+    );
+    let written = dfa_on_context(
+        "for b in &bs { let d = (*b - b'0') as u64; s = @t[s][d]; \
+         if d == 1u64 { @t = [[1u64, 1u64], [1u64, 1u64], [1u64, 1u64]]; }; }",
+    );
+    let held = written
+        .cycle_where(|tokens| tokens.iter().any(|token| matches!(token, Token::Carried(_))));
+    assert_eq!(held.law, None, "{}", written.listing);
+    assert_eq!(held.order, Order::InOrder, "{}", written.listing);
+}
+
+/// RFC-0093 rule 9 reads `t[y][x]`; `t[y]` of a flat table is no reading of
+/// it, and the cycle has no law.
+#[test]
+fn a_flat_table_indexed_by_the_state_has_no_law() {
+    let c = Scanned::of(
+        "let t = vec([1u64, 2u64, 0u64]); let bs = \"110011\".to_string().to_bytes(); \
+         let s = 0u64; for b in &bs { s = t[s]; } s",
     );
     let held = c.carried_cycle();
     assert_eq!(law_of(held), None, "{}", c.listing);

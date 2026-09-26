@@ -320,6 +320,7 @@ enum LawKind {
     First,
     Reset(Box<LawKind>),
     AffineMap,
+    StateMap,
 }
 
 impl LawKind {
@@ -341,6 +342,7 @@ impl LawKind {
             Law::First { .. } => LawKind::First,
             Law::Reset(inner) => LawKind::Reset(Box::new(LawKind::of(inner))),
             Law::AffineMap => LawKind::AffineMap,
+            Law::StateMap { .. } => LawKind::StateMap,
         }
     }
 }
