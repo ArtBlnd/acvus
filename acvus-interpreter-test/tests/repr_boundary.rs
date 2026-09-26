@@ -387,6 +387,11 @@ impl Unsafety {
                         (Some(TokenTree::Ident(kw)), Some(TokenTree::Ident(_))) if kw == "fn" => {
                             self.found(line, UnsafeKind::Fn);
                         }
+                        (Some(TokenTree::Ident(kw)), Some(TokenTree::Punct(dollar)))
+                            if kw == "fn" && dollar.as_char() == '$' =>
+                        {
+                            self.found(line, UnsafeKind::Fn);
+                        }
                         (Some(TokenTree::Ident(kw)), _) if kw == "impl" && names_global_alloc(&trees[at + 2..]) => {
                             at += 2;
                             while at < trees.len()
@@ -553,6 +558,7 @@ fn the_count_takes_each_unsafe_block_and_fn_and_not_an_impl_or_a_pointer_type() 
         }
         macro_rules! m {
             () => { unsafe fn k() {} fn j() { unsafe { x() } } type P = unsafe fn(); };
+            ($name:ident) => { unsafe fn $name() {} };
         }
         quote::quote! { unsafe impl GlobalAlloc for A { unsafe fn alloc() {} } unsafe { y() } }
         #[unsafe(no_mangle)]
@@ -569,7 +575,8 @@ fn the_count_takes_each_unsafe_block_and_fn_and_not_an_impl_or_a_pointer_type() 
             at(8, UnsafeKind::Fn),
             at(16, UnsafeKind::Fn),
             at(16, UnsafeKind::Block),
-            at(18, UnsafeKind::Block),
+            at(17, UnsafeKind::Fn),
+            at(19, UnsafeKind::Block),
         ]
     );
 }

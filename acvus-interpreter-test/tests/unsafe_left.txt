@@ -88,7 +88,7 @@
 12 acvus-interpreter/src/layout.rs
 20 acvus-interpreter/src/machine.rs
 49 acvus-interpreter/src/ops/call.rs
-6 acvus-interpreter/src/ops/chain.rs
+7 acvus-interpreter/src/ops/chain.rs
 3 acvus-interpreter/src/ops/composite.rs
 6 acvus-interpreter/src/ops/control.rs
 9 acvus-interpreter/src/ops/index.rs
