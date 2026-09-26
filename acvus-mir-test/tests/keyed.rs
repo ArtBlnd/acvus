@@ -531,9 +531,12 @@ const KEYED_SOUNDNESS_PROGRAMS: &[(&str, bool)] = &[
     ("map_word_count_or_insert.acvus", true),
     ("marks_stored_last.acvus", true),
     ("nested_histogram_over_rows.acvus", true),
-    ("nested_word_count_in_two_loops.acvus", false),
+    // The outer loop of these two is refused (tested by
+    // `a_table_the_outer_iteration_reads_outside_one_keyed_nested_loop_is_not_keyed_there`);
+    // each word loop inside is itself a keyed count.
+    ("nested_word_count_in_two_loops.acvus", true),
     ("nested_word_count_over_lines.acvus", true),
-    ("nested_word_count_read_by_lookup.acvus", false),
+    ("nested_word_count_read_by_lookup.acvus", true),
     ("scatter_repeating_a_key.acvus", true),
     ("two_references_to_one_element.acvus", false),
     ("u8_bucket_past_255.acvus", true),
