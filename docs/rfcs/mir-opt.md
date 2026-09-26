@@ -625,13 +625,19 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    body of the region RFC-0057 rule 3 builds. A value reaches a later
    stage by dominance.
    A pull loop — a `while` whose header calls an extern `next(&mut it)`,
-   tests its `Option` and leaves only there — ends its header in
+   tests its `Option` and leaves there, or from a later stage where rule
+   5 runs its pulls ahead — ends its header in
    `Terminator::While { cond, stages, exit, exit_args }`, its body
    `stages.body()` as a `For`'s: the header,
    its call and its test are the first stage and the control token's
    cycle, in order (rule 5), and the payload reaches later stages by
-   dominance. Its count is unknown on entry, so its cost (RFC-0066 rule 8)
-   is in place until a declaration bounds its pulls.
+   dominance. Its count is at most what the call that made its iterator
+   states as `len(ret)` (RFC-0082 rule 4), where nothing but the header
+   touches the iterator; otherwise it is unknown on entry and its cost
+   (RFC-0066 rule 8) is in place. A pull by an instance stating `returns`
+   and no effect, of an iterator nothing reads after the loop, runs ahead
+   of a body exit: its storage's cycle does not join the control token,
+   and an element pulled past the exit is released with its iteration.
 
 2. **Tokens.** One iteration orders another only through:
    - an `Order` value (RFC-0007);
@@ -683,6 +689,7 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    an effect runs only once its iteration holds the control token, so no
    effect is issued ahead of an exit; one without an effect may run ahead
    and be discarded when it finishes on every run: it holds no `while`
+   but a pull loop so bounded,
    and no call of a local function, a `for` in it finishes when its body
    does, and every extern it calls states `returns` (RFC-0082 rule 8).
    `analysis::raise::finishes` is that test, and the removal of an unused
@@ -1352,7 +1359,10 @@ many small cycles, one per key, each with the law its entry's update has.
    same value, a copy through one shared reference (whose referent no
    write reaches while it lives, RFC-0028), or the same language operation
    over operands that are one key, an operation reading nothing but its
-   operands. A call is none of these. An iteration may touch several keys
+   operands. A key at a `&K` parameter is the value it lends, and a call
+   whose instance states a term (RFC-0104) is that term: `&r.k` and
+   `to_string(&r.k)` are one key. No other call shows two values equal.
+   An iteration may touch several keys
    where it touches the storage only inside a nested loop whose own cycle
    on it is keyed by `L`, and nothing else in the iteration reads the
    storage: the outer cycle is then keyed by `L`, as RFC-0093 rule 1
@@ -1372,16 +1382,15 @@ many small cycles, one per key, each with the law its entry's update has.
 4. **The lowerer's reading** (RFC-0092): each chunk builds its entries from
    `L`'s identity; the join combines per key, in chunk order where rule 3
    says so.
-5. **An entry a call opens.** `#[extern_fn(law(absent = v))]` on
-   `f(x: &mut M, k: K, .., v: V) -> &mut V` whose `reaches` names `x[k]`
-   states that `f` leaves the entry at `k` as it was where `x` holds one,
-   makes it `v` where it holds none, and returns a reference to its
-   value. It is the author's promise (RFC-0082 rule 5), and this rule is
-   its reader. An iteration that opens its entry by one such call, and
-   reads and writes it only through the reference returned or lends it to
-   calls of one instance stating `fold`, touches one key by rule 1. An
-   entry opened at a `v` that is not `L`'s identity has no keyed law:
-   every chunk would open it again (rule 4).
+5. **An entry a call reaches.** A call whose instance states a term over
+   an entry `x[k]` (RFC-0104) reads and writes that entry as the term
+   says; an iteration whose every access of the storage is such a call at
+   one key, or a `take` or `assign` through a reference one returned,
+   touches one key. The entry is an `Option` token (RFC-0093 rule 4), so
+   an entry opened at a value other than `L`'s identity has no keyed law.
+   A value the iteration reads from the entry outside its cycle (the old
+   value `insert` returns, pushed elsewhere) makes the storage an ordinary
+   token: a keyed cycle has no scan.
 
 **Why.** The entries are the independent unit, and the law of one entry's
 update is already read by RFC-0093; keying only names the entry.

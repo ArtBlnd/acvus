@@ -86,6 +86,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0095: A host graph compiles several hosts into one solve, and a host calls another's entry as a function along a DAG (Proposed)
 - RFC-0097: A dynamic extern meets data from outside the checker at one sealed gate (Proposed)
 - RFC-0101: A host binds a declared hook to another program's entry, which runs within the call on the lent arguments (Proposed)
+- RFC-0104: An extern states what a call computes as a term, the first fragment of its model (Proposed)
 
 ### [identity.md](identity.md)
 
