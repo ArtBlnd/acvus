@@ -428,12 +428,23 @@ struct Reached {
 
 fn reached(touched: &Touched, loans: &Loans<'_>, regions: &RegionsAt<'_>) -> Reached {
     match touched {
-        Touched::Place(RefTarget::Var(s) | RefTarget::Param(s)) => Reached {
+        Touched::Place(RefTarget::Var(s)) => Reached {
             storage: vec![Loan {
                 storage: loans.storage_of(*s),
                 mutability: Mutability::Mut,
             }],
             via: Via::new(),
+        },
+        // A reference parameter's own register holds its loan under the
+        // parameter's storage, which is the name flow inference gives what
+        // the parameter lends (RFC-0079 rule 3); a touch of the slot is not a
+        // touch of what it lends, so the register never conflicts with it.
+        Touched::Place(RefTarget::Param(s)) => Reached {
+            storage: vec![Loan {
+                storage: loans.storage_of(*s),
+                mutability: Mutability::Mut,
+            }],
+            via: Via::new().with(*s),
         },
         Touched::Place(RefTarget::Through(r)) => {
             let held = regions.regions(*r);
