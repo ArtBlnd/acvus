@@ -1168,6 +1168,11 @@ Status: Proposed
    comparison under which equal values are one value; a select on its
    sign reads as that order's maximum or minimum. Both are the author's
    promise (rule 5), sampled by tests, and name their extern by instance.
+11. **An equivalence.** `law(equivalence)` on a `core::eq` instance
+   states that it is reflexive, symmetric and transitive, and that the
+   `core::hash` instance at its type hashes values it calls equal alike.
+   On one requiring `core::eq` at a part, it holds where that requirement
+   resolves with it; RFC-0070 rule 6 reads it. `f64`'s `eq` states none.
 
 **Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
 extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no

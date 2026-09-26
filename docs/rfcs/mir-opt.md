@@ -1346,10 +1346,14 @@ many small cycles, one per key, each with the law its entry's update has.
    write reaches while it lives, RFC-0028), or the same language operation
    over operands that are one key, an operation reading nothing but its
    operands. A call is none of these.
-2. **A map's keys meet by an equivalence.** A map or set token is keyed
-   only where its type carries the `Equiv` marker: its key's `eq`
-   declares an equivalence and its `hash` agrees with it. An `Opaque` one
-   stays in order.
+2. **A map's keys meet by an equivalence.** `HashMap` and `HashSet` carry
+   a keying marker as their last type argument, `Equiv` or `Opaque`,
+   acvus-extern's sealed types that the checker knows by their
+   declaration, not their spelling. A table at `Equiv` is made only from
+   an `eq` requirement naming `law::Equivalence` (RFC-0070 rule 6):
+   `hash_map()` and `hash_set()` return `Equiv`, and the closure forms
+   `hash_map_by` and `hash_set_by` return `Opaque`. A map or set token is
+   keyed only at `Equiv`; an `Opaque` one stays in order.
 3. **Order within and across keys.** Updates at one key keep chunk order
    when `L` does not commute (a `push` per key keeps input order within
    the key). A map or set that iterates in insertion order is joined in
