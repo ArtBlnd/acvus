@@ -4,11 +4,12 @@
 //! function, a call of an extern by whether its instance is declared
 //! `total` (RFC-0082 rule 9).
 
+use acvus_extern::{Registry, TypesOnly, extern_fn, extern_registry};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ir::{BinOp, Callee, InstKind, MirModule};
 use acvus_mir::printer::dump_with;
 use acvus_mir::ty::{ParamTerm, Poly, PolyParam, Ty, TyTerm};
-use acvus_mir_test::{compile_script_module_at, multi_fn_module_at};
+use acvus_mir_test::{compile_script_module_at, multi_fn_module_at, optimized_script};
 use acvus_utils::Interner;
 
 const LEVELS: [Opt; 2] = [Opt::None, Opt::Full];
@@ -147,6 +148,76 @@ fn an_unused_call_of_an_extern_declared_total_is_gone() {
             dump_with(&i, &module)
         );
     }
+}
+
+/// `std::to_string` states `total` of its own body and chooses `i64`'s
+/// `display`, which states it too: the call is total over its chosen tree
+/// (RFC-0082 rule 9), so an unread one goes.
+#[test]
+fn an_unused_integer_to_string_is_gone() {
+    let i = Interner::new();
+    for opt in LEVELS {
+        let module = script(&i, "let s = @x.to_string(); 5", opt);
+        assert_eq!(
+            count(&module, is_extern_call),
+            0,
+            "at {opt:?}\n{}",
+            dump_with(&i, &module)
+        );
+    }
+}
+
+/// A type whose `display` states no `total`: `to_string` resolves at it,
+/// and the call's chosen tree holds that instance.
+mod fx {
+    use super::*;
+
+    #[derive(acvus_extern::ExternType)]
+    #[repr(transparent)]
+    pub struct Tag(i64);
+
+    #[extern_fn(effect = pure)]
+    pub fn tag(n: i64) -> Tag {
+        Tag(n)
+    }
+
+    #[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+    pub fn display_tag(a: &Tag, out: &mut String) {
+        let _ = (a, out);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx",
+            types: [Tag],
+            fns: [tag, display_tag],
+        }
+    }
+}
+
+/// The same unread `to_string` over a `display` that states no `total`: the
+/// call may trap, so it stays.
+#[test]
+fn an_unused_to_string_over_a_display_that_may_trap_stays() {
+    let i = Interner::new();
+    let source = "let t = fx::tag(1); let s = t.to_string(); 5";
+    let module = optimized_script(&i, source, &[], vec![fx::registry()])
+        .unwrap_or_else(|e| panic!("{source}\n{e}"))
+        .module;
+    let named = |kind: &InstKind, name: &str| {
+        matches!(
+            kind,
+            InstKind::FunctionCall { callee: Callee::Extern { id, .. }, .. }
+                if i.resolve(id.name) == name
+        )
+    };
+    assert_eq!(
+        count(&module, |kind| named(kind, "to_string")),
+        1,
+        "{}",
+        dump_with(&i, &module)
+    );
 }
 
 const WHILE_ENDING_ONLY_WHERE_N_IS_AT_MOST_SEVEN: &str =

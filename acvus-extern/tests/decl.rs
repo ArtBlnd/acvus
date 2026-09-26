@@ -3476,23 +3476,30 @@ where
     }
 }
 
-/// A call of an extern that requires an instance runs that instance, which
-/// the extern's own declaration does not see.
+/// An instance with requirements states `total` of its own body (RFC-0082
+/// rule 9): combining admits it, and a call reads it over its chosen tree.
 #[test]
-fn total_on_an_extern_that_requires_an_instance_is_refused_at_combine() {
+fn total_on_an_extern_that_requires_an_instance_combines() {
     let i = Interner::new();
-    let err = Externs::<Tiny>::combine(vec![a_total_extern_that_requires_an_instance()], &i)
-        .err()
-        .expect("`total` cannot hold of a call that runs an instance it requires");
-    let acvus_extern::CombineError::TotalOverRequiredInstance { function, signature, .. } = &err else {
-        panic!("{err:?}")
+    let externs = Externs::<Tiny>::combine(vec![a_total_extern_that_requires_an_instance()], &i)
+        .unwrap_or_else(|err| panic!("`total` of an instance's own body combines: {err}"));
+    let same_total = qref(&i, "same_total");
+    let function = externs
+        .functions
+        .iter()
+        .find(|function| function.qref == same_total)
+        .expect("`t::same_total` is registered");
+    let acvus_extern::FnKind::Extern {
+        instances,
+        requires,
+        ..
+    } = &function.kind
+    else {
+        panic!("`t::same_total` is an extern")
     };
-    assert_eq!((function.as_str(), signature.as_str()), ("t::same_total", "t::eq"));
-    let written = format!("{err}");
-    assert!(
-        written.contains("`total`") && written.contains("`returns`"),
-        "the refusal names the declaration and what it may state: {written}"
-    );
+    let generic = instances.generic.as_ref().expect("`same_total` is generic");
+    assert_eq!(generic.returns, acvus_extern::Returns::Total);
+    assert_eq!(requires.len(), 1, "{requires:?}");
 }
 
 // -- `inverse` names a registered restore of the payload (RFC-0082 rule 3) --

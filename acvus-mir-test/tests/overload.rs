@@ -143,6 +143,51 @@ mod fx_c {
     }
 }
 
+/// `display` at `Kelvin` states no `total` and at `Rankine` states it: a
+/// declaration's `total` is read by a call's chosen tree, not by resolution
+/// (RFC-0082 rule 9), so both have `to_string`.
+mod fx_temp {
+    use acvus_extern::{ExternType, Registry, TypesOnly, extern_fn, extern_registry};
+
+    #[derive(ExternType)]
+    #[repr(transparent)]
+    pub struct Kelvin(i64);
+
+    #[derive(ExternType)]
+    #[repr(transparent)]
+    pub struct Rankine(i64);
+
+    #[extern_fn(effect = pure)]
+    fn kelvin(n: i64) -> Kelvin {
+        Kelvin(n)
+    }
+
+    #[extern_fn(effect = pure)]
+    fn rankine(n: i64) -> Rankine {
+        Rankine(n)
+    }
+
+    #[extern_fn(instance_of = acvus_extern::core::display, effect = pure)]
+    fn display_kelvin(a: &Kelvin, out: &mut String) {
+        let _ = (a, out);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    #[extern_fn(instance_of = acvus_extern::core::display, effect = pure, total)]
+    fn display_rankine(a: &Rankine, out: &mut String) {
+        let _ = (a, out);
+        unreachable!("a type-only fixture is never run")
+    }
+
+    pub fn registry() -> Registry<TypesOnly> {
+        extern_registry! {
+            ns: "fx_temp",
+            types: [Kelvin, Rankine],
+            fns: [kelvin, rankine, display_kelvin, display_rankine],
+        }
+    }
+}
+
 // -- Harness ----------------------------------------------------------------
 
 fn script_fn(i: &Interner, source: &str) -> Function {
@@ -227,7 +272,12 @@ fn check_functions(
 
 fn check(i: &Interner, source: &str) -> Result<Checked, Vec<String>> {
     let mut registries = acvus_ext::std_registries::<TypesOnly>();
-    registries.extend([fx_a::registry(), fx_b::registry(), fx_c::registry()]);
+    registries.extend([
+        fx_a::registry(),
+        fx_b::registry(),
+        fx_c::registry(),
+        fx_temp::registry(),
+    ]);
     let Externs {
         functions, types, ..
     } = Externs::combine(registries, i).expect("registries combine");
@@ -601,6 +651,23 @@ fn a_refusal_names_the_display_instance_the_generic_to_string_lacked() {
                 .to_string()
         ]
     );
+}
+
+/// RFC-0082 rule 9: `total` does not take part in resolution, so a type
+/// whose `display` states no `total` has `to_string` as one that states it
+/// does, by the same callee.
+#[test]
+fn to_string_resolves_whether_or_not_the_display_is_total() {
+    let i = Interner::new();
+    for (source, made) in [
+        ("fx_temp::kelvin(1).to_string()", "fx_temp::kelvin"),
+        ("let k = fx_temp::kelvin(1); std::to_string(&k)", "fx_temp::kelvin"),
+        ("fx_temp::rankine(1).to_string()", "fx_temp::rankine"),
+    ] {
+        let c = checked(&i, source);
+        assert_eq!(c.ret, Ty::String, "{source}");
+        assert_eq!(c.callees, vec![made, "std::to_string"], "{source}");
+    }
 }
 
 /// Refused: a set an argument empties opens no decision and names the call
