@@ -140,7 +140,7 @@ async fn a_cast_binds_tighter_than_a_binary_operator_and_looser_than_a_unary_one
 
 fn chains(i: &Interner, source: &str, context: Context, ret: Ty) -> Vec<ChainShape> {
     let prepared = prepared_script(i, source, context, ret);
-    chains_of_body(&prepared.main)
+    chains_of_body(prepared.main())
 }
 
 /// The `accum` bench's `float while` body, character for character;

@@ -36,19 +36,19 @@ async fn the_word_class_is_a_proper_part_of_the_frame() {
     );
     let body = main_body(&prepared);
 
-    let word_slots: Vec<usize> = body.slot_kinds.iter().map(|k| k.slot.index()).collect();
+    let word_slots: Vec<usize> = body.slot_kinds().iter().map(|k| k.slot.index()).collect();
     assert_eq!(
         word_slots,
         [0, 1, 4, 5, 6],
         "the registers `open_frame` fixes a kind on, in a frame of {}",
-        body.frame_len
+        body.frame_len()
     );
     assert!(
-        body.slot_kinds.iter().all(|k| k.kind.is_inline()),
+        body.slot_kinds().iter().all(|k| k.kind.is_inline()),
         "every slot the frame opens is opened at an inline kind"
     );
     assert!(
-        usize::from(body.frame_len) > body.slot_kinds.len(),
+        usize::from(body.frame_len()) > body.slot_kinds().len(),
         "the frame keeps registers outside the word class — slots 2 and 3, \
          where the `String` and the borrow of it live — rather than reusing \
          them for the integers"

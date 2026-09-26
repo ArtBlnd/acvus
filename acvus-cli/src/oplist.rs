@@ -19,11 +19,11 @@ struct Named {
 /// `main` first, then the closures by ascending label: the map that holds them
 /// has no order a reader could rely on.
 fn bodies(prepared: &Prepared) -> Vec<Named> {
-    let mut closures: Vec<_> = prepared.closures.iter().collect();
+    let mut closures: Vec<_> = prepared.closures().iter().collect();
     closures.sort_by_key(|(label, _)| label.0);
     let mut bodies = vec![Named {
         name: "main".to_string(),
-        code: body_text(&prepared.main),
+        code: body_text(prepared.main()),
     }];
     bodies.extend(closures.into_iter().map(|(label, code)| Named {
         name: format!("closure L{}", label.0),

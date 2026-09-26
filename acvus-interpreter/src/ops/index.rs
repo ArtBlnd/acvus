@@ -78,8 +78,8 @@ impl<const CHECKED: bool> Op for IndexCopy<CHECKED> {
     successor!();
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn index_read(&self) -> Option<Read> {
-        CHECKED.then_some(self.read)
+    fn index_read(&self) -> Option<(IndexMode, Read)> {
+        CHECKED.then_some((IndexMode::Copy, self.read))
     }
 
     #[inline]
@@ -107,8 +107,8 @@ impl<const CHECKED: bool> Op for IndexRef<CHECKED> {
     successor!();
 
     #[cfg(any(debug_assertions, feature = "probe"))]
-    fn index_read(&self) -> Option<Read> {
-        CHECKED.then_some(self.read)
+    fn index_read(&self) -> Option<(IndexMode, Read)> {
+        CHECKED.then_some((IndexMode::Ref, self.read))
     }
 
     #[inline]

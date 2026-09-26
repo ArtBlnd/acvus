@@ -7,13 +7,42 @@
 //! and re-enters the loop at the block after it. A run-time failure is a panic
 //! and leaves through the unwinder, not through this loop.
 
+#![cfg_attr(
+    feature = "tooling",
+    doc = r#"
+Under `tooling` no code outside the runtime builds a machine or runs a
+module on arguments it chooses.
+
+```compile_fail,E0624
+use acvus_interpreter::machine::Machine;
+
+let _ = Machine::new;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::machine::Machine;
+
+let _ = Machine::regs;
+```
+
+```compile_fail,E0603
+use acvus_interpreter::machine::call_module;
+```
+
+```compile_fail,E0624
+use acvus_interpreter::Code;
+
+let _ = Code::start;
+```
+"#
+)]
+
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
 
 use acvus_extern::{Ctx, MOST_MEMBERS, RustCallee, Words};
 use acvus_mir::graph::QualifiedRef;
-use acvus_utils::Interner;
 use futures::future::BoxFuture;
 
 use crate::code::{
@@ -87,7 +116,7 @@ impl<'c> Machine<'c> {
     /// thread's stack no longer holds traps here, before the body runs
     /// (RFC-0100 rule 5). Every framed body runs in a `Machine`, so this is
     /// the one place a call chain is checked.
-    pub fn new(body: &'c Body, mut regs: Regs<'c>, rt: &'c AcvusRuntime, depth: Depth) -> Machine<'c> {
+    pub(crate) fn new(body: &'c Body, mut regs: Regs<'c>, rt: &'c AcvusRuntime, depth: Depth) -> Machine<'c> {
         let frame = regs.take_window(depth.enter());
         Machine {
             body,
@@ -104,7 +133,7 @@ impl<'c> Machine<'c> {
     /// One compare per joint. The index is unchecked because every
     /// terminator's target was resolved by `prepare` against this same
     /// `heads` array, and the two sentinels are what the compare catches.
-    pub fn run(&mut self) -> Exit {
+    pub(crate) fn run(&mut self) -> Exit {
         let body = self.body;
         let mut at: Exit = self.at.into();
         loop {
@@ -123,47 +152,39 @@ impl<'c> Machine<'c> {
         }
     }
 
-    pub fn body(&self) -> &'c Body {
-        self.body
-    }
-
     #[inline(always)]
-    pub fn regs(&mut self) -> &mut Regs<'c> {
+    pub(crate) fn regs(&mut self) -> &mut Regs<'c> {
         &mut self.regs
     }
 
-    pub fn shared(&self) -> &Arc<InterpreterContext> {
+    pub(crate) fn shared(&self) -> &Arc<InterpreterContext> {
         &self.ctx.rt.shared
-    }
-
-    pub fn interner(&self) -> &Interner {
-        &self.ctx.rt.shared.interner
     }
 
     /// The runtime a call out of this frame hands a future, a spawned job or
     /// a handler that roots cells of its own: this frame's, at the depth its
     /// callee runs at. An executor may run that work inside this frame's own
     /// poll, so the chain goes on counting there.
-    pub fn callee_runtime(&mut self) -> AcvusRuntime {
+    pub(crate) fn callee_runtime(&mut self) -> AcvusRuntime {
         let depth = self.window().depth();
         self.ctx.rt.at(depth)
     }
 
     /// The body returns this value; the `Return` terminator leaves the loop.
     #[inline]
-    pub fn finish(&mut self, value: Value) {
+    pub(crate) fn finish(&mut self, value: Value) {
         self.exit[0] = value;
     }
 
     #[inline]
-    pub fn finish_pair(&mut self, ptr: u64, len: u64) {
+    pub(crate) fn finish_pair(&mut self, ptr: u64, len: u64) {
         self.exit = [crate::runtime::word(ptr), crate::runtime::word(len)];
     }
 
     /// The future the driver awaits, the slot its result lands in, and the
     /// block the body goes on at once it has (RFC-0046).
     #[inline]
-    pub fn suspend<const LARGE: bool>(
+    pub(crate) fn suspend<const LARGE: bool>(
         &mut self,
         dst: Marked,
         resume: BlockId,
@@ -178,13 +199,13 @@ impl<'c> Machine<'c> {
     }
 
     #[inline]
-    pub fn suspend_unit(&mut self, resume: BlockId, fut: BoxFuture<'static, ()>) {
+    pub(crate) fn suspend_unit(&mut self, resume: BlockId, fut: BoxFuture<'static, ()>) {
         self.at = resume;
         self.pending = Some(Pending::Unit { fut });
     }
 
     #[inline]
-    pub fn suspend_pair(
+    pub(crate) fn suspend_pair(
         &mut self,
         dst: SlicePair,
         resume: BlockId,
@@ -197,7 +218,7 @@ impl<'c> Machine<'c> {
     /// The cells a call out of this frame takes its callee's frame from, and
     /// the body this frame's window is bound to (RFC-0050 rule 6).
     #[inline(always)]
-    pub fn window(&mut self) -> &mut FrameState {
+    pub(crate) fn window(&mut self) -> &mut FrameState {
         // SAFETY: `window`'s callers are this interpreter's call ops, which
         // lay and bind the frame in place; no handler is handed a `Machine`.
         unsafe { self.ctx.frame_mut() }
@@ -212,7 +233,7 @@ impl<'c> Machine<'c> {
     /// registers an argument window is coloured in, and
     /// `Prepare::call_into_run` asserts that of the run it names.
     #[inline(always)]
-    pub unsafe fn lend_call<'r>(
+    pub(crate) unsafe fn lend_call<'r>(
         &'r mut self,
         args: Off,
         arity: u16,
@@ -240,7 +261,7 @@ impl<'c> Machine<'c> {
     /// destination run is this frame's own registers and the window is the
     /// cells above them.
     #[inline(always)]
-    pub fn lend_out_and_window<'r>(&'r mut self, at: Off, width: u16) -> LentOut<'r, 'c> {
+    pub(crate) fn lend_out_and_window<'r>(&'r mut self, at: Off, width: u16) -> LentOut<'r, 'c> {
         LentOut {
             out: self.regs.run_of_mut(at, width),
             ctx: &mut self.ctx,
@@ -250,7 +271,7 @@ impl<'c> Machine<'c> {
     /// Lent together because the run is this frame's own registers and the
     /// window is the cells above them: two fields, two disjoint borrows.
     #[inline(always)]
-    pub fn lend_and_window<'r>(&'r mut self, at: Off, arity: u16) -> Lent<'r, 'c> {
+    pub(crate) fn lend_and_window<'r>(&'r mut self, at: Off, arity: u16) -> Lent<'r, 'c> {
         Lent {
             run: self.regs.run_of(at, arity),
             ctx: &mut self.ctx,
@@ -261,7 +282,7 @@ impl<'c> Machine<'c> {
     /// rule 7): no allocation, one mask store to enter and one sweep to leave.
     /// The arguments are already in the window's first registers, where the
     /// call's `LayArg` operations put them.
-    pub fn call_sync<F, R>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> R
+    pub(crate) fn call_sync<F, R>(&mut self, callee: &Body, named: &dyn Debug, arity: u16, fill: F) -> R
     where
         F: FnOnce(&mut Machine<'_>),
         R: Returned,
@@ -392,7 +413,7 @@ where
 }
 
 /// Run the entry body of the module `id` names.
-pub async fn call_module<R>(rt: AcvusRuntime, id: QualifiedRef, args: Vec<Value>) -> R
+pub(crate) async fn call_module<R>(rt: AcvusRuntime, id: QualifiedRef, args: Vec<Value>) -> R
 where
     R: Returned,
 {
@@ -435,7 +456,7 @@ pub(crate) fn call_module_rooted(rt: &AcvusRuntime, id: QualifiedRef, depth: Dep
     })
 }
 
-pub fn call_module_sync<R>(
+pub(crate) fn call_module_sync<R>(
     machine: &mut Machine<'_>,
     prepared: &Prepared,
     id: QualifiedRef,
@@ -582,7 +603,7 @@ impl Code {
     /// synchronous call reaches — on a window of their own, because the
     /// arguments arrive as values rather than as a run of the caller's
     /// registers.
-    pub fn start<'c>(&'c self, f: Value, rt: &AcvusRuntime, args: &mut [Value]) -> Resume<'c> {
+    pub(crate) fn start<'c>(&'c self, f: Value, rt: &AcvusRuntime, args: &mut [Value]) -> Resume<'c> {
         match &self.body {
             CodeBody::Body(body) => body.start(&f, args),
             CodeBody::Expr(_) | CodeBody::Rust => Resume::Done(self.frameless_now(f, rt, args)),
