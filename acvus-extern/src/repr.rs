@@ -39,8 +39,11 @@ use std::ptr::NonNull;
 
 mod sealed {
     /// Unnameable outside this module: `Word`'s impls are the ones below,
-    /// one per type `for_each_inline!` lists.
-    pub trait Sealed {}
+    /// one per type `for_each_inline!` lists, and `decode` is callable only
+    /// through `Encoded::get`.
+    pub trait Sealed: Sized {
+        fn decode(encoded: super::Encoded<Self>) -> Self;
+    }
 }
 
 /// The one encoding of an `Inline` value in the runtime's value word
@@ -58,93 +61,113 @@ mod sealed {
 /// bytes under this encoding, which is what `view` reads.
 pub trait Word: sealed::Sealed + Copy + Send + Sync + 'static {
     fn into_word(self) -> u64;
+}
 
-    /// # Safety
-    /// `word` is `into_word` of some value of this type.
-    unsafe fn from_word(word: u64) -> Self;
+/// A `Word` type of which every `u64` reads as some value, so reading one
+/// back needs no fact about where the word came from. `char` is the inline
+/// type that is not one: its word is read through `Encoded<char>`.
+pub trait TotalWord: Word {
+    fn from_word(word: u64) -> Self;
+}
+
+macro_rules! total {
+    ($t:ty, |$value:ident| $into:expr, |$word:ident| $from:expr) => {
+        impl sealed::Sealed for $t {
+            #[inline(always)]
+            fn decode(encoded: Encoded<Self>) -> Self {
+                <$t as TotalWord>::from_word(encoded.word())
+            }
+        }
+        impl Word for $t {
+            #[inline(always)]
+            fn into_word(self) -> u64 {
+                let $value = self;
+                $into
+            }
+        }
+        impl TotalWord for $t {
+            #[inline(always)]
+            fn from_word($word: u64) -> Self {
+                $from
+            }
+        }
+    };
 }
 
 macro_rules! signed {
     ($($t:ty),*) => { $(
-        impl sealed::Sealed for $t {}
-        impl Word for $t {
-            #[inline(always)]
-            fn into_word(self) -> u64 {
-                i64::from(self).cast_unsigned()
-            }
-            #[inline(always)]
-            unsafe fn from_word(word: u64) -> Self {
-                word as $t
-            }
-        }
+        total!($t, |value| i64::from(value).cast_unsigned(), |word| word as $t);
     )* };
 }
 
 macro_rules! unsigned {
     ($($t:ty),*) => { $(
-        impl sealed::Sealed for $t {}
-        impl Word for $t {
-            #[inline(always)]
-            fn into_word(self) -> u64 {
-                u64::from(self)
-            }
-            #[inline(always)]
-            unsafe fn from_word(word: u64) -> Self {
-                word as $t
-            }
-        }
+        total!($t, |value| u64::from(value), |word| word as $t);
     )* };
 }
 
 signed!(i8, i16, i32, i64);
 unsigned!(u8, u16, u32, u64);
+total!(f64, |value| value.to_bits(), |word| f64::from_bits(word));
+total!(bool, |value| u64::from(value), |word| word != 0);
+total!((), |_value| 0, |_word| ());
 
-impl sealed::Sealed for f64 {}
-impl Word for f64 {
+impl sealed::Sealed for char {
     #[inline(always)]
-    fn into_word(self) -> u64 {
-        self.to_bits()
-    }
-    #[inline(always)]
-    unsafe fn from_word(word: u64) -> Self {
-        f64::from_bits(word)
+    fn decode(encoded: Encoded<Self>) -> Self {
+        // SAFETY: `Encoded::of` is the one maker of an `Encoded<char>`, and
+        // it wrote the scalar value zero-extended, so the low 32 bits are
+        // that scalar value.
+        unsafe { char::from_u32_unchecked(encoded.word() as u32) }
     }
 }
-
-impl sealed::Sealed for char {}
 impl Word for char {
     #[inline(always)]
     fn into_word(self) -> u64 {
         u64::from(u32::from(self))
     }
-    #[inline(always)]
-    unsafe fn from_word(word: u64) -> Self {
-        // SAFETY: the caller's contract: the word is a scalar value
-        // zero-extended, so its low 32 bits are that scalar value.
-        unsafe { char::from_u32_unchecked(word as u32) }
-    }
 }
 
-impl sealed::Sealed for bool {}
-impl Word for bool {
-    #[inline(always)]
-    fn into_word(self) -> u64 {
-        u64::from(self)
-    }
-    #[inline(always)]
-    unsafe fn from_word(word: u64) -> Self {
-        word != 0
-    }
-}
+/// A word that is `into_word` of a `T` (RFC-0102): `of` is its one maker, so
+/// reading it back as a `T`, or naming its first bytes as one, is safe at
+/// every inline type, `char` and `bool` among them.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct Encoded<T>(u64, PhantomData<fn() -> T>);
 
-impl sealed::Sealed for () {}
-impl Word for () {
+impl<T> Encoded<T>
+where
+    T: Word,
+{
     #[inline(always)]
-    fn into_word(self) -> u64 {
-        0
+    pub fn of(value: T) -> Encoded<T> {
+        Encoded(value.into_word(), PhantomData)
     }
+
     #[inline(always)]
-    unsafe fn from_word(_: u64) -> Self {}
+    pub fn word(self) -> u64 {
+        self.0
+    }
+
+    #[inline(always)]
+    pub fn get(self) -> T {
+        <T as sealed::Sealed>::decode(self)
+    }
+
+    /// The value, read where the word holds it.
+    #[inline(always)]
+    pub fn view(&self) -> &T {
+        const {
+            assert!(
+                mem::size_of::<T>() <= mem::size_of::<u64>() && mem::align_of::<T>() <= mem::align_of::<u64>(),
+                "an inline value's bytes fit its word's first bytes"
+            )
+        };
+        // SAFETY: the word is `into_word` of a `T` (`of`), whose first bytes
+        // are that `T`'s own on a little-endian target, the only kind this
+        // module builds for; the assertion above fits them in the word.
+        unsafe { &*std::ptr::from_ref(&self.0).cast::<T>() }
+    }
 }
 
 macro_rules! listed {
@@ -280,10 +303,10 @@ impl PtrWord {
         self.0
     }
 
-    /// # Safety
-    /// `word` is `PtrWord::word` of some `PtrWord`.
+    /// A word read back as the address it holds. Any word is some address;
+    /// what reads through the pointer answers for it.
     #[inline(always)]
-    pub const unsafe fn from_word(word: u64) -> PtrWord {
+    pub const fn from_word(word: u64) -> PtrWord {
         PtrWord(word)
     }
 }
@@ -795,13 +818,35 @@ mod tests {
     #[test]
     fn a_word_reads_back_as_its_value() {
         for v in [i8::MIN, -1, 0, 1, i8::MAX] {
-            // SAFETY: the word is `into_word` of an `i8`.
-            assert_eq!(unsafe { i8::from_word(v.into_word()) }, v);
+            assert_eq!(i8::from_word(v.into_word()), v);
+            assert_eq!(Encoded::of(v).get(), v);
         }
-        // SAFETY: as above, at `char`.
-        assert_eq!(unsafe { char::from_word('é'.into_word()) }, 'é');
+        assert_eq!(Encoded::of('é').get(), 'é');
+        assert_eq!(Encoded::of('\u{10FFFF}').word(), 0x10FFFF);
         assert!(is_inline::<char>());
         assert!(!is_inline::<String>());
+    }
+
+    #[test]
+    fn every_word_reads_as_a_value_of_a_total_type() {
+        for word in [0, 1, 2, 0x7F, 0x80, 0xFFFF_FFFF, 0xD800, u64::MAX] {
+            assert_eq!(i8::from_word(word), word as i8);
+            assert_eq!(u32::from_word(word), word as u32);
+            assert_eq!(f64::from_word(word).to_bits(), word);
+            assert_eq!(bool::from_word(word), word != 0);
+            let () = <()>::from_word(word);
+        }
+    }
+
+    #[test]
+    fn an_encoded_word_is_viewed_as_its_value() {
+        assert_eq!(*Encoded::of(-2i16).view(), -2);
+        assert_eq!(*Encoded::of(u64::MAX).view(), u64::MAX);
+        assert_eq!(*Encoded::of(1.5f64).view(), 1.5);
+        assert_eq!(*Encoded::of('\u{10FFFF}').view(), '\u{10FFFF}');
+        assert!(*Encoded::of(true).view());
+        assert!(!*Encoded::of(false).view());
+        let () = *Encoded::of(()).view();
     }
 
     #[test]
@@ -857,8 +902,7 @@ mod tests {
         #[cfg(target_pointer_width = "64")]
         round_trip(std::ptr::without_provenance::<u8>(0xFEDC_BA98_7654_3210));
 
-        // SAFETY: the word is `word_of_ptr`'s, stored bare.
-        let again = unsafe { PtrWord::from_word(word_of_ptr(&word).word()) };
+        let again = PtrWord::from_word(word_of_ptr(&word).word());
         // SAFETY: the pointer is `&word`'s, which is live.
         assert_eq!(unsafe { *ptr_of_word::<u64>(again) }, 7);
     }

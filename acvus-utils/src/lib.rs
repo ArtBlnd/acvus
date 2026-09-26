@@ -1,5 +1,5 @@
 mod id;
-pub use id::{LocalFactory, LocalIdOps, LocalVec};
+pub use id::{LocalFactory, LocalIdOps, LocalVec, NextId32, NextIdUsize};
 mod freeze;
 pub use freeze::Freeze;
 mod astr;

@@ -10,7 +10,7 @@ use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
-use acvus_extern::repr::{self, PtrWord, Word};
+use acvus_extern::repr::{self, PtrWord, TotalWord, Word};
 use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
@@ -94,6 +94,20 @@ impl Kind {
     }
 }
 
+/// An inline word read back at its type. Every inline type but `char` reads
+/// any word (`repr::TotalWord`); a `Char` word is a scalar value only because
+/// `inline_of`'s caller vouches it was `into_word` of a `char`.
+macro_rules! word_as {
+    (Char: $t:ty, $word:expr) => {
+        // SAFETY: `inline_of`'s contract: the word is `into_word` of a
+        // `char`, its scalar value zero-extended.
+        unsafe { char::from_u32_unchecked(u32::from_word($word)) }
+    };
+    ($name:ident: $t:ty, $word:expr) => {
+        <$t as TotalWord>::from_word($word)
+    };
+}
+
 /// An `Inline` value is its kind and its one word (`repr::Word`), and these
 /// are the readers and writers that dispatch a `T` known only by its
 /// `TypeId` to that word.
@@ -133,9 +147,7 @@ macro_rules! inline_words {
                         "materialize: {self:?} is not a {}",
                         stringify!($t)
                     );
-                    // SAFETY: the caller's contract: the word is `into_word`
-                    // of a `$t`.
-                    *slot = Some(unsafe { <$t as Word>::from_word(self.word) });
+                    *slot = Some(word_as!($name: $t, self.word));
                 })*
                 out
             }
@@ -520,8 +532,7 @@ macro_rules! value_word {
             /// `Instance`, `InstanceAwait` or `Code`.
             #[inline(always)]
             unsafe fn ptr<T>(&self) -> *const T {
-                // SAFETY: the caller's contract.
-                repr::ptr_of_word(unsafe { PtrWord::from_word(self.word) })
+                repr::ptr_of_word(PtrWord::from_word(self.word))
             }
         }
     };
@@ -793,18 +804,14 @@ macro_rules! value_constructors {
             /// The word read as an `i64`: an integer of any width, sign- or
             /// zero-extended as its encoding is.
             $v fn as_int(&self) -> i64 {
-                // SAFETY: every word is `into_word` of some `i64`.
-                unsafe { i64::from_word(self.bits()) }
+                i64::from_word(self.bits())
             }
             $v fn as_float(&self) -> f64 {
-                // SAFETY: every word is `into_word` of some `f64`.
-                unsafe { f64::from_word(self.bits()) }
+                f64::from_word(self.bits())
             }
             /// The scalar value this word spells.
             $v fn as_char(&self) -> u32 {
-                // SAFETY: every word of a `Char` is its scalar value
-                // zero-extended, which is `into_word` of that `u32`.
-                let code = unsafe { u32::from_word(self.bits()) };
+                let code = u32::from_word(self.bits());
                 debug_assert!(
                     char::from_u32(code).is_some(),
                     "a char's word is a Unicode scalar value, found {code:#x}; every way into a `Char` \
@@ -813,8 +820,7 @@ macro_rules! value_constructors {
                 code
             }
             $v fn as_bool(&self) -> bool {
-                // SAFETY: a `Bool`'s word is `into_word` of its `bool`.
-                unsafe { bool::from_word(self.bits()) }
+                bool::from_word(self.bits())
             }
 
             $v fn string(s: impl Into<String>) -> Self {

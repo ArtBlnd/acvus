@@ -256,17 +256,11 @@ pub fn substitute<F>(slot: &mut Box<dyn Op>, make: F)
 where
     F: FnOnce(Box<dyn Op>) -> Box<dyn Op>,
 {
-    // SAFETY: `read` copies the one owning pointer out of `slot`;
-    // `take_successor` consumes that copy, which is the old node's only
-    // drop; `write` then stores the new node without dropping the copy. On
-    // every path `slot` owns exactly one node.
-    unsafe {
-        let old = std::ptr::read(slot);
-        let successor = old
-            .take_successor()
-            .expect("the node a probe substitutes holds a successor");
-        std::ptr::write(slot, make(successor));
-    }
+    let old = std::mem::replace(slot, Box::new(crate::ops::control::Poison));
+    let successor = old
+        .take_successor()
+        .expect("the node a probe substitutes holds a successor");
+    *slot = make(successor);
 }
 
 #[cfg(any(debug_assertions, feature = "probe"))]

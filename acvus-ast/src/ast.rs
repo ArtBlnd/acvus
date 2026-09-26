@@ -8,12 +8,11 @@ use crate::span::Span;
 acvus_utils::declare_local_id!(pub AstId);
 
 impl AstId {
+    /// # Panics
+    /// Every `u32` id is taken.
     pub fn alloc() -> Self {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: id + 1 is always >= 1.
-        Self(unsafe { std::num::NonZero::new_unchecked(id + 1) })
+        static NEXT: acvus_utils::NextId32 = acvus_utils::NextId32::new();
+        Self(NEXT.take().expect("AstId::alloc: every u32 id is taken"))
     }
 }
 
