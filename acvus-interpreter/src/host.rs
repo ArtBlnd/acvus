@@ -239,12 +239,12 @@ use futures::FutureExt;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::executor::Executor;
-use crate::hook::{CompiledHook, DeclaredInput, FoundLent, HookDecl, HookEffect, HookPart, LentEntry, LentInputs, Names};
+use crate::hook::{CompiledHook, HookDecl, HookEffect, HookPart};
 use crate::init::{DeclaredInits, GraphParts, InitGiven, InitKey, InitSource, RustInit};
 use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
 use crate::ops::storage::{fetch_now, fetch_waited};
 use crate::port::{Gate, Held, Port, ended, serve};
-use crate::prepare::{PrepareCtx, prepare_lent_module, prepare_module};
+use crate::prepare::{PrepareCtx, prepare_module};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
 
@@ -400,8 +400,8 @@ impl fmt::Display for HostError {
             HostError::Trapped { message } => write!(f, "the run trapped: {message}"),
             HostError::Unbound { hook } => write!(
                 f,
-                "the hook `{hook}` is unbound, or bound to an entry whose program the host released, \
-                 so the program does not run; `Program::bind` binds it (RFC-0101 rule 1)"
+                "the hook `{hook}` is unbound, so the program does not run; `Program::bind` binds it \
+                 (RFC-0101 rule 2)"
             ),
         }
     }
@@ -864,7 +864,6 @@ pub(crate) enum EntryDeclaration {
     /// settles, and its `$` inputs are the ones it reads (RFC-0071 rule 4).
     Function,
     Positional { params: Vec<ParamTerm<Poly>>, ret: PolyTy },
-    Lent { inputs: ResolvedShape, order: Vec<Astr>, declared: PolyTy },
 }
 
 #[derive(Clone)]
@@ -940,10 +939,6 @@ pub(crate) struct HostParts {
 impl Host<SyncAccess> {
     pub fn new(registries: Vec<Registry<AcvusRuntime>>) -> Self {
         Host::over(Interner::new(), registries)
-    }
-
-    pub fn with_names(names: &Names, registries: Vec<Registry<AcvusRuntime>>) -> Self {
-        Host::over(names.0.clone(), registries)
     }
 
     pub(crate) fn in_graph(interner: &Interner) -> Self {
@@ -1051,22 +1046,6 @@ where
     {
         let inputs = ResolvedShape::of_fields(&self.parts.interner, &shape);
         self.typed_entry::<R>(name, inputs, source)
-    }
-
-    pub fn lent_entry<R>(self, name: &str, inputs: LentInputs, source: Source<'_>) -> Self
-    where
-        R: Declared,
-    {
-        let interner = &self.parts.interner;
-        let resolved = inputs.resolved(interner);
-        let order = resolved.iter().map(|input| input.name).collect();
-        let fields = resolved
-            .into_iter()
-            .map(|DeclaredInput { name, ty }| (name, ty))
-            .collect();
-        let inputs = ResolvedShape::sorted(interner, fields);
-        let declared = R::declared(interner);
-        self.declare_entry(name, source, EntryDeclaration::Lent { inputs, order, declared })
     }
 
     pub fn hook(mut self, name: &str, arity: usize, effect: HookEffect) -> Self {
@@ -1192,13 +1171,11 @@ tooling_vis!(host_tooling);
 enum EntryShape {
     Typed { inputs: ResolvedShape, declared: PolyTy },
     Untyped,
-    Lent { order: Vec<Astr> },
 }
 
 enum CompiledShape {
     Typed { inputs: EntryInputs, declared: PolyTy },
     Untyped,
-    Lent(LentEntry),
 }
 
 struct EntryInputs {
@@ -1332,7 +1309,7 @@ struct CompiledEntry {
     required: Vec<ContextInfo>,
 }
 
-pub(crate) fn span_of(span: Span) -> Option<Span> {
+fn span_of(span: Span) -> Option<Span> {
     (span.start != 0 || span.end != 0).then_some(span)
 }
 
@@ -1430,9 +1407,7 @@ pub(crate) fn compile(
             let listed: Vec<String> = shadowed.iter().map(|name| format!("`{name}`")).collect();
             let what = match declaration {
                 EntryDeclaration::Function | EntryDeclaration::Positional { .. } => "function",
-                EntryDeclaration::Typed { .. } | EntryDeclaration::Untyped | EntryDeclaration::Lent { .. } => {
-                    "entry"
-                }
+                EntryDeclaration::Typed { .. } | EntryDeclaration::Untyped => "entry",
             };
             let message = format!(
                 "the {what} `{name}` would shadow {}, which a script calls as `{bare}`",
@@ -1450,23 +1425,43 @@ pub(crate) fn compile(
         );
         let local = match declaration {
             EntryDeclaration::Typed { inputs, declared } => {
-                refusals.extend(declared_input_refusals(interner, &bindings, &name, &origin, qref, &inputs));
+                refusals.extend(inputs.repeated_names().into_iter().map(|repeated| {
+                    let message = format!(
+                        "the input `${}` of the entry `{name}` is given twice",
+                        interner.resolve(repeated)
+                    );
+                    Refusal::of(origin.clone(), message)
+                }));
+                refusals.extend(
+                    inputs
+                        .fields
+                        .iter()
+                        .filter(|(field, _)| bindings.get(QualifiedRef::root(*field).in_host(qref.host)).is_some())
+                        .map(|(field, _)| {
+                            let message = format!(
+                                "the input `${}` of the entry `{name}` is already fixed by a binding",
+                                interner.resolve(*field)
+                            );
+                            Refusal::of(origin.clone(), message)
+                        }),
+                );
+                let params = inputs
+                    .fields
+                    .iter()
+                    .map(|(field, ty)| ParamTerm::new(*field, ty.clone()))
+                    .collect();
+                let ty = TyTerm::Fn {
+                    params,
+                    ret: Box::new(declared.clone()),
+                    captures: vec![],
+                    effect: Effect::OPAQUE.into(),
+                    flows: Flows::Every.into(),
+                };
+                let shape = EntryShape::Typed { inputs, declared };
                 LocalFunction {
                     kind: FnKind::Local(ast, GraphInputs::Declared),
-                    ty: declared_entry_ty(&inputs, &declared),
-                    shape: Some(EntryShape::Typed { inputs, declared }),
-                }
-            }
-            EntryDeclaration::Lent {
-                inputs,
-                order,
-                declared,
-            } => {
-                refusals.extend(declared_input_refusals(interner, &bindings, &name, &origin, qref, &inputs));
-                LocalFunction {
-                    kind: FnKind::Local(ast, GraphInputs::Declared),
-                    ty: declared_entry_ty(&inputs, &declared),
-                    shape: Some(EntryShape::Lent { order }),
+                    ty,
+                    shape: Some(shape),
                 }
             }
             EntryDeclaration::Untyped => LocalFunction {
@@ -1508,11 +1503,6 @@ pub(crate) fn compile(
         .iter()
         .map(|f| f.qref)
         .filter(|qref| declared.contains_key(qref))
-        .collect();
-    let lent: FxHashMap<QualifiedRef, String> = declared
-        .iter()
-        .filter(|(_, declaration)| matches!(declaration.shape, EntryShape::Lent { .. }))
-        .map(|(qref, declaration)| (*qref, declaration.name.clone()))
         .collect();
     functions.extend(extern_fns);
 
@@ -1593,7 +1583,6 @@ pub(crate) fn compile(
             cause: None,
         })
     }));
-    refusals.extend(crate::hook::lent_called(&lowered.modules, &lent, origin_of));
     if !refusals.is_empty() {
         return Err(each_fault_once(refusals));
     }
@@ -1619,10 +1608,7 @@ pub(crate) fn compile(
 
     let hooks: HashMap<String, CompiledHook> = hooks
         .into_iter()
-        .map(|hook| {
-            let sites = crate::hook::sites_of(&optimized.modules, hook.qref(interner), origin_of);
-            (hook.name.clone(), hook.compiled(sites))
-        })
+        .map(|hook| (hook.name().to_owned(), hook.compiled()))
         .collect();
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
         .contexts
@@ -1644,17 +1630,7 @@ pub(crate) fn compile(
             access,
         };
         for (q, m) in &optimized.modules {
-            let module = match lent.get(q) {
-                None => prepare_module(m, &ctx),
-                Some(entry) => match crate::hook::lent_module(interner, entry, &origin_of(q), m) {
-                    Ok(module) => prepare_lent_module(&module, &ctx),
-                    Err(refused) => {
-                        refusals.extend(refused);
-                        continue;
-                    }
-                },
-            };
-            match module {
+            match prepare_module(m, &ctx) {
                 Ok(module) => prepared.push((*q, Executable::Module(Arc::new(module)))),
                 Err(refused) => refusals.push(Refusal {
                     origin: origin_of(q),
@@ -1687,12 +1663,6 @@ pub(crate) fn compile(
                     declared,
                 },
                 EntryShape::Untyped => CompiledShape::Untyped,
-                EntryShape::Lent { order } => {
-                    let Some(resolution) = inf.try_resolution(qref) else {
-                        panic!("inference resolves every entry no stage refused")
-                    };
-                    CompiledShape::Lent(LentEntry::of(interner, &order, &module.main, resolution.effect.clone()))
-                }
             };
             let entry = CompiledEntry {
                 name: name.clone(),
@@ -1775,50 +1745,6 @@ pub(crate) fn compile(
     })
 }
 
-fn declared_input_refusals(
-    interner: &Interner,
-    bindings: &Bindings,
-    entry: &str,
-    origin: &Option<Origin>,
-    qref: QualifiedRef,
-    inputs: &ResolvedShape,
-) -> Vec<Refusal> {
-    let repeated = inputs.repeated_names().into_iter().map(|repeated| {
-        let message = format!(
-            "the input `${}` of the entry `{entry}` is given twice",
-            interner.resolve(repeated)
-        );
-        Refusal::of(origin.clone(), message)
-    });
-    let bound = inputs
-        .fields
-        .iter()
-        .filter(|(field, _)| bindings.get(QualifiedRef::root(*field).in_host(qref.host)).is_some())
-        .map(|(field, _)| {
-            let message = format!(
-                "the input `${}` of the entry `{entry}` is already fixed by a binding",
-                interner.resolve(*field)
-            );
-            Refusal::of(origin.clone(), message)
-        });
-    repeated.chain(bound).collect()
-}
-
-fn declared_entry_ty(inputs: &ResolvedShape, declared: &PolyTy) -> PolyTy {
-    let params = inputs
-        .fields
-        .iter()
-        .map(|(field, ty)| ParamTerm::new(*field, ty.clone()))
-        .collect();
-    TyTerm::Fn {
-        params,
-        ret: Box::new(declared.clone()),
-        captures: vec![],
-        effect: Effect::OPAQUE.into(),
-        flows: Flows::Every.into(),
-    }
-}
-
 /// The extern functions a script's bare `name` reaches (RFC-0021,
 /// RFC-0043): every one of that name, in any namespace or at the root, that
 /// the registries declared a function rather than a machine coercion; each
@@ -1865,7 +1791,7 @@ fn bare_callable(
 
 /// What one compilation made, whatever access it was compiled for.
 pub(crate) struct Compiled {
-    pub(crate) shared: InterpreterContext,
+    shared: InterpreterContext,
     rt: AcvusRuntime,
     entries: HashMap<String, CompiledEntry>,
     pub(crate) hooks: HashMap<String, CompiledHook>,
@@ -1877,11 +1803,11 @@ pub(crate) struct Compiled {
 }
 
 impl Compiled {
-    pub(crate) fn interner(&self) -> &Interner {
+    fn interner(&self) -> &Interner {
         &self.shared.interner
     }
 
-    pub(crate) fn unbound_hook(&self) -> Option<&str> {
+    fn unbound_hook(&self) -> Option<&str> {
         let mut unbound: Vec<&str> = self
             .hooks
             .iter()
@@ -1890,22 +1816,6 @@ impl Compiled {
             .collect();
         unbound.sort_unstable();
         unbound.first().copied()
-    }
-
-    pub(crate) fn lent_entry(&self, name: &str) -> Result<FoundLent<'_>, HostError> {
-        let compiled = self.compiled(name)?;
-        let CompiledShape::Lent(shape) = &compiled.shape else {
-            return Err(HostError::Mismatched {
-                what: Part::Inputs(name.to_owned()),
-                held: "inputs a host gives".to_owned(),
-                asked: "inputs a hook lends, as `Host::lent_entry` declares them".to_owned(),
-            });
-        };
-        Ok(FoundLent {
-            qref: compiled.qref,
-            shape,
-            ret: &compiled.ret,
-        })
     }
 
     pub(crate) fn running(mut self, runs: &FxHashSet<String>) -> Self {
@@ -1948,7 +1858,7 @@ impl Compiled {
 }
 
 pub struct Program<A = SyncAccess> {
-    pub(crate) compiled: Arc<Compiled>,
+    pub(crate) compiled: Compiled,
     access: PhantomData<fn() -> A>,
 }
 
@@ -1958,7 +1868,7 @@ where
 {
     pub(crate) fn of(compiled: Compiled) -> Self {
         Program {
-            compiled: Arc::new(compiled),
+            compiled,
             access: PhantomData,
         }
     }
@@ -2145,19 +2055,9 @@ where
         let compiled = program.compiled(name)?;
         let interner = program.interner();
         let asked = R::declared(interner);
-        let inputs_lent = |shape: &LentEntry| HostError::Mismatched {
-            what: Part::Inputs(name.to_owned()),
-            held: format!("{}, which only a hook's call lends", shape.display(interner)),
-            asked: "inputs a host gives".to_owned(),
+        let CompiledShape::Typed { inputs, declared } = &compiled.shape else {
+            return Err(program.mismatched(Part::Result(name.to_owned()), &Ty::Never, &asked));
         };
-        let inputs = match &compiled.shape {
-            CompiledShape::Typed { inputs, declared } => (inputs, declared),
-            CompiledShape::Lent(shape) => return Err(inputs_lent(shape)),
-            CompiledShape::Untyped => {
-                return Err(program.mismatched(Part::Result(name.to_owned()), &Ty::Never, &asked));
-            }
-        };
-        let (inputs, declared) = inputs;
         if !asked.same_erased(declared) {
             return Err(HostError::Mismatched {
                 what: Part::Result(name.to_owned()),
