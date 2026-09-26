@@ -19,7 +19,7 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
 1. **One element width.** Every container the machine can slice stores
    `Vec<Value>` (the runtime's `Array` is `Arr<Value, ()>`, a `Vec<T>` reaches
    the store as `Vec<Value>`, RFC-0039). A converted container (`Vec<f64>` in
-   a Rust signature) has no storage of its own and cannot be sliced. A slice
+   a Rust signature) has no storage to slice. A slice
    is always `&[Value]`, element width 16, and the interpreter's one ABI fact
    is its own `Value`.
 2. **Types.** `&[T]` and `&mut [T]` are reference types (RFC-0018): a slice
@@ -41,13 +41,13 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
    declaration's parameters: it is admitted at any argument width and refused
    for a declaration of no parameter, which lends no storage to project.
 4. **`Index { dst, slice, index, mode }`** reads element `index`. The index
-   is `u64` and nothing else; the one check is `index < len`, panicking with
+   is `u64`; the one check is `index < len`, panicking with
    Rust's text (`index out of bounds: the len is {len} but the index is
    {index}`). `mode` is decided statically by the checker from the element
    type: `Copy` for a word element (`dst` is the element), `Ref` otherwise
    (`dst` is a `Ref` into the slice's storage carrying its loan).
-   `IndexSet { slice, index, value }` writes through `&mut [T]` with `assign`
-   semantics. Each carries `bound`, `Checked` or `Proven`; the user cannot
+   `IndexSet { slice, index, value }` writes through `&mut [T]` as `assign`
+   does. Each carries `bound`, `Checked` or `Proven`; the user cannot
    ask for `Proven`, only rule 7's pass writes it, and `prepare` emits the
    unchecked form for it alone. `InstKind::ArrayIndex` stays distinct: it
    moves an element out of an owned scrutinee at a constant position, which
@@ -61,14 +61,14 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
    literal; a postfix `[` binds to the expression before it.
 6. **Representation.** A slice is two adjacent registers — `ptr` then `len`
    (`SlicePair`) — given to one MIR value by `prepare`; the second register is
-   fixed at prepare and never computed in a `run`. It is never a `Value`: not
+   fixed at prepare, never computed in a `run`. It is never a `Value`: not
    an element of a container, not a capture (the loans refuse a borrow that
    outlives its body). It copies like every reference (`&[T]` owns nothing),
    and both registers open as `Kind::U64`. `Index`/`IndexSet` read `ptr`,
    `len`, `index` and the element at `ptr + index * 16`: register loads, no
    box, no allocation, no drop. `&str` is the same pair (RFC-0062).
 
-   The pair crosses an ExternFn boundary in both directions. A pair result
+   The pair crosses an ExternFn boundary both ways. A pair result
    comes back as `Elements` in two return registers and is stored to the
    pair. A parameter is `Slice<T, Rt>` or `SliceMut<T, Rt>` by value, two of
    the argument run (`Arg` with `Form = Pair`, RFC-0059). `&v` reaches such a
@@ -85,8 +85,8 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
    value, a slice's length or a container's element count, plus a constant.
    `± constant` is exact interval arithmetic at the program's `+` and `-`
    (RFC-0037), ⊤ where a pass's could wrap; φ is join, widened at a loop
-   header; everything else is ⊤. The edge of a
-   comparison that holds `i < n` sets `i.hi = n − 1`; a range `for` gives its
+   header; the rest is ⊤. The edge of a
+   comparison holding `i < n` sets `i.hi = n − 1`; a range `for` gives its
    counter `[at, hi − 1]`. A call's result reads its callee's postconditions
    (RFC-0082 rule 4): `ret = len(x)` makes it `x`'s length. A slice's length
    is fixed while the slice lives. A container's element count holds from
@@ -109,7 +109,8 @@ it with `Index` / `IndexSet`. No instruction knows a container's layout:
    Where every touch of a storage in a loop goes through slices of it and one
    is exclusive, the loop takes one `as_slice_mut` in its preheader and reads
    through it; any other touch (a `push`, a call taking the container) leaves
-   the slices in place. A shared borrow is keyed by storage, instruction kind,
+   the slices in place, as does a slice read other than by `Index` or
+   `IndexSet`. A shared borrow is keyed by storage, instruction kind,
    every operand and the reference type, so slices of `m[z]` and `m[one]` stay
    two.
 

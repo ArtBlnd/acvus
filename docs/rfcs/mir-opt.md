@@ -701,7 +701,9 @@ operations' declarations. How a stage runs is the lowerer's (RFC-0092).
    after every pass that moves or merges the body's instructions writes
    the boundaries, before strength reduction. It keeps each cycle whole,
    puts work the cycle does not read after it and work it reads before it,
-   and duplicates nothing: an instruction two cycles share joins them. The
+   and duplicates nothing: an instruction two cycles share joins them. An
+   instruction touches every storage a reference it reads borrows from, so
+   a move of a storage stays after the last read through a borrow of it. The
    terminator names no token, so a pass that removes a `merge` or a phi
    leaves a stage with no cycle, free, and cutting again merges the
    boundaries left empty. A loop the pass cannot cut is one stage.
