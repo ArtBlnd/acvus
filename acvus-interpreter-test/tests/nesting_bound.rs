@@ -7,19 +7,24 @@
 //! each call for a trap (RFC-0100 rule 5), and a debug build's headroom is
 //! more than a 256 KiB thread holds, so a body that calls a closure traps at
 //! its first call there, at any nesting: observed 2026-09-26 for the lambda
-//! and pattern sources. It runs on a thread of `std`'s default stack instead.
+//! and pattern sources. It runs on a thread of `std`'s default stack instead,
+//! through the host's typed entry (RFC-0090), whose `Output` lends the result
+//! as the Rust type the entry declares. That entry compiles the source again
+//! and prepares it, so the preparation is on the run's thread too, where it
+//! was before the host carried the run; preparing the lambda and pattern
+//! sources overflows 256 KiB in the loan analysis's walk of their nested
+//! types: observed 2026-09-26.
 //!
 //! The sources run in a child process: an overflow aborts the whole process,
 //! so a walk left outside `grow` fails the one test that spawned the child
 //! rather than ending the runner.
 
 use std::process::Command;
-use std::sync::Arc;
 
 use acvus_ast::error::ParseErrorKind;
 use acvus_ast::NESTING_MAX;
-use acvus_interpreter::{AcvusRuntime, SequentialExecutor, Value};
-use acvus_interpreter_test::{CompileResult, check_source, execute_compiled};
+use acvus_interpreter::{AcvusRuntime, Host, MemoryStorage, SequentialExecutor, Source};
+use acvus_interpreter_test::check_source;
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::ty::Ty;
@@ -35,6 +40,8 @@ const SMALL_STACK: usize = 256 << 10;
 const RUN_STACK: usize = 2 << 20;
 
 const MAX: usize = NESTING_MAX as usize;
+
+const ENTRY: &str = "main";
 
 #[derive(Clone, Copy)]
 enum Form {
@@ -149,7 +156,7 @@ fn parsed(interner: &Interner, form: Form, source: &str) -> Result<ParsedAst, Ve
     }
 }
 
-fn compiled(interner: &Interner, form: Form, source: &str, opt: Opt) -> CompileResult {
+fn checked(interner: &Interner, form: Form, source: &str, opt: Opt) {
     let ast = parsed(interner, form, source)
         .unwrap_or_else(|errors| panic!("the source is refused: {errors:?}"));
     let ret = match form {
@@ -165,30 +172,43 @@ fn compiled(interner: &Interner, form: Form, source: &str, opt: Opt) -> CompileR
         opt,
         |_| {},
     )
-    .unwrap_or_else(|refusal| panic!("{opt:?} refused:\n  {}", refusal.messages.join("\n  ")))
+    .unwrap_or_else(|refusal| panic!("{opt:?} refused:\n  {}", refusal.messages.join("\n  ")));
 }
 
-fn ran(interner: &Interner, form: Form, compiled: CompileResult) -> Expected {
-    let (_, mut interp) = execute_compiled(
-        interner,
-        compiled,
-        std::collections::HashMap::new(),
-        Arc::new(SequentialExecutor),
-    );
+fn ran(form: Form, source: &str, opt: Opt) -> Expected {
+    let host = Host::new(acvus_ext::std_registries::<AcvusRuntime>()).opt(opt);
+    let host = match form {
+        Form::Script => host.entry::<(), i64>(ENTRY, Source::Script(source)),
+        Form::Template => host.entry::<(), String>(ENTRY, Source::Template(source)),
+    };
+    let program = host
+        .compile(SequentialExecutor)
+        .unwrap_or_else(|error| panic!("the host refused at {opt:?}: {error:?}"));
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("a current-thread runtime");
-    let value: Value = runtime
-        .block_on(interp.execute())
-        .unwrap_or_else(|error| panic!("the run ended with {error:?}"));
-    match form {
-        Form::Script => Expected::Int(value.as_int()),
-        Form::Template => {
-            assert!(value.is_string(), "a template runs to text: {value:?}");
-            // SAFETY: the value is a String, checked above.
-            Expected::Text(unsafe { value.as_str() }.to_owned())
+    runtime.block_on(program.scope(async |s| {
+        let mut storage = MemoryStorage::new();
+        let mut page = s.open(&mut storage);
+        match form {
+            Form::Script => {
+                let entry = s.entry::<(), i64>(ENTRY).expect("the entry returns `i64`");
+                let output = entry
+                    .run(&mut page, ())
+                    .await
+                    .unwrap_or_else(|error| panic!("the run ended with {error:?}"));
+                Expected::Int(output.with(|n: &i64| *n).expect("the result is an `i64`"))
+            }
+            Form::Template => {
+                let entry = s.entry::<(), String>(ENTRY).expect("the entry returns `String`");
+                let output = entry
+                    .run(&mut page, ())
+                    .await
+                    .unwrap_or_else(|error| panic!("the run ended with {error:?}"));
+                Expected::Text(output.with(|text: &str| text.to_owned()).expect("the result is a `String`"))
+            }
         }
-    }
+    }))
 }
 
 fn on_thread<T, F>(stack: usize, work: F) -> T
@@ -218,9 +238,9 @@ fn at_the_bound(name: &str) {
         let form = kind.form;
         let at = source.clone();
         let compiling = interner.clone();
-        let result = on_thread(SMALL_STACK, move || compiled(&compiling, form, &at, opt));
-        let running = interner.clone();
-        let value = on_thread(RUN_STACK, move || ran(&running, form, result));
+        on_thread(SMALL_STACK, move || checked(&compiling, form, &at, opt));
+        let at = source.clone();
+        let value = on_thread(RUN_STACK, move || ran(form, &at, opt));
         assert_eq!(value, (kind.value)(MAX), "{name} at {opt:?}");
     }
 }
