@@ -647,6 +647,7 @@ pub struct LawTable {
     /// where the registries declared it.
     equiv: Option<QualifiedRef>,
     option_tags: Option<crate::ty::OptionTags>,
+    pull_signature: Option<QualifiedRef>,
 }
 
 impl LawTable {
@@ -778,6 +779,7 @@ impl LawTable {
             shared_slice_views,
             equiv: types.keying().map(|markers| markers.equiv),
             option_tags: types.option_tags(),
+            pull_signature: types.pull_signature(),
         }
     }
 
@@ -809,6 +811,12 @@ impl LawTable {
     /// The tags of an `Option`'s variants, where the registries combined.
     pub fn option_tags(&self) -> Option<crate::ty::OptionTags> {
         self.option_tags
+    }
+
+    /// Whether a call names an instance of `iter::next`, the signature a
+    /// pull loop's header calls (RFC-0089 rule 1).
+    pub fn pulls(&self, callee: &Callee) -> bool {
+        matches!(callee, Callee::Extern { id, .. } if Some(*id) == self.pull_signature)
     }
 
     pub fn of_callee(&self, callee: &Callee) -> &ResolvedLaws {

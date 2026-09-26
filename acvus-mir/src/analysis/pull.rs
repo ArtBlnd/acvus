@@ -2,6 +2,9 @@
 //! its iterator states as `len(ret)` (RFC-0082 rule 4), where nothing but
 //! the header touches the iterator. Each pull yields at most one of the
 //! elements the call stated, so the loop runs at most that many iterations.
+//! And RFC-0089 rule 5: a pull runs ahead of a body exit where its instance
+//! states `returns` and no effect and nothing reads the iterator after the
+//! loop.
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
@@ -71,6 +74,93 @@ pub fn bound(
         made_at: made.at,
         count,
     })
+}
+
+/// Whether the header's pull runs ahead of an exit from the loop's body:
+/// every pull returns, changes nothing but the iterator, and no path from
+/// the loop's exits reads the iterator before a store replaces it whole.
+pub fn runs_ahead(
+    cfg: &CfgBody,
+    laws: &LawTable,
+    loans: &Loans<'_>,
+    header: BlockIdx,
+    loop_blocks: &[BlockIdx],
+) -> bool {
+    let Some(lend) = header_lend(cfg, header) else {
+        return false;
+    };
+    let Some(pull) = cfg.blocks[header.0]
+        .insts
+        .iter()
+        .map(|inst| &inst.kind)
+        .find(|kind| is_pull_of(kind, lend.lent))
+    else {
+        return false;
+    };
+    let InstKind::FunctionCall {
+        callee,
+        callee_ty: Ty::Fn { effect, .. },
+        order: None,
+        ..
+    } = pull
+    else {
+        return false;
+    };
+    laws.returns_of(callee).returns_or_traps()
+        && effect.get().is_pure()
+        && !read_after_the_loop(cfg, loans, lend.iterator, loop_blocks)
+}
+
+/// A walk from each edge leaving the loop, which a whole store of the
+/// iterator ends: any access of it on the way but a release reads it.
+fn read_after_the_loop(
+    cfg: &CfgBody,
+    loans: &Loans<'_>,
+    iterator: ValueId,
+    loop_blocks: &[BlockIdx],
+) -> bool {
+    let reaches_iterator = |value: ValueId| {
+        value == iterator || loans.holds(value).any(|loan| loan.storage.slot() == Some(iterator))
+    };
+    let mut work: Vec<BlockIdx> = loop_blocks
+        .iter()
+        .flat_map(|block| cfg.successors(*block))
+        .filter(|succ| !loop_blocks.contains(succ))
+        .collect();
+    let mut seen: rustc_hash::FxHashSet<BlockIdx> = rustc_hash::FxHashSet::default();
+    'blocks: while let Some(block) = work.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        let held = &cfg.blocks[block.0];
+        for inst in &held.insts {
+            match &inst.kind {
+                InstKind::Drop { .. } => {}
+                InstKind::Assign { target, path, .. }
+                    if inst_info::storage(target) == Some(iterator) && path.is_empty() =>
+                {
+                    continue 'blocks;
+                }
+                InstKind::Ref { target, .. }
+                | InstKind::Take { target, .. }
+                | InstKind::Assign { target, .. }
+                    if inst_info::storage(target) == Some(iterator) =>
+                {
+                    return true;
+                }
+                kind if inst_info::uses(kind).into_iter().any(reaches_iterator) => return true,
+                _ => {}
+            }
+        }
+        if inst_info::terminator_uses(&held.terminator)
+            .into_iter()
+            .any(reaches_iterator)
+        {
+            return true;
+        }
+        work.extend(cfg.successors(block));
+    }
+    false
 }
 
 fn header_lend(cfg: &CfgBody, header: BlockIdx) -> Option<HeaderLend> {

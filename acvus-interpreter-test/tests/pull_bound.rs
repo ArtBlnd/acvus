@@ -1,7 +1,9 @@
 //! RFC-0089 rules 1 and 5 at the listing: a pull loop inside a search's
 //! predicate runs ahead of the search's exit only where the call that made
 //! its iterator bounds its pulls (RFC-0082 rule 4's `len(ret)`), and
-//! nothing but the loop's header touches the iterator.
+//! nothing but the loop's header touches the iterator; and a pull runs
+//! ahead of its own loop's body exit only where its instance states
+//! `returns`.
 
 use acvus_extern::{ExternType, Registry, Runtime, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
@@ -39,14 +41,35 @@ fn next_countdown(it: &mut Countdown) -> Option<i64> {
     Some(1)
 }
 
+/// A countdown whose `next` states nothing of how it ends.
+#[derive(ExternType)]
+#[extern_type(name = "Unstated")]
+#[repr(transparent)]
+pub struct Unstated(CountdownBody);
+
+#[extern_fn(effect = pure, total)]
+fn unstated(n: i64) -> Unstated {
+    Unstated(CountdownBody { left: n })
+}
+
+#[extern_fn(instance_of = acvus_ext::iter_sig::next, effect = pure)]
+fn next_unstated(it: &mut Unstated) -> Option<i64> {
+    let left = it.0.left;
+    if left <= 0 {
+        return None;
+    }
+    it.0.left = left - 1;
+    Some(left)
+}
+
 fn countdown_registry<Rt>() -> Registry<Rt>
 where
     Rt: Runtime,
 {
     extern_registry! {
         ns: "cd",
-        types: [Countdown],
-        fns: [countdown, next_countdown],
+        types: [Countdown, Unstated],
+        fns: [countdown, next_countdown, unstated, next_unstated],
     }
 }
 
@@ -56,16 +79,16 @@ fn registries() -> Vec<Registry<AcvusRuntime>> {
     registries
 }
 
-fn outer_free_stage(source: &str) -> String {
+fn listing(source: &str, ret: Ty) -> String {
     let i = Interner::new();
     let ast = ParsedAst::Script(acvus_ast::parse_script(&i, source).expect("the script parses"));
-    let compiled = check_source(&i, ast, &FxHashMap::default(), registries(), Ty::U64, Opt::Full, |_| {})
+    let compiled = check_source(&i, ast, &FxHashMap::default(), registries(), ret, Opt::Full, |_| {})
         .unwrap_or_else(|refusal| panic!("{}", refusal.messages.join("; ")));
-    let listing = acvus_mir::printer::dump_with_facts(
-        &i,
-        &compiled.modules[&compiled.entry_qref],
-        &compiled.laws,
-    );
+    acvus_mir::printer::dump_with_facts(&i, &compiled.modules[&compiled.entry_qref], &compiled.laws)
+}
+
+fn outer_free_stage(source: &str) -> String {
+    let listing = listing(source, Ty::U64);
     let mut lines = listing.lines().skip_while(|line| !line.contains("for range("));
     lines.next();
     lines
@@ -126,4 +149,26 @@ fn a_bounded_iterator_touched_outside_its_header_is_held_back() {
          at",
     );
     assert!(!free.contains(INNER_PULL_TEST), "{free}");
+}
+
+/// A pull whose instance states no `returns` may not finish, so it may not
+/// run ahead of the body's `break`: the loop is no pull loop.
+#[test]
+fn a_pull_whose_instance_states_no_returns_does_not_run_ahead_of_a_body_exit() {
+    let source = "let it = cd::unstated(5); let found = 0;
+        while let Some(x) = it.next() { if x < 3 { found = x; break; }; }
+        found";
+    let listed = listing(source, Ty::I64);
+    assert!(!listed.contains(" stages ["), "{listed}");
+}
+
+/// The same loop over an iterator whose `next` states `total` is a pull
+/// loop running its pulls ahead of the `break`.
+#[test]
+fn a_pull_whose_instance_states_total_runs_ahead_of_a_body_exit() {
+    let source = "let it = cd::countdown(5); let found = 0;
+        while let Some(x) = it.next() { if x > 0 { found = x; break; }; }
+        found";
+    let listed = listing(source, Ty::I64);
+    assert!(listed.contains("while ") && listed.contains(" stages ["), "{listed}");
 }

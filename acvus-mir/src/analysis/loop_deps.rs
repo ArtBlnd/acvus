@@ -252,17 +252,30 @@ pub fn loop_blocks_of(loops: &[NaturalLoop], header: BlockIdx) -> Vec<BlockIdx> 
     }
 }
 
+/// How a pull loop's control joins its pulls (RFC-0089 rules 1 and 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PullExits {
+    /// The loop leaves at its header alone: the header, its call and its
+    /// test are the control token's cycle.
+    AtTheHeader,
+    /// The loop leaves from its body too, and its pulls run ahead of that
+    /// exit: the iterator's cycle does not join the control token.
+    AheadOfABodyExit,
+}
+
 /// RFC-0089 rule 1's pull: the header holds a `Ref` lending one storage
 /// `&mut`, an extern call of that reference alone returning an `Option`, and
 /// the test of that `Option`'s `Some`, which its branch decides by; and no
-/// other block of the loop leaves it. Which externs pull is
-/// `optimize::while_to_for`'s to decide; this is the shape it wrote.
+/// other block of the loop leaves it, or the pulls run ahead of the body's
+/// exit (rule 5). Which externs pull is `optimize::while_to_for`'s to
+/// decide; this is the shape it wrote.
 fn pull_shape(
     cfg: &CfgBody,
     loans: &Loans<'_>,
+    laws: &LawTable,
     header: BlockIdx,
     loop_blocks: &[BlockIdx],
-) -> Result<(), ShapeFault> {
+) -> Result<PullExits, ShapeFault> {
     let block = &cfg.blocks[header.0];
     let Terminator::While { cond, .. } = &block.terminator else {
         return Err(ShapeFault::HeaderIsNoPull);
@@ -326,8 +339,11 @@ fn pull_shape(
                 .any(|succ| !loop_blocks.contains(succ))
         });
     match leaves_elsewhere {
+        false => Ok(PullExits::AtTheHeader),
+        true if crate::analysis::pull::runs_ahead(cfg, laws, loans, header, loop_blocks) => {
+            Ok(PullExits::AheadOfABodyExit)
+        }
         true => Err(ShapeFault::PullLeavesElsewhere),
-        false => Ok(()),
     }
 }
 
@@ -535,9 +551,10 @@ impl LoopDeps {
             panic!("block {} heads no `For` and no `While`", header.0)
         };
         let membership = StageMembership::of(cfg, header, head, stages, loop_blocks)?;
-        if let Head::Pull = head {
-            pull_shape(cfg, loans, header, loop_blocks)?;
-        }
+        let pull_exits = match head {
+            Head::Pull => Some(pull_shape(cfg, loans, laws, header, loop_blocks)?),
+            Head::For(_) => None,
+        };
         let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body(), head);
         let slots = TargetSlots::of(loans, head.source(), loop_blocks);
         let cells = inverse_cells(
@@ -580,6 +597,7 @@ impl LoopDeps {
                     lent,
                     header,
                     loop_blocks,
+                    pull_exits,
                 )
                 .into_iter()
                 .map(|found| place(found, &stage_of))
@@ -3804,10 +3822,15 @@ impl Graph {
         lent: &[LentStorage],
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
+        pull_exits: Option<PullExits>,
     ) -> Vec<Found> {
         let mut found: Vec<Held> = self.carried_cycles(cfg, header, loop_blocks);
         found.extend(self.storage_cycles(cfg, loans, slots, disjoint, cells, lent));
+        // RFC-0089 rule 5: a pull running ahead of a body exit decides its
+        // header's exit ahead too, as a `for`'s header does.
+        let header_decides_ahead = pull_exits == Some(PullExits::AheadOfABodyExit);
         let exits = self.with(|member| match member {
+            Member::Term(block) if header_decides_ahead && block == header => false,
             Member::Term(block) => {
                 matches!(cfg.blocks[block.0].terminator, Terminator::Return { .. })
                     || cfg
@@ -3822,7 +3845,7 @@ impl Graph {
             members.extend(exits);
             // RFC-0089 rule 1: a pull loop's header, its call and its test
             // are the control token's cycle.
-            if let Some((Head::Pull, _)) = Head::of(&cfg.blocks[header.0].terminator) {
+            if pull_exits == Some(PullExits::AtTheHeader) {
                 members.extend(self.with(|member| member.block() == header));
             }
             found.push(Held {

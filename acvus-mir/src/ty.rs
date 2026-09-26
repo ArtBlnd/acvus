@@ -1651,6 +1651,7 @@ pub struct TypeRegistry {
     sliced: FxHashSet<SlicedStorage>,
     keying: Option<KeyingMarkers>,
     option_tags: Option<OptionTags>,
+    pull_signature: Option<QualifiedRef>,
 }
 
 /// The tags an `Option`'s two variants carry. The language fixes them
@@ -1843,6 +1844,16 @@ impl TypeRegistry {
 
     pub fn option_tags(&self) -> Option<OptionTags> {
         self.option_tags
+    }
+
+    /// The shared signature whose instances pull an iterator, `iter::next`
+    /// (RFC-0089 rule 1), as `acvus_extern::core` declares it.
+    pub fn register_pull_signature(&mut self, signature: QualifiedRef) {
+        self.pull_signature = Some(signature);
+    }
+
+    pub fn pull_signature(&self) -> Option<QualifiedRef> {
+        self.pull_signature
     }
 
     /// The keying markers' declarations, where a registry declared them.

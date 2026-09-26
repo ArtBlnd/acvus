@@ -920,6 +920,7 @@ impl<R: Runtime> Externs<R> {
             opaque: type_names.core_declaration::<crate::keying::Opaque>(interner),
         });
         types.register_option_tags(acvus_mir::ty::OptionTags::of(interner));
+        types.register_pull_signature(<crate::core::next as SharedSignature>::qref(interner));
         for c in &contributions {
             for sig in &c.manifest.signatures {
                 if !names.insert(sig.qref) {

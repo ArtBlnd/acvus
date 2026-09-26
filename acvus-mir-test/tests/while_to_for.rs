@@ -54,7 +54,7 @@ impl Promoted {
         fold::run(&mut cfg);
         reborrow::run(&mut cfg);
         if let Pass::Runs = pass {
-            while_to_for::run(&i, &mut cfg, &laws);
+            while_to_for::run(&mut cfg, &laws);
         }
         dce::run(&mut cfg, &laws, &FunctionSummary::unknown());
         let invariants = Invariants::of(&cfg);
@@ -716,7 +716,7 @@ fn assert_computation_alone_moves(source: &str, added: &[&str]) {
         loop_.natural.header
     };
 
-    while_to_for::run(&i, &mut cfg, &laws);
+    while_to_for::run(&mut cfg, &laws);
     let after = snapshot(&cfg);
 
     let Terminator::For { stages, exit, .. } = &cfg.blocks[header.0].terminator else {
@@ -1189,11 +1189,25 @@ fn a_pull_by_an_extern_other_than_next_stays_a_plain_branch_loop() {
     );
 }
 
+/// RFC-0089 rules 1 and 5: `next` over an owning iterator states `total`
+/// and no effect, and nothing reads the iterator after the loop, so its
+/// pulls run ahead of the body's exit.
 #[test]
-fn a_pull_loop_the_body_leaves_stays_a_plain_branch_loop() {
-    assert_a_plain_branch_loop(
+fn a_pull_loop_the_body_leaves_is_a_while_where_its_pulls_run_ahead() {
+    assert_a_pull(
         "let xs = vec([3, 4]); let it = xs.into_iter(); let s = 0; \
          while let Some(x) = it.next() { if x > 3 { break; }; s = s + x; } s",
+    );
+}
+
+/// A pull after the loop reads the iterator: a pull run ahead of the exit
+/// would have taken the element it reads.
+#[test]
+fn a_pull_loop_the_body_leaves_whose_iterator_is_read_after_it_stays_a_plain_branch_loop() {
+    assert_a_plain_branch_loop(
+        "let xs = vec([3, 4, 5]); let it = xs.into_iter(); let s = 0; \
+         while let Some(x) = it.next() { if x > 3 { break; }; s = s + x; } \
+         s + it.next().unwrap()",
     );
 }
 

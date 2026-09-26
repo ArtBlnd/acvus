@@ -2894,11 +2894,78 @@ fn a_while_whose_header_is_no_pull_is_refused() {
     );
 }
 
+/// Corpus row F04 as the fused `any` writes it: `next` over an owning
+/// iterator states `total` and no effect, and nothing reads the iterator
+/// after the loop, so the pull runs ahead of the `break` (RFC-0089 rule 5):
+/// its storage's cycle is the header's alone, the predicate is free, and
+/// the exit is the control token's cycle.
 #[test]
-fn a_pull_loop_that_leaves_from_its_body_is_refused() {
+fn a_pull_run_ahead_of_a_body_exit_keeps_its_storage_cycle_apart_from_the_control_token() {
+    let c = Compiled::of(
+        "let xs = vec([5, 3, 8, 1]); let it = xs.into_iter(); let found = false; \
+         while let Some(x) = it.next() { if x > 7 { found = true; break; }; } found",
+    );
+    let header = c.only_pull_header();
+    let deps = c.deps_of(header);
+    assert!(matches!(deps.control, Control::Chained { .. }), "{}", c.listing);
+    assert_eq!(
+        c.shapes_of(header),
+        vec![
+            Shape::Cycles(vec![CycleShape {
+                tokens: vec![TokenKind::Storage],
+                order: Order::InOrder,
+                law: None,
+            }]),
+            Shape::Free,
+            Shape::Cycles(vec![CycleShape {
+                tokens: vec![TokenKind::Control],
+                order: Order::InOrder,
+                law: None,
+            }]),
+        ],
+        "{}",
+        c.listing
+    );
+}
+
+/// Z26 over a pull: a print before the `break` keeps its place in the
+/// exiting stage, whatever the pull runs ahead of.
+#[test]
+fn a_print_before_a_pull_loops_body_exit_waits_for_the_control_token() {
+    let c = Compiled::with_io(
+        "let xs = vec([5, 3, 8, 1]); let it = xs.into_iter(); let found = false; \
+         while let Some(x) = it.next() { io::print(&x.to_string()); if x > 7 { found = true; break; }; } \
+         found",
+    );
+    let header = c.only_pull_header();
+    let shapes = c.shapes_of(header);
+    let exiting = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Cycles(cycles) => cycles
+                .iter()
+                .find(|cycle| cycle.tokens.contains(&TokenKind::Control)),
+            Shape::Free => None,
+        })
+        .unwrap_or_else(|| panic!("an exiting stage:\n{}", c.listing));
+    assert!(exiting.tokens.contains(&TokenKind::Order), "{}", c.listing);
+}
+
+/// A pull loop leaving from its body whose iterator is read after it: its
+/// pulls may not run ahead of that exit (RFC-0089 rule 5), so it is no pull
+/// loop.
+#[test]
+fn a_pull_loop_that_leaves_from_its_body_and_whose_iterator_is_read_after_it_is_refused() {
     let interner = Interner::new();
-    let mut compiled = compile_script_at(&interner, PULL_PUSH, &FxHashMap::default(), Opt::Full)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let mut compiled = compile_script_at(
+        &interner,
+        "let xs = vec([5, 3, 8]); let it = xs.into_iter(); let out = vec([]); \
+         while let Some(x) = it.next() { out.push(x * 2); } \
+         out.len() + it.next().unwrap_or(0) as u64",
+        &FxHashMap::default(),
+        Opt::Full,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     let mut cfg = promote(compiled.module.main.clone());
     let header = (0..cfg.blocks.len())
         .map(BlockIdx)

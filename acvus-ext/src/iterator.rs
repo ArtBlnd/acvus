@@ -1240,7 +1240,7 @@ where
             Chain<_, _, _, _, Rt>,
             Flatten<_, _, _, _, Rt>, FlatMap<_, _, _, _, Rt>,
         ],
-        signatures: [sig::next, sig::into_iter, sig::as_iter],
+        signatures: [sig::into_iter, sig::as_iter],
         fns: [
             into_iter_vec, next_items, into_iter_array,
             as_iter_vec, next_refs_vec, as_iter_array, next_refs_array,

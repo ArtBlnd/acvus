@@ -39,16 +39,9 @@ use acvus_extern::{
 pub mod sig {
     use acvus_extern::extern_signature;
 
-    extern_signature! {
-        ns: "iter",
-        effect = E,
-        fn next<I, T, E, Rt>(it: &mut I) -> Option<T>
-        where
-            I: Var<kind::Type>,
-            T: Var<kind::Type>,
-            E: Var<kind::Effect>,
-            Rt: Runtime;
-    }
+    /// Declared in `acvus_extern::core`, whose identity the compiler reads
+    /// a pull by (RFC-0089 rule 1).
+    pub use acvus_extern::core::{__sig_next, next};
 
     extern_signature! {
         ns: "iter",
