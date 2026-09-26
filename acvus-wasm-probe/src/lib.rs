@@ -1,6 +1,8 @@
 //! A straight body of many operations, run inside a `wasm32` module, which
 //! marks the engine's call depth and the linear stack pointer where the body
-//! starts and where it ends (RFC-0105 rule 3).
+//! starts and where it ends (RFC-0105 rule 3), and a recursion run through
+//! a host given a stack budget, which ends in a value or the depth trap
+//! (RFC-0100 rule 5).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -11,6 +13,8 @@ use acvus_interpreter::{
     AcvusRuntime, Executable, Interpreter, InterpreterContext, PrepareCtx, SequentialExecutor,
     prepare_module,
 };
+#[cfg(target_arch = "wasm32")]
+use acvus_interpreter::{Host, MemoryStorage, Source};
 use acvus_mir::graph::optimize::Opt;
 use acvus_mir::graph::{
     Access, Bindings, CompilationGraph, FnKind, Function, Inputs, ParsedAst, QualifiedRef,
@@ -179,8 +183,46 @@ pub fn run_straight_body(steps: u32) -> Finished {
     }
 }
 
+/// A recursion whose deepest call nests `frames` frames: `main`, then
+/// `f(frames - 2)` down to `f(0)`, which marks where it runs. It returns
+/// `frames - 2`.
+pub fn recursion(frames: u32) -> String {
+    let n = frames
+        .checked_sub(2)
+        .expect("a recursion nests at least `main` and one call of `f`");
+    format!("fn f(n) {{ if n == 0 {{ mark(0) }} else {{ 1 + f(n - 1) }} }}\nf({n})")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn run_recursion(frames: u32, stack_budget: Option<usize>) -> (i64, Vec<Mark>) {
+    MARKS.lock().expect("one thread").clear();
+    let mut registries = acvus_ext::std_registries::<AcvusRuntime>();
+    registries.push(registry());
+    let host = Host::new(registries);
+    let host = match stack_budget {
+        Some(bytes) => host.stack_budget(bytes),
+        None => host,
+    };
+    let source = recursion(frames);
+    let program = host
+        .entry::<(), i64>("main", Source::Script(&source))
+        .compile(SequentialExecutor)
+        .unwrap_or_else(|error| panic!("the recursion does not compile: {error}"));
+    let value = futures::executor::block_on(program.scope(async |scope| {
+        let mut storage = MemoryStorage::new();
+        let mut page = scope.open(&mut storage);
+        let entry = scope.entry::<(), i64>("main")?;
+        let out = entry.run(&mut page, ()).await?;
+        out.with(|n: &i64| *n)
+    }))
+    .unwrap_or_else(|error| panic!("the recursion ended without a value: {error}"));
+    (value, MARKS.lock().expect("one thread").clone())
+}
+
 thread_local! {
     static LAST: RefCell<Option<Finished>> = const { RefCell::new(None) };
+    #[cfg(target_arch = "wasm32")]
+    static RECURSED: RefCell<Vec<Mark>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A panic on `wasm32` is a trap that carries no message, so the embedder
@@ -194,6 +236,37 @@ pub extern "C" fn run(steps: u32) -> u32 {
     let count = u32::try_from(finished.marks.len()).expect("a run makes four marks");
     LAST.set(Some(finished));
     count
+}
+
+#[cfg(target_arch = "wasm32")]
+/// `recursion(frames)` on a host given no stack budget. It returns the
+/// recursion's value; its deepest call's mark is at `recursion_marks`.
+#[unsafe(no_mangle)]
+pub extern "C" fn recurse(frames: u32) -> i64 {
+    recursed(frames, None)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn recurse_within(frames: u32, stack_budget: u32) -> i64 {
+    let bytes = usize::try_from(stack_budget).expect("a wasm32 usize holds a u32");
+    recursed(frames, Some(bytes))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn recursed(frames: u32, stack_budget: Option<usize>) -> i64 {
+    std::panic::set_hook(Box::new(|info| {
+        *PANIC.lock().expect("one thread") = info.to_string();
+    }));
+    let (value, marks) = run_recursion(frames, stack_budget);
+    RECURSED.set(marks);
+    value
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn recursion_marks() -> *const Mark {
+    RECURSED.with_borrow(|marks| marks.as_ptr())
 }
 
 #[unsafe(no_mangle)]

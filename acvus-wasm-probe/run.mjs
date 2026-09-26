@@ -1,11 +1,16 @@
-// Runs the probe module's straight body under node, once per step count, each
-// on a fresh instance, and prints one JSON line: per run, its marks and the
-// linear stack pointer around it, or the trap, and then whether dropping the
-// prepared body trapped.
-// Usage: node run.mjs <module.wasm> <steps>...
+// Runs the probe module under node, each run on a fresh instance, and prints
+// one JSON line.
+//
+// node run.mjs <module.wasm> <steps>...
+//   The straight body, once per step count: per run, its marks and the
+//   linear stack pointer around it, or the trap, and then whether dropping
+//   the prepared body trapped.
+// node run.mjs <module.wasm> recursion <stack budget in bytes | default> <frames>...
+//   A recursion nesting that many frames, on a host given that stack budget
+//   or none: per run, its value and its deepest call's mark, or the trap.
 import { readFileSync } from 'node:fs';
 
-const [path, ...counts] = process.argv.slice(2);
+const [path, ...rest] = process.argv.slice(2);
 const module = new WebAssembly.Module(readFileSync(path));
 
 Error.stackTraceLimit = Infinity;
@@ -27,6 +32,38 @@ const panicMessage = (ex) =>
     new Uint8Array(ex.memory.buffer, ex.panic_message_ptr(), ex.panic_message_len()),
   );
 
+const recursions = (budget, frames) => {
+  const runs = [];
+  for (const deep of frames.map(Number)) {
+    const ex = new WebAssembly.Instance(module, imports).exports;
+    let value;
+    try {
+      value = budget === 'default' ? ex.recurse(deep) : ex.recurse_within(deep, Number(budget));
+    } catch (error) {
+      runs.push({ frames: deep, budget, trap: String(error), panic: panicMessage(ex) });
+      continue;
+    }
+    const view = new DataView(ex.memory.buffer, ex.recursion_marks(), 16);
+    runs.push({
+      frames: deep,
+      budget,
+      value: String(value),
+      deepest: {
+        engine_frames: view.getUint32(8, true),
+        linear_sp: view.getUint32(12, true),
+      },
+    });
+  }
+  return runs;
+};
+
+if (rest[0] === 'recursion') {
+  const [, budget, ...frames] = rest;
+  console.log(JSON.stringify(recursions(budget, frames)));
+  process.exit(0);
+}
+
+const counts = rest;
 const runs = [];
 for (const steps of counts.map(Number)) {
   const ex = new WebAssembly.Instance(module, imports).exports;

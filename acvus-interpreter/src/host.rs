@@ -886,6 +886,8 @@ struct HostParts {
     lower: Lower,
     timer: Option<Timer>,
     hooks: Vec<HookDecl>,
+    #[cfg(target_arch = "wasm32")]
+    stack_budget: usize,
 }
 
 /// A clock an embedder gives the host: the time since an origin of its
@@ -983,6 +985,8 @@ impl Host<SyncAccess> {
                 lower: Lower::Ahead,
                 timer,
                 hooks: Vec::new(),
+                #[cfg(target_arch = "wasm32")]
+                stack_budget: crate::regs::MEASURED_STACK,
             },
             access: PhantomData,
         }
@@ -1151,6 +1155,17 @@ where
             .bind(interner.intern(name), value)
             .map_err(|e| refused(format!("${name}: {e}")))?;
         Ok(self)
+    }
+
+    /// The bytes of the engine's stack a run may spend, which bound how
+    /// deep a call chain nests (RFC-0100 rule 5). The engine's stack is the
+    /// embedder's to size, as node's `--stack-size` does, and a module
+    /// cannot read it. A host given none assumes the stack the build's
+    /// figures were measured on.
+    #[cfg(target_arch = "wasm32")]
+    pub fn stack_budget(mut self, bytes: usize) -> Self {
+        self.parts.stack_budget = bytes;
+        self
     }
 
     pub fn compile<E>(self, executor: E) -> Result<Program<A>, HostError>
@@ -1380,6 +1395,8 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         lower: lowered_ahead,
         mut timer,
         hooks,
+        #[cfg(target_arch = "wasm32")]
+        stack_budget,
     } = host;
     let interner = &interner;
     let mut registries = registries;
@@ -1706,6 +1723,8 @@ fn compile(host: HostParts, access: GraphAccess, executor: Arc<dyn Executor>) ->
         .with_context_names(context_names)
         .with_space(space)
         .with_inits(inits);
+    #[cfg(target_arch = "wasm32")]
+    let shared = shared.with_stack(stack_budget);
     if access == GraphAccess::Sync {
         refusals.extend(
             init_functions

@@ -127,7 +127,11 @@ impl<'c> Machine<'c> {
     /// (RFC-0100 rule 5). Every framed body runs in a `Machine`, so this is
     /// the one place a call chain is checked.
     pub(crate) fn new(body: &'c Body, mut regs: Regs<'c>, rt: &'c AcvusRuntime, depth: Depth) -> Machine<'c> {
-        let frame = regs.take_window(depth.enter());
+        #[cfg(not(target_arch = "wasm32"))]
+        let entered = depth.enter();
+        #[cfg(target_arch = "wasm32")]
+        let entered = depth.enter(rt.shared.frame_bound);
+        let frame = regs.take_window(entered);
         Machine {
             body,
             regs,

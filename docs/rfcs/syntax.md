@@ -432,8 +432,16 @@ is a graph function, typed, called and inlined as a host function is.
    off. On `wasm32` an overflow is the engine's trap: V8's stack ends in a
    `RangeError`, and the linear memory's stack, laid below the data, in an
    out-of-bounds access that leaves data and heap as they were; either ends
-   the instance, as a panic does there. A depth bound derived per build from
-   the stack a frame was measured to cost traps first, to name the depth.
+   the instance, as a panic does there. A module cannot read its engine's
+   stack, so a depth bound traps first, to name the depth. The host
+   computes it when it compiles, from the stack budget its embedder gives
+   it in bytes (`Host::stack_budget`): the budget less a headroom, over the
+   most stack a counted frame was measured to cost on the build, charged
+   half again. A host given no budget assumes the stack the build's figures
+   were measured on, V8's default 984 KiB for the `wasm` profile. The
+   budget is the embedder's statement of the engine's stack: under a
+   budget larger than the stack the engine gives, a chain can run that
+   stack out before the bound traps.
 
 **Why.** A function with no environment needs no closure record, no
 capture analysis and no rule for what a caller forwards: it is the graph
@@ -451,6 +459,9 @@ that nests past `GUARD_EVERY`. The OS query runs once per thread.
 - A lift in each graph builder — four copies kept equal by hand.
 - `fn` in templates — a template's statements are a script's lines; one
   place to declare functions is enough.
+- A `wasm32` bound fixed per build — the engine's stack is the embedder's
+  to size, so a fixed bound wastes a larger stack and overflows a smaller
+  one before it traps.
 - A depth count as the native guard — a count bounds frames, not bytes: a
   call under more nested regions, a handler with a larger frame or a
   thread with a smaller stack overflows under any count.

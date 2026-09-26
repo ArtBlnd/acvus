@@ -15,9 +15,9 @@ crate-type = ["cdylib", "rlib"]
 acvus-ast = { path = "../acvus-ast" }
 acvus-ext = { path = "../acvus-ext" }
 acvus-extern = { path = "../acvus-extern" }
-# `tooling` for `Interpreter::new`: `Host::compile` reads the clock, which
-# `wasm32-unknown-unknown`'s std does not have, so the module runs the
-# pipeline below the host.
+# `tooling` for `Interpreter::new` and `Lowering::InPlace`: the straight body
+# runs below the host, prepared in place, as `wasm_probe` counts its
+# operations. The recursion runs through the host.
 acvus-interpreter = { path = "../acvus-interpreter", features = ["tooling"] }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }

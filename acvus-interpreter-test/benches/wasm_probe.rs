@@ -5,7 +5,10 @@
 //! call; and it links a 16 MiB linear stack (RFC-0105 rules 1–3). Where node
 //! is installed, a straight body of more than 40 000 operations runs in the
 //! module at the engine depth and linear stack pointer of a body of one
-//! step, and is dropped without running the engine's stack out (rule 4).
+//! step, and is dropped without running the engine's stack out (rule 4); and
+//! a recursion ends in its value within the bound its host computed from the
+//! stack budget it was given, and in the depth trap past it (RFC-0100
+//! rule 5).
 //!
 //! `cargo bench -p acvus-interpreter-test --bench wasm_probe`. What it reads
 //! is the module, which it builds with the `wasm` profile, the deployed one
@@ -698,6 +701,146 @@ fn check_engine(module: &Path) {
     );
 }
 
+/// A stack budget below the one a host given none assumes, and one above it
+/// run under an engine given that much stack (RFC-0100 rule 5).
+const SMALL_BUDGET: u64 = 512 << 10;
+const LARGE_BUDGET: u64 = 4 << 20;
+
+/// Frames no budget admits: a recursion this deep traps at the bound, and
+/// the trap names the bound.
+const PAST_EVERY_BOUND: u64 = 1 << 20;
+
+/// How one recursion of `acvus_wasm_probe::recursion` ended in node.
+#[derive(Debug, PartialEq)]
+enum Recursed {
+    Value(i64),
+    DepthTrap { frames: u64, bound: u64 },
+}
+
+fn depth_trap(panic: &str) -> Option<(u64, u64)> {
+    let (_, message) = panic.split_once(acvus_interpreter::DEPTH_TRAP)?;
+    let frames = message.strip_prefix(": a call nests ")?;
+    let (frames, bound) = frames.split_once(" frames deep, and a call chain nests at most ")?;
+    let bound = bound.strip_suffix(" on the stack its host was given (RFC-0100 rule 5)")?;
+    Some((frames.parse().ok()?, bound.parse().ok()?))
+}
+
+fn recursions(module: &Path, budget: Option<u64>, engine_stack_kib: Option<u64>, frames: &[u64]) -> Vec<Recursed> {
+    let runner = workspace().join("acvus-wasm-probe/run.mjs");
+    let mut node = Command::new(NODE);
+    if let Some(kib) = engine_stack_kib {
+        node.arg(format!("--stack-size={kib}"));
+    }
+    let budget_arg = budget.map_or_else(|| "default".to_string(), |bytes| bytes.to_string());
+    let out = node
+        .arg(&runner)
+        .arg(module)
+        .args(["recursion", &budget_arg])
+        .args(frames.iter().map(u64::to_string))
+        .output()
+        .expect("node runs");
+    assert!(
+        out.status.success(),
+        "node failed: {}",
+        String::from_utf8(out.stderr).expect("node's diagnostics are UTF-8")
+    );
+    let runs: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("the runner prints one JSON line");
+    runs.as_array()
+        .expect("the runner prints an array")
+        .iter()
+        .map(|run| {
+            if let Some(value) = run.get("value") {
+                let value = value.as_str().expect("the runner prints a value as a string");
+                return Recursed::Value(value.parse().expect("the value is an i64"));
+            }
+            let panic = run["panic"].as_str().unwrap_or_else(|| panic!("the runner reported no panic: {run}"));
+            let Some((frames, bound)) = depth_trap(panic) else {
+                panic!("the recursion ended other than in a value or the depth trap: {run}");
+            };
+            Recursed::DepthTrap { frames, bound }
+        })
+        .collect()
+}
+
+fn bound_of(module: &Path, budget: Option<u64>, engine_stack_kib: Option<u64>) -> u64 {
+    match recursions(module, budget, engine_stack_kib, &[PAST_EVERY_BOUND]).as_slice() {
+        [Recursed::DepthTrap { bound, .. }] => *bound,
+        other => panic!("a recursion of {PAST_EVERY_BOUND} frames ended in {other:?}"),
+    }
+}
+
+/// `recursion(frames)` returns `frames - 2`.
+fn value_at(frames: u64) -> Recursed {
+    let depth = frames
+        .checked_sub(2)
+        .expect("a recursion nests at least `main` and one call of `f`");
+    Recursed::Value(i64::try_from(depth).expect("a probe depth fits i64"))
+}
+
+/// RFC-0100 rule 5 on `wasm32`: the bound a recursion traps at follows the
+/// stack the embedder gives the host, and a chain past it ends in the depth
+/// trap.
+fn check_depth(module: &Path) {
+    if !Path::new(NODE).exists() {
+        println!("wasm_probe: {NODE} does not exist; the recursion is not run");
+        return;
+    }
+    let measured = bound_of(module, None, None);
+    assert!(
+        measured > 3,
+        "a host given no stack budget bounds a recursion at {measured} frames, too few to nest \
+         `main` and two calls of `f` below it"
+    );
+    assert_eq!(
+        recursions(module, None, None, &[measured - 1, measured + 1]),
+        [
+            value_at(measured - 1),
+            Recursed::DepthTrap {
+                frames: measured + 1,
+                bound: measured
+            }
+        ],
+        "on a host given no stack budget"
+    );
+    println!("wasm_probe: a host given no stack budget bounds a recursion at {measured} frames");
+
+    let small = recursions(module, Some(SMALL_BUDGET), None, &[measured - 1]);
+    let [Recursed::DepthTrap { bound: small_bound, .. }] = small.as_slice() else {
+        panic!(
+            "a recursion of {} frames on a host given {SMALL_BUDGET} bytes ended in {small:?}, \
+             not the depth trap: the host did not take the budget",
+            measured - 1
+        );
+    };
+    println!(
+        "wasm_probe: a host given {SMALL_BUDGET} bytes traps a recursion of {} frames at its \
+         bound, {small_bound}",
+        measured - 1
+    );
+
+    let engine_kib = LARGE_BUDGET >> 10;
+    let large = bound_of(module, Some(LARGE_BUDGET), Some(engine_kib));
+    assert!(large > measured + 1, "a host given {LARGE_BUDGET} bytes bounds at {large}, not past {measured}");
+    assert_eq!(
+        recursions(module, Some(LARGE_BUDGET), Some(engine_kib), &[measured + 1, large - 1, large + 1]),
+        [
+            value_at(measured + 1),
+            value_at(large - 1),
+            Recursed::DepthTrap {
+                frames: large + 1,
+                bound: large
+            }
+        ],
+        "on a host given {LARGE_BUDGET} bytes, under node --stack-size={engine_kib}"
+    );
+    println!(
+        "wasm_probe: a host given {LARGE_BUDGET} bytes, under node --stack-size={engine_kib}, \
+         runs a recursion of {} frames and bounds one at {large}",
+        large - 1
+    );
+}
+
 fn main() {
     let ops = body_ops();
     assert!(
@@ -712,6 +855,7 @@ fn main() {
     let landing = check_runs(&module);
     check_linear_stack(&module);
     check_engine(&path);
+    check_depth(&path);
     assert!(
         landing.calling == 0,
         "{} operations of {} families call their successor where the return_call belongs, \

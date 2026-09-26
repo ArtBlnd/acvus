@@ -125,6 +125,8 @@ pub struct InterpreterContext {
     pub executor: Arc<dyn crate::executor::Executor>,
     /// Space hooks by extension type (RFC-0033).
     pub space: Arc<crate::layout::Hooks>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) frame_bound: crate::regs::FrameBound,
 }
 
 impl InterpreterContext {
@@ -142,7 +144,15 @@ impl InterpreterContext {
             context_names: Freeze::new(FxHashMap::default()),
             executor,
             space: Arc::new(crate::layout::Hooks::default()),
+            #[cfg(target_arch = "wasm32")]
+            frame_bound: crate::regs::FrameBound::within(crate::regs::MEASURED_STACK),
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn with_stack(mut self, bytes: usize) -> Self {
+        self.frame_bound = crate::regs::FrameBound::within(bytes);
+        self
     }
 
     pub fn with_fn_types(mut self, fn_types: FxHashMap<QualifiedRef, Ty>) -> Self {

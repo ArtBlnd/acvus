@@ -211,9 +211,19 @@ impl Depth {
 
     /// A frame is about to run at this depth. Only an entered depth has a
     /// depth above it, so every frame a chain reaches passed the guard.
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     pub(crate) fn enter(self) -> Entered {
         guard(self.frames());
+        Entered(self)
+    }
+
+    /// A `wasm32` frame cannot read how much of the engine's stack is left,
+    /// so its depth is compared with a bound instead of its position.
+    #[cfg(target_arch = "wasm32")]
+    #[inline(always)]
+    pub(crate) fn enter(self, bound: FrameBound) -> Entered {
+        guard(self.frames(), bound);
         Entered(self)
     }
 
@@ -386,6 +396,8 @@ mod native {
 
 #[cfg(target_arch = "wasm32")]
 use wasm::guard;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use wasm::{FrameBound, MEASURED_STACK};
 
 /// A wasm32 stack overflow is the engine's trap (RFC-0100 rule 5), and the
 /// bound traps first to name the depth.
@@ -393,11 +405,9 @@ use wasm::guard;
 mod wasm {
     use super::DEPTH_TRAP;
 
-    /// The stack a call chain spends first on one build, and what one
-    /// counted frame was measured to spend of it.
-    struct Spent {
-        stack: usize,
-        /// What of `stack` a chain does not spend: the host's frames below
+    /// What a call chain spends of its stack on one build, as measured.
+    struct Spend {
+        /// What of the stack a chain does not spend: the host's frames below
         /// the chain's root, and the panic a trap raises at the deepest frame.
         headroom: usize,
         /// The most stack a counted frame was measured to cost over the
@@ -405,42 +415,66 @@ mod wasm {
         frame: usize,
     }
 
-    /// Release (the `wasm` profile, `opt-level = "z"`): the engine's own
-    /// stack, V8's default 984 KiB, which holds an engine frame for each wasm
-    /// call and so one per region too; the most is the seven nested
-    /// regions'.
+    /// Release (the `wasm` profile, `opt-level = "z"`), on the engine's own
+    /// stack, which holds an engine frame for each wasm call and so one per
+    /// region too; the most is the seven nested regions'.
     #[cfg(not(debug_assertions))]
-    const SPENT: Spent = Spent {
-        stack: 984 << 10,
+    const SPEND: Spend = Spend {
         headroom: 128 << 10,
         frame: 2464,
     };
 
-    /// Debug: the linear memory's stack, 1 MiB, the linker's default; the
-    /// most is the three stages'.
+    /// The stack the release figures were measured on: V8's default, 984 KiB.
+    #[cfg(not(debug_assertions))]
+    pub(crate) const MEASURED_STACK: usize = 984 << 10;
+
+    /// Debug, on the linear memory's stack; the most is the three stages'.
     #[cfg(debug_assertions)]
-    const SPENT: Spent = Spent {
-        stack: 1 << 20,
+    const SPEND: Spend = Spend {
         headroom: 128 << 10,
         frame: 8296,
     };
 
-    /// A frame is charged the most measured and half again.
-    const BOUND: usize = (SPENT.stack - SPENT.headroom) / (SPENT.frame * 3 / 2);
+    /// The stack the debug figures were measured on: the linear memory's,
+    /// 1 MiB, when the module was linked with the linker's default. The
+    /// module is linked at 16 MiB since (`.cargo/config.toml`); the figure
+    /// was kept as a debug host's stack so that a debug build's bound did
+    /// not move with that change. Linked at 16 MiB, a debug module runs the
+    /// engine's stack out before the linear one (docs/wasm.md).
+    ///
+    /// NOTE: what a debug frame costs of the engine's stack on the costliest
+    /// path has not been measured, so a debug budget is checked against the
+    /// linear stack's figure only.
+    #[cfg(debug_assertions)]
+    pub(crate) const MEASURED_STACK: usize = 1 << 20;
+
+    /// The most frames a call chain nests on a stack of a given size. A
+    /// frame is charged the most measured and half again.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct FrameBound(usize);
+
+    impl FrameBound {
+        /// A stack no larger than the headroom leaves nothing for a frame:
+        /// its bound is zero, and a chain's first frame traps.
+        pub(crate) const fn within(stack: usize) -> FrameBound {
+            FrameBound(stack.saturating_sub(SPEND.headroom) / (SPEND.frame * 3 / 2))
+        }
+    }
 
     #[inline(always)]
-    pub(super) fn guard(frames: usize) {
-        if frames > BOUND {
-            past_the_bound(frames)
+    pub(super) fn guard(frames: usize, bound: FrameBound) {
+        if frames > bound.0 {
+            past_the_bound(frames, bound)
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn past_the_bound(frames: usize) -> ! {
+    fn past_the_bound(frames: usize, bound: FrameBound) -> ! {
         panic!(
             "{DEPTH_TRAP}: a call nests {frames} frames deep, and a call chain nests at most \
-             {BOUND} (RFC-0100 rule 5)"
+             {} on the stack its host was given (RFC-0100 rule 5)",
+            bound.0
         )
     }
 }
