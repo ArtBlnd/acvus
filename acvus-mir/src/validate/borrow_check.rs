@@ -10,7 +10,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::loans::{
-    Held, HeldInput, Loan, Loans, RegionsAt, Via, held_positions, positions,
+    Held, HeldInput, Loan, LoanStorage, Loans, RegionsAt, Via, held_positions, positions,
 };
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
@@ -407,9 +407,10 @@ fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(Touched,
     }
 }
 
-/// Whether `touch` on a storage conflicts with a live loan of it.
-fn conflicts(live: &Loan, touch: &Touch) -> bool {
-    match (live.mutability, touch) {
+/// Whether `touch` on a storage conflicts with a live loan of it, held as
+/// `live`.
+fn conflicts(live: Mutability, touch: &Touch) -> bool {
+    match (live, touch) {
         (Mutability::Mut, _) => true,
         (Mutability::Shared, Touch::Reference(Mutability::Shared)) => false,
         (Mutability::Shared, Touch::Reference(Mutability::Mut)) => true,
@@ -424,33 +425,63 @@ fn conflicts(live: &Loan, touch: &Touch) -> bool {
 struct Reached {
     storage: Vec<Loan>,
     via: Via,
+    /// Whether the touch names the storage itself rather than reaching it
+    /// through a reference: the place, which RFC-0018 rule 8 excludes while
+    /// any loan taken `&mut` on it lives, however its holder holds it.
+    at_place: bool,
 }
 
-fn reached(touched: &Touched, loans: &Loans<'_>, regions: &RegionsAt<'_>) -> Reached {
+impl Reached {
+    /// The mutability `live` conflicts by here: a loan taken `&mut` and held
+    /// read-only (a shared reborrow, a `&T` a call returned from it) still
+    /// excludes the place, and is read-only only to a touch through a
+    /// reference.
+    fn excluded_by(&self, live: &Loan) -> Mutability {
+        match self.at_place {
+            true => live.taken,
+            false => live.mutability,
+        }
+    }
+}
+
+/// The loan a touch of the place holds, the strongest there is.
+fn at_place(storage: LoanStorage) -> Loan {
+    Loan {
+        storage,
+        mutability: Mutability::Mut,
+        taken: Mutability::Mut,
+    }
+}
+
+fn reached(
+    touched: &Touched,
+    loans: &Loans<'_>,
+    regions: &RegionsAt<'_>,
+    val_types: &FxHashMap<ValueId, Ty>,
+) -> Reached {
     match touched {
         Touched::Place(RefTarget::Var(s)) => Reached {
-            storage: vec![Loan {
-                storage: loans.storage_of(*s),
-                mutability: Mutability::Mut,
-            }],
+            storage: vec![at_place(loans.storage_of(*s))],
             via: Via::new(),
+            at_place: true,
         },
         // A reference parameter's own register holds its loan under the
         // parameter's storage, which is the name flow inference gives what
         // the parameter lends (RFC-0079 rule 3); a touch of the slot is not a
         // touch of what it lends, so the register never conflicts with it.
+        // What it lends is reached through it, so a loan held read-only is
+        // read-only to it; a parameter held by value is its own place.
         Touched::Place(RefTarget::Param(s)) => Reached {
-            storage: vec![Loan {
-                storage: loans.storage_of(*s),
-                mutability: Mutability::Mut,
-            }],
+            storage: vec![at_place(loans.storage_of(*s))],
             via: Via::new().with(*s),
+            at_place: !matches!(val_types.get(s), Some(Ty::Ref(..) | Ty::Fn { .. })),
         },
         Touched::Place(RefTarget::Through(r)) => {
             let held = regions.regions(*r);
             Reached {
                 storage: held.names().to_vec(),
                 via: held.via().with(*r),
+                at_place: false,
             }
         }
         Touched::Held { slot, position } => {
@@ -458,6 +489,7 @@ fn reached(touched: &Touched, loans: &Loans<'_>, regions: &RegionsAt<'_>) -> Rea
             Reached {
                 storage: held.position(*position).to_vec(),
                 via: held.via().with(*slot),
+                at_place: false,
             }
         }
     }
@@ -698,7 +730,7 @@ impl Checking<'_> {
             let mut regions = self.loans.at_entry(BlockIdx(bi));
             for (ii, inst) in block.insts.iter().enumerate() {
                 for (target, touch) in touches(&inst.kind, &self.cfg().val_types) {
-                    let reach = reached(&target, &self.loans, &regions);
+                    let reach = reached(&target, &self.loans, &regions, &self.cfg().val_types);
                     let mut holders: Vec<ValueId> = live_before[ii]
                         .iter()
                         .copied()
@@ -707,7 +739,10 @@ impl Checking<'_> {
                                 && regions.regions(*holder).holds().any(|loan| {
                                     reach.storage.iter().any(|through| {
                                         through.storage == loan.storage
-                                            && conflicts(loan, &touch.bounded(through.mutability))
+                                            && conflicts(
+                                                reach.excluded_by(loan),
+                                                &touch.bounded(through.mutability),
+                                            )
                                     })
                                 })
                         })

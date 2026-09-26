@@ -27,7 +27,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::analysis::inst_info;
-use crate::analysis::loans::Loans;
+use crate::analysis::loans::{Loans, StorageEffect};
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::graph::QualifiedRef;
 use crate::ir::*;
@@ -179,10 +179,10 @@ fn build_dependency_graph(loans: &Loans<'_>, block: BlockIdx) -> Vec<SmallVec<[u
 
     // Storage order (RFC-0018): a touch of a slot follows its last write,
     // and a write follows every touch since the previous write.
+    let effects: Vec<StorageEffect> = insts.iter().map(|inst| loans.storage_effect(&inst.kind)).collect();
     let mut last_write: FxHashMap<ValueId, usize> = FxHashMap::default();
     let mut reads_since: FxHashMap<ValueId, Vec<usize>> = FxHashMap::default();
-    for (i, inst) in insts.iter().enumerate() {
-        let effect = loans.storage_effect(&inst.kind);
+    for (i, effect) in effects.iter().enumerate() {
         for s in effect.reads.iter().chain(&effect.writes) {
             deps[i].extend(last_write.get(s).copied().filter(|&w| w != i));
         }
@@ -198,6 +198,26 @@ fn build_dependency_graph(loans: &Loans<'_>, block: BlockIdx) -> Vec<SmallVec<[u
         }
         for s in &effect.reads {
             reads_since.entry(*s).or_default().push(i);
+        }
+    }
+
+    // RFC-0018 rule 8: a touch of a place and a read through a loan taken
+    // `&mut` on it keep their order, though both read: moved past one
+    // another, the place is touched while that loan lives.
+    let mut placed_at: FxHashMap<ValueId, Vec<usize>> = FxHashMap::default();
+    let mut held_at: FxHashMap<ValueId, Vec<usize>> = FxHashMap::default();
+    for (i, effect) in effects.iter().enumerate() {
+        for s in &effect.placed {
+            deps[i].extend(held_at.get(s).into_iter().flatten().copied().filter(|&h| h != i));
+        }
+        for s in &effect.held {
+            deps[i].extend(placed_at.get(s).into_iter().flatten().copied().filter(|&p| p != i));
+        }
+        for s in &effect.placed {
+            placed_at.entry(*s).or_default().push(i);
+        }
+        for s in &effect.held {
+            held_at.entry(*s).or_default().push(i);
         }
     }
 
