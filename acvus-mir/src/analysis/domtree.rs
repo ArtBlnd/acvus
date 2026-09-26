@@ -238,10 +238,8 @@ impl PostDomTree {
             };
         }
 
-        // Build reverse CFG: reverse_succs[b] = blocks that b is a successor of
-        // = predecessors of b in forward CFG become successors of b in reverse.
-        // Actually: reverse edge (a->b) becomes (b->a).
-        // reverse_succs[b] = { a | a->b in forward CFG } = preds[b] in forward.
+        // The reverse CFG turns each forward edge a->b into b->a, so a
+        // block's successors in reverse are its forward predecessors.
         let fwd_preds = cfg.predecessors();
         let reverse_succs: Vec<SmallVec<[usize; 2]>> = (0..n)
             .map(|bi| {
@@ -263,26 +261,18 @@ impl PostDomTree {
             let virtual_exit = n;
             let mut rev_succs_with_virtual: Vec<SmallVec<[usize; 2]>> =
                 reverse_succs.into_iter().collect();
-            // Add virtual node.
+            // Every real exit flows into the virtual exit, so in reverse the
+            // virtual exit is the entry and its successors are the real exits.
             rev_succs_with_virtual.push(SmallVec::new());
-            // Each real exit -> virtual exit in forward = virtual exit -> each real exit in reverse.
-            // So virtual node's successors = all real exits.
-            // And each real exit's successors already include its reverse preds;
-            // additionally, virtual exit has predecessor = each real exit, meaning
-            // in reverse: each real exit's successor list gains virtual_exit.
-            // Actually: forward edge: exit->virtual_exit. Reverse: virtual_exit->exit.
-            // So rev_succs_with_virtual[virtual_exit] = exits.
             rev_succs_with_virtual[virtual_exit] = exits.iter().map(|&e| e).collect();
 
             let mut ipdom =
                 compute_domtree_on_reverse(n + 1, virtual_exit, &rev_succs_with_virtual);
-            // Remove virtual node, map any reference to it to UNREACHABLE.
+            // Drop the virtual exit. A block whose immediate post-dominator
+            // is the virtual exit has none among the real blocks.
             ipdom.truncate(n);
             for dom in ipdom.iter_mut() {
                 if *dom == virtual_exit {
-                    *dom = *dom; // exit post-dominates itself via virtual
-                    // Actually, blocks whose ipdom is the virtual exit have no real post-dominator.
-                    // For practical purposes, treat them as having no ipdom.
                     *dom = UNREACHABLE;
                 }
             }
