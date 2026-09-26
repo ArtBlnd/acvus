@@ -12,7 +12,7 @@ use std::future::{Future, Ready};
 pub trait Runtime: Sized + Send + Sync + 'static {
     type Value: crate::Cross<Self, Form = crate::One>
         + crate::Borrowable<Self>
-        + crate::Release
+        + crate::Release<Self>
         + Copy
         + Default;
     /// The frame a handler calls a closure on: the cells above the calling
@@ -321,8 +321,8 @@ pub(crate) use sealed::HoldsNoValues;
 
 impl HoldsNoValues for TypesOnly {}
 
-impl crate::Release for () {
-    fn release(self) {}
+impl crate::Release<TypesOnly> for () {
+    fn release(self, _: crate::Releasing<TypesOnly>) {}
 }
 
 fn no_values() -> ! {

@@ -71,7 +71,7 @@ where
 
     #[inline(always)]
     pub fn release(self) {
-        self.take().release();
+        self.take().release(Releasing::by_holder());
     }
 
     pub fn new(rt: &R, value: T) -> Self
@@ -240,7 +240,18 @@ where
     fn drop(&mut self) {
         // SAFETY: `drop` runs once, and `take` — the only other reader —
         // forgets the holder before reading.
-        unsafe { ManuallyDrop::take(&mut self.0) }.release();
+        unsafe { ManuallyDrop::take(&mut self.0) }.release(Releasing::by_holder());
+    }
+}
+
+/// The leave to release a word, which a holder gives as it drops or releases
+/// itself.
+pub struct Releasing<R>(PhantomData<fn() -> R>);
+
+impl<R> Releasing<R> {
+    #[inline(always)]
+    fn by_holder() -> Self {
+        Releasing(PhantomData)
     }
 }
 

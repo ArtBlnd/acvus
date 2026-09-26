@@ -19,8 +19,10 @@ use std::ptr::{self, NonNull};
 use std::slice;
 
 use acvus_extern::repr::{self as word, PtrWord};
+use acvus_extern::{Holding, Owned};
 
 use crate::regs::{CELL_SLOTS, Cell};
+use crate::runtime::AcvusRuntime;
 use crate::value::{Kind, Value};
 use crate::vtable::{Composite, NameFn};
 
@@ -731,13 +733,11 @@ type RecordOf<H, E> = HeadAndTail<RecordHead<H>, E>;
 /// live until the one `Owned` that holds the value releases it.
 ///
 /// NOTE: the machine keeps both facts: `prepare` gives `Value::inline`
-/// inline kinds, and the checker's ownership rules release a value once. The
-/// ways to make a value from bits (`Value::inline`, `Value::bits_mut`,
-/// `Value::large_ref`, `Konst::value`) are the runtime's alone even under
-/// `tooling`. Two ways remain for safe code outside the machine to break a
-/// fact, which the sweep's second part carries in types: `Value` is `Copy`
-/// with a safe `Release`, and an `Owned` derefs to its word, so a holder of
-/// a `Large` can release it twice; and under `tooling` a `Body` or `Regs`
+/// inline kinds, and the checker's ownership rules release a value once.
+/// Even under `tooling`, code outside the runtime makes no value from bits
+/// and releases a word only through the holder that owns it. One way
+/// remains for safe code outside the machine to break a fact, which the
+/// sweep's second part carries in types: under `tooling` a `Body` or `Regs`
 /// the tooling builds opens a register at any kind (`SlotKind`,
 /// `Regs::set_word`).
 #[derive(Clone, Copy)]
@@ -824,6 +824,21 @@ impl<'v> Large<'v> {
             // live for `'v`.
             &unsafe { slot_header::<T>().whole(self.0).as_ref() }.value
         })
+    }
+}
+
+impl Value {
+    /// The caller being the value's one holder is not a parameter type yet:
+    /// the machine's registers are its callers, and the type that says a
+    /// register holds its value alone is the `Operand` of RFC-0102 rule 2.
+    /// Until then this is safe and crate-private, as `Value::inline` is, so
+    /// no code outside the runtime reaches it.
+    #[inline(always)]
+    pub(crate) fn release_owned(self) {
+        // SAFETY: the caller is the value's one holder: a register the
+        // checker's ownership rules release once (RFC-0048 rule 6), or the
+        // place a word moved out of one lies in.
+        drop(unsafe { Owned::<AcvusRuntime>::from_value(Holding::new(), self) })
     }
 }
 

@@ -6,7 +6,7 @@
 //! one compare and one dependent load. Nothing is boxed and nothing is
 //! freed: a slice owns nothing (RFC-0048).
 
-use acvus_extern::{Release, Words};
+use acvus_extern::Words;
 use acvus_mir::ir::{IndexBound, IndexMode};
 
 use crate::code::{Exit, Marked, Off, Op, SlicePair, successor};
@@ -154,7 +154,7 @@ impl<const CHECKED: bool, const LARGE: bool> Op for IndexSet<CHECKED, LARGE> {
 #[inline(always)]
 fn release_if<const LARGE: bool>(value: Value) {
     if LARGE {
-        value.release();
+        value.release_owned();
     }
 }
 

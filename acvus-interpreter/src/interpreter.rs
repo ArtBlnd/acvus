@@ -108,8 +108,8 @@ impl Init {
 }
 
 fn owned_result(value: Value) -> Owned<AcvusRuntime> {
-    // SAFETY: the init's run moved its result out to this caller, and no
-    // other holder owns it.
+    // SAFETY: the run moved its result out to this caller, and no other
+    // holder owns it.
     unsafe { Owned::from_value(Holding::new(), value) }
 }
 
@@ -287,6 +287,12 @@ impl Interpreter {
     #[cfg(feature = "tooling")]
     pub async fn execute(&mut self) -> Result<Value, HostError> {
         self.ended_or_ran().await
+    }
+
+    /// As `execute`, with the result in the holder that releases it.
+    #[cfg(feature = "tooling")]
+    pub async fn execute_owned(&mut self) -> Result<Owned<AcvusRuntime>, HostError> {
+        self.ended_or_ran().await.map(owned_result)
     }
 
     /// The run to its result, or to the `HostError` it ended with; a run

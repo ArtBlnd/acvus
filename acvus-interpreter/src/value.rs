@@ -44,6 +44,39 @@ let _ = Konst::Word(Kind::Large, 8).value();
 ```
 "#
 )]
+#![cfg_attr(
+    feature = "tooling",
+    doc = r#"
+A value is released by the one holder that owns it (RFC-0102 rule 3): not by
+a copy while its holder still owns it, not by the runtime's own release, and
+not by a token another runtime's holder gave.
+
+```compile_fail,E0061
+use acvus_extern::Release;
+use acvus_interpreter::Value;
+
+let value = Value::string("probe");
+let copy = value;
+value.release();
+copy.release();
+```
+
+```compile_fail,E0624
+use acvus_interpreter::Value;
+
+Value::string("probe").release_owned();
+```
+
+```compile_fail,E0308
+use acvus_extern::{Release, Releasing, TypesOnly};
+use acvus_interpreter::Value;
+
+fn release_with_another_runtimes_token(token: Releasing<TypesOnly>) {
+    Value::string("probe").release(token);
+}
+```
+"#
+)]
 
 use std::any::TypeId;
 use std::fmt;
@@ -54,7 +87,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use acvus_extern::repr::{self, PtrWord, TotalWord, Word};
-use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
+use acvus_extern::{FieldAt, ObjectShape, Owned, Release, Releasing};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
 
@@ -259,8 +292,8 @@ impl Default for Value {
 unsafe impl Send for Value {}
 unsafe impl Sync for Value {}
 
-impl Release for Value {
-    fn release(self) {
+impl Release<AcvusRuntime> for Value {
+    fn release(self, _: Releasing<AcvusRuntime>) {
         if let Some(large) = Large::of(&self) {
             large.release()
         }
@@ -1351,7 +1384,7 @@ mod tests {
             let _copy = large;
         }
         assert_eq!(Arc::strong_count(&alive), 2);
-        large.release();
+        large.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 
@@ -1384,7 +1417,7 @@ mod tests {
         let held = v.get::<VariantValue>().expect("`variant_with` wrote a variant");
         assert_eq!(**held.tag(), tag);
         assert_eq!(held.payload().kind(), Kind::Large);
-        v.release();
+        v.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
 
         let unit = Value::variant_with(tag, || unsafe {
@@ -1394,7 +1427,7 @@ mod tests {
         let held = unit.get::<VariantValue>().expect("`variant_with` wrote a variant");
         assert_eq!(**held.tag(), tag);
         assert_eq!(held.payload().kind(), Kind::Undef);
-        unit.release();
+        unit.release_owned();
     }
 
     #[test]
@@ -1408,7 +1441,7 @@ mod tests {
         assert_eq!(items[1].kind(), Kind::Large);
         assert_eq!(items[2].as_int(), 3);
         assert_eq!(Arc::strong_count(&alive), 2);
-        a.release();
+        a.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
 
         let t = Value::tuple_with(|| vec![counted(&alive), int(7)]);
@@ -1416,7 +1449,7 @@ mod tests {
         let items = &t.get::<Tuple>().expect("`tuple_with` wrote a tuple").0;
         assert_eq!(items[1].as_int(), 7);
         assert_eq!(Arc::strong_count(&alive), 2);
-        t.release();
+        t.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 
@@ -1434,7 +1467,7 @@ mod tests {
         assert_eq!(held.values[1].kind(), Kind::Large);
         assert_eq!(Arc::strong_count(&shape), 2);
         assert_eq!(Arc::strong_count(&alive), 2);
-        o.release();
+        o.release_owned();
         assert_eq!(Arc::strong_count(&shape), 1);
         assert_eq!(Arc::strong_count(&alive), 1);
 
@@ -1447,7 +1480,7 @@ mod tests {
         assert_eq!(held.values[0].kind(), Kind::Large);
         assert_eq!(held.values[1].as_int(), 9);
         assert_eq!(Arc::strong_count(&alive), 2);
-        f.release();
+        f.release_owned();
         assert_eq!(Arc::strong_count(&shape), 1);
         assert_eq!(Arc::strong_count(&alive), 1);
     }
@@ -1460,7 +1493,7 @@ mod tests {
         assert!(s.get::<u64>().is_none());
         assert!(Value::int(3).get::<String>().is_none(), "an inline value holds no allocation");
         assert!(Value::int(3).vtable().is_none());
-        s.release();
+        s.release_owned();
     }
 
     #[test]
@@ -1482,7 +1515,7 @@ mod tests {
         assert_eq!(format!("{record:?}"), "Record(2 captures)");
         assert!(record.get::<Head>().is_none(), "a record is no `Slot` of its head");
         assert_eq!(record.composite(), Some(Composite::Fn));
-        record.release();
+        record.release_owned();
         assert_eq!(Arc::strong_count(&alive), 1);
     }
 
@@ -1491,7 +1524,7 @@ mod tests {
         let s = Value::string("in place");
         assert!(s.is_string());
         assert_eq!(s.get::<String>().map(String::as_str), Some("in place"));
-        s.release();
+        s.release_owned();
     }
 
     /// The one thing between the allocation and the last write is `make`. If

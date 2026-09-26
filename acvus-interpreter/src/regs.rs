@@ -11,8 +11,6 @@
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
-use acvus_extern::Release;
-
 use crate::code::{Body, Marked, Off, WordMask};
 use crate::repr::{self, Apart, Registers};
 use crate::value::Value;
@@ -958,7 +956,7 @@ impl<'f> Regs<'f> {
         let word = at.word_byte();
         let marked = self.marked(word);
         if marked & one != 0 {
-            self.read(at.at()).release();
+            self.read(at.at()).release_owned();
         }
         // SAFETY: `check_assignment`, as stated on `Regs`, with the previous
         // owner released just above.
@@ -993,7 +991,7 @@ impl<'f> Regs<'f> {
                     slot.get() < self.len,
                     "a set mark bit is a register index, which its frame holds"
                 );
-                self.read(Off::of_below(slot)).release();
+                self.read(Off::of_below(slot)).release_owned();
                 live &= live - 1;
             }
             self.mark(word_byte, 0);

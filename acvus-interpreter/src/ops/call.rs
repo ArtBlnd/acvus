@@ -31,7 +31,6 @@ use crate::machine::{
 use crate::ops::control::{self, Ends, Escapes, Rejoins};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
-use acvus_extern::Release;
 
 /// The declared instance a call reaches, cloned out of the module table for
 /// this site alone. `prepare` asked `HandlerFactory::width` once and hands
@@ -2212,7 +2211,7 @@ unsafe fn call_closure<const THROUGH: bool>(
             let taken = m.regs().take::<true>(callee);
             // SAFETY: as the `THROUGH` arm, for the closure this call took.
             let value = unsafe { taken.code_of().code().call(taken, rt, m.window(), arity) };
-            taken.release();
+            taken.release_owned();
             value
         }
     }
@@ -2269,7 +2268,7 @@ impl<const LARGE: bool, const THROUGH: bool> Op for CallIndirectAsync<LARGE, THR
         let fut: BoxFuture<'static, Value> = Box::pin(async move {
             let value = fn_value_call(&closure, &rt, &mut args).await;
             if !THROUGH {
-                closure.release();
+                closure.release_owned();
             }
             value
         });
