@@ -5215,9 +5215,16 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 for def in inst_info::defs(kind) {
                     changed |= dependent.insert(def);
                 }
-                // A storage given a value that reads the state holds it.
-                for slot in effect(self.loans, kind)
-                    .writes
+                // A storage given a value that reads the state holds it. A
+                // take moves the value out and gives the storage none: no
+                // read follows a move until a store gives it one again.
+                let stores = match kind {
+                    InstKind::Take {
+                        taken_out: false, ..
+                    } => Default::default(),
+                    _ => effect(self.loans, kind).writes,
+                };
+                for slot in stores
                     .into_iter()
                     .chain(slots_lent_mutably(self.loans, kind))
                     .chain(match kind {
@@ -7743,8 +7750,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     }
 
     /// Whether two values of the iteration are one value: [`Self::same_value`],
-    /// two copies of what one reference lends, or two records or variants
-    /// built of one value each.
+    /// two copies of what one reference lends, two reads of one assignment
+    /// to a local, or two records or variants built of one value each.
     fn one_value(&self, a: ValueId, b: ValueId) -> bool {
         if self.same_value(a, b) {
             return true;
@@ -7752,6 +7759,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if let (Some(a), Some(b)) = (self.copy_of(a), self.copy_of(b))
             && a == b
         {
+            return true;
+        }
+        if self.read_of_one_assignment(a, b) {
             return true;
         }
         let built = |value: ValueId| match self.defs.get(&value) {
@@ -7791,6 +7801,56 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             }
             _ => false,
         }
+    }
+
+    /// Whether `a` and `b` each read the whole of one local of the
+    /// iteration that the iteration assigns once, ahead of both, and lends
+    /// mutably nowhere: both read the value that assignment stored. The
+    /// element a fused step lends and then moves on either arm of a select
+    /// is such a local.
+    fn read_of_one_assignment(&self, a: ValueId, b: ValueId) -> bool {
+        let read = |value: ValueId| match self.defs.get(&value) {
+            Some(&Def::Inst(at)) => match self.inst(at) {
+                InstKind::Take {
+                    target: RefTarget::Var(slot),
+                    path,
+                    taken_out: false,
+                    ..
+                } if path.is_empty() => Some((*slot, at)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let (Some((slot, a_at)), Some((other, b_at))) = (read(a), read(b)) else {
+            return false;
+        };
+        if slot != other || !self.is_local(slot) {
+            return false;
+        }
+        let mut assigned: Option<InstAt> = None;
+        for (at, kind) in self.insts() {
+            match kind {
+                InstKind::Assign { target, .. } if inst_info::storage(target) == Some(slot) => {
+                    if assigned.replace(at).is_some() {
+                        return false;
+                    }
+                }
+                InstKind::Ref {
+                    target,
+                    mutability: Mutability::Mut,
+                    ..
+                } if inst_info::storage(target) == Some(slot) => return false,
+                _ => {}
+            }
+        }
+        let Some(assigned) = assigned else {
+            return false;
+        };
+        let ahead_of = |read: InstAt| match assigned.block == read.block {
+            true => assigned.at < read.at,
+            false => self.domtree.dominates(assigned.block, read.block),
+        };
+        ahead_of(a_at) && ahead_of(b_at)
     }
 
     /// The reference whose lent value `reference` lends: itself, or the

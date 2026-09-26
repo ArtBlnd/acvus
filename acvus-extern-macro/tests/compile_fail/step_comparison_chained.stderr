@@ -1,0 +1,19 @@
+error: a comparison compares two terms: `a < b < c` is no term
+ --> tests/compile_fail/step_comparison_chained.rs:5:66
+  |
+5 | #[extern_fn(effect = pure, step(state s = None; s = if 0 < f(&x) < 3 { Some(x) } else { None }; finish s))]
+  |                                                                  ^
+
+warning: unused imports: `Closure`, `Cross`, `Instance`, `Later`, `PassedByValue`, `Runtime`, `Stored`, `Var`, and `kind`
+ --> tests/compile_fail/step_comparison_chained.rs:2:20
+  |
+2 | use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^^^  ^^^^^  ^^^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `acvus_ext::iter_sig::next`
+ --> tests/compile_fail/step_comparison_chained.rs:3:5
+  |
+3 | use acvus_ext::iter_sig::next;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^

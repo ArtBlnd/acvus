@@ -2191,6 +2191,116 @@ fn an_option_of_a_record_chosen_by_one_field_is_the_lifted_left_biased_extremum(
     assert!(lines.contains("in_order law(Option(Extremum(Max, field k)) exact)"), "{lines}");
 }
 
+/// `f06_opt_for` with the element moved into the record on both arms, as
+/// a local the iteration assigns once: both moves are that one value, and a
+/// move out of the local gives it nothing of the state.
+#[test]
+fn an_option_of_a_record_moving_one_local_on_both_arms_is_the_lifted_left_biased_extremum() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+         let best = None; \
+         for s in &xs { let x = s.to_string(); let k = x.len() as i64; \
+           best = match best { \
+             None => Some({ v: x, k: k, }), \
+             Some(b) => if k > b.k { Some({ v: x, k: k, }) } else { Some(b) }, }; } \
+         best.unwrap().v",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::InOrder,
+            exact(LawKind::OptionLifted(Box::new(LawKind::FieldExtremum(LawOp::Max))))
+        ),
+        "{lines}"
+    );
+}
+
+/// A local the iteration assigns twice holds two values: the record the
+/// `None` arm builds of it before the second store is not the one the
+/// select builds after it, so the `None` arm is no step of the law.
+#[test]
+fn an_option_of_a_record_moving_a_local_stored_twice_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+         let best = None; \
+         for s in &xs { let x = s.to_string(); let k = x.len() as i64; \
+           best = match best { \
+             None => Some({ v: x, k: k, }), \
+             Some(b) => { x = \"z\".to_string(); \
+               if k > b.k { Some({ v: x, k: k, }) } else { Some(b) } }, }; } \
+         best.unwrap().v",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// A store under a branch that reads the state gives the local the state,
+/// a move out of it does not: the sum reading the stored local is no law.
+#[test]
+fn a_store_to_a_local_under_a_branch_reading_the_state_gives_it_the_state() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"apple\".to_string()]); let n = 0u64; \
+         for s in &xs { let t = s.to_string(); if n > 3u64 { t = \"\".to_string(); }; \
+           n = n + t.len(); } n",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// Corpus row F06 as the fused `max_by_key` writes it (RFC-0099 rule 1):
+/// the step's state is the handler's `Option` of the held element and its
+/// key, replaced on a strict compare only, so the pull loop's cycle on it
+/// is the lifted left-biased extremum; `min_by_key` is its mirror.
+#[test]
+fn a_fused_max_or_min_by_key_is_the_lifted_left_biased_extremum_of_the_key() {
+    for (consumer, op) in [("max_by_key", LawOp::Max), ("min_by_key", LawOp::Min)] {
+        let c = Compiled::of(&format!(
+            "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+             xs.into_iter().{consumer}(|s| -> s.len() as i64).unwrap()"
+        ));
+        let header = c.only_pull_header();
+        let shapes = c.shapes_of(header);
+        let lawful: Vec<&CycleShape> = shapes
+            .iter()
+            .flat_map(|shape| match shape {
+                Shape::Cycles(cycles) => cycles.iter().collect(),
+                Shape::Free => Vec::new(),
+            })
+            .filter(|cycle| cycle.law.is_some())
+            .collect();
+        assert_eq!(
+            lawful,
+            vec![&cycle(
+                vec![TokenKind::Storage],
+                Order::InOrder,
+                exact(LawKind::OptionLifted(Box::new(LawKind::FieldExtremum(op))))
+            )],
+            "{consumer}: {}",
+            c.listing
+        );
+    }
+}
+
+/// The tie order (F06's adversarial case): `kiwi` and `pear` share the
+/// greatest key, and the first wins. A reading that took the extremum as
+/// commutative would join chunks in any order and could keep `pear`; the
+/// fused loop's cycle stays in order.
+#[test]
+fn a_fused_max_by_key_over_a_tie_keeps_its_cycle_in_order() {
+    let c = Compiled::of(
+        "let xs = vec([\"kiwi\".to_string(), \"pear\".to_string(), \"fig\".to_string()]); \
+         xs.into_iter().max_by_key(|s| -> s.len() as i64).unwrap()",
+    );
+    let header = c.only_pull_header();
+    for shape in c.shapes_of(header) {
+        let Shape::Cycles(cycles) = shape else {
+            continue;
+        };
+        for cycle in cycles {
+            assert_eq!(cycle.order, Order::InOrder, "{}", c.listing);
+        }
+    }
+}
+
 /// Both values are computed before the switch, so only their being one
 /// value tells the lifted law from another.
 #[test]

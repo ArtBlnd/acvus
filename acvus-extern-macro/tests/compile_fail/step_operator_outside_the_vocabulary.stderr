@@ -1,4 +1,4 @@
-error: a term is a call of a closure or a registered extern, a constant, `x`, the state, a parameter, `&x`, `&s`, or `a +% b` (RFC-0099 rule 1)
+error: a term is a call of a closure or a registered extern, a constant, `x`, the state, a parameter, a local, a record or its field, `Some`, `None`, `&x`, `&s`, `a +% b`, a comparison, an `if` or a `match` (RFC-0099 rule 1)
  --> tests/compile_fail/step_operator_outside_the_vocabulary.rs:5:52
   |
 5 | #[extern_fn(effect = pure, step(state s = 0; s = s * x; finish s))]

@@ -1,16 +1,19 @@
-//! A term is a call, a constant, `x`, `s`, a local, a record, an `Option`, a lend, `+%`, a comparison, an `if` or a `match`: `*` is none (RFC-0099 rule 1).
+//! A local shadows no name of the step (RFC-0099 rule 1).
 use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
 use acvus_ext::iter_sig::next;
 
-#[extern_fn(effect = pure, step(state s = 0; s = s * x; finish s))]
-fn product_of<I, T, E, Rt>(it: Instance<'_, next<I, T, E, Rt>, I, Rt, Later>) -> i64
+#[extern_fn(effect = pure, step(state s = None; let x = f(&x); s = None; finish s))]
+fn keyed<'a, I, T, E, Rt>(
+    it: Instance<'a, next<I, T, E, Rt>, I, Rt, Later>,
+    f: Closure<'a, (&'a T,), i64, E, Rt>,
+) -> Option<T>
 where
     I: Var<kind::Type>,
     T: Var<kind::Type> + Stored<Rt> + Cross<Rt> + PassedByValue<Rt>,
     E: Var<kind::Effect>,
     Rt: Runtime,
 {
-    drop(it);
+    drop((it, f));
     unreachable!("a refused step is never called")
 }
 

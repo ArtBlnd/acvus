@@ -349,3 +349,26 @@ fn a_capturing_closure_is_called_once_per_element_through_its_storage() {
     );
     fuses(&full, &["map", "sum"]);
 }
+
+/// F06's adversarial case at the consumer's contract: `kiwi` and `pear`
+/// tie on the greatest key and `fig` and `pea` on the least; the fused
+/// loop keeps the first of each, as the handler does.
+#[test]
+fn a_fused_max_or_min_by_key_keeps_the_first_of_a_tie() {
+    for (source, consumer) in [
+        (
+            "let xs = vec([\"kiwi\".to_string(), \"pear\".to_string(), \"fig\".to_string()]);\n\
+             xs.into_iter().max_by_key(|s| -> s.len() as i64).unwrap() == \"kiwi\".to_string()\n",
+            "max_by_key",
+        ),
+        (
+            "let xs = vec([\"kiwi\".to_string(), \"fig\".to_string(), \"pea\".to_string()]);\n\
+             xs.into_iter().min_by_key(|s| -> s.len() as i64).unwrap() == \"fig\".to_string()\n",
+            "min_by_key",
+        ),
+    ] {
+        let full = at_both_levels(source);
+        fuses(&full, &[consumer]);
+        assert_eq!(full.outcome, Outcome::Value("true".to_string()), "{consumer}");
+    }
+}

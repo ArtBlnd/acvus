@@ -1,0 +1,19 @@
+error: `k` is moved twice on one path: a local is moved once, and a comparison reads it
+ --> tests/compile_fail/step_moves_a_local_twice.rs:5:100
+  |
+5 | #[extern_fn(effect = pure, step(state s = None; let k = f(&x); s = Some({ value: x, key: k, again: k }); finish s))]
+  |                                                                                                    ^
+
+warning: unused imports: `Closure`, `Cross`, `Instance`, `Later`, `PassedByValue`, `Runtime`, `Stored`, `Var`, and `kind`
+ --> tests/compile_fail/step_moves_a_local_twice.rs:2:20
+  |
+2 | use acvus_extern::{Closure, Instance, Later, Runtime, Stored, Cross, PassedByValue, Var, extern_fn, kind};
+  |                    ^^^^^^^  ^^^^^^^^  ^^^^^  ^^^^^^^  ^^^^^^  ^^^^^  ^^^^^^^^^^^^^  ^^^             ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `acvus_ext::iter_sig::next`
+ --> tests/compile_fail/step_moves_a_local_twice.rs:3:5
+  |
+3 | use acvus_ext::iter_sig::next;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
