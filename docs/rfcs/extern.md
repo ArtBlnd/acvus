@@ -1507,8 +1507,7 @@ call site, with every mismatch an explicit `None`.
 4. **Another entry within the call.** An entry run from inside a call
    takes the call's arguments as rule 1 lends them and gives its result
    through rule 3's `Output`: nothing it is lent or gives leaves the call.
-   How a call reaches the entry is the interpreter's hook, not yet
-   decided.
+   A call reaches the entry through a hook the host binds (RFC-0101).
 
 **Why.** Outside data is untyped wherever it comes from; the one honest
 place to check it is where it enters, against the type the checker settled
@@ -1530,3 +1529,51 @@ new closure kind.
   that knows `τ` fails at the first wrong leaf.
 - Laying the arguments out as bytes a second run decodes (`encode`,
   `run_encoded`) — owned bytes outlive the call, so a value leaves it.
+
+## RFC-0101: A host binds a declared hook to another program's entry, which runs within the call on the lent arguments
+
+Status: Proposed
+
+A host that loads programs it did not compile together (a manifest names
+them at run time) still has one program call another. RFC-0095 joins
+hosts compiled as one graph; here the two programs are prepared apart, so
+the call meets at a gate the host binds once both are prepared, and
+nothing crosses it but lent arguments and a result written in place
+(RFC-0097 rule 4).
+
+1. **A hook is declared.** A host declares a hook by name as a dynamic
+   extern (RFC-0097): its arguments arrive as rule 1's view and its
+   result is rule 3's `Output`, settled at each call site. A program
+   whose hook is unbound refuses to run, naming the hook.
+2. **The host binds it.** Once both programs are prepared, the host binds
+   the hook to a closure of `(ctx, call)`. `call` is sealed: it lends the
+   call's arguments and runs one prepared entry of another program with
+   them, writing that entry's result into the call's `Output`. Nothing
+   the entry is lent or returns outlives the call.
+3. **Types are compared at binding.** Binding compares, at every call
+   site of the hook, the site's settled argument types with the entry's
+   inputs and the site's result type with the entry's result, by
+   structure, since the two programs have their own names. A mismatch
+   refuses the binding, naming the site and the position. Only the
+   language's own types cross; an extension type is refused, as a space
+   refuses one. The entry takes each input lent: its body reads it and
+   never takes it, which preparing it for binding checks.
+4. **Effects and re-entry.** The entry's effects are within the hook's
+   declared effect, or the binding is refused. A call that would run an
+   entry of a program already running on the same call stack traps
+   (RFC-0048): no cycle between programs prepared apart is seen before
+   they run.
+
+**Why.** A lent argument and an in-place result are the plainest sound
+shape for two programs no checker saw together: no value leaves the call,
+no byte format is promised, and each program's own checks stand. Types
+meet at binding, the first moment both are known.
+**Cost.** A structural comparison per call site at binding; a re-entry
+check per hook call.
+**Rejected.**
+- Encoding the arguments as bytes the other program decodes — owned
+  bytes outlive the call (RFC-0097).
+- Comparing types at each call — every call pays for what binding
+  settles once.
+- Refusing a program cycle before running — programs prepared apart have
+  no shared graph to find it in.
