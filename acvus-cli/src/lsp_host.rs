@@ -180,6 +180,7 @@ mod tests {
             &[],
             crate::cli_registries(),
             Opt::Full,
+            compile::Timed::Off,
             acvus_interpreter::SequentialExecutor,
         );
         match refused {

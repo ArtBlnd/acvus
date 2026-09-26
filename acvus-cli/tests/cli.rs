@@ -1390,3 +1390,61 @@ fn lsp_exits_with_1_after_a_refused_initialize_while_the_client_holds_stdin_open
         "{stderr}"
     );
 }
+
+fn trapped_depth(dir: &Path, stack: &[&str]) -> usize {
+    let source = snippet(dir, "fn f(n) { if n < 0 { 0 } else { 1 + f(n + 1) } }\nf(0)");
+    let args = [&["run", source], stack].concat();
+    let out = acvus(dir, &args);
+    assert_eq!(out.status.code(), Some(2), "{args:?}: {}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "", "{args:?}");
+    let stderr = text(&out.stderr);
+    let prefix = format!("error: {}: a call nests ", acvus_interpreter::DEPTH_TRAP);
+    let Some(rest) = stderr.strip_prefix(&prefix) else {
+        panic!("{args:?} ends in the depth trap: {stderr}")
+    };
+    let Some((depth, _)) = rest.split_once(" frames deep") else {
+        panic!("{args:?}: the trap names its depth: {stderr}")
+    };
+    depth.parse().expect("the depth is a number")
+}
+
+#[test]
+fn a_recursion_traps_past_the_stack_its_thread_has_and_stack_sets_that_stack() {
+    let dir = crate::sandbox::tempdir();
+    let default = trapped_depth(dir.path(), &[]);
+    let small = trapped_depth(dir.path(), &["--stack", "8"]);
+    let written = trapped_depth(dir.path(), &["--stack=8"]);
+    assert_eq!(small, written, "`--stack 8` and `--stack=8` are one stack");
+    assert!(
+        small * 4 < default,
+        "a stack of 8 MiB admits well under a quarter of what 64 MiB admits: {small} against {default}"
+    );
+}
+
+#[test]
+fn stack_takes_a_positive_whole_number_of_mib() {
+    let dir = crate::sandbox::tempdir();
+    let source = snippet(dir.path(), "1");
+    let cases: [(&[&str], &str); 6] = [
+        (&["--stack", "0"], "--stack takes a positive whole number of MiB, not `0`"),
+        (&["--stack=0"], "--stack takes a positive whole number of MiB, not `0`"),
+        (&["--stack", "-1"], "--stack takes a positive whole number of MiB, not `-1`"),
+        (&["--stack", "1.5"], "--stack takes a positive whole number of MiB, not `1.5`"),
+        (
+            &["--stack", "18446744073709551615"],
+            "--stack takes a positive whole number of MiB, not `18446744073709551615`",
+        ),
+        (&["--stack"], "--stack takes a positive whole number of MiB"),
+    ];
+    for (flags, message) in cases {
+        let args = [&["run", source], flags].concat();
+        let out = acvus(dir.path(), &args);
+        assert_eq!(out.status.code(), Some(64), "{args:?}: {}", text(&out.stderr));
+        assert_eq!(text(&out.stdout), "", "{args:?}");
+        let stderr = text(&out.stderr);
+        assert!(
+            stderr.starts_with(&format!("error: {message}\nusage: acvus run ")),
+            "{args:?}: {stderr}"
+        );
+    }
+}

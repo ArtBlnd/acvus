@@ -250,3 +250,34 @@ environments.
 - An empty entry for every document in the workspace's answer, so a client can
   clear it: a path that is no document, such as a host's manifest, or a
   document no compilation lists any longer, is still left uncleared.
+
+## RFC-0107: The embedder supplies the stack and the clock
+
+Status: Proposed
+
+A host compiles and runs on threads its embedder made, and it reads time
+only to report how long compiling took. Neither is the host's to choose: a
+browser has no `Instant`, and a thread's stack is set where it is spawned.
+
+1. **The CLI's stacks.** `acvus` compiles and runs on threads of 64 MiB: the
+   thread that runs the command, and every worker and blocking thread of
+   its runtime. `--stack <MiB>` sets them all. The machine's guard reads
+   each thread's own extent (RFC-0100 rule 5), so a larger stack admits a
+   deeper recursion and a smaller one traps sooner, with no other setting.
+2. **The host's clock.** `Host` reads no clock of its own. An embedder that
+   wants a compilation's stage times gives the host a clock; a program
+   compiled without one has no times, and says so in its type. So a host
+   compiles on `wasm32` as it does natively.
+
+**Why.** An 8 MiB main thread and runtime threads of 2 MiB overflow on a
+script a 64 MiB stack runs, and a clock read inside the host panics on
+`wasm32`.
+**Cost.** A thread spawned for the command. A builder method, and times
+that only a clocked program has.
+**Rejected.**
+- A clock that answers zero where the target has none: a time that was
+  never measured, printed as one.
+- Choosing the clock by target in the host: the embedder knows its
+  platform's clock, and the host would carry every platform's.
+- Leaving the CLI on the main thread and raising only the workers: the
+  command compiles on the thread `block_on` runs.
