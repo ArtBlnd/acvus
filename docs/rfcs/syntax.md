@@ -414,12 +414,32 @@ is a graph function, typed, called and inlined as a host function is.
    recursion computes no summary; the compiled size grows with the calls
    from outside a component, one copy each. A recursion past the machine's depth
    bound traps (RFC-0048) rather than overflowing the native stack.
+   The depth is the framed bodies one native stack holds: a direct call, a
+   closure, a host function and a closure an extern calls back each run
+   their callee inside the calling operation, and an awaited callee is
+   polled inside its caller's poll (RFC-0044 rule 1). Every framed body runs
+   in a `Machine`, whose making is the one compare; the window a call lays
+   its callee in carries the depth, and a future, a spawn or a handler's own
+   cells carry the depth their callee runs at, since an executor may run
+   them inside the spawner's poll. The bound is the stack a chain spends
+   first, less a headroom for the host's frames and the trap's unwind, over
+   what one frame is charged: the most stack a counted frame was measured
+   to cost over those paths, and half again. Natively that stack is a
+   spawned thread's 2 MiB; on `wasm32` it is the engine's own, V8's
+   984 KiB, where each wasm call and so each region is an engine frame, and
+   in a debug build the linear memory's 1 MiB. Each target and build is
+   charged its own measurement, so a debug build's bound is the lower. The
+   trap's message names the depth.
 
 **Why.** A function with no environment needs no closure record, no
 capture analysis and no rule for what a caller forwards: it is the graph
 function the host already declares, written in the script.
 **Cost.** A new statement form and one refusal; the checker's component
-typing already exists.
+typing already exists. One compare per framed call, a depth word in each
+window and in each runtime a frame hands off. The bound holds while a
+frame costs what it is charged: a call under more nested regions than the
+charge covers, or through an extern whose frames outgrow those measured,
+spends more stack per frame than the bound was derived against.
 **Rejected.**
 - Reading `$` and `@` in a body, forwarded from each caller — a capture by
   another name: the function would carry its caller's environment.
@@ -428,3 +448,9 @@ typing already exists.
 - A lift in each graph builder — four copies kept equal by hand.
 - `fn` in templates — a template's statements are a script's lines; one
   place to declare functions is enough.
+- The depth in a thread-local — `wasm32` refuses it (RFC-0044), and an
+  awaited chain moves between threads.
+- A probe of the stack pointer against a limit — the limit is the extent
+  of the stack a run is on, which a host's thread does not state.
+- One bound for every build — a debug build's frame costs several times a
+  release build's, so one bound overflows the one or wastes the other.

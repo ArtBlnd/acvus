@@ -82,6 +82,7 @@ pub use host::{
 };
 pub use host_graph::HostGraph;
 pub use port::Held;
+pub use regs::{DEPTH_TRAP, Depth};
 pub use runtime::AcvusRuntime;
 pub use space::{
     Commit, Committed, DirStore, Head, Identity, Log, MemoryStore, Mode, Node, NodeKind, Plain,

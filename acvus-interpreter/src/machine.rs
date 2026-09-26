@@ -22,7 +22,7 @@ use crate::code::{
 };
 use crate::flight::FrameCells;
 use crate::interpreter::{InterpreterContext, lookup_module};
-use crate::regs::{FrameSlot, FrameState, Regs, RootFrame, Store};
+use crate::regs::{Depth, FrameSlot, FrameState, Regs, RootFrame, Store};
 use crate::repr::{Apart, Registers};
 use crate::runtime::AcvusRuntime;
 use crate::value::Value;
@@ -83,8 +83,11 @@ pub struct Machine<'c> {
 }
 
 impl<'c> Machine<'c> {
-    pub fn new(body: &'c Body, mut regs: Regs<'c>, rt: &'c AcvusRuntime) -> Machine<'c> {
-        let frame = regs.take_window();
+    /// The machine of a frame bound at `depth`: a depth past `Depth::BOUND`
+    /// traps here, before the body runs (RFC-0100 rule 5). Every framed body
+    /// runs in a `Machine`, so this is the one place a call chain is counted.
+    pub fn new(body: &'c Body, mut regs: Regs<'c>, rt: &'c AcvusRuntime, depth: Depth) -> Machine<'c> {
+        let frame = regs.take_window(depth.enter());
         Machine {
             body,
             regs,
@@ -134,6 +137,15 @@ impl<'c> Machine<'c> {
 
     pub fn interner(&self) -> &Interner {
         &self.ctx.rt.shared.interner
+    }
+
+    /// The runtime a call out of this frame hands a future, a spawned job or
+    /// a handler that roots cells of its own: this frame's, at the depth its
+    /// callee runs at. An executor may run that work inside this frame's own
+    /// poll, so the chain goes on counting there.
+    pub fn callee_runtime(&mut self) -> AcvusRuntime {
+        let depth = self.window().depth();
+        self.ctx.rt.at(depth)
     }
 
     /// The body returns this value; the `Return` terminator leaves the loop.
@@ -257,8 +269,9 @@ impl<'c> Machine<'c> {
         // SAFETY: the frame is bound in place, never moved out or replaced.
         let window = unsafe { self.ctx.frame_mut() };
         if window.fits(callee) {
+            let depth = window.depth();
             let (regs, opened) = window.bind(callee);
-            return run_frame(callee, named, regs, rt, opened, fill);
+            return run_frame(callee, named, regs, rt, opened, depth, fill);
         }
         run_rooted(window, callee, named, arity, rt, fill)
     }
@@ -286,7 +299,7 @@ where
     for (slot, arg) in FrameSlot::first(laid.len()).zip(laid) {
         regs.open(Off::of_below(slot), *arg);
     }
-    run_frame(callee, named, regs, rt, true, fill)
+    run_frame(callee, named, regs, rt, true, window.depth(), fill)
 }
 
 /// What a frame holds for as long as it is bound to one body: the kind byte
@@ -313,6 +326,7 @@ fn run_frame<F, R>(
     mut regs: Regs<'_>,
     rt: &AcvusRuntime,
     opened: bool,
+    depth: Depth,
     fill: F,
 ) -> R
 where
@@ -326,7 +340,7 @@ where
     if !opened {
         open_frame(body, &mut regs);
     }
-    let mut machine = Machine::new(body, regs, rt);
+    let mut machine = Machine::new(body, regs, rt, depth);
     fill(&mut machine);
     let stop = machine.run();
     debug_assert_eq!(
@@ -399,19 +413,21 @@ where
     if let Some(order) = body.order_param {
         regs.put(order, Value::unit());
     }
-    drive(Machine::new(body, regs, &rt)).await
+    let depth = rt.depth();
+    drive(Machine::new(body, regs, &rt, depth)).await
 }
 
 /// Run the entry body of the module `id` names to its result on a frame of
 /// its own, from an operation that cannot wait: an init a `Fetch` runs
 /// under synchronous access, which `Host::compile` admits only where its
-/// body cannot suspend.
-pub(crate) fn call_module_rooted(rt: &AcvusRuntime, id: QualifiedRef) -> Value {
+/// body cannot suspend. The frame runs at `depth`, the depth of the frame
+/// the `Fetch`'s callee would run at.
+pub(crate) fn call_module_rooted(rt: &AcvusRuntime, id: QualifiedRef, depth: Depth) -> Value {
     let prepared: Arc<Prepared> = Arc::clone(lookup_module(&rt.shared, &id));
     let body = prepared.main.as_ref();
     let mut store = Store::new();
     let (regs, _) = store.bind(body);
-    run_frame(body, &id, regs, rt, false, |callee| {
+    run_frame(body, &id, regs, rt, false, depth, |callee| {
         if let Some(order) = body.order_param {
             callee.regs.put(order, Value::unit());
         }
@@ -461,12 +477,13 @@ pub(crate) unsafe fn entry_body(
             bind_captures(body, &f, &mut callee.regs)
         });
     }
+    let depth = window.depth();
     let (mut regs, bound) = window.bind(body);
     if !bound {
         open_frame(body, &mut regs);
     }
     bind_captures(body, &f, &mut regs);
-    let mut machine = Machine::new(body, regs, rt);
+    let mut machine = Machine::new(body, regs, rt, depth);
     let stop = machine.run();
     debug_assert_eq!(
         stop, RETURN,
@@ -576,7 +593,7 @@ impl Code {
     /// them out of a window.
     fn frameless_now(&self, f: Value, rt: &AcvusRuntime, args: &[Value]) -> Value {
         let arity = u16::try_from(args.len()).expect("an argument run is at most one cell wide");
-        let RootFrame { mut state, cells } = RootFrame::new();
+        let RootFrame { mut state, cells } = RootFrame::new(rt.depth());
         for (slot, arg) in FrameSlot::first(args.len()).zip(args) {
             state.lay(Off::of_below(slot), *arg);
         }
@@ -620,7 +637,8 @@ pub fn fn_value_call<'f>(
             Resume::Frame { body, store } => {
                 let (mut cells, rt) = FrameCells::open(store, rt);
                 let (regs, _) = cells.store().bind(body);
-                drive(Machine::new(body, regs, &rt)).await
+                let depth = rt.depth();
+                drive(Machine::new(body, regs, &rt, depth)).await
             }
             Resume::Done(value) => value,
         }
