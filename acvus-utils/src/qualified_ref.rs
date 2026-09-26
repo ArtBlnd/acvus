@@ -12,6 +12,21 @@ pub struct QualifiedRef {
     /// Context or function name.
     pub name: Astr,
     pub host: Option<Astr>,
+    /// `Some` only for a function a script declares with `fn` (RFC-0100):
+    /// no name a program writes carries one, so no lookup by name reaches
+    /// such a function, and a call reaches it only where the script's own
+    /// lift resolved the call to it.
+    pub scope: Option<FnScope>,
+}
+
+/// Which script declares a `fn`, and which instance of it a function is:
+/// each call site from outside the function's component has one instance
+/// of that component (RFC-0100 rule 3). The declaring script is the
+/// function's namespace and host with `script` as its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FnScope {
+    pub script: Astr,
+    pub instance: u32,
 }
 
 impl QualifiedRef {
@@ -20,6 +35,7 @@ impl QualifiedRef {
             namespace: None,
             name,
             host: None,
+            scope: None,
         }
     }
 
@@ -28,10 +44,25 @@ impl QualifiedRef {
             namespace: Some(namespace),
             name,
             host: None,
+            scope: None,
         }
     }
 
     pub fn in_host(self, host: Option<Astr>) -> Self {
         Self { host, ..self }
+    }
+
+    pub fn written_in(self) -> Self {
+        self.declaring_script().unwrap_or(self)
+    }
+
+    pub fn declaring_script(self) -> Option<Self> {
+        let scope = self.scope?;
+        Some(Self {
+            namespace: self.namespace,
+            name: scope.script,
+            host: self.host,
+            scope: None,
+        })
     }
 }

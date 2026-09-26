@@ -62,11 +62,20 @@ pub fn lower(
     let mut errors = Vec::new();
     let callee_inputs = inputs_of(infer_result.outcomes.iter());
 
-    for func in graph.functions.iter() {
-        let Some(source) = parsed.get(&func.qref) else {
+    // The host's functions in the order it gave them, then the lift's, so
+    // that refusals come out in one order run after run.
+    let mut lifted: Vec<QualifiedRef> = parsed
+        .keys()
+        .copied()
+        .filter(|qref| qref.scope.is_some())
+        .collect();
+    lifted.sort();
+    let order = graph.functions.iter().map(|func| func.qref).chain(lifted);
+    for qref in order {
+        let Some(source) = parsed.get(&qref) else {
             continue;
         };
-        let Some(outcome) = infer_result.outcomes.get(&func.qref) else {
+        let Some(outcome) = infer_result.outcomes.get(&qref) else {
             continue;
         };
         let Some(lowered) = lower_one(interner, source, outcome, &graph.bindings, &callee_inputs)
@@ -75,11 +84,11 @@ pub fn lower(
         };
         if !lowered.errors.is_empty() {
             errors.push(LowerError {
-                fn_id: func.qref,
+                fn_id: qref,
                 errors: lowered.errors,
             });
         }
-        modules.insert(func.qref, lowered.module);
+        modules.insert(qref, lowered.module);
     }
     LowerResult { modules, errors }
 }
@@ -122,7 +131,15 @@ pub fn lower_one(
     let mut module = match parsed {
         ParsedSource::Script(script) => lowerer.lower_script(script),
         ParsedSource::Template(template) => lowerer.lower_template(template),
-        ParsedSource::Recovered(_) => return None,
+        ParsedSource::Fn(LiftedFn {
+            decl: FnBody::Parsed(decl),
+            ..
+        }) => lowerer.lower_fn(decl),
+        ParsedSource::Recovered(_)
+        | ParsedSource::Fn(LiftedFn {
+            decl: FnBody::Recovered(_),
+            ..
+        }) => return None,
     };
 
     let mut errors = super::bind::substitute(

@@ -153,6 +153,10 @@ pub enum Definition {
     Local {
         span: Span,
     },
+    /// A `fn` the document declares, at its name (RFC-0100).
+    Declared {
+        span: Span,
+    },
     /// A function whose body is in the graph.
     Function(QualifiedRef),
     Context(QualifiedRef),
@@ -660,10 +664,10 @@ impl LspSession {
     /// The type of the innermost node a cursor at `offset` is on that has
     /// one.
     pub fn hover(&self, id: DocId, offset: usize) -> Option<Hover> {
-        let (nodes, view) = self.checked_body(id)?;
+        let (nodes, views) = self.checked_views(id)?;
         let interner = self.graph.interner();
         nodes.at_cursor(offset).into_iter().find_map(|node| {
-            let ty = view.types.get(&node.id)?;
+            let ty = views.iter().find_map(|view| view.types.get(&node.id))?;
             Some(Hover {
                 span: node.span,
                 ty: ty.display(interner).to_string(),
@@ -675,9 +679,21 @@ impl LspSession {
     /// binder itself included, the function a call settled on where the
     /// graph holds its body, or the context or input it reads.
     pub fn definition(&self, id: DocId, offset: usize) -> Option<Definition> {
-        let (nodes, view) = self.checked_body(id)?;
+        let (nodes, views) = self.checked_views(id)?;
         let name = nodes.name_at(offset)?;
-        match *view.resolved.get(&name.id)? {
+        let Some(resolved) = views.iter().find_map(|view| view.resolved.get(&name.id).copied())
+        else {
+            let script = self.function_ref(id)?;
+            return self
+                .graph
+                .instances_of(script)
+                .filter_map(declared_name)
+                .find(|declared| declared.id == name.id)
+                .map(|declared| Definition::Declared {
+                    span: declared.span,
+                });
+        };
+        match resolved {
             Resolved::Local(binder) => {
                 let span = nodes
                     .names()
@@ -687,10 +703,18 @@ impl LspSession {
                     .span;
                 Some(Definition::Local { span })
             }
-            Resolved::Function(qref) => match self.graph.function(qref)?.kind {
-                FnKind::Local(..) => Some(Definition::Function(qref)),
-                FnKind::Extern { .. } => None,
-            },
+            Resolved::Function(qref) => {
+                let function = self.graph.function(qref)?;
+                match declared_name(function) {
+                    Some(declared) => Some(Definition::Declared {
+                        span: declared.span,
+                    }),
+                    None => match function.kind {
+                        FnKind::Local(..) => Some(Definition::Function(qref)),
+                        FnKind::Extern { .. } => None,
+                    },
+                }
+            }
             Resolved::Context(qref) => Some(Definition::Context(qref)),
             Resolved::Input(name) => Some(Definition::Input(name)),
         }
@@ -849,6 +873,32 @@ impl LspSession {
         let open = self.documents.get(&id)?;
         Some((&open.nodes, self.graph.view(open.document.qref)?))
     }
+
+    /// The nodes of the document and the views that check them: its body's,
+    /// then each instance's of a `fn` it declares, whose body is written in
+    /// the document too (RFC-0100 rule 4).
+    fn checked_views(&self, id: DocId) -> Option<(&Nodes, Vec<Freeze<BodyView>>)> {
+        let (nodes, own) = self.checked_body(id)?;
+        let script = self.function_ref(id)?;
+        let mut instances: Vec<QualifiedRef> = self
+            .graph
+            .instances_of(script)
+            .map(|instance| instance.qref)
+            .collect();
+        instances.sort();
+        let views = std::iter::once(own)
+            .chain(instances.into_iter().filter_map(|instance| self.graph.view(instance)))
+            .collect();
+        Some((nodes, views))
+    }
+}
+
+/// The name of the `fn` a function is an instance of.
+fn declared_name(function: &Function) -> Option<acvus_ast::Binder> {
+    match &function.kind {
+        FnKind::Local(ParsedAst::Fn(lifted), _) => Some(lifted.decl.name()),
+        FnKind::Local(..) | FnKind::Extern { .. } => None,
+    }
 }
 
 /// What the names of a body resolve to, by where the names are written,
@@ -931,6 +981,10 @@ fn nodes_of(ast: &ParsedAst) -> Nodes {
         ParsedAst::Template(template) => Nodes::of_template(template),
         ParsedAst::Recovered(RecoveredAst::Script(script)) => Nodes::of_script(script),
         ParsedAst::Recovered(RecoveredAst::Template(template)) => Nodes::of_template(template),
+        ParsedAst::Fn(lifted) => match &lifted.decl {
+            FnBody::Parsed(decl) => Nodes::of_fn(decl),
+            FnBody::Recovered(decl) => Nodes::of_fn(decl),
+        },
     }
 }
 

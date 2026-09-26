@@ -2679,6 +2679,7 @@ fn qref_expr(name: &str) -> proc_macro2::TokenStream {
             namespace: __ns.map(|__n| __i.intern(__n)),
             name: __i.intern(#name),
             host: None,
+            scope: None,
         }
     }
 }

@@ -444,6 +444,7 @@ pub(crate) fn qref_of(path: &Path) -> syn::Result<proc_macro2::TokenStream> {
                 namespace: __ns.map(|__n| __i.intern(__n)),
                 name: __i.intern(#name),
                 host: None,
+                scope: None,
             }
         }),
         [ns, name] => Ok(quote! {
