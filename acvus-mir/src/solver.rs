@@ -2530,6 +2530,9 @@ enum DecisionState {
     Open,
     Settled(Answer),
     Failed,
+    /// Opened by a check that was dropped before it settled; the check
+    /// that opens the same decision again owns it (`Solver::withdraw_since`).
+    Withdrawn,
 }
 
 #[derive(Debug, Clone)]
@@ -2696,6 +2699,15 @@ pub struct Solver<'src> {
     /// `clone` at `Vec<T>` requires `clone`, whose instances include it
     /// (RFC-0070 rule 3).
     signatures: &'src FxHashMap<QualifiedRef, Instances>,
+}
+
+/// How much a solver held when a check began (`Solver::open_mark`).
+#[derive(Debug, Clone, Copy)]
+pub struct OpenMark {
+    decisions: usize,
+    begun_by_decisions: usize,
+    opened_children: usize,
+    instance_bounds: usize,
 }
 
 /// What `Solver::snapshot` took.
@@ -3068,15 +3080,44 @@ impl<'src> Solver<'src> {
         let slot = &self.decisions[id.0 as usize];
         match slot.state {
             DecisionState::Settled(Answer::Instance(_)) => slot.instance_flows.as_ref(),
-            DecisionState::Settled(_) | DecisionState::Open | DecisionState::Failed => None,
+            DecisionState::Settled(_)
+            | DecisionState::Open
+            | DecisionState::Failed
+            | DecisionState::Withdrawn => None,
         }
     }
 
     pub fn answer(&self, id: DecisionId) -> Option<Answer> {
         match &self.decisions[id.0 as usize].state {
             DecisionState::Settled(answer) => Some(answer.clone()),
-            DecisionState::Open | DecisionState::Failed => None,
+            DecisionState::Open | DecisionState::Failed | DecisionState::Withdrawn => None,
         }
+    }
+
+    /// What a check that is about to be dropped unsettled will leave, for
+    /// `withdraw_since`.
+    pub fn open_mark(&self) -> OpenMark {
+        OpenMark {
+            decisions: self.decisions.slots.len(),
+            begun_by_decisions: self.begun_by_decisions.len(),
+            opened_children: self.opened_children.len(),
+            instance_bounds: self.instance_bounds.len(),
+        }
+    }
+
+    /// Withdraw every decision opened since `mark` that is still open, and
+    /// what was queued since for the check that opened them to place. The
+    /// joins that check made stay; its decisions never settle and nothing
+    /// reports them, since the check that opens them again owns them.
+    pub fn withdraw_since(&mut self, mark: OpenMark) {
+        for slot in &mut self.decisions.slots[mark.decisions..] {
+            if matches!(slot.state, DecisionState::Open) {
+                slot.state = DecisionState::Withdrawn;
+            }
+        }
+        self.begun_by_decisions.truncate(mark.begun_by_decisions);
+        self.opened_children.truncate(mark.opened_children);
+        self.instance_bounds.truncate(mark.instance_bounds);
     }
 
     // -- Settle and solve ----------------------------------------------

@@ -59,6 +59,48 @@ pub enum ParsedAst {
     /// for what parsed and never lowered (RFC-0078); its parse errors are
     /// the caller's to report.
     Recovered(RecoveredAst),
+    /// One instance of a `fn` a script declares. Only the lift makes one
+    /// (`graph::lift`, RFC-0100 rule 4); a host declares none.
+    Fn(LiftedFn),
+}
+
+/// A `fn` as its instance's body: the declaration, and the locals of the
+/// declaring script outside it, which the body may not read (RFC-0100
+/// rule 2).
+#[derive(Debug, Clone)]
+pub struct LiftedFn {
+    pub decl: FnBody,
+    /// Each local of the script outside this `fn`, at the binder that first
+    /// declares it.
+    pub outside: FxHashMap<Astr, acvus_ast::Span>,
+}
+
+/// A `fn` from a script that parsed, or from one the parse recovered, whose
+/// instance is checked for what parsed and never lowered (RFC-0078).
+#[derive(Debug, Clone)]
+pub enum FnBody {
+    Parsed(acvus_ast::FnDecl),
+    Recovered(acvus_ast::FnDecl<acvus_ast::ErrorNode>),
+}
+
+impl FnBody {
+    pub fn name(&self) -> acvus_ast::Binder {
+        match self {
+            FnBody::Parsed(decl) => decl.name.clone(),
+            FnBody::Recovered(decl) => decl.name.clone(),
+        }
+    }
+}
+
+/// What the lift settled for one body (RFC-0100 rule 4): the function each
+/// call of a script's `fn` reaches, by the call's callee node; for an
+/// instance, the body it is typed together with, the one whose call it
+/// instances; and what the lift refused in a script.
+#[derive(Debug, Clone, Default)]
+pub struct LiftFacts {
+    pub calls: FxHashMap<acvus_ast::AstId, QualifiedRef>,
+    pub typed_with: Option<QualifiedRef>,
+    pub refusals: Vec<crate::error::MirError>,
 }
 
 #[derive(Debug, Clone)]

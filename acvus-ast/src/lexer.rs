@@ -284,6 +284,7 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::Continue
         | Token::Return
         | Token::Anyorder
+        | Token::Fn
         | Token::Match
         | Token::Mut
         | Token::As

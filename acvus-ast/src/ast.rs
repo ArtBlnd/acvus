@@ -144,6 +144,10 @@ pub enum Stmt<S = Clean> {
         body: Vec<Stmt<S>>,
         span: Span,
     },
+    /// `fn name(a, b) { body }` - a function of the script, lifted into a
+    /// graph function of its own (RFC-0100). The enclosing body runs
+    /// nothing here.
+    FnDecl(FnDecl<S>),
     /// A template's text line or one of its `{{ }}` tags: the value is
     /// appended to the template's result (RFC-0071 rules 2 and 3).
     Append {
@@ -152,6 +156,18 @@ pub enum Stmt<S = Clean> {
         span: Span,
     },
     Error(S),
+}
+
+/// `fn name(a, b) { body }` (RFC-0100). `name` and each of `params` is a
+/// binder, so each carries the span it is written at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnDecl<S = Clean> {
+    pub id: AstId,
+    pub name: Binder,
+    pub params: Vec<Binder>,
+    pub body: Vec<Stmt<S>>,
+    pub tail: Option<Box<Expr<S>>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -923,6 +939,9 @@ fn walk_stmts<S>(stmts: &[Stmt<S>], refs: &mut ContextRefs) {
             }
             Stmt::Break { .. } | Stmt::Continue { .. } => {}
             Stmt::Anyorder { body, .. } => walk_stmts(body, refs),
+            // A `fn`'s body is a function of its own and names no context
+            // (RFC-0100 rule 2): nothing of it is the enclosing body's.
+            Stmt::FnDecl(_) => {}
             Stmt::Append { expr, .. } => walk_expr(expr, refs),
             Stmt::Error(_) => {}
         }

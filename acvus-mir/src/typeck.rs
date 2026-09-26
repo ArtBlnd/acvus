@@ -9,7 +9,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::error::{
-    DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, ShownValue,
+    DataShape, DidYouMean, InstanceWanted, MirError, MirErrorKind, OperatorSignature, Outside,
+    ShownValue,
 };
 use crate::graph::bind::{DeferredJoin, Typed, type_bound};
 use crate::graph::{BoundValue, Inputs, QualifiedRef};
@@ -1272,6 +1273,15 @@ pub enum BodyTail {
     Value { ty: InferTy, at: Span },
 }
 
+/// A body whose tail is its value: a script's, or a `fn`'s with the
+/// binders of its parameters.
+struct ValueBody<'b, S> {
+    stmts: &'b [acvus_ast::Stmt<S>],
+    tail: Option<&'b Expr<S>>,
+    span: Span,
+    params: &'b [acvus_ast::Binder],
+}
+
 impl Checks for Clean {
     type Resolution = Result<Freeze<TypeResolution>, Vec<MirError>>;
 
@@ -1828,6 +1838,14 @@ pub struct TypeChecker<'a, 's, 'src, S = Clean> {
     /// The type checking recorded at the marked node: a fresh variable
     /// where the name it holds, which nothing binds, would be poison.
     marked_ty: Option<InferTy>,
+    lifted_calls: FxHashMap<AstId, QualifiedRef>,
+    declared_fn: Option<DeclaredFn>,
+}
+
+/// The body under check is one instance of a script's `fn`, which reads
+/// nothing outside it (RFC-0100 rule 2).
+struct DeclaredFn {
+    locals_outside: FxHashMap<Astr, Span>,
 }
 
 impl TypeChecker<'_, '_, '_, Clean> {
@@ -1977,7 +1995,16 @@ where
             probe: None,
             probed: None,
             marked_ty: None,
+            lifted_calls: FxHashMap::default(),
+            declared_fn: None,
         }
+    }
+
+    /// The function each call of a script's `fn` in this body reaches, by
+    /// the call's callee node (`graph::lift`).
+    pub fn with_lifted_calls(mut self, calls: FxHashMap<AstId, QualifiedRef>) -> Self {
+        self.lifted_calls = calls;
+        self
     }
 
     pub fn with_body_effect(mut self, effect: EffectTerm<Infer>) -> Self {
@@ -2148,6 +2175,7 @@ where
         let flows = self.infer_flows(body_flows::Body {
             stmts: &template.body,
             tail: None,
+            params: &[],
         });
         S::conclude(self, template.span, BodyTail::Text, flows)
     }
@@ -2155,7 +2183,7 @@ where
     /// Type check a script. Consumes self, returns TypeResolution.
     /// `expected_tail`: if provided, the script's tail expression is unified with this type.
     pub fn check_script(
-        mut self,
+        self,
         script: &acvus_ast::Script<S>,
         expected_tail: Option<InferTy>,
         crossing: ResultCrossing,
@@ -2163,6 +2191,104 @@ where
     where
         S: Checks,
     {
+        let body = ValueBody {
+            stmts: &script.stmts,
+            tail: script.tail.as_deref(),
+            span: script.span,
+            params: &[],
+        };
+        self.check_value_body(body, expected_tail, crossing)
+    }
+
+    /// One instance of a script's `fn` (RFC-0100): the declared parameters
+    /// are its parameters, and the body reads each by its name.
+    pub fn check_fn(
+        mut self,
+        decl: &acvus_ast::FnDecl<S>,
+        locals_outside: FxHashMap<Astr, Span>,
+        expected_tail: Option<InferTy>,
+        crossing: ResultCrossing,
+    ) -> Checked<S::Resolution>
+    where
+        S: Checks,
+    {
+        let body = self.enter_fn(decl, locals_outside);
+        self.check_value_body(body, expected_tail, crossing)
+    }
+
+    /// An instance's body joined into the variables its component shares,
+    /// with no decision settled: every join a caller's settle then reads
+    /// is in place, the one from the result to the parameters included
+    /// (`graph::infer::Component::check`).
+    pub fn join_fn(
+        mut self,
+        decl: &acvus_ast::FnDecl<S>,
+        locals_outside: FxHashMap<Astr, Span>,
+        expected_tail: Option<InferTy>,
+        crossing: ResultCrossing,
+    ) {
+        let body = self.enter_fn(decl, locals_outside);
+        self.join_value_body(&body, expected_tail, crossing);
+    }
+
+    fn enter_fn<'d>(
+        &mut self,
+        decl: &'d acvus_ast::FnDecl<S>,
+        locals_outside: FxHashMap<Astr, Span>,
+    ) -> ValueBody<'d, S> {
+        self.declared_fn = Some(DeclaredFn { locals_outside });
+        let declared: Vec<InferTy> = self.param_types.iter().map(|param| param.ty.clone()).collect();
+        assert_eq!(
+            declared.len(),
+            decl.params.len(),
+            "a `fn`'s instance declares one parameter per parameter the `fn` writes"
+        );
+        for (param, ty) in decl.params.iter().zip(declared) {
+            self.define_var(param.name, ty.clone(), param.id, param.span);
+            self.record(param.id, ty);
+        }
+        ValueBody {
+            stmts: &decl.body,
+            tail: decl.tail.as_deref(),
+            span: decl.span,
+            params: &decl.params,
+        }
+    }
+
+    fn check_value_body(
+        mut self,
+        body: ValueBody<'_, S>,
+        expected_tail: Option<InferTy>,
+        crossing: ResultCrossing,
+    ) -> Checked<S::Resolution>
+    where
+        S: Checks,
+    {
+        let tail_ty = self.join_value_body(&body, expected_tail, crossing);
+        self.solve_body();
+        self.check_moves_out_of_captures();
+        self.check_context_binds_under_open_head();
+        self.check_contexts_are_data();
+        let flows = self.infer_flows(body_flows::Body {
+            stmts: body.stmts,
+            tail: body.tail,
+            params: body.params,
+        });
+        let at = body.tail.map_or(body.span, |tail| tail.span());
+        S::conclude(
+            self,
+            body.span,
+            BodyTail::Value { ty: tail_ty, at },
+            flows,
+        )
+    }
+
+    fn join_value_body(
+        &mut self,
+        body: &ValueBody<'_, S>,
+        expected_tail: Option<InferTy>,
+        crossing: ResultCrossing,
+    ) -> InferTy {
         // A declared `ret` is the body's return type itself, so every
         // `return` joins against it exactly as the tail does; undeclared, it
         // is the fresh variable the tail resolves.
@@ -2171,10 +2297,10 @@ where
             None => self.solver.fresh_ty_var(),
         };
         self.return_ty = Some(return_ty.clone());
-        for stmt in &script.stmts {
+        for stmt in body.stmts {
             self.check_stmt(stmt);
         }
-        let tail_ty = if let Some(tail) = &script.tail {
+        let tail_ty = if let Some(tail) = body.tail {
             let ty = self.check_expr(tail);
             let site = ConversionSite {
                 id: tail.id(),
@@ -2208,26 +2334,12 @@ where
                         expected: self.type_as_written(&expected),
                         got: self.type_as_written(&got),
                     },
-                    script.span,
+                    body.span,
                 );
             }
             TyTerm::Unit
         };
-        self.solve_body();
-        self.check_moves_out_of_captures();
-        self.check_context_binds_under_open_head();
-        self.check_contexts_are_data();
-        let flows = self.infer_flows(body_flows::Body {
-            stmts: &script.stmts,
-            tail: script.tail.as_deref(),
-        });
-        let at = script.tail.as_ref().map_or(script.span, |tail| tail.span());
-        S::conclude(
-            self,
-            script.span,
-            BodyTail::Value { ty: tail_ty, at },
-            flows,
-        )
+        tail_ty
     }
 
     fn refused<R, F>(mut self, resolution: F) -> Checked<R>
@@ -3527,8 +3639,12 @@ where
         seen
     }
 
+    /// Whether a name this body writes can reach `function`; a script's
+    /// `fn` is reached only through the lift's resolution of a call.
     fn reaches(&self, function: QualifiedRef) -> bool {
-        function.host.is_none() || (function.host == self.host && function.namespace.is_none())
+        function.scope.is_none()
+            && (function.host.is_none()
+                || (function.host == self.host && function.namespace.is_none()))
     }
 
     /// RFC-0043.
@@ -3538,7 +3654,18 @@ where
         callee: AstId,
         written: WrittenAs,
     ) -> Vec<SignatureCandidate> {
-        let mut candidates = self.declared_signatures(name, written);
+        let mut candidates = match self.lifted_calls.get(&callee) {
+            Some(&lifted) => {
+                let scheme = self.env.functions.get(&lifted).unwrap_or_else(|| {
+                    panic!("the lift's instance {lifted:?} is typed in its caller's component")
+                });
+                vec![SignatureCandidate::Named {
+                    qref: lifted,
+                    scheme: scheme.clone(),
+                }]
+            }
+            None => self.declared_signatures(name, written),
+        };
         if name.namespace.is_none()
             && name.host.is_none()
             && let Some(ty) = self.local_signature(name.name, callee)
@@ -3883,14 +4010,7 @@ where
                         ty
                     }
                     None => {
-                        let near = self.near_bindings(*name);
-                        self.error(
-                            MirErrorKind::UndefinedVariable {
-                                name: self.interner.resolve(*name).to_string(),
-                                near,
-                            },
-                            span,
-                        );
+                        self.unbound_name(*name, span);
                         Self::infer_error()
                     }
                 };
@@ -5603,6 +5723,10 @@ where
     /// The type of the context `@name` at `id` names, recording `id` as a
     /// reference to it where it is declared.
     fn resolve_context_type(&mut self, id: AstId, qref: QualifiedRef, span: Span) -> InferTy {
+        if self.declared_fn.is_some() {
+            self.captures_outside(qref.name, Outside::Context, span);
+            return Self::infer_error();
+        }
         self.note_context_use(qref, span);
         if let Some(ty) = self.env.contexts.get(&qref) {
             self.resolved.record(id, Resolved::Context(qref));
@@ -5651,7 +5775,7 @@ where
                 let resolved = self.solver.resolve_ty(&param.ty);
                 let at = param.first_read.unwrap_or(body);
                 let closed = self.closed_or_refused(&resolved, at);
-                if matches!(closed, Ty::Never) {
+                if matches!(closed, Ty::Never) && self.declared_fn.is_none() {
                     let name = self.interner.resolve(param.name).to_string();
                     self.error(MirErrorKind::InputTypeUndecided(name), at);
                 }
@@ -5665,6 +5789,13 @@ where
     }
 
     fn read_input(&mut self, name: Astr, span: Span, reader: Reader) -> InputRead {
+        if self.declared_fn.is_some() {
+            self.captures_outside(name, Outside::Input, span);
+            return InputRead {
+                ty: Self::infer_error(),
+                admitted: false,
+            };
+        }
         if let Some(bound) = self.bound_inputs.iter_mut().find(|b| b.name == name) {
             bound.first_read.get_or_insert(span);
         }
@@ -6078,10 +6209,64 @@ where
     }
 
     fn undefined_function(&mut self, name: QualifiedRef, call_span: Span) -> InferTy {
+        if self.is_local_outside(name) {
+            self.captures_outside(name.name, Outside::Local, call_span);
+            return Self::infer_error();
+        }
         let near = self.near_functions(name);
         let name = self.interner.resolve(name.name).to_string();
         self.error(MirErrorKind::UndefinedFunction { name, near }, call_span);
         Self::infer_error()
+    }
+
+    fn is_local_outside(&self, name: QualifiedRef) -> bool {
+        name.namespace.is_none()
+            && name.host.is_none()
+            && self
+                .declared_fn
+                .as_ref()
+                .is_some_and(|declared| declared.locals_outside.contains_key(&name.name))
+    }
+
+    /// A read in a `fn`'s body of what is outside it (RFC-0100 rule 2). A
+    /// local of the script is labeled where it is declared.
+    fn captures_outside(&mut self, name: Astr, outside: Outside, span: Span) {
+        let spelled = self.interner.resolve(name).to_string();
+        let declared_at = match outside {
+            Outside::Local => self
+                .declared_fn
+                .as_ref()
+                .and_then(|declared| declared.locals_outside.get(&name).copied()),
+            Outside::Input | Outside::Context => None,
+        };
+        let labels = declared_at
+            .map(|at| Label::at(at, format!("`{spelled}` is declared here, outside the `fn`")))
+            .into_iter()
+            .collect();
+        self.labeled_error(
+            MirErrorKind::CapturesOutside {
+                name: spelled,
+                outside,
+            },
+            span,
+            labels,
+        );
+    }
+
+    /// An unbound local name at `span`: outside a `fn`'s body, as a capture.
+    fn unbound_name(&mut self, name: Astr, span: Span) {
+        if self.is_local_outside(QualifiedRef::root(name)) {
+            self.captures_outside(name, Outside::Local, span);
+            return;
+        }
+        let near = self.near_bindings(name);
+        self.error(
+            MirErrorKind::UndefinedVariable {
+                name: self.interner.resolve(name).to_string(),
+                near,
+            },
+            span,
+        );
     }
 
     /// RFC-0043.
@@ -7048,7 +7233,9 @@ where
             .env
             .functions
             .iter()
-            .filter(|(qref, scheme)| qref.name == wanted && scheme.params().len() == arity)
+            .filter(|(qref, scheme)| {
+                qref.scope.is_none() && qref.name == wanted && scheme.params().len() == arity
+            })
             .map(|(_, scheme)| scheme)
             .collect();
         if declarations.is_empty() {
@@ -7528,6 +7715,10 @@ where
                         );
                         Self::infer_error()
                     }
+                    AssignTarget::Unbound if self.is_local_outside(QualifiedRef::root(*name)) => {
+                        self.captures_outside(*name, Outside::Local, *span);
+                        Self::infer_error()
+                    }
                     AssignTarget::Unbound => {
                         self.error(
                             MirErrorKind::AssignToUnbound(self.interner.resolve(*name).to_string()),
@@ -7580,6 +7771,9 @@ where
                 }
                 self.pop_scope();
             }
+            // Its instances are checked as functions of their own
+            // (`graph::lift`).
+            acvus_ast::Stmt::FnDecl(_) => {}
             acvus_ast::Stmt::WhileLet {
                 pattern,
                 source,
@@ -7977,14 +8171,7 @@ where
                             ty
                         }
                         None => {
-                            let near = self.near_bindings(name.name);
-                            self.error(
-                                MirErrorKind::UndefinedVariable {
-                                    name: self.interner.resolve(name.name).to_string(),
-                                    near,
-                                },
-                                *span,
-                            );
+                            self.unbound_name(name.name, *span);
                             Self::infer_error()
                         }
                     },

@@ -53,6 +53,10 @@ between the scrutinee line and that arm. The refusals are one per fault:
 an `% if` to belong to, this `% if` already has an `% else`, `% pattern =>`
 needs a `% match` to belong to.
 
+A template declares no `fn` (RFC-0100 rule 1): a `% fn` line, and a `fn`
+in a block a tag or a `%` line holds, are refused with `only a script
+(`.acvus`) declares a `fn`; a template declares none`.
+
 A `%` line the statement grammar does not admit is a parse error at that
 line. It does not fall back to text.
 
@@ -128,7 +132,7 @@ Script       = Stmt* Expr?
 ```
 Stmt         = LetBind | LetUninit | Assign | Store | DerefStore
              | While | WhileLet | For | Break | Continue
-             | Anyorder | ExprStmt | BlockStmt
+             | Anyorder | FnDecl | ExprStmt | BlockStmt
 
 LetBind      = "let" IDENT "=" Expr ";"                 ← let x = 0;
 LetUninit    = "let" IDENT ";"                          ← let x;
@@ -144,13 +148,14 @@ ForHead      = Expr | Expr ".." Expr
 Break        = "break" ";"
 Continue     = "continue" ";"
 Anyorder     = "anyorder" "{" Stmt* "}"
+FnDecl       = "fn" IDENT "(" (IDENT ("," IDENT)* ","?)? ")" "{" Stmt* Expr? "}"
 ExprStmt     = Expr ";"                                 ← Expr: no BranchExpr first
 BlockStmt    = BranchExpr ";"?
 BranchExpr   = IfExpr | MatchExpr
 ```
 
-`while`, `for` and `anyorder` are statements, not expressions: each ends at
-the `}` closing its block, and a `;` after that `}` is refused.
+`while`, `for`, `anyorder` and `fn` are statements, not expressions: each
+ends at the `}` closing its block, and a `;` after that `}` is refused.
 
 An `if`, an `if let` or a `match` that begins a statement is the whole
 statement, as in Rust: it ends at its `}`, and no operator or postfix
@@ -206,6 +211,29 @@ A `for` over an array may be left by `break`, `?` or `return` at every
 element type: the elements it had taken are the binding's and are released
 by their scopes, and the array's release on the leaving edge releases the
 ones it had not taken.
+
+### `fn`
+
+```
+fn name(a, b) { body }
+```
+
+A script declares a function with `fn` wherever a statement stands, in any
+block (RFC-0100). Every `fn` of a script is callable throughout that script,
+before and after its declaration and from every block, and from no other
+script. The body reads each parameter by its name, `n`, and calls the
+script's `fn`s, the registry's externs and the host's functions; no
+parameter or result type is written, and each call site types the `fn` as a
+lambda written there would be. A `fn` captures nothing, and each of these is
+refused:
+
+```
+the function `f` is declared twice in this script
+the `fn` `len` would shadow `vec::len`, …, which the host declares and a script calls as `len`
+a `fn` captures nothing: its body reads `y`, a local of the script
+a `fn` captures nothing: its body reads `$x`, an input of the script; pass it as an argument
+a `fn` captures nothing: its body names `@c`, a context the host declares; pass it as an argument
+```
 
 ### `return`
 
@@ -534,6 +562,7 @@ pattern, `% _ =>` in a template included. It is not an expression.
 | `==` `!=` `<` `>` `<=` `>=` | comparison operators |
 | `=` | assignment (a statement) |
 | `in` | a `for` head |
+| `fn` | a function a script declares (RFC-0100) |
 | `return` | leaves the enclosing body with the expression that follows |
 | `->` | lambda arrow |
 | `..` `..=` `=..` | range operators |

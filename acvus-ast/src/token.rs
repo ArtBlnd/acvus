@@ -65,6 +65,8 @@ pub enum Token {
     Return,
     #[token("anyorder", priority = 3)]
     Anyorder,
+    #[token("fn", priority = 3)]
+    Fn,
     #[token("match", priority = 3)]
     Match,
     #[token("mut", priority = 3)]
@@ -197,7 +199,7 @@ pub enum Token {
 /// Every word the lexer reserves, each as `Token::keyword` names it.
 pub const KEYWORDS: &[&str] = &[
     "true", "false", "_", "Some", "None", "Ok", "Err", "let", "if", "else", "while", "for", "in",
-    "break", "continue", "return", "anyorder", "match", "mut", "as",
+    "break", "continue", "return", "anyorder", "fn", "match", "mut", "as",
 ];
 
 impl Token {
@@ -221,6 +223,7 @@ impl Token {
             Token::Continue => Some("continue"),
             Token::Return => Some("return"),
             Token::Anyorder => Some("anyorder"),
+            Token::Fn => Some("fn"),
             Token::Match => Some("match"),
             Token::Mut => Some("mut"),
             Token::As => Some("as"),
@@ -304,6 +307,7 @@ impl fmt::Display for Token {
             Token::Continue => write!(f, "continue"),
             Token::Return => write!(f, "return"),
             Token::Anyorder => write!(f, "anyorder"),
+            Token::Fn => write!(f, "fn"),
             Token::Match => write!(f, "match"),
             Token::Mut => write!(f, "mut"),
             Token::As => write!(f, "as"),

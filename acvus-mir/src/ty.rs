@@ -2878,7 +2878,9 @@ impl TypeEnv {
         let mut candidates: Vec<QualifiedRef> = self
             .functions
             .keys()
-            .filter(|q| q.name == name.name && q.namespace.is_some() && q.host.is_none())
+            .filter(|q| {
+                q.name == name.name && q.namespace.is_some() && q.host.is_none() && q.scope.is_none()
+            })
             .copied()
             .collect();
         candidates.sort();
