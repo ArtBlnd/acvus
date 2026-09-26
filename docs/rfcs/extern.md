@@ -1491,7 +1491,10 @@ call site, with every mismatch an explicit `None`.
 **Why.** Outside data is untyped wherever it comes from; the one honest
 place to check it is where it enters, against the type the checker settled
 there. Sealing the gate keeps every other crossing the checker's own
-(RFC-0068), and lending only keeps runtime values uncloned.
+(RFC-0068), and lending only keeps runtime values uncloned. An entry run
+within the call on lent arguments is the plainest sound shape: no value
+leaves the call, and no byte format is promised that the layout would then
+have to keep.
 **Cost.** A site-settled result needs a must-settle bound and the call
 site's result type in the prepared site; a Rust-bodied function value is a
 new closure kind.
