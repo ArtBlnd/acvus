@@ -365,8 +365,19 @@ Status: Accepted
    `f64`, `bool`, `u8`, `char` and `String`, each pinned by a test to the
    operator instruction it stands beside (RFC-0020); `Vec<T>` has each,
    requiring the same signature at `T` (`cmp` lexicographic). `hash_map()`
-   requires `hash` and `eq` at `K`; `hash_map_by(hash, eq)` is the closure
+   and `hash_set()` require `hash` at `K` and `eq` at `K` naming
+   `law::Equivalence` (rule 6); `hash_map_by(hash, eq)` is the closure
    form, where an object key goes. `dedup` requires `eq` at `T`.
+
+6. **A requirement may name a law.** A `Required` parameter names a law
+   by acvus-extern's sealed law marker at its type (`law::Equivalence`;
+   none named by default). It is resolved only by an instance that states
+   that law (RFC-0082 rule 11) and each of whose own requirements at the
+   same signature resolves with it too, so `eq` over `Vec<T>` is an
+   equivalence exactly where `T`'s is. A site that reaches no such
+   instance fails as `NoInstance`, naming the law. The law is in the
+   requirement's type, so the handler holding it holds the fact, and no
+   value states it.
 
 **Why.** A container is not built with its element's instances beside it,
 and must not be: `clone` at `Vec<T>` needs `clone` at `T` because of what

@@ -5,7 +5,7 @@ for slice(r6) -> L1 else L2 stages [L1, L18]
 // cost W=29 O=18281 split when n > 20173, n = len(r6)
 for slice(r35) -> L6 else L7 stages [L6, L16]
 // L6: free {as_slice, call to_string, const, const}
-// L16: cycle Storage(r36) in_order {ref, call or_insert, take, +, assign}
+// L16: cycle Storage(r36) keyed(r37 keys in_order) any_order law(Op(Add) exact commutative) {ref, call or_insert, take, +, assign}
 // control upfront
 // cost W=4 O=18281 split when n > 146248, n = len(r35)
 for slice(r55) -> L9 else L10 stages [L9, L17]

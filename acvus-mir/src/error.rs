@@ -95,6 +95,9 @@ pub enum InstanceWanted {
     Requirement {
         signature: QualifiedRef,
         required_by: Option<QualifiedRef>,
+        /// The law the requirement names, which every instance it takes
+        /// states (RFC-0070 rule 6).
+        law: Option<crate::laws::NamedLaw>,
     },
 }
 
@@ -1003,16 +1006,19 @@ impl<'a> fmt::Display for MirErrorDisplay<'a> {
                     InstanceWanted::Callee(Some(callee)) => qualified(interner, *callee),
                     InstanceWanted::Requirement {
                         signature,
-                        required_by: None,
-                    } => qualified(interner, *signature),
-                    InstanceWanted::Requirement {
-                        signature,
-                        required_by: Some(by),
-                    } => format!(
-                        "{} required by {}",
-                        qualified(interner, *signature),
-                        qualified(interner, *by)
-                    ),
+                        required_by,
+                        law,
+                    } => {
+                        let stating = match law {
+                            Some(law) => format!(" stating {}", law.written()),
+                            None => String::new(),
+                        };
+                        let by = match required_by {
+                            Some(by) => format!(" required by {}", qualified(interner, *by)),
+                            None => String::new(),
+                        };
+                        format!("{}{stating}{by}", qualified(interner, *signature))
+                    }
                 };
                 write!(
                     f,

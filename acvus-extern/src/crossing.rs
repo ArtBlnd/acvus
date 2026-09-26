@@ -59,11 +59,12 @@ where
 
     /// # Safety
     /// `value` was made by `Runtime::instance_value` from an entry of an
-    /// instance of `S` standing at the type `I` is filled with, and the
-    /// entry is live for `'r`.
+    /// instance of `S` standing at the type `I` is filled with, the entry
+    /// is live for `'r`, and the checker chose that instance for a
+    /// requirement naming the law `L` names (RFC-0070 rule 6).
     #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn instance<'r, S, I, T>(self, value: Rt::Value) -> InstanceOf<'r, S, I, Rt, T>
+    pub unsafe fn instance<'r, S, I, T, L>(self, value: Rt::Value) -> InstanceOf<'r, S, I, Rt, T, L>
     where
         S: Signature<Rt, This = I>,
         S::Mode: ReadsItsReceiver,

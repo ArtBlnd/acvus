@@ -5,12 +5,12 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::laws::{
-    BinaryLaws, Copies, Identity, LawRole, Laws, Postcondition, Reaches, Returns, Unresolved,
+    BinaryLaws, Copies, Identity, LawRole, Laws, NamedLaw, Postcondition, Reaches, Returns, Unresolved,
 };
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
-    ParamTerm, Poly, PolyBuilder, PolyTy, RequirementSig, Task, TyTerm, TyVarBound, TypeArg,
-    TypeRegistry, UserDefinedDecl, Viewed, bind_chosen, matches_pattern, unify_patterns,
+    KeyingMarkers, ParamTerm, Poly, PolyBuilder, PolyTy, RequirementSig, Task, TyTerm,
+    TyVarBound, TypeArg, TypeRegistry, UserDefinedDecl, Viewed, bind_chosen, matches_pattern, unify_patterns,
 };
 use acvus_utils::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -81,6 +81,8 @@ pub struct Requirement {
     pub signature: QualifiedRef,
     pub pattern: PolyTy,
     pub calls: Task,
+    /// The law the parameter's `L` names (RFC-0070 rule 6).
+    pub law: Option<NamedLaw>,
 }
 
 impl Requirement {
@@ -89,6 +91,7 @@ impl Requirement {
             signature: self.signature,
             pattern: self.pattern.clone(),
             calls: self.calls,
+            law: self.law,
         }
     }
 }
@@ -733,6 +736,22 @@ impl TypeNames {
         Ok(true)
     }
 
+    /// The name the core registry, which every combination holds, declares
+    /// the Rust type `T` under.
+    fn core_declaration<T>(&self, i: &Interner) -> QualifiedRef
+    where
+        T: ExternTypeDecl,
+    {
+        let form = Named::extension::<T>(i).rust;
+        let Some(qref) = self.by_rust.get(&form) else {
+            panic!(
+                "the core registry declares {}, and every combination holds it",
+                std::any::type_name::<T>()
+            )
+        };
+        *qref
+    }
+
     /// Binds a type a registry's `types` lists, answering whether its
     /// declaration is the first under its name.
     fn declare(&mut self, i: &Interner, named: Named) -> Result<bool, CombineError> {
@@ -896,6 +915,10 @@ impl<R: Runtime> Externs<R> {
                 }
             }
         }
+        types.register_keying(KeyingMarkers {
+            equiv: type_names.core_declaration::<crate::keying::Equiv>(interner),
+            opaque: type_names.core_declaration::<crate::keying::Opaque>(interner),
+        });
         for c in &contributions {
             for sig in &c.manifest.signatures {
                 if !names.insert(sig.qref) {
@@ -1188,7 +1211,14 @@ impl LawSite<'_> {
             Laws::TotalOrder => "total_order",
             Laws::Inverse(_) => "inverse",
             Laws::Payload => "payload",
+            Laws::Equivalence => "equivalence",
+            Laws::Absent { .. } => "absent",
         };
+        let over_eq = self.function
+            == <crate::core::eq as crate::registry::SharedSignature>::qref(self.interner);
+        if matches!(laws, Laws::Equivalence) && !over_eq {
+            return Err(self.unshaped(law));
+        }
         let PolyTy::Fn { ret, .. } = self.ty else {
             return Err(self.unshaped(law));
         };

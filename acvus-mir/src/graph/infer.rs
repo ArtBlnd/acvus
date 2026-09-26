@@ -759,6 +759,7 @@ fn declared_scheme(
             signature: req.signature,
             pattern: req.pattern.clone(),
             calls: req.calls,
+            law: req.law,
             instances: declared
                 .get(&req.signature)
                 .map(|sig| sig.instances.clone())

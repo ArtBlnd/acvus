@@ -1,11 +1,12 @@
-# `HashMap<K, V>` and `HashSet<K>`
+# `HashMap<K, V, Q>` and `HashSet<K, Q>`
 
 A map holds what a key names, and every operation that has to find a key
 asks the key's hash and equality. There are two constructors, and the
 difference between them is where those two come from.
 
 `hash_map()` and `hash_set()` take no argument and require the key type's
-own `core::hash` and `core::eq` (RFC-0070 rule 5). The checker settles the key
+own `core::hash`, and its own `core::eq` naming `law::Equivalence` (RFC-0070
+rules 5 and 6). The checker settles the key
 type at the call — in `let m = hash_map(); insert(&mut m, 1, 10);` the
 first `insert` settles it — and decides the two instances there; the map
 stores what it was handed and holds no closure. Both instances are pure, so
@@ -16,10 +17,14 @@ let counts = hash_map();
 let seen = hash_set();
 ```
 
-The key types that reach them are the ones with instances declared:
-`Int`, `Float`, `Bool`, `Byte`, `String`, `Decimal` and a `Vec` of any of
-those. An object or an enum has none, and a script keyed by one is refused
-with `no instance of core::hash has the call type ...`.
+The key types that reach them are the ones whose `eq` states the
+equivalence and that have a `hash`: `Int`, `Bool`, `Byte`, `Char`,
+`String` and a `Vec` of any of those. `Float`'s `eq` states none, so a
+`Float` key is refused with `no instance of core::eq stating
+law::Equivalence required by map::hash_map ...`, and goes to `hash_map_by`;
+`Decimal` has no `hash`. An object or an enum has neither, and a script
+keyed by one is refused with `no instance of core::hash has the call type
+...`.
 
 `hash_map_by(hash, eq)` and `hash_set_by(hash, eq)` take the two as
 closures, the map stores them, and a lookup carries the join of their
@@ -39,61 +44,70 @@ first `insert`, so the choice falls on the wrong instance. That is the
 refusal `hash_map()` does not have, because there the requirement is
 decided at the settled key type.
 
+The last type argument is the keying marker (RFC-0098 rule 2): `hash_map()`
+and `hash_set()` answer `Equiv`, the closure forms `Opaque`, and every
+other operation takes either. The two are two types, so a value that is one
+constructor's on one path and the other's on another is refused:
+`if c { hash_map() } else { hash_map_by(..) }` is `type mismatch: expected
+HashMap<i64, i64, Equiv, Pure>, got HashMap<i64, i64, Opaque, Pure>`. A loop
+whose every touch of an `Equiv` table in an iteration is at one key splits
+by key; an `Opaque` one stays in order.
+
 The types are `HashMap` and `HashSet`, which are Rust's own names. A constructor named `map` would
 join the overload set of `iter::map`, and the two are then ambiguous at a
 call whose lambda parameter type is still open — `examples/grades` stops
 compiling.
 
 A function that walks a map or a set answers a pipeline, and a pipeline's
-type is the stage itself: `Keys<K, V>` and `Values<K, V>` borrow the map and
-yield `&K` and `&V`, `Refs<HashSet<K>>` borrows the set and yields `&K`, and
+type is the stage itself: `Keys<K, V, Q>` and `Values<K, V, Q>` borrow the map and
+yield `&K` and `&V`, `Refs<HashSet<K, Q>>` borrows the set and yields `&K`, and
 `Items<K>` owns the keys a consumed map or set gave up. A function that
 *takes* a pipeline takes the stage's type variable, written `I` below; any
 stage whose element fits stands there.
 
-## `HashMap<K, V>` — namespace `map`
+## `HashMap<K, V, Q>` — namespace `map`
 
 | name | signature | Rust twin | difference |
 | --- | --- | --- | --- |
-| `hash_map` | `Fn() -> HashMap<K, V>` where `K` has `core::hash` and `core::eq` | `HashMap::new` | the key's own instances stand where Rust's `Hash` and `Eq` bounds do; the map stores no closure |
-| `hash_map_by` | `Fn(Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashMap<K, V>` | `HashMap::with_hasher` | the comparator is passed too; Rust takes `Eq` from the key |
-| `with_capacity` | `Fn(u64, Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashMap<K, V>` | `HashMap::with_capacity_and_hasher` | the closure form, as `hash_map_by`; a capacity past the address space traps with `capacity overflow`, as `Vec::with_capacity` does |
-| `len` | `Fn(&HashMap<K, V>) -> u64` | `HashMap::len` | none |
-| `is_empty` | `Fn(&HashMap<K, V>) -> Bool` | `HashMap::is_empty` | none |
-| `clear` | `Fn(&mut HashMap<K, V>) -> ()` | `HashMap::clear` | none |
-| `insert` | `Fn(&mut HashMap<K, V>, K, V) -> Option<V>` | `HashMap::insert` | a replaced key keeps the position it was first inserted at |
-| `get` | `Fn(&HashMap<K, V>, &K) -> Option<&V>` | `HashMap::get` | the probe is a `&K`; there is no `Borrow<Q>` |
-| `get_mut` | `Fn(&mut HashMap<K, V>, &K) -> Option<&mut V>` | `HashMap::get_mut` | as `get`; what the call binds is a `&mut V`, and the one spelling refused binds through a pattern — see "What the boundary refuses" below |
-| `contains_key` | `Fn(&HashMap<K, V>, &K) -> Bool` | `HashMap::contains_key` | the probe is a `&K` |
-| `remove` | `Fn(&mut HashMap<K, V>, &K) -> Option<V>` | `HashMap::remove` | the entries after it move down, as `IndexMap::shift_remove` does, so the order of what is left is the order it was |
-| `or_insert` | `Fn(&mut HashMap<K, V>, K, V) -> &mut V` | `HashMap::entry(k).or_insert(v)` | one call rather than an `Entry` value; the default is evaluated whether or not it is used |
-| `extend` | `Fn(&mut HashMap<K, V>, HashMap<K, V>) -> ()` | `HashMap::extend` | the argument is another map, consumed; a sequence of pairs does not cross |
-| `retain` | `Fn(&mut HashMap<K, V>, Fn(&K, &V) -> Bool) -> ()` | `HashMap::retain` | the closure is lent `&V`, not `&mut V` |
-| `keys` | `Fn(&HashMap<K, V>) -> Keys<K, V>` | `HashMap::keys` | insertion order; `Keys` is a borrowing source whose element is a `&K` |
-| `values` | `Fn(&HashMap<K, V>) -> Values<K, V>` | `HashMap::values` | insertion order; `Values` is a borrowing source whose element is a `&V` |
-| `into_keys` | `Fn(HashMap<K, V>) -> Items<K>` | `HashMap::into_keys` | insertion order; consumes the map |
-| `into_values` | `Fn(HashMap<K, V>) -> Items<V>` | `HashMap::into_values` | insertion order; consumes the map |
+| `hash_map` | `Fn() -> HashMap<K, V, Equiv>` where `K` has `core::hash` and `core::eq` stating `law::Equivalence` | `HashMap::new` | the key's own instances stand where Rust's `Hash` and `Eq` bounds do; the map stores no closure |
+| `hash_map_by` | `Fn(Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashMap<K, V, Opaque>` | `HashMap::with_hasher` | the comparator is passed too; Rust takes `Eq` from the key |
+| `with_capacity` | `Fn(u64, Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashMap<K, V, Opaque>` | `HashMap::with_capacity_and_hasher` | the closure form, as `hash_map_by`; a capacity past the address space traps with `capacity overflow`, as `Vec::with_capacity` does |
+| `len` | `Fn(&HashMap<K, V, Q>) -> u64` | `HashMap::len` | none |
+| `is_empty` | `Fn(&HashMap<K, V, Q>) -> Bool` | `HashMap::is_empty` | none |
+| `clear` | `Fn(&mut HashMap<K, V, Q>) -> ()` | `HashMap::clear` | none |
+| `insert` | `Fn(&mut HashMap<K, V, Q>, K, V) -> Option<V>` | `HashMap::insert` | a replaced key keeps the position it was first inserted at |
+| `get` | `Fn(&HashMap<K, V, Q>, &K) -> Option<&V>` | `HashMap::get` | the probe is a `&K`; there is no `Borrow<Q>` |
+| `get_mut` | `Fn(&mut HashMap<K, V, Q>, &K) -> Option<&mut V>` | `HashMap::get_mut` | as `get`; what the call binds is a `&mut V`, and the one spelling refused binds through a pattern — see "What the boundary refuses" below |
+| `contains_key` | `Fn(&HashMap<K, V, Q>, &K) -> Bool` | `HashMap::contains_key` | the probe is a `&K` |
+| `remove` | `Fn(&mut HashMap<K, V, Q>, &K) -> Option<V>` | `HashMap::remove` | the entries after it move down, as `IndexMap::shift_remove` does, so the order of what is left is the order it was |
+| `or_insert` | `Fn(&mut HashMap<K, V, Q>, K, V) -> &mut V` | `HashMap::entry(k).or_insert(v)` | one call rather than an `Entry` value; the default is evaluated whether or not it is used |
+| `extend` | `Fn(&mut HashMap<K, V, Q>, HashMap<K, V, Q>) -> ()` | `HashMap::extend` | the argument is another map, consumed; a sequence of pairs does not cross |
+| `retain` | `Fn(&mut HashMap<K, V, Q>, Fn(&K, &V) -> Bool) -> ()` | `HashMap::retain` | the closure is lent `&V`, not `&mut V` |
+| `keys` | `Fn(&HashMap<K, V, Q>) -> Keys<K, V, Q>` | `HashMap::keys` | insertion order; `Keys` is a borrowing source whose element is a `&K` |
+| `values` | `Fn(&HashMap<K, V, Q>) -> Values<K, V, Q>` | `HashMap::values` | insertion order; `Values` is a borrowing source whose element is a `&V` |
+| `into_keys` | `Fn(HashMap<K, V, Q>) -> Items<K>` | `HashMap::into_keys` | insertion order; consumes the map |
+| `into_values` | `Fn(HashMap<K, V, Q>) -> Items<V>` | `HashMap::into_values` | insertion order; consumes the map |
 
-## `HashSet<K>` — namespace `set`
+## `HashSet<K, Q>` — namespace `set`
 
 | name | signature | Rust twin | difference |
 | --- | --- | --- | --- |
-| `hash_set` | `Fn() -> HashSet<K>` where `K` has `core::hash` and `core::eq` | `HashSet::new` | as `hash_map` |
-| `hash_set_by` | `Fn(Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::with_hasher` | the comparator is passed too |
-| `len` | `Fn(&HashSet<K>) -> u64` | `HashSet::len` | none |
-| `is_empty` | `Fn(&HashSet<K>) -> Bool` | `HashSet::is_empty` | none |
-| `clear` | `Fn(&mut HashSet<K>) -> ()` | `HashSet::clear` | none |
-| `insert` | `Fn(&mut HashSet<K>, K) -> Bool` | `HashSet::insert` | none; the answer is whether the set gained the key, and a key already there is left as it was |
-| `contains` | `Fn(&HashSet<K>, &K) -> Bool` | `HashSet::contains` | the probe is a `&K` |
-| `remove` | `Fn(&mut HashSet<K>, &K) -> Bool` | `HashSet::remove` | the keys after it move down, so the order of what is left is the order it was |
-| `extend` | `Fn(&mut HashSet<K>, HashSet<K>) -> ()` | `HashSet::extend` | the argument is another set, consumed |
-| `union` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::union` | consumes both and answers a set, as `intersection`; the hasher, comparator and order kept are the first set's. Its body writes the second set's keys into the first in place rather than calling `set::extend`: the earlier `union` lent a handler local `&mut a` to that un-inlined handler, and LLVM's sibling-call rule refuses a tail call out of any function an alloca's address escapes, so every `Op::run` reaching it landed with a call |
-| `intersection` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::intersection` | consumes both and answers a set; Rust borrows both and yields references, which needs a clone of a key to build a set from, and the runtime offers none. The hasher, comparator and order kept are the first set's; the second set's own hasher and comparator decide each membership |
-| `difference` | `Fn(HashSet<K>, HashSet<K>) -> HashSet<K>` | `HashSet::difference` | consumes both and answers a set, as `intersection` |
-| `is_subset` | `Fn(&HashSet<K>, &HashSet<K>) -> Bool` | `HashSet::is_subset` | the second set's own hasher and comparator decide each membership |
-| `from_iter` | `Fn(I, Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashSet<K>` | `HashSet::from_iter` | `I` is any pipeline whose element is a `K`; the closure form, as `hash_set_by`; a repeat keeps the first key |
-| `as_iter` | `Fn(&HashSet<K>) -> Refs<HashSet<K>>` | `HashSet::iter` | insertion order; the name is the language's shared source signature, and the element is a `&K` |
-| `into_iter` | `Fn(HashSet<K>) -> Items<K>` | `HashSet::into_iter` | insertion order; consumes the set |
+| `hash_set` | `Fn() -> HashSet<K, Equiv>` where `K` has `core::hash` and `core::eq` stating `law::Equivalence` | `HashSet::new` | as `hash_map` |
+| `hash_set_by` | `Fn(Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashSet<K, Opaque>` | `HashSet::with_hasher` | the comparator is passed too |
+| `len` | `Fn(&HashSet<K, Q>) -> u64` | `HashSet::len` | none |
+| `is_empty` | `Fn(&HashSet<K, Q>) -> Bool` | `HashSet::is_empty` | none |
+| `clear` | `Fn(&mut HashSet<K, Q>) -> ()` | `HashSet::clear` | none |
+| `insert` | `Fn(&mut HashSet<K, Q>, K) -> Bool` | `HashSet::insert` | none; the answer is whether the set gained the key, and a key already there is left as it was |
+| `contains` | `Fn(&HashSet<K, Q>, &K) -> Bool` | `HashSet::contains` | the probe is a `&K` |
+| `remove` | `Fn(&mut HashSet<K, Q>, &K) -> Bool` | `HashSet::remove` | the keys after it move down, so the order of what is left is the order it was |
+| `extend` | `Fn(&mut HashSet<K, Q>, HashSet<K, Q>) -> ()` | `HashSet::extend` | the argument is another set, consumed |
+| `union` | `Fn(HashSet<K, Q>, HashSet<K, Q>) -> HashSet<K, Q>` | `HashSet::union` | consumes both and answers a set, as `intersection`; the hasher, comparator and order kept are the first set's. Its body writes the second set's keys into the first in place rather than calling `set::extend`: the earlier `union` lent a handler local `&mut a` to that un-inlined handler, and LLVM's sibling-call rule refuses a tail call out of any function an alloca's address escapes, so every `Op::run` reaching it landed with a call |
+| `intersection` | `Fn(HashSet<K, Q>, HashSet<K, Q>) -> HashSet<K, Q>` | `HashSet::intersection` | consumes both and answers a set; Rust borrows both and yields references, which needs a clone of a key to build a set from, and the runtime offers none. The hasher, comparator and order kept are the first set's; the second set's own hasher and comparator decide each membership |
+| `difference` | `Fn(HashSet<K, Q>, HashSet<K, Q>) -> HashSet<K, Q>` | `HashSet::difference` | consumes both and answers a set, as `intersection` |
+| `is_subset` | `Fn(&HashSet<K, Q>, &HashSet<K, Q>) -> Bool` | `HashSet::is_subset` | the second set's own hasher and comparator decide each membership |
+| `from_iter` | `Fn(I, Fn(&K) -> u64, Fn(&K, &K) -> Bool) -> HashSet<K, Opaque>` | `HashSet::from_iter` | `I` is any pipeline whose element is a `K`; the closure form, as `hash_set_by`; a repeat keeps the first key |
+| `as_iter` | `Fn(&HashSet<K, Q>) -> Refs<HashSet<K, Q>>` | `HashSet::iter` | insertion order; the name is the language's shared source signature, and the element is a `&K` |
+| `into_iter` | `Fn(HashSet<K, Q>) -> Items<K>` | `HashSet::into_iter` | insertion order; consumes the set |
 
 ## Iteration order
 

@@ -5,13 +5,13 @@
 //! entry of its own (RFC-0080 rule 2).
 #![forbid(unsafe_code)]
 use acvus_extern::{
-    CallSite, InstanceEntry, InstanceRun, Now, Owned, Required, Runtime, Arg,
+    CallSite, InstanceEntry, InstanceRun, Now, Owned, Required, Runtime, Arg, law,
     extern_signature,
 };
 
 extern_signature! { ns: "q", fn eq<T>(a: &T, b: &T) -> bool where T: Var<kind::Type>; }
 
-type Forge<Rt> = Required<eq<Owned<Rt>, Rt>, Owned<Rt>, Now, 0>;
+type Forge<Rt> = Required<eq<Owned<Rt>, Rt>, Owned<Rt>, Now, law::Equivalence, 0>;
 
 fn from_a_word<Rt>(words: &[Rt::Value])
 where

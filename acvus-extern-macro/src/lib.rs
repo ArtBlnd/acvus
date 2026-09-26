@@ -549,6 +549,8 @@ struct RequiredParam {
     signature: Type,
     var: Ident,
     task: Type,
+    /// The `law::Law` marker an `InstanceOf` names (RFC-0070 rule 6).
+    law: Type,
 }
 
 /// One Rust parameter after the runtime, in declaration order.
@@ -965,6 +967,18 @@ fn requirement_param(ty: &Type) -> syn::Result<Option<Requirement>> {
         Some(t) => (*t).clone(),
         None => syn::parse_quote! { ::acvus_extern::Now },
     };
+    let unnamed: Type = syn::parse_quote! { ::acvus_extern::law::Unnamed };
+    let law = match (owns, tys.get(4)) {
+        (false, Some(law)) => (*law).clone(),
+        (false, None) | (true, None) => unnamed,
+        (true, Some(law)) => {
+            return Err(syn::Error::new_spanned(
+                law,
+                "an `Instance` owns its receiver and names no law; a requirement names a law \
+                 at an `InstanceOf`, which stands at its type (RFC-0070 rule 6)",
+            ));
+        }
+    };
     let variable = |ty: &Type| -> Option<Ident> {
         let Type::Path(v) = ty else {
             return None;
@@ -982,6 +996,7 @@ fn requirement_param(ty: &Type) -> syn::Result<Option<Requirement>> {
             signature: (*signature).clone(),
             var,
             task,
+            law,
         })));
     }
     let (var, held, mode) = match at {
@@ -1002,6 +1017,7 @@ fn requirement_param(ty: &Type) -> syn::Result<Option<Requirement>> {
             signature: (*signature).clone(),
             var,
             task,
+            law,
         },
         held,
         mode,
@@ -1701,7 +1717,8 @@ fn generate_extern_fn(
                 let var: Type = syn::parse_quote! { #var };
                 let var = vars.to_runtime_instance(&var, member);
                 let task = &r.task;
-                quote! { ::acvus_extern::Required<#sig, #var, #task, #nth> }
+                let law = &r.law;
+                quote! { ::acvus_extern::Required<#sig, #var, #task, #law, #nth> }
             })
             .collect();
         let entry_param = match required.is_empty() {
@@ -1719,13 +1736,15 @@ fn generate_extern_fn(
                 let var: Type = syn::parse_quote! { #var };
                 let var = vars.to_runtime_instance(&var, member);
                 let task = &r.task;
+                let law = &r.law;
                 let nth = proc_macro2::Literal::usize_unsuffixed(nth);
                 quote! {
                     // SAFETY: the entry's `requires` holds, at this
                     // declaration's own order, the word of the entry
-                    // `prepare` chose for this requirement, and that entry
-                    // lives as long as the one this glue runs.
-                    let #ident: ::acvus_extern::InstanceOf<'__w, #sig, #var, __R, #task> =
+                    // `prepare` chose for this requirement under the law it
+                    // names, and that entry lives as long as the one this
+                    // glue runs.
+                    let #ident: ::acvus_extern::InstanceOf<'__w, #sig, #var, __R, #task, #law> =
                         unsafe { __rt.instance(__entry.requires[#nth]) };
                 }
             });
@@ -2202,16 +2221,25 @@ fn generate_extern_fn(
             // runs its `sync =` twin (RFC-0046, RFC-0068 rule 5).
             let calls = quote! { <#task as ::acvus_extern::CalledAt>::TASK };
             let marker = vars.to_compile_time_instance(&r.signature, None);
+            let law = &r.law;
             Ok(quote! {
                 ::acvus_extern::Requirement {
                     signature: <#path as ::acvus_extern::SharedSignature>::qref(__i),
                     pattern: <#marker as ::acvus_extern::RequirementOf>::pattern(__i, &__vars),
                     calls: #calls,
+                    law: <#law as ::acvus_extern::law::Law>::NAMED,
                 }
             })
         })
         .collect::<syn::Result<_>>()?;
     let declared_ty = signature(None);
+    let is_type_var = |ty: &Type| {
+        matches!(ty, Type::Path(path)
+            if path.qself.is_none()
+                && path.path.get_ident().is_some_and(|ident| {
+                    matches!(vars.lookup(ident), Some((VarKind::Ty, _)))
+                }))
+    };
     let laws = match (&attr.law, &attr.payload) {
         (Some(law), Some(named)) => {
             return Err(syn::Error::new(
@@ -2223,7 +2251,16 @@ fn generate_extern_fn(
                 ),
             ));
         }
-        (Some(law), None) => law.checked_laws(fn_ident, &params, &ret, &returning)?,
+        (Some(law), None) => law.checked_laws(
+            fn_ident,
+            &params,
+            &ret,
+            &returning,
+            attr.instance_of.as_ref(),
+            attr.reaches
+                .as_ref()
+                .and_then(|reaches| reaches.keyed_param(&params, &is_type_var)),
+        )?,
         (None, Some(named)) => law::checked_payload(named, fn_ident, &params, &ret, &returning)?,
         (None, None) => quote! { ::acvus_extern::Laws::None },
     };
@@ -2243,7 +2280,7 @@ fn generate_extern_fn(
         None => quote! { ::std::vec::Vec::new() },
     };
     let reaches = match &attr.reaches {
-        Some(stated) => stated.declared(fn_ident, &params)?,
+        Some(stated) => stated.declared(fn_ident, &params, &is_type_var)?,
         None => quote! { ::acvus_extern::Reaches::Lent },
     };
     let copies = match &attr.copies {

@@ -1,0 +1,26 @@
+error[E0277]: `law(equivalence)` is stated on a `core::eq` instance, and this is an instance of `same`
+ --> tests/compile_fail/law_equivalence_off_eq.rs:7:27
+  |
+7 | #[extern_fn(instance_of = same, effect = pure, law(equivalence))]
+  |                           ^^^^ not `core::eq`
+  |
+help: the trait `EquivalenceOver` is not implemented for `same`
+ --> tests/compile_fail/law_equivalence_off_eq.rs:5:1
+  |
+5 | extern_signature! { ns: "t", fn same<T>(a: &T, b: &T) -> bool where T: acvus_extern::Var<acvus_extern::kind::Type>; }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: an equivalence is a law of `eq` and the `hash` beside it (RFC-0082 rule 11)
+help: the trait `EquivalenceOver` is implemented for `eq<T, Rt>`
+ --> $WORKSPACE/acvus-extern/src/law.rs
+  |
+  | impl<T, Rt> EquivalenceOver for crate::core::eq<T, Rt> {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `acvus_extern::law::stated_over`
+ --> $WORKSPACE/acvus-extern/src/law.rs
+  |
+  | pub const fn stated_over<S>()
+  |              ----------- required by a bound in this function
+  | where
+  |     S: EquivalenceOver,
+  |        ^^^^^^^^^^^^^^^ required by this bound in `stated_over`
+  = note: this error originates in the macro `extern_signature` (in Nightly builds, run with -Z macro-backtrace for more info)

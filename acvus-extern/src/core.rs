@@ -54,6 +54,7 @@ where
 {
     extern_registry! {
         ns: "core",
+        types: [crate::keying::Equiv, crate::keying::Opaque],
         signatures: [clone, eq, cmp, add, sub, mul, div, rem, neg, hash, display],
         fns: [as_str],
     }

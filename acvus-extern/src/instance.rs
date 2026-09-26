@@ -353,33 +353,37 @@ where
 /// one of the runtime's values, standing at the type, and handed each
 /// receiver it reads, since a requirer applies it to many values of the
 /// type (a map's keys, both sides of `==`).
-pub struct InstanceOf<'r, S, I, Rt, T = Now>
+///
+/// `L` is the law the requirement names (RFC-0070 rule 6): `law::Unnamed`
+/// names none, and `law::Equivalence` is resolved only by an `eq` instance
+/// stating `law(equivalence)`, so a handler holding one holds the fact.
+pub struct InstanceOf<'r, S, I, Rt, T = Now, L = crate::law::Unnamed>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     value: Rt::Value,
-    at: PhantomData<(&'r (), fn() -> (S, I, T))>,
+    at: PhantomData<(&'r (), fn() -> (S, I, T, L))>,
 }
 
 // SAFETY: an `InstanceOf` is at its own `'s`, and holds one word the run
 // keeps.
-unsafe impl<'s, S, I, Rt, T> crate::Within<'s> for InstanceOf<'s, S, I, Rt, T>
+unsafe impl<'s, S, I, Rt, T, L> crate::Within<'s> for InstanceOf<'s, S, I, Rt, T, L>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
 }
 
-// SAFETY: an `InstanceOf` is one `Rt::Value` at every `S`, `I` and `T`.
-unsafe impl<'r, M, S, I, Rt, T> crate::UniformPayload<M> for InstanceOf<'r, S, I, Rt, T>
+// SAFETY: an `InstanceOf` is one `Rt::Value` at every `S`, `I`, `T` and `L`.
+unsafe impl<'r, M, S, I, Rt, T, L> crate::UniformPayload<M> for InstanceOf<'r, S, I, Rt, T, L>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
 }
 
-impl<'r, S, I, Rt, T> Clone for InstanceOf<'r, S, I, Rt, T>
+impl<'r, S, I, Rt, T, L> Clone for InstanceOf<'r, S, I, Rt, T, L>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,
@@ -389,27 +393,28 @@ where
     }
 }
 
-impl<'r, S, I, Rt, T> Copy for InstanceOf<'r, S, I, Rt, T>
+impl<'r, S, I, Rt, T, L> Copy for InstanceOf<'r, S, I, Rt, T, L>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
 }
 
-impl<'r, S, I, Rt, T> InstanceOf<'r, S, I, Rt, T>
+impl<'r, S, I, Rt, T, L> InstanceOf<'r, S, I, Rt, T, L>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     const ONE_VALUE: () = assert!(
-        size_of::<InstanceOf<'r, S, I, Rt, T>>() == size_of::<Rt::Value>(),
+        size_of::<InstanceOf<'r, S, I, Rt, T, L>>() == size_of::<Rt::Value>(),
         "an instance of a type is one of the runtime's values and nothing else"
     );
 
     /// # Safety
     /// `value` was made by `Runtime::instance_value` from an entry of an
-    /// instance of `S` standing at the type `I` is filled with, and the
-    /// entry is live for `'r`.
+    /// instance of `S` standing at the type `I` is filled with, the entry
+    /// is live for `'r`, and the checker chose that instance for a
+    /// requirement naming the law `L` names (RFC-0070 rule 6).
     #[inline(always)]
     pub(crate) unsafe fn at(value: Rt::Value) -> Self
     where
@@ -423,13 +428,13 @@ where
     }
 }
 
-impl<'w, S, I, Rt> InstanceOf<'w, S, I, Rt, Now>
+impl<'w, S, I, Rt, L> InstanceOf<'w, S, I, Rt, Now, L>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,
 {
     #[inline(always)]
-    pub fn into_async(self) -> InstanceOf<'w, S, I, Rt, Later> {
+    pub fn into_async(self) -> InstanceOf<'w, S, I, Rt, Later, L> {
         InstanceOf {
             value: self.value,
             at: PhantomData,
@@ -455,7 +460,7 @@ where
     }
 }
 
-impl<'w, S, I, Rt> InstanceOf<'w, S, I, Rt, Later>
+impl<'w, S, I, Rt, L> InstanceOf<'w, S, I, Rt, Later, L>
 where
     S: Signature<Rt, This = I>,
     Rt: Runtime,

@@ -5401,6 +5401,7 @@ where
                     call,
                     instances,
                     required,
+                    law,
                     ..
                 } => {
                     let opened_by = self.decision_callee(decision);
@@ -5424,6 +5425,7 @@ where
                             Some(signature) => InstanceWanted::Requirement {
                                 signature,
                                 required_by: opened_by,
+                                law,
                             },
                             None => InstanceWanted::Callee(opened_by),
                         },

@@ -343,30 +343,33 @@ where
 }
 
 /// A parameter that is the declaration's `NTH` required instance, standing
-/// at its type (`InstanceOf`): the call site holds the checker's answer for
-/// it, and the run carries nothing.
-pub struct Required<S, I, T, const NTH: usize>(PhantomData<fn() -> (S, I, T)>);
+/// at its type (`InstanceOf`), naming the law `L` names: the call site holds
+/// the checker's answer for it, and the run carries nothing.
+pub struct Required<S, I, T, L, const NTH: usize>(PhantomData<fn() -> (S, I, T, L)>);
 
-impl<S, I, T, Rt, const NTH: usize> Arg<Rt> for Required<S, I, T, NTH>
+impl<S, I, T, L, Rt, const NTH: usize> Arg<Rt> for Required<S, I, T, L, NTH>
 where
     S: Signature<Rt, This = I> + 'static,
     S::Mode: ReadsItsReceiver,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
+    L: crate::law::Law,
     Rt: Runtime,
 {
-    type Site = InstanceOf<'static, S, I, Rt, T>;
+    type Site = InstanceOf<'static, S, I, Rt, T, L>;
     type Form = Nothing;
 
     const ARGUMENTS: usize = 0;
     const LENDS_A_WORD: bool = false;
 
-    fn site(site: &CallSite<'_, Rt>, _: usize) -> InstanceOf<'static, S, I, Rt, T> {
+    fn site(site: &CallSite<'_, Rt>, _: usize) -> InstanceOf<'static, S, I, Rt, T, L> {
         // SAFETY: `CallSite::new`'s contract, the one way a word reaches
         // `requires`: the word is the entry chosen for this site's `NTH`
-        // requirement, whose signature is `S` and whose type is what the
-        // requirement's variable is filled with here, and the entry
-        // outlives every handler sited here.
+        // requirement, whose signature is `S`, whose type is what the
+        // requirement's variable is filled with here, and which the checker
+        // chose under the law the declaration's requirement names, which
+        // `#[extern_fn]` wrote as `L`'s; the entry outlives every handler
+        // sited here.
         unsafe { InstanceOf::at(site.requires[NTH]) }
     }
 
@@ -375,20 +378,21 @@ where
 }
 
 // SAFETY: the instance is the site table's; the capability is not used.
-unsafe impl<'a, 'w, S, I, T, Rt, const NTH: usize> Takes<'a, 'w, Required<S, I, T, NTH>, Rt>
-    for InstanceOf<'w, S, I, Rt, T>
+unsafe impl<'a, 'w, S, I, T, L, Rt, const NTH: usize> Takes<'a, 'w, Required<S, I, T, L, NTH>, Rt>
+    for InstanceOf<'w, S, I, Rt, T, L>
 where
     S: Signature<Rt, This = I> + 'static,
     S::Mode: ReadsItsReceiver,
     I: Send + Sync + 'static,
     T: Send + Sync + 'static,
+    L: crate::law::Law,
     Rt: Runtime,
 {
     unsafe fn take(
         _: crate::Crossing<'a, Rt>,
         _: &'a [Rt::Value],
-        site: &InstanceOf<'static, S, I, Rt, T>,
-    ) -> InstanceOf<'w, S, I, Rt, T> {
+        site: &InstanceOf<'static, S, I, Rt, T, L>,
+    ) -> InstanceOf<'w, S, I, Rt, T, L> {
         *site
     }
 }

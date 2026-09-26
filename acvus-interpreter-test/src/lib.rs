@@ -331,7 +331,7 @@ where
         });
     }
 
-    let laws = acvus_mir::laws::LawTable::of(graph.functions.iter());
+    let laws = acvus_mir::laws::LawTable::of(graph.functions.iter(), &graph.types);
     let opt_result = graph_optimize::optimize(interner, &laws, result.modules.clone(), opt);
 
     // Report validation errors from optimization.

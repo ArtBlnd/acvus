@@ -1148,10 +1148,10 @@ Status: Proposed
    states every place `f` reads or writes through its reference
    parameters: `x`, all the reference parameter `x` lends, `x[i]`, its
    element at the `u64` parameter `i`, or `x[k]`, a map or set's entry at
-   the key parameter `k`, meeting other keys by the map's equivalence
+   the key parameter `k`, typed by a declaration's type variable, meeting other keys by the map's equivalence
    (RFC-0098 rule 2). It names every reference
-   parameter. A length `f` reads to check an index is no place, as an
-   index's own check is not: no write of an element changes it. It is the
+   parameter. A length read to check an index is no place: no write of an
+   element changes it. It is the
    author's promise as a law is (rule 5), sampled only by tests.
    `#[extern_fn]` refuses a name that is no parameter, a place of a
    parameter taken by value, an index that is not a `u64` taken by value,
@@ -1185,6 +1185,11 @@ Status: Proposed
    comparison under which equal values are one value; a select on its
    sign reads as that order's maximum or minimum. Both are the author's
    promise (rule 5), sampled by tests, and name their extern by instance.
+11. **An equivalence.** `law(equivalence)` on a `core::eq` instance
+   states that it is reflexive, symmetric and transitive, and that the
+   `core::hash` instance at its type hashes values it calls equal alike.
+   On one requiring `core::eq` at a part, it holds where that requirement
+   resolves with it; RFC-0070 rule 6 reads it. `f64`'s `eq` states none.
 
 **Why.** RFC-0066 rule 6 leaves what merge a storage write is to the
 extern, and `min`, `max`, `&&` and `||` reach MIR as calls whose laws no

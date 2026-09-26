@@ -71,10 +71,16 @@ fn a_histogram_bucket_updated_by_add_is_keyed_any_order_at_its_bucket() {
          for x in &xs { let b = *x % 4u64; h[b] = h[b] + 1; }
          h.len()",
     );
-    let Order::Keyed { key, within } = c.order else {
+    let Order::Keyed {
+        key,
+        within,
+        across,
+    } = c.order
+    else {
         panic!("keyed:\n{}", c.listing)
     };
     assert_eq!(within, KeyOrder::AnyOrder, "{}", c.listing);
+    assert_eq!(across, KeyOrder::AnyOrder, "a vec's buckets join in any order:\n{}", c.listing);
     assert!(is_remainder(&c.cfg, key), "the key is `*x % 4`:\n{}", c.listing);
     assert_eq!(c.law, Some(Law::Op(LawOp::Add)), "{}", c.listing);
     assert!(
@@ -344,6 +350,12 @@ const KEYED_SOUNDNESS_PROGRAMS: &[(&str, bool)] = &[
     ("k02_histogram_vec_bucket.acvus", true),
     ("k07_char_frequency.acvus", true),
     ("last_per_key_in_order.acvus", true),
+    ("map_count_by_lambdas.acvus", false),
+    ("map_count_from_five.acvus", false),
+    ("map_count_over_a_filled_map.acvus", true),
+    ("map_group_by_push_from_new.acvus", true),
+    ("map_max_per_key.acvus", true),
+    ("map_word_count_or_insert.acvus", true),
     ("two_references_to_one_element.acvus", false),
     ("u8_bucket_past_255.acvus", true),
     ("u8_bucket_past_255_two_takes.acvus", true),
