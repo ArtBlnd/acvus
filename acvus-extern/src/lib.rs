@@ -44,6 +44,8 @@ mod projection;
 mod reference;
 mod registry;
 pub mod repr;
+#[doc(hidden)]
+pub mod ret;
 mod runtime;
 mod rust_fn;
 mod slice;

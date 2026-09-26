@@ -243,7 +243,8 @@ full at its site's type. Every other reading back is cut.
 
 6. **A result at a signature variable crosses as the runtime's value.**
    A signature whose result mentions one of its type variables crosses that
-   result as `Rt::Value`: `Returned<Rt>::cross` erases what the instance
+   result as `Rt::Value`: `ret::Returned<Shape, Rt>::cross`, acvus-extern's
+   at the signature's shape, erases what the instance
    returned and `restore` materializes at the requirer's own result type,
    which the checker unified with the instance's. A concrete result crosses as
    typed. `Signature::call_later` returns `impl Future`, adding no box.

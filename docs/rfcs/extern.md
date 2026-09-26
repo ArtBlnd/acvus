@@ -996,10 +996,14 @@ Status: Accepted
    `unsafe` to implement, since the capability crosses any word at any
    type: its `# Safety` is that the word an impl hands back or reads is
    the value of `Self` at the type the checker settled, that it crosses
-   nothing else with the capability, and that it keeps none. The derives,
-   `#[extern_fn]`, `extern_signature!` and the library's macros emit
-   `unsafe impl` with the `SAFETY` that discharges it, so their users
-   write no `unsafe`; a crossing written by hand says `unsafe impl`.
+   nothing else with the capability, and that it keeps none. A crossing
+   a user crate declares names one of acvus-extern's sealed strategies by
+   a safe associated type (a signature's `Returned` by its shape), whose
+   bodies and whose one `unsafe impl` are acvus-extern's. A fact about a
+   type's own structure (`Within`, `UniformPayload`, `Transparent`, a
+   generic type's `Canonical`, `LaidOut`) is the derive's: it reads the
+   definition and emits the `unsafe impl` with the `SAFETY` that
+   discharges it, and one written by hand says `unsafe impl`.
 3. **A keep is refused by Rust.** A type variable is not `'static` and a
    carrier is `Within` the call (RFC-0079 rules 6 to 8), so a handler that
    keeps either past the call does not compile, and no handler asserts it

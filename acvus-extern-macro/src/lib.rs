@@ -1850,8 +1850,8 @@ fn generate_extern_fn(
             #(let #out_idents = #out_idents.take();)*
         };
         // An instance whose result is a borrow crosses it through the
-        // marker that borrow stands at; an owned result through the
-        // signature's own `Returned` (RFC-0068 rule 6).
+        // marker that borrow stands at; an owned result through
+        // `ret::Returned` at the signature module's `Shape` (RFC-0068 rule 6).
         let (lent_cross, lent_cross_await) = match &returning {
             Returning::Lent(shape) if !shape.slice => {
                 let carrier = shape.one_carrier(&quote! { #rt_ret }, &quote! { __R });
@@ -1868,8 +1868,15 @@ fn generate_extern_fn(
                 }
             }
             _ => (
-                quote! { <_ as #sig_mod::Returned<__R>>::cross(__rt, #call) },
-                quote! { <_ as #sig_mod::Returned<__R>>::cross(__rt, (#call).await) },
+                quote! {
+                    <_ as ::acvus_extern::ret::Returned<#sig_mod::Shape, __R>>::cross(__rt, #call)
+                },
+                quote! {
+                    <_ as ::acvus_extern::ret::Returned<#sig_mod::Shape, __R>>::cross(
+                        __rt,
+                        (#call).await,
+                    )
+                },
             ),
         };
         if awaits && has_glue {
@@ -5706,61 +5713,10 @@ fn signature_module(
     ret: &Type,
 ) -> proc_macro2::TokenStream {
     let module = signature_module_ident(ident);
-    // A result standing at one of the signature's type variables is the
-    // instance's own Rust type on one side and the requirer's on the other,
-    // so it crosses as the runtime's value: the glue erases what its
-    // handler returned and the requirer materializes at its own `Ret`.
-    let returned = match RetShape::of(ret, vars) {
-        RetShape::Concrete => quote! {
-            pub type Ret<#runtime> = <#ret as ::acvus_extern::RestRun<#runtime>>::Run;
-
-            // SAFETY: a concrete result crosses as itself; the capability
-            // crosses nothing and is not kept.
-            unsafe impl<#runtime> Returned<#runtime> for #ret
-            where
-                #runtime: ::acvus_extern::Runtime,
-            {
-                #[inline(always)]
-                fn cross(_: ::acvus_extern::Crossing<'_, #runtime>, __r: Self) -> Ret<#runtime> {
-                    __r
-                }
-            }
-        },
-        RetShape::OptionOfVariable(_) => quote! {
-            pub type Ret<#runtime> =
-                ::core::option::Option<<#runtime as ::acvus_extern::Runtime>::Value>;
-
-            // SAFETY: the word is `__T`'s own `erase` of the present value,
-            // at the `__T` the checker settled; nothing else crosses and the
-            // capability is not kept.
-            unsafe impl<#runtime, __T> Returned<#runtime> for ::core::option::Option<__T>
-            where
-                #runtime: ::acvus_extern::Runtime,
-                __T: ::acvus_extern::OneValue<#runtime>,
-            {
-                #[inline(always)]
-                fn cross(__rt: ::acvus_extern::Crossing<'_, #runtime>, __r: Self) -> Ret<#runtime> {
-                    __r.map(|__v| <__T as ::acvus_extern::OneValue<#runtime>>::erase(__v, __rt))
-                }
-            }
-        },
-        RetShape::Whole => quote! {
-            pub type Ret<#runtime> = <#runtime as ::acvus_extern::Runtime>::Value;
-
-            // SAFETY: the word is `__T`'s own `erase` of the result, at the
-            // `__T` the checker settled; nothing else crosses and the
-            // capability is not kept.
-            unsafe impl<#runtime, __T> Returned<#runtime> for __T
-            where
-                #runtime: ::acvus_extern::Runtime,
-                __T: ::acvus_extern::OneValue<#runtime>,
-            {
-                #[inline(always)]
-                fn cross(__rt: ::acvus_extern::Crossing<'_, #runtime>, __r: Self) -> Ret<#runtime> {
-                    <__T as ::acvus_extern::OneValue<#runtime>>::erase(__r, __rt)
-                }
-            }
-        },
+    let shape = match RetShape::of(ret, vars) {
+        RetShape::Concrete => quote! { ::acvus_extern::ret::Concrete<#ret> },
+        RetShape::OptionOfVariable(_) => quote! { ::acvus_extern::ret::OptionOfVar },
+        RetShape::Whole => quote! { ::acvus_extern::ret::Whole },
     };
     let tail: Vec<&ExternParam> = params.iter().skip(1).collect();
     let rest: Vec<RestAt> = tail.iter().map(|p| RestAt::of(p, vars)).collect();
@@ -5884,24 +5840,9 @@ fn signature_module(
         pub mod #module {
             pub type Rest<'__a, #runtime> = #run;
 
-            /// A result as it crosses between an instance's glue and a
-            /// requirer: `Ret` is one type for every instance of the
-            /// signature, and `restore` reads it back at the requirer's
-            /// own type, which the checker unified with the instance's.
-            ///
-            /// # Safety
-            /// The word `cross` hands back is exactly the result at the
-            /// type the checker settled for it; it crosses nothing else
-            /// with the capability; and it keeps no capability past the
-            /// call.
-            pub unsafe trait Returned<#runtime>: Sized
-            where
-                #runtime: ::acvus_extern::Runtime,
-            {
-                fn cross(rt: ::acvus_extern::Crossing<'_, #runtime>, r: Self) -> Ret<#runtime>;
-            }
+            pub type Shape = #shape;
 
-            #returned
+            pub type Ret<#runtime> = <Shape as ::acvus_extern::ret::Shape<#runtime>>::Ret;
 
             pub type Now<#runtime> = for<'__a> unsafe fn(
                 &::acvus_extern::InstanceEntry<#runtime>,
