@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use acvus_ast::Span;
-use acvus_extern::{FieldAt, Owned, Words, repr};
+use acvus_extern::{FieldAt, Owned, Words};
 use acvus_mir::ir::Label;
 use futures::future::BoxFuture;
 use rustc_hash::FxHashMap;
@@ -34,7 +34,7 @@ pub type Slot = u16;
 /// scales: `Add::<i64>::run`'s three `shl $4` are what this type removes
 /// (RFC-0052 rule 5). `Slot` and `Off` are different types so that the index
 /// and the displacement cannot be handed to each other's reader.
-pub type Off = acvus_extern::repr::Disp<Value>;
+pub type Off = crate::repr::Disp<Value>;
 
 /// A register and the frame's claim on the `Large` it may own: the mark word's
 /// displacement inside the mark region and the register's bit in it, both
@@ -53,7 +53,7 @@ pub type Off = acvus_extern::repr::Disp<Value>;
 pub struct Marked {
     mask: u64,
     word_byte: u32,
-    at: repr::DispBelow<Value, { crate::regs::MAX_FRAME_SLOTS }>,
+    at: crate::repr::DispBelow<Value, { crate::regs::MAX_FRAME_SLOTS }>,
 }
 
 impl Marked {
@@ -62,7 +62,7 @@ impl Marked {
         Marked {
             mask: 1u64 << (index % crate::regs::MARK_WORD_SLOTS as usize),
             word_byte: (index / crate::regs::MARK_WORD_SLOTS as usize * size_of::<u64>()) as u32,
-            at: repr::DispBelow::of(slot),
+            at: crate::repr::DispBelow::of(slot),
         }
     }
 
@@ -668,8 +668,8 @@ impl CodeRef {
         unsafe { &*self.0.as_ptr() }
     }
 
-    pub fn address(self) -> *const () {
-        self.0.as_ptr().cast()
+    pub fn address(self) -> *const Code {
+        self.0.as_ptr().cast_const()
     }
 
     /// # Safety

@@ -1180,18 +1180,6 @@ where
     }
 }
 
-/// Whether a container of `T` is stored as a container of `T`: when `T`
-/// is the runtime's value or a `repr(transparent)` name for it; any other
-/// element was converted on the way in, so the storage holds values, not
-/// `T`s.
-pub(crate) fn stored_as_container_of<T, Rt>() -> bool
-where
-    T: OneValue<Rt>,
-    Rt: Runtime,
-{
-    T::STORED_AS_VALUE
-}
-
 /// An element a borrowed `Vec` or array is read in place at: an
 /// `Erased<Rt, T>`, whose canonical form `Owned<Rt>` is a type variable's
 /// run-time instantiation. A `Vec` or an array a script holds is the

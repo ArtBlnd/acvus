@@ -80,5 +80,5 @@ where
 /// # Safety
 /// `p` is the header of a live `Box<Slot<T>>` that is not used again.
 pub unsafe fn drop_slot<T>(p: NonNull<Header>) {
-    drop(unsafe { Box::from_raw(p.cast::<Slot<T>>().as_ptr()) });
+    drop(unsafe { Box::from_raw(crate::repr::slot_header::<T>().whole(p).as_ptr()) });
 }

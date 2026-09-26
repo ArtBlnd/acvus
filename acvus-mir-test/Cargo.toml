@@ -24,3 +24,6 @@ rustc-hash = { workspace = true }
 
 [dev-dependencies]
 insta = "1"
+
+[lints]
+workspace = true

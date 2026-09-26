@@ -271,7 +271,7 @@ impl acvus_extern::Borrowable<Tiny> for V {
             panic!("deref_mut: not a reference: {reference:?}")
         };
         // SAFETY: the target is live and, by the checker, exclusively named.
-        unsafe { &mut *(*p as *mut V) }
+        unsafe { &mut *(*p).cast_mut() }
     }
 }
 
@@ -420,11 +420,11 @@ impl Runtime for Tiny {
             panic!("deref_mut: not a reference: {reference:?}")
         };
         // SAFETY: the target is live and, by the checker, exclusively named.
-        open_mut(unsafe { &mut *(*p as *mut V) })
+        open_mut(unsafe { &mut *(*p).cast_mut() })
     }
 
     unsafe fn reference(&self, target: &V) -> V {
-        V::Reference(target as *const V)
+        V::Reference(std::ptr::from_ref(target))
     }
     fn rust_fn(&self, _: acvus_extern::RustBody<Self>) -> V {
         panic!("Tiny makes no Rust function value")

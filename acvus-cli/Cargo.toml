@@ -43,3 +43,6 @@ serde_json = "1"
 # the listing the interpreter's tests read.
 acvus-interpreter-test = { path = "../acvus-interpreter-test" }
 url = "2"
+
+[lints]
+workspace = true

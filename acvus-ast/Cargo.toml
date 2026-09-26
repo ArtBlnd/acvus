@@ -15,3 +15,6 @@ lalrpop = "0.22"
 
 [dev-dependencies]
 insta = "1"
+
+[lints]
+workspace = true

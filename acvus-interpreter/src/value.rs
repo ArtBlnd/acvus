@@ -2,22 +2,21 @@
 //! `Value`'s `Kind` says what Rust type it was erased from; the MIR type
 //! the interpreter carries beside it says what the program reads it as.
 
-use std::alloc::{alloc, dealloc, handle_alloc_error};
 use std::any::TypeId;
 use std::fmt;
 use std::any::Any;
 use std::mem;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
-use std::slice;
 use std::sync::Arc;
 
-use acvus_extern::repr::{self, HeadAndTail, PtrWord, Word};
+use acvus_extern::repr::{self, PtrWord, Word};
 use acvus_extern::{FieldAt, ObjectShape, Owned, Release};
 use acvus_mir::ty::IntTy;
 use acvus_utils::{Astr, Interner};
 
 use crate::flight::Launched;
+use crate::repr::{HeadAndTail, slot_header};
 use crate::runtime::AcvusRuntime;
 use crate::vtable::{Composite, DebugFn, HasVtable, Header, NameFn, Slot, Vtable, drop_slot};
 
@@ -239,9 +238,10 @@ where
     // SAFETY: `header` and `value` are both written above, and `Slot<T>` has
     // no other field.
     let slot = unsafe { slot.assume_init() };
+    let header = slot_header::<T>().head(NonNull::from(Box::leak(slot)));
     Value {
         kind: Kind::Large,
-        word: repr::word_of_ptr(Box::into_raw(slot).cast::<Header>()).word(),
+        word: repr::word_of_ptr(header.as_ptr()).word(),
     }
 }
 
@@ -310,7 +310,7 @@ macro_rules! value_word {
                         );
                         let p = self.payload();
                         // SAFETY: the payload was allocated by `large` as Box<Slot<T>>.
-                        let slot = unsafe { Box::from_raw(p.cast::<Slot<T>>().as_ptr()) };
+                        let slot = unsafe { Box::from_raw(slot_header::<T>().whole(p).as_ptr()) };
                         let Slot { value, .. } = *slot;
                         value
                     }
@@ -355,7 +355,7 @@ macro_rules! value_word {
             $v unsafe fn peek<T: 'static>(&self) -> &T {
                 debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
                 // SAFETY: the payload is a live Slot<T>.
-                unsafe { &self.payload().cast::<Slot<T>>().as_ref().value }
+                unsafe { &slot_header::<T>().whole(self.payload()).as_ref().value }
             }
 
             /// Mutate a `Large` payload in place.
@@ -365,7 +365,7 @@ macro_rules! value_word {
             $v unsafe fn peek_mut<T: 'static>(&mut self) -> &mut T {
                 debug_assert_eq!(self.header().vtable.type_id, TypeId::of::<T>());
                 // SAFETY: the payload is a live Slot<T> and we hold &mut self.
-                unsafe { &mut self.payload().cast::<Slot<T>>().as_mut().value }
+                unsafe { &mut slot_header::<T>().whole(self.payload()).as_mut().value }
             }
 
             /// The bits an `Inline` type was erased into.
@@ -642,10 +642,7 @@ impl FnValue {
     unsafe fn captures<'a>(head: NonNull<Slot<FnValue>>) -> &'a [Owned<AcvusRuntime>] {
         // SAFETY: the caller's contract, and `ClosureRecord::layout`: `len`
         // captures follow the head at `ClosureRecord::TAIL`.
-        unsafe {
-            let first = ClosureRecord::tail(head).as_ptr();
-            slice::from_raw_parts(first, usize::from(head.as_ref().value.len))
-        }
+        unsafe { ClosureRecord::tail_run(head, head.as_ref().value.len) }
     }
 }
 
@@ -654,11 +651,10 @@ impl FnValue {
 unsafe fn drop_closure(p: NonNull<Header>) {
     // SAFETY: the caller's contract.
     unsafe {
-        let head = p.cast::<Slot<FnValue>>();
+        let head = slot_header::<FnValue>().whole(p);
         let len = head.as_ref().value.len;
-        let first = ClosureRecord::tail(head).as_ptr();
-        ptr::drop_in_place(slice::from_raw_parts_mut(first, usize::from(len)));
-        dealloc(head.as_ptr().cast::<u8>(), ClosureRecord::layout(len));
+        ptr::drop_in_place(ClosureRecord::tail_run_mut(head, len));
+        ClosureRecord::dealloc(head, len);
     }
 }
 
@@ -684,7 +680,7 @@ macro_rules! typed_debug_fn {
     ($T:ty; $dg:ident = |$d:ident, $f:ident| $dg_body:expr;) => {
         unsafe fn $dg(p: NonNull<Header>, $f: &mut fmt::Formatter<'_>) -> fmt::Result {
             // SAFETY: p is the header of a live Slot<$T>.
-            let $d = unsafe { &p.cast::<Slot<$T>>().as_ref().value };
+            let $d = unsafe { &slot_header::<$T>().whole(p).as_ref().value };
             $dg_body
         }
     };
@@ -957,14 +953,9 @@ macro_rules! value_constructors {
                 let len =
                     u16::try_from(captures.len()).expect("a closure captures at most u16::MAX registers");
                 debug_assert!(len > 0, "a closure of no captures is `Value::code`");
-                let layout = ClosureRecord::layout(len);
-                // SAFETY: the layout has a non-zero size.
-                let block = unsafe { alloc(layout) }.cast::<Slot<FnValue>>();
-                let Some(head) = NonNull::new(block) else {
-                    handle_alloc_error(layout)
-                };
-                // SAFETY: `block` is `layout` bytes, uninitialized: the head is
-                // written first, then each capture in order.
+                let head = ClosureRecord::alloc(len);
+                // SAFETY: `head` is `ClosureRecord::alloc(len)`'s, unwritten:
+                // the head is written first, then each capture in order.
                 unsafe {
                     head.as_ptr().write(Slot {
                         header: Header { vtable: &FN },
@@ -977,7 +968,7 @@ macro_rules! value_constructors {
                 }
                 Value {
                     kind: Kind::Large,
-                    word: repr::word_of_ptr(head.cast::<Header>().as_ptr()).word(),
+                    word: repr::word_of_ptr(slot_header::<FnValue>().head(head).as_ptr()).word(),
                 }
             }
 
@@ -1112,7 +1103,7 @@ macro_rules! value_constructors {
                     Kind::Code => unsafe { crate::code::CodeRef::of_address(self.ptr::<crate::code::Code>()) },
                     // SAFETY: the caller's contract: a closure that is not
                     // `Kind::Code` is a boxed `FnValue`.
-                    _ => unsafe { self.payload().cast::<Slot<FnValue>>().as_ref().value.code },
+                    _ => unsafe { slot_header::<FnValue>().whole(self.payload()).as_ref().value.code },
                 }
             }
 
@@ -1124,7 +1115,7 @@ macro_rules! value_constructors {
                     Kind::Code => &[],
                     // SAFETY: the caller's contract, as `code_of`: a boxed closure
                     // is a record `Value::closure` laid.
-                    _ => unsafe { FnValue::captures(self.payload().cast::<Slot<FnValue>>()) },
+                    _ => unsafe { FnValue::captures(slot_header::<FnValue>().whole(self.payload())) },
                 }
             }
         }

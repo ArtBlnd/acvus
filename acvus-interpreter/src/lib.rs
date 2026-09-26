@@ -60,6 +60,7 @@ mod prepare;
 pub mod regs;
 #[cfg(not(feature = "tooling"))]
 mod regs;
+mod repr;
 mod runtime;
 pub mod space;
 mod value;
