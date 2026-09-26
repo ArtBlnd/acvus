@@ -78,7 +78,9 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 /// `Op(Add) exact commutative`, `Call(#0, option-lifted) exact`,
 /// `Fold(r3, #1) exact`, `Order exact commutative`, `Last exact`,
 /// `Extremum(Max, Carried(r3), carrying Carried(r4)) exact`,
-/// `Option(Call(#1, identity)) exact commutative`,
+/// `Option(Call(#1, identity)) exact commutative` (`None` adjoined as the
+/// identity), `Option(Op(Add), None absorbing) exact commutative`,
+/// `Extremum(Max, field k) exact` (a record chosen by its field `k`),
 /// `Ordered(Max, #2) exact commutative`,
 /// `First(Carried(r3), guarding Carried(r4)) exact`,
 /// `Reset(Op(Concat)) exact`, `AffineMap exact`, `StateMap(len(r3)) exact`,
@@ -135,6 +137,14 @@ fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
             )
         }
         Law::OptionLifted(inner) => format!("Option({})", fmt_law(inner, ctx, vn)),
+        Law::OptionAbsorbing(inner) => {
+            format!("Option({}, None absorbing)", fmt_law(inner, ctx, vn))
+        }
+        Law::FieldExtremum { op, field } => format!(
+            "Extremum({}, field {})",
+            fmt_law_op(*op),
+            ctx.interner.resolve(*field)
+        ),
         Law::Product(parts) => {
             let parts: Vec<String> = parts
                 .iter()

@@ -315,6 +315,8 @@ enum LawKind {
     Last,
     Extremum(LawOp),
     OptionLifted(Box<LawKind>),
+    OptionAbsorbing(Box<LawKind>),
+    FieldExtremum(LawOp),
     Product(Vec<LawKind>),
     Ordered(LawOp),
     First,
@@ -333,6 +335,8 @@ impl LawKind {
             Law::Last => LawKind::Last,
             Law::Extremum { op, .. } => LawKind::Extremum(*op),
             Law::OptionLifted(inner) => LawKind::OptionLifted(Box::new(LawKind::of(inner))),
+            Law::OptionAbsorbing(inner) => LawKind::OptionAbsorbing(Box::new(LawKind::of(inner))),
+            Law::FieldExtremum { op, .. } => LawKind::FieldExtremum(*op),
             Law::Product(parts) => {
                 LawKind::Product(
                     parts.iter().map(|(_, part)| LawKind::of(&part.accumulator.law)).collect(),
@@ -1918,6 +1922,210 @@ fn a_switch_on_an_option_token_combining_another_value_has_no_law() {
          best.unwrap()",
     );
     assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// The `Some` arm's update of `f06_opt_int` (remaining-rows survey): a
+/// compare and select, the maximum, and the `None` arm sends `Some(k)`, the
+/// value the select combines the payload with (RFC-0093 rule 4).
+#[test]
+fn a_switch_on_an_option_token_whose_some_arm_selects_the_greater_is_the_maximum_with_none_as_identity() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([3, 9, 4]); let best = None; \
+         for s in &xs { let k = *s * 2; \
+           best = match best { None => Some(k), Some(b) => if k > b { Some(k) } else { Some(b) }, }; } \
+         best.unwrap()",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::AnyOrder,
+            exact(LawKind::OptionLifted(Box::new(LawKind::Op(LawOp::Max))))
+        ),
+        "{lines}"
+    );
+    assert!(lines.contains("any_order law(Option(Op(Max)) exact commutative)"), "{lines}");
+}
+
+/// `r21_absorb` in its `+` form: the `None` arm leaves the token, so `None`
+/// absorbs from either side (RFC-0093 rule 4).
+#[test]
+fn a_switch_on_an_option_token_whose_none_arm_leaves_it_is_the_law_with_none_absorbing() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64, 8u64, 1u64]); let p = Some(0u64); \
+         for x in &xs { p = match p { Some(v) => Some(v + *x), None => None, }; } \
+         p.unwrap()",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::AnyOrder,
+            exact(LawKind::OptionAbsorbing(Box::new(LawKind::Op(LawOp::Add))))
+        ),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("any_order law(Option(Op(Add), None absorbing) exact commutative)"),
+        "{lines}"
+    );
+}
+
+/// The `Some` arm's law is any law the readings read: here `+` through a
+/// branch whose other arm leaves the payload.
+#[test]
+fn an_absorbing_lift_reads_its_payload_law_through_a_branch() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64, 8u64, 1u64]); let p = Some(0u64); \
+         for x in &xs { p = match p { Some(v) => if *x > 2u64 { Some(v + *x) } else { Some(v) }, None => None, }; } \
+         p.unwrap()",
+    );
+    assert_eq!(
+        law_of(&held),
+        Some(&LawKind::OptionAbsorbing(Box::new(LawKind::Op(LawOp::Add)))),
+        "{lines}"
+    );
+}
+
+/// A `Some` arm that may send `None` is no update of the payload: a careless
+/// payload reading would take that `None` as a value reading none of the
+/// state, `0·b + v`.
+#[test]
+fn a_some_arm_that_may_send_none_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64, 8u64, 1u64]); let p = Some(0u64); \
+         for x in &xs { p = match p { Some(v) => if *x > 7u64 { None } else { Some(v + *x) }, None => None, }; } \
+         p.is_none()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `Some(e ⊕ y)` with `e` the identity is `Some(y)`.
+#[test]
+fn a_none_arm_sending_the_identity_combined_with_the_value_adjoins_none_as_identity() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64, 8u64, 1u64]); let p = None; \
+         for x in &xs { p = match p { Some(v) => Some(v + *x), None => Some(0u64 + *x), }; } \
+         p.unwrap()",
+    );
+    assert_eq!(
+        law_of(&held),
+        Some(&LawKind::OptionLifted(Box::new(LawKind::Op(LawOp::Add)))),
+        "{lines}"
+    );
+}
+
+/// `Some(5 + y)` opens the token at `5 + y`, which a chunk run from `None`
+/// would add once per chunk.
+#[test]
+fn a_none_arm_sending_another_value_than_the_identity_combined_with_it_has_no_law() {
+    for none_arm in ["Some(5u64 + *x)", "Some(*x + 1u64)"] {
+        let (held, lines) = the_cycle(&format!(
+            "let xs = vec([5u64, 3u64, 8u64, 1u64]); let p = None; \
+             for x in &xs {{ p = match p {{ Some(v) => Some(v + *x), None => {none_arm}, }}; }} \
+             p.unwrap()"
+        ));
+        assert_eq!(law_of(&held), None, "{none_arm}: {lines}");
+    }
+}
+
+/// `Some(y)` names what one step of the law combines: an update of two
+/// steps combines `y + y`, not `y`, and one under a branch combines `y` only
+/// where the branch takes it.
+#[test]
+fn an_identity_lift_whose_some_arm_is_not_one_step_of_its_law_has_no_law() {
+    for some_arm in [
+        "Some(b + k + k)",
+        "if k > 5 { Some(b + k) } else { Some(b) }",
+    ] {
+        let (held, lines) = the_cycle(&format!(
+            "let xs = vec([3, 9, 4]); let best = None; \
+             for s in &xs {{ let k = *s * 2; \
+               best = match best {{ None => Some(k), Some(b) => {some_arm}, }}; }} \
+             best.unwrap()"
+        ));
+        assert_eq!(law_of(&held), None, "{some_arm}: {lines}");
+    }
+}
+
+/// `adv_r21_i64`: `checked_add` over `i64` states no law, so an absorbing
+/// `None` has nothing to lift. `[MAX, 1, -1]` is `None` in order, and a
+/// split `[MAX] | [1, -1]` would give `Some(MAX)`.
+#[test]
+fn a_checked_add_over_i64_at_its_edge_values_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([9223372036854775807, 1, -1]); let p = Some(0); \
+         for x in &xs { p = match p { Some(v) => v.checked_add(*x), None => None, }; } \
+         p.is_none()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `f06_rec_for`: a record chosen by a strict compare of its field `k`
+/// carries its other field; a tie keeps the earlier record, so the law is
+/// in order (RFC-0093 rule 5).
+#[test]
+fn a_record_chosen_by_a_strict_compare_of_one_field_is_that_fields_left_biased_extremum() {
+    for (compare, op) in [("k > best.k", LawOp::Max), ("k < best.k", LawOp::Min)] {
+        let (held, lines) = the_cycle(&format!(
+            "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+             let best = {{ v: \"\".to_string(), k: 9, }}; \
+             for s in &xs {{ let k = s.len() as i64; \
+               best = if {compare} {{ {{ v: s.to_string(), k: k, }} }} else {{ best }}; }} \
+             best.v"
+        ));
+        assert_eq!(
+            held,
+            cycle(
+                vec![TokenKind::Storage],
+                Order::InOrder,
+                exact(LawKind::FieldExtremum(op))
+            ),
+            "{compare}: {lines}"
+        );
+    }
+}
+
+/// A non-strict compare keeps the later of two records with one key, a
+/// record whose field is not the compared value is no extremum of it, and
+/// either would join chunks to another record than the program's.
+#[test]
+fn a_record_chosen_by_a_non_strict_compare_or_by_another_value_has_no_law() {
+    for (compare, key) in [("k >= best.k", "k"), ("k > best.k", "k + 1")] {
+        let (held, lines) = the_cycle(&format!(
+            "let xs = vec([\"kiwi\".to_string(), \"pear\".to_string(), \"fig\".to_string()]); \
+             let best = {{ v: \"\".to_string(), k: -1, }}; \
+             for s in &xs {{ let k = s.len() as i64; let t = s.to_string(); \
+               best = if {compare} {{ {{ v: t, k: {key}, }} }} else {{ best }}; }} \
+             best.v"
+        ));
+        assert_eq!(law_of(&held), None, "{compare}, k: {key}: {lines}");
+    }
+}
+
+/// `f06_opt_for`: the record extremum lifted over `Option`, `None` its
+/// identity; the lift keeps the extremum's order.
+#[test]
+fn an_option_of_a_record_chosen_by_one_field_is_the_lifted_left_biased_extremum() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([\"fig\".to_string(), \"apple\".to_string(), \"kiwi\".to_string()]); \
+         let best = None; \
+         for s in &xs { let k = s.len() as i64; \
+           best = match best { \
+             None => Some({ v: s.to_string(), k: k, }), \
+             Some(b) => if k > b.k { Some({ v: s.to_string(), k: k, }) } else { Some(b) }, }; } \
+         best.unwrap().v",
+    );
+    assert_eq!(
+        held,
+        cycle(
+            vec![TokenKind::Storage],
+            Order::InOrder,
+            exact(LawKind::OptionLifted(Box::new(LawKind::FieldExtremum(LawOp::Max))))
+        ),
+        "{lines}"
+    );
+    assert!(lines.contains("in_order law(Option(Extremum(Max, field k)) exact)"), "{lines}");
 }
 
 /// Both values are computed before the switch, so only their being one
