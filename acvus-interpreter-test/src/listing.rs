@@ -56,7 +56,7 @@ pub fn script_listing_with_externs(
         &main_body(&prepared_script_with_externs(
             interner, source, context, registries, ret,
         ))
-        .heads,
+        .heads(),
     )
 }
 
@@ -82,12 +82,12 @@ pub fn prepared_script(
 }
 
 pub fn main_body(prepared: &Prepared) -> &Body {
-    prepared.main.as_ref()
+    prepared.main()
 }
 
 pub fn chains_of_body(body: &Body) -> Vec<ChainShape> {
     let mut found = Vec::new();
-    collect_chains(&body.heads, &mut found);
+    collect_chains(body.heads(), &mut found);
     found
 }
 
@@ -136,5 +136,5 @@ pub fn script_listing(
     context: Context,
     ret: Ty,
 ) -> Vec<BlockListing> {
-    listing(&main_body(&prepared_script(interner, source, context, ret)).heads)
+    listing(&main_body(&prepared_script(interner, source, context, ret)).heads())
 }

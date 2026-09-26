@@ -6,7 +6,14 @@
 //! The scan reads each file's syntax (`syn`), so a comment is no match. A
 //! macro's body — a `macro_rules!` arm, a `quote!` the proc macro emits — is
 //! tokens and not syntax, so it is scanned token by token for the same forms.
+//!
+//! RFC-0102 rule 5: every `unsafe` block and `unsafe fn` outside the two
+//! modules is counted per file, and each file's count is the one
+//! `unsafe_left.txt` records. A count that rises fails the scan, and so does
+//! one that falls until the table is lowered with it, so the table's total is
+//! the count the workspace holds.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -326,6 +333,251 @@ fn no_cast_is_written_outside_the_boundary_modules() {
         refused.is_empty(),
         "a cast outside `acvus_extern::repr` and the interpreter's `repr` (RFC-0080 rule 5):\n{}",
         refused.join("\n")
+    );
+}
+
+// -- The counted `unsafe` (RFC-0102 rule 5) ----------------------------------
+
+/// The table of `unsafe` sites each file keeps, beside this file: one
+/// `<count> <path>` per line, a `#` line a comment.
+const UNSAFE_LEFT: &str = include_str!("unsafe_left.txt");
+
+/// The `unsafe` blocks and `unsafe fn` items of one file.
+///
+/// An `unsafe fn` is a free function, a method, a trait's declaration or an
+/// implementation's; a function pointer type `unsafe fn(..)` declares no
+/// function and is not one. An `unsafe impl` or `unsafe trait` is not counted
+/// (RFC-0080 rule 2), and an `unsafe impl` of `GlobalAlloc` holds its own
+/// items (RFC-0102 rule 4), so nothing inside one is counted either.
+#[derive(Default)]
+struct Unsafety {
+    sites: Vec<UnsafeSite>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum UnsafeKind {
+    Block,
+    Fn,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+struct UnsafeSite {
+    line: usize,
+    kind: UnsafeKind,
+}
+
+impl Unsafety {
+    fn found(&mut self, line: usize, kind: UnsafeKind) {
+        self.sites.push(UnsafeSite { line, kind });
+    }
+}
+
+impl Unsafety {
+    fn macro_tokens(&mut self, stream: TokenStream) {
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        let mut at = 0;
+        while at < trees.len() {
+            match &trees[at] {
+                TokenTree::Ident(ident) if ident == "unsafe" => {
+                    let line = ident.span().start().line;
+                    match (trees.get(at + 1), trees.get(at + 2)) {
+                        (Some(TokenTree::Group(body)), _) if body.delimiter() == Delimiter::Brace => {
+                            self.found(line, UnsafeKind::Block);
+                        }
+                        (Some(TokenTree::Ident(kw)), Some(TokenTree::Ident(_))) if kw == "fn" => {
+                            self.found(line, UnsafeKind::Fn);
+                        }
+                        (Some(TokenTree::Ident(kw)), Some(TokenTree::Punct(dollar)))
+                            if kw == "fn" && dollar.as_char() == '$' =>
+                        {
+                            self.found(line, UnsafeKind::Fn);
+                        }
+                        (Some(TokenTree::Ident(kw)), _) if kw == "impl" && names_global_alloc(&trees[at + 2..]) => {
+                            at += 2;
+                            while at < trees.len()
+                                && !matches!(&trees[at], TokenTree::Group(g) if g.delimiter() == Delimiter::Brace)
+                            {
+                                at += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                TokenTree::Group(group) => self.macro_tokens(group.stream()),
+                TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+            }
+            at += 1;
+        }
+    }
+}
+
+fn names_global_alloc(head: &[TokenTree]) -> bool {
+    head.iter()
+        .take_while(|tree| !matches!(tree, TokenTree::Ident(kw) if kw == "for"))
+        .any(|tree| matches!(tree, TokenTree::Ident(name) if name == "GlobalAlloc"))
+}
+
+impl<'ast> Visit<'ast> for Unsafety {
+    fn visit_expr_unsafe(&mut self, block: &'ast syn::ExprUnsafe) {
+        self.found(block.unsafe_token.span.start().line, UnsafeKind::Block);
+        visit::visit_expr_unsafe(self, block);
+    }
+
+    fn visit_signature(&mut self, sig: &'ast syn::Signature) {
+        if let Some(token) = &sig.unsafety {
+            self.found(token.span.start().line, UnsafeKind::Fn);
+        }
+        visit::visit_signature(self, sig);
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let global_alloc = item.unsafety.is_some()
+            && item
+                .trait_
+                .as_ref()
+                .and_then(|(_, path, _)| path.segments.last())
+                .is_some_and(|last| last.ident == "GlobalAlloc");
+        if !global_alloc {
+            visit::visit_item_impl(self, item);
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.macro_tokens(mac.tokens.clone());
+        visit::visit_macro(self, mac);
+    }
+}
+
+fn unsafety(source: &str, path: &str) -> Vec<UnsafeSite> {
+    let file = syn::parse_file(source).unwrap_or_else(|e| panic!("{path} does not parse: {e}"));
+    let mut scan = Unsafety::default();
+    scan.visit_file(&file);
+    scan.sites
+}
+
+/// `UNSAFE_LEFT`, by path.
+fn unsafe_left() -> BTreeMap<&'static str, usize> {
+    let mut table = BTreeMap::new();
+    for (number, line) in UNSAFE_LEFT.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (count, path) = line
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("unsafe_left.txt:{}: `<count> <path>`", number + 1));
+        let count: usize = count
+            .parse()
+            .unwrap_or_else(|e| panic!("unsafe_left.txt:{}: {count}: {e}", number + 1));
+        assert!(count > 0, "unsafe_left.txt:{}: a file of no site has no line", number + 1);
+        assert!(
+            table.insert(path, count).is_none(),
+            "unsafe_left.txt:{}: {path} is listed twice",
+            number + 1
+        );
+    }
+    table
+}
+
+#[test]
+fn no_file_holds_more_unsafe_than_the_table_records() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_sources_outside_build_output(&root, &mut files);
+    let table = unsafe_left();
+
+    let mut found = BTreeMap::new();
+    for file in &files {
+        let rel = file
+            .strip_prefix(&root)
+            .expect("a source under the root")
+            .to_str()
+            .unwrap_or_else(|| panic!("{} is no UTF-8 path", file.display()));
+        if BOUNDARY.contains(&rel) {
+            continue;
+        }
+        let source = std::fs::read_to_string(file).unwrap_or_else(|e| panic!("reading {rel}: {e}"));
+        let sites = unsafety(&source, rel);
+        if !sites.is_empty() {
+            found.insert(rel.to_owned(), sites);
+        }
+    }
+
+    let mut rose = Vec::new();
+    let mut fell = Vec::new();
+    for (path, sites) in &found {
+        let left = match table.get(path.as_str()) {
+            Some(left) => *left,
+            None => 0,
+        };
+        if sites.len() > left {
+            let lines: Vec<String> = sites.iter().map(|site| format!("{} {:?}", site.line, site.kind)).collect();
+            rose.push(format!("{path}: {} where the table records {left} ({})", sites.len(), lines.join(", ")));
+        } else if sites.len() < left {
+            fell.push(format!("{path}: {} where the table records {left}", sites.len()));
+        }
+    }
+    for (path, left) in &table {
+        if !found.contains_key(*path) {
+            fell.push(format!("{path}: 0 where the table records {left}"));
+        }
+    }
+    let total: usize = table.values().sum();
+    println!("unsafe outside the boundary modules (unsafe_left.txt): {total}");
+    let counted: Vec<String> = found.iter().map(|(path, sites)| format!("{} {path}", sites.len())).collect();
+    assert!(
+        rose.is_empty(),
+        "an `unsafe` block or `unsafe fn` outside the boundary modules that the table does not record \
+         (RFC-0102 rule 5):\n{}",
+        rose.join("\n")
+    );
+    assert!(
+        fell.is_empty(),
+        "a file holds fewer `unsafe` sites than unsafe_left.txt records; lower the table to the count:\n{}\n\
+         the counts found:\n{}",
+        fell.join("\n"),
+        counted.join("\n")
+    );
+}
+
+#[test]
+fn the_count_takes_each_unsafe_block_and_fn_and_not_an_impl_or_a_pointer_type() {
+    let source = r#"
+        unsafe fn f(p: *const u64) -> u64 { unsafe { *p } }
+        struct S;
+        impl S {
+            unsafe fn g(&self) {}
+            fn h(&self, e: unsafe fn(u64)) -> u64 { let _ = unsafe { 1 }; 0 }
+        }
+        trait T { unsafe fn t(); }
+        unsafe impl Send for S {}
+        unsafe trait U {}
+        unsafe impl std::alloc::GlobalAlloc for S {
+            unsafe fn alloc(&self, l: Layout) -> *mut u8 { unsafe { std::alloc::System.alloc(l) } }
+            unsafe fn dealloc(&self, p: *mut u8, l: Layout) {}
+        }
+        macro_rules! m {
+            () => { unsafe fn k() {} fn j() { unsafe { x() } } type P = unsafe fn(); };
+            ($name:ident) => { unsafe fn $name() {} };
+        }
+        quote::quote! { unsafe impl GlobalAlloc for A { unsafe fn alloc() {} } unsafe { y() } }
+        #[unsafe(no_mangle)]
+        fn safe() {}
+    "#;
+    let at = |line, kind| UnsafeSite { line, kind };
+    assert_eq!(
+        unsafety(source, "inline"),
+        [
+            at(2, UnsafeKind::Fn),
+            at(2, UnsafeKind::Block),
+            at(5, UnsafeKind::Fn),
+            at(6, UnsafeKind::Block),
+            at(8, UnsafeKind::Fn),
+            at(16, UnsafeKind::Fn),
+            at(16, UnsafeKind::Block),
+            at(17, UnsafeKind::Fn),
+            at(19, UnsafeKind::Block),
+        ]
     );
 }
 

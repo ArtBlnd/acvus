@@ -5,7 +5,7 @@
 //! facts `prepare` reads off the types at every storage instruction; nothing
 //! in this file re-derives them, so a wrong one is a defect in `prepare`.
 
-use acvus_extern::{FieldAt, Owned, Release};
+use acvus_extern::{FieldAt, Owned};
 
 use std::marker::PhantomData;
 use std::mem;
@@ -378,7 +378,7 @@ fn overwrite<const LARGE: bool>(at: &mut Value, value: Value) {
     let replaced = *at;
     *at = value;
     if LARGE {
-        replaced.release();
+        replaced.release_owned();
     }
 }
 

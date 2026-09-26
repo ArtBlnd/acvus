@@ -9,10 +9,33 @@ use std::ops::Deref;
 
 use crate::crossing::{Crossing, Holding};
 use crate::erased::Erased;
+pub use crate::erased::Releasing;
 use crate::runtime::Runtime;
 
-pub trait Release: Copy + Send + Sync + 'static {
-    fn release(self);
+/// RFC-0102 rule 3.
+///
+/// ```compile_fail,E0061
+/// use acvus_extern::{Owned, Release, Runtime};
+///
+/// fn release_a_copy_its_holder_still_owns<R: Runtime>(held: Owned<R>) {
+///     let word: R::Value = *held;
+///     word.release();
+///     drop(held);
+/// }
+/// ```
+///
+/// ```compile_fail,E0423
+/// use std::marker::PhantomData;
+/// use acvus_extern::{Owned, Release, Releasing, Runtime};
+///
+/// fn release_a_copy_with_a_token_of_its_own<R: Runtime>(held: Owned<R>) {
+///     let word: R::Value = *held;
+///     word.release(Releasing::<R>(PhantomData));
+///     drop(held);
+/// }
+/// ```
+pub trait Release<R>: Copy + Send + Sync + 'static {
+    fn release(self, holder: Releasing<R>);
 }
 
 /// Rust's `!`, named through `fn() -> !` because a stable crate cannot

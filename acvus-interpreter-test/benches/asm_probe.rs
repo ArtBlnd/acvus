@@ -3,8 +3,10 @@
 //!
 //! A bench and not a test: what it reads is the release machine, and a debug
 //! build has no tail call in it, so a `cargo test` copy would pass on an
-//! artifact nobody runs. `cargo bench --bench asm_probe` builds the profile
-//! the numbers come from and disassembles itself.
+//! artifact nobody runs. `cargo bench --profile dist --bench asm_probe`
+//! builds the deployed profile and disassembles itself: its whole-program
+//! LTO inlines handlers and helpers across crates into the operations, and
+//! without it over a hundred operations call where the tail jump belongs.
 //!
 //! `PADDING` below is the mnemonic set `benches/README.md` names for dropping
 //! inter-function alignment padding out of an `Op::run` body diff.

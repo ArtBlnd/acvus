@@ -6,5 +6,5 @@ error[E0624]: associated function `vouched` is private
   |
  ::: $WORKSPACE/acvus-extern/src/repr.rs
   |
-  |     pub(crate) const unsafe fn vouched() -> Self {
-  |     -------------------------------------------- private associated function defined here
+  |     const unsafe fn vouched() -> Self {
+  |     --------------------------------- private associated function defined here

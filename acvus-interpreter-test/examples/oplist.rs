@@ -83,26 +83,26 @@ fn dump_chain(indent: &str, head: &dyn Op) {
 fn dump_body(name: &str, code: &Body) {
     println!(
         "== {name}: blocks={} entry={} frame_len={} params={:?} captures={:?}",
-        code.heads.len(),
-        code.entry,
-        code.frame_len,
-        code.params,
-        code.captures
+        code.heads().len(),
+        code.entry(),
+        code.frame_len(),
+        code.params(),
+        code.captures()
     );
     println!(
         "   slot_kinds=[{}] entry_konsts=[{}]",
-        code.slot_kinds
+        code.slot_kinds()
             .iter()
             .map(|k| format!("r{}={:?}", k.slot.index(), k.kind))
             .collect::<Vec<_>>()
             .join(", "),
-        code.entry_konsts
+        code.entry_konsts()
             .iter()
             .map(|k| format!("r{}={:?}", k.slot.index(), k.value))
             .collect::<Vec<_>>()
             .join(", ")
     );
-    dump_blocks("  ", &code.heads);
+    dump_blocks("  ", code.heads());
 }
 
 fn dump(name: &str, code: &Code) {
@@ -193,8 +193,8 @@ fn main() {
     for (qref, module) in &cr.modules {
         let prepared = prepare_module(module, &ctx)
             .unwrap_or_else(|refused| panic!("the body is refused: {refused}"));
-        dump_body(&format!("{qref:?} main"), &prepared.main);
-        for (label, closure) in &prepared.closures {
+        dump_body(&format!("{qref:?} main"), prepared.main());
+        for (label, closure) in prepared.closures() {
             dump(&format!("{qref:?} closure {label:?}"), closure);
         }
     }

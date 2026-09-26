@@ -1,6 +1,6 @@
-//! A layout witness is made only by `same_layout!` inside acvus-extern
-//! (RFC-0080 rule 5). Its constructor is private to the crate, so code
-//! outside cannot vouch for two types, even in an `unsafe` block.
+//! A layout witness is made only by `acvus_extern::repr`'s constructors, each
+//! bound by the `unsafe impl` that proves it (RFC-0102 rule 2). The body they
+//! share is private to `repr`, so no other code vouches, even in `unsafe`.
 use acvus_extern::repr::SameLayout;
 
 fn main() {

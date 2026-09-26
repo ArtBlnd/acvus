@@ -48,13 +48,13 @@ fn prepared(i: &Interner, source: &str, context: Context, ret: Ty) -> Prepared {
 }
 
 fn main_chains(prepared: &Prepared) -> Vec<ChainShape> {
-    chains_of_body(&prepared.main)
+    chains_of_body(prepared.main())
 }
 
 fn only_closure(prepared: &Prepared) -> &Code {
-    assert_eq!(prepared.closures.len(), 1, "these scripts have one closure");
+    assert_eq!(prepared.closures().len(), 1, "these scripts have one closure");
     prepared
-        .closures
+        .closures()
         .values()
         .next()
         .expect("one closure")
@@ -224,9 +224,9 @@ async fn a_chain_reads_a_constant_from_a_register_the_entry_filled() {
     assert_eq!(v.as_int(), 19);
 
     let module = prepared(&i, "@n * 3 + 4", ctx(&i, "n", IntTy::I64, 5), Ty::I64);
-    let body = &*module.main;
+    let body = module.main();
     let filled: Vec<i64> = body
-        .entry_konsts
+        .entry_konsts()
         .iter()
         .map(|konst| konst.value.as_int())
         .collect();
@@ -236,7 +236,7 @@ async fn a_chain_reads_a_constant_from_a_register_the_entry_filled() {
     );
     let chain = main_chains(&module);
     let chain = chain.first().expect("one chain");
-    let konst_slots: Vec<Off> = body.entry_konsts.iter().map(|konst| konst.slot).collect();
+    let konst_slots: Vec<Off> = body.entry_konsts().iter().map(|konst| konst.slot).collect();
     let reads_a_konst = chain.leaves.iter().any(|off| {
         konst_slots
             .iter()
@@ -254,9 +254,9 @@ async fn a_constant_a_call_reads_is_not_hoisted() {
         Context::default(),
         Ty::Int(IntTy::U64),
     );
-    let body = &*module.main;
+    let body = module.main();
     assert!(
-        body.entry_konsts.is_empty(),
+        body.entry_konsts().is_empty(),
         "a string a call reads became an entry constant"
     );
 }
@@ -413,18 +413,18 @@ fn every_chain_leaf_is_inside_the_frame_it_reads_unchecked() {
         ctx(&i, "n", IntTy::I64, 4),
         Ty::I64,
     );
-    let body = &*module.main;
+    let body = module.main();
     for chain in main_chains(&module) {
         for offset in &chain.leaves {
             assert!(
-                *offset < ChainBounds::byte_offset_of_word(Off::of(body.frame_len)),
+                *offset < ChainBounds::byte_offset_of_word(Off::of(body.frame_len())),
                 "a chain reads at offset {offset}, past the frame of {} registers",
-                body.frame_len
+                body.frame_len()
             );
         }
     }
     assert!(
-        !body.entry_konsts.is_empty(),
+        !body.entry_konsts().is_empty(),
         "the literals 2 and 1 are registers the entry fills"
     );
 }

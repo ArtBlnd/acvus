@@ -1,7 +1,7 @@
 //! Strings: a template's output, equality, and the clone the language's
 //! `StringClone` instruction is (RFC-0020).
 
-use acvus_extern::{Release, StrView, Words};
+use acvus_extern::{StrView, Words};
 
 #[cfg(any(debug_assertions, feature = "probe"))]
 use crate::code::OwnedOps;
@@ -130,7 +130,7 @@ impl Op for Concat {
                     let held = regs.read(slot);
                     // SAFETY: the type checker admits only a `String` here.
                     out.push_str(unsafe { held.as_str() });
-                    held.release();
+                    held.release_owned();
                 }
             }
         }
@@ -169,7 +169,7 @@ impl Op for Append {
                 let held = regs.read(slot);
                 // SAFETY: the type checker admits only a `String` here.
                 out.push_str(unsafe { held.as_str() });
-                held.release();
+                held.release_owned();
             }
         }
         regs.take_mask(self.owns_large);

@@ -5,6 +5,7 @@
 //! unchanged: a hook is this interpreter's feature, and the extern contract
 //! every runtime shares gains nothing for it.
 
+use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 use acvus_extern::{
@@ -59,6 +60,24 @@ impl HookEffect {
     }
 }
 
+/// A hook a host of a graph declares is in that host's scope, as its
+/// entries are (RFC-0101 rule 2). A host compiled alone is no scope, and
+/// its hooks' `host` is `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct HookName {
+    pub host: Option<String>,
+    pub hook: String,
+}
+
+impl fmt::Display for HookName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.host {
+            None => write!(f, "`{}`", self.hook),
+            Some(host) => write!(f, "`{}` of the host `{host}`", self.hook),
+        }
+    }
+}
+
 /// What `Program::bind` refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookPart {
@@ -94,7 +113,7 @@ pub struct Binding<P>
 where
     P: sealed::Sealed,
 {
-    hook: String,
+    hook: HookName,
     body: OnceLock<Box<Body<P>>>,
 }
 
@@ -111,9 +130,9 @@ macro_rules! slot {
         }
 
         impl Slot {
-            fn of(hook: &str, arity: usize) -> Option<Slot> {
+            fn unbound_of_arity(arity: usize) -> Option<fn(&HookName) -> Slot> {
                 match arity {
-                    $($arity => Some(Slot::$variant(Arc::new(Binding::new(hook)))),)+
+                    $($arity => Some(|hook: &HookName| Slot::$variant(Arc::new(Binding::new(hook)))),)+
                     _ => None,
                 }
             }
@@ -172,9 +191,9 @@ impl<P> Binding<P>
 where
     P: sealed::Sealed,
 {
-    fn new(hook: &str) -> Self {
+    fn new(hook: &HookName) -> Self {
         Binding {
-            hook: hook.to_owned(),
+            hook: hook.clone(),
             body: OnceLock::new(),
         }
     }
@@ -210,9 +229,9 @@ where
 // -- Declaring a hook ----------------------------------------------------
 
 pub(crate) struct HookDecl {
-    name: String,
+    name: HookName,
     effect: HookEffect,
-    slot: Slot,
+    unbound_slot: fn(&HookName) -> Slot,
 }
 
 impl HookDecl {
@@ -220,13 +239,42 @@ impl HookDecl {
     /// view holds.
     pub(crate) fn new(name: &str, arity: usize, effect: HookEffect) -> Option<HookDecl> {
         Some(HookDecl {
-            name: name.to_owned(),
+            name: HookName {
+                host: None,
+                hook: name.to_owned(),
+            },
             effect,
-            slot: Slot::of(name, arity)?,
+            unbound_slot: Slot::unbound_of_arity(arity)?,
         })
     }
 
-    pub(crate) fn name(&self) -> &str {
+    pub(crate) fn in_host(self, host: &str) -> HookDecl {
+        HookDecl {
+            name: HookName {
+                host: Some(host.to_owned()),
+                hook: self.name.hook,
+            },
+            ..self
+        }
+    }
+
+    pub(crate) fn declared(self) -> DeclaredHook {
+        DeclaredHook {
+            slot: (self.unbound_slot)(&self.name),
+            name: self.name,
+            effect: self.effect,
+        }
+    }
+}
+
+pub(crate) struct DeclaredHook {
+    name: HookName,
+    effect: HookEffect,
+    slot: Slot,
+}
+
+impl DeclaredHook {
+    pub(crate) fn name(&self) -> &HookName {
         &self.name
     }
 
@@ -242,7 +290,8 @@ impl HookDecl {
             });
             let declaring = Declaring {
                 interner,
-                name: &name,
+                name: &name.hook,
+                host: name.host.as_deref(),
                 effect: effect.clone(),
             };
             contribution.declare(declaring.of(&slot));
@@ -258,6 +307,7 @@ impl HookDecl {
 struct Declaring<'a> {
     interner: &'a Interner,
     name: &'a str,
+    host: Option<&'a str>,
     effect: Effect,
 }
 
@@ -319,7 +369,8 @@ impl Declaring<'_> {
             .collect();
         ExternFn {
             decl: FnDecl {
-                qref: QualifiedRef::root(self.interner.intern(self.name)),
+                qref: QualifiedRef::root(self.interner.intern(self.name))
+                    .in_host(self.host.map(|host| self.interner.intern(host))),
                 ty: PolyTy::Fn {
                     params,
                     ret: Box::new(result),
@@ -361,9 +412,9 @@ impl<A> Program<A>
 where
     A: Access,
 {
-    /// Binds `hook`, declared with `N` arguments, to `body`, which each call
-    /// runs on the call's lent arguments and whose `Finished` is the call's
-    /// result. `body` may capture the host's state, and is handed no context
+    /// Binds `hook`, declared with `N` arguments by a host compiled alone,
+    /// to `body`, which each call runs on the call's lent arguments and
+    /// whose `Finished` is the call's result. `body` may capture the host's state, and is handed no context
     /// and no storage (RFC-0101 rule 3).
     ///
     /// Nothing it is lent outlives the call. A closure that keeps what
@@ -414,15 +465,48 @@ where
         HookArity<N>: HookParams,
         F: for<'c> Fn(HookArgs<'c, N>, HookOutput<'c>) -> BoxFuture<'c, HookFinished<'c>> + Send + Sync + 'static,
     {
-        let Some(declared) = self.compiled.hooks.get(hook) else {
+        self.bound::<N, F>(
+            HookName {
+                host: None,
+                hook: hook.to_owned(),
+            },
+            body,
+        )
+    }
+
+    /// Binds the hook `hook` that the graph's host `host` declares, as
+    /// `bind` binds a hook of a host compiled alone (RFC-0101 rule 2).
+    /// The host is an argument of its own, not a prefix of the hook's
+    /// name: a host is a scope of the graph, and no name's text is read
+    /// for one (RFC-0095 rule 1).
+    pub fn bind_in<const N: usize, F>(&self, host: &str, hook: &str, body: F) -> Result<(), HostError>
+    where
+        HookArity<N>: HookParams,
+        F: for<'c> Fn(HookArgs<'c, N>, HookOutput<'c>) -> BoxFuture<'c, HookFinished<'c>> + Send + Sync + 'static,
+    {
+        self.bound::<N, F>(
+            HookName {
+                host: Some(host.to_owned()),
+                hook: hook.to_owned(),
+            },
+            body,
+        )
+    }
+
+    fn bound<const N: usize, F>(&self, hook: HookName, body: F) -> Result<(), HostError>
+    where
+        HookArity<N>: HookParams,
+        F: for<'c> Fn(HookArgs<'c, N>, HookOutput<'c>) -> BoxFuture<'c, HookFinished<'c>> + Send + Sync + 'static,
+    {
+        let Some(declared) = self.compiled.hooks.get(&hook) else {
             return Err(HostError::NotInGraph {
-                what: Named::Hook(hook.to_owned()),
+                what: Named::Hook(hook),
             });
         };
         let refused = |part: HookPart, message: String| {
             HostError::Refused(vec![Refusal {
                 cause: Some(Cause::Hook {
-                    hook: hook.to_owned(),
+                    hook: hook.clone(),
                     part,
                 }),
                 ..Refusal::of(None, message)
@@ -430,7 +514,7 @@ where
         };
         let Some(binding) = <HookArity<N> as sealed::Sealed>::binding(&declared.slot) else {
             let message = format!(
-                "the hook `{hook}` takes {} arguments, and the closure bound to it takes {N}",
+                "the hook {hook} takes {} arguments, and the closure bound to it takes {N}",
                 declared.slot.arity()
             );
             return Err(refused(HookPart::Arity, message));
@@ -438,7 +522,7 @@ where
         binding
             .body
             .set(Box::new(body))
-            .map_err(|_| refused(HookPart::Bound, format!("the hook `{hook}` is bound already")))
+            .map_err(|_| refused(HookPart::Bound, format!("the hook {hook} is bound already")))
     }
 }
 

@@ -86,6 +86,7 @@ alternative it rejects. A decision another section owns is pointed to with
 - RFC-0095: A host graph compiles several hosts into one solve, and a host calls another's entry as a function along a DAG (Proposed)
 - RFC-0097: A dynamic extern meets data from outside the checker at one sealed gate (Proposed)
 - RFC-0101: A host of this interpreter binds a hook, a dynamic extern whose body is a closure (Proposed)
+- RFC-0102: `unsafe` is written only as a primitive of a boundary module (Proposed)
 
 ### [identity.md](identity.md)
 

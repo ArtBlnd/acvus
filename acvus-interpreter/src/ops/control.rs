@@ -1286,8 +1286,7 @@ impl Op for DropValue {
 
     #[inline]
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
-        use acvus_extern::Release;
-        m.regs().take::<true>(self.slot).release();
+        m.regs().take::<true>(self.slot).release_owned();
         self.next.run(m, r0)
     }
 }

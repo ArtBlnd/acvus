@@ -239,7 +239,7 @@ use futures::FutureExt;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::executor::Executor;
-use crate::hook::{CompiledHook, HookDecl, HookEffect, HookPart};
+use crate::hook::{CompiledHook, DeclaredHook, HookDecl, HookEffect, HookName, HookPart};
 use crate::init::{DeclaredInits, GraphParts, InitGiven, InitKey, InitSource, RustInit};
 use crate::interpreter::{Executable, Interpreter, InterpreterContext, lookup_module};
 use crate::ops::storage::{fetch_now, fetch_waited};
@@ -306,7 +306,7 @@ pub enum Cause {
     /// The exposures of a host graph hold this cycle of hosts, each calling
     /// the next and the last calling the first (RFC-0095 rule 3).
     Cycle { hosts: Vec<String> },
-    Hook { hook: String, part: HookPart },
+    Hook { hook: HookName, part: HookPart },
 }
 
 impl Refusal {
@@ -329,7 +329,7 @@ impl Refusal {
 pub enum Named {
     Entry(String),
     Context(String),
-    Hook(String),
+    Hook(HookName),
 }
 
 /// Where a declared type and an asked one differ.
@@ -350,7 +350,7 @@ pub enum HostError {
     Unfilled { key: String },
     Storage(StorageError),
     Trapped { message: String },
-    Unbound { hook: String },
+    Unbound { hook: HookName },
 }
 
 impl fmt::Display for HostError {
@@ -371,7 +371,7 @@ impl fmt::Display for HostError {
             } => write!(f, "the compilation has no `@{key}`"),
             HostError::NotInGraph {
                 what: Named::Hook(name),
-            } => write!(f, "the compilation declares no hook `{name}`"),
+            } => write!(f, "the compilation declares no hook {name}"),
             HostError::Mismatched {
                 what: Part::Context(key),
                 held,
@@ -400,8 +400,8 @@ impl fmt::Display for HostError {
             HostError::Trapped { message } => write!(f, "the run trapped: {message}"),
             HostError::Unbound { hook } => write!(
                 f,
-                "the hook `{hook}` is unbound, so the program does not run; `Program::bind` binds it \
-                 (RFC-0101 rule 2)"
+                "the hook {hook} is unbound, so the program does not run; `Program::bind` binds it, \
+                 or `Program::bind_in` for a hook of a graph's host (RFC-0101 rule 2)"
             ),
         }
     }
@@ -1362,8 +1362,9 @@ pub(crate) fn compile(
         hooks,
     } = host;
     let interner = &interner;
+    let hooks: Vec<DeclaredHook> = hooks.into_iter().map(HookDecl::declared).collect();
     let mut registries = registries;
-    registries.extend(hooks.iter().map(HookDecl::registry));
+    registries.extend(hooks.iter().map(DeclaredHook::registry));
     // A recovered tree is checked for what parsed and never lowered, so its
     // parse errors and those refusals are reported together (RFC-0078
     // rule 5); a structural refusal ends the compilation before typeck.
@@ -1408,7 +1409,7 @@ pub(crate) fn compile(
                 interner,
                 &extern_fns,
                 &types,
-                QualifiedRef::root(interner.intern(bare)),
+                QualifiedRef::root(interner.intern(bare)).in_host(qref.host),
             ),
             None => Vec::new(),
         };
@@ -1615,9 +1616,9 @@ pub(crate) fn compile(
         return Err(each_fault_once(refusals));
     }
 
-    let hooks: HashMap<String, CompiledHook> = hooks
+    let hooks: HashMap<HookName, CompiledHook> = hooks
         .into_iter()
-        .map(|hook| (hook.name().to_owned(), hook.compiled()))
+        .map(|hook| (hook.name().clone(), hook.compiled()))
         .collect();
     let context_names: FxHashMap<QualifiedRef, Astr> = graph
         .contexts
@@ -1763,10 +1764,6 @@ pub(crate) fn compile(
     })
 }
 
-/// The extern functions a script's bare `name` reaches (RFC-0021,
-/// RFC-0043): every one of that name, in any namespace or at the root, that
-/// the registries declared a function rather than a machine coercion; each
-/// written with its namespace, in name order.
 /// Every instance of a script's `fn` is checked, lowered and optimized as a
 /// function of its own (RFC-0100 rule 3), so a fault of the `fn`'s body is
 /// refused once by each instance, at one span and in one message. A reader
@@ -1787,6 +1784,10 @@ fn each_fault_once(refusals: Vec<Refusal>) -> Vec<Refusal> {
     shown
 }
 
+/// The extern functions a script's bare `name` reaches (RFC-0021,
+/// RFC-0043): every one of that name, in any namespace or at the root, that
+/// the registries declared a function rather than a machine coercion; each
+/// written with its namespace, in name order.
 fn bare_callable(
     interner: &Interner,
     extern_fns: &[Function],
@@ -1795,7 +1796,11 @@ fn bare_callable(
 ) -> Vec<String> {
     let mut reached: Vec<String> = extern_fns
         .iter()
-        .filter(|f| f.qref.name == name.name && types.machine_view(f.qref).is_none())
+        .filter(|f| {
+            f.qref.name == name.name
+                && (f.qref.host.is_none() || f.qref.host == name.host)
+                && types.machine_view(f.qref).is_none()
+        })
         .map(|f| match f.qref.namespace {
             Some(ns) => format!("{}::{}", interner.resolve(ns), interner.resolve(f.qref.name)),
             None => interner.resolve(f.qref.name).to_owned(),
@@ -1812,7 +1817,7 @@ pub(crate) struct Compiled {
     shared: InterpreterContext,
     rt: AcvusRuntime,
     entries: HashMap<String, CompiledEntry>,
-    pub(crate) hooks: HashMap<String, CompiledHook>,
+    pub(crate) hooks: HashMap<HookName, CompiledHook>,
     solved: BTreeMap<String, Arc<Ty>>,
     #[cfg(feature = "tooling")]
     listing_laws: acvus_mir::laws::LawTable,
@@ -1827,12 +1832,12 @@ impl Compiled {
         &self.shared.interner
     }
 
-    fn unbound_hook(&self) -> Option<&str> {
-        let mut unbound: Vec<&str> = self
+    fn unbound_hook(&self) -> Option<&HookName> {
+        let mut unbound: Vec<&HookName> = self
             .hooks
             .iter()
             .filter(|(_, hook)| !hook.is_bound())
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _)| name)
             .collect();
         unbound.sort_unstable();
         unbound.first().copied()
@@ -1869,7 +1874,7 @@ impl Compiled {
 
     async fn run_over(&self, entry: QualifiedRef, port: Arc<Port>, args: Vec<Value>) -> Result<Value, HostError> {
         if let Some(hook) = self.unbound_hook() {
-            return Err(HostError::Unbound { hook: hook.to_owned() });
+            return Err(HostError::Unbound { hook: hook.clone() });
         }
         Interpreter::on_port(self.shared.clone(), entry, port, args)
             .ended_or_ran()

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use acvus_ext::*;
-use acvus_extern::{ExternType, Externs, Owned, Registry, Release, extern_fn, extern_registry};
+use acvus_extern::{ExternType, Externs, Owned, Registry, extern_fn, extern_registry};
 use acvus_interpreter::AcvusRuntime;
 use acvus_interpreter::*;
 use acvus_mir::graph::*;
@@ -29,7 +29,7 @@ async fn run_ext(
     source: &str,
     context: TypedContext,
     registries: Vec<Registry<AcvusRuntime>>,
-) -> Value {
+) -> Owned<AcvusRuntime> {
     let ast = ParsedAst::Script(acvus_ast::parse_script(interner, source).expect("parse"));
     run_parsed(interner, ast, context, registries).await
 }
@@ -39,7 +39,7 @@ async fn run_parsed(
     ast: ParsedAst,
     context: TypedContext,
     registries: Vec<Registry<AcvusRuntime>>,
-) -> Value {
+) -> Owned<AcvusRuntime> {
     let mut all_registries = std_registries::<AcvusRuntime>();
     all_registries.extend(registries);
     let Externs {
@@ -151,7 +151,7 @@ async fn run_parsed(
         InterpreterContext::new(interner, exec_fns, executor).with_context_names(context_names);
     let page = snapshot;
     let mut interp = Interpreter::new(shared, entry_qref, page);
-    interp.execute().await.expect("the seeds hold every context the run fetches")
+    interp.execute_owned().await.expect("the seeds hold every context the run fetches")
 }
 
 // -- An extension type whose `Drop` counts -------------------------------

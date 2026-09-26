@@ -72,15 +72,21 @@ enum V {
 unsafe impl Send for V {}
 unsafe impl Sync for V {}
 
-impl Release for V {
-    fn release(self) {
+impl V {
+    fn release_owned(self) {
         match self {
             V::None | V::Undef | V::Tag(_) | V::Reference(_) | V::Instance(_) => {}
             // SAFETY: `some` leaked this cell and nothing else releases it.
-            V::Some(cell) => unsafe { *Box::from_raw(cell) }.release(),
+            V::Some(cell) => unsafe { *Box::from_raw(cell) }.release_owned(),
             // SAFETY: `erase` leaked this cell and nothing else frees it.
             V::Boxed(cell) => drop(unsafe { Box::from_raw(cell) }),
         }
+    }
+}
+
+impl Release<Counted> for V {
+    fn release(self, _: acvus_extern::Releasing<Counted>) {
+        self.release_owned()
     }
 }
 
@@ -418,7 +424,7 @@ fn tracked_value(rt: &Counted, drops: &Drops) -> V {
 fn closure_owning_a_tracked_capture(rt: &Counted, drops: &Drops) -> V {
     let captured = drops.payload();
     let f: UnaryClosure = Box::new(move |rt, argument| {
-        argument.release();
+        argument.release_owned();
         // SAFETY: `usize` is stored as itself.
         unsafe { rt.erase::<usize>(captured.0.load(Ordering::SeqCst)) }
     });
@@ -447,7 +453,7 @@ fn an_owned_that_gave_its_value_back_releases_nothing() {
     // SAFETY: the word is made here, and no other holder owns it.
     let value = unsafe { Owned::<Counted>::from_value(runtime_holding(), tracked_value(&rt, &drops)) }.into_value(runtime_holding());
     assert_eq!(drops.count(), 0, "the value is out of the holder");
-    value.release();
+    value.release_owned();
     assert_eq!(drops.count(), 1, "its new owner released it once");
 }
 
@@ -502,7 +508,7 @@ fn a_vec_releases_its_elements_once() {
     let drops = Drops::default();
     let stored = OneValue::<_>::erase(vec![drops.payload(), drops.payload(), drops.payload()], runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the elements are in the store");
-    stored.release();
+    stored.release_owned();
     assert_eq!(drops.count(), 3, "each element was released once");
 }
 
@@ -527,7 +533,7 @@ fn an_array_releases_its_elements_once() {
     let stored = OneValue::<_>::erase(
         Arr::<Tracked, ()>::new(vec![drops.payload(), drops.payload()]), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the elements are in the store");
-    stored.release();
+    stored.release_owned();
     assert_eq!(drops.count(), 2, "each element was released once");
 }
 
@@ -552,7 +558,7 @@ fn a_result_releases_its_ok_payload_once() {
     let drops = Drops::default();
     let stored = OneValue::<_>::erase(Ok::<Tracked, Tracked>(drops.payload()), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the payload is in the store");
-    stored.release();
+    stored.release_owned();
     assert_eq!(drops.count(), 1, "the ok payload was released once");
 }
 
@@ -562,7 +568,7 @@ fn a_result_releases_its_err_payload_once() {
     let drops = Drops::default();
     let stored = OneValue::<_>::erase(Err::<Tracked, Tracked>(drops.payload()), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the payload is in the store");
-    stored.release();
+    stored.release_owned();
     assert_eq!(drops.count(), 1, "the err payload was released once");
 }
 
@@ -574,7 +580,7 @@ fn an_option_releases_its_payload_once() {
     let drops = Drops::default();
     let stored = OneValue::<_>::erase(Some(drops.payload()), runtime_crossing(&rt));
     assert_eq!(drops.count(), 0, "the payload is in the store");
-    stored.release();
+    stored.release_owned();
     assert_eq!(drops.count(), 1, "the payload was released once");
 }
 
@@ -771,7 +777,7 @@ fn a_borrow_releases_nothing_and_its_storage_still_releases_once() {
         0,
         "a borrow owns nothing and releases nothing"
     );
-    storage.release();
+    storage.release_owned();
     assert_eq!(drops.count(), 2, "the storage released each element once");
 }
 
