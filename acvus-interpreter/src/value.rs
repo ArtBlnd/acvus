@@ -257,8 +257,14 @@ macro_rules! value_word {
                 word: 0,
             };
 
+            /// A value of an inline kind from its word. It is the runtime's
+            /// alone, even under `tooling`: its kind is checked only in a
+            /// debug build, so it would make a `Large` of any bits, which
+            /// `Release` then frees. The runtime gives it kinds `prepare`
+            /// settled; the tooling makes an inline value by its type
+            /// (`Value::int`, `Value::from_bits`, `Value::char_`, …).
             #[inline]
-            $v fn inline(kind: Kind, bits: u64) -> Value {
+            pub(crate) fn inline(kind: Kind, bits: u64) -> Value {
                 debug_assert!(kind.is_inline(), "inline: {kind:?} does not carry bits");
                 Value { kind, word: bits }
             }
@@ -389,9 +395,11 @@ macro_rules! value_word {
                 &self.word
             }
 
-            /// As `bits`, in place and exclusively.
+            /// As `bits`, in place and exclusively. The runtime's alone, as
+            /// `inline` is: a write through it would put any bits under a
+            /// `Large`'s kind.
             #[inline]
-            $v fn bits_mut(&mut self) -> &mut u64 {
+            pub(crate) fn bits_mut(&mut self) -> &mut u64 {
                 debug_assert!(self.kind.is_inline(), "bits_mut: {self:?} carries no bits");
                 &mut self.word
             }
@@ -488,8 +496,10 @@ macro_rules! value_word {
             /// The read and write through a projection are RFC-0050 rule 3's one
             /// family over a run and a heap `Large` alike, and they arrive with the
             /// flat heap object.
+            ///
+            /// The runtime's alone, as `inline` is: it names any address.
             #[inline]
-            $v fn large_ref(base: *mut Value) -> Value {
+            pub(crate) fn large_ref(base: *mut Value) -> Value {
                 Value {
                     kind: Kind::LargeRef,
                     word: repr::word_of_ptr(base).word(),

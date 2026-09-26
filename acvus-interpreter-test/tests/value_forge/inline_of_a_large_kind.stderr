@@ -1,0 +1,10 @@
+error[E0624]: associated function `inline` is private
+ --> tests/value_forge/inline_of_a_large_kind.rs:6:20
+  |
+6 |     let _ = Value::inline(Kind::Large, 8);
+  |                    ^^^^^^ private associated function
+  |
+ ::: $WORKSPACE/acvus-interpreter/src/value.rs
+  |
+  |             pub(crate) fn inline(kind: Kind, bits: u64) -> Value {
+  |             ---------------------------------------------------- private associated function defined here

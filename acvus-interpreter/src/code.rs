@@ -369,7 +369,8 @@ pub enum Konst {
 }
 
 impl Konst {
-    pub fn value(&self) -> Value {
+    /// The runtime's alone, as `Value::inline` is: a `Word` names any kind.
+    pub(crate) fn value(&self) -> Value {
         match self {
             Konst::Word(kind, bits) => Value::inline(*kind, *bits),
             Konst::Str(s) => Value::string(s.as_str()),

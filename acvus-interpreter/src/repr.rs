@@ -730,11 +730,16 @@ type RecordOf<H, E> = HeadAndTail<RecordHead<H>, E>;
 /// `Large` is one `Large::allocate` or `Record::allocate` gave, and the allocation is
 /// live until the one `Owned` that holds the value releases it.
 ///
-/// NOTE: `Value::inline` checks that its kind is inline only in a debug
-/// build, and `Value` is `Copy` with a safe `Release`, so safe tooling code
-/// can break either fact today. The machine keeps both because `prepare`
-/// gives `Value::inline` inline kinds and the checker's ownership rules
-/// release a value once; the sweep's second part carries them in types.
+/// NOTE: the machine keeps both facts: `prepare` gives `Value::inline`
+/// inline kinds, and the checker's ownership rules release a value once. The
+/// ways to make a value from bits (`Value::inline`, `Value::bits_mut`,
+/// `Value::large_ref`, `Konst::value`) are the runtime's alone even under
+/// `tooling`. Two ways remain for safe code outside the machine to break a
+/// fact, which the sweep's second part carries in types: `Value` is `Copy`
+/// with a safe `Release`, and an `Owned` derefs to its word, so a holder of
+/// a `Large` can release it twice; and under `tooling` a `Body` or `Regs`
+/// the tooling builds opens a register at any kind (`SlotKind`,
+/// `Regs::set_word`).
 #[derive(Clone, Copy)]
 pub struct Large<'v>(NonNull<Header>, PhantomData<&'v Value>);
 
