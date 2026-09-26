@@ -122,7 +122,7 @@ impl Drop for Stash {
     fn drop(&mut self) {
         for held in std::mem::take(&mut self.held) {
             if let Held::Owning(_, value) = held {
-                value.release();
+                value.release_owned();
             }
         }
     }

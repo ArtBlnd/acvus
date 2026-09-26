@@ -1062,9 +1062,8 @@ where
     fn run(&self, m: &mut Machine<'_>, r0: u64) -> Exit {
         let mut cursor = self.src.load(m, self.counter);
         if !self.src.probe(m, &mut cursor) {
-            use acvus_extern::Release;
             self.src.ended(m, cursor);
-            m.regs().take::<true>(self.ring).release();
+            m.regs().take::<true>(self.ring).release_owned();
             return self.exit.into();
         }
         self.issue(m, cursor, r0);
