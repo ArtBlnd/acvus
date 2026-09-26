@@ -35,6 +35,7 @@ futures = "0.3"
 # spans' locations.
 proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", features = ["full", "visit"] }
+trybuild = "1.0.121"
 
 # A process has one global allocator, and these three count through it:
 # a run's allocations are what they assert. Sharing a binary with tests
@@ -74,6 +75,12 @@ path = "tests/sleep.rs"
 [[test]]
 name = "fixtures"
 harness = false
+
+# trybuild builds each case as a crate of its own, so the cases stay out
+# of `all`.
+[[test]]
+name = "hook_compile_fail"
+path = "tests/hook_compile_fail.rs"
 
 [[bench]]
 name = "attention"

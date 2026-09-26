@@ -81,7 +81,7 @@ pub use host::{
     CompileTimes, InputListing, Listing, UntypedEntry, UntypedOutput, context_refs, environment,
     untyped_entry_ty,
 };
-pub use hook::{Call, HookEffect, HookPart, Lent, LentInputs, Names, Ran};
+pub use hook::{HookArity, HookArgs, HookEffect, HookFinished, HookOutput, HookParams, HookPart};
 pub use host_graph::HostGraph;
 pub use port::Held;
 pub use runtime::AcvusRuntime;

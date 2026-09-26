@@ -383,24 +383,6 @@ fn within_call_bounds(body: &MirBody, role: BodyRole) -> Result<(), FrameRefusal
 /// # Errors
 /// A body needs more registers than a frame, a call or an entry holds.
 pub fn prepare_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Result<Prepared, FrameRefusal> {
-    prepare_module_with(module, ctx, ParamRelease::ByFrame)
-}
-
-pub(crate) fn prepare_lent_module(module: &MirModule, ctx: &PrepareCtx<'_>) -> Result<Prepared, FrameRefusal> {
-    prepare_module_with(module, ctx, ParamRelease::ByCaller)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ParamRelease {
-    ByFrame,
-    ByCaller,
-}
-
-fn prepare_module_with(
-    module: &MirModule,
-    ctx: &PrepareCtx<'_>,
-    params: ParamRelease,
-) -> Result<Prepared, FrameRefusal> {
     let bodies = || std::iter::once(&module.main).chain(module.closures.values());
     let literals = Arc::new(Literals::of(bodies().flat_map(|body| literal_texts(body))));
     let entries = RefCell::new(InstanceEntryStore::default());
@@ -438,7 +420,6 @@ fn prepare_module_with(
         &entries,
         &closures,
         &literals,
-        params,
     )?);
     Ok(Prepared {
         main,
@@ -535,13 +516,12 @@ fn pull_loops_in_place(body: &MirBody) -> Cow<'_, MirBody> {
 
 /// # Errors
 /// The body needs more registers than a frame, a call or an entry holds.
-fn prepare_entry(
+pub fn prepare_entry(
     body: &MirBody,
     ctx: &PrepareCtx<'_>,
     entries: &RefCell<InstanceEntryStore>,
     closures: &FxHashMap<Label, Arc<Code>>,
     literals: &Arc<Literals>,
-    params: ParamRelease,
 ) -> Result<Body, FrameRefusal> {
     let body = &*pull_loops_in_place(body);
     within_call_bounds(body, BodyRole::Entry)?;
@@ -551,7 +531,7 @@ fn prepare_entry(
     prep.plan_runs(scalars, BodyRole::Entry)?;
     let regions = prep.regions();
 
-    Ok(framed(prep, literals, &regions, BodyRole::Entry, params))
+    Ok(framed(prep, literals, &regions, BodyRole::Entry))
 }
 
 /// # Errors
@@ -580,7 +560,6 @@ pub fn prepare_closure(
         literals,
         &regions,
         BodyRole::Closure,
-        ParamRelease::ByFrame,
     ))))
 }
 
@@ -589,7 +568,6 @@ fn framed(
     literals: &Arc<Literals>,
     regions: &[Region],
     role: BodyRole,
-    params: ParamRelease,
 ) -> Body {
     let body = prep.body;
     let blocks = prep.blocks(0..body.insts.len(), regions);
@@ -606,10 +584,7 @@ fn framed(
 
     let frame_len = prep.frame_len();
     let param_ids: Vec<ValueId> = body.params.iter().map(|(_, v)| *v).collect();
-    let param_marks = match params {
-        ParamRelease::ByFrame => prep.param_marks(&param_ids),
-        ParamRelease::ByCaller => 0,
-    };
+    let param_marks = prep.param_marks(&param_ids);
     let params = param_ids.iter().map(|id| prep.off(*id)).collect();
     let captures = body.captures.iter().map(|(_, v)| prep.off(*v)).collect();
     let order_param = body.order_param.map(|id| prep.off(id));
@@ -7616,7 +7591,6 @@ mod recognizer_tests {
                 &RefCell::new(InstanceEntryStore::default()),
                 &FxHashMap::default(),
                 &literals,
-                ParamRelease::ByFrame,
             )
             .unwrap_or_else(|refusal| panic!("a fixture body is refused: {refusal}"))))
         }

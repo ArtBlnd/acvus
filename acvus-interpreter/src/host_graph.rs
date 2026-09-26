@@ -417,9 +417,9 @@ fn merge(
         refusals.extend(under_host(&host, parts.refusals));
         refusals.extend(parts.hooks.iter().map(|hook| {
             let message = format!(
-                "the host `{host}` declares the hook `{}`; a graph's hosts call one another as \
-                 functions, and a hook is a separately compiled program's (RFC-0101)",
-                hook.name
+                "the host `{host}` declares the hook `{}`; a graph merges its hosts' entries, inits \
+                 and bindings and no hook, so a hook is declared on a host compiled alone",
+                hook.name()
             );
             Refusal::of(None, message)
         }));
@@ -476,17 +476,6 @@ fn merge(
         });
     }
 
-    refusals.extend(entries.iter().filter_map(|declared| {
-        let EntryDeclaration::Lent { .. } = declared.declaration else {
-            return None;
-        };
-        let name = program_key(declared.name.host.as_deref(), &declared.name.name);
-        let message = format!(
-            "the lent entry `{name}` is declared in a graph; a lent entry runs from a hook of a \
-             separately compiled program (RFC-0101)"
-        );
-        Some(Refusal::of(Some(Origin::Entry(name)), message))
-    }));
     let merged = HostParts {
         interner: interner.clone(),
         registries,

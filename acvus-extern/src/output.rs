@@ -265,18 +265,6 @@ where
         self.root().field(name, fill)
     }
 
-    /// # Safety
-    /// `value` holds a value of the type this output's site settled for
-    /// `T`, and no other holder owns it.
-    #[doc(hidden)]
-    pub unsafe fn finish_whole(self, value: Owned<Rt>) -> Finished<'call, T, Rt> {
-        Finished {
-            built: Some(value),
-            _brand: PhantomData,
-            _settled: PhantomData,
-        }
-    }
-
     /// The value, where nothing sealed the output and every field of every
     /// object place was filled; else the `None` the script sees, every value
     /// filled so far released.
