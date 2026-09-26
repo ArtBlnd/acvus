@@ -475,7 +475,7 @@ pub struct Header {
     vtable: &'static Vtable,
 }
 
-/// The allocation of a `Large` of one value: `Large::new`'s `Box<Slot<T>>`.
+/// The allocation of a `Large` of one value: `Large::allocate`'s `Box<Slot<T>>`.
 #[repr(C)]
 pub struct Slot<T> {
     header: Header,
@@ -565,7 +565,7 @@ impl Vtable {
     }
 }
 
-/// The vtable of a `Slot<T>`: `Large::new::<T>` takes one, so the header it
+/// The vtable of a `Slot<T>`: `Large::allocate::<T>` takes one, so the header it
 /// writes names the drop and the print of the slot it allocates.
 #[repr(transparent)]
 pub struct SlotVtable<T>(Vtable, PhantomData<fn() -> T>);
@@ -638,7 +638,7 @@ where
 }
 
 /// The vtable of a closure record of head `H` and tail elements `E`:
-/// `Record::new` takes one, as `Large::new` takes a `SlotVtable`.
+/// `Record::allocate` takes one, as `Large::allocate` takes a `SlotVtable`.
 #[repr(transparent)]
 pub struct RecordVtable<H, E>(Vtable, PhantomData<fn() -> (H, E)>);
 
@@ -667,7 +667,7 @@ where
     }
 }
 
-/// An iterator that yields exactly its `len` elements, which `Record::new`
+/// An iterator that yields exactly its `len` elements, which `Record::allocate`
 /// writes into a tail of that many without counting them.
 ///
 /// # Safety
@@ -699,10 +699,10 @@ where
 }
 
 /// # Safety
-/// `header` begins a live record `Record::new` wrote at `H` and `E`, freed
+/// `header` begins a live record `Record::allocate` wrote at `H` and `E`, freed
 /// here and not named after.
 unsafe fn drop_record<H, E>(header: NonNull<Header>) {
-    // SAFETY: the caller's contract: `Record::new` wrote the head and `len`
+    // SAFETY: the caller's contract: `Record::allocate` wrote the head and `len`
     // elements after it, in an allocation of `RecordOf::<H, E>::layout(len)`.
     unsafe {
         let head = record_header::<H>().whole(header);
@@ -714,7 +714,7 @@ unsafe fn drop_record<H, E>(header: NonNull<Header>) {
 }
 
 /// # Safety
-/// `header` begins a live record `Record::new` wrote at `H`.
+/// `header` begins a live record `Record::allocate` wrote at `H`.
 unsafe fn show_record<H>(header: NonNull<Header>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     // SAFETY: the caller's contract.
     let head = unsafe { record_header::<H>().whole(header).as_ref() };
@@ -727,7 +727,7 @@ type RecordOf<H, E> = HeadAndTail<RecordHead<H>, E>;
 ///
 /// `Large::of` trusts two facts of the `Value` it reads, which the code that
 /// writes values keeps and no type yet carries: the word of a value of kind
-/// `Large` is one `Large::new` or `Record::new` gave, and the allocation is
+/// `Large` is one `Large::allocate` or `Record::allocate` gave, and the allocation is
 /// live until the one `Owned` that holds the value releases it.
 ///
 /// NOTE: `Value::inline` checks that its kind is inline only in a debug
@@ -748,7 +748,7 @@ impl Large<'_> {
     /// it unwinds, the slot is still a `Box<MaybeUninit<Slot<T>>>`, whose
     /// drop frees the allocation and runs no `Drop` of `T`.
     ///
-    pub fn new<T, F>(vtable: &'static SlotVtable<T>, make: F) -> PtrWord
+    pub fn allocate<T, F>(vtable: &'static SlotVtable<T>, make: F) -> PtrWord
     where
         T: 'static,
         F: FnOnce() -> T,
@@ -777,7 +777,7 @@ impl<'v> Large<'v> {
     pub fn of(value: &'v Value) -> Option<Large<'v>> {
         (value.kind() == Kind::Large).then(|| {
             let header = word::ptr_of_word::<Header>(PtrWord::from_word(value.word_of_any_kind()));
-            // SAFETY: a `Large` word is `Large::new`'s or `Record::new`'s, the
+            // SAFETY: a `Large` word is `Large::allocate`'s or `Record::allocate`'s, the
             // address of a live allocation, which is not null.
             Large(unsafe { NonNull::new_unchecked(header.cast_mut()) }, PhantomData)
         })
@@ -832,7 +832,7 @@ impl Record {
     /// # Panics
     /// `tail` holds more than `u16::MAX` elements.
     #[inline(always)]
-    pub fn new<H, E>(vtable: &'static RecordVtable<H, E>, head: H, tail: &mut dyn ExactLen<Item = E>) -> PtrWord
+    pub fn allocate<H, E>(vtable: &'static RecordVtable<H, E>, head: H, tail: &mut dyn ExactLen<Item = E>) -> PtrWord
     where
         H: 'static,
         E: 'static,

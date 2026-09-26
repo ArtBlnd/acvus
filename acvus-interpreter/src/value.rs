@@ -224,7 +224,7 @@ impl Release for Value {
     }
 }
 
-/// A `Large` holding what `make` returns, written in place (`Large::new`), so
+/// A `Large` holding what `make` returns, written in place (`Large::allocate`), so
 /// a constructor that reads its parts inside `make` writes them straight into
 /// the heap rather than building the value on the stack and copying it in
 /// after `malloc`.
@@ -236,7 +236,7 @@ where
 {
     Value {
         kind: Kind::Large,
-        word: Large::new::<T, F>(vtable, make).word(),
+        word: Large::allocate::<T, F>(vtable, make).word(),
     }
 }
 
@@ -903,7 +903,7 @@ macro_rules! value_constructors {
                 debug_assert!(captures.len() > 0, "a closure of no captures is `Value::code`");
                 Value {
                     kind: Kind::Large,
-                    word: Record::new(&FN, FnValue { code }, captures).word(),
+                    word: Record::allocate(&FN, FnValue { code }, captures).word(),
                 }
             }
 
@@ -1418,7 +1418,7 @@ mod tests {
         let tail = [(); 2];
         let record = Value {
             kind: Kind::Large,
-            word: Record::new(
+            word: Record::allocate(
                 &RECORD,
                 Head(Arc::clone(&alive)),
                 &mut tail.iter().map(|()| Counted { _alive: Arc::clone(&alive) }),
