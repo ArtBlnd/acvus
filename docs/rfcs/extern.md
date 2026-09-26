@@ -1504,19 +1504,17 @@ call site, with every mismatch an explicit `None`.
    result is a new source (RFC-0012 rule 4): a call whose result's settled
    type carries an identity argument is refused, naming the call, since its
    use would tie the host's value to a source it is not from.
-4. **Another entry within the call.** An entry run from inside a call
-   takes the call's arguments as rule 1 lends them and gives its result
-   through rule 3's `Output`: nothing it is lent or gives leaves the call.
-   How a call reaches the entry is the host's: a hook (RFC-0101) hands a
-   closure the arguments, and the closure runs what it captures.
+4. **A body the host binds.** A hook (RFC-0101) is a dynamic extern whose
+   body is a closure the host binds: it takes rule 1's view and fills rule
+   3's `Output`, and nothing it is lent leaves the call.
 
 **Why.** Outside data is untyped wherever it comes from; the one honest
 place to check it is where it enters, against the type the checker settled
 there. Sealing the gate keeps every other crossing the checker's own
-(RFC-0068), and lending only keeps runtime values uncloned. An entry run
-within the call on lent arguments is the plainest sound shape: no value
-leaves the call, and no byte format is promised that the layout would then
-have to keep.
+(RFC-0068), and lending only keeps runtime values uncloned. A body that is lent the
+arguments and fills the output in place is the plainest sound shape: no
+value leaves the call, and no byte format is promised that the layout would
+then have to keep.
 **Cost.** A site-settled result needs a must-settle bound and the call
 site's result type in the prepared site; a Rust-bodied function value is a
 new closure kind.

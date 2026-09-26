@@ -365,6 +365,50 @@ where
     /// runs on the call's lent arguments and whose `Finished` is the call's
     /// result. `body` may capture the host's state, and is handed no context
     /// and no storage (RFC-0101 rule 3).
+    ///
+    /// Nothing it is lent outlives the call. A closure that keeps what
+    /// `with` lends it does not compile:
+    ///
+    /// ```compile_fail,E0521
+    /// use std::sync::{Arc, Mutex};
+    /// use acvus_interpreter::{HookEffect, Host, SequentialExecutor, Source};
+    ///
+    /// let program = Host::new(acvus_ext::std_registries())
+    ///     .hook("keep", 1, HookEffect::Opaque)
+    ///     .entry::<(), i64>("main", Source::Script("match keep(\"a\".to_string()) { Some(v) => v, None => 0 }"))
+    ///     .compile(SequentialExecutor)
+    ///     .unwrap();
+    /// let kept: Arc<Mutex<Vec<&'static String>>> = Arc::new(Mutex::new(Vec::new()));
+    /// program
+    ///     .bind::<1, _>("keep", move |args, out| {
+    ///         let kept = Arc::clone(&kept);
+    ///         Box::pin(async move {
+    ///             args.with(0, |text: &String| kept.lock().unwrap().push(text));
+    ///             out.finish()
+    ///         })
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// nor does one that sends the view itself out of the call:
+    ///
+    /// ```compile_fail,E0521
+    /// use std::sync::mpsc;
+    /// use acvus_interpreter::{HookArgs, HookEffect, Host, SequentialExecutor, Source};
+    ///
+    /// let program = Host::new(acvus_ext::std_registries())
+    ///     .hook("keep", 1, HookEffect::Opaque)
+    ///     .entry::<(), i64>("main", Source::Script("match keep(1) { Some(v) => v, None => 0 }"))
+    ///     .compile(SequentialExecutor)
+    ///     .unwrap();
+    /// let (send, _receive) = mpsc::sync_channel::<HookArgs<'static, 1>>(1);
+    /// program
+    ///     .bind::<1, _>("keep", move |args, out| {
+    ///         send.send(args).unwrap();
+    ///         Box::pin(async move { out.finish() })
+    ///     })
+    ///     .unwrap();
+    /// ```
     pub fn bind<const N: usize, F>(&self, hook: &str, body: F) -> Result<(), HostError>
     where
         HookArity<N>: HookParams,
