@@ -473,15 +473,18 @@ out. That stack is the embedder's: a CLI's main thread, a worker, or a wasm
 module's linear stack.
 
 1. **A bound, at parse.** A script whose nesting (an expression, block,
-   lambda or pattern inside another) exceeds `NESTING_MAX` is refused
+   lambda, statement or pattern inside another, one binary operator of a
+   chain each) exceeds `NESTING_MAX` is refused
    where it is parsed, as `NestingTooDeep`, naming the bound and the span
    where it was passed. No pass after the parser meets a deeper script, so
    no pass counts on its own. The bound is one number on every target: a
-   script compiles on `wasm32` exactly where it compiles natively.
+   script compiles on `wasm32` exactly where it compiles natively. The
+   bound is on the script's nesting: a type's depth, which a flat script
+   can grow, is not bounded by it.
 2. **The bound fits the smallest stack.** `NESTING_MAX` is chosen so that
    every walk at that depth fits in the linear stack `wasm32` is linked
-   with, minus the runtime's headroom. That is measured per build by a test
-   compiling a script at the bound on `wasm32`.
+   with, minus the runtime's headroom, measured by an example that
+   compiles a script at the bound on `wasm32` (docs/nesting.md).
 3. **Native walks grow their stack.** On a native target, each recursive
    walk enters its recursion through `stacker::maybe_grow`, so a script
    within the bound compiles on any thread the embedder gives it, however
