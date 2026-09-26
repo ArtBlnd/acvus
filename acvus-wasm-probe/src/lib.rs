@@ -35,13 +35,13 @@ static PANIC: Mutex<String> = Mutex::new(String::new());
 #[link(wasm_import_module = "probe")]
 unsafe extern "C" {
     /// The frames on the engine's stack at the call, counted by the embedder.
-    fn engine_frames() -> u32;
+    /// It takes nothing and returns a number, so a call is safe.
+    safe fn engine_frames() -> u32;
 }
 
 #[cfg(target_arch = "wasm32")]
 fn engine_depth() -> u32 {
-    // SAFETY: the import takes nothing and returns a number.
-    unsafe { engine_frames() }
+    engine_frames()
 }
 
 #[cfg(target_arch = "wasm32")]
