@@ -1545,24 +1545,33 @@ nothing crosses it but lent arguments and a result written in place
    extern (RFC-0097): its arguments arrive as rule 1's view and its
    result is rule 3's `Output`, settled at each call site. A program
    whose hook is unbound refuses to run, naming the hook.
-2. **The host binds it.** Once both programs are prepared, the host binds
-   the hook to a closure of `(ctx, call)`. `call` is sealed: it lends the
-   call's arguments and runs one prepared entry of another program with
-   them, writing that entry's result into the call's `Output`. Nothing
-   the entry is lent or returns outlives the call.
-3. **Types are compared at binding.** Binding compares, at every call
-   site of the hook, the site's settled argument types with the entry's
-   inputs and the site's result type with the entry's result, by
-   structure, since the two programs have their own names. A mismatch
-   refuses the binding, naming the site and the position. Only the
-   language's own types cross; an extension type is refused, as a space
-   refuses one. The entry takes each input lent: its body reads it and
-   never takes it, which preparing it for binding checks.
-4. **Effects and re-entry.** The entry's effects are within the hook's
-   declared effect, or the binding is refused. A call that would run an
-   entry of a program already running on the same call stack traps
-   (RFC-0048): no cycle between programs prepared apart is seen before
-   they run.
+2. **The host binds it to a lent entry.** An entry declared lent takes
+   each input lent: its body reads an input and never takes or writes it
+   unless the input is `&mut`, which compiling its program checks, and it
+   runs only from a hook. Once both programs are prepared, the host binds
+   the hook to a closure of a sealed `call`, which runs one lent entry
+   with the call's own arguments. The entry may wait; the call suspends
+   its caller until the entry ends. The entry's result, a value it made,
+   moves into the call's `Output`, and a write through a `&mut` argument
+   stores in the caller's storage; nothing the entry is lent outlives the
+   call.
+3. **Types are compared at binding.** A value carries its program's
+   names (an enum's tags, an object's fields), so both programs are
+   compiled over one table of names, and binding refuses two. At every
+   call site of the hook, each argument's settled type must be within the
+   entry's input (an enum the site builds may have fewer variants than the
+   entry takes, as structural types meet by union, RFC-0042 rule 1), and the
+   entry's result within the site's settled result; a mismatch refuses the
+   binding, naming the site and the position. Only the language's own
+   types cross: no extension type, function value, task handle or view,
+   and a reference only as a whole argument.
+4. **Effects and re-entry.** The caller does not see the entry's
+   contexts: a read of one counts as idempotent and a write as opaque,
+   and the entry's effects are within the hook's declared effect, or the
+   binding is refused. A call that would run an entry of a program
+   already running on the same call stack traps (RFC-0048). Two programs
+   bound to each other hold no strong cycle: each is released with its
+   host.
 
 **Why.** A lent argument and an in-place result are the plainest sound
 shape for two programs no checker saw together: no value leaves the call,
