@@ -215,7 +215,7 @@ pub async fn run(source: &str, ret: Ty, lower: Lower, on: On) -> Ran {
     else {
         panic!("the entry is prepared")
     };
-    let listed = serde_json::to_string(&acvus_interpreter::listing::body_listing(&entry.main))
+    let listed = serde_json::to_string(&acvus_interpreter::listing::body_listing(entry.main()))
         .expect("a listing serializes");
     let lowered = listed.contains("\"ForAhead<");
     assert_eq!(

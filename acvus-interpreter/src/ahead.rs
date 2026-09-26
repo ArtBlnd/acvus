@@ -10,7 +10,6 @@
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 
-use acvus_extern::Release;
 
 use crate::code::{Marked, Off};
 use crate::regs::Regs;
