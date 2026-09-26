@@ -25,7 +25,7 @@ use rustc_hash::FxHashMap;
 /// The path libtest names the child's tests by, which the parent filters on.
 const CHILD: &str = "fn_depth::child::";
 
-const CHILD_TESTS: usize = 15;
+const CHILD_TESTS: usize = 17;
 
 /// A spawned `std` thread's and a tokio worker's default stack.
 const DEFAULT_STACK: usize = 2 << 20;
@@ -288,6 +288,26 @@ mod child {
             HostFn { name: "pong", source: "if $n < 0 { 0 } else { ping($n + 1) }" },
         ];
         assert_traps("ping(0)", PING_PONG);
+    }
+
+    #[test]
+    #[ignore = "exhausts a thread's stack; run by the parent test in a child process"]
+    fn host_functions_calling_each_other_with_no_base_trap() {
+        const PING_PONG: &[HostFn] = &[
+            HostFn { name: "ping", source: "pong($n + 1)" },
+            HostFn { name: "pong", source: "ping($n + 1)" },
+        ];
+        assert_traps("ping(0)", PING_PONG);
+        assert_traps("pong(0)", PING_PONG);
+    }
+
+    #[test]
+    #[ignore = "exhausts a thread's stack; run by the parent test in a child process"]
+    fn a_host_function_calling_itself_with_no_base_traps_also_as_an_operand() {
+        const F: &[HostFn] = &[HostFn { name: "f", source: "f($n + 1)" }];
+        for main in ["f(0)", "f(0) + 1", "1 + f(0)", "-f(0)"] {
+            assert_traps(main, F);
+        }
     }
 
     /// Two call sites from outside `f`'s component make two copies of it

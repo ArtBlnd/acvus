@@ -67,3 +67,32 @@ async fn a_move_on_the_panicking_path_does_not_reach_the_code_after() {
     .value;
     assert_eq!(v.as_int(), 4);
 }
+
+#[tokio::test]
+async fn a_panic_as_an_operand_is_below_the_other_operand_s_type() {
+    let i = Interner::new();
+    for source in [
+        r#"if @c { boom("no".to_string()) + 1 } else { 41 }"#,
+        r#"if @c { 1 + boom("no".to_string()) } else { 41 }"#,
+        r#"if @c { -boom("no".to_string()) } else { 41 }"#,
+    ] {
+        let v = run_script_mode_with_externs(&i, source, flag(&i, false), registries(), Ty::I64)
+            .await
+            .value;
+        assert_eq!(v.as_int(), 41, "{source}");
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "boom: no")]
+async fn a_panic_as_an_operand_stops_the_run_with_its_message() {
+    let i = Interner::new();
+    run_script_mode_with_externs(
+        &i,
+        r#"if @c { boom("no".to_string()) + 1 } else { 41 }"#,
+        flag(&i, true),
+        registries(),
+        Ty::I64,
+    )
+    .await;
+}

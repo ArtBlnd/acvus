@@ -516,7 +516,8 @@ async fn a_body_that_is_not_utf8_is_a_body_error() {
 
 #[tokio::test]
 async fn a_port_nothing_listens_on_is_a_connect_error() {
-    let port = loopback::closed_port().await;
+    let closed = loopback::closed_port().await;
+    let port = closed.port();
     let source = classify(&format!(
         r#"get("http://127.0.0.1:{port}/text".to_string())"#
     ));
