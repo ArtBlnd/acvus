@@ -62,7 +62,13 @@ fn a_literal_of_any_width_takes_a_few_registers() {
         (string_literal(1000), "CallExtern"),
     ] {
         let blocks = script_listing_with_externs(&i, &source, Context::default(), regs(), Ty::I64);
-        let ops = ops_of_anywhere(&blocks);
+        // A debug build's chain of a thousand pushes holds a `StackGuard`
+        // every `GUARD_EVERY` operations (RFC-0100 rule 5); the order read
+        // here is the literal's own operations'.
+        let ops: Vec<String> = ops_of_anywhere(&blocks)
+            .into_iter()
+            .filter(|op| op != "StackGuard")
+            .collect();
         let pushes: Vec<usize> = ops
             .iter()
             .enumerate()

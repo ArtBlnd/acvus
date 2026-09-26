@@ -112,6 +112,7 @@ dependencies = [
  "acvus-utils",
  "blake3",
  "futures",
+ "libc",
  "parking_lot",
  "rust_decimal",
  "rustc-hash",

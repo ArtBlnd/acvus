@@ -83,9 +83,10 @@ pub struct Machine<'c> {
 }
 
 impl<'c> Machine<'c> {
-    /// The machine of a frame bound at `depth`: a depth past `Depth::BOUND`
-    /// traps here, before the body runs (RFC-0100 rule 5). Every framed body
-    /// runs in a `Machine`, so this is the one place a call chain is counted.
+    /// The machine of a frame bound at `depth`: a frame the running
+    /// thread's stack no longer holds traps here, before the body runs
+    /// (RFC-0100 rule 5). Every framed body runs in a `Machine`, so this is
+    /// the one place a call chain is checked.
     pub fn new(body: &'c Body, mut regs: Regs<'c>, rt: &'c AcvusRuntime, depth: Depth) -> Machine<'c> {
         let frame = regs.take_window(depth.enter());
         Machine {
