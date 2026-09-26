@@ -56,7 +56,7 @@ mod uniform;
 mod vec;
 mod within;
 
-pub use args::{Args, ArgsSite, ByArgs, Encoded, MOST_MEMBERS, Members, Positions};
+pub use args::{Args, ArgsSite, ByArgs, MOST_MEMBERS, Members, Positions};
 pub use canonical::Canonical;
 pub use crossing::{Crossing, Holding};
 pub use ctx::Ctx;

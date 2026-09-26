@@ -42,7 +42,6 @@ use crate::loan::{Mut, Shared};
 use crate::obj::{Form, FormKind, SurvivesSuspension};
 use crate::owned::Owned;
 use crate::runtime::Runtime;
-use crate::space::SpaceError;
 
 mod sealed {
     pub trait Sealed {}
@@ -179,20 +178,6 @@ where
     unsafe fn loan_ended(_: &Rt, _: &[Rt::Value], _: &ArgsSite) {}
 }
 
-/// The canonical bytes `Args::encode` lays the arguments out as (RFC-0033).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Encoded(Box<[u8]>);
-
-impl Encoded {
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    pub fn into_bytes(self) -> Box<[u8]> {
-        self.0
-    }
-}
-
 /// The call's arguments at the positions `P` names, with the type the
 /// checker settled for each at this call site.
 pub struct Args<'call, P, Rt>
@@ -285,27 +270,6 @@ where
                 unsafe { lend(self.rt, interner, word, held, f) }.ok()
             }
         }
-    }
-
-    /// Every argument laid out by its settled type, in order (RFC-0033). A
-    /// reference is refused: its target is the caller's storage, which
-    /// bytes do not carry.
-    pub fn encode(&self) -> Result<Encoded, SpaceError> {
-        let mut out = Vec::new();
-        for (at, (ty, word)) in self.site.tys.iter().zip(self.words.as_ref()).enumerate() {
-            let laid = match ty {
-                Ty::Ref(..) => Err(SpaceError::new("a reference names the caller's storage")),
-                // SAFETY: the view owns the word, crossed at `ty`.
-                ty => unsafe { self.rt.encode(ty, word, &mut out) },
-            };
-            laid.map_err(|refused| {
-                SpaceError::new(format!(
-                    "argument {at} of type {} is not encoded: {refused}",
-                    ty.display(&self.site.interner)
-                ))
-            })?;
-        }
-        Ok(Encoded(out.into_boxed_slice()))
     }
 }
 

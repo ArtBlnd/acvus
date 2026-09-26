@@ -1,20 +1,14 @@
 //! A handler's view of the arguments it names only by type variable
 //! (RFC-0097 rule 1): each is lent to a closure whose parameter type is the
-//! one the checker settled at the call site, `None` at any other, and laid
-//! out by those settled types as bytes that decode back at their tuple.
+//! one the checker settled at the call site, and `None` at any other.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use acvus_extern::{
-    Args, Externs, NodeHash, Registry, Runtime, SpaceError, SpaceResult, TyArg, Var, extern_fn,
-    extern_registry, kind,
-};
-use acvus_interpreter::layout::{self, Nested, ZeroWidth};
-use acvus_interpreter::{AcvusRuntime, InterpreterContext, SequentialExecutor, Value};
+use acvus_extern::{Args, Registry, Runtime, TyArg, Var, extern_fn, extern_registry, kind};
+use acvus_interpreter::{AcvusRuntime, Value};
 use acvus_interpreter_test::*;
-use acvus_mir::ty::{ObjectTy, Ty};
+use acvus_mir::ty::Ty;
 use acvus_utils::Interner;
-use rustc_hash::FxHashMap;
 
 #[derive(TyArg)]
 #[projection]
@@ -121,33 +115,6 @@ where
 }
 
 #[extern_fn(effect = pure)]
-fn encodes_one<A, R>(args: Args<'_, (A,), R>) -> bool
-where
-    A: Var<kind::Type>,
-    R: Runtime,
-{
-    args.encode().is_ok()
-}
-
-static ENCODED: Mutex<Vec<Box<[u8]>>> = Mutex::new(Vec::new());
-
-#[extern_fn(effect = opaque)]
-fn encode_three<A, B, C, R>(args: Args<'_, (A, B, C), R>) -> i64
-where
-    A: Var<kind::Type>,
-    B: Var<kind::Type>,
-    C: Var<kind::Type>,
-    R: Runtime,
-{
-    let encoded = args.encode().expect("an i64, a String and an object lay out");
-    ENCODED
-        .lock()
-        .expect("no test panicked holding the lock")
-        .push(encoded.into_bytes());
-    0
-}
-
-#[extern_fn(effect = pure)]
 async fn read_one_awaited<A, R>(args: Args<'_, (A,), R>) -> Option<i64>
 where
     A: Var<kind::Type>,
@@ -175,8 +142,6 @@ fn registry() -> Registry<AcvusRuntime> {
             count_one,
             read_one,
             bump_one,
-            encodes_one,
-            encode_three,
             read_one_awaited,
             read_one_offloaded,
         ],
@@ -256,56 +221,4 @@ async fn a_reference_argument_is_lent_as_its_target() {
     assert_eq!(run_optional(&i, "let n = 5;\nbump_one(&n)").await, None);
     let bumped = run(&i, "let n = 5;\nlet bumped = bump_one(&mut n);\nn", Ty::I64).await;
     assert_eq!(bumped.as_int(), 6);
-    assert!(!run(&i, "let n = 5;\nencodes_one(&n)", Ty::Bool).await.as_bool());
-    assert!(run(&i, "encodes_one(5)", Ty::Bool).await.as_bool());
-}
-
-struct NothingNested;
-
-/// The three arguments are an `i64`, a `String` and an object of two
-/// `i64` fields, none of which lays out at zero width.
-const ZERO_WIDTH_PARTS: usize = 0;
-
-impl Nested for NothingNested {
-    fn commit(&self, _: &AcvusRuntime, _: &Ty, _: &Value) -> SpaceResult<NodeHash> {
-        Err(SpaceError::new("these bytes hold no extension value"))
-    }
-
-    fn load(&self, _: &AcvusRuntime, _: &Ty, _: NodeHash, _: &ZeroWidth) -> SpaceResult<Value> {
-        Err(SpaceError::new("these bytes hold no extension value"))
-    }
-}
-
-#[tokio::test]
-async fn encode_round_trips_through_the_tuple_of_the_settled_types() {
-    let i = Interner::new();
-    run(&i, r#"encode_three(41, "ab".to_string(), point(3, 4))"#, Ty::I64).await;
-    let bytes = ENCODED
-        .lock()
-        .expect("no test panicked holding the lock")
-        .pop()
-        .expect("encode_three ran");
-    let externs = Externs::combine(acvus_ext::std_registries(), &i).expect("registries combine");
-    let rt = InterpreterContext::new(&i, FxHashMap::default(), Arc::new(SequentialExecutor))
-        .with_space(externs.space)
-        .runtime_over_an_empty_page();
-    let point_ty = Ty::Object(ObjectTy::written(
-        [(i.intern("x"), Ty::I64), (i.intern("y"), Ty::I64)].into_iter().collect(),
-    ));
-    let tuple = Ty::Tuple(vec![Ty::I64, Ty::String, point_ty.clone()]);
-    let decoded = layout::decode_all(&rt, &NothingNested, &tuple, &bytes, &ZeroWidth::allowing(ZERO_WIDTH_PARTS))
-        .expect("the bytes decode at the tuple of the argument types");
-    // SAFETY: `decode_all` built a value of `tuple`.
-    let parts = unsafe { decoded.as_tuple() };
-    assert_eq!(parts[0].as_int(), 41);
-    // SAFETY: the second part is a `String`, as `tuple` says.
-    assert_eq!(unsafe { parts[1].as_str() }, "ab");
-    // SAFETY: the third part is the object `point_ty` names, laid out by
-    // its fields in name order.
-    let fields = unsafe { parts[2].as_object() };
-    assert_eq!(fields[0].as_int(), 3, "x");
-    assert_eq!(fields[1].as_int(), 4, "y");
-    let mut again = Vec::new();
-    layout::encode(&rt, &NothingNested, &tuple, &decoded, &mut again).expect("the decoded tuple lays out");
-    assert_eq!(&*again, &*bytes);
 }

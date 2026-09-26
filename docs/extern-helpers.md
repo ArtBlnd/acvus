@@ -176,7 +176,6 @@ the hooks a registry contributed for it (`Contribution::space`,
 | `ByArgs` | a parameter written `Args<'_, (A, ..), Rt>` | derived from `Arg` — one acvus parameter per member, the settled types kept in its site table |
 | `ArgsSite` | an `Args`'s site: the settled type of each member and the interner they were settled under | derived from `Arg::Site` — owned copies, since a site table outlives the preparation that filled it |
 | `Positions` | the run an `Args` takes, one word per member | derived from `Form` — it survives the caller suspending, the words being moved into the view |
-| `Encoded` | an `Args`'s arguments laid out by their settled types (RFC-0033) | atom — owned bytes, built only by `Args::encode` |
 | `Output` | a `dynamic` extern's result as its call fills it, at the type the site settled (RFC-0097 rule 3) | atom — built by the glue alone; `write` checks a leaf's declaration against its place, `field` descends into an object, `finish` checks every field was filled; hands out no `Ty`, value or word |
 | `Place` | one place of an `Output`: the whole result or one field of an object | derived from `Output` — the cursor `field` lends its closure |
 | `Finished` | what `Output::finish` built, or the sealed failure the script sees as `None` | atom — branded with its call's lifetime, invariantly, so it stands for no other call |
