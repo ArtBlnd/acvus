@@ -81,7 +81,7 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 /// `Option(Call(#1, identity)) exact commutative`,
 /// `Ordered(Max, #2) exact commutative`,
 /// `First(Carried(r3), guarding Carried(r4)) exact`,
-/// `Reset(Op(Concat)) exact`, `AffineMap exact`,
+/// `Reset(Op(Concat)) exact`, `AffineMap exact`, `StateMap(len(r3)) exact`,
 /// `Product(Carried(r3): Op(Add) exact commutative, Carried(r4): Op(Add)
 /// exact commutative) exact commutative`, with `scan` beside a part that is
 /// one: `Product(Carried(r3): Op(Xor) exact commutative scan, …)`.
@@ -170,6 +170,7 @@ fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
         }
         Law::Reset(inner) => format!("Reset({})", fmt_law(inner, ctx, vn)),
         Law::AffineMap => "AffineMap".to_string(),
+        Law::StateMap { table } => format!("StateMap(len({}))", vn.fmt_val(*table)),
     }
 }
 

@@ -376,7 +376,7 @@ fn standing_operation(kind: &InstKind) -> Option<ValueId> {
 
 /// The storage slots `loop_` writes: what an instruction writes or lends
 /// exclusively, and the source a `for` inside it writes through.
-fn written_in(cfg: &CfgBody, loans: &Loans<'_>, loop_: &NaturalLoop) -> FxHashSet<ValueId> {
+pub(crate) fn written_in(cfg: &CfgBody, loans: &Loans<'_>, loop_: &NaturalLoop) -> FxHashSet<ValueId> {
     let mut written: FxHashSet<ValueId> = FxHashSet::default();
     for block in loop_.blocks() {
         let held = &cfg.blocks[block.0];

@@ -19,7 +19,7 @@ use crate::analysis::inst_info::{self, Reads};
 use crate::analysis::interval::ConstantBounds;
 use crate::analysis::loans::Loans;
 use crate::analysis::loops::{
-    Invariants, LoopNest, NaturalLoop, Term, natural_loops_innermost_first,
+    Invariants, LoopNest, NaturalLoop, Term, natural_loops_innermost_first, written_in,
 };
 use crate::analysis::raise::{self, FunctionSummary};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
@@ -1391,6 +1391,14 @@ pub enum Law {
     /// `(2, 1)`, and the other order is `(2, 2)`. Over a float the expansion
     /// rounds differently from the program's order, and no law is read.
     AffineMap,
+    /// A token updated as `t[y][x]`, `table` the slice of a `t` invariant
+    /// in the loop (RFC-0093 rule 9). Composing the iterations' functions
+    /// of the state is associative, with the identity map as identity, and
+    /// does not commute. A lowerer's first pass computes a chunk's function
+    /// at the states `[0, len(table))` and records an index that would trap
+    /// as `Trap` (RFC-0092 rule 5); any other state is itself an outer index
+    /// that traps at the chunk's first update.
+    StateMap { table: ValueId },
 }
 
 /// Whether a `first`'s arm has run (RFC-0093 rules 5 and 7).
@@ -3847,6 +3855,7 @@ enum Step<'a> {
     },
     /// `a·y + x` over an integer (RFC-0093 rule 8).
     AffineMap,
+    StateMap { table: ValueId },
 }
 
 /// A law an `Option` token's payload combines through.
@@ -3919,6 +3928,11 @@ impl Step<'_> {
             },
             Self::AffineMap => Accumulator {
                 law: Law::AffineMap,
+                exact: true,
+                commutative: false,
+            },
+            Self::StateMap { table } => Accumulator {
+                law: Law::StateMap { table },
                 exact: true,
                 commutative: false,
             },
@@ -5322,6 +5336,12 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 }
                 combined?.then(Step::Order)
             }
+            InstKind::Index {
+                slice: row,
+                index: column,
+                mode: IndexMode::Copy,
+                ..
+            } => self.table_entry(*row, *column),
             InstKind::StringClone { src, .. } => self.form(*src),
             // A shared view of a container lends the container's whole value.
             InstKind::AsSlice {
@@ -5366,6 +5386,56 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             }
             _ => None,
         }
+    }
+
+    /// RFC-0093 rule 9: `row[column]` where `row` is a shared view of
+    /// `t[y]`, `y` the state and `column` reading none of it.
+    fn table_entry(&mut self, row: ValueId, column: ValueId) -> Option<Form<'a>> {
+        if self.form(column)? != Form::Free {
+            return None;
+        }
+        let Some(&Def::Inst(viewed)) = self.defs.get(&row) else {
+            return None;
+        };
+        let InstKind::AsSlice {
+            container: row_ref,
+            mutability: Mutability::Shared,
+            ..
+        } = self.inst(viewed)
+        else {
+            return None;
+        };
+        let Some(&Def::Inst(indexed)) = self.defs.get(row_ref) else {
+            return None;
+        };
+        let &InstKind::Index {
+            slice: table,
+            index: state,
+            mode: IndexMode::Ref,
+            ..
+        } = self.inst(indexed)
+        else {
+            return None;
+        };
+        if !self.invariant_table(table) {
+            return None;
+        }
+        let entry = self.form(state)?.then(Step::StateMap { table })?;
+        self.chain.extend([*row_ref, row]);
+        Some(entry)
+    }
+
+    fn invariant_table(&self, table: ValueId) -> bool {
+        let Some(loop_) = self.loops.iter().find(|loop_| loop_.header == self.header) else {
+            return false;
+        };
+        if Invariants::of(self.cfg).in_loop(loop_, table).is_none() {
+            return false;
+        }
+        let written = written_in(self.cfg, self.loans, loop_);
+        let mut borrowed = self.loans.holds(table).peekable();
+        borrowed.peek().is_some()
+            && borrowed.all(|loan| loan.storage.slot().is_some_and(|slot| !written.contains(&slot)))
     }
 
     /// What a storage the iteration defines and drops holds where it is
