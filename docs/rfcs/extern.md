@@ -1507,7 +1507,8 @@ call site, with every mismatch an explicit `None`.
 4. **Another entry within the call.** An entry run from inside a call
    takes the call's arguments as rule 1 lends them and gives its result
    through rule 3's `Output`: nothing it is lent or gives leaves the call.
-   A call reaches the entry through a hook the host binds (RFC-0101).
+   How a call reaches the entry is the host's: a hook (RFC-0101) hands a
+   closure the arguments, and the closure runs what it captures.
 
 **Why.** Outside data is untyped wherever it comes from; the one honest
 place to check it is where it enters, against the type the checker settled
@@ -1530,63 +1531,45 @@ new closure kind.
 - Laying the arguments out as bytes a second run decodes (`encode`,
   `run_encoded`) — owned bytes outlive the call, so a value leaves it.
 
-## RFC-0101: A host binds a declared hook to another program's entry, which runs within the call on the lent arguments
+## RFC-0101: A host of this interpreter binds a hook, a dynamic extern whose body is a closure
 
 Status: Proposed
 
-A host that loads programs it did not compile together (a manifest names
-them at run time) still has one program call another. RFC-0095 joins
-hosts compiled as one graph; here the two programs are prepared apart, so
-the call meets at a gate the host binds once both are prepared, and
-nothing crosses it but lent arguments and a result written in place
-(RFC-0097 rule 4).
+An extern's body is a Rust function the macro declares, so it captures
+nothing; a host that must reach its own state from a script (a manifest's
+model client, another program it keeps) has no way in. A hook relaxes only
+that: it is a dynamic extern whose body is a closure the host binds. It is
+this interpreter's host feature, not the extern contract: acvus-extern,
+the channel every runtime shares, gains nothing for it.
 
-1. **A hook is declared.** A host declares a hook by name as a dynamic
-   extern (RFC-0097): its arguments arrive as rule 1's view and its
-   result is rule 3's `Output`, settled at each call site. A program
-   whose hook is unbound refuses to run, naming the hook.
-2. **The host binds it to a lent entry.** An entry declared lent takes
-   each input lent: its body reads an input and never takes or writes it
-   unless the input is `&mut`, which compiling its program checks, and it
-   runs only from a hook. Once both programs are prepared, the host binds
-   the hook to a closure of a sealed `call`, which runs one lent entry
-   with the call's own arguments. The entry may wait; the call suspends
-   its caller until the entry ends. The entry's result, a value it made,
-   moves into the call's `Output`, and a write through a `&mut` argument
-   stores in the caller's storage; nothing the entry is lent outlives the
-   call. While it waits, the entry's contexts are its own program's
-   storage, held by the call until the entry ends.
-3. **Types are compared at binding.** A value carries its program's
-   names (an enum's tags, an object's fields), so both programs are
-   compiled over one table of names, and binding refuses two. At every
-   call site of the hook, each argument's settled type must be within the
-   entry's input, and the entry's result within the site's settled result:
-   an enum within one of more variants laid out at the same width, as
-   structural types meet by union (RFC-0042 rule 1); an object only with
-   the same fields, since its layout is its field set and no union joins
-   two programs' objects; a type behind `&mut` the same on both sides; a mismatch refuses the
-   binding, naming the site and the position. Only the language's own
-   types cross: no extension type, function value, task handle or view,
-   and a reference only as a whole argument.
-4. **Effects and re-entry.** The caller does not see the entry's
-   contexts: a read of one counts as idempotent and a write as opaque,
-   and the entry's effects are within the hook's declared effect, or the
-   binding is refused. A call that would run an entry of a program
-   already running on the same call stack traps (RFC-0048). A binding
-   holds its entry's program weakly, so two programs bound to each other
-   are each released with its host, and a hook whose entry's program was
-   released is unbound again.
+1. **Declared before compiling.** A host declares a hook by name, arity
+   and effect. Its call sites are checked as a dynamic extern's
+   (RFC-0097): each argument's type and the result `Option<T>` are settled
+   where the script calls it, and the caller reads the call's effect as
+   declared.
+2. **Bound to a closure.** The host binds the hook to an async closure
+   that may capture the host's state. It takes the call's arguments as
+   RFC-0097 rule 1's view, lent and never taken, and fills the result
+   through rule 3's `Output`. A program with an unbound hook refuses to
+   run, naming it.
+3. **It forwards, and reaches no context.** The hook hands the closure the
+   arguments and nothing else: no context and no storage of the caller or
+   of any program. A context a pass promoted to a register (mem2reg) stays
+   valid across the call, as across any extern's. What the closure does
+   with what it is lent, a `&mut` argument included, is the host's.
 
-**Why.** A lent argument and an in-place result are the plainest sound
-shape for two programs no checker saw together: no value leaves the call,
-no byte format is promised, and each program's own checks stand. Types
-meet at binding, the first moment both are known.
-**Cost.** A structural comparison per call site at binding; a re-entry
-check per hook call.
+**Why.** An extern that captures is all a host needs to join its own state
+to a script; the view, the output and the effect are the extern
+contract's own, so the hook adds no rule of its own to what crosses.
+Giving it contexts would make every hook call opaque over every context
+and store them all before it, undoing mem2reg.
+**Cost.** A closure call per hook call beside the glue an extern has.
 **Rejected.**
-- Encoding the arguments as bytes the other program decodes — owned
-  bytes outlive the call (RFC-0097).
-- Comparing types at each call — every call pays for what binding
-  settles once.
-- Refusing a program cycle before running — programs prepared apart have
-  no shared graph to find it in.
+- A hook that runs another program's entry over a storage it is handed —
+  a storage reachable from a call breaks mem2reg, and running programs is
+  the host's, which it does with what the closure captures.
+- Hook types in acvus-extern — the contract is every runtime's, and a
+  hook is this interpreter's.
+- Parameters declared with Rust types — a manifest names its hooks'
+  arguments where the script writes them; the dynamic view settles them
+  at each site.
