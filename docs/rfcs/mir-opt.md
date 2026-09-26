@@ -811,8 +811,9 @@ law and runs in its order.
    trap absorbing. The first pass reads the table without trapping (RFC-0092
    rule 5); the second runs the program's own updates from each chunk's
    offset and traps where the program does. No fact about the table's
-   entries is needed. The first pass runs once per state, so its cost
-   counts `len(t)` times (RFC-0066 rule 8).
+   entries is needed. The first pass runs once per state, `len(t)` times
+   the ordered stage's work; RFC-0066 rule 8 counts no ordered stage in
+   `W`, so the law leaves the cost line as it was.
 
 **Why.** A law stated on the loop would be a second statement of what the
 operations already say; read from them, it follows every pass that
