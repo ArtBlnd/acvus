@@ -15,8 +15,8 @@ use crate::typeck::ProbeProduct;
 
 use super::extract::{ParsedSource, extract, extract_one, lift_one};
 use super::infer::{
-    CallTargets, FnInferOutcome, Probe, SccInferResult, extract_call_edges, infer_scc,
-    solve_contexts, tarjan_scc, typed_together,
+    CallTargets, FnInferOutcome, LocalFunction, Probe, SccInferResult, extract_call_edges,
+    infer_scc, solve_contexts, tarjan_scc, typed_together,
 };
 use super::lower::{inputs_of, lower_one};
 use super::optimize::{Opt, optimize};
@@ -430,6 +430,7 @@ impl IncrementalGraph {
         {
             return None;
         }
+        let probed_local = LocalFunction::of(&probed)?;
         let parsed = extract_one(&self.interner, &probed)?;
         let declared: Vec<QualifiedRef> = self.functions.keys().copied().collect();
         let lift = lift_one(&self.interner, &probed, &declared, &self.types);
@@ -498,12 +499,15 @@ impl IncrementalGraph {
             resolved_inputs.insert(*member, inferred.resolved_inputs[member].clone());
         }
 
-        let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
+        let fn_by_id: FxHashMap<QualifiedRef, LocalFunction<'_>> = self
             .all_functions()
-            .filter(|f| !replaced(&f.qref) && matches!(f.kind, FnKind::Local(..)))
-            .map(|f| (f.qref, f))
-            .chain(instances.iter().map(|instance| (instance.qref, instance)))
-            .chain(std::iter::once((qref, &probed)))
+            .filter(|f| !replaced(&f.qref))
+            .filter_map(|f| Some((f.qref, LocalFunction::of(f)?)))
+            .chain(instances.iter().map(|instance| {
+                let local = LocalFunction::of(instance).expect("an instance of a `fn` has a body");
+                (instance.qref, local)
+            }))
+            .chain(std::iter::once((qref, probed_local)))
             .collect();
         let parsed_for_scc: FxHashMap<QualifiedRef, &ParsedSource> = scc_order[at]
             .iter()
@@ -642,12 +646,11 @@ impl IncrementalGraph {
         let mut resolved_fn_types = self.extern_fn_types();
         let mut resolved_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> = FxHashMap::default();
 
-        let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
+        let fn_by_id: FxHashMap<QualifiedRef, LocalFunction<'_>> = self
             .functions
             .values()
             .chain(self.lifted.values())
-            .filter(|f| matches!(f.kind, FnKind::Local(..)))
-            .map(|f| (f.qref, f))
+            .filter_map(|f| Some((f.qref, LocalFunction::of(f)?)))
             .collect();
 
         let extract_parsed: FxHashMap<QualifiedRef, &ParsedSource> = self
@@ -718,12 +721,11 @@ impl IncrementalGraph {
         let mut resolved_fn_types = self.extern_fn_types();
         let mut resolved_inputs: FxHashMap<QualifiedRef, Vec<InputParam>> = FxHashMap::default();
 
-        let fn_by_id: FxHashMap<QualifiedRef, &Function> = self
+        let fn_by_id: FxHashMap<QualifiedRef, LocalFunction<'_>> = self
             .functions
             .values()
             .chain(self.lifted.values())
-            .filter(|f| matches!(f.kind, FnKind::Local(..)))
-            .map(|f| (f.qref, f))
+            .filter_map(|f| Some((f.qref, LocalFunction::of(f)?)))
             .collect();
 
         let extract_parsed: FxHashMap<QualifiedRef, &ParsedSource> = self

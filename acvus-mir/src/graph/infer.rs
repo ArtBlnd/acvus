@@ -1147,13 +1147,36 @@ fn grown_effects(
         .collect()
 }
 
-fn body_span(parsed: &ParsedSource) -> acvus_ast::Span {
-    match parsed {
-        ParsedSource::Script(script) => script.span,
-        ParsedSource::Template(template) => template.span,
-        ParsedSource::Recovered(RecoveredAst::Script(script)) => script.span,
-        ParsedSource::Recovered(RecoveredAst::Template(template)) => template.span,
-        ParsedSource::Fn(lifted) => lifted.decl.name().span,
+/// A function with a body, the one kind of function a component checks.
+#[derive(Clone, Copy)]
+pub struct LocalFunction<'f> {
+    pub ty: &'f PolyTy,
+    pub ast: &'f ParsedAst,
+    pub inputs: Inputs,
+}
+
+impl<'f> LocalFunction<'f> {
+    /// `None` for an extern, which has no body.
+    pub fn of(function: &'f Function) -> Option<Self> {
+        match &function.kind {
+            FnKind::Local(ast, inputs) => Some(Self {
+                ty: &function.ty,
+                ast,
+                inputs: *inputs,
+            }),
+            FnKind::Extern { .. } => None,
+        }
+    }
+
+    /// Where a refusal about the function as a whole points.
+    fn span(&self) -> acvus_ast::Span {
+        match self.ast {
+            ParsedAst::Script(script) => script.span,
+            ParsedAst::Template(template) => template.span,
+            ParsedAst::Recovered(RecoveredAst::Script(script)) => script.span,
+            ParsedAst::Recovered(RecoveredAst::Template(template)) => template.span,
+            ParsedAst::Fn(lifted) => lifted.decl.name().span,
+        }
     }
 }
 
@@ -1162,7 +1185,7 @@ pub fn infer_scc(
     scc: &[QualifiedRef],
     entries: &[QualifiedRef],
     bindings: &Bindings,
-    fn_by_id: &FxHashMap<QualifiedRef, &Function>,
+    fn_by_id: &FxHashMap<QualifiedRef, LocalFunction<'_>>,
     extract_parsed: &FxHashMap<QualifiedRef, &ParsedSource>,
     contexts: &[Context],
     resolved_fn_types: &FxHashMap<QualifiedRef, PolyTy>,
@@ -1202,7 +1225,7 @@ struct Component<'c> {
     interner: &'c Interner,
     entries: &'c [QualifiedRef],
     bindings: &'c Bindings,
-    fn_by_id: &'c FxHashMap<QualifiedRef, &'c Function>,
+    fn_by_id: &'c FxHashMap<QualifiedRef, LocalFunction<'c>>,
     /// The parsed body of each member that has one.
     parsed: &'c FxHashMap<QualifiedRef, &'c ParsedSource>,
     known: &'c KnownContexts<'c>,
@@ -1305,10 +1328,7 @@ impl Component<'_> {
                     Ty::error(),
                     Some(crate::error::MirError {
                         kind: crate::error::MirErrorKind::MemberResultOpen { member: fid },
-                        span: self
-                            .parsed
-                            .get(&fid)
-                            .map_or(acvus_ast::Span::ZERO, |parsed| body_span(parsed)),
+                        span: self.fn_by_id[&fid].span(),
                         labels: Vec::new(),
                     }),
                 ),
@@ -1415,7 +1435,7 @@ impl Component<'_> {
                 params: ref fn_params,
                 ret: ref fn_ret,
                 ..
-            } = self.fn_by_id[&fid].ty
+            } = *self.fn_by_id[&fid].ty
             else {
                 unreachable!("local function ty must be Fn");
             };
@@ -1447,7 +1467,7 @@ impl Component<'_> {
                 params: ref fn_params,
                 ret: ref fn_ret,
                 ..
-            } = self.fn_by_id[&fid].ty
+            } = *self.fn_by_id[&fid].ty
             else {
                 unreachable!("local function ty must be Fn");
             };
@@ -1521,7 +1541,7 @@ impl Component<'_> {
         let func = self.fn_by_id[&fid];
         let TyTerm::Fn {
             ret: ref fn_ret, ..
-        } = func.ty
+        } = *func.ty
         else {
             unreachable!("local function ty must be Fn");
         };
@@ -1553,10 +1573,10 @@ impl Component<'_> {
         fid: QualifiedRef,
     ) -> Option<MemberCheck> {
         let func = self.fn_by_id[&fid];
-        let (Some(parsed), FnKind::Local(_, inputs)) = (self.parsed.get(&fid), &func.kind) else {
+        let Some(parsed) = self.parsed.get(&fid) else {
             return None;
         };
-        let body_check = self.body_check(solver, env, own, fid, *inputs);
+        let body_check = self.body_check(solver, env, own, fid, func.inputs);
         let effect = body_check.effect.clone();
         let checked = body_check.check(solver, parsed);
 
@@ -1672,10 +1692,9 @@ fn infer_at(
 
     let known = KnownContexts::instantiate(&mut solver, contexts);
 
-    let fn_by_id: FxHashMap<QualifiedRef, &Function> = extract
+    let fn_by_id: FxHashMap<QualifiedRef, LocalFunction<'_>> = extract
         .functions(graph)
-        .filter(|f| matches!(f.kind, FnKind::Local(..)))
-        .map(|f| (f.qref, f))
+        .filter_map(|f| Some((f.qref, LocalFunction::of(f)?)))
         .collect();
 
     // Every component is checked on the one solver, after the components
