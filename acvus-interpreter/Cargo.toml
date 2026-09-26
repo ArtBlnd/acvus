@@ -39,6 +39,7 @@ trait-variant = "0.1"
 tokio = { version = "1", features = ["rt", "time"] }
 
 [dev-dependencies]
+acvus-ext = { path = "../acvus-ext" }
 tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]

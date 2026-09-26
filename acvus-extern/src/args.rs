@@ -213,6 +213,14 @@ where
         P::LEN
     }
 
+    /// `acvus-interpreter`'s hook runs another program's entry on these
+    /// words in place and takes none of them; the view releases each when
+    /// the call ends (RFC-0101 rule 3).
+    #[doc(hidden)]
+    pub fn lent_words(&self, _: Holding<'_, Rt>) -> &[Owned<Rt>] {
+        self.words.as_ref()
+    }
+
     /// `f` lent argument `i`, or its target where the argument is a
     /// reference; `None` where `i` is past the end or `f`'s parameter type
     /// is not the one the checker settled there.
