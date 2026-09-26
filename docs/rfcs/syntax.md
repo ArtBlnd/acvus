@@ -416,7 +416,9 @@ is a graph function, typed, called and inlined as a host function is.
    thread's native stack out traps (RFC-0048) rather than overflowing it.
    Every framed body runs in a `Machine`, whose making compares the stack's
    position with the running thread's line: the lowest usable byte of its
-   stack, read once per thread from the OS, plus a headroom. `prepare` puts
+   stack, read once per thread from the OS, plus a headroom. On a native
+   target other than Linux and Android the stack is not read yet: every
+   frame is admitted, and an overflow there aborts. `prepare` puts
    a `StackGuard`, the same compare, where a body's operations nest
    `GUARD_EVERY` frames past the last check: a region's parts nest in the
    region's operation, and in a debug build, which calls an operation's

@@ -554,15 +554,12 @@ pub fn first_element<T>(run: &[T]) -> NonNull<T> {
 // -- The running thread's native stack ----------------------------------------
 
 /// `regs::Depth::enter` compares `position` against a `ThreadStack` as a
-/// stack that grows down, which it does on every target the `compile_error!`
-/// below admits.
+/// stack that grows down. Linux and Android state a thread's stack; on any
+/// other native target the stack is not read yet, and `of_this_thread`
+/// states the whole address space, so every frame is admitted and an
+/// overflow there aborts (RFC-0100 rule 5).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_stack {
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    compile_error!(
-        "acvus-interpreter reads a thread's stack from pthread_getattr_np, which this target \
-         does not have (RFC-0100 rule 5)"
-    );
 
     #[derive(Clone, Copy, Debug)]
     pub struct ThreadStack {
@@ -579,9 +576,17 @@ pub mod native_stack {
             self.high
         }
 
+        /// Not read on this target: the whole address space, which admits
+        /// every frame (the module's head).
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        pub fn of_this_thread() -> Option<ThreadStack> {
+            Some(ThreadStack { low: 0, high: usize::MAX })
+        }
+
         /// glibc, musl and bionic state a thread's usable stack through
         /// `pthread_getattr_np`, the main thread's included, with the guard
         /// pages below `low`.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         pub fn of_this_thread() -> Option<ThreadStack> {
             let mut attr = std::mem::MaybeUninit::<libc::pthread_attr_t>::uninit();
             // SAFETY: `pthread_getattr_np` initializes `attr` when it answers
