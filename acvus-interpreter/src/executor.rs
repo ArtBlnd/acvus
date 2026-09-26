@@ -127,25 +127,61 @@ impl Done {
 }
 
 /// A sync call to run on a thread the executor chooses.
-pub struct BlockingJob {
-    job: JobId,
-    work: Box<dyn FnOnce() -> Value + Send + Sync>,
+///
+/// The job's name rides in the box beside the work, not in a field beside
+/// the box. A third word would make `spawn_blocking` take the job by the
+/// address of a copy in the spawning operation's frame, and that escaping
+/// address costs the operation the tail call to its successor that RFC-0052
+/// rule 1 requires of it.
+pub struct BlockingJob(Box<dyn Blocking>);
+
+const _: () = assert!(
+    size_of::<BlockingJob>() <= 2 * size_of::<usize>(),
+    "a BlockingJob wider than two words is passed by address, and the spawning operation loses its tail call"
+);
+
+trait Blocking: Send + Sync {
+    fn id(&self) -> JobId;
+
+    fn run(self: Box<Self>) -> Done;
 }
 
-impl BlockingJob {
-    pub(crate) fn new(work: Box<dyn FnOnce() -> Value + Send + Sync>) -> Self {
-        BlockingJob {
-            job: JobId::next(),
-            work,
-        }
-    }
+struct BlockingWork<F> {
+    job: JobId,
+    work: F,
+}
 
-    pub(crate) fn id(&self) -> JobId {
+impl<F> Blocking for BlockingWork<F>
+where
+    F: FnOnce() -> Value + Send + Sync,
+{
+    fn id(&self) -> JobId {
         self.job
     }
 
+    fn run(self: Box<Self>) -> Done {
+        let BlockingWork { job, work } = *self;
+        Done::of(job, work())
+    }
+}
+
+impl BlockingJob {
+    pub(crate) fn new<F>(work: F) -> Self
+    where
+        F: FnOnce() -> Value + Send + Sync + 'static,
+    {
+        BlockingJob(Box::new(BlockingWork {
+            job: JobId::next(),
+            work,
+        }))
+    }
+
+    pub(crate) fn id(&self) -> JobId {
+        self.0.id()
+    }
+
     pub fn run(self) -> Done {
-        Done::of(self.job, (self.work)())
+        self.0.run()
     }
 }
 
