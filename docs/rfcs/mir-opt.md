@@ -760,7 +760,10 @@ law and runs in its order.
    there has law `L` and nothing else there reads, is combined through
    `L` with the nested loop's run from `L`'s identity. A branch is also
    a switch; an assignment is read as the chain of all the iteration's
-   assignments to the token.
+   assignments to the token. Two reads of one local the iteration stores
+   once, ahead of both, and lends mutably nowhere are one value; a move
+   out of a storage gives it no value, so it makes no later read depend
+   on the token.
 2. **Bool.** `||`, `&&` and `!=` over `Bool` are the language's laws, with
    identities `false`, `true`, `false`; an arm that fixes the token to
    one of them reads as that law.
@@ -1419,13 +1422,22 @@ reader reads it as it reads a `for` or a `while`.
    - a consumer's step updates its state `s`, and may end in `break r`
      (the consumer returns `r`); at the stream's end it returns `finish`,
      a term over `s`;
+   - a step may bind `let b = e` for the rest of its block;
    - a term is a call of a closure parameter, a registered extern named
-     as RFC-0082 rule 2 names one, a constant, `x`, `s`, and `if` over a
-     term of `bool`.
+     as RFC-0082 rule 2 names one, a constant, `x`, `s`, a local, `Some e`,
+     `None`, a record `{ f: e, .. }`, a local's field `b.f`, a comparison
+     of two numbers of one type, `if c { a } else { b }` over a term of
+     `bool`, and `match e { None => a, Some(b) => c }`. The element, the
+     state and each local move at most once on each path; a comparison
+     reads its operands.
    `map` is `yield f(x)`, `filter` is `if p(&x) { yield x } else { skip }`,
    `take_while` is `if p(&x) { yield x } else { done }`, `flat_map` is
    `nest f(x)`, `fold` is `s = g(s, x)`, `any` is `if p(&x) { break true }`
-   with `finish = false`. It is the author's promise (RFC-0082 rule 5),
+   with `finish = false`. `max_by_key` keeps the handler's state:
+   `let k = f(&x); s = match s { None => Some({ value: x, key: k }),
+   Some(b) => if k > b.key { Some({ value: x, key: k }) } else { Some(b) } }`
+   from `None`, with `finish = match s { None => None, Some(b) =>
+   Some(b.value) }`, so a tie keeps the earlier element. It is the author's promise (RFC-0082 rule 5),
    checked per declaration: the handler and the fused loop agree on every
    pipeline up to a bound, each type variable at a small finite type,
    since a declaration generic in `T` cannot inspect it; a concretely
