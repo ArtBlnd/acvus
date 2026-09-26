@@ -1467,9 +1467,9 @@ The first shape a lowerer admits under RFC-0092: a chunk of one iteration, one s
    - it lies in no other loop of its body;
    - its source is a shared slice or a range;
    - its first stage is free and no cycle crosses;
-   - the first stage's straight run from the body entry to its last `Spawn` before a joint (the prefix) spawns an extern whose declaration is `heavy` or an `async fn`, read by the instance the call names;
-   - every other instruction of the prefix cannot trap (RFC-0048 rule 8);
-   - the prefix reads no header parameter;
+   - the first stage's straight run from the body entry to its last `Spawn` before a joint (the prefix) spawns an extern whose declaration is `heavy` or an `async fn`, read by the instance the call names; a joint is an evaluation, a call that suspends, or a branch other than an `if` whose arms rejoin in the stage;
+   - every other instruction of the prefix cannot trap and finishes (RFC-0048 rule 8, RFC-0089 rule 5), read from the body alone;
+   - the prefix reads no value the loop defines outside it, a header parameter among them;
    - where the loop can leave from its body, no instruction of the prefix has an effect.
    `analysis::ahead` decides it from `analysis::loop_deps` and `analysis::raise`, and names the first condition that fails.
 2. **The run.** On entering the loop and at each header, the lowerer runs the prefix of the iterations up to a bound ahead, each laid at its own index. Each spawn thereby starts its work. The registers the prefix writes and later instructions read are moved out, by index, into a buffer the frame owns. Each iteration then takes its own back and runs the rest of the body in place, in index order: its evaluations, the rest of its first stage and every later stage.
