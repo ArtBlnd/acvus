@@ -45,7 +45,6 @@ mod for_loop;
 mod fused_run;
 mod hash_instances;
 mod hook;
-mod host_graph;
 mod host_surface;
 mod inlined_closure_capture;
 mod input_lent_to_a_view;

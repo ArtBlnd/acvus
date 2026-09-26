@@ -28,11 +28,6 @@ pub struct UserDefinedDecl {
     /// argument, so the argument is a specializing position
     /// (hash-types.md, R1). One entry per `type_params` entry.
     pub specializable: Vec<bool>,
-    /// Whether a value of the type may hold a function beside what its
-    /// type arguments name, which a reader walks itself (RFC-0095 rule 4).
-    /// It is `false` only where a fact of the type rules a function out,
-    /// so a declaration that knows no such fact answers `true`.
-    pub may_hold_a_function: bool,
 }
 
 /// A declaration under a name the registry already has a type for.
@@ -2867,23 +2862,17 @@ pub enum FnLookup<'a> {
 impl TypeEnv {
     /// A script's bare name is its own function if it has one, else the
     /// functions of that name under any namespace (RFC-0021, RFC-0043).
-    pub fn resolve_fn(&self, name: QualifiedRef, host: Option<Astr>) -> FnLookup<'_> {
-        let written_bare = name.namespace.is_none() && name.host.is_none();
-        if written_bare && let Some(scheme) = self.functions.get(&name.in_host(host)) {
-            return FnLookup::Found(name.in_host(host), scheme);
-        }
+    pub fn resolve_fn(&self, name: QualifiedRef) -> FnLookup<'_> {
         if let Some(scheme) = self.functions.get(&name) {
             return FnLookup::Found(name, scheme);
         }
-        if !written_bare {
+        if name.namespace.is_some() {
             return FnLookup::Missing;
         }
         let mut candidates: Vec<QualifiedRef> = self
             .functions
             .keys()
-            .filter(|q| {
-                q.name == name.name && q.namespace.is_some() && q.host.is_none() && q.scope.is_none()
-            })
+            .filter(|q| q.name == name.name && q.namespace.is_some() && q.scope.is_none())
             .copied()
             .collect();
         candidates.sort();
@@ -5550,7 +5539,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5571,7 +5559,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5595,7 +5582,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5622,7 +5608,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5664,7 +5649,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5688,7 +5672,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5712,7 +5695,6 @@ mod tests {
                 identity_params: 0,
                 region_params: 0,
                 specializable: vec![false],
-                may_hold_a_function: true,
             })
             .expect("one declaration per name");
         let signatures = FxHashMap::default();
@@ -5744,7 +5726,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         let decl = reg.get(id);
@@ -5763,7 +5744,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![],
-            may_hold_a_function: true,
         };
         reg.register(decl()).expect("one declaration per name");
         assert_eq!(reg.register(decl()), Err(DuplicateType(id)));
@@ -5812,7 +5792,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false; type_param_count],
-            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         reg.register_cast(CastRule {
@@ -6021,7 +6000,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         reg.from_rules.entry(id).or_default().push(rule_a);
@@ -6059,7 +6037,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         reg.register_cast(CastRule {
@@ -6104,7 +6081,6 @@ mod tests {
             identity_params: 0,
             region_params: 0,
             specializable: vec![false],
-            may_hold_a_function: true,
         })
         .expect("one declaration per name");
         let mut builder1 = PolyBuilder::new();

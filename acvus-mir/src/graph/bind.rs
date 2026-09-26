@@ -20,7 +20,7 @@ use crate::ir::{Inst, InstKind, MirBody, RefTarget, ValueId};
 use crate::solver::Solver;
 use crate::ty::{Home, InferTy, IntTy, LenTerm, Mutability, ObjectTy, Ty, TyTerm, TypeArg};
 
-use super::types::QualifiedRef;
+use super::types::{Bindings, QualifiedRef};
 
 // -- The value ---------------------------------------------------------
 
@@ -257,7 +257,6 @@ impl BoundValue {
                             QualifiedRef {
                                 namespace: Some(enum_name),
                                 name: tag,
-                                host: None,
                                 scope: None,
                             },
                         ref_kind: RefKind::Value,
@@ -520,17 +519,14 @@ pub(super) fn admit(value: &BoundValue) -> Result<(), BindingRefused> {
 
 /// A parameter the declaration names is filled by its call, so a binding of
 /// the same name leaves it standing, as the checker does (RFC-0054 rule 6).
-pub fn substitute<'b, I>(
+pub fn substitute(
     interner: &Interner,
     body: &mut MirBody,
     declared_params: usize,
-    bindings: I,
-) -> Vec<MirError>
-where
-    I: IntoIterator<Item = (Astr, &'b BoundValue)>,
-{
+    bindings: &Bindings,
+) -> Vec<MirError> {
     let mut errors = Vec::new();
-    for (name, value) in bindings {
+    for (name, value) in bindings.iter() {
         let Some(at) = body.params[declared_params..]
             .iter()
             .position(|(held, _)| *held == name)

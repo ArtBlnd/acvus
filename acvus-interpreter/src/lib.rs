@@ -37,7 +37,6 @@ pub mod executor;
 mod flight;
 mod hook;
 mod host;
-mod host_graph;
 mod init;
 mod interpreter;
 #[cfg(feature = "tooling")]
@@ -88,8 +87,7 @@ pub use host::{
     CompileTimes, InputListing, Listing, UntypedEntry, UntypedOutput, context_refs, environment,
     untyped_entry_ty,
 };
-pub use hook::{HookArity, HookArgs, HookEffect, HookFinished, HookName, HookOutput, HookParams, HookPart};
-pub use host_graph::HostGraph;
+pub use hook::{HookArity, HookArgs, HookEffect, HookFinished, HookOutput, HookParams, HookPart};
 pub use port::Held;
 pub use regs::DEPTH_TRAP;
 pub use runtime::AcvusRuntime;

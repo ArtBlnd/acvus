@@ -78,19 +78,12 @@ pub fn lift_one(
     declared: &[QualifiedRef],
     registry: &TypeRegistry,
 ) -> Option<Lift> {
-    let host = script.qref.host;
     lift(interner, script, |name: Astr| {
-        let written = QualifiedRef::root(name);
         let mut reached: Vec<String> = declared
             .iter()
             .copied()
             .filter(|qref| {
-                qref.scope.is_none()
-                    && qref.name == name
-                    && registry.machine_view(*qref).is_none()
-                    && (*qref == written.in_host(host)
-                        || *qref == written
-                        || (qref.namespace.is_some() && qref.host.is_none()))
+                qref.scope.is_none() && qref.name == name && registry.machine_view(*qref).is_none()
             })
             .map(|qref| match qref.namespace {
                 Some(ns) => format!("{}::{}", interner.resolve(ns), interner.resolve(qref.name)),

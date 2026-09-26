@@ -20,14 +20,6 @@ feature; the extern contract every runtime shares has nothing of it.
   closure bound to a hook of another arity is refused as
   `Cause::Hook { part: HookPart::Arity, .. }`, and a second binding as
   `HookPart::Bound`. Binding an undeclared name is `HostError::NotInGraph`.
-- **In a host graph.** A hook a host of a `HostGraph` declares is a hook of
-  the graph's program in that host's scope, as its entries are (RFC-0095
-  rule 1). Only that host's scripts reach it, so two hosts may each
-  declare a hook of one name, and they are two hooks.
-  `Program::bind_in::<N, _>(host, name, closure)` binds it; `bind` by the
-  name alone reaches no hook of a graph. A hook an exposed entry calls
-  runs in the caller's run, and its effect is the caller's as the
-  entry's other effects are.
 - **Arguments.** `args` is RFC-0097 rule 1's `Args` view over the call's
   arguments (`()` for a hook of none). `args.with(i, |x: &T| …)` and
   `args.with_mut(i, |x: &mut T| …)` lend argument `i` to a closure and give
@@ -47,8 +39,7 @@ feature; the extern contract every runtime shares has nothing of it.
   call as across any extern's. Running another program is the host's, with
   what the closure captures.
 - **Running.** A program with an unbound hook does not run: its runs end
-  with `HostError::Unbound`, naming the hook and, in a graph, its host
-  (`HookName`).
+  with `HostError::Unbound`, naming the hook.
 
 ```rust
 use std::sync::Arc;
@@ -105,52 +96,6 @@ greeting + "; asked " + asked.to_string()"#,
     }))?;
     assert_eq!(text, "hello, ann; asked 1");
     assert_eq!(sent.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-```
-
-Two hosts of a graph, each with its own `ask`:
-
-```rust
-use acvus_interpreter::{
-    AcvusRuntime, HookEffect, HostError, HostGraph, MemoryStorage, SequentialExecutor, Source,
-};
-
-fn main() -> Result<(), HostError> {
-    let asks = "match ask() { Some(n) => n, None => -1 }";
-    let program = HostGraph::new(acvus_ext::std_registries::<AcvusRuntime>())
-        .host("a", |host| {
-            Ok(host.hook("ask", 0, HookEffect::Opaque).entry::<(), i64>("main", Source::Script(asks)))
-        })?
-        .host("b", |host| {
-            Ok(host.hook("ask", 0, HookEffect::Opaque).entry::<(), i64>("main", Source::Script(asks)))
-        })?
-        .entry("a", "main")
-        .entry("b", "main")
-        .compile(SequentialExecutor)?;
-
-    for (host, answer) in [("a", 1i64), ("b", 2)] {
-        program.bind_in::<0, _>(host, "ask", move |(), mut out| {
-            Box::pin(async move {
-                out.write(answer);
-                out.finish()
-            })
-        })?;
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("a runtime");
-    let run = |entry: &'static str| {
-        runtime.block_on(program.scope(async |s| {
-            let mut storage = MemoryStorage::new();
-            let mut page = s.open(&mut storage);
-            let main = s.entry::<(), i64>(entry)?;
-            main.run(&mut page, ()).await?.with(|n: &i64| *n)
-        }))
-    };
-    assert_eq!(run("a/main")?, 1);
-    assert_eq!(run("b/main")?, 2);
     Ok(())
 }
 ```

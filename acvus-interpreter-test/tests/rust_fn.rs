@@ -4,12 +4,12 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::{Declared, Registry, Runtime, RustFn, extern_fn, extern_registry};
-use acvus_interpreter::{AcvusRuntime, HostError, HostGraph, SequentialExecutor, Source};
+use acvus_extern::{Registry, Runtime, RustFn, extern_fn, extern_registry};
+use acvus_interpreter::{AcvusRuntime, SequentialExecutor};
 use acvus_interpreter_test::{Context, Helper, Refusal, check_graph, check_source, execute_compiled, run_script_with_externs};
 use acvus_mir::graph::ParsedAst;
 use acvus_mir::graph::optimize::Opt;
-use acvus_mir::ty::{Effect, Flows, IntTy, ObjectTy, ParamTerm, Poly, PolyParam, PolyTy, Ty, TyTerm};
+use acvus_mir::ty::{Effect, Flows, IntTy, ParamTerm, Poly, PolyParam, PolyTy, Ty, TyTerm};
 use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
@@ -159,60 +159,4 @@ fn a_call_with_a_second_argument_is_a_compile_error() {
 fn a_call_with_a_string_argument_is_a_compile_error() {
     let messages = refused("let plus = adder(1);\nplus(\"one\".to_string())");
     assert_eq!(messages, ["[main] type mismatch: expected i64, got String"]);
-}
-
-// -- Nothing callable crosses a host boundary (RFC-0095 rule 4) --------------
-
-pub struct TakesAnAdder;
-
-impl Declared for TakesAnAdder {
-    fn declared(interner: &Interner) -> PolyTy {
-        TyTerm::Object(ObjectTy::written([(interner.intern("add"), adder_result_ty(interner))].into_iter().collect()))
-    }
-}
-
-pub struct AnAdder;
-
-impl Declared for AnAdder {
-    fn declared(interner: &Interner) -> PolyTy {
-        adder_result_ty(interner)
-    }
-}
-
-fn exposing<I, R>(main: &'static str, exposed: &'static str) -> Result<HostGraph, HostError>
-where
-    I: Declared,
-    R: Declared,
-{
-    HostGraph::new(registries())
-        .host("a", move |host| Ok(host.entry::<(), i64>("main", Source::Script(main))))
-        .and_then(|g| g.host("b", move |host| Ok(host.entry::<I, R>("e", Source::Script(exposed)))))
-        .map(|g| g.expose("a", "e", "b", "e").entry("a", "main"))
-}
-
-fn crossing_refusals(graph: Result<HostGraph, HostError>) -> Vec<String> {
-    let refusals = match graph.and_then(|graph| graph.compile(SequentialExecutor)) {
-        Ok(_) => panic!("the graph compiled"),
-        Err(HostError::Refused(refusals)) => refusals,
-        Err(other) => panic!("a graph is refused with its refusals, not {other:?}"),
-    };
-    refusals
-        .into_iter()
-        .map(|refusal| refusal.message)
-        .filter(|message| message.contains("nothing callable crosses"))
-        .collect()
-}
-
-#[test]
-fn a_rust_fn_in_an_exposed_input_is_refused() {
-    let messages = crossing_refusals(exposing::<TakesAnAdder, i64>("e({ add: adder(1), })", "$add(1)"));
-    assert_eq!(messages.len(), 1, "{messages:#?}");
-    assert!(messages[0].contains("at `$add` of its input the function type"), "{messages:#?}");
-}
-
-#[test]
-fn a_rust_fn_as_an_exposed_result_is_refused() {
-    let messages = crossing_refusals(exposing::<(), AnAdder>("0", "adder(1)"));
-    assert_eq!(messages.len(), 1, "{messages:#?}");
-    assert!(messages[0].contains("at `result` of its result the function type"), "{messages:#?}");
 }

@@ -53,7 +53,6 @@ macro_rules! keying_marker {
                     identity_params: 0,
                     region_params: 0,
                     specializable: Vec::new(),
-                    may_hold_a_function: false,
                 }
             }
         }

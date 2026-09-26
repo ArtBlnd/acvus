@@ -281,7 +281,6 @@ where
         QualifiedRef {
             namespace: self.script.namespace,
             name: self.decl(member).name.name,
-            host: self.script.host,
             scope: Some(FnScope {
                 script: self.script.name,
                 instance,
@@ -618,7 +617,6 @@ fn bare_callee<S>(func: &Expr<S>) -> Option<BareCall> {
                 QualifiedRef {
                     namespace: None,
                     name,
-                    host: None,
                     scope: None,
                 },
             ref_kind: RefKind::Value,

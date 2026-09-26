@@ -10,32 +10,15 @@ use std::sync::Arc;
 use acvus_extern::{Crossing, Owned};
 use acvus_mir::graph::{Context, ContextInit, FnKind, Function, Inputs, ParsedAst, QualifiedRef};
 use acvus_mir::ty::{Effect, Flows, PolyBuilder, PolyTy, Ty, TyTerm, lift_declaration};
-use acvus_utils::{Astr, Interner};
+use acvus_utils::Interner;
 use rustc_hash::FxHashMap;
 
-use crate::host::program_key;
 use crate::interpreter::Init;
 use crate::runtime::AcvusRuntime;
 
 pub(crate) struct InitSource {
-    pub(crate) key: InitKey,
+    pub(crate) key: String,
     pub(crate) given: InitGiven,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InitKey {
-    pub(crate) host: Option<String>,
-    pub(crate) written: String,
-}
-
-impl InitKey {
-    pub(crate) fn stored(&self) -> String {
-        program_key(self.host.as_deref(), &self.written)
-    }
-
-    fn host(&self, interner: &Interner) -> Option<Astr> {
-        self.host.as_deref().map(|host| interner.intern(host))
-    }
 }
 
 pub(crate) enum InitGiven {
@@ -71,25 +54,14 @@ impl SolvedRustInit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InitRefusal {
-    Twice {
-        key: InitKey,
-    },
-    NamesAContext {
-        key: InitKey,
-        context: String,
-    },
-    NameTaken {
-        key: InitKey,
-    },
-    SolvedElsewhere {
-        key: InitKey,
-        declared: String,
-        solved: String,
-    },
+    Twice { key: String },
+    NamesAContext { key: String, context: String },
+    NameTaken { key: String },
+    SolvedElsewhere { key: String, declared: String, solved: String },
 }
 
 impl InitRefusal {
-    pub(crate) fn key(&self) -> &InitKey {
+    pub(crate) fn key(&self) -> &str {
         match self {
             InitRefusal::Twice { key }
             | InitRefusal::NamesAContext { key, .. }
@@ -102,21 +74,18 @@ impl InitRefusal {
 impl fmt::Display for InitRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            InitRefusal::Twice { key } => write!(f, "`@{}` is given two inits", key.written),
+            InitRefusal::Twice { key } => write!(f, "`@{key}` is given two inits"),
             InitRefusal::NamesAContext { key, context } => write!(
                 f,
-                "the init of `@{}` names `@{context}`, and an init names no context",
-                key.written
+                "the init of `@{key}` names `@{context}`, and an init names no context"
             ),
             InitRefusal::NameTaken { key } => write!(
                 f,
-                "the init of `@{0}` is compiled as the function `@{0}`, which the graph already holds",
-                key.written
+                "the init of `@{key}` is compiled as the function `@{key}`, which the graph already holds"
             ),
             InitRefusal::SolvedElsewhere { key, declared, solved } => write!(
                 f,
-                "the init of `@{0}` makes a {declared}, and the scripts solve `@{0}` to {solved}",
-                key.written
+                "the init of `@{key}` makes a {declared}, and the scripts solve `@{key}` to {solved}"
             ),
         }
     }
@@ -124,8 +93,8 @@ impl fmt::Display for InitRefusal {
 
 /// A source reads `@key` as the context, so no call a source writes reaches
 /// the init.
-fn init_ref(interner: &Interner, key: &InitKey) -> QualifiedRef {
-    QualifiedRef::root(interner.intern(&format!("@{}", key.written))).in_host(key.host(interner))
+fn init_ref(interner: &Interner, key: &str) -> QualifiedRef {
+    QualifiedRef::root(interner.intern(&format!("@{key}")))
 }
 
 pub(crate) struct GraphParts {
@@ -141,7 +110,7 @@ enum DeclaredInit {
 }
 
 pub(crate) struct DeclaredInits {
-    by_key: BTreeMap<String, (InitKey, DeclaredInit)>,
+    by_key: BTreeMap<String, DeclaredInit>,
 }
 
 impl DeclaredInits {
@@ -153,7 +122,7 @@ impl DeclaredInits {
         let mut refusals = Vec::new();
         let mut by_key = BTreeMap::new();
         for InitSource { key, given } in inits {
-            if by_key.contains_key(&key.stored()) {
+            if by_key.contains_key(&key) {
                 refusals.push(InitRefusal::Twice { key });
                 continue;
             }
@@ -170,7 +139,7 @@ impl DeclaredInits {
                     DeclaredInit::Rust(rust)
                 }
             };
-            by_key.insert(key.stored(), (key, declared));
+            by_key.insert(key, declared);
         }
         match refusals.is_empty() {
             true => Ok(DeclaredInits { by_key }),
@@ -178,15 +147,15 @@ impl DeclaredInits {
         }
     }
 
-    pub(crate) fn key_of(&self, qref: &QualifiedRef) -> Option<&InitKey> {
+    pub(crate) fn key_of(&self, qref: &QualifiedRef) -> Option<&str> {
         self.functions()
             .find(|(_, function)| function == qref)
             .map(|(key, _)| key)
     }
 
-    pub(crate) fn functions(&self) -> impl Iterator<Item = (&InitKey, QualifiedRef)> {
-        self.by_key.values().filter_map(|(key, init)| match init {
-            DeclaredInit::Script(function) => Some((key, *function)),
+    pub(crate) fn functions(&self) -> impl Iterator<Item = (&str, QualifiedRef)> {
+        self.by_key.iter().filter_map(|(key, init)| match init {
+            DeclaredInit::Script(function) => Some((key.as_str(), *function)),
             DeclaredInit::Rust(_) => None,
         })
     }
@@ -198,9 +167,9 @@ impl DeclaredInits {
     ) -> Result<FxHashMap<Box<str>, Init>, Vec<InitRefusal>> {
         let mut inits = FxHashMap::default();
         let mut refusals = Vec::new();
-        for (stored, (key, init)) in self.by_key {
-            let Some(ty) = solved.get(&stored) else {
-                panic!("`declare` made `@{stored}` a context of the graph")
+        for (key, init) in self.by_key {
+            let Some(ty) = solved.get(&key) else {
+                panic!("`declare` made `@{key}` a context of the graph")
             };
             let ty = Arc::clone(ty);
             let init = match init {
@@ -217,7 +186,7 @@ impl DeclaredInits {
                     Init::rust(SolvedRustInit { make }, ty)
                 }
             };
-            inits.insert(stored.into_boxed_str(), init);
+            inits.insert(key.into_boxed_str(), init);
         }
         match refusals.is_empty() {
             true => Ok(inits),
@@ -226,12 +195,8 @@ impl DeclaredInits {
     }
 }
 
-fn context_of<'g>(
-    interner: &Interner,
-    key: &InitKey,
-    graph: &'g mut GraphParts,
-) -> &'g mut Context {
-    let context_ref = QualifiedRef::root(interner.intern(&key.written)).in_host(key.host(interner));
+fn context_of<'g>(interner: &Interner, key: &str, graph: &'g mut GraphParts) -> &'g mut Context {
+    let context_ref = QualifiedRef::root(interner.intern(key));
     let at = match graph.contexts.iter().position(|c| c.qref == context_ref) {
         Some(at) => at,
         None => {
@@ -248,7 +213,7 @@ fn context_of<'g>(
 
 fn script_init(
     interner: &Interner,
-    key: &InitKey,
+    key: &str,
     ast: ParsedAst,
     graph: &mut GraphParts,
 ) -> Result<QualifiedRef, InitRefusal> {
@@ -260,12 +225,12 @@ fn script_init(
     named.sort();
     if let Some(context) = named.into_iter().next() {
         return Err(InitRefusal::NamesAContext {
-            key: key.clone(),
+            key: key.to_owned(),
             context,
         });
     }
     if graph.functions.iter().any(|function| function.qref == qref) {
-        return Err(InitRefusal::NameTaken { key: key.clone() });
+        return Err(InitRefusal::NameTaken { key: key.to_owned() });
     }
     let context = context_of(interner, key, graph);
     context.init = Some(ContextInit::Body(qref));
