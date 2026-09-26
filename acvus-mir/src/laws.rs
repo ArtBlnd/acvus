@@ -233,6 +233,12 @@ pub enum ResolvedLaws {
     #[default]
     None,
     Binary(ResolvedBinary),
+    /// A law stated on `f(a: T, b: T) -> Option<T>`: the law of `f`'s
+    /// extension to `Option<T>`, `Some(a) · Some(b)` being `f(a, b)` and
+    /// `None` absorbing from either side, its identity `Some` of the one
+    /// stated at `T` (RFC-0082 rule 2). No reader reads it as a law over
+    /// `T`.
+    Extension(ResolvedBinary),
     Fold(ResolvedFold),
     TotalOrder,
     /// `inverse = g`, with `g` taken at the instance whose state and payload
@@ -351,22 +357,30 @@ pub fn resolve<'a>(
             commutative,
             identity,
         }) => {
-            if !binary_fits(params, ret) {
-                return Err(Unresolved::UnfitDeclaration);
-            }
-            Ok(ResolvedLaws::Binary(ResolvedBinary {
-            associative: *associative,
-            commutative: *commutative,
-            identity: match identity {
-                None => None,
-                Some(Identity::Const(constant)) => Some(ResolvedIdentity::Const(constant.clone())),
-                Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(instance_of(
-                    LawRole::Identity,
-                    *named,
-                    &Wanted::Returning((**ret).clone()),
-                )?)),
-            },
-            }))
+            let (value, extension) = match (binary_fits(params, ret), extension_of(params, ret)) {
+                (true, _) => ((**ret).clone(), false),
+                (false, Some(value)) => (value, true),
+                (false, None) => return Err(Unresolved::UnfitDeclaration),
+            };
+            let resolved = ResolvedBinary {
+                associative: *associative,
+                commutative: *commutative,
+                identity: match identity {
+                    None => None,
+                    Some(Identity::Const(constant)) => {
+                        Some(ResolvedIdentity::Const(constant.clone()))
+                    }
+                    Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(instance_of(
+                        LawRole::Identity,
+                        *named,
+                        &Wanted::Returning(value),
+                    )?)),
+                },
+            };
+            Ok(match extension {
+                false => ResolvedLaws::Binary(resolved),
+                true => ResolvedLaws::Extension(resolved),
+            })
         }
         Laws::Fold(FoldLaw {
             combine,
@@ -495,6 +509,18 @@ fn binary_fits(params: &[crate::ty::PolyParam], ret: &PolyTy) -> bool {
     let over_values = a.ty == b.ty && a.ty == *ret;
     let over_string_views = *ret == PolyTy::String && str_view(&a.ty) && str_view(&b.ty);
     over_values || over_string_views
+}
+
+/// RFC-0082 rule 2's `f(a: T, b: T) -> Option<T>`: `T`, the type a law
+/// stated there is `f`'s extension's over.
+fn extension_of(params: &[crate::ty::PolyParam], ret: &PolyTy) -> Option<PolyTy> {
+    let [a, b] = params else {
+        return None;
+    };
+    let PolyTy::Option(payload) = ret else {
+        return None;
+    };
+    (a.ty == b.ty && a.ty == **payload).then(|| a.ty.clone())
 }
 
 /// Whether `means`, declared on an instance of type `declaring`, reads each

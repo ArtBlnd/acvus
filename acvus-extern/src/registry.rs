@@ -5,7 +5,8 @@ use std::fmt;
 
 use acvus_mir::graph::{FnKind, Function, QualifiedRef};
 use acvus_mir::laws::{
-    BinaryLaws, Identity, LawRole, Laws, NamedLaw, Postcondition, Reaches, Returns, Unresolved,
+    BinaryLaws, Identity, LawRole, Laws, NamedLaw, Postcondition, Reaches, ResolvedLaws, Returns,
+    Unresolved,
 };
 use acvus_mir::ty::{
     CastRule, DuplicateType, Effect, EffectArg, EffectTerm, EffectVarBound, IdentityTerm,
@@ -1235,20 +1236,26 @@ impl LawSite<'_> {
         let PolyTy::Fn { ret, .. } = self.ty else {
             return Err(self.unshaped(law));
         };
+        let resolved =
+            acvus_mir::laws::resolve(laws, self.ty, |named| self.declared.get(&named).copied());
+        // A law over `f`'s extension to `Option<T>` states its identity at
+        // `T` (RFC-0082 rule 2).
+        let value = match (&resolved, &**ret) {
+            (Ok(ResolvedLaws::Extension(_)), PolyTy::Option(payload)) => &**payload,
+            _ => &**ret,
+        };
         if let Laws::Binary(BinaryLaws {
             identity: Some(Identity::Const(constant)),
             ..
         }) = laws
-            && !is_value_of(constant, ret)
+            && !is_value_of(constant, value)
         {
             return Err(CombineError::IdentityNotOfResultType {
                 function: written(self.interner, self.function),
                 constant: constant.clone(),
-                ty: (**ret).clone(),
+                ty: value.clone(),
             });
         }
-        let resolved =
-            acvus_mir::laws::resolve(laws, self.ty, |named| self.declared.get(&named).copied());
         match resolved {
             Ok(_) => Ok(()),
             Err(Unresolved::UnfitDeclaration) => Err(self.unshaped(law)),

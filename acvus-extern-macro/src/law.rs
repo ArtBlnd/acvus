@@ -255,7 +255,13 @@ impl LawAttr {
         }
         let binary = match params {
             [a, b] if matches!(returning, Returning::Value) => match (a.mode, b.mode) {
-                (Mode::Value, Mode::Value) => same_type(&a.ty, &b.ty) && same_type(&a.ty, ret),
+                // RFC-0082 rule 2: over `T`, or over `f`'s extension to
+                // `Option<T>` with `None` absorbing.
+                (Mode::Value, Mode::Value) => {
+                    same_type(&a.ty, &b.ty)
+                        && (same_type(&a.ty, ret)
+                            || option_payload(ret).is_some_and(|payload| same_type(&a.ty, payload)))
+                }
                 (Mode::Str, Mode::Str) => {
                     matches!(ret, Type::Path(path) if path.path.is_ident("String"))
                 }
@@ -268,8 +274,9 @@ impl LawAttr {
             return Err(syn::Error::new(
                 word.span(),
                 format!(
-                    "the law `{word}` is stated over `f(a: T, b: T) -> T` or \
-                     `f(a: &str, b: &str) -> String`, and `{fn_ident}` is not of that shape"
+                    "the law `{word}` is stated over `f(a: T, b: T) -> T`, \
+                     `f(a: T, b: T) -> Option<T>` or `f(a: &str, b: &str) -> String`, and \
+                     `{fn_ident}` is not of that shape"
                 ),
             ));
         }

@@ -81,6 +81,8 @@ fn proven_suffix(bound: IndexBound) -> &'static str {
 /// `Extremum(Max, Carried(r3), carrying Carried(r4)) exact`,
 /// `Option(Call(#1, identity)) exact commutative` (`None` adjoined as the
 /// identity), `Option(Op(Add), None absorbing) exact commutative`,
+/// `Extension(Call(#2, identity), None absorbing) exact commutative` (a law
+/// stated over an `Option` result, RFC-0082 rule 2),
 /// `Extremum(Max, field k) exact` (a record chosen by its field `k`),
 /// `Ordered(Max, #2) exact commutative`,
 /// `First(Carried(r3), guarding Carried(r4)) exact`,
@@ -140,6 +142,16 @@ fn fmt_law(law: &Law, ctx: &PrintCtx<'_>, vn: &mut ValNormalizer) -> String {
         Law::OptionLifted(inner) => format!("Option({})", fmt_law(inner, ctx, vn)),
         Law::OptionAbsorbing(inner) => {
             format!("Option({}, None absorbing)", fmt_law(inner, ctx, vn))
+        }
+        Law::Extension(call) => {
+            let identity = match call.identity {
+                CallIdentity::Declared(_) => "identity",
+                CallIdentity::OptionLifted => "option-lifted",
+            };
+            format!(
+                "Extension(Call({}, {identity}), None absorbing)",
+                ctx.fmt_fn_id(call.callee.id)
+            )
         }
         Law::FieldExtremum { op, field } => format!(
             "Extremum({}, field {})",

@@ -229,11 +229,6 @@ macro_rules! int_common {
 
         // -- checked ----------------------------------------------------
 
-        #[extern_fn(instance_of = crate::num::sig::checked_add, effect = pure, total)]
-        pub fn checked_add(a: $t, b: $t) -> Option<$t> {
-            a.checked_add(b)
-        }
-
         #[extern_fn(instance_of = crate::num::sig::checked_sub, effect = pure, total)]
         pub fn checked_sub(a: $t, b: $t) -> Option<$t> {
             a.checked_sub(b)
@@ -517,6 +512,14 @@ macro_rules! int_pow_unsigned {
 
 macro_rules! int_signed {
     () => {
+        /// No law: over a signed width the overflow point depends on the
+        /// grouping, `(MAX + 1) + -1` overflowing where `MAX + (1 + -1)`
+        /// does not.
+        #[extern_fn(instance_of = crate::num::sig::checked_add, effect = pure, total)]
+        pub fn checked_add(a: Width, b: Width) -> Option<Width> {
+            a.checked_add(b)
+        }
+
         /// No law: a signed saturating sum is not associative, since
         /// `(MAX + 1) + -1` is `MAX - 1` and `MAX + (1 + -1)` is `MAX`.
         #[extern_fn(instance_of = crate::num::sig::saturating_add, effect = pure, total)]
@@ -556,6 +559,20 @@ macro_rules! int_signed {
 
 macro_rules! int_unsigned {
     () => {
+        /// The law of the sum's extension to `Option` with `None` absorbing
+        /// (RFC-0082 rule 2): over nonnegative terms a partial sum past
+        /// `MAX` stays past it once more terms are added, so the overflow
+        /// point, and the sum below it, do not depend on the grouping.
+        #[extern_fn(
+            instance_of = crate::num::sig::checked_add,
+            effect = pure,
+            total,
+            law(associative, commutative, identity = 0)
+        )]
+        pub fn checked_add(a: Width, b: Width) -> Option<Width> {
+            a.checked_add(b)
+        }
+
         /// An unsigned saturating sum is the true sum clamped to `MAX`, and
         /// clamping above commutes with a sum of nonnegative terms, so it
         /// associates.
@@ -1080,6 +1097,77 @@ mod tests {
                 }
             }
         };
+    }
+
+    /// The declared law of each `f(a: T, b: T) -> Option<T>` over its
+    /// extension to `Option<T>` with `None` absorbing (RFC-0082 rule 2),
+    /// at one width, over its edges, a sample of its words and `None`.
+    macro_rules! extension_laws_hold_at {
+        ($test:ident, $m:ident: $t:ident $(, $f:ident = $identity:expr)+ $(,)?) => {
+            #[test]
+            fn $test() {
+                let edges: [$t; 5] = [$t::MIN, $t::MAX, 0, 1, $t::MAX / 2];
+                let mut samples = Samples(SEED);
+                let words: Vec<Option<$t>> = edges
+                    .into_iter()
+                    .chain((0..SAMPLED).map(|_| samples.next() as $t))
+                    .map(Some)
+                    .chain([None])
+                    .collect();
+                let declared: Vec<(&str, fn($t, $t) -> Option<$t>, $t)> =
+                    vec![$((stringify!($f), $m::$f, $identity)),+];
+                for (name, f, identity) in declared {
+                    let extended = |a: Option<$t>, b: Option<$t>| match (a, b) {
+                        (Some(a), Some(b)) => f(a, b),
+                        _ => None,
+                    };
+                    let identity = Some(identity);
+                    for &a in &words {
+                        assert_eq!(extended(a, identity), a, "{name}: identity right of {a:?}");
+                        assert_eq!(extended(identity, a), a, "{name}: identity left of {a:?}");
+                        for &b in &words {
+                            assert_eq!(extended(a, b), extended(b, a), "{name}: commutes at {a:?}, {b:?}");
+                            for &c in words.iter().take(16).chain(&[None]) {
+                                assert_eq!(
+                                    extended(extended(a, b), c),
+                                    extended(a, extended(b, c)),
+                                    "{name}: associates at {a:?}, {b:?}, {c:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    extension_laws_hold_at!(declared_extension_laws_hold_at_u8, u8s: u8, checked_add = 0);
+    extension_laws_hold_at!(declared_extension_laws_hold_at_u16, u16s: u16, checked_add = 0);
+    extension_laws_hold_at!(declared_extension_laws_hold_at_u32, u32s: u32, checked_add = 0);
+    extension_laws_hold_at!(declared_extension_laws_hold_at_u64, u64s: u64, checked_add = 0);
+
+    /// Why the signed instances state no law: the overflow point depends on
+    /// the grouping at the width's edge.
+    #[test]
+    fn a_signed_checked_add_does_not_associate_at_the_edge() {
+        let extended = |a: Option<i64>, b: Option<i64>| match (a, b) {
+            (Some(a), Some(b)) => i64s::checked_add(a, b),
+            _ => None,
+        };
+        let (a, b, c) = (Some(i64::MAX), Some(1), Some(-1));
+        assert_ne!(extended(extended(a, b), c), extended(a, extended(b, c)));
+    }
+
+    /// Nor does `checked_mul` over an unsigned width: `2^32 · 2^32 · 0` is
+    /// `None` left to right and `Some(0)` right to left.
+    #[test]
+    fn an_unsigned_checked_mul_does_not_associate() {
+        let extended = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => u64s::checked_mul(a, b),
+            _ => None,
+        };
+        let (a, b, c) = (Some(1u64 << 32), Some(1u64 << 32), Some(0));
+        assert_ne!(extended(extended(a, b), c), extended(a, extended(b, c)));
     }
 
     laws_hold_at!(declared_laws_hold_at_i8, i8s: i8);

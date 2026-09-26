@@ -1379,6 +1379,12 @@ pub enum Law {
     /// `Some` of `⊕`'s identity, or from `None` adjoined once more as
     /// identity where `⊕` has none in the payload's type (RFC-0093 rule 4).
     OptionAbsorbing(Box<Law>),
+    /// The law `f(a: T, b: T) -> Option<T>` states over its extension to
+    /// `Option<T>` (RFC-0082 rule 2): `Some(a) · Some(b)` is `f(a, b)`, and
+    /// `None` absorbs from either side. Its identity is `Some` of the one
+    /// `f` states at `T`. A switch on the token whose `None` arm leaves it
+    /// and whose `Some(b)` arm sends `f(b, y)` reads it (RFC-0093 rule 4).
+    Extension(CallLaw),
     /// A record token chosen whole by a strict compare of its field `field`
     /// with a value of the iteration, the other arm leaving it: `a · b` is
     /// `b` where `b.field` wins the strict compare `op` (`Max` or `Min`)
@@ -4635,6 +4641,12 @@ enum Step<'a> {
         inner: Lifted<'a>,
         none: AdjoinedNone,
     },
+    /// `f(b, y)` for an `f` stating a law over its `Option` result, the
+    /// `Some(b)` arm of a switch on the token whose `None` arm leaves it.
+    Extension {
+        callee: ExternInstance,
+        law: &'a ResolvedBinary,
+    },
     Ordered {
         op: LawOp,
         order: ExternInstance,
@@ -4697,7 +4709,7 @@ impl<'a> Lifted<'a> {
             Step::AffineMap => Self::AffineMap,
             Step::StateMap { table } => Self::StateMap { table },
             Step::FieldExtremum { op, field } => Self::FieldExtremum { op, field },
-            Step::OptionLifted { .. } => return None,
+            Step::OptionLifted { .. } | Step::Extension { .. } => return None,
         })
     }
 
@@ -4725,6 +4737,17 @@ impl Step<'_> {
             },
             Self::Call { callee, law } => Accumulator {
                 law: Law::Call(CallLaw {
+                    callee,
+                    identity: match &law.identity {
+                        Some(identity) => CallIdentity::Declared(identity.clone()),
+                        None => CallIdentity::OptionLifted,
+                    },
+                }),
+                exact: true,
+                commutative: law.commutative,
+            },
+            Self::Extension { callee, law } => Accumulator {
+                law: Law::Extension(CallLaw {
                     callee,
                     identity: match &law.identity {
                         Some(identity) => CallIdentity::Declared(identity.clone()),
@@ -7165,6 +7188,30 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             some_arm: some_arm.arm,
         });
         view.dependent = view.values_reading_state(None);
+        // RFC-0093 rule 4's second reading: `f(b, y)` for an `f` stating a
+        // law over its `Option` result, `None` absorbing.
+        if let Some((callee, law, first, second)) = self.extension_call(some_arm.value) {
+            if none != AdjoinedNone::Absorbing || !law.associative {
+                return None;
+            }
+            let step = Step::Extension { callee, law };
+            let Form::Combined(read) =
+                view.combined_with_free(some_arm.value, first, second, step, law.commutative)?
+            else {
+                return None;
+            };
+            if read != step || view.resets {
+                return None;
+            }
+            let built_in_arms: Vec<ValueId> = [none_arm.value, some_arm.value]
+                .into_iter()
+                .flat_map(|value| self.update_support(value))
+                .collect();
+            self.chain.extend(view.chain);
+            self.chain.extend(built_in_arms);
+            self.chain.insert(tag);
+            return Some(Form::Combined(step));
+        }
         let Form::Combined(step) = view.form(some_arm.value)? else {
             return None;
         };
@@ -7209,6 +7256,40 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             some_arm,
             none,
         })
+    }
+
+    /// A call `f(a, b)` defining `value`, `f`'s instance stating a law over
+    /// its extension to `Option` (RFC-0082 rule 2).
+    fn extension_call(
+        &self,
+        value: ValueId,
+    ) -> Option<(ExternInstance, &'a ResolvedBinary, ValueId, ValueId)> {
+        let Some(Def::Inst(at)) = self.defs.get(&value) else {
+            return None;
+        };
+        let InstKind::FunctionCall {
+            callee: callee @ Callee::Extern { id, instance, .. },
+            args,
+            ..
+        } = self.inst(*at)
+        else {
+            return None;
+        };
+        let ResolvedLaws::Extension(law) = self.laws.of_callee(callee) else {
+            return None;
+        };
+        let &[first, second] = args.as_slice() else {
+            return None;
+        };
+        Some((
+            ExternInstance {
+                id: *id,
+                instance: *instance,
+            },
+            law,
+            first,
+            second,
+        ))
     }
 
     fn made_option(&self, value: ValueId) -> Option<MadeOption> {

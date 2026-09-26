@@ -316,6 +316,7 @@ enum LawKind {
     Extremum(LawOp),
     OptionLifted(Box<LawKind>),
     OptionAbsorbing(Box<LawKind>),
+    Extension,
     FieldExtremum(LawOp),
     Product(Vec<LawKind>),
     Ordered(LawOp),
@@ -336,6 +337,7 @@ impl LawKind {
             Law::Extremum { op, .. } => LawKind::Extremum(*op),
             Law::OptionLifted(inner) => LawKind::OptionLifted(Box::new(LawKind::of(inner))),
             Law::OptionAbsorbing(inner) => LawKind::OptionAbsorbing(Box::new(LawKind::of(inner))),
+            Law::Extension(_) => LawKind::Extension,
             Law::FieldExtremum { op, .. } => LawKind::FieldExtremum(*op),
             Law::Product(parts) => {
                 LawKind::Product(
@@ -2057,6 +2059,66 @@ fn a_checked_add_over_i64_at_its_edge_values_has_no_law() {
     let (held, lines) = the_cycle(
         "let xs = vec([9223372036854775807, 1, -1]); let p = Some(0); \
          for x in &xs { p = match p { Some(v) => v.checked_add(*x), None => None, }; } \
+         p.is_none()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// Corpus row R21: `checked_add` over `u64` states its law over its
+/// extension to `Option<u64>`, `None` absorbing (RFC-0082 rule 2), and the
+/// switch whose `None` arm leaves the token and whose `Some(v)` arm sends
+/// `checked_add(v, x)` reads it (RFC-0093 rule 4).
+#[test]
+fn a_checked_add_over_u64_reads_as_its_extension_with_none_absorbing() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64, 8u64, 1u64]); let p = Some(0u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_add(*x), None => None, }; } \
+         p.unwrap()",
+    );
+    assert_eq!(
+        held,
+        cycle(vec![TokenKind::Storage], Order::AnyOrder, exact(LawKind::Extension)),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("any_order law(Extension(Call(#"),
+        "{lines}"
+    );
+    assert!(lines.contains(", identity), None absorbing) exact commutative)"), "{lines}");
+}
+
+/// A `None` arm restarting at `Some(x)` adjoins `None` as an identity, and
+/// `checked_add`'s `None` is its overflow: a run past `MAX` would restart
+/// its sum there, so no law is read.
+#[test]
+fn a_checked_add_whose_none_arm_restarts_the_sum_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([18446744073709551615u64, 1u64, 2u64]); let p = Some(0u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_add(*x), None => Some(*x), }; } \
+         p.unwrap()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `checked_add(v, v)` combines the state with itself, no value of the
+/// iteration.
+#[test]
+fn a_checked_add_of_the_state_with_itself_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([5u64, 3u64]); let p = Some(1u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_add(v), None => None, }; } \
+         p.unwrap()",
+    );
+    assert_eq!(law_of(&held), None, "{lines}");
+}
+
+/// `checked_mul` over `u64` states no law: `2^32 · 2^32 · 0` is `None` in
+/// order and `Some(0)` grouped from the right.
+#[test]
+fn a_checked_mul_over_u64_has_no_law() {
+    let (held, lines) = the_cycle(
+        "let xs = vec([4294967296u64, 4294967296u64, 0u64]); let p = Some(1u64); \
+         for x in &xs { p = match p { Some(v) => v.checked_mul(*x), None => None, }; } \
          p.is_none()",
     );
     assert_eq!(law_of(&held), None, "{lines}");
