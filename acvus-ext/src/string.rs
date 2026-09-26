@@ -35,8 +35,10 @@ use crate::iter::Items;
 /// conversion, not a text, so it is no instance of `core::display`, which
 /// stands at no `str` and no `String` (RFC-0070 rule 5). A `&str` reaches a
 /// `String` parameter only through this. Its result is the text `a` lends
-/// (RFC-0082 rule 10).
-#[extern_fn(effect = pure, copies(a))]
+/// (RFC-0082 rule 10). `total`: `str::to_owned` copies the bytes into a
+/// fresh allocation and has no panicking path, and an allocation failure
+/// aborts the process rather than trapping the run.
+#[extern_fn(effect = pure, total, copies(a))]
 fn to_string(a: &str) -> String {
     a.to_owned()
 }
@@ -613,6 +615,20 @@ mod tests {
                 i.intern("to_string")
             )]
         );
+    }
+
+    /// RFC-0082 rule 9 sampled: the owned copy of text returns, without
+    /// unwinding, over the empty text, a NUL, the widest scalar value and
+    /// a run past one allocation page.
+    #[test]
+    fn to_string_is_total_over_a_sample() {
+        const PAGE_BYTES: usize = 4096;
+        let long = "é".repeat(PAGE_BYTES);
+        for text in ["", "\0", "\u{10FFFF}", "a\u{0301}", long.as_str()] {
+            let copied = std::panic::catch_unwind(|| to_string(text))
+                .expect("`string::to_string` is declared `total`, and a total handler does not unwind");
+            assert_eq!(copied, text);
+        }
     }
 
     /// RFC-0082 rule 10 sampled: the sign of `cmp` is antisymmetric,

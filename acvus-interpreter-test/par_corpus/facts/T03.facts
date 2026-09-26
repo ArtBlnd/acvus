@@ -3,3 +3,4 @@ for slice(r11) -> L1 else L2 stages [L1, L5]
 // L5: cycle Order(r13) any_order law(Order exact commutative) {merge, jump, jump}
 // control upfront
 // cost W=51 O=18281 split when n > 11471, n = len(r11)
+// lower in place: its first stage spawns no heavy or io call before it waits

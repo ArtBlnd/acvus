@@ -3,8 +3,10 @@ for slice(r7) -> L1 else L2 stages [L1, L6]
 // L6: cycle Order(r9) any_order law(Order exact commutative) {merge}
 // control upfront
 // cost W=18321 O=18281 split when n > 32, n = len(r7)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for slice(r7) -> L4 else L5 stages [L4, L7]
 // L4: free {const_str, take, assign, ref, call to_string, assign, ref, concat, drop, assign, ref, as_slice, spawn print, eval, drop}
 // L7: cycle Order(r26) any_order law(Order exact commutative) {merge}
 // control upfront
 // cost W=18321 O=18281 split when n > 32, n = len(r7)
+// lower in place: its first stage spawns no heavy or io call before it waits

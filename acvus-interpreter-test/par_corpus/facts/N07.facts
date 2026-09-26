@@ -3,26 +3,31 @@ for range(0 (r45)..2 (r46)) -> L1 else L2 stages [L1, L22]
 // L22: cycle Storage(r47) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
 // cost W=76 O=18281 split when n > 7698, n = max(2 (r46) - 0 (r45), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r49)..3 (r50)) -> L4 else L5 stages [L4, L18]
 // L4: free {index, as_slice, index}
 // L18: cycle Storage(r47) disjoint {ref, as_slice, index, as_slice, index_set}
 // control upfront
 // cost W=24 O=18281 split when n > 24375, n = max(3 (r50) - 0 (r49), 0)
+// lower in place: inside the loop at L0
 while r70 -> L9 else L6 stages [L8, L9, L19]
 // L8: cycle Storage(r71)+Control in_order {ref, call next, test_variant, while}
 // L9: free {unwrap_variant, take, assign, ref, call to_string}
 // L19: cycle Storage(r72) in_order law(Fold(r72, #6) exact) {ref, call push}
 // control chained through L8
 // cost in place: no count on entry
+// lower in place: it is a pull loop
 while r95 -> L13 else L10 stages [L12, L13, L20]
 // L12: cycle Storage(r96)+Control in_order {ref, call next, test_variant, while}
 // L13: free {unwrap_variant, take, assign, ref, call to_string}
 // L20: cycle Storage(r97) in_order law(Fold(r97, #6) exact) {ref, call push}
 // control chained through L12
 // cost in place: no count on entry
+// lower in place: it is a pull loop
 while r124 -> L17 else L14 stages [L16, L17, L21]
 // L16: cycle Storage(r125)+Control in_order {ref, call next, test_variant, while}
 // L17: free {unwrap_variant, take, assign, ref, call to_string}
 // L21: cycle Storage(r126) in_order law(Fold(r126, #6) exact) {ref, call push}
 // control chained through L16
 // cost in place: no count on entry
+// lower in place: it is a pull loop

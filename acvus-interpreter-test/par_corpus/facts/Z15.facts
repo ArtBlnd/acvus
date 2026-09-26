@@ -4,3 +4,4 @@ while r31 -> L6 else L3 stages [L5, L6, L7]
 // L7: cycle Storage(r33) in_order law(Fold(r33, #2) exact) {ref, call push}
 // control chained through L5
 // cost in place: no count on entry
+// lower in place: it is a pull loop

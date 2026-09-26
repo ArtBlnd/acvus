@@ -2,3 +2,4 @@ for slice(r13) -> L1 else L2 stages [L1]
 // L1: cycle Storage(r14) in_order {ref, take, take, call checked_add, make_variant, assign, switch, jump, jump}
 // control upfront
 // cost in place: no stage runs apart
+// lower in place: its first stage is not free

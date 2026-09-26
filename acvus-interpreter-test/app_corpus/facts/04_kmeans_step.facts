@@ -3,11 +3,13 @@ for range(0 (r82)..r69) -> L1 else L2 stages [L1, L27]
 // L27: cycle Storage(r83) disjoint {index_set}
 // control upfront
 // cost W=5 O=18281 split when n > 116999, n = max(r69 - 0 (r82), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r89)..r71) -> L4 else L5 stages [L4, L25]
 // L4: free {index, index, -, index, index, -, *, *, +}
 // L25: cycle Carried(r87)+Carried(r88) in_order law(Extremum(Min, Carried(r88), carrying Carried(r87)) exact) {<, cast, branch, jump}
 // control upfront
 // cost W=17 O=18281 split when n > 34412, n = max(r71 - 0 (r89), 0)
+// lower in place: inside the loop at L0
 for range(0 (r118)..r69) -> L9 else L10 stages [L9, L19, L20, L21, L22, L23]
 // L9: free {index, cast, index}
 // L19: cycle Storage(r119) keyed(r120) any_order law(Op(Add) exact commutative) {index, +, index_set}
@@ -17,24 +19,29 @@ for range(0 (r118)..r69) -> L9 else L10 stages [L9, L19, L20, L21, L22, L23]
 // L23: cycle Storage(r122) keyed(r120) any_order law(Op(Add) exact commutative) {index, +, index_set}
 // control upfront
 // cost W=10 O=18305 split when n > 58576, n = max(r69 - 0 (r118), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r144)..r71) -> L12 else L13 stages [L12, L26]
 // L12: free {index, const, >}
 // L26: cycle Storage(r145) disjoint {index_set}
 // L26: cycle Storage(r146) disjoint {index_set}
 // control upfront
 // cost W=4 O=18281 split when n > 146248, n = max(r71 - 0 (r144), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r163)..r69) -> L17 else L18 stages [L17, L24]
 // L17: free {index, cast, index, index, -, index, index, -, *, *}
 // L24: cycle Carried(r162) any_order law(Op(Add) exact commutative) {+, +}
 // control upfront
 // cost W=20 O=18281 split when n > 29250, n = max(r69 - 0 (r163), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r11)..r3) -> L1 else L2 stages [L1, L8]
 // L1: free {const_str, index, call to_string, assign, ref, const_str, index, call to_string, assign, ref, const_str}
 // L8: cycle Storage(r12) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost W=20 O=18281 split when n > 29250, n = max(r3 - 0 (r11), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r43)..r42) -> L4 else L5 stages [L4, L9]
 // L4: free {const, >, index, call to_string, assign, ref}
 // L9: cycle Storage(r12) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost W=11 O=18281 split when n > 53182, n = max(r42 - 0 (r43), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits

@@ -3,17 +3,20 @@ for range(0 (r78)..10 (r62)) -> L1 else L2 stages [L1, L5]
 // L5: cycle Storage(r79) in_order law(Op(Concat) exact) {ref, concat, assign, ref, concat, assign}
 // control upfront
 // cost W=17 O=18281 split when n > 34412, n = max(10 (r62) - 0 (r78), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for slice(r3) -> L1 else L2 stages [L1, L9]
 // L1: free {take, const, take}
 // L9: cycle Storage(r9) keyed(r10) any_order law(Op(Add) exact commutative) {index, +, index_set}
 // control upfront
 // cost W=6 O=18281 split when n > 97499, n = len(r3)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r25)..r1) -> L4 else L5 stages [L4, L10, L11]
 // L4: free {index, cast}
 // L10: cycle Carried(r24) in_order law(Op(Add) exact commutative) scan {+}
 // L11: cycle Storage(r26) in_order law(Fold(r26, #3) exact) {ref, call push}
 // control upfront
 // cost W=4 O=18287 split when n > 146296, n = max(r1 - 0 (r25), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r45)..r38) -> L7 else L8 stages [L7, L12, L13, L14]
 // L7: free {index, index, index, cast, const}
 // L12: cycle Storage(r46) in_order {index, index, +, index_set}
@@ -21,9 +24,11 @@ for range(0 (r45)..r38) -> L7 else L8 stages [L7, L12, L13, L14]
 // L14: cycle Storage(r47) keyed(r48) in_order law(Last exact) {index_set}
 // control upfront
 // cost W=12 O=18293 split when n > 48782, n = max(r38 - 0 (r45), 0)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for range(0 (r31)..r1) -> L1 else L2 stages [L1, L25]
 // L1: free {const}
 // L25: cycle Carried(r29)+Carried(r30)+Storage(r32)+Storage(r33)+Storage(r34)+Storage(r35)+Storage(r36)+Storage(r37) in_order {index, <, index_set, index_set, const, +, ref, call push, const, index_set, ref, call push, ref, index, call push, const, ref, call len, >, ref, call len, const, -, as_slice, index, ref, as_slice, index, const, +, index, <, const, +, ref, as_slice, index_set, index, cast, index, const, <, index_set, index_set, const, +, ref, call push, const, index_set, ref, call push, ref, index, call push, index, index, index, call min, index_set, ref, call pop, ref, call pop, ref, call len, const, >, as_slice, call len, const, -, index, index, index, call min, index_set, index, index, ==, const, const, +, ref, call pop, call unwrap, const, index_set, ==, const, branch, jump, branch, branch, branch, jump, branch, jump, jump, branch, branch, jump, branch, branch, jump, jump, jump, jump, jump, jump}
 // L25: cycle Storage(r38) in_order {index_set}
 // control upfront
 // cost in place: W=0
+// lower in place: its first stage spawns no heavy or io call before it waits

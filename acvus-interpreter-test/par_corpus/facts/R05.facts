@@ -3,3 +3,4 @@ for slice(r14) -> L1 else L2 stages [L1, L5]
 // L5: cycle Carried(r15) any_order law(Op(Max) exact commutative) {>, take, branch, jump}
 // control upfront
 // cost W=3 O=18281 split when n > 194998, n = len(r14)
+// lower in place: its first stage spawns no heavy or io call before it waits

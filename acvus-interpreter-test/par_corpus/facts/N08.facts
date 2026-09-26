@@ -3,13 +3,16 @@ for slice(r29) -> L1 else L2 stages [L1, L11]
 // L11: cycle Storage(r30) in_order law(Fold(r30, #2) exact) {ref, call push}
 // control upfront
 // cost W=14 O=18281 split when n > 41786, n = len(r29)
+// lower in place: its first stage spawns no heavy or io call before it waits
 for slice(r35) -> L4 else L5 stages [L4]
 // L4: cycle Storage(r36) in_order law(Op(Concat) exact) {ref, concat, assign}
 // control upfront
 // cost in place: no stage runs apart
+// lower in place: inside the loop at L0
 while r52 -> L9 else L6 stages [L8, L9, L10]
 // L8: cycle Storage(r53)+Control in_order {ref, call next, test_variant, while}
 // L9: free {unwrap_variant}
 // L10: cycle Storage(r54) in_order law(Fold(r54, #2) exact) {ref, call push}
 // control chained through L8
 // cost in place: no count on entry
+// lower in place: it is a pull loop

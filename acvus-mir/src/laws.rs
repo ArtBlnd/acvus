@@ -16,7 +16,7 @@ use rustc_hash::FxHashMap;
 use crate::graph::{FnKind, Function, QualifiedRef};
 use crate::ir::Callee;
 use crate::step::Step;
-use crate::ty::{Mutability, PolyTy, View, Viewed, matches_pattern};
+use crate::ty::{Mutability, PolyTy, Task, View, Viewed, matches_pattern};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Laws {
@@ -592,6 +592,7 @@ struct DeclaredAt<'a> {
     returns: Returns,
     copies: Option<Copies>,
     cost: Option<u64>,
+    task: Task,
 }
 
 /// What one instance of an extern declares.
@@ -603,6 +604,7 @@ struct Declared {
     returns: Returns,
     copies: Option<Copies>,
     cost: Option<u64>,
+    task: Task,
 }
 
 /// One instance of an extern: its type, and whether its declaration
@@ -658,6 +660,7 @@ impl LawTable {
                         returns: instance.returns,
                         copies: instance.copies,
                         cost: instance.cost,
+                        task: instance.task,
                     })
                     .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
                         ty: &function.ty,
@@ -667,6 +670,7 @@ impl LawTable {
                         returns: generic.returns,
                         copies: generic.copies,
                         cost: generic.cost,
+                        task: generic.task,
                     }));
                 let mut declared: Vec<Declared> = declared_at
                     .map(|DeclaredAt {
@@ -677,6 +681,7 @@ impl LawTable {
                              returns,
                              copies,
                              cost,
+                             task,
                          }| Declared {
                         laws: resolve(laws, ty, |named| functions.get(&named).copied())
                             .unwrap_or_else(|unresolved| {
@@ -698,6 +703,7 @@ impl LawTable {
                             )
                         }),
                         cost,
+                        task,
                     })
                     .collect();
                 if declared.is_empty() {
@@ -828,6 +834,13 @@ impl LawTable {
     /// a value, which no declaration weighs.
     pub fn cost_of(&self, callee: &Callee) -> Option<u64> {
         self.declared(callee).and_then(|declared| declared.cost)
+    }
+
+    /// The task the handler of the instance a call names runs at, as its
+    /// declaration named it; `None` for a call of a local function or
+    /// through a value.
+    pub fn task_of(&self, callee: &Callee) -> Option<Task> {
+        self.declared(callee).map(|declared| declared.task)
     }
 
     fn declared(&self, callee: &Callee) -> Option<&Declared> {

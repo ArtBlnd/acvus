@@ -1139,10 +1139,11 @@ fn a_loop_whose_only_effect_folds_away_after_inlining_is_one_free_stage() {
         })
         .collect();
     assert!(head.contains("stages [L"), "{listing}");
-    assert_eq!(facts.len(), 2, "one stage and the control:\n{listing}");
+    assert_eq!(facts.len(), 3, "one stage, the control and the lowering:\n{listing}");
     assert!(facts[0].contains(": free {"), "{listing}");
     assert_eq!(facts[1], "control upfront", "{listing}");
-    assert!(!listing.contains("spawn"), "{listing}");
+    assert!(facts[2].starts_with("lower in place: "), "{listing}");
+    assert!(!listing.contains("= spawn "), "{listing}");
 }
 
 // -- A law read from what a cycle computes (RFC-0089 rule 4) ------------

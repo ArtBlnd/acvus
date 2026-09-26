@@ -220,7 +220,8 @@ fn a_loop_whose_only_stage_is_disjoint_is_given_a_cost() {
         facts,
         [
             "L1: cycle Storage(r12) disjoint {index_set}",
-            "control upfront"
+            "control upfront",
+            "lower in place: its first stage is not free"
         ],
         "{}",
         filled.with_costs
