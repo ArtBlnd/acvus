@@ -647,7 +647,7 @@ impl Body {
     }
 }
 
-pub fn fn_value_call<'f>(
+pub(crate) fn fn_value_call<'f>(
     f: &'f Value,
     rt: &'f AcvusRuntime,
     args: &mut [Value],

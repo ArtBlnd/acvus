@@ -736,10 +736,9 @@ type RecordOf<H, E> = HeadAndTail<RecordHead<H>, E>;
 /// inline kinds, and the checker's ownership rules release a value once.
 /// Even under `tooling`, code outside the runtime makes no value from bits,
 /// builds or edits no `Body`, writes no register, and releases a word only
-/// through the holder that owns it. Two gaps remain, which the sweep's
-/// second part carries in types: `fn_value_call`, which `lib.rs` exports
-/// under `tooling`, reads any word as a closure; and a copy of a word read
-/// after its holder released it is read as the freed allocation.
+/// through the holder that owns it, and calls no word as a closure. One gap
+/// remains, which the sweep's second part carries in types: a copy of a
+/// word read after its holder released it is read as the freed allocation.
 #[derive(Clone, Copy)]
 pub struct Large<'v>(NonNull<Header>, PhantomData<&'v Value>);
 

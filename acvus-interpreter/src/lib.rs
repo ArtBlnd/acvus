@@ -3,6 +3,13 @@
 //! through an `Output`, and reads and writes contexts through the page's
 //! typed methods (RFC-0090).
 //!
+//! No safe path outside the runtime calls a word as a closure: the machine's
+//! call of a function value is its own.
+//!
+//! ```compile_fail,E0432
+//! use acvus_interpreter::fn_value_call;
+//! ```
+//!
 //! The runtime's own value word, the machine that runs it, and a run's raw
 //! writes are the runtime's and its tooling's (RFC-0090 rule 6): a module or
 //! an item that names them is public only under the `tooling` feature, and
@@ -99,8 +106,6 @@ pub use interpreter::{Args, Executable, Interpreter, InterpreterContext};
 pub use port::ContextWrite;
 #[cfg(feature = "tooling")]
 pub use layout::Hooks as SpaceHooksByType;
-#[cfg(feature = "tooling")]
-pub use machine::fn_value_call;
 #[cfg(feature = "tooling")]
 pub use ops::chain::{ChainTy, LeafRead, Node as ChainNode, Nodes as ChainNodes, Reads};
 /// The handlers an `Index` runs, checked and, for a bound the MIR proves,
