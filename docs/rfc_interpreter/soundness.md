@@ -14,7 +14,7 @@ The one unsafe entry trusts the call-site shape built from the checker's decisio
 
 ## 4. The aliasing model
 
-The interpreter adopts Tree Borrows as its aliasing model: soundness is judged under Tree Borrows, and Miri under Tree Borrows is the gate. A writable reference is made only from a `&mut`, and a pointer into an owned allocation is taken after the allocation's last move. What only Stacked Borrows reports is recorded as a model difference, not fixed.
+The interpreter adopts Tree Borrows as its aliasing model: soundness is judged under Tree Borrows, and Miri under Tree Borrows is the gate. A writable reference is made only from a `&mut`, and a pointer into an owned allocation is taken after the allocation's last move. The gate reads a word back with the tag of the pointer it was made from, which is stricter than the exposed provenance a native build uses, so a clean run under the gate means the native program is defined. What only Stacked Borrows reports is recorded as a model difference, not fixed.
 
 ## 5. Release once
 

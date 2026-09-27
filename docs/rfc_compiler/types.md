@@ -6,7 +6,7 @@ A type is widened, joined or unioned only where the compiler sees every use of i
 
 ## 2. Join
 
-Two object types join at the union of their fields. Two enums of one name join at the union of their variants; enums of two names do not join.
+Two object types join at the union of their fields. Two enums of one name join at the union of their variants; enums of two names do not join. Two function types join at the join of their effects, which form a lattice, so a joined function is never assumed to do less than either side; laws, `ensures` and `means` do not join, and a joined function carries none.
 
 ## 3. Subtyping
 
