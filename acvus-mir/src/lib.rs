@@ -7,6 +7,7 @@ pub mod graph;
 pub mod infer;
 pub mod ir;
 pub mod laws;
+pub mod lower;
 pub mod means;
 pub mod step;
 pub mod optimize;
