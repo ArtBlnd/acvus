@@ -345,19 +345,47 @@ fn priority_topo_sort(
 mod tests {
     use super::*;
     use crate::cfg;
-    use crate::ty::Ty;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
+    use crate::flows::{Flows, FlowTerm};
+    use crate::ty::{Calls, Contexts, Effect, EffectTerm, Holds, IntTy, Reissue, SplitCost, Ty};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
     }
 
-    fn make_cfg(insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: crate::ty::Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    /// `run` at an empty `Declarations`, over `types`.
+    fn run_test(cfg: &mut CfgBody, types: &Types<Concrete>) {
+        let decls = empty_declarations(&Interner::new());
+        run(cfg, types, &decls);
+    }
+
+    fn handle_of_string(types: &mut Types<Concrete>) -> Ty {
+        let string_ty = types.intern(TyKind::String);
+        types.intern(TyKind::Handle(string_ty))
+    }
+
+    fn make_cfg(types: &mut Types<Concrete>, insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut factory = LocalFactory::<ValueId>::new();
         let mut val_types = FxHashMap::default();
         for _ in 0..val_count {
             let vid = factory.next();
-            val_types.insert(vid, Ty::I64);
+            val_types.insert(vid, i64_ty);
         }
         cfg::promote(MirBody {
             demoted_diamonds: Default::default(),
@@ -382,9 +410,11 @@ mod tests {
     /// order whatever priorities say.
     #[test]
     fn page_ops_keep_their_order() {
+        let mut types = Types::<Concrete>::new();
         let i = Interner::new();
         let x = QualifiedRef::root(i.intern("x"));
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -411,7 +441,7 @@ mod tests {
             ],
             2,
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(page_ops(&cfg), ["commit", "fetch", "commit"]);
     }
 
@@ -427,35 +457,38 @@ mod tests {
             .collect()
     }
 
-    fn fn_ty_touching(i: &Interner, name: &str, context: QualifiedRef) -> (QualifiedRef, Ty) {
+    fn fn_ty_touching(types: &mut Types<Concrete>, i: &Interner, name: &str, context: QualifiedRef) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
-        let effect = crate::ty::Effect::with_contexts(
-            crate::ty::Reissue::Idempotent,
+        let effect = Effect::new(
+            Reissue::Idempotent,
             false,
-            Default::default(),
+            Contexts::new(),
             [context].into_iter().collect(),
+            SplitCost::Unavailable,
         );
-        (
-            qref,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::String),
-                captures: vec![],
-                effect: effect.into(),
-                flows: crate::flows::Flows::Every.into(),
-            },
-        )
+        let string_ty = types.intern(TyKind::String);
+        let ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: string_ty,
+            effect: EffectTerm::Known(effect),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        (qref, ty)
     }
 
     /// `commit @x; call f (touches @x); fetch @x` keeps its order; a spawn
     /// that touches nothing still moves to the front.
     #[test]
     fn a_call_touching_a_context_stays_between_its_page_ops() {
+        let mut types = Types::<Concrete>::new();
         let i = Interner::new();
         let x = QualifiedRef::root(i.intern("x"));
-        let (f, f_ty) = fn_ty_touching(&i, "f", x);
-        let (g, g_ty) = io_fn_ty(&i, "g");
+        let (f, f_ty) = fn_ty_touching(&mut types, &i, "f", x);
+        let (g, g_ty) = io_fn_ty(&mut types, &i, "g");
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -496,8 +529,8 @@ mod tests {
             ],
             5,
         );
-        cfg.val_types.insert(v(3), Ty::Handle(Box::new(Ty::String)));
-        run(&mut cfg);
+        cfg.val_types.insert(v(3), handle_of_string(&mut types));
+        run_test(&mut cfg, &types);
 
         let commit = find_idx(&cfg, |k| matches!(k, InstKind::Commit { .. })).unwrap();
         let call = find_idx(&cfg, |k| matches!(k, InstKind::FunctionCall { .. })).unwrap();
@@ -519,17 +552,21 @@ mod tests {
     /// blocks.
     #[test]
     fn a_store_of_an_eval_result_waits_with_it_for_its_reader() {
+        let mut types = Types::<Concrete>::new();
         let i = Interner::new();
         let f = QualifiedRef::root(i.intern("f"));
-        let f_ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::String),
-            captures: vec![],
-            effect: crate::ty::Effect::PURE.into(),
-            flows: crate::flows::Flows::Every.into(),
-        };
+        let string_ty = types.intern(TyKind::String);
+        let f_ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: string_ty,
+            effect: EffectTerm::Known(Effect::pure()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
         let b = v(9);
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Spawn {
                     dst: v(1),
@@ -580,12 +617,12 @@ mod tests {
         );
         for handle in [v(1), v(4)] {
             cfg.val_types
-                .insert(handle, Ty::Handle(Box::new(Ty::String)));
+                .insert(handle, handle_of_string(&mut types));
         }
         for text in [v(2), v(5), v(6), b] {
-            cfg.val_types.insert(text, Ty::String);
+            cfg.val_types.insert(text, string_ty);
         }
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         let spawns: Vec<usize> = cfg.blocks[0]
             .insts
@@ -605,10 +642,12 @@ mod tests {
     /// after the eval: the spawn's summary is the eval's.
     #[test]
     fn a_fetch_waits_for_the_eval_of_a_spawn_touching_it() {
+        let mut types = Types::<Concrete>::new();
         let i = Interner::new();
         let x = QualifiedRef::root(i.intern("x"));
-        let (f, f_ty) = fn_ty_touching(&i, "f", x);
+        let (f, f_ty) = fn_ty_touching(&mut types, &i, "f", x);
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -642,8 +681,8 @@ mod tests {
             ],
             4,
         );
-        cfg.val_types.insert(v(1), Ty::Handle(Box::new(Ty::String)));
-        run(&mut cfg);
+        cfg.val_types.insert(v(1), handle_of_string(&mut types));
+        run_test(&mut cfg, &types);
 
         let commit = find_idx(&cfg, |k| matches!(k, InstKind::Commit { .. })).unwrap();
         let spawn = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
@@ -655,18 +694,18 @@ mod tests {
         );
     }
 
-    fn io_fn_ty(i: &Interner, name: &str) -> (QualifiedRef, Ty) {
+    fn io_fn_ty(types: &mut Types<Concrete>, i: &Interner, name: &str) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
-        (
-            qref,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::String),
-                captures: vec![],
-                effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::flows::Flows::Every.into(),
-            },
-        )
+        let string_ty = types.intern(TyKind::String);
+        let ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: string_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        (qref, ty)
     }
 
     /// Collect all instructions from all blocks (flattened).
@@ -683,17 +722,19 @@ mod tests {
 
     #[test]
     fn two_independent_spawns_before_evals() {
+        let mut types = Types::<Concrete>::new();
         // Before: spawn_a, eval_a, spawn_b, eval_b, add, return
         // After:  spawn_a, spawn_b, eval_a, eval_b, add, return
         //   (spawns first, evals later)
         let i = Interner::new();
-        let (fa, fa_ty) = io_fn_ty(&i, "fetch_a");
-        let (fb, fb_ty) = io_fn_ty(&i, "fetch_b");
+        let (fa, fa_ty) = io_fn_ty(&mut types, &i, "fetch_a");
+        let (fb, fb_ty) = io_fn_ty(&mut types, &i, "fetch_b");
 
         // h0 = spawn fetch_a(); r0 = eval h0;
         // h1 = spawn fetch_b(); r1 = eval h1;
         // r2 = r0 + r1; return r2
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Spawn {
                     dst: v(0),
@@ -733,10 +774,10 @@ mod tests {
             5,
         );
         // Set Handle types for eval.
-        cfg.val_types.insert(v(0), Ty::Handle(Box::new(Ty::String)));
-        cfg.val_types.insert(v(2), Ty::Handle(Box::new(Ty::String)));
+        cfg.val_types.insert(v(0), handle_of_string(&mut types));
+        cfg.val_types.insert(v(2), handle_of_string(&mut types));
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         // Both spawns should come before both evals.
         let spawn_a = find_idx(
@@ -776,10 +817,12 @@ mod tests {
 
     #[test]
     fn eval_after_its_spawn() {
+        let mut types = Types::<Concrete>::new();
         let i = Interner::new();
-        let (fa, fa_ty) = io_fn_ty(&i, "fetch");
+        let (fa, fa_ty) = io_fn_ty(&mut types, &i, "fetch");
 
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Spawn {
                     dst: v(0),
@@ -800,9 +843,9 @@ mod tests {
             ],
             2,
         );
-        cfg.val_types.insert(v(0), Ty::Handle(Box::new(Ty::String)));
+        cfg.val_types.insert(v(0), handle_of_string(&mut types));
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
         let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::TakeEffect { .. })).unwrap();
@@ -813,12 +856,14 @@ mod tests {
 
     #[test]
     fn independent_work_between_spawn_and_eval() {
+        let mut types = Types::<Concrete>::new();
         // spawn, const, const, eval, add, return
         // const instructions should land between spawn and eval.
         let i = Interner::new();
-        let (fa, fa_ty) = io_fn_ty(&i, "fetch");
+        let (fa, fa_ty) = io_fn_ty(&mut types, &i, "fetch");
 
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(5),
@@ -853,9 +898,9 @@ mod tests {
             ],
             8,
         );
-        cfg.val_types.insert(v(0), Ty::Handle(Box::new(Ty::String)));
+        cfg.val_types.insert(v(0), handle_of_string(&mut types));
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
         let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::TakeEffect { .. })).unwrap();
@@ -869,7 +914,9 @@ mod tests {
 
     #[test]
     fn no_spawns_preserves_order() {
+        let mut types = Types::<Concrete>::new();
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -897,7 +944,7 @@ mod tests {
             .iter()
             .map(|i| std::mem::discriminant(&i.kind))
             .collect();
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let after: Vec<_> = all_insts(&cfg)
             .iter()
             .map(|i| std::mem::discriminant(&i.kind))
@@ -910,9 +957,11 @@ mod tests {
 
     #[test]
     fn use_def_prevents_reorder() {
+        let mut types = Types::<Concrete>::new();
         // r0 = const 1; r1 = r0 + r0; return r1
         // r0 must come before r1 (use-def).
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -932,7 +981,7 @@ mod tests {
             2,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         let const_idx = find_idx(&cfg, |k| matches!(k, InstKind::Const { .. })).unwrap();
         let binop_idx = find_idx(&cfg, |k| matches!(k, InstKind::BinOp { .. })).unwrap();
