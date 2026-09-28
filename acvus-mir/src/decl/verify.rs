@@ -62,8 +62,9 @@ pub enum Refused {
     /// variable.
     TypeVariableInValueType { written: Written },
     /// A declared cast or conversion whose `via` is no declared function
-    /// of type `fn(from) -> to` at the rule's own ends: the rule is
-    /// performed by its `via` (types §3, §7).
+    /// of type `fn(from) -> to` at the rule's own ends, or one with impls:
+    /// the rule is performed by its `via`, exactly one function
+    /// (types §3, §7).
     ViaNotItsFunction { written: Written },
     /// A scheme whose bounds do not give each of its type variables exactly
     /// one bound (extern-fn §1: a type parameter carries one bound).
@@ -718,7 +719,8 @@ fn cast_tree(
 
 /// types §3, §7: a declared cast or conversion is performed by its `via`,
 /// so the `via` is a declared function of type `fn(from) -> to` at the
-/// rule's own ends.
+/// rule's own ends. A rule is declared for one pair of types, so its `via`
+/// is exactly one function, a function with no impls.
 fn refuse_vias_not_their_functions(
     types: &Types<Poly>,
     functions: &FxHashMap<QualifiedRef, Scheme>,
@@ -732,7 +734,7 @@ fn refuse_vias_not_their_functions(
         .map(|rule| (Written::Conversion(rule.via), rule.via, rule.from, rule.to));
     for (written, via, from, to) in casts.chain(conversions) {
         let performs = functions.get(&via).is_some_and(|scheme| match types.kind(scheme.ty) {
-            TyKind::Fn { params, ret, .. } => params[..] == [from] && *ret == to,
+            TyKind::Fn { params, ret, .. } => scheme.impls.is_none() && params[..] == [from] && *ret == to,
             _ => false,
         });
         if !performs {
@@ -1596,6 +1598,29 @@ mod tests {
                     written: Written::Conversion(other_type)
                 },
             ]
+        );
+    }
+
+    /// types §3, §7: a cast's `via` is exactly one function, so a generic
+    /// function with impls is refused as its `via`, even at its type.
+    #[test]
+    fn a_via_with_impls_is_refused() {
+        let mut fixture = Fixture::new();
+        let (i32_, i64_) = (fixture.ty(TyKind::Int(IntTy::I32)), fixture.ty(TyKind::Int(IntTy::I64)));
+        let widen = fixture.name("m", "widen");
+        let ty = fixture.function(&[i32_], i64_);
+        let scheme = fixture.with_impls(ty, 0, &[ty]);
+        fixture.declare(widen, scheme);
+        fixture.raw.casts.push(CastRule {
+            from: i32_,
+            to: i64_,
+            via: widen,
+        });
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::ViaNotItsFunction {
+                written: Written::Cast(widen)
+            }]
         );
     }
 
