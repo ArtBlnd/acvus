@@ -4,9 +4,9 @@ use super::decision::{Decision, Decisions};
 use super::output::Output;
 use super::refusal;
 use super::scope::Scope;
-use crate::decl::{Declarations, Head};
+use crate::decl::Declarations;
 use crate::infer::{Bound, Closed, Infer, Term};
-use crate::ty::{Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind, TypeArg};
+use crate::ty::{Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind};
 
 /// The shared state of one checked body (S1): the declarations it reads,
 /// and four things it builds. No rule holds state of its own.
@@ -80,7 +80,7 @@ impl<'d> Ctxt<'d> {
     /// already closed at the top of its cast tree can never change, so it
     /// enters at once.
     pub fn enter(&mut self, site: AstId, value: Term, slot: Term, span: Span) {
-        super::decision::enter(self, Decision::Enter { site, span, value, slot });
+        super::decision::decide(self, Decision::Enter { site, span, value, slot });
     }
 
     /// An integer the language's own operations read (operators §2), or an
@@ -107,27 +107,19 @@ impl<'d> Ctxt<'d> {
         self.infer.instantiate_type(self.decls, ty)
     }
 
-    /// A `&` or `&mut` of a value of term `target`. A value already a
-    /// reference is reborrowed, since a reference's target is never a
-    /// reference (types §4): `&mut` of a `&` is refused.
+    /// A `&` or `&mut` of a value of term `target`, decided once its head
+    /// is known: a value already a reference is reborrowed, since a
+    /// reference's target is never a reference (types §4).
     pub fn lend(&mut self, target: Term, mutability: Mutability, span: Span) -> Term {
-        match self.closed(target).map(|closed| closed.head) {
-            Some(Head::Ref(held, _)) => {
-                if !held.reaches(mutability) {
-                    let wanted = self.fresh();
-                    let wanted = self.node(TyKind::Ref(mutability, TypeArg::Uniform(wanted)));
-                    self.eq(target, wanted, span);
-                }
-                match held == mutability {
-                    true => target,
-                    false => {
-                        let inner = self.referent(target);
-                        self.held(TyKind::Ref(mutability, TypeArg::Uniform(inner)))
-                    }
-                }
-            }
-            _ => self.held(TyKind::Ref(mutability, TypeArg::Uniform(target))),
-        }
+        let result = self.fresh();
+        let lend = Decision::Lend {
+            span,
+            value: target,
+            mutability,
+            result,
+        };
+        super::decision::decide(self, lend);
+        result
     }
 
     /// The target of a term closed as a reference.

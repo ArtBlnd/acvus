@@ -3,8 +3,8 @@
 //!
 //! `solve` fires every decision whose terms are closed, each once, until
 //! none fires. At a stall, in this order and resuming after the first that
-//! changes anything: a value with no head yet takes the closed slot it
-//! enters, since that use decides it (types §5, D27); every integer literal
+//! changes anything: a form whose head is open is decided by its own use
+//! where it can be (`uses_decide`); every integer literal
 //! no use decided takes its default width; every type variable no pending
 //! decision reads is `!`; then every type variable at all is `!`; then
 //! every effect nothing constrains is opaque and every open `#` is not
@@ -27,6 +27,7 @@ use super::ctxt::Ctxt;
 use super::output::{AsCast, Chosen, Conversion, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, NoReach};
 use super::refusal::{self, RefusalKind};
+use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::{
@@ -77,13 +78,23 @@ pub(super) enum Decision {
         site: AstId,
         span: Span,
         callee: Callee,
-        args: Box<[Term]>,
+        /// Each argument at the site it is written, where its conversion
+        /// into its parameter is recorded.
+        args: Box<[(AstId, Term)]>,
         result: Term,
         effect: Option<EffectTerm<InferPhase>>,
     },
     /// What a `for` iterates by (control-flow); by reference, its
     /// container's `as_slice(_mut)` is reached at `callee_site`.
-    Iterate { site: AstId, callee_site: AstId, span: Span, head: Term, item: Term },
+    /// `body` is the effect of the body the `for` is in.
+    Iterate {
+        site: AstId,
+        callee_site: AstId,
+        span: Span,
+        head: Term,
+        item: Term,
+        body: EffectTerm<InferPhase>,
+    },
     /// What a `?` unwraps (control-flow).
     Try { site: AstId, span: Span, operand: Term, value: Term, exit: Term },
     /// A value entering a slot (types §3, §7).
@@ -104,6 +115,40 @@ pub(super) enum Decision {
     /// where its type does not copy, the body moves it out, and the lambda
     /// is called once (functions §3).
     MovesOut { lambda: AstId, span: Span, term: Term },
+    /// `&value` or `&mut value`: a reborrow where `value` is a reference,
+    /// since a reference's target is never one (types §4).
+    Lend { span: Span, value: Term, mutability: Mutability, result: Term },
+    /// `object.field`, through a reference as Rust auto-derefs; a declared
+    /// struct must have the field, and any other object grows by it where
+    /// transparent (types §1-2).
+    Field { span: Span, object: Term, field: Astr, part: Term },
+    /// `container[i]`: the language's own for an array or a slice, and
+    /// `as_slice(_mut)` at `callee_site` otherwise (operators §3).
+    /// `body` is the effect of the body the index is in.
+    Index {
+        callee_site: AstId,
+        span: Span,
+        container: Term,
+        mutability: Mutability,
+        element: Term,
+        body: EffectTerm<InferPhase>,
+    },
+    /// `*reference`: its target; a store through it needs a `&mut`
+    /// (operators §6).
+    Deref { span: Span, reference: Term, target: Term, store: bool },
+    /// A pattern against its scrutinee, through a reference as Rust's
+    /// default binding modes do (patterns §1).
+    Destructure { shape: Box<Shape>, scrutinee: Term, lent: Option<Mutability> },
+    /// `==` or an ordering at `node`: part by part for a structural type,
+    /// through `core::eq` or `core::cmp` otherwise (operators §4).
+    /// `body` is the effect of the body the comparison is in.
+    Compare {
+        node: AstId,
+        span: Span,
+        sig: CoreSig,
+        operand: Term,
+        body: EffectTerm<InferPhase>,
+    },
 }
 
 impl Decision {
@@ -114,7 +159,13 @@ impl Decision {
             Decision::Iterate { item, .. } => vec![*item],
             Decision::Try { value, exit, .. } => vec![*value, *exit],
             Decision::Enter { slot, .. } => vec![*slot],
-            Decision::Cast { .. }
+            Decision::Lend { result, .. } => vec![*result],
+            Decision::Field { part, .. } => vec![*part],
+            Decision::Index { element, .. } => vec![*element],
+            Decision::Deref { target, .. } => vec![*target],
+            Decision::Destructure { shape, .. } => shape.bindings(),
+            Decision::Compare { .. }
+            | Decision::Cast { .. }
             | Decision::Settle { .. }
             | Decision::HoldsNoLoans { .. }
             | Decision::MovedCapture { .. }
@@ -126,11 +177,21 @@ impl Decision {
     /// Every term this decision reads or writes.
     fn terms(&self) -> Vec<Term> {
         match self {
-            Decision::Reach { args, result, .. } => args.iter().copied().chain([*result]).collect(),
+            Decision::Reach { args, result, .. } => args.iter().map(|(_, arg)| *arg).chain([*result]).collect(),
             Decision::Iterate { head, item, .. } => vec![*head, *item],
             Decision::Try { operand, value, exit, .. } => vec![*operand, *value, *exit],
             Decision::Enter { value, slot, .. } => vec![*value, *slot],
             Decision::Cast { source, .. } => vec![*source],
+            Decision::Lend { value, result, .. } => vec![*value, *result],
+            Decision::Field { object, part, .. } => vec![*object, *part],
+            Decision::Index { container, element, .. } => vec![*container, *element],
+            Decision::Deref { reference, target, .. } => vec![*reference, *target],
+            Decision::Destructure { shape, scrutinee, .. } => {
+                let mut terms = shape.bindings();
+                terms.push(*scrutinee);
+                terms
+            }
+            Decision::Compare { operand, .. } => vec![*operand],
             Decision::Settle { term, .. }
             | Decision::HoldsNoLoans { term, .. }
             | Decision::MovedCapture { term, .. }
@@ -186,7 +247,7 @@ enum Reading {
 pub(super) fn solve(cx: &mut Ctxt<'_>) {
     loop {
         if fire_round(cx, Reading::Closed)
-            || slots_decide(cx)
+            || uses_decide(cx)
             || default_literals(cx)
             || default_unconstrained(cx, true)
             || default_unconstrained(cx, false)
@@ -202,19 +263,38 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
     }
 }
 
-/// `decision`, an `Enter`, fired now where its value is closed at the top
-/// of its cast tree, which no later decision can change (types §6);
-/// pending otherwise.
-pub(super) fn enter(cx: &mut Ctxt<'_>, decision: Decision) {
-    let Decision::Enter { value, .. } = decision else {
-        panic!("decision::enter: only an Enter is entered");
-    };
-    let top = cx
-        .infer
-        .closed(cx.decls.casts(), &NothingOpen, value)
-        .is_some_and(|closed| cx.decls.casts().step_up(closed.head).is_none());
+/// The one term whose head a decision reads before it fires, where it has
+/// exactly one.
+fn read_head(decision: &Decision) -> Option<Term> {
+    match decision {
+        Decision::Enter { value, .. } | Decision::Lend { value, .. } => Some(*value),
+        Decision::Field { object, .. } => Some(*object),
+        Decision::Index { container, .. } => Some(*container),
+        Decision::Deref { reference, .. } => Some(*reference),
+        Decision::Destructure { scrutinee, .. } => Some(*scrutinee),
+        Decision::Compare { operand, .. } => Some(*operand),
+        Decision::Iterate { head, .. } => Some(*head),
+        Decision::Try { operand, .. } => Some(*operand),
+        Decision::Cast { source, .. } => Some(*source),
+        Decision::Reach { .. }
+        | Decision::Settle { .. }
+        | Decision::HoldsNoLoans { .. }
+        | Decision::MovedCapture { .. }
+        | Decision::MovesOut { .. } => None,
+    }
+}
+
+/// `decision` fired now where the head it reads is closed at the top of
+/// its cast tree, which no later decision can change (types §6); pending
+/// otherwise.
+pub(super) fn decide(cx: &mut Ctxt<'_>, decision: Decision) {
+    let top = read_head(&decision).is_some_and(|term| {
+        cx.infer
+            .closed(cx.decls.casts(), &NothingOpen, term)
+            .is_some_and(|closed| cx.decls.casts().step_up(closed.head).is_none())
+    });
     match top {
-        true => fire(cx, decision, Reading::Closed).expect("a value closed at the top of its tree fires"),
+        true => fire(cx, decision, Reading::Closed).expect("a decision whose head is at the top of its tree fires"),
         false => cx.decisions.push(decision),
     }
 }
@@ -259,6 +339,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             span,
             head,
             item,
+            body,
         } => {
             let Some(closed) = closed_for(cx, head, reading) else {
                 return Err(Decision::Iterate {
@@ -267,9 +348,10 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                     span,
                     head,
                     item,
+                    body,
                 });
             };
-            fire_iterate(cx, site, callee_site, span, closed, item);
+            fire_iterate(cx, site, callee_site, span, closed, item, &body);
             Ok(())
         }
         Decision::Try {
@@ -319,6 +401,104 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             super::closure::relax(cx, lambda, Calls::Many, holds, span);
             Ok(())
         }
+        Decision::Lend {
+            span,
+            value,
+            mutability,
+            result,
+        } => {
+            let Some(closed) = closed_for(cx, value, reading) else {
+                return Err(Decision::Lend {
+                    span,
+                    value,
+                    mutability,
+                    result,
+                });
+            };
+            super::place::fire_lend(cx, span, Some(closed), mutability, result, value);
+            Ok(())
+        }
+        Decision::Field {
+            span,
+            object,
+            field,
+            part,
+        } => {
+            let Some(closed) = closed_for(cx, object, reading) else {
+                return Err(Decision::Field {
+                    span,
+                    object,
+                    field,
+                    part,
+                });
+            };
+            super::place::fire_field(cx, span, object, Some(closed.head), field, part);
+            Ok(())
+        }
+        Decision::Index {
+            callee_site,
+            span,
+            container,
+            mutability,
+            element,
+            body,
+        } => {
+            let Some(closed) = closed_for(cx, container, reading) else {
+                return Err(Decision::Index {
+                    callee_site,
+                    span,
+                    container,
+                    mutability,
+                    element,
+                    body,
+                });
+            };
+            super::place::fire_index(cx, callee_site, span, closed, mutability, element, &body);
+            Ok(())
+        }
+        Decision::Deref {
+            span,
+            reference,
+            target,
+            store,
+        } => {
+            let Some(closed) = closed_for(cx, reference, reading) else {
+                return Err(Decision::Deref {
+                    span,
+                    reference,
+                    target,
+                    store,
+                });
+            };
+            super::place::fire_deref(cx, span, closed, target, store);
+            Ok(())
+        }
+        Decision::Destructure { shape, scrutinee, lent } => {
+            let Some(closed) = closed_for(cx, scrutinee, reading) else {
+                return Err(Decision::Destructure { shape, scrutinee, lent });
+            };
+            super::pat::fire_destructure(cx, *shape, scrutinee, Some(closed.head), lent);
+            Ok(())
+        }
+        Decision::Compare {
+            node,
+            span,
+            sig,
+            operand,
+            body,
+        } => {
+            let Some(closed) = closed_for(cx, operand, reading) else {
+                return Err(Decision::Compare {
+                    node,
+                    span,
+                    sig,
+                    operand,
+                    body,
+                });
+            };
+            super::op::fire_compare(cx, node, span, sig, closed, &body);
+            Ok(())
+        }
         Decision::MovesOut { lambda, span, term } => {
             if !unbound_vars(cx, [term]).is_empty() {
                 return Err(Decision::MovesOut { lambda, span, term });
@@ -350,9 +530,12 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
 }
 
 fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: Term) {
-    let from = value.head;
     match cx.infer.enter(cx.decls, value, slot) {
-        Ok(Entered::Folded) => note_view(cx, site, from, slot),
+        Ok(Entered::Folded) => cx.out.entered.push(super::output::Entered {
+            site,
+            value: value.term,
+            slot,
+        }),
         Ok(Entered::Converted(conversion)) => {
             let via = Chosen {
                 declaration: conversion.rule().via,
@@ -365,35 +548,20 @@ fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: T
     }
 }
 
-/// A value that climbed the cast tree into its slot is coerced there by
-/// the step it climbed first (operators §5, types §3).
-///
-/// NOTE: a climb of several steps records only its first; `Conversion`
-/// names one function. Lower will need the whole path.
-fn note_view(cx: &mut Ctxt<'_>, site: AstId, from: Head, slot: Term) {
-    let Some(to) = cx.infer.closed(cx.decls.casts(), &NothingOpen, slot).map(|closed| closed.head) else {
-        return;
-    };
-    if from == to || from == Head::Base(Base::Never) {
-        return;
-    }
-    let Some(step) = cx.decls.casts().step_up(from) else {
-        return;
-    };
-    let via = Chosen {
-        declaration: step.rule().via,
-        r#impl: None,
-        required: Box::new([]),
-    };
-    cx.out.conversions.insert(site, Conversion { via, to: slot });
-}
-
 /// `for` by the kind its head's type gives (control-flow): a reference to
 /// an array or a slice by reference, the language's own, since no
 /// declaration carries an array (extern-fn §1); a reference to any other
 /// container by reference, through its `as_slice(_mut)` (operators §3); an
 /// array by value.
-fn fire_iterate(cx: &mut Ctxt<'_>, site: AstId, callee_site: AstId, span: Span, head: Closed, item: Term) {
+fn fire_iterate(
+    cx: &mut Ctxt<'_>,
+    site: AstId,
+    callee_site: AstId,
+    span: Span,
+    head: Closed,
+    item: Term,
+    body: &EffectTerm<InferPhase>,
+) {
     let iteration = match head.head {
         Head::Base(Base::Array) => {
             let element = element_of(cx, head.term);
@@ -415,7 +583,9 @@ fn fire_iterate(cx: &mut Ctxt<'_>, site: AstId, callee_site: AstId, span: Span, 
             let element = cx.fresh();
             let slice = cx.node(TyKind::Slice(element));
             let lent_slice = cx.held(TyKind::Ref(mutability, TypeArg::Uniform(slice)));
-            reach_core(cx, callee_site, span, CoreSig::AsSlice(mutability), vec![head.term], lent_slice);
+            let callee = Callee::Core(CoreSig::AsSlice(mutability));
+            let reached = super::call::reach_in(cx, body, callee_site, callee, vec![(site, head.term)], span);
+            cx.eq(reached, lent_slice, span);
             let lent = cx.lend(element, mutability, span);
             cx.eq(item, lent, span);
             Iteration::ByRef(mutability)
@@ -437,25 +607,6 @@ fn element_of(cx: &Ctxt<'_>, sequence: Term) -> Term {
         TyKind::Array(element, _) | TyKind::Slice(element) => *element,
         other => panic!("element_of: a term closed as an array or a slice is one, not {other:?}"),
     }
-}
-
-/// A lang item's reach at `site`, pushed from a firing: the call's effect
-/// joins the run's, since a decision fires after every body is walked.
-///
-/// NOTE: a reach pushed from a firing inside a lambda's body (a `for` by
-/// reference there) joins the run's effect rather than the lambda's; the
-/// decision does not know which body pushed it.
-fn reach_core(cx: &mut Ctxt<'_>, site: AstId, span: Span, sig: CoreSig, args: Vec<Term>, result: Term) {
-    let effect = EffectTerm::Var(cx.infer.fresh_effect());
-    super::effect::note_call_effect(cx, &effect);
-    cx.decisions.push(Decision::Reach {
-        site,
-        span,
-        callee: Callee::Core(sig),
-        args: args.into(),
-        result,
-        effect: Some(effect),
-    });
 }
 
 /// `?` on an `Option` or a `Result` (control-flow): its value is the
@@ -510,7 +661,7 @@ struct Reach {
     site: AstId,
     span: Span,
     callee: Callee,
-    args: Box<[Term]>,
+    args: Box<[(AstId, Term)]>,
     result: Term,
     effect: Option<EffectTerm<InferPhase>>,
 }
@@ -613,9 +764,9 @@ fn choose(cx: &Ctxt<'_>, offers: &[Offer], positions: &[Position], chains: &[Vec
 /// without impls, and apart, the generic impls, which a call reaches only
 /// where no concrete one is left (`Impls`: the concrete ones in order, then
 /// the generic one).
-///
-/// NOTE: the generic impl as the fallback is read from `Impls`' order, not
-/// from the ledger (question Q8 to the coordinator).
+/// A type variable parameter matches at the exact step, so the generic
+/// impl would tie with every exact concrete one; the concrete impls come
+/// first (D62).
 struct Offers {
     concrete: Vec<Offer>,
     generic: Vec<Offer>,
@@ -724,9 +875,9 @@ fn params_of(types: &Types<Poly>, ty: TyId<Poly>) -> &[TyId<Poly>] {
 
 /// The arguments' positions front to back, stopping after the first that
 /// is not closed: a later one is not read before it (types §6).
-fn positions(cx: &Ctxt<'_>, args: &[Term], reading: Reading) -> Vec<Position> {
+fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading) -> Vec<Position> {
     let mut out = Vec::new();
-    for (at, arg) in args.iter().enumerate() {
+    for (at, (_, arg)) in args.iter().enumerate() {
         if !position(cx, *arg, vec![at], reading, &mut out) {
             break;
         }
@@ -792,7 +943,7 @@ fn param_head_at(types: &Types<Poly>, params: &[TyId<Poly>], path: &[usize]) -> 
 /// `ty` is the order token or a started call, or a reference to a
 /// reference: verify refuses a declaration that writes one
 /// (`InternalType`, `ReferenceToReference`).
-fn poly_head(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Head> {
+pub(super) fn poly_head(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Head> {
     match types.kind(ty) {
         TyKind::Ref(mutability, target) => poly_base(types.kind(target.ty())).map(|base| Head::Ref(*mutability, base)),
         kind => poly_base(kind).map(Head::Base),
@@ -865,8 +1016,8 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             parent.required = all.into();
         }
         _ => {
-            for (arg, param) in args.iter().zip(params.iter()) {
-                cx.enter(site, *arg, *param, span);
+            for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
+                cx.enter(*arg_site, *arg, *param, span);
             }
             cx.eq(result, ret, span);
             if let Some(effect) = effect {
@@ -885,13 +1036,14 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
 /// the required generic function's impls, by the pattern's parameters
 /// (extern-fn §6).
 pub(super) fn push_required(cx: &mut Ctxt<'_>, site: AstId, span: Span, required: RequiredAt) {
-    let TyKind::Fn { params: args, .. } = cx.infer.types().kind(cx.infer.shallow(required.pattern)).clone() else {
+    let TyKind::Fn { params, .. } = cx.infer.types().kind(cx.infer.shallow(required.pattern)).clone() else {
         // An impl is a function (extern-fn §1), so a pattern of another type
         // is answered by none.
         let name = required.generic_function.name;
         refusal::push(cx, RefusalKind::NoDeclaration { name }, span);
         return;
     };
+    let args = params.iter().map(|param| (site, *param)).collect();
     let result = cx.fresh();
     cx.decisions.push(Decision::Reach {
         site,
@@ -930,10 +1082,22 @@ fn instantiate(cx: &mut Ctxt<'_>, offer: Offer, span: Span) -> Instantiated {
 /// no declared bounds, so they are stated here as `Any`, one per index up
 /// to the largest the impl writes.
 fn impl_scheme(types: &Types<Poly>, sig: &ImplSig) -> Scheme {
+    let mut written = vec![sig.ty];
+    written.extend(sig.requires.iter().map(|required| required.pattern));
+    Scheme {
+        ty: sig.ty,
+        param_names: sig.param_names.clone(),
+        bounds: vec![TyVarBound::Any; variables_of(types, &written)].into(),
+        impls: None,
+        requires: sig.requires.clone(),
+    }
+}
+
+/// How many type variables `written` holds: one past the largest index.
+pub(super) fn variables_of(types: &Types<Poly>, written: &[TyId<Poly>]) -> usize {
     let mut largest: Option<u32> = None;
     let mut seen = FxHashSet::default();
-    let mut stack = vec![sig.ty];
-    stack.extend(sig.requires.iter().map(|required| required.pattern));
+    let mut stack = written.to_vec();
     while let Some(at) = stack.pop() {
         if !seen.insert(at) {
             continue;
@@ -944,14 +1108,7 @@ fn impl_scheme(types: &Types<Poly>, sig: &ImplSig) -> Scheme {
         }
         kind.for_each_child(|child| stack.push(child));
     }
-    let count = largest.map_or(0, |largest| largest as usize + 1);
-    Scheme {
-        ty: sig.ty,
-        param_names: sig.param_names.clone(),
-        bounds: vec![TyVarBound::Any; count].into(),
-        impls: None,
-        requires: sig.requires.clone(),
-    }
+    largest.map_or(0, |largest| largest as usize + 1)
 }
 
 /// Every variable of `ty` a bound constrains waits for a use to answer it
@@ -991,29 +1148,58 @@ fn unbound_vars(cx: &Ctxt<'_>, terms: impl IntoIterator<Item = Term>) -> FxHashS
     vars
 }
 
-/// At a stall, a value with no head yet entering a closed slot takes the
-/// slot's type: the use decides it (types §5, D27). Whether any did.
+/// At a stall, before any default, a form whose head is still open is
+/// decided by its own use where that use decides it (types §5: defaults
+/// apply only where nothing more can be decided; D62 Q7). Whether any was.
+/// - A value entering a closed slot takes the slot's type.
+/// - A value lent where the reference is already closed is that
+///   reference's target.
+/// - A field read of an open object makes it an object with that field,
+///   and a pattern destructuring an open scrutinee makes it the pattern's
+///   shape. A reference is never made of an open term: only a value's own
+///   type makes one (types §4).
 ///
-/// NOTE: provisional (question Q7 to the coordinator). Without it an
-/// integer literal passed to an `u8` parameter would default to `i64`
-/// before its use is read.
-fn slots_decide(cx: &mut Ctxt<'_>) -> bool {
+/// NOTE: the last two extend Q7's rule, which names only the slot, to
+/// the field and the pattern that decide their operand's shape. Without
+/// them the ownership §4 example (`let a; a.x = 0;`) would leave `a` open
+/// and default it to `!`.
+fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
     let mut decided = false;
     let mut at = 0;
     while at < cx.decisions.pending.len() {
-        let Decision::Enter { value, slot, span, .. } = cx.decisions.pending[at] else {
+        let open = |cx: &Ctxt<'_>, term: Term| cx.infer.closed(cx.decls.casts(), &NothingOpen, term).is_none();
+        let decides = match &cx.decisions.pending[at] {
+            Decision::Enter { value, slot, .. } | Decision::Lend { value, result: slot, .. } => {
+                open(cx, *value) && !open(cx, *slot)
+            }
+            Decision::Field { object, .. } => open(cx, *object),
+            Decision::Destructure { scrutinee, .. } => open(cx, *scrutinee),
+            _ => false,
+        };
+        if !decides {
             at += 1;
             continue;
-        };
-        let headless = cx.infer.closed(cx.decls.casts(), &NothingOpen, value).is_none();
-        let slot_closed = cx.infer.closed(cx.decls.casts(), &NothingOpen, slot).is_some();
-        if headless && slot_closed {
-            cx.decisions.pending.remove(at);
-            cx.eq(value, slot, span);
-            decided = true;
-        } else {
-            at += 1;
         }
+        match cx.decisions.pending.remove(at) {
+            Decision::Enter { value, slot, span, .. } => cx.eq(value, slot, span),
+            Decision::Lend {
+                span,
+                value,
+                mutability,
+                result,
+            } => super::place::fire_lend(cx, span, None, mutability, result, value),
+            Decision::Field {
+                span,
+                object,
+                field,
+                part,
+            } => super::place::fire_field(cx, span, object, None, field, part),
+            Decision::Destructure { shape, scrutinee, lent } => {
+                super::pat::fire_destructure(cx, *shape, scrutinee, None, lent)
+            }
+            other => panic!("uses_decide: only the forms matched above are taken, not {other:?}"),
+        }
+        decided = true;
     }
     decided
 }
@@ -1090,6 +1276,12 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         Decision::Enter { span, .. }
         | Decision::Iterate { span, .. }
         | Decision::Try { span, .. }
-        | Decision::Cast { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
+        | Decision::Cast { span, .. }
+        | Decision::Lend { span, .. }
+        | Decision::Field { span, .. }
+        | Decision::Index { span, .. }
+        | Decision::Deref { span, .. }
+        | Decision::Compare { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
+        Decision::Destructure { shape, .. } => refusal::push(cx, RefusalKind::Undecided, shape.span()),
     }
 }

@@ -1,10 +1,12 @@
 //! Every term to its concrete type, once (compilation); the lambdas' claimed
 //! flows into their function types.
 
-use rustc_hash::FxHashMap;
+use acvus_ast::AstId;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{Closure, Conversion, Typeck};
+use super::output::{Chosen, Closure, Comparing, Comparison, Conversion, Typeck};
+use crate::decl::{Base, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
     Alignment, Calls, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, Infer as InferPhase,
@@ -40,13 +42,8 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
             Some((site, exit))
         })
         .collect();
-    let conversions = std::mem::take(&mut cx.out.conversions)
-        .into_iter()
-        .filter_map(|(site, conversion)| {
-            let to = freeze(&mut cx, types, &mut memo, conversion.to)?;
-            Some((site, Conversion { via: conversion.via, to }))
-        })
-        .collect();
+    let conversions = conversions(&mut cx, types, &mut memo);
+    let comparisons = comparisons(&mut cx);
     let body_effect = match cx.out.body_effect.take() {
         Some(effect) => effect_of(&mut cx, effect),
         // A run that calls nothing has no effect to order (effects §1).
@@ -63,6 +60,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
         conversions,
         casts: std::mem::take(&mut cx.out.casts),
         closures,
+        comparisons,
         body_effect,
         refusals: std::mem::take(&mut cx.out.refusals),
     }
@@ -81,7 +79,7 @@ fn freeze(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo,
     loop {
         match cx.infer.freeze(types, memo, term) {
             Ok(ty) => return Some(ty),
-            Err(Unsettled::Flow(var)) => set_flows(cx, FlowTerm::Var(var), Flows::Every),
+            Err(Unsettled::Flow(var)) => set_flows(cx, FlowTerm::Var(var), unclaimed_flows()),
             Err(open) => {
                 assert!(
                     !cx.out.refusals.is_empty(),
@@ -93,13 +91,19 @@ fn freeze(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo,
     }
 }
 
-/// `flows` set to `to`.
+/// The flows of a function value nothing ever gave, such as a parameter
+/// of a lambda never called: no lambda claimed them and no declaration
+/// states them.
 ///
-/// NOTE: an open flow set that no lambda claimed is a function value
-/// nothing ever gave, such as a parameter of a lambda never called. It is
-/// set to every output from every input, what a declaration stating none
-/// gets (extern-fn §4); types §5 states no default for flows (question Q17
-/// to the coordinator).
+/// PARKED(P9): types §5 states no default for flows. Provisionally every
+/// output takes from every input, what a declaration stating nothing gets
+/// (extern-fn §4), which is sound; this function is the one place that
+/// decides it.
+fn unclaimed_flows() -> Flows {
+    Flows::Every
+}
+
+/// `flows` set to `to`.
 fn set_flows(cx: &mut Ctxt<'_>, flows: FlowTerm<InferPhase>, to: Flows) {
     let effect = EffectTerm::Known(Effect::pure());
     let open = probe(cx, effect.clone(), flows);
@@ -244,4 +248,126 @@ fn positions(cx: &Ctxt<'_>, term: Term) -> Option<Held> {
         }
     }
     Some(held)
+}
+
+/// Every coercion, each at its site with its steps in order: a declared
+/// conversion (types §7) as it was applied, and a value folded into a slot
+/// as the steps up the cast tree from the value's final type to the slot's
+/// (types §3, operators §5), read now since the slot may have risen after
+/// the value entered it.
+///
+/// # Panics
+/// Two different coercions at one site: every value enters its slot at its
+/// own site, and the sites that two entries share (a branch with no tail
+/// and a missing `else`, both `()`) coerce nothing.
+fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, Box<[Conversion<Ty>]>> {
+    let mut out: FxHashMap<AstId, Box<[Conversion<Ty>]>> = FxHashMap::default();
+    let mut record = |site: AstId, steps: Vec<Conversion<Ty>>| {
+        if steps.is_empty() {
+            return;
+        }
+        let steps: Box<[Conversion<Ty>]> = steps.into();
+        if let Some(earlier) = out.get(&site) {
+            assert_eq!(earlier, &steps, "one site coerces one way");
+            return;
+        }
+        out.insert(site, steps);
+    };
+    for (site, conversion) in std::mem::take(&mut cx.out.conversions) {
+        if let Some(to) = freeze(cx, types, memo, conversion.to) {
+            record(site, vec![Conversion { via: conversion.via, to }]);
+        }
+    }
+    for entered in std::mem::take(&mut cx.out.entered) {
+        if let Some(steps) = climb(cx, types, memo, entered.value, entered.slot) {
+            record(entered.site, steps);
+        }
+    }
+    out
+}
+
+/// The steps up the cast tree from `value`'s head to `slot`'s, each with
+/// the type it reaches. `None` where a refusal left either open.
+///
+/// # Panics
+/// With no refusal made, the slot's head is not up the tree from the
+/// value's: `enter` folded the value into it, so it is.
+fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, value: Term, slot: Term) -> Option<Vec<Conversion<Ty>>> {
+    let (Some(mut at), Some(to)) = (cx.closed(value), cx.closed(slot)) else {
+        return None;
+    };
+    if at.head == Head::Base(Base::Never) {
+        return Some(Vec::new());
+    }
+    let mut steps = Vec::new();
+    while at.head != to.head {
+        let Some(step) = cx.decls.casts().step_up(at.head) else {
+            assert!(
+                !cx.out.refusals.is_empty(),
+                "a folded value's slot is up the cast tree from it, and no refusal explains otherwise"
+            );
+            return None;
+        };
+        let rule = step.rule().clone();
+        let reached = match super::decision::poly_head(cx.decls.types(), rule.to) == Some(to.head) {
+            true => slot,
+            false => {
+                let scheme = Scheme {
+                    ty: rule.to,
+                    param_names: Box::new([]),
+                    bounds: vec![TyVarBound::Any; super::decision::variables_of(cx.decls.types(), &[rule.to])].into(),
+                    impls: None,
+                    requires: Box::new([]),
+                };
+                let above = cx.infer.instantiate(cx.decls, &scheme).ty;
+                if let Err(mismatch) = cx.infer.enter(cx.decls, at, above) {
+                    panic!("a step the tree admits takes its value up: {mismatch:?}");
+                }
+                above
+            }
+        };
+        let via = Chosen {
+            declaration: rule.via,
+            r#impl: None,
+            required: Box::new([]),
+        };
+        steps.push(Conversion {
+            via,
+            to: freeze(cx, types, memo, reached)?,
+        });
+        at = cx.closed(reached)?;
+    }
+    Some(steps)
+}
+
+/// Every comparison tree, from each root the program wrote down to the
+/// parts that reach `core::eq` or `core::cmp` (operators §4). A tree some
+/// refusal left open is left out.
+fn comparisons(cx: &mut Ctxt<'_>) -> FxHashMap<AstId, Comparison> {
+    let nodes = std::mem::take(&mut cx.out.comparisons);
+    let children: FxHashSet<AstId> = nodes
+        .values()
+        .flat_map(|node| match node {
+            Comparing::Parts(parts) => parts.to_vec(),
+            Comparing::Reached => Vec::new(),
+        })
+        .collect();
+    let roots: Vec<AstId> = nodes.keys().copied().filter(|node| !children.contains(node)).collect();
+    let mut out = FxHashMap::default();
+    for root in roots {
+        if let Some(tree) = comparison(cx, &nodes, root) {
+            out.insert(root, tree);
+        }
+    }
+    out
+}
+
+fn comparison(cx: &mut Ctxt<'_>, nodes: &FxHashMap<AstId, Comparing>, node: AstId) -> Option<Comparison> {
+    match nodes.get(&node)? {
+        Comparing::Parts(parts) => {
+            let parts: Option<Vec<Comparison>> = parts.iter().map(|part| comparison(cx, nodes, *part)).collect();
+            Some(Comparison::Parts(parts?.into()))
+        }
+        Comparing::Reached => cx.out.reached.remove(&node).map(Comparison::Reached),
+    }
 }

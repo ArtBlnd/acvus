@@ -71,8 +71,9 @@ fn call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[&Expr<S
     }
 }
 
-fn check_args<S: Slot>(cx: &mut Ctxt<'_>, args: &[&Expr<S>]) -> Vec<Term> {
-    args.iter().map(|arg| check_expr(cx, arg, Demand::Read)).collect()
+/// Each argument's term, at the site it is written.
+fn check_args<S: Slot>(cx: &mut Ctxt<'_>, args: &[&Expr<S>]) -> Vec<(AstId, Term)> {
+    args.iter().map(|arg| (arg.id(), check_expr(cx, arg, Demand::Read))).collect()
 }
 
 /// A call of a value: the value is a function of the call's arity
@@ -95,8 +96,8 @@ fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> 
         holds: Holds::Nothing,
     });
     cx.join(callee, form, func.span());
-    for ((arg, value), param) in args.iter().zip(values).zip(params) {
-        cx.enter(arg.id(), value, param, arg.span());
+    for ((arg, (site, value)), param) in args.iter().zip(values).zip(params) {
+        cx.enter(site, value, param, arg.span());
     }
     note_call_effect(cx, &effect);
     ret
@@ -106,10 +107,35 @@ fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> 
 /// argument terms `args`; the result's term. The call's effect joins its
 /// body's now, and the reached declaration's joins it when the reach fires
 /// (effects §1).
-pub(super) fn reach_call(cx: &mut Ctxt<'_>, site: AstId, callee: Callee, args: Vec<Term>, span: Span) -> Term {
+pub(super) fn reach_call(cx: &mut Ctxt<'_>, site: AstId, callee: Callee, args: Vec<(AstId, Term)>, span: Span) -> Term {
     let result = cx.fresh();
     let effect = EffectTerm::Var(cx.infer.fresh_effect());
     note_call_effect(cx, &effect);
+    cx.decisions.push(Decision::Reach {
+        site,
+        span,
+        callee,
+        args: args.into(),
+        result,
+        effect: Some(effect),
+    });
+    result
+}
+
+/// A reach pushed by a decision as it fires, after the walk: the call's
+/// effect joins `body`, the effect of the body the deciding form was
+/// written in (effects §1).
+pub(super) fn reach_in(
+    cx: &mut Ctxt<'_>,
+    body: &EffectTerm<crate::ty::Infer>,
+    site: AstId,
+    callee: Callee,
+    args: Vec<(AstId, Term)>,
+    span: Span,
+) -> Term {
+    let result = cx.fresh();
+    let effect = EffectTerm::Var(cx.infer.fresh_effect());
+    cx.infer.join_effects(body, &effect);
     cx.decisions.push(Decision::Reach {
         site,
         span,

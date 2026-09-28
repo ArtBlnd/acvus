@@ -178,12 +178,7 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
         Literal::Char(_) => cx.node(TyKind::Char),
         Literal::Bool(_) => cx.bool(),
         Literal::Unit => cx.unit(),
-        // NOTE: a string literal is Rust's `&str`; the ledger does not state
-        // it (question Q10 to the coordinator).
-        Literal::String(_) => {
-            let str_ty = cx.node(TyKind::Str);
-            cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)))
-        }
+        Literal::String(_) => string_literal(cx),
         // Rust's `b"…"`: a reference to an array of its bytes.
         Literal::Bytes(bytes) => {
             let byte = cx.node(TyKind::Int(IntTy::U8));
@@ -199,6 +194,15 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
             cx.held(TyKind::Array(element, LenTerm::Known(items.len())))
         }
     }
+}
+
+/// A string literal's type.
+///
+/// PARKED(P7): the ledger does not state it. Provisionally it is Rust's
+/// `&str`; this function is the one place that decides it.
+fn string_literal(cx: &mut Ctxt<'_>) -> Term {
+    let str_ty = cx.node(TyKind::Str);
+    cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)))
 }
 
 /// `[a, b]`: every element enters the one element slot (types §3). A `..`

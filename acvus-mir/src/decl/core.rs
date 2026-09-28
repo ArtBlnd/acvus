@@ -10,7 +10,7 @@
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{Scheme, TyVarBound};
-use crate::ty::{Calls, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
 
 /// The names of `core`'s generic functions: the lang items (operators §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,8 +30,12 @@ pub struct Core {
     pub clone: QualifiedRef,
     pub unwrap: QualifiedRef,
     pub tags: Tags,
+    /// The names an `as` may cast to, each with its type (operators §5).
+    cast_targets: [(Astr, CastTy); CAST_TARGETS],
     params: ParamNames,
 }
+
+const CAST_TARGETS: usize = IntTy::ALL.len() + 3;
 
 /// The parameter names the lang items take: Rust's, and `out`, which
 /// operators §2 names for `display`.
@@ -77,6 +81,13 @@ impl Core {
                 ok: interner.intern("Ok"),
                 err: interner.intern("Err"),
             },
+            cast_targets: std::array::from_fn(|at| {
+                let target = match IntTy::ALL.get(at) {
+                    Some(width) => CastTy::Int(*width),
+                    None => [CastTy::F64, CastTy::Bool, CastTy::Char][at - IntTy::ALL.len()],
+                };
+                (interner.intern(target.name()), target)
+            }),
             params: ParamNames {
                 receiver: interner.intern("self"),
                 other: interner.intern("other"),
@@ -111,6 +122,14 @@ impl Core {
             (self.unwrap, table.unwrap()),
         ]);
         functions
+    }
+
+    /// The type an `as` names by `name`, if it names one (operators §5).
+    pub fn cast_target(&self, name: Astr) -> Option<CastTy> {
+        self.cast_targets
+            .iter()
+            .find(|(written, _)| *written == name)
+            .map(|(_, target)| *target)
     }
 
     /// Whether `function` is a lang item's name.
@@ -275,6 +294,19 @@ mod tests {
         assert_eq!(&scheme.param_names[..], &names[..]);
         assert_eq!(&scheme.bounds[..], &vec![TyVarBound::Any; expected.variables][..]);
         assert!(scheme.impls.is_none() && scheme.requires.is_empty());
+    }
+
+    /// operators §5: `as` names the numbers, `bool` and `char`, and nothing
+    /// else.
+    #[test]
+    fn the_cast_targets_are_the_numbers_bool_and_char() {
+        let interner = Interner::new();
+        let core = Core::of(&interner);
+        for name in ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f64", "bool", "char"] {
+            let target = core.cast_target(interner.intern(name)).expect("a cast target");
+            assert_eq!(target.name(), name);
+        }
+        assert_eq!(core.cast_target(interner.intern("String")), None);
     }
 
     /// operators §2: every lang item's generic function is the table's.

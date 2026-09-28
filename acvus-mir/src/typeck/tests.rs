@@ -117,6 +117,40 @@ impl Fixture {
         id
     }
 
+    /// An extern `Vec<T>` whose `as_slice` impl views it as `&[T]`
+    /// (operators §3, §5).
+    fn vec_with_as_slice(&mut self) -> QualifiedRef {
+        let fx = self;
+        let vec_id = QualifiedRef::root(fx.name("Vec"));
+        fx.raw.user_types.push(UserTypeDecl {
+            id: vec_id,
+            type_params: Box::new([TyVarBound::Any]),
+            specializes: Box::new([false]),
+            effect_params: 0,
+            identity_params: 0,
+            lifetimes: 0,
+        });
+        let e = fx.var(0);
+        let vec_e = fx.vec_of(vec_id, e);
+        let shared_vec_e = fx.reference(Mutability::Shared, vec_e);
+        let slice_e = fx.ty(TyKind::Slice(e));
+        let shared_slice_e = fx.reference(Mutability::Shared, slice_e);
+        let at_vec = fx.pure(&[shared_vec_e], shared_slice_e);
+        let as_slice = fx.raw.core.as_slice;
+        fx.lang_item(as_slice, &[at_vec]);
+        vec_id
+    }
+
+    /// `Vec<element>`.
+    fn vec_of(&mut self, vec_id: QualifiedRef, element: TyId<Poly>) -> TyId<Poly> {
+        self.ty(TyKind::UserDefined {
+            id: vec_id,
+            type_args: Box::new([TypeArg::Uniform(element)]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([]),
+        })
+    }
+
     /// A lang item's concrete impls; its generic function is the
     /// compiler's (operators §2).
     fn lang_item(&mut self, item: QualifiedRef, impls: &[TyId<Poly>]) {
@@ -692,35 +726,10 @@ fn an_arrays_element_is_indexed() {
 #[test]
 fn a_containers_element_is_indexed_through_as_slice() {
     let mut fx = Fixture::new();
-    let vec_id = QualifiedRef::root(fx.name("Vec"));
-    fx.raw.user_types.push(UserTypeDecl {
-        id: vec_id,
-        type_params: Box::new([TyVarBound::Any]),
-        specializes: Box::new([false]),
-        effect_params: 0,
-        identity_params: 0,
-        lifetimes: 0,
-    });
-    let e = fx.var(0);
-    let vec_e = fx.ty(TyKind::UserDefined {
-        id: vec_id,
-        type_args: Box::new([TypeArg::Uniform(e)]),
-        effect_args: Box::new([]),
-        identity_args: Box::new([]),
-    });
-    let shared_vec_e = fx.reference(Mutability::Shared, vec_e);
-    let slice_e = fx.ty(TyKind::Slice(e));
-    let shared_slice_e = fx.reference(Mutability::Shared, slice_e);
-    let at_vec = fx.pure(&[shared_vec_e], shared_slice_e);
+    let vec_id = fx.vec_with_as_slice();
     let as_slice = fx.raw.core.as_slice;
-    fx.lang_item(as_slice, &[at_vec]);
     let bool_ty = fx.ty(TyKind::Bool);
-    let vec_bool = fx.ty(TyKind::UserDefined {
-        id: vec_id,
-        type_args: Box::new([TypeArg::Uniform(bool_ty)]),
-        effect_args: Box::new([]),
-        identity_args: Box::new([]),
-    });
+    let vec_bool = fx.vec_of(vec_id, bool_ty);
     fx.context("v", vec_bool);
     let (checked, script) = fx.script("@v[0]");
     checked.admitted();
@@ -859,4 +868,162 @@ fn break_outside_a_loop_is_refused() {
     assert_eq!(checked.refusals(), vec![&RefusalKind::OutsideLoop]);
     let (checked, _) = Fixture::new().script("while true { let f = |x| -> { continue; x }; } 1");
     assert_eq!(checked.refusals(), vec![&RefusalKind::OutsideLoop]);
+}
+
+// Casts (operators §5)
+
+/// operators §5: `as` casts between the numbers, `bool` and `char` as Rust
+/// does; its value has the type it names.
+#[test]
+fn as_casts_as_rust_casts() {
+    let (checked, script) = Fixture::new().script("1u8 as i64");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+    let site = script.tail.as_ref().unwrap().id();
+    assert_eq!(
+        checked.typeck.casts[&site],
+        super::AsCast {
+            from: crate::ty::CastTy::Int(IntTy::U8),
+            to: crate::ty::CastTy::Int(IntTy::I64)
+        }
+    );
+}
+
+/// operators §5: nothing is cast to `bool`, and `as` names only the
+/// numbers, `bool` and `char`.
+#[test]
+fn an_as_rust_does_not_admit_is_refused() {
+    let (checked, _) = Fixture::new().script("1u8 as bool");
+    assert_eq!(
+        checked.refusals(),
+        vec![&RefusalKind::CastNotAdmitted {
+            from: Some(crate::ty::CastTy::Int(IntTy::U8)),
+            to: crate::ty::CastTy::Bool
+        }]
+    );
+    let fx = Fixture::new();
+    let string = fx.name("String");
+    let (checked, _) = fx.script("1 as String");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::UnknownCastTarget { name: string }]);
+}
+
+// Coercions (types §3, operators §5)
+
+/// operators §5: a reference to a container reads as its view where the
+/// slot asks for it; the coercion is recorded at the argument, with its
+/// step.
+#[test]
+fn a_view_coercion_is_recorded_at_the_argument() {
+    let mut fx = Fixture::new();
+    let vec_id = fx.vec_with_as_slice();
+    let as_slice = fx.raw.core.as_slice;
+    let bool_ty = fx.ty(TyKind::Bool);
+    let slice = fx.ty(TyKind::Slice(bool_ty));
+    let shared_slice = fx.reference(Mutability::Shared, slice);
+    let unit = fx.ty(TyKind::Unit);
+    let takes_slice = fx.pure(&[shared_slice], unit);
+    fx.declare("first", takes_slice, &[]);
+    let vec_bool = fx.vec_of(vec_id, bool_ty);
+    fx.context("v", vec_bool);
+    let (checked, script) = fx.script("first(&@v)");
+    checked.admitted();
+    let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
+        panic!("not a call");
+    };
+    let steps = &checked.typeck.conversions[&args[0].id()];
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].via.declaration, as_slice);
+    let TyKind::Ref(Mutability::Shared, viewed) = checked.kind(steps[0].to) else {
+        panic!("a view is a reference");
+    };
+    assert!(matches!(checked.kind(viewed.ty()), TyKind::Slice(_)));
+}
+
+// Comparisons (operators §4)
+
+/// operators §4: a structural type compares part by part, each part
+/// through its `core::eq` impl.
+#[test]
+fn a_tuple_compares_part_by_part() {
+    let mut fx = Fixture::new();
+    let eq = fx.raw.core.eq;
+    let bool_ty = fx.ty(TyKind::Bool);
+    let impls: Vec<TyId<Poly>> = [TyKind::Int(IntTy::I64), TyKind::Bool]
+        .into_iter()
+        .map(|kind| {
+            let t = fx.ty(kind);
+            let shared = fx.reference(Mutability::Shared, t);
+            fx.pure(&[shared, shared], bool_ty)
+        })
+        .collect();
+    fx.lang_item(eq, &impls);
+    let (checked, script) = fx.script("(1, true) == (2, false)");
+    checked.admitted();
+    let site = script.tail.as_ref().unwrap().id();
+    let super::Comparison::Parts(parts) = &checked.typeck.comparisons[&site] else {
+        panic!("a tuple compares its parts");
+    };
+    let reached: Vec<Option<Impl>> = parts
+        .iter()
+        .map(|part| match part {
+            super::Comparison::Reached(chosen) => chosen.r#impl,
+            super::Comparison::Parts(_) => panic!("an integer and a bool reach an impl"),
+        })
+        .collect();
+    assert_eq!(reached, vec![Some(Impl::Concrete(0)), Some(Impl::Concrete(1))]);
+    assert!(!checked.typeck.reached.contains_key(&site));
+}
+
+// Forms decided by their operand's head (types §6)
+
+/// types §6: a field read through a reference is decided once the object's
+/// type is known, which here is only after the lambda is called.
+#[test]
+fn a_field_through_a_reference_waits_for_its_objects_type() {
+    let mut fx = Fixture::new();
+    let a = fx.name("a");
+    let bool_ty = fx.ty(TyKind::Bool);
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, bool_ty)]), ())));
+    fx.context("o", object);
+    let (checked, script) = fx.script("let f = |r| -> r.a; f(&@o)");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+/// patterns §1: through a reference, Rust's default binding modes lend
+/// what a pattern binds.
+#[test]
+fn a_pattern_through_a_reference_binds_references() {
+    let fx = Fixture::new();
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let f = |p| -> match p { (x, y) => x, }; let r = f(&(1u8, true)); 1");
+    checked.admitted();
+    let TyKind::Ref(Mutability::Shared, target) = checked.kind(binding(&checked, &script, &names, "r")) else {
+        panic!("a binding through a `&` is a `&`");
+    };
+    assert!(is_int(&checked, target.ty(), IntTy::U8));
+}
+
+/// operators §3: an index is decided by its container's type, known here
+/// only once the lambda is called.
+#[test]
+fn an_index_waits_for_its_containers_type() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    fx.context("xs", array);
+    let (checked, script) = fx.script("let g = |xs| -> xs[0]; g(@xs)");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+/// operators §6: a store through a reference known only later to be
+/// shared is refused once it is known.
+#[test]
+fn a_store_through_a_reference_known_later_to_be_shared_is_refused() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let (checked, _) = fx.script("let h = |r| -> { *r = 1; 2 }; h(&@n)");
+    assert!(checked.refusals().contains(&&RefusalKind::StoreThroughShared));
 }

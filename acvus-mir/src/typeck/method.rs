@@ -12,10 +12,6 @@ use super::place::Demand;
 use crate::infer::Term;
 
 /// The reach is recorded at `callee_site`, where the callee is written.
-///
-/// NOTE: the receiver is the first argument as it stands, with no `&`
-/// added; the ledger states no adjustment (question Q18 to the
-/// coordinator).
 pub(super) fn check_method_call<S: Slot>(
     cx: &mut Ctxt<'_>,
     _site: AstId,
@@ -25,11 +21,21 @@ pub(super) fn check_method_call<S: Slot>(
     args: &[Expr<S>],
     span: Span,
 ) -> Term {
-    let mut terms = vec![check_expr(cx, receiver, Demand::Read)];
-    terms.extend(args.iter().map(|arg| check_expr(cx, arg, Demand::Read)));
+    let mut terms = vec![receiver_arg(cx, receiver)];
+    terms.extend(args.iter().map(|arg| (arg.id(), check_expr(cx, arg, Demand::Read))));
     let callee = match name == cx.decls.core().unwrap.name {
         true => Callee::Core(CoreSig::Unwrap),
         false => Callee::Method(name),
     };
     reach_call(cx, callee_site, callee, terms, span)
+}
+
+/// The receiver as the call's first argument.
+///
+/// PARKED(P8): the ledger does not state Rust's receiver adjustment
+/// (auto-ref and auto-deref). Provisionally the receiver is the argument
+/// as it stands, with no `&` added; this function is the one place that
+/// decides it.
+fn receiver_arg<S: Slot>(cx: &mut Ctxt<'_>, receiver: &Expr<S>) -> (AstId, Term) {
+    (receiver.id(), check_expr(cx, receiver, Demand::Read))
 }

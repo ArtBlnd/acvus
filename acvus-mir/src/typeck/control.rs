@@ -91,13 +91,16 @@ pub(super) fn check_for<S: Slot>(
         ForHead::Value(expr) => {
             let head = check_expr(cx, expr, Demand::Read);
             let item = cx.fresh();
-            cx.decisions.push(Decision::Iterate {
+            let body = super::effect::body_effect(cx);
+            let iterate = Decision::Iterate {
                 site,
                 callee_site,
                 span: expr.span(),
                 head,
                 item,
-            });
+                body,
+            };
+            super::decision::decide(cx, iterate);
             item
         }
         ForHead::Range { lo, hi } => {

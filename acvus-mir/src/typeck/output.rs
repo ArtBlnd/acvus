@@ -82,6 +82,33 @@ pub struct Closure {
     pub calls: Calls,
 }
 
+/// How `==` or an ordering compares its operands' type (operators §4):
+/// part by part, each part as it compares, or through the `core::eq` or
+/// `core::cmp` impl reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Comparison {
+    Parts(Box<[Comparison]>),
+    Reached(Chosen),
+}
+
+/// A comparison node while checking: its parts' nodes, or a reach at the
+/// node itself, recorded in `reached` once it fires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Comparing {
+    Parts(Box<[AstId]>),
+    Reached,
+}
+
+/// A value that entered a slot and was folded there (types §3); its
+/// coercion is read at writeback, from the value's final type up to the
+/// slot's, since the slot may rise after the value entered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Entered {
+    pub site: AstId,
+    pub value: Term,
+    pub slot: Term,
+}
+
 /// An `as` cast, at either end a `CastTy` (operators §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AsCast {
@@ -97,9 +124,14 @@ pub(super) struct Output {
     pub reached: FxHashMap<AstId, Chosen>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Term>>,
+    /// Each value converted by a declared conversion (types §7), at its
+    /// site.
     pub conversions: FxHashMap<AstId, Conversion<Term>>,
+    /// Each value folded into a slot, in the order it entered.
+    pub entered: Vec<Entered>,
     pub casts: FxHashMap<AstId, AsCast>,
     pub closures: FxHashMap<AstId, Closure>,
+    pub comparisons: FxHashMap<AstId, Comparing>,
     pub body_effect: Option<EffectTerm<InferPhase>>,
     pub refusals: Vec<Refusal>,
 }
@@ -111,9 +143,11 @@ pub struct Typeck {
     pub reached: FxHashMap<AstId, Chosen>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,
-    pub conversions: FxHashMap<AstId, Conversion<Ty>>,
+    /// Each coercion at a site, its steps in order.
+    pub conversions: FxHashMap<AstId, Box<[Conversion<Ty>]>>,
     pub casts: FxHashMap<AstId, AsCast>,
     pub closures: FxHashMap<AstId, Closure>,
+    pub comparisons: FxHashMap<AstId, Comparison>,
     pub body_effect: Effect,
     pub refusals: Vec<Refusal>,
 }

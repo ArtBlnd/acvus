@@ -1,25 +1,22 @@
-//! Places: field access, `&` and `&mut`, `a[i]`, `*r`, and stores.
-//!
-//! NOTE: where a place's rule depends on whether a value is a reference,
-//! an array or a declared struct (auto-deref of `r.f`, `a[i]` of an array,
-//! `*r`), it reads the closed-head query when the place is checked; a term
-//! not closed by then takes the general rule (questions Q12 and Q14 to the
-//! coordinator).
+//! Places: field access, `&` and `&mut`, `a[i]`, `*r`, and stores. What
+//! each means depends on its operand's head (a reference, an array, a
+//! declared struct), so each is a decision fired once that head is known
+//! (types §6).
 
 use acvus_ast::{AstId, Expr, Place, PlaceBase, Root, Slot, Span};
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::call::reach_call;
+use super::call::reach_in;
 use super::closure::refuse_recursion;
 use super::ctxt::Ctxt;
-use super::decision::{Callee, CoreSig};
+use super::decision::{Callee, CoreSig, Decision};
 use super::expr::check_expr;
 use super::output::Name;
 use super::refusal::{self, RefusalKind};
 use super::scope::note_captures;
 use crate::decl::{Base, Head};
-use crate::infer::Term;
-use crate::ty::{Label, Mutability, ObjectTy, TyKind, TypeArg};
+use crate::infer::{Closed, Term};
+use crate::ty::{EffectTerm, Infer as InferPhase, Label, Mutability, ObjectTy, TyKind, TypeArg};
 
 /// What an expression is read for, passed down and never held: `a[i]`
 /// reaches `as_slice` or `as_slice_mut` by it (operators §3).
@@ -55,33 +52,60 @@ pub(super) fn check_field<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, object: &Exp
     field_of(cx, object, field, span)
 }
 
-/// Field `field` of a value of term `object`, through a reference as Rust
-/// reads a field through one.
+/// Field `field` of a value of term `object`: a decision on its head.
 fn field_of(cx: &mut Ctxt<'_>, object: Term, field: Astr, span: Span) -> Term {
-    let object = match cx.closed(object).map(|closed| closed.head) {
-        Some(Head::Ref(..)) => cx.referent(object),
-        _ => object,
-    };
-    let declared = match cx.closed(object).map(|closed| cx.infer.types().kind(closed.term)) {
-        Some(TyKind::Object(ObjectTy::Declared(_, fields))) => Some(fields.clone()),
-        _ => None,
+    let part = cx.fresh();
+    super::decision::decide(
+        cx,
+        Decision::Field {
+            span,
+            object,
+            field,
+            part,
+        },
+    );
+    part
+}
+
+/// A field read fired: through a reference to its target, as Rust
+/// auto-derefs; of a declared struct, the field it has; of `!`, `!`; of
+/// any other object, the field it grows to have where transparent
+/// (types §1-2). `head` is `None` where the object's use decides it at a
+/// stall, which makes it an object and never a reference.
+pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, object: Term, head: Option<Head>, field: Astr, part: Term) {
+    match head {
+        Some(Head::Ref(..)) => {
+            let target = cx.referent(object);
+            let reached = field_of(cx, target, field, span);
+            cx.eq(part, reached, span);
+            return;
+        }
+        Some(Head::Base(Base::Never)) => {
+            let never = cx.never();
+            cx.eq(part, never, span);
+            return;
+        }
+        Some(Head::Base(_)) | None => {}
+    }
+    let declared = match head {
+        Some(_) => match cx.infer.types().kind(cx.infer.shallow(object)) {
+            TyKind::Object(ObjectTy::Declared(_, fields)) => Some(fields.clone()),
+            _ => None,
+        },
+        None => None,
     };
     if let Some(fields) = declared {
-        return match fields.iter().find(|(name, _)| *name == field) {
-            Some((_, part)) => *part,
-            None => {
-                refusal::push(cx, RefusalKind::GrowsOpaque, span);
-                cx.fresh()
-            }
-        };
+        match fields.iter().find(|(name, _)| *name == field) {
+            Some((_, declared_part)) => cx.eq(part, *declared_part, span),
+            None => refusal::push(cx, RefusalKind::GrowsOpaque, span),
+        }
+        return;
     }
-    let part = cx.fresh();
     let shape = cx.held(TyKind::Object(ObjectTy::Structural(
         Box::new([(field, part)]),
         Label::Transparent,
     )));
     cx.join(object, shape, span);
-    part
 }
 
 /// `a[i]`: its container's `as_slice` or `as_slice_mut` by `demand`,
@@ -104,24 +128,81 @@ pub(super) fn check_index<S: Slot>(
 }
 
 fn element(cx: &mut Ctxt<'_>, callee_site: AstId, container: Term, mutability: Mutability, span: Span) -> Term {
-    let sequence = match cx.closed(container).map(|closed| closed.head) {
-        Some(Head::Base(Base::Array)) => Some(container),
-        Some(Head::Ref(_, Base::Array | Base::Slice)) => Some(cx.referent(container)),
-        _ => None,
+    let element = cx.fresh();
+    let body = super::effect::body_effect(cx);
+    let index = Decision::Index {
+        callee_site,
+        span,
+        container,
+        mutability,
+        element,
+        body,
+    };
+    super::decision::decide(cx, index);
+    element
+}
+
+/// An index fired: an array's or a slice's element is the language's own,
+/// since no declaration carries an array (extern-fn §1), through a
+/// reference too; any other container's is reached through its
+/// `as_slice(_mut)` (operators §3).
+pub(super) fn fire_index(
+    cx: &mut Ctxt<'_>,
+    callee_site: AstId,
+    span: Span,
+    container: Closed,
+    mutability: Mutability,
+    element: Term,
+    body: &EffectTerm<InferPhase>,
+) {
+    let sequence = match container.head {
+        Head::Base(Base::Array) => Some(container.term),
+        Head::Ref(_, Base::Array | Base::Slice) => Some(cx.referent(container.term)),
+        Head::Base(Base::Never) => {
+            let never = cx.never();
+            cx.eq(element, never, span);
+            return;
+        }
+        Head::Base(_) | Head::Ref(..) => None,
     };
     if let Some(sequence) = sequence {
-        return match cx.infer.types().kind(cx.infer.shallow(sequence)) {
-            TyKind::Array(element, _) | TyKind::Slice(element) => *element,
+        let part = match cx.infer.types().kind(cx.infer.shallow(sequence)) {
+            TyKind::Array(part, _) | TyKind::Slice(part) => *part,
             other => panic!("a term closed as an array or a slice is one, not {other:?}"),
         };
+        cx.eq(element, part, span);
+        return;
     }
-    let element = cx.fresh();
     let slice = cx.node(TyKind::Slice(element));
     let lent_slice = cx.held(TyKind::Ref(mutability, TypeArg::Uniform(slice)));
-    let lent = cx.lend(container, mutability, span);
-    let reached = reach_call(cx, callee_site, Callee::Core(CoreSig::AsSlice(mutability)), vec![lent], span);
+    let lent = cx.lend(container.term, mutability, span);
+    let callee = Callee::Core(CoreSig::AsSlice(mutability));
+    let reached = reach_in(cx, body, callee_site, callee, vec![(callee_site, lent)], span);
     cx.eq(reached, lent_slice, span);
-    element
+}
+
+/// A lend fired. A reference is reborrowed: a `&mut` of a `&` is refused,
+/// and a `&` of a `&mut` is a `&` of its target. Any other value, and one
+/// whose use decides it at a stall (`head` `None`), is lent as it is.
+pub(super) fn fire_lend(cx: &mut Ctxt<'_>, span: Span, value: Option<Closed>, mutability: Mutability, result: Term, target: Term) {
+    let lent = match value.map(|closed| closed.head) {
+        Some(Head::Ref(held, _)) => {
+            if !held.reaches(mutability) {
+                let wanted = cx.fresh();
+                let wanted = cx.node(TyKind::Ref(mutability, TypeArg::Uniform(wanted)));
+                cx.eq(target, wanted, span);
+            }
+            match held == mutability {
+                true => target,
+                false => {
+                    let inner = cx.referent(target);
+                    cx.node(TyKind::Ref(mutability, TypeArg::Uniform(inner)))
+                }
+            }
+        }
+        Some(Head::Base(_)) | None => cx.node(TyKind::Ref(mutability, TypeArg::Uniform(target))),
+    };
+    cx.eq(result, lent, span);
 }
 
 /// `&p`, `&mut p`.
@@ -135,24 +216,37 @@ pub(super) fn check_borrow<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, mutable: bo
 }
 
 /// `*r` read: a take of what `r` names (operators §6).
-///
-/// NOTE: an `r` not closed when read is taken to be a `&`, the one
-/// reference both mutabilities reach (question Q12 to the coordinator).
 pub(super) fn check_deref<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, reference: &Expr<S>, span: Span) -> Term {
     let reference = check_expr(cx, reference, Demand::Read);
-    match cx.closed(reference).map(|closed| closed.head) {
-        Some(Head::Ref(..)) => cx.referent(reference),
-        Some(Head::Base(Base::Never)) => cx.never(),
-        Some(Head::Base(_)) => {
-            refusal::push(cx, RefusalKind::NotAReference, span);
-            cx.fresh()
+    deref(cx, reference, false, span)
+}
+
+fn deref(cx: &mut Ctxt<'_>, reference: Term, store: bool, span: Span) -> Term {
+    let target = cx.fresh();
+    let deref = Decision::Deref {
+        span,
+        reference,
+        target,
+        store,
+    };
+    super::decision::decide(cx, deref);
+    target
+}
+
+/// A deref fired: a reference's target, which a store reaches only through
+/// a `&mut` (operators §6); `!` of `!`; anything else is refused.
+pub(super) fn fire_deref(cx: &mut Ctxt<'_>, span: Span, reference: Closed, target: Term, store: bool) {
+    match reference.head {
+        Head::Ref(Mutability::Shared, _) if store => refusal::push(cx, RefusalKind::StoreThroughShared, span),
+        Head::Ref(..) => {
+            let referent = cx.referent(reference.term);
+            cx.eq(target, referent, span);
         }
-        None => {
-            let target = cx.fresh();
-            let shape = cx.held(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(target)));
-            cx.eq(reference, shape, span);
-            target
+        Head::Base(Base::Never) => {
+            let never = cx.never();
+            cx.eq(target, never, span);
         }
+        Head::Base(_) => refusal::push(cx, RefusalKind::NotAReference, span),
     }
 }
 
@@ -228,12 +322,6 @@ fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, span: Span) -> Option<T
 pub(super) fn check_deref_store<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, target: &Expr<S>, value: &Expr<S>, span: Span) {
     let reference = check_expr(cx, target, Demand::Write);
     let stored = check_expr(cx, value, Demand::Read);
-    if let Some(Head::Ref(Mutability::Shared, _)) = cx.closed(reference).map(|closed| closed.head) {
-        refusal::push(cx, RefusalKind::StoreThroughShared, span);
-        return;
-    }
-    let slot = cx.fresh();
-    let shape = cx.held(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(slot)));
-    cx.eq(reference, shape, target.span());
+    let slot = deref(cx, reference, true, span);
     cx.enter(value.id(), stored, slot, value.span());
 }

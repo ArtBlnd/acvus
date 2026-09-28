@@ -4,18 +4,18 @@
 
 use acvus_ast::{AstId, BinOp, Expr, Slot, Span, UnaryOp};
 
-use super::call::reach_call;
+use super::call::{reach_call, reach_in};
 use super::ctxt::Ctxt;
-use super::decision::{Callee, CoreSig};
+use super::decision::{Callee, CoreSig, Decision};
+use super::output::Comparing;
 use super::expr::check_expr;
 use super::place::{self, Demand};
-use crate::infer::Term;
-use crate::ty::Mutability;
+use crate::infer::{Closed, Term};
+use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, ObjectTy, TyKind};
 
-/// NOTE: `==` and the orderings reach `core::eq` and `core::cmp` at the
-/// operands' type whatever it is. The structural comparison part by part
-/// (operators §4) is not built: its parts' reaches have no site to be
-/// recorded at (question Q15 to the coordinator).
+/// `==` and the orderings compare part by part where the operands' type is
+/// structural, and through `core::eq` or `core::cmp` otherwise
+/// (operators §4): a `Compare` decision on the operands' one type.
 pub(super) fn check_binary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<S>, op: BinOp, right: &Expr<S>, span: Span) -> Term {
     // A lang item takes its operands by `&` (operators §2), so they are
     // lent, not used whole.
@@ -42,13 +42,10 @@ pub(super) fn check_binary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<
         BinOp::Mul => lang_item(cx, site, CoreSig::Mul, operands, span),
         BinOp::Div => lang_item(cx, site, CoreSig::Div, operands, span),
         BinOp::Mod => lang_item(cx, site, CoreSig::Rem, operands, span),
-        BinOp::Eq | BinOp::Neq => lang_item(cx, site, CoreSig::Eq, operands, span),
+        BinOp::Eq | BinOp::Neq => compare(cx, site, CoreSig::Eq, operands, span),
         // An ordering is `core::cmp`'s answer compared with `0`: the
         // operator is a `bool` (operators §2).
-        BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-            lang_item(cx, site, CoreSig::Cmp, operands, span);
-            cx.bool()
-        }
+        BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => compare(cx, site, CoreSig::Cmp, operands, span),
         BinOp::And | BinOp::Or => {
             let bool_ty = cx.bool();
             cx.eq(lhs, bool_ty, left.span());
@@ -88,10 +85,69 @@ struct Operands<'e, S> {
 /// its operands (operators §2).
 fn lang_item<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, sig: CoreSig, operands: Operands<'_, S>, span: Span) -> Term {
     let args = vec![
-        cx.lend(operands.lhs, Mutability::Shared, operands.left.span()),
-        cx.lend(operands.rhs, Mutability::Shared, operands.right.span()),
+        (operands.left.id(), cx.lend(operands.lhs, Mutability::Shared, operands.left.span())),
+        (operands.right.id(), cx.lend(operands.rhs, Mutability::Shared, operands.right.span())),
     ];
     reach_call(cx, site, Callee::Core(sig), args, span)
+}
+
+/// A comparison: the lang items take both operands at one type
+/// (operators §2), and how that type compares is decided once it is
+/// known.
+fn compare<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, sig: CoreSig, operands: Operands<'_, S>, span: Span) -> Term {
+    cx.eq(operands.lhs, operands.rhs, operands.right.span());
+    let body = super::effect::body_effect(cx);
+    let compare = Decision::Compare {
+        node: site,
+        span,
+        sig,
+        operand: operands.lhs,
+        body,
+    };
+    super::decision::decide(cx, compare);
+    cx.bool()
+}
+
+/// A comparison fired at `node` on its operands' type (operators §4): a
+/// structural type compares its parts, each a node of its own; a reference
+/// compares what it names, since a lang item's `&T` is never a reference to
+/// a reference (types §4); any other type reaches `core::eq` or `core::cmp`
+/// at `node`.
+pub(super) fn fire_compare(
+    cx: &mut Ctxt<'_>,
+    node: AstId,
+    span: Span,
+    sig: CoreSig,
+    operand: Closed,
+    body: &EffectTerm<InferPhase>,
+) {
+    let parts: Option<Vec<Term>> = match cx.infer.types().kind(operand.term) {
+        TyKind::Tuple(items) => Some(items.to_vec()),
+        TyKind::Array(element, _) | TyKind::Option(element) => Some(vec![*element]),
+        TyKind::Result(ok, err) => Some(vec![*ok, *err]),
+        TyKind::Object(ObjectTy::Structural(fields, _)) => Some(fields.iter().map(|(_, field)| *field).collect()),
+        TyKind::Ref(_, target) => Some(vec![target.ty()]),
+        TyKind::Never => Some(Vec::new()),
+        _ => None,
+    };
+    let Some(parts) = parts else {
+        cx.out.comparisons.insert(node, Comparing::Reached);
+        let lent = cx.lend(operand.term, Mutability::Shared, span);
+        reach_in(cx, body, node, Callee::Core(sig), vec![(node, lent), (node, lent)], span);
+        return;
+    };
+    let nodes: Vec<AstId> = parts.iter().map(|_| AstId::alloc()).collect();
+    cx.out.comparisons.insert(node, Comparing::Parts(nodes.clone().into()));
+    for (part, part_node) in parts.into_iter().zip(nodes) {
+        let compare = Decision::Compare {
+            node: part_node,
+            span,
+            sig,
+            operand: part,
+            body: body.clone(),
+        };
+        super::decision::decide(cx, compare);
+    }
 }
 
 /// `-x`, `!x`. `*r` is `place::check_deref`.
@@ -103,7 +159,7 @@ pub(super) fn check_unary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, op: UnaryOp, 
         UnaryOp::Neg => {
             let value = check_expr(cx, operand, Demand::Lend(Mutability::Shared));
             let arg = cx.lend(value, Mutability::Shared, operand.span());
-            reach_call(cx, site, Callee::Core(CoreSig::Neg), vec![arg], span)
+            reach_call(cx, site, Callee::Core(CoreSig::Neg), vec![(operand.id(), arg)], span)
         }
         UnaryOp::Not => check_expr(cx, operand, Demand::Read),
         UnaryOp::Deref => place::check_deref(cx, site, operand, span),

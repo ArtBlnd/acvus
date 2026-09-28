@@ -17,5 +17,5 @@ pub(super) fn check_append<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, expr: &Expr<
     let shown = cx.lend(value, Mutability::Shared, expr.span());
     let string = cx.node(TyKind::String);
     let out = cx.node(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string)));
-    reach_call(cx, site, Callee::Core(CoreSig::Display), vec![shown, out], span);
+    reach_call(cx, site, Callee::Core(CoreSig::Display), vec![(expr.id(), shown), (site, out)], span);
 }
