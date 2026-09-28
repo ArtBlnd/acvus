@@ -74,7 +74,8 @@ mod tests {
     use super::*;
     use crate::cfg::promote;
     use acvus_utils::QualifiedRef;
-    use crate::ty::Param;
+    use crate::ty::{Calls, Contexts, Cost, Effect, EffectTerm, Holds, IntTy, Mutability, ParamTerm, Reissue, SplitCost, TypeArg};
+    use crate::flows::{Flows, FlowTerm};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
 
@@ -82,12 +83,13 @@ mod tests {
         ValueId::from_raw(n)
     }
 
-    fn make_cfg(insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+    fn make_cfg(types: &mut Types<Concrete>, insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut factory = LocalFactory::<ValueId>::new();
         let mut val_types = FxHashMap::default();
         for _ in 0..val_count {
             let vid = factory.next();
-            val_types.insert(vid, Ty::I64);
+            val_types.insert(vid, i64_ty);
         }
         promote(MirBody {
             demoted_diamonds: Default::default(),
@@ -108,6 +110,24 @@ mod tests {
         })
     }
 
+    /// A type value these tests do not read further: a placeholder
+    /// `callee_ty` for a call whose test is not about its type.
+    fn dummy_ty(types: &mut Types<Concrete>) -> Ty {
+        types.intern(TyKind::Int(IntTy::I64))
+    }
+
+    /// A call whose effect may be split (effects §6), the cost being of no
+    /// interest to these tests.
+    fn splittable() -> Effect {
+        Effect::new(
+            Reissue::Opaque,
+            false,
+            Contexts::new(),
+            Contexts::new(),
+            SplitCost::WithCost(Cost::stated(1)),
+        )
+    }
+
     /// Collect all instructions from all blocks (flattened).
     fn all_insts(cfg: &CfgBody) -> Vec<&Inst> {
         cfg.blocks.iter().flat_map(|b| b.insts.iter()).collect()
@@ -118,19 +138,24 @@ mod tests {
     #[test]
     fn a_call_handed_a_reference_is_spawned() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let print_id = QualifiedRef::root(i.intern("print"));
-        let taken = Ty::Ref(
-            crate::ty::Mutability::Shared,
-            Box::new(crate::ty::TypeArg::uniform(Ty::String)),
-        );
-        let print_ty = Ty::Fn {
-            params: vec![Param::new(i.intern("s"), taken.clone())],
-            ret: Box::new(Ty::Unit),
-            captures: vec![],
-            effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::flows::Flows::none().into(),
-        };
+        let string_ty = types.intern(TyKind::String);
+        let unit_ty = types.intern(TyKind::Unit);
+        let taken = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string_ty)));
+        let print_ty = types.intern(TyKind::Fn {
+            params: Box::new([ParamTerm {
+                name: i.intern("s"),
+                ty: taken,
+            }]),
+            ret: unit_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::none()),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::FunctionCall {
                     dst: v(1),
@@ -148,7 +173,7 @@ mod tests {
         );
         cfg.val_types.insert(v(0), taken);
 
-        run(&mut cfg);
+        run(&mut cfg, &mut types);
 
         let insts = all_insts(&cfg);
         assert!(
@@ -156,29 +181,32 @@ mod tests {
             "a call whose argument holds a loan is spawned with that argument"
         );
         assert!(matches!(insts[1].kind, InstKind::TakeEffect { dst, .. } if dst == v(1)));
-        assert_eq!(cfg.task, Task::Async);
+        // `cfg.task` no longer exists: this pass now decides splitting from
+        // the callee's `SplitCost` alone (effects §6), so a body carries no
+        // task of its own to assert on.
     }
 
     #[test]
     fn split_io_call() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let fetch_id = QualifiedRef::root(i.intern("fetch"));
 
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            fetch_id,
-            Ty::Fn {
-                params: vec![Param::new(i.intern("id"), Ty::I64)],
-                ret: Box::new(Ty::String),
-                captures: vec![],
-
-                effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::flows::Flows::Every.into(),
-            },
-        );
-
-        let fetch_ty = fn_metadata[&fetch_id].clone();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let string_ty = types.intern(TyKind::String);
+        let fetch_ty = types.intern(TyKind::Fn {
+            params: Box::new([ParamTerm {
+                name: i.intern("id"),
+                ty: i64_ty,
+            }]),
+            ret: string_ty,
+            effect: EffectTerm::Known(splittable()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -199,7 +227,7 @@ mod tests {
             2,
         );
 
-        run(&mut cfg);
+        run(&mut cfg, &mut types);
 
         // Should be: Const, Spawn, TakeEffect in block insts (Return is terminator).
         let insts = all_insts(&cfg);
@@ -221,7 +249,7 @@ mod tests {
         if let InstKind::Spawn { dst: handle, .. } = &insts[1].kind {
             let handle_ty = cfg.val_types.get(handle).unwrap();
             assert!(
-                matches!(handle_ty, Ty::Handle(..)),
+                matches!(types.kind(*handle_ty), TyKind::Handle(..)),
                 "Spawn dst must have Handle type"
             );
         }
@@ -230,36 +258,41 @@ mod tests {
     #[test]
     fn pure_call_unchanged() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let add_id = QualifiedRef::root(i.intern("add"));
 
-        let mut fn_metadata = FxHashMap::default();
-        fn_metadata.insert(
-            add_id,
-            Ty::Fn {
-                params: vec![
-                    Param::new(i.intern("a"), Ty::I64),
-                    Param::new(i.intern("b"), Ty::I64),
-                ],
-                ret: Box::new(Ty::I64),
-                captures: vec![],
-
-                effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::flows::Flows::Every.into(),
-            },
-        );
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let add_ty = types.intern(TyKind::Fn {
+            params: Box::new([
+                ParamTerm {
+                    name: i.intern("a"),
+                    ty: i64_ty,
+                },
+                ParamTerm {
+                    name: i.intern("b"),
+                    ty: i64_ty,
+                },
+            ]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
 
         let mut cfg = make_cfg(
+            &mut types,
             vec![InstKind::FunctionCall {
                 dst: v(0),
                 callee: Callee::Direct(add_id),
-                callee_ty: Ty::error(),
+                callee_ty: add_ty,
                 args: vec![v(1), v(2)],
                 order: None,
             }],
             3,
         );
 
-        run(&mut cfg);
+        run(&mut cfg, &mut types);
 
         // Pure call should NOT be split.
         let insts = all_insts(&cfg);
@@ -267,19 +300,27 @@ mod tests {
         assert!(matches!(insts[0].kind, InstKind::FunctionCall { .. }));
     }
 
-    fn burner(i: &Interner, effect: crate::ty::Effect) -> Ty {
-        Ty::Fn {
-            params: vec![Param::new(i.intern("seed"), Ty::I64)],
-            ret: Box::new(Ty::I64),
-            captures: vec![],
-            effect: effect.into(),
-            flows: crate::flows::Flows::Every.into(),
-        }
+    fn burner(types: &mut Types<Concrete>, i: &Interner, effect: Effect) -> Ty {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        types.intern(TyKind::Fn {
+            params: Box::new([ParamTerm {
+                name: i.intern("seed"),
+                ty: i64_ty,
+            }]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(effect),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        })
     }
 
-    fn split_once(i: &Interner, effect: crate::ty::Effect) -> CfgBody {
+    fn split_once(i: &Interner, effect: Effect) -> CfgBody {
+        let mut types = Types::<Concrete>::new();
         let hash = QualifiedRef::root(i.intern("hash"));
+        let burner_ty = burner(&mut types, i, effect);
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -288,7 +329,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(hash),
-                    callee_ty: burner(i, effect),
+                    callee_ty: burner_ty,
                     args: vec![v(0)],
                     order: None,
                 },
@@ -299,14 +340,21 @@ mod tests {
             ],
             2,
         );
-        run(&mut cfg);
+        run(&mut cfg, &mut types);
         cfg
     }
 
     #[test]
     fn a_pure_heavy_call_splits_into_a_pair_with_no_order() {
         let i = Interner::new();
-        let cfg = split_once(&i, crate::ty::Effect::PURE.at_task(Task::Heavy));
+        let heavy = Effect::new(
+            Reissue::Pure,
+            true,
+            Contexts::new(),
+            Contexts::new(),
+            SplitCost::WithCost(Cost::stated(1)),
+        );
+        let cfg = split_once(&i, heavy);
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 3);
         assert!(
@@ -322,7 +370,7 @@ mod tests {
     #[test]
     fn a_pure_sync_call_is_not_split() {
         let i = Interner::new();
-        let cfg = split_once(&i, crate::ty::Effect::PURE);
+        let cfg = split_once(&i, Effect::pure());
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 2);
         assert!(matches!(insts[1].kind, InstKind::FunctionCall { .. }));
@@ -331,18 +379,21 @@ mod tests {
     #[test]
     fn indirect_call_unchanged() {
         // Indirect calls are never split (no QualifiedRef to look up).
+        let mut types = Types::<Concrete>::new();
+        let dummy = dummy_ty(&mut types);
         let mut cfg = make_cfg(
+            &mut types,
             vec![InstKind::FunctionCall {
                 dst: v(0),
                 callee: Callee::Indirect(v(1)),
-                callee_ty: Ty::error(),
+                callee_ty: dummy,
                 args: vec![],
                 order: None,
             }],
             2,
         );
 
-        run(&mut cfg);
+        run(&mut cfg, &mut types);
 
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 1);
@@ -352,31 +403,26 @@ mod tests {
     #[test]
     fn multiple_io_calls_all_split() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let fetch_a = QualifiedRef::root(i.intern("fetch_a"));
         let fetch_b = QualifiedRef::root(i.intern("fetch_b"));
 
-        let mut fn_metadata = FxHashMap::default();
-        for &fid in &[fetch_a, fetch_b] {
-            fn_metadata.insert(
-                fid,
-                Ty::Fn {
-                    params: vec![],
-                    ret: Box::new(Ty::String),
-                    captures: vec![],
-
-                    effect: crate::ty::Effect::OPAQUE.into(),
-                    flows: crate::flows::Flows::Every.into(),
-                },
-            );
-        }
-
-        let io_fn_ty = fn_metadata[&fetch_a].clone();
+        let string_ty = types.intern(TyKind::String);
+        let io_fn_ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: string_ty,
+            effect: EffectTerm::Known(splittable()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
         let mut cfg = make_cfg(
+            &mut types,
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(fetch_a),
-                    callee_ty: io_fn_ty.clone(),
+                    callee_ty: io_fn_ty,
                     args: vec![],
                     order: None,
                 },
@@ -401,7 +447,7 @@ mod tests {
             3,
         );
 
-        run(&mut cfg);
+        run(&mut cfg, &mut types);
 
         // 2 calls -> 2 Spawn + 2 TakeEffect + BinOp = 5 (Return is terminator)
         let insts = all_insts(&cfg);
