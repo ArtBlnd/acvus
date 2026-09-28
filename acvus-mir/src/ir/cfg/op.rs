@@ -516,13 +516,11 @@ impl Op {
         }
     }
 
-    /// Whether the operation writes storage: removing one whose result is
-    /// unused still changes what the storage holds.
+    /// Whether the operation writes storage, or ends a value it holds:
+    /// removing one still changes what the storage holds. A `FieldSet`
+    /// yields a new value and writes nothing.
     pub fn writes_storage(&self) -> bool {
-        matches!(
-            self,
-            Op::Assign { .. } | Op::IndexSet { .. } | Op::FieldSet { .. } | Op::StringAppend { .. } | Op::Drop { .. }
-        )
+        matches!(self, Op::Assign { .. } | Op::IndexSet { .. } | Op::StringAppend { .. } | Op::Drop { .. })
     }
 
     /// Whether the operation loads or commits a context, an effect of its

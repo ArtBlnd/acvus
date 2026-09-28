@@ -99,9 +99,9 @@ struct OrderThread {
 impl<'m> Builder<'m> {
     /// Starts a body at its entry block, which has no parameters; an
     /// ordered body gets its order parameter here.
-    pub(super) fn new(module: &'m mut Module, ordered: bool) -> Builder<'m> {
+    pub(super) fn new(module: &'m mut Module, ordered: bool, ret: Ty) -> Builder<'m> {
         let entry_block = BlockId::of_index(0);
-        let mut body = Body::empty();
+        let mut body = Body::empty(ret);
         let order = ordered.then(|| {
             let order_ty = module.types.intern(TyKind::Order);
             let token = body.make_token(&module.types, order_ty, Def::OrderParam);

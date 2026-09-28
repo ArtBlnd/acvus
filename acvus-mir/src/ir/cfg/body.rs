@@ -26,12 +26,12 @@ impl BlockId {
     }
 }
 
-/// A compiled module: its bodies, the entry's result type and flows, and
-/// the one table every type of the module is an id of.
+/// A compiled module: its bodies, the entry's flows, and the one table
+/// every type of the module is an id of. The module's result type is its
+/// entry body's.
 pub struct Module {
     pub(super) bodies: Vec<Body>,
     pub(super) entry: Option<BodyId>,
-    pub(super) ret: Ty,
     pub(super) flows: Flows,
     pub(super) types: Types<Concrete>,
 }
@@ -118,6 +118,7 @@ impl UseSites {
 }
 
 pub struct Body {
+    pub(super) ret: Ty,
     pub(super) blocks: Vec<Block>,
     pub(super) entry: BlockId,
     pub(super) params: Vec<(Astr, ValueId)>,
@@ -463,23 +464,23 @@ impl Module {
     /// body, and so no entry, until `set_entry`.
     ///
     /// Cost: O(1).
-    pub fn new(types: Types<Concrete>, ret: Ty, flows: Flows) -> Module {
+    pub fn new(types: Types<Concrete>, flows: Flows) -> Module {
         Module {
             bodies: Vec::new(),
             entry: None,
-            ret,
             flows,
             types,
         }
     }
 
-    /// A Builder for a new body of this module; its `seal` adds the body.
-    /// An `ordered` body, one whose effect is not pure, takes an order
-    /// parameter, which the Builder makes and threads (effects §3).
+    /// A Builder for a new body of this module, whose every return yields
+    /// a `ret`; its `seal` adds the body. An `ordered` body, one whose
+    /// effect is not pure, takes an order parameter, which the Builder makes
+    /// and threads (effects §3).
     ///
     /// Cost: O(1).
-    pub fn build_body(&mut self, ordered: bool) -> super::Builder<'_> {
-        super::Builder::new(self, ordered)
+    pub fn build_body(&mut self, ordered: bool, ret: Ty) -> super::Builder<'_> {
+        super::Builder::new(self, ordered, ret)
     }
 
     /// A Rewriter over one body of this module.
@@ -510,9 +511,6 @@ impl Module {
     pub fn entry(&self) -> BodyId {
         self.entry.expect("the module's entry was set before it is read")
     }
-    pub fn ret(&self) -> Ty {
-        self.ret
-    }
     pub fn flows(&self) -> &Flows {
         &self.flows
     }
@@ -529,6 +527,10 @@ impl Module {
 }
 
 impl Body {
+    /// The type every return of the body yields.
+    pub fn ret(&self) -> Ty {
+        self.ret
+    }
     pub fn entry(&self) -> BlockId {
         self.entry
     }

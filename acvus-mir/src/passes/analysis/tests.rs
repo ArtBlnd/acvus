@@ -45,7 +45,7 @@ fn fixture() -> Fixture {
         holds: Holds::Nothing,
     });
     Fixture {
-        module: Module::new(types, int, Flows::none()),
+        module: Module::new(types, Flows::none()),
         interner: Interner::new(),
         int,
         bool,
@@ -302,7 +302,7 @@ fn the_constant_domain_is_a_lattice() {
 fn sparse_folds_a_straight_line() {
     let mut f = fixture();
     let (name, int) = (f.interner.intern("a"), f.int);
-    let mut builder = f.module.build_body(false);
+    let mut builder = f.module.build_body(false, f.int);
     let a = builder.param(name, int);
     let x = builder.push(constant(2), int, Span::ZERO);
     let y = builder.push(constant(3), int, Span::ZERO);
@@ -326,7 +326,7 @@ fn sparse_folds_a_straight_line() {
 fn sparse_runs_only_the_known_arm_of_a_diamond() {
     let mut f = fixture();
     let (int, bool) = (f.int, f.bool);
-    let mut builder = f.module.build_body(false);
+    let mut builder = f.module.build_body(false, f.int);
     let c = builder.push(truth(true), bool, Span::ZERO);
     let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
     let join = builder.new_block(&[int]);
@@ -354,7 +354,7 @@ fn sparse_runs_only_the_known_arm_of_a_diamond() {
 fn sparse_joins_both_arms_of_an_unknown_diamond() {
     let mut f = fixture();
     let (name, int, bool) = (f.interner.intern("c"), f.int, f.bool);
-    let mut builder = f.module.build_body(false);
+    let mut builder = f.module.build_body(false, f.int);
     let c = builder.param(name, bool);
     let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
     let join = builder.new_block(&[int]);
@@ -394,7 +394,7 @@ struct CountingLoop {
 
 fn counting_loop(f: &mut Fixture) -> CountingLoop {
     let (name, int, bool) = (f.interner.intern("n"), f.int, f.bool);
-    let mut builder = f.module.build_body(false);
+    let mut builder = f.module.build_body(false, f.int);
     let n = builder.param(name, int);
     let i0 = builder.push(constant(0), int, Span::ZERO);
     let k0 = builder.push(constant(5), int, Span::ZERO);
@@ -601,7 +601,7 @@ impl SparseAnalysis for Ranges {
 fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
     let mut f = fixture();
     let int = f.int;
-    let mut builder = f.module.build_body(false);
+    let mut builder = f.module.build_body(false, f.int);
     let at = builder.push(constant(3), int, Span::ZERO);
     let hi = builder.push(constant(4), int, Span::ZERO);
     let header = builder.new_block(&[]);
@@ -678,7 +678,7 @@ fn sparse_analyses_values_and_holds_no_fact_for_a_token() {
     let mut f = fixture();
     let (int, order, effectful, name) = (f.int, f.order, f.effectful, f.interner.intern("f"));
     let call = || Op::FunctionCall { callee: Callee::Direct(QualifiedRef::root(name)), callee_ty: effectful, args: Vec::new() };
-    let mut builder = f.module.build_body(true);
+    let mut builder = f.module.build_body(true, f.int);
     builder.open_anyorder();
     let r1 = builder.push_effect(call(), int, Span::ZERO);
     let r2 = builder.push_effect(call(), int, Span::ZERO);
@@ -783,7 +783,7 @@ fn dense_liveness_runs_backward_around_a_loop() {
     let mut f = fixture();
     let (na, nb, nc, int, bool) =
         (f.interner.intern("a"), f.interner.intern("b"), f.interner.intern("c"), f.int, f.bool);
-    let mut builder = f.module.build_body(false);
+    let mut builder = f.module.build_body(false, f.int);
     let a = builder.param(na, int);
     let b = builder.param(nb, int);
     let c = builder.param(nc, bool);
@@ -832,7 +832,7 @@ fn dense_runs_forward_over_a_diamond() {
     let mut f = fixture();
     let (nc, int) = (f.interner.intern("c"), f.int);
     let bool = f.bool;
-    let mut builder = f.module.build_body(false);
+    let mut builder = f.module.build_body(false, f.int);
     let c = builder.param(nc, bool);
     let x = builder.push(constant(0), int, Span::ZERO);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
@@ -860,7 +860,7 @@ fn dense_runs_forward_over_a_diamond() {
 fn identity_bodies<const N: usize>(f: &mut Fixture) -> [BodyId; N] {
     let (name, int) = (f.interner.intern("a"), f.int);
     [(); N].map(|()| {
-        let mut builder = f.module.build_body(false);
+        let mut builder = f.module.build_body(false, f.int);
         let a = builder.param(name, int);
         builder.terminate(ret(a));
         builder.seal().expect("the body has no open state")

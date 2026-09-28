@@ -85,25 +85,13 @@ fn found(holds: bool, detail: impl FnOnce() -> String) -> Found {
 
 /// Checks each instruction's operands and result against what its operation
 /// takes and yields, every edge against its target's parameters, every
-/// switch key against its scrutinee and every loop source against what it
-/// hands its body, and that every return of the body returns one type. A
-/// body does not record its result type, and a function loaded or called by
-/// name, like a context, is typed by declarations the body does not hold:
-/// those are checked only as far as the body shows (a function type, a type
-/// without positions).
+/// switch key against its scrutinee, every loop source against what it
+/// hands its body, and every return against the body's result type. A
+/// function loaded or called by name, like a context, is typed by
+/// declarations the body does not hold: those are checked only as far as
+/// the body shows (a function type, a type without positions).
 fn types_agree(body: &Body, types: &Types<Concrete>) -> Found {
     let check = TypeCheck { body, types };
-    let mut returned: Option<(BlockId, Ty)> = None;
-    for (id, block) in body.blocks() {
-        let Terminator::Return { value, .. } = block.terminator() else { continue };
-        let ty = body.ty_of(*value);
-        match returned {
-            Some((first, first_ty)) => found(ty == first_ty, || {
-                format!("{id:?} returns {:?} and {first:?} returns {:?}", types.kind(ty), types.kind(first_ty))
-            })?,
-            None => returned = Some((id, ty)),
-        }
-    }
     for (id, block) in body.blocks() {
         for (index, inst) in block.insts().iter().enumerate() {
             check
@@ -560,8 +548,11 @@ impl TypeCheck<'_> {
             Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } | Terminator::While { cond, .. } => {
                 self.is_bool(*cond).map_err(at)?
             }
-            Terminator::Return { order: Some(order), .. } => {
-                self.is(*order, |kind| matches!(kind, TyKind::Order), "Order").map_err(at)?
+            Terminator::Return { value, order, .. } => {
+                self.same(*value, self.body.ret(), "the body's result type").map_err(at)?;
+                if let Some(order) = order {
+                    self.is(*order, |kind| matches!(kind, TyKind::Order), "Order").map_err(at)?;
+                }
             }
             Terminator::Switch { tag, arms, .. } => {
                 let scrutinee = match self.kind(self.ty(*tag)) {
@@ -578,7 +569,7 @@ impl TypeCheck<'_> {
                     self.is_u64(trip).map_err(at)?;
                 }
             }
-            Terminator::Jump { .. } | Terminator::Return { order: None, .. } | Terminator::Diverge => {}
+            Terminator::Jump { .. } | Terminator::Diverge => {}
         }
         for edge in terminator.edges() {
             let params = self.body.block(edge.to).params();

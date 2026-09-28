@@ -16,7 +16,7 @@ use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability,
-    Reissue, TyKind, TypeArg, Types,
+    ObjectTy, Reissue, TyKind, TypeArg, Types,
 };
 
 // -- Fixture -------------------------------------------------------------
@@ -42,6 +42,8 @@ struct Fixture {
     str_ref: Ty,
     /// `Result<i64, bool>`.
     result: Ty,
+    /// A declared struct with one field `x: i64`.
+    object: Ty,
 }
 
 fn fixture() -> Fixture {
@@ -71,8 +73,10 @@ fn fixture() -> Fixture {
     let str_ty = types.intern(TyKind::Str);
     let str_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)));
     let result = types.intern(TyKind::Result(int, bool));
+    let point = QualifiedRef::root(interner.intern("Point"));
+    let object = types.intern(TyKind::Object(ObjectTy::Declared(point, Box::new([(interner.intern("x"), int)]))));
     Fixture {
-        module: Module::new(types, int, Flows::none()),
+        module: Module::new(types, Flows::none()),
         interner,
         int,
         bool,
@@ -84,6 +88,7 @@ fn fixture() -> Fixture {
         idempotent,
         str_ref,
         result,
+        object,
     }
 }
 
@@ -100,8 +105,8 @@ impl Fixture {
         self.module.body(body)
     }
 
-    fn build(&mut self, ordered: bool) -> Builder<'_> {
-        self.module.build_body(ordered)
+    fn build(&mut self, ordered: bool, ret: Ty) -> Builder<'_> {
+        self.module.build_body(ordered, ret)
     }
 
     fn insts(&self, body: BodyId, block: BlockId) -> &[Inst] {
@@ -313,7 +318,7 @@ impl LoanFacts for TestFacts {
 /// One block: `x = a + a; y = -x; z = a + a; w = z + x; return y`.
 fn straight_line(f: &mut Fixture) -> (BodyId, [ValueId; 4]) {
     let (name, int) = (f.name("a"), f.int);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(name, int);
     let x = builder.push(add(a, a), int, at(1));
     let y = builder.push(neg(x), int, at(2));
@@ -327,7 +332,7 @@ fn straight_line(f: &mut Fixture) -> (BodyId, [ValueId; 4]) {
 fn two_calls(f: &mut Fixture, callee: Ty) -> (BodyId, ValueId) {
     let (name, int) = (f.name("a"), f.int);
     let (first, second) = (f.call(callee), f.call(callee));
-    let mut builder = f.build(true);
+    let mut builder = f.build(true, f.int);
     let a = builder.param(name, int);
     builder.push_effect(first, int, at(1));
     builder.push_effect(second, int, at(2));
@@ -376,7 +381,7 @@ fn replace_uses_refuses_a_value_that_does_not_dominate_a_use_and_leaves_the_body
 fn replace_uses_of_another_type_is_a_callers_defect() {
     let mut f = fixture();
     let (name, int, bool) = (f.name("a"), f.int, f.bool);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(name, int);
     let b = builder.push(Op::Const { value: Literal::Bool(true) }, bool, at(1));
     builder.terminate(ret(a));
@@ -434,7 +439,7 @@ fn inserting_a_merge_is_a_callers_defect() {
 fn remove_takes_out_an_unused_pure_instruction_and_a_pure_call() {
     let mut f = fixture();
     let (name, int, pure) = (f.name("a"), f.int, f.call(f.pure));
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(name, int);
     builder.push(pure, int, at(1));
     builder.push(min(a, a), int, at(2));
@@ -476,7 +481,7 @@ fn remove_refuses_an_opaque_call_and_a_call_that_writes() {
     assert_eq!(snapshot(f.body(id)), before);
 
     let (name, int, writing) = (f.name("a"), f.int, f.call(f.pure_writing));
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(name, int);
     builder.push(writing, int, at(1));
     builder.terminate(ret(a));
@@ -490,7 +495,7 @@ fn remove_refuses_an_opaque_call_and_a_call_that_writes() {
 fn remove_refuses_a_check_a_store_and_an_idempotent_call() {
     let mut f = fixture();
     let (name, int, idempotent) = (f.name("a"), f.int, f.call(f.idempotent));
-    let mut builder = f.build(true);
+    let mut builder = f.build(true, f.int);
     let a = builder.param(name, int);
     let x = builder.slot(int, at(0));
     builder.push_unit(check_add(a, a), at(1));
@@ -511,10 +516,28 @@ fn remove_refuses_a_check_a_store_and_an_idempotent_call() {
 }
 
 #[test]
+fn remove_takes_out_an_unused_field_set_which_writes_no_storage() {
+    let mut f = fixture();
+    let (na, np, nx, int, object) = (f.name("a"), f.name("p"), f.name("x"), f.int, f.object);
+    let mut builder = f.build(false, int);
+    let a = builder.param(na, int);
+    let p = builder.param(np, object);
+    builder.push(Op::FieldSet { object: p, field: nx, rest: Vec::new(), value: a }, object, at(1));
+    builder.terminate(ret(a));
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(&f, id);
+    let mut facts = NoFacts;
+    let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.remove(inst_ref(entry, 0)), Ok(()));
+    editor.finish();
+    assert!(f.insts(id, entry).is_empty());
+}
+
+#[test]
 fn removing_a_taking_removes_its_start() {
     let mut f = fixture();
     let (name, int, call) = (f.name("a"), f.int, f.call(f.pure_splittable));
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(name, int);
     builder.push(call, int, at(1));
     builder.terminate(ret(a));
@@ -541,7 +564,7 @@ fn removing_a_taking_removes_its_start() {
 /// returns.
 fn branching(f: &mut Fixture) -> (BodyId, [BlockId; 4]) {
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let c = builder.param(nc, bool);
     let [then_block, else_block, join, spare] = [(); 4].map(|()| builder.new_block(&[]));
@@ -593,7 +616,7 @@ fn take_arm_makes_a_diamond_a_jump_and_its_join_stays_a_block() {
 fn take_arm_on_a_jump_if_passes_the_taken_arms_arguments() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let c = builder.param(nc, bool);
     let [left, right] = [(); 2].map(|()| builder.new_block(&[int]));
@@ -636,7 +659,7 @@ fn prune_removes_unreached_blocks_and_renumbers_the_rest() {
 fn prune_keeps_a_surviving_diamonds_join_that_no_edge_reaches() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let c = builder.param(nc, bool);
     let [then_block, else_block, join, spare] = [(); 4].map(|()| builder.new_block(&[]));
@@ -677,7 +700,7 @@ fn move_to_moves_an_instruction_whose_operands_dominate_its_new_place() {
 fn move_to_refuses_a_place_an_operand_does_not_dominate() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(name, int);
     let x = builder.push(add(a, a), int, at(1));
     builder.push_unit(check_add(x, a), at(2));
@@ -725,7 +748,7 @@ fn moving_an_effect_across_another_on_its_chain_is_refused_by_dominance() {
 fn moving_an_effect_away_from_what_its_token_reaches_is_refused() {
     let mut f = fixture();
     let (nc, int, bool, call) = (f.name("c"), f.int, f.bool, f.call(f.opaque));
-    let mut builder = f.build(true);
+    let mut builder = f.build(true, bool);
     let c = builder.param(nc, bool);
     builder.push_effect(call, int, at(1));
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
@@ -752,7 +775,7 @@ fn moving_an_effect_away_from_what_its_token_reaches_is_refused() {
 /// instruction under test, the body's first.
 fn loop_computing(f: &mut Fixture, op: fn(ValueId, ValueId) -> Op) -> (BodyId, BlockId) {
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let c = builder.param(nc, bool);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
@@ -803,7 +826,7 @@ fn hoisting_a_trapping_value_out_of_a_loop_is_refused() {
 fn a_split_calls_start_and_taking_move_while_their_tokens_still_dominate() {
     let mut f = fixture();
     let (name, int, call) = (f.name("a"), f.int, f.call(f.splittable));
-    let mut builder = f.build(true);
+    let mut builder = f.build(true, f.int);
     let a = builder.param(name, int);
     builder.push_effect(call, int, at(1));
     builder.push_unit(check_add(a, a), at(2));
@@ -868,7 +891,7 @@ fn assign(slot: ValueId, value: ValueId) -> Op {
 /// slot.
 fn slot_across_a_diamond_and_a_loop(f: &mut Fixture) -> (BodyId, ValueId, [BlockId; 6]) {
     let (nc, int, bool) = (f.name("c"), f.int, f.bool);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let c = builder.param(nc, bool);
     let x = builder.slot(int, at(30));
     let one = builder.push(int_const(1), int, at(1));
@@ -942,7 +965,7 @@ fn promote_builds_values_across_a_diamond_and_a_loop() {
 fn promote_reads_undef_where_no_store_comes_first() {
     let mut f = fixture();
     let int = f.int;
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let x = builder.slot(int, at(30));
     let read = builder.push(take(x), int, at(1));
     builder.terminate(ret(read));
@@ -976,7 +999,7 @@ fn promote_refuses_a_slot_whose_reference_escapes() {
 fn a_cursor_walks_on_across_the_removals_made_through_it() {
     let mut f = fixture();
     let (na, int) = (f.name("a"), f.int);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let kept = builder.push(min(a, a), int, at(1));
     builder.push(min(a, a), int, at(2));
@@ -1143,7 +1166,7 @@ fn order_chain_whole_accepts_an_anyorder_fork_that_merges_and_rejects_one_that_d
     let mut f = fixture();
     let (int, calls) = (f.int, [f.call(f.opaque), f.call(f.opaque)]);
     let [first, second] = calls;
-    let mut builder = f.build(true);
+    let mut builder = f.build(true, f.int);
     builder.open_anyorder();
     let r = builder.push_effect(first, int, at(1));
     builder.push_effect(second, int, at(2));
@@ -1171,13 +1194,13 @@ fn types_agree(f: &Fixture, id: BodyId) -> Result<(), Violation> {
 }
 
 #[test]
-fn types_agree_checks_that_every_return_returns_one_type() {
+fn types_agree_checks_every_return_against_the_bodys_result_type() {
     let mut f = fixture();
     let (id, _) = branching(&mut f);
     assert_eq!(types_agree(&f, id), Ok(()));
 
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let c = builder.param(nc, bool);
     let [left, right] = [(); 2].map(|()| builder.new_block(&[]));
@@ -1192,7 +1215,7 @@ fn types_agree_checks_that_every_return_returns_one_type() {
 
 fn switching_on(f: &mut Fixture, key: SwitchKey) -> BodyId {
     let (na, int) = (f.name("a"), f.int);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let [arm, other] = [(); 2].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::Switch { tag: a, arms: vec![(key, arm, Vec::new())], default: Some((other, Vec::new())) });
@@ -1214,7 +1237,7 @@ fn types_agree_checks_switch_keys_against_the_scrutinee() {
 
 fn range_loop(f: &mut Fixture, element: Ty) -> BodyId {
     let (na, int) = (f.name("a"), f.int);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let header = builder.new_block(&[]);
     let loop_body = builder.new_block(&[element]);
@@ -1247,7 +1270,7 @@ fn types_agree_checks_a_loops_source_against_what_it_hands_its_body() {
 
 fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     builder.push(Op::Fetch { context: page }, ty, at(1));
     builder.terminate(ret(a));
@@ -1266,7 +1289,7 @@ fn types_agree_checks_that_a_context_value_holds_no_position() {
 
 fn unwrapping(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, nr, int, result) = (f.name("a"), f.name("r"), f.int, f.result);
-    let mut builder = f.build(false);
+    let mut builder = f.build(false, f.int);
     let a = builder.param(na, int);
     let r = builder.param(nr, result);
     builder.push(Op::UnwrapVariant { src: r }, ty, at(1));

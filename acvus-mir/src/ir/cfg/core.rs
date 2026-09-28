@@ -31,10 +31,11 @@ pub struct StillUsed {
 }
 
 impl Body {
-    /// A body with no block and no value yet; its entry is the first block
-    /// added to it.
-    pub(super) fn empty() -> Body {
+    /// A body with no block and no value yet, whose returns yield a `ret`;
+    /// its entry is the first block added to it.
+    pub(super) fn empty(ret: Ty) -> Body {
         Body {
+            ret,
             blocks: Vec::new(),
             entry: BlockId::of_index(0),
             params: Vec::new(),
