@@ -43,16 +43,25 @@ pub(super) struct Found {
     pub crossed: Vec<AstId>,
 }
 
-/// The bindings in scope, innermost last, and the run's own result slot
-/// once a `return`, a `?` or the tail names it.
+/// What kind of source the run is (programs §1-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Run {
+    Script,
+    Template,
+}
+
+/// The bindings in scope, innermost last, the kind of run, and the run's
+/// own result slot once a `return`, a `?` or the tail names it.
 pub(super) struct Scope {
     frames: Vec<Frame>,
+    run: Run,
     run_result: Option<Term>,
 }
 
 impl Scope {
-    pub fn new() -> Self {
+    pub fn new(run: Run) -> Self {
         Self {
+            run,
             frames: vec![Frame {
                 names: FxHashMap::default(),
                 body: None,
@@ -200,6 +209,10 @@ impl Scope {
     /// The run's result slot, once something named it.
     pub fn run_result(&self) -> Option<Term> {
         self.run_result
+    }
+
+    pub fn run(&self) -> Run {
+        self.run
     }
 
     /// Where the innermost lambda's calls' effects join; `None` outside

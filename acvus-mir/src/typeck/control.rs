@@ -9,7 +9,8 @@ use super::expr::check_expr;
 use super::output::Iteration;
 use super::pat::check_pattern;
 use super::place::Demand;
-use super::scope::Binding;
+use super::refusal::{self, RefusalKind};
+use super::scope::{Binding, Run};
 use super::stmt::{check_body, check_stmts};
 use crate::infer::Term;
 
@@ -141,17 +142,35 @@ pub(super) fn check_try<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, inner: &Expr<S>
         value,
         exit,
     });
-    let result = body_result(cx);
-    cx.enter(site, exit, result, span);
+    if let Some(result) = leaves_to(cx, span) {
+        cx.enter(site, exit, result, span);
+    }
     value
 }
 
 /// `return v`: `v` enters the body's result; the form is `!`.
 pub(super) fn check_return<S: Slot>(cx: &mut Ctxt<'_>, value: &Expr<S>, span: Span) -> Term {
     let term = check_expr(cx, value, Demand::Read);
-    let result = body_result(cx);
-    cx.enter(value.id(), term, result, span);
+    if let Some(result) = leaves_to(cx, span) {
+        cx.enter(value.id(), term, result, span);
+    }
     cx.never()
+}
+
+/// The slot a `return` or a `?` at `span` leaves the innermost body
+/// through: a lambda's result, or the run's.
+///
+/// PARKED(P12): the ledger does not say what leaving a template's run
+/// means, since a template's result is the text it builds (programs §1).
+/// Provisionally a `return` or a `?` outside every lambda of a template is
+/// refused, the conservative choice, and this function is the one place
+/// that decides it.
+fn leaves_to(cx: &mut Ctxt<'_>, span: Span) -> Option<Term> {
+    if cx.scope.body_result().is_none() && cx.scope.run() == Run::Template {
+        refusal::push(cx, RefusalKind::ReturnInTemplate, span);
+        return None;
+    }
+    Some(body_result(cx))
 }
 
 /// The slot the innermost body leaves through; the run's is named the

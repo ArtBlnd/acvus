@@ -147,8 +147,15 @@ pub enum Stmt<S = Clean> {
     /// graph function of its own (RFC-0100). The enclosing body runs
     /// nothing here.
     FnDecl(FnDecl<S>),
-    /// A template's text line or one of its `{{ }}` tags: the value is
-    /// appended to the template's result (RFC-0071 rules 2 and 3).
+    /// A template's literal text, appended to its result as written
+    /// (programs §1).
+    Text {
+        id: AstId,
+        value: String,
+        span: Span,
+    },
+    /// A template's `{{ }}` tag: the value is formatted and appended to the
+    /// template's result (programs §1, RFC-0071 rule 3).
     Append {
         id: AstId,
         expr: Expr<S>,
@@ -350,8 +357,9 @@ pub enum ForHead<S = Clean> {
 }
 
 /// A parsed template: a script whose text lines are output (RFC-0071).
-/// Its statements are the script's, and a text line or a `{{ }}` tag is
-/// the one statement the script does not write, `Stmt::Append`.
+/// Its statements are the script's, and its text and its `{{ }}` tags are
+/// the two statements the script does not write, `Stmt::Text` and
+/// `Stmt::Append`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Template<S = Clean> {
     pub id: AstId,
@@ -962,7 +970,7 @@ fn walk_stmts_level<S>(stmts: &[Stmt<S>], refs: &mut ContextRefs) {
             // (RFC-0100 rule 2): nothing of it is the enclosing body's.
             Stmt::FnDecl(_) => {}
             Stmt::Append { expr, .. } => walk_expr(expr, refs),
-            Stmt::Error(_) => {}
+            Stmt::Text { .. } | Stmt::Error(_) => {}
         }
     }
 }

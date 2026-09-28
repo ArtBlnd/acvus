@@ -66,7 +66,8 @@ pub(super) fn check_stmts<S: Slot>(cx: &mut Ctxt<'_>, stmts: &[Stmt<S>]) {
 }
 
 /// `Store`, `DerefStore`, `LetBind`, `LetUninit`, `Assign`, `While`,
-/// `WhileLet`, `For`, `Break`, `Continue`, `Anyorder`, `Append`, `Expr`.
+/// `WhileLet`, `For`, `Break`, `Continue`, `Anyorder`, `Append`, `Text`,
+/// `Expr`.
 /// A `FnDecl` is not a script's (programs §2): it is refused as a form.
 pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
     match stmt {
@@ -135,6 +136,9 @@ pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
         }
         Stmt::FnDecl(decl) => refusal::push(cx, RefusalKind::FnDeclInScript, decl.span),
         Stmt::Append { id, expr, span } => template::check_append(cx, *id, expr, *span),
+        // Text is appended as written; no type decides anything of it
+        // (programs §1).
+        Stmt::Text { .. } => {}
         Stmt::Error(_) => {}
     }
 }

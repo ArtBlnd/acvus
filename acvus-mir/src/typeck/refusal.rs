@@ -32,6 +32,9 @@ pub enum RefusalKind {
     StoreThroughShared,
     /// `fn` in a script, which has none (programs §2).
     FnDeclInScript,
+    /// A `return` or a `?` that leaves a template's run, whose meaning the
+    /// ledger does not state (PARKED(P12), `control::leaves_to`).
+    ReturnInTemplate,
     /// `_` or `..` where a value is read: they are a pattern's.
     PatternInValue,
     /// A variant written with other than one payload.

@@ -46,10 +46,11 @@ pub use output::{AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Comparis
 pub use refusal::{Refusal, RefusalKind};
 
 use ctxt::Ctxt;
+use scope::Run;
 
 /// A script (programs §2): statements and a tail.
 pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, script: &Script<S>) -> Typeck {
-    let mut cx = Ctxt::new(decls);
+    let mut cx = Ctxt::new(decls, Run::Script);
     let tail = script.tail.as_deref();
     let value = stmt::check_body(&mut cx, &script.stmts, tail);
     let site = tail.map_or(script.id, Expr::id);
@@ -62,7 +63,7 @@ pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, 
 /// A template (programs §1): text and `{{ }}`, each a call of
 /// `core::display`.
 pub fn check_template<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, template: &Template<S>) -> Typeck {
-    let mut cx = Ctxt::new(decls);
+    let mut cx = Ctxt::new(decls, Run::Template);
     stmt::check_stmts(&mut cx, &template.body);
     decision::solve(&mut cx);
     let built = cx.node(TyKind::String);

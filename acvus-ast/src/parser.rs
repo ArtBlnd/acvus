@@ -480,14 +480,11 @@ where
     /// One piece of a text line, as the append it is (RFC-0071 rule 2).
     fn append_of(&mut self, piece: &Piece) -> Result<Nested<Stmt<S>>, ParseError> {
         match piece {
-            Piece::Text { value, span } => append(
-                Nested::leaf(Expr::Literal {
-                    id: AstId::alloc(),
-                    value: Literal::String(value.clone()),
-                    span: *span,
-                }),
-                *span,
-            ),
+            Piece::Text { value, span } => Ok(Nested::leaf(Stmt::Text {
+                id: AstId::alloc(),
+                value: value.clone(),
+                span: *span,
+            })),
             Piece::Tag {
                 content,
                 span,
@@ -878,7 +875,8 @@ where
         | Stmt::WhileLet { span, .. }
         | Stmt::Anyorder { span, .. }
         | Stmt::FnDecl(FnDecl { span, .. })
-        | Stmt::Append { span, .. } => *span,
+        | Stmt::Append { span, .. }
+        | Stmt::Text { span, .. } => *span,
         Stmt::Expr(expr) => expr.span(),
         Stmt::Error(node) => node.node().span,
     }
@@ -1541,15 +1539,14 @@ mod tests {
         expr
     }
 
-    fn text_of(stmt: &Stmt) -> &str {
-        let Expr::Literal {
-            value: Literal::String(text),
-            ..
-        } = appended(stmt)
-        else {
+    fn text_of<S>(stmt: &Stmt<S>) -> &str
+    where
+        S: std::fmt::Debug,
+    {
+        let Stmt::Text { value, .. } = stmt else {
             panic!("{stmt:?}");
         };
-        text
+        value
     }
 
     fn script(src: &str) -> Script {
@@ -1611,6 +1608,22 @@ mod tests {
         let t = template("hello world\n");
         assert_eq!(t.body.len(), 1);
         assert_eq!(text_of(&t.body[0]), "hello world\n");
+    }
+
+    /// programs §1: text and `{{ }}` are different forms, so a string
+    /// literal in a tag is an `Append`, never `Text`.
+    #[test]
+    fn text_and_a_tag_holding_a_string_are_apart() {
+        let t = template(r#"a {{ "b" }}"#);
+        assert_eq!(t.body.len(), 2);
+        assert_eq!(text_of(&t.body[0]), "a ");
+        assert!(matches!(
+            appended(&t.body[1]),
+            Expr::Literal {
+                value: Literal::String(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2989,18 +3002,7 @@ mod tests {
                 appended(&recovered.tree.body[1]),
                 Expr::Ident { .. }
             ));
-            let Stmt::Append {
-                expr:
-                    Expr::Literal {
-                        value: Literal::String(text),
-                        ..
-                    },
-                ..
-            } = recovered.tree.body.last().expect("the second line")
-            else {
-                panic!("{:?}", recovered.tree.body);
-            };
-            assert_eq!(text, "b\n");
+            assert_eq!(text_of(recovered.tree.body.last().expect("the second line")), "b\n");
         }
 
         #[test]

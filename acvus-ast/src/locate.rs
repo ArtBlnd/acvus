@@ -301,6 +301,7 @@ impl Nodes {
                 self.push(*id, *span, None);
                 self.expr(expr);
             }
+            Stmt::Text { id, span, .. } => self.push(*id, *span, None),
             Stmt::Error(node) => self.error(node),
         }
     }

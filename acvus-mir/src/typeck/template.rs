@@ -9,8 +9,8 @@ use super::expr::check_expr;
 use super::place::Demand;
 use crate::ty::{Mutability, TyKind, TypeArg};
 
-/// `Append`: a text line, or a value formatted by `core::display`
-/// (operators §7), reached through `call`: `display(&T, out: &mut String)`
+/// `Append`, a `{{ }}` tag: a value formatted by `core::display`
+/// (programs §1), reached through `call`: `display(&T, out: &mut String)`
 /// (operators §2).
 pub(super) fn check_append<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, expr: &Expr<S>, span: Span) {
     let value = check_expr(cx, expr, Demand::Lend(Mutability::Shared));

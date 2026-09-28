@@ -1532,3 +1532,24 @@ fn a_mut_reference_captured_shared_is_read_shared() {
     };
     assert_eq!(*mutability, Mutability::Mut);
 }
+
+/// programs §1: a template's text is appended as written, and only a
+/// `{{ }}` reaches `core::display`, so text needs no `display` impl.
+#[test]
+fn a_templates_text_reaches_no_display() {
+    let mut fx = Fixture::new();
+    fx.display(&[TyKind::Int(IntTy::I64)]);
+    let (checked, _) = fx.template("count: {{ 42 }}\n");
+    checked.admitted();
+    assert_eq!(checked.typeck.reached.len(), 1);
+}
+
+/// PARKED(P12): what leaving a template's run means is not stated, so a
+/// `return` there is refused; one inside a lambda leaves the lambda.
+#[test]
+fn a_return_in_a_template_is_refused() {
+    let (checked, _) = Fixture::new().template("% return 1\n");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::ReturnInTemplate]);
+    let (checked, _) = Fixture::new().template("% let f = |x| -> return x\n");
+    checked.admitted();
+}
