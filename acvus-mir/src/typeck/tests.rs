@@ -1,0 +1,807 @@
+//! Each test states the rule its expected result comes from. Programs are
+//! parsed with `acvus-ast`; declarations go through `verify`.
+
+use acvus_ast::{Expr, Script, Stmt, Template};
+use acvus_utils::{Astr, Interner, QualifiedRef};
+
+use super::{Capture, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
+use crate::decl::{Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::ty::{
+    Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
+    TypeArg, Types,
+};
+
+struct Fixture {
+    names: Interner,
+    raw: RawDeclarations,
+}
+
+/// A checked program and the table its types are in.
+struct Checked {
+    typeck: Typeck,
+    types: Types<Concrete>,
+}
+
+impl Checked {
+    fn kind(&self, ty: Ty) -> &TyKind<Concrete> {
+        self.types.kind(ty)
+    }
+
+    fn refusals(&self) -> Vec<&RefusalKind> {
+        self.typeck.refusals.iter().map(|refusal| &refusal.kind).collect()
+    }
+
+    fn admitted(&self) {
+        assert!(self.typeck.refusals.is_empty(), "refused: {:?}", self.typeck.refusals);
+    }
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let names = Interner::new();
+        let core = Core::of(&names);
+        Self {
+            names,
+            raw: RawDeclarations {
+                types: Types::new(),
+                functions: Vec::new(),
+                user_types: Vec::new(),
+                casts: Vec::new(),
+                conversions: Vec::new(),
+                contexts: Vec::new(),
+                inputs: Vec::new(),
+                loop_markers: LoopMarkers::default(),
+                core,
+            },
+        }
+    }
+
+    fn name(&self, name: &str) -> Astr {
+        self.names.intern(name)
+    }
+
+    fn ty(&mut self, kind: TyKind<Poly>) -> TyId<Poly> {
+        self.raw.types.intern(kind)
+    }
+
+    fn int(&mut self, width: IntTy) -> TyId<Poly> {
+        self.ty(TyKind::Int(width))
+    }
+
+    fn var(&mut self, at: u32) -> TyId<Poly> {
+        self.ty(TyKind::Var(at))
+    }
+
+    fn reference(&mut self, mutability: Mutability, target: TyId<Poly>) -> TyId<Poly> {
+        self.ty(TyKind::Ref(mutability, TypeArg::Uniform(target)))
+    }
+
+    fn function(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, effect: EffectTerm<Poly>) -> TyId<Poly> {
+        self.ty(TyKind::Fn {
+            params: params.into(),
+            ret,
+            effect,
+            flows: FlowTerm::Known(Flows::none()),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        })
+    }
+
+    fn pure(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>) -> TyId<Poly> {
+        self.function(params, ret, EffectTerm::Known(crate::ty::Effect::pure()))
+    }
+
+    fn param_names(&self, count: usize) -> Box<[Astr]> {
+        (0..count).map(|at| self.name(&format!("p{at}"))).collect()
+    }
+
+    fn arity(&self, ty: TyId<Poly>) -> usize {
+        match self.raw.types.kind(ty) {
+            TyKind::Fn { params, .. } => params.len(),
+            _ => 0,
+        }
+    }
+
+    /// A plain extern fn `name`, its type variables bounded by `bounds`.
+    fn declare(&mut self, name: &str, ty: TyId<Poly>, bounds: &[TyVarBound]) -> QualifiedRef {
+        let id = QualifiedRef::root(self.name(name));
+        let scheme = Scheme {
+            ty,
+            param_names: self.param_names(self.arity(ty)),
+            bounds: bounds.into(),
+            impls: None,
+            requires: Box::new([]),
+        };
+        self.raw.functions.push((id, scheme));
+        id
+    }
+
+    /// A lang item's generic function with its concrete impls, as
+    /// operators §2's table states its type.
+    fn lang_item(&mut self, item: QualifiedRef, ty: TyId<Poly>, variables: usize, impls: &[TyId<Poly>]) {
+        let concrete = impls
+            .iter()
+            .map(|ty| ImplSig {
+                ty: *ty,
+                param_names: self.param_names(self.arity(*ty)),
+                requires: Box::new([]),
+                facts: Default::default(),
+            })
+            .collect();
+        let scheme = Scheme {
+            ty,
+            param_names: self.param_names(self.arity(ty)),
+            bounds: vec![TyVarBound::Any; variables].into(),
+            impls: Some(Impls { concrete, generic: None }),
+            requires: Box::new([]),
+        };
+        self.raw.functions.push((item, scheme));
+    }
+
+    /// `add<T, O>(&T, &T) -> O`, and its other binary siblings, at the
+    /// widths given, each `(&w, &w) -> w`.
+    fn arithmetic(&mut self, item: QualifiedRef, widths: &[TyKind<Poly>]) {
+        let (t, o) = (self.var(0), self.var(1));
+        let shared_t = self.reference(Mutability::Shared, t);
+        let ty = self.function(&[shared_t, shared_t], o, EffectTerm::Var(0));
+        let impls: Vec<TyId<Poly>> = widths
+            .iter()
+            .map(|kind| {
+                let w = self.ty(kind.clone());
+                let shared = self.reference(Mutability::Shared, w);
+                self.pure(&[shared, shared], w)
+            })
+            .collect();
+        self.lang_item(item, ty, 2, &impls);
+    }
+
+    /// `display<T>(&T, out: &mut String)` at `shown`.
+    fn display(&mut self, shown: &[TyKind<Poly>]) {
+        let t = self.var(0);
+        let shared_t = self.reference(Mutability::Shared, t);
+        let string = self.ty(TyKind::String);
+        let out = self.reference(Mutability::Mut, string);
+        let unit = self.ty(TyKind::Unit);
+        let ty = self.function(&[shared_t, out], unit, EffectTerm::Var(0));
+        let impls: Vec<TyId<Poly>> = shown
+            .iter()
+            .map(|kind| {
+                let w = self.ty(kind.clone());
+                let shared = self.reference(Mutability::Shared, w);
+                self.pure(&[shared, out], unit)
+            })
+            .collect();
+        let item = self.raw.core.display;
+        self.lang_item(item, ty, 1, &impls);
+    }
+
+    fn context(&mut self, name: &str, ty: TyId<Poly>) {
+        let id = QualifiedRef::root(self.name(name));
+        self.raw.contexts.push((id, ty));
+    }
+
+    fn input(&mut self, name: &str, ty: TyId<Poly>) {
+        let name = self.name(name);
+        self.raw.inputs.push((name, ty));
+    }
+
+    fn script(self, source: &str) -> (Checked, Script) {
+        let script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
+        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
+        let mut types = Types::new();
+        let typeck = check_script(&decls, &mut types, &script);
+        (Checked { typeck, types }, script)
+    }
+
+    fn template(self, source: &str) -> (Checked, Template) {
+        let template = acvus_ast::parse_template(&self.names, source).expect("the test's source parses");
+        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
+        let mut types = Types::new();
+        let typeck = check_template(&decls, &mut types, &template);
+        (Checked { typeck, types }, template)
+    }
+}
+
+/// The type of a script's tail.
+fn tail(checked: &Checked, script: &Script) -> Ty {
+    let tail = script.tail.as_ref().expect("the test's script has a tail");
+    checked.typeck.types[&tail.id()]
+}
+
+/// The type of the `let` binding `name`.
+fn binding(checked: &Checked, script: &Script, names: &Interner, name: &str) -> Ty {
+    let name = names.intern(name);
+    script
+        .stmts
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::LetBind { binder, .. } | Stmt::LetUninit { binder, .. } if binder.name == name => {
+                Some(checked.typeck.types[&binder.id])
+            }
+            _ => None,
+        })
+        .expect("the test's script binds the name")
+}
+
+fn is_int(checked: &Checked, ty: Ty, width: IntTy) -> bool {
+    checked.kind(ty) == &TyKind::Int(width)
+}
+
+// Literals (types §5, operators §1)
+
+/// types §5: an unsuffixed integer literal is `i64` where no use decides.
+#[test]
+fn an_unsuffixed_literal_no_use_decides_is_i64() {
+    let (checked, script) = Fixture::new().script("1");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+}
+
+/// A suffixed literal names its own width.
+#[test]
+fn a_suffixed_literal_has_its_width() {
+    let (checked, script) = Fixture::new().script("1u8");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+}
+
+/// types §5: a type variable nothing constrains is `!`; `[]` is `[!; 0]`.
+#[test]
+fn an_empty_list_is_an_array_of_never() {
+    let (checked, script) = Fixture::new().script("[]");
+    checked.admitted();
+    let TyKind::Array(element, LenTerm::Known(0)) = checked.kind(tail(&checked, &script)) else {
+        panic!("not an empty array");
+    };
+    assert_eq!(checked.kind(*element), &TyKind::Never);
+}
+
+// Names (types §6, programs §4)
+
+/// A binding's term is what flows into it; a use of it names the binder.
+#[test]
+fn a_binding_takes_the_value_it_is_let_to() {
+    let mut fx = Fixture::new();
+    let i32_ty = fx.int(IntTy::I32);
+    fx.context("n", i32_ty);
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let x = @n; x");
+    checked.admitted();
+    assert!(is_int(&checked, binding(&checked, &script, &names, "x"), IntTy::I32));
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I32));
+}
+
+/// A name that is no binding, declaration or input is refused.
+#[test]
+fn an_unknown_name_is_refused() {
+    let fx = Fixture::new();
+    let y = fx.name("y");
+    let (checked, _) = fx.script("y");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::UnknownName { name: y }]);
+}
+
+/// programs §4: an input is a value the host passes, at its declared type.
+#[test]
+fn an_input_has_its_declared_type() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("flag", bool_ty);
+    let (checked, script) = fx.script("$flag");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+/// programs §4: the program never assigns an input.
+#[test]
+fn an_input_is_never_assigned() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("flag", bool_ty);
+    let flag = fx.name("flag");
+    let (checked, _) = fx.script("$flag = true; 1");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::InputAssigned { input: flag }]);
+}
+
+/// programs §2: a script has no `fn`.
+#[test]
+fn a_script_has_no_fn() {
+    let (checked, _) = Fixture::new().script("fn f() { 1 } 2");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::FnDeclInScript]);
+}
+
+// Operators (operators §2)
+
+/// operators §2: `+` is a call of `core::add`; the operands' types decide
+/// the impl, and the impl chooses the result.
+#[test]
+fn addition_reaches_the_impl_its_operands_decide() {
+    let mut fx = Fixture::new();
+    let add = fx.raw.core.add;
+    fx.arithmetic(add, &[TyKind::Int(IntTy::U8), TyKind::Int(IntTy::I64)]);
+    let (checked, script) = fx.script("1 + 2");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+    let tail_site = script.tail.as_ref().unwrap().id();
+    let chosen = &checked.typeck.reached[&tail_site];
+    assert_eq!((chosen.declaration, chosen.r#impl), (add, Some(Impl::Concrete(1))));
+}
+
+/// operators §2 with types §5: a literal's width is decided by its use; an
+/// operand of `u8` leaves one impl, and the literal takes `u8` from it.
+#[test]
+fn a_literal_operand_takes_the_width_its_use_decides() {
+    let mut fx = Fixture::new();
+    let add = fx.raw.core.add;
+    fx.arithmetic(add, &[TyKind::Int(IntTy::U8), TyKind::Int(IntTy::I64)]);
+    let u8_ty = fx.int(IntTy::U8);
+    fx.context("b", u8_ty);
+    let (checked, script) = fx.script("@b + 1");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+}
+
+/// operators §2: where no impl answers, the program is refused.
+#[test]
+fn an_operator_no_impl_answers_is_refused() {
+    let mut fx = Fixture::new();
+    let add = fx.raw.core.add;
+    fx.arithmetic(add, &[TyKind::Int(IntTy::I64)]);
+    let (checked, _) = fx.script("true + false");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: add.name }]);
+}
+
+/// operators §2: `&&` is the language's own, on `bool`.
+#[test]
+fn logical_and_is_the_languages_own_on_bool() {
+    let (checked, script) = Fixture::new().script("true && false");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+    assert!(checked.typeck.reached.is_empty());
+    let (checked, _) = Fixture::new().script("true && 1");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(_)]));
+}
+
+// Objects and fields (types §1-2, ownership §4)
+
+/// types §1: an object the program writes is transparent, and a field
+/// read of it is its field's type.
+#[test]
+fn a_written_objects_field_is_read() {
+    let (checked, script) = Fixture::new().script("let o = { a: true, }; o.a");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+/// ownership §4, types §2: a store into a field of a binding declared
+/// without a value joins that field into its object type.
+#[test]
+fn a_store_into_a_field_grows_the_bindings_object() {
+    let fx = Fixture::new();
+    let (x, y) = (fx.name("x"), fx.name("y"));
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let a; a.x = 1; a.y = true; a");
+    checked.admitted();
+    let TyKind::Object(ObjectTy::Structural(fields, ())) = checked.kind(binding(&checked, &script, &names, "a")) else {
+        panic!("not a structural object");
+    };
+    let names: Vec<Astr> = fields.iter().map(|(name, _)| *name).collect();
+    let mut expected = vec![x, y];
+    expected.sort();
+    assert_eq!(names, expected);
+}
+
+/// types §1, context §2: a context's type is opaque, so a field it lacks is
+/// not grown into it.
+#[test]
+fn a_field_an_opaque_object_lacks_is_refused() {
+    let mut fx = Fixture::new();
+    let age = fx.name("age");
+    let i64_ty = fx.int(IntTy::I64);
+    let user = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(age, i64_ty)]), ())));
+    fx.context("user", user);
+    let (checked, _) = fx.script("@user.name");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque]);
+}
+
+// Control flow (control-flow, types §2-4)
+
+/// types §3: the branches of an `if` enter one slot.
+#[test]
+fn branches_enter_one_slot() {
+    let (checked, script) = Fixture::new().script("if true { 1u8 } else { 2 }");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+    let (checked, _) = Fixture::new().script("if true { 1 } else { false }");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(_)]));
+}
+
+/// control-flow, types §4: `return` is `!`, and its value enters the body's
+/// result.
+#[test]
+fn return_is_never_and_enters_the_result() {
+    let (checked, script) = Fixture::new().script("if true { return 1u8; }; 2");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+}
+
+/// control-flow: a range iterates its integers by value.
+#[test]
+fn a_range_iterates_by_value() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("for i in 0..3 { i; } 1");
+    checked.admitted();
+    let Stmt::For { id, binder, .. } = &script.stmts[0] else {
+        panic!("not a for");
+    };
+    assert_eq!(checked.typeck.iteration[id], Iteration::Range);
+    assert!(is_int(&checked, checked.typeck.types[&binder.id], IntTy::I64));
+}
+
+/// control-flow: a reference to an array iterates by reference; an array
+/// by value.
+#[test]
+fn an_array_iterates_by_reference_through_a_reference_and_by_value_itself() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let array = fx.ty(TyKind::Array(i64_ty, LenTerm::Known(3)));
+    fx.context("xs", array);
+    let (checked, script) = fx.script("for x in &@xs { x; } for y in @xs { y; } 1");
+    checked.admitted();
+    let Stmt::For { id, binder, .. } = &script.stmts[0] else {
+        panic!("not a for");
+    };
+    assert_eq!(checked.typeck.iteration[id], Iteration::ByRef(Mutability::Shared));
+    let TyKind::Ref(Mutability::Shared, element) = checked.kind(checked.typeck.types[&binder.id]) else {
+        panic!("not a shared reference");
+    };
+    assert!(is_int(&checked, element.ty(), IntTy::I64));
+    let Stmt::For { id, binder, .. } = &script.stmts[1] else {
+        panic!("not a for");
+    };
+    assert_eq!(checked.typeck.iteration[id], Iteration::ByValue);
+    assert!(is_int(&checked, checked.typeck.types[&binder.id], IntTy::I64));
+}
+
+/// control-flow: nothing else is iterated.
+#[test]
+fn an_integer_is_not_iterated() {
+    let (checked, _) = Fixture::new().script("for x in 1 { x; } 1");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NotIterable]);
+}
+
+/// control-flow: `?` on an `Option` is its payload, and leaves through
+/// `Option`.
+#[test]
+fn try_on_an_option_is_its_payload() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let option = fx.ty(TyKind::Option(i64_ty));
+    fx.context("o", option);
+    let (checked, script) = fx.script("let x = @o?; Some(x)");
+    checked.admitted();
+    let TyKind::Option(payload) = checked.kind(tail(&checked, &script)) else {
+        panic!("not an option");
+    };
+    assert!(is_int(&checked, *payload, IntTy::I64));
+    assert!(matches!(checked.typeck.tries.values().next(), Some(TryExit::Option(_))));
+}
+
+/// control-flow: a `?` whose operand is neither a `Result` nor an `Option`
+/// is refused.
+#[test]
+fn try_on_a_bool_is_refused() {
+    let (checked, _) = Fixture::new().script("let x = true?; 1");
+    assert!(checked.refusals().contains(&&RefusalKind::NotTryable));
+}
+
+// Patterns (patterns §1-4, types §2)
+
+/// patterns §2: a pattern naming a variant grows a transparent enum.
+#[test]
+fn a_pattern_grows_a_transparent_enum() {
+    let fx = Fixture::new();
+    let (red, blue) = (fx.name("Red"), fx.name("Blue"));
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let c = Color::Red; match c { Color::Red => 1, Color::Blue => 2, }");
+    checked.admitted();
+    let TyKind::Enum { variants, .. } = checked.kind(binding(&checked, &script, &names, "c")) else {
+        panic!("not an enum");
+    };
+    let tags: Vec<Astr> = variants.iter().map(|(tag, _)| *tag).collect();
+    let mut expected = vec![red, blue];
+    expected.sort();
+    assert_eq!(tags, expected);
+}
+
+/// patterns §2: an enum not visible there does not grow; a pattern naming
+/// a variant it lacks is refused.
+#[test]
+fn a_pattern_naming_a_variant_an_opaque_enum_lacks_is_refused() {
+    let mut fx = Fixture::new();
+    let color = QualifiedRef::root(fx.name("Color"));
+    let red = fx.name("Red");
+    let declared = fx.ty(TyKind::Enum {
+        name: color,
+        variants: Box::new([(red, None)]),
+        label: (),
+    });
+    fx.context("c", declared);
+    let (checked, _) = fx.script("match @c { Color::Red => 1, Color::Blue => 2, }");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque]);
+}
+
+/// patterns §1: an object pattern binds its fields.
+#[test]
+fn an_object_pattern_binds_fields() {
+    let mut fx = Fixture::new();
+    let name = fx.name("name");
+    let bool_ty = fx.ty(TyKind::Bool);
+    let data = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(name, bool_ty)]), ())));
+    fx.context("data", data);
+    let (checked, script) = fx.script("if let { name, } = @data { name } else { false }");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+/// types §2: `Some(x)` is `core`'s `Option`.
+#[test]
+fn some_is_an_option() {
+    let (checked, script) = Fixture::new().script("Some(true)");
+    checked.admitted();
+    let TyKind::Option(payload) = checked.kind(tail(&checked, &script)) else {
+        panic!("not an option");
+    };
+    assert_eq!(checked.kind(*payload), &TyKind::Bool);
+}
+
+// Calls (types §6-7, extern-fn §5)
+
+/// types §6: a call of a name reaches the declaration its arguments'
+/// types decide.
+#[test]
+fn a_call_reaches_the_overload_its_argument_decides() {
+    let mut fx = Fixture::new();
+    let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    let of_int = fx.pure(&[i64_ty], bool_ty);
+    let of_bool = fx.pure(&[bool_ty], i64_ty);
+    let first = QualifiedRef::qualified(fx.name("a"), fx.name("f"));
+    let second = QualifiedRef::qualified(fx.name("b"), fx.name("f"));
+    for (id, ty) in [(first, of_int), (second, of_bool)] {
+        let scheme = Scheme {
+            ty,
+            param_names: fx.param_names(1),
+            bounds: Box::new([]),
+            impls: None,
+            requires: Box::new([]),
+        };
+        fx.raw.functions.push((id, scheme));
+    }
+    let (checked, script) = fx.script("f(true)");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+    let site = script.tail.as_ref().unwrap().id();
+    assert_eq!(checked.typeck.reached[&site].declaration, second);
+}
+
+/// types §6: several declarations left is a refusal.
+#[test]
+fn a_call_two_declarations_answer_is_refused() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let ty = fx.pure(&[i64_ty], i64_ty);
+    let f = fx.name("f");
+    for namespace in ["a", "b"] {
+        let id = QualifiedRef::qualified(fx.name(namespace), f);
+        let scheme = Scheme {
+            ty,
+            param_names: fx.param_names(1),
+            bounds: Box::new([]),
+            impls: None,
+            requires: Box::new([]),
+        };
+        fx.raw.functions.push((id, scheme));
+    }
+    let (checked, _) = fx.script("f(1)");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::SeveralDeclarations { .. }]));
+}
+
+/// `left | f` is `f(left)`.
+#[test]
+fn a_pipe_calls_its_right_with_its_left() {
+    let mut fx = Fixture::new();
+    let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    let ty = fx.pure(&[i64_ty], bool_ty);
+    fx.declare("positive", ty, &[]);
+    let (checked, script) = fx.script("1 | positive");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+/// operators §2: `.unwrap()` is `core::unwrap`, `unwrap<W, T>(W) -> T` at
+/// `Option<T>`.
+#[test]
+fn unwrap_reaches_the_lang_item() {
+    let mut fx = Fixture::new();
+    let unwrap = fx.raw.core.unwrap;
+    let (w, t) = (fx.var(0), fx.var(1));
+    let generic = fx.function(&[w], t, EffectTerm::Var(0));
+    let option_t = fx.ty(TyKind::Option(t));
+    let at_option = fx.function(&[option_t], t, EffectTerm::Known(crate::ty::Effect::pure()));
+    fx.lang_item(unwrap, generic, 2, &[at_option]);
+    let bool_ty = fx.ty(TyKind::Bool);
+    let option = fx.ty(TyKind::Option(bool_ty));
+    fx.context("o", option);
+    let (checked, script) = fx.script("@o.unwrap()");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+// Lambdas (functions §2-4)
+
+/// functions §2, D27: a lambda's parameters start fresh and are decided by
+/// the slot it enters and its uses; a name from outside is a capture by
+/// reference.
+#[test]
+fn a_lambda_captures_by_reference_and_takes_its_arguments_types() {
+    let fx = Fixture::new();
+    let y = fx.name("y");
+    let (checked, script) = fx.script("let y = true; let f = |x| -> y; f(1u8)");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+    let closure = checked.typeck.closures.values().next().expect("one lambda");
+    assert_eq!(
+        &closure.captures[..],
+        &[Captured {
+            name: y,
+            capture: Capture::Ref(Mutability::Shared)
+        }]
+    );
+    assert_eq!(closure.calls, Calls::Many);
+}
+
+/// functions §4: a lambda may not recurse.
+#[test]
+fn a_lambda_may_not_recurse() {
+    let (checked, _) = Fixture::new().script("let f; f = |x| -> f(x); 1");
+    assert!(checked.refusals().contains(&&RefusalKind::LambdaRecursion));
+}
+
+// Places (operators §3, §6)
+
+/// operators §6: `*r = v` needs a `&mut`.
+#[test]
+fn a_store_through_a_shared_reference_is_refused() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let (checked, _) = fx.script("let r = &@n; *r = 1; 1");
+    assert!(checked.refusals().contains(&&RefusalKind::StoreThroughShared));
+}
+
+/// operators §6: `*r` of a `&T` is a `T`.
+#[test]
+fn a_deref_reads_the_referent() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let (checked, script) = fx.script("let r = &@n; *r");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+}
+
+/// operators §3: `a[i]` of an array is its element.
+#[test]
+fn an_arrays_element_is_indexed() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    fx.context("xs", array);
+    let (checked, script) = fx.script("@xs[0]");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+}
+
+/// operators §3: `a[i]` of another container reaches its `as_slice`.
+#[test]
+fn a_containers_element_is_indexed_through_as_slice() {
+    let mut fx = Fixture::new();
+    let vec_id = QualifiedRef::root(fx.name("Vec"));
+    fx.raw.user_types.push(UserTypeDecl {
+        id: vec_id,
+        type_params: Box::new([TyVarBound::Any]),
+        specializes: Box::new([false]),
+        effect_params: 0,
+        identity_params: 0,
+        lifetimes: 0,
+    });
+    let (c, t) = (fx.var(0), fx.var(1));
+    let (shared_c, slice_t) = (fx.reference(Mutability::Shared, c), fx.ty(TyKind::Slice(t)));
+    let shared_slice_t = fx.reference(Mutability::Shared, slice_t);
+    let generic = fx.function(&[shared_c], shared_slice_t, EffectTerm::Var(0));
+    let e = fx.var(0);
+    let vec_e = fx.ty(TyKind::UserDefined {
+        id: vec_id,
+        type_args: Box::new([TypeArg::Uniform(e)]),
+        effect_args: Box::new([]),
+        identity_args: Box::new([]),
+    });
+    let shared_vec_e = fx.reference(Mutability::Shared, vec_e);
+    let slice_e = fx.ty(TyKind::Slice(e));
+    let shared_slice_e = fx.reference(Mutability::Shared, slice_e);
+    let at_vec = fx.pure(&[shared_vec_e], shared_slice_e);
+    let as_slice = fx.raw.core.as_slice;
+    fx.lang_item(as_slice, generic, 2, &[at_vec]);
+    let bool_ty = fx.ty(TyKind::Bool);
+    let vec_bool = fx.ty(TyKind::UserDefined {
+        id: vec_id,
+        type_args: Box::new([TypeArg::Uniform(bool_ty)]),
+        effect_args: Box::new([]),
+        identity_args: Box::new([]),
+    });
+    fx.context("v", vec_bool);
+    let (checked, script) = fx.script("@v[0]");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+    let Expr::Index { callee_id, .. } = script.tail.as_deref().unwrap() else {
+        panic!("not an index");
+    };
+    assert_eq!(checked.typeck.reached[callee_id].declaration, as_slice);
+}
+
+// Contexts (context §2-3, ownership §5)
+
+/// ownership §5: a run's result has a type with no positions.
+#[test]
+fn a_runs_result_holds_no_loan() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let (checked, _) = fx.script("&@n");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::HoldsLoans]);
+}
+
+/// context §3: a value stored into a context outlives the run, so its type
+/// has no positions.
+#[test]
+fn a_context_of_a_function_type_is_never_stored() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let function = fx.pure(&[i64_ty], i64_ty);
+    fx.context("f", function);
+    let (checked, _) = fx.script("@f = @f; 1");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::HoldsLoans]);
+}
+
+/// context: a context not declared is refused.
+#[test]
+fn an_undeclared_context_is_refused() {
+    let fx = Fixture::new();
+    let x = QualifiedRef::root(fx.name("x"));
+    let (checked, _) = fx.script("@x");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::UnknownContext { context: x }]);
+}
+
+// Templates (programs §1, operators §2)
+
+/// programs §1: `{{ v }}` formats `v` through `core::display`.
+#[test]
+fn an_interpolation_reaches_display() {
+    let mut fx = Fixture::new();
+    fx.display(&[TyKind::Int(IntTy::I64)]);
+    let display = fx.raw.core.display;
+    let (checked, template) = fx.template("{{ 42 }}");
+    checked.admitted();
+    let Stmt::Append { id, .. } = &template.body[0] else {
+        panic!("not an append");
+    };
+    assert_eq!(checked.typeck.reached[id].declaration, display);
+}
+
+/// operators §2: where no `display` impl answers, the template is refused.
+#[test]
+fn an_interpolation_no_display_answers_is_refused() {
+    let mut fx = Fixture::new();
+    fx.display(&[TyKind::Int(IntTy::I64)]);
+    let (checked, _) = fx.template("{{ true }}");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::NoDeclaration { .. }]));
+}

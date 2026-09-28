@@ -32,6 +32,8 @@ mod refusal;
 mod scope;
 mod stmt;
 mod template;
+#[cfg(test)]
+mod tests;
 mod variant;
 mod writeback;
 

@@ -2,10 +2,20 @@
 
 use acvus_ast::{AstId, Expr, Slot, Span};
 
+use super::call::reach_call;
 use super::ctxt::Ctxt;
+use super::decision::{Callee, CoreSig};
+use super::expr::check_expr;
+use super::place::Demand;
+use crate::ty::{Mutability, TyKind, TypeArg};
 
 /// `Append`: a text line, or a value formatted by `core::display`
-/// (operators §7), reached through `call`.
+/// (operators §7), reached through `call`: `display(&T, out: &mut String)`
+/// (operators §2).
 pub(super) fn check_append<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, expr: &Expr<S>, span: Span) {
-    todo!("typeck::template::check_append")
+    let value = check_expr(cx, expr, Demand::Read);
+    let shown = cx.lend(value, Mutability::Shared, expr.span());
+    let string = cx.node(TyKind::String);
+    let out = cx.node(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string)));
+    reach_call(cx, site, Callee::Core(CoreSig::Display), vec![shown, out], span);
 }

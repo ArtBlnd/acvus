@@ -3,24 +3,157 @@
 //! arity. Arguments `enter` parameters (types §7). Every other form that
 //! reaches a declaration comes here.
 
-use acvus_ast::{AstId, Expr, Slot, Span};
+use acvus_ast::{AstId, Expr, RefKind, Slot, Span};
+use acvus_utils::QualifiedRef;
 
 use super::ctxt::Ctxt;
-use super::decision::Callee;
+use super::decision::{self, Callee, Decision};
+use super::effect::note_call_effect;
+use super::expr::check_expr;
+use super::output::{Chosen, Impl, Name};
+use super::place::Demand;
+use super::refusal::{self, RefusalKind};
+use super::variant::check_variant;
 use crate::infer::Term;
+use crate::ty::{Calls, EffectTerm, FlowTerm, Holds, TyKind};
 
 /// `f(args)`.
 pub(super) fn check_call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[Expr<S>], span: Span) -> Term {
-    todo!("typeck::call::check_call")
+    let args: Vec<&Expr<S>> = args.iter().collect();
+    call(cx, site, func, &args, span)
 }
 
 /// `left | func`: `func(left)`.
 pub(super) fn check_pipe<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<S>, func: &Expr<S>, span: Span) -> Term {
-    todo!("typeck::call::check_pipe")
+    call(cx, site, func, &[left], span)
+}
+
+/// A call of `func` with `args`. A bare name bound in scope is a value; a
+/// qualified name is its declaration where one is declared, and otherwise
+/// `Enum::Tag(payload)`, the variant the parser leaves as a call (the
+/// parser's `build_call`); a bare name not in scope reaches among its
+/// declarations.
+fn call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[&Expr<S>], span: Span) -> Term {
+    let Expr::Ident {
+        id,
+        name,
+        ref_kind: RefKind::Value,
+        span: name_span,
+    } = func
+    else {
+        return value_call(cx, func, args);
+    };
+    match name.namespace {
+        None if cx.scope.lookup(name.name).is_some() => value_call(cx, func, args),
+        None if !cx.decls.overloads(name.name).is_empty() => {
+            let args = check_args(cx, args);
+            reach_call(cx, site, Callee::Name(name.name), args, span)
+        }
+        None => {
+            check_args(cx, args);
+            refusal::push(cx, RefusalKind::UnknownName { name: name.name }, *name_span);
+            cx.fresh()
+        }
+        Some(_) if cx.decls.scheme(*name).is_some() => {
+            cx.out.names.insert(*id, Name::Declaration(*name));
+            let args = check_args(cx, args);
+            reach_call(cx, site, Callee::Declaration(*name), args, span)
+        }
+        Some(enum_name) => match args {
+            [] => check_variant::<S>(cx, site, Some(enum_name), name.name, None, span),
+            [payload] => check_variant(cx, site, Some(enum_name), name.name, Some(payload), span),
+            _ => {
+                check_args(cx, args);
+                refusal::push(cx, RefusalKind::VariantArity { tag: name.name }, span);
+                cx.fresh()
+            }
+        },
+    }
+}
+
+fn check_args<S: Slot>(cx: &mut Ctxt<'_>, args: &[&Expr<S>]) -> Vec<Term> {
+    args.iter().map(|arg| check_expr(cx, arg, Demand::Read)).collect()
+}
+
+/// A call of a value: the value is a function of the call's arity
+/// (types §6), its parameters the slots the arguments enter (types §7). The
+/// form joins the value, so a value that is called once or holds loans
+/// keeps that (types §2).
+fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> Term {
+    let callee = check_expr(cx, func, Demand::Read);
+    let values = check_args(cx, args);
+    let params: Vec<Term> = values.iter().map(|_| cx.fresh()).collect();
+    let ret = cx.fresh();
+    let effect = EffectTerm::Var(cx.infer.fresh_effect());
+    let flows = FlowTerm::Var(cx.infer.fresh_flow());
+    let form = cx.held(TyKind::Fn {
+        params: params.clone().into(),
+        ret,
+        effect: effect.clone(),
+        flows,
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+    });
+    cx.join(callee, form, func.span());
+    for ((arg, value), param) in args.iter().zip(values).zip(params) {
+        cx.enter(arg.id(), value, param, arg.span());
+    }
+    note_call_effect(cx, &effect);
+    ret
 }
 
 /// The one path to a declaration: a `Reach` at `site` over `callee` with
-/// argument terms `args`; the result's term.
+/// argument terms `args`; the result's term. The call's effect joins its
+/// body's now, and the reached declaration's joins it when the reach fires
+/// (effects §1).
 pub(super) fn reach_call(cx: &mut Ctxt<'_>, site: AstId, callee: Callee, args: Vec<Term>, span: Span) -> Term {
-    todo!("typeck::call::reach_call")
+    let result = cx.fresh();
+    let effect = EffectTerm::Var(cx.infer.fresh_effect());
+    note_call_effect(cx, &effect);
+    cx.decisions.push(Decision::Reach {
+        site,
+        span,
+        callee,
+        args: args.into(),
+        result,
+        effect: Some(effect),
+    });
+    result
+}
+
+/// A declaration used as a value: its signature at this use. A generic
+/// function is a value only through its generic impl, since no argument
+/// decides among its concrete ones (types §6).
+pub(super) fn declaration_value(cx: &mut Ctxt<'_>, site: AstId, declaration: QualifiedRef, span: Span) -> Term {
+    let scheme = cx
+        .decls
+        .scheme(declaration)
+        .expect("a name reaches only a declared function");
+    let r#impl = match &scheme.impls {
+        None => None,
+        Some(impls) if impls.concrete.is_empty() && impls.generic.is_some() => Some(Impl::Generic),
+        Some(_) => {
+            let kind = RefusalKind::SeveralDeclarations {
+                name: declaration.name,
+                left: Box::new([declaration]),
+            };
+            refusal::push(cx, kind, span);
+            return cx.fresh();
+        }
+    };
+    let instantiated = cx.infer.instantiate(cx.decls, scheme);
+    cx.out.names.insert(site, Name::Declaration(declaration));
+    cx.out.reached.insert(
+        site,
+        Chosen {
+            declaration,
+            r#impl,
+            required: Box::new([]),
+        },
+    );
+    decision::settle_bounded(cx, instantiated.ty, span);
+    for required in instantiated.requirements {
+        decision::push_required(cx, site, span, required);
+    }
+    instantiated.ty
 }

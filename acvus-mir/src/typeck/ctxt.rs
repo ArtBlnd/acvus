@@ -1,8 +1,12 @@
-use super::decision::Decisions;
+use acvus_ast::{AstId, Span};
+
+use super::decision::{Decision, Decisions};
 use super::output::Output;
+use super::refusal;
 use super::scope::Scope;
-use crate::decl::Declarations;
-use crate::infer::Infer;
+use crate::decl::{Declarations, Head, Scheme};
+use crate::infer::{Bound, Closed, Infer, Term};
+use crate::ty::{Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind, TypeArg};
 
 /// The shared state of one checked body (S1): the declarations it reads,
 /// and four things it builds. No rule holds state of its own.
@@ -22,6 +26,130 @@ impl<'d> Ctxt<'d> {
             scope: Scope::new(),
             decisions: Decisions::default(),
             out: Output::default(),
+        }
+    }
+
+    pub fn fresh(&mut self) -> Term {
+        self.infer.fresh(Bound::Any)
+    }
+
+    pub fn node(&mut self, kind: TyKind<InferPhase>) -> Term {
+        self.infer.intern(kind)
+    }
+
+    /// A node the program writes, behind a fresh variable, so that the
+    /// variable is where it grows (D20).
+    pub fn held(&mut self, kind: TyKind<InferPhase>) -> Term {
+        let node = self.infer.intern(kind);
+        let var = self.fresh();
+        self.infer
+            .eq(var, node)
+            .expect("a fresh unbounded variable that no reference targets binds to any node");
+        var
+    }
+
+    pub fn unit(&mut self) -> Term {
+        self.node(TyKind::Unit)
+    }
+
+    pub fn never(&mut self) -> Term {
+        self.node(TyKind::Never)
+    }
+
+    pub fn bool(&mut self) -> Term {
+        self.node(TyKind::Bool)
+    }
+
+    pub fn record(&mut self, site: AstId, term: Term) {
+        self.out.types.insert(site, term);
+    }
+
+    pub fn eq(&mut self, a: Term, b: Term, span: Span) {
+        if let Err(mismatch) = self.infer.eq(a, b) {
+            refusal::mismatch(self, mismatch, span);
+        }
+    }
+
+    pub fn join(&mut self, a: Term, b: Term, span: Span) {
+        if let Err(mismatch) = self.infer.join(a, b) {
+            refusal::mismatch(self, mismatch, span);
+        }
+    }
+
+    /// `value` enters `slot` once `value` is closed (types §3, §7). A value
+    /// already closed at the top of its cast tree can never change, so it
+    /// enters at once.
+    pub fn enter(&mut self, site: AstId, value: Term, slot: Term, span: Span) {
+        super::decision::enter(self, Decision::Enter { site, span, value, slot });
+    }
+
+    /// An integer the language's own operations read (operators §2), or an
+    /// index or a range's end. Its width is a use's to decide, and `i64`
+    /// where none does, as a literal's (types §5).
+    pub fn integer(&mut self, span: Span) -> Term {
+        let term = self.infer.fresh(Bound::Integer {
+            signed: true,
+            among: IntTy::ALL.into(),
+            literal: true,
+        });
+        self.decisions.push(Decision::Settle { span, term });
+        term
+    }
+
+    /// B's closed-head query, against the decisions still pending.
+    pub fn closed(&self, term: Term) -> Option<Closed> {
+        self.infer.closed(self.decls.casts(), &self.decisions, term)
+    }
+
+    /// A declared type that is not a function's (a context's, an input's)
+    /// at this body: every node `Opaque`, and no variable.
+    ///
+    /// NOTE: infer instantiates only a `Scheme`, so the type is wrapped in
+    /// one with no parameters. This stands until infer states an
+    /// instantiation of a bare declared type (question Q2 to the
+    /// coordinator).
+    pub fn declared(&mut self, ty: TyId<Poly>) -> Term {
+        let scheme = Scheme {
+            ty,
+            param_names: Box::new([]),
+            bounds: Box::new([]),
+            impls: None,
+            requires: Box::new([]),
+        };
+        self.infer.instantiate(self.decls, &scheme).ty
+    }
+
+    /// A `&` or `&mut` of a value of term `target`. A value already a
+    /// reference is reborrowed, since a reference's target is never a
+    /// reference (types §4): `&mut` of a `&` is refused.
+    pub fn lend(&mut self, target: Term, mutability: Mutability, span: Span) -> Term {
+        match self.closed(target).map(|closed| closed.head) {
+            Some(Head::Ref(held, _)) => {
+                if !held.reaches(mutability) {
+                    let wanted = self.fresh();
+                    let wanted = self.node(TyKind::Ref(mutability, TypeArg::Uniform(wanted)));
+                    self.eq(target, wanted, span);
+                }
+                match held == mutability {
+                    true => target,
+                    false => {
+                        let inner = self.referent(target);
+                        self.held(TyKind::Ref(mutability, TypeArg::Uniform(inner)))
+                    }
+                }
+            }
+            _ => self.held(TyKind::Ref(mutability, TypeArg::Uniform(target))),
+        }
+    }
+
+    /// The target of a term closed as a reference.
+    ///
+    /// # Panics
+    /// `reference` is not a reference: callers ask `closed` first.
+    pub fn referent(&self, reference: Term) -> Term {
+        match self.infer.types().kind(self.infer.shallow(reference)) {
+            TyKind::Ref(_, target) => target.ty(),
+            other => panic!("referent: a term closed as a reference is a reference, not {other:?}"),
         }
     }
 }

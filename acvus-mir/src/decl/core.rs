@@ -21,6 +21,7 @@ pub struct Core {
     pub as_str: QualifiedRef,
     pub display: QualifiedRef,
     pub clone: QualifiedRef,
+    pub unwrap: QualifiedRef,
     pub tags: Tags,
 }
 
@@ -51,6 +52,7 @@ impl Core {
             as_str: name("as_str"),
             display: name("display"),
             clone: name("clone"),
+            unwrap: name("unwrap"),
             tags: Tags {
                 some: interner.intern("Some"),
                 none: interner.intern("None"),
