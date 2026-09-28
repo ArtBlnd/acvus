@@ -10,7 +10,7 @@ mod op;
 mod rewriter;
 
 pub use aspect::{Aspect, Changes};
-pub use body::{Block, BlockId, Body, BodyId, Module, Stages, Terminator};
+pub use body::{Block, BlockId, Body, BodyId, Inst, Module, OrderUse, Stages, Terminator};
 pub use builder::{Builder, Unsealed};
 pub use op::Op;
 pub use core::StillUsed;

@@ -120,17 +120,18 @@ impl<'m> Rewriter<'m> {
 fn removal_aspects(body: &Body, value: ValueId) -> Vec<Aspect> {
     match body.def_of(value) {
         Def::Inst(block, index) => {
-            let op = &body.blocks[block.index()].insts[index].0;
+            let inst = &body.blocks[block.index()].insts[index];
             let mut aspects = vec![Aspect::Instructions];
-            if op.touches_storage() {
+            if inst.op().touches_storage() {
                 aspects.push(Aspect::Storage);
             }
-            if op.is_on_order_chain() {
+            if inst.is_on_order_chain() {
                 aspects.push(Aspect::OrderTokens);
             }
             aspects
         }
         Def::BlockParam(..) => vec![Aspect::Instructions],
-        Def::Param(_) | Def::Capture(_) | Def::OrderParam => Vec::new(),
+        Def::Slot(_) => vec![Aspect::Storage],
+        Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::UnplacedParam(_) => Vec::new(),
     }
 }

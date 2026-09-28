@@ -4,11 +4,10 @@
 
 use acvus_ast::Literal;
 use acvus_utils::{Astr, QualifiedRef};
-use smallvec::SmallVec;
 
 use super::BodyId;
 use crate::ir::{
-    BinOp, Callee, Checked, Chosen, ExternImpl, IndexBound, IndexMode, OrderEdge, PathSeg, RefTarget,
+    BinOp, Callee, Checked, Chosen, ExternImpl, IndexBound, IndexMode, PathSeg, RefTarget,
     UnaryOp, ValueId,
 };
 use crate::ty::{CastTy, Mutability, Ty};
@@ -17,22 +16,19 @@ use crate::ty::{CastTy, Mutability, Ty};
 pub enum Op {
     // Constants
     Const {
-        dst: ValueId,
         value: Literal,
     },
-    /// Obligation across artifacts: the bytes `dst` names are not in this
+    /// Obligation across artifacts: the bytes the result names are not in this
     /// instruction. `acvus-interpreter`'s preparation copies each distinct
     /// text of a module once and the module's prepared code owns that copy,
     /// so a `&str` constant is the pointer and length of a run whose owner
     /// is the code holding this operation (RFC-0062 rule 2).
     ConstStr {
-        dst: ValueId,
         text: String,
     },
     /// A template's output: the parts joined into one `String`. A part is a
     /// `String`, moved in, or a `&String`, read through.
     StringConcat {
-        dst: ValueId,
         parts: Vec<ValueId>,
     },
     /// A template's append: the bytes of `part` are written onto the end of
@@ -47,19 +43,16 @@ pub enum Op {
     },
     /// Whether the two strings `a` and `b` name hold the same bytes.
     StringEq {
-        dst: ValueId,
         a: ValueId,
         b: ValueId,
     },
     /// A new `String` with the bytes of the one `src` names.
     StringClone {
-        dst: ValueId,
         src: ValueId,
     },
     /// RFC-0020. `leaves` is in `structural::structural_leaves` order over
     /// the type `a` lends, the order `acvus_interpreter::prepare` reads it in.
     StructuralEq {
-        dst: ValueId,
         a: ValueId,
         b: ValueId,
         leaves: Vec<Chosen>,
@@ -68,25 +61,22 @@ pub enum Op {
     /// the type `src` lends, the order `acvus_interpreter::prepare` reads it
     /// in.
     StructuralClone {
-        dst: ValueId,
         src: ValueId,
         leaves: Vec<Chosen>,
     },
 
     // -- Storage (RFC-0018) -----------------------------------------
-    /// A reference to a storage: `dst` is a `&T` or `&mut T` naming the
+    /// A reference to a storage: the result is a `&T` or `&mut T` naming the
     /// value at `path` under `target`. `path: vec![]` is the storage itself,
     /// `vec![a, b]` the field `a.b` of it.
     Ref {
-        dst: ValueId,
         target: RefTarget,
         path: Vec<PathSeg>,
         mutability: Mutability,
     },
-    /// Move the value out of a storage into `dst`; a primitive is copied
+    /// Move the value out of a storage into the result; a primitive is copied
     /// and the storage keeps it. A read of a variable.
     Take {
-        dst: ValueId,
         target: RefTarget,
         path: Vec<PathSeg>,
         /// The take-out of a place lent to a call through a conversion
@@ -104,7 +94,7 @@ pub enum Op {
         restores: bool,
     },
     // -- Slices (RFC-0047) ------------------------------------------
-    /// Take the whole run of `container`'s elements: `dst` is a
+    /// Take the whole run of `container`'s elements: the result is a
     /// `Ref(mutability, Slice(T))` holding the loan `container` holds, and
     /// `impl` is the `core::as_slice` / `core::as_slice_mut` the
     /// container's own evidence settled on.
@@ -114,7 +104,6 @@ pub enum Op {
     /// `code_motion` lifts a shared one out of every loop that does not
     /// write the container, which it may never do for a call.
     AsSlice {
-        dst: ValueId,
         container: ValueId,
         mutability: Mutability,
         r#impl: ExternImpl,
@@ -122,7 +111,6 @@ pub enum Op {
     /// Element `index` of `slice`. The index is `u64`; the one check is
     /// `index < len`, made unless `bound` is `Proven`.
     Index {
-        dst: ValueId,
         slice: ValueId,
         index: ValueId,
         mode: IndexMode,
@@ -137,9 +125,9 @@ pub enum Op {
         bound: IndexBound,
     },
 
-    /// Move a context's whole value out of the page into `dst` (RFC-0025).
+    /// Move a context's whole value out of the page into the result
+    /// (RFC-0025).
     Fetch {
-        dst: ValueId,
         context: QualifiedRef,
     },
     /// Move `value` into the page as the context's whole value (RFC-0025).
@@ -154,14 +142,12 @@ pub enum Op {
     // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
     FieldGet {
-        dst: ValueId,
         object: ValueId,
         field: Astr,
         rest: Vec<Astr>,
     },
     /// Replace a field in a scalar value, producing a new value. 1+ depth.
     FieldSet {
-        dst: ValueId,
         object: ValueId,
         field: Astr,
         rest: Vec<Astr>,
@@ -170,13 +156,11 @@ pub enum Op {
 
     // Arithmetic / logic
     BinOp {
-        dst: ValueId,
         op: BinOp,
         left: ValueId,
         right: ValueId,
     },
     UnaryOp {
-        dst: ValueId,
         op: UnaryOp,
         operand: ValueId,
     },
@@ -212,7 +196,6 @@ pub enum Op {
     /// pure ExternFn performing a declared coercion between user-defined
     /// types (RFC-0023 rule 8), which is a call, not a width.
     Cast {
-        dst: ValueId,
         src: ValueId,
         to: CastTy,
     },
@@ -220,41 +203,35 @@ pub enum Op {
     // Functions
     /// Load a graph-level function into a value (for passing as argument, storing, etc.)
     LoadFunction {
-        dst: ValueId,
         id: QualifiedRef,
     },
     /// Unified function call. Callee can be a direct graph function or an indirect value.
     /// Semantically equivalent to Spawn + TakeEffect (synchronous call = spawn then immediately eval).
-    /// A call whose effect is not Pure carries an `OrderEdge`; a Pure call carries none.
+    /// A call whose effect is not Pure has an order edge on its instruction
+    /// record; a Pure call has none.
     FunctionCall {
-        dst: ValueId,
         callee: Callee,
         callee_ty: Ty,
         args: Vec<ValueId>,
-        order: Option<OrderEdge>,
     },
     /// Issue a call and receive a Handle<T> for its result. The work starts
-    /// here; `order` is the `Order` it waits for when the call is effectful.
-    /// `dst` receives a Handle whose type carries the callee's return type.
+    /// here; its record consumes the `Order` it waits for when the call is
+    /// effectful. The result is a Handle whose type carries the callee's
+    /// return type.
     Spawn {
-        dst: ValueId,
         callee: Callee,
         callee_ty: Ty,
         args: Vec<ValueId>,
-        order: Option<ValueId>,
     },
     /// Evaluate (force) a Handle, consuming it.
-    /// `src` must be a Handle<T>. `dst` receives T; `order` receives the
+    /// `src` must be a Handle<T>. The result is the T; its record yields the
     /// `Order` that follows the call when the call is effectful.
     TakeEffect {
-        dst: ValueId,
         src: ValueId,
-        order: Option<ValueId>,
     },
-    /// Join orders: `dst` follows every order in `orders`. Associative and
+    /// Join orders: the result follows every order in `orders`. Associative and
     /// commutative; a value instruction, not control flow.
     Merge {
-        dst: ValueId,
         orders: Vec<ValueId>,
     },
 
@@ -264,86 +241,71 @@ pub enum Op {
     /// element at a time as each is computed, so an element's value is
     /// live only from its definition to its push.
     ArrayBegin {
-        dst: ValueId,
         capacity: usize,
     },
     /// `array`, an `Array<T, k>`, moved in with `value` moved onto its end:
-    /// `dst` is the `Array<T, k + 1>`. Every value either writes is a whole
+    /// the result is the `Array<T, k + 1>`. Every value either writes is a whole
     /// array of the length its type states.
     ArrayPush {
-        dst: ValueId,
         array: ValueId,
         value: ValueId,
     },
     MakeObject {
-        dst: ValueId,
         fields: Vec<(Astr, ValueId)>,
     },
     MakeTuple {
-        dst: ValueId,
         elements: Vec<ValueId>,
     },
     TupleIndex {
-        dst: ValueId,
         tuple: ValueId,
         index: usize,
     },
 
     // Pattern matching (decision tree)
     TestLiteral {
-        dst: ValueId,
         src: ValueId,
         value: Literal,
     },
     TestObjectKey {
-        dst: ValueId,
         src: ValueId,
         key: Astr,
     },
     ArrayIndex {
-        dst: ValueId,
         array: ValueId,
         index: usize,
     },
     ObjectGet {
-        dst: ValueId,
         object: ValueId,
         key: Astr,
     },
 
     // Closures
     MakeClosure {
-        dst: ValueId,
         body: BodyId,
         captures: Vec<ValueId>,
     },
 
     // Variant (tagged union)
     MakeVariant {
-        dst: ValueId,
         tag: Astr,
         payload: Option<ValueId>,
     },
     TestVariant {
-        dst: ValueId,
         src: ValueId,
         tag: Astr,
     },
     UnwrapVariant {
-        dst: ValueId,
         src: ValueId,
     },
     /// Undefined value - valid to move/copy, UB to read as a concrete value.
     /// Used as initial value for SSA variables that are defined inside loops
     /// (iteration bindings, write-only contexts).
-    Undef {
-        dst: ValueId,
-    },
+    Undef,
 
     /// Drop a value, releasing its resources.
     ///
     /// Inserted by the compiler at the end of a value's live range (last use
-    /// or scope exit). No `dst` - Drop only consumes, never produces.
+    /// or scope exit). Drop only consumes, never produces.
     ///
     /// At runtime, the interpreter calls the Owned vtable's drop function.
     /// Copy types (SBO) have a no-op drop. Boxed types invoke their destructor.
@@ -369,24 +331,24 @@ macro_rules! walk_operands {
             | Op::Fetch { .. }
             | Op::LoadFunction { .. }
             | Op::ArrayBegin { .. }
-            | Op::Undef { .. } => {}
-            Op::StringConcat { parts, .. } => parts.into_iter().for_each(|v| $on(v)),
+            | Op::Undef => {}
+            Op::StringConcat { parts } => parts.into_iter().for_each(|v| $on(v)),
             Op::StringAppend { target, part } => {
                 $on(target);
                 $on(part);
             }
-            Op::StringEq { a, b, .. } | Op::StructuralEq { a, b, .. } => {
+            Op::StringEq { a, b } | Op::StructuralEq { a, b, .. } => {
                 $on(a);
                 $on(b);
             }
-            Op::StringClone { src, .. }
+            Op::StringClone { src }
             | Op::StructuralClone { src, .. }
             | Op::Cast { src, .. }
-            | Op::TakeEffect { src, .. }
+            | Op::TakeEffect { src }
             | Op::TestLiteral { src, .. }
             | Op::TestObjectKey { src, .. }
             | Op::TestVariant { src, .. }
-            | Op::UnwrapVariant { src, .. }
+            | Op::UnwrapVariant { src }
             | Op::Drop { src } => $on(src),
             Op::Ref { target, .. } | Op::Take { target, .. } => on_target(target, $on),
             Op::Assign { target, value, .. } => {
@@ -419,27 +381,17 @@ macro_rules! walk_operands {
                 $on(step);
                 $on(count);
             }
-            Op::FunctionCall { callee, args, order, .. } => {
+            Op::FunctionCall { callee, args, .. } | Op::Spawn { callee, args, .. } => {
                 on_callee(callee, $on);
                 args.into_iter().for_each(|v| $on(v));
-                if let Some(OrderEdge { before, .. }) = order {
-                    $on(before);
-                }
             }
-            Op::Spawn { callee, args, order, .. } => {
-                on_callee(callee, $on);
-                args.into_iter().for_each(|v| $on(v));
-                if let Some(before) = order {
-                    $on(before);
-                }
-            }
-            Op::Merge { orders, .. } => orders.into_iter().for_each(|v| $on(v)),
-            Op::ArrayPush { array, value, .. } => {
+            Op::Merge { orders } => orders.into_iter().for_each(|v| $on(v)),
+            Op::ArrayPush { array, value } => {
                 $on(array);
                 $on(value);
             }
-            Op::MakeObject { fields, .. } => fields.into_iter().for_each(|(_, v)| $on(v)),
-            Op::MakeTuple { elements, .. } => elements.into_iter().for_each(|v| $on(v)),
+            Op::MakeObject { fields } => fields.into_iter().for_each(|(_, v)| $on(v)),
+            Op::MakeTuple { elements } => elements.into_iter().for_each(|v| $on(v)),
             Op::TupleIndex { tuple, .. } => $on(tuple),
             Op::ArrayIndex { array, .. } => $on(array),
             Op::MakeClosure { captures, .. } => captures.into_iter().for_each(|v| $on(v)),
@@ -453,7 +405,8 @@ macro_rules! walk_operands {
 }
 
 impl Op {
-    /// Every value the instruction reads, once per operand.
+    /// Every value the operation reads, once per operand. The order token
+    /// an effectful instruction consumes is on its record, not here.
     pub(super) fn for_each_operand(&self, mut on_use: impl FnMut(ValueId)) {
         let on_use: &mut dyn FnMut(&ValueId) = &mut |v| on_use(*v);
         walk_operands!(self, on_use, &)
@@ -464,9 +417,9 @@ impl Op {
         walk_operands!(self, on_use, &mut)
     }
 
-    /// Every value the instruction defines: its result, and the order token
-    /// an effectful call or a taking yields.
-    pub(super) fn defs(&self) -> SmallVec<[ValueId; 2]> {
+    /// Whether the operation yields a value; the ones that do not only
+    /// write or check.
+    pub fn has_result(&self) -> bool {
         match self {
             Op::StringAppend { .. }
             | Op::Assign { .. }
@@ -474,45 +427,43 @@ impl Op {
             | Op::Commit { .. }
             | Op::Check { .. }
             | Op::CheckSteps { .. }
-            | Op::Drop { .. } => SmallVec::new(),
-            Op::FunctionCall { dst, order, .. } => {
-                std::iter::once(*dst).chain(order.map(|edge| edge.after)).collect()
-            }
-            Op::TakeEffect { dst, order, .. } => std::iter::once(*dst).chain(*order).collect(),
-            Op::Const { dst, .. }
-            | Op::ConstStr { dst, .. }
-            | Op::StringConcat { dst, .. }
-            | Op::StringEq { dst, .. }
-            | Op::StringClone { dst, .. }
-            | Op::StructuralEq { dst, .. }
-            | Op::StructuralClone { dst, .. }
-            | Op::Ref { dst, .. }
-            | Op::Take { dst, .. }
-            | Op::AsSlice { dst, .. }
-            | Op::Index { dst, .. }
-            | Op::Fetch { dst, .. }
-            | Op::FieldGet { dst, .. }
-            | Op::FieldSet { dst, .. }
-            | Op::BinOp { dst, .. }
-            | Op::UnaryOp { dst, .. }
-            | Op::Cast { dst, .. }
-            | Op::LoadFunction { dst, .. }
-            | Op::Spawn { dst, .. }
-            | Op::Merge { dst, .. }
-            | Op::ArrayBegin { dst, .. }
-            | Op::ArrayPush { dst, .. }
-            | Op::MakeObject { dst, .. }
-            | Op::MakeTuple { dst, .. }
-            | Op::TupleIndex { dst, .. }
-            | Op::TestLiteral { dst, .. }
-            | Op::TestObjectKey { dst, .. }
-            | Op::ArrayIndex { dst, .. }
-            | Op::ObjectGet { dst, .. }
-            | Op::MakeClosure { dst, .. }
-            | Op::MakeVariant { dst, .. }
-            | Op::TestVariant { dst, .. }
-            | Op::UnwrapVariant { dst, .. }
-            | Op::Undef { dst } => smallvec::smallvec![*dst],
+            | Op::Drop { .. } => false,
+            Op::Const { .. }
+            | Op::ConstStr { .. }
+            | Op::StringConcat { .. }
+            | Op::StringEq { .. }
+            | Op::StringClone { .. }
+            | Op::StructuralEq { .. }
+            | Op::StructuralClone { .. }
+            | Op::Ref { .. }
+            | Op::Take { .. }
+            | Op::AsSlice { .. }
+            | Op::Index { .. }
+            | Op::Fetch { .. }
+            | Op::FieldGet { .. }
+            | Op::FieldSet { .. }
+            | Op::BinOp { .. }
+            | Op::UnaryOp { .. }
+            | Op::Cast { .. }
+            | Op::LoadFunction { .. }
+            | Op::FunctionCall { .. }
+            | Op::Spawn { .. }
+            | Op::TakeEffect { .. }
+            | Op::Merge { .. }
+            | Op::ArrayBegin { .. }
+            | Op::ArrayPush { .. }
+            | Op::MakeObject { .. }
+            | Op::MakeTuple { .. }
+            | Op::TupleIndex { .. }
+            | Op::TestLiteral { .. }
+            | Op::TestObjectKey { .. }
+            | Op::ArrayIndex { .. }
+            | Op::ObjectGet { .. }
+            | Op::MakeClosure { .. }
+            | Op::MakeVariant { .. }
+            | Op::TestVariant { .. }
+            | Op::UnwrapVariant { .. }
+            | Op::Undef => true,
         }
     }
 
@@ -527,17 +478,6 @@ impl Op {
                 | Op::StringAppend { .. }
                 | Op::Fetch { .. }
                 | Op::Commit { .. }
-        )
-    }
-
-    /// Whether the instruction consumes or yields an order token.
-    pub(super) fn is_on_order_chain(&self) -> bool {
-        matches!(
-            self,
-            Op::FunctionCall { order: Some(_), .. }
-                | Op::Spawn { order: Some(_), .. }
-                | Op::TakeEffect { order: Some(_), .. }
-                | Op::Merge { .. }
         )
     }
 }

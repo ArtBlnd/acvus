@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use super::op::Op;
-use crate::ir::{DebugInfo, ExitTrip, ForSource, SwitchKey, ValueId};
+use crate::ir::{DebugInfo, ExitTrip, ForSource, OrderEdge, SwitchKey, ValueId};
 use crate::ty::{Concrete, Flows, Ty, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -48,7 +48,11 @@ pub(super) enum Def {
     Param(usize),
     Capture(usize),
     OrderParam,
+    Slot(usize),
     BlockParam(BlockId, usize),
+    /// A parameter the Builder adds to a block for the order token, whose
+    /// position is fixed at `seal`, after the caller's parameters.
+    UnplacedParam(BlockId),
     Inst(BlockId, usize),
 }
 
@@ -103,6 +107,7 @@ pub struct Body {
     pub(super) params: Vec<(Astr, ValueId)>,
     pub(super) captures: Vec<(Astr, ValueId)>,
     pub(super) order_param: Option<ValueId>,
+    pub(super) slots: Vec<ValueId>,
     pub(super) values: FxHashMap<ValueId, ValueDef>,
     /// Every value's uses; a value has an entry from its birth.
     pub(super) uses: FxHashMap<ValueId, UseSites>,
@@ -112,8 +117,91 @@ pub struct Body {
 
 pub struct Block {
     pub(super) params: Vec<ValueId>,
-    pub(super) insts: Vec<(Op, Span)>,
+    pub(super) insts: Vec<Inst>,
     pub(super) terminator: Terminator,
+}
+
+/// An instruction: its operation, the value it yields, its place on the
+/// order chain, and its span. The core makes the result and the tokens; no
+/// caller names them.
+#[derive(Debug, Clone)]
+pub struct Inst {
+    pub(super) op: Op,
+    pub(super) result: Option<ValueId>,
+    pub(super) order: Option<OrderUse>,
+    pub(super) span: Span,
+}
+
+/// How an instruction stands on the order chain (effects §3, §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderUse {
+    /// An effectful call: it consumes one token and yields the next.
+    Edge(OrderEdge),
+    /// A split call's start: it consumes the token.
+    Start(ValueId),
+    /// A split call's taking: it yields the token that follows the call.
+    Take(ValueId),
+}
+
+impl OrderUse {
+    pub fn consumed(self) -> Option<ValueId> {
+        match self {
+            OrderUse::Edge(edge) => Some(edge.before),
+            OrderUse::Start(before) => Some(before),
+            OrderUse::Take(_) => None,
+        }
+    }
+
+    pub fn yielded(self) -> Option<ValueId> {
+        match self {
+            OrderUse::Edge(edge) => Some(edge.after),
+            OrderUse::Take(after) => Some(after),
+            OrderUse::Start(_) => None,
+        }
+    }
+}
+
+impl Inst {
+    pub fn op(&self) -> &Op {
+        &self.op
+    }
+    pub fn result(&self) -> Option<ValueId> {
+        self.result
+    }
+    pub fn order(&self) -> Option<OrderUse> {
+        self.order
+    }
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Every value the instruction defines: its result and the token it
+    /// yields.
+    pub(super) fn defs(&self) -> SmallVec<[ValueId; 2]> {
+        self.result.into_iter().chain(self.order.and_then(OrderUse::yielded)).collect()
+    }
+
+    /// Every value the instruction reads: its operation's operands and the
+    /// token it consumes.
+    pub(super) fn operands(&self) -> SmallVec<[ValueId; 4]> {
+        let mut operands = SmallVec::new();
+        self.op.for_each_operand(|value| operands.push(value));
+        operands.extend(self.order.and_then(OrderUse::consumed));
+        operands
+    }
+
+    pub(super) fn for_each_operand_mut(&mut self, mut on_use: impl FnMut(&mut ValueId)) {
+        self.op.for_each_operand_mut(&mut on_use);
+        match &mut self.order {
+            Some(OrderUse::Edge(OrderEdge { before, .. })) | Some(OrderUse::Start(before)) => on_use(before),
+            Some(OrderUse::Take(_)) | None => {}
+        }
+    }
+
+    /// Whether the instruction consumes, yields or joins order tokens.
+    pub(super) fn is_on_order_chain(&self) -> bool {
+        self.order.is_some() || matches!(self.op, Op::Merge { .. })
+    }
 }
 
 /// A loop's stage chain (effects: loop deps): the entry block of each stage,
@@ -358,10 +446,12 @@ impl Module {
     }
 
     /// A Builder for a new body of this module; its `seal` adds the body.
+    /// An `ordered` body, one whose effect is not pure, takes an order
+    /// parameter, which the Builder makes and threads (effects §3).
     ///
     /// Cost: O(1).
-    pub fn build_body(&mut self) -> super::Builder<'_> {
-        super::Builder::new(self)
+    pub fn build_body(&mut self, ordered: bool) -> super::Builder<'_> {
+        super::Builder::new(self, ordered)
     }
 
     /// A Rewriter over one body of this module.
@@ -442,6 +532,10 @@ impl Body {
     pub fn order_param(&self) -> Option<ValueId> {
         self.order_param
     }
+    /// The body's storage slots, which `RefTarget::Var` names.
+    pub fn slots(&self) -> &[ValueId] {
+        &self.slots
+    }
     pub fn debug(&self) -> &DebugInfo {
         &self.debug
     }
@@ -451,7 +545,7 @@ impl Block {
     pub fn params(&self) -> &[ValueId] {
         &self.params
     }
-    pub fn insts(&self) -> &[(Op, Span)] {
+    pub fn insts(&self) -> &[Inst] {
         &self.insts
     }
     pub fn terminator(&self) -> &Terminator {

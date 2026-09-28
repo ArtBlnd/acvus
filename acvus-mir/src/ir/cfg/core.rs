@@ -14,14 +14,13 @@
 //! - A `Diamond`'s join and a `For`'s or `While`'s stages and exit follow
 //!   every retarget and block split.
 
-use acvus_ast::Span;
 use acvus_utils::LocalFactory;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use super::body::{Block, BlockId, Body, Def, Edge, Site, Terminator, UseSites, ValueDef};
+use super::body::{Block, BlockId, Body, Def, Edge, Inst, OrderUse, Site, Terminator, UseSites, ValueDef};
 use super::op::Op;
-use crate::ir::{DebugInfo, ValueId, fn_effect};
+use crate::ir::{DebugInfo, OrderEdge, ValueId, fn_effect};
 use crate::ty::{Concrete, SplitCost, Ty, TyKind, Types};
 
 /// A value that still has uses, removed without a replacement.
@@ -40,6 +39,7 @@ impl Body {
             params: Vec::new(),
             captures: Vec::new(),
             order_param: None,
+            slots: Vec::new(),
             values: FxHashMap::default(),
             uses: FxHashMap::default(),
             value_ids: LocalFactory::new(),
@@ -86,18 +86,20 @@ impl Body {
             .def
     }
 
-    /// Records `op` as the instruction at `index` of `block`: it defines
-    /// its results there and uses its operands there. Cost: O(operands and
-    /// results of `op`).
+    /// Records `inst` as the instruction at `index` of `block`: it defines
+    /// its result and the token it yields there, and uses its operands
+    /// there. Cost: O(its operands).
     ///
     /// # Panics
-    /// A result or an operand of `op` is not a value of this body.
-    pub(super) fn record_inst(&mut self, block: BlockId, index: usize, op: &Op) {
-        for value in op.defs() {
+    /// A value it defines or reads is not a value of this body.
+    pub(super) fn record_inst(&mut self, block: BlockId, index: usize, inst: &Inst) {
+        for value in inst.defs() {
             self.value_def_mut(value).def = Def::Inst(block, index);
         }
         let site = Site::Inst(block, index);
-        op.for_each_operand(|value| self.use_sites_mut(value).add(site, 1));
+        for value in inst.operands() {
+            self.use_sites_mut(value).add(site, 1);
+        }
     }
 
 
@@ -125,8 +127,8 @@ impl Body {
                 Shift::Up => index + 1,
                 Shift::Down => index - 1,
             };
-            let op = &self.blocks[block.index()].insts[index].0;
-            let (defs, operands) = (op.defs(), operands_of(op));
+            let inst = &self.blocks[block.index()].insts[index];
+            let (defs, operands) = (inst.defs(), inst.operands());
             for value in defs {
                 self.value_def_mut(value).def = Def::Inst(block, to);
             }
@@ -137,51 +139,22 @@ impl Body {
         }
     }
 
-    /// Inserts `op` at `index` of `block`; the instructions from `index` on
-    /// move down by one. Every result of `op` is already a value of this
-    /// body and is defined here from now on. Cost: O(operands and results
-    /// of the instructions from `index` on).
-    pub(super) fn insert_inst(&mut self, block: BlockId, index: usize, op: Op, span: Span) {
+    /// Inserts `inst` at `index` of `block`; the instructions from `index`
+    /// on move down by one. Every value it defines is already a value of
+    /// this body and is defined here from now on. Cost: O(operands of the
+    /// instructions from `index` on).
+    pub(super) fn insert_inst(&mut self, block: BlockId, index: usize, inst: Inst) {
         self.shift_insts(block, index, Shift::Up);
-        self.record_inst(block, index, &op);
-        self.blocks[block.index()].insts.insert(index, (op, span));
-    }
-
-    /// Inserts at `index` of `block` the instruction `build` makes from new
-    /// values of `result_tys`, which it defines, and returns those values.
-    /// Cost: O(|result_tys|) and `insert_inst`'s.
-    ///
-    /// # Panics
-    /// The instruction does not define exactly the values made for it.
-    pub(super) fn insert_new_inst(
-        &mut self,
-        types: &Types<Concrete>,
-        block: BlockId,
-        index: usize,
-        result_tys: &[Ty],
-        build: impl FnOnce(&[ValueId]) -> Op,
-        span: Span,
-    ) -> SmallVec<[ValueId; 2]> {
-        let results: SmallVec<[ValueId; 2]> = result_tys
-            .iter()
-            .map(|ty| self.make_value(types, *ty, Def::Inst(block, index)))
-            .collect();
-        let op = build(&results);
-        assert_eq!(
-            op.defs(),
-            results,
-            "an instruction defines exactly the values made for it"
-        );
-        self.insert_inst(block, index, op, span);
-        results
+        self.record_inst(block, index, &inst);
+        self.blocks[block.index()].insts.insert(index, inst);
     }
 
     /// Takes the instruction at `index` of `block` out, with its uses; the
     /// instructions after it move up by one. The values it defined keep a
     /// stale definition: the caller defines them again or drops them.
     /// Cost: O(operands and results of the instructions from `index` on).
-    fn take_inst(&mut self, block: BlockId, index: usize) -> (Op, Span) {
-        for value in operands_of(&self.blocks[block.index()].insts[index].0) {
+    fn take_inst(&mut self, block: BlockId, index: usize) -> Inst {
+        for value in self.blocks[block.index()].insts[index].operands() {
             self.use_sites_mut(value).remove_one(Site::Inst(block, index));
         }
         self.shift_insts(block, index + 1, Shift::Down);
@@ -217,9 +190,7 @@ impl Body {
                 }
             };
             match site {
-                Site::Inst(block, index) => {
-                    self.blocks[block.index()].insts[index].0.for_each_operand_mut(swap)
-                }
+                Site::Inst(block, index) => self.blocks[block.index()].insts[index].for_each_operand_mut(swap),
                 Site::Term(block) => self.blocks[block.index()].terminator.for_each_operand_mut(swap),
             }
             self.use_sites_mut(with).add(site, count);
@@ -249,9 +220,22 @@ impl Body {
                 self.remove_block_param(block, index);
                 Ok(())
             }
+            Def::Slot(index) => {
+                self.refuse_used(value)?;
+                self.slots.remove(index);
+                let later: SmallVec<[ValueId; 4]> = self.slots[index..].iter().copied().collect();
+                for (offset, slot) in later.into_iter().enumerate() {
+                    self.value_def_mut(slot).def = Def::Slot(index + offset);
+                }
+                self.drop_value(value);
+                Ok(())
+            }
             Def::Param(_) | Def::Capture(_) | Def::OrderParam => panic!(
                 "{value:?} is part of the body's interface; the core does not remove it"
             ),
+            Def::UnplacedParam(block) => {
+                panic!("{value:?} is a parameter the Builder has not placed on {block:?} yet")
+            }
         }
     }
 
@@ -264,53 +248,54 @@ impl Body {
 
     fn remove_inst(&mut self, block: BlockId, index: usize, named: ValueId) -> Result<(), StillUsed> {
         self.refuse_used(named)?;
-        let op = &self.blocks[block.index()].insts[index].0;
-        match *op {
-            Op::TakeEffect { dst, src, order } => {
-                self.refuse_used(dst)?;
-                let Def::Inst(spawn_block, spawn_index) = self.def_of(src) else {
-                    panic!("a taking's handle is a spawn's result (effects §6)")
+        let inst = &self.blocks[block.index()].insts[index];
+        if let Some(result) = inst.result {
+            self.refuse_used(result)?;
+        }
+        match (&inst.op, inst.order) {
+            (Op::TakeEffect { src }, order) => {
+                let (src, yielded) = (*src, order.and_then(OrderUse::yielded));
+                let Def::Inst(start_block, start_index) = self.def_of(src) else {
+                    panic!("a taking's handle is a start's result (effects §6)")
                 };
-                let Op::Spawn { order: spawn_order, .. } = self.blocks[spawn_block.index()].insts[spawn_index].0
-                else {
-                    panic!("a taking's handle is a spawn's result (effects §6)")
-                };
-                match (spawn_order, order) {
+                let start = &self.blocks[start_block.index()].insts[start_index];
+                assert!(
+                    matches!(start.op, Op::Spawn { .. }),
+                    "a taking's handle is a start's result (effects §6)"
+                );
+                match (start.order.and_then(OrderUse::consumed), yielded) {
                     (Some(before), Some(after)) => self.replace_all_uses(after, before),
                     (None, None) => {}
                     (Some(_), None) | (None, Some(_)) => {
                         panic!("a split call's start and taking are ordered together (effects §6)")
                     }
                 }
-                self.take_inst(block, index);
-                let spawn_index =
-                    if spawn_block == block && spawn_index > index { spawn_index - 1 } else { spawn_index };
-                let (spawn, _) = self.take_inst(spawn_block, spawn_index);
-                for defined in spawn.defs().into_iter().chain([dst, src]).chain(order) {
+                let taking = self.take_inst(block, index);
+                let start_index =
+                    if start_block == block && start_index > index { start_index - 1 } else { start_index };
+                let start = self.take_inst(start_block, start_index);
+                for defined in start.defs().into_iter().chain(taking.defs()) {
                     self.drop_value(defined);
                 }
-                Ok(())
             }
-            Op::FunctionCall { dst, order: Some(edge), .. } => {
-                self.refuse_used(dst)?;
+            (_, Some(OrderUse::Edge(edge))) => {
                 self.replace_all_uses(edge.after, edge.before);
-                self.take_inst(block, index);
-                self.drop_value(dst);
-                self.drop_value(edge.after);
-                Ok(())
-            }
-            _ => {
-                let defs = op.defs();
-                for defined in &defs {
-                    self.refuse_used(*defined)?;
-                }
-                self.take_inst(block, index);
-                for defined in defs {
+                let removed = self.take_inst(block, index);
+                for defined in removed.defs() {
                     self.drop_value(defined);
                 }
-                Ok(())
+            }
+            (_, Some(OrderUse::Start(_) | OrderUse::Take(_))) => {
+                panic!("a split call's start goes only with its taking (effects §6)")
+            }
+            (_, None) => {
+                let removed = self.take_inst(block, index);
+                for defined in removed.defs() {
+                    self.drop_value(defined);
+                }
             }
         }
+        Ok(())
     }
 
     fn remove_block_param(&mut self, block: BlockId, index: usize) {
@@ -339,6 +324,67 @@ impl Body {
             self.value_def_mut(param).def = Def::BlockParam(block, index + offset);
         }
         self.drop_value(removed);
+    }
+
+    /// Places the Builder's parameter `param` last on `block`, and passes
+    /// each value of `incoming` on the edge it names by source block and
+    /// edge position. Cost: O(|incoming| and the named terminators' edges).
+    ///
+    /// # Panics
+    /// A named edge is a loop's edge into its body, which carries no
+    /// arguments.
+    pub(super) fn place_param(&mut self, block: BlockId, param: ValueId, incoming: &[(BlockId, usize, ValueId)]) {
+        let index = self.blocks[block.index()].params.len();
+        self.blocks[block.index()].params.push(param);
+        self.value_def_mut(param).def = Def::BlockParam(block, index);
+        for (from, position, value) in incoming {
+            let mut edge_at = 0;
+            self.blocks[from.index()].terminator.for_each_edge_mut(|_, _, args| {
+                if edge_at == *position {
+                    let Some(args) = args else {
+                        panic!("{block:?} is a loop body entered from {from:?}; it takes no parameter of the Builder's")
+                    };
+                    args.push(*value);
+                }
+                edge_at += 1;
+            });
+            self.use_sites_mut(*value).add(Site::Term(*from), 1);
+        }
+    }
+
+    /// Removes every parameter of `params` whose arguments, other than the
+    /// parameter itself, are one value: its uses become that value, until
+    /// no such parameter is left (Braun et al. 2013, trivial phis). Cost:
+    /// O(|params| · (the body's edges + uses)) per round, at most |params|
+    /// rounds.
+    pub(super) fn remove_trivial_params(&mut self, params: &[ValueId]) {
+        loop {
+            let mut removed_any = false;
+            for param in params {
+                let Some(ValueDef { def: Def::BlockParam(block, index), .. }) = self.values.get(param).copied() else {
+                    continue;
+                };
+                let mut incoming: SmallVec<[ValueId; 2]> = SmallVec::new();
+                for pred in &self.blocks {
+                    for edge in pred.terminator.edges().iter().filter(|edge| edge.to == block) {
+                        let arg = edge.args[index - edge.supplied];
+                        if arg != *param && !incoming.contains(&arg) {
+                            incoming.push(arg);
+                        }
+                    }
+                }
+                let [only] = incoming[..] else {
+                    continue;
+                };
+                self.replace_all_uses(*param, only);
+                self.remove_value(*param)
+                    .expect("a parameter whose uses were all replaced has none");
+                removed_any = true;
+            }
+            if !removed_any {
+                return;
+            }
+        }
     }
 
     /// Appends `block` to the body. Cost: O(1).
@@ -388,11 +434,11 @@ impl Body {
         assert!(at <= head.insts.len(), "{block:?} has no position {at}");
         let insts = head.insts.split_off(at);
         let terminator = std::mem::replace(&mut head.terminator, Terminator::Jump { to: tail_id, args: Vec::new() });
-        for (offset, (op, _)) in insts.iter().enumerate() {
-            for value in op.defs() {
+        for (offset, inst) in insts.iter().enumerate() {
+            for value in inst.defs() {
                 self.value_def_mut(value).def = Def::Inst(tail_id, offset);
             }
-            for value in operands_of(op) {
+            for value in inst.operands() {
                 self.use_sites_mut(value)
                     .move_site(Site::Inst(block, at + offset), Site::Inst(tail_id, offset));
             }
@@ -435,9 +481,11 @@ impl Body {
     }
 
     /// The call `call` is the result of becomes a `Spawn` and its
-    /// `TakeEffect` at its place (effects §6): the start takes the call's
-    /// operands and its order token, and the taking defines `call` and the
-    /// token the call yielded. Cost: O(the block's instructions after it).
+    /// `TakeEffect` at its place (effects §6): the start reads the call's
+    /// operands and consumes its order token, and the taking defines `call`
+    /// and yields the token the call yielded. Splitting is a property of the
+    /// callee type's effect, so an indirect callee splits as a named one
+    /// does. Cost: O(the block's instructions after it).
     ///
     /// # Panics
     /// `call` is not the result of a `FunctionCall`, or the callee's type
@@ -446,10 +494,9 @@ impl Body {
         let Def::Inst(block, index) = self.def_of(call) else {
             panic!("{call:?} is not the result of a call")
         };
-        let Op::FunctionCall { dst, callee_ty, .. } = &self.blocks[block.index()].insts[index].0 else {
+        let Op::FunctionCall { callee_ty, .. } = &self.blocks[block.index()].insts[index].op else {
             panic!("{call:?} is not the result of a call")
         };
-        assert_eq!(*dst, call, "{call:?} is not the result of a call");
         let TyKind::Fn { ret, .. } = types.kind(*callee_ty) else {
             panic!("a call's callee type is a function type")
         };
@@ -460,27 +507,30 @@ impl Body {
             "{call:?}'s callee does not state that it may be split (effects §6)"
         );
         let handle_ty = types.intern(TyKind::Handle(ret));
-        let (op, span) = self.take_inst(block, index);
-        let Op::FunctionCall { dst, callee, callee_ty, args, order } = op else {
+        let Inst { op, order, span, .. } = self.take_inst(block, index);
+        let Op::FunctionCall { callee, callee_ty, args } = op else {
             panic!("the instruction read above is a call")
         };
-        let handle = self.insert_new_inst(
-            types,
-            block,
-            index,
-            &[handle_ty],
-            |made| Op::Spawn { dst: made[0], callee, callee_ty, args, order: order.map(|edge| edge.before) },
+        let edge = order.map(|order| match order {
+            OrderUse::Edge(edge) => edge,
+            OrderUse::Start(_) | OrderUse::Take(_) => panic!("a call's order is an edge"),
+        });
+        let handle = self.make_value(types, handle_ty, Def::Inst(block, index));
+        let start = Inst {
+            op: Op::Spawn { callee, callee_ty, args },
+            result: Some(handle),
+            order: edge.map(|OrderEdge { before, .. }| OrderUse::Start(before)),
             span,
-        )[0];
-        let taking = Op::TakeEffect { dst, src: handle, order: order.map(|edge| edge.after) };
-        self.insert_inst(block, index + 1, taking, span);
+        };
+        let taking = Inst {
+            op: Op::TakeEffect { src: handle },
+            result: Some(call),
+            order: edge.map(|OrderEdge { after, .. }| OrderUse::Take(after)),
+            span,
+        };
+        self.insert_inst(block, index, start);
+        self.insert_inst(block, index + 1, taking);
     }
-}
-
-fn operands_of(op: &Op) -> SmallVec<[ValueId; 4]> {
-    let mut operands = SmallVec::new();
-    op.for_each_operand(|value| operands.push(value));
-    operands
 }
 
 #[derive(Clone, Copy)]
