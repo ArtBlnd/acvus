@@ -6,16 +6,23 @@
 //! term of one head under `join` where the label allows growth, or under
 //! `enter` along the cast tree. Knowledge only grows (types §6).
 
+mod bound;
+mod cells;
 mod closed;
 mod freeze;
 mod relate;
 mod scheme;
+#[cfg(test)]
+mod tests;
 
 use crate::decl::TyVarBound;
+use crate::flows::FlowTerm;
 use crate::ty::{
-    EffectTerm, EffectVarId, FlowVarId, IdentityId, IdentityVarId, Infer as InferPhase, IntTy, LenVarId, ReprVarId, TyId,
-    TyKind, TyVarId, Types,
+    EffectTerm, EffectVarId, FlowVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId,
+    ReprVarId, TyId, TyKind, TyVarId, Types,
 };
+
+use cells::{Cells, MarkTerm};
 
 pub use closed::{Closed, OpenSources};
 pub use freeze::{FreezeMemo, Unsettled};
@@ -54,11 +61,19 @@ pub enum Mark {
 pub struct Infer {
     types: Types<InferPhase>,
     ty_vars: Vec<VarState>,
-    effect_vars: Vec<Option<EffectTerm<InferPhase>>>,
-    len_vars: Vec<Option<usize>>,
-    identity_vars: Vec<Option<IdentityId>>,
-    repr_vars: Vec<Option<Mark>>,
-    flow_vars: Vec<Option<crate::flows::Flows>>,
+    effect_vars: Cells<EffectTerm<InferPhase>>,
+    len_vars: Cells<LenTerm<InferPhase>>,
+    identity_vars: Cells<IdentityTerm<InferPhase>>,
+    repr_vars: Cells<MarkTerm>,
+    flow_vars: Cells<FlowTerm<InferPhase>>,
+}
+
+/// Where a term's chain of bound variables ends: at an unbound variable,
+/// or at a node, reached through `holder`, the last variable on the way.
+#[derive(Debug, Clone, Copy)]
+enum End {
+    Unbound(TyVarId, Term),
+    Node { holder: Option<(TyVarId, Term)>, node: Term },
 }
 
 impl Infer {
@@ -66,11 +81,11 @@ impl Infer {
         Self {
             types: Types::new(),
             ty_vars: Vec::new(),
-            effect_vars: Vec::new(),
-            len_vars: Vec::new(),
-            identity_vars: Vec::new(),
-            repr_vars: Vec::new(),
-            flow_vars: Vec::new(),
+            effect_vars: Cells::new(),
+            len_vars: Cells::new(),
+            identity_vars: Cells::new(),
+            repr_vars: Cells::new(),
+            flow_vars: Cells::new(),
         }
     }
 
@@ -92,35 +107,23 @@ impl Infer {
     }
 
     pub fn fresh_effect(&mut self) -> EffectVarId {
-        let var = EffectVarId(u32::try_from(self.effect_vars.len()).expect("Infer::fresh_effect: u32::MAX variables"));
-        self.effect_vars.push(None);
-        var
+        self.effect_vars.fresh("Infer::fresh_effect: u32::MAX variables")
     }
 
     pub fn fresh_len(&mut self) -> LenVarId {
-        let var = LenVarId(u32::try_from(self.len_vars.len()).expect("Infer::fresh_len: u32::MAX variables"));
-        self.len_vars.push(None);
-        var
+        self.len_vars.fresh("Infer::fresh_len: u32::MAX variables")
     }
 
     pub fn fresh_identity(&mut self) -> IdentityVarId {
-        let var = IdentityVarId(
-            u32::try_from(self.identity_vars.len()).expect("Infer::fresh_identity: u32::MAX variables"),
-        );
-        self.identity_vars.push(None);
-        var
+        self.identity_vars.fresh("Infer::fresh_identity: u32::MAX variables")
     }
 
     pub fn fresh_repr(&mut self) -> ReprVarId {
-        let var = ReprVarId(u32::try_from(self.repr_vars.len()).expect("Infer::fresh_repr: u32::MAX variables"));
-        self.repr_vars.push(None);
-        var
+        self.repr_vars.fresh("Infer::fresh_repr: u32::MAX variables")
     }
 
     pub fn fresh_flow(&mut self) -> FlowVarId {
-        let var = FlowVarId(u32::try_from(self.flow_vars.len()).expect("Infer::fresh_flow: u32::MAX variables"));
-        self.flow_vars.push(None);
-        var
+        self.flow_vars.fresh("Infer::fresh_flow: u32::MAX variables")
     }
 
     /// `ty` with every bound variable at its root followed; a term whose
@@ -133,6 +136,21 @@ impl Infer {
             at = *to;
         }
         at
+    }
+
+    fn end(&self, term: Term) -> End {
+        let mut at = term;
+        let mut holder = None;
+        while let TyKind::Var(var) = self.types.kind(at) {
+            match &self.ty_vars[var.0 as usize] {
+                VarState::Unbound(_) => return End::Unbound(*var, at),
+                VarState::Bound(to) => {
+                    holder = Some((*var, at));
+                    at = *to;
+                }
+            }
+        }
+        End::Node { holder, node: at }
     }
 
     /// The unbound variables, with their bounds: what defaults read at a
@@ -148,8 +166,20 @@ impl Infer {
     }
 
     /// A declaration's bound as a variable's (`scheme`).
-    pub(crate) fn bound_of(&mut self, _bound: &TyVarBound) -> Bound {
-        todo!("infer::Infer::bound_of: instantiate a declared bound's shapes")
+    pub(crate) fn bound_of(&mut self, bound: &TyVarBound) -> Bound {
+        match bound {
+            TyVarBound::Any => Bound::Any,
+            TyVarBound::Settled => Bound::Settled,
+            TyVarBound::Integer { signed, among } => Bound::Integer {
+                signed: *signed,
+                among: among.clone(),
+            },
+            TyVarBound::OneOf(shapes) => todo!(
+                "stop: a OneOf bound's {} shapes are TyId<Poly> in the declarations' table, which bound_of \
+                 cannot read, and a shape may name the scheme's own variables, which bound_of cannot map",
+                shapes.len()
+            ),
+        }
     }
 }
 
