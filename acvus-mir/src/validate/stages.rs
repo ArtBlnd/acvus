@@ -109,14 +109,37 @@ mod tests {
     use crate::analysis::inst_info;
     use crate::analysis::loop_deps::{LoopDeps, Order, Token};
     use crate::cfg::{BlockIdx, Terminator};
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::{BinOp, DebugInfo, ExitTrip, ForSource, Inst, Overflow, Stages, ValueId};
-    use crate::ty::{Task, Ty};
+    use crate::ty::{Concrete, IntTy, Ty, TyKind, Types};
     use acvus_ast::Literal;
-    use acvus_utils::{LocalFactory, LocalIdOps};
+    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
+    }
+
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    fn test_laws() -> LawTable {
+        LawTable::of(&empty_declarations(&Interner::new()))
+    }
+
+    fn test_decls() -> Declarations {
+        empty_declarations(&Interner::new())
     }
 
     const AT: usize = 0;
@@ -230,9 +253,12 @@ mod tests {
             },
         ];
         edit(&mut insts);
-        let mut val_types: FxHashMap<ValueId, Ty> = (0..=COND_2).map(|n| (v(n), Ty::I64)).collect();
-        val_types.insert(v(COND), Ty::Bool);
-        val_types.insert(v(COND_2), Ty::Bool);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let bool_ty = types.intern(TyKind::Bool);
+        let mut val_types: FxHashMap<ValueId, Ty> = (0..=COND_2).map(|n| (v(n), i64_ty)).collect();
+        val_types.insert(v(COND), bool_ty);
+        val_types.insert(v(COND_2), bool_ty);
         let mut factory = LocalFactory::<ValueId>::new();
         for _ in 0..=COND_2 {
             factory.next();
@@ -257,8 +283,9 @@ mod tests {
                 label_count: 9,
             },
             closures: FxHashMap::default(),
-            ret: Ty::I64,
+            ret: i64_ty,
             flows: crate::flows::Flows::Every,
+            types,
         }
     }
 
@@ -317,7 +344,11 @@ mod tests {
     }
 
     fn refusals(module: &MirModule) -> Vec<ValidationErrorKind> {
-        check(module, &LawTable::default()).into_iter().map(|error| error.kind).collect()
+        let decls = empty_declarations(&Interner::new());
+        check(module, &decls, &LawTable::of(&decls))
+            .into_iter()
+            .map(|error| error.kind)
+            .collect()
     }
 
     struct OnlyLoop {
@@ -331,7 +362,8 @@ mod tests {
             .map(BlockIdx)
             .find(|at| matches!(cfg.blocks[at.0].terminator, Terminator::For { .. }))
             .expect("the body holds one `For`");
-        let deps = LoopDeps::of(&cfg, &LawTable::default(), header).expect("the chain's shape holds");
+        let deps = LoopDeps::of(&cfg, &module.types, &test_decls(), &test_laws(), header)
+            .expect("the chain's shape holds");
         OnlyLoop { cfg, deps }
     }
 
@@ -341,7 +373,7 @@ mod tests {
         assert!(refusals(&module).is_empty(), "{:?}", refusals(&module));
         let OnlyLoop { cfg, deps } = only_loop(&module);
         assert!(deps.is_free(0));
-        let judged = deps.judge(&cfg, &LawTable::default());
+        let judged = deps.judge(&cfg, &module.types, &test_decls(), &test_laws());
         let orders: Vec<Ordered> = deps
             .cycles
             .iter()
@@ -497,7 +529,7 @@ mod tests {
         assert!(refusals(&module).is_empty(), "{:?}", refusals(&module));
         let OnlyLoop { cfg, deps } = only_loop(&module);
         assert!(!deps.is_free(0));
-        let judged = deps.judge(&cfg, &LawTable::default());
+        let judged = deps.judge(&cfg, &module.types, &test_decls(), &test_laws());
         let control = deps
             .cycles
             .iter()
@@ -547,7 +579,7 @@ mod tests {
         let module = body(|insts| leave_from(insts, S_JOIN, COND, LEAVE, STAY));
         assert!(refusals(&module).is_empty(), "{:?}", refusals(&module));
         let OnlyLoop { cfg, deps } = only_loop(&module);
-        let judged = deps.judge(&cfg, &LawTable::default());
+        let judged = deps.judge(&cfg, &module.types, &test_decls(), &test_laws());
         let in_stage: Vec<Ordered> = deps
             .cycles
             .iter()

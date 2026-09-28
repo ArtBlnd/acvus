@@ -215,7 +215,7 @@ mod tests {
     use super::*;
     use crate::cfg;
     use crate::ir::{DebugInfo, Inst, MirBody, ValueId};
-    use crate::ty::Ty;
+    use crate::ty::{Concrete, IntTy, Ty, TyKind, Types};
     use acvus_ast::Span;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
@@ -228,6 +228,12 @@ mod tests {
     }
     fn inst(kind: InstKind) -> Inst {
         Inst { span: span(), kind }
+    }
+
+    /// A type value these tests do not read: DSE reads `InstKind::Commit`
+    /// and `InstKind::Fetch` alone, never a value's type.
+    fn i64_ty() -> Ty {
+        Types::<Concrete>::new().intern(TyKind::Int(IntTy::I64))
     }
 
     fn make_body(insts: Vec<InstKind>, val_types: FxHashMap<ValueId, Ty>) -> MirBody {
@@ -275,8 +281,8 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::I64);
-        val_types.insert(v(1), Ty::I64);
+        val_types.insert(v(0), i64_ty());
+        val_types.insert(v(1), i64_ty());
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -305,8 +311,8 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::I64);
-        val_types.insert(v(1), Ty::I64);
+        val_types.insert(v(0), i64_ty());
+        val_types.insert(v(1), i64_ty());
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -333,8 +339,8 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::I64);
-        val_types.insert(v(1), Ty::I64);
+        val_types.insert(v(0), i64_ty());
+        val_types.insert(v(1), i64_ty());
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -361,15 +367,15 @@ mod tests {
         let ctx = QualifiedRef::root(i.intern("x"));
         let f = QualifiedRef::root(i.intern("f"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::I64);
-        val_types.insert(v(1), Ty::I64);
+        val_types.insert(v(0), i64_ty());
+        val_types.insert(v(1), i64_ty());
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: crate::ir::Callee::Direct(f),
-                    callee_ty: Ty::error(),
+                    callee_ty: i64_ty(),
                     args: vec![],
                     order: None,
                 },
@@ -396,8 +402,8 @@ mod tests {
         let i = Interner::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::I64);
-        val_types.insert(v(1), Ty::I64);
+        val_types.insert(v(0), i64_ty());
+        val_types.insert(v(1), i64_ty());
         let body = make_body(
             vec![
                 commit(ctx, v(0)),
@@ -421,7 +427,7 @@ mod tests {
     #[test]
     fn no_context_stores_noop() {
         let mut val_types = FxHashMap::default();
-        val_types.insert(v(0), Ty::I64);
+        val_types.insert(v(0), i64_ty());
 
         let body = make_body(
             vec![

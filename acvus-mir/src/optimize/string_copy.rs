@@ -213,12 +213,35 @@ fn edges_mut(t: &mut Terminator) -> Vec<(crate::ir::Label, Vec<&mut ValueId>)> {
 mod tests {
     use super::*;
     use crate::cfg::promote;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::{DebugInfo, Label, MirBody};
+    use crate::ty::Ty;
     use acvus_ast::Literal;
-    use acvus_utils::{LocalFactory, LocalIdOps};
+    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
+    }
+
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    /// `run` at an empty `Declarations`, over `types`.
+    fn run_test(cfg: &mut CfgBody, types: &Types<Concrete>) {
+        let interner = Interner::new();
+        let decls = empty_declarations(&interner);
+        run(cfg, types, &decls);
     }
 
     fn body(insts: Vec<InstKind>, types: Vec<(ValueId, Ty)>) -> CfgBody {
@@ -255,6 +278,8 @@ mod tests {
 
     #[test]
     fn a_string_used_twice_is_copied_once() {
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
         let mut cfg = body(
             vec![
                 InstKind::Const {
@@ -270,9 +295,9 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(1), Ty::String), (v(2), Ty::String)],
+            vec![(v(1), string_ty), (v(2), string_ty)],
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(clones(&cfg), 1);
         let InstKind::StringConcat { parts, .. } = &cfg.blocks[0].insts[2].kind else {
             panic!("the concat stays third, after the copy");
@@ -282,6 +307,8 @@ mod tests {
 
     #[test]
     fn a_string_used_twice_in_one_instruction_is_copied_for_each_but_the_last() {
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
         let mut cfg = body(
             vec![
                 InstKind::Const {
@@ -297,9 +324,9 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(1), Ty::String), (v(2), Ty::String)],
+            vec![(v(1), string_ty), (v(2), string_ty)],
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(clones(&cfg), 1);
         let InstKind::StringConcat { parts, .. } = &cfg.blocks[0].insts[2].kind else {
             panic!("the concat stays third");
@@ -310,6 +337,8 @@ mod tests {
 
     #[test]
     fn a_jump_argument_alive_only_as_the_successor_parameter_is_not_copied() {
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
         let mut cfg = body(
             vec![
                 InstKind::Const {
@@ -329,9 +358,9 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(1), Ty::String), (v(2), Ty::String)],
+            vec![(v(1), string_ty), (v(2), string_ty)],
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(clones(&cfg), 0);
     }
 
@@ -339,6 +368,9 @@ mod tests {
     /// edge is taken, so no path uses it twice.
     #[test]
     fn an_argument_read_by_name_only_past_another_edge_is_not_copied() {
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
+        let bool_ty = types.intern(TyKind::Bool);
         let mut cfg = body(
             vec![
                 InstKind::Const {
@@ -373,14 +405,16 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(1), Ty::String), (v(2), Ty::String), (v(3), Ty::Bool)],
+            vec![(v(1), string_ty), (v(2), string_ty), (v(3), bool_ty)],
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(clones(&cfg), 0);
     }
 
     #[test]
     fn a_string_used_once_is_not_copied() {
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
         let mut cfg = body(
             vec![
                 InstKind::Const {
@@ -392,9 +426,9 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(1), Ty::String)],
+            vec![(v(1), string_ty)],
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(clones(&cfg), 0);
     }
 }

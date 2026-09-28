@@ -2114,7 +2114,7 @@ fn write_level(effect: &Effect, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::{ObjectTy, Ty};
+    use crate::ty::{Concrete, IntTy, ObjectTy, Ty, TyKind, Types};
     use acvus_utils::Interner;
 
     fn compile_and_dump_ctx(
@@ -2149,7 +2149,9 @@ mod tests {
     #[test]
     fn print_if_block() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(interner.intern("n"), Ty::I64)]);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let context = FxHashMap::from_iter([(interner.intern("n"), i64_ty)]);
         let out = compile_and_dump_ctx("% if @n == 1\nmatched\n% end\n", &context, &interner);
         assert!(!out.contains("iter_init"), "{out}");
         assert!(!out.contains("iter_next"), "{out}");
@@ -2159,13 +2161,12 @@ mod tests {
     #[test]
     fn print_object_field() {
         let interner = Interner::new();
-        let context = FxHashMap::from_iter([(
-            interner.intern("user"),
-            Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-                (interner.intern("n"), Ty::I64),
-                (interner.intern("age"), Ty::I64),
-            ]))),
-        )]);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let mut fields = vec![(interner.intern("n"), i64_ty), (interner.intern("age"), i64_ty)];
+        fields.sort_by_key(|(name, _)| *name);
+        let user_ty = types.intern(TyKind::Object(ObjectTy::Structural(fields.into_boxed_slice(), ())));
+        let context = FxHashMap::from_iter([(interner.intern("user"), user_ty)]);
         let out = compile_and_dump_ctx("% let x = @user.age", &context, &interner);
         assert!(out.contains(".age"), "{out}");
     }
