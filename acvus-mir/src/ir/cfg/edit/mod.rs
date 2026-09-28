@@ -43,6 +43,15 @@ pub struct InstRef {
     index: usize,
 }
 
+impl InstRef {
+    pub fn block(self) -> BlockId {
+        self.block
+    }
+    pub fn index(self) -> usize {
+        self.index
+    }
+}
+
 /// Where an instruction is inserted or moved to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {

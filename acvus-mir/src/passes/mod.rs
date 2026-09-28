@@ -10,5 +10,6 @@
 
 pub mod analysis;
 pub mod domain;
+pub mod edit_facts;
 pub mod optimize;
 pub mod pipeline;
