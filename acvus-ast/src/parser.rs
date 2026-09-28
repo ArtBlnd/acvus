@@ -2631,6 +2631,52 @@ mod tests {
         }
     }
 
+    /// The binary operator at the root of `source`, and its two operands'
+    /// operators where they are binary.
+    fn binary_shape(source: &str) -> (BinOp, Option<BinOp>, Option<BinOp>) {
+        let interner = Interner::new();
+        let parsed = parse_expr(&interner, source).expect(source);
+        let Expr::BinaryOp { op, left, right, .. } = parsed else {
+            panic!("{source} parsed as {parsed:?}");
+        };
+        let op_of = |expr: &Expr| match expr {
+            Expr::BinaryOp { op, .. } => Some(*op),
+            _ => None,
+        };
+        (op, op_of(&left), op_of(&right))
+    }
+
+    /// operators §2: `^`, `&`, `<<` and `>>` are binary operators, and
+    /// they bind as Rust's do: the shifts looser than `+`, `&` looser than
+    /// the shifts, `^` looser than `&`, and all of them tighter than a
+    /// comparison.
+    #[test]
+    fn the_bitwise_operators_bind_as_rusts() {
+        assert_eq!(binary_shape("a ^ b"), (BinOp::Xor, None, None));
+        assert_eq!(binary_shape("a & b"), (BinOp::BitAnd, None, None));
+        assert_eq!(binary_shape("a << b"), (BinOp::Shl, None, None));
+        assert_eq!(binary_shape("a >> b"), (BinOp::Shr, None, None));
+        assert_eq!(binary_shape("a << b + c"), (BinOp::Shl, None, Some(BinOp::Add)));
+        assert_eq!(binary_shape("a & b >> c"), (BinOp::BitAnd, None, Some(BinOp::Shr)));
+        assert_eq!(binary_shape("a ^ b & c"), (BinOp::Xor, None, Some(BinOp::BitAnd)));
+        assert_eq!(binary_shape("a & b ^ c"), (BinOp::Xor, Some(BinOp::BitAnd), None));
+        assert_eq!(binary_shape("a ^ b == c"), (BinOp::Eq, Some(BinOp::Xor), None));
+        assert_eq!(binary_shape("a ^ b ^ c"), (BinOp::Xor, Some(BinOp::Xor), None));
+    }
+
+    /// A `&` before an operand is still a borrow, and `a & &b` is `&` of a
+    /// borrow.
+    #[test]
+    fn a_prefix_ampersand_is_still_a_borrow() {
+        let interner = Interner::new();
+        assert!(matches!(parse_expr(&interner, "&a"), Ok(Expr::Borrow { .. })));
+        let parsed = parse_expr(&interner, "a & &b").expect("a & &b");
+        let Expr::BinaryOp { op: BinOp::BitAnd, right, .. } = parsed else {
+            panic!("a & &b parsed as {parsed:?}");
+        };
+        assert!(matches!(*right, Expr::Borrow { .. }));
+    }
+
     #[test]
     fn a_minus_after_a_value_is_subtraction() {
         let interner = Interner::new();
@@ -2885,7 +2931,7 @@ mod tests {
             };
             assert_eq!(value.span, Span::new(8, 9));
 
-            let recovered = recovered_script("let a = # ^;");
+            let recovered = recovered_script("let a = # ~;");
             assert_eq!(
                 recovered
                     .errors
@@ -2894,7 +2940,7 @@ mod tests {
                     .collect::<Vec<_>>(),
                 vec![
                     ParseErrorKind::UnexpectedCharacter('#'),
-                    ParseErrorKind::UnexpectedCharacter('^'),
+                    ParseErrorKind::UnexpectedCharacter('~'),
                 ]
             );
         }

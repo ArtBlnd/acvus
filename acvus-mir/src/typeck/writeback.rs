@@ -5,7 +5,7 @@ use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{Chosen, Closure, Comparing, Comparison, Conversion, Impl, Typeck};
+use super::output::{Chosen, Closure, Comparing, Comparison, Conversion, Entered, Typeck};
 use crate::decl::{Base, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
@@ -283,12 +283,48 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
             record(site, vec![Conversion { via: conversion.via, to }]);
         }
     }
+    let mut climbed = Vec::new();
     for entered in std::mem::take(&mut cx.out.entered) {
-        if let Some(steps) = climb(cx, types, memo, entered.value, entered.slot) {
-            record(entered.site, steps);
+        if let Some(steps) = climb(cx, types, memo, entered) {
+            climbed.push((entered.site, steps));
         }
     }
+    // A view step's requirements are reaches of their own, fired now that
+    // every type they read is known.
+    super::decision::solve(cx);
+    for (site, steps) in climbed {
+        let steps = steps
+            .into_iter()
+            .map(|Step { via, to }| {
+                let via = match via {
+                    StepVia::Cast(chosen) => chosen,
+                    StepVia::View(node) => cx
+                        .out
+                        .reached
+                        .remove(&node)
+                        .expect("a view step is recorded in `reached` at its node"),
+                };
+                Conversion { via, to }
+            })
+            .collect();
+        record(site, steps);
+    }
     out
+}
+
+/// One step up the cast tree, before a view step's requirements are
+/// reached.
+struct Step {
+    via: StepVia,
+    to: Ty,
+}
+
+enum StepVia {
+    /// A declared cast, through a function that has no impls.
+    Cast(Chosen),
+    /// A view, whose impl and requirements are recorded in `reached` at
+    /// this node.
+    View(AstId),
 }
 
 /// The steps up the cast tree from `value`'s head to `slot`'s, each with
@@ -297,7 +333,8 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
 /// # Panics
 /// With no refusal made, the slot's head is not up the tree from the
 /// value's: `enter` folded the value into it, so it is.
-fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, value: Term, slot: Term) -> Option<Vec<Conversion<Ty>>> {
+fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, entered: Entered) -> Option<Vec<Step>> {
+    let Entered { span, value, slot, .. } = entered;
     let (Some(mut at), Some(to)) = (cx.closed(value), cx.closed(slot)) else {
         return None;
     };
@@ -314,7 +351,7 @@ fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, 
             return None;
         };
         let rule = step.rule().clone();
-        let r#impl = step.view_impl().map(Impl::Concrete);
+        let view_impl = step.view_impl();
         let reached = match super::decision::poly_head(cx.decls.types(), rule.to) == Some(to.head) {
             true => slot,
             false => {
@@ -332,12 +369,19 @@ fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, 
                 above
             }
         };
-        let via = Chosen {
-            declaration: rule.via,
-            r#impl,
-            required: Box::new([]),
+        let via = match view_impl {
+            Some(view) => {
+                let node = AstId::alloc();
+                super::decision::reach_view_step(cx, node, span, rule.via, view, at.term, reached);
+                StepVia::View(node)
+            }
+            None => StepVia::Cast(Chosen {
+                declaration: rule.via,
+                r#impl: None,
+                required: Box::new([]),
+            }),
         };
-        steps.push(Conversion {
+        steps.push(Step {
             via,
             to: freeze(cx, types, memo, reached)?,
         });

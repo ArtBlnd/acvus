@@ -138,6 +138,10 @@ pub enum Token {
     FatArrow,
     #[token("..")]
     DotDot,
+    #[token("<<")]
+    Shl,
+    #[token(">>")]
+    Shr,
 
     // -- Single-char operators --
     #[token("+")]
@@ -150,6 +154,8 @@ pub enum Token {
     Slash,
     #[token("%")]
     Percent,
+    #[token("^")]
+    Caret,
     #[token("!")]
     Bang,
     #[token("?")]
@@ -255,6 +261,9 @@ impl Token {
             | Token::Star
             | Token::Slash
             | Token::Percent
+            | Token::Caret
+            | Token::Shl
+            | Token::Shr
             | Token::Bang
             | Token::Question
             | Token::Amp
@@ -322,6 +331,9 @@ impl fmt::Display for Token {
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
             Token::Percent => write!(f, "%"),
+            Token::Caret => write!(f, "^"),
+            Token::Shl => write!(f, "<<"),
+            Token::Shr => write!(f, ">>"),
             Token::Bang => write!(f, "!"),
             Token::Question => write!(f, "?"),
             Token::AndAnd => write!(f, "&&"),

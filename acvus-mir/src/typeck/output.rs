@@ -2,7 +2,7 @@
 //! `Output` is built while checking, at terms; `Typeck` is the frozen form
 //! `writeback` alone makes.
 
-use acvus_ast::AstId;
+use acvus_ast::{AstId, Span};
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
@@ -107,6 +107,7 @@ pub(super) enum Comparing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Entered {
     pub site: AstId,
+    pub span: Span,
     pub value: Term,
     pub slot: Term,
 }

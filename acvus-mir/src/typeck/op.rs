@@ -6,7 +6,7 @@ use acvus_ast::{AstId, BinOp, Expr, Slot, Span, UnaryOp};
 
 use super::call::{reach_call, reach_in};
 use super::ctxt::Ctxt;
-use super::decision::{Callee, CoreSig, Decision};
+use super::decision::{Callee, CoreSig, Decision, Domain};
 use super::output::Comparing;
 use super::expr::check_expr;
 use super::place::{self, Demand};
@@ -56,24 +56,26 @@ pub(super) fn check_binary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<
         }
         BinOp::Xor => {
             cx.eq(lhs, rhs, span);
-            let operand = Decision::BoolOrInteger { span, operand: lhs };
-            super::decision::decide(cx, operand);
+            operand(cx, lhs, Domain::BoolOrInteger, span);
             lhs
         }
         BinOp::BitAnd | BinOp::BitOr => {
-            let integer = cx.integer(span);
-            cx.eq(lhs, integer, left.span());
-            cx.eq(rhs, integer, right.span());
-            integer
+            cx.eq(lhs, rhs, span);
+            operand(cx, lhs, Domain::Integer, span);
+            lhs
         }
         BinOp::Shl | BinOp::Shr => {
-            let shifted = cx.integer(left.span());
-            cx.eq(lhs, shifted, left.span());
-            let by = cx.integer(right.span());
-            cx.eq(rhs, by, right.span());
-            shifted
+            operand(cx, lhs, Domain::Integer, left.span());
+            operand(cx, rhs, Domain::Integer, right.span());
+            lhs
         }
     }
+}
+
+/// An operand of the language's own operator, decided in `domain` once
+/// its type is known (operators §2).
+fn operand(cx: &mut Ctxt<'_>, operand: Term, domain: Domain, span: Span) {
+    super::decision::decide(cx, Decision::Operand { span, operand, domain });
 }
 
 struct Operands<'e, S> {
@@ -152,20 +154,27 @@ pub(super) fn fire_compare(
     }
 }
 
-/// `^` fired on its operands' one type (operators §2): a `bool` or an
-/// integer. A `!` operand is never read.
-pub(super) fn fire_bool_or_integer(cx: &mut Ctxt<'_>, span: Span, operand: Closed) {
-    match operand.head {
-        Head::Base(Base::Bool | Base::Int(_) | Base::Never) => {}
-        Head::Base(_) | Head::Ref(..) => refusal::push(cx, RefusalKind::NotBoolOrInteger, span),
+/// An operand of the language's own operator fired on its type
+/// (operators §2): refused outside `domain`. A `!` operand is never read.
+pub(super) fn fire_operand(cx: &mut Ctxt<'_>, span: Span, operand: Closed, domain: Domain) {
+    let admitted = match operand.head {
+        Head::Base(Base::Never) => true,
+        Head::Base(Base::Bool) => domain != Domain::Integer,
+        Head::Base(Base::Int(_)) => domain != Domain::Bool,
+        Head::Base(_) | Head::Ref(..) => false,
+    };
+    if !admitted {
+        let kind = match domain {
+            Domain::Bool => RefusalKind::NotBool,
+            Domain::Integer => RefusalKind::NotInteger,
+            Domain::BoolOrInteger => RefusalKind::NotBoolOrInteger,
+        };
+        refusal::push(cx, kind, span);
     }
 }
 
-/// `-x`, `!x`. `*r` is `place::check_deref`.
-///
-/// NOTE: operators §2 lists `!` on `bool` alone, where Rust also has it on
-/// the integers. Which the language means is not settled yet, so its
-/// operand is not constrained here.
+/// `-x`, `!x`, which is on `bool` alone (operators §2). `*r` is
+/// `place::check_deref`.
 pub(super) fn check_unary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, op: UnaryOp, operand: &Expr<S>, span: Span) -> Term {
     match op {
         UnaryOp::Neg => {
@@ -173,7 +182,11 @@ pub(super) fn check_unary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, op: UnaryOp, 
             let arg = cx.lend(value, Mutability::Shared, operand.span());
             reach_call(cx, site, Callee::Core(CoreSig::Neg), vec![(operand.id(), arg)], span)
         }
-        UnaryOp::Not => check_expr(cx, operand, Demand::Read),
+        UnaryOp::Not => {
+            let value = check_expr(cx, operand, Demand::Read);
+            self::operand(cx, value, Domain::Bool, operand.span());
+            value
+        }
         UnaryOp::Deref => place::check_deref(cx, site, operand, span),
     }
 }

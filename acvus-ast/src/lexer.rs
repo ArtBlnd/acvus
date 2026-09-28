@@ -306,6 +306,9 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::Star
         | Token::Slash
         | Token::Percent
+        | Token::Caret
+        | Token::Shl
+        | Token::Shr
         | Token::Bang
         | Token::Amp
         | Token::Lt

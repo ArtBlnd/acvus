@@ -54,6 +54,17 @@ pub(super) enum CoreSig {
     Unwrap,
 }
 
+/// The types one of the language's own operators takes (operators §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Domain {
+    /// `!`.
+    Bool,
+    /// `&`, `|`, `<<`, `>>`.
+    Integer,
+    /// `^`.
+    BoolOrInteger,
+}
+
 /// What a reach decides among.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Callee {
@@ -143,9 +154,9 @@ pub(super) enum Decision {
     /// term `last`: `block` is `!` where `last` is, and `()` otherwise
     /// (control-flow).
     BlockEnd { span: Span, last: Term, block: Term },
-    /// `^` on its operands' one type, which is a `bool` or an integer
-    /// (operators §2).
-    BoolOrInteger { span: Span, operand: Term },
+    /// An operand of one of the language's own operators, whose type is
+    /// in the operator's domain (operators §2).
+    Operand { span: Span, operand: Term, domain: Domain },
     /// `==` or an ordering at `node`: part by part for a structural type,
     /// through `core::eq` or `core::cmp` otherwise (operators §4).
     /// `body` is the effect of the body the comparison is in.
@@ -173,7 +184,7 @@ impl Decision {
             Decision::BlockEnd { block, .. } => vec![*block],
             Decision::Destructure { shape, .. } => shape.bindings(),
             Decision::Compare { .. }
-            | Decision::BoolOrInteger { .. }
+            | Decision::Operand { .. }
             | Decision::Cast { .. }
             | Decision::Settle { .. }
             | Decision::HoldsNoLoans { .. }
@@ -201,7 +212,7 @@ impl Decision {
                 terms.push(*scrutinee);
                 terms
             }
-            Decision::Compare { operand, .. } | Decision::BoolOrInteger { operand, .. } => vec![*operand],
+            Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => vec![*operand],
             Decision::Settle { term, .. }
             | Decision::HoldsNoLoans { term, .. }
             | Decision::MovedCapture { term, .. }
@@ -291,7 +302,7 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Index { container, .. } => Some(*container),
         Decision::Deref { reference, .. } => Some(*reference),
         Decision::Destructure { scrutinee, .. } => Some(*scrutinee),
-        Decision::Compare { operand, .. } | Decision::BoolOrInteger { operand, .. } => Some(*operand),
+        Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => Some(*operand),
         Decision::BlockEnd { last, .. } => Some(*last),
         Decision::Iterate { head, .. } => Some(*head),
         Decision::Try { operand, .. } => Some(*operand),
@@ -526,11 +537,11 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             super::stmt::fire_block_end(cx, span, closed, block);
             Ok(())
         }
-        Decision::BoolOrInteger { span, operand } => {
+        Decision::Operand { span, operand, domain } => {
             let Some(closed) = closed_for(cx, operand, reading) else {
-                return Err(Decision::BoolOrInteger { span, operand });
+                return Err(Decision::Operand { span, operand, domain });
             };
-            super::op::fire_bool_or_integer(cx, span, closed);
+            super::op::fire_operand(cx, span, closed, domain);
             Ok(())
         }
         Decision::MovesOut { lambda, span, term } => {
@@ -567,6 +578,7 @@ fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: T
     match cx.infer.enter(cx.decls, value, slot) {
         Ok(Entered::Folded) => cx.out.entered.push(super::output::Entered {
             site,
+            span,
             value: value.term,
             slot,
         }),
@@ -1067,6 +1079,49 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
     }
 }
 
+/// A view step (operators §5) from `from` up to `to` at `node`: the view's
+/// concrete impl `at` of `via`, instantiated with `from` its parameter and
+/// `to` its result, and each of its requirements a reach of its own
+/// (extern-fn §6), as a reached call's are. What it chose is recorded in
+/// `reached` at `node`.
+///
+/// # Panics
+/// `via` names no declaration: a view step's `via` is the view whose
+/// impl it is, which the compiler builds (`Core::generic_functions`).
+pub(super) fn reach_view_step(cx: &mut Ctxt<'_>, node: AstId, span: Span, via: QualifiedRef, at: usize, from: Term, to: Term) {
+    let scheme = cx
+        .decls
+        .scheme(via)
+        .expect("a view step's `via` is a lang item the compiler builds");
+    let sig = &scheme.impls.as_ref().expect("a view step is an impl of its view").concrete[at];
+    let offer = Offer {
+        declaration: via,
+        r#impl: Some(Impl::Concrete(at)),
+        ty: sig.ty,
+    };
+    let Instantiated { ty, requirements } = instantiate(cx, offer, span);
+    let TyKind::Fn { params, ret, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
+        panic!("an instantiated view impl is a function type (NotAFunction)");
+    };
+    let [param] = &params[..] else {
+        panic!("a view impl in the tree takes one parameter, as the compiler builds each view (operators §2)");
+    };
+    cx.eq(*param, from, span);
+    cx.eq(ret, to, span);
+    cx.out.reached.insert(
+        node,
+        Chosen {
+            declaration: via,
+            r#impl: Some(Impl::Concrete(at)),
+            required: Box::new([]),
+        },
+    );
+    settle_bounded(cx, ty, span);
+    for required in requirements {
+        push_required(cx, node, span, required);
+    }
+}
+
 /// A requirement a reached declaration states, as a reach of its own over
 /// the required generic function's impls, by the pattern's parameters
 /// (extern-fn §6).
@@ -1317,7 +1372,7 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::Index { span, .. }
         | Decision::Deref { span, .. }
         | Decision::Compare { span, .. }
-        | Decision::BoolOrInteger { span, .. }
+        | Decision::Operand { span, .. }
         | Decision::BlockEnd { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
         Decision::Destructure { shape, .. } => refusal::push(cx, RefusalKind::Undecided, shape.span()),
     }

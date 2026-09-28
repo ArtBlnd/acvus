@@ -359,6 +359,9 @@ pub enum Terminal {
     Star,
     Slash,
     Percent,
+    Caret,
+    Shl,
+    Shr,
     Bang,
     Question,
     AndAnd,
@@ -446,7 +449,7 @@ const LITERALS: [Terminal; 7] = [
 ];
 
 impl Terminal {
-    pub const ALL: [Terminal; 68] = [
+    pub const ALL: [Terminal; 71] = [
         Terminal::Int,
         Terminal::IntOf,
         Terminal::Char,
@@ -485,6 +488,9 @@ impl Terminal {
         Terminal::Star,
         Terminal::Slash,
         Terminal::Percent,
+        Terminal::Caret,
+        Terminal::Shl,
+        Terminal::Shr,
         Terminal::Bang,
         Terminal::Question,
         Terminal::AndAnd,
@@ -557,6 +563,9 @@ impl Terminal {
             Token::Star => Terminal::Star,
             Token::Slash => Terminal::Slash,
             Token::Percent => Terminal::Percent,
+            Token::Caret => Terminal::Caret,
+            Token::Shl => Terminal::Shl,
+            Token::Shr => Terminal::Shr,
             Token::Bang => Terminal::Bang,
             Token::Question => Terminal::Question,
             Token::AndAnd => Terminal::AndAnd,
@@ -634,6 +643,9 @@ impl Terminal {
             Terminal::Star => "*",
             Terminal::Slash => "/",
             Terminal::Percent => "%",
+            Terminal::Caret => "^",
+            Terminal::Shl => "<<",
+            Terminal::Shr => ">>",
             Terminal::Bang => "!",
             Terminal::Question => "?",
             Terminal::AndAnd => "&&",
@@ -773,6 +785,9 @@ mod tests {
             Token::Star,
             Token::Slash,
             Token::Percent,
+            Token::Caret,
+            Token::Shl,
+            Token::Shr,
             Token::Bang,
             Token::Question,
             Token::AndAnd,

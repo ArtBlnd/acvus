@@ -53,6 +53,10 @@ pub enum RefusalKind {
     /// `^` on a value that is neither a `bool` nor an integer
     /// (operators §2).
     NotBoolOrInteger,
+    /// `!` on a value that is no `bool` (operators §2).
+    NotBool,
+    /// `&`, `|`, `<<` or `>>` on a value that is no integer (operators §2).
+    NotInteger,
     /// `as` from a type Rust does not cast to `to` (operators §5); `from`
     /// is `None` where the source is no number, `bool` or `char`.
     CastNotAdmitted { from: Option<CastTy>, to: CastTy },

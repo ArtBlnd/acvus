@@ -58,6 +58,9 @@ extern {
         "*" => Token::Star,
         "/" => Token::Slash,
         "%" => Token::Percent,
+        "^" => Token::Caret,
+        "<<" => Token::Shl,
+        ">>" => Token::Shr,
         "!" => Token::Bang,
         "?" => Token::Question,
         "&&" => Token::AndAnd,
@@ -449,12 +452,31 @@ AndExpr<Lead>: Nested<Expr<S>> = {
 
 // Comparison: ==, !=, <, >, <=, >=
 CompExpr<Lead>: Nested<Expr<S>> = {
-    <l:@L> <left:CompExpr<Lead>> "==" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Eq, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> "!=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Neq, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> "<" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lt, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> ">" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gt, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> "<=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lte, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> ">=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gte, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "==" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Eq, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "!=" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Neq, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "<" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lt, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> ">" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gt, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "<=" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lte, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> ">=" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gte, right, Span::new(l, r)),
+    BitXorExpr<Lead>,
+};
+
+// The bitwise operators bind as Rust's do: `^` looser than `&`, `&` looser
+// than the shifts, and the shifts looser than `+` and `-`. The binary `|`
+// is not among them, since `|` is the pipe.
+BitXorExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:BitXorExpr<Lead>> "^" <right:BitAndExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Xor, right, Span::new(l, r)),
+    BitAndExpr<Lead>,
+};
+
+BitAndExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:BitAndExpr<Lead>> "&" <right:ShiftExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::BitAnd, right, Span::new(l, r)),
+    ShiftExpr<Lead>,
+};
+
+ShiftExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:ShiftExpr<Lead>> "<<" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Shl, right, Span::new(l, r)),
+    <l:@L> <left:ShiftExpr<Lead>> ">>" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Shr, right, Span::new(l, r)),
     AddExpr<Lead>,
 };
 

@@ -1,7 +1,7 @@
 //! Each test states the rule its expected result comes from. Programs are
 //! parsed with `acvus-ast`; declarations go through `verify`.
 
-use acvus_ast::{BinOp, ElseBranch, Expr, Script, Stmt, Template};
+use acvus_ast::{ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{Capture, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
@@ -229,17 +229,6 @@ impl Fixture {
 
     fn script(self, source: &str) -> (Checked, Script) {
         let script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
-        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
-        let mut types = Types::new();
-        let typeck = check_script(&decls, &mut types, &script);
-        (Checked { typeck, types }, script)
-    }
-
-    /// A script parsed from `source`, then rewritten by `edit` before it is
-    /// checked: a form the parser does not write yet is built so.
-    fn script_edited(self, source: &str, edit: impl FnOnce(&mut Script)) -> (Checked, Script) {
-        let mut script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
-        edit(&mut script);
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
         let typeck = check_script(&decls, &mut types, &script);
@@ -1105,28 +1094,45 @@ fn a_term_linked_to_a_pending_slot_waits_for_it() {
     assert_eq!(checked.typeck.reached[&site].declaration, wide);
 }
 
-/// `left + right` of a script's tail rewritten to `left ^ right`, which the
-/// parser does not write yet.
-fn xor_tail(script: &mut Script) {
-    let Some(Expr::BinaryOp { op, .. }) = script.tail.as_deref_mut() else {
-        panic!("the test's tail is a binary operator");
-    };
-    *op = BinOp::Xor;
-}
-
 /// operators §2: `^` is the language's own on `bool` and the integers,
 /// and on no other type.
 #[test]
 fn xor_is_the_languages_own_on_bool_and_the_integers() {
-    let (checked, script) = Fixture::new().script_edited("true + false", xor_tail);
+    let (checked, script) = Fixture::new().script("true ^ false");
     checked.admitted();
     assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
     assert!(checked.typeck.reached.is_empty());
-    let (checked, script) = Fixture::new().script_edited("1u8 + 2", xor_tail);
+    let (checked, script) = Fixture::new().script("1u8 ^ 2");
     checked.admitted();
     assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
-    let (checked, _) = Fixture::new().script_edited("(1, 2) + (3, 4)", xor_tail);
+    let (checked, _) = Fixture::new().script("(1, 2) ^ (3, 4)");
     assert_eq!(checked.refusals(), vec![&RefusalKind::NotBoolOrInteger]);
+}
+
+/// operators §2: `!` is the language's own on `bool` alone.
+#[test]
+fn not_is_the_languages_own_on_bool() {
+    let (checked, script) = Fixture::new().script("!true");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+    let (checked, _) = Fixture::new().script("!1u8");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NotBool]);
+}
+
+/// operators §2: `&`, `<<` and `>>` are the language's own on the
+/// integers alone; a shift's two operands may differ in width.
+#[test]
+fn bitwise_and_and_shifts_are_the_languages_own_on_the_integers() {
+    let (checked, script) = Fixture::new().script("1u8 & 2");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+    let (checked, script) = Fixture::new().script("1u8 << 3u32");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+    let (checked, _) = Fixture::new().script("true & false");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NotInteger]);
+    let (checked, _) = Fixture::new().script("1 >> true");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NotInteger]);
 }
 
 /// types §3, §7: a `return` and the tail each enter the run's result at
@@ -1312,4 +1318,57 @@ fn a_bodys_effect_holds_the_contexts_it_touches() {
     assert_eq!(effect.reads(), &crate::ty::Contexts::from([n]));
     assert_eq!(effect.writes(), &crate::ty::Contexts::from([n]));
     assert_eq!(effect.reissue(), crate::ty::Reissue::Opaque);
+}
+
+/// extern-fn §6, operators §5: a view step's impl states its requirements,
+/// and each is reached as a reached call's are, recorded on the step.
+#[test]
+fn a_view_steps_requirements_are_reached() {
+    let mut fx = Fixture::new();
+    let (vec_id, at_vec) = fx.vec_and_its_view();
+    let (as_slice, clone) = (fx.raw.core.as_slice, fx.raw.core.clone);
+    let e = fx.var(0);
+    let shared_e = fx.reference(Mutability::Shared, e);
+    // The pattern states the flows the impl it asks for has: an impl that
+    // labels no lifetime takes every flow (extern-fn §4).
+    let clones_e = fx.ty(TyKind::Fn {
+        params: Box::new([shared_e]),
+        ret: e,
+        effect: EffectTerm::Known(crate::ty::Effect::pure()),
+        flows: FlowTerm::Known(Flows::Every),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+    });
+    let view = ImplSig {
+        ty: at_vec,
+        param_names: fx.param_names(1),
+        requires: Box::new([crate::decl::Requirement {
+            generic_function: clone,
+            pattern: clones_e,
+            law: None,
+        }]),
+        facts: Default::default(),
+    };
+    fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
+    let bool_ty = fx.ty(TyKind::Bool);
+    let shared_bool = fx.reference(Mutability::Shared, bool_ty);
+    let clones_bool = fx.pure(&[shared_bool], bool_ty);
+    fx.lang_item(clone, &[clones_bool]);
+    let bools = fx.ty(TyKind::Slice(bool_ty));
+    let shared_bools = fx.reference(Mutability::Shared, bools);
+    let unit = fx.ty(TyKind::Unit);
+    let takes_slice = fx.pure(&[shared_bools], unit);
+    fx.declare("first", takes_slice, &[]);
+    let vec_bool = fx.vec_of(vec_id, bool_ty);
+    fx.context("v", vec_bool);
+    let (checked, script) = fx.script("first(&@v)");
+    checked.admitted();
+    let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
+        panic!("not a call");
+    };
+    let steps = &checked.typeck.conversions[&args[0].id()];
+    assert_eq!(steps[0].via.r#impl, Some(Impl::Concrete(0)));
+    let required: Vec<(QualifiedRef, Option<Impl>)> =
+        steps[0].via.required.iter().map(|chosen| (chosen.declaration, chosen.r#impl)).collect();
+    assert_eq!(required, vec![(clone, Some(Impl::Concrete(0)))]);
 }
