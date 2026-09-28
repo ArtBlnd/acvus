@@ -1,24 +1,23 @@
-//! What a function type says its call joins (RFC-0079 rule 5): for each
-//! output of a call, the inputs whose loans it may take.
+//! What a function type says its call joins (ownership §5, extern-fn §4):
+//! for each output of a call, the inputs whose loans it may take.
 //!
 //! A flow names the ends of a call, not positions: `Param(i)` is the
 //! argument at `i` whatever its type, and a flow is `Aligned` (position `k`
-//! of the output from position `k` of the input), `Labelled` (each position
-//! of the output from the input positions whose labels reach its label,
-//! RFC-0096) or `Any` (every position of the output from every position of
-//! the input). A function type is met in the solver before its parameters'
-//! types resolve, and the flows it carries then are already what the MIR
-//! reads: the positions an end has are the resolved type's
-//! (`analysis::loans::positions`), counted where a call is checked. An end
-//! of a type variable `T` flowing `Aligned` to another end of `T` is rule
-//! 5's label `(T, k)`: the input's `k`-th position reaches only the
-//! output's `k`-th. A `Labelled` flow carries the shape of both ends as the
-//! extern's Rust signature lays them out (`Laid`), which a call walks beside
-//! the ends' resolved types to find each label's positions.
+//! of the output from position `k` of the input), `Labelled` (each segment
+//! of the output from the input segments its map names) or `Any` (every
+//! position of the output from every position of the input). The positions
+//! an end has are its concrete type's (`ty::positions`), counted where a
+//! call is checked. A `Labelled` flow carries both ends' declared types,
+//! whose segments (`decl::labels`) a call reads beside the concrete ones.
 
+use std::hash::{Hash, Hasher};
+use std::ops::Range;
+
+use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 
-use crate::ty::{Phase, TyTerm};
+use crate::decl::Declarations;
+use crate::ty::{Concrete, LifetimesOf, ObjectTy, Poly, Ty, TyId, TyKind, Types, positions};
 
 /// One end of a flow: a value the call reads or writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -37,156 +36,266 @@ pub enum FlowEnd {
 }
 
 /// How the positions of a flow's two ends meet.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Alignment {
     /// Position `k` of the output takes position `k` of the input; the two
     /// ends have one shape.
     Aligned,
-    /// Each position of the output takes the input positions its map names
-    /// (RFC-0096 rule 1).
+    /// Each segment of the output takes the input segments its map names.
     Labelled(Box<Labelled>),
     /// Every position of the output takes every position of the input.
     Any,
 }
 
-/// The shape of one end of a `Labelled` flow, as the extern's Rust
-/// signature lays it out (RFC-0079 rule 2, RFC-0096 rule 2). Its
-/// *segments* are, in order: one per `Ref` (the reference's own
-/// position), one per region parameter of a `User`, and one per `Var` and
-/// `Unread`, which stand for every position of the part of the end's type
-/// they are matched with.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Laid {
-    NoPosition,
-    /// `&T`: one segment for the reference, then `T`'s.
-    Ref(Box<Laid>),
-    Option(Box<Laid>),
-    Result(Box<Laid>, Box<Laid>),
-    Tuple(Vec<Laid>),
-    /// `[T; N]` or `[T]`: the element's.
-    Array(Box<Laid>),
-    /// An extension type: one segment per region parameter, then its type
-    /// arguments', in declaration order.
-    User { regions: usize, args: Vec<Laid> },
-    /// A type variable: one segment, every position of its value.
-    Var,
-    /// A type the macro does not read, as a type argument of an extension
-    /// type: one segment, every position of it.
-    Unread,
+/// One segment of a declared type, in the order `segments` reads them
+/// (`decl::labels`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Segment {
+    /// A reference's own position.
+    Reference,
+    /// One lifetime an extern-defined type declares.
+    Lifetime,
+    /// Every position of what instantiates this type variable.
+    TypeVar(u32),
 }
 
-impl Laid {
-    pub fn segment_count(&self) -> usize {
-        acvus_utils::grow(|| self.segment_count_level())
+impl Segment {
+    /// Whether position `k` of `self` takes position `k` of `from` alone:
+    /// both are one type variable's part (`decl::labels`). Otherwise every
+    /// position of `self` takes every position of `from`.
+    pub fn aligned_with(self, from: Segment) -> bool {
+        matches!((self, from), (Segment::TypeVar(to), Segment::TypeVar(from)) if to == from)
     }
+}
 
-    fn segment_count_level(&self) -> usize {
-        match self {
-            Laid::NoPosition => 0,
-            Laid::Var | Laid::Unread => 1,
-            Laid::Ref(pointee) => 1 + pointee.segment_count(),
-            Laid::Option(inner) | Laid::Array(inner) => inner.segment_count(),
-            Laid::Result(ok, err) => ok.segment_count() + err.segment_count(),
-            Laid::Tuple(parts) => parts.iter().map(Laid::segment_count).sum(),
-            Laid::User { regions, args } => regions + args.iter().map(Laid::segment_count).sum::<usize>(),
+/// A `Labelled` flow: both ends' declared types, in the declarations'
+/// table, and for each segment of the output the input segments it takes.
+/// A segment the map does not name takes nothing from this input.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Labelled {
+    pub from_decl: TyId<Poly>,
+    pub to_decl: TyId<Poly>,
+    pub map: Box<[Box<[usize]>]>,
+}
+
+/// The segments of the declared type `ty`, in order: a reference's own
+/// position before its target's, an extern-defined type's lifetimes before
+/// its arguments', a structural type's parts in order, and one element's
+/// for a sequence. A function value's one position is no segment.
+///
+/// # Panics
+/// `ty` holds a `Handle` or an `Order`, which no declaration writes.
+pub fn segments(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>) -> Vec<Segment> {
+    let mut out = Vec::new();
+    push_segments(poly, decls, ty, &mut out);
+    out
+}
+
+fn push_segments(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>, out: &mut Vec<Segment>) {
+    acvus_utils::grow(|| push_segments_level(poly, decls, ty, out))
+}
+
+fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>, out: &mut Vec<Segment>) {
+    match poly.kind(ty) {
+        TyKind::Int(_)
+        | TyKind::Float
+        | TyKind::Char
+        | TyKind::String
+        | TyKind::Bool
+        | TyKind::Unit
+        | TyKind::Never
+        | TyKind::Str
+        | TyKind::Fn { .. } => {}
+        TyKind::Order | TyKind::Handle(_) => panic!("a declared type holds no Handle and no Order"),
+        TyKind::Var(var) => out.push(Segment::TypeVar(*var)),
+        TyKind::Ref(_, target) => {
+            out.push(Segment::Reference);
+            push_segments(poly, decls, target.ty(), out);
+        }
+        TyKind::UserDefined { id, type_args, .. } => {
+            out.extend(std::iter::repeat_n(Segment::Lifetime, decls.lifetimes_of(*id)));
+            for arg in type_args {
+                push_segments(poly, decls, arg.ty(), out);
+            }
+        }
+        TyKind::Array(element, _) | TyKind::Slice(element) | TyKind::Option(element) => {
+            push_segments(poly, decls, *element, out)
+        }
+        TyKind::Result(ok, err) => {
+            push_segments(poly, decls, *ok, out);
+            push_segments(poly, decls, *err, out);
+        }
+        TyKind::Tuple(items) => {
+            for item in items {
+                push_segments(poly, decls, *item, out);
+            }
+        }
+        TyKind::Object(object) => {
+            for (_, field) in object.fields() {
+                push_segments(poly, decls, *field, out);
+            }
+        }
+        TyKind::Enum { variants, .. } => {
+            for payload in variants.iter().filter_map(|(_, payload)| *payload) {
+                push_segments(poly, decls, payload, out);
+            }
         }
     }
+}
 
-    /// Whether this shape is `ty`'s, above the parts `Var` and `Unread`
-    /// stand for: the declared form of what a call matches against the
-    /// resolved type (`analysis::loans::segments`).
-    pub fn fits<V: Phase>(&self, ty: &TyTerm<V>) -> bool {
-        acvus_utils::grow(|| self.fits_level::<V>(ty))
+/// The positions of a value of `ty` each segment of `decl_ty` covers, in
+/// the order `segments` gives them. `ty` is an instance of `decl_ty`: a
+/// type variable's part covers every position of what instantiates it.
+///
+/// # Panics
+/// `ty` is not an instance of `decl_ty`. A call's concrete type is its
+/// declaration's instantiated, so the two agree by construction.
+pub fn segment_positions(
+    poly: &Types<Poly>,
+    decl_ty: TyId<Poly>,
+    types: &Types<Concrete>,
+    ty: Ty,
+    decls: &Declarations,
+) -> Vec<Range<usize>> {
+    let mut walk = SegmentWalk {
+        poly,
+        types,
+        decls,
+        at: 0,
+        out: Vec::new(),
+    };
+    walk.lay(decl_ty, ty);
+    assert_eq!(
+        walk.at,
+        positions(types, decls, ty),
+        "a declared type's segments lie within its instance's positions"
+    );
+    walk.out
+}
+
+struct SegmentWalk<'a> {
+    poly: &'a Types<Poly>,
+    types: &'a Types<Concrete>,
+    decls: &'a Declarations,
+    at: usize,
+    out: Vec<Range<usize>>,
+}
+
+impl SegmentWalk<'_> {
+    fn lay(&mut self, decl_ty: TyId<Poly>, ty: Ty) {
+        acvus_utils::grow(|| self.lay_level(decl_ty, ty))
     }
 
-    fn fits_level<V: Phase>(&self, ty: &TyTerm<V>) -> bool {
-        match (self, ty) {
-            (Laid::Var | Laid::Unread, _) => true,
-            (Laid::NoPosition, ty) => has_no_position(ty),
-            (Laid::Ref(pointee), TyTerm::Ref(_, inner)) => pointee.fits(&inner.ty()),
-            (Laid::Option(inner), TyTerm::Option(ty))
-            | (Laid::Array(inner), TyTerm::Array(ty, _) | TyTerm::Slice(ty)) => inner.fits(ty),
-            (Laid::Result(ok, err), TyTerm::Result(ok_ty, err_ty)) => ok.fits(ok_ty) && err.fits(err_ty),
-            (Laid::Tuple(parts), TyTerm::Tuple(items)) => {
-                parts.len() == items.len() && parts.iter().zip(items).all(|(part, item)| part.fits(item))
+    fn cover(&mut self, width: usize) {
+        self.out.push(self.at..self.at + width);
+        self.at += width;
+    }
+
+    fn lay_level(&mut self, decl_ty: TyId<Poly>, ty: Ty) {
+        const DISAGREE: &str = "a call's concrete type is an instance of its declared type";
+        match (self.poly.kind(decl_ty), self.types.kind(ty)) {
+            (TyKind::Var(_), _) => self.cover(positions(self.types, self.decls, ty)),
+            (TyKind::Order | TyKind::Handle(_), _) => {
+                panic!("a declared type holds no Handle and no Order")
             }
             (
-                Laid::User { regions, args },
-                TyTerm::UserDefined {
-                    type_args,
-                    region_params,
+                TyKind::Int(_)
+                | TyKind::Float
+                | TyKind::Char
+                | TyKind::String
+                | TyKind::Bool
+                | TyKind::Unit
+                | TyKind::Never
+                | TyKind::Str,
+                _,
+            ) => {}
+            (TyKind::Fn { .. }, TyKind::Fn { .. }) => self.at += 1,
+            (TyKind::Ref(_, decl_target), TyKind::Ref(_, target)) => {
+                self.cover(1);
+                self.lay(decl_target.ty(), target.ty());
+            }
+            (
+                TyKind::UserDefined {
+                    id: decl_id,
+                    type_args: decl_args,
                     ..
                 },
+                TyKind::UserDefined { id, type_args, .. },
             ) => {
-                regions == region_params
-                    && args.len() == type_args.len()
-                    && args.iter().zip(type_args).all(|(arg, ty)| arg.fits(&ty.ty()))
+                assert_eq!(decl_id, id, "{DISAGREE}");
+                assert_eq!(decl_args.len(), type_args.len(), "{DISAGREE}");
+                for _ in 0..self.decls.lifetimes_of(*id) {
+                    self.cover(1);
+                }
+                for (decl_arg, arg) in decl_args.iter().zip(type_args.iter()) {
+                    self.lay(decl_arg.ty(), arg.ty());
+                }
             }
-            _ => false,
+            (
+                TyKind::Array(decl_element, _) | TyKind::Slice(decl_element),
+                TyKind::Array(element, _) | TyKind::Slice(element),
+            )
+            | (TyKind::Option(decl_element), TyKind::Option(element)) => self.lay(*decl_element, *element),
+            (TyKind::Result(decl_ok, decl_err), TyKind::Result(ok, err)) => {
+                self.lay(*decl_ok, *ok);
+                self.lay(*decl_err, *err);
+            }
+            (TyKind::Tuple(decl_items), TyKind::Tuple(items)) => {
+                assert_eq!(decl_items.len(), items.len(), "{DISAGREE}");
+                for (decl_item, item) in decl_items.iter().zip(items.iter()) {
+                    self.lay(*decl_item, *item);
+                }
+            }
+            (TyKind::Object(decl_object), TyKind::Object(object)) => {
+                assert!(
+                    matches!(
+                        (decl_object, object),
+                        (ObjectTy::Structural(..), ObjectTy::Structural(..))
+                    ) || matches!(
+                        (decl_object, object),
+                        (ObjectTy::Declared(decl_id, _), ObjectTy::Declared(id, _)) if decl_id == id
+                    ),
+                    "{DISAGREE}"
+                );
+                let (decl_fields, fields) = (decl_object.fields(), object.fields());
+                assert_eq!(decl_fields.len(), fields.len(), "{DISAGREE}");
+                for ((decl_name, decl_field), (name, field)) in decl_fields.iter().zip(fields.iter()) {
+                    assert_eq!(decl_name, name, "{DISAGREE}");
+                    self.lay(*decl_field, *field);
+                }
+            }
+            (
+                TyKind::Enum {
+                    name: decl_name,
+                    variants: decl_variants,
+                    ..
+                },
+                TyKind::Enum { name, variants, .. },
+            ) => {
+                assert_eq!(decl_name, name, "{DISAGREE}");
+                assert_eq!(decl_variants.len(), variants.len(), "{DISAGREE}");
+                for ((decl_tag, decl_payload), (tag, payload)) in decl_variants.iter().zip(variants.iter()) {
+                    assert_eq!(decl_tag, tag, "{DISAGREE}");
+                    match (decl_payload, payload) {
+                        (Some(decl_payload), Some(payload)) => self.lay(*decl_payload, *payload),
+                        (None, None) => {}
+                        _ => panic!("{DISAGREE}"),
+                    }
+                }
+            }
+            _ => panic!("{DISAGREE}"),
         }
     }
 }
 
-/// Whether a value of `ty` has no position whatever its variables are.
-fn has_no_position<V: Phase>(ty: &TyTerm<V>) -> bool {
-    acvus_utils::grow(|| has_no_position_level::<V>(ty))
-}
-
-fn has_no_position_level<V: Phase>(ty: &TyTerm<V>) -> bool {
-    match ty {
-        TyTerm::Ref(..) | TyTerm::Fn { .. } | TyTerm::Handle(_) | TyTerm::Var(_) => false,
-        TyTerm::UserDefined {
-            type_args,
-            region_params,
-            ..
-        } => *region_params == 0 && type_args.iter().all(|arg| has_no_position(&arg.ty())),
-        TyTerm::Array(inner, _) | TyTerm::Option(inner) | TyTerm::Slice(inner) => has_no_position(inner),
-        TyTerm::Result(ok, err) => has_no_position(ok) && has_no_position(err),
-        TyTerm::Tuple(items) => items.iter().all(has_no_position),
-        TyTerm::Object(fields) => fields.values().all(has_no_position),
-        TyTerm::Enum { variants, .. } => variants.values().flatten().all(|payload| has_no_position(payload)),
-        TyTerm::Int(_)
-        | TyTerm::Float
-        | TyTerm::Char
-        | TyTerm::String
-        | TyTerm::Bool
-        | TyTerm::Unit
-        | TyTerm::Never
-        | TyTerm::Order
-        | TyTerm::Str
-        | TyTerm::Error(_) => true,
-    }
-}
-
-/// Where one segment of an output takes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Take {
-    /// The input segment.
-    pub segment: usize,
-    /// Position `k` of the output segment from position `k` of the input
-    /// one: both are one type variable's. Otherwise every position of the
-    /// output segment takes every position of the input one.
-    pub aligned: bool,
-}
-
-/// A `Labelled` flow: both ends' shapes and, for each segment of the
-/// output, the input segments it takes from (RFC-0096 rule 1). A segment
-/// no `Take` names takes nothing from this input.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Labelled {
-    pub to: Laid,
-    pub from: Laid,
-    pub takes: Vec<Vec<Take>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Flow {
     pub to: FlowEnd,
     pub from: FlowEnd,
     pub alignment: Alignment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Source {
     pub from: FlowEnd,
     pub alignment: Alignment,
@@ -194,17 +303,50 @@ pub struct Source {
 
 /// The flows of one function type.
 ///
-/// `Every` is every output from every input, `Any`: the union RFC-0064
-/// gave a call without a summary, and what an extern's type states until
-/// its lifetimes are read (RFC-0079 rule 6). It is its own value because a
-/// declaration states it without counting the parameters; `Listed` holds
-/// the flows sorted, each pair of ends once per alignment, an `Any` flow
-/// standing for the `Aligned` or `Labelled` one it covers, so two equal
-/// sets are equal values.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// `Every` is every output from every input, `Any`: what a declaration that
+/// states nothing about its flows gets (extern-fn §4). It is its own value
+/// because a declaration states it without counting the parameters.
+/// `Listed` is a set: each pair of ends once per alignment, an `Any` flow
+/// standing for the `Aligned` or `Labelled` one it covers. Two listings of
+/// one set are equal and hash alike whatever their order, since a
+/// `Labelled` flow's declared types have no order to sort by.
+#[derive(Debug, Clone)]
 pub enum Flows {
     Every,
     Listed(Vec<Flow>),
+}
+
+impl PartialEq for Flows {
+    fn eq(&self, other: &Flows) -> bool {
+        match (self, other) {
+            (Flows::Every, Flows::Every) => true,
+            (Flows::Listed(a), Flows::Listed(b)) => {
+                a.iter().all(|flow| b.contains(flow)) && b.iter().all(|flow| a.contains(flow))
+            }
+            (Flows::Every, Flows::Listed(_)) | (Flows::Listed(_), Flows::Every) => false,
+        }
+    }
+}
+
+impl Eq for Flows {}
+
+impl Hash for Flows {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        if let Flows::Listed(listed) = self {
+            let mut each: Vec<u64> = listed
+                .iter()
+                .map(|flow| {
+                    let mut hasher = FxHasher::default();
+                    flow.hash(&mut hasher);
+                    hasher.finish()
+                })
+                .collect();
+            each.sort_unstable();
+            each.dedup();
+            each.hash(state);
+        }
+    }
 }
 
 impl Default for Flows {
@@ -220,9 +362,12 @@ impl Flows {
     }
 
     pub fn of(flows: impl IntoIterator<Item = Flow>) -> Self {
-        let mut listed: Vec<Flow> = flows.into_iter().collect();
-        listed.sort();
-        listed.dedup();
+        let mut listed: Vec<Flow> = Vec::new();
+        for flow in flows {
+            if !listed.contains(&flow) {
+                listed.push(flow);
+            }
+        }
         let covered: Vec<Flow> = listed
             .iter()
             .filter(|flow| flow.alignment != Alignment::Any)
@@ -239,7 +384,7 @@ impl Flows {
         Flows::Listed(listed)
     }
 
-    /// Both sets' flows: where two function types meet (RFC-0079 rule 5).
+    /// Both sets' flows: where two function types join (types §2).
     pub fn join(&self, other: &Flows) -> Flows {
         match (self, other) {
             (Flows::Every, _) | (_, Flows::Every) => Flows::Every,
@@ -297,7 +442,7 @@ impl Flows {
 }
 
 /// A function type's flows during inference: known, or a variable the
-/// solver joins where two function types meet (RFC-0079 rule 5).
+/// solver joins where two function types join (types §2).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FlowTerm<V: crate::ty::Phase> {
     Known(Flows),
