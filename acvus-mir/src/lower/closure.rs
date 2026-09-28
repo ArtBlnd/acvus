@@ -14,11 +14,11 @@ use super::context::{Namer, enter_body};
 use super::control::return_value;
 use super::ctxt::{Home, Lcx, ordered};
 use super::expr::lower_expr;
-use super::place::{Operand, Place, assign, binding_place, lend, read};
+use super::place::{Operand, Place, assign, binding_place, input_place, input_ty, lend, read};
 use crate::ir::cfg::{Op, Terminator};
 use crate::ir::{RefTarget, ValueId, known_effect};
 use crate::ty::{Ty, TyKind};
-use crate::typeck::{Capture, Captured};
+use crate::typeck::{Capture, CaptureOf, Captured};
 
 /// One captured name as the enclosing body passes it.
 struct Passed {
@@ -47,13 +47,6 @@ pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &
         namer.expr(body);
         namer.finish()
     };
-    if let Some(input) = named.inputs.first() {
-        todo!(
-            "D79: the input {:?} named inside a lambda: an input is a parameter of the entry body, typeck records no \
-             capture of it, and no rule states how a lambda's body reaches it",
-            input.name
-        );
-    }
     let decls = cx.decls;
     let typeck = cx.typeck;
     let anyorder = cx.anyorder;
@@ -73,7 +66,12 @@ pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &
                 Home::Slot(slot)
             }
         };
-        inner.bind(passed.captured.binder, home, passed.span);
+        match passed.captured.binder {
+            CaptureOf::Binding(binder) => inner.bind(binder, home, passed.span),
+            CaptureOf::Input(name) => {
+                inner.inputs.insert(name, home);
+            }
+        }
     }
     for (param, ty) in params.iter().zip(param_tys.iter()) {
         let value = inner.builder.param(param.name, *ty, param.span);
@@ -97,12 +95,18 @@ pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &
 /// What the enclosing body passes for `captured`: the value by move, a
 /// reference to the binding by reference.
 fn pass(cx: &mut Lcx<'_, '_>, captured: Captured, span: Span) -> Passed {
-    let binding_ty = cx.ty(captured.binder);
-    let place = binding_place(cx, captured.binder, binding_ty);
-    let binder_span = *cx
-        .binder_spans
-        .get(&captured.binder)
-        .unwrap_or_else(|| panic!("the binder {:?} a lambda captures is bound before the lambda", captured.binder));
+    let (place, binder_span) = match captured.binder {
+        CaptureOf::Binding(binder) => {
+            let place = binding_place(cx, binder, cx.ty(binder));
+            let binder_span = *cx
+                .binder_spans
+                .get(&binder)
+                .unwrap_or_else(|| panic!("the binder {binder:?} a lambda captures is bound before the lambda"));
+            (place, binder_span)
+        }
+        CaptureOf::Input(name) => (input_place(cx, name, input_ty(cx, name)), span),
+    };
+    let binding_ty = place.ty;
     let value = match captured.capture {
         Capture::Move => read(cx, Operand::Place(place), span),
         Capture::Ref(mutability) => lend(cx, Operand::Place(place), mutability, span),

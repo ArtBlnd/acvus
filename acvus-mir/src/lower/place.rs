@@ -81,12 +81,32 @@ pub(super) fn operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>, mutability:
     }
 }
 
-fn input_place(cx: &Lcx<'_, '_>, name: acvus_utils::Astr, ty: Ty) -> Place {
-    let slot = *cx
+/// The type of the input `name`, as its home holds it.
+pub(super) fn input_ty(cx: &Lcx<'_, '_>, name: acvus_utils::Astr) -> Ty {
+    let home = *cx
         .inputs
         .get(&name)
-        .unwrap_or_else(|| panic!("the input {name:?} the body names is given its slot at entry"));
-    Place { target: RefTarget::Var(slot), path: Vec::new(), ty }
+        .unwrap_or_else(|| panic!("the input {name:?} the body names is given its home at entry"));
+    match home {
+        Home::Slot(slot) => cx.value_ty(slot),
+        Home::Through(reference) => match cx.kind(cx.value_ty(reference)) {
+            TyKind::Ref(_, target) => target.ty(),
+            other => panic!("an input captured by reference is reached through a reference, not {other:?}"),
+        },
+    }
+}
+
+/// The place the input `name` lives in, holding a `ty`.
+pub(super) fn input_place(cx: &Lcx<'_, '_>, name: acvus_utils::Astr, ty: Ty) -> Place {
+    let home = *cx
+        .inputs
+        .get(&name)
+        .unwrap_or_else(|| panic!("the input {name:?} the body names is given its home at entry"));
+    let target = match home {
+        Home::Slot(slot) => RefTarget::Var(slot),
+        Home::Through(reference) => RefTarget::Through(reference),
+    };
+    Place { target, path: Vec::new(), ty }
 }
 
 fn context_operand(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Span) -> Operand {

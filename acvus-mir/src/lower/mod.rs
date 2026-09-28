@@ -25,14 +25,14 @@ mod tests;
 
 pub mod required;
 
-use acvus_ast::{AstId, Script, Slot, Template};
+use acvus_ast::{Script, Slot, Template};
 
 use crate::decl::Declarations;
 use crate::ir::cfg::{Module, Terminator};
-use crate::ty::{Concrete, Ty, TyKind, Types};
+use crate::ty::{Concrete, Ty, Types};
 use crate::typeck::Typeck;
 
-use context::{Named, Namer, enter_body};
+use context::{Namer, enter_body, enter_inputs};
 use control::return_value;
 use ctxt::{Lcx, ordered};
 
@@ -42,7 +42,7 @@ use ctxt::{Lcx, ordered};
 ///
 /// # Panics
 /// `typeck` holds a refusal: that is the entry's defect.
-pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, mut types: Types<Concrete>, script: &Script<S>) -> Module {
+pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, types: Types<Concrete>, script: &Script<S>) -> Module {
     assert_admitted(typeck);
     let named = {
         let mut namer = Namer::new(typeck);
@@ -52,11 +52,12 @@ pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, mut types: T
         }
         namer.finish()
     };
-    let ret = script_result(typeck, &mut types, script.tail.as_deref().map(acvus_ast::Expr::id), &named);
+    let ret = run_result(typeck);
     let mut module = Module::new(types);
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
     let mut cx = Lcx::new(decls, typeck, builder, 0);
     enter_body(&mut cx, &named);
+    enter_inputs(&mut cx, &named);
     let value = stmt::lower_body(&mut cx, &script.stmts, script.tail.as_deref(), script.span);
     let value = match &script.tail {
         Some(tail) => call::convert(&mut cx, tail.id(), value, tail.span()),
@@ -77,7 +78,7 @@ pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, mut types: T
 pub fn lower_template<S: Slot>(
     decls: &Declarations,
     typeck: &Typeck,
-    mut types: Types<Concrete>,
+    types: Types<Concrete>,
     template: &Template<S>,
 ) -> Module {
     assert_admitted(typeck);
@@ -86,11 +87,12 @@ pub fn lower_template<S: Slot>(
         namer.stmts(&template.body);
         namer.finish()
     };
-    let ret = types.intern(TyKind::String);
+    let ret = run_result(typeck);
     let mut module = Module::new(types);
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
     let mut cx = Lcx::new(decls, typeck, builder, 0);
     enter_body(&mut cx, &named);
+    enter_inputs(&mut cx, &named);
     template::open_output(&mut cx, template.span);
     stmt::lower_stmts(&mut cx, &template.body);
     let value = template::take_output(&mut cx, template.span);
@@ -109,22 +111,10 @@ fn assert_admitted(typeck: &Typeck) {
     );
 }
 
-/// The run's result type: what the tail and every `return` enter, each
-/// coerced at its own site. The first of them that is not `!` names it; a
-/// body with neither yields `()`.
-fn script_result(typeck: &Typeck, types: &mut Types<Concrete>, tail: Option<AstId>, named: &Named) -> Ty {
-    let entered = |site: AstId| -> Ty {
-        match typeck.conversions.get(&site).and_then(|steps| steps.last()) {
-            Some(step) => step.to,
-            None => typeck.types[&site],
-        }
-    };
-    let candidates: Vec<Ty> = tail.into_iter().chain(named.returned).map(entered).collect();
-    match candidates.iter().find(|ty| !matches!(types.kind(**ty), TyKind::Never)) {
-        Some(ty) => *ty,
-        None => match candidates.first() {
-            Some(never) => *never,
-            None => types.intern(TyKind::Unit),
-        },
-    }
+/// The run's result type, as typeck recorded it.
+///
+/// # Panics
+/// typeck recorded none: it records one for every admitted program.
+fn run_result(typeck: &Typeck) -> Ty {
+    typeck.result.expect("typeck records the run's result type of every admitted program")
 }

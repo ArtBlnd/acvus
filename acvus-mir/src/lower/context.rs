@@ -5,14 +5,15 @@
 //! commits are effects. Removing unread loads and unwritten commits is the
 //! required step's.
 //!
-//! What a body names is read off its own statements, not its lambdas'.
-//! Inputs (programs §4) are read off the same walk: each is a parameter of
-//! the entry body, held in a slot.
+//! The contexts a body names are read off its own statements, not its
+//! lambdas'. Inputs (programs §4) are read off the same walk, its lambdas'
+//! included: each is a parameter of the entry body, held in a slot, which
+//! a lambda that reads it captures.
 
 use acvus_ast::{ElseBranch, Expr, ForHead, ObjectPatternField, Pattern, Place, PlaceBase, RefKind, Root, Slot, Span, Stmt, TuplePatternElem};
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::ctxt::{ContextHome, Lcx};
+use super::ctxt::{ContextHome, Home, Lcx};
 use super::place::{Operand, Place as LPlace, assign, read};
 use crate::ir::cfg::Op;
 use crate::ir::{RefTarget, ValueId};
@@ -23,8 +24,6 @@ use crate::ty::{Effect, Reissue, Ty};
 pub(super) struct Named {
     pub contexts: Vec<NamedContext>,
     pub inputs: Vec<NamedInput>,
-    /// The site of the value of the first `return` the body writes.
-    pub returned: Option<acvus_ast::AstId>,
 }
 
 /// A context a body names, its type, and where it first names it.
@@ -45,11 +44,14 @@ pub(super) struct NamedInput {
 pub(super) struct Namer<'t> {
     typeck: &'t crate::typeck::Typeck,
     named: Named,
+    /// How many lambdas deep the walk is: a lambda's contexts are its own
+    /// body's, and the inputs it reads are the entry's, which it captures.
+    lambdas: usize,
 }
 
 impl<'t> Namer<'t> {
     pub fn new(typeck: &'t crate::typeck::Typeck) -> Self {
-        Namer { typeck, named: Named::default() }
+        Namer { typeck, named: Named::default(), lambdas: 0 }
     }
 
     pub fn finish(self) -> Named {
@@ -57,7 +59,7 @@ impl<'t> Namer<'t> {
     }
 
     fn context(&mut self, context: QualifiedRef, ty: Ty, span: Span) {
-        if !self.named.contexts.iter().any(|named| named.context == context) {
+        if self.lambdas == 0 && !self.named.contexts.iter().any(|named| named.context == context) {
             self.named.contexts.push(NamedContext { context, ty, span });
         }
     }
@@ -141,7 +143,12 @@ impl<'t> Namer<'t> {
         match expr {
             Expr::Ident { id, name, ref_kind: RefKind::ExternParam, span } => self.input(name.name, self.ty(*id), *span),
             Expr::ContextRef { id, name, span } => self.context(*name, self.ty(*id), *span),
-            Expr::Ident { .. } | Expr::Literal { .. } | Expr::Lambda { .. } | Expr::Error(_) => {}
+            Expr::Lambda { body, .. } => {
+                self.lambdas += 1;
+                self.expr(body);
+                self.lambdas -= 1;
+            }
+            Expr::Ident { .. } | Expr::Literal { .. } | Expr::Error(_) => {}
             Expr::BinaryOp { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);
@@ -160,12 +167,7 @@ impl<'t> Namer<'t> {
             | Expr::Borrow { place: inner, .. }
             | Expr::Cast { expr: inner, .. }
             | Expr::Try { inner, .. } => self.expr(inner),
-            Expr::Return { value, .. } => {
-                if self.named.returned.is_none() {
-                    self.named.returned = Some(value.id());
-                }
-                self.expr(value);
-            }
+            Expr::Return { value, .. } => self.expr(value),
             Expr::FuncCall { func, args, .. } => {
                 self.expr(func);
                 args.iter().for_each(|arg| self.expr(arg));
@@ -260,8 +262,7 @@ impl<'t> Namer<'t> {
 }
 
 /// The body's entry: each context it names gets its home, a slot loaded
-/// now where it is not volatile; each input it names is a parameter held
-/// in a slot.
+/// now where it is not volatile.
 pub(super) fn enter_body(cx: &mut Lcx<'_, '_>, named: &Named) {
     for NamedContext { context, ty, span } in &named.contexts {
         let volatile = cx
@@ -279,11 +280,16 @@ pub(super) fn enter_body(cx: &mut Lcx<'_, '_>, named: &Named) {
         };
         cx.contexts.push((*context, home));
     }
+}
+
+/// The entry body's inputs: each it names is a parameter held in a slot
+/// (programs §4). A lambda reaches an input by capturing it.
+pub(super) fn enter_inputs(cx: &mut Lcx<'_, '_>, named: &Named) {
     for NamedInput { name, ty, span } in &named.inputs {
         let param = cx.builder.param(*name, *ty, *span);
         let slot = cx.builder.slot(*ty, *span);
         assign(cx, slot_place(slot, *ty), param, *span);
-        cx.inputs.insert(*name, slot);
+        cx.inputs.insert(*name, Home::Slot(slot));
     }
 }
 

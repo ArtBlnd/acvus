@@ -10,15 +10,17 @@
 //! effect touches (context §3).
 
 use acvus_ast::{AstId, BinOp, Expr, Literal, RefKind, Slot, Span};
+use acvus_utils::Astr;
 
 use super::context::bracket_call;
+use super::control::diamond;
 use super::control::lower_short_circuit;
 use super::ctxt::Lcx;
 use super::expr::lower_expr;
 use super::place::{lend, operand};
 use crate::ir::cfg::Op;
-use crate::ir::{Callee, UnaryOp, ValueId, fn_effect};
-use crate::ty::{Mutability, Reissue, Ty, TyKind};
+use crate::ir::{Callee, PathSeg, RefTarget, UnaryOp, ValueId, fn_effect, known_len};
+use crate::ty::{IntTy, Mutability, Reissue, Ty, TyKind};
 use crate::typeck::Comparison;
 
 /// `value`, written at `site`, coerced by each step typeck recorded there.
@@ -187,27 +189,35 @@ pub(super) fn lower_binary<S: Slot>(
     }
 }
 
+/// What a comparison asks of its operands (operators §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    /// `==`: a `bool`.
+    Equal,
+    /// An ordering: `cmp`'s `i64`, `-1`, `0` or `1` (operators §2).
+    Order,
+}
+
 /// `==` or an ordering by the comparison typeck recorded (operators §4):
-/// through the `core::eq` or `core::cmp` impl it reached, an ordering being
-/// `cmp`'s answer compared with `0` (operators §2).
+/// part by part for a structural type, each part through the `core::eq` or
+/// `core::cmp` impl reached for it; an ordering is `cmp`'s answer compared
+/// with `0` (operators §2).
 fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, left: &Expr<S>, right: &Expr<S>, span: Span) -> ValueId {
     let comparison = cx
         .typeck
         .comparisons
         .get(&site)
         .unwrap_or_else(|| panic!("typeck records how every comparison compares, and not at {site:?}"));
-    match comparison {
-        Comparison::Reached(_) => {}
-        Comparison::Parts(_) => todo!(
-            "D79: a comparison part by part (operators §4): a part's `Comparison::Reached` carries no site, so the callee \
-             type typeck recorded for it in `Typeck.callees` cannot be found"
-        ),
-    }
+    let asked = match op {
+        BinOp::Eq | BinOp::Neq => Asked::Equal,
+        _ => Asked::Order,
+    };
+    let compared_ty = cx.ty(left.id());
     let lhs = lent_operand(cx, left);
     let rhs = lent_operand(cx, right);
     let lhs = convert(cx, site, lhs, span);
     let rhs = convert(cx, site, rhs, span);
-    let answer = call_reached(cx, site, vec![lhs, rhs], span);
+    let answer = compared(cx, comparison, asked, compared_ty, lhs, rhs, span);
     let bool_ty = cx.ty(site);
     match op {
         BinOp::Eq => answer,
@@ -219,6 +229,185 @@ fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, left: &Expr<S>
         }
         other => panic!("{other:?} is not a comparison"),
     }
+}
+
+/// `a` against `b`, two operands of a node of type `ty` as a comparison
+/// reads them: a shared reference to the node's value, or, where the node
+/// is itself a reference, that reference, since a reference's target is
+/// never a reference (types §4).
+fn compared(
+    cx: &mut Lcx<'_, '_>,
+    node: &Comparison,
+    asked: Asked,
+    ty: Ty,
+    a: ValueId,
+    b: ValueId,
+    span: Span,
+) -> ValueId {
+    let parts = match node {
+        Comparison::Reached { chosen, callee } => {
+            let called = cx.callee(chosen);
+            return issue(cx, called, *callee, vec![a, b], span);
+        }
+        Comparison::Parts(parts) => parts,
+    };
+    let only = || parts.first().expect("a node of one part type has its part");
+    match cx.kind(ty).clone() {
+        TyKind::Ref(_, target) => compared(cx, only(), asked, target.ty(), a, b, span),
+        TyKind::Tuple(items) => {
+            let parts: Vec<Part<'_>> = items
+                .iter()
+                .zip(parts.iter())
+                .enumerate()
+                .map(|(at, (item, node))| Part { seg: PathSeg::Index(at), ty: *item, node })
+                .collect();
+            in_order(cx, asked, &parts, a, b, span)
+        }
+        TyKind::Object(object) => {
+            let parts: Vec<Part<'_>> = object
+                .fields()
+                .iter()
+                .zip(parts.iter())
+                .map(|((name, field), node)| Part { seg: PathSeg::Field(*name), ty: *field, node })
+                .collect();
+            in_order(cx, asked, &parts, a, b, span)
+        }
+        TyKind::Array(element, len) => {
+            let node = only();
+            let parts: Vec<Part<'_>> =
+                (0..known_len(&len)).map(|at| Part { seg: PathSeg::Index(at), ty: element, node }).collect();
+            in_order(cx, asked, &parts, a, b, span)
+        }
+        TyKind::Option(payload) => {
+            let tags = cx.decls.core().tags;
+            let payload = Part { seg: PathSeg::Payload, ty: payload, node: only() };
+            tagged(cx, asked, tags.some, Tagged::Option(payload), a, b, span)
+        }
+        TyKind::Result(ok, err) => {
+            let tags = cx.decls.core().tags;
+            let [ok_node, err_node] = &parts[..] else { panic!("a `Result` compares by its two payloads") };
+            let ok = Part { seg: PathSeg::Payload, ty: ok, node: ok_node };
+            let err = Part { seg: PathSeg::Payload, ty: err, node: err_node };
+            tagged(cx, asked, tags.ok, Tagged::Result { ok, err }, a, b, span)
+        }
+        TyKind::Never => answered(cx, asked, span),
+        other => panic!("typeck compares part by part only a structural type or a reference, not {other:?}"),
+    }
+}
+
+/// One part of a node: the step to it, its type, and how it compares.
+#[derive(Clone, Copy)]
+struct Part<'c> {
+    seg: PathSeg,
+    ty: Ty,
+    node: &'c Comparison,
+}
+
+/// A variant type's payloads: `Option`'s one, or `Result`'s two.
+enum Tagged<'c> {
+    Option(Part<'c>),
+    Result { ok: Part<'c>, err: Part<'c> },
+}
+
+/// What a comparison of no part answers: equal.
+fn answered(cx: &mut Lcx<'_, '_>, asked: Asked, span: Span) -> ValueId {
+    match asked {
+        Asked::Equal => cx.bool_const(true, span),
+        Asked::Order => order_const(cx, 0, span),
+    }
+}
+
+fn order_const(cx: &mut Lcx<'_, '_>, value: i128, span: Span) -> ValueId {
+    let i64_ty = cx.builder.intern(TyKind::Int(IntTy::I64));
+    cx.constant(Literal::Int(value), i64_ty, span)
+}
+
+/// The operand of `part` of the node `base` is the operand of.
+fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span) -> ValueId {
+    let target = RefTarget::Through(base);
+    let path = vec![part.seg];
+    match cx.kind(part.ty) {
+        TyKind::Ref(..) => cx.builder.push(Op::Take { target, path, taken_out: false }, part.ty, span),
+        _ => {
+            let ty = cx.ref_ty(Mutability::Shared, part.ty);
+            cx.builder.push(Op::Ref { target, path, mutability: Mutability::Shared }, ty, span)
+        }
+    }
+}
+
+fn part_compared(cx: &mut Lcx<'_, '_>, asked: Asked, part: Part<'_>, a: ValueId, b: ValueId, span: Span) -> ValueId {
+    let a = part_operand(cx, a, part, span);
+    let b = part_operand(cx, b, part, span);
+    compared(cx, part.node, asked, part.ty, a, b, span)
+}
+
+/// Parts compared in order, as Rust's derived comparisons do: equal while
+/// every part is, and ordered by the first part that is not equal. A part
+/// is compared only where the parts before it left the answer open.
+fn in_order(cx: &mut Lcx<'_, '_>, asked: Asked, parts: &[Part<'_>], a: ValueId, b: ValueId, span: Span) -> ValueId {
+    let mut answer: Option<ValueId> = None;
+    for part in parts {
+        let next = |cx: &mut Lcx<'_, '_>| part_compared(cx, asked, *part, a, b, span);
+        answer = Some(match answer {
+            None => next(cx),
+            Some(before) => match asked {
+                Asked::Equal => {
+                    let bool_ty = cx.bool_ty();
+                    diamond(cx, before, bool_ty, span, next, |cx| cx.bool_const(false, span))
+                }
+                Asked::Order => {
+                    let order_ty = cx.value_ty(before);
+                    let zero = order_const(cx, 0, span);
+                    let bool_ty = cx.bool_ty();
+                    let open = cx.builder.push(Op::BinOp { op: crate::ir::BinOp::Eq, left: before, right: zero }, bool_ty, span);
+                    diamond(cx, open, order_ty, span, next, |_| before)
+                }
+            },
+        });
+    }
+    match answer {
+        Some(answer) => answer,
+        None => answered(cx, asked, span),
+    }
+}
+
+/// An `Option` or a `Result` compared: by tag first, `None` before `Some`
+/// and `Ok` before `Err` as Rust derives them, then by the payload the two
+/// share.
+fn tagged(cx: &mut Lcx<'_, '_>, asked: Asked, first: Astr, payloads: Tagged<'_>, a: ValueId, b: ValueId, span: Span) -> ValueId {
+    let bool_ty = cx.bool_ty();
+    let a_first = cx.builder.push(Op::TestVariant { src: a, tag: first }, bool_ty, span);
+    let b_first = cx.builder.push(Op::TestVariant { src: b, tag: first }, bool_ty, span);
+    let same = cx.builder.push(Op::BinOp { op: crate::ir::BinOp::Eq, left: a_first, right: b_first }, bool_ty, span);
+    let answer_ty = match asked {
+        Asked::Equal => bool_ty,
+        Asked::Order => cx.builder.intern(TyKind::Int(IntTy::I64)),
+    };
+    let payloads_compared = |cx: &mut Lcx<'_, '_>| match payloads {
+        Tagged::Option(payload) => {
+            diamond(cx, a_first, answer_ty, span, |cx| part_compared(cx, asked, payload, a, b, span), |cx| answered(cx, asked, span))
+        }
+        Tagged::Result { ok, err } => diamond(
+            cx,
+            a_first,
+            answer_ty,
+            span,
+            |cx| part_compared(cx, asked, ok, a, b, span),
+            |cx| part_compared(cx, asked, err, a, b, span),
+        ),
+    };
+    let tags_differ = |cx: &mut Lcx<'_, '_>| match asked {
+        Asked::Equal => cx.bool_const(false, span),
+        Asked::Order => {
+            let (when_first, otherwise) = match payloads {
+                Tagged::Option(_) => (1, -1),
+                Tagged::Result { .. } => (-1, 1),
+            };
+            let i64_ty = answer_ty;
+            diamond(cx, a_first, i64_ty, span, |cx| order_const(cx, when_first, span), |cx| order_const(cx, otherwise, span))
+        }
+    };
+    diamond(cx, same, answer_ty, span, payloads_compared, tags_differ)
 }
 
 /// `-x`: `core::neg` on `&x` (operators §2).

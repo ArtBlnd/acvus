@@ -147,6 +147,22 @@ impl Fixture {
         })
     }
 
+    /// `eq(&w, &w) -> bool` and `cmp(&w, &w) -> i64` at `i64` and `bool`.
+    fn comparisons(&mut self) {
+        let int = self.int();
+        let bool_ty = self.ty(TyKind::Bool);
+        let mut eqs = Vec::new();
+        let mut cmps = Vec::new();
+        for w in [int, bool_ty] {
+            let shared = self.reference(Mutability::Shared, w);
+            eqs.push(self.function(&[shared, shared], bool_ty, Effect::pure()));
+            cmps.push(self.function(&[shared, shared], int, Effect::pure()));
+        }
+        let (eq, cmp) = (self.raw.core.eq, self.raw.core.cmp);
+        self.lang_item(eq, &eqs);
+        self.lang_item(cmp, &cmps);
+    }
+
     /// `display(&i64, &mut String)` and `display(&str, &mut String)`, pure:
     /// typeck reaches `display` for a template's text too.
     fn display_ints(&mut self) {
@@ -714,4 +730,89 @@ fn a_declared_conversion_step_is_a_call_of_its_via() {
         inst.op(),
         Op::Assign { target: crate::ir::RefTarget::Var(target), value, .. } if *target == slot && *value == call
     )));
+}
+
+// -- D79: comparisons by parts, inputs in lambdas, shared captures of `&mut` ---
+
+fn calls_of(lowered: &Lowered, callee: QualifiedRef) -> usize {
+    count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == callee))
+}
+
+/// `==` on a tuple compares its parts in order through each part's
+/// `core::eq`, the second only where the first is equal (operators §4).
+#[test]
+fn tuple_equality_compares_part_by_part() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let lowered = fx.script("(1, true) == (2, false)");
+    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    assert_eq!(calls_of(&lowered, eq), 2);
+    assert!(lowered.entry_terminators().iter().any(|terminator| matches!(terminator, Terminator::Diamond { .. })));
+}
+
+/// An ordering on a tuple is the first part's `cmp` that is not `0`,
+/// compared with `0` (operators §2, §4).
+#[test]
+fn tuple_ordering_is_the_first_unequal_parts_cmp() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let lowered = fx.script("(1, 2) < (1, 3)");
+    let cmp = QualifiedRef::qualified(lowered.name("core"), lowered.name("cmp"));
+    assert_eq!(calls_of(&lowered, cmp), 2);
+    let lt = count(&lowered.entry_ops(), |op| matches!(op, Op::BinOp { op: crate::ir::BinOp::Lt, .. }));
+    assert_eq!(lt, 1);
+}
+
+/// `==` on an `Option` tests both tags, and compares the payloads only
+/// where both are `Some`.
+#[test]
+fn option_equality_tests_tags_before_payloads() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let int = fx.int();
+    let option = fx.ty(TyKind::Option(int));
+    fx.input("o", option);
+    fx.input("p", option);
+    let lowered = fx.script("$o == $p");
+    let ops = lowered.entry_ops();
+    assert_eq!(count(&ops, |op| matches!(op, Op::TestVariant { .. })), 2);
+    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    assert_eq!(calls_of(&lowered, eq), 1);
+}
+
+/// An input read inside a lambda is captured as a binding is (D79).
+#[test]
+fn an_input_read_in_a_lambda_is_captured() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    fx.input("n", int);
+    let lowered = fx.script("let g = |x| -> $n; g(1)");
+    let closure = lowered
+        .entry_ops()
+        .into_iter()
+        .find_map(|op| match op {
+            Op::MakeClosure { body, captures } => Some((*body, captures.len())),
+            _ => None,
+        })
+        .expect("a closure");
+    assert_eq!(closure.1, 1);
+    assert_eq!(lowered.module.body(closure.0).captures().len(), 1);
+    assert!(lowered.module.body(closure.0).params().len() == 1, "the input is no parameter of the lambda");
+}
+
+/// A `&mut` captured by shared reference is read inside as a shared
+/// reborrow, and its capture is one (functions §2, types §4).
+#[test]
+fn a_mut_reference_captured_shared_is_a_shared_reborrow_inside() {
+    let lowered = Fixture::new().script("let a = 1; let r = &mut a; let g = |x| -> *r; g(1)");
+    let entry = lowered.entry();
+    let captures = lowered
+        .entry_ops()
+        .into_iter()
+        .find_map(|op| match op {
+            Op::MakeClosure { captures, .. } => Some(captures.clone()),
+            _ => None,
+        })
+        .expect("a closure");
+    assert!(matches!(lowered.kind_of(entry, captures[0]), TyKind::Ref(Mutability::Shared, _)));
 }

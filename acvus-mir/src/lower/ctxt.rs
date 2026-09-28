@@ -50,8 +50,9 @@ pub(super) struct Lcx<'a, 'm> {
     pub loops: Vec<LoopTargets>,
     /// Every context the body names, in the order it first names them.
     pub contexts: Vec<(QualifiedRef, ContextHome)>,
-    /// The slot each input the body names is held in (programs §4).
-    pub inputs: FxHashMap<Astr, ValueId>,
+    /// Where each input the body names lives (programs §4): a slot of the
+    /// entry body, or a lambda's capture of it.
+    pub inputs: FxHashMap<Astr, Home>,
     /// Whether a run reaches the current block: after a `return`, a
     /// `break`, a `continue` or a `?`'s exit, what follows is appended to
     /// a block no edge enters, and its own edges out become `Diverge`.
