@@ -57,6 +57,10 @@ pub enum Refused {
     /// A declared type holds a reference whose target is a reference
     /// (types §4).
     ReferenceToReference { written: Written },
+    /// A context's or an input's declared type holds a type variable. Each
+    /// is one value of one fixed type (context §2), so no use chooses the
+    /// variable.
+    TypeVariableInValueType { written: Written },
     /// A scheme whose bounds do not give each of its type variables exactly
     /// one bound (extern-fn §1: a type parameter carries one bound).
     BoundsDoNotFit { function: QualifiedRef },
@@ -115,6 +119,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         },
         &mut refused,
     );
+    refuse_type_variables_in_value_types(&types, &contexts, &inputs, &mut refused);
     refuse_array_types(&types, &functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
     refuse_unfit_bounds(&types, &functions, &mut refused);
@@ -504,6 +509,38 @@ fn refuse_unwritable_types(
     unreadable
 }
 
+/// context §2: a context's and an input's declared type is one fixed type,
+/// so it holds no type variable.
+fn refuse_type_variables_in_value_types(
+    types: &Types<Poly>,
+    contexts: &[(QualifiedRef, ContextDecl)],
+    inputs: &[(Astr, TyId<Poly>)],
+    refused: &mut Vec<Refused>,
+) {
+    let contexts = contexts.iter().map(|(id, declared)| (Written::Context(*id), declared.ty));
+    let inputs = inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
+    for (written, ty) in contexts.chain(inputs) {
+        if holds_type_variable(types, ty) {
+            refused.push(Refused::TypeVariableInValueType { written });
+        }
+    }
+}
+
+fn holds_type_variable(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
+    let mut seen = FxHashSet::default();
+    let mut stack = vec![ty];
+    while let Some(at) = stack.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        match types.kind(at) {
+            TyKind::Var(_) => return true,
+            kind => kind.for_each_child(|child| stack.push(child)),
+        }
+    }
+    false
+}
+
 /// What a type term names: every extern-defined type, each once, whether
 /// it holds a type only the IR writes, and whether it holds a reference to
 /// a reference.
@@ -603,19 +640,26 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
     })
 }
 
+/// A rule the tree is built from: a declared cast, or a view at the
+/// concrete impl it is (operators §5).
+struct TreeRule {
+    rule: CastRule,
+    view_impl: Option<usize>,
+}
+
 /// A step of the tree: a cast from one head up to another.
 struct Step {
     from: Head,
     to: Head,
-    rule: CastRule,
+    rule: TreeRule,
 }
 
 impl Step {
     /// `rule` as a step, or `CastWithoutHead` where an end has no head.
-    fn of(types: &Types<Poly>, rule: CastRule) -> Result<Step, Refused> {
-        match (head(types, rule.from), head(types, rule.to)) {
+    fn of(types: &Types<Poly>, rule: TreeRule) -> Result<Step, Refused> {
+        match (head(types, rule.rule.from), head(types, rule.rule.to)) {
             (Some(from), Some(to)) => Ok(Step { from, to, rule }),
-            (None, _) | (_, None) => Err(Refused::CastWithoutHead { via: rule.via }),
+            (None, _) | (_, None) => Err(Refused::CastWithoutHead { via: rule.rule.via }),
         }
     }
 }
@@ -630,15 +674,13 @@ fn cast_tree(
     core: &Core,
     refused: &mut Vec<Refused>,
 ) -> CastTree {
-    let rules = casts
-        .iter()
-        .cloned()
-        .map(Ok)
+    let declared = casts.iter().cloned().map(|rule| Ok(TreeRule { rule, view_impl: None }));
+    let rules = declared
         .chain(view_rules(types, functions, misfits, core))
         .filter(|rule| {
             !rule
                 .as_ref()
-                .is_ok_and(|rule| ends_in_reference_to_reference(types, [rule.from, rule.to]))
+                .is_ok_and(|tree_rule| ends_in_reference_to_reference(types, [tree_rule.rule.from, tree_rule.rule.to]))
         });
     let mut steps = Vec::new();
     for rule in rules {
@@ -655,10 +697,11 @@ fn cast_tree(
         match tree.up.get(&from) {
             Some(first) => refused.push(Refused::TwoStepsUp {
                 head: from,
-                via: [first.rule().via, rule.via],
+                via: [first.rule().via, rule.rule.via],
             }),
             None => {
-                tree.up.insert(from, VerifiedExternCast(rule));
+                let TreeRule { rule, view_impl } = rule;
+                tree.up.insert(from, VerifiedExternCast { rule, view_impl });
                 above.insert(from, to);
                 from_order.push(from);
             }
@@ -703,8 +746,8 @@ fn conversions_by_head(
 }
 
 /// Each impl of `core::as_slice`, `core::as_slice_mut` and
-/// `core::as_str` as a cast from its parameter to its result (operators
-/// §3, §5). A generic impl's container is a variable, which has no
+/// `core::as_str` as a cast from its parameter to its result, at that impl
+/// (operators §3, §5). A generic impl's container is a variable, which has no
 /// head. An impl refused as not of its generic function is left out.
 ///
 /// # Panics
@@ -718,7 +761,7 @@ fn view_rules(
     functions: &FxHashMap<QualifiedRef, Scheme>,
     misfits: &FxHashSet<(QualifiedRef, usize)>,
     core: &Core,
-) -> Vec<Result<CastRule, Refused>> {
+) -> Vec<Result<TreeRule, Refused>> {
     let mut rules = Vec::new();
     for via in [core.as_slice, core.as_slice_mut, core.as_str] {
         let Some(impls) = functions.get(&via).and_then(|scheme| scheme.impls.as_ref()) else {
@@ -729,17 +772,20 @@ fn view_rules(
             .iter()
             .enumerate()
             .filter(|(at, _)| !misfits.contains(&(via, *at)));
-        for (_, r#impl) in fitting {
+        for (at, r#impl) in fitting {
             let TyKind::Fn { params, ret, .. } = types.kind(r#impl.ty) else {
                 panic!("a fitting view impl is a function type, as the compiler builds each view (operators §2)")
             };
             let [param] = &params[..] else {
                 panic!("a fitting view impl takes one parameter, as the compiler builds each view (operators §2)")
             };
-            rules.push(Ok(CastRule {
-                from: *param,
-                to: *ret,
-                via,
+            rules.push(Ok(TreeRule {
+                rule: CastRule {
+                    from: *param,
+                    to: *ret,
+                    via,
+                },
+                view_impl: Some(at),
             }));
         }
         if impls.generic.is_some() {
@@ -1353,6 +1399,30 @@ mod tests {
     #[test]
     fn an_empty_set_is_taken_in() {
         assert!(Fixture::new().verify().is_ok());
+    }
+
+    /// context §2: a context's and an input's type is one fixed type, so a
+    /// type variable in either is refused.
+    #[test]
+    fn a_context_or_an_input_holding_a_type_variable_is_refused() {
+        let mut fixture = Fixture::new();
+        let context = fixture.name("m", "c");
+        let input = fixture.interner.intern("i");
+        let var = fixture.ty(TyKind::Var(0));
+        let option = fixture.ty(TyKind::Option(var));
+        fixture.raw.contexts.push((context, ContextDecl { ty: option, volatile: false }));
+        fixture.raw.inputs.push((input, var));
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::TypeVariableInValueType {
+                    written: Written::Context(context)
+                },
+                Refused::TypeVariableInValueType {
+                    written: Written::Input(input)
+                },
+            ]
+        );
     }
 
     /// extern-fn §1: no declaration carries an array type.

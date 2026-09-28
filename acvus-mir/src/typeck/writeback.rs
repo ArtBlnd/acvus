@@ -5,7 +5,7 @@ use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{Chosen, Closure, Comparing, Comparison, Conversion, Typeck};
+use super::output::{Chosen, Closure, Comparing, Comparison, Conversion, Impl, Typeck};
 use crate::decl::{Base, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
@@ -309,6 +309,7 @@ fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, 
             return None;
         };
         let rule = step.rule().clone();
+        let r#impl = step.view_impl().map(Impl::Concrete);
         let reached = match super::decision::poly_head(cx.decls.types(), rule.to) == Some(to.head) {
             true => slot,
             false => {
@@ -328,7 +329,7 @@ fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, 
         };
         let via = Chosen {
             declaration: rule.via,
-            r#impl: None,
+            r#impl,
             required: Box::new([]),
         };
         steps.push(Conversion {

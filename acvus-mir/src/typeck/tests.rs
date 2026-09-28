@@ -1,11 +1,11 @@
 //! Each test states the rule its expected result comes from. Programs are
 //! parsed with `acvus-ast`; declarations go through `verify`.
 
-use acvus_ast::{Expr, Script, Stmt, Template};
+use acvus_ast::{BinOp, ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{Capture, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
-use crate::decl::{Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::decl::{CastRule, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
     TypeArg, Types,
@@ -117,12 +117,35 @@ impl Fixture {
         id
     }
 
+    /// A plain extern fn `name` in `namespace`, one of the declarations a
+    /// bare `name` may reach.
+    fn overload(&mut self, namespace: &str, name: &str, ty: TyId<Poly>) -> QualifiedRef {
+        let id = QualifiedRef::qualified(self.name(namespace), self.name(name));
+        let scheme = Scheme {
+            ty,
+            param_names: self.param_names(self.arity(ty)),
+            bounds: Box::new([]),
+            impls: None,
+            requires: Box::new([]),
+        };
+        self.raw.functions.push((id, scheme));
+        id
+    }
+
     /// An extern `Vec<T>` whose `as_slice` impl views it as `&[T]`
     /// (operators §3, §5).
     fn vec_with_as_slice(&mut self) -> QualifiedRef {
-        let fx = self;
-        let vec_id = QualifiedRef::root(fx.name("Vec"));
-        fx.raw.user_types.push(UserTypeDecl {
+        let (vec_id, at_vec) = self.vec_and_its_view();
+        let as_slice = self.raw.core.as_slice;
+        self.lang_item(as_slice, &[at_vec]);
+        vec_id
+    }
+
+    /// An extern `Vec<T>`, and the type of its `as_slice` impl,
+    /// `(&Vec<T>) -> &[T]`, not yet given.
+    fn vec_and_its_view(&mut self) -> (QualifiedRef, TyId<Poly>) {
+        let vec_id = QualifiedRef::root(self.name("Vec"));
+        self.raw.user_types.push(UserTypeDecl {
             id: vec_id,
             type_params: Box::new([TyVarBound::Any]),
             specializes: Box::new([false]),
@@ -130,15 +153,12 @@ impl Fixture {
             identity_params: 0,
             lifetimes: 0,
         });
-        let e = fx.var(0);
-        let vec_e = fx.vec_of(vec_id, e);
-        let shared_vec_e = fx.reference(Mutability::Shared, vec_e);
-        let slice_e = fx.ty(TyKind::Slice(e));
-        let shared_slice_e = fx.reference(Mutability::Shared, slice_e);
-        let at_vec = fx.pure(&[shared_vec_e], shared_slice_e);
-        let as_slice = fx.raw.core.as_slice;
-        fx.lang_item(as_slice, &[at_vec]);
-        vec_id
+        let e = self.var(0);
+        let vec_e = self.vec_of(vec_id, e);
+        let shared_vec_e = self.reference(Mutability::Shared, vec_e);
+        let slice_e = self.ty(TyKind::Slice(e));
+        let shared_slice_e = self.reference(Mutability::Shared, slice_e);
+        (vec_id, self.pure(&[shared_vec_e], shared_slice_e))
     }
 
     /// `Vec<element>`.
@@ -209,6 +229,17 @@ impl Fixture {
 
     fn script(self, source: &str) -> (Checked, Script) {
         let script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
+        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
+        let mut types = Types::new();
+        let typeck = check_script(&decls, &mut types, &script);
+        (Checked { typeck, types }, script)
+    }
+
+    /// A script parsed from `source`, then rewritten by `edit` before it is
+    /// checked: a form the parser does not write yet is built so.
+    fn script_edited(self, source: &str, edit: impl FnOnce(&mut Script)) -> (Checked, Script) {
+        let mut script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
+        edit(&mut script);
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
         let typeck = check_script(&decls, &mut types, &script);
@@ -1026,4 +1057,155 @@ fn a_store_through_a_reference_known_later_to_be_shared_is_refused() {
     fx.context("n", i64_ty);
     let (checked, _) = fx.script("let h = |r| -> { *r = 1; 2 }; h(&@n)");
     assert!(checked.refusals().contains(&&RefusalKind::StoreThroughShared));
+}
+
+/// types §6: a decision reads a term only once no pending decision may
+/// change it, and a term linked to a pending slot is that slot. `==` makes
+/// `y` one with the `if`'s slot, which `g(w)` raises from `u8` to `i64`
+/// once `w` is known, so `f(y)` reaches `f` at `i64`.
+#[test]
+fn a_term_linked_to_a_pending_slot_waits_for_it() {
+    let mut fx = Fixture::new();
+    let (u8_ty, i64_ty, bool_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    let widening = fx.pure(&[u8_ty], i64_ty);
+    let widen = fx.declare("widen", widening, &[]);
+    fx.raw.casts.push(CastRule {
+        from: u8_ty,
+        to: i64_ty,
+        via: widen,
+    });
+    let of_bool = fx.pure(&[bool_ty], i64_ty);
+    fx.overload("a", "g", widening);
+    fx.overload("b", "g", of_bool);
+    let (takes_u8, takes_i64) = (fx.pure(&[u8_ty], bool_ty), fx.pure(&[i64_ty], bool_ty));
+    fx.overload("a", "f", takes_u8);
+    let wide = fx.overload("b", "f", takes_i64);
+    let eq = fx.raw.core.eq;
+    let equalities: Vec<TyId<Poly>> = [u8_ty, i64_ty]
+        .into_iter()
+        .map(|compared| {
+            let shared = fx.reference(Mutability::Shared, compared);
+            fx.pure(&[shared, shared], bool_ty)
+        })
+        .collect();
+    fx.lang_item(eq, &equalities);
+    let (checked, script) = fx.script("let y; let w; let z = y == (if true { 1u8 } else { g(w) }); w = 2u8; f(y)");
+    checked.admitted();
+    let site = script.tail.as_ref().unwrap().id();
+    assert_eq!(checked.typeck.reached[&site].declaration, wide);
+}
+
+/// `left + right` of a script's tail rewritten to `left ^ right`, which the
+/// parser does not write yet.
+fn xor_tail(script: &mut Script) {
+    let Some(Expr::BinaryOp { op, .. }) = script.tail.as_deref_mut() else {
+        panic!("the test's tail is a binary operator");
+    };
+    *op = BinOp::Xor;
+}
+
+/// operators §2: `^` is the language's own on `bool` and the integers,
+/// and on no other type.
+#[test]
+fn xor_is_the_languages_own_on_bool_and_the_integers() {
+    let (checked, script) = Fixture::new().script_edited("true + false", xor_tail);
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+    assert!(checked.typeck.reached.is_empty());
+    let (checked, script) = Fixture::new().script_edited("1u8 + 2", xor_tail);
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+    let (checked, _) = Fixture::new().script_edited("(1, 2) + (3, 4)", xor_tail);
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NotBoolOrInteger]);
+}
+
+/// types §3, §7: a `return` and the tail each enter the run's result at
+/// their own site. The result is the two's join up the cast tree, and the
+/// `u8` returned is converted where it is returned.
+#[test]
+fn a_return_and_the_tail_each_enter_the_runs_result() {
+    let mut fx = Fixture::new();
+    let (u8_ty, i64_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64));
+    let widening = fx.pure(&[u8_ty], i64_ty);
+    let widen = fx.declare("widen", widening, &[]);
+    fx.raw.casts.push(CastRule {
+        from: u8_ty,
+        to: i64_ty,
+        via: widen,
+    });
+    let (checked, script) = fx.script("if true { return 1u8; }; 2i64");
+    checked.admitted();
+    let Stmt::Expr(Expr::If { then_body, .. }) = &script.stmts[0] else {
+        panic!("not an if");
+    };
+    let Stmt::Expr(Expr::Return { value, .. }) = &then_body[0] else {
+        panic!("not a return");
+    };
+    let steps = &checked.typeck.conversions[&value.id()];
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].via.declaration, widen);
+    assert!(is_int(&checked, steps[0].to, IntTy::I64));
+    let tail_site = script.tail.as_ref().unwrap().id();
+    assert!(!checked.typeck.conversions.contains_key(&tail_site));
+}
+
+/// operators §5: a view step names the impl of the view it is; here the
+/// second `as_slice` impl.
+#[test]
+fn a_view_step_names_its_impl() {
+    let mut fx = Fixture::new();
+    let other_id = QualifiedRef::root(fx.name("Other"));
+    fx.raw.user_types.push(UserTypeDecl {
+        id: other_id,
+        type_params: Box::new([]),
+        specializes: Box::new([]),
+        effect_params: 0,
+        identity_params: 0,
+        lifetimes: 0,
+    });
+    let other = fx.ty(TyKind::UserDefined {
+        id: other_id,
+        type_args: Box::new([]),
+        effect_args: Box::new([]),
+        identity_args: Box::new([]),
+    });
+    let bool_ty = fx.ty(TyKind::Bool);
+    let shared_other = fx.reference(Mutability::Shared, other);
+    let bools = fx.ty(TyKind::Slice(bool_ty));
+    let shared_bools = fx.reference(Mutability::Shared, bools);
+    let at_other = fx.pure(&[shared_other], shared_bools);
+    let (vec_id, at_vec) = fx.vec_and_its_view();
+    let as_slice = fx.raw.core.as_slice;
+    fx.lang_item(as_slice, &[at_other, at_vec]);
+    let unit = fx.ty(TyKind::Unit);
+    let takes_slice = fx.pure(&[shared_bools], unit);
+    fx.declare("first", takes_slice, &[]);
+    let vec_bool = fx.vec_of(vec_id, bool_ty);
+    fx.context("v", vec_bool);
+    let (checked, script) = fx.script("first(&@v)");
+    checked.admitted();
+    let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
+        panic!("not a call");
+    };
+    let steps = &checked.typeck.conversions[&args[0].id()];
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].via.declaration, as_slice);
+    assert_eq!(steps[0].via.r#impl, Some(Impl::Concrete(1)));
+}
+
+/// control-flow, types §6: a block whose last statement's type is `!` is
+/// `!`, where that type becomes known only once its call is reached.
+#[test]
+fn a_block_ending_in_a_call_of_type_never_is_never() {
+    let mut fx = Fixture::new();
+    let never = fx.ty(TyKind::Never);
+    let aborts = fx.pure(&[], never);
+    fx.declare("abort", aborts, &[]);
+    let (checked, script) = fx.script("if true { 1u8 } else { abort(); }");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
+    let Some(Expr::If { else_branch, .. }) = script.tail.as_deref() else {
+        panic!("not an if");
+    };
+    assert!(matches!(else_branch.as_deref(), Some(ElseBranch::Else { tail: None, .. })));
 }

@@ -33,6 +33,8 @@ enum Placeholders {
     Declared,
     /// A cast's patterns': declared with no bound, so any type.
     Unbounded,
+    /// A context's or an input's type, which has none.
+    Absent,
 }
 
 /// One use's fresh variables, one per placeholder, and each declared type
@@ -89,10 +91,10 @@ impl Infer {
     /// `Label::Opaque` (types §1).
     ///
     /// # Panics
-    /// `ty` holds a type variable: a context's and an input's type is
-    /// concrete, so no placeholder of theirs has a variable made.
+    /// `ty` holds a type variable: `verify` refuses a context or an input
+    /// whose type holds one (`TypeVariableInValueType`).
     pub fn instantiate_type(&mut self, decls: &Declarations, ty: TyId<Poly>) -> Term {
-        let mut at = AtUse::new(decls.types(), Placeholders::Declared);
+        let mut at = AtUse::new(decls.types(), Placeholders::Absent);
         self.instantiate_ty(&mut at, ty)
     }
 
@@ -222,6 +224,8 @@ impl Infer {
     /// A scheme's placeholder has no variable made up front: `verify`
     /// refuses a scheme whose bounds are not one per type variable
     /// (`BoundsDoNotFit`), so a verified scheme's variables are all made.
+    /// A context's or an input's type holds a placeholder: `verify` refuses
+    /// one (`TypeVariableInValueType`).
     fn ty_var_at(&mut self, at: &mut AtUse<'_>, index: u32) -> Term {
         match at.placeholders {
             Placeholders::Declared => *at
@@ -229,6 +233,10 @@ impl Infer {
                 .get(&index)
                 .expect("a verified scheme gives each of its type variables one bound (BoundsDoNotFit)"),
             Placeholders::Unbounded => *at.ty_vars.entry(index).or_insert_with(|| self.fresh(Bound::Any)),
+            Placeholders::Absent => panic!(
+                "a verified context's or input's type holds no type variable (TypeVariableInValueType), \
+                 but {index} is written in one"
+            ),
         }
     }
 

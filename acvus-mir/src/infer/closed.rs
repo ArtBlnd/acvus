@@ -3,7 +3,7 @@
 
 use super::{End, Infer, Term};
 use crate::decl::{Base, CastTree, Head};
-use crate::ty::{ObjectTy, Phase, Poly, TyId, TyKind, Types};
+use crate::ty::{ObjectTy, Phase, Poly, TyId, TyKind, TyVarId, Types};
 
 /// What the decisions still pending may do: typeck answers from its
 /// decision graph; B only asks.
@@ -29,6 +29,31 @@ impl Infer {
         };
         let head = self.head_of(node)?;
         (casts.step_up(head).is_none() || !open.may_change(term)).then_some(Closed { head, term: node })
+    }
+
+    /// The variable a relation rebinds to change `term`'s head: the last
+    /// on its chain. `None` for a term no variable holds, whose head no
+    /// relation changes. Two terms linked through variables answer the
+    /// same.
+    pub(crate) fn last_variable(&self, term: Term) -> Option<TyVarId> {
+        match self.end(term) {
+            End::Unbound(var, _) | End::Node { holder: Some((var, _)), .. } => Some(var),
+            End::Node { holder: None, .. } => None,
+        }
+    }
+
+    /// Every variable whose rebinding changes `term`'s head: its own last
+    /// variable and, for a reference, its target's, since a reference's
+    /// head carries its target's constructor.
+    pub(crate) fn head_variables(&self, term: Term) -> impl Iterator<Item = TyVarId> {
+        let target = match self.end(term) {
+            End::Node { node, .. } => match self.types.kind(node) {
+                TyKind::Ref(_, target) => self.last_variable(target.ty()),
+                _ => None,
+            },
+            End::Unbound(..) => None,
+        };
+        self.last_variable(term).into_iter().chain(target)
     }
 
     /// The head a cast step is taken from at `node` (types §3): its

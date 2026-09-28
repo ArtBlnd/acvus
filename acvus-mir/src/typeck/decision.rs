@@ -29,7 +29,7 @@ use super::reach::{self, Candidate, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
-use crate::infer::{Bound, Closed, Entered, Instantiated, OpenSources, RequiredAt, Term};
+use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::{
     Calls, CastTy, EffectTerm, Holds, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
 };
@@ -139,6 +139,13 @@ pub(super) enum Decision {
     /// A pattern against its scrutinee, through a reference as Rust's
     /// default binding modes do (patterns §1).
     Destructure { shape: Box<Shape>, scrutinee: Term, lent: Option<Mutability> },
+    /// A block with no tail whose last statement is the expression of
+    /// term `last`: `block` is `!` where `last` is, and `()` otherwise
+    /// (control-flow).
+    BlockEnd { span: Span, last: Term, block: Term },
+    /// `^` on its operands' one type, which is a `bool` or an integer
+    /// (operators §2).
+    BoolOrInteger { span: Span, operand: Term },
     /// `==` or an ordering at `node`: part by part for a structural type,
     /// through `core::eq` or `core::cmp` otherwise (operators §4).
     /// `body` is the effect of the body the comparison is in.
@@ -163,8 +170,10 @@ impl Decision {
             Decision::Field { part, .. } => vec![*part],
             Decision::Index { element, .. } => vec![*element],
             Decision::Deref { target, .. } => vec![*target],
+            Decision::BlockEnd { block, .. } => vec![*block],
             Decision::Destructure { shape, .. } => shape.bindings(),
             Decision::Compare { .. }
+            | Decision::BoolOrInteger { .. }
             | Decision::Cast { .. }
             | Decision::Settle { .. }
             | Decision::HoldsNoLoans { .. }
@@ -186,12 +195,13 @@ impl Decision {
             Decision::Field { object, part, .. } => vec![*object, *part],
             Decision::Index { container, element, .. } => vec![*container, *element],
             Decision::Deref { reference, target, .. } => vec![*reference, *target],
+            Decision::BlockEnd { last, block, .. } => vec![*last, *block],
             Decision::Destructure { shape, scrutinee, .. } => {
                 let mut terms = shape.bindings();
                 terms.push(*scrutinee);
                 terms
             }
-            Decision::Compare { operand, .. } => vec![*operand],
+            Decision::Compare { operand, .. } | Decision::BoolOrInteger { operand, .. } => vec![*operand],
             Decision::Settle { term, .. }
             | Decision::HoldsNoLoans { term, .. }
             | Decision::MovedCapture { term, .. }
@@ -212,17 +222,26 @@ impl Decisions {
     }
 }
 
-impl OpenSources for Decisions {
+/// The pending decisions, each output seen through B's links.
+pub(super) struct Pending<'a> {
+    pub decisions: &'a Decisions,
+    pub infer: &'a Infer,
+}
+
+impl OpenSources for Pending<'_> {
     /// Whether a pending decision outside the cycles through `term` may
-    /// still enter into it or bind it (types §6). A decision being fired is
-    /// taken out of the pending set first, so its own outputs never keep
-    /// its inputs open.
-    ///
-    /// NOTE: this compares terms as written, since a decision holds no
-    /// view of B's bindings. A term linked to a pending slot through
-    /// another variable is not seen as that slot.
+    /// still enter into it or bind it (types §6): whether some pending
+    /// output is held by a variable whose rebinding changes `term`'s head.
+    /// A decision being fired is taken out of the pending set first, so
+    /// its own outputs never keep its inputs open.
     fn may_change(&self, term: Term) -> bool {
-        self.pending.iter().any(|decision| decision.outputs().any(|output| output == term))
+        let reads: FxHashSet<TyVarId> = self.infer.head_variables(term).collect();
+        self.decisions
+            .pending
+            .iter()
+            .flat_map(Decision::outputs)
+            .filter_map(|output| self.infer.last_variable(output))
+            .any(|var| reads.contains(&var))
     }
 }
 
@@ -272,7 +291,8 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Index { container, .. } => Some(*container),
         Decision::Deref { reference, .. } => Some(*reference),
         Decision::Destructure { scrutinee, .. } => Some(*scrutinee),
-        Decision::Compare { operand, .. } => Some(*operand),
+        Decision::Compare { operand, .. } | Decision::BoolOrInteger { operand, .. } => Some(*operand),
+        Decision::BlockEnd { last, .. } => Some(*last),
         Decision::Iterate { head, .. } => Some(*head),
         Decision::Try { operand, .. } => Some(*operand),
         Decision::Cast { source, .. } => Some(*source),
@@ -497,6 +517,20 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             super::op::fire_compare(cx, node, span, sig, closed, &body);
+            Ok(())
+        }
+        Decision::BlockEnd { span, last, block } => {
+            let Some(closed) = closed_for(cx, last, reading) else {
+                return Err(Decision::BlockEnd { span, last, block });
+            };
+            super::stmt::fire_block_end(cx, span, closed, block);
+            Ok(())
+        }
+        Decision::BoolOrInteger { span, operand } => {
+            let Some(closed) = closed_for(cx, operand, reading) else {
+                return Err(Decision::BoolOrInteger { span, operand });
+            };
+            super::op::fire_bool_or_integer(cx, span, closed);
             Ok(())
         }
         Decision::MovesOut { lambda, span, term } => {
@@ -1281,7 +1315,9 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::Field { span, .. }
         | Decision::Index { span, .. }
         | Decision::Deref { span, .. }
-        | Decision::Compare { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
+        | Decision::Compare { span, .. }
+        | Decision::BoolOrInteger { span, .. }
+        | Decision::BlockEnd { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
         Decision::Destructure { shape, .. } => refusal::push(cx, RefusalKind::Undecided, shape.span()),
     }
 }

@@ -10,6 +10,8 @@ use super::decision::{Callee, CoreSig, Decision};
 use super::output::Comparing;
 use super::expr::check_expr;
 use super::place::{self, Demand};
+use super::refusal::{self, RefusalKind};
+use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
 use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, ObjectTy, TyKind};
 
@@ -52,10 +54,10 @@ pub(super) fn check_binary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<
             cx.eq(rhs, bool_ty, right.span());
             bool_ty
         }
-        // NOTE: `^` is on `bool` and the integers; no bound states "a
-        // `bool` or an integer", so only its operands' sameness is checked.
         BinOp::Xor => {
             cx.eq(lhs, rhs, span);
+            let operand = Decision::BoolOrInteger { span, operand: lhs };
+            super::decision::decide(cx, operand);
             lhs
         }
         BinOp::BitAnd | BinOp::BitOr => {
@@ -150,10 +152,20 @@ pub(super) fn fire_compare(
     }
 }
 
+/// `^` fired on its operands' one type (operators §2): a `bool` or an
+/// integer. A `!` operand is never read.
+pub(super) fn fire_bool_or_integer(cx: &mut Ctxt<'_>, span: Span, operand: Closed) {
+    match operand.head {
+        Head::Base(Base::Bool | Base::Int(_) | Base::Never) => {}
+        Head::Base(_) | Head::Ref(..) => refusal::push(cx, RefusalKind::NotBoolOrInteger, span),
+    }
+}
+
 /// `-x`, `!x`. `*r` is `place::check_deref`.
 ///
-/// NOTE: `!` is on `bool` and the integers; as for `^`, no bound states
-/// that pair, so its operand is not constrained here.
+/// NOTE: operators §2 lists `!` on `bool` alone, where Rust also has it on
+/// the integers. Which the language means is not settled yet, so its
+/// operand is not constrained here.
 pub(super) fn check_unary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, op: UnaryOp, operand: &Expr<S>, span: Span) -> Term {
     match op {
         UnaryOp::Neg => {

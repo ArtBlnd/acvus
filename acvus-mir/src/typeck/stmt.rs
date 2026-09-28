@@ -1,42 +1,62 @@
 //! Statements, and a body of statements and a tail.
 
-use acvus_ast::{Expr, Slot, Stmt};
+use acvus_ast::{Expr, Slot, Span, Stmt};
 
 use super::ctxt::Ctxt;
+use super::decision::Decision;
 use super::expr::check_expr;
 use super::place::{self, Demand};
 use super::refusal::{self, RefusalKind};
 use super::scope::{self, Binding};
 use super::{control, template};
-use crate::infer::Term;
-use crate::ty::TyKind;
+use crate::decl::{Base, Head};
+use crate::infer::{Closed, Term};
 
 /// Statements then a tail: the tail's term, or without one `()`, or `!`
-/// where the last statement diverges (control-flow).
+/// where the last statement diverges (control-flow). A `break` or a
+/// `continue` diverges as written; an expression statement diverges where
+/// its type is `!`, decided once that type is known (types §6).
 pub(super) fn check_body<S: Slot>(cx: &mut Ctxt<'_>, stmts: &[Stmt<S>], tail: Option<&Expr<S>>) -> Term {
-    check_stmts(cx, stmts);
-    match tail {
-        Some(tail) => check_expr(cx, tail, Demand::Read),
-        None if stmts.last().is_some_and(|last| diverges(cx, last)) => cx.never(),
-        None => cx.unit(),
+    if let Some(tail) = tail {
+        check_stmts(cx, stmts);
+        return check_expr(cx, tail, Demand::Read);
+    }
+    let Some((last, leading)) = stmts.split_last() else {
+        return cx.unit();
+    };
+    check_stmts(cx, leading);
+    match last {
+        Stmt::Expr(expr) => {
+            let last = check_expr(cx, expr, Demand::Read);
+            let block = cx.fresh();
+            let ends = Decision::BlockEnd {
+                span: expr.span(),
+                last,
+                block,
+            };
+            super::decision::decide(cx, ends);
+            block
+        }
+        Stmt::Break { .. } | Stmt::Continue { .. } => {
+            check_stmt(cx, last);
+            cx.never()
+        }
+        _ => {
+            check_stmt(cx, last);
+            cx.unit()
+        }
     }
 }
 
-/// Whether `stmt` never finishes: a `break`, a `continue`, or an
-/// expression of type `!` as far as it is known when the block is checked.
-///
-/// NOTE: a statement whose type becomes `!` only after solving leaves its
-/// block `()`; a block's type is fixed when it is checked.
-fn diverges<S: Slot>(cx: &Ctxt<'_>, stmt: &Stmt<S>) -> bool {
-    match stmt {
-        Stmt::Break { .. } | Stmt::Continue { .. } => true,
-        Stmt::Expr(expr) => cx
-            .out
-            .types
-            .get(&expr.id())
-            .is_some_and(|term| matches!(cx.infer.types().kind(cx.infer.shallow(*term)), TyKind::Never)),
-        _ => false,
-    }
+/// A block with no tail whose last statement is an expression, fired on
+/// that expression's type: `!` where it is `!`, and `()` otherwise
+/// (control-flow).
+pub(super) fn fire_block_end(cx: &mut Ctxt<'_>, span: Span, last: Closed, block: Term) {
+    let ends = match last.head {
+        Head::Base(Base::Never) => cx.never(),
+        _ => cx.unit(),
+    };
+    cx.eq(block, ends, span);
 }
 
 pub(super) fn check_stmts<S: Slot>(cx: &mut Ctxt<'_>, stmts: &[Stmt<S>]) {

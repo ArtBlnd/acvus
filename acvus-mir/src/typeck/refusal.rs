@@ -50,6 +50,9 @@ pub enum RefusalKind {
     NotTryable,
     /// `*r` where `r` is no reference (operators §6).
     NotAReference,
+    /// `^` on a value that is neither a `bool` nor an integer
+    /// (operators §2).
+    NotBoolOrInteger,
     /// `as` from a type Rust does not cast to `to` (operators §5); `from`
     /// is `None` where the source is no number, `bool` or `char`.
     CastNotAdmitted { from: Option<CastTy>, to: CastTy },

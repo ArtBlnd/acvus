@@ -14,11 +14,20 @@ pub struct CastRule {
 
 /// A cast `verify` admitted into the tree. Only `verify` builds one.
 #[derive(Debug, Clone, PartialEq)]
-pub struct VerifiedExternCast(pub(super) CastRule);
+pub struct VerifiedExternCast {
+    pub(super) rule: CastRule,
+    /// For a view (operators §5), the concrete impl of `rule.via` the
+    /// step is; `None` for a declared cast, whose `via` has no impls.
+    pub(super) view_impl: Option<usize>,
+}
 
 impl VerifiedExternCast {
     pub fn rule(&self) -> &CastRule {
-        &self.0
+        &self.rule
+    }
+
+    pub(crate) fn view_impl(&self) -> Option<usize> {
+        self.view_impl
     }
 }
 

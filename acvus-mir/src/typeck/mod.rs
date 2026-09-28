@@ -37,7 +37,7 @@ mod tests;
 mod variant;
 mod writeback;
 
-use acvus_ast::{Script, Slot, Template};
+use acvus_ast::{Expr, Script, Slot, Template};
 
 use crate::decl::Declarations;
 use crate::ty::{Concrete, Types};
@@ -50,8 +50,11 @@ use ctxt::Ctxt;
 /// A script (programs §2): statements and a tail.
 pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, script: &Script<S>) -> Typeck {
     let mut cx = Ctxt::new(decls);
-    let tail = stmt::check_body(&mut cx, &script.stmts, script.tail.as_deref());
-    context::check_run_result(&mut cx, tail, script.span);
+    let tail = script.tail.as_deref();
+    let value = stmt::check_body(&mut cx, &script.stmts, tail);
+    let site = tail.map_or(script.id, Expr::id);
+    let span = tail.map_or(script.span, Expr::span);
+    context::check_run_result(&mut cx, site, value, span);
     decision::solve(&mut cx);
     writeback::finish(cx, types)
 }

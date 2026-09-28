@@ -43,24 +43,12 @@ pub(super) fn refuse_held_loans(cx: &mut Ctxt<'_>, context: Term, span: Span) {
 }
 
 /// A run's result holds no loan (ownership §5), read once its type is
-/// solved. The tail becomes the run's result, or joins the one a `return`
-/// or a `?` already named.
-///
-/// NOTE: where a `return` named the run's result, the tail joins it rather
-/// than entering it, since the tail's site is not at hand here; a cast or
-/// a conversion between the two is not applied.
-pub(super) fn check_run_result(cx: &mut Ctxt<'_>, result: Term, span: Span) {
-    let term = match cx.scope.run_result() {
-        Some(slot) => {
-            cx.join(result, slot, span);
-            slot
-        }
-        None => {
-            cx.scope.set_run_result(result);
-            result
-        }
-    };
-    cx.decisions.push(Decision::HoldsNoLoans { span, term });
+/// solved. The tail enters the run's result at `site`, its own, as a
+/// `return` or a `?` enters it at theirs (types §3, §7).
+pub(super) fn check_run_result(cx: &mut Ctxt<'_>, site: AstId, tail: Term, span: Span) {
+    let result = super::control::body_result(cx);
+    cx.enter(site, tail, result, span);
+    cx.decisions.push(Decision::HoldsNoLoans { span, term: result });
 }
 
 /// Whether a value of a closed term holds a loan at some position

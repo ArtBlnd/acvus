@@ -1,6 +1,6 @@
 use acvus_ast::{AstId, Span};
 
-use super::decision::{Decision, Decisions};
+use super::decision::{Decision, Decisions, Pending};
 use super::output::Output;
 use super::refusal;
 use super::scope::Scope;
@@ -98,7 +98,11 @@ impl<'d> Ctxt<'d> {
 
     /// B's closed-head query, against the decisions still pending.
     pub fn closed(&self, term: Term) -> Option<Closed> {
-        self.infer.closed(self.decls.casts(), &self.decisions, term)
+        let pending = Pending {
+            decisions: &self.decisions,
+            infer: &self.infer,
+        };
+        self.infer.closed(self.decls.casts(), &pending, term)
     }
 
     /// A declared type that is not a function's (a context's, an input's)
