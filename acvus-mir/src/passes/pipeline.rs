@@ -80,12 +80,15 @@ fn proofs(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     step::<Bce>(module, body, am);
 }
 
-/// P6. The loop group, planned with the user (compilation §4), is reserved
-/// after it; nothing runs there yet.
+/// P6. `licm` runs last because it makes every loop's preheader, and
+/// `simplify_cfg`, which P3* runs, bypasses a preheader left empty; P7
+/// edits no block, so F2 holds from here into P7 (D73). The loop group,
+/// planned with the user (compilation §4), is reserved after it; nothing
+/// runs there yet.
 fn motion(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
-    step::<Licm>(module, body, am);
     step::<Sink>(module, body, am);
     scalar_fixpoint(module, body, am, scalar_round);
+    step::<Licm>(module, body, am);
 }
 
 /// P7. Nothing after `schedule` moves an instruction.

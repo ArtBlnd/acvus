@@ -6,7 +6,7 @@ use crate::ir::cfg::{BlockId, Body, Definition, Stages, Terminator};
 use crate::ir::{BinOp, Overflow, ValueId};
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::tests::{
-    Fixture, assign, bool_const, declarations, int_const, jump, ret, take, wrapping_add,
+    Fixture, assign, bool_const, declarations, int_const, jump, ret, take, trapping_add, wrapping_add,
 };
 
 /// ```text
@@ -90,9 +90,9 @@ fn no_level_changes_nothing() {
 
 /// Derived from the order: P1 promotes both slots, so `acc` becomes the
 /// loop header's parameter; P3* folds `b` to 3, replaces `t2` by `t1` and
-/// removes the dead product and every constant left unread; P6 hoists `t1`
-/// and `t1 + t1` into the entry, the loop's preheader, and sinks the
-/// constant 3 to the one block that reads it. What is left:
+/// removes the dead product and every constant left unread; P6 sinks the
+/// constant 3 to the one block that reads it, then hoists `t1` and
+/// `t1 + t1` into the entry, the loop's preheader. What is left:
 ///
 /// ```text
 /// entry:  zero = 0; t1 = n + n; u = t1 + t1; jump header(zero)
@@ -252,4 +252,58 @@ fn a_step_that_requires_ssa_refuses_a_promotable_slot() {
     let mut am = AnalysisManager::new(&decls);
 
     step::<Sccp>(&mut f.module, id, &mut am);
+}
+
+/// ```text
+/// if d { n + n } else { n + 1 }     both trap, so neither is hoisted
+/// while c { n + n }                 traps, so it stays in the loop
+/// return 0
+/// ```
+/// The loop is entered from both arms, and `licm` gives it a preheader it
+/// can hoist nothing into. `licm` runs last in P6 (D73), so no
+/// `simplify_cfg` bypasses that empty preheader before P7 requires F2.
+#[test]
+fn a_loop_keeps_its_empty_preheader_into_p7() {
+    let mut f = Fixture::new();
+    let (int, bool, nn, nc, nd) = (f.int, f.bool, f.name("n"), f.name("c"), f.name("d"));
+    let mut builder = f.module.build_body(false, int);
+    let n = builder.param(nn, int);
+    let c = builder.param(nc, bool);
+    let d = builder.param(nd, bool);
+    let [then_block, else_block, join, header, loop_body, exit] = [(); 6].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::Diamond {
+        cond: d,
+        then_to: then_block,
+        then_args: Vec::new(),
+        else_to: else_block,
+        else_args: Vec::new(),
+        join,
+    });
+    builder.switch_to(then_block);
+    builder.push(trapping_add(n, n), int, Span::ZERO);
+    builder.terminate(jump(join));
+    builder.switch_to(else_block);
+    let one = builder.push(int_const(1), int, Span::ZERO);
+    builder.push(trapping_add(n, one), int, Span::ZERO);
+    builder.terminate(jump(join));
+    builder.switch_to(join);
+    builder.terminate(jump(header));
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.switch_to(loop_body);
+    builder.push(trapping_add(n, n), int, Span::ZERO);
+    builder.terminate(jump(header));
+    builder.switch_to(exit);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+
+    optimized(&mut f, Level::Full);
+
+    let decls = declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let loops = am.get::<LoopTree>(&f.module, id);
+    let [of] = loops.loops().collect::<Vec<_>>()[..] else { panic!("one loop stays:\n{}", f.snapshot(id)) };
+    let Some(preheader) = loops.preheader(of) else { panic!("the loop has a preheader:\n{}", f.snapshot(id)) };
+    assert!(f.module.body(id).block(preheader).insts().is_empty(), "nothing is hoisted:\n{}", f.snapshot(id));
 }
