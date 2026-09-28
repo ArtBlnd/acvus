@@ -13,7 +13,7 @@ use crate::ty::{Mutability, TyKind, TypeArg};
 /// (operators §7), reached through `call`: `display(&T, out: &mut String)`
 /// (operators §2).
 pub(super) fn check_append<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, expr: &Expr<S>, span: Span) {
-    let value = check_expr(cx, expr, Demand::Read);
+    let value = check_expr(cx, expr, Demand::Lend(Mutability::Shared));
     let shown = cx.lend(value, Mutability::Shared, expr.span());
     let string = cx.node(TyKind::String);
     let out = cx.node(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string)));

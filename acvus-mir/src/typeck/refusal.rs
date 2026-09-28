@@ -50,8 +50,12 @@ pub enum RefusalKind {
     NotTryable,
     /// `*r` where `r` is no reference (operators §6).
     NotAReference,
-    /// `as` from a type Rust does not cast to `to` (operators §5).
-    CastNotAdmitted { to: CastTy },
+    /// `as` from a type Rust does not cast to `to` (operators §5); `from`
+    /// is `None` where the source is no number, `bool` or `char`.
+    CastNotAdmitted { from: Option<CastTy>, to: CastTy },
+    /// `break` or `continue` with no loop around it before a lambda's
+    /// boundary (control-flow).
+    OutsideLoop,
     // C: growth into what may not grow.
     GrowsOpaque,
     // Decisions.

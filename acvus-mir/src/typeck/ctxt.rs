@@ -4,7 +4,7 @@ use super::decision::{Decision, Decisions};
 use super::output::Output;
 use super::refusal;
 use super::scope::Scope;
-use crate::decl::{Declarations, Head, Scheme};
+use crate::decl::{Declarations, Head};
 use crate::infer::{Bound, Closed, Infer, Term};
 use crate::ty::{Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind, TypeArg};
 
@@ -102,21 +102,9 @@ impl<'d> Ctxt<'d> {
     }
 
     /// A declared type that is not a function's (a context's, an input's)
-    /// at this body: every node `Opaque`, and no variable.
-    ///
-    /// NOTE: infer instantiates only a `Scheme`, so the type is wrapped in
-    /// one with no parameters. This stands until infer states an
-    /// instantiation of a bare declared type (question Q2 to the
-    /// coordinator).
+    /// at this body: every node `Opaque` (types §1).
     pub fn declared(&mut self, ty: TyId<Poly>) -> Term {
-        let scheme = Scheme {
-            ty,
-            param_names: Box::new([]),
-            bounds: Box::new([]),
-            impls: None,
-            requires: Box::new([]),
-        };
-        self.infer.instantiate(self.decls, &scheme).ty
+        self.infer.instantiate_type(self.decls, ty)
     }
 
     /// A `&` or `&mut` of a value of term `target`. A value already a

@@ -90,6 +90,7 @@ fn while_loop(cond: ValueId, body: BlockId, exit: BlockId) -> Terminator {
 
 fn empty_declarations(interner: &Interner) -> Declarations {
     Declarations::verify(RawDeclarations {
+        lang_impls: Vec::new(),
         types: Types::new(),
         functions: Vec::new(),
         user_types: Vec::new(),

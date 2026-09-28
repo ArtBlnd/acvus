@@ -17,8 +17,24 @@ use crate::ty::Mutability;
 /// (operators §4) is not built: its parts' reaches have no site to be
 /// recorded at (question Q15 to the coordinator).
 pub(super) fn check_binary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<S>, op: BinOp, right: &Expr<S>, span: Span) -> Term {
-    let lhs = check_expr(cx, left, Demand::Read);
-    let rhs = check_expr(cx, right, Demand::Read);
+    // A lang item takes its operands by `&` (operators §2), so they are
+    // lent, not used whole.
+    let demand = match op {
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Eq
+        | BinOp::Neq
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::Lte
+        | BinOp::Gte => Demand::Lend(Mutability::Shared),
+        BinOp::And | BinOp::Or | BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => Demand::Read,
+    };
+    let lhs = check_expr(cx, left, demand);
+    let rhs = check_expr(cx, right, demand);
     let operands = Operands { left, lhs, right, rhs };
     match op {
         BinOp::Add => lang_item(cx, site, CoreSig::Add, operands, span),
@@ -85,7 +101,7 @@ fn lang_item<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, sig: CoreSig, operands: Op
 pub(super) fn check_unary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, op: UnaryOp, operand: &Expr<S>, span: Span) -> Term {
     match op {
         UnaryOp::Neg => {
-            let value = check_expr(cx, operand, Demand::Read);
+            let value = check_expr(cx, operand, Demand::Lend(Mutability::Shared));
             let arg = cx.lend(value, Mutability::Shared, operand.span());
             reach_call(cx, site, Callee::Core(CoreSig::Neg), vec![arg], span)
         }

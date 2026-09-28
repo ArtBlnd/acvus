@@ -37,12 +37,21 @@ impl Demand {
             Demand::Write | Demand::Lend(Mutability::Mut) => Mutability::Mut,
         }
     }
+
+    /// What a place's container is read for when a part of it is: a part
+    /// read whole leaves the container in place, lent for the part's read.
+    fn of_container(self) -> Demand {
+        match self {
+            Demand::Read => Demand::Lend(Mutability::Shared),
+            other => other,
+        }
+    }
 }
 
 /// `a.f`: a transparent object grows to have `f`; an opaque one must
 /// (types §1-2).
 pub(super) fn check_field<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, object: &Expr<S>, field: Astr, demand: Demand, span: Span) -> Term {
-    let object = check_expr(cx, object, demand);
+    let object = check_expr(cx, object, demand.of_container());
     field_of(cx, object, field, span)
 }
 
@@ -87,7 +96,7 @@ pub(super) fn check_index<S: Slot>(
     demand: Demand,
     span: Span,
 ) -> Term {
-    let container = check_expr(cx, object, demand);
+    let container = check_expr(cx, object, demand.of_container());
     let at = check_expr(cx, index, Demand::Read);
     let integer = cx.integer(index.span());
     cx.eq(at, integer, index.span());
@@ -192,7 +201,7 @@ fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, span: Span) -> Option<T
         Root::Local(name) => match cx.scope.lookup(name) {
             Some(found) => {
                 cx.out.names.insert(site, Name::Binding(found.binding.binder));
-                note_captures(cx, name, &found.crossed, Demand::Write);
+                note_captures(cx, name, &found, Demand::Write, span);
                 Some(found.binding.term)
             }
             None => {

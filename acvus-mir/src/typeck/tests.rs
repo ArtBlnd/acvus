@@ -43,6 +43,7 @@ impl Fixture {
         Self {
             names,
             raw: RawDeclarations {
+                lang_impls: Vec::new(),
                 types: Types::new(),
                 functions: Vec::new(),
                 user_types: Vec::new(),
@@ -116,9 +117,9 @@ impl Fixture {
         id
     }
 
-    /// A lang item's generic function with its concrete impls, as
-    /// operators §2's table states its type.
-    fn lang_item(&mut self, item: QualifiedRef, ty: TyId<Poly>, variables: usize, impls: &[TyId<Poly>]) {
+    /// A lang item's concrete impls; its generic function is the
+    /// compiler's (operators §2).
+    fn lang_item(&mut self, item: QualifiedRef, impls: &[TyId<Poly>]) {
         let concrete = impls
             .iter()
             .map(|ty| ImplSig {
@@ -128,22 +129,12 @@ impl Fixture {
                 facts: Default::default(),
             })
             .collect();
-        let scheme = Scheme {
-            ty,
-            param_names: self.param_names(self.arity(ty)),
-            bounds: vec![TyVarBound::Any; variables].into(),
-            impls: Some(Impls { concrete, generic: None }),
-            requires: Box::new([]),
-        };
-        self.raw.functions.push((item, scheme));
+        self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
     }
 
-    /// `add<T, O>(&T, &T) -> O`, and its other binary siblings, at the
-    /// widths given, each `(&w, &w) -> w`.
+    /// Impls of `add<T, O>(&T, &T) -> O`, or of one of its binary
+    /// siblings, at the widths given, each `(&w, &w) -> w`.
     fn arithmetic(&mut self, item: QualifiedRef, widths: &[TyKind<Poly>]) {
-        let (t, o) = (self.var(0), self.var(1));
-        let shared_t = self.reference(Mutability::Shared, t);
-        let ty = self.function(&[shared_t, shared_t], o, EffectTerm::Var(0));
         let impls: Vec<TyId<Poly>> = widths
             .iter()
             .map(|kind| {
@@ -152,17 +143,14 @@ impl Fixture {
                 self.pure(&[shared, shared], w)
             })
             .collect();
-        self.lang_item(item, ty, 2, &impls);
+        self.lang_item(item, &impls);
     }
 
-    /// `display<T>(&T, out: &mut String)` at `shown`.
+    /// Impls of `display<T>(&T, out: &mut String)` at `shown`.
     fn display(&mut self, shown: &[TyKind<Poly>]) {
-        let t = self.var(0);
-        let shared_t = self.reference(Mutability::Shared, t);
         let string = self.ty(TyKind::String);
         let out = self.reference(Mutability::Mut, string);
         let unit = self.ty(TyKind::Unit);
-        let ty = self.function(&[shared_t, out], unit, EffectTerm::Var(0));
         let impls: Vec<TyId<Poly>> = shown
             .iter()
             .map(|kind| {
@@ -172,7 +160,7 @@ impl Fixture {
             })
             .collect();
         let item = self.raw.core.display;
-        self.lang_item(item, ty, 1, &impls);
+        self.lang_item(item, &impls);
     }
 
     fn context(&mut self, name: &str, ty: TyId<Poly>) {
@@ -623,11 +611,10 @@ fn a_pipe_calls_its_right_with_its_left() {
 fn unwrap_reaches_the_lang_item() {
     let mut fx = Fixture::new();
     let unwrap = fx.raw.core.unwrap;
-    let (w, t) = (fx.var(0), fx.var(1));
-    let generic = fx.function(&[w], t, EffectTerm::Var(0));
+    let t = fx.var(0);
     let option_t = fx.ty(TyKind::Option(t));
     let at_option = fx.function(&[option_t], t, EffectTerm::Known(crate::ty::Effect::pure()));
-    fx.lang_item(unwrap, generic, 2, &[at_option]);
+    fx.lang_item(unwrap, &[at_option]);
     let bool_ty = fx.ty(TyKind::Bool);
     let option = fx.ty(TyKind::Option(bool_ty));
     fx.context("o", option);
@@ -714,10 +701,6 @@ fn a_containers_element_is_indexed_through_as_slice() {
         identity_params: 0,
         lifetimes: 0,
     });
-    let (c, t) = (fx.var(0), fx.var(1));
-    let (shared_c, slice_t) = (fx.reference(Mutability::Shared, c), fx.ty(TyKind::Slice(t)));
-    let shared_slice_t = fx.reference(Mutability::Shared, slice_t);
-    let generic = fx.function(&[shared_c], shared_slice_t, EffectTerm::Var(0));
     let e = fx.var(0);
     let vec_e = fx.ty(TyKind::UserDefined {
         id: vec_id,
@@ -730,7 +713,7 @@ fn a_containers_element_is_indexed_through_as_slice() {
     let shared_slice_e = fx.reference(Mutability::Shared, slice_e);
     let at_vec = fx.pure(&[shared_vec_e], shared_slice_e);
     let as_slice = fx.raw.core.as_slice;
-    fx.lang_item(as_slice, generic, 2, &[at_vec]);
+    fx.lang_item(as_slice, &[at_vec]);
     let bool_ty = fx.ty(TyKind::Bool);
     let vec_bool = fx.ty(TyKind::UserDefined {
         id: vec_id,
@@ -804,4 +787,76 @@ fn an_interpolation_no_display_answers_is_refused() {
     fx.display(&[TyKind::Int(IntTy::I64)]);
     let (checked, _) = fx.template("{{ true }}");
     assert!(matches!(checked.refusals()[..], [RefusalKind::NoDeclaration { .. }]));
+}
+
+/// functions §2: `move` captures each name by move.
+#[test]
+fn a_move_lambda_captures_by_move() {
+    let fx = Fixture::new();
+    let y = fx.name("y");
+    let (checked, _) = fx.script("let y = true; let f = move |x| -> y; f(1u8)");
+    checked.admitted();
+    let closure = checked.typeck.closures.values().next().expect("one lambda");
+    assert_eq!(
+        &closure.captures[..],
+        &[Captured {
+            name: y,
+            capture: Capture::Move
+        }]
+    );
+    assert_eq!(closure.calls, Calls::Many, "a `bool` copies, so nothing is moved out");
+}
+
+/// functions §3: a `move` closure whose body moves a captured value out is
+/// called once.
+#[test]
+fn a_move_lambda_that_moves_a_capture_out_is_once() {
+    let mut fx = Fixture::new();
+    let string = fx.ty(TyKind::String);
+    fx.context("s", string);
+    let (checked, script) = fx.script("let s = @s; let f = move |x| -> s; 1");
+    checked.admitted();
+    let closure = checked.typeck.closures.values().next().expect("one lambda");
+    assert_eq!(closure.calls, Calls::Once);
+    let Stmt::LetBind { expr, .. } = &script.stmts[1] else {
+        panic!("not a let");
+    };
+    let TyKind::Fn { calls, .. } = checked.kind(checked.typeck.types[&expr.id()]) else {
+        panic!("not a function");
+    };
+    assert_eq!(*calls, Calls::Once);
+}
+
+/// ownership §5: a `move` closure holds the strongest loan its captured
+/// values hold; a lambda capturing by reference holds that reference.
+#[test]
+fn a_closure_holds_the_loans_of_its_captures() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let (checked, script) = fx.script("let r = &mut @n; let f = move |x| -> r; let g = |x| -> r; 1");
+    checked.admitted();
+    let holds = |at: usize| {
+        let Stmt::LetBind { expr, .. } = &script.stmts[at] else {
+            panic!("not a let");
+        };
+        let TyKind::Fn { holds, .. } = checked.kind(checked.typeck.types[&expr.id()]) else {
+            panic!("not a function");
+        };
+        *holds
+    };
+    assert_eq!(holds(1), Holds::Mut);
+    assert_eq!(holds(2), Holds::Shared);
+}
+
+/// control-flow: `break` and `continue` leave a loop; one outside every
+/// loop, or inside a lambda inside one, is refused.
+#[test]
+fn break_outside_a_loop_is_refused() {
+    let (checked, _) = Fixture::new().script("while true { break; } 1");
+    checked.admitted();
+    let (checked, _) = Fixture::new().script("break; 1");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::OutsideLoop]);
+    let (checked, _) = Fixture::new().script("while true { let f = |x| -> { continue; x }; } 1");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::OutsideLoop]);
 }

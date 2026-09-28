@@ -44,7 +44,11 @@ pub use verify::{Refused, Written};
 /// verification.
 pub struct RawDeclarations {
     pub types: Types<Poly>,
+    /// Every declared function but the lang items, whose generic functions
+    /// the compiler builds (operators §2).
     pub functions: Vec<(QualifiedRef, Scheme)>,
+    /// The impls each lang item is given, by its `core` name.
+    pub lang_impls: Vec<(QualifiedRef, Impls)>,
     pub user_types: Vec<UserTypeDecl>,
     pub casts: Vec<CastRule>,
     pub conversions: Vec<ConversionRule>,

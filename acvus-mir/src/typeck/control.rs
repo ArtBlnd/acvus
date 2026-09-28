@@ -63,14 +63,14 @@ pub(super) fn check_match<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, scrutinee: &
 
 pub(super) fn check_while<S: Slot>(cx: &mut Ctxt<'_>, cond: &Expr<S>, body: &[Stmt<S>]) {
     check_condition(cx, cond);
-    cx.scope.push();
+    cx.scope.push_loop();
     check_stmts(cx, body);
     cx.scope.pop();
 }
 
 pub(super) fn check_while_let<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>, source: &Expr<S>, body: &[Stmt<S>]) {
     let scrutinee = check_expr(cx, source, Demand::Read);
-    cx.scope.push();
+    cx.scope.push_loop();
     check_pattern(cx, pattern, scrutinee);
     check_stmts(cx, body);
     cx.scope.pop();
@@ -113,7 +113,7 @@ pub(super) fn check_for<S: Slot>(
         }
     };
     cx.record(binder.id, item);
-    cx.scope.push();
+    cx.scope.push_loop();
     cx.scope.define(
         binder.name,
         Binding {

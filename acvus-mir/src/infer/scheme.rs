@@ -84,6 +84,18 @@ impl Infer {
         Instantiated { ty, requirements }
     }
 
+    /// A declared type that is not a function's, such as a context's or an
+    /// input's, at this use: every structural node it builds is
+    /// `Label::Opaque` (types §1).
+    ///
+    /// # Panics
+    /// `ty` holds a type variable: a context's and an input's type is
+    /// concrete, so no placeholder of theirs has a variable made.
+    pub fn instantiate_type(&mut self, decls: &Declarations, ty: TyId<Poly>) -> Term {
+        let mut at = AtUse::new(decls.types(), Placeholders::Declared);
+        self.instantiate_ty(&mut at, ty)
+    }
+
     /// A cast's or a conversion's two patterns at one use, sharing their
     /// fresh variables (extern-fn §7).
     pub(super) fn instantiate_ends(&mut self, poly: &Types<Poly>, from: TyId<Poly>, to: TyId<Poly>) -> (Term, Term) {

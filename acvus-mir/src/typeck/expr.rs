@@ -18,6 +18,9 @@ use crate::ty::{IntTy, LenTerm, Label, Mutability, ObjectTy, TyKind, TypeArg};
 pub(super) fn check_expr<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Term {
     let term = acvus_utils::grow(|| check_form(cx, expr, demand));
     cx.record(expr.id(), term);
+    if demand == Demand::Read {
+        closure::note_whole_use(cx, expr, term);
+    }
     term
 }
 
@@ -34,7 +37,7 @@ fn check_form<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Ter
                 && name.namespace.is_none()
                 && let Some(found) = cx.scope.lookup(name.name)
             {
-                note_captures(cx, name.name, &found.crossed, demand);
+                note_captures(cx, name.name, &found, demand, *span);
             }
             term
         }
@@ -77,7 +80,13 @@ fn check_form<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Ter
             ..
         } => method::check_method_call(cx, *id, *callee_id, receiver, *name, args, *span),
         Expr::Pipe { id, left, right, span } => call::check_pipe(cx, *id, left, right, *span),
-        Expr::Lambda { id, params, body, span } => closure::check_lambda(cx, *id, params, body, *span),
+        Expr::Lambda {
+            id,
+            captures_by_move,
+            params,
+            body,
+            ..
+        } => closure::check_lambda(cx, *id, *captures_by_move, params, body),
         Expr::Paren { inner, .. } => check_expr(cx, inner, demand),
         Expr::Borrow {
             id,

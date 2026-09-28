@@ -178,6 +178,16 @@ impl Infer {
         End::Node { holder, node: at }
     }
 
+    /// types §5: an effect nothing constrains is opaque, and an argument
+    /// whose `#` nothing decides is not specialized. Every such variable
+    /// still open takes its default; whether any did. Solving calls this
+    /// only at a stall.
+    pub fn default_effects_and_marks(&mut self) -> bool {
+        let effects = self.effect_vars.default_unbound(&crate::ty::Effect::opaque());
+        let marks = self.repr_vars.default_unbound(&Mark::Uniform);
+        effects || marks
+    }
+
     /// The unbound variables, with their bounds: what defaults read at a
     /// stall (types §5).
     pub fn unbound(&self) -> impl Iterator<Item = (TyVarId, &Bound)> {

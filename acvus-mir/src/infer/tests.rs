@@ -681,6 +681,7 @@ fn pure_fn(types: &mut Types<Poly>, params: Vec<crate::ty::TyId<Poly>>, ret: cra
 
 fn raw(names: &Interner, types: Types<Poly>, functions: Vec<(QualifiedRef, Scheme)>, casts: Vec<CastRule>) -> RawDeclarations {
     RawDeclarations {
+        lang_impls: Vec::new(),
         types,
         functions,
         user_types: Vec::new(),
@@ -1208,4 +1209,43 @@ fn two_identities_with_no_identity_free_ancestor_do_not_meet() {
             candidates: Box::new([])
         })
     );
+}
+
+/// types §1: a declared type that is not a function's, such as a
+/// context's, is built opaque at its use.
+#[test]
+fn a_declared_type_is_instantiated_opaque() {
+    let mut fx = Fixture::new();
+    let mut types = Types::new();
+    let field = fx.name("age");
+    let int = types.intern(TyKind::Int(IntTy::I64));
+    let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(field, int)]), ())));
+    let decls = Declarations::verify(raw(&fx.names, types, Vec::new(), Vec::new())).expect("verified");
+    let term = fx.infer.instantiate_type(&decls, object);
+    assert_eq!(fx.fields_of(term), (vec![field], Label::Opaque));
+}
+
+/// types §5: an effect nothing constrains is opaque, and an argument whose
+/// `#` nothing decides is not specialized.
+#[test]
+fn open_effects_and_marks_take_their_defaults() {
+    let mut fx = Fixture::new();
+    let effect = EffectTerm::Var(fx.infer.fresh_effect());
+    let function = fx.function(effect, Flows::none(), Calls::Many, Holds::Nothing);
+    let mark = fx.infer.fresh_repr();
+    let unit = fx.kind(TyKind::Unit);
+    let open = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Open(mark, unit)));
+    assert!(fx.infer.default_effects_and_marks());
+    assert!(!fx.infer.default_effects_and_marks(), "each default applies once");
+    let (types, frozen) = fx.freeze(function);
+    let TyKind::Fn {
+        effect: EffectTerm::Known(settled),
+        ..
+    } = types.kind(frozen)
+    else {
+        panic!("a function of a known effect");
+    };
+    assert_eq!(settled, &Effect::opaque());
+    let (types, frozen) = fx.freeze(open);
+    assert!(matches!(types.kind(frozen), TyKind::Ref(_, TypeArg::Uniform(_))));
 }

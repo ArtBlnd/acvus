@@ -906,6 +906,7 @@ mod tests {
     /// declared type (`decl/mod.rs`).
     fn empty_declarations(interner: &Interner) -> Declarations {
         Declarations::verify(RawDeclarations {
+            lang_impls: Vec::new(),
             types: Types::new(),
             functions: Vec::new(),
             user_types: vec![UserTypeDecl {

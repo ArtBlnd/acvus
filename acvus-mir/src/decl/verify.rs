@@ -7,7 +7,7 @@ use super::casts::{Base, CastTree, Head, VerifiedExternCast};
 use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::impl_fit::is_impl_of;
-use super::{CastRule, ContextDecl, Core, Declarations, RawDeclarations, Requirement, Scheme, UserTypeDecl};
+use super::{CastRule, ContextDecl, Core, Declarations, Impls, RawDeclarations, Requirement, Scheme, UserTypeDecl};
 use super::segments::{Segment, segments};
 use crate::ty::{
     Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LifetimesOf, Mutability, ObjectTy,
@@ -65,6 +65,11 @@ pub enum Refused {
     NotAFunction { function: QualifiedRef },
     /// Two types under one name.
     DuplicateType { id: QualifiedRef },
+    /// A generic function declared under a lang item's name: the compiler
+    /// builds every lang item's generic function itself (operators §2).
+    CoreGenericFunction { id: QualifiedRef },
+    /// Impls given to a name that is no lang item (operators §2).
+    NotALangItem { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in
     /// rfc_compiler; carried from the registry's rule until it is.
     TwoIdentities { id: QualifiedRef },
@@ -83,8 +88,9 @@ pub enum Written {
 /// Build the verified set, or every refusal the set earns.
 pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>> {
     let RawDeclarations {
-        types,
+        mut types,
         functions,
+        lang_impls,
         user_types,
         casts,
         conversions,
@@ -95,6 +101,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     } = raw;
     let mut refused = Vec::new();
 
+    let functions = with_lang_items(&mut types, &core, functions, lang_impls, &mut refused);
     let user_types = extern_types(user_types, &mut refused);
     let unreadable = refuse_unwritable_types(
         &types,
@@ -143,6 +150,46 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         true => Ok(decls),
         false => Err(refused),
     }
+}
+
+/// The declared functions with every lang item's generic function, built by
+/// the compiler from operators §2's table and given the impls declared for
+/// it, in front. A function declared under a lang item's name, and impls
+/// given to a name that is no lang item, are refused and left out; a lang
+/// item given impls twice keeps the first, as a function declared twice
+/// does.
+fn with_lang_items(
+    types: &mut Types<Poly>,
+    core: &Core,
+    functions: Vec<(QualifiedRef, Scheme)>,
+    lang_impls: Vec<(QualifiedRef, Impls)>,
+    refused: &mut Vec<Refused>,
+) -> Vec<(QualifiedRef, Scheme)> {
+    let mut given: FxHashMap<QualifiedRef, Impls> = FxHashMap::default();
+    for (id, impls) in lang_impls {
+        if !core.names(id) {
+            refused.push(Refused::NotALangItem { id });
+        } else if given.contains_key(&id) {
+            refused.push(Refused::DuplicateFunction { id });
+        } else {
+            given.insert(id, impls);
+        }
+    }
+    let mut all: Vec<(QualifiedRef, Scheme)> = core
+        .generic_functions(types)
+        .into_iter()
+        .map(|(id, scheme)| {
+            let impls = given.remove(&id);
+            (id, Scheme { impls, ..scheme })
+        })
+        .collect();
+    for (id, scheme) in functions {
+        match core.names(id) {
+            true => refused.push(Refused::CoreGenericFunction { id }),
+            false => all.push((id, scheme)),
+        }
+    }
+    all
 }
 
 /// Each entry by its key. The first entry of a key stands; every later
@@ -661,9 +708,11 @@ fn conversions_by_head(
 /// head. An impl refused as not of its generic function is left out.
 ///
 /// # Panics
-/// A fitting impl is not a function of one parameter. Every fitting
-/// impl has its view's shape, and core declares each view
-/// as a function of one parameter.
+/// A fitting impl is not a function of one parameter. A fitting impl is
+/// its view's type at some choice of the view's variables, and the
+/// compiler builds each view's type from operators §2 as a function of one
+/// parameter (`Core::generic_functions`); an impl of any other shape is
+/// refused as `ImplNotOfGenericFunction` and left out above.
 fn view_rules(
     types: &Types<Poly>,
     functions: &FxHashMap<QualifiedRef, Scheme>,
@@ -682,10 +731,10 @@ fn view_rules(
             .filter(|(at, _)| !misfits.contains(&(via, *at)));
         for (_, r#impl) in fitting {
             let TyKind::Fn { params, ret, .. } = types.kind(r#impl.ty) else {
-                panic!("a view impl is a function type, as core declares its view")
+                panic!("a fitting view impl is a function type, as the compiler builds each view (operators §2)")
             };
             let [param] = &params[..] else {
-                panic!("a view impl takes one parameter, as core declares its view")
+                panic!("a fitting view impl takes one parameter, as the compiler builds each view (operators §2)")
             };
             rules.push(Ok(CastRule {
                 from: *param,
@@ -1104,6 +1153,7 @@ mod tests {
             Fixture {
                 interner,
                 raw: RawDeclarations {
+                    lang_impls: Vec::new(),
                     types: Types::new(),
                     functions: Vec::new(),
                     user_types: Vec::new(),
@@ -1222,6 +1272,16 @@ mod tests {
 
         fn declare(&mut self, id: QualifiedRef, scheme: Scheme) {
             self.raw.functions.push((id, scheme));
+        }
+
+        /// Gives the lang item `item` the concrete impls `tys`, stating no
+        /// fact.
+        fn give(&mut self, item: QualifiedRef, tys: &[TyId<Poly>]) {
+            let impls = Impls {
+                concrete: tys.iter().map(|ty| self.r#impl(*ty, Box::new([]))).collect(),
+                generic: None,
+            };
+            self.raw.lang_impls.push((item, impls));
         }
 
         fn verify(self) -> Result<Declarations, Vec<Refused>> {
@@ -1781,22 +1841,6 @@ mod tests {
         assert_eq!(decls.overloads(other), &[] as &[QualifiedRef]);
     }
 
-    /// core's view lang item: `fn(&C) -> &[T]` under `mutability`, or
-    /// `fn(&C) -> &str` where `slice` is false.
-    fn view_signature(fixture: &mut Fixture, mutability: Mutability, slice: bool) -> TyId<Poly> {
-        let container = fixture.ty(TyKind::Var(0));
-        let container_ref = fixture.reference(mutability, container);
-        let view = match slice {
-            true => {
-                let element = fixture.ty(TyKind::Var(1));
-                fixture.ty(TyKind::Slice(element))
-            }
-            false => fixture.ty(TyKind::Str),
-        };
-        let view_ref = fixture.reference(mutability, view);
-        fixture.function(&[container_ref], view_ref)
-    }
-
     /// operators §5, types §3: `as_slice` at `&Vec` is a step from
     /// `Ref(Shared, Named(Vec))` to `Ref(Shared, Slice)`; `as_str` at
     /// `&String` from `Ref(Shared, String)` to `Ref(Shared, Str)`. Two views
@@ -1816,9 +1860,8 @@ mod tests {
         let string_ref = fixture.reference(Mutability::Shared, string);
         let str_ref = fixture.shared_str();
         let as_str_at_string = fixture.function(&[string_ref], str_ref);
-        let (as_slice_ty, as_str_ty) = (view_signature(&mut fixture, Mutability::Shared, true), view_signature(&mut fixture, Mutability::Shared, false));
-        fixture.declare(core.as_slice, fixture.with_impls(as_slice_ty, 2, &[as_slice_at_vec]));
-        fixture.declare(core.as_str, fixture.with_impls(as_str_ty, 1, &[as_str_at_string]));
+        fixture.give(core.as_slice, &[as_slice_at_vec]);
+        fixture.give(core.as_str, &[as_str_at_string]);
         let decls = fixture.verify().expect("two views from two heads are a tree");
         let from_vec = decls
             .casts()
@@ -1849,7 +1892,7 @@ mod tests {
         let other_ref = fixture.reference(Mutability::Shared, other_ty);
         let slice_ref = fixture.reference(Mutability::Shared, slice);
         let as_slice_at_vec = fixture.function(&[vec_ref], slice_ref);
-        fixture.declare(core.as_slice, fixture.with_impls(as_slice_at_vec, 0, &[as_slice_at_vec]));
+        fixture.give(core.as_slice, &[as_slice_at_vec]);
         fixture.raw.casts.push(CastRule {
             from: vec_ref,
             to: other_ref,
@@ -2211,27 +2254,20 @@ mod tests {
     fn a_generic_view_is_refused() {
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
-        let ty = view_signature(&mut fixture, Mutability::Shared, true);
-        fixture.declare(
+        fixture.raw.lang_impls.push((
             core.as_slice,
-            Scheme {
-                impls: Some(Impls {
-                    concrete: Box::new([]),
-                    generic: Some(GenericImplSig::default()),
-                }),
-                ..fixture.plain(ty, 2)
+            Impls {
+                concrete: Box::new([]),
+                generic: Some(GenericImplSig::default()),
             },
-        );
+        ));
         assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via: core.as_slice }]);
     }
 
-    /// A view lang item core declares with no impl adds no step.
+    /// A view lang item given no impl adds no step.
     #[test]
     fn a_view_lang_item_without_impls_adds_no_step() {
-        let mut fixture = Fixture::new();
-        let core = fixture.raw.core;
-        let ty = view_signature(&mut fixture, Mutability::Shared, true);
-        fixture.declare(core.as_slice, fixture.plain(ty, 2));
+        let fixture = Fixture::new();
         let decls = fixture.verify().expect("nothing to refuse");
         assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)).is_none());
     }
@@ -2243,8 +2279,6 @@ mod tests {
     fn a_view_at_any_container_is_judged_by_the_tree() {
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
-        let as_slice_ty = view_signature(&mut fixture, Mutability::Shared, true);
-        let as_str_ty = view_signature(&mut fixture, Mutability::Shared, false);
         let string = fixture.ty(TyKind::String);
         let string_ref = fixture.reference(Mutability::Shared, string);
         let byte = fixture.ty(TyKind::Int(IntTy::U8));
@@ -2253,8 +2287,8 @@ mod tests {
         let str_ref = fixture.shared_str();
         let as_slice_at_string = fixture.function(&[string_ref], bytes_ref);
         let as_str_at_string = fixture.function(&[string_ref], str_ref);
-        fixture.declare(core.as_slice, fixture.with_impls(as_slice_ty, 2, &[as_slice_at_string]));
-        fixture.declare(core.as_str, fixture.with_impls(as_str_ty, 1, &[as_str_at_string]));
+        fixture.give(core.as_slice, &[as_slice_at_string]);
+        fixture.give(core.as_str, &[as_str_at_string]);
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
@@ -2512,5 +2546,69 @@ mod tests {
         assert!(refused.contains(&Refused::DuplicateType { id: t }));
         assert!(refused.contains(&Refused::ArrayType { declaration: f }));
         assert_eq!(refused.len(), 2);
+    }
+
+    /// operators §2: the compiler builds every lang item's generic function,
+    /// so one declared under a lang item's name is refused.
+    #[test]
+    fn a_generic_function_under_a_lang_items_name_is_refused() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let t = fixture.ty(TyKind::Var(0));
+        let ty = fixture.function(&[t], t);
+        fixture.declare(core.clone, fixture.plain(ty, 1));
+        assert_eq!(refusals(fixture), vec![Refused::CoreGenericFunction { id: core.clone }]);
+    }
+
+    /// operators §2: impls are given only to a lang item.
+    #[test]
+    fn impls_of_a_name_that_is_no_lang_item_are_refused() {
+        let mut fixture = Fixture::new();
+        let id = fixture.name("m", "f");
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let ty = fixture.function(&[int], int);
+        fixture.give(id, &[ty]);
+        assert_eq!(refusals(fixture), vec![Refused::NotALangItem { id }]);
+    }
+
+    /// operators §2, extern-fn §6: an impl of a view that is not a function
+    /// is refused as a signature and as no impl of the view's type, and the
+    /// view rule never reads it.
+    #[test]
+    fn a_view_impl_that_is_no_function_is_refused_before_the_view_rule() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let not_a_function = fixture.ty(TyKind::Int(IntTy::I64));
+        fixture.give(core.as_slice, &[not_a_function]);
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::NotAFunction { function: core.as_slice },
+                Refused::ImplNotOfGenericFunction {
+                    generic_function: core.as_slice,
+                    r#impl: 0
+                },
+            ]
+        );
+    }
+
+    /// operators §2: an impl of a lang item is held to the compiler's type
+    /// of it by the impl-fit rule.
+    #[test]
+    fn an_impl_is_held_to_the_compilers_lang_item() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let shared = fixture.reference(Mutability::Shared, int);
+        let fits = fixture.function(&[shared, shared], int);
+        let misfit = fixture.function(&[int, int], int);
+        fixture.give(core.add, &[fits, misfit]);
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::ImplNotOfGenericFunction {
+                generic_function: core.add,
+                r#impl: 1
+            }]
+        );
     }
 }

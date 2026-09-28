@@ -6,7 +6,9 @@
 //! changes anything: a value with no head yet takes the closed slot it
 //! enters, since that use decides it (types §5, D27); every integer literal
 //! no use decided takes its default width; every type variable no pending
-//! decision reads is `!`; then every type variable at all is `!`; then a
+//! decision reads is `!`; then every type variable at all is `!`; then
+//! every effect nothing constrains is opaque and every open `#` is not
+//! specialized (types §5); then a
 //! decision closed only up to a cycle through decisions fires on what the
 //! sources outside the cycle fixed (typeck-structure section 4). What is
 //! still open after that is refused, naming the construct left open.
@@ -28,7 +30,7 @@ use super::refusal::{self, RefusalKind};
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::{
-    CastTy, EffectTerm, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
+    Calls, CastTy, EffectTerm, Holds, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
 };
 
 /// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
@@ -94,6 +96,14 @@ pub(super) enum Decision {
     /// A value that outlives the run, whose type has no positions
     /// (ownership §5), read once no variable is left in it.
     HoldsNoLoans { span: Span, term: Term },
+    /// A name a `move` lambda captured: the lambda's function value holds
+    /// the strongest loan the captured value's type holds (ownership §5),
+    /// read once no variable is left in it.
+    MovedCapture { lambda: AstId, span: Span, term: Term },
+    /// A value a `move` lambda's body uses whole, out of what it captured:
+    /// where its type does not copy, the body moves it out, and the lambda
+    /// is called once (functions §3).
+    MovesOut { lambda: AstId, span: Span, term: Term },
 }
 
 impl Decision {
@@ -104,7 +114,11 @@ impl Decision {
             Decision::Iterate { item, .. } => vec![*item],
             Decision::Try { value, exit, .. } => vec![*value, *exit],
             Decision::Enter { slot, .. } => vec![*slot],
-            Decision::Cast { .. } | Decision::Settle { .. } | Decision::HoldsNoLoans { .. } => Vec::new(),
+            Decision::Cast { .. }
+            | Decision::Settle { .. }
+            | Decision::HoldsNoLoans { .. }
+            | Decision::MovedCapture { .. }
+            | Decision::MovesOut { .. } => Vec::new(),
         };
         outputs.into_iter()
     }
@@ -117,7 +131,10 @@ impl Decision {
             Decision::Try { operand, value, exit, .. } => vec![*operand, *value, *exit],
             Decision::Enter { value, slot, .. } => vec![*value, *slot],
             Decision::Cast { source, .. } => vec![*source],
-            Decision::Settle { term, .. } | Decision::HoldsNoLoans { term, .. } => vec![*term],
+            Decision::Settle { term, .. }
+            | Decision::HoldsNoLoans { term, .. }
+            | Decision::MovedCapture { term, .. }
+            | Decision::MovesOut { term, .. } => vec![*term],
         }
     }
 }
@@ -173,6 +190,7 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
             || default_literals(cx)
             || default_unconstrained(cx, true)
             || default_unconstrained(cx, false)
+            || cx.infer.default_effects_and_marks()
             || fire_round(cx, Reading::CycleBroken)
         {
             continue;
@@ -290,6 +308,23 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             }
             if super::context::holds_positions(cx, term) {
                 refusal::push(cx, RefusalKind::HoldsLoans, span);
+            }
+            Ok(())
+        }
+        Decision::MovedCapture { lambda, span, term } => {
+            if !unbound_vars(cx, [term]).is_empty() {
+                return Err(Decision::MovedCapture { lambda, span, term });
+            }
+            let holds = super::closure::strongest_loan(cx, term);
+            super::closure::relax(cx, lambda, Calls::Many, holds, span);
+            Ok(())
+        }
+        Decision::MovesOut { lambda, span, term } => {
+            if !unbound_vars(cx, [term]).is_empty() {
+                return Err(Decision::MovesOut { lambda, span, term });
+            }
+            if !super::closure::copies(cx, term) {
+                super::closure::relax(cx, lambda, Calls::Once, Holds::Nothing, span);
             }
             Ok(())
         }
@@ -466,7 +501,7 @@ fn fire_cast(cx: &mut Ctxt<'_>, site: AstId, span: Span, source: Closed, to: Cas
         Some(from) if from.admits(to) => {
             cx.out.casts.insert(site, AsCast { from, to });
         }
-        _ => refusal::push(cx, RefusalKind::CastNotAdmitted { to }, span),
+        from => refusal::push(cx, RefusalKind::CastNotAdmitted { from, to }, span),
     }
 }
 
@@ -1047,7 +1082,7 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
     match decision {
         Decision::Settle { span, .. } => refusal::push(cx, RefusalKind::BoundUnanswered, span),
         // Its type holds a variable some other refusal left open.
-        Decision::HoldsNoLoans { .. } => {}
+        Decision::HoldsNoLoans { .. } | Decision::MovedCapture { .. } | Decision::MovesOut { .. } => {}
         Decision::Reach { span, callee, .. } => {
             let open = callee_name(cx, &callee);
             refusal::push(cx, RefusalKind::NeverKnown { open }, span);

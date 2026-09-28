@@ -1,10 +1,5 @@
 //! Every term to its concrete type, once (compilation); the lambdas' claimed
 //! flows into their function types.
-//!
-//! Solving leaves open only what no decision reads: an effect nothing
-//! constrains is opaque, and an argument whose `#` nothing decides is not
-//! specialized (types §5). Both are applied here, where freezing meets
-//! them, by relating the open variable to its default through B's `eq`.
 
 use rustc_hash::FxHashMap;
 
@@ -13,7 +8,7 @@ use super::output::{Closure, Conversion, Typeck};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
     Alignment, Calls, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, Infer as InferPhase,
-    Mutability, Ty, TyKind, TypeArg, Types,
+    Mutability, Ty, TyKind, Types,
 };
 
 pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
@@ -73,29 +68,21 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
     }
 }
 
-/// `term` frozen, each open effect, mark and flow set to its default first.
-/// `None` only where a refusal already left a type variable, a length or
-/// an identity open; with no refusal that is the checker's defect.
+/// `term` frozen, each open flow set first. `None` only where a refusal
+/// already left a variable open; with no refusal that is the checker's
+/// defect.
 ///
 /// # Panics
-/// A type variable, a length or an identity is open and no refusal was
-/// made: solving binds every type variable, and every length and identity
-/// is fixed by the term that made it.
+/// A variable other than a flow set is open and no refusal was made:
+/// solving binds every type variable and, at its last stall, every effect
+/// and mark (types §5), and every length and identity is fixed by the term
+/// that made it.
 fn freeze(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, term: Term) -> Option<Ty> {
     loop {
         match cx.infer.freeze(types, memo, term) {
             Ok(ty) => return Some(ty),
-            Err(Unsettled::Effect(var)) => default_effect(cx, EffectTerm::Var(var)),
-            Err(Unsettled::Mark(var)) => {
-                let unit = cx.unit();
-                let open = cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Open(var, unit)));
-                let uniform = cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(unit)));
-                cx.infer
-                    .eq(open, uniform)
-                    .expect("an open mark takes `Uniform`, the default of types §5");
-            }
             Err(Unsettled::Flow(var)) => set_flows(cx, FlowTerm::Var(var), Flows::Every),
-            Err(open @ (Unsettled::Ty(_) | Unsettled::Len(_) | Unsettled::Identity(_))) => {
+            Err(open) => {
                 assert!(
                     !cx.out.refusals.is_empty(),
                     "{open:?} is open after solving, and no refusal explains it"
@@ -104,15 +91,6 @@ fn freeze(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo,
             }
         }
     }
-}
-
-/// An effect nothing constrains is opaque (types §5, effects).
-fn default_effect(cx: &mut Ctxt<'_>, effect: EffectTerm<InferPhase>) {
-    let open = probe(cx, effect, FlowTerm::Known(Flows::none()));
-    let opaque = probe(cx, EffectTerm::Known(Effect::opaque()), FlowTerm::Known(Flows::none()));
-    cx.infer
-        .eq(open, opaque)
-        .expect("an open effect takes the opaque effect");
 }
 
 /// `flows` set to `to`.
@@ -143,12 +121,18 @@ fn probe(cx: &mut Ctxt<'_>, effect: EffectTerm<InferPhase>, flows: FlowTerm<Infe
     })
 }
 
-/// What `effect` settled to, its default where nothing constrained it.
+/// What `effect` settled to.
+///
+/// # Panics
+/// `effect` is open: `solve` ends only at a stall where no effect was left
+/// to default, so every effect is known.
 fn effect_of(cx: &mut Ctxt<'_>, effect: EffectTerm<InferPhase>) -> Effect {
     let probe = probe(cx, effect, FlowTerm::Known(Flows::none()));
     let mut types = Types::new();
-    let frozen = freeze(cx, &mut types, &mut FreezeMemo::default(), probe)
-        .expect("a function type of no parameter holds no type variable");
+    let frozen = cx
+        .infer
+        .freeze(&mut types, &mut FreezeMemo::default(), probe)
+        .expect("solve defaults every open effect at its last stall (types §5)");
     match types.kind(frozen) {
         TyKind::Fn {
             effect: EffectTerm::Known(effect),

@@ -92,6 +92,17 @@ impl<T: VarTerm> Cells<T> {
         }
     }
 
+    /// Every variable still unbound takes `value`; whether any did. A
+    /// variable made one with another is bound through it and is left.
+    pub(super) fn default_unbound(&mut self, value: &T::Value) -> bool {
+        let mut any = false;
+        for cell in self.cells.iter_mut().filter(|cell| cell.is_none()) {
+            *cell = Some(T::of_value(value.clone()));
+            any = true;
+        }
+        any
+    }
+
     /// Makes `a` and `b` one (types §4): an unbound variable is bound, two
     /// variables are linked, two known values must be equal.
     pub(super) fn unify(&mut self, a: &T, b: &T) -> Result<T, Unequal> {
