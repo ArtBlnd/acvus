@@ -1209,10 +1209,13 @@ mod tests {
     // -- is_move_only tests --
 
     /// A user-defined type with an identity: a source of its own, so move-only.
-    fn test_user_defined(types: &mut Types<Concrete>) -> Ty {
-        let i = Interner::new();
+    /// `interner` is the one interner every name in the caller's test comes
+    /// from: two `Astr`s from different interners panic on comparison
+    /// (`acvus_utils::Astr`), so a fresh `Interner::new()` here, called more
+    /// than once, would name two "TestType"s that never compare equal.
+    fn test_user_defined(interner: &Interner, types: &mut Types<Concrete>) -> Ty {
         types.intern(TyKind::UserDefined {
-            id: QualifiedRef::root(i.intern("TestType")),
+            id: QualifiedRef::root(interner.intern("TestType")),
             type_args: Box::new([]),
             effect_args: Box::new([]),
             identity_args: Box::new([crate::ty::IdentityTerm::Known(
@@ -1223,13 +1226,14 @@ mod tests {
 
     #[test]
     fn an_option_moves_exactly_when_its_payload_does() {
+        let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let float_ty = types.intern(TyKind::Float);
         let string_ty = types.intern(TyKind::String);
         let option_float = types.intern(TyKind::Option(float_ty));
         let option_string = types.intern(TyKind::Option(string_ty));
         let option_option_float = types.intern(TyKind::Option(option_float));
-        let user = test_user_defined(&mut types);
+        let user = test_user_defined(&i, &mut types);
         let option_user = types.intern(TyKind::Option(user));
         let option_option_user = types.intern(TyKind::Option(option_user));
         assert_eq!(is_move_only(&types, option_float), false);
@@ -1268,16 +1272,18 @@ mod tests {
 
     #[test]
     fn user_defined_is_move() {
+        let i = Interner::new();
         let mut types = Types::<Concrete>::new();
-        let user = test_user_defined(&mut types);
+        let user = test_user_defined(&i, &mut types);
         assert_eq!(is_move_only(&types, user), true);
     }
 
     #[test]
     fn tuple_with_user_defined_is_move() {
+        let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        let user = test_user_defined(&mut types);
+        let user = test_user_defined(&i, &mut types);
         let ty = types.intern(TyKind::Tuple(Box::new([i64_ty, user])));
         assert_eq!(is_move_only(&types, ty), true);
     }
@@ -1301,8 +1307,9 @@ mod tests {
 
     #[test]
     fn error_for_user_defined_reuse() {
+        let i = Interner::new();
         let mut types = Types::<Concrete>::new();
-        let user_ty = test_user_defined(&mut types);
+        let user_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
         let dummy = dummy_ty(&mut types);
@@ -1316,11 +1323,12 @@ mod tests {
         val_types.insert(v1, array_ty);
         val_types.insert(v2, array_ty);
 
+        let test_fn = QualifiedRef::root(i.intern("test"));
         let call = |dst, span| Inst {
             span,
             kind: InstKind::FunctionCall {
                 dst,
-                callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                callee: Callee::Direct(test_fn),
                 callee_ty: dummy,
                 args: vec![v0],
                 order: None,
@@ -1347,8 +1355,9 @@ mod tests {
 
     #[test]
     fn no_error_for_single_use_user_defined() {
+        let i = Interner::new();
         let mut types = Types::<Concrete>::new();
-        let user_ty = test_user_defined(&mut types);
+        let user_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
         let dummy = dummy_ty(&mut types);
@@ -1363,7 +1372,7 @@ mod tests {
         let mut module = make_module(
             vec![inst(InstKind::FunctionCall {
                 dst: v1,
-                callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                callee: Callee::Direct(QualifiedRef::root(i.intern("test"))),
                 callee_ty: dummy,
                 args: vec![v0],
                 order: None,
@@ -1378,8 +1387,9 @@ mod tests {
 
     #[test]
     fn var_reassign_revives() {
+        let i = Interner::new();
         let mut types = Types::<Concrete>::new();
-        let move_ty = test_user_defined(&mut types);
+        let move_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
         let dummy = dummy_ty(&mut types);
@@ -1420,7 +1430,7 @@ mod tests {
                 // use v1
                 inst(InstKind::FunctionCall {
                     dst: v4,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee: Callee::Direct(QualifiedRef::root(i.intern("test"))),
                     callee_ty: dummy,
                     args: vec![v1],
                     order: None,
@@ -1442,7 +1452,7 @@ mod tests {
                 // use v3
                 inst(InstKind::FunctionCall {
                     dst: v5,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee: Callee::Direct(QualifiedRef::root(i.intern("test"))),
                     callee_ty: dummy,
                     args: vec![v3],
                     order: None,
@@ -1461,8 +1471,9 @@ mod tests {
 
     #[test]
     fn var_use_after_move() {
+        let i = Interner::new();
         let mut types = Types::<Concrete>::new();
-        let move_ty = test_user_defined(&mut types);
+        let move_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
         let dummy = dummy_ty(&mut types);
@@ -1498,7 +1509,7 @@ mod tests {
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v3,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee: Callee::Direct(QualifiedRef::root(i.intern("test"))),
                     callee_ty: dummy,
                     args: vec![v1],
                     order: None,
@@ -1512,7 +1523,7 @@ mod tests {
                 }),
                 inst(InstKind::FunctionCall {
                     dst: v4,
-                    callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
+                    callee: Callee::Direct(QualifiedRef::root(i.intern("test"))),
                     callee_ty: dummy,
                     args: vec![v2],
                     order: None,
@@ -1534,7 +1545,7 @@ mod tests {
     fn a_context_committed_after_its_move_is_named_at_the_move() {
         let i = Interner::new();
         let mut types = Types::<Concrete>::new();
-        let move_ty = test_user_defined(&mut types);
+        let move_ty = test_user_defined(&i, &mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let slot = vf.next();
         let filled = vf.next();
@@ -1613,6 +1624,10 @@ mod tests {
         vf: LocalFactory<ValueId>,
         val_types: FxHashMap<ValueId, Ty>,
         types: Types<Concrete>,
+        /// The one interner every name this storage builds comes from,
+        /// `test_user_defined`'s included: an `Astr` panics on comparison
+        /// with one from a different interner.
+        interner: Interner,
         insts: Vec<Inst>,
         v: PathSeg,
         w: PathSeg,
@@ -1622,19 +1637,22 @@ mod tests {
         fn new() -> Self {
             let interner = Interner::new();
             let mut types = Types::<Concrete>::new();
-            let user_ty = test_user_defined(&mut types);
+            let user_ty = test_user_defined(&interner, &mut types);
             let mut vf = LocalFactory::<ValueId>::new();
             let slot = vf.next();
             let mut val_types = FxHashMap::default();
             val_types.insert(slot, user_ty);
+            let v = PathSeg::Field(interner.intern("v"));
+            let w = PathSeg::Field(interner.intern("w"));
             Self {
                 slot,
                 vf,
                 val_types,
                 types,
+                interner,
                 insts: Vec::new(),
-                v: PathSeg::Field(interner.intern("v")),
-                w: PathSeg::Field(interner.intern("w")),
+                v,
+                w,
             }
         }
 
@@ -1653,7 +1671,7 @@ mod tests {
         }
 
         fn take(&mut self, path: &[PathSeg]) {
-            let user_ty = test_user_defined(&mut self.types);
+            let user_ty = test_user_defined(&self.interner, &mut self.types);
             self.take_as(path, user_ty, false);
         }
 
@@ -1684,7 +1702,7 @@ mod tests {
 
         fn assign_as(&mut self, path: &[PathSeg], restores: bool) {
             let value = self.vf.next();
-            let user_ty = test_user_defined(&mut self.types);
+            let user_ty = test_user_defined(&self.interner, &mut self.types);
             self.val_types.insert(value, user_ty);
             self.push(InstKind::Assign {
                 target: RefTarget::Var(self.slot),
@@ -1696,7 +1714,7 @@ mod tests {
 
         fn lend(&mut self, path: &[PathSeg]) {
             let dst = self.vf.next();
-            let user_ty = test_user_defined(&mut self.types);
+            let user_ty = test_user_defined(&self.interner, &mut self.types);
             let shared_ref = self
                 .types
                 .intern(TyKind::Ref(crate::ty::Mutability::Shared, TypeArg::Uniform(user_ty)));
@@ -1790,7 +1808,7 @@ mod tests {
         let mut o = Storage::new();
         o.assign(&[]);
         let v = o.v;
-        let user_ty = test_user_defined(&mut o.types);
+        let user_ty = test_user_defined(&o.interner, &mut o.types);
         o.take_out(&[v], user_ty);
         o.assign(&[v]);
         o.assign(&[]);

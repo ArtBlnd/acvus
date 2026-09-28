@@ -149,7 +149,7 @@ mod tests {
                 ty: taken,
             }]),
             ret: unit_ty,
-            effect: EffectTerm::Known(Effect::opaque()),
+            effect: EffectTerm::Known(splittable()),
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,

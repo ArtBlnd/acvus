@@ -2243,13 +2243,33 @@ mod tests {
         assert!(check_types(&mut module).is_empty());
     }
 
+    /// `!` is the bottom type (types §4): a value of it fits any slot, but a
+    /// slot declared `!` accepts no value of another type.
     #[test]
-    fn a_body_declaring_never_accepts_the_value_it_returns() {
+    fn a_body_declaring_never_refuses_the_value_it_returns() {
         let mut types = Types::<Concrete>::new();
         let never_ty = types.intern(TyKind::Never);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut module = make_closure_module(types, never_ty, i64_ty);
-        assert!(check_types(&mut module).is_empty());
+        let errors = check_types(&mut module);
+        let [
+            ValidationError {
+                kind:
+                    ValidationErrorKind::TypeMismatch {
+                        inst_name,
+                        expected,
+                        actual,
+                        ..
+                    },
+                ..
+            },
+        ] = errors.as_slice()
+        else {
+            panic!("expected one type mismatch, got {errors:?}");
+        };
+        assert_eq!(inst_name, "Return");
+        assert!(matches!(module.types.kind(*expected), TyKind::Never), "{expected:?}");
+        assert!(matches!(module.types.kind(*actual), TyKind::Int(IntTy::I64)), "{actual:?}");
     }
 
     enum LentSlot {
