@@ -12,8 +12,6 @@ use std::borrow::Cow;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use acvus_ast::Span;
-use acvus_utils::Astr;
 
 use crate::analysis::{escape, inst_info};
 use crate::ir::*;
@@ -225,18 +223,12 @@ fn inline_body(
         let mut val_remap: FxHashMap<ValueId, ValueId> = FxHashMap::default();
 
         let insts = std::mem::take(&mut current.insts);
-        let plans = ClosurePlans::of_body(&insts, types, &current.val_types, closures);
+        let plans = ClosurePlans::of_body(&insts, closures);
         let mut bound: FxHashMap<PlanId, Vec<CaptureBound>> = FxHashMap::default();
 
         for (idx, inst) in insts.iter().enumerate() {
             if let Some(plan) = plans.made_at(idx) {
-                let mut emit = Emit {
-                    body: &mut current,
-                    types,
-                    insts: &mut new_insts,
-                };
-                let captures = plan.bind_captures(&mut emit, &val_remap, inst.span);
-                bound.insert(plan.id, captures);
+                bound.insert(plan.id, plan.bind_captures(&val_remap));
                 changed = true;
                 continue;
             }
@@ -261,7 +253,6 @@ fn inline_body(
                 callee_body,
                 args,
                 captures,
-                skip,
                 order,
             }) = inline_target
             {
@@ -342,10 +333,7 @@ fn inline_body(
                 }
 
                 // Emit callee instructions with remapped ids.
-                for (at, callee_inst) in callee_body.insts.iter().enumerate() {
-                    if skip.contains(&at) {
-                        continue;
-                    }
+                for callee_inst in &callee_body.insts {
                     match &callee_inst.kind {
                         InstKind::Return {
                             value,
@@ -402,8 +390,6 @@ struct InlineTarget<'a> {
     callee_body: Cow<'a, MirBody>,
     args: Vec<ValueId>,
     captures: Vec<CaptureBound>,
-    /// Callee instructions a [`CaptureBound`] has already answered.
-    skip: FxHashSet<usize>,
     order: Option<OrderEdge>,
 }
 
@@ -450,7 +436,6 @@ fn direct_target<'a>(
         callee_body: Cow::Owned(Import::from(&callee.types).body(&callee.main, types)),
         args: args.clone(),
         captures: Vec::new(),
-        skip: FxHashSet::default(),
         order: *order,
     })
 }
@@ -466,39 +451,13 @@ const INLINE_MAX_INSTS: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PlanId(usize);
 
-/// One read of a capture register. `at` indexes the callee's instructions,
-/// not the caller's.
+/// What an inlined copy puts in place of one capture register: the value
+/// `MakeClosure` passed for it, whose type is the register's (functions §2:
+/// a capture by reference is a `&T` value the lowering passes).
 #[derive(Debug, Clone, Copy)]
-struct WordRead {
-    at: usize,
-    dst: ValueId,
-}
-
-/// How an inlined copy reads one capture of the closure body.
-#[derive(Debug, Clone)]
-enum CaptureBinding {
-    /// The argument is already the reference the body reads: the captured
-    /// name was itself a capture, and no `&&T` exists (RFC-0029).
-    Reference,
-    /// The body reads the capture only as the word copy RFC-0018 gives it.
-    Copy(Vec<WordRead>),
-    /// The body reads the capture through a reference into storage the
-    /// closure owns, so the caller gives it the local it was.
-    Local,
-}
-
-/// What an inlined copy puts in place of one capture register.
-#[derive(Debug, Clone)]
-enum CaptureBound {
-    Register {
-        reg: ValueId,
-        value: ValueId,
-    },
-    Copy {
-        reg: ValueId,
-        reads: Vec<WordRead>,
-        of: ValueId,
-    },
+struct CaptureBound {
+    reg: ValueId,
+    value: ValueId,
 }
 
 impl CaptureBound {
@@ -507,36 +466,16 @@ impl CaptureBound {
         remap: &mut FxHashMap<ValueId, ValueId>,
         substituted: &mut FxHashSet<ValueId>,
     ) {
-        match self {
-            Self::Register { reg, value } => {
-                remap.insert(*reg, *value);
-                substituted.insert(*reg);
-            }
-            Self::Copy { reg, reads, of } => {
-                substituted.insert(*reg);
-                for read in reads {
-                    remap.insert(read.dst, *of);
-                    substituted.insert(read.dst);
-                }
-            }
-        }
-    }
-
-    fn skipped(&self) -> &[WordRead] {
-        match self {
-            Self::Register { .. } => &[],
-            Self::Copy { reads, .. } => reads,
-        }
+        remap.insert(self.reg, self.value);
+        substituted.insert(self.reg);
     }
 }
 
-/// One capture of the closure: the name it binds, the register the body
-/// reads it in, the value `MakeClosure` takes, and how the two meet.
+/// One capture of the closure: the register the body reads it in, and the
+/// value `MakeClosure` takes for it.
 struct PlannedCapture {
-    name: Astr,
     reg: ValueId,
     arg: ValueId,
-    binding: CaptureBinding,
 }
 
 /// A closure of one body, with every call of it and everything that exists
@@ -548,32 +487,14 @@ struct ClosurePlan<'a> {
 }
 
 impl<'a> ClosurePlan<'a> {
-    /// The caller's side of each capture, made where `MakeClosure` was and
-    /// not at each call: a `Local` binding moves the captured value into a
-    /// local, and a value moves once however many calls read it.
-    fn bind_captures(
-        &self,
-        emit: &mut Emit<'_>,
-        val_remap: &FxHashMap<ValueId, ValueId>,
-        span: Span,
-    ) -> Vec<CaptureBound> {
+    /// Each capture register bound to the value `MakeClosure` passed for
+    /// it, as the caller holds that value where the closure was made.
+    fn bind_captures(&self, val_remap: &FxHashMap<ValueId, ValueId>) -> Vec<CaptureBound> {
         self.captures
             .iter()
-            .map(|capture| {
-                let arg = remap_one(capture.arg, val_remap);
-                let reg = capture.reg;
-                match &capture.binding {
-                    CaptureBinding::Reference => CaptureBound::Register { reg, value: arg },
-                    CaptureBinding::Copy(reads) => CaptureBound::Copy {
-                        reg,
-                        reads: reads.clone(),
-                        of: arg,
-                    },
-                    CaptureBinding::Local => CaptureBound::Register {
-                        reg,
-                        value: emit.lend_local(span, capture.name, arg),
-                    },
-                }
+            .map(|capture| CaptureBound {
+                reg: capture.reg,
+                value: remap_one(capture.arg, val_remap),
             })
             .collect()
     }
@@ -590,64 +511,8 @@ impl<'a> ClosurePlan<'a> {
             callee_body: Cow::Borrowed(self.body),
             args: args.clone(),
             captures: bound.to_vec(),
-            skip: bound
-                .iter()
-                .flat_map(|b| b.skipped().iter().map(|read| read.at))
-                .collect(),
             order: *order,
         }
-    }
-}
-
-struct Emit<'b> {
-    body: &'b mut MirBody,
-    types: &'b mut Types<Concrete>,
-    insts: &'b mut Vec<Inst>,
-}
-
-impl Emit<'_> {
-    fn value(&mut self, ty: Ty) -> ValueId {
-        let dst = self.body.val_factory.next();
-        self.body.val_types.insert(dst, ty);
-        dst
-    }
-
-    fn inst(&mut self, span: Span, kind: InstKind) {
-        self.insts.push(Inst { span, kind });
-    }
-
-    /// The reference an inlined capture register reads, not the local it
-    /// reads it out of.
-    fn lend_local(&mut self, span: Span, name: Astr, value: ValueId) -> ValueId {
-        let ty = self.body.ty_of(value);
-
-        let slot = self.value(ty);
-        self.body
-            .debug
-            .val_origins
-            .insert(slot, ValOrigin::Named(name));
-        self.inst(
-            span,
-            InstKind::Assign {
-                target: RefTarget::Var(slot),
-                path: Vec::new(),
-                value,
-                restores: false,
-            },
-        );
-
-        let lent_ty = self.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(ty)));
-        let lent = self.value(lent_ty);
-        self.inst(
-            span,
-            InstKind::Ref {
-                dst: lent,
-                target: RefTarget::Var(slot),
-                path: Vec::new(),
-                mutability: Mutability::Shared,
-            },
-        );
-        lent
     }
 }
 
@@ -661,12 +526,7 @@ struct ClosurePlans<'a> {
 }
 
 impl<'a> ClosurePlans<'a> {
-    fn of_body(
-        insts: &[Inst],
-        types: &Types<Concrete>,
-        val_types: &FxHashMap<ValueId, Ty>,
-        closures: &'a FxHashMap<Label, MirBody>,
-    ) -> Self {
+    fn of_body(insts: &[Inst], closures: &'a FxHashMap<Label, MirBody>) -> Self {
         let mut this = Self {
             plans: Vec::new(),
             made: FxHashMap::default(),
@@ -692,9 +552,7 @@ impl<'a> ClosurePlans<'a> {
             let Some(uses) = ClosureUses::of(insts, idx, *dst) else {
                 continue;
             };
-            let Some(planned) = plan_captures(types, closure, captures, val_types) else {
-                continue;
-            };
+            let planned = plan_captures(closure, captures);
             if uses.overlaps(&this) {
                 continue;
             }
@@ -844,63 +702,15 @@ fn starts_or_ends_a_block(kind: &InstKind) -> bool {
     )
 }
 
-/// Each capture of `closure` against the value `MakeClosure` takes for it, or
-/// `None` where one of them is a shape the splice cannot answer.
-fn plan_captures(
-    types: &Types<Concrete>,
-    closure: &MirBody,
-    args: &[ValueId],
-    caller_types: &FxHashMap<ValueId, Ty>,
-) -> Option<Vec<PlannedCapture>> {
+/// Each capture register of `closure` against the value `MakeClosure` takes
+/// for it.
+fn plan_captures(closure: &MirBody, args: &[ValueId]) -> Vec<PlannedCapture> {
     closure
         .captures
         .iter()
         .zip(args)
-        .map(|((name, reg), arg)| {
-            Some(PlannedCapture {
-                name: *name,
-                reg: *reg,
-                arg: *arg,
-                binding: capture_binding(types, closure, *reg, *caller_types.get(arg)?)?,
-            })
-        })
+        .map(|((_, reg), arg)| PlannedCapture { reg: *reg, arg: *arg })
         .collect()
-}
-
-fn capture_binding(types: &Types<Concrete>, closure: &MirBody, reg: ValueId, arg_ty: Ty) -> Option<CaptureBinding> {
-    let cap_ty = closure.ty_of(reg);
-    if cap_ty == arg_ty {
-        return Some(CaptureBinding::Reference);
-    }
-    let TyKind::Ref(Mutability::Shared, inner) = types.kind(cap_ty) else {
-        return None;
-    };
-    if inner.ty() != arg_ty {
-        return None;
-    }
-    Some(match word_reads(closure, reg) {
-        Some(reads) => CaptureBinding::Copy(reads),
-        None => CaptureBinding::Local,
-    })
-}
-
-/// The reads of a capture register, where the body reads it as nothing but
-/// the word copy RFC-0018 gives it.
-fn word_reads(closure: &MirBody, reg: ValueId) -> Option<Vec<WordRead>> {
-    let mut reads = Vec::new();
-    for (at, inst) in closure.insts.iter().enumerate() {
-        match &inst.kind {
-            InstKind::Take {
-                dst,
-                target: RefTarget::Through(through),
-                path,
-                ..
-            } if *through == reg && path.is_empty() => reads.push(WordRead { at, dst: *dst }),
-            other if inst_info::uses(other).contains(&reg) => return None,
-            _ => {}
-        }
-    }
-    Some(reads)
 }
 
 /// Remap a single ValueId through a remap table. Returns original if not mapped.
