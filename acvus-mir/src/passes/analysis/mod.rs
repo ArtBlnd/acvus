@@ -10,6 +10,7 @@ mod loop_tree;
 mod manager;
 mod post_dominators;
 mod sparse;
+mod values;
 
 #[cfg(test)]
 mod tests;
@@ -23,3 +24,4 @@ pub use loop_tree::{LoopId, LoopTree};
 pub use post_dominators::PostDominators;
 pub use manager::{Analysis, AnalysisManager};
 pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};
+pub use values::{ConstantValues, IntervalValues};

@@ -3,7 +3,11 @@
 //! infinity (compilation §2: the fixpoint is bounded). Abstract operations
 //! over-approximate the language's (operators §1).
 
-use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
+use acvus_ast::Literal;
+
+use crate::ir::{BinOp, Overflow, UnaryOp};
+use crate::passes::domain::{Arithmetic, JoinSemiLattice, Operation, Scalar, ValueDomain, Widen, not_an_operation};
+use crate::ty::{CastTy, IntTy};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Interval {
@@ -67,16 +71,440 @@ impl Widen for Interval {
 
 pub struct IntervalDomain;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl ValueDomain for IntervalDomain {
+    type Value = Interval;
+
+    fn top(&self) -> Interval {
+        Interval::full()
+    }
+
+    fn constant(&self, literal: &Literal, ty: CastTy) -> Interval {
+        match Scalar::of(literal, ty) {
+            Scalar::Int(n) => Interval::exactly(n),
+            Scalar::F64(_) | Scalar::Char(_) | Scalar::Bool(_) => Interval::full(),
+        }
+    }
+
+    fn binary(&self, op: BinOp, ty: CastTy, left: &Interval, right: &Interval) -> Interval {
+        let arithmetic = match Operation::of(op) {
+            Operation::Compare(_) => return Interval::full(),
+            Operation::Compute(arithmetic) => arithmetic,
+        };
+        let CastTy::Int(width) = ty else {
+            return Interval::full();
+        };
+        if *left == Interval::Empty || *right == Interval::Empty {
+            return Interval::Empty;
+        }
+        let range = Interval::of_width(width);
+        match arithmetic {
+            Arithmetic::Add(overflow) => at_width(left.sum(right), overflow, width),
+            Arithmetic::Sub(overflow) => at_width(left.difference(right), overflow, width),
+            Arithmetic::Mul(overflow) => at_width(left.product(right), overflow, width),
+            Arithmetic::Div => left.quotient(right).meet(&range),
+            Arithmetic::Mod => left.remainder(right).meet(&range),
+            Arithmetic::Shl(overflow) => {
+                let amount = shift_amount(right, overflow, width);
+                let shifted = amount.bounds().map_or(Interval::Empty, |(lo, hi)| {
+                    left.product(&Interval::Range { lo: power_of_two(lo), hi: power_of_two(hi) })
+                });
+                at_width(shifted, Overflow::Wrap, width)
+            }
+            Arithmetic::Shr(overflow) => {
+                let amount = shift_amount(right, overflow, width);
+                left.shifted_right(&amount).meet(&range)
+            }
+            Arithmetic::BitAnd => left.bit_and(right, width).meet(&range),
+            Arithmetic::BitOr | Arithmetic::Xor => left.bit_or(right, width).meet(&range),
+            Arithmetic::Min => left.least(right),
+            Arithmetic::Max => left.greatest(right),
+            Arithmetic::And | Arithmetic::Or => not_an_operation(op, ty),
+        }
+    }
+
+    fn unary(&self, op: UnaryOp, ty: CastTy, operand: &Interval) -> Interval {
+        match (op, ty) {
+            (UnaryOp::Neg(overflow), CastTy::Int(width)) if width.signed() => {
+                at_width(Interval::exactly(0).difference(operand), overflow, width)
+            }
+            (UnaryOp::Neg(_), CastTy::F64) | (UnaryOp::Not, CastTy::Bool) => Interval::full(),
+            _ => not_an_operation(op, ty),
+        }
+    }
+
+    fn cast(&self, from: CastTy, to: CastTy, operand: &Interval) -> Interval {
+        assert!(from.admits(to), "`{} as {}` is not a cast the language admits", from.name(), to.name());
+        let CastTy::Int(width) = to else {
+            return Interval::full();
+        };
+        match from {
+            CastTy::Int(_) => at_width(operand.clone(), Overflow::Wrap, width),
+            CastTy::Bool => Interval::finite(0, 1),
+            CastTy::Char => at_width(Interval::finite(0, i128::from(u32::from(char::MAX))), Overflow::Wrap, width),
+            CastTy::F64 => Interval::of_width(width),
+        }
+    }
+}
+
+/// The result at `width` of an operation whose exact result lies in
+/// `exact`. A trapping operation's result is the part that fits, since no
+/// run passes it with any other (operators §1); a wrapping one's is `exact`
+/// where it fits and the whole width where it may wrap.
+fn at_width(exact: Interval, overflow: Overflow, width: IntTy) -> Interval {
+    let range = Interval::of_width(width);
+    match overflow {
+        Overflow::Trap => exact.meet(&range),
+        Overflow::Wrap if exact.le(&range) => exact,
+        Overflow::Wrap => range,
+    }
+}
+
+/// The amounts a shift runs with: a trapping shift's are the ones below
+/// the width, a wrapping shift's are taken modulo the width.
+fn shift_amount(amount: &Interval, overflow: Overflow, width: IntTy) -> Interval {
+    let amounts = Interval::finite(0, i128::from(width.bits()) - 1);
+    match overflow {
+        Overflow::Trap => amount.meet(&amounts),
+        Overflow::Wrap if amount.le(&amounts) => amount.clone(),
+        Overflow::Wrap => amounts,
+    }
+}
+
+/// `2^amount` for an amount below 64.
+fn power_of_two(amount: i128) -> Bound {
+    Bound::Finite(1i128 << amount)
+}
+
+/// An end of an interval, or the exact value an operation on ends computes,
+/// which may lie beyond `i128`. Rounding it back to a `Bound` moves it
+/// outward: a lower end down, an upper end up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Exact {
+    NegInfinity,
+    BelowMin,
+    Finite(i128),
+    AboveMax,
+    PosInfinity,
+}
+
+impl Exact {
+    fn of(bound: Bound) -> Exact {
+        match bound {
+            Bound::NegInfinity => Exact::NegInfinity,
+            Bound::Finite(n) => Exact::Finite(n),
+            Bound::PosInfinity => Exact::PosInfinity,
+        }
+    }
+
+    fn lower(self) -> Bound {
+        match self {
+            Exact::NegInfinity | Exact::BelowMin => Bound::NegInfinity,
+            Exact::Finite(n) => Bound::Finite(n),
+            Exact::AboveMax => Bound::Finite(i128::MAX),
+            Exact::PosInfinity => Bound::PosInfinity,
+        }
+    }
+
+    fn upper(self) -> Bound {
+        match self {
+            Exact::NegInfinity => Bound::NegInfinity,
+            Exact::BelowMin => Bound::Finite(i128::MIN),
+            Exact::Finite(n) => Bound::Finite(n),
+            Exact::AboveMax | Exact::PosInfinity => Bound::PosInfinity,
+        }
+    }
+
+    /// Past `i128` on the side of `positive`.
+    fn overflowed(positive: bool) -> Exact {
+        match positive {
+            true => Exact::AboveMax,
+            false => Exact::BelowMin,
+        }
+    }
+
+    fn infinity(positive: bool) -> Exact {
+        match positive {
+            true => Exact::PosInfinity,
+            false => Exact::NegInfinity,
+        }
+    }
+}
+
+fn is_positive(bound: Bound) -> bool {
+    bound > Bound::Finite(0)
+}
+
+/// `a + b`; `None` where the ends are opposite infinities, which only an
+/// end of no interval pairs.
+fn sum(a: Bound, b: Bound) -> Option<Exact> {
+    match (a, b) {
+        (Bound::NegInfinity, Bound::PosInfinity) | (Bound::PosInfinity, Bound::NegInfinity) => None,
+        (Bound::NegInfinity, _) | (_, Bound::NegInfinity) => Some(Exact::NegInfinity),
+        (Bound::PosInfinity, _) | (_, Bound::PosInfinity) => Some(Exact::PosInfinity),
+        (Bound::Finite(a), Bound::Finite(b)) => {
+            Some(a.checked_add(b).map_or(Exact::overflowed(a > 0), Exact::Finite))
+        }
+    }
+}
+
+fn negation(a: Bound) -> Exact {
+    match a {
+        Bound::NegInfinity => Exact::PosInfinity,
+        Bound::Finite(n) => n.checked_neg().map_or(Exact::AboveMax, Exact::Finite),
+        Bound::PosInfinity => Exact::NegInfinity,
+    }
+}
+
+/// `a · b`, with `0 · ∞ = 0`: an infinite end stands for values without
+/// bound, and each of them times zero is zero.
+fn product(a: Bound, b: Bound) -> Exact {
+    let positive = is_positive(a) == is_positive(b);
+    match (a, b) {
+        (Bound::Finite(0), _) | (_, Bound::Finite(0)) => Exact::Finite(0),
+        (Bound::Finite(a), Bound::Finite(b)) => a.checked_mul(b).map_or(Exact::overflowed(positive), Exact::Finite),
+        (Bound::NegInfinity | Bound::PosInfinity, _) | (_, Bound::NegInfinity | Bound::PosInfinity) => {
+            Exact::infinity(positive)
+        }
+    }
+}
+
+/// `a / b` rounded toward zero, as the language divides, for a `b` that is
+/// not zero; a finite `a` over an infinite `b` is zero.
+fn quotient(a: Bound, b: Bound) -> Exact {
+    assert!(b != Bound::Finite(0), "a divisor's part excludes zero");
+    let positive = is_positive(a) == is_positive(b);
+    match (a, b) {
+        (Bound::Finite(0), _) => Exact::Finite(0),
+        (Bound::Finite(a), Bound::Finite(b)) => a.checked_div(b).map_or(Exact::overflowed(positive), Exact::Finite),
+        (Bound::Finite(_), Bound::NegInfinity | Bound::PosInfinity) => Exact::Finite(0),
+        (Bound::NegInfinity | Bound::PosInfinity, _) => Exact::infinity(positive),
+    }
+}
+
+fn shifted_right(a: Bound, amount: i128) -> Bound {
+    match a {
+        Bound::Finite(n) => Bound::Finite(n >> amount),
+        infinite @ (Bound::NegInfinity | Bound::PosInfinity) => infinite,
+    }
+}
+
+impl Interval {
+    pub(crate) fn full() -> Interval {
+        Interval::Range { lo: Bound::NegInfinity, hi: Bound::PosInfinity }
+    }
+
+    pub(crate) fn exactly(n: i128) -> Interval {
+        Interval::finite(n, n)
+    }
+
+    fn finite(lo: i128, hi: i128) -> Interval {
+        Interval::between(Bound::Finite(lo), Bound::Finite(hi))
+    }
+
+    fn of_width(width: IntTy) -> Interval {
+        Interval::finite(width.min(), width.max())
+    }
 
     /// `[lo, hi]`, or `Empty` where it holds no integer.
-    fn range(lo: Bound, hi: Bound) -> Interval {
+    fn between(lo: Bound, hi: Bound) -> Interval {
         match lo <= hi && lo != Bound::PosInfinity && hi != Bound::NegInfinity {
             true => Interval::Range { lo, hi },
             false => Interval::Empty,
         }
+    }
+
+    /// The smallest interval holding every one of `exacts`, each rounded
+    /// outward; `Empty` for none.
+    fn hull(exacts: impl IntoIterator<Item = Exact>) -> Interval {
+        let mut exacts = exacts.into_iter();
+        let Some(first) = exacts.next() else {
+            return Interval::Empty;
+        };
+        let (lo, hi) = exacts.fold((first, first), |(lo, hi), exact| (lo.min(exact), hi.max(exact)));
+        Interval::between(lo.lower(), hi.upper())
+    }
+
+    fn bounds(&self) -> Option<(i128, i128)> {
+        match self {
+            Interval::Range { lo: Bound::Finite(lo), hi: Bound::Finite(hi) } => Some((*lo, *hi)),
+            Interval::Empty | Interval::Range { .. } => None,
+        }
+    }
+
+    fn ends(&self) -> Option<(Bound, Bound)> {
+        match self {
+            Interval::Empty => None,
+            Interval::Range { lo, hi } => Some((*lo, *hi)),
+        }
+    }
+
+    /// The four products of an end of `self` with an end of `other`, by
+    /// `op`, whose hull holds `op` of every pair where `op` is monotone in
+    /// each argument over each interval.
+    fn corners(&self, other: &Interval, op: impl Fn(Bound, Bound) -> Exact) -> Interval {
+        let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (self.ends(), other.ends()) else {
+            return Interval::Empty;
+        };
+        Interval::hull([op(a_lo, b_lo), op(a_lo, b_hi), op(a_hi, b_lo), op(a_hi, b_hi)])
+    }
+
+    /// Every integer at least this interval's least.
+    pub(crate) fn at_least_lo(&self) -> Interval {
+        match self.ends() {
+            None => Interval::Empty,
+            Some((lo, _)) => Interval::between(lo, Bound::PosInfinity),
+        }
+    }
+
+    /// Every integer at most this interval's greatest.
+    pub(crate) fn at_most_hi(&self) -> Interval {
+        match self.ends() {
+            None => Interval::Empty,
+            Some((_, hi)) => Interval::between(Bound::NegInfinity, hi),
+        }
+    }
+
+    /// The integers both hold.
+    pub(crate) fn meet(&self, other: &Interval) -> Interval {
+        let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (self.ends(), other.ends()) else {
+            return Interval::Empty;
+        };
+        Interval::between(a_lo.max(b_lo), a_hi.min(b_hi))
+    }
+
+    /// `{a + b}` over the integers, no width.
+    pub(crate) fn sum(&self, other: &Interval) -> Interval {
+        let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (self.ends(), other.ends()) else {
+            return Interval::Empty;
+        };
+        let lo = sum(a_lo, b_lo).map_or(Bound::NegInfinity, Exact::lower);
+        let hi = sum(a_hi, b_hi).map_or(Bound::PosInfinity, Exact::upper);
+        Interval::between(lo, hi)
+    }
+
+    /// `{-a}` over the integers.
+    fn negated(&self) -> Interval {
+        match self.ends() {
+            None => Interval::Empty,
+            Some((lo, hi)) => Interval::between(negation(hi).lower(), negation(lo).upper()),
+        }
+    }
+
+    /// `{a - b}` over the integers, no width.
+    pub(crate) fn difference(&self, other: &Interval) -> Interval {
+        self.sum(&other.negated())
+    }
+
+    /// `{a · b}` over the integers, no width.
+    pub(crate) fn product(&self, other: &Interval) -> Interval {
+        self.corners(other, product)
+    }
+
+    /// `{max(a, b)}`.
+    pub(crate) fn greatest(&self, other: &Interval) -> Interval {
+        let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (self.ends(), other.ends()) else {
+            return Interval::Empty;
+        };
+        Interval::between(a_lo.max(b_lo), a_hi.max(b_hi))
+    }
+
+    fn least(&self, other: &Interval) -> Interval {
+        let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (self.ends(), other.ends()) else {
+            return Interval::Empty;
+        };
+        Interval::between(a_lo.min(b_lo), a_hi.min(b_hi))
+    }
+
+    /// The divisor's negative and positive parts, zero left out, since a
+    /// division by zero traps.
+    fn divisor_parts(&self) -> [Interval; 2] {
+        [
+            self.meet(&Interval::between(Bound::NegInfinity, Bound::Finite(-1))),
+            self.meet(&Interval::between(Bound::Finite(1), Bound::PosInfinity)),
+        ]
+    }
+
+    /// `{a / b}` for every `b` but zero. On each part of the divisor, the
+    /// truncated quotient is monotone in each argument, so the corners
+    /// bound it.
+    fn quotient(&self, divisor: &Interval) -> Interval {
+        let mut out = Interval::Empty;
+        for part in divisor.divisor_parts() {
+            out.join(&self.corners(&part, quotient));
+        }
+        out
+    }
+
+    /// `{a % b}` for every `b` but zero: its sign is the dividend's, and
+    /// its magnitude is below the divisor's.
+    fn remainder(&self, divisor: &Interval) -> Interval {
+        let [negative, positive] = divisor.divisor_parts();
+        let mut magnitudes = negative.negated();
+        magnitudes.join(&positive);
+        let (Some((a_lo, a_hi)), Some((_, largest))) = (self.ends(), magnitudes.ends()) else {
+            return Interval::Empty;
+        };
+        let below = sum(largest, Bound::Finite(-1)).map_or(Bound::PosInfinity, Exact::upper);
+        let within = Interval::between(negation(below).lower(), below);
+        let signed = Interval::between(a_lo.min(Bound::Finite(0)), a_hi.max(Bound::Finite(0)));
+        signed.meet(&within)
+    }
+
+    /// `{a >> s}` for amounts `s` below 128: for each amount monotone in
+    /// `a`, and for each `a` monotone in the amount.
+    fn shifted_right(&self, amount: &Interval) -> Interval {
+        let (Some((lo, hi)), Some((s_lo, s_hi))) = (self.ends(), amount.bounds()) else {
+            return Interval::Empty;
+        };
+        Interval::hull(
+            [(lo, s_lo), (lo, s_hi), (hi, s_lo), (hi, s_hi)]
+                .into_iter()
+                .map(|(end, s)| Exact::of(shifted_right(end, s))),
+        )
+    }
+
+    /// `{a & b}`: at most either operand that is not negative, and at
+    /// least zero where one is not.
+    fn bit_and(&self, other: &Interval, width: IntTy) -> Interval {
+        let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (self.ends(), other.ends()) else {
+            return Interval::Empty;
+        };
+        let zero = Bound::Finite(0);
+        match (a_lo >= zero, b_lo >= zero) {
+            (true, true) => Interval::between(zero, a_hi.min(b_hi)),
+            (true, false) => Interval::between(zero, a_hi),
+            (false, true) => Interval::between(zero, b_hi),
+            (false, false) => Interval::of_width(width),
+        }
+    }
+
+    /// `{a | b}` and `{a ^ b}`: for operands not negative, below the power
+    /// of two above both.
+    fn bit_or(&self, other: &Interval, width: IntTy) -> Interval {
+        let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (self.ends(), other.ends()) else {
+            return Interval::Empty;
+        };
+        match (a_lo, b_lo, a_hi.max(b_hi)) {
+            (Bound::Finite(a_lo), Bound::Finite(b_lo), Bound::Finite(hi)) if a_lo >= 0 && b_lo >= 0 => {
+                let bits = 128 - hi.leading_zeros();
+                let below = match bits {
+                    0..=126 => Bound::Finite((1i128 << bits) - 1),
+                    _ => Bound::PosInfinity,
+                };
+                Interval::between(Bound::Finite(0), below)
+            }
+            _ => Interval::of_width(width),
+        }
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn range(lo: Bound, hi: Bound) -> Interval {
+        Interval::between(lo, hi)
     }
 
     fn finite(lo: i128, hi: i128) -> Interval {
@@ -176,4 +604,188 @@ mod tests {
         fact.widen(&finite(0, 2));
         assert_eq!(fact, range(Bound::Finite(0), Bound::PosInfinity));
     }
+
+    // -- Value operations over-approximate the language's ------------------
+
+    use crate::ir::{BinOp, Overflow, UnaryOp};
+    use crate::ty::{CastTy, IntTy};
+
+    fn contains(interval: &Interval, n: i128) -> bool {
+        Interval::exactly(n).le(interval)
+    }
+
+    /// The integers of `interval` that are values of `width`.
+    fn members(interval: &Interval, width: IntTy) -> Vec<i128> {
+        match interval.meet(&Interval::of_width(width)).bounds() {
+            Some((lo, hi)) => (lo..=hi).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// The language's `a op b` at `width`, by Rust's own operations at a
+    /// width of eight bits; `None` is a trap.
+    fn concrete(op: BinOp, width: IntTy, a: i128, b: i128) -> Option<i128> {
+        use Overflow::{Trap, Wrap};
+        macro_rules! at {
+            ($t:ty) => {{
+                let (a, b) = (a as $t, b as $t);
+                let amount = u32::try_from(b).ok();
+                let result: Option<$t> = match op {
+                    BinOp::Add(Trap) => a.checked_add(b),
+                    BinOp::Add(Wrap) => Some(a.wrapping_add(b)),
+                    BinOp::Sub(Trap) => a.checked_sub(b),
+                    BinOp::Sub(Wrap) => Some(a.wrapping_sub(b)),
+                    BinOp::Mul(Trap) => a.checked_mul(b),
+                    BinOp::Mul(Wrap) => Some(a.wrapping_mul(b)),
+                    BinOp::Div => a.checked_div(b),
+                    BinOp::Mod => a.checked_rem(b),
+                    BinOp::Shl(Trap) => amount.and_then(|amount| a.checked_shl(amount)),
+                    BinOp::Shl(Wrap) => Some(a.wrapping_shl(b as u32)),
+                    BinOp::Shr(Trap) => amount.and_then(|amount| a.checked_shr(amount)),
+                    BinOp::Shr(Wrap) => Some(a.wrapping_shr(b as u32)),
+                    BinOp::BitAnd => Some(a & b),
+                    BinOp::BitOr => Some(a | b),
+                    BinOp::Xor => Some(a ^ b),
+                    BinOp::Min => Some(a.min(b)),
+                    BinOp::Max => Some(a.max(b)),
+                    other => panic!("{other:?} is not an integer operation"),
+                };
+                result.map(i128::from)
+            }};
+        }
+        match width {
+            IntTy::I8 => at!(i8),
+            IntTy::U8 => at!(u8),
+            other => panic!("the table runs at eight bits, not {}", other.name()),
+        }
+    }
+
+    fn operands() -> Vec<Interval> {
+        vec![
+            Interval::Empty,
+            finite(0, 0),
+            finite(-1, -1),
+            finite(1, 3),
+            finite(-3, -1),
+            finite(-5, 5),
+            finite(0, 7),
+            finite(7, 9),
+            finite(100, 127),
+            finite(200, 255),
+            finite(-128, -120),
+            range(Bound::NegInfinity, Bound::PosInfinity),
+        ]
+    }
+
+    #[test]
+    fn integer_operations_over_approximate_the_language_at_eight_bits() {
+        use Overflow::{Trap, Wrap};
+        let ops = [
+            BinOp::Add(Trap),
+            BinOp::Add(Wrap),
+            BinOp::Sub(Trap),
+            BinOp::Sub(Wrap),
+            BinOp::Mul(Trap),
+            BinOp::Mul(Wrap),
+            BinOp::Div,
+            BinOp::Mod,
+            BinOp::Shl(Trap),
+            BinOp::Shl(Wrap),
+            BinOp::Shr(Trap),
+            BinOp::Shr(Wrap),
+            BinOp::BitAnd,
+            BinOp::BitOr,
+            BinOp::Xor,
+            BinOp::Min,
+            BinOp::Max,
+        ];
+        for width in [IntTy::I8, IntTy::U8] {
+            for op in ops {
+                for a in &operands() {
+                    for b in &operands() {
+                        let abstract_result = IntervalDomain.binary(op, CastTy::Int(width), a, b);
+                        for x in members(a, width) {
+                            for y in members(b, width) {
+                                if let Some(value) = concrete(op, width, x, y) {
+                                    assert!(
+                                        contains(&abstract_result, value),
+                                        "{x} {op:?} {y} = {value} at {}, outside {a:?} {op:?} {b:?} = {abstract_result:?}",
+                                        width.name()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn negation_over_approximates_the_language_at_eight_bits() {
+        for overflow in [Overflow::Trap, Overflow::Wrap] {
+            for a in &operands() {
+                let abstract_result = IntervalDomain.unary(UnaryOp::Neg(overflow), CastTy::Int(IntTy::I8), a);
+                for x in members(a, IntTy::I8) {
+                    let x = x as i8;
+                    let value = match overflow {
+                        Overflow::Trap => x.checked_neg(),
+                        Overflow::Wrap => Some(x.wrapping_neg()),
+                    };
+                    if let Some(value) = value {
+                        assert!(contains(&abstract_result, i128::from(value)), "-{x} outside {abstract_result:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_trapping_result_is_clamped_to_its_width_and_a_wrapping_one_widens_to_it() {
+        let i8_ty = CastTy::Int(IntTy::I8);
+        let u64_ty = CastTy::Int(IntTy::U64);
+        let max = i128::from(u64::MAX);
+        let add_trap = BinOp::Add(Overflow::Trap);
+        let add_wrap = BinOp::Add(Overflow::Wrap);
+        assert_eq!(IntervalDomain.binary(add_trap, i8_ty, &finite(100, 120), &finite(10, 20)), finite(110, 127));
+        assert_eq!(IntervalDomain.binary(add_wrap, i8_ty, &finite(100, 120), &finite(10, 20)), finite(-128, 127));
+        assert_eq!(IntervalDomain.binary(add_wrap, i8_ty, &finite(1, 2), &finite(10, 20)), finite(11, 22));
+        assert_eq!(IntervalDomain.binary(add_trap, u64_ty, &finite(max - 1, max), &finite(0, 5)), finite(max - 1, max));
+        assert_eq!(IntervalDomain.binary(add_wrap, u64_ty, &finite(max - 1, max), &finite(0, 5)), finite(0, max));
+        assert_eq!(
+            IntervalDomain.binary(BinOp::Mul(Overflow::Trap), u64_ty, &finite(max, max), &finite(max, max)),
+            Interval::Empty,
+            "every run traps, so no value passes"
+        );
+        assert_eq!(IntervalDomain.binary(BinOp::Div, i8_ty, &finite(-5, 5), &finite(0, 0)), Interval::Empty);
+        assert_eq!(IntervalDomain.binary(BinOp::Div, i8_ty, &finite(-128, -128), &finite(-1, -1)), Interval::Empty);
+        assert_eq!(IntervalDomain.binary(BinOp::Shl(Overflow::Trap), u64_ty, &finite(1, 1), &finite(64, 70)), Interval::Empty);
+        assert_eq!(
+            IntervalDomain.binary(BinOp::Shr(Overflow::Trap), u64_ty, &finite(max, max), &finite(63, 63)),
+            finite(1, 1)
+        );
+    }
+
+    #[test]
+    fn comparisons_and_non_integers_are_top() {
+        let top = IntervalDomain.top();
+        let i8_ty = CastTy::Int(IntTy::I8);
+        assert_eq!(IntervalDomain.binary(BinOp::Lt, i8_ty, &finite(0, 1), &finite(5, 6)), top);
+        assert_eq!(IntervalDomain.binary(BinOp::Add(Overflow::Trap), CastTy::F64, &top, &top), top);
+        assert_eq!(IntervalDomain.constant(&acvus_ast::Literal::Float(1.5), CastTy::F64), top);
+        assert_eq!(IntervalDomain.constant(&acvus_ast::Literal::Int(-7), i8_ty), finite(-7, -7));
+    }
+
+    #[test]
+    fn casts_keep_what_fits_the_target_width() {
+        let u8_ty = CastTy::Int(IntTy::U8);
+        let i64_ty = CastTy::Int(IntTy::I64);
+        let top = IntervalDomain.top();
+        assert_eq!(IntervalDomain.cast(i64_ty, u8_ty, &finite(3, 5)), finite(3, 5));
+        assert_eq!(IntervalDomain.cast(i64_ty, u8_ty, &finite(250, 260)), finite(0, 255));
+        assert_eq!(IntervalDomain.cast(CastTy::F64, CastTy::Int(IntTy::I8), &top), finite(-128, 127));
+        assert_eq!(IntervalDomain.cast(CastTy::Bool, i64_ty, &top), finite(0, 1));
+        assert_eq!(IntervalDomain.cast(i64_ty, CastTy::F64, &finite(3, 5)), top);
+    }
+
 }

@@ -189,7 +189,7 @@ impl ValueDomain for ConstDomain {
         Const::Top
     }
 
-    fn constant(&self, literal: &Literal) -> Const {
+    fn constant(&self, literal: &Literal, _ty: CastTy) -> Const {
         match literal {
             Literal::Int(n) => Const::Int(*n),
             Literal::Bool(b) => Const::Bool(*b),
@@ -197,7 +197,7 @@ impl ValueDomain for ConstDomain {
         }
     }
 
-    fn binary(&self, op: BinOp, left: &Const, right: &Const) -> Const {
+    fn binary(&self, op: BinOp, _ty: CastTy, left: &Const, right: &Const) -> Const {
         match (op, left, right) {
             (_, Const::Bottom, _) | (_, _, Const::Bottom) => Const::Bottom,
             (BinOp::Add(_), Const::Int(a), Const::Int(b)) => a.checked_add(*b).map_or(Const::Top, Const::Int),
@@ -206,7 +206,7 @@ impl ValueDomain for ConstDomain {
         }
     }
 
-    fn unary(&self, op: UnaryOp, operand: &Const) -> Const {
+    fn unary(&self, op: UnaryOp, _ty: CastTy, operand: &Const) -> Const {
         match (op, operand) {
             (_, Const::Bottom) => Const::Bottom,
             (UnaryOp::Not, Const::Bool(b)) => Const::Bool(!b),
@@ -225,8 +225,28 @@ impl ValueDomain for ConstDomain {
 
 /// Value operations through the domain, anything else `top`; a branch on a
 /// known condition runs only its arm, and on `bottom` none yet.
-struct Propagate<D> {
+struct Propagate<'m, D> {
     domain: D,
+    scalars: Scalars<'m>,
+}
+
+/// The scalar type of each value of one body, which a value operation is
+/// handed.
+#[derive(Clone, Copy)]
+struct Scalars<'m> {
+    module: &'m Module,
+    body: &'m Body,
+}
+
+impl<'m> Scalars<'m> {
+    fn of(module: &'m Module, id: BodyId) -> Scalars<'m> {
+        Scalars { module, body: module.body(id) }
+    }
+
+    fn ty(&self, value: ValueId) -> CastTy {
+        CastTy::of_kind(self.module.types().kind(self.body.ty_of(value)))
+            .unwrap_or_else(|| panic!("{value:?} is a scalar in these bodies"))
+    }
 }
 
 /// A value a branch reads: whether it is a known truth.
@@ -258,7 +278,7 @@ impl Condition for Const {
     }
 }
 
-impl<D> SparseAnalysis for Propagate<D>
+impl<D> SparseAnalysis for Propagate<'_, D>
 where
     D: ValueDomain,
     D::Value: Condition,
@@ -271,9 +291,14 @@ where
 
     fn transfer(&self, inst: &Inst, operands: &[&D::Value]) -> D::Value {
         match (inst.op(), operands) {
-            (Op::Const { value }, []) => self.domain.constant(value),
-            (Op::BinOp { op, .. }, [left, right]) => self.domain.binary(*op, left, right),
-            (Op::UnaryOp { op, .. }, [operand]) => self.domain.unary(*op, operand),
+            (Op::Const { value }, []) => {
+                let result = inst.result().expect("a constant yields a value");
+                self.domain.constant(value, self.scalars.ty(result))
+            }
+            (Op::BinOp { op, left: of, .. }, [left, right]) => {
+                self.domain.binary(*op, self.scalars.ty(*of), left, right)
+            }
+            (Op::UnaryOp { op, operand: of }, [operand]) => self.domain.unary(*op, self.scalars.ty(*of), operand),
             _ => self.domain.top(),
         }
     }
@@ -313,7 +338,7 @@ fn sparse_folds_a_straight_line() {
     builder.terminate(ret(w));
     let id = builder.seal().expect("the body has no open state");
 
-    let facts = solve_sparse(&Propagate { domain: ConstDomain }, f.module.body(id));
+    let facts = solve_sparse(&Propagate { domain: ConstDomain, scalars: Scalars::of(&f.module, id) }, f.module.body(id));
     assert_eq!(*facts.of(a), Const::Top, "a parameter comes from outside the body");
     assert_eq!(*facts.of(x), Const::Int(2));
     assert_eq!(*facts.of(y), Const::Int(3));
@@ -344,7 +369,7 @@ fn sparse_runs_only_the_known_arm_of_a_diamond() {
     builder.terminate(ret(p));
     let id = builder.seal().expect("the body has no open state");
 
-    let facts = solve_sparse(&Propagate { domain: ConstDomain }, f.module.body(id));
+    let facts = solve_sparse(&Propagate { domain: ConstDomain, scalars: Scalars::of(&f.module, id) }, f.module.body(id));
     assert_eq!(*facts.of(c), Const::Bool(true));
     assert_eq!(*facts.of(t), Const::Int(1));
     assert_eq!(*facts.of(e), Const::Bottom, "the else arm is not executable");
@@ -372,7 +397,7 @@ fn sparse_joins_both_arms_of_an_unknown_diamond() {
     builder.terminate(ret(p));
     let id = builder.seal().expect("the body has no open state");
 
-    let facts = solve_sparse(&Propagate { domain: ConstDomain }, f.module.body(id));
+    let facts = solve_sparse(&Propagate { domain: ConstDomain, scalars: Scalars::of(&f.module, id) }, f.module.body(id));
     assert_eq!(*facts.of(e), Const::Int(2));
     assert_eq!(*facts.of(p), Const::Top);
 }
@@ -434,7 +459,7 @@ fn the_loop_header_is_the_back_edge_target() {
 fn sparse_widens_a_loop_carried_value() {
     let mut f = fixture();
     let lp = counting_loop(&mut f);
-    let facts = solve_sparse(&Propagate { domain: ConstDomain }, f.module.body(lp.id));
+    let facts = solve_sparse(&Propagate { domain: ConstDomain, scalars: Scalars::of(&f.module, lp.id) }, f.module.body(lp.id));
     assert_eq!(*facts.of(lp.i), Const::Top);
     assert_eq!(*facts.of(lp.i1), Const::Top);
     assert_eq!(*facts.of(lp.k), Const::Int(5));
@@ -507,14 +532,14 @@ impl ValueDomain for BoundDomain {
         Bound::Unbounded
     }
 
-    fn constant(&self, literal: &Literal) -> Bound {
+    fn constant(&self, literal: &Literal, _ty: CastTy) -> Bound {
         match literal {
             Literal::Int(n) => Bound::AtMost(*n),
             _ => Bound::Unbounded,
         }
     }
 
-    fn binary(&self, op: BinOp, left: &Bound, right: &Bound) -> Bound {
+    fn binary(&self, op: BinOp, _ty: CastTy, left: &Bound, right: &Bound) -> Bound {
         match (op, left, right) {
             (_, Bound::Bottom, _) | (_, _, Bound::Bottom) => Bound::Bottom,
             (BinOp::Add(_), Bound::AtMost(a), Bound::AtMost(b)) => {
@@ -524,7 +549,7 @@ impl ValueDomain for BoundDomain {
         }
     }
 
-    fn unary(&self, _op: UnaryOp, operand: &Bound) -> Bound {
+    fn unary(&self, _op: UnaryOp, _ty: CastTy, operand: &Bound) -> Bound {
         match operand {
             Bound::Bottom => Bound::Bottom,
             _ => Bound::Unbounded,
@@ -550,7 +575,7 @@ fn the_bound_domain_is_a_lattice() {
 fn sparse_ends_on_an_infinite_domain_by_widening_at_the_header() {
     let mut f = fixture();
     let lp = counting_loop(&mut f);
-    let facts = solve_sparse(&Propagate { domain: BoundDomain }, f.module.body(lp.id));
+    let facts = solve_sparse(&Propagate { domain: BoundDomain, scalars: Scalars::of(&f.module, lp.id) }, f.module.body(lp.id));
     assert_eq!(*facts.of(lp.i), Bound::Unbounded);
     assert_eq!(*facts.of(lp.k), Bound::AtMost(5));
     assert_eq!(*facts.of(lp.one), Bound::AtMost(1));
@@ -561,9 +586,9 @@ fn sparse_ends_on_an_infinite_domain_by_widening_at_the_header() {
 /// Constants, and a `For` over `at..hi` whose bounds are known: its counter
 /// on the body edge is `at` where the range holds one value, and its trip
 /// count on the exit edge is `hi - at` where that is not negative.
-struct Ranges;
+struct Ranges<'m>(Scalars<'m>);
 
-impl SparseAnalysis for Ranges {
+impl SparseAnalysis for Ranges<'_> {
     type Domain = ConstDomain;
 
     fn domain(&self) -> &ConstDomain {
@@ -571,11 +596,11 @@ impl SparseAnalysis for Ranges {
     }
 
     fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
-        Propagate { domain: ConstDomain }.transfer(inst, operands)
+        Propagate { domain: ConstDomain, scalars: self.0 }.transfer(inst, operands)
     }
 
     fn executable(&self, terminator: &Terminator, operands: &[&Const]) -> Executable {
-        Propagate { domain: ConstDomain }.executable(terminator, operands)
+        Propagate { domain: ConstDomain, scalars: self.0 }.executable(terminator, operands)
     }
 
     fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Const]) -> Const {
@@ -627,12 +652,12 @@ fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
     builder.terminate(ret(trip));
     let id = builder.seal().expect("the body has no open state");
 
-    let facts = solve_sparse(&Ranges, f.module.body(id));
+    let facts = solve_sparse(&Ranges(Scalars::of(&f.module, id)), f.module.body(id));
     assert_eq!(*facts.of(counter), Const::Int(3));
     assert_eq!(*facts.of(x), Const::Int(4));
     assert_eq!(*facts.of(trip), Const::Int(1));
 
-    let unknowing = solve_sparse(&Propagate { domain: ConstDomain }, f.module.body(id));
+    let unknowing = solve_sparse(&Propagate { domain: ConstDomain, scalars: Scalars::of(&f.module, id) }, f.module.body(id));
     assert_eq!(*unknowing.of(counter), Const::Top, "an analysis that knows nothing states top");
     assert_eq!(*unknowing.of(trip), Const::Top);
 }
@@ -642,9 +667,9 @@ fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
 /// `Propagate`, checking that no order token reaches it: a call of no
 /// arguments has no operand, a `Merge` is never visited, and a `Return`
 /// hands over its value alone.
-struct TokenBlind;
+struct TokenBlind<'m>(Scalars<'m>);
 
-impl SparseAnalysis for TokenBlind {
+impl SparseAnalysis for TokenBlind<'_> {
     type Domain = ConstDomain;
 
     fn domain(&self) -> &ConstDomain {
@@ -657,14 +682,14 @@ impl SparseAnalysis for TokenBlind {
             Op::FunctionCall { .. } => assert!(operands.is_empty(), "the consumed token is left out"),
             _ => {}
         }
-        Propagate { domain: ConstDomain }.transfer(inst, operands)
+        Propagate { domain: ConstDomain, scalars: self.0 }.transfer(inst, operands)
     }
 
     fn executable(&self, terminator: &Terminator, operands: &[&Const]) -> Executable {
         if let Terminator::Return { .. } = terminator {
             assert_eq!(operands.len(), 1, "a Return's order token is left out");
         }
-        Propagate { domain: ConstDomain }.executable(terminator, operands)
+        Propagate { domain: ConstDomain, scalars: self.0 }.executable(terminator, operands)
     }
 
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&Const]) -> Const {
@@ -693,7 +718,7 @@ fn sparse_analyses_values_and_holds_no_fact_for_a_token() {
     let body = f.module.body(id);
     let merges = body.blocks().flat_map(|(_, block)| block.insts()).filter(|inst| matches!(inst.op(), Op::Merge { .. }));
     assert!(merges.count() > 0, "the anyorder scope gathered its calls with a Merge");
-    let facts = solve_sparse(&TokenBlind, body);
+    let facts = solve_sparse(&TokenBlind(Scalars::of(&f.module, id)), body);
     assert_eq!(*facts.of(k), Const::Int(7));
     assert_eq!(*facts.of(r1), Const::Top);
     assert_eq!(*facts.of(y), Const::Top);
