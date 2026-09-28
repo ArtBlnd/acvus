@@ -1041,7 +1041,6 @@ mod tests {
     #[test]
     fn a_primitive_is_read_while_shared_referenced() {
         let mut types = Types::<Concrete>::new();
-        let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut val_types = string_slot(&mut types);
         val_types[0] = (slot(), i64_ty);
@@ -1138,7 +1137,6 @@ mod tests {
 
     #[test]
     fn a_read_of_the_storage_while_a_mutable_reference_is_live_is_rejected() {
-        let mut types = Types::<Concrete>::new();
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut val_types = string_slot(&mut types);
