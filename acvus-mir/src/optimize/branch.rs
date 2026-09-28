@@ -27,14 +27,15 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::known::KnownValues;
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{Label, ValueId};
+use crate::decl::Tags;
 use crate::ty::{Concrete, Types};
 
-pub fn run(interner: &Interner, cfg: &mut CfgBody, types: &Types<Concrete>) {
-    while decide_once(interner, cfg, types) {}
+pub fn run(interner: &Interner, cfg: &mut CfgBody, types: &Types<Concrete>, tags: &Tags) {
+    while decide_once(interner, cfg, types, tags) {}
 }
 
-fn decide_once(interner: &Interner, cfg: &mut CfgBody, types: &Types<Concrete>) -> bool {
-    let known = KnownValues::of(interner, cfg, types);
+fn decide_once(interner: &Interner, cfg: &mut CfgBody, types: &Types<Concrete>, tags: &Tags) -> bool {
+    let known = KnownValues::of(cfg, types, tags);
     let headers = LoopHeaders::of(cfg);
     let decided: Vec<Decided> = (0..cfg.blocks.len())
         .map(BlockIdx)

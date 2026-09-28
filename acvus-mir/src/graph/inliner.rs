@@ -32,58 +32,59 @@ pub struct InlineResult {
 ///
 /// `modules`: per-function MIR from the lower phase.
 /// `recursive_fns`: functions that should NOT be inlined (recursive / mutual recursive).
+///
+/// Every module's calls are inlined from the bodies the modules had on
+/// entry. The types a spliced callee names are interned into the caller's
+/// own table; interning only adds, so the caller's entry bodies stay
+/// readable in it while the others are inlined.
 pub fn inline(
-    modules: &FxHashMap<QualifiedRef, MirModule>,
+    mut modules: FxHashMap<QualifiedRef, MirModule>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> InlineResult {
-    let mut result = FxHashMap::default();
-
-    for (&fn_id, module) in modules {
-        let inlined = inline_module(module, modules, recursive_fns);
-        result.insert(fn_id, inlined);
+    let mut ids: Vec<QualifiedRef> = modules.keys().copied().collect();
+    ids.sort_unstable();
+    let mut inlined = Vec::with_capacity(ids.len());
+    for id in ids {
+        let mut module = modules.remove(&id).expect("each id is a key of the map");
+        let bodies = inline_module(&mut module, &modules, recursive_fns);
+        modules.insert(id, module);
+        inlined.push((id, bodies));
     }
-
-    InlineResult { modules: result }
+    for (id, bodies) in inlined {
+        let module = modules.get_mut(&id).expect("each id is a key of the map");
+        module.main = bodies.main;
+        module.closures = bodies.closures;
+    }
+    InlineResult { modules }
 }
 
-/// Inline all eligible calls within a single MirModule.
-///
-/// The inlined module has a table of its own: the module's types, and the
-/// types of every callee spliced into it, are imported into that table.
+/// A module's bodies with their calls inlined.
+struct Inlined {
+    main: MirBody,
+    closures: FxHashMap<Label, MirBody>,
+}
+
+/// Inline all eligible calls within a single MirModule, interning what the
+/// spliced callees name into its table. A call of the module itself is not
+/// among `all_modules`, and is left standing: it is recursive.
 fn inline_module(
-    module: &MirModule,
+    module: &mut MirModule,
     all_modules: &FxHashMap<QualifiedRef, MirModule>,
     recursive_fns: &FxHashSet<QualifiedRef>,
-) -> MirModule {
-    let mut types = Types::new();
-    let mut own = Import::from(&module.types);
-    let main = own.body(&module.main, &mut types);
-    let own_closures: FxHashMap<Label, MirBody> = module
-        .closures
-        .iter()
-        .map(|(label, closure)| (*label, own.body(closure, &mut types)))
-        .collect();
-    let ret = own.ty(module.ret, &mut types);
-
-    let body = inline_body(&main, all_modules, recursive_fns, &own_closures, &mut types);
+) -> Inlined {
+    let types = &mut module.types;
+    let main = inline_body(&module.main, all_modules, recursive_fns, &module.closures, types);
 
     // Inline within closures too.
     let mut closures = FxHashMap::default();
-    for (label, closure) in &own_closures {
-        let mut inlined_body = inline_body(closure, all_modules, recursive_fns, &own_closures, &mut types);
+    for (label, closure) in &module.closures {
+        let mut inlined_body = inline_body(closure, all_modules, recursive_fns, &module.closures, types);
         inlined_body.captures = closure.captures.clone();
         inlined_body.params = closure.params.clone();
         closures.insert(*label, inlined_body);
     }
 
-    MirModule {
-        declared_params: module.declared_params,
-        main: body,
-        closures,
-        ret,
-        flows: module.flows.clone(),
-        types,
-    }
+    Inlined { main, closures }
 }
 
 /// The types of one module's table, re-interned into another table.

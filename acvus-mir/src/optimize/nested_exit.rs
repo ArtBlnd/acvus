@@ -24,7 +24,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use acvus_ast::{Literal, Span};
-use acvus_utils::{Astr, Interner};
 
 use crate::analysis::domtree::DomTree;
 use crate::analysis::inst_info;
@@ -36,23 +35,15 @@ use crate::ir::{ExitTrip, ForSource, Inst, InstKind, Label, ValueId};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
 use crate::ir::is_word;
 use crate::ty::{Concrete, Ty, TyKind, Types};
-use crate::decl::Declarations;
+use crate::decl::{Declarations, Tags};
 
 type Preds = FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>;
 
-pub fn run(interner: &Interner, cfg: &mut CfgBody, types: &mut Types<Concrete>, decls: &Declarations) {
-    let tags = Tags {
-        some: interner.intern("Some"),
-        none: interner.intern("None"),
-    };
+pub fn run(cfg: &mut CfgBody, types: &mut Types<Concrete>, decls: &Declarations) {
+    let tags = decls.core().tags;
     while let Some(moved) = Move::find(cfg, types, decls) {
         moved.apply(cfg, types, &tags);
     }
-}
-
-struct Tags {
-    some: Astr,
-    none: Astr,
 }
 
 enum Verdict {

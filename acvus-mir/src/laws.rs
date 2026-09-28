@@ -11,7 +11,7 @@
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
-use acvus_utils::{Astr, Interner, QualifiedRef};
+use acvus_utils::QualifiedRef;
 
 use crate::decl::{Declarations, Scheme};
 use crate::ir::{Callee, Chosen};
@@ -595,8 +595,8 @@ impl Wanted {
 /// variable stands for any one type, the same wherever it recurs; effect,
 /// length and identity variables of the pattern stand for any effect,
 /// length or identity. A variable of the matched type matches only a
-/// pattern variable, and a `#` mark matches only itself: the generic
-/// instance is the uniform one (types §8).
+/// pattern variable. A decided `#` mark matches only itself, and a
+/// pattern's undecided mark takes either (types §8).
 struct PatternMatch<'a> {
     poly: &'a Types<Poly>,
     bound: FxHashMap<u32, TyId<Poly>>,
@@ -620,9 +620,9 @@ impl<'a> PatternMatch<'a> {
 
     fn arg_matches(&mut self, arg: &TypeArg<Poly>, pattern: &TypeArg<Poly>) -> bool {
         match (arg, pattern) {
-            (TypeArg::Uniform(ty), TypeArg::Uniform(p) | TypeArg::Open(_, p))
-            | (TypeArg::Specialized(ty), TypeArg::Specialized(p))
-            | (TypeArg::Open(_, ty), TypeArg::Open(_, p)) => self.matches(*ty, *p),
+            (TypeArg::Uniform(ty) | TypeArg::Specialized(ty) | TypeArg::Open(_, ty), TypeArg::Open(_, p))
+            | (TypeArg::Uniform(ty), TypeArg::Uniform(p))
+            | (TypeArg::Specialized(ty), TypeArg::Specialized(p)) => self.matches(*ty, *p),
             (TypeArg::Uniform(_) | TypeArg::Specialized(_) | TypeArg::Open(..), _) => false,
         }
     }
@@ -817,13 +817,6 @@ pub struct InstanceType {
     pub generic: bool,
 }
 
-/// The tags of an `Option`'s two variants (types §2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OptionTags {
-    pub some: Astr,
-    pub none: Astr,
-}
-
 #[derive(Debug)]
 pub struct LawTable {
     by_instance: FxHashMap<QualifiedRef, Vec<Declared>>,
@@ -832,30 +825,22 @@ pub struct LawTable {
     /// The declaration of the `Equiv` keying marker (RFC-0098 rule 2),
     /// where the declarations name it.
     equiv: Option<QualifiedRef>,
-    option_tags: OptionTags,
     pull_signature: Option<QualifiedRef>,
 }
 
 impl LawTable {
-    /// The laws of every instance of each of `externs`, numbered as
+    /// The laws of every instance of every declaration, numbered as
     /// `Callee::Extern` numbers them: the concrete instances in order, then
-    /// the generic one; an extern that lists no instances is instance 0.
+    /// the generic one; a declaration that lists no instances is instance 0.
     ///
     /// # Panics
-    /// An extern of `externs` is not declared, or a law names an extern
-    /// with no instance of the types it asks: `acvus_extern::Externs::combine`
-    /// refuses such a registry by the same [`resolve`].
-    pub fn of(
-        decls: &Declarations,
-        interner: &Interner,
-        externs: impl IntoIterator<Item = QualifiedRef>,
-    ) -> Self {
+    /// A law names an extern with no instance of the types it asks:
+    /// `acvus_extern::Externs::combine` refuses such a registry by the same
+    /// [`resolve`].
+    pub fn of(decls: &Declarations) -> Self {
         let mut by_instance = FxHashMap::default();
         let mut instance_types = FxHashMap::default();
-        for id in externs {
-            let Some(scheme) = decls.scheme(id) else {
-                panic!("the law table is asked for {id:?}, which is not declared")
-            };
+        for (id, scheme) in decls.functions() {
             by_instance.insert(id, declared_instances(id, scheme, decls));
             instance_types.insert(id, typed_instances(scheme));
         }
@@ -864,10 +849,6 @@ impl LawTable {
             by_instance,
             instance_types,
             equiv: markers.keying.map(|keying| keying.equiv),
-            option_tags: OptionTags {
-                some: interner.intern("Some"),
-                none: interner.intern("None"),
-            },
             pull_signature: markers.pull,
         }
     }
@@ -891,11 +872,6 @@ impl LawTable {
     /// registries named from its Rust type, not by how a script spells it.
     pub fn is_equiv(&self, id: QualifiedRef) -> bool {
         self.equiv == Some(id)
-    }
-
-    /// The tags of an `Option`'s variants.
-    pub fn option_tags(&self) -> OptionTags {
-        self.option_tags
     }
 
     /// Whether a call names an instance of `iter::next`, the signature a

@@ -20,7 +20,7 @@ use crate::step::{
     closures_called,
 };
 use crate::decl::Declarations;
-use crate::ir::known_effect;
+use crate::ir::{is_word, known_effect};
 use crate::ty::{Concrete, IntTy, Mutability, ObjectTy, Poly, Reissue, Ty, TyId, TyKind, TypeArg, Types};
 use scheme::Bindings;
 
@@ -520,7 +520,7 @@ impl<'p> Fusion<'p> {
         self.push(InstKind::TestVariant {
             dst: is_some,
             src: pulled_option,
-            tag: self.interner.intern("Some"),
+            tag: self.decls.core().tags.some,
         });
         let first_step = self.fresh_label();
         let finish = self.finish;
@@ -1008,13 +1008,26 @@ impl<'p> Fusion<'p> {
         Ok(())
     }
 
+    /// The element a nest yields: the word element of the shared slice
+    /// `core::as_slice` lends of the container (operators §3), at the
+    /// instance its type chooses.
     fn nested_element(&mut self, container: Ty) -> Result<Nested, Declined> {
-        let _ = container;
-        todo!(
-            "the shared slice view of a container: the declarations name no machine view; is it \
-             `core::as_slice`'s instances (operators §3), and by what name does the compiler know \
-             `core::as_slice`? (stopped for the coordinator)"
-        )
+        let unfit = Declined::NestOverNoWordSlice(container);
+        let lent = self.lent(Mutability::Shared, container);
+        let as_slice = self.decls.core().as_slice;
+        let view = self
+            .resolve(as_slice, &[Some(lent)], None)
+            .map_err(|_| unfit.clone())?;
+        let TyKind::Ref(Mutability::Shared, slice) = self.types.kind(view.ret) else {
+            return Err(unfit);
+        };
+        let TyKind::Slice(element) = *self.types.kind(slice.ty()) else {
+            return Err(unfit);
+        };
+        if !is_word(self.types, element) {
+            return Err(unfit);
+        }
+        Ok(Nested { view, element })
     }
 
     fn block(&mut self, block: &'p ConsumerBlock, scope: &Scope) -> Result<BlockEnd, Declined> {
@@ -1227,7 +1240,7 @@ impl<'p> Fusion<'p> {
                 let dst = self.value(ty);
                 self.push(InstKind::MakeVariant {
                     dst,
-                    tag: self.interner.intern("Some"),
+                    tag: self.decls.core().tags.some,
                     payload: Some(payload.value),
                 });
                 Typed { value: dst, ty }
@@ -1239,7 +1252,7 @@ impl<'p> Fusion<'p> {
                 let dst = self.value(ty);
                 self.push(InstKind::MakeVariant {
                     dst,
-                    tag: self.interner.intern("None"),
+                    tag: self.decls.core().tags.none,
                     payload: None,
                 });
                 Typed { value: dst, ty }
@@ -1539,12 +1552,12 @@ impl<'p> Fusion<'p> {
             tag: lent,
             arms: vec![
                 (
-                    SwitchKey::Tag(self.interner.intern("None")),
+                    SwitchKey::Tag(self.decls.core().tags.none),
                     none_label,
                     Vec::new(),
                 ),
                 (
-                    SwitchKey::Tag(self.interner.intern("Some")),
+                    SwitchKey::Tag(self.decls.core().tags.some),
                     some_label,
                     Vec::new(),
                 ),

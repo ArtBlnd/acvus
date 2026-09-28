@@ -119,7 +119,7 @@ fn optimize_level(
                 let _declined: Vec<optimize::fusion::Declined> =
                     optimize::fusion::run(interner, laws, decls, module);
             }
-            inliner::inline(&ssa_modules, &recursive)
+            inliner::inline(ssa_modules, &recursive)
         }
     };
 
@@ -532,7 +532,7 @@ fn run_pass2_required(
     optimize::string_copy::run(cfg, types, decls);
     optimize::reborrow::run(cfg, types);
     optimize::fold::run(cfg, types);
-    optimize::branch::run(interner, cfg, types);
+    optimize::branch::run(interner, cfg, types, &decls.core().tags);
     optimize::dce::run(cfg, types, decls, laws, functions);
 }
 
@@ -558,7 +558,7 @@ fn run_pass2(
     optimize::fold::run(cfg, types);
     // RFC-0071: after the fold, which is what makes a condition constant;
     // before `dse`/`dce`, which sweep what the arms it dropped had read.
-    optimize::branch::run(interner, cfg, types);
+    optimize::branch::run(interner, cfg, types, &decls.core().tags);
     optimize::reborrow::run(cfg, types);
     optimize::dse::run(cfg);
     // RFC-0081: after `ssa_pass`, which makes the counter a header
@@ -590,7 +590,7 @@ fn run_pass2(
     // the nested loop's own exit, so the parent is cut around an exit of its
     // own (RFC-0089 rule 5); before the cut, which reads the exits, and
     // after `forward`, which would take the exit block's plain jump for it.
-    optimize::nested_exit::run(interner, cfg, types, decls);
+    optimize::nested_exit::run(cfg, types, decls);
     // RFC-0089 rule 6: after every pass that moves or merges a body's
     // instructions -- `code_motion` and `forward` across blocks, `gvn`
     // merging, `reorder` within one block -- since a stage is a set of

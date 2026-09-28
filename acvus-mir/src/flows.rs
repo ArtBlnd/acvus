@@ -7,13 +7,12 @@
 //! of the output from the input segments its map names) or `Any` (every
 //! position of the output from every position of the input). The positions
 //! an end has are its concrete type's (`ty::positions`), counted where a
-//! call is checked. A `Labelled` flow carries both ends' declared types,
-//! whose segments (`decl::labels`) a call reads beside the concrete ones.
+//! call is checked. A `Labelled` flow names the declaration its ends are
+//! read off, whose segments (`decl::labels`) a call reads beside the
+//! concrete types.
 
-use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
-use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 
 use acvus_utils::QualifiedRef;
@@ -38,7 +37,7 @@ pub enum FlowEnd {
 }
 
 /// How the positions of a flow's two ends meet.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Alignment {
     /// Position `k` of the output takes position `k` of the input; the two
     /// ends have one shape.
@@ -72,10 +71,10 @@ impl Segment {
     }
 }
 
-/// A `Labelled` flow: both ends' declared types, in the declarations'
-/// table, and for each segment of the output the input segments it takes.
-/// A segment the map does not name takes nothing from this input.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// A `Labelled` flow: the declaration its ends are read off, and for each
+/// segment of the output the input segments it takes. A segment the map
+/// does not name takes nothing from this input.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Labelled {
     /// The declaration whose signature's ends the segments are read off.
     pub declared: Declared,
@@ -88,6 +87,45 @@ pub struct Labelled {
 pub struct Declared {
     pub function: QualifiedRef,
     pub instance: Option<usize>,
+}
+
+impl Declared {
+    /// The declared type of the end `end` of this signature, in the
+    /// declarations' table: the result, or the parameter at its index.
+    ///
+    /// # Panics
+    /// The declaration, its instance or the end does not exist, or `end`
+    /// is the callee's captures: a `Labelled` flow is read off an extern's
+    /// signature, whose ends are its parameters and its result.
+    pub fn end_ty(self, decls: &Declarations, end: FlowEnd) -> TyId<Poly> {
+        let scheme = decls
+            .scheme(self.function)
+            .expect("a Labelled flow names a declared function");
+        let signature = match self.instance {
+            None => scheme.ty,
+            Some(instance) => {
+                scheme
+                    .instances
+                    .as_ref()
+                    .and_then(|instances| instances.concrete.get(instance))
+                    .expect("a Labelled flow names a concrete instance its declaration has")
+                    .ty
+            }
+        };
+        let TyKind::Fn { params, ret, .. } = decls.types().kind(signature) else {
+            panic!("a declared function's signature is a function type")
+        };
+        match end {
+            FlowEnd::Result => *ret,
+            FlowEnd::Param(index) => {
+                params
+                    .get(index)
+                    .expect("a Labelled flow's end is a parameter of its signature")
+                    .ty
+            }
+            FlowEnd::Captures => panic!("a Labelled flow's ends are an extern's parameters and result"),
+        }
+    }
 }
 
 /// The segments of the declared type `ty`, in order: a reference's own
@@ -116,8 +154,8 @@ fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>,
         | TyKind::Bool
         | TyKind::Unit
         | TyKind::Never
-        | TyKind::Str
-        | TyKind::Fn { .. } => {}
+        | TyKind::Str => {}
+        TyKind::Fn { .. } => out.push(Segment::FunctionValue),
         TyKind::Order | TyKind::Handle(_) => panic!("a declared type holds no Handle and no Order"),
         TyKind::Var(var) => out.push(Segment::TypeVar(*var)),
         TyKind::Ref(_, target) => {
@@ -221,7 +259,7 @@ impl SegmentWalk<'_> {
                 | TyKind::Str,
                 _,
             ) => {}
-            (TyKind::Fn { .. }, TyKind::Fn { .. }) => self.at += 1,
+            (TyKind::Fn { .. }, TyKind::Fn { .. }) => self.cover(1),
             (TyKind::Ref(_, decl_target), TyKind::Ref(_, target)) => {
                 self.cover(1);
                 self.lay(decl_target.ty(), target.ty());
@@ -300,14 +338,14 @@ impl SegmentWalk<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Flow {
     pub to: FlowEnd,
     pub from: FlowEnd,
     pub alignment: Alignment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Source {
     pub from: FlowEnd,
     pub alignment: Alignment,
@@ -318,47 +356,13 @@ pub struct Source {
 /// `Every` is every output from every input, `Any`: what a declaration that
 /// states nothing about its flows gets (extern-fn §4). It is its own value
 /// because a declaration states it without counting the parameters.
-/// `Listed` is a set: each pair of ends once per alignment, an `Any` flow
-/// standing for the `Aligned` or `Labelled` one it covers. Two listings of
-/// one set are equal and hash alike whatever their order, since a
-/// `Labelled` flow's declared types have no order to sort by.
-#[derive(Debug, Clone)]
+/// `Listed` holds the flows sorted, each pair of ends once per alignment,
+/// an `Any` flow standing for the `Aligned` or `Labelled` one it covers, so
+/// two equal sets are equal values.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Flows {
     Every,
     Listed(Vec<Flow>),
-}
-
-impl PartialEq for Flows {
-    fn eq(&self, other: &Flows) -> bool {
-        match (self, other) {
-            (Flows::Every, Flows::Every) => true,
-            (Flows::Listed(a), Flows::Listed(b)) => {
-                a.iter().all(|flow| b.contains(flow)) && b.iter().all(|flow| a.contains(flow))
-            }
-            (Flows::Every, Flows::Listed(_)) | (Flows::Listed(_), Flows::Every) => false,
-        }
-    }
-}
-
-impl Eq for Flows {}
-
-impl Hash for Flows {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-        if let Flows::Listed(listed) = self {
-            let mut each: Vec<u64> = listed
-                .iter()
-                .map(|flow| {
-                    let mut hasher = FxHasher::default();
-                    flow.hash(&mut hasher);
-                    hasher.finish()
-                })
-                .collect();
-            each.sort_unstable();
-            each.dedup();
-            each.hash(state);
-        }
-    }
 }
 
 impl Default for Flows {
@@ -374,12 +378,9 @@ impl Flows {
     }
 
     pub fn of(flows: impl IntoIterator<Item = Flow>) -> Self {
-        let mut listed: Vec<Flow> = Vec::new();
-        for flow in flows {
-            if !listed.contains(&flow) {
-                listed.push(flow);
-            }
-        }
+        let mut listed: Vec<Flow> = flows.into_iter().collect();
+        listed.sort();
+        listed.dedup();
         let covered: Vec<Flow> = listed
             .iter()
             .filter(|flow| flow.alignment != Alignment::Any)

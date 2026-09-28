@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use serde::{Deserialize, Serialize};
 
-use crate::flows::{Alignment, Flow, FlowEnd, FlowTerm, Flows};
+use crate::flows::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled};
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
     Calls, Concrete, Contexts, Effect, EffectArg, EffectTerm, Holds, IdentityId, IdentityTerm, IntTy, LenTerm,
@@ -95,14 +95,22 @@ pub struct SerFlow {
     pub alignment: SerAlignment,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SerAlignment {
     Aligned,
+    /// The declaration the ends are read off, and per output segment the
+    /// input segments it takes.
+    Labelled {
+        function: SerQualifiedRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<usize>,
+        map: Vec<Vec<usize>>,
+    },
     Any,
 }
 
-fn flows_to_ser(flows: &Flows) -> SerFlows {
+fn flows_to_ser(flows: &Flows, interner: &Interner) -> SerFlows {
     match flows {
         Flows::Every => SerFlows::Every,
         Flows::Listed(listed) => SerFlows::Listed {
@@ -114,10 +122,11 @@ fn flows_to_ser(flows: &Flows) -> SerFlows {
                     alignment: match &flow.alignment {
                         Alignment::Aligned => SerAlignment::Aligned,
                         Alignment::Any => SerAlignment::Any,
-                        Alignment::Labelled(_) => todo!(
-                            "a Labelled flow carries its ends' declared types, which live in the \
-                             declarations' table: how is it written down? (stopped for the coordinator)"
-                        ),
+                        Alignment::Labelled(labelled) => SerAlignment::Labelled {
+                            function: qref_to_ser(&labelled.declared.function, interner),
+                            instance: labelled.declared.instance,
+                            map: labelled.map.iter().map(|takes| takes.to_vec()).collect(),
+                        },
                     },
                 })
                 .collect(),
@@ -125,14 +134,25 @@ fn flows_to_ser(flows: &Flows) -> SerFlows {
     }
 }
 
-fn ser_to_flows(flows: &SerFlows) -> Flows {
+fn ser_to_flows(flows: &SerFlows, interner: &Interner) -> Flows {
     match flows {
         SerFlows::Every => Flows::Every,
         SerFlows::Listed { flows } => Flows::of(flows.iter().map(|flow| Flow {
             to: flow.to,
             from: flow.from,
-            alignment: match flow.alignment {
+            alignment: match &flow.alignment {
                 SerAlignment::Aligned => Alignment::Aligned,
+                SerAlignment::Labelled {
+                    function,
+                    instance,
+                    map,
+                } => Alignment::Labelled(Box::new(Labelled {
+                    declared: Declared {
+                        function: ser_to_qref(function, interner),
+                        instance: *instance,
+                    },
+                    map: map.iter().map(|takes| takes.clone().into_boxed_slice()).collect(),
+                })),
                 SerAlignment::Any => Alignment::Any,
             },
         })),
@@ -374,10 +394,13 @@ fn to_ser_level(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> SerTy {
                 .collect(),
             ret: part(*ret),
             effect: effect_to_ser(known_effect(effect), interner),
-            flows: flows_to_ser(match flows {
-                FlowTerm::Known(flows) => flows,
-                FlowTerm::Var(var) => match *var {},
-            }),
+            flows: flows_to_ser(
+                match flows {
+                    FlowTerm::Known(flows) => flows,
+                    FlowTerm::Var(var) => match *var {},
+                },
+                interner,
+            ),
             calls: match calls {
                 Calls::Once => SerCalls::Once,
                 Calls::Many => SerCalls::Many,
@@ -481,7 +504,7 @@ impl SerTy {
                     .collect(),
                 ret: ret.to_ty(types, interner),
                 effect: EffectTerm::Known(ser_to_effect(effect, interner)),
-                flows: FlowTerm::Known(ser_to_flows(flows)),
+                flows: FlowTerm::Known(ser_to_flows(flows, interner)),
                 calls: match calls {
                     SerCalls::Once => Calls::Once,
                     SerCalls::Many => Calls::Many,

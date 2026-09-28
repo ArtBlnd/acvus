@@ -2626,7 +2626,7 @@ struct ViewedLoad {
 
 fn viewed_load(
     cfg: &CfgBody,
-    tags: crate::laws::OptionTags,
+    tags: crate::decl::Tags,
     call: InstAt,
     view: ValueId,
 ) -> Option<ViewedLoad> {
@@ -2880,7 +2880,7 @@ fn keyed_storage(
             if places.reach_of_inst(&inst.kind, slot).is_none() {
                 continue;
             }
-            let tags = laws.option_tags();
+            let tags = places.loans.layout().decls.core().tags;
             viewed.push(viewed_load(cfg, tags, InstAt { block, at }, *dst)?);
         }
     }

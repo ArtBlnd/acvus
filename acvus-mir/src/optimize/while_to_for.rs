@@ -989,7 +989,7 @@ impl Recognizer<'_> {
             return None;
         };
         let storage = inst_info::storage(target)?;
-        let some = self.laws.option_tags().some;
+        let some = self.decls.core().tags.some;
         let pulls = self.laws.pulls(callee)
             && args[..] == [*lent]
             && matches!(self.cfg.val_types.get(pulled).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_)))

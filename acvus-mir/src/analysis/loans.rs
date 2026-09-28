@@ -23,41 +23,9 @@ use crate::ir::{
 };
 use crate::decl::Declarations;
 use crate::flows::{Alignment, FlowEnd, FlowTerm, Flows, Labelled, Segment, Source, segment_positions, segments};
-use crate::ty::{Concrete, Holds, LifetimesOf, Mutability, ParamTerm, Ty, TyKind, Types, positions};
+use crate::ty::{Concrete, Holds, LifetimesOf, Mutability, ParamTerm, PositionKind, Ty, TyKind, Types, position_kinds, positions};
 
 // -- Positions (ownership §5) ---------------------------------------
-
-/// What one position of a type is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PositionKind {
-    /// A reference: its loans name the storage it points at, and the pointee's
-    /// positions follow it.
-    Ref(Mutability),
-    /// What a function value captured, and the mutability `held_loan` gives
-    /// its captures.
-    Captures(Option<Mutability>),
-    /// A lifetime an extern-defined type declares.
-    Lifetime,
-    /// The arguments of a spawned call still in flight.
-    InFlight,
-}
-
-/// Behind a `&T`, a `&mut` reaches its pointee only as a shared reborrow
-/// (RFC-0029 rule 5).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Access {
-    Owned,
-    BehindShared,
-}
-
-impl Access {
-    fn bound(self, mutability: Mutability) -> Mutability {
-        match self {
-            Self::Owned => mutability,
-            Self::BehindShared => Mutability::Shared,
-        }
-    }
-}
 
 /// A field of an object or a payload of an enum's variant.
 struct NamedPart {
@@ -107,74 +75,41 @@ impl<'a> Layout<'a> {
         self.kinds(ty).into_iter().any(|kind| {
             matches!(
                 kind,
-                PositionKind::Ref(Mutability::Mut) | PositionKind::Captures(Some(Mutability::Mut))
+                PositionKind::Ref(Mutability::Mut) | PositionKind::Captures(Holds::Mut)
             )
         })
     }
 
-    /// The kind of each of `ty`'s positions, in order.
+    /// The kind of each of `ty`'s positions, in order (`ty::position_kinds`),
+    /// bounded by the access a holder has: behind a `&T`, a `&mut` reaches
+    /// its target only as a shared reborrow (RFC-0029 rule 5), and a
+    /// function value's mutable captures are read-only.
     pub fn kinds(self, ty: Ty) -> Vec<PositionKind> {
-        let mut out = Vec::new();
-        self.lay_out_under(ty, Access::Owned, &mut out);
-        out
-    }
-
-    fn lay_out_under(self, ty: Ty, access: Access, out: &mut Vec<PositionKind>) {
-        acvus_utils::grow(|| self.lay_out_under_level(ty, access, out))
-    }
-
-    fn lay_out_under_level(self, ty: Ty, access: Access, out: &mut Vec<PositionKind>) {
-        match self.types.kind(ty) {
-            TyKind::Ref(mutability, inner) => {
-                let mutability = access.bound(*mutability);
-                out.push(PositionKind::Ref(mutability));
-                let inner_access = match mutability {
-                    Mutability::Shared => Access::BehindShared,
-                    Mutability::Mut => access,
-                };
-                self.lay_out_under(inner.ty(), inner_access, out);
-            }
-            TyKind::Array(inner, _) | TyKind::Option(inner) | TyKind::Slice(inner) => {
-                self.lay_out_under(*inner, access, out)
-            }
-            TyKind::Handle(inner) => {
-                out.push(PositionKind::InFlight);
-                self.lay_out_under(*inner, access, out);
-            }
-            TyKind::Result(ok, err) => {
-                self.lay_out_under(*ok, access, out);
-                self.lay_out_under(*err, access, out);
-            }
-            TyKind::Tuple(items) => {
-                for item in items.iter() {
-                    self.lay_out_under(*item, access, out);
+        let mut kinds = position_kinds(self.types, self.decls, ty);
+        let mut shared_until = 0;
+        for k in 0..kinds.len() {
+            let behind_shared = k < shared_until;
+            match &mut kinds[k] {
+                PositionKind::Ref(mutability) => {
+                    if behind_shared {
+                        *mutability = Mutability::Shared;
+                    }
+                    if *mutability == Mutability::Shared {
+                        let pointee = self
+                            .pointee_at(ty, k)
+                            .expect("a reference position has a pointee");
+                        shared_until = shared_until.max(k + 1 + self.positions(pointee));
+                    }
                 }
-            }
-            TyKind::Object(_) | TyKind::Enum { .. } => {
-                for part in self.parts_in_order(ty) {
-                    self.lay_out_under(part.ty, access, out);
+                PositionKind::Captures(holds) => {
+                    if behind_shared && *holds == Holds::Mut {
+                        *holds = Holds::Shared;
+                    }
                 }
+                PositionKind::Lifetime | PositionKind::InFlight => {}
             }
-            TyKind::Fn { .. } => out.push(PositionKind::Captures(
-                held_loan(self.types, ty).map(|mutability| access.bound(mutability)),
-            )),
-            TyKind::UserDefined { id, type_args, .. } => {
-                out.extend(std::iter::repeat_n(PositionKind::Lifetime, self.decls.lifetimes_of(*id)));
-                for arg in type_args.iter() {
-                    self.lay_out_under(arg.ty(), access, out);
-                }
-            }
-            TyKind::Int(_)
-            | TyKind::Float
-            | TyKind::Char
-            | TyKind::String
-            | TyKind::Bool
-            | TyKind::Unit
-            | TyKind::Never
-            | TyKind::Order
-            | TyKind::Str => {}
-            TyKind::Var(var) => match *var {},
         }
+        kinds
     }
 
     /// An object's fields or an enum's payloads, in the order their
@@ -269,8 +204,9 @@ impl<'a> Layout<'a> {
             .into_iter()
             .enumerate()
             .filter_map(|(k, kind)| match kind {
-                PositionKind::Ref(mutability) | PositionKind::Captures(Some(mutability)) => Some((k, mutability)),
-                PositionKind::Captures(None) | PositionKind::Lifetime | PositionKind::InFlight => None,
+                PositionKind::Ref(mutability) => Some((k, mutability)),
+                PositionKind::Captures(holds) => captured(holds).map(|mutability| (k, mutability)),
+                PositionKind::Lifetime | PositionKind::InFlight => None,
             })
             .collect();
         if held.is_empty() {
@@ -1823,11 +1759,13 @@ impl RegionAnalysis<'_> {
             .expect("a Labelled flow's input is a parameter of its function type")
             .ty;
         let poly = decls.types();
+        let to_decl = map.declared.end_ty(decls, FlowEnd::Result);
+        let from_decl = map.declared.end_ty(decls, from);
         let ends = LabelledEnds {
-            to: segment_positions(poly, map.to_decl, types, ret, decls),
-            from: segment_positions(poly, map.from_decl, types, from_ty, decls),
-            to_segments: segments(poly, decls, map.to_decl),
-            from_segments: segments(poly, decls, map.from_decl),
+            to: segment_positions(poly, to_decl, types, ret, decls),
+            from: segment_positions(poly, from_decl, types, from_ty, decls),
+            to_segments: segments(poly, decls, to_decl),
+            from_segments: segments(poly, decls, from_decl),
         };
         assert!(
             map.map.len() == ends.to.len() && map.map.iter().flatten().all(|segment| *segment < ends.from.len()),
@@ -2299,8 +2237,10 @@ fn entry_regions(layout: Layout<'_>, storage: &EntryStorage, value: ValueId, ty:
         .map(|(position, kind)| {
             let mutability = match kind {
                 PositionKind::Ref(mutability) => mutability,
-                PositionKind::Captures(Some(mutability)) => mutability,
-                PositionKind::Captures(None) => return Region::default(),
+                PositionKind::Captures(holds) => match captured(holds) {
+                    Some(mutability) => mutability,
+                    None => return Region::default(),
+                },
                 PositionKind::Lifetime | PositionKind::InFlight => Mutability::Shared,
             };
             let loan = match position == 0 && names_itself {
@@ -2365,12 +2305,17 @@ impl RegionsAt<'_> {
 pub fn held_loan(types: &Types<Concrete>, ty: Ty) -> Option<Mutability> {
     match types.kind(ty) {
         TyKind::Ref(mutability, _) => Some(*mutability),
-        TyKind::Fn { holds, .. } => match holds {
-            Holds::Nothing => None,
-            Holds::Shared => Some(Mutability::Shared),
-            Holds::Mut => Some(Mutability::Mut),
-        },
+        TyKind::Fn { holds, .. } => captured(*holds),
         _ => None,
+    }
+}
+
+/// The loan a function value's captures hold, as its `holds` states it.
+fn captured(holds: Holds) -> Option<Mutability> {
+    match holds {
+        Holds::Nothing => None,
+        Holds::Shared => Some(Mutability::Shared),
+        Holds::Mut => Some(Mutability::Mut),
     }
 }
 

@@ -28,6 +28,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator, reachable};
 use crate::ir::{InstKind, Label, PathSeg, RefTarget, SwitchKey, ValueId};
+use crate::decl::Tags;
 use crate::ty::{Concrete, Mutability, Ty, TyKind, Types};
 
 /// A value every run gives, or the referent every run names.
@@ -176,22 +177,12 @@ pub struct KnownValues {
     values: FxHashMap<ValueId, Known>,
 }
 
-/// The two tag names an `Option`'s variants carry (RFC-0039).
-struct OptionTags {
-    some: Astr,
-    none: Astr,
-}
-
 impl KnownValues {
-    pub fn of(interner: &Interner, cfg: &CfgBody, types: &Types<Concrete>) -> KnownValues {
+    pub fn of(cfg: &CfgBody, types: &Types<Concrete>, tags: &Tags) -> KnownValues {
         let alive = reachable(cfg);
         let once = defined_once(cfg);
         let slots = Slots::of(cfg);
         let incoming = Incoming::of(cfg, &alive);
-        let tags = OptionTags {
-            some: interner.intern("Some"),
-            none: interner.intern("None"),
-        };
         let mut known = KnownValues {
             values: FxHashMap::default(),
         };
@@ -222,7 +213,7 @@ impl KnownValues {
                     if known.values.contains_key(&dst) || !once.contains(&dst) {
                         continue;
                     }
-                    if let Some(value) = known.eval(cfg, types, &slots, &tags, &inst.kind) {
+                    if let Some(value) = known.eval(cfg, types, &slots, tags, &inst.kind) {
                         known.values.insert(dst, value);
                         changed = true;
                     }
@@ -292,7 +283,7 @@ impl KnownValues {
         cfg: &CfgBody,
         types: &Types<Concrete>,
         slots: &Slots,
-        tags: &OptionTags,
+        tags: &Tags,
         kind: &InstKind,
     ) -> Option<Known> {
         let known = |v: &ValueId| self.values.get(v);
