@@ -39,7 +39,9 @@ pub struct Outlives {
     pub shorter: Lifetime,
 }
 
-/// An extern fn's lifetimes: each end's labels, and their order.
+/// An extern fn's lifetimes: each end's labels, and their order. Every
+/// segment arrives labelled: an elided lifetime is filled by whatever makes
+/// the declaration, never by the compiler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelledSignature {
     pub ends: Box<[EndLabels]>,
