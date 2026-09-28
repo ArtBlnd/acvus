@@ -247,6 +247,15 @@ where
         }
     }
 
+    /// The instruction at `index` of `block` as the last edit left it;
+    /// none past the block's end. Cost: O(1).
+    ///
+    /// # Panics
+    /// `block` is not a block of the body.
+    pub fn inst_at(&self, block: BlockId, index: usize) -> Option<InstRef> {
+        (index < self.body_ref().block(block).insts().len()).then_some(InstRef { block, index })
+    }
+
     fn body_ref(&self) -> &Body {
         self.module.body(self.body)
     }

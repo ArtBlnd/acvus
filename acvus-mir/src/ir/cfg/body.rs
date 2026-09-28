@@ -570,6 +570,19 @@ impl Module {
     pub fn body(&self, id: BodyId) -> &Body {
         &self.bodies[id.0 as usize]
     }
+
+    /// Every body of the module, in the order their seals added them.
+    /// Cost: O(1), and O(bodies) to walk.
+    pub fn body_ids(&self) -> impl Iterator<Item = BodyId> + use<> {
+        (0..self.bodies.len()).map(|index| BodyId(u32::try_from(index).expect("a module holds at most u32::MAX bodies")))
+    }
+
+    /// Test only: the id the next sealed body takes, for a body that makes
+    /// a closure of itself. Cost: O(1).
+    #[cfg(test)]
+    pub(crate) fn next_body_id(&self) -> BodyId {
+        BodyId(u32::try_from(self.bodies.len()).expect("a module holds at most u32::MAX bodies"))
+    }
     /// # Panics
     /// No entry was set.
     pub fn entry(&self) -> BodyId {

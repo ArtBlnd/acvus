@@ -13,9 +13,9 @@ use crate::ir::cfg::edit::{DefDominatesUses, Invariants, OrderChainWhole, Struct
 use crate::ir::cfg::{BlockId, BodyId, Changes, Module, Op, Terminator};
 use crate::ir::{BinOp, Callee, Overflow, RefTarget, ValueId};
 use crate::passes::analysis::AnalysisManager;
-use crate::passes::optimize::BodyTransform;
+use crate::passes::optimize::{BodyTransform, ModuleTransform};
 use crate::ty::{
-    Calls, Concrete, Contexts, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost, Ty,
+    Calls, Concrete, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost, Ty,
     TyKind, TypeArg, Types,
 };
 
@@ -33,6 +33,16 @@ pub(super) struct Fixture {
     pub pure: Ty,
     /// `fn() -> i64`, opaque.
     pub opaque: Ty,
+    /// `fn(i64) -> i64`, pure.
+    pub pure_unary: Ty,
+    /// `fn(i64) -> i64`, opaque.
+    pub opaque_unary: Ty,
+    /// `fn() -> i64`, opaque and declared commutative.
+    pub commuting: Ty,
+    /// `fn(i64) -> i64`, opaque and declared commutative.
+    pub commuting_unary: Ty,
+    /// `fn() -> i64`, opaque and splittable.
+    pub splittable: Ty,
     /// `(i64, i64)`.
     pub pair: Ty,
     /// `(i64, i64, i64)`.
@@ -49,9 +59,9 @@ impl Fixture {
         let bool = types.intern(TyKind::Bool);
         let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
         let mut_ref_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
-        let mut call_ty = |effect: Effect| {
+        let mut call_ty = |params: &[Ty], effect: Effect| {
             types.intern(TyKind::Fn {
-                params: Box::new([]),
+                params: params.into(),
                 ret: int,
                 effect: EffectTerm::Known(effect),
                 flows: FlowTerm::Known(Flows::none()),
@@ -59,8 +69,17 @@ impl Fixture {
                 holds: Holds::Nothing,
             })
         };
-        let pure = call_ty(Effect::new(Reissue::Pure, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
-        let opaque = call_ty(Effect::opaque());
+        let pure_effect = Effect::new(Reissue::Pure, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
+        let commuting_effect = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
+        let splittable_effect =
+            Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::WithCost(Cost::stated(1)));
+        let pure = call_ty(&[], pure_effect.clone());
+        let opaque = call_ty(&[], Effect::opaque());
+        let pure_unary = call_ty(&[int], pure_effect);
+        let opaque_unary = call_ty(&[int], Effect::opaque());
+        let commuting = call_ty(&[], commuting_effect.clone());
+        let commuting_unary = call_ty(&[int], commuting_effect);
+        let splittable = call_ty(&[], splittable_effect);
         let pair = types.intern(TyKind::Tuple(Box::new([int, int])));
         let triple = types.intern(TyKind::Tuple(Box::new([int, int, int])));
         let quad = types.intern(TyKind::Tuple(Box::new([int, int, int, int])));
@@ -74,6 +93,11 @@ impl Fixture {
             mut_ref_int,
             pure,
             opaque,
+            pure_unary,
+            opaque_unary,
+            commuting,
+            commuting_unary,
+            splittable,
             pair,
             triple,
             quad,
@@ -97,6 +121,16 @@ impl Fixture {
         let decls = declarations(&self.interner);
         let mut am = AnalysisManager::new(&decls);
         T::run(&mut self.module, body, &mut am)
+    }
+
+    /// Runs `T` over the module with a fresh analysis manager.
+    pub fn run_module<T>(&mut self) -> Vec<(BodyId, Changes)>
+    where
+        T: ModuleTransform,
+    {
+        let decls = declarations(&self.interner);
+        let mut am = AnalysisManager::new(&decls);
+        T::run(&mut self.module, &mut am)
     }
 
     /// Every block's parameters, instructions and terminator, one per line.
@@ -140,6 +174,11 @@ pub(super) fn assert_whole(module: &Module, body: BodyId) {
     if let Err(violation) = Base::check(module.body(body), module.types()) {
         panic!("the output breaks {}: {}", violation.invariant, violation.detail);
     }
+}
+
+/// A direct call of `name`, typed `callee_ty`, with `args`.
+pub(super) fn direct_call(name: Astr, callee_ty: Ty, args: Vec<ValueId>) -> Op {
+    Op::FunctionCall { callee: Callee::Direct(QualifiedRef::root(name)), callee_ty, args }
 }
 
 pub(super) fn int_const(value: i128) -> Op {

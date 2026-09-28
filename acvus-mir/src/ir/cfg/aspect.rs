@@ -28,7 +28,7 @@ impl Changes {
     }
 
     /// Every aspect recorded, each once. Cost: O(aspects).
-    pub(super) fn aspects(&self) -> impl Iterator<Item = Aspect> + '_ {
+    pub fn aspects(&self) -> impl Iterator<Item = Aspect> + '_ {
         self.changed.iter().copied()
     }
 }
