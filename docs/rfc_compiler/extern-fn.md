@@ -20,7 +20,7 @@ A call's effect states whether reissuing it is pure, idempotent or opaque; wheth
 
 ## 3. Laws, ensures, means
 
-A law is an algebraic property of the function: associativity, commutativity and an identity; a fold with its combine and identity; a total order; an inverse; a payload projection; an equivalence; a stream step. An `ensures` relates the result to the arguments by `=` or `≤`. A `means` states what a call computes, as a term. The compiler uses each as given.
+A law is an algebraic property of the function: associativity, commutativity and an identity; a fold with its combine and identity; a total order; an inverse; an equivalence; a stream step. An `ensures` relates the result to the arguments by `=` or `≤`. A `means` states what a call computes, as a term. The compiler uses each as given.
 
 ## 4. Flows
 
