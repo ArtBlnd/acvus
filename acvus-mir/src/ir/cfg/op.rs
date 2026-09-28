@@ -10,7 +10,7 @@ use crate::ir::{
     BinOp, Callee, Checked, Chosen, ExternImpl, IndexBound, IndexMode, Overflow, PathSeg, RefTarget,
     UnaryOp, ValueId,
 };
-use crate::ty::{CastTy, Mutability, Ty};
+use crate::ty::{CastTy, Concrete, Mutability, Ty, Types, copies};
 
 #[derive(Debug, Clone)]
 pub enum Op {
@@ -496,6 +496,29 @@ impl Op {
             | Op::UnwrapVariant { .. }
             | Op::Undef => true,
         }
+    }
+
+    /// Whether running the operation on more runs or fewer than its place
+    /// runs on is observable, apart from an effect its callee's type
+    /// declares: it may trap (compilation §1), it writes storage, or it is
+    /// a `Take` of a type that does not copy, which moves the value out and
+    /// so empties its place (ownership §1-2). `result` is the type of what
+    /// it yields. Such an operation, like an effectful one, moves only
+    /// between places that run on exactly the same runs. Cost: O(the
+    /// result type's size) for a `Take`, O(1) otherwise.
+    ///
+    /// # Panics
+    /// The operation is a `Take` and `result` is none: a `Take` yields the
+    /// value it reads.
+    pub fn bound_to_its_paths(&self, result: Option<Ty>, types: &Types<Concrete>) -> bool {
+        let moves_out = match self {
+            Op::Take { .. } => {
+                let Some(result) = result else { panic!("a Take yields the value it reads") };
+                !copies(types, result)
+            }
+            _ => false,
+        };
+        self.may_trap() || self.writes_storage() || moves_out
     }
 
     /// Whether the operation may end the run with a trap (compilation §1:

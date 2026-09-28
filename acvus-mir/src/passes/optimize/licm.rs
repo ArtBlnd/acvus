@@ -1,11 +1,11 @@
 //! Loop-invariant code motion, in two editors, one after the other.
 //!
-//! First `Editor<Cfg>` makes preheaders: a natural loop without one, whose
-//! header one block outside the loop enters by exactly one edge, gets a
-//! preheader by `split_edge` on that edge. A header that several outside
-//! blocks enter, or that one enters by several edges, gets none, since no
-//! split of one edge gives it a single entering block, and its loop is
-//! skipped.
+//! First `Editor<Cfg>` makes preheaders: every edge into a natural loop's
+//! header from outside the loop goes through one new block, by
+//! `split_edges`, where the loop has no preheader. Every loop then has one,
+//! so F2 holds. No loop's header is the body's entry, since the Builder
+//! never makes the entry a loop header (D54), so every header has a block
+//! outside its loop that enters it.
 //!
 //! Then `Editor<Motion>` hoists, inner loops first. An instruction is
 //! invariant in a loop when every operand, order token included, is defined
@@ -17,20 +17,20 @@
 //! preheader of an inner loop, which is a block of the loop around it, so
 //! that loop offers it again.
 //!
-//! Form: F1, SSA, in; F1 kept, and F2, loops canonical, out for every loop
-//! whose header one outside block enters by one edge.
+//! Form: F1, SSA, in; F1 kept, and F2, loops canonical, out.
 //!
 //! Cost: O(loops) edge splits, each the core's O(the header's parameters);
 //! then O(loop depth × instructions) move offers, each at `move_to`'s cost.
 //!
-//! Meaning: a preheader is an empty block on the one edge into the loop,
-//! passing its parameters on, so every run takes the same way through the
+//! Meaning: a preheader is an empty block on the edges into the loop,
+//! passing each edge's arguments on, so every run takes the same way through the
 //! same instructions. A move is made only where `move_to` allows it: every
 //! operand and use, order tokens included, stays dominated, so the order of
-//! effects is kept (effects §3); an instruction that may trap or has an
-//! effect moves only where it runs on exactly the runs it did (compilation
-//! §1), which the end of a preheader is not when the loop may run no
-//! iteration; and no move crosses a write to storage the instruction names
+//! effects is kept (effects §3); an instruction whose running on other
+//! runs is observable, one that may trap, has an effect, writes storage or
+//! moves a value out of a place, moves only where it runs on exactly the
+//! runs it did (compilation §1), which the end of a preheader is not when
+//! the loop may run no iteration; and no move crosses a write to storage the instruction names
 //! (ownership §5). A hoisted value's operands are the same on every
 //! iteration, so it is the value each iteration computed. No type changes.
 
@@ -67,10 +67,10 @@ impl BodyTransform for Licm {
     }
 }
 
-/// Splits the one edge into each loop's header from outside the loop,
-/// where the loop has no preheader and exactly one such edge enters it.
-/// A split adds a block after every block the loop tree knows and changes
-/// no other loop's entering edges, so the tree still answers for them.
+/// Makes a preheader for every loop without one, from all the blocks
+/// outside it that enter its header. A split adds a block after every block
+/// the loop tree knows, and the new block enters only its own loop's header,
+/// so the tree still answers for every other loop's entering blocks.
 fn make_preheaders(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
     let loops = am.get::<LoopTree>(module, body);
     let mut no_facts = NoFacts;
@@ -80,23 +80,20 @@ fn make_preheaders(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'
             continue;
         }
         let header = loops.header(of);
-        if let Some(from) = single_entering_edge(editor.body(), &loops, of, header) {
-            editor.split_edge(from, header);
-        }
+        let outside = entering_blocks(editor.body(), &loops, of, header);
+        assert!(
+            !outside.is_empty(),
+            "the loop at {header:?} is entered from outside it, since the Builder never makes the entry a loop header (D54)"
+        );
+        editor.split_edges(&outside, header);
     }
     editor.finish()
 }
 
-/// The block outside `of` that enters `header`, where it is the only one
-/// and enters by one edge.
-fn single_entering_edge(body: &Body, loops: &LoopTree, of: LoopId, header: BlockId) -> Option<BlockId> {
+/// The blocks outside `of` with an edge into its header, each once.
+fn entering_blocks(body: &Body, loops: &LoopTree, of: LoopId, header: BlockId) -> Vec<BlockId> {
     let preds = body.predecessors();
-    let mut outside = preds[&header].iter().copied().filter(|pred| !loops.contains(of, *pred));
-    let (Some(from), None) = (outside.next(), outside.next()) else {
-        return None;
-    };
-    let edges = body.block(from).terminator().edges().iter().filter(|edge| edge.to == header).count();
-    (edges == 1).then_some(from)
+    preds[&header].iter().copied().filter(|pred| !loops.contains(of, *pred)).collect()
 }
 
 /// Every loop, the deepest first.
@@ -156,6 +153,8 @@ mod tests {
         b: ValueId,
         /// `&mut s`, for a slot `s`.
         x: ValueId,
+        /// A slot of a `String`.
+        text: ValueId,
     }
 
     /// A body built by `loop_around`.
@@ -167,6 +166,7 @@ mod tests {
 
     /// ```text
     /// entry:  a = 1; b = 2; x = &mut s; if c goto header else done
+    ///         (with `text`, a `String` slot, declared)
     /// header: while c { body } exit
     /// body:   <the instruction under test>; jump header
     /// exit:   return a
@@ -178,10 +178,11 @@ mod tests {
     where
         F: FnOnce(&mut Builder<'_>, &Outside) -> ValueId,
     {
-        let (int, bool, mut_ref_int, nc) = (f.int, f.bool, f.mut_ref_int, f.name("c"));
+        let (int, bool, string, mut_ref_int, nc) = (f.int, f.bool, f.string, f.mut_ref_int, f.name("c"));
         let mut builder = f.module.build_body(false, int);
         let c = builder.param(nc, bool);
         let s = builder.slot(int, Span::ZERO);
+        let text = builder.slot(string, Span::ZERO);
         let a = builder.push(int_const(1), int, Span::ZERO);
         let b = builder.push(int_const(2), int, Span::ZERO);
         let x = builder.push(
@@ -200,7 +201,7 @@ mod tests {
         builder.switch_to(header);
         builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
         builder.switch_to(loop_body);
-        let under_test = inside(&mut builder, &Outside { a, b, x });
+        let under_test = inside(&mut builder, &Outside { a, b, x, text });
         builder.terminate(jump(header));
         builder.switch_to(exit);
         builder.terminate(ret(a));
@@ -291,11 +292,8 @@ mod tests {
 
     /// `*x = a` in a loop that may run no iteration: after a run with none,
     /// `s` holds what it held before the loop, so the store stays in the
-    /// loop. `move_to` now lets a write to storage move to a place that
-    /// does not run on exactly the runs its own does, since it pins only
-    /// what may trap or has an effect; the fix is the editor's.
+    /// loop.
     #[test]
-    #[ignore = "blocked on ir::cfg::edit: move_to lets a store leave a loop that may run no iteration"]
     fn a_store_in_a_loop_that_may_not_run_stays() {
         let mut f = Fixture::new();
         let Looped { id, loop_body, .. } = loop_around(&mut f, |builder, &Outside { a, x, .. }| {
@@ -311,6 +309,83 @@ mod tests {
         let preheader = preheader_of(&f, id, loop_body);
         assert!(f.ops(id, preheader).is_empty(), "nothing is hoisted");
         assert!(matches!(f.ops(id, loop_body)[..], [Op::Assign { .. }]), "the store stays in the loop");
+        assert_whole(&f.module, id);
+    }
+
+    /// `v = text` in a loop that may run no iteration: the `String` does not
+    /// copy, so the take empties `text`, and after a run with no iteration
+    /// `text` still holds its value.
+    #[test]
+    fn a_take_of_a_value_that_does_not_copy_stays_in_the_loop() {
+        let mut f = Fixture::new();
+        let string = f.string;
+        let Looped { id, loop_body, under_test: taken } = loop_around(&mut f, |builder, outside| {
+            builder.push(
+                Op::Take { target: RefTarget::Var(outside.text), path: Vec::new(), taken_out: false },
+                string,
+                Span::ZERO,
+            )
+        });
+
+        f.run::<Licm>(id);
+
+        let preheader = preheader_of(&f, id, loop_body);
+        assert!(f.ops(id, preheader).is_empty(), "nothing is hoisted");
+        let stayed = f.module.body(id).block(loop_body).insts();
+        assert_eq!(stayed.iter().map(|inst| inst.result()).collect::<Vec<_>>(), [Some(taken)]);
+        assert_whole(&f.module, id);
+    }
+
+    /// ```text
+    /// entry:  a = 1; b = 2; if c goto left else right
+    /// left:   goto header
+    /// right:  goto header
+    /// header: while c { body } exit
+    /// body:   v = a + b; goto header
+    /// exit:   return a
+    /// ```
+    /// Two blocks outside the loop enter its header.
+    #[test]
+    fn a_loop_two_blocks_enter_gets_one_preheader() {
+        let mut f = Fixture::new();
+        let (int, bool, nc) = (f.int, f.bool, f.name("c"));
+        let mut builder = f.module.build_body(false, int);
+        let c = builder.param(nc, bool);
+        let a = builder.push(int_const(1), int, Span::ZERO);
+        let b = builder.push(int_const(2), int, Span::ZERO);
+        let [left, right, header, loop_body, exit] = [(); 5].map(|()| builder.new_block(&[]));
+        builder.terminate(Terminator::JumpIf {
+            cond: c,
+            then_to: left,
+            then_args: Vec::new(),
+            else_to: right,
+            else_args: Vec::new(),
+        });
+        builder.switch_to(left);
+        builder.terminate(jump(header));
+        builder.switch_to(right);
+        builder.terminate(jump(header));
+        builder.switch_to(header);
+        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+        builder.switch_to(loop_body);
+        let sum = builder.push(wrapping_add(a, b), int, Span::ZERO);
+        builder.terminate(jump(header));
+        builder.switch_to(exit);
+        builder.terminate(ret(a));
+        let id = builder.seal().expect("the body has no open state");
+
+        let changes = f.run::<Licm>(id);
+
+        let preheader = preheader_of(&f, id, loop_body);
+        assert!(![left, right].contains(&preheader), "a new block stands on both edges into the loop");
+        let body = f.module.body(id);
+        for from in [left, right] {
+            assert!(matches!(body.block(from).terminator(), Terminator::Jump { to, .. } if *to == preheader));
+        }
+        let hoisted = body.block(preheader).insts();
+        assert_eq!(hoisted.iter().map(|inst| inst.result()).collect::<Vec<_>>(), [Some(sum)]);
+        assert!(f.ops(id, loop_body).is_empty());
+        assert!(changes.touched(crate::ir::cfg::Aspect::CfgShape));
         assert_whole(&f.module, id);
     }
 

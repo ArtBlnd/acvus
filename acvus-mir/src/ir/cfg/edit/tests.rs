@@ -1567,6 +1567,88 @@ fn split_edge_of_two_edges_to_one_block_is_a_callers_defect() {
     editor.split_edge(entry, both);
 }
 
+/// `if c { goto left } else { goto right }; left: goto join(one);
+/// right: goto join(two); join(p): return p`.
+#[test]
+fn split_edges_puts_one_block_on_the_edges_of_two_predecessors() {
+    let mut f = fixture();
+    let (nc, int, bool) = (f.name("c"), f.int, f.bool);
+    let mut builder = f.build(false, f.int);
+    let c = builder.param(nc, bool);
+    let [left, right] = [(); 2].map(|()| builder.new_block(&[]));
+    let join = builder.new_block(&[int]);
+    builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: Vec::new(), else_to: right, else_args: Vec::new() });
+    builder.switch_to(left);
+    let one = builder.push(int_const(1), int, at(1));
+    builder.terminate(Terminator::Jump { to: join, args: vec![one] });
+    builder.switch_to(right);
+    let two = builder.push(int_const(2), int, at(2));
+    builder.terminate(Terminator::Jump { to: join, args: vec![two] });
+    builder.switch_to(join);
+    let p = builder.block_params(join)[0];
+    builder.terminate(ret(p));
+    let id = builder.seal().expect("the body has no open state");
+
+    let mut facts = NoFacts;
+    let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
+    let middle = editor.split_edges(&[left, right], join);
+    let changes = editor.finish();
+
+    assert!(changes.touched(Aspect::CfgShape));
+    let body = f.body(id);
+    let enters = |from: BlockId| match body.block(from).terminator() {
+        Terminator::Jump { to, args } => (*to, args.clone()),
+        other => panic!("{from:?} still jumps, not {other:?}"),
+    };
+    assert_eq!(enters(left), (middle, vec![one]));
+    assert_eq!(enters(right), (middle, vec![two]));
+    let [param] = body.block(middle).params() else {
+        panic!("the new block takes what the edges passed")
+    };
+    assert_eq!(body.ty_of(*param), int);
+    assert!(body.block(middle).insts().is_empty());
+    assert_eq!(enters(middle), (join, vec![*param]));
+    assert_eq!(body.predecessors()[&join].as_slice(), [middle]);
+    assert_eq!(<DefDominatesUses as Invariant>::check(body, f.module.types()), Ok(()));
+    assert_eq!(<TypesAgree as Invariant>::check(body, f.module.types()), Ok(()));
+}
+
+/// `if c { goto join(one) } else { goto join(two) }`: the entry is listed
+/// once, and both of its edges go through the new block.
+#[test]
+fn split_edges_takes_every_edge_of_a_block_listed_once() {
+    let mut f = fixture();
+    let (nc, int, bool) = (f.name("c"), f.int, f.bool);
+    let mut builder = f.build(false, f.int);
+    let c = builder.param(nc, bool);
+    let one = builder.push(int_const(1), int, at(1));
+    let two = builder.push(int_const(2), int, at(2));
+    let join = builder.new_block(&[int]);
+    builder.terminate(Terminator::JumpIf { cond: c, then_to: join, then_args: vec![one], else_to: join, else_args: vec![two] });
+    builder.switch_to(join);
+    let p = builder.block_params(join)[0];
+    builder.terminate(ret(p));
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(&f, id);
+
+    let mut facts = NoFacts;
+    let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
+    let middle = editor.split_edges(&[entry], join);
+    editor.finish();
+
+    let body = f.body(id);
+    let Terminator::JumpIf { then_to, then_args, else_to, else_args, .. } = body.block(entry).terminator() else {
+        panic!("the entry still branches")
+    };
+    assert_eq!((*then_to, then_args.as_slice(), *else_to, else_args.as_slice()), (middle, [one].as_slice(), middle, [two].as_slice()));
+    let [param] = body.block(middle).params() else {
+        panic!("the new block takes what the edges passed")
+    };
+    assert!(matches!(body.block(middle).terminator(), Terminator::Jump { to, args } if *to == join && *args == [*param]));
+    assert_eq!(<DefDominatesUses as Invariant>::check(body, f.module.types()), Ok(()));
+    assert_eq!(<TypesAgree as Invariant>::check(body, f.module.types()), Ok(()));
+}
+
 #[test]
 fn merge_into_predecessor_joins_a_block_its_sole_predecessor_jumps_to() {
     let mut f = fixture();

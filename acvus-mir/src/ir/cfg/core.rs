@@ -884,17 +884,25 @@ impl Body {
         }
     }
 
-    /// A new block stands on the edge at `position` of `from`'s terminator:
-    /// it takes parameters like the edge's target, the edge enters it with
-    /// the arguments it passed and the parameters it supplied, and it jumps
-    /// to the old target passing every parameter on. A loop's body or exit,
-    /// named by the edge, is the new block from now on, as every structural
-    /// label follows its edge. Cost: O(the target's parameters).
+    /// A new block stands on every edge of `edges`, each named by its block
+    /// and its position in that block's terminator, all into one target: it
+    /// takes parameters like the target, each edge enters it with the
+    /// arguments it passed and the parameters it supplied, and it jumps to
+    /// the target passing every parameter on. A loop's body or exit, named
+    /// by an edge, is the new block from now on, as every structural label
+    /// follows its edge. Cost: O(the target's parameters + |edges|).
     ///
     /// # Panics
-    /// `from`'s terminator has no edge at `position`.
-    pub(super) fn split_edge(&mut self, from: BlockId, position: usize) -> BlockId {
-        let to = *self.blocks[from.index()].terminator.edge_target_mut(position);
+    /// `edges` is empty; a terminator has no edge at its position; or the
+    /// edges do not all enter one block.
+    pub(super) fn split_edges(&mut self, edges: &[(BlockId, usize)]) -> BlockId {
+        let targets: Vec<BlockId> =
+            edges.iter().map(|(from, position)| *self.blocks[from.index()].terminator.edge_target_mut(*position)).collect();
+        let Some((to, others)) = targets.split_first() else {
+            panic!("a split names at least one edge")
+        };
+        let to = *to;
+        assert!(others.iter().all(|other| *other == to), "the split edges all enter {to:?}, not {targets:?}");
         let middle = BlockId::of_index(self.blocks.len());
         let params: Vec<ValueId> = self.blocks[to.index()]
             .params
@@ -906,7 +914,9 @@ impl Body {
         let terminator = Terminator::Jump { to, args: params.clone() };
         self.record_terminator(middle, &terminator);
         self.new_block(Block { params, insts: Vec::new(), terminator });
-        *self.blocks[from.index()].terminator.edge_target_mut(position) = middle;
+        for (from, position) in edges {
+            *self.blocks[from.index()].terminator.edge_target_mut(*position) = middle;
+        }
         middle
     }
 

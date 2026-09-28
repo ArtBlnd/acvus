@@ -89,8 +89,9 @@ pub enum CannotMove {
     /// A use of what it defines, order token included, would not be reached
     /// from where it would stand.
     UseNotDominated(Site),
-    /// It may trap or has an effect, and the new place does not run on
-    /// exactly the runs the old one does (compilation §1).
+    /// It may trap, has an effect, writes storage or moves a value out of
+    /// a place, and the new place does not run on exactly the runs the old
+    /// one does (compilation §1).
     ChangesWhereItRuns,
     /// It would cross a write to storage its loans name.
     CrossesConflictingWrite(InstRef),
@@ -543,9 +544,10 @@ where
     /// defines, order tokens included; the order chain is their def-use, so
     /// dominance keeps it whole and no token is rethreaded (D54). It is
     /// refused where an operand is not defined at `at`; where `at` does not
-    /// come first on every path to a use of what it defines; where it may
-    /// trap or has an effect and `at` does not run on exactly the runs its
-    /// place does (compilation §1); or where the way between its place and
+    /// come first on every path to a use of what it defines; where running
+    /// it on other runs is observable (`Op::bound_to_its_paths`, or an
+    /// effect) and `at` does not run on exactly the runs its place does
+    /// (compilation §1); or where the way between its place and
     /// `at` crosses a write to storage it or that write names (ownership §5).
     ///
     /// # Panics
@@ -567,7 +569,8 @@ where
         if let Some(site) = uses.into_iter().find(|site| !self.needs.position_dominates(at, *site)) {
             return Err(CannotMove::UseNotDominated(site));
         }
-        let pinned = moved.op().may_trap() || self.has_effect(moved);
+        let result_ty = moved.result().map(|result| body.ty_of(result));
+        let pinned = moved.op().bound_to_its_paths(result_ty, self.module.types()) || self.has_effect(moved);
         if pinned && !self.needs.control_equivalent(Position::Before(inst), at) {
             return Err(CannotMove::ChangesWhereItRuns);
         }
@@ -886,6 +889,30 @@ where
             panic!("{from:?} has {} edges to {to:?}; split_edge names exactly one", positions.len())
         };
         self.edit(|rewriter| rewriter.split_edge(from, position))
+    }
+
+    /// G2: a new empty block that every edge from each block of `from`
+    /// into `to` now goes through; it takes parameters like `to`, each edge
+    /// passes its own arguments to it, and it passes them on to `to`.
+    /// Structure follows the edges, as `split_edge`'s does. A block with
+    /// several edges into `to` is listed once, and all of them are
+    /// redirected.
+    ///
+    /// # Panics
+    /// `from` is empty, lists a block twice, or lists one with no edge to
+    /// `to`.
+    pub fn split_edges(&mut self, from: &[BlockId], to: BlockId) -> BlockId {
+        let mut edges: Vec<(BlockId, usize)> = Vec::new();
+        for (at, block) in from.iter().enumerate() {
+            assert!(!from[..at].contains(block), "{block:?} is listed twice; split_edges names each block once");
+            let before = edges.len();
+            let terminator = self.body_ref().block(*block).terminator();
+            let into = terminator.edges().iter().enumerate().filter(|(_, edge)| edge.to == to).map(|(position, _)| (*block, position)).collect::<Vec<_>>();
+            edges.extend(into);
+            assert!(edges.len() > before, "{block:?} has no edge to {to:?}");
+        }
+        assert!(!edges.is_empty(), "split_edges names at least one block");
+        self.edit(|rewriter| rewriter.split_edges(&edges))
     }
 
     /// G2: `block` joins its sole predecessor, which enters it by a `Jump`,

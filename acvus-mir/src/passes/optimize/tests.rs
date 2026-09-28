@@ -25,6 +25,8 @@ pub(super) struct Fixture {
     pub int: Ty,
     pub i8: Ty,
     pub bool: Ty,
+    /// `String`, which does not copy.
+    pub string: Ty,
     /// `&i64`.
     pub ref_int: Ty,
     /// `&mut i64`.
@@ -57,6 +59,7 @@ impl Fixture {
         let int = types.intern(TyKind::Int(IntTy::I64));
         let i8 = types.intern(TyKind::Int(IntTy::I8));
         let bool = types.intern(TyKind::Bool);
+        let string = types.intern(TyKind::String);
         let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
         let mut_ref_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
         let mut call_ty = |params: &[Ty], effect: Effect| {
@@ -89,6 +92,7 @@ impl Fixture {
             int,
             i8,
             bool,
+            string,
             ref_int,
             mut_ref_int,
             pure,

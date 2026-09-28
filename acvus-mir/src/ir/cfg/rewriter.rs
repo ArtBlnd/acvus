@@ -220,12 +220,21 @@ impl<'m> Rewriter<'m> {
     }
 
     /// A new block on the edge at `position` of `from`. Cost:
-    /// `Body::split_edge`'s.
+    /// `Body::split_edges`' for one edge.
     ///
     /// # Panics
-    /// As `Body::split_edge`.
+    /// As `Body::split_edges`.
     pub fn split_edge(&mut self, from: BlockId, position: usize) -> BlockId {
-        let middle = self.body_mut().split_edge(from, position);
+        self.split_edges(&[(from, position)])
+    }
+
+    /// A new block on every edge of `edges`, all into one block. Cost:
+    /// `Body::split_edges`'.
+    ///
+    /// # Panics
+    /// As `Body::split_edges`.
+    pub fn split_edges(&mut self, edges: &[(BlockId, usize)]) -> BlockId {
+        let middle = self.body_mut().split_edges(edges);
         self.changes.record(Aspect::CfgShape);
         let body = self.body();
         let params = body.block(middle).params();
