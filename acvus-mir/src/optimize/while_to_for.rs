@@ -992,7 +992,7 @@ impl Recognizer<'_> {
         let some = self.decls.core().tags.some;
         let pulls = self.laws.pulls(callee)
             && args[..] == [*lent]
-            && matches!(self.cfg.val_types.get(pulled).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_)))
+            && matches!(self.types.kind(self.cfg.ty_of(*pulled)), TyKind::Option(_))
             && src == pulled
             && *tag == some
             && dst == cond;

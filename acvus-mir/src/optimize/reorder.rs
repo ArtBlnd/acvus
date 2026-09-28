@@ -116,7 +116,7 @@ fn effect_touch(types: &Types<Concrete>, ty: Ty) -> Touch {
 /// every function-typed argument.
 fn call_touch(types: &Types<Concrete>, callee_ty: Ty, args: &[ValueId], val_types: &FxHashMap<ValueId, Ty>) -> Touch {
     args.iter()
-        .filter_map(|arg| val_types.get(arg).copied())
+        .map(|arg| recorded(val_types, *arg))
         .filter(|ty| matches!(types.kind(*ty), TyKind::Fn { .. }))
         .fold(effect_touch(types, callee_ty), |touch, ty| {
             touch.join(effect_touch(types, ty))

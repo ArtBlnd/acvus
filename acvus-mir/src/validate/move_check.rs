@@ -25,7 +25,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{
-    Callee, DebugInfo, Inst, InstKind, MirBody, MirModule, PathSeg, RefTarget, ValueId,
+    Callee, DebugInfo, Inst, InstKind, MirBody, MirModule, PathSeg, RefTarget, ValueId, recorded,
 };
 use crate::ty::{Concrete, Ty, TyKind, Types, copies};
 
@@ -595,7 +595,7 @@ fn propagate_args(
     // If an arg is move-only and moved, the param inherits Moved.
     for (arg, param) in args.iter().zip(params.iter()) {
         let arg_liveness = source.get_value(*arg).unwrap_or(Liveness::Alive);
-        let is_move = val_types.get(param).is_some_and(|ty| is_move_only(types, *ty));
+        let is_move = is_move_only(types, recorded(val_types, *param));
         if is_move {
             let entry = target_entry.values.entry(*param).or_insert(Liveness::Alive);
             let joined = entry.join(arg_liveness);
@@ -622,10 +622,8 @@ fn try_consume_value(
     state: &mut MoveState,
     errors: &mut Vec<ValidationError>,
 ) -> bool {
-    let Some(ty) = val_types.get(&id) else {
-        return false;
-    };
-    if !is_move_only(types, *ty) {
+    let ty = recorded(val_types, id);
+    if !is_move_only(types, ty) {
         return false;
     }
 
@@ -639,7 +637,7 @@ fn try_consume_value(
             span: site.span,
             kind: ValidationErrorKind::UseAfterMove {
                 value_id: id.to_raw() as u32,
-                ty: *ty,
+                ty,
                 origin: debug.get(id).cloned(),
                 labels: moved.label(),
             },
@@ -679,8 +677,8 @@ pub(crate) fn emptied_by(
     match kind {
         InstKind::Take { target, path, .. } => {
             let storage = crate::analysis::inst_info::storage(target)?;
-            let ty = val_types.get(&storage)?;
-            under_options(types, *ty, path)
+            let ty = recorded(val_types, storage);
+            under_options(types, ty, path)
                 .is_some_and(|ty| moves_out(types, ty))
                 .then_some(storage)
         }
@@ -713,9 +711,8 @@ fn extract_part(
     state: &mut MoveState,
     errors: &mut Vec<ValidationError>,
 ) {
-    if let Some(ty) = val_types.get(&dst)
-        && moves_out(types, *ty)
-    {
+    let ty = recorded(val_types, dst);
+    if moves_out(types, ty) {
         match state.get_value(container) {
             Some(Liveness::Moved { site: moved }) => errors.push(ValidationError {
                 scope: scope.to_string(),
@@ -723,7 +720,7 @@ fn extract_part(
                 span: site.span,
                 kind: ValidationErrorKind::UseAfterMove {
                     value_id: container.to_raw() as u32,
-                    ty: ty.clone(),
+                    ty,
                     origin: debug.get(container).cloned(),
                     labels: moved.label(),
                 },
@@ -885,8 +882,7 @@ fn process_inst(
                 errors,
             );
             if let RefTarget::Var(slot) | RefTarget::Param(slot) = target
-                && let Some(ty) = val_types.get(dst)
-                && (moves_out(types, *ty) || *taken_out)
+                && (moves_out(types, recorded(val_types, *dst)) || *taken_out)
             {
                 let site = MoveSite {
                     span,

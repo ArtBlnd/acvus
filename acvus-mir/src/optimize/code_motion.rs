@@ -914,14 +914,8 @@ fn coalesce(cfg: &mut CfgBody, preheader: BlockIdx, pairs: &[SliceOfStorage]) {
         .expect("an AsSlice defines its destination");
     let new_reference = cfg.val_factory.next();
     let new_slice = cfg.val_factory.next();
-    let ty_of = |v: ValueId, cfg: &CfgBody| {
-        cfg.val_types
-            .get(&v)
-            .cloned()
-            .expect("the pipeline types every defined value")
-    };
-    let reference_ty = ty_of(old_reference, cfg);
-    let slice_ty = ty_of(old_slice, cfg);
+    let reference_ty = cfg.ty_of(old_reference);
+    let slice_ty = cfg.ty_of(old_slice);
     cfg.val_types.insert(new_reference, reference_ty);
     cfg.val_types.insert(new_slice, slice_ty);
 
@@ -970,18 +964,20 @@ fn remap_defs(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId>) {
 /// name two different elements of it. A `ref &v` reads no value, so its
 /// operands are empty and two of them are one borrow as before.
 #[derive(PartialEq)]
-struct BorrowKey<'a> {
+struct BorrowKey {
     taken_by: Discriminant<InstKind>,
     operands: SmallVec<[ValueId; 2]>,
-    ty: Option<&'a Ty>,
+    ty: Ty,
 }
 
-impl<'a> BorrowKey<'a> {
-    fn of(kind: &InstKind, dst: ValueId, val_types: &'a FxHashMap<ValueId, Ty>) -> Self {
+impl BorrowKey {
+    /// # Panics
+    /// `dst` has no recorded type: every IR value has one.
+    fn of(kind: &InstKind, dst: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> Self {
         Self {
             taken_by: discriminant(kind),
             operands: inst_info::uses(kind).iter().copied().collect(),
-            ty: val_types.get(&dst),
+            ty: crate::ir::recorded(val_types, dst),
         }
     }
 }
@@ -1002,7 +998,7 @@ fn merge_pass(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) 
     let mut replaced: Vec<At> = Vec::new();
 
     for (bi, block) in blocks.iter().enumerate() {
-        let mut borrows_of: FxHashMap<ValueId, Vec<(BorrowKey<'_>, ValueId)>> =
+        let mut borrows_of: FxHashMap<ValueId, Vec<(BorrowKey, ValueId)>> =
             FxHashMap::default();
 
         for (ii, inst) in block.insts.iter().enumerate() {

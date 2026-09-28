@@ -441,8 +441,8 @@ impl Reading<'_> {
 
     fn leaving_on(&self, flag: &Flag, paths: &[BackPath]) -> Option<CfgBody> {
         if !matches!(
-            self.cfg.val_types.get(&flag.param).map(|ty| self.loans.layout().types.kind(*ty)),
-            Some(TyKind::Bool)
+            self.loans.layout().types.kind(self.cfg.ty_of(flag.param)),
+            TyKind::Bool
         ) {
 
             return None;

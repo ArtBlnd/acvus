@@ -212,9 +212,7 @@ fn plan(cfg: &CfgBody, types: &Types<Concrete>, scalars: Scalars) -> Option<Plan
         .filter_map(|inst| slot_of(&inst.kind))
         .filter(|slot| !escaped.escapes(*slot) && !from_outside.contains(slot))
     {
-        // A slot whose type this body does not record has no types to give
-        // its parts, so it keeps its aggregate.
-        let Some(shape) = cfg.val_types.get(&slot).and_then(|ty| shape_of(types, *ty, scalars.tag)) else {
+        let Some(shape) = shape_of(types, cfg.ty_of(slot), scalars.tag) else {
             continue;
         };
         shapes.insert(slot, shape);

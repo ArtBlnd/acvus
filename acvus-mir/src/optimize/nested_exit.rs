@@ -176,7 +176,7 @@ impl Move {
             .iter()
             .chain(&read_of_body);
         for value in carried {
-            if !Self::an_option_holds(types, *cfg.val_types.get(value)?) {
+            if !Self::an_option_holds(types, cfg.ty_of(*value)) {
                 return None;
             }
         }

@@ -229,10 +229,7 @@ fn fold_constant(cfg: &mut CfgBody, types: &Types<Concrete>, facts: &Facts, site
     let (Some(a), Some(b)) = (facts.literal(left), facts.literal(right)) else {
         return false;
     };
-    let Some(ty) = cfg.val_types.get(&left) else {
-        return false;
-    };
-    let Some(value) = evaluate(op, types.kind(*ty), a, b) else {
+    let Some(value) = evaluate(op, types.kind(cfg.ty_of(left)), a, b) else {
         return false;
     };
     *kind_mut(cfg, site) = InstKind::Const { dst, value };
@@ -282,7 +279,7 @@ fn fold_cast(cfg: &mut CfgBody, types: &Types<Concrete>, facts: &Facts, site: Si
     let InstKind::Cast { dst, src, to } = kind_at(cfg, site) else {
         return false;
     };
-    let Some(from) = cfg.val_types.get(&src).and_then(|ty| CastTy::of_kind(types.kind(*ty))) else {
+    let Some(from) = CastTy::of_kind(types.kind(cfg.ty_of(src))) else {
         return false;
     };
     let Some(value) = facts
@@ -461,8 +458,8 @@ fn kind_mut(cfg: &mut CfgBody, site: Site) -> &mut InstKind {
 
 /// The integer width an operand is read at, where it is an integer.
 fn int_width(cfg: &CfgBody, types: &Types<Concrete>, v: ValueId) -> Option<IntTy> {
-    match cfg.val_types.get(&v).map(|ty| types.kind(*ty)) {
-        Some(TyKind::Int(k)) => Some(*k),
+    match types.kind(cfg.ty_of(v)) {
+        TyKind::Int(k) => Some(*k),
         _ => None,
     }
 }

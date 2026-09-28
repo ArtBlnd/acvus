@@ -301,7 +301,7 @@ fn declared_closure_returns(
                 else {
                     return None;
                 };
-                let TyKind::Fn { ret, .. } = types.kind(*maker.val_types.get(dst)?) else {
+                let TyKind::Fn { ret, .. } = types.kind(maker.ty_of(*dst)) else {
                     return None;
                 };
                 Some((*made, *ret))

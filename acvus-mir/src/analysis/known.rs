@@ -287,13 +287,13 @@ impl KnownValues {
         kind: &InstKind,
     ) -> Option<Known> {
         let known = |v: &ValueId| self.values.get(v);
-        let ty = |v: &ValueId| cfg.val_types.get(v).map(|ty| types.kind(*ty));
+        let ty = |v: &ValueId| types.kind(cfg.ty_of(*v));
         match kind {
             InstKind::Const {
                 value: Literal::String(text),
                 ..
             } => Some(Known::Text(text.clone())),
-            InstKind::Const { dst, value } => Some(Known::Word(Word::of_constant(value, ty(dst)?)?)),
+            InstKind::Const { dst, value } => Some(Known::Word(Word::of_constant(value, ty(dst))?)),
             InstKind::ConstStr { text, .. } => Some(Known::Text(text.clone())),
             InstKind::StringConcat { parts, .. } => {
                 let texts = parts
@@ -323,7 +323,7 @@ impl KnownValues {
                 // an `Option` from whether a payload is present and
                 // `prepare::lay_variant` from the tag, so only a value on
                 // which the two agree is known, and a test may read either.
-                if let TyKind::Option(_) = ty(dst)? {
+                if let TyKind::Option(_) = ty(dst) {
                     let some = *tag == tags.some && payload.is_some();
                     let none = *tag == tags.none && payload.is_none();
                     if !(some || none) {
@@ -352,7 +352,7 @@ impl KnownValues {
                 // Decision: a reference to a place that holds a reference is
                 // not known. `Known` holds one referent, and a reader of
                 // such a value would strip one level where two are stacked.
-                let TyKind::Ref(_, place) = ty(dst)? else {
+                let TyKind::Ref(_, place) = ty(dst) else {
                     return None;
                 };
                 if let TyKind::Ref(..) = types.kind(place.ty()) {
@@ -366,7 +366,7 @@ impl KnownValues {
                 let Known::Variant { tag: held, payload } = known(src)? else {
                     return None;
                 };
-                let matches = match scrutinee(types, *cfg.val_types.get(src)?) {
+                let matches = match scrutinee(types, cfg.ty_of(*src)) {
                     // `ops::variant::TestOption` compares whether the value
                     // is a `Some` with whether the tested tag is `Some`. The
                     // lowering tests an `Option` for `Some` or `None` only,
@@ -381,7 +381,7 @@ impl KnownValues {
                 Some(Known::bool(matches))
             }
             InstKind::TestLiteral { src, value, .. } => {
-                Some(Known::bool(test_literal(ty(src)?, known(src), value)?))
+                Some(Known::bool(test_literal(ty(src), known(src), value)?))
             }
             // `ops::pattern::TestObjectKey` answers whether the field's
             // position holds a value rather than the `Undef` a construction
@@ -397,7 +397,7 @@ impl KnownValues {
             // itself and never through a reference. It turns a variant
             // without a payload into `()`, and that is left unfolded.
             InstKind::UnwrapVariant { src, .. } => {
-                if let TyKind::Ref(..) = ty(src)? {
+                if let TyKind::Ref(..) = ty(src) {
                     return None;
                 }
                 match known(src)? {

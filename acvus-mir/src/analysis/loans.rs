@@ -23,7 +23,7 @@ use crate::ir::{
 };
 use crate::decl::Declarations;
 use crate::flows::{Alignment, FlowEnd, FlowTerm, Flows, Labelled, Segment, Source, segment_positions, segments};
-use crate::ty::{Concrete, Holds, LifetimesOf, Mutability, ParamTerm, PositionKind, Ty, TyKind, Types, position_kinds, positions};
+use crate::ty::{Concrete, Holds, Mutability, ParamTerm, PositionKind, Ty, TyKind, Types, position_kinds, positions};
 
 // -- Positions (ownership §5) ---------------------------------------
 
@@ -62,8 +62,8 @@ impl<'a> Layout<'a> {
     /// storage holds when it is read: a reference whose pointee has
     /// positions, or a function value's captures.
     pub fn reads_through(self, ty: Ty) -> bool {
-        self.kinds(ty).into_iter().enumerate().any(|(k, kind)| match kind {
-            PositionKind::Ref(_) => self.pointee_at(ty, k).is_some_and(|pointee| self.positions(pointee) > 0),
+        self.kinds(ty).into_iter().any(|kind| match kind {
+            PositionKind::Ref(_, width) => width > 0,
             PositionKind::Captures(_) => true,
             PositionKind::Lifetime | PositionKind::InFlight => false,
         })
@@ -75,7 +75,7 @@ impl<'a> Layout<'a> {
         self.kinds(ty).into_iter().any(|kind| {
             matches!(
                 kind,
-                PositionKind::Ref(Mutability::Mut) | PositionKind::Captures(Holds::Mut)
+                PositionKind::Ref(Mutability::Mut, _) | PositionKind::Captures(Holds::Mut)
             )
         })
     }
@@ -90,15 +90,12 @@ impl<'a> Layout<'a> {
         for k in 0..kinds.len() {
             let behind_shared = k < shared_until;
             match &mut kinds[k] {
-                PositionKind::Ref(mutability) => {
+                PositionKind::Ref(mutability, width) => {
                     if behind_shared {
                         *mutability = Mutability::Shared;
                     }
                     if *mutability == Mutability::Shared {
-                        let pointee = self
-                            .pointee_at(ty, k)
-                            .expect("a reference position has a pointee");
-                        shared_until = shared_until.max(k + 1 + self.positions(pointee));
+                        shared_until = shared_until.max(k + 1 + *width);
                     }
                 }
                 PositionKind::Captures(holds) => {
@@ -204,7 +201,7 @@ impl<'a> Layout<'a> {
             .into_iter()
             .enumerate()
             .filter_map(|(k, kind)| match kind {
-                PositionKind::Ref(mutability) => Some((k, mutability)),
+                PositionKind::Ref(mutability, _) => Some((k, mutability)),
                 PositionKind::Captures(holds) => captured(holds).map(|mutability| (k, mutability)),
                 PositionKind::Lifetime | PositionKind::InFlight => None,
             })
@@ -228,59 +225,13 @@ impl<'a> Layout<'a> {
         }
     }
 
-    /// The type of what a reference at position `k` of `ty` points at, when
-    /// position `k` is a reference.
-    fn pointee_at(self, ty: Ty, k: usize) -> Option<Ty> {
-        self.pointee_walk(ty, k).ok().flatten()
-    }
-
-    fn pointee_walk(self, ty: Ty, k: usize) -> Result<Option<Ty>, usize> {
-        acvus_utils::grow(|| self.pointee_walk_level(ty, k))
-    }
-
-    fn pointee_walk_level(self, ty: Ty, k: usize) -> Result<Option<Ty>, usize> {
-        match self.types.kind(ty) {
-            TyKind::Ref(_, inner) => match k {
-                0 => Ok(Some(inner.ty())),
-                _ => self.pointee_walk(inner.ty(), k - 1).map_err(|n| n + 1),
-            },
-            TyKind::Array(inner, _) | TyKind::Option(inner) | TyKind::Slice(inner) => self.pointee_walk(*inner, k),
-            TyKind::Handle(inner) => match k {
-                0 => Ok(None),
-                _ => self.pointee_walk(*inner, k - 1).map_err(|n| n + 1),
-            },
-            TyKind::Result(ok, err) => self.pointee_walk_all([*ok, *err], k),
-            TyKind::Tuple(items) => self.pointee_walk_all(items.iter().copied(), k),
-            TyKind::Object(_) | TyKind::Enum { .. } => {
-                let parts: Vec<Ty> = self.parts_in_order(ty).into_iter().map(|part| part.ty).collect();
-                self.pointee_walk_all(parts, k)
-            }
-            TyKind::Fn { .. } => match k {
-                0 => Ok(None),
-                _ => Err(1),
-            },
-            TyKind::UserDefined { id, type_args, .. } => {
-                let lifetimes = self.decls.lifetimes_of(*id);
-                match k < lifetimes {
-                    true => Ok(None),
-                    false => self
-                        .pointee_walk_all(type_args.iter().map(|arg| arg.ty()), k - lifetimes)
-                        .map_err(|n| n + lifetimes),
-                }
-            }
-            _ => Err(0),
+    /// How many positions the target of the reference at position `k` of
+    /// `ty` has, when position `k` is a reference; its positions follow it.
+    fn target_width(self, ty: Ty, k: usize) -> Option<usize> {
+        match position_kinds(self.types, self.decls, ty).get(k) {
+            Some(PositionKind::Ref(_, width)) => Some(*width),
+            _ => None,
         }
-    }
-
-    fn pointee_walk_all(self, parts: impl IntoIterator<Item = Ty>, k: usize) -> Result<Option<Ty>, usize> {
-        let mut seen = 0;
-        for part in parts {
-            match self.pointee_walk(part, k - seen) {
-                Ok(found) => return Ok(found),
-                Err(n) => seen += n,
-            }
-        }
-        Err(seen)
     }
 }
 
@@ -797,11 +748,6 @@ struct RegionAnalysis<'a> {
     entry: EntryStorage,
 }
 
-/// A value with no type entry is read as one position holding every loan
-/// it is given: the stricter reading, so a missing type never hides a loan.
-/// The pipeline types every defined value; only a hand-built body lacks one.
-const UNTYPED_POSITIONS: usize = 1;
-
 /// Where the loans a storage holds live among its holder's positions.
 enum Contents {
     /// The positions of the value the storage holds.
@@ -856,29 +802,39 @@ fn add_via(via: &mut Via, held: &Regions, from: ValueId) {
 }
 
 impl RegionAnalysis<'_> {
-    fn width(&self, v: ValueId) -> usize {
-        self.val_types
-            .get(&v)
-            .map_or(UNTYPED_POSITIONS, |ty| self.layout.positions(*ty))
+    /// # Panics
+    /// `v` has no recorded type: every IR value has one.
+    fn recorded(&self, v: ValueId) -> Ty {
+        crate::ir::recorded(self.val_types, v)
     }
 
-    fn pointee(&self, reference: ValueId) -> Option<Ty> {
-        match self.layout.types.kind(*self.val_types.get(&reference)?) {
-            TyKind::Ref(_, inner) => Some(inner.ty()),
-            _ => None,
+    fn width(&self, v: ValueId) -> usize {
+        self.layout.positions(self.recorded(v))
+    }
+
+    /// # Panics
+    /// `reference` is not of reference type: every value an instruction
+    /// reads through is.
+    fn pointee(&self, reference: ValueId) -> Ty {
+        match self.layout.types.kind(self.recorded(reference)) {
+            TyKind::Ref(_, inner) => inner.ty(),
+            _ => panic!("a value read through is of reference type"),
         }
     }
 
     fn pointee_width(&self, reference: ValueId) -> usize {
-        self.pointee(reference)
-            .map_or(UNTYPED_POSITIONS, |pointee| self.layout.positions(pointee))
+        self.layout.positions(self.pointee(reference))
     }
 
     /// The width of what a `Handle` carries.
+    ///
+    /// # Panics
+    /// `handle` is not of `Handle` type: a `Spawn` defines one and a
+    /// `TakeEffect` reads one.
     fn handled_width(&self, handle: ValueId) -> usize {
-        match self.val_types.get(&handle).map(|ty| self.layout.types.kind(*ty)) {
-            Some(TyKind::Handle(inner)) => self.layout.positions(*inner),
-            _ => UNTYPED_POSITIONS,
+        match self.layout.types.kind(self.recorded(handle)) {
+            TyKind::Handle(inner) => self.layout.positions(*inner),
+            _ => panic!("a spawned call's value is of Handle type"),
         }
     }
 
@@ -920,11 +876,8 @@ impl RegionAnalysis<'_> {
         if !holds_mut {
             return;
         }
-        let Some(ty) = self.val_types.get(&v) else {
-            return;
-        };
-        for (region, kind) in positions.iter_mut().zip(self.layout.kinds(*ty)) {
-            if kind == PositionKind::Ref(Mutability::Shared) {
+        for (region, kind) in positions.iter_mut().zip(self.layout.kinds(self.recorded(v))) {
+            if let PositionKind::Ref(Mutability::Shared, _) = kind {
                 let mut shared = Region::default();
                 shared.join_mut(&std::mem::take(region).shared());
                 *region = shared;
@@ -939,21 +892,15 @@ impl RegionAnalysis<'_> {
     fn contents(&self, storage: LoanStorage) -> Contents {
         match storage {
             LoanStorage::Local(value) | LoanStorage::Param { value, .. } => {
-                match self.val_types.get(&value).map(|ty| (*ty, self.layout.types.kind(*ty))) {
-                    Some((_, TyKind::Ref(_, inner))) => Contents::Positions(1..1 + self.layout.positions(inner.ty())),
-                    Some((ty, _)) => Contents::Positions(0..self.layout.positions(ty)),
-                    None => Contents::Positions(0..UNTYPED_POSITIONS),
+                let ty = self.recorded(value);
+                match self.layout.types.kind(ty) {
+                    TyKind::Ref(_, inner) => Contents::Positions(1..1 + self.layout.positions(inner.ty())),
+                    _ => Contents::Positions(0..self.layout.positions(ty)),
                 }
             }
             LoanStorage::Outside(Outside { entry, position }) => {
-                let pointee = self
-                    .val_types
-                    .get(&entry)
-                    .and_then(|ty| self.layout.pointee_at(*ty, position));
-                match pointee {
-                    Some(pointee) => {
-                        Contents::Positions(position + 1..position + 1 + self.layout.positions(pointee))
-                    }
+                match self.layout.target_width(self.recorded(entry), position) {
+                    Some(width) => Contents::Positions(position + 1..position + 1 + width),
                     None => Contents::Summarized(position),
                 }
             }
@@ -1020,11 +967,11 @@ impl RegionAnalysis<'_> {
 
     /// The part of `from`, a value of type `ty`, that `path` names, as a value
     /// of `width` positions; every loan of `from` when the part is not known.
-    fn project(&self, from: &[Region], ty: Option<Ty>, path: &[PathSeg], width: usize) -> Vec<Region> {
+    fn project(&self, from: &[Region], ty: Ty, path: &[PathSeg], width: usize) -> Vec<Region> {
         if path.is_empty() {
             return reshape(from, width);
         }
-        let at = ty.map_or(Vec::new(), |ty| self.layout.offsets(ty, path, width));
+        let at = self.layout.offsets(ty, path, width);
         if at.is_empty() {
             return fill(width, fold(from));
         }
@@ -1055,16 +1002,14 @@ impl RegionAnalysis<'_> {
     /// A value built from `parts`, each placed at every offset its path step
     /// may name among `dst`'s positions.
     fn build_from(&self, state: &mut State, dst: ValueId, parts: &[Placed], changed: &mut Changed) {
-        let ty = self.val_types.get(&dst).copied();
+        let ty = self.recorded(dst);
         let mut out = fill(self.width(dst), Region::default());
         let mut via = Via::new();
         for Placed { seg, value } in parts {
             let held = state.get(*value);
             add_via(&mut via, &held, *value);
             let part_width = self.width(*value);
-            let at = ty.map_or(Vec::new(), |ty| {
-                self.layout.offsets(ty, std::slice::from_ref(seg), part_width)
-            });
+            let at = self.layout.offsets(ty, std::slice::from_ref(seg), part_width);
             join_part(&mut out, &at, &padded(held.positions, part_width));
         }
         self.put(state, dst, Regions::with_via(out, &via), changed);
@@ -1074,14 +1019,10 @@ impl RegionAnalysis<'_> {
     /// the storage it names now (RFC-0079 rule 3).
     fn current(&self, state: &State, v: ValueId) -> Vec<Region> {
         let mut held = padded(state.get(v).positions, self.width(v));
-        let Some(ty) = self.val_types.get(&v).copied() else {
-            return held;
-        };
-        for (k, kind) in self.layout.kinds(ty).into_iter().enumerate() {
-            let (PositionKind::Ref(_), Some(pointee)) = (kind, self.layout.pointee_at(ty, k)) else {
+        for (k, kind) in self.layout.kinds(self.recorded(v)).into_iter().enumerate() {
+            let PositionKind::Ref(_, width) = kind else {
                 continue;
             };
-            let width = self.layout.positions(pointee);
             for loan in held[k].loans.clone() {
                 let view = self.storage_view(state, loan.storage, width);
                 for (mine, theirs) in held[k + 1..k + 1 + width].iter_mut().zip(&view) {
@@ -1115,14 +1056,7 @@ impl RegionAnalysis<'_> {
         let mut reach = Reach::default();
         let held = self.current(state, callee);
         add_via(&mut reach.via, &state.get(callee), callee);
-        let Some(ty) = self.val_types.get(&callee) else {
-            for region in &held {
-                reach.take(region);
-            }
-            self.deepen(state, &mut reach);
-            return reach;
-        };
-        for (kind, region) in self.layout.kinds(*ty).into_iter().zip(&held) {
+        for (kind, region) in self.layout.kinds(self.recorded(callee)).into_iter().zip(&held) {
             if let PositionKind::Captures(_) = kind {
                 reach.take(region);
             }
@@ -1256,16 +1190,10 @@ impl RegionAnalysis<'_> {
             values: std::slice::from_ref(region),
         };
         let held = self.current(state, v);
-        let Some(ty) = self.val_types.get(&v).copied() else {
-            for storage in held.iter().flat_map(|position| &position.loans).map(|loan| loan.storage) {
-                self.storage_write(state, storage, &unknown_place, changed);
-            }
-            return;
-        };
-        for (k, kind) in self.layout.kinds(ty).into_iter().enumerate() {
+        for (k, kind) in self.layout.kinds(self.recorded(v)).into_iter().enumerate() {
             let writable = match kind {
-                PositionKind::Ref(Mutability::Mut) | PositionKind::Captures(_) => true,
-                PositionKind::Ref(Mutability::Shared) | PositionKind::Lifetime | PositionKind::InFlight => false,
+                PositionKind::Ref(Mutability::Mut, _) | PositionKind::Captures(_) => true,
+                PositionKind::Ref(Mutability::Shared, _) | PositionKind::Lifetime | PositionKind::InFlight => false,
             };
             if !writable {
                 continue;
@@ -1279,8 +1207,8 @@ impl RegionAnalysis<'_> {
             for storage in named {
                 self.storage_write(state, storage, &unknown_place, changed);
             }
-            if let (PositionKind::Ref(Mutability::Mut), Some(pointee)) = (kind, self.layout.pointee_at(ty, k)) {
-                for position in k + 1..k + 1 + self.layout.positions(pointee) {
+            if let PositionKind::Ref(Mutability::Mut, width) = kind {
+                for position in k + 1..k + 1 + width {
                     self.join_at(state, v, position, region, changed);
                 }
             }
@@ -1352,10 +1280,11 @@ impl RegionAnalysis<'_> {
                             .content_range(storage)
                             .map(|k| held.positions.get(k).cloned().unwrap_or_default())
                             .collect();
-                        let contents_ty = self.val_types.get(s).map(|ty| match self.layout.types.kind(*ty) {
+                        let slot_ty = self.recorded(*s);
+                        let contents_ty = match self.layout.types.kind(slot_ty) {
                             TyKind::Ref(_, inner) => inner.ty(),
-                            _ => *ty,
-                        });
+                            _ => slot_ty,
+                        };
                         let pointee = self.project(&contents, contents_ty, path, width);
                         self.reference(names, pointee, &held.via)
                     }
@@ -1384,7 +1313,7 @@ impl RegionAnalysis<'_> {
                 let regions = match target {
                     RefTarget::Var(s) | RefTarget::Param(s) => {
                         let held = state.get(*s).through(*s);
-                        let part = self.project(&held.positions, self.val_types.get(s).copied(), path, width);
+                        let part = self.project(&held.positions, self.recorded(*s), path, width);
                         Regions::with_via(part, &held.via)
                     }
                     RefTarget::Through(r) => {
@@ -1413,10 +1342,7 @@ impl RegionAnalysis<'_> {
                         self.put(state, *s, Regions::with_via(positions, &held.via), changed);
                     }
                     RefTarget::Var(s) | RefTarget::Param(s) => {
-                        let at = self
-                            .val_types
-                            .get(s)
-                            .map_or(Vec::new(), |ty| self.layout.offsets(*ty, path, value_width));
+                        let at = self.layout.offsets(self.recorded(*s), path, value_width);
                         let part = WrittenPart {
                             pointee_width: self.width(*s),
                             at: &at,
@@ -1425,9 +1351,7 @@ impl RegionAnalysis<'_> {
                         self.write_part(state, *s, self.entry.storage(*s), &part, changed);
                     }
                     RefTarget::Through(m) => {
-                        let at = self
-                            .pointee(*m)
-                            .map_or(Vec::new(), |ty| self.layout.offsets(ty, path, value_width));
+                        let at = self.layout.offsets(self.pointee(*m), path, value_width);
                         let part = WrittenPart {
                             pointee_width: self.pointee_width(*m),
                             at: &at,
@@ -1521,10 +1445,7 @@ impl RegionAnalysis<'_> {
                 let value_held = state.get(*value).through(*value);
                 let value_width = self.width(*value);
                 let mut positions = reshape(&object_held.positions, self.width(*dst));
-                let at = self
-                    .val_types
-                    .get(dst)
-                    .map_or(Vec::new(), |ty| self.layout.offsets(*ty, &path, value_width));
+                let at = self.layout.offsets(self.recorded(*dst), &path, value_width);
                 join_part(&mut positions, &at, &padded(value_held.positions.clone(), value_width));
                 let mut regions = Regions::with_via(positions, &object_held.via);
                 regions.join_mut(&Regions::with_via(Vec::new(), &value_held.via));
@@ -1535,8 +1456,8 @@ impl RegionAnalysis<'_> {
                     self.put(state, *dst, Regions::default(), changed);
                     return;
                 };
-                let seg = match self.val_types.get(dst).map(|ty| self.layout.types.kind(*ty)) {
-                    Some(TyKind::Enum { .. }) => PathSeg::Field(*tag),
+                let seg = match self.layout.types.kind(self.recorded(*dst)) {
+                    TyKind::Enum { .. } => PathSeg::Field(*tag),
                     _ => PathSeg::Payload,
                 };
                 let parts = [Placed {
@@ -1551,9 +1472,9 @@ impl RegionAnalysis<'_> {
                 let value_held = state.get(*value).through(*value);
                 let value_width = self.width(*value);
                 let mut positions = reshape(&array_held.positions, self.width(*dst));
-                let at = self.val_types.get(dst).map_or(Vec::new(), |ty| {
-                    self.layout.offsets(*ty, &[PathSeg::Index(0)], value_width)
-                });
+                let at = self
+                    .layout
+                    .offsets(self.recorded(*dst), &[PathSeg::Index(0)], value_width);
                 join_part(&mut positions, &at, &padded(value_held.positions.clone(), value_width));
                 let mut regions = Regions::with_via(positions, &array_held.via);
                 regions.join_mut(&Regions::with_via(Vec::new(), &value_held.via));
@@ -1620,9 +1541,9 @@ impl RegionAnalysis<'_> {
             }
             InstKind::StructuralClone { dst, src, .. } => {
                 let held = state.get(*src).through(*src);
-                let from = match self.pointee(*src) {
-                    Some(_) => self.deref(state, *src),
-                    None => held.positions.clone(),
+                let from = match self.layout.types.kind(self.recorded(*src)) {
+                    TyKind::Ref(..) => self.deref(state, *src),
+                    _ => held.positions.clone(),
                 };
                 let positions = reshape(&from, self.width(*dst));
                 self.put(state, *dst, Regions::with_via(positions, &held.via), changed);
@@ -1649,7 +1570,7 @@ impl RegionAnalysis<'_> {
 
     fn read_part(&self, state: &mut State, dst: ValueId, src: ValueId, path: &[PathSeg], changed: &mut Changed) {
         let held = state.get(src).through(src);
-        let part = self.project(&held.positions, self.val_types.get(&src).copied(), path, self.width(dst));
+        let part = self.project(&held.positions, self.recorded(src), path, self.width(dst));
         self.put(state, dst, Regions::with_via(part, &held.via), changed);
     }
 
@@ -1934,9 +1855,7 @@ impl<'cfg> Loans<'cfg> {
         };
         let mut entry = DataflowState::new();
         for value in cfg.entry_defs() {
-            if let Some(ty) = cfg.val_types.get(&value) {
-                entry.set(value, entry_regions(layout, &analysis.entry, value, *ty));
-            }
+            entry.set(value, entry_regions(layout, &analysis.entry, value, analysis.recorded(value)));
         }
         let result = forward_analysis(cfg, &analysis, entry);
         // The fixpoint's block exits are not joined here. The walk below
@@ -1991,6 +1910,12 @@ impl<'cfg> Loans<'cfg> {
         self.cfg
     }
 
+    /// # Panics
+    /// `v` has no recorded type: every IR value has one.
+    pub fn recorded(&self, v: ValueId) -> Ty {
+        self.cfg.ty_of(v)
+    }
+
     /// The positions of the CFG's types.
     pub fn layout(&self) -> Layout<'cfg> {
         self.layout
@@ -2035,12 +1960,12 @@ impl<'cfg> Loans<'cfg> {
     pub fn held(&self, loan: &Loan) -> Held {
         match loan.storage {
             LoanStorage::Local(value) => Held::Local(value),
-            LoanStorage::Param { index, value } => match self.cfg.val_types.get(&value).map(|ty| self.layout.types.kind(*ty)) {
-                Some(TyKind::Ref(..) | TyKind::Fn { .. }) => Held::Input(HeldInput {
+            LoanStorage::Param { index, value } => match self.layout.types.kind(self.recorded(value)) {
+                TyKind::Ref(..) | TyKind::Fn { .. } => Held::Input(HeldInput {
                     end: FlowEnd::Param(index),
                     position: 0,
                 }),
-                Some(_) | None => Held::Local(value),
+                _ => Held::Local(value),
             },
             LoanStorage::Outside(Outside { entry, position }) => match self.storage.params.get(&entry) {
                 Some(index) => Held::Input(HeldInput {
@@ -2198,8 +2123,8 @@ impl<'cfg> Loans<'cfg> {
     fn touch(&self, effect: &mut StorageEffect, target: &RefTarget, mutability: Mutability) {
         match target {
             RefTarget::Var(s) => effect.add_placed(self.storage_of(*s), mutability),
-            RefTarget::Param(s) => match self.cfg.val_types.get(s).map(|ty| self.layout.types.kind(*ty)) {
-                Some(TyKind::Ref(..) | TyKind::Fn { .. }) => effect.add(Loan {
+            RefTarget::Param(s) => match self.layout.types.kind(self.recorded(*s)) {
+                TyKind::Ref(..) | TyKind::Fn { .. } => effect.add(Loan {
                     storage: self.storage_of(*s),
                     mutability,
                     taken: mutability,
@@ -2236,7 +2161,7 @@ fn entry_regions(layout: Layout<'_>, storage: &EntryStorage, value: ValueId, ty:
         .enumerate()
         .map(|(position, kind)| {
             let mutability = match kind {
-                PositionKind::Ref(mutability) => mutability,
+                PositionKind::Ref(mutability, _) => mutability,
                 PositionKind::Captures(holds) => match captured(holds) {
                     Some(mutability) => mutability,
                     None => return Region::default(),

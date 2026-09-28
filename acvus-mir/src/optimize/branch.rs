@@ -154,7 +154,7 @@ fn decide(
         // dispatch stands as the source wrote it.
         Terminator::Switch { tag, arms, default } => {
             let (kind, _, _) = arms.first()?;
-            let key = known.switch_key(interner, types, *tag, *cfg.val_types.get(tag)?, *kind)?;
+            let key = known.switch_key(interner, types, *tag, cfg.ty_of(*tag), *kind)?;
 
             let arm = arms.iter().find(|(held, _, _)| *held == key);
             match arm {

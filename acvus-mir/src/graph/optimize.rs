@@ -174,10 +174,7 @@ fn required_inputs(cfg: &CfgBody) -> Vec<RequiredInput> {
         .filter(|(_, slot)| read.contains(slot))
         .map(|(name, slot)| RequiredInput {
             name: QualifiedRef::root(*name),
-            ty: *cfg
-                .val_types
-                .get(slot)
-                .expect("lowering gives every parameter of a body its type"),
+            ty: cfg.ty_of(*slot),
         })
         .collect()
 }

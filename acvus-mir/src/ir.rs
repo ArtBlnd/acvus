@@ -1246,6 +1246,14 @@ impl Default for MirBody {
 }
 
 impl MirBody {
+    /// The type recorded for `v`.
+    ///
+    /// # Panics
+    /// `v` has no recorded type: every IR value has one.
+    pub fn ty_of(&self, v: ValueId) -> Ty {
+        recorded(&self.val_types, v)
+    }
+
     pub fn new() -> Self {
         Self {
             insts: Vec::new(),
@@ -1391,4 +1399,12 @@ impl ScalarTypes {
             .expect("IntTy::ALL holds every width");
         self.ints[at]
     }
+}
+
+/// The type `val_types` records for `v`.
+///
+/// # Panics
+/// `v` has no recorded type: every IR value has one.
+pub fn recorded(val_types: &FxHashMap<ValueId, Ty>, v: ValueId) -> Ty {
+    *val_types.get(&v).expect("every IR value has a recorded type")
 }

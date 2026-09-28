@@ -429,9 +429,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
     let mut entry_param_defs: BTreeMap<ValueId, ValueId> = BTreeMap::default();
     for (_name, reg) in cfg.params.iter().chain(cfg.captures.iter()) {
         entry_param_defs.insert(*reg, *reg);
-        if let Some(ty) = cfg.val_types.get(reg) {
-            var_types.insert(*reg, ty.clone());
-        }
+        var_types.insert(*reg, cfg.ty_of(*reg));
     }
 
     // First pass: identify non-promotable storage.
@@ -469,9 +467,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                         slot: *slot,
                     });
                     read_vars.insert(*slot);
-                    if let Some(ty) = cfg.val_types.get(dst) {
-                        var_types.entry(*slot).or_insert_with(|| ty.clone());
-                    }
+                    var_types.entry(*slot).or_insert_with(|| cfg.ty_of(*dst));
                 }
                 InstKind::Take {
                     dst,
@@ -480,9 +476,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                     ..
                 } if path.is_empty() && !non_promotable_vars.contains(slot) => {
                     read_vars.insert(*slot);
-                    if let Some(ty) = cfg.val_types.get(dst) {
-                        var_types.entry(*slot).or_insert_with(|| ty.clone());
-                    }
+                    var_types.entry(*slot).or_insert_with(|| cfg.ty_of(*dst));
                     ops.ops.push(SsaOp::ParamLoad {
                         dst: *dst,
                         slot: *slot,
@@ -499,9 +493,7 @@ fn collect_ssa_info(cfg: &CfgBody) -> SsaInfo {
                         value: *value,
                     });
                     written_vars.insert(*slot);
-                    if let Some(ty) = cfg.val_types.get(value) {
-                        var_types.entry(*slot).or_insert_with(|| ty.clone());
-                    }
+                    var_types.entry(*slot).or_insert_with(|| cfg.ty_of(*value));
                 }
                 _ => {}
             }

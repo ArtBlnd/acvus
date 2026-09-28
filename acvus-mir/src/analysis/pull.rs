@@ -276,7 +276,7 @@ fn over_args(cfg: &CfgBody, types: &Types<Concrete>, term: &PostTerm, args: &[Va
         PostTerm::Const(value) => Term::int(*value),
         PostTerm::Param(at) => {
             let arg = *args.get(*at)?;
-            match types.kind(*cfg.val_types.get(&arg)?) {
+            match types.kind(cfg.ty_of(arg)) {
                 TyKind::Int(_) => Term::Value(arg),
                 _ => return None,
             }

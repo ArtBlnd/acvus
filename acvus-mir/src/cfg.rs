@@ -129,6 +129,14 @@ pub struct CfgBody {
 }
 
 impl CfgBody {
+    /// The type recorded for `v`.
+    ///
+    /// # Panics
+    /// `v` has no recorded type: every IR value has one.
+    pub fn ty_of(&self, v: ValueId) -> Ty {
+        crate::ir::recorded(&self.val_types, v)
+    }
+
     /// Successors of a block.
     pub fn successors(&self, idx: BlockIdx) -> SmallVec<[BlockIdx; 2]> {
         let block = &self.blocks[idx.0];

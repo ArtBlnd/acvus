@@ -25,11 +25,7 @@ pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>) {
 }
 
 fn ty_of<'t>(cfg: &CfgBody, types: &'t Types<Concrete>, value: ValueId) -> &'t TyKind<Concrete> {
-    types.kind(
-        *cfg.val_types
-            .get(&value)
-            .unwrap_or_else(|| panic!("lowering gives {value:?} a type")),
-    )
+    types.kind(cfg.ty_of(value))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

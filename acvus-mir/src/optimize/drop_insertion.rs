@@ -30,7 +30,7 @@ use crate::analysis::loans::Loans;
 use crate::analysis::loop_deps::{BodyDeps, Head, HeaderDeps, Storage, Token};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
-use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId};
+use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId, recorded};
 use crate::laws::LawTable;
 use crate::decl::Declarations;
 use crate::ty::{Concrete, Ty, Types};
@@ -763,7 +763,7 @@ struct BlockDrop {
 
 /// Does this value need a Drop instruction?
 fn needs_drop(types: &Types<Concrete>, val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
-    val_types.get(&val).is_some_and(|ty| is_move_only(types, *ty))
+    is_move_only(types, recorded(val_types, val))
 }
 
 /// The values this instruction takes ownership of: no Drop follows them.

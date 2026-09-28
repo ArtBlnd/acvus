@@ -239,13 +239,7 @@ impl<'a> InitCheck<'a> {
     }
 
     fn ty_of(&self, value: ValueId) -> &TyKind<Concrete> {
-        self.types.kind(
-            *self
-                .cfg
-                .val_types
-                .get(&value)
-                .expect("every register of a lowered body has a type"),
-        )
+        self.types.kind(self.cfg.ty_of(value))
     }
 
     fn leaves_of(&self, value: ValueId) -> &[LeafId] {

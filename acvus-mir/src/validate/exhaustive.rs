@@ -184,7 +184,7 @@ pub fn known_variants(types: &Types<Concrete>, body: &MirBody, value: ValueId) -
 /// The type of the value a `Switch` reads its tag from. A place scrutinee is
 /// lent for the tag read, and what it lends is what names the variants.
 fn scrutinee_ty<'t>(types: &'t Types<Concrete>, body: &MirBody, value: ValueId) -> Option<&'t TyKind<Concrete>> {
-    match types.kind(*body.val_types.get(&value)?) {
+    match types.kind(body.ty_of(value)) {
         TyKind::Ref(_, inner) => Some(types.kind(inner.ty())),
         kind => Some(kind),
     }

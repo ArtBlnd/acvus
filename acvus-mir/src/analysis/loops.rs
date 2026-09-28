@@ -284,10 +284,7 @@ impl Invariants {
             .flat_map(|block| cfg.blocks[block.0].insts.iter())
             .filter_map(|inst| {
                 let dst = standing_operation(&inst.kind)?;
-                let is_word = cfg
-                    .val_types
-                    .get(&dst)
-                    .is_some_and(|ty| is_word(loans.layout().types, *ty));
+                let is_word = is_word(loans.layout().types, cfg.ty_of(dst));
 
                 (is_word && touches_none_of(loans, &inst.kind, &written)).then_some((dst, &inst.kind))
             })

@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::loans::{Held, HeldInput, Layout, Loan, LoanStorage, Loans, RegionsAt, Via};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
-use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
+use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId, recorded};
 use crate::decl::Declarations;
 use crate::flows::{Alignment, FlowEnd, FlowTerm, Flows};
 use crate::ty::{Concrete, Mutability, Ty, TyKind, Types};
@@ -73,14 +73,12 @@ fn closure_flows(module: &MirModule) -> FxHashMap<ClosureLabel, Vec<Flows>> {
             else {
                 continue;
             };
-            let flows = match body.val_types.get(dst).map(|ty| module.types.kind(*ty)) {
-                Some(TyKind::Fn {
-                    flows: FlowTerm::Known(flows),
-                    ..
-                }) => flows.clone(),
-                // A closure the validator finds untyped is refused there;
-                // the union is what it is checked against here.
-                Some(_) | None => Flows::Every,
+            let TyKind::Fn { flows, .. } = module.types.kind(body.ty_of(*dst)) else {
+                panic!("a MakeClosure's value is of function type")
+            };
+            let flows = match flows {
+                FlowTerm::Known(flows) => flows.clone(),
+                FlowTerm::Var(var) => match *var {},
             };
             made.entry(*label).or_default().push(flows);
         }
@@ -189,11 +187,7 @@ impl<'cfg> Checking<'cfg> {
                 continue;
             };
             let regions = self.loans.regions(value);
-            let width = self
-                .cfg()
-                .val_types
-                .get(&value)
-                .map_or(0, |ty| self.loans.layout().positions(*ty));
+            let width = self.loans.layout().positions(self.cfg().ty_of(value));
             for position in 0..width {
                 for loan in regions.position(position) {
                     outputs.push(Output {
@@ -240,12 +234,7 @@ impl<'cfg> Checking<'cfg> {
             .iter()
             .find_map(|block| match block.terminator {
                 Terminator::Return { value, .. } => {
-                    Some(
-                        self.cfg()
-                            .val_types
-                            .get(&value)
-                            .map_or(0, |ty| self.loans.layout().positions(*ty)),
-                    )
+                    Some(self.loans.layout().positions(self.cfg().ty_of(value)))
                 }
                 _ => None,
             });
@@ -311,8 +300,7 @@ impl<'cfg> Checking<'cfg> {
                 .cfg()
                 .params
                 .get(index)
-                .and_then(|(_, value)| self.cfg().val_types.get(value))
-                .map(|ty| self.loans.layout().positions(*ty)),
+                .map(|(_, value)| self.loans.layout().positions(self.cfg().ty_of(*value))),
             FlowEnd::Captures => Some(1),
             FlowEnd::Result => None,
         };
@@ -325,15 +313,8 @@ impl<'cfg> Checking<'cfg> {
 
 // -- Exclusion ---------------------------------------------------------
 
-/// A `Take` whose result has no type entry is checked as a move: the
-/// stricter reading, so a missing type never hides a conflict.
-const UNTYPED_TAKE_MOVES: bool = true;
-
 fn take_moves(types: &Types<Concrete>, val_types: &FxHashMap<ValueId, Ty>, dst: &ValueId) -> bool {
-    match val_types.get(dst) {
-        Some(ty) => is_move_only(types, *ty),
-        None => UNTYPED_TAKE_MOVES,
-    }
+    is_move_only(types, recorded(val_types, *dst))
 }
 
 /// What an instruction does to a storage.
@@ -398,10 +379,9 @@ fn touches(layout: Layout<'_>, kind: &InstKind, val_types: &FxHashMap<ValueId, T
                     moves: take_moves(layout.types, val_types, dst),
                 },
             )];
-            if let Some(slot) = inst_info::storage(target)
-                && let (Some(slot_ty), Some(taken)) = (val_types.get(&slot), val_types.get(dst))
-            {
-                touches.extend(layout.held_positions(*slot_ty, path, *taken).into_iter().map(
+            if let Some(slot) = inst_info::storage(target) {
+                let (slot_ty, taken) = (recorded(val_types, slot), recorded(val_types, *dst));
+                touches.extend(layout.held_positions(slot_ty, path, taken).into_iter().map(
                     |(position, mutability)| {
                         (
                             Touched::Held { slot, position },
@@ -486,8 +466,8 @@ fn reached(
             storage: vec![at_place(loans.storage_of(*s))],
             via: Via::new().with(*s),
             at_place: !matches!(
-                val_types.get(s).map(|ty| types.kind(*ty)),
-                Some(TyKind::Ref(..) | TyKind::Fn { .. })
+                types.kind(recorded(val_types, *s)),
+                TyKind::Ref(..) | TyKind::Fn { .. }
             ),
         },
         Touched::Place(RefTarget::Through(r)) => {

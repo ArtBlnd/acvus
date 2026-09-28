@@ -64,8 +64,8 @@ impl<'a> Removal<'a> {
                 ..
             } => {
                 matches!(
-                    self.cfg.val_types.get(left).map(|ty| self.types.kind(*ty)),
-                    Some(TyKind::Int(_))
+                    self.types.kind(self.cfg.ty_of(*left)),
+                    TyKind::Int(_)
                 ) && !self.ruled_out(at)
             }
             InstKind::Index {

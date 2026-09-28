@@ -33,13 +33,11 @@ impl Reborrow {
         else {
             return None;
         };
-        let through = cfg.val_types.get(source).copied();
+        let through = cfg.ty_of(*source);
         (path.is_empty()
-            && through.is_some_and(|through| {
-                matches!(types.kind(through), TyKind::Ref(..)) && !is_move_only(types, through)
-            })
-            && through == cfg.val_types.get(dst).copied())
-
+            && matches!(types.kind(through), TyKind::Ref(..))
+            && !is_move_only(types, through)
+            && through == cfg.ty_of(*dst))
         .then_some(Reborrow {
             of: *dst,
             source: *source,

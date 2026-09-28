@@ -108,7 +108,7 @@ fn copies_for(
     let mut occurrences: FxHashMap<ValueId, usize> = FxHashMap::default();
     let mut order: Vec<ValueId> = Vec::new();
     for v in uses {
-        if !matches!(cfg.val_types.get(&v).map(|ty| types.kind(*ty)), Some(TyKind::String)) {
+        if !matches!(types.kind(cfg.ty_of(v)), TyKind::String) {
             continue;
         }
         let n = occurrences.entry(v).or_insert(0);

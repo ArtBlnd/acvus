@@ -106,7 +106,7 @@ fn copies_a_word(cfg: &CfgBody, types: &Types<Concrete>, kind: &InstKind) -> boo
     else {
         return false;
     };
-    cfg.val_types.get(dst).is_some_and(|ty| is_word(types, *ty))
+    is_word(types, cfg.ty_of(*dst))
 }
 
 pub fn slots_lent_mutably(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {

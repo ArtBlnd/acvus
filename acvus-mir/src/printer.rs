@@ -1316,11 +1316,7 @@ fn write_body(
                     let params_str = params
                         .iter()
                         .map(|v| {
-                            let ty = body
-                                .val_types
-                                .get(v)
-                                .map(|t| format!("{}", show_ty(ctx.types, *t, ctx.interner)))
-                                .unwrap_or_else(|| "?".into());
+                            let ty = show_ty(ctx.types, body.ty_of(*v), ctx.interner);
                             format!("{}: {ty}", vn.fmt_val(*v))
                         })
                         .collect::<Vec<_>>()

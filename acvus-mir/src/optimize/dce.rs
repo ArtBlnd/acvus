@@ -115,10 +115,9 @@ fn filled_slot(kind: &InstKind) -> Option<ValueId> {
 }
 
 /// Whether a slot's type has a release: a word owns nothing, so a store
-/// into it releases nothing whatever the slot held (RFC-0048 rule 4). A type
-/// the classification cannot read is taken to have one.
+/// into it releases nothing whatever the slot held (RFC-0048 rule 4).
 fn releases(slot: ValueId, cfg: &CfgBody, types: &Types<Concrete>) -> bool {
-    cfg.val_types.get(&slot).is_none_or(|ty| is_move_only(types, *ty))
+    is_move_only(types, cfg.ty_of(slot))
 }
 
 /// Which slots may hold a value at a point: a store lands on an occupant
@@ -334,8 +333,8 @@ fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, removal: &Removal<'_>)
         && (matches!(callee, crate::ir::Callee::Indirect(_))
             || args.iter().any(|arg| {
                 matches!(
-                    val_types.get(arg).map(|ty| types.kind(*ty)),
-                    Some(TyKind::Ref(crate::ty::Mutability::Mut, _))
+                    types.kind(crate::ir::recorded(val_types, *arg)),
+                    TyKind::Ref(crate::ty::Mutability::Mut, _)
                 )
             }))
     {

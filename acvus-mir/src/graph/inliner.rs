@@ -619,11 +619,7 @@ impl Emit<'_> {
     /// The reference an inlined capture register reads, not the local it
     /// reads it out of.
     fn lend_local(&mut self, span: Span, name: Astr, value: ValueId) -> ValueId {
-        let ty = *self
-            .body
-            .val_types
-            .get(&value)
-            .expect("a MakeClosure capture is typed where the caller takes it");
+        let ty = self.body.ty_of(value);
 
         let slot = self.value(ty);
         self.body
@@ -872,7 +868,7 @@ fn plan_captures(
 }
 
 fn capture_binding(types: &Types<Concrete>, closure: &MirBody, reg: ValueId, arg_ty: Ty) -> Option<CaptureBinding> {
-    let cap_ty = *closure.val_types.get(&reg)?;
+    let cap_ty = closure.ty_of(reg);
     if cap_ty == arg_ty {
         return Some(CaptureBinding::Reference);
     }

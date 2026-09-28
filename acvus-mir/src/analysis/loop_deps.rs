@@ -325,7 +325,7 @@ fn pull_shape(
             .all(|loan| loan.storage.slot() == Some(slot))
     });
     let pulls = args[..] == [*lent]
-        && matches!(cfg.val_types.get(option).map(|ty| types.kind(*ty)), Some(TyKind::Option(_)))
+        && matches!(types.kind(cfg.ty_of(*option)), TyKind::Option(_))
         && src == option
         && dst == cond;
     if !lends_one_storage || !pulls {
@@ -1845,8 +1845,8 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
                 a_ref == b_ref
                     && a_path == b_path
                     && matches!(
-                        self.cfg.val_types.get(a_ref).map(|ty| self.types.kind(*ty)),
-                        Some(TyKind::Ref(Mutability::Shared, _))
+                        self.types.kind(self.cfg.ty_of(*a_ref)),
+                        TyKind::Ref(Mutability::Shared, _)
                     )
             }
             (
@@ -1898,7 +1898,7 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
                 },
             ) => a_to == b_to && self.read_by_value(*a_src) && self.one_key(*a_src, *b_src),
             (InstKind::Const { value: a_value, .. }, InstKind::Const { value: b_value, .. }) => {
-                self.cfg.val_types.get(&a) == self.cfg.val_types.get(&b)
+                self.cfg.ty_of(a) == self.cfg.ty_of(b)
                     && same_literal(a_value, b_value)
             }
             _ => false,
@@ -1931,7 +1931,7 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
                 _ => None,
             }
         };
-        let read = match self.types.kind(*self.cfg.val_types.get(&key)?) {
+        let read = match self.types.kind(self.cfg.ty_of(key)) {
             TyKind::Ref(Mutability::Shared, _) => lent_through(key)?,
             TyKind::Ref(Mutability::Mut, _) => return None,
             _ => {
@@ -1955,14 +1955,14 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             }
         };
         matches!(
-            self.cfg.val_types.get(&read.reference).map(|ty| self.types.kind(*ty)),
-            Some(TyKind::Ref(Mutability::Shared, _))
+            self.types.kind(self.cfg.ty_of(read.reference)),
+            TyKind::Ref(Mutability::Shared, _)
         )
         .then_some(read)
     }
 
     fn key_read_of_reference(&self, reference: ValueId) -> Option<LentPlace> {
-        match self.types.kind(*self.cfg.val_types.get(&reference)?) {
+        match self.types.kind(self.cfg.ty_of(reference)) {
             TyKind::Ref(Mutability::Shared, _) => self.key_read(reference),
             _ => None,
         }
@@ -1998,7 +1998,7 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
     /// An operand of no reference type: an operation over it reads nothing
     /// but the operand.
     fn read_by_value(&self, operand: ValueId) -> bool {
-        matches!(self.cfg.val_types.get(&operand), Some(ty) if !matches!(self.types.kind(*ty), TyKind::Ref(..)))
+        !matches!(self.types.kind(self.cfg.ty_of(operand)), TyKind::Ref(..))
     }
 
     fn holds(&self, value: ValueId, slot: ValueId) -> bool {
@@ -2353,7 +2353,7 @@ fn inverse_cells(
             let reads_the_payload = matches!(laws.of_callee(reader), ResolvedLaws::Payload)
                 && read == [option]
                 && reads.count(option) == 1;
-            let one_word = cfg.val_types.get(&payload).is_some_and(|ty| is_word(loans.layout().types, *ty));
+            let one_word = is_word(loans.layout().types, cfg.ty_of(payload));
             let lends = loans.holds(payload).next().is_some();
             if !reads_the_payload || !one_word || lends {
                 return None;
@@ -2449,8 +2449,8 @@ fn is_identity(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable, law: &La
         Some(Literal::IntOf(suffixed)) => Some(suffixed.value),
         _ => None,
     };
-    let width = match cfg.val_types.get(&value).map(|ty| types.kind(*ty)) {
-        Some(TyKind::Int(width)) => Some(*width),
+    let width = match types.kind(cfg.ty_of(value)) {
+        TyKind::Int(width) => Some(*width),
         _ => None,
     };
     match law {
@@ -2485,7 +2485,7 @@ fn is_term(cfg: &CfgBody, types: &Types<Concrete>, value: ValueId, term: &MeansT
     let Some(kind) = def_of(cfg, value) else {
         return false;
     };
-    let is_option = |dst: &ValueId| matches!(cfg.val_types.get(dst).map(|ty| types.kind(*ty)), Some(TyKind::Option(_)));
+    let is_option = |dst: &ValueId| matches!(types.kind(cfg.ty_of(*dst)), TyKind::Option(_));
     match (term, kind) {
         (
             MeansTerm::Call { name, args },
@@ -3118,7 +3118,7 @@ fn keyed_through_nested_loop_level(
 }
 
 fn keyed_by_equivalence(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable, slot: ValueId) -> bool {
-    let Some(TyKind::UserDefined { type_args, .. }) = cfg.val_types.get(&slot).map(|ty| types.kind(*ty)) else {
+    let TyKind::UserDefined { type_args, .. } = types.kind(cfg.ty_of(slot)) else {
         return false;
     };
     matches!(
@@ -3954,11 +3954,7 @@ impl Graph {
             {
                 continue;
             }
-            let ty = cfg
-                .val_types
-                .get(&param)
-                .expect("lowering types every header parameter");
-            let is_order = matches!(types.kind(*ty), TyKind::Order);
+            let is_order = matches!(types.kind(cfg.ty_of(param)), TyKind::Order);
             let starts: Vec<usize> = self
                 .readers(param)
                 .iter()
@@ -5297,7 +5293,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     fn of_viewed_option_type(&self, value: ValueId) -> bool {
         self.payload_view.is_some_and(|view| {
-            self.cfg.val_types.get(&value) == self.cfg.val_types.get(&view.token)
+            self.cfg.ty_of(value) == self.cfg.ty_of(view.token)
         })
     }
 
@@ -6347,7 +6343,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 left,
                 right,
                 ..
-            } if matches!(self.cfg.val_types.get(left).map(|ty| self.types.kind(*ty)), Some(TyKind::Bool)) => {
+            } if matches!(self.types.kind(self.cfg.ty_of(*left)), TyKind::Bool) => {
                 let op = match op {
                     BinOp::Or => LawOp::Or,
                     BinOp::And => LawOp::And,
@@ -6368,7 +6364,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             InstKind::BinOp {
                 op, left, right, ..
             } => {
-                let ty = *self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
+                let ty = self.cfg.ty_of(inst_info::defs(kind)[0]);
                 let exact = match self.types.kind(ty) {
                     _ if crate::analysis::affine::exact_under_wrapping(self.types, ty) => true,
                     TyKind::Float => false,
@@ -6477,7 +6473,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 payload: Some(payload),
                 ..
             } if self.payload_view.is_some()
-                && matches!(self.cfg.val_types.get(dst).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_))) =>
+                && matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(_)) =>
             {
                 self.form(*payload)
             }
@@ -6636,7 +6632,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     dst,
                     payload: Some(payload),
                     ..
-                } if matches!(self.cfg.val_types.get(dst).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_))) => *payload,
+                } if matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(_)) => *payload,
                 _ => value,
             },
             _ => value,
@@ -6817,9 +6813,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let State::Param { param: guard, index } = self.state else {
             return None;
         };
-        let unset = match self.cfg.val_types.get(&guard).map(|ty| self.types.kind(*ty)) {
-            Some(TyKind::Bool) if !guarded.is_empty() => Unset::Flag,
-            Some(TyKind::Int(_)) => {
+        let unset = match self.types.kind(self.cfg.ty_of(guard)) {
+            TyKind::Bool if !guarded.is_empty() => Unset::Flag,
+            TyKind::Int(_) => {
                 let sentinel = self.sentinel_compared(guard)?;
                 self.sentinel = Some(int_constant(self.cfg, sentinel)?);
                 Unset::Sentinel(sentinel)
@@ -7136,7 +7132,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return None;
         };
         let cond = *cond;
-        if !matches!(self.cfg.val_types.get(&cond).map(|ty| self.types.kind(*ty)), Some(TyKind::Bool)) || self.form(cond)? != Form::State
+        if !matches!(self.types.kind(self.cfg.ty_of(cond)), TyKind::Bool) || self.form(cond)? != Form::State
         {
             return None;
         }
@@ -7371,7 +7367,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         };
         match self.inst(*at) {
             InstKind::MakeVariant { dst, tag, payload }
-                if matches!(self.cfg.val_types.get(dst).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_))) =>
+                if matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(_)) =>
             {
                 Some(MadeOption {
                     tag: *tag,
@@ -7435,7 +7431,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             InstKind::BinOp {
                 op, left, right, ..
             } => {
-                let ty = *self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
+                let ty = self.cfg.ty_of(inst_info::defs(kind)[0]);
                 let exact = match self.types.kind(ty) {
                     _ if crate::analysis::affine::exact_under_wrapping(self.types, ty) => true,
                     TyKind::Float => false,
@@ -7506,7 +7502,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if let Some(compare) = self.field_compare(op, left, right) {
             return self.field_select(select, *cond, compare);
         }
-        if !matches!(self.cfg.val_types.get(&left).map(|ty| self.types.kind(*ty)), Some(TyKind::Int(_))) {
+        if !matches!(self.types.kind(self.cfg.ty_of(left)), TyKind::Int(_)) {
             return None;
         }
         // The compare as `y ? s`, the value of the iteration on the left.
@@ -7713,7 +7709,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             y,
             y_first,
         } = compare;
-        if self.form(y)? != Form::Free || !matches!(self.cfg.val_types.get(&y).map(|ty| self.types.kind(*ty)), Some(TyKind::Int(_))) {
+        if self.form(y)? != Form::Free || !matches!(self.types.kind(self.cfg.ty_of(y)), TyKind::Int(_)) {
             return None;
         }
         let y_less_when_true = match (op, y_first) {
@@ -7956,8 +7952,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return false;
         };
         let shared = matches!(
-            self.cfg.val_types.get(&ra).map(|ty| self.types.kind(*ty)),
-            Some(TyKind::Ref(crate::ty::Mutability::Shared, _))
+            self.types.kind(self.cfg.ty_of(ra)),
+            TyKind::Ref(crate::ty::Mutability::Shared, _)
         );
         ra == rb && pa == pb && shared
     }

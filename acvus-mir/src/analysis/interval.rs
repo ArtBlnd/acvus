@@ -514,7 +514,7 @@ fn division_defined(cfg: &CfgBody, types: &Types<Concrete>, kind: &InstKind, fac
     else {
         return false;
     };
-    let Some(TyKind::Int(width)) = cfg.val_types.get(left).map(|ty| types.kind(*ty)) else {
+    let TyKind::Int(width) = types.kind(cfg.ty_of(*left)) else {
         return false;
     };
     let no_overflow =
@@ -612,7 +612,7 @@ impl<'a> Domain<'a> {
             .flat_map(|block| &block.insts)
             .filter_map(|inst| match &inst.kind {
                 InstKind::AsSlice { dst, container, .. } => {
-                    Some((*dst, array_len(types, *cfg.val_types.get(container)?)?))
+                    Some((*dst, array_len(types, cfg.ty_of(*container))?))
                 }
                 _ => None,
             })
@@ -661,14 +661,14 @@ impl<'a> Domain<'a> {
     }
 
     fn int_ty(&self, value: ValueId) -> Option<IntTy> {
-        match self.cfg.val_types.get(&value).map(|ty| self.types.kind(*ty)) {
-            Some(TyKind::Int(t)) => Some(*t),
+        match self.types.kind(self.cfg.ty_of(value)) {
+            TyKind::Int(t) => Some(*t),
             _ => None,
         }
     }
 
     fn reference(&self, value: ValueId) -> Option<Referent> {
-        let Some(TyKind::Ref(_, inner)) = self.cfg.val_types.get(&value).map(|ty| self.types.kind(*ty)) else {
+        let TyKind::Ref(_, inner) = self.types.kind(self.cfg.ty_of(value)) else {
             return None;
         };
         match self.types.kind(inner.ty()) {
@@ -753,15 +753,15 @@ impl<'a> Domain<'a> {
     /// cannot write through.
     fn only_reads(&self, value: ValueId) -> bool {
         matches!(
-            self.cfg.val_types.get(&value).map(|ty| self.types.kind(*ty)),
-            Some(
+            self.types.kind(self.cfg.ty_of(value)),
+            
                 TyKind::Int(_)
                     | TyKind::Float
                     | TyKind::Bool
                     | TyKind::Char
                     | TyKind::Unit
                     | TyKind::Ref(Mutability::Shared, _)
-            )
+            
         )
     }
 
