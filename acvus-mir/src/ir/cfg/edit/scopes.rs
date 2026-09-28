@@ -80,7 +80,7 @@ macro_rules! scope {
 scope!(Value, [Instructions, Storage], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues]);
 scope!(Remove, [Instructions, Storage, OrderTokens], 'n => NoFacts, Base, [RemovesInsts]);
 scope!(Cfg, [CfgShape, Instructions, Storage, OrderTokens], 'n => NoFacts, Base, [EditsCfg]);
-scope!(Sccp, [Instructions, CfgShape], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues, EditsCfg]);
+scope!(Sccp, [CfgShape, Instructions, Storage, OrderTokens], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues, EditsCfg]);
 scope!(Motion, [Instructions, OrderTokens, Storage], 'n => dyn MotionFacts + 'n, (Base, SplitTakenOnce), [MovesInsts]);
 scope!(Effect, [Instructions, OrderTokens], 'n => dyn OrderFacts + 'n, (Base, SplitTakenOnce), [EditsOrder]);
 scope!(Storage, [Instructions, Storage], 'n => dyn LoanFacts + 'n, Base, [PromotesStorage]);

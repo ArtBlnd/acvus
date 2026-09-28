@@ -31,10 +31,12 @@ use std::collections::BTreeSet;
 
 use acvus_ast::Span;
 
-use super::body::Def;
+use rustc_hash::FxHashSet;
+
+use super::body::{Def, InstId};
 use super::core::{InstShift, structural_fields};
 use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
-use crate::ir::{Callee, RefTarget, SwitchKey, ValueId, fn_effect};
+use crate::ir::{Callee, IndexBound, RefTarget, SwitchKey, ValueId, fn_effect};
 use crate::ty::{Reissue, SplitCost, Ty};
 
 /// An instruction of the body being edited.
@@ -120,6 +122,9 @@ where
     needs: &'m mut S::Needs<'m>,
     changes: Changes,
     walk: Walk,
+    /// Every instruction the current cursor has yielded. Cost: O(1) per
+    /// yield, and O(instructions yielded) held.
+    yielded: FxHashSet<InstId>,
 }
 
 /// Where a cursor stands: the next instruction it yields is at `next` of
@@ -148,13 +153,13 @@ impl Walk {
 
     /// Keeps the walk on the same instructions across a merge of `block`,
     /// whose instructions now follow the `base` instructions of `pred`:
-    /// a walk inside `block` goes on at the same instruction in `pred`, and
-    /// a walk past the end of `pred`, where `block` came before it and so
-    /// was walked already, goes on past what `block` brought. An instruction
-    /// of `block` the walk passed while `pred` was still ahead of it is
-    /// walked again inside `pred`.
+    /// a walk inside `block` goes on at the same instruction in `pred` where
+    /// `pred` comes first, and otherwise at the block after `block`, which
+    /// the removal of `block` gives it, reaching `pred` in its turn; a walk
+    /// past the end of `pred`, where `block` came before it and so was
+    /// walked already, goes on past what `block` brought.
     fn merge(&mut self, block: BlockId, pred: BlockId, base: usize, moved: usize) {
-        if self.block == block {
+        if self.block == block && pred.index() < block.index() {
             *self = Walk { block: pred, next: base + self.next };
         } else if self.block == pred && self.next >= base && block.index() < pred.index() {
             self.next = base + moved;
@@ -198,13 +203,14 @@ where
     /// `body` is not a body of `module`.
     pub fn new(module: &'m mut Module, body: BodyId, needs: &'m mut S::Needs<'m>) -> Self {
         module.assert_body(body);
-        Editor { module, body, needs, changes: Changes::default(), walk: Walk::start() }
+        Editor { module, body, needs, changes: Changes::default(), walk: Walk::start(), yielded: FxHashSet::default() }
     }
 
     /// A cursor over the body's instructions in block order; it stays valid
     /// across every edit made through it.
     pub fn cursor(&mut self) -> Cursor<'_, 'm, S> {
         self.walk = Walk::start();
+        self.yielded.clear();
         Cursor::new(self)
     }
 
@@ -715,6 +721,9 @@ pub enum CannotSwap {
     NotAdjacent,
     /// The declarations keep their order (effects §1).
     Ordered,
+    /// The later one reads this value, defined from the earlier one up to
+    /// it, so it cannot run first.
+    DependsOn(ValueId),
 }
 
 /// Why a block cannot merge into its predecessor.
@@ -868,8 +877,8 @@ where
     /// Refused as `NotAdjacent` where either is not an effectful call on a
     /// chain, `b` does not consume `a`'s yield alone, or the two do not
     /// stand in one block with `a` first; as `Ordered` where the
-    /// declarations keep their order, or where `b` reads a value defined
-    /// from `a` up to it, which `b` cannot run before.
+    /// declarations keep their order; and as `DependsOn` where `b` reads a
+    /// value defined from `a` up to it.
     pub fn swap(&mut self, a: InstRef, b: InstRef) -> Result<(), CannotSwap> {
         let (first, second) = (self.inst(a), self.inst(b));
         let (Some(OrderUse::Edge(yielded)), Some(OrderUse::Edge(consumed))) = (first.order(), second.order()) else {
@@ -883,13 +892,16 @@ where
         if !self.needs.may_reorder(a, b) {
             return Err(CannotSwap::Ordered);
         }
-        let mut reads_between = false;
+        let mut read_between = None;
         second.op().for_each_operand(|value| {
-            reads_between |=
+            let between =
                 matches!(body.def_of(value), Def::Inst(block, index) if block == a.block && (a.index..b.index).contains(&index));
+            if between && read_between.is_none() {
+                read_between = Some(value);
+            }
         });
-        if reads_between {
-            return Err(CannotSwap::Ordered);
+        if let Some(value) = read_between {
+            return Err(CannotSwap::DependsOn(value));
         }
         let shifts = self.edit(|rewriter| rewriter.swap_effects(a.block, a.index, b.index));
         self.shifted(shifts);
@@ -902,18 +914,25 @@ where
     S: Discharges,
     S::Needs<'m>: DischargeFacts,
 {
-    /// G1: removes an instruction the core would keep, on the fact that
-    /// proves it unobservable: a check (`Check`, `CheckSteps`) on
-    /// `NeverFires`, a store (`Assign`) or a load (`Fetch`) on `NeverRead`,
-    /// a commit on `NeverWritten`. An effect's token is handed on to what
-    /// used the token it yields. The body is unchanged on a refusal.
+    /// G1: discharges what the core would keep, on the fact that proves it
+    /// unobservable: a check on `NeverFires`, a store (`Assign`) or a load
+    /// (`Fetch`) on `NeverRead`, a commit on `NeverWritten`. A `Check` or
+    /// `CheckSteps` is removed; an `Index` or `IndexSet` whose bound is
+    /// checked keeps its place, and its bound becomes proven; every other
+    /// kind is removed, and an effect's token is handed on to what used the
+    /// token it yields. The body is unchanged on a refusal.
     ///
     /// # Panics
-    /// `inst` is none of those kinds; or the facts call a load never read
-    /// whose result has a use.
+    /// `inst` is none of those kinds, or an index whose bound is proven
+    /// already; or the facts call a load never read whose result has a use.
     pub fn discharge(&mut self, inst: InstRef) -> Result<(), CannotDischarge> {
+        let checked_bound = matches!(
+            self.inst(inst).op(),
+            Op::Index { bound: IndexBound::Checked, .. } | Op::IndexSet { bound: IndexBound::Checked, .. }
+        );
         let needed = match self.inst(inst).op() {
             Op::Check { .. } | Op::CheckSteps { .. } => Unobserved::NeverFires,
+            _ if checked_bound => Unobserved::NeverFires,
             Op::Assign { .. } | Op::Fetch { .. } => Unobserved::NeverRead,
             Op::Commit { .. } => Unobserved::NeverWritten,
             other => panic!("discharge removes a check, a store, a load or a commit, not {other:?}"),
@@ -921,6 +940,10 @@ where
         match self.needs.discharged(inst) {
             None => Err(CannotDischarge::NotProven),
             Some(fact) if fact != needed => Err(CannotDischarge::WrongFact),
+            Some(_) if checked_bound => {
+                self.edit(|rewriter| rewriter.prove_bound(inst.block, inst.index));
+                Ok(())
+            }
             Some(_) => {
                 let shifts = self
                     .edit(|rewriter| rewriter.remove_inst(inst.block, inst.index))
@@ -948,7 +971,7 @@ where
     /// `slot` is not a slot of the body.
     pub fn split_slot(&mut self, slot: ValueId) -> Result<Vec<ValueId>, CannotSplitSlot> {
         let body = self.body_ref();
-        assert!(matches!(body.def_of(slot), Def::Slot(_)), "{slot:?} is not a slot of the body");
+        assert!(matches!(body.def_of(slot), Def::Slot { .. }), "{slot:?} is not a slot of the body");
         let Some(fields) = structural_fields(self.module.types(), body.ty_of(slot)) else {
             return Err(CannotSplitSlot::NotStructural);
         };

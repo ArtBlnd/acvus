@@ -48,13 +48,22 @@ pub struct RawDeclarations {
     pub user_types: Vec<UserTypeDecl>,
     pub casts: Vec<CastRule>,
     pub conversions: Vec<ConversionRule>,
-    /// Each context with its fixed type (context).
-    pub contexts: Vec<(QualifiedRef, TyId<Poly>)>,
+    /// Each context with its declaration (context).
+    pub contexts: Vec<(QualifiedRef, ContextDecl)>,
     /// Each input `$x` with its type (programs §4).
     pub inputs: Vec<(Astr, TyId<Poly>)>,
     pub loop_markers: LoopMarkers,
     /// `core`'s names, from `Core::of`.
     pub core: Core,
+}
+
+/// A context's declaration: its fixed type (context §2), and whether it is
+/// volatile, held in no slot, each read one load and each write one commit
+/// (context §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextDecl {
+    pub ty: TyId<Poly>,
+    pub volatile: bool,
 }
 
 /// A verified set of declarations.
@@ -68,7 +77,7 @@ pub struct Declarations {
     casts: CastTree,
     /// Each head's declared conversions, in declaration order.
     conversions: FxHashMap<Head, Box<[VerifiedConversion]>>,
-    contexts: FxHashMap<QualifiedRef, TyId<Poly>>,
+    contexts: FxHashMap<QualifiedRef, ContextDecl>,
     inputs: FxHashMap<Astr, TyId<Poly>>,
     loop_markers: LoopMarkers,
     core: Core,
@@ -107,7 +116,13 @@ impl Declarations {
     }
 
     pub fn context(&self, context: QualifiedRef) -> Option<TyId<Poly>> {
-        self.contexts.get(&context).copied()
+        self.contexts.get(&context).map(|declared| declared.ty)
+    }
+
+    /// Whether `context` is declared volatile; `None` where it is not
+    /// declared.
+    pub fn context_is_volatile(&self, context: QualifiedRef) -> Option<bool> {
+        self.contexts.get(&context).map(|declared| declared.volatile)
     }
 
     pub fn input(&self, name: Astr) -> Option<TyId<Poly>> {

@@ -22,7 +22,7 @@ use smallvec::SmallVec;
 
 use super::body::{Block, BlockId, Body, Def, Edge, Inst, OrderUse, Site, Terminator, UseSites, ValueDef};
 use super::op::Op;
-use crate::ir::{DebugInfo, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
+use crate::ir::{DebugInfo, IndexBound, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
 use crate::ty::{Concrete, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types};
 
 /// A value that still has uses, removed without a replacement.
@@ -47,6 +47,7 @@ impl Body {
             values: FxHashMap::default(),
             uses: FxHashMap::default(),
             value_ids: LocalFactory::new(),
+            next_inst: 0,
             debug: DebugInfo::new(),
         }
     }
@@ -257,13 +258,16 @@ impl Body {
                 self.remove_block_param(block, index);
                 Ok(())
             }
-            Def::Slot(index) => {
+            Def::Slot { index, .. } => {
                 self.refuse_used(value)?;
                 self.slots.remove(index);
                 self.slot_spans.remove(&value);
                 let later: SmallVec<[ValueId; 4]> = self.slots[index..].iter().copied().collect();
                 for (offset, slot) in later.into_iter().enumerate() {
-                    self.value_def_mut(slot).def = Def::Slot(index + offset);
+                    let ValueDef { def: Def::Slot { index: at, .. }, .. } = self.value_def_mut(slot) else {
+                        panic!("{slot:?} stands among the slots and is defined as one")
+                    };
+                    *at = index + offset;
                 }
                 self.drop_value(value);
                 Ok(())
@@ -571,18 +575,18 @@ impl Body {
             OrderUse::Start(_) | OrderUse::Take(_) => panic!("a call's order is an edge"),
         });
         let handle = self.make_value(types, handle_ty, Def::Inst(block, index));
-        let start = Inst {
-            op: Op::Spawn { callee, callee_ty, args },
-            result: Some(handle),
-            order: edge.map(|OrderEdge { before, .. }| OrderUse::Start(before)),
+        let start = self.make_inst(
+            Op::Spawn { callee, callee_ty, args },
+            Some(handle),
+            edge.map(|OrderEdge { before, .. }| OrderUse::Start(before)),
             span,
-        };
-        let taking = Inst {
-            op: Op::TakeEffect { src: handle },
-            result: Some(call),
-            order: edge.map(|OrderEdge { after, .. }| OrderUse::Take(after)),
+        );
+        let taking = self.make_inst(
+            Op::TakeEffect { src: handle },
+            Some(call),
+            edge.map(|OrderEdge { after, .. }| OrderUse::Take(after)),
             span,
-        };
+        );
         self.insert_inst(block, index, start);
         self.insert_inst(block, index + 1, taking);
     }
@@ -621,7 +625,8 @@ impl Body {
         }
         assert!(index <= self.blocks[block.index()].insts.len(), "{block:?} has no position {index}");
         let result = self.make_value(types, ty, Def::Inst(block, index));
-        self.insert_inst(block, index, Inst { op, result: Some(result), order: None, span });
+        let inst = self.make_inst(op, Some(result), None, span);
+        self.insert_inst(block, index, inst);
         result
     }
 
@@ -706,7 +711,7 @@ impl Body {
                 Def::Inst(block, index) => Def::Inst(rename(block), index),
                 Def::BlockParam(block, index) => Def::BlockParam(rename(block), index),
                 Def::UnplacedParam(block) => panic!("a sealed body has no unplaced parameter, and {block:?} has one"),
-                def @ (Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::Slot(_)) => def,
+                def @ (Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::Slot { .. }) => def,
             };
         }
         for sites in self.uses.values_mut() {
@@ -750,7 +755,7 @@ impl Body {
     /// reaches the start of an entry block that an edge enters again, where
     /// a parameter cannot stand.
     pub(super) fn promote_slot(&mut self, types: &Types<Concrete>, slot: ValueId) -> Vec<InstShift> {
-        let Def::Slot(_) = self.def_of(slot) else {
+        let Def::Slot { .. } = self.def_of(slot) else {
             panic!("{slot:?} is not a slot")
         };
         let ty = self.ty_of(slot);
@@ -823,7 +828,8 @@ impl Body {
             0 => self.drop_value(undef),
             _ => {
                 let entry = self.entry;
-                self.insert_inst(entry, 0, Inst { op: Op::Undef, result: Some(undef), order: None, span });
+                let inst = self.make_inst(Op::Undef, Some(undef), None, span);
+                self.insert_inst(entry, 0, inst);
                 shifts.push(InstShift::Inserted { block: entry, index: 0 });
             }
         }
@@ -1034,7 +1040,7 @@ impl Body {
     /// other than a `Take`, `Assign` or `Ref` whose path names a field of
     /// it names it.
     pub(super) fn split_slot(&mut self, types: &Types<Concrete>, slot: ValueId) -> Vec<ValueId> {
-        let Def::Slot(_) = self.def_of(slot) else {
+        let Def::Slot { .. } = self.def_of(slot) else {
             panic!("{slot:?} is not a slot")
         };
         let fields = structural_fields(types, self.ty_of(slot))
@@ -1043,7 +1049,7 @@ impl Body {
         let parts: Vec<ValueId> = fields
             .iter()
             .map(|(_, ty)| {
-                let part = self.make_value(types, *ty, Def::Slot(self.slots.len()));
+                let part = self.make_value(types, *ty, Def::Slot { index: self.slots.len(), context: None });
                 self.slots.push(part);
                 self.slot_spans.insert(part, span);
                 part
@@ -1072,6 +1078,23 @@ impl Body {
         parts
     }
 
+    /// The `Index` or `IndexSet` at `index` of `block`, whose bound is
+    /// checked, takes its bound as proven: its check is gone and the
+    /// instruction stays. Cost: O(1).
+    ///
+    /// # Panics
+    /// The instruction is not an `Index` or `IndexSet` whose bound is
+    /// checked.
+    pub(super) fn prove_bound(&mut self, block: BlockId, index: usize) {
+        let op = &mut self.blocks[block.index()].insts[index].op;
+        match op {
+            Op::Index { bound, .. } | Op::IndexSet { bound, .. } if *bound == IndexBound::Checked => {
+                *bound = IndexBound::Proven;
+            }
+            other => panic!("{block:?}[{index}] is {other:?}, not an index whose bound is checked"),
+        }
+    }
+
     /// Inserts a `Drop` of `value` at `index` of `block`. Cost: O(operands
     /// of the instructions from `index` on).
     ///
@@ -1081,7 +1104,8 @@ impl Body {
     pub(super) fn insert_drop(&mut self, block: BlockId, index: usize, value: ValueId, span: Span) {
         assert!(index <= self.blocks[block.index()].insts.len(), "{block:?} has no position {index}");
         assert!(!self.is_token(value), "{value:?} is an order token, which no drop ends");
-        self.insert_inst(block, index, Inst { op: Op::Drop { src: value }, result: None, order: None, span });
+        let inst = self.make_inst(Op::Drop { src: value }, None, None, span);
+        self.insert_inst(block, index, inst);
     }
 
     /// The call at `index` of `block` becomes a copy of `callee`: `block`
@@ -1142,7 +1166,10 @@ impl Body {
             copied.insert(order_param, edge.before);
         }
         for slot in &callee.slots {
-            let copy = self.make_like(callee.value_def(*slot), Def::Slot(self.slots.len()));
+            let Def::Slot { context, .. } = callee.def_of(*slot) else {
+                panic!("{slot:?} stands among the callee's slots and is defined as one")
+            };
+            let copy = self.make_like(callee.value_def(*slot), Def::Slot { index: self.slots.len(), context });
             self.slots.push(copy);
             self.slot_spans.insert(copy, callee.slot_spans[slot]);
             copied.insert(*slot, copy);
@@ -1201,6 +1228,7 @@ impl Body {
                 }
             };
             let params: Vec<ValueId> = callee_block.params.iter().map(|param| copied[param]).collect();
+            let insts = insts.into_iter().map(|inst| Inst { id: self.fresh_inst_id(), ..inst }).collect();
             self.new_block(Block { params, insts, terminator });
         }
         for id in (base..self.blocks.len()).map(BlockId::of_index) {

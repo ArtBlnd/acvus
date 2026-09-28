@@ -1689,7 +1689,7 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.swap(inst_ref(entry, 0), inst_ref(entry, 1)), Err(CannotSwap::Ordered));
+    assert_eq!(editor.swap(inst_ref(entry, 0), inst_ref(entry, 1)), Err(CannotSwap::DependsOn(r)));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -2040,4 +2040,143 @@ fn insert_drop_is_refused_inside_a_loop_before_a_use_the_back_edge_reaches() {
     );
     assert_eq!(editor.insert_drop(x, Position::End(exit), at(9)), Ok(()));
     editor.finish();
+}
+
+// -- The cursor across an inline and a merge -----------------------------------
+
+/// What a cursor yields over the whole body, by instruction identity, with
+/// `edit` run at each instruction it yields.
+fn walk_with<S>(editor: &mut Editor<'_, S>, mut edit: impl FnMut(&mut Editor<'_, S>, InstRef)) -> Vec<super::super::body::InstId>
+where
+    S: Scope,
+{
+    let mut yielded = Vec::new();
+    let mut cursor = editor.cursor();
+    while let Some(at) = cursor.next() {
+        yielded.push(cursor.editor().inst(at).id());
+        edit(cursor.editor(), at);
+    }
+    yielded
+}
+
+/// Every instruction of the body was yielded, and none twice.
+fn assert_yielded_once(body: &Body, yielded: &[super::super::body::InstId]) {
+    let distinct: FxHashSet<_> = yielded.iter().copied().collect();
+    assert_eq!(distinct.len(), yielded.len(), "no instruction is yielded twice: {yielded:?}");
+    for (_, block) in body.blocks() {
+        for inst in block.insts() {
+            assert!(distinct.contains(&inst.id()), "{inst:?} is walked");
+        }
+    }
+}
+
+/// The callee `|x| x + k`, capturing `k`; the caller
+/// `one = 1; f = the closure; r = f(a); s = r + r; return s`. The cursor
+/// inlines the call when it meets it.
+#[test]
+fn a_cursor_yields_each_instruction_once_through_an_inline() {
+    let mut f = fixture();
+    let (na, nx, nk, int) = (f.name("a"), f.name("x"), f.name("k"), f.int);
+    let lambda_ty = closure_ty(&mut f, &[int], CallEffect::pure());
+    let mut builder = f.build(false, int);
+    let x = builder.param(nx, int);
+    let k = builder.capture(nk, int);
+    let sum = builder.push(add(x, k), int, at(1));
+    builder.terminate(ret(sum));
+    let callee = builder.seal().expect("the callee has no open state");
+
+    let mut builder = f.build(false, int);
+    let a = builder.param(na, int);
+    let one = builder.push(int_const(1), int, at(2));
+    let closure = builder.push(Op::MakeClosure { body: callee, captures: vec![one] }, lambda_ty, at(3));
+    let r = builder.push(Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a] }, int, at(4));
+    let s = builder.push(add(r, r), int, at(5));
+    builder.terminate(ret(s));
+    let caller = builder.seal().expect("the caller has no open state");
+
+    let mut facts = NoFacts;
+    let mut editor = Editor::<Inline>::new(&mut f.module, caller, &mut facts);
+    let yielded = walk_with(&mut editor, |editor, at| {
+        if matches!(editor.inst(at).op(), Op::FunctionCall { .. }) {
+            assert_eq!(editor.inline(at), Ok(()));
+        }
+    });
+    editor.finish();
+    assert_yielded_once(f.body(caller), &yielded);
+    assert_eq!(yielded.len(), 5, "one, the closure, the call, s and the callee's sum");
+}
+
+/// `entry: x = a + a; jump pred`, `tail: t = -x; return t`,
+/// `pred: z = a + a; jump tail`: the cursor yields `t` in `tail` before it
+/// reaches `pred`, and there merges `tail` into `pred`, which moves `t`
+/// ahead of the cursor again.
+#[test]
+fn a_cursor_yields_each_instruction_once_through_a_merge() {
+    let mut f = fixture();
+    let (na, int) = (f.name("a"), f.int);
+    let mut builder = f.build(false, int);
+    let a = builder.param(na, int);
+    let x = builder.push(add(a, a), int, at(1));
+    let [tail, pred] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(pred));
+    builder.switch_to(tail);
+    let t = builder.push(neg(x), int, at(2));
+    builder.terminate(ret(t));
+    builder.switch_to(pred);
+    builder.push(add(a, a), int, at(3));
+    builder.terminate(jump(tail));
+    let id = builder.seal().expect("the body has no open state");
+
+    let mut facts = NoFacts;
+    let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
+    let yielded = walk_with(&mut editor, |editor, at| {
+        if editor.inst(at).result() == Some(t) {
+            assert_eq!(editor.merge_into_predecessor(at.block), Ok(()));
+        }
+    });
+    editor.finish();
+    let body = f.body(id);
+    assert_eq!(body.blocks().count(), 2);
+    assert_yielded_once(body, &yielded);
+    assert_eq!(yielded.len(), 3);
+}
+
+// -- G1 on a checked bound -----------------------------------------------------
+
+#[test]
+fn discharge_of_a_checked_index_proves_its_bound_and_keeps_the_index() {
+    let mut f = fixture();
+    let (ns, ni, int) = (f.name("s"), f.name("i"), f.int);
+    let u64_ty = f.module.types.intern(TyKind::Int(IntTy::U64));
+    let slice = f.module.types.intern(TyKind::Slice(int));
+    let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
+    let mut builder = f.build(false, int);
+    let s = builder.param(ns, slice_ref);
+    let i = builder.param(ni, u64_ty);
+    let checked = Op::Index { slice: s, index: i, mode: crate::ir::IndexMode::Copy, bound: crate::ir::IndexBound::Checked };
+    let e = builder.push(checked, int, at(1));
+    builder.terminate(ret(e));
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(&f, id);
+
+    let before = snapshot(f.body(id));
+    let mut facts = TestFacts::of(&f.module, id);
+    let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.discharge(inst_ref(entry, 0)), Err(CannotDischarge::NotProven));
+    editor.finish();
+    assert_eq!(snapshot(f.body(id)), before);
+
+    facts.unobserved.insert(inst_ref(entry, 0), Unobserved::NeverRead);
+    let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.discharge(inst_ref(entry, 0)), Err(CannotDischarge::WrongFact), "a checked bound needs NeverFires");
+    editor.finish();
+
+    facts.unobserved.insert(inst_ref(entry, 0), Unobserved::NeverFires);
+    let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.discharge(inst_ref(entry, 0)), Ok(()));
+    editor.finish();
+    let insts = f.insts(id, entry);
+    assert_eq!(insts.len(), 1, "the index stays");
+    assert!(matches!(insts[0].op(), Op::Index { bound: crate::ir::IndexBound::Proven, .. }));
+    assert_eq!(result_of(&insts[0]), e);
 }

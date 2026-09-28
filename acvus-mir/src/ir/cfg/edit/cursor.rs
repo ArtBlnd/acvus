@@ -8,6 +8,7 @@ use crate::ir::cfg::BlockId;
 /// The editor keeps the cursor's place, and every edit moves that place
 /// with the instructions it shifts: an instruction put in before the place
 /// is not yielded, one put in at or after it is, and a removed one is not.
+/// An instruction is yielded at most once, wherever an edit moves it.
 pub struct Cursor<'e, 'm, S>
 where
     S: Scope,
@@ -31,9 +32,13 @@ where
             if walk.block.index() >= body.blocks().count() {
                 return None;
             }
-            if walk.next < body.block(walk.block).insts().len() {
+            if let Some(inst) = body.block(walk.block).insts().get(walk.next) {
+                let id = inst.id();
                 self.editor.walk.next += 1;
-                return Some(InstRef { block: walk.block, index: walk.next });
+                if self.editor.yielded.insert(id) {
+                    return Some(InstRef { block: walk.block, index: walk.next });
+                }
+                continue;
             }
             self.editor.walk.block = BlockId::of_index(walk.block.index() + 1);
             self.editor.walk.next = 0;

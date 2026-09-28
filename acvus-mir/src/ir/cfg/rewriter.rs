@@ -339,6 +339,16 @@ impl<'m> Rewriter<'m> {
         continuation
     }
 
+    /// The checked bound of the `Index` or `IndexSet` at `index` of `block`
+    /// becomes proven. Cost: O(1).
+    ///
+    /// # Panics
+    /// As `Body::prove_bound`.
+    pub fn prove_bound(&mut self, block: BlockId, index: usize) {
+        self.body_mut().prove_bound(block, index);
+        self.changes.record(Aspect::Instructions);
+    }
+
     pub fn finish(self) -> Changes {
         self.changes
     }
@@ -375,7 +385,7 @@ fn value_removal_aspects(body: &Body, value: ValueId) -> Vec<Aspect> {
     match body.def_of(value) {
         Def::Inst(block, index) => removal_aspects(body, block, index).into_vec(),
         Def::BlockParam(..) => vec![Aspect::Instructions],
-        Def::Slot(_) => vec![Aspect::Storage],
+        Def::Slot { .. } => vec![Aspect::Storage],
         Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::UnplacedParam(_) => Vec::new(),
     }
 }

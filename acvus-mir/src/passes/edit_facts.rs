@@ -14,6 +14,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::cfg::edit::{DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved};
+use acvus_utils::QualifiedRef;
+
+use crate::decl::Declarations;
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module, Op, Site, Terminator};
 use crate::ir::{PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{AnalysisManager, Dominators, Escapes, LoopTree, Loans, Point, PostDominators, Storage};
@@ -61,7 +64,7 @@ impl<'a, 'd> EditFacts<'a, 'd> {
             defined: definitions(of),
             named: named_storages(of, &loans),
             commuting: commuting_calls(of, module.types()),
-            unobserved: unobserved_insts(of, &loans),
+            unobserved: unobserved_insts(of, &loans, am.decls()),
             loans,
             am,
         }
@@ -89,7 +92,7 @@ impl Facts for EditFacts<'_, '_> {
         self.defined = definitions(of);
         self.named = named_storages(of, &self.loans);
         self.commuting = commuting_calls(of, module.types());
-        self.unobserved = unobserved_insts(of, &self.loans);
+        self.unobserved = unobserved_insts(of, &self.loans, self.am.decls());
     }
 }
 
@@ -222,24 +225,33 @@ fn definitions(body: &Body) -> FxHashMap<ValueId, Defined> {
 /// - a store whose storage no read reaches before a write replaces it or
 ///   the body ends, per `loans`;
 /// - a load whose result has no use;
-/// - a commit of the slot its value is taken whole from, where no write to
-///   that slot stands on a path from the body's entry to it.
+/// - a commit of a context whose slot no write reaches from the body's
+///   entry.
 ///
-/// Cost: O(stores · storages each writes · the body's sites and edges), and
-/// O(commits · the body's sites and edges).
-fn unobserved_insts(body: &Body, loans: &Loans) -> FxHashMap<(BlockId, usize), Unobserved> {
+/// A load or a commit of a volatile context is never proven: nothing merges
+/// or removes them (context §3). Cost: O(stores · storages each writes · the
+/// body's sites and edges), and O(commits · the body's sites and edges).
+///
+/// # Panics
+/// A load or a commit names a context `decls` does not declare.
+fn unobserved_insts(body: &Body, loans: &Loans, decls: &Declarations) -> FxHashMap<(BlockId, usize), Unobserved> {
     let preds = body.predecessors();
+    let volatile = |context: QualifiedRef| {
+        decls
+            .context_is_volatile(context)
+            .unwrap_or_else(|| panic!("the context {context:?} a body loads or commits is declared"))
+    };
     let mut unobserved = FxHashMap::default();
     for (block, record) in body.blocks() {
         for (index, inst) in record.insts().iter().enumerate() {
             let proven = match inst.op() {
                 Op::Assign { .. } => store_never_read(body, loans, block, index).then_some(Unobserved::NeverRead),
-                Op::Fetch { .. } => {
+                Op::Fetch { context } if !volatile(*context) => {
                     let result = inst.result().expect("a load yields a value");
                     (body.use_count(result) == 0).then_some(Unobserved::NeverRead)
                 }
-                Op::Commit { value, .. } => {
-                    commit_never_written(body, loans, &preds, block, index, *value).then_some(Unobserved::NeverWritten)
+                Op::Commit { context, .. } if !volatile(*context) => {
+                    commit_never_written(body, loans, &preds, block, index, *context).then_some(Unobserved::NeverWritten)
                 }
                 _ => None,
             };
@@ -321,27 +333,25 @@ fn store_never_read(body: &Body, loans: &Loans, block: BlockId, index: usize) ->
     })
 }
 
-/// Whether the commit at `index` of `block`, whose value is a whole `Take`
-/// of a slot, has no write to that slot on any path from the body's entry
-/// to it. A commit whose value is taken from no slot has no slot to read
-/// this from, and is not proven.
+/// Whether no write to the slot `context` lives in stands on a path from the
+/// body's entry to the commit at `index` of `block`. Storing into the slot
+/// the value a `Fetch` of `context` produced, with no commit of `context`
+/// between the two, writes back what was loaded and is not a write (context
+/// §3). A body with no slot marked for `context` has nothing to read this
+/// from, and the commit is not proven.
 fn commit_never_written(
     body: &Body,
     loans: &Loans,
     preds: &FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
     block: BlockId,
     index: usize,
-    value: ValueId,
+    context: QualifiedRef,
 ) -> bool {
-    let Definition::Inst(taken_at, taken_index) = body.definition(value) else {
+    let Some(slot) = body.slots().iter().copied().find(|slot| body.context_of_slot(*slot) == Some(context)) else {
         return false;
     };
-    let slot = match body.block(taken_at).insts()[taken_index].op() {
-        Op::Take { target: RefTarget::Var(slot), path, .. } if path.is_empty() => *slot,
-        _ => return false,
-    };
     let storage = Storage::Slot(slot);
-    let writes = |site: Site| loans.writes(site).contains(&storage);
+    let writes = |site: Site| loans.writes(site).contains(&storage) && !writes_back_a_load(body, site, slot, context);
     if (0..index).any(|earlier| writes(Site::Inst(block, earlier))) {
         return false;
     }
@@ -358,6 +368,33 @@ fn commit_never_written(
         pending.extend(preds[&at].iter().copied());
     }
     true
+}
+
+/// Whether `site` is a whole `Assign` into `slot` of a value a `Fetch` of
+/// `context` produced earlier in the same block, with no commit of
+/// `context` between the load and the store.
+fn writes_back_a_load(body: &Body, site: Site, slot: ValueId, context: QualifiedRef) -> bool {
+    let Site::Inst(block, index) = site else {
+        return false;
+    };
+    let insts = body.block(block).insts();
+    let Op::Assign { target: RefTarget::Var(target), path, value, .. } = insts[index].op() else {
+        return false;
+    };
+    if *target != slot || !path.is_empty() {
+        return false;
+    }
+    let Definition::Inst(loaded_in, loaded_at) = body.definition(*value) else {
+        return false;
+    };
+    if loaded_in != block || loaded_at >= index {
+        return false;
+    }
+    let loads = matches!(insts[loaded_at].op(), Op::Fetch { context: loaded } if *loaded == context);
+    let committed_between = insts[loaded_at + 1..index]
+        .iter()
+        .any(|inst| matches!(inst.op(), Op::Commit { context: committed, .. } if *committed == context));
+    loads && !committed_between
 }
 
 /// The calls, starts and takings of `body` whose callee's declared effect
@@ -407,7 +444,7 @@ mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
     use super::*;
-    use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
+    use crate::decl::{ContextDecl, Core, Declarations, LoopMarkers, RawDeclarations};
     use crate::ir::cfg::edit::{CannotDischarge, CannotMove, Discharge, Editor, Motion, NoFacts, Remove, Value};
     use crate::ir::cfg::{Inst, Terminator};
     use crate::ir::{BinOp, Callee, Overflow, RefTarget};
@@ -464,19 +501,24 @@ mod tests {
         }
     }
 
+    /// Declarations of two contexts of `i64`: `page`, held in a slot, and
+    /// `clock`, volatile.
     fn declarations(interner: &Interner) -> Declarations {
+        let mut types = Types::<crate::ty::Poly>::new();
+        let int = types.intern(TyKind::Int(IntTy::I64));
+        let context = |name: &str, volatile: bool| (QualifiedRef::root(interner.intern(name)), ContextDecl { ty: int, volatile });
         Declarations::verify(RawDeclarations {
-            types: Types::new(),
+            types,
             functions: Vec::new(),
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),
-            contexts: Vec::new(),
+            contexts: vec![context("page", false), context("clock", true)],
             inputs: Vec::new(),
             loop_markers: LoopMarkers::default(),
             core: Core::of(interner),
         })
-        .expect("empty declarations verify")
+        .expect("two contexts under two names verify")
     }
 
     fn constant(n: i128) -> Op {
@@ -928,40 +970,75 @@ mod tests {
     }
 
     /// ```text
-    /// v = fetch page; w = fetch page; t = c; commit page = t;
-    /// u = s; commit page = u; commit page = w; return w
+    /// v = fetch page; c = v; w = fetch clock; x = fetch page;
+    /// t = c; commit page = t;
+    /// one = 1; c = one; u = c; commit page = u; commit clock = one;
+    /// return v
     /// ```
-    /// with `c` and `s` slots, `s` written first.
+    /// with `c` the slot `page` lives in and `clock` volatile.
     #[test]
-    fn a_load_nothing_reads_and_a_commit_of_a_slot_never_written_are_unobserved() {
+    fn loads_and_commits_are_unobserved_by_the_context_slot_and_never_when_volatile() {
         let mut f = fixture();
         let int = f.int;
-        let page = QualifiedRef::root(f.interner.intern("page"));
+        let (page, clock) = (QualifiedRef::root(f.interner.intern("page")), QualifiedRef::root(f.interner.intern("clock")));
         let mut builder = f.module.build_body(false, int);
-        let (c, s) = (builder.slot(int, Span::ZERO), builder.slot(int, Span::ZERO));
-        let one = builder.push(constant(1), int, Span::ZERO);
-        builder.push_unit(assign(s, one), Span::ZERO);
+        let c = builder.context_slot(page, int, Span::ZERO);
+        let v = builder.push(Op::Fetch { context: page }, int, Span::ZERO);
+        builder.push_unit(assign(c, v), Span::ZERO);
+        builder.push(Op::Fetch { context: clock }, int, Span::ZERO);
         builder.push(Op::Fetch { context: page }, int, Span::ZERO);
-        let w = builder.push(Op::Fetch { context: page }, int, Span::ZERO);
         let t = builder.push(take(c), int, Span::ZERO);
         builder.push_unit(commit(page, t), Span::ZERO);
-        let u = builder.push(take(s), int, Span::ZERO);
+        let one = builder.push(constant(1), int, Span::ZERO);
+        builder.push_unit(assign(c, one), Span::ZERO);
+        let u = builder.push(take(c), int, Span::ZERO);
         builder.push_unit(commit(page, u), Span::ZERO);
-        builder.push_unit(commit(page, w), Span::ZERO);
-        builder.terminate(Terminator::Return { value: w, order: None, span: Span::ZERO });
+        builder.push_unit(commit(clock, one), Span::ZERO);
+        builder.terminate(Terminator::Return { value: v, order: None, span: Span::ZERO });
         let id = builder.seal().expect("the body has no open state");
-        let [_, _, unread, read, _, never_written, _, written, from_no_slot] = inst_refs(&mut f.module, id)[..] else {
-            panic!("the body has nine instructions")
+        assert_eq!(f.module.body(id).context_of_slot(c), Some(page));
+        let [read, _, volatile_load, unread, _, after_the_load, _, _, _, after_an_assign, volatile_commit] =
+            inst_refs(&mut f.module, id)[..]
+        else {
+            panic!("the body has eleven instructions")
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
         let facts = EditFacts::new(&mut am, &f.module, id);
 
-        assert_eq!(facts.discharged(unread), Some(Unobserved::NeverRead));
         assert_eq!(facts.discharged(read), None);
-        assert_eq!(facts.discharged(never_written), Some(Unobserved::NeverWritten));
-        assert_eq!(facts.discharged(written), None, "s is written before its commit");
-        assert_eq!(facts.discharged(from_no_slot), None, "its value is taken from no slot");
+        assert_eq!(facts.discharged(unread), Some(Unobserved::NeverRead));
+        assert_eq!(facts.discharged(volatile_load), None, "a volatile load is never removed");
+        assert_eq!(
+            facts.discharged(after_the_load),
+            Some(Unobserved::NeverWritten),
+            "storing what the load produced writes nothing"
+        );
+        assert_eq!(facts.discharged(after_an_assign), None, "c is assigned before this commit");
+        assert_eq!(facts.discharged(volatile_commit), None, "a volatile commit is never removed");
+    }
+
+    /// A volatile load nothing uses stays: `discharge` refuses it.
+    #[test]
+    fn a_volatile_load_with_no_use_is_not_discharged() {
+        let mut f = fixture();
+        let int = f.int;
+        let clock = QualifiedRef::root(f.interner.intern("clock"));
+        let mut builder = f.module.build_body(false, int);
+        builder.push(Op::Fetch { context: clock }, int, Span::ZERO);
+        let one = builder.push(constant(1), int, Span::ZERO);
+        builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO });
+        let id = builder.seal().expect("the body has no open state");
+        let [load, _] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has two instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let mut facts = EditFacts::new(&mut am, &f.module, id);
+        let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
+        assert_eq!(editor.discharge(load), Err(CannotDischarge::NotProven));
+        editor.finish();
+        assert_eq!(f.module.body(id).blocks().flat_map(|(_, block)| block.insts()).count(), 2);
     }
 
     /// Through `Editor<Discharge>` over `EditFacts`: a dead store, an unread
@@ -973,7 +1050,7 @@ mod tests {
         let int = f.int;
         let page = QualifiedRef::root(f.interner.intern("page"));
         let mut builder = f.module.build_body(false, int);
-        let (c, s) = (builder.slot(int, Span::ZERO), builder.slot(int, Span::ZERO));
+        let (c, s) = (builder.context_slot(page, int, Span::ZERO), builder.slot(int, Span::ZERO));
         let one = builder.push(constant(1), int, Span::ZERO);
         builder.push_unit(assign(s, one), Span::ZERO);
         builder.push_unit(assign(s, one), Span::ZERO);

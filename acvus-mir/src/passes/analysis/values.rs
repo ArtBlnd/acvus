@@ -326,7 +326,7 @@ mod tests {
         let int = types.intern(TyKind::Int(IntTy::I64));
         let byte = types.intern(TyKind::Int(IntTy::I8));
         let bool = types.intern(TyKind::Bool);
-        Fixture { module: Module::new(types, Flows::none()), interner: Interner::new(), int, byte, bool }
+        Fixture { module: Module::new(types), interner: Interner::new(), int, byte, bool }
     }
 
     fn declarations(interner: &Interner, functions: Vec<(QualifiedRef, Scheme)>, types: Types<Poly>) -> Declarations {
@@ -461,6 +461,7 @@ mod tests {
             tag: k,
             arms: vec![(SwitchKey::Int(1), a, Vec::new()), (SwitchKey::Int(2), b, Vec::new())],
             default: Some((d, Vec::new())),
+            join,
         });
         let mut arm_values = Vec::new();
         for (block, n) in [(a, 10), (b, 20), (d, 30)] {
@@ -580,7 +581,7 @@ mod tests {
             calls: Calls::Many,
             holds: Holds::Nothing,
         });
-        let mut module = Module::new(types, Flows::none());
+        let mut module = Module::new(types);
         let mut builder = module.build_body(false, int);
         let x = builder.push(constant(7), int, Span::ZERO);
         let call = Op::FunctionCall {

@@ -11,7 +11,7 @@
 //! merge of what its instructions yielded.
 
 use acvus_ast::Span;
-use acvus_utils::Astr;
+use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
 use super::body::{Block, BlockId, Body, BodyId, Def, Inst, Module, OrderUse, Terminator};
@@ -169,7 +169,21 @@ impl<'m> Builder<'m> {
     /// # Panics
     /// `ty` is `Order`: only the core makes an order token.
     pub fn slot(&mut self, ty: Ty, span: Span) -> ValueId {
-        let def = Def::Slot(self.body.slots.len());
+        self.make_slot(ty, span, None)
+    }
+
+    /// The slot a context that is not volatile lives in (context §3),
+    /// holding a `ty`, marked with `context` where it is born; `span` is the
+    /// span that names the context. Cost: O(1).
+    ///
+    /// # Panics
+    /// `ty` is `Order`: only the core makes an order token.
+    pub fn context_slot(&mut self, context: QualifiedRef, ty: Ty, span: Span) -> ValueId {
+        self.make_slot(ty, span, Some(context))
+    }
+
+    fn make_slot(&mut self, ty: Ty, span: Span, context: Option<QualifiedRef>) -> ValueId {
+        let def = Def::Slot { index: self.body.slots.len(), context };
         let value = self.body.make_value(&self.module.types, ty, def);
         self.body.slots.push(value);
         self.body.slot_spans.insert(value, span);
@@ -186,7 +200,8 @@ impl<'m> Builder<'m> {
         assert!(op.has_result(), "{op:?} yields no value; it is pushed by push_unit");
         self.assert_not_on_chain(&op);
         let result = self.new_result(ty);
-        self.append(Inst { op, result: Some(result), order: None, span });
+        let inst = self.body.make_inst(op, Some(result), None, span);
+        self.append(inst);
         result
     }
 
@@ -201,7 +216,8 @@ impl<'m> Builder<'m> {
     pub fn push_unit(&mut self, op: Op, span: Span) {
         assert!(!op.has_result(), "{op:?} yields a value; it is pushed by push");
         self.assert_not_on_chain(&op);
-        self.append(Inst { op, result: None, order: None, span });
+        let inst = self.body.make_inst(op, None, None, span);
+        self.append(inst);
     }
 
     /// Appends an effectful call typed `ty` and returns its result. It
@@ -229,17 +245,14 @@ impl<'m> Builder<'m> {
         let order_ty = self.order().order_ty;
         let result = self.new_result(ty);
         let after = self.new_token_result(order_ty);
-        self.append(Inst { op, result: Some(result), order: Some(OrderUse::Edge(OrderEdge { before, after })), span });
+        let inst = self.body.make_inst(op, Some(result), Some(OrderUse::Edge(OrderEdge { before, after })), span);
+        self.append(inst);
         match self.order().scope.as_ref().map(|scope| scope.id) {
             Some(scope) => {
                 let gathered = self.read_order(OrderVar::Gathered(scope), at);
                 let merged = self.new_token_result(order_ty);
-                self.append(Inst {
-                    op: Op::Merge { orders: vec![gathered, after] },
-                    result: Some(merged),
-                    order: None,
-                    span,
-                });
+                let merge = self.body.make_inst(Op::Merge { orders: vec![gathered, after] }, Some(merged), None, span);
+                self.append(merge);
                 self.write_order(OrderVar::Gathered(scope), at, merged);
             }
             None => self.write_order(OrderVar::Token, at, after),

@@ -2,7 +2,7 @@
 //! is through `Builder` and `Rewriter` only.
 
 use acvus_ast::Span;
-use acvus_utils::{Astr, LocalFactory};
+use acvus_utils::{Astr, LocalFactory, QualifiedRef};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
@@ -52,7 +52,9 @@ pub(super) enum Def {
     Param(usize),
     Capture(usize),
     OrderParam,
-    Slot(usize),
+    /// A slot, by its place among the body's slots, and the context it
+    /// holds where it is a context's slot (context §3).
+    Slot { index: usize, context: Option<QualifiedRef> },
     BlockParam(BlockId, usize),
     /// A parameter the Builder adds to a block for the order token, whose
     /// position is fixed at `seal`, after the caller's parameters.
@@ -145,6 +147,8 @@ pub struct Body {
     /// Every value's uses; a value has an entry from its birth.
     pub(super) uses: FxHashMap<ValueId, UseSites>,
     pub(super) value_ids: LocalFactory<ValueId>,
+    /// The identity the next instruction made in this body takes.
+    pub(super) next_inst: u32,
     pub(super) debug: DebugInfo,
 }
 
@@ -154,11 +158,18 @@ pub struct Block {
     pub(super) terminator: Terminator,
 }
 
+/// An instruction's identity within its body, given when the instruction
+/// is made and kept while it moves between positions and blocks, so a
+/// cursor yields each instruction at most once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct InstId(u32);
+
 /// An instruction: its operation, the value it yields, its place on the
 /// order chain, and its span. The core makes the result and the tokens; no
 /// caller names them.
 #[derive(Debug, Clone)]
 pub struct Inst {
+    pub(super) id: InstId,
     pub(super) op: Op,
     pub(super) result: Option<ValueId>,
     pub(super) order: Option<OrderUse>,
@@ -194,7 +205,24 @@ impl OrderUse {
     }
 }
 
+impl Body {
+    /// A new instruction with an identity of its own. Cost: O(1).
+    pub(super) fn make_inst(&mut self, op: Op, result: Option<ValueId>, order: Option<OrderUse>, span: Span) -> Inst {
+        Inst { id: self.fresh_inst_id(), op, result, order, span }
+    }
+
+    pub(super) fn fresh_inst_id(&mut self) -> InstId {
+        let id = InstId(self.next_inst);
+        self.next_inst = self.next_inst.checked_add(1).expect("a body makes at most u32::MAX instructions");
+        id
+    }
+}
+
 impl Inst {
+    pub(super) fn id(&self) -> InstId {
+        self.id
+    }
+
     pub fn op(&self) -> &Op {
         &self.op
     }
@@ -625,12 +653,24 @@ impl Body {
             Def::Param(index) => Definition::Param(index),
             Def::Capture(index) => Definition::Capture(index),
             Def::OrderParam => Definition::OrderParam,
-            Def::Slot(index) => Definition::Slot(index),
+            Def::Slot { index, .. } => Definition::Slot(index),
             Def::BlockParam(block, index) => Definition::BlockParam(block, index),
             Def::Inst(block, index) => Definition::Inst(block, index),
             Def::UnplacedParam(block) => {
                 panic!("a sealed body has no unplaced parameter, and {block:?} has one for {value:?}")
             }
+        }
+    }
+
+    /// The context `slot` holds, where it is a context's slot, as
+    /// `Builder::context_slot` made it. Cost: O(1).
+    ///
+    /// # Panics
+    /// `slot` is not a slot of this body.
+    pub fn context_of_slot(&self, slot: ValueId) -> Option<QualifiedRef> {
+        match self.def_of(slot) {
+            Def::Slot { context, .. } => context,
+            def => panic!("{slot:?} is defined at {def:?}, not as a slot"),
         }
     }
 

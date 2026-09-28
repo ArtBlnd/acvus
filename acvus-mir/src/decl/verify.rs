@@ -7,7 +7,7 @@ use super::casts::{Base, CastTree, Head, VerifiedExternCast};
 use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::impl_fit::is_impl_of;
-use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, UserTypeDecl};
+use super::{CastRule, ContextDecl, Core, Declarations, RawDeclarations, Requirement, Scheme, UserTypeDecl};
 use super::segments::{Segment, segments};
 use crate::ty::{
     Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LifetimesOf, Mutability, ObjectTy,
@@ -378,7 +378,7 @@ struct DeclaredTypes<'d> {
     user_types: &'d FxHashMap<QualifiedRef, UserTypeDecl>,
     casts: &'d [CastRule],
     conversions: &'d [ConversionRule],
-    contexts: &'d [(QualifiedRef, TyId<Poly>)],
+    contexts: &'d [(QualifiedRef, ContextDecl)],
     inputs: &'d [(Astr, TyId<Poly>)],
 }
 
@@ -411,7 +411,7 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
             (Written::Conversion(rule.via), rule.to),
         ]
     });
-    let contexts = declared.contexts.iter().map(|(id, ty)| (Written::Context(*id), *ty));
+    let contexts = declared.contexts.iter().map(|(id, declared)| (Written::Context(*id), declared.ty));
     let inputs = declared.inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
     functions
         .chain(casts)
@@ -1979,9 +1979,24 @@ mod tests {
         let mut fixture = Fixture::new();
         let id = fixture.name("m", "user");
         let (int, string) = (fixture.ty(TyKind::Int(IntTy::I64)), fixture.ty(TyKind::String));
-        fixture.raw.contexts.push((id, int));
-        fixture.raw.contexts.push((id, string));
+        fixture.raw.contexts.push((id, ContextDecl { ty: int, volatile: false }));
+        fixture.raw.contexts.push((id, ContextDecl { ty: string, volatile: true }));
         assert_eq!(refusals(fixture), vec![Refused::DuplicateContext { id }]);
+    }
+
+    /// context §3: whether a context is volatile is its declaration's fact.
+    #[test]
+    fn a_context_declares_whether_it_is_volatile() {
+        let mut fixture = Fixture::new();
+        let (held, volatile, absent) = (fixture.name("m", "held"), fixture.name("m", "clock"), fixture.name("m", "none"));
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        fixture.raw.contexts.push((held, ContextDecl { ty: int, volatile: false }));
+        fixture.raw.contexts.push((volatile, ContextDecl { ty: int, volatile: true }));
+        let decls = Declarations::verify(fixture.raw).expect("two contexts under two names verify");
+        assert_eq!(decls.context_is_volatile(held), Some(false));
+        assert_eq!(decls.context_is_volatile(volatile), Some(true));
+        assert_eq!(decls.context_is_volatile(absent), None);
+        assert_eq!(decls.context(volatile), Some(int));
     }
 
     /// programs §4: an input `$x` has one type, so two declarations of it
@@ -2256,7 +2271,7 @@ mod tests {
         let mut fixture = Fixture::new();
         let (context, ghost) = (fixture.name("m", "user"), fixture.name("m", "Ghost"));
         let ghost_ty = undeclared(&mut fixture, ghost);
-        fixture.raw.contexts.push((context, ghost_ty));
+        fixture.raw.contexts.push((context, ContextDecl { ty: ghost_ty, volatile: false }));
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
@@ -2339,7 +2354,7 @@ mod tests {
         let context = fixture.name("m", "token");
         let order = fixture.ty(TyKind::Order);
         let option = fixture.ty(TyKind::Option(order));
-        fixture.raw.contexts.push((context, option));
+        fixture.raw.contexts.push((context, ContextDecl { ty: option, volatile: false }));
         assert_eq!(
             refusals(fixture),
             vec![Refused::InternalType {
