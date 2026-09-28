@@ -2201,6 +2201,34 @@ fn insert_drop_is_refused_inside_a_loop_before_a_use_the_back_edge_reaches() {
     editor.finish();
 }
 
+/// `y` is made anew by each iteration, so the next iteration's use of it
+/// reads another value, and a drop after its last use in the body stands.
+#[test]
+fn insert_drop_after_the_last_use_of_a_value_each_iteration_makes_stands() {
+    let mut f = fixture();
+    let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
+    let mut builder = f.build(false, f.int);
+    let a = builder.param(na, int);
+    let c = builder.param(nc, bool);
+    let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header));
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.switch_to(loop_body);
+    let y = builder.push(neg(a), int, at(2));
+    builder.push(neg(y), int, at(3));
+    builder.terminate(jump(header));
+    builder.switch_to(exit);
+    builder.terminate(ret(a));
+    let id = builder.seal().expect("the body has no open state");
+
+    let mut facts = TestFacts::of(&f.module, id);
+    let mut editor = Editor::<Drops>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.insert_drop(y, Position::End(loop_body), at(9)), Ok(()));
+    editor.finish();
+    assert!(matches!(f.insts(id, loop_body)[2].op(), Op::Drop { src } if *src == y));
+}
+
 // -- The cursor across an inline and a merge -----------------------------------
 
 /// What a cursor yields over the whole body, by instruction identity, with

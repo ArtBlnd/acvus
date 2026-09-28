@@ -1,6 +1,7 @@
 //! Analyses (passes-structure §1-2): where values flow. The two engines, and
 //! the manager that computes, keeps and invalidates facts.
 
+mod content_liveness;
 mod dense;
 mod dominators;
 mod escapes;
@@ -15,6 +16,7 @@ mod values;
 #[cfg(test)]
 mod tests;
 
+pub use content_liveness::ContentLiveness;
 pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
 pub use dominators::{Dominators, Point};
 pub use escapes::Escapes;

@@ -1381,6 +1381,40 @@ fn liveness_keeps_a_header_parameter_live_through_the_exit_of_a_latch() {
     assert_eq!(*live.live_at_end(exit), set(&[]));
 }
 
+// -- Content liveness ------------------------------------------------------------
+
+/// ```text
+/// entry:  a = 1; s = a; b = 2; s = b; r = &s; f(r); return b
+/// ```
+/// The first content of `s` is replaced before any read, so it is dead from
+/// its store; the second is read through `r` by the call, and dead after it.
+#[test]
+fn content_liveness_ends_at_a_whole_store_and_follows_a_read_through_a_reference() {
+    let mut f = loan_fixture();
+    let (int, ref_int, passes_nothing) = (f.int, f.ref_int, f.passes_nothing);
+    let callee = Callee::Direct(QualifiedRef::root(f.interner.intern("f")));
+    let mut builder = f.module.build_body(false, int);
+    let entry = builder.current_block();
+    let s = builder.slot(int, Span::ZERO);
+    let a = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(Op::Assign { target: RefTarget::Var(s), path: Vec::new(), value: a, restores: false }, Span::ZERO);
+    let b = builder.push(constant(2), int, Span::ZERO);
+    builder.push_unit(Op::Assign { target: RefTarget::Var(s), path: Vec::new(), value: b, restores: false }, Span::ZERO);
+    let r = builder.push(reference(s, Mutability::Shared), ref_int, Span::ZERO);
+    builder.push(Op::FunctionCall { callee, callee_ty: passes_nothing, args: vec![r] }, ref_int, Span::ZERO);
+    builder.terminate(ret(b));
+    let id = builder.seal().expect("the body has no open state");
+
+    let content = f.facts::<ContentLiveness>(id);
+    let live_after = |index: usize| content.live_after(Site::Inst(entry, index)).contains(&s);
+    assert!(!live_after(1), "the first content is replaced before any read");
+    assert!(live_after(3), "the second content is read through r");
+    assert!(live_after(4));
+    assert!(!live_after(5), "nothing reads s after the call");
+    assert!(!content.live_at_start(entry).contains(&s));
+    assert!(content.live_at_end(entry).is_empty(), "the body's end reads none of its own slots");
+}
+
 // -- Loans and escapes ---------------------------------------------------------
 
 struct LoanFixture {

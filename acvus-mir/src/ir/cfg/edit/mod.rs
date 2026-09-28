@@ -1130,7 +1130,10 @@ where
 {
     /// S3: a `Drop` of `value` at `at`, where nothing uses it after:
     /// refused as `UsedAfter` at the first use, in block order, that a path
-    /// from `at` reaches, the instruction at `at` included.
+    /// from `at` reaches without passing `value`'s definition again, the
+    /// instruction at `at` included. A use reached only through the
+    /// definition, as around a loop that defines the value, reads the value
+    /// that definition makes anew, not the one dropped.
     ///
     /// # Panics
     /// `value` is not defined at `at`, or is an order token, which no drop
@@ -1140,7 +1143,12 @@ where
         assert!(self.needs.dominates(value, at), "a drop of {value:?} stands where {value:?} is defined");
         let body = self.body_ref();
         let points = Points::of(body);
-        let reached = points.reach(body, points.id(block, index), None, Direction::Forward);
+        let redefined = match body.def_of(value) {
+            Def::Inst(defined, at) => Some(points.id(defined, at + 1)),
+            Def::BlockParam(defined, _) => Some(points.id(defined, 0)),
+            Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::Slot { .. } | Def::UnplacedParam(_) => None,
+        };
+        let reached = points.reach(body, points.id(block, index), redefined, Direction::Forward);
         let follows = |site: Site| match site {
             Site::Inst(block, index) => reached[points.id(block, index)],
             Site::Term(block) => reached[points.id(block, body.block(block).insts().len())],
