@@ -312,7 +312,7 @@ mod tests {
         let int = f.int;
         let name = Interner::new().intern("x");
         let mut builder = f.module.build_body(false, int);
-        let x = builder.param(name, int);
+        let x = builder.param(name, int, acvus_ast::Span::ZERO);
         let one = builder.push(constant(1), int, Span::ZERO);
         let two = builder.push(constant(2), int, Span::ZERO);
         builder.push_unit(Op::Check { op: Checked::Add, left: one, right: two }, Span::ZERO);

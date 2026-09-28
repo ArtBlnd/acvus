@@ -24,7 +24,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::cfg::edit::{
-    CannotDischarge, Cfg, Clones, Discharge, Drops, Editor, InstRef, NoFacts, Position, Remove, Value,
+    CannotDischarge, CannotRemoveParam, Cfg, Clones, Discharge, Drops, Editor, InstRef, NoFacts, Position, Remove,
+    Value,
 };
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, ValueId};
@@ -585,6 +586,8 @@ struct EdgeDrops {
 /// the step: just before or just after an instruction, or on an edge.
 #[derive(Default)]
 struct DropPlan {
+    /// At a block's start: the entry's, for a parameter dead there.
+    at_start: FxHashMap<BlockId, Vec<PlannedDrop>>,
     before: FxHashMap<Site, Vec<PlannedDrop>>,
     after: FxHashMap<Site, Vec<PlannedDrop>>,
     on_edges: Vec<EdgeDrops>,
@@ -600,15 +603,23 @@ struct Walked {
 }
 
 fn insert_drops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
+    remove_dead_block_params(module, body, am);
     let liveness = am.get::<Liveness>(module, body);
     let content = am.get::<ContentLiveness>(module, body);
     let loans = am.get::<Loans>(module, body);
     let facts = PlanFacts { body: module.body(body), types: module.types(), liveness: &liveness, content: &content, loans: &loans };
-    let DropPlan { mut before, mut after, on_edges } = facts.plan();
+    let DropPlan { mut at_start, mut before, mut after, on_edges } = facts.plan();
 
     let mut no_facts = NoFacts;
     let mut editor = Editor::<Cfg>::new(module, body, &mut no_facts);
-    let split: Vec<EdgeDrops> = on_edges
+    let mut by_edge: Vec<EdgeDrops> = Vec::new();
+    for EdgeDrops { from, to, drops } in on_edges {
+        match by_edge.iter_mut().find(|edge| edge.from == from && edge.to == to) {
+            Some(edge) => edge.drops.extend(drops),
+            None => by_edge.push(EdgeDrops { from, to, drops }),
+        }
+    }
+    let split: Vec<EdgeDrops> = by_edge
         .into_iter()
         .map(|EdgeDrops { from, to, drops }| EdgeDrops { from, to: editor.split_edge(from, to), drops })
         .collect();
@@ -629,6 +640,7 @@ fn insert_drops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'
                 if let Some(walked) = walking {
                     drop_all(editor, owed.drain(..), Position::End(walked.block));
                 }
+                owed.extend(at_start.remove(&block).into_iter().flatten());
                 0
             }
         };
@@ -645,10 +657,43 @@ fn insert_drops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'
     for EdgeDrops { to: middle, drops, .. } in split {
         drop_all(&mut editor, drops.into_iter(), Position::End(middle));
     }
+    for (block, drops) in at_start {
+        drop_all(&mut editor, drops.into_iter(), Position::End(block));
+    }
     assert!(
         before.is_empty() && after.is_empty(),
         "every instruction a drop stands by is walked, and {before:?} and {after:?} are left"
     );
+    let changes = editor.finish();
+    am.invalidate(body, &changes);
+}
+
+/// A block parameter that does not copy and that nothing reads has no
+/// reason to exist: it goes with its argument on every edge, and each
+/// argument then ends on its edge unless read beyond (D74). Removing one can
+/// leave the parameter that fed it unread, so this repeats until none is
+/// left; each round removes at least one parameter.
+fn remove_dead_block_params(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
+    let mut no_facts = NoFacts;
+    let mut editor = Editor::<Cfg>::new(module, body, &mut no_facts);
+    loop {
+        let (of, types) = (editor.body(), editor.types());
+        let dead: Vec<ValueId> = of
+            .blocks()
+            .flat_map(|(_, block)| block.params().iter().copied())
+            .filter(|param| of.use_count(*param) == 0 && !of.is_token(*param) && !copies(types, of.ty_of(*param)))
+            .collect();
+        let mut removed = false;
+        for param in dead {
+            match editor.remove_param(param) {
+                Ok(()) => removed = true,
+                Err(CannotRemoveParam::StillUsed | CannotRemoveParam::Supplied) => {}
+            }
+        }
+        if !removed {
+            break;
+        }
+    }
     let changes = editor.finish();
     am.invalidate(body, &changes);
 }
@@ -701,6 +746,16 @@ impl PlanFacts<'_> {
     ///
     /// # Panics
     /// One of them is also passed as a value.
+    /// Whether the body names `param` as a storage.
+    fn names_storage(&self, param: ValueId) -> bool {
+        self.body.users(param).any(|site| match site {
+            Site::Inst(block, index) => {
+                matches!(place_of(self.body.block(block).insts()[index].op()), Some((RefTarget::Param(named), _)) if *named == param)
+            }
+            Site::Term(_) => false,
+        })
+    }
+
     fn storage_params(&self) -> FxHashSet<ValueId> {
         let body = self.body;
         let mut storages = FxHashSet::default();
@@ -719,7 +774,12 @@ impl PlanFacts<'_> {
                 }
                 Site::Term(_) => true,
             });
-            assert!(!as_value, "the parameter {param:?} is named both as a storage and as a value");
+            assert!(
+                !as_value,
+                "the parameter {param:?} is named both as a storage and as a value; a by-value parameter lives in \
+                 one form, its storage where anything lends or writes it and a value otherwise, and two are lower's \
+                 defect (D74)"
+            );
         }
         storages
     }
@@ -779,9 +839,14 @@ impl PlanFacts<'_> {
                 }
                 None => match body.definition(value) {
                     Definition::Inst(at, index) => (Site::Inst(at, index), body.block(at).insts()[index].span()),
+                    Definition::Param(_) => {
+                        let drop = PlannedDrop { ended: Ended::Value(value), span: body.binder_span(value) };
+                        plan.at_start.entry(block).or_default().push(drop);
+                        continue;
+                    }
                     definition => panic!(
-                        "{value:?}, defined at {definition:?}, is dead where {block:?} starts; a drop there has no \
-                         edge of its own to stand on, since each incoming edge passes the value it would drop"
+                        "{value:?}, defined at {definition:?}, is dead where {block:?} starts; a block parameter \
+                         nothing reads was removed before the plan, unless a loop's terminator fills it (D74)"
                     ),
                 },
             };
@@ -797,7 +862,7 @@ impl PlanFacts<'_> {
         let body = self.body;
         let owned = match body.definition(place) {
             Definition::Slot(_) => body.context_of_slot(place).is_none(),
-            Definition::Param(_) => true,
+            Definition::Param(_) => self.names_storage(place),
             Definition::Capture(_) | Definition::OrderParam | Definition::BlockParam(..) | Definition::Inst(..) => false,
         };
         owned && !copies(self.types, body.ty_of(place))
@@ -848,12 +913,10 @@ impl PlanFacts<'_> {
         }
         if block == body.entry() {
             for (_, param) in body.params() {
-                let dead = !self.content.live_at_start(block).contains(param);
-                assert!(
-                    !(self.liveness_ends_content(*param) && dead),
-                    "the storage of the parameter {param:?} is dead where the body starts; a drop there has no edge \
-                     and no span of its own"
-                );
+                if self.liveness_ends_content(*param) && !self.content.live_at_start(block).contains(param) {
+                    let drop = PlannedDrop { ended: Ended::Content(*param), span: body.binder_span(*param) };
+                    plan.at_start.entry(block).or_default().push(drop);
+                }
             }
         }
     }
@@ -896,10 +959,10 @@ impl PlanFacts<'_> {
 
     /// Before each store that overwrites a context's slot whole, other than
     /// the store of its load, the content it replaces is the body's where
-    /// the slot holds one there, and is dropped (context §3, D71).
-    ///
-    /// # Panics
-    /// The slot holds its content on some paths to such a store only.
+    /// the slot holds one there, and is dropped (context §3, D71). Where the
+    /// slot holds it on some paths only, nothing reads it between the join
+    /// and the store, so its liveness ended on the edges into the join: it
+    /// is dropped on each such edge where it is present (ownership §6, D74).
     fn context_overwrites(&self, plan: &mut DropPlan) {
         let body = self.body;
         let contexts: Vec<ValueId> = body
@@ -923,13 +986,72 @@ impl PlanFacts<'_> {
                             plan.before.entry(Site::Inst(block, index)).or_default().push(drop);
                         }
                         Held::Absent | Held::Unreached => {}
-                        Held::Maybe => panic!(
-                            "the context slot {slot:?} holds its content on some paths only where {block:?}[{index}] \
-                             overwrites it; which of them drops the old content is not settled"
-                        ),
+                        Held::Maybe => self.drop_on_edges_where_present(&presence, &facts, slot, block, index, plan),
                     }
                 }
                 presence.transfer(inst, &mut state);
+            }
+        }
+    }
+
+    /// The slot holds its content on some paths only where `block`'s
+    /// instruction at `index` overwrites it: the content is dropped on each
+    /// edge into the join where the slot holds it, walking back through
+    /// blocks that neither read nor store it.
+    ///
+    /// # Panics
+    /// The content is read between the join and the overwrite. `check`
+    /// refuses a read of content moved out on some path (init, move), and
+    /// this step runs after `check`, so such a body is a defect.
+    fn drop_on_edges_where_present(
+        &self,
+        presence: &ContextPresence<'_>,
+        facts: &crate::passes::analysis::DenseFacts<HeldBySlot>,
+        slot: ValueId,
+        block: BlockId,
+        index: usize,
+        plan: &mut DropPlan,
+    ) {
+        let body = self.body;
+        let preds = body.predecessors();
+        let untouched = |block: BlockId, upto: usize| {
+            body.block(block).insts()[..upto].iter().enumerate().all(|(at, inst)| {
+                let site = Site::Inst(block, at);
+                let reads = self.loans.reads(site).contains(&Storage::Slot(slot));
+                let stores = matches!(place_of(inst.op()), Some((RefTarget::Var(named), _)) if *named == slot);
+                !reads && !stores
+            })
+        };
+        assert!(
+            untouched(block, index) && facts.at(block).of(slot) == Held::Maybe,
+            "the context slot {slot:?} is read or taken on some paths only before {block:?}[{index}] overwrites it;              check refuses a read of content moved out on some path, and insert_drops runs after check"
+        );
+        let mut visited: FxHashSet<BlockId> = FxHashSet::from_iter([block]);
+        let mut pending = vec![block];
+        while let Some(join) = pending.pop() {
+            for pred in &preds[&join] {
+                let mut at_end = facts.at(*pred).clone();
+                for inst in body.block(*pred).insts() {
+                    presence.transfer(inst, &mut at_end);
+                }
+                match at_end.of(slot) {
+                    Held::Present => {
+                        let drop = PlannedDrop { ended: Ended::Content(slot), span: body.block(*pred).terminator_span() };
+                        plan.on_edges.push(EdgeDrops { from: *pred, to: join, drops: vec![drop] });
+                    }
+                    Held::Absent | Held::Unreached => {}
+                    Held::Maybe => {
+                        let len = body.block(*pred).insts().len();
+                        assert!(
+                            untouched(*pred, len),
+                            "the context slot {slot:?} is read or taken on some paths only in {pred:?}, before an \
+                             overwrite; check refuses such a read, and insert_drops runs after check"
+                        );
+                        if visited.insert(*pred) {
+                            pending.push(*pred);
+                        }
+                    }
+                }
             }
         }
     }

@@ -331,7 +331,7 @@ fn sparse_folds_a_straight_line() {
     let mut f = fixture();
     let (name, int) = (f.interner.intern("a"), f.int);
     let mut builder = f.module.build_body(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.push(constant(2), int, Span::ZERO);
     let y = builder.push(constant(3), int, Span::ZERO);
     let z = builder.push(add(x, y), int, Span::ZERO);
@@ -383,7 +383,7 @@ fn sparse_joins_both_arms_of_an_unknown_diamond() {
     let mut f = fixture();
     let (name, int, bool) = (f.interner.intern("c"), f.int, f.bool);
     let mut builder = f.module.build_body(false, f.int);
-    let c = builder.param(name, bool);
+    let c = builder.param(name, bool, acvus_ast::Span::ZERO);
     let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
     let join = builder.new_block(&[int]);
     let p = builder.block_params(join)[0];
@@ -423,7 +423,7 @@ struct CountingLoop {
 fn counting_loop(f: &mut Fixture) -> CountingLoop {
     let (name, int, bool) = (f.interner.intern("n"), f.int, f.bool);
     let mut builder = f.module.build_body(false, f.int);
-    let n = builder.param(name, int);
+    let n = builder.param(name, int, acvus_ast::Span::ZERO);
     let i0 = builder.push(constant(0), int, Span::ZERO);
     let k0 = builder.push(constant(5), int, Span::ZERO);
     let header = builder.new_block(&[int, int]);
@@ -819,9 +819,9 @@ fn dense_liveness_runs_backward_around_a_loop() {
     let (na, nb, nc, int, bool) =
         (f.interner.intern("a"), f.interner.intern("b"), f.interner.intern("c"), f.int, f.bool);
     let mut builder = f.module.build_body(false, f.int);
-    let a = builder.param(na, int);
-    let b = builder.param(nb, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let b = builder.param(nb, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let x = builder.push(add(a, a), int, Span::ZERO);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
@@ -872,7 +872,7 @@ fn dense_runs_forward_over_a_diamond() {
     let (nc, int) = (f.interner.intern("c"), f.int);
     let bool = f.bool;
     let mut builder = f.module.build_body(false, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let x = builder.push(constant(0), int, Span::ZERO);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
@@ -900,7 +900,7 @@ fn identity_bodies<const N: usize>(f: &mut Fixture) -> [BodyId; N] {
     let (name, int) = (f.interner.intern("a"), f.int);
     [(); N].map(|()| {
         let mut builder = f.module.build_body(false, f.int);
-        let a = builder.param(name, int);
+        let a = builder.param(name, int, acvus_ast::Span::ZERO);
         builder.terminate(ret(a), acvus_ast::Span::ZERO);
         builder.seal().expect("the body has no open state")
     })
@@ -1060,7 +1060,7 @@ struct DiamondBody {
 fn diamond_body(f: &mut Fixture) -> DiamondBody {
     let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
     let mut builder = f.module.build_body(false, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let x = builder.push(constant(0), int, Span::ZERO);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
@@ -1134,7 +1134,7 @@ struct WhileBody {
 fn while_body(f: &mut Fixture) -> WhileBody {
     let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
     let mut builder = f.module.build_body(false, int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header, Vec::new()), acvus_ast::Span::ZERO);
@@ -1177,7 +1177,7 @@ fn a_diverging_arm_reaches_the_exit_without_the_join() {
     let mut f = fixture();
     let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
     let mut builder = f.module.build_body(false, int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
@@ -1247,7 +1247,7 @@ struct NestedLoops {
 fn nested_loops(f: &mut Fixture) -> NestedLoops {
     let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
     let mut builder = f.module.build_body(false, int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let [outer, outer_body, inner, inner_body, outer_latch, exit] = [(); 6].map(|()| builder.new_block(&[]));
     builder.terminate(jump(outer, Vec::new()), acvus_ast::Span::ZERO);
@@ -1313,7 +1313,7 @@ fn a_header_entered_from_two_blocks_has_no_preheader() {
     let mut f = fixture();
     let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
     let mut builder = f.module.build_body(false, int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [left, right, header, loop_body, exit] = [(); 5].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, left, right, header), acvus_ast::Span::ZERO);
     for arm in [left, right] {
@@ -1353,7 +1353,7 @@ fn liveness_keeps_a_header_parameter_live_through_the_exit_of_a_latch() {
     let mut f = fixture();
     let (nn, int, bool) = (f.interner.intern("n"), f.int, f.bool);
     let mut builder = f.module.build_body(false, int);
-    let n = builder.param(nn, int);
+    let n = builder.param(nn, int, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let i0 = builder.push(constant(0), int, Span::ZERO);
     let header = builder.new_block(&[int]);
@@ -1609,7 +1609,7 @@ fn a_block_parameter_joins_the_references_its_edges_pass() {
     let mut f = loan_fixture();
     let (nc, int, bool, ref_int) = (f.interner.intern("c"), f.int, f.bool, f.ref_int);
     let mut builder = f.module.build_body(false, int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let a = builder.slot(int, Span::ZERO);
     let b = builder.slot(int, Span::ZERO);
     let one = builder.push(constant(1), int, Span::ZERO);
@@ -1644,7 +1644,7 @@ fn an_option_of_a_reference_parameter_names_its_outside_storage() {
     let mut f = loan_fixture();
     let (no, int, ref_int, option_ref) = (f.interner.intern("o"), f.int, f.ref_int, f.option_ref);
     let mut builder = f.module.build_body(false, int);
-    let o = builder.param(no, option_ref);
+    let o = builder.param(no, option_ref, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let u = builder.push(Op::UnwrapVariant { src: o }, ref_int, Span::ZERO);
     let v = builder.push(Op::Take { target: RefTarget::Through(u), path: Vec::new(), taken_out: false }, int, Span::ZERO);

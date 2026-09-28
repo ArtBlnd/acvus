@@ -157,25 +157,29 @@ impl<'m> Builder<'m> {
         self.at
     }
 
-    /// A parameter of the body, after those declared so far. Cost: O(1).
+    /// A parameter of the body, after those declared so far; `span` is the
+    /// span of its binder. Cost: O(1).
     ///
     /// # Panics
     /// `ty` is `Order`: only the core makes an order token.
-    pub fn param(&mut self, name: Astr, ty: Ty) -> ValueId {
+    pub fn param(&mut self, name: Astr, ty: Ty, span: Span) -> ValueId {
         let def = Def::Param(self.body.params.len());
         let value = self.body.make_value(&self.module.types, ty, def);
         self.body.params.push((name, value));
+        self.body.binder_spans.insert(value, span);
         value
     }
 
-    /// A capture of the body, after those declared so far. Cost: O(1).
+    /// A capture of the body, after those declared so far; `span` is the
+    /// span of its binder. Cost: O(1).
     ///
     /// # Panics
     /// `ty` is `Order`: only the core makes an order token.
-    pub fn capture(&mut self, name: Astr, ty: Ty) -> ValueId {
+    pub fn capture(&mut self, name: Astr, ty: Ty, span: Span) -> ValueId {
         let def = Def::Capture(self.body.captures.len());
         let value = self.body.make_value(&self.module.types, ty, def);
         self.body.captures.push((name, value));
+        self.body.binder_spans.insert(value, span);
         value
     }
 

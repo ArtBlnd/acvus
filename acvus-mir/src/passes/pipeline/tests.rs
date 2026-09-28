@@ -28,8 +28,8 @@ struct Sample {
 fn sample(f: &mut Fixture) -> Sample {
     let (int, bool, nn, nc) = (f.int, f.bool, f.name("n"), f.name("c"));
     let mut builder = f.module.build_body(false, int);
-    let n = builder.param(nn, int);
-    let c = builder.param(nc, bool);
+    let n = builder.param(nn, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let x = builder.slot(int, Span::ZERO);
     let acc = builder.slot(int, Span::ZERO);
     let one = builder.push(int_const(1), int, Span::ZERO);
@@ -41,9 +41,9 @@ fn sample(f: &mut Fixture) -> Sample {
     let b = builder.push(wrapping_add(a, two), int, Span::ZERO);
     builder.push(Op::BinOp { op: BinOp::Mul(Overflow::Wrap), left: n, right: n }, int, Span::ZERO);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let t1 = builder.push(wrapping_add(n, n), int, Span::ZERO);
     let t2 = builder.push(wrapping_add(n, n), int, Span::ZERO);
@@ -51,11 +51,11 @@ fn sample(f: &mut Fixture) -> Sample {
     let current = builder.push(take(acc), int, Span::ZERO);
     let next = builder.push(wrapping_add(current, u), int, Span::ZERO);
     builder.push_unit(assign(acc, next), Span::ZERO);
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
     let last = builder.push(take(acc), int, Span::ZERO);
     let result = builder.push(wrapping_add(last, b), int, Span::ZERO);
-    builder.terminate(ret(result));
+    builder.terminate(ret(result), acvus_ast::Span::ZERO);
     let body = builder.seal().expect("the body has no open state");
     Sample { body, n }
 }
@@ -170,17 +170,17 @@ fn the_scalar_fixpoint_cascades_and_lowers_its_measure_each_round() {
         else_to: else_block,
         else_args: Vec::new(),
         join,
-    });
+    }, acvus_ast::Span::ZERO);
     builder.switch_to(then_block);
     let five = builder.push(int_const(5), int, Span::ZERO);
-    builder.terminate(Terminator::Jump { to: join, args: vec![five] });
+    builder.terminate(Terminator::Jump { to: join, args: vec![five] }, acvus_ast::Span::ZERO);
     builder.switch_to(else_block);
     let six = builder.push(int_const(6), int, Span::ZERO);
-    builder.terminate(Terminator::Jump { to: join, args: vec![six] });
+    builder.terminate(Terminator::Jump { to: join, args: vec![six] }, acvus_ast::Span::ZERO);
     builder.switch_to(join);
     let one = builder.push(int_const(1), int, Span::ZERO);
     let sum = builder.push(wrapping_add(p, one), int, Span::ZERO);
-    builder.terminate(ret(sum));
+    builder.terminate(ret(sum), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let decls = declarations(&f.interner);
     let mut am = AnalysisManager::new(&decls);
@@ -225,8 +225,8 @@ fn a_round_that_changes_without_lowering_the_measure_panics() {
     let mut f = Fixture::new();
     let (int, nn) = (f.int, f.name("n"));
     let mut builder = f.module.build_body(false, int);
-    let n = builder.param(nn, int);
-    builder.terminate(ret(n));
+    let n = builder.param(nn, int, acvus_ast::Span::ZERO);
+    builder.terminate(ret(n), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let decls = declarations(&f.interner);
     let mut am = AnalysisManager::new(&decls);
@@ -246,7 +246,7 @@ fn a_step_that_requires_ssa_refuses_a_promotable_slot() {
     let one = builder.push(int_const(1), int, Span::ZERO);
     builder.push_unit(assign(x, one), Span::ZERO);
     let read = builder.push(take(x), int, Span::ZERO);
-    builder.terminate(ret(read));
+    builder.terminate(ret(read), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let decls = declarations(&f.interner);
     let mut am = AnalysisManager::new(&decls);
@@ -267,9 +267,9 @@ fn a_loop_keeps_its_empty_preheader_into_p7() {
     let mut f = Fixture::new();
     let (int, bool, nn, nc, nd) = (f.int, f.bool, f.name("n"), f.name("c"), f.name("d"));
     let mut builder = f.module.build_body(false, int);
-    let n = builder.param(nn, int);
-    let c = builder.param(nc, bool);
-    let d = builder.param(nd, bool);
+    let n = builder.param(nn, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
+    let d = builder.param(nd, bool, acvus_ast::Span::ZERO);
     let [then_block, else_block, join, header, loop_body, exit] = [(); 6].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::Diamond {
         cond: d,
@@ -278,24 +278,24 @@ fn a_loop_keeps_its_empty_preheader_into_p7() {
         else_to: else_block,
         else_args: Vec::new(),
         join,
-    });
+    }, acvus_ast::Span::ZERO);
     builder.switch_to(then_block);
     builder.push(trapping_add(n, n), int, Span::ZERO);
-    builder.terminate(jump(join));
+    builder.terminate(jump(join), acvus_ast::Span::ZERO);
     builder.switch_to(else_block);
     let one = builder.push(int_const(1), int, Span::ZERO);
     builder.push(trapping_add(n, one), int, Span::ZERO);
-    builder.terminate(jump(join));
+    builder.terminate(jump(join), acvus_ast::Span::ZERO);
     builder.switch_to(join);
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     builder.push(trapping_add(n, n), int, Span::ZERO);
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
     let zero = builder.push(int_const(0), int, Span::ZERO);
-    builder.terminate(ret(zero));
+    builder.terminate(ret(zero), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     optimized(&mut f, Level::Full);

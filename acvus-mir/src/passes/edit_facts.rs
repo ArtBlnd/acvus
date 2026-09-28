@@ -682,7 +682,7 @@ mod tests {
     fn diamond_body(f: &mut Fixture) -> DiamondBody {
         let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
         let mut builder = f.module.build_body(false, int);
-        let c = builder.param(nc, bool);
+        let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let entry = builder.current_block();
         let x = builder.push(constant(0), int, Span::ZERO);
         let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
@@ -887,7 +887,7 @@ mod tests {
         let mut f = fixture();
         let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
         let mut builder = f.module.build_body(false, int);
-        let c = builder.param(nc, bool);
+        let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let entry = builder.current_block();
         let x = builder.push(constant(0), int, Span::ZERO);
         let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
@@ -1056,7 +1056,7 @@ mod tests {
         let mut f = fixture();
         let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
         let mut builder = f.module.build_body(false, int);
-        let c = builder.param(nc, bool);
+        let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let (s, unread) = (builder.slot(int, Span::ZERO), builder.slot(int, Span::ZERO));
         let one = builder.push(constant(1), int, Span::ZERO);
         builder.push_unit(assign(s, one), Span::ZERO);

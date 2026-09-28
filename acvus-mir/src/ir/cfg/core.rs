@@ -44,6 +44,7 @@ impl Body {
             order_param: None,
             slots: Vec::new(),
             slot_spans: FxHashMap::default(),
+            binder_spans: FxHashMap::default(),
             values: FxHashMap::default(),
             uses: FxHashMap::default(),
             value_ids: LocalFactory::new(),

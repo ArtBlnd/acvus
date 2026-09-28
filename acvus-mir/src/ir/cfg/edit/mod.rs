@@ -802,6 +802,15 @@ pub enum CannotRetarget {
     ParamsDisagree,
 }
 
+/// Why a block parameter cannot be removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotRemoveParam {
+    /// Something reads it.
+    StillUsed,
+    /// A loop's terminator fills it itself, so no argument goes with it.
+    Supplied,
+}
+
 /// Why a block cannot merge into its predecessor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CannotMerge {
@@ -945,6 +954,34 @@ where
         }
         assert!(!edges.is_empty(), "split_edges names at least one block");
         self.edit(|rewriter| rewriter.split_edges(&edges))
+    }
+
+    /// A parameter of a block that nothing reads goes, together with its
+    /// argument on every edge into the block; each argument's value then
+    /// ends on its edge unless it is read beyond. Refused as `StillUsed`
+    /// where something reads it, and as `Supplied` where a loop's
+    /// terminator fills it.
+    ///
+    /// # Panics
+    /// `param` is not a block parameter of the body.
+    pub fn remove_param(&mut self, param: ValueId) -> Result<(), CannotRemoveParam> {
+        let body = self.body_ref();
+        let Def::BlockParam(block, index) = body.def_of(param) else {
+            panic!("{param:?} is not a block parameter of the body")
+        };
+        if body.use_count(param) > 0 {
+            return Err(CannotRemoveParam::StillUsed);
+        }
+        let supplied = body
+            .blocks()
+            .flat_map(|(_, from)| from.terminator().edges())
+            .any(|edge| edge.to == block && index < edge.supplied);
+        if supplied {
+            return Err(CannotRemoveParam::Supplied);
+        }
+        self.edit(|rewriter| rewriter.remove(param))
+            .expect("a parameter nothing reads is removed");
+        Ok(())
     }
 
     /// G2: `block` joins its sole predecessor, which enters it by a `Jump`,

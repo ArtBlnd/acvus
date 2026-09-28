@@ -73,8 +73,8 @@ mod tests {
         let (int, ref_int, mut_ref_int) = (f.int, f.ref_int, f.mut_ref_int);
         let (nr, nm) = (f.name("r"), f.name("m"));
         let mut builder = f.module.build_body(false, int);
-        let r = builder.param(nr, ref_int);
-        let m = builder.param(nm, mut_ref_int);
+        let r = builder.param(nr, ref_int, acvus_ast::Span::ZERO);
+        let m = builder.param(nm, mut_ref_int, acvus_ast::Span::ZERO);
         let s = builder.push(reborrow_of(r, Mutability::Shared), ref_int, Span::ZERO);
         let t = builder.push(reborrow_of(m, Mutability::Mut), mut_ref_int, Span::ZERO);
         let a = builder.push(read_through(s), int, Span::ZERO);
@@ -103,7 +103,7 @@ mod tests {
         let mut f = Fixture::new();
         let (int, ref_int, mut_ref_int, nm) = (f.int, f.ref_int, f.mut_ref_int, f.name("m"));
         let mut builder = f.module.build_body(false, int);
-        let m = builder.param(nm, mut_ref_int);
+        let m = builder.param(nm, mut_ref_int, acvus_ast::Span::ZERO);
         let s = builder.push(reborrow_of(m, Mutability::Shared), ref_int, Span::ZERO);
         let a = builder.push(read_through(s), int, Span::ZERO);
         builder.terminate(Terminator::Return { value: a, order: None, span: Span::ZERO }, Span::ZERO);

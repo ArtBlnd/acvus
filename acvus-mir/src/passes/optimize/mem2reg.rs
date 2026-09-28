@@ -54,7 +54,7 @@ mod tests {
         let mut f = Fixture::new();
         let (int, bool, nc) = (f.int, f.bool, f.name("c"));
         let mut builder = f.module.build_body(false, int);
-        let c = builder.param(nc, bool);
+        let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let x = builder.slot(int, Span::ZERO);
         let one = builder.push(int_const(1), int, Span::ZERO);
         builder.push_unit(assign(x, one), Span::ZERO);

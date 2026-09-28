@@ -226,7 +226,7 @@ mod tests {
         let mut f = fixture();
         let (name, int, bool) = (f.interner.intern("c"), f.int, f.bool);
         let mut builder = f.module.build_body(false, int);
-        let c = builder.param(name, bool);
+        let c = builder.param(name, bool, acvus_ast::Span::ZERO);
         let entry = builder.current_block();
         let [then_block, else_block, join2] = [(); 3].map(|()| builder.new_block(&[]));
         let [join, tail] = [(); 2].map(|()| builder.new_block(&[int]));

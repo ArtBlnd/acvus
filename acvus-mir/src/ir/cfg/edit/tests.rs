@@ -338,7 +338,7 @@ impl DischargeFacts for TestFacts {
 fn straight_line(f: &mut Fixture) -> (BodyId, [ValueId; 4]) {
     let (name, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(1));
     let y = builder.push(neg(x), int, at(2));
     let z = builder.push(add(a, a), int, at(3));
@@ -352,7 +352,7 @@ fn two_calls(f: &mut Fixture, callee: Ty) -> (BodyId, ValueId) {
     let (name, int) = (f.name("a"), f.int);
     let (first, second) = (f.call(callee), f.call(callee));
     let mut builder = f.build(true, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push_effect(first, int, at(1));
     builder.push_effect(second, int, at(2));
     builder.push_unit(check_add(a, a), at(3));
@@ -401,7 +401,7 @@ fn replace_uses_of_another_type_is_a_callers_defect() {
     let mut f = fixture();
     let (name, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let b = builder.push(Op::Const { value: Literal::Bool(true) }, bool, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -459,7 +459,7 @@ fn remove_takes_out_an_unused_pure_instruction_and_a_pure_call() {
     let mut f = fixture();
     let (name, int, pure) = (f.name("a"), f.int, f.call(f.pure));
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push(pure, int, at(1));
     builder.push(min(a, a), int, at(2));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -501,7 +501,7 @@ fn remove_refuses_an_opaque_call_and_a_call_that_writes() {
 
     let (name, int, writing) = (f.name("a"), f.int, f.call(f.pure_writing));
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push(writing, int, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -515,7 +515,7 @@ fn remove_refuses_a_check_a_store_and_an_idempotent_call() {
     let mut f = fixture();
     let (name, int, idempotent) = (f.name("a"), f.int, f.call(f.idempotent));
     let mut builder = f.build(true, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.slot(int, at(0));
     builder.push_unit(check_add(a, a), at(1));
     builder.push_unit(Op::Assign { target: RefTarget::Var(x), path: Vec::new(), value: a, restores: false }, at(2));
@@ -539,8 +539,8 @@ fn remove_takes_out_an_unused_field_set_which_writes_no_storage() {
     let mut f = fixture();
     let (na, np, nx, int, object) = (f.name("a"), f.name("p"), f.name("x"), f.int, f.object);
     let mut builder = f.build(false, int);
-    let a = builder.param(na, int);
-    let p = builder.param(np, object);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let p = builder.param(np, object, acvus_ast::Span::ZERO);
     builder.push(Op::FieldSet { object: p, field: nx, rest: Vec::new(), value: a }, object, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -557,7 +557,7 @@ fn removing_a_taking_removes_its_start() {
     let mut f = fixture();
     let (name, int, call) = (f.name("a"), f.int, f.call(f.pure_splittable));
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push(call, int, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -584,8 +584,8 @@ fn removing_a_taking_removes_its_start() {
 fn branching(f: &mut Fixture) -> (BodyId, [BlockId; 4]) {
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [then_block, else_block, join, spare] = [(); 4].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     builder.switch_to(then_block);
@@ -673,8 +673,8 @@ fn take_arm_on_a_jump_if_passes_the_taken_arms_arguments() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [left, right] = [(); 2].map(|()| builder.new_block(&[int]));
     builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: vec![a], else_to: right, else_args: vec![a] }, acvus_ast::Span::ZERO);
     for block in [left, right] {
@@ -716,8 +716,8 @@ fn prune_keeps_a_surviving_diamonds_join_that_no_edge_reaches() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [then_block, else_block, join, spare] = [(); 4].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     for block in [then_block, else_block, join, spare] {
@@ -757,7 +757,7 @@ fn move_to_refuses_a_place_an_operand_does_not_dominate() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(1));
     builder.push_unit(check_add(x, a), at(2));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -805,7 +805,7 @@ fn moving_an_effect_away_from_what_its_token_reaches_is_refused() {
     let mut f = fixture();
     let (nc, int, bool, call) = (f.name("c"), f.int, f.bool, f.call(f.opaque));
     let mut builder = f.build(true, bool);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     builder.push_effect(call, int, at(1));
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
@@ -832,8 +832,8 @@ fn moving_an_effect_away_from_what_its_token_reaches_is_refused() {
 fn loop_computing(f: &mut Fixture, op: fn(ValueId, ValueId) -> Op) -> (BodyId, BlockId) {
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
@@ -883,7 +883,7 @@ fn a_split_calls_start_and_taking_move_while_their_tokens_still_dominate() {
     let mut f = fixture();
     let (name, int, call) = (f.name("a"), f.int, f.call(f.splittable));
     let mut builder = f.build(true, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push_effect(call, int, at(1));
     builder.push_unit(check_add(a, a), at(2));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -948,7 +948,7 @@ fn assign(slot: ValueId, value: ValueId) -> Op {
 fn slot_across_a_diamond_and_a_loop(f: &mut Fixture) -> (BodyId, ValueId, [BlockId; 6]) {
     let (nc, int, bool) = (f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let x = builder.slot(int, at(30));
     let one = builder.push(int_const(1), int, at(1));
     builder.push_unit(assign(x, one), at(2));
@@ -1056,7 +1056,7 @@ fn a_cursor_walks_on_across_the_removals_made_through_it() {
     let mut f = fixture();
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let kept = builder.push(min(a, a), int, at(1));
     builder.push(min(a, a), int, at(2));
     builder.push(min(a, a), int, at(3));
@@ -1257,8 +1257,8 @@ fn types_agree_checks_every_return_against_the_bodys_result_type() {
 
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [left, right] = [(); 2].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: Vec::new(), else_to: right, else_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(left);
@@ -1272,7 +1272,7 @@ fn types_agree_checks_every_return_against_the_bodys_result_type() {
 fn switching_on(f: &mut Fixture, key: SwitchKey) -> BodyId {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let [arm, other, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::Switch { tag: a, arms: vec![(key, arm, Vec::new())], default: Some((other, Vec::new())), join }, acvus_ast::Span::ZERO);
     for block in [arm, other, join] {
@@ -1294,7 +1294,7 @@ fn types_agree_checks_switch_keys_against_the_scrutinee() {
 fn range_loop(f: &mut Fixture, element: Ty) -> BodyId {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let header = builder.new_block(&[]);
     let loop_body = builder.new_block(&[element]);
     let exit = builder.new_block(&[]);
@@ -1331,7 +1331,7 @@ fn viewing(f: &mut Fixture, mutability: Mutability, viewed: Ty) -> BodyId {
     let mut builder = f.build(false, f.int);
     let array = builder.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2)));
     let lent = builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));
-    let a = builder.param(na, lent);
+    let a = builder.param(na, lent, acvus_ast::Span::ZERO);
     builder.push(Op::ArrayView { src: a, mutability }, viewed, at(1));
     let zero = builder.push(Op::Const { value: Literal::Int(0) }, int, at(2));
     builder.terminate(ret(zero), acvus_ast::Span::ZERO);
@@ -1360,7 +1360,7 @@ fn types_agree_checks_an_array_view_against_the_array_it_views() {
 fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = f.build(true, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     builder.push_effect(Op::Fetch { context: page }, ty, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
@@ -1379,8 +1379,8 @@ fn types_agree_checks_that_a_context_value_holds_no_position() {
 fn unwrapping(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, nr, int, result) = (f.name("a"), f.name("r"), f.int, f.result);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let r = builder.param(nr, result);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let r = builder.param(nr, result, acvus_ast::Span::ZERO);
     builder.push(Op::UnwrapVariant { src: r }, ty, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
@@ -1404,7 +1404,7 @@ fn types_agree_checks_a_result_payload_against_its_variants() {
 fn switching(f: &mut Fixture, arms_join: bool) -> (BodyId, ValueId, [BlockId; 5]) {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let [one, two, other, join, spare] = [(); 5].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::Switch {
         tag: a,
@@ -1503,8 +1503,8 @@ fn structure_kept_catches_a_switch_join_that_is_no_block() {
 fn forking(f: &mut Fixture) -> (BodyId, ValueId, [BlockId; 2]) {
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [left, right] = [(); 2].map(|()| builder.new_block(&[int]));
     builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: vec![a], else_to: right, else_args: vec![a] }, acvus_ast::Span::ZERO);
     for block in [left, right] {
@@ -1562,8 +1562,8 @@ fn split_edge_of_two_edges_to_one_block_is_a_callers_defect() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let both = builder.new_block(&[]);
     builder.terminate(Terminator::JumpIf { cond: c, then_to: both, then_args: Vec::new(), else_to: both, else_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(both);
@@ -1582,7 +1582,7 @@ fn split_edges_puts_one_block_on_the_edges_of_two_predecessors() {
     let mut f = fixture();
     let (nc, int, bool) = (f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [left, right] = [(); 2].map(|()| builder.new_block(&[]));
     let join = builder.new_block(&[int]);
     builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: Vec::new(), else_to: right, else_args: Vec::new() }, acvus_ast::Span::ZERO);
@@ -1628,7 +1628,7 @@ fn split_edges_takes_every_edge_of_a_block_listed_once() {
     let mut f = fixture();
     let (nc, int, bool) = (f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let one = builder.push(int_const(1), int, at(1));
     let two = builder.push(int_const(2), int, at(2));
     let join = builder.new_block(&[int]);
@@ -1662,7 +1662,7 @@ fn merge_into_predecessor_joins_a_block_its_sole_predecessor_jumps_to() {
     let mut f = fixture();
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(1));
     let next = builder.new_block(&[int]);
     builder.terminate(Terminator::Jump { to: next, args: vec![x] }, acvus_ast::Span::ZERO);
@@ -1722,8 +1722,8 @@ fn merge_into_predecessor_refuses_a_block_two_blocks_enter() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [left, right, meet] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: Vec::new(), else_to: right, else_args: Vec::new() }, acvus_ast::Span::ZERO);
     for block in [left, right] {
@@ -1780,7 +1780,7 @@ fn three_calls(f: &mut Fixture) -> BodyId {
     let (name, int) = (f.name("a"), f.int);
     let calls = [f.call(f.opaque), f.call(f.opaque), f.call(f.opaque)];
     let mut builder = f.build(true, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     for (n, call) in calls.into_iter().enumerate() {
         builder.push_effect(call, int, at(n as u32 + 1));
     }
@@ -1844,7 +1844,7 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
     let first = f.call(f.opaque);
     let callee = Callee::Direct(QualifiedRef::root(f.name("k")));
     let mut builder = f.build(true, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let r = builder.push_effect(first, int, at(1));
     builder.push_effect(Op::FunctionCall { callee, callee_ty: taking_int, args: vec![r] }, int, at(2));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -1865,7 +1865,7 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
 fn dischargeable(f: &mut Fixture) -> BodyId {
     let (name, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = f.build(true, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let s = builder.slot(int, at(0));
     builder.push_unit(check_add(a, a), at(1));
     builder.push_unit(assign(s, a), at(2));
@@ -1937,7 +1937,7 @@ fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
     let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int])));
     let int_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let s = builder.slot(pair, at(0));
     let field = |index: usize| vec![crate::ir::PathSeg::Index(index)];
     for index in 0..2 {
@@ -1973,7 +1973,7 @@ fn split_slot_refuses_a_type_that_is_not_structural_and_a_use_of_the_whole() {
     let (name, int, object) = (f.name("a"), f.int, f.object);
     let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int])));
     let mut builder = f.build(false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let scalar = builder.slot(int, at(0));
     let declared = builder.slot(object, at(0));
     let whole = builder.slot(pair, at(0));
@@ -2019,15 +2019,15 @@ fn inline_puts_a_straight_callee_in_the_calls_place_on_the_callers_chain() {
     let lambda_ty = closure_ty(&mut f, &[int], CallEffect::opaque());
     let (inner_call, after_call) = (f.call(f.opaque), f.call(f.opaque));
     let mut builder = f.build(true, int);
-    let x = builder.param(nx, int);
-    let k = builder.capture(nk, int);
+    let x = builder.param(nx, int, acvus_ast::Span::ZERO);
+    let k = builder.capture(nk, int, acvus_ast::Span::ZERO);
     builder.push_effect(inner_call, int, at(1));
     let sum = builder.push(add(x, k), int, at(2));
     builder.terminate(ret(sum), acvus_ast::Span::ZERO);
     let callee = builder.seal().expect("the callee has no open state");
 
     let mut builder = f.build(true, int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let one = builder.push(int_const(1), int, at(3));
     let closure = builder.push(Op::MakeClosure { body: callee, captures: vec![one] }, lambda_ty, at(4));
     let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a] };
@@ -2080,8 +2080,8 @@ fn inline_joins_every_return_of_the_callee_at_the_continuation() {
     let (na, nc, nx, int, bool) = (f.name("a"), f.name("c"), f.name("x"), f.int, f.bool);
     let lambda_ty = closure_ty(&mut f, &[int, bool], CallEffect::pure());
     let mut builder = f.build(false, int);
-    let x = builder.param(nx, int);
-    let c = builder.param(nc, bool);
+    let x = builder.param(nx, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [left, right] = [(); 2].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: Vec::new(), else_to: right, else_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(left);
@@ -2092,8 +2092,8 @@ fn inline_joins_every_return_of_the_callee_at_the_continuation() {
     let callee = builder.seal().expect("the callee has no open state");
 
     let mut builder = f.build(false, int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let closure = builder.push(Op::MakeClosure { body: callee, captures: Vec::new() }, lambda_ty, at(2));
     let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a, c] };
     let r = builder.push(call, int, at(3));
@@ -2135,7 +2135,7 @@ fn inline_refuses_a_callee_without_a_body_and_the_callers_own_body() {
     let direct = f.call(f.pure);
     let own = BodyId(u32::try_from(f.module.bodies.len()).expect("few bodies"));
     let mut builder = f.build(false, int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     builder.push(direct, int, at(1));
     let closure = builder.push(Op::MakeClosure { body: own, captures: Vec::new() }, lambda_ty, at(2));
     let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: Vec::new() };
@@ -2184,8 +2184,8 @@ fn insert_drop_is_refused_inside_a_loop_before_a_use_the_back_edge_reaches() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(1));
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
@@ -2216,8 +2216,8 @@ fn insert_drop_after_the_last_use_of_a_value_each_iteration_makes_stands() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = f.build(false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
@@ -2364,14 +2364,14 @@ fn a_cursor_yields_each_instruction_once_through_an_inline() {
     let (na, nx, nk, int) = (f.name("a"), f.name("x"), f.name("k"), f.int);
     let lambda_ty = closure_ty(&mut f, &[int], CallEffect::pure());
     let mut builder = f.build(false, int);
-    let x = builder.param(nx, int);
-    let k = builder.capture(nk, int);
+    let x = builder.param(nx, int, acvus_ast::Span::ZERO);
+    let k = builder.capture(nk, int, acvus_ast::Span::ZERO);
     let sum = builder.push(add(x, k), int, at(1));
     builder.terminate(ret(sum), acvus_ast::Span::ZERO);
     let callee = builder.seal().expect("the callee has no open state");
 
     let mut builder = f.build(false, int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let one = builder.push(int_const(1), int, at(2));
     let closure = builder.push(Op::MakeClosure { body: callee, captures: vec![one] }, lambda_ty, at(3));
     let r = builder.push(Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a] }, int, at(4));
@@ -2400,7 +2400,7 @@ fn a_cursor_yields_each_instruction_once_through_a_merge() {
     let mut f = fixture();
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(1));
     let [tail, pred] = [(); 2].map(|()| builder.new_block(&[]));
     builder.terminate(jump(pred), acvus_ast::Span::ZERO);
@@ -2436,8 +2436,8 @@ fn discharge_of_a_checked_index_proves_its_bound_and_keeps_the_index() {
     let slice = f.module.types.intern(TyKind::Slice(int));
     let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
     let mut builder = f.build(false, int);
-    let s = builder.param(ns, slice_ref);
-    let i = builder.param(ni, u64_ty);
+    let s = builder.param(ns, slice_ref, acvus_ast::Span::ZERO);
+    let i = builder.param(ni, u64_ty, acvus_ast::Span::ZERO);
     let checked = Op::Index { slice: s, index: i, mode: crate::ir::IndexMode::Copy, bound: crate::ir::IndexBound::Checked };
     let e = builder.push(checked, int, at(1));
     builder.terminate(ret(e), acvus_ast::Span::ZERO);

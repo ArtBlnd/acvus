@@ -180,7 +180,7 @@ mod tests {
     {
         let (int, bool, string, mut_ref_int, nc) = (f.int, f.bool, f.string, f.mut_ref_int, f.name("c"));
         let mut builder = f.module.build_body(false, int);
-        let c = builder.param(nc, bool);
+        let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let s = builder.slot(int, Span::ZERO);
         let text = builder.slot(string, Span::ZERO);
         let a = builder.push(int_const(1), int, Span::ZERO);
@@ -350,7 +350,7 @@ mod tests {
         let mut f = Fixture::new();
         let (int, bool, nc) = (f.int, f.bool, f.name("c"));
         let mut builder = f.module.build_body(false, int);
-        let c = builder.param(nc, bool);
+        let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let a = builder.push(int_const(1), int, Span::ZERO);
         let b = builder.push(int_const(2), int, Span::ZERO);
         let [left, right, header, loop_body, exit] = [(); 5].map(|()| builder.new_block(&[]));

@@ -406,7 +406,7 @@ mod tests {
         let decls = declarations(&f.interner, Vec::new(), Types::new());
         let (name, int, byte) = (f.interner.intern("a"), f.int, f.byte);
         let mut builder = f.module.build_body(false, int);
-        let a = builder.param(name, int);
+        let a = builder.param(name, int, acvus_ast::Span::ZERO);
         let x = builder.push(constant(2), int, Span::ZERO);
         let y = builder.push(constant(3), int, Span::ZERO);
         let z = builder.push(binary(BinOp::Add(Overflow::Trap), x, y), int, Span::ZERO);

@@ -143,6 +143,8 @@ pub struct Body {
     pub(super) slots: Vec<ValueId>,
     /// The span of the binding each slot stores.
     pub(super) slot_spans: FxHashMap<ValueId, Span>,
+    /// The span of the binder each parameter and capture names.
+    pub(super) binder_spans: FxHashMap<ValueId, Span>,
     pub(super) values: FxHashMap<ValueId, ValueDef>,
     /// Every value's uses; a value has an entry from its birth.
     pub(super) uses: FxHashMap<ValueId, UseSites>,
@@ -642,6 +644,17 @@ impl Body {
     /// The body's storage slots, which `RefTarget::Var` names.
     pub fn slots(&self) -> &[ValueId] {
         &self.slots
+    }
+    /// The span of the binder that names `value`, a parameter or a capture
+    /// of the body. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is neither.
+    pub fn binder_span(&self, value: ValueId) -> Span {
+        *self
+            .binder_spans
+            .get(&value)
+            .unwrap_or_else(|| panic!("{value:?} is a parameter or a capture of the body, which a binder names"))
     }
     pub fn debug(&self) -> &DebugInfo {
         &self.debug

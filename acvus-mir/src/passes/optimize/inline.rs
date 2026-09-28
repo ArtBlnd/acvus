@@ -250,12 +250,12 @@ mod tests {
         let mut f = Fixture::new();
         let (int, closure_ty, na, nx) = (f.int, f.pure_unary, f.name("a"), f.name("x"));
         let mut builder = f.module.build_body(false, int);
-        let x = builder.param(nx, int);
+        let x = builder.param(nx, int, acvus_ast::Span::ZERO);
         let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
         builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(false, int);
-        let a = builder.param(na, int);
+        let a = builder.param(na, int, acvus_ast::Span::ZERO);
         let closure = builder.push(Op::MakeClosure { body: callee, captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![a] };
         let r = builder.push(call, int, Span::ZERO);
@@ -284,7 +284,7 @@ mod tests {
         let (int, closure_ty, nx) = (f.int, f.pure_unary, f.name("x"));
         let own = f.module.next_body_id();
         let mut builder = f.module.build_body(false, int);
-        let x = builder.param(nx, int);
+        let x = builder.param(nx, int, acvus_ast::Span::ZERO);
         let closure = builder.push(Op::MakeClosure { body: own, captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![x] };
         let r = builder.push(call, int, Span::ZERO);
@@ -306,13 +306,13 @@ mod tests {
         let (int, closure_ty, opaque, na, nx, ng, nh) =
             (f.int, f.opaque_unary, f.opaque, f.name("a"), f.name("x"), f.name("g"), f.name("h"));
         let mut builder = f.module.build_body(true, int);
-        let x = builder.param(nx, int);
+        let x = builder.param(nx, int, acvus_ast::Span::ZERO);
         let g = builder.push_effect(direct_call(ng, opaque, Vec::new()), int, Span::ZERO);
         let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
         builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(true, int);
-        let a = builder.param(na, int);
+        let a = builder.param(na, int, acvus_ast::Span::ZERO);
         let closure = builder.push(Op::MakeClosure { body: callee, captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![a] };
         let r = builder.push_effect(call, int, Span::ZERO);

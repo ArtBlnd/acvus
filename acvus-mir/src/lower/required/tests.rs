@@ -227,7 +227,7 @@ fn a_string_read_in_one_arm_and_after_the_join_is_cloned_in_the_arm() {
     let t = f.t;
     let nc = f.interner.intern("c");
     let mut builder = f.module.build_body(false, t.int);
-    let c = builder.param(nc, t.bool);
+    let c = builder.param(nc, t.bool, acvus_ast::Span::ZERO);
     let s = text(t, &mut builder, at(1));
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), at(7));
@@ -455,7 +455,7 @@ fn a_value_live_into_one_arm_only_is_dropped_at_the_other_arm_through_a_split_ed
     let nc = f.interner.intern("c");
     let mut builder = f.module.build_body(false, t.int);
     let entry = builder.current_block();
-    let c = builder.param(nc, t.bool);
+    let c = builder.param(nc, t.bool, acvus_ast::Span::ZERO);
     let s = text(t, &mut builder, at(1));
     let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
     let join = builder.new_block(&[t.int]);
@@ -589,7 +589,7 @@ fn copying_values_get_no_drop() {
     let t = f.t;
     let nc = f.interner.intern("c");
     let mut builder = f.module.build_body(false, t.int);
-    let c = builder.param(nc, t.bool);
+    let c = builder.param(nc, t.bool, acvus_ast::Span::ZERO);
     let n = builder.push(constant(1), t.int, at(1));
     builder.push(constant(2), t.int, at(2));
     builder.push(t.call(t.takes_int, vec![n]), t.int, at(3));
@@ -609,4 +609,191 @@ fn copying_values_get_no_drop() {
 
     assert_eq!(drops(&f.all_ops(id)), 0);
     assert_eq!(f.module.body(id).blocks().count(), blocks, "no edge is split");
+}
+
+/// `if c { f(s); jump join(u) } else { jump join(s) }` where `join`'s
+/// parameter is never read: the parameter goes with its arguments, so `s`
+/// ends on the edge into `join`, which is split for its drop with the span
+/// of the entry's terminator.
+#[test]
+fn a_dead_block_parameter_is_removed_and_its_argument_dropped_on_the_edge() {
+    let mut f = fixture();
+    let t = f.t;
+    let nc = f.interner.intern("c");
+    let mut builder = f.module.build_body(false, t.int);
+    let entry = builder.current_block();
+    let c = builder.param(nc, t.bool, at(1));
+    let s = text(t, &mut builder, at(2));
+    let then_block = builder.new_block(&[]);
+    let join = builder.new_block(&[t.string]);
+    builder.terminate(
+        Terminator::JumpIf { cond: c, then_to: then_block, then_args: Vec::new(), else_to: join, else_args: vec![s] },
+        at(7),
+    );
+    builder.switch_to(then_block);
+    builder.push(t.call(t.takes_string, vec![s]), t.int, at(3));
+    let u = text(t, &mut builder, at(4));
+    builder.terminate(jump(join, vec![u]), at(8));
+    builder.switch_to(join);
+    let n = builder.push(constant(0), t.int, at(5));
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let body = f.module.body(id);
+    assert!(body.block(join).params().is_empty(), "the unread parameter is removed");
+    let Terminator::JumpIf { then_to, else_to, else_args, .. } = body.block(entry).terminator() else {
+        panic!("the entry still ends in its branch")
+    };
+    assert_eq!(*then_to, then_block);
+    assert!(else_args.is_empty(), "the argument goes with the parameter");
+    let split = f.ops(id, *else_to);
+    let [dropped] = &split[..] else {
+        panic!("the split edge holds the drop of s: {split:?}")
+    };
+    assert!(is_drop_of(dropped, s));
+    assert_eq!(body.block(*else_to).insts()[0].span(), at(7), "the drop takes the source terminator's span");
+    assert!(f.ops(id, then_block).iter().any(|op| is_drop_of(op, u)), "u, now unread, ends where it is made");
+}
+
+/// A `String` parameter nothing reads is dropped at the entry's start,
+/// with its binder's span.
+#[test]
+fn a_dead_body_parameter_is_dropped_at_the_entry_with_its_binders_span() {
+    let mut f = fixture();
+    let t = f.t;
+    let ns = f.interner.intern("s");
+    let mut builder = f.module.build_body(false, t.int);
+    let entry = builder.current_block();
+    let s = builder.param(ns, t.string, at(4));
+    let n = builder.push(constant(0), t.int, at(5));
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let ops = f.ops(id, entry);
+    let [dropped, _] = &ops[..] else {
+        panic!("the parameter is dropped first: {ops:?}")
+    };
+    assert!(is_drop_of(dropped, s));
+    assert_eq!(f.module.body(id).block(entry).insts()[0].span(), at(4));
+}
+
+/// `note` is loaded; the then arm takes it out and puts a new content back,
+/// the else arm overwrites it, and the join overwrites it again. The then
+/// arm's store fills an empty slot and drops nothing; the else arm's and the
+/// join's each drop the content they replace.
+#[test]
+fn a_context_moved_out_on_one_arm_and_reassigned_on_both_is_dropped_at_each_overwrite_of_a_held_content() {
+    let mut f = fixture();
+    let t = f.t;
+    let (note, nc) = (f.context("note"), f.interner.intern("c"));
+    let mut builder = f.module.build_body(true, t.int);
+    let cond = builder.param(nc, t.bool, at(1));
+    let c = builder.context_slot(note, t.string, at(1));
+    let loaded = builder.push_effect(Op::Fetch { context: note }, t.string, at(1));
+    builder.push_unit(assign(c, loaded), at(1));
+    let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(diamond(cond, then_block, else_block, join), at(7));
+    builder.switch_to(then_block);
+    let out = builder.push(take(c), t.string, at(2));
+    builder.push(t.call(t.takes_string, vec![out]), t.int, at(2));
+    let back = text(t, &mut builder, at(3));
+    builder.push_unit(assign(c, back), at(3));
+    builder.terminate(jump(join, Vec::new()), at(8));
+    builder.switch_to(else_block);
+    let other = text(t, &mut builder, at(4));
+    builder.push_unit(assign(c, other), at(4));
+    builder.terminate(jump(join, Vec::new()), at(9));
+    builder.switch_to(join);
+    let last = text(t, &mut builder, at(5));
+    builder.push_unit(assign(c, last), at(5));
+    let taken = builder.push(take(c), t.string, at(6));
+    builder.push_effect_unit(commit(note, taken), at(6));
+    let n = builder.push(constant(0), t.int, at(6));
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    assert_eq!(drops(&f.ops(id, then_block)), 0, "the then arm refills an empty slot");
+    let dropped_before = |block: BlockId, stored: ValueId| {
+        let ops = f.ops(id, block);
+        let store = ops.iter().position(|op| matches!(op, Op::Assign { value, .. } if *value == stored));
+        let store = store.expect("the overwrite stays");
+        store >= 2 && is_take_of(&ops[store - 2], c) && matches!(ops[store - 1], Op::Drop { .. })
+    };
+    assert!(dropped_before(else_block, other), "the loaded content is dropped before the else arm's overwrite");
+    assert!(dropped_before(join, last), "the arms' content is dropped before the join's overwrite");
+    assert_eq!(drops(&f.all_ops(id)), 2);
+}
+
+/// `note` is loaded; the then arm takes it out, the else arm leaves it, and
+/// the join overwrites it. At the overwrite the slot holds content on the
+/// else path only: that content's liveness ended on the edge from the else
+/// arm, so it is dropped there, with that arm's terminator's span.
+#[test]
+fn a_context_held_on_one_path_only_at_an_overwrite_is_dropped_on_the_edge_where_it_is_held() {
+    let mut f = fixture();
+    let t = f.t;
+    let (note, nc) = (f.context("note"), f.interner.intern("c"));
+    let mut builder = f.module.build_body(true, t.int);
+    let cond = builder.param(nc, t.bool, at(1));
+    let c = builder.context_slot(note, t.string, at(1));
+    let loaded = builder.push_effect(Op::Fetch { context: note }, t.string, at(1));
+    builder.push_unit(assign(c, loaded), at(1));
+    let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(diamond(cond, then_block, else_block, join), at(7));
+    builder.switch_to(then_block);
+    let out = builder.push(take(c), t.string, at(2));
+    builder.push(t.call(t.takes_string, vec![out]), t.int, at(2));
+    builder.terminate(jump(join, Vec::new()), at(8));
+    builder.switch_to(else_block);
+    builder.terminate(jump(join, Vec::new()), at(9));
+    builder.switch_to(join);
+    let last = text(t, &mut builder, at(5));
+    builder.push_unit(assign(c, last), at(5));
+    let taken = builder.push(take(c), t.string, at(6));
+    builder.push_effect_unit(commit(note, taken), at(6));
+    let n = builder.push(constant(0), t.int, at(6));
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let body = f.module.body(id);
+    assert!(matches!(body.block(then_block).terminator(), Terminator::Jump { to, .. } if *to == join), "the then edge is not split");
+    let Terminator::Jump { to: middle, .. } = body.block(else_block).terminator() else {
+        panic!("the else arm still jumps")
+    };
+    assert_ne!(*middle, join, "the else edge is split");
+    let split = f.ops(id, *middle);
+    let [taken_out, dropped] = &split[..] else {
+        panic!("the split edge takes the content out and drops it: {split:?}")
+    };
+    assert!(is_take_of(taken_out, c));
+    assert!(matches!(dropped, Op::Drop { .. }));
+    assert_eq!(body.block(*middle).insts()[1].span(), at(9), "the drop takes the else arm's terminator's span");
+    assert_eq!(drops(&f.all_ops(id)), 1);
+}
+
+/// A parameter lent by a `Ref` and also passed as a value lives in two
+/// forms, which is lower's defect.
+#[test]
+#[should_panic(expected = "is named both as a storage and as a value")]
+fn a_parameter_named_both_as_a_storage_and_as_a_value_is_refused() {
+    let mut f = fixture();
+    let t = f.t;
+    let ns = f.interner.intern("s");
+    let mut builder = f.module.build_body(false, t.int);
+    let s = builder.param(ns, t.string, at(1));
+    let lent = builder.push(Op::Ref { target: RefTarget::Param(s), path: Vec::new(), mutability: Mutability::Shared }, t.string_ref, at(2));
+    builder.push(Op::StringEq { a: lent, b: lent }, t.bool, at(2));
+    let x = builder.push(t.call(t.takes_string, vec![s]), t.int, at(3));
+    builder.terminate(ret(x), Span::ZERO);
+    builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
 }

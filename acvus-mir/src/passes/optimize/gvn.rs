@@ -433,9 +433,9 @@ mod tests {
         let (int, bool) = (f.int, f.bool);
         let (nx, ny, nc) = (f.name("x"), f.name("y"), f.name("c"));
         let mut builder = f.module.build_body(false, int);
-        let x = builder.param(nx, int);
-        let y = builder.param(ny, int);
-        let c = builder.param(nc, bool);
+        let x = builder.param(nx, int, acvus_ast::Span::ZERO);
+        let y = builder.param(ny, int, acvus_ast::Span::ZERO);
+        let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let s = builder.push(wrapping_add(x, y), int, Span::ZERO);
         let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
         let join = builder.new_block(&[int]);
@@ -475,8 +475,8 @@ mod tests {
         let tuple = f.quad;
         let (nx, ny) = (f.name("x"), f.name("y"));
         let mut builder = f.module.build_body(false, tuple);
-        let x = builder.param(nx, int);
-        let y = builder.param(ny, int);
+        let x = builder.param(nx, int, acvus_ast::Span::ZERO);
+        let y = builder.param(ny, int, acvus_ast::Span::ZERO);
         let a = builder.push(wrapping_add(x, y), int, Span::ZERO);
         let b = builder.push(wrapping_add(y, x), int, Span::ZERO);
         let c = builder.push(sub(x, y), int, Span::ZERO);

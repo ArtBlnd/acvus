@@ -122,7 +122,7 @@ fn returned_order(body: &Body, block: BlockId) -> Option<ValueId> {
 fn straight_line(f: &mut Fixture) -> (BodyId, ValueId, ValueId, ValueId) {
     let (name, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(1));
     let y = builder.push(neg(x), int, at(2));
     builder.terminate(ret(y), acvus_ast::Span::ZERO);
@@ -136,7 +136,7 @@ fn every_value_is_born_typed() {
     let mut f = fixture();
     let (name, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let slot = builder.slot(bool, at(0));
     let join = builder.new_block(&[bool]);
     let p = builder.block_params(join)[0];
@@ -160,7 +160,7 @@ fn a_reference_to_a_reference_is_refused() {
     let (name, int) = (f.name("r"), f.int);
     let inner = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
     let outer = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(inner)));
-    build(&mut f.module, false, f.int).param(name, outer);
+    build(&mut f.module, false, f.int).param(name, outer, acvus_ast::Span::ZERO);
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn a_type_of_another_table_is_refused() {
     let mut f = fixture();
     let name = f.name("a");
     let foreign = Types::<Concrete>::new().intern(TyKind::Bool);
-    build(&mut f.module, false, f.int).param(name, foreign);
+    build(&mut f.module, false, f.int).param(name, foreign, acvus_ast::Span::ZERO);
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn an_operation_without_a_result_is_not_given_one() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push(Op::Drop { src: a }, int, at(4));
 }
 
@@ -219,7 +219,7 @@ fn a_removal_moves_the_definitions_after_it() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(5));
     let y = builder.push(neg(a), int, at(6));
     let z = builder.push(neg(y), int, at(7));
@@ -244,8 +244,8 @@ fn a_use_is_replaced_only_by_a_value_of_its_type() {
     let mut f = fixture();
     let (na, nb, int, bool) = (f.name("a"), f.name("b"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
-    let b = builder.param(nb, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let b = builder.param(nb, bool, acvus_ast::Span::ZERO);
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     f.module.rewrite(id).replace_all_uses(a, b);
@@ -269,7 +269,7 @@ fn an_edge_argument_of_another_type_is_refused() {
     let mut f = fixture();
     let (name, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let join = builder.new_block(&[bool]);
     builder.terminate(Terminator::Jump { to: join, args: vec![a] }, acvus_ast::Span::ZERO);
 }
@@ -280,7 +280,7 @@ fn a_reserved_block_is_checked_against_its_edges_when_made() {
     let mut f = fixture();
     let (name, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let join = builder.reserve_block();
     builder.terminate(Terminator::Jump { to: join, args: vec![a] }, acvus_ast::Span::ZERO);
     builder.make_block(join, &[bool]);
@@ -292,7 +292,7 @@ fn a_retarget_to_other_parameters_is_refused() {
     let mut f = fixture();
     let (name, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let takes_int = builder.new_block(&[int]);
     let takes_bool = builder.new_block(&[bool]);
     builder.terminate(Terminator::Jump { to: takes_int, args: vec![a] }, acvus_ast::Span::ZERO);
@@ -309,9 +309,9 @@ fn removing_a_block_parameter_removes_its_argument_on_every_edge() {
     let mut f = fixture();
     let (na, nb, nc, int, bool) = (f.name("a"), f.name("b"), f.name("c"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
-    let b = builder.param(nb, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let b = builder.param(nb, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let then_block = builder.new_block(&[]);
     let else_block = builder.new_block(&[]);
     let join = builder.reserve_block();
@@ -372,7 +372,7 @@ fn every_record_keeps_the_span_it_was_pushed_with() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.push(neg(a), int, at(100));
     builder.push_unit(Op::Drop { src: x }, at(101));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -405,7 +405,7 @@ fn the_token_crosses_a_diamond_join() {
     let (nc, int, bool, whole) = (f.name("c"), f.int, f.bool, f.whole);
     let (arm_call, join_call) = (f.call(whole), f.call(whole));
     let mut builder = build(&mut f.module, true, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     builder.switch_to(then_block);
@@ -441,7 +441,7 @@ fn a_join_no_arm_advances_takes_no_token_parameter() {
     let (nc, int, bool, whole) = (f.name("c"), f.int, f.bool, f.whole);
     let join_call = f.call(whole);
     let mut builder = build(&mut f.module, true, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     for block in [then_block, else_block] {
@@ -464,7 +464,7 @@ fn the_token_crosses_a_loop_back_edge() {
     let (nc, int, bool, whole) = (f.name("c"), f.int, f.bool, f.whole);
     let body_call = f.call(whole);
     let mut builder = build(&mut f.module, true, f.bool);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
@@ -637,7 +637,7 @@ fn a_commit_is_not_pushed_as_pure() {
     let mut f = fixture();
     let (name, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
-    let a = builder.param(name, int);
+    let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push_unit(Op::Commit { context: page, value: a, wrote: true }, at(33));
 }
 
@@ -792,8 +792,8 @@ fn a_retarget_updates_a_diamonds_join() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [then_block, else_block, join, new_join] = [(); 4].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     for block in [then_block, else_block] {
@@ -824,8 +824,8 @@ fn a_retarget_updates_a_loops_stages_and_exit() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let header = builder.current_block();
     let [loop_body, exit, other_body, other_exit] = [(); 4].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
@@ -854,9 +854,9 @@ fn a_split_keeps_the_block_named_and_moves_the_diamond_with_the_tail() {
     let mut f = fixture();
     let (na, nc, nd, int, bool) = (f.name("a"), f.name("c"), f.name("d"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
-    let c = builder.param(nc, bool);
-    let d = builder.param(nd, bool);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
+    let d = builder.param(nd, bool, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     let x = builder.push(add(a, a), int, at(32));
@@ -901,7 +901,7 @@ struct SwitchBody {
 fn switch_body(f: &mut Fixture) -> SwitchBody {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
     let [one, two, other, join, spare] = [(); 5].map(|()| builder.new_block(&[]));
     builder.terminate(Terminator::Switch {
@@ -961,7 +961,7 @@ fn the_builder_refuses_a_switch_whose_join_is_not_a_block() {
     let mut f = fixture();
     let (na, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let arm = builder.new_block(&[]);
     builder.terminate(Terminator::Switch {
         tag: a,
@@ -988,12 +988,12 @@ fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
         holds: Holds::Nothing,
     });
     let mut outer = build(&mut f.module, false, int);
-    let a = outer.param(na, int);
+    let a = outer.param(na, int, acvus_ast::Span::ZERO);
     let k = outer.push(Op::Const { value: Literal::Int(1) }, int, at(1));
     let lambda = {
         let mut inner = outer.build_nested(false, int);
-        let x = inner.param(nx, int);
-        let captured = inner.capture(nk, int);
+        let x = inner.param(nx, int, acvus_ast::Span::ZERO);
+        let captured = inner.capture(nk, int, acvus_ast::Span::ZERO);
         let sum = inner.push(add(x, captured), int, at(2));
         inner.terminate(ret(sum), acvus_ast::Span::ZERO);
         inner.seal().expect("the lambda's body has no open state")
@@ -1074,7 +1074,7 @@ fn a_return_does_not_take_a_token_from_its_caller() {
     let mut f = fixture();
     let (na, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
-    let a = builder.param(na, int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let flag = builder.push(Op::Const { value: Literal::Bool(false) }, bool, at(34));
     builder.terminate(Terminator::Return { value: a, order: Some(flag), span: Span::ZERO }, Span::ZERO);
 }
@@ -1087,7 +1087,7 @@ fn the_core_records_every_token_it_makes() {
     let (nc, int, bool, whole) = (f.name("c"), f.int, f.bool, f.whole);
     let (loop_call, scoped_call) = (f.call(whole), f.call(whole));
     let mut builder = build(&mut f.module, true, f.int);
-    let c = builder.param(nc, bool);
+    let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
@@ -1123,7 +1123,7 @@ fn the_core_records_every_token_it_makes() {
 fn a_parameter_of_order_type_is_refused() {
     let mut f = fixture();
     let (name, order) = (f.name("o"), f.order);
-    build(&mut f.module, false, f.int).param(name, order);
+    build(&mut f.module, false, f.int).param(name, order, acvus_ast::Span::ZERO);
 }
 
 #[test]
@@ -1131,7 +1131,7 @@ fn a_parameter_of_order_type_is_refused() {
 fn a_capture_of_order_type_is_refused() {
     let mut f = fixture();
     let (name, order) = (f.name("o"), f.order);
-    build(&mut f.module, false, f.int).capture(name, order);
+    build(&mut f.module, false, f.int).capture(name, order, acvus_ast::Span::ZERO);
 }
 
 #[test]
