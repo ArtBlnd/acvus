@@ -66,26 +66,26 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         let two = builder.push(int_const(2), int, Span::ZERO);
         builder.push_unit(assign(x, two), Span::ZERO);
-        builder.terminate(jump(join));
+        builder.terminate(jump(join), acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
-        builder.terminate(jump(join));
+        builder.terminate(jump(join), acvus_ast::Span::ZERO);
         builder.switch_to(join);
-        builder.terminate(jump(header));
+        builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let read = builder.push(take(x), int, Span::ZERO);
         let step = builder.push(int_const(1), int, Span::ZERO);
         let next = builder.push(wrapping_add(read, step), int, Span::ZERO);
         builder.push_unit(assign(x, next), Span::ZERO);
-        builder.terminate(jump(header));
+        builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
         let last = builder.push(take(x), int, Span::ZERO);
-        builder.terminate(ret(last));
+        builder.terminate(ret(last), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = f.run::<Mem2Reg>(id);
@@ -135,7 +135,7 @@ mod tests {
             Span::ZERO,
         );
         let t = builder.push(Op::Take { target: RefTarget::Through(r), path: Vec::new(), taken_out: false }, int, Span::ZERO);
-        builder.terminate(ret(t));
+        builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);
 

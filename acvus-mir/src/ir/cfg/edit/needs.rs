@@ -58,6 +58,13 @@ pub enum Unobserved {
     NeverWritten,
 }
 
+pub trait ContentFacts: Facts {
+    /// Whether the content of `place`, a slot or a by-value parameter's
+    /// own storage, may be read from `at` on, before a whole store replaces
+    /// it or the body ends.
+    fn content_read_after(&self, place: ValueId, at: Position) -> bool;
+}
+
 pub trait DischargeFacts: Facts {
     /// The fact that makes `inst` unobservable, if an analysis proves one.
     fn discharged(&self, inst: InstRef) -> Option<Unobserved>;

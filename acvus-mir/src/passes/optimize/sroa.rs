@@ -148,7 +148,7 @@ mod tests {
             int,
             Span::ZERO,
         );
-        builder.terminate(ret(v));
+        builder.terminate(ret(v), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = run(&mut f, id);
@@ -180,7 +180,7 @@ mod tests {
         let one = builder.push(constant(1), int, Span::ZERO);
         builder.push_unit(assign_at(d, vec![PathSeg::Field(a)], one), Span::ZERO);
         let t = builder.push(take_at(d, vec![PathSeg::Field(a)]), int, Span::ZERO);
-        builder.terminate(ret(t));
+        builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = run(&mut f, id);
@@ -207,7 +207,7 @@ mod tests {
             Span::ZERO,
         );
         let t = builder.push(take_at(p, vec![PathSeg::Index(0)]), int, Span::ZERO);
-        builder.terminate(ret(t));
+        builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = run(&mut f, id);

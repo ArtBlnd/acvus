@@ -136,7 +136,7 @@ mod tests {
         builder.push_unit(assign(s, one), Span::ZERO);
         builder.push_unit(assign(s, two), Span::ZERO);
         let t = builder.push(take(RefTarget::Var(s)), int, Span::ZERO);
-        builder.terminate(ret(t));
+        builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = run(&mut f, id);
@@ -159,7 +159,7 @@ mod tests {
         let t = builder.push(take(RefTarget::Var(s)), int, Span::ZERO);
         let two = builder.push(constant(2), int, Span::ZERO);
         builder.push_unit(assign(s, two), Span::ZERO);
-        builder.terminate(ret(t));
+        builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         run(&mut f, id);
@@ -183,7 +183,7 @@ mod tests {
             Span::ZERO,
         );
         let t = builder.push(take(RefTarget::Through(r)), int, Span::ZERO);
-        builder.terminate(ret(t));
+        builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = run(&mut f, id);

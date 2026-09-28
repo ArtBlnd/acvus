@@ -197,16 +197,16 @@ mod tests {
             then_args: Vec::new(),
             else_to: done,
             else_args: Vec::new(),
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let under_test = inside(&mut builder, &Outside { a, b, x, text });
-        builder.terminate(jump(header));
+        builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
         builder.switch_to(done);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         Looped { id, loop_body, under_test }
     }
@@ -360,18 +360,18 @@ mod tests {
             then_args: Vec::new(),
             else_to: right,
             else_args: Vec::new(),
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(left);
-        builder.terminate(jump(header));
+        builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(right);
-        builder.terminate(jump(header));
+        builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let sum = builder.push(wrapping_add(a, b), int, Span::ZERO);
-        builder.terminate(jump(header));
+        builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = f.run::<Licm>(id);

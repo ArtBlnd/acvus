@@ -252,14 +252,14 @@ mod tests {
         let mut builder = f.module.build_body(false, int);
         let x = builder.param(nx, int);
         let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
-        builder.terminate(ret(doubled));
+        builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(false, int);
         let a = builder.param(na, int);
         let closure = builder.push(Op::MakeClosure { body: callee, captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![a] };
         let r = builder.push(call, int, Span::ZERO);
-        builder.terminate(ret(r));
+        builder.terminate(ret(r), acvus_ast::Span::ZERO);
         let caller = builder.seal().expect("the caller has no open state");
         let callee_before = f.snapshot(callee);
 
@@ -288,7 +288,7 @@ mod tests {
         let closure = builder.push(Op::MakeClosure { body: own, captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![x] };
         let r = builder.push(call, int, Span::ZERO);
-        builder.terminate(ret(r));
+        builder.terminate(ret(r), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         assert_eq!(id, own);
         let before = f.snapshot(id);
@@ -309,7 +309,7 @@ mod tests {
         let x = builder.param(nx, int);
         let g = builder.push_effect(direct_call(ng, opaque, Vec::new()), int, Span::ZERO);
         let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
-        builder.terminate(ret(doubled));
+        builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(true, int);
         let a = builder.param(na, int);
@@ -317,7 +317,7 @@ mod tests {
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![a] };
         let r = builder.push_effect(call, int, Span::ZERO);
         let h = builder.push_effect(direct_call(nh, opaque, Vec::new()), int, Span::ZERO);
-        builder.terminate(ret(r));
+        builder.terminate(ret(r), acvus_ast::Span::ZERO);
         let caller = builder.seal().expect("the caller has no open state");
         let o0 = f.module.body(caller).order_param().expect("the caller is ordered");
         let g_in_callee = f.module.body(callee).blocks().flat_map(|(_, block)| block.insts()).find(|inst| inst.result() == Some(g));

@@ -183,17 +183,17 @@ mod tests {
         let mut builder = f.module.build_body(false, int);
         let x = builder.push(constant(1), int, Span::ZERO);
         let [a, b, c] = [(); 3].map(|()| builder.new_block(&[int]));
-        builder.terminate(jump(a, vec![x]));
+        builder.terminate(jump(a, vec![x]), acvus_ast::Span::ZERO);
         builder.switch_to(a);
         let p = builder.block_params(a)[0];
-        builder.terminate(jump(b, vec![p]));
+        builder.terminate(jump(b, vec![p]), acvus_ast::Span::ZERO);
         builder.switch_to(b);
         let q = builder.block_params(b)[0];
-        builder.terminate(jump(c, vec![q]));
+        builder.terminate(jump(c, vec![q]), acvus_ast::Span::ZERO);
         builder.switch_to(c);
         let r = builder.block_params(c)[0];
         let y = builder.push(Op::BinOp { op: BinOp::Add(Overflow::Trap), left: r, right: r }, int, Span::ZERO);
-        builder.terminate(ret(y));
+        builder.terminate(ret(y), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = run(&mut f, id);
@@ -237,21 +237,21 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         let t = builder.push(constant(1), int, Span::ZERO);
-        builder.terminate(jump(join, vec![t]));
+        builder.terminate(jump(join, vec![t]), acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
-        builder.terminate(jump(join2, Vec::new()));
+        builder.terminate(jump(join2, Vec::new()), acvus_ast::Span::ZERO);
         builder.switch_to(join2);
         let e = builder.push(constant(2), int, Span::ZERO);
-        builder.terminate(jump(join, vec![e]));
+        builder.terminate(jump(join, vec![e]), acvus_ast::Span::ZERO);
         builder.switch_to(join);
         let p = builder.block_params(join)[0];
-        builder.terminate(jump(tail, vec![p]));
+        builder.terminate(jump(tail, vec![p]), acvus_ast::Span::ZERO);
         builder.switch_to(tail);
         let q = builder.block_params(tail)[0];
-        builder.terminate(ret(q));
+        builder.terminate(ret(q), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         run(&mut f, id);
@@ -285,12 +285,12 @@ mod tests {
         let mut builder = f.module.build_body(false, int);
         let x = builder.push(constant(1), int, Span::ZERO);
         let [dead, dead2] = [(); 2].map(|()| builder.new_block(&[]));
-        builder.terminate(ret(x));
+        builder.terminate(ret(x), acvus_ast::Span::ZERO);
         builder.switch_to(dead);
         let y = builder.push(constant(2), int, Span::ZERO);
-        builder.terminate(jump(dead2, Vec::new()));
+        builder.terminate(jump(dead2, Vec::new()), acvus_ast::Span::ZERO);
         builder.switch_to(dead2);
-        builder.terminate(ret(y));
+        builder.terminate(ret(y), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         run(&mut f, id);
@@ -307,7 +307,7 @@ mod tests {
         let int = f.int;
         let mut builder = f.module.build_body(false, int);
         let x = builder.push(constant(1), int, Span::ZERO);
-        builder.terminate(ret(x));
+        builder.terminate(ret(x), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = run(&mut f, id);

@@ -230,7 +230,7 @@ mod tests {
         let s = builder.push(wrapping_add(r, r), int, Span::ZERO);
         let u = builder.push(wrapping_add(s, s), int, Span::ZERO);
         let v = builder.push(wrapping_add(u, p), int, Span::ZERO);
-        builder.terminate(ret(v));
+        builder.terminate(ret(v), acvus_ast::Span::ZERO);
         Built { id: builder.seal().expect("the body has no open state"), p, q }
     }
 
@@ -284,7 +284,7 @@ mod tests {
         let p = builder.push_effect(direct_call(name, commuting, Vec::new()), int, Span::ZERO);
         let q = builder.push_effect(direct_call(name, commuting, Vec::new()), int, Span::ZERO);
         let sum = builder.push(wrapping_add(p, q), int, Span::ZERO);
-        builder.terminate(ret(sum));
+        builder.terminate(ret(sum), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);
 

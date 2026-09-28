@@ -3,7 +3,7 @@
 //! everything.
 
 use super::keeps::{DefDominatesUses, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree};
-use super::needs::{DischargeFacts, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+use super::needs::{ContentFacts, DischargeFacts, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
 use crate::ir::cfg::Aspect;
 
 mod sealed {
@@ -37,6 +37,9 @@ pub trait Discharges: Scope {}
 pub trait Inlines: Scope {}
 /// Drop insertion, the required step of ownership §6 only (S3).
 pub trait InsertsDrops: Scope {}
+/// A `String` read that is not its last use becoming a clone, the required
+/// step of ownership §3 only (S4).
+pub trait ClonesReads: Scope {}
 
 /// Values: replace uses, insert pure instructions (GVN, reborrow).
 pub struct Value;
@@ -61,6 +64,8 @@ pub struct Discharge;
 pub struct Inline;
 /// Drop insertion, used by the required step only (S3).
 pub struct Drops;
+/// Clones of `String` reads, used by the required step only (S4).
+pub struct Clones;
 
 /// Every scope keeps these.
 type Base = (TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept);
@@ -87,10 +92,16 @@ scope!(Storage, [Instructions, Storage], 'n => dyn LoanFacts + 'n, Base, [Promot
 scope!(Loop, [CfgShape, Instructions], 'n => NoFacts, Base, [EditsLoops]);
 scope!(Discharge, [Instructions, Storage, OrderTokens], 'n => dyn DischargeFacts + 'n, Base, [Discharges]);
 scope!(Inline, [CfgShape, Instructions, Storage, OrderTokens, Types], 'n => NoFacts, (Base, SplitTakenOnce), [Inlines]);
-scope!(Drops, [Instructions, Storage], 'n => dyn DominanceFacts + 'n, Base, [InsertsDrops]);
+scope!(Drops, [Instructions, Storage], 'n => dyn DropFacts + 'n, Base, [InsertsDrops]);
+scope!(Clones, [Instructions, Storage, Types], 'n => NoFacts, Base, [ClonesReads]);
 
 /// What motion reads: dominance and loans. Effect order is not motion's:
 /// an effect's token keeps it on its chain, so dominance alone keeps it in
 /// order (D54).
 pub trait MotionFacts: DominanceFacts + LoanFacts {}
+
+/// What drop insertion reads: dominance for a value's drop, and whether a
+/// storage's content is read after a position for a content's drop.
+pub trait DropFacts: DominanceFacts + ContentFacts {}
+impl<T> DropFacts for T where T: DominanceFacts + ContentFacts + ?Sized {}
 impl<T> MotionFacts for T where T: DominanceFacts + LoanFacts + ?Sized {}

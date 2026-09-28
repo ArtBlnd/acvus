@@ -234,7 +234,7 @@ mod tests {
         let d = builder.push(wrapping_add(c, c), int, Span::ZERO);
         let s = builder.push(wrapping_add(r, d), int, Span::ZERO);
         let t = builder.push(wrapping_add(s, b), int, Span::ZERO);
-        builder.terminate(ret(t));
+        builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
         let o0 = f.module.body(id).order_param().expect("the body is ordered");
@@ -260,7 +260,7 @@ mod tests {
         let (int, opaque, name) = (f.int, f.opaque, f.name("f"));
         let mut builder = f.module.build_body(true, int);
         let r = builder.push_effect(direct_call(name, opaque, Vec::new()), int, Span::ZERO);
-        builder.terminate(ret(r));
+        builder.terminate(ret(r), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);
 

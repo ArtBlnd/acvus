@@ -13,14 +13,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use smallvec::SmallVec;
 
-use crate::ir::cfg::edit::{DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved};
+use crate::ir::cfg::edit::{ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved};
 use acvus_utils::QualifiedRef;
 
 use crate::decl::Declarations;
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module, Op, Site, Terminator};
 use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect, known_len};
 use crate::passes::analysis::{
-    AnalysisManager, Dominators, Escapes, IntervalValues, LoopTree, Loans, Point, PostDominators, SparseFacts, Storage,
+    AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans, Point, PostDominators, SparseFacts, Storage,
 };
 use crate::passes::domain::{Bound, Interval, IntervalDomain, JoinSemiLattice};
 use crate::ty::{CastTy, Concrete, Ty, TyKind, Types};
@@ -32,6 +32,7 @@ pub struct EditFacts<'a, 'd> {
     loop_tree: Rc<LoopTree>,
     loans: Rc<Loans>,
     escapes: Rc<Escapes>,
+    content: Rc<ContentLiveness>,
     defined: FxHashMap<ValueId, Defined>,
     /// The storages each instruction's operands and result name, and those
     /// it reads and writes, by block and index.
@@ -66,6 +67,7 @@ impl<'a, 'd> EditFacts<'a, 'd> {
             post_dominators: am.get::<PostDominators>(module, body),
             loop_tree: am.get::<LoopTree>(module, body),
             escapes: am.get::<Escapes>(module, body),
+            content: am.get::<ContentLiveness>(module, body),
             defined: definitions(of),
             named: named_storages(of, &loans),
             commuting: commuting_calls(of, module.types()),
@@ -93,6 +95,7 @@ impl Facts for EditFacts<'_, '_> {
         self.loop_tree = self.am.get::<LoopTree>(module, body);
         self.loans = self.am.get::<Loans>(module, body);
         self.escapes = self.am.get::<Escapes>(module, body);
+        self.content = self.am.get::<ContentLiveness>(module, body);
         let intervals = self.am.get::<IntervalValues>(module, body);
         let of = module.body(body);
         self.defined = definitions(of);
@@ -149,6 +152,17 @@ impl LoanFacts for EditFacts<'_, '_> {
     /// Cost: O(1).
     fn escapes(&self, slot: ValueId) -> Option<Site> {
         self.escapes.escape(slot)
+    }
+}
+
+impl ContentFacts for EditFacts<'_, '_> {
+    /// Read from the content liveness the last refresh kept. Cost: O(1).
+    fn content_read_after(&self, place: ValueId, at: Position) -> bool {
+        let live = match at {
+            Position::Before(inst) => self.content.live_before(inst.block(), inst.index()),
+            Position::End(block) => self.content.live_before_terminator(block),
+        };
+        live.contains(&place)
     }
 }
 
@@ -681,14 +695,14 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         let t = builder.push(add(x, x), int, Span::ZERO);
-        builder.terminate(Terminator::Jump { to: join, args: vec![t] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![t] }, acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
-        builder.terminate(Terminator::Jump { to: join, args: vec![x] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![x] }, acvus_ast::Span::ZERO);
         builder.switch_to(join);
-        builder.terminate(Terminator::Return { value: p, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: p, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         DiamondBody { id, entry, then_block, else_block, join, c, x, t, p }
     }
@@ -766,7 +780,7 @@ mod tests {
         let b = builder.push_effect(commuting_call, int, Span::ZERO);
         builder.push_effect(opaque_call, int, Span::ZERO);
         let d = builder.push(add(a, b), int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: d, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: d, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let [a_at, b_at, c_at, d_at] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has four instructions")
@@ -825,7 +839,7 @@ mod tests {
         let mut builder = f.module.build_body(true, int);
         let a = builder.push_effect(split_call, int, Span::ZERO);
         builder.push_effect(other_call, int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: a, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: a, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let [a_at, _] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has two instructions")
@@ -877,19 +891,19 @@ mod tests {
         let entry = builder.current_block();
         let x = builder.push(constant(0), int, Span::ZERO);
         let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
-        builder.terminate(Terminator::Jump { to: header, args: Vec::new() });
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(header);
         builder.terminate(Terminator::While {
             cond: c,
             stages: crate::ir::cfg::Stages::lowered(loop_body),
             exit,
             exit_args: Vec::new(),
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
-        builder.terminate(Terminator::Jump { to: header, args: Vec::new() });
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(exit);
         let y = builder.push(add(x, x), int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: y, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: y, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let [x_at, y_at] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has two instructions")
@@ -930,7 +944,7 @@ mod tests {
         let r = builder.push(Op::Ref { target: RefTarget::Var(x), path: Vec::new(), mutability: Mutability::Shared }, ref_int, Span::ZERO);
         let t = builder.push(Op::Take { target: RefTarget::Through(r), path: Vec::new(), taken_out: false }, int, Span::ZERO);
         let u = builder.push(take(y), int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         StorageBody { id, x, y, u }
     }
@@ -1021,7 +1035,7 @@ mod tests {
         builder.push_unit(assign(s, one), Span::ZERO);
         let t = builder.push(take(s), int, Span::ZERO);
         builder.push_unit(Op::Check { op: crate::ir::Checked::Add, left: one, right: one }, Span::ZERO);
-        builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let [_, first, second, _, check] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has five instructions")
@@ -1055,14 +1069,14 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         builder.push(take(s), int, Span::ZERO);
-        builder.terminate(Terminator::Jump { to: join, args: Vec::new() });
+        builder.terminate(Terminator::Jump { to: join, args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
-        builder.terminate(Terminator::Jump { to: join, args: Vec::new() });
+        builder.terminate(Terminator::Jump { to: join, args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(join);
-        builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let [_, read_store, unread_store, _] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has four instructions")
@@ -1100,7 +1114,7 @@ mod tests {
         let u = builder.push(take(c), int, Span::ZERO);
         builder.push_effect_unit(commit(page, u), Span::ZERO);
         builder.push_effect_unit(commit(clock, one), Span::ZERO);
-        builder.terminate(Terminator::Return { value: v, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: v, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         assert_eq!(f.module.body(id).context_of_slot(c), Some(page));
         let [read, _, volatile_load, unread, _, after_the_load, _, _, _, after_an_assign, volatile_commit] =
@@ -1133,7 +1147,7 @@ mod tests {
         let mut builder = f.module.build_body(true, int);
         builder.push_effect(Op::Fetch { context: clock }, int, Span::ZERO);
         let one = builder.push(constant(1), int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let [load, _] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has two instructions")
@@ -1164,7 +1178,7 @@ mod tests {
         let t = builder.push(take(c), int, Span::ZERO);
         builder.push_effect_unit(commit(page, t), Span::ZERO);
         let u = builder.push(take(s), int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: u, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: u, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let [_, dead, live, load, _, unwritten, _] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has seven instructions")

@@ -414,7 +414,7 @@ mod tests {
         let b = builder.push(constant(100), byte, Span::ZERO);
         let o = builder.push(binary(BinOp::Add(Overflow::Trap), b, b), byte, Span::ZERO);
         let r = builder.push(Op::Cast { src: z, to: CastTy::Int(IntTy::I8) }, byte, Span::ZERO);
-        builder.terminate(ret(w));
+        builder.terminate(ret(w), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let constants = facts::<ConstantValues>(&f.module, &decls, id);
@@ -451,15 +451,15 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         let t = builder.push(constant(10), int, Span::ZERO);
-        builder.terminate(jump(join, vec![t]));
+        builder.terminate(jump(join, vec![t]), acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
         let e = builder.push(constant(20), int, Span::ZERO);
-        builder.terminate(jump(join, vec![e]));
+        builder.terminate(jump(join, vec![e]), acvus_ast::Span::ZERO);
         builder.switch_to(join);
-        builder.terminate(ret(p));
+        builder.terminate(ret(p), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let constants = facts::<ConstantValues>(&f.module, &decls, id);
@@ -488,16 +488,16 @@ mod tests {
             arms: vec![(SwitchKey::Int(1), a, Vec::new()), (SwitchKey::Int(2), b, Vec::new())],
             default: Some((d, Vec::new())),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         let mut arm_values = Vec::new();
         for (block, n) in [(a, 10), (b, 20), (d, 30)] {
             builder.switch_to(block);
             let value = builder.push(constant(n), int, Span::ZERO);
             arm_values.push(value);
-            builder.terminate(jump(join, vec![value]));
+            builder.terminate(jump(join, vec![value]), acvus_ast::Span::ZERO);
         }
         builder.switch_to(join);
-        builder.terminate(ret(p));
+        builder.terminate(ret(p), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let constants = facts::<ConstantValues>(&f.module, &decls, id);
@@ -529,7 +529,7 @@ mod tests {
         let counter = builder.block_params(loop_body)[0];
         let exit = builder.new_block(&[int]);
         let trip = builder.block_params(exit)[0];
-        builder.terminate(jump(header, vec![s0]));
+        builder.terminate(jump(header, vec![s0]), acvus_ast::Span::ZERO);
         builder.switch_to(header);
         builder.terminate(Terminator::For {
             source: ForSource::Range { at, hi },
@@ -537,13 +537,13 @@ mod tests {
             exit,
             exit_trip: ExitTrip::Defined,
             exit_args: Vec::new(),
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let one = builder.push(constant(1), int, Span::ZERO);
         let s1 = builder.push(binary(BinOp::Add(Overflow::Trap), s, one), int, Span::ZERO);
-        builder.terminate(jump(header, vec![s1]));
+        builder.terminate(jump(header, vec![s1]), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
-        builder.terminate(ret(trip));
+        builder.terminate(ret(trip), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let intervals = facts::<IntervalValues>(&f.module, &decls, id);
@@ -616,7 +616,7 @@ mod tests {
             args: vec![x],
         };
         let r = builder.push(call, int, Span::ZERO);
-        builder.terminate(ret(r));
+        builder.terminate(ret(r), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let intervals = facts::<IntervalValues>(&module, &decls, id);

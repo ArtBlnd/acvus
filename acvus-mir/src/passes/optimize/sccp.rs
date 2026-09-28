@@ -148,7 +148,7 @@ mod tests {
         let b = builder.push(int_const(2), int, Span::ZERO);
         let c = builder.push(trapping_add(a, b), int, Span::ZERO);
         let d = builder.push(Op::BinOp { op: BinOp::Mul(Overflow::Trap), left: c, right: c }, int, Span::ZERO);
-        builder.terminate(ret(d));
+        builder.terminate(ret(d), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
 
@@ -191,16 +191,16 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         let one = builder.push(int_const(1), int, Span::ZERO);
-        builder.terminate(Terminator::Jump { to: join, args: vec![one] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![one] }, acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
         let two = builder.push(int_const(2), int, Span::ZERO);
-        builder.terminate(Terminator::Jump { to: join, args: vec![two] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![two] }, acvus_ast::Span::ZERO);
         builder.switch_to(join);
         let p = builder.block_params(join)[0];
-        builder.terminate(ret(p));
+        builder.terminate(ret(p), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let blocks_before = f.module.body(id).blocks().count();
 
@@ -242,15 +242,15 @@ mod tests {
             arms: vec![(SwitchKey::Int(1), one, Vec::new()), (SwitchKey::Int(2), two, Vec::new())],
             default: Some((other, Vec::new())),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         for (block, n) in [(one, 10), (two, 20), (other, 30)] {
             builder.switch_to(block);
             let k = builder.push(int_const(n), int, Span::ZERO);
-            builder.terminate(Terminator::Jump { to: join, args: vec![k] });
+            builder.terminate(Terminator::Jump { to: join, args: vec![k] }, acvus_ast::Span::ZERO);
         }
         builder.switch_to(join);
         let p = builder.block_params(join)[0];
-        builder.terminate(ret(p));
+        builder.terminate(ret(p), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let blocks_before = f.module.body(id).blocks().count();
 
@@ -281,7 +281,7 @@ mod tests {
         let mut builder = f.module.build_body(false, i8);
         let a = builder.push(int_const(100), i8, Span::ZERO);
         let b = builder.push(trapping_add(a, a), i8, Span::ZERO);
-        builder.terminate(ret(b));
+        builder.terminate(ret(b), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);
 

@@ -446,15 +446,15 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         let t = builder.push(wrapping_add(x, y), int, Span::ZERO);
-        builder.terminate(Terminator::Jump { to: join, args: vec![t] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![t] }, acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
-        builder.terminate(Terminator::Jump { to: join, args: vec![s] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![s] }, acvus_ast::Span::ZERO);
         builder.switch_to(join);
         let p = builder.block_params(join)[0];
-        builder.terminate(ret(p));
+        builder.terminate(ret(p), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let changes = f.run::<Gvn>(id);
@@ -482,7 +482,7 @@ mod tests {
         let c = builder.push(sub(x, y), int, Span::ZERO);
         let d = builder.push(sub(y, x), int, Span::ZERO);
         let all = builder.push(Op::MakeTuple { elements: vec![a, b, c, d] }, tuple, Span::ZERO);
-        builder.terminate(ret(all));
+        builder.terminate(ret(all), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
 
@@ -509,7 +509,7 @@ mod tests {
         let p = builder.push(pure_call.clone(), int, Span::ZERO);
         let q = builder.push(pure_call, int, Span::ZERO);
         let all = builder.push(Op::MakeTuple { elements: vec![a, b, p, q] }, tuple, Span::ZERO);
-        builder.terminate(ret(all));
+        builder.terminate(ret(all), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
 
@@ -535,7 +535,7 @@ mod tests {
         let b = builder.push_effect(opaque_call, int, Span::ZERO);
         builder.close_anyorder();
         let all = builder.push(Op::MakeTuple { elements: vec![a, b] }, tuple, Span::ZERO);
-        builder.terminate(ret(all));
+        builder.terminate(ret(all), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);
         let merges = before.matches("Merge").count();
@@ -573,7 +573,7 @@ mod tests {
         let m = builder.push_merge(vec![t, t], Span::ZERO);
         let b = builder.push_effect(opaque_call, int, Span::ZERO);
         let all = builder.push(Op::MakeTuple { elements: vec![a, b] }, tuple, Span::ZERO);
-        builder.terminate(ret(all));
+        builder.terminate(ret(all), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         assert_eq!(consumed(&f, id, b), m);
 
@@ -605,7 +605,7 @@ mod tests {
         let m3 = builder.push_merge(vec![m2, t2, t2], Span::ZERO);
         let c = builder.push_effect(opaque_call, int, Span::ZERO);
         let all = builder.push(Op::MakeTuple { elements: vec![a, b, c] }, triple, Span::ZERO);
-        builder.terminate(ret(all));
+        builder.terminate(ret(all), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         assert_eq!(consumed(&f, id, c), m3);
 

@@ -125,7 +125,7 @@ fn straight_line(f: &mut Fixture) -> (BodyId, ValueId, ValueId, ValueId) {
     let a = builder.param(name, int);
     let x = builder.push(add(a, a), int, at(1));
     let y = builder.push(neg(x), int, at(2));
-    builder.terminate(ret(y));
+    builder.terminate(ret(y), acvus_ast::Span::ZERO);
     (builder.seal().expect("the body has no open state"), a, x, y)
 }
 
@@ -141,9 +141,9 @@ fn every_value_is_born_typed() {
     let join = builder.new_block(&[bool]);
     let p = builder.block_params(join)[0];
     let t = builder.push(Op::Const { value: Literal::Bool(true) }, bool, at(3));
-    builder.terminate(Terminator::Jump { to: join, args: vec![t] });
+    builder.terminate(Terminator::Jump { to: join, args: vec![t] }, acvus_ast::Span::ZERO);
     builder.switch_to(join);
-    builder.terminate(ret(a));
+    builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let body = f.body(id);
     assert_eq!(body.ty_of(a), int);
@@ -223,7 +223,7 @@ fn a_removal_moves_the_definitions_after_it() {
     let x = builder.push(add(a, a), int, at(5));
     let y = builder.push(neg(a), int, at(6));
     let z = builder.push(neg(y), int, at(7));
-    builder.terminate(ret(z));
+    builder.terminate(ret(z), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let mut rewriter = f.module.rewrite(id);
@@ -246,7 +246,7 @@ fn a_use_is_replaced_only_by_a_value_of_its_type() {
     let mut builder = build(&mut f.module, false, f.int);
     let a = builder.param(na, int);
     let b = builder.param(nb, bool);
-    builder.terminate(ret(a));
+    builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     f.module.rewrite(id).replace_all_uses(a, b);
 }
@@ -260,7 +260,7 @@ fn an_edge_short_of_arguments_is_refused() {
     let int = f.int;
     let mut builder = build(&mut f.module, false, f.int);
     let join = builder.new_block(&[int]);
-    builder.terminate(jump(join));
+    builder.terminate(jump(join), acvus_ast::Span::ZERO);
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn an_edge_argument_of_another_type_is_refused() {
     let mut builder = build(&mut f.module, false, f.int);
     let a = builder.param(name, int);
     let join = builder.new_block(&[bool]);
-    builder.terminate(Terminator::Jump { to: join, args: vec![a] });
+    builder.terminate(Terminator::Jump { to: join, args: vec![a] }, acvus_ast::Span::ZERO);
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn a_reserved_block_is_checked_against_its_edges_when_made() {
     let mut builder = build(&mut f.module, false, f.int);
     let a = builder.param(name, int);
     let join = builder.reserve_block();
-    builder.terminate(Terminator::Jump { to: join, args: vec![a] });
+    builder.terminate(Terminator::Jump { to: join, args: vec![a] }, acvus_ast::Span::ZERO);
     builder.make_block(join, &[bool]);
 }
 
@@ -295,10 +295,10 @@ fn a_retarget_to_other_parameters_is_refused() {
     let a = builder.param(name, int);
     let takes_int = builder.new_block(&[int]);
     let takes_bool = builder.new_block(&[bool]);
-    builder.terminate(Terminator::Jump { to: takes_int, args: vec![a] });
+    builder.terminate(Terminator::Jump { to: takes_int, args: vec![a] }, acvus_ast::Span::ZERO);
     for block in [takes_int, takes_bool] {
         builder.switch_to(block);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
     }
     let id = builder.seal().expect("the body has no open state");
     f.module.rewrite(id).retarget(takes_int, takes_bool);
@@ -315,15 +315,15 @@ fn removing_a_block_parameter_removes_its_argument_on_every_edge() {
     let then_block = builder.new_block(&[]);
     let else_block = builder.new_block(&[]);
     let join = builder.reserve_block();
-    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     for (block, arg) in [(then_block, a), (else_block, b)] {
         builder.switch_to(block);
-        builder.terminate(Terminator::Jump { to: join, args: vec![arg] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![arg] }, acvus_ast::Span::ZERO);
     }
     builder.make_block(join, &[int]);
     let p = builder.block_params(join)[0];
     builder.switch_to(join);
-    builder.terminate(ret(a));
+    builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let mut rewriter = f.module.rewrite(id);
@@ -349,7 +349,7 @@ fn push_effect_threads_the_token_and_return_carries_the_current_one() {
     let first = builder.push_effect(first_call, int, at(8));
     builder.push(pure_call, int, at(9));
     let second = builder.push_effect(second_call, int, at(10));
-    builder.terminate(ret(second));
+    builder.terminate(ret(second), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -375,7 +375,7 @@ fn every_record_keeps_the_span_it_was_pushed_with() {
     let a = builder.param(name, int);
     let x = builder.push(neg(a), int, at(100));
     builder.push_unit(Op::Drop { src: x }, at(101));
-    builder.terminate(ret(a));
+    builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let body = f.body(id);
     let insts = body.block(body.entry()).insts();
@@ -407,15 +407,15 @@ fn the_token_crosses_a_diamond_join() {
     let mut builder = build(&mut f.module, true, f.int);
     let c = builder.param(nc, bool);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
-    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     builder.switch_to(then_block);
     builder.push_effect(arm_call, int, at(13));
-    builder.terminate(jump(join));
+    builder.terminate(jump(join), acvus_ast::Span::ZERO);
     builder.switch_to(else_block);
-    builder.terminate(jump(join));
+    builder.terminate(jump(join), acvus_ast::Span::ZERO);
     builder.switch_to(join);
     let joined = builder.push_effect(join_call, int, at(14));
-    builder.terminate(ret(joined));
+    builder.terminate(ret(joined), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -443,14 +443,14 @@ fn a_join_no_arm_advances_takes_no_token_parameter() {
     let mut builder = build(&mut f.module, true, f.int);
     let c = builder.param(nc, bool);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
-    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     for block in [then_block, else_block] {
         builder.switch_to(block);
-        builder.terminate(jump(join));
+        builder.terminate(jump(join), acvus_ast::Span::ZERO);
     }
     builder.switch_to(join);
     let joined = builder.push_effect(join_call, int, at(15));
-    builder.terminate(ret(joined));
+    builder.terminate(ret(joined), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -466,19 +466,19 @@ fn the_token_crosses_a_loop_back_edge() {
     let mut builder = build(&mut f.module, true, f.bool);
     let c = builder.param(nc, bool);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
     builder.terminate(Terminator::While {
         cond: c,
         stages: Stages::lowered(loop_body),
         exit,
         exit_args: Vec::new(),
-    });
+    }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     builder.push_effect(body_call, int, at(16));
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
-    builder.terminate(ret(c));
+    builder.terminate(ret(c), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -509,7 +509,7 @@ fn anyorder_gives_its_entry_token_inside_and_merges_on_close() {
     builder.close_anyorder();
     builder.close_anyorder();
     let last = builder.push_effect(after, int, at(19));
-    builder.terminate(ret(last));
+    builder.terminate(ret(last), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -539,15 +539,15 @@ fn anyorder_merges_on_an_edge_that_leaves_it() {
     let out = builder.reserve_block();
     builder.open_anyorder();
     builder.push_effect(inside, int, at(20));
-    builder.terminate(jump(out));
+    builder.terminate(jump(out), acvus_ast::Span::ZERO);
     let rest = builder.new_block(&[]);
     builder.switch_to(rest);
     builder.close_anyorder();
-    builder.terminate(Terminator::Diverge);
+    builder.terminate(Terminator::Diverge, acvus_ast::Span::ZERO);
     builder.make_block(out, &[]);
     builder.switch_to(out);
     let last = builder.push_effect(outside, int, at(21));
-    builder.terminate(ret(last));
+    builder.terminate(ret(last), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -565,11 +565,11 @@ fn a_return_inside_anyorder_carries_the_merge() {
     let mut builder = build(&mut f.module, true, f.int);
     builder.open_anyorder();
     let value = builder.push_effect(inside, int, at(22));
-    builder.terminate(ret(value));
+    builder.terminate(ret(value), acvus_ast::Span::ZERO);
     let rest = builder.new_block(&[]);
     builder.switch_to(rest);
     builder.close_anyorder();
-    builder.terminate(Terminator::Diverge);
+    builder.terminate(Terminator::Diverge, acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -585,7 +585,7 @@ fn removing_an_effectful_call_rethreads_the_token_around_it() {
     let mut builder = build(&mut f.module, true, f.int);
     let first = builder.push_effect(first_call, int, at(23));
     let second = builder.push_effect(second_call, int, at(24));
-    builder.terminate(ret(second));
+    builder.terminate(ret(second), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let o0 = f.body(id).order_param().expect("ordered");
 
@@ -609,7 +609,7 @@ fn a_load_and_a_commit_are_threaded_on_the_chain() {
     let mut builder = build(&mut f.module, true, f.int);
     let loaded = builder.push_effect(Op::Fetch { context: page }, int, at(30));
     builder.push_effect_unit(Op::Commit { context: page, value: loaded, wrote: true }, at(31));
-    builder.terminate(ret(loaded));
+    builder.terminate(ret(loaded), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
@@ -656,7 +656,7 @@ fn removing_a_load_rethreads_the_token_around_it() {
     let mut builder = build(&mut f.module, true, f.int);
     let unread = builder.push_effect(Op::Fetch { context: page }, int, at(35));
     let read = builder.push_effect(Op::Fetch { context: page }, int, at(36));
-    builder.terminate(ret(read));
+    builder.terminate(ret(read), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let o0 = f.body(id).order_param().expect("ordered");
 
@@ -712,7 +712,7 @@ fn split_call_makes_a_start_and_its_taking() {
     let mut builder = build(&mut f.module, true, f.int);
     let call = builder.push_effect(call_op, int, at(25));
     let user = builder.push(neg(call), int, at(26));
-    builder.terminate(ret(user));
+    builder.terminate(ret(user), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let entry = f.body(id).entry();
     let call_edge = edge_of(&f.body(id).block(entry).insts()[0]);
@@ -745,7 +745,7 @@ fn removing_a_taking_removes_its_start_and_rethreads_the_token() {
     let call = builder.push_effect(call_op, int, at(27));
     let user = builder.push(neg(call), int, at(28));
     let later = builder.push_effect(later_op, int, at(29));
-    builder.terminate(ret(later));
+    builder.terminate(ret(later), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let o0 = f.body(id).order_param().expect("ordered");
 
@@ -768,7 +768,7 @@ fn a_call_its_callee_does_not_let_split_is_refused() {
     let (int, call_op) = (f.int, f.call(f.whole));
     let mut builder = build(&mut f.module, true, f.int);
     let call = builder.push_effect(call_op, int, at(30));
-    builder.terminate(ret(call));
+    builder.terminate(ret(call), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     f.module.rewrite(id).split_call(call);
 }
@@ -795,14 +795,14 @@ fn a_retarget_updates_a_diamonds_join() {
     let a = builder.param(na, int);
     let c = builder.param(nc, bool);
     let [then_block, else_block, join, new_join] = [(); 4].map(|()| builder.new_block(&[]));
-    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     for block in [then_block, else_block] {
         builder.switch_to(block);
-        builder.terminate(jump(join));
+        builder.terminate(jump(join), acvus_ast::Span::ZERO);
     }
     for block in [join, new_join] {
         builder.switch_to(block);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
     }
     let id = builder.seal().expect("the body has no open state");
 
@@ -828,14 +828,14 @@ fn a_retarget_updates_a_loops_stages_and_exit() {
     let c = builder.param(nc, bool);
     let header = builder.current_block();
     let [loop_body, exit, other_body, other_exit] = [(); 4].map(|()| builder.new_block(&[]));
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     for block in [loop_body, other_body] {
         builder.switch_to(block);
-        builder.terminate(jump(header));
+        builder.terminate(jump(header), acvus_ast::Span::ZERO);
     }
     for block in [exit, other_exit] {
         builder.switch_to(block);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
     }
     let id = builder.seal().expect("the body has no open state");
 
@@ -861,13 +861,13 @@ fn a_split_keeps_the_block_named_and_moves_the_diamond_with_the_tail() {
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     let x = builder.push(add(a, a), int, at(32));
     let y = builder.push(neg(x), int, at(33));
-    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.terminate(diamond(c, then_block, else_block, join), acvus_ast::Span::ZERO);
     for block in [then_block, else_block] {
         builder.switch_to(block);
-        builder.terminate(jump(join));
+        builder.terminate(jump(join), acvus_ast::Span::ZERO);
     }
     builder.switch_to(join);
-    builder.terminate(ret(y));
+    builder.terminate(ret(y), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let mut rewriter = f.module.rewrite(id);
@@ -909,14 +909,14 @@ fn switch_body(f: &mut Fixture) -> SwitchBody {
         arms: vec![(SwitchKey::Int(1), one, Vec::new()), (SwitchKey::Int(2), two, Vec::new())],
         default: Some((other, Vec::new())),
         join,
-    });
+    }, acvus_ast::Span::ZERO);
     for block in [one, two, other] {
         builder.switch_to(block);
-        builder.terminate(jump(join));
+        builder.terminate(jump(join), acvus_ast::Span::ZERO);
     }
     for block in [join, spare] {
         builder.switch_to(block);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
     }
     let id = builder.seal().expect("the body has no open state");
     SwitchBody { id, entry, arms: [one, two, other], join, spare }
@@ -968,7 +968,7 @@ fn the_builder_refuses_a_switch_whose_join_is_not_a_block() {
         arms: vec![(SwitchKey::Int(1), arm, Vec::new())],
         default: None,
         join: BlockId::of_index(7),
-    });
+    }, acvus_ast::Span::ZERO);
 }
 
 // -- Builder: a nested body --------------------------------------------------
@@ -995,7 +995,7 @@ fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
         let x = inner.param(nx, int);
         let captured = inner.capture(nk, int);
         let sum = inner.push(add(x, captured), int, at(2));
-        inner.terminate(ret(sum));
+        inner.terminate(ret(sum), acvus_ast::Span::ZERO);
         inner.seal().expect("the lambda's body has no open state")
     };
     let closure = outer.push(Op::MakeClosure { body: lambda, captures: vec![k] }, lambda_ty, at(3));
@@ -1004,7 +1004,7 @@ fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
         int,
         at(4),
     );
-    outer.terminate(ret(called));
+    outer.terminate(ret(called), acvus_ast::Span::ZERO);
     let enclosing = outer.seal().expect("the enclosing body has no open state");
 
     assert_ne!(lambda, enclosing);
@@ -1024,7 +1024,7 @@ fn seal_reports_a_block_without_its_terminator() {
     let mut f = fixture();
     let mut builder = build(&mut f.module, false, f.int);
     let open = builder.new_block(&[]);
-    builder.terminate(Terminator::Diverge);
+    builder.terminate(Terminator::Diverge, acvus_ast::Span::ZERO);
     assert_eq!(builder.seal().err(), Some(Unsealed::BlockWithoutTerminator(open)));
 }
 
@@ -1033,7 +1033,7 @@ fn seal_reports_an_edge_to_an_unmade_block() {
     let mut f = fixture();
     let mut builder = build(&mut f.module, false, f.int);
     let unmade = builder.reserve_block();
-    builder.terminate(jump(unmade));
+    builder.terminate(jump(unmade), acvus_ast::Span::ZERO);
     assert_eq!(builder.seal().err(), Some(Unsealed::EdgeToUnmadeBlock(unmade)));
 }
 
@@ -1042,7 +1042,7 @@ fn seal_reports_a_reserved_block_nothing_names() {
     let mut f = fixture();
     let mut builder = build(&mut f.module, false, f.int);
     let unmade = builder.reserve_block();
-    builder.terminate(Terminator::Diverge);
+    builder.terminate(Terminator::Diverge, acvus_ast::Span::ZERO);
     assert_eq!(builder.seal().err(), Some(Unsealed::ReservedNeverMade(unmade)));
 }
 
@@ -1051,7 +1051,7 @@ fn seal_reports_an_open_anyorder_scope() {
     let mut f = fixture();
     let mut builder = build(&mut f.module, true, f.int);
     builder.open_anyorder();
-    builder.terminate(Terminator::Diverge);
+    builder.terminate(Terminator::Diverge, acvus_ast::Span::ZERO);
     assert_eq!(builder.seal().err(), Some(Unsealed::OpenAnyorder));
 }
 
@@ -1061,7 +1061,7 @@ fn a_sealed_body_is_added_to_the_module() {
     let mut builder = build(&mut f.module, false, f.int);
     builder.open_anyorder();
     builder.close_anyorder();
-    builder.terminate(Terminator::Diverge);
+    builder.terminate(Terminator::Diverge, acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     f.module.set_entry(id);
     assert_eq!(f.module.entry(), id);
@@ -1076,7 +1076,7 @@ fn a_return_does_not_take_a_token_from_its_caller() {
     let mut builder = build(&mut f.module, false, f.int);
     let a = builder.param(na, int);
     let flag = builder.push(Op::Const { value: Literal::Bool(false) }, bool, at(34));
-    builder.terminate(Terminator::Return { value: a, order: Some(flag), span: Span::ZERO });
+    builder.terminate(Terminator::Return { value: a, order: Some(flag), span: Span::ZERO }, Span::ZERO);
 }
 
 // -- Order tokens are the core's alone (ir-core-structure §2) -------------
@@ -1089,17 +1089,17 @@ fn the_core_records_every_token_it_makes() {
     let mut builder = build(&mut f.module, true, f.int);
     let c = builder.param(nc, bool);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let looped = builder.push_effect(loop_call, int, at(40));
-    builder.terminate(jump(header));
+    builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
     builder.open_anyorder();
     let scoped = builder.push_effect(scoped_call, int, at(41));
     builder.close_anyorder();
-    builder.terminate(ret(scoped));
+    builder.terminate(ret(scoped), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);

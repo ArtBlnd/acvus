@@ -493,6 +493,7 @@ impl Body {
         assert!(at <= head.insts.len(), "{block:?} has no position {at}");
         let insts = head.insts.split_off(at);
         let terminator = std::mem::replace(&mut head.terminator, Terminator::Jump { to: tail_id, args: Vec::new() });
+        let terminator_span = head.terminator_span;
         for (offset, inst) in insts.iter().enumerate() {
             for value in inst.defs() {
                 self.value_def_mut(value).def = Def::Inst(tail_id, offset);
@@ -507,7 +508,7 @@ impl Body {
         for value in operands {
             self.use_sites_mut(value).move_site(Site::Term(block), Site::Term(tail_id));
         }
-        self.new_block(Block { params: Vec::new(), insts, terminator })
+        self.new_block(Block { params: Vec::new(), insts, terminator, terminator_span })
     }
 
     /// Every edge into `from`, every `Diamond` join and loop stage and exit
@@ -888,7 +889,8 @@ impl Body {
     /// and its position in that block's terminator, all into one target: it
     /// takes parameters like the target, each edge enters it with the
     /// arguments it passed and the parameters it supplied, and it jumps to
-    /// the target passing every parameter on. A loop's body or exit, named
+    /// the target passing every parameter on. Its jump carries the span of the
+    /// first edge's source terminator, where control leaves for it. A loop's body or exit, named
     /// by an edge, is the new block from now on, as every structural label
     /// follows its edge. Cost: O(the target's parameters + |edges|).
     ///
@@ -912,8 +914,10 @@ impl Body {
             .map(|(index, param)| self.make_like(self.value_def(param), Def::BlockParam(middle, index)))
             .collect();
         let terminator = Terminator::Jump { to, args: params.clone() };
+        let (first, _) = edges[0];
+        let terminator_span = self.blocks[first.index()].terminator_span;
         self.record_terminator(middle, &terminator);
-        self.new_block(Block { params, insts: Vec::new(), terminator });
+        self.new_block(Block { params, insts: Vec::new(), terminator, terminator_span });
         for (from, position) in edges {
             *self.blocks[from.index()].terminator.edge_target_mut(*position) = middle;
         }
@@ -962,14 +966,47 @@ impl Body {
             }
         }
         let terminator = std::mem::replace(&mut self.blocks[block.index()].terminator, Terminator::Diverge);
+        let terminator_span = self.blocks[block.index()].terminator_span;
         for value in terminator.operands() {
             self.use_sites_mut(value).move_site(Site::Term(block), Site::Term(pred));
         }
         let merged = &mut self.blocks[pred.index()];
         merged.insts.extend(insts);
         merged.terminator = terminator;
+        merged.terminator_span = terminator_span;
         let keep: Vec<bool> = (0..self.blocks.len()).map(|index| index != block.index()).collect();
         self.remove_blocks(&keep)
+    }
+
+    /// The operand at `index` of the instruction or terminator at `site`,
+    /// in the order `Inst::operands` and `Terminator::operands` give, which
+    /// is `of`, becomes `with`; no other operand changes. Cost: O(the
+    /// site's operands).
+    ///
+    /// # Panics
+    /// Their types differ, or that operand is not `of`.
+    pub(super) fn replace_operand_at(&mut self, site: Site, index: usize, of: ValueId, with: ValueId) {
+        let (of_ty, with_ty) = (self.ty_of(of), self.ty_of(with));
+        assert!(
+            of_ty == with_ty,
+            "{of:?} of {of_ty:?} is replaced only by a value of its type, not {with:?} of {with_ty:?}"
+        );
+        let mut position = 0;
+        let mut found = None;
+        let swap = |value: &mut ValueId| {
+            if position == index {
+                found = Some(*value);
+                *value = with;
+            }
+            position += 1;
+        };
+        match site {
+            Site::Inst(block, at) => self.blocks[block.index()].insts[at].for_each_operand_mut(swap),
+            Site::Term(block) => self.blocks[block.index()].terminator.for_each_operand_mut(swap),
+        }
+        assert_eq!(found, Some(of), "operand {index} of {site:?} is {of:?}");
+        self.use_sites_mut(of).remove_one(site);
+        self.use_sites_mut(with).add(site, 1);
     }
 
     /// The operands of the instruction or terminator at `site` that are `of`
@@ -1147,6 +1184,7 @@ impl Body {
         };
         let args = args.clone();
         let result = call.result.expect("a call yields a value");
+        let call_span = call.span;
         let edge = call.order.map(|order| match order {
             OrderUse::Edge(edge) => edge,
             OrderUse::Start(_) | OrderUse::Take(_) => panic!("a call's order is an edge"),
@@ -1243,7 +1281,7 @@ impl Body {
             };
             let params: Vec<ValueId> = callee_block.params.iter().map(|param| copied[param]).collect();
             let insts = insts.into_iter().map(|inst| Inst { id: self.fresh_inst_id(), ..inst }).collect();
-            self.new_block(Block { params, insts, terminator });
+            self.new_block(Block { params, insts, terminator, terminator_span: callee_block.terminator_span });
         }
         for id in (base..self.blocks.len()).map(BlockId::of_index) {
             for at in 0..self.blocks[id.index()].insts.len() {
@@ -1259,6 +1297,7 @@ impl Body {
             }
         }
         self.blocks[block.index()].terminator = Terminator::Jump { to: moved(callee.entry), args: Vec::new() };
+        self.blocks[block.index()].terminator_span = call_span;
         continuation
     }
 }

@@ -243,7 +243,7 @@ mod tests {
         let header = builder.new_block(&[]);
         let loop_body = builder.new_block(&[index]);
         let exit = builder.new_block(&[]);
-        builder.terminate(Terminator::Jump { to: header, args: Vec::new() });
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(header);
         builder.terminate(Terminator::For {
             source: ForSource::Range { at, hi },
@@ -251,14 +251,14 @@ mod tests {
             exit,
             exit_trip: ExitTrip::Absent,
             exit_args: Vec::new(),
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let i = builder.block_params(loop_body)[0];
         builder.push(Op::Index { slice: s, index: i, mode: IndexMode::Copy, bound: IndexBound::Checked }, int, Span::ZERO);
-        builder.terminate(Terminator::Jump { to: header, args: Vec::new() });
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(exit);
         let z = builder.push(constant(0), int, Span::ZERO);
-        builder.terminate(ret(z));
+        builder.terminate(ret(z), acvus_ast::Span::ZERO);
         builder.seal().expect("the body has no open state")
     }
 
@@ -317,7 +317,7 @@ mod tests {
         let two = builder.push(constant(2), int, Span::ZERO);
         builder.push_unit(Op::Check { op: Checked::Add, left: one, right: two }, Span::ZERO);
         builder.push_unit(Op::Check { op: Checked::Add, left: x, right: one }, Span::ZERO);
-        builder.terminate(ret(x));
+        builder.terminate(ret(x), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         run(&mut f, id);

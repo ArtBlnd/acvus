@@ -80,7 +80,7 @@ mod tests {
         let a = builder.push(read_through(s), int, Span::ZERO);
         let b = builder.push(read_through(t), int, Span::ZERO);
         let sum = builder.push(crate::passes::optimize::tests::wrapping_add(a, b), int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: sum, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: sum, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
 
@@ -106,7 +106,7 @@ mod tests {
         let m = builder.param(nm, mut_ref_int);
         let s = builder.push(reborrow_of(m, Mutability::Shared), ref_int, Span::ZERO);
         let a = builder.push(read_through(s), int, Span::ZERO);
-        builder.terminate(Terminator::Return { value: a, order: None, span: Span::ZERO });
+        builder.terminate(Terminator::Return { value: a, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);
 

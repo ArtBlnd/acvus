@@ -280,6 +280,28 @@ impl<'m> Rewriter<'m> {
         }
     }
 
+    /// The operand at `index` of `site`, which is `of`, becomes `with`.
+    /// Cost: `Body::replace_operand_at`'s.
+    ///
+    /// # Panics
+    /// As `Body::replace_operand_at`.
+    pub fn replace_operand_at(&mut self, site: Site, index: usize, of: ValueId, with: ValueId) {
+        self.body_mut().replace_operand_at(site, index, of, with);
+        self.changes.record(Aspect::Instructions);
+        if self.is_order(self.body().ty_of(of)) {
+            self.changes.record(Aspect::OrderTokens);
+        }
+    }
+
+    /// The id of `kind` in the module's one table. Cost: O(kind).
+    ///
+    /// # Panics
+    /// As `Types::intern`.
+    pub fn intern(&mut self, kind: TyKind<Concrete>) -> Ty {
+        self.changes.record(Aspect::Types);
+        self.module.types.intern(kind)
+    }
+
     /// Two adjacent effects on one chain trade places. Cost:
     /// `Body::swap_effects`'s.
     ///

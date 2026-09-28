@@ -156,6 +156,9 @@ pub struct Block {
     pub(super) params: Vec<ValueId>,
     pub(super) insts: Vec<Inst>,
     pub(super) terminator: Terminator,
+    /// The span of the construct that made the terminator; a `Return`'s
+    /// is its own.
+    pub(super) terminator_span: Span,
 }
 
 /// An instruction's identity within its body, given when the instruction
@@ -776,5 +779,10 @@ impl Block {
     }
     pub fn terminator(&self) -> &Terminator {
         &self.terminator
+    }
+    /// The span of the construct that made the terminator: where control
+    /// leaves the block. Cost: O(1).
+    pub fn terminator_span(&self) -> Span {
+        self.terminator_span
     }
 }

@@ -200,7 +200,7 @@ mod tests {
         let e = builder.push(wrapping_add(d, a), int, Span::ZERO);
         let g = builder.push(wrapping_add(e, x), int, Span::ZERO);
         let h = builder.push(wrapping_add(g, y), int, Span::ZERO);
-        builder.terminate(ret(h));
+        builder.terminate(ret(h), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
         let o0 = f.module.body(id).order_param().expect("the body is ordered");

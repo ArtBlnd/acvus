@@ -1,19 +1,21 @@
-//! For each slot, whether its current content may be read before a whole
-//! store replaces it or the body ends: the dense engine, backward, over sets
-//! of slots. A site gens every slot `Loans` says it reads, directly or
-//! through a reference; a store into a whole slot by name kills it. A store
-//! into part of a slot, or into a slot through a reference, kills nothing,
-//! so a slot is live wherever those leave it in doubt. The body's end reads
-//! none of its own slots.
+//! For each place the body owns, a slot or a by-value parameter's own
+//! storage, whether its current content may be read before a whole store
+//! replaces it or the body ends: the dense engine, backward, over sets of
+//! places, each named by its slot or its parameter. A site gens every such
+//! place `Loans` says it reads, directly or through a reference; a store
+//! into a whole place by name kills it. A store into part of a place, or
+//! into a place through a reference, kills nothing, so a place is live
+//! wherever those leave it in doubt. The body's end reads none of its own
+//! places.
 //!
-//! `Liveness` answers for values; this answers for what a slot holds, which
-//! a slot's own `ValueId` does not follow, since every access names it.
+//! `Liveness` answers for values; this answers for what a place holds, which
+//! a place's own `ValueId` does not follow, since every access names it.
 //!
 //! Cost: `Loans`', and then a block's state only grows, at most once per
-//! slot, and each growth re-runs the transfer of the block, so O(slots ·
+//! place, and each growth re-runs the transfer of the block, so O(places ·
 //! (blocks + edges) · the largest block's sites · the storages a site
-//! reads). The per-point sets take O(points · slots) space. The height is
-//! the body's slots; the widening is the join.
+//! reads). The per-point sets take O(points · places) space. The height is
+//! the body's places; the widening is the join.
 //!
 //! passes-analyses.md.
 
@@ -25,14 +27,14 @@ use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Directio
 use crate::passes::domain::{JoinSemiLattice, Widen};
 
 pub struct ContentLiveness {
-    /// Per block, the slots live before each instruction, and last the
-    /// slots live before its terminator.
+    /// Per block, the places live before each instruction, and last the
+    /// places live before its terminator.
     before: FxHashMap<BlockId, Vec<FxHashSet<ValueId>>>,
     at_end: FxHashMap<BlockId, FxHashSet<ValueId>>,
 }
 
 impl ContentLiveness {
-    /// The slots whose content may be read from just after the instruction
+    /// The places whose content may be read from just after the instruction
     /// at `site` runs, before a whole store replaces it or the body ends;
     /// for a terminator, from just after it, on the way into a successor.
     /// Cost: O(1).
@@ -46,7 +48,7 @@ impl ContentLiveness {
         }
     }
 
-    /// The slots whose content may be read from `block`'s start. Cost: O(1).
+    /// The places whose content may be read from `block`'s start. Cost: O(1).
     ///
     /// # Panics
     /// `block` is not a block of the body.
@@ -54,7 +56,26 @@ impl ContentLiveness {
         &self.points(block)[0]
     }
 
-    /// The slots whose content may be read after `block`'s terminator, on
+    /// The places whose content may be read from just before the
+    /// instruction at `index` of `block`, or before its terminator where
+    /// `index` is the block's length. Cost: O(1).
+    ///
+    /// # Panics
+    /// `block` is not a block of the body, or `index` is past its length.
+    pub fn live_before(&self, block: BlockId, index: usize) -> &FxHashSet<ValueId> {
+        self.points(block).get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"))
+    }
+
+    /// The places whose content may be read from just before `block`'s
+    /// terminator. Cost: O(1).
+    ///
+    /// # Panics
+    /// `block` is not a block of the body.
+    pub fn live_before_terminator(&self, block: BlockId) -> &FxHashSet<ValueId> {
+        self.points(block).last().expect("a block's points end before its terminator")
+    }
+
+    /// The places whose content may be read after `block`'s terminator, on
     /// its way into a successor. Cost: O(1).
     ///
     /// # Panics
@@ -98,7 +119,7 @@ impl Analysis for ContentLiveness {
     }
 }
 
-/// A set of slots; finite over a body, so its widening is its join.
+/// A set of places; finite over a body, so its widening is its join.
 #[derive(Debug, Clone, PartialEq)]
 struct Live(FxHashSet<ValueId>);
 
@@ -148,11 +169,11 @@ impl<'f> Backward<'f> {
     }
 
     fn gen_reads(&self, site: Site, state: &mut Live) {
-        let read_slots = self.loans.reads(site).iter().filter_map(|storage| match storage {
-            Storage::Slot(slot) => Some(*slot),
-            Storage::Param(_) | Storage::Outside { .. } => None,
+        let read_places = self.loans.reads(site).iter().filter_map(|storage| match storage {
+            Storage::Slot(place) | Storage::Param(place) => Some(*place),
+            Storage::Outside { .. } => None,
         });
-        state.0.extend(read_slots);
+        state.0.extend(read_places);
     }
 }
 
@@ -166,10 +187,10 @@ impl DenseAnalysis for Backward<'_> {
     }
 
     fn transfer(&self, inst: &Inst, state: &mut Live) {
-        if let Op::Assign { target: RefTarget::Var(slot), path, .. } = inst.op()
+        if let Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } = inst.op()
             && path.is_empty()
         {
-            state.0.remove(slot);
+            state.0.remove(place);
         }
         let site = self.inst_sites.get(&std::ptr::from_ref(inst)).expect("the instruction transferred is one of the body's");
         self.gen_reads(*site, state);

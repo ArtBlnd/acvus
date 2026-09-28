@@ -21,10 +21,11 @@ pub use cursor::Cursor;
 pub use keeps::{
     DefDominatesUses, Invariant, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
-pub use needs::{DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+pub use needs::{ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
 pub use scopes::{
     MotionFacts, Cfg, EditsCfg, EditsLoops, EditsOrder, Effect, Loop, Motion, MovesInsts, PromotesStorage, Remove, RemovesInsts,
-    ReplacesValues, Sccp, Scope, Storage, Value, Discharge, Discharges, Drops, Inline, Inlines, InsertsDrops,
+    ReplacesValues, Sccp, Scope, Storage, Value, Discharge, Discharges, Drops, Inline, Inlines, InsertsDrops, Clones,
+    ClonesReads, DropFacts,
 };
 
 use std::collections::BTreeSet;
@@ -37,7 +38,7 @@ use super::body::{Def, InstId};
 use super::core::{InstShift, structural_fields};
 use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
 use crate::ir::{Callee, IndexBound, RefTarget, SwitchKey, ValueId, fn_effect};
-use crate::ty::{Concrete, Reissue, SplitCost, Ty, Types};
+use crate::ty::{Concrete, Mutability, Reissue, SplitCost, Ty, TyKind, TypeArg, Types};
 
 /// An instruction of the body being edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -834,6 +835,15 @@ pub enum CannotInline {
 pub enum CannotDrop {
     /// The value is used after the position.
     UsedAfter(Site),
+    /// The storage's content may be read after the position.
+    ContentReadAfter,
+}
+
+/// Why a read cannot become a clone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotCloneRead {
+    /// The place the `Take` reads is not a `String`.
+    NotAString,
 }
 
 impl<'m, S> Editor<'m, S>
@@ -841,6 +851,28 @@ where
     S: ReplacesValues,
     S::Needs<'m>: DominanceFacts,
 {
+    /// G3, by operand: the operand at `index` of `site`, in the order
+    /// `Inst::operands` and `Terminator::operands` give, which is `of`, takes
+    /// `with` instead, and no other operand changes; refused where `with`
+    /// does not dominate `site`.
+    ///
+    /// # Panics
+    /// `of` and `with` differ in type, or that operand is not `of`.
+    pub fn replace_operand(&mut self, site: Site, index: usize, of: ValueId, with: ValueId) -> Result<(), DoesNotDominate> {
+        let body = self.body_ref();
+        let (of_ty, with_ty) = (body.ty_of(of), body.ty_of(with));
+        assert!(of_ty == with_ty, "{of:?} of {of_ty:?} is replaced only by a value of its type, not {with:?} of {with_ty:?}");
+        assert!(site_operands(body, site).get(index) == Some(&of), "operand {index} of {site:?} is not {of:?}");
+        if of == with {
+            return Ok(());
+        }
+        if !self.needs.dominates(with, site_position(site)) {
+            return Err(DoesNotDominate { use_at: site });
+        }
+        self.edit(|rewriter| rewriter.replace_operand_at(site, index, of, with));
+        Ok(())
+    }
+
     /// G3: the operands at `site` that are `of` take `with` instead, and no
     /// other use changes; refused where `with` does not dominate `site`.
     ///
@@ -1126,7 +1158,7 @@ where
 impl<'m, S> Editor<'m, S>
 where
     S: InsertsDrops,
-    S::Needs<'m>: DominanceFacts,
+    S::Needs<'m>: DropFacts,
 {
     /// S3: a `Drop` of `value` at `at`, where nothing uses it after:
     /// refused as `UsedAfter` at the first use, in block order, that a path
@@ -1160,6 +1192,72 @@ where
         }
         self.edit(|rewriter| rewriter.insert_drop(block, index, value, span));
         self.shifted([InstShift::Inserted { block, index }]);
+        Ok(())
+    }
+
+    /// S3, for a storage: the whole content of `place`, a slot or a by-value
+    /// parameter's own storage, is taken out at `at` and dropped there, as
+    /// a `Take` of it followed by a `Drop` of what it took. Refused as
+    /// `ContentReadAfter` where the content may be read from `at` on.
+    ///
+    /// # Panics
+    /// `place` is neither a slot nor a parameter of the body, or `at` names
+    /// no position of the body.
+    pub fn drop_content(&mut self, place: ValueId, at: Position, span: Span) -> Result<(), CannotDrop> {
+        let (block, index) = self.place(at);
+        let target = match self.body_ref().def_of(place) {
+            Def::Slot { .. } => RefTarget::Var(place),
+            Def::Param(_) => RefTarget::Param(place),
+            def => panic!("{place:?} is defined at {def:?}, and only a slot or a parameter has its own storage"),
+        };
+        if self.needs.content_read_after(place, at) {
+            return Err(CannotDrop::ContentReadAfter);
+        }
+        let ty = self.body_ref().ty_of(place);
+        self.edit(|rewriter| {
+            let taken = Op::Take { target, path: Vec::new(), taken_out: false };
+            let content = rewriter.insert(block, index, taken, ty, span);
+            rewriter.insert_drop(block, index + 1, content, span);
+        });
+        self.shifted([InstShift::Inserted { block, index }, InstShift::Inserted { block, index: index + 1 }]);
+        Ok(())
+    }
+}
+
+impl<S> Editor<'_, S>
+where
+    S: ClonesReads,
+{
+    /// S4: the `Take` at `take`, of a `String` place, becomes a shared
+    /// `Ref` of that place and a `StringClone` of it, with the `Take`'s
+    /// span; what used the `Take`'s result uses the clone, and the place
+    /// keeps its content (ownership §3). `&String` is interned in the
+    /// module's table. Refused as `NotAString` where the place is not a
+    /// `String`.
+    ///
+    /// # Panics
+    /// `take` is not a `Take`.
+    pub fn clone_read(&mut self, take: InstRef) -> Result<(), CannotCloneRead> {
+        let inst = self.inst(take);
+        let Op::Take { target, path, .. } = inst.op() else {
+            panic!("{take:?} is {:?}, not a Take", inst.op())
+        };
+        let (target, path, span) = (*target, path.clone(), inst.span());
+        let read = inst.result().expect("a Take yields a value");
+        let string = self.body_ref().ty_of(read);
+        if !matches!(self.module.types().kind(string), TyKind::String) {
+            return Err(CannotCloneRead::NotAString);
+        }
+        let (block, index) = (take.block, take.index);
+        let shifts = self.edit(|rewriter| {
+            let lent = rewriter.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string)));
+            let reference = rewriter.insert(block, index, Op::Ref { target, path, mutability: Mutability::Shared }, lent, span);
+            let clone = rewriter.insert(block, index + 1, Op::StringClone { src: reference }, string, span);
+            rewriter.replace_all_uses(read, clone);
+            rewriter.remove_inst(block, index + 2).expect("a Take whose uses went to its clone has none")
+        });
+        self.shifted([InstShift::Inserted { block, index }, InstShift::Inserted { block, index: index + 1 }]);
+        self.shifted(shifts);
         Ok(())
     }
 }

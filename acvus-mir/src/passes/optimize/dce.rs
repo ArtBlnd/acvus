@@ -87,7 +87,7 @@ mod tests {
         builder.push(trapping_add(a, a), int, Span::ZERO);
         builder.push_unit(assign(x, a), Span::ZERO);
         builder.push_effect(opaque_call, int, Span::ZERO);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
 
@@ -111,7 +111,7 @@ mod tests {
         let mut builder = f.module.build_body(false, int);
         builder.push(pure_call, int, Span::ZERO);
         let a = builder.push(int_const(1), int, Span::ZERO);
-        builder.terminate(ret(a));
+        builder.terminate(ret(a), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
 

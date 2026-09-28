@@ -52,7 +52,7 @@ enum Building {
 struct MadeBlock {
     params: Vec<ValueId>,
     insts: Vec<Inst>,
-    terminator: Option<Terminator>,
+    terminator: Option<(Terminator, Span)>,
 }
 
 /// A variable of the order chain the Builder threads.
@@ -360,7 +360,7 @@ impl<'m> Builder<'m> {
             .map(|(index, ty)| self.body.make_value(&self.module.types, *ty, Def::BlockParam(block, index)))
             .collect();
         for (from, building) in self.blocks.iter().enumerate() {
-            let Building::Made(MadeBlock { terminator: Some(terminator), .. }) = building else {
+            let Building::Made(MadeBlock { terminator: Some((terminator, _)), .. }) = building else {
                 continue;
             };
             for edge in terminator.edges().iter().filter(|edge| edge.to == block) {
@@ -402,11 +402,18 @@ impl<'m> Builder<'m> {
     /// scope pass the scope's merge so far. Cost: O(the terminator's
     /// operands and the parameters of its targets).
     ///
+    /// `span` is the span of the construct that made the terminator; a
+    /// `Return` carries its own, and `span` is that one.
+    ///
     /// # Panics
     /// The current block is terminated; an operand is not a value of this
     /// body; a named block is not a block of this body; an edge disagrees
-    /// with its target's parameters; or a `Return` names an order token.
-    pub fn terminate(&mut self, mut terminator: Terminator) {
+    /// with its target's parameters; a `Return` names an order token, or
+    /// carries a span other than `span`.
+    pub fn terminate(&mut self, mut terminator: Terminator, span: Span) {
+        if let Terminator::Return { span: own, .. } = &terminator {
+            assert_eq!(*own, span, "a Return carries its own span, and terminate is given that one");
+        }
         let at = self.at;
         let Building::Made(current) = self.building(at) else {
             panic!("the current block {at:?} is made")
@@ -451,7 +458,7 @@ impl<'m> Builder<'m> {
         let Building::Made(current) = &mut self.blocks[at.index()] else {
             panic!("the current block {at:?} is made")
         };
-        current.terminator = Some(terminator);
+        current.terminator = Some((terminator, span));
     }
 
     /// Opens an `anyorder` scope (effects §3): every effectful call inside
@@ -507,7 +514,7 @@ impl<'m> Builder<'m> {
         }
         let mut named = vec![false; self.blocks.len()];
         for building in &self.blocks {
-            if let Building::Made(MadeBlock { terminator: Some(terminator), .. }) = building {
+            if let Building::Made(MadeBlock { terminator: Some((terminator, _)), .. }) = building {
                 terminator.for_each_block(|block| named[block.index()] = true);
             }
         }
@@ -519,10 +526,10 @@ impl<'m> Builder<'m> {
                 Building::Unmade if named[index] => return Err(Unsealed::EdgeToUnmadeBlock(block)),
                 Building::Unmade => return Err(Unsealed::ReservedNeverMade(block)),
             };
-            let Some(terminator) = terminator else {
+            let Some((terminator, terminator_span)) = terminator else {
                 return Err(Unsealed::BlockWithoutTerminator(block));
             };
-            made.push(Block { params, insts, terminator });
+            made.push(Block { params, insts, terminator, terminator_span });
         }
         for block in made {
             self.body.new_block(block);

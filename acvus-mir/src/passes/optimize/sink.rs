@@ -134,15 +134,15 @@ mod tests {
             else_to: else_block,
             else_args: Vec::new(),
             join,
-        });
+        }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
         let u = builder.push(wrapping_add(b, a), int, Span::ZERO);
-        builder.terminate(Terminator::Jump { to: join, args: vec![u] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![u] }, acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
-        builder.terminate(Terminator::Jump { to: join, args: vec![a] });
+        builder.terminate(Terminator::Jump { to: join, args: vec![a] }, acvus_ast::Span::ZERO);
         builder.switch_to(join);
         let r = builder.block_params(join)[0];
-        builder.terminate(ret(r));
+        builder.terminate(ret(r), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
 
