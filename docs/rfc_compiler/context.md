@@ -16,4 +16,6 @@ A context's type is invariant by the transparency rule: its uses beyond the prog
 
 What a load, a store or a commit does beyond the program is unknown to the language, as a syscall's is. A context is close to a typed vIOMMU.
 
+The load and the commit are the effects. An assignment to a context inside the run is an assignment to a plain value and carries no effect of its own. Only promoting the context to a plain value removes a load or a commit; nothing else does.
+
 A value stored into a context outlives the run, so it holds no reference into the run. It may carry an identity.
