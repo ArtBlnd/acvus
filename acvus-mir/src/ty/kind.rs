@@ -44,6 +44,7 @@ pub enum TyKind<V: Phase> {
         effect: EffectTerm<V>,
         flows: FlowTerm<V>,
         calls: Calls,
+        holds: Holds,
     },
     /// An extern-defined type (extern-fn §8).
     UserDefined {
@@ -70,6 +71,21 @@ impl<V: Phase> ObjectTy<V> {
         match self {
             ObjectTy::Structural(fields, _) | ObjectTy::Declared(_, fields) => fields,
         }
+    }
+}
+
+/// The strongest loan a function value's captures hold, at its one
+/// position (ownership §5). Two join at the stronger (types §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Holds {
+    Nothing,
+    Shared,
+    Mut,
+}
+
+impl Holds {
+    pub fn join(self, other: Holds) -> Holds {
+        self.max(other)
     }
 }
 
