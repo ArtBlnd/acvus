@@ -1,6 +1,7 @@
 use acvus_utils::QualifiedRef;
 
 use super::TyVarBound;
+use super::labels::LabelledSignature;
 use crate::laws::{Laws, NamedLaw, Postcondition, Reaches, Returns};
 use crate::means::Means;
 use crate::ty::{Poly, TyId};
@@ -47,6 +48,10 @@ pub struct DeclaredFacts {
     pub reaches: Reaches,
     pub returns: Returns,
     pub means: Option<Means>,
+    /// The lifetimes the Rust signature names, which `verify` turns into
+    /// the declared function type's flows. `None`: the flows are every
+    /// input to every output (extern-fn §4).
+    pub lifetimes: Option<LabelledSignature>,
 }
 
 /// An instance of `signature` whose type joins `pattern`, written at the

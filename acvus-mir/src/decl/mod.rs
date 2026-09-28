@@ -9,6 +9,7 @@
 
 mod bound;
 mod casts;
+mod labels;
 mod loop_markers;
 mod scheme;
 mod user_type;
@@ -21,6 +22,7 @@ use crate::ty::{LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
 pub use casts::{CastRule, CastTree, Head, VerifiedExternCast};
+pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use scheme::{DeclaredFacts, GenericSig, InstanceSig, Instances, Requirement, Scheme};
 pub use user_type::UserTypeDecl;

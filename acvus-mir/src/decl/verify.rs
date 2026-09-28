@@ -18,6 +18,9 @@ pub enum Refused {
     /// A required instance's types are not smaller than the declaration's
     /// own (extern-fn §6).
     RequirementNotSmaller { declaration: QualifiedRef, signature: QualifiedRef },
+    /// An end's labels are not one per segment of its declared type, or
+    /// name a lifetime the signature does not have.
+    LabelsDoNotFit { declaration: QualifiedRef },
     /// Two types under one name.
     DuplicateType { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in
