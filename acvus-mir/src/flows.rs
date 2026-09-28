@@ -16,6 +16,8 @@ use std::ops::Range;
 use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 
+use acvus_utils::QualifiedRef;
+
 use crate::decl::Declarations;
 use crate::ty::{Concrete, LifetimesOf, ObjectTy, Poly, Ty, TyId, TyKind, Types, positions};
 
@@ -55,6 +57,8 @@ pub enum Segment {
     Reference,
     /// One lifetime an extern-defined type declares.
     Lifetime,
+    /// A function value's one position (ownership §5).
+    FunctionValue,
     /// Every position of what instantiates this type variable.
     TypeVar(u32),
 }
@@ -73,15 +77,23 @@ impl Segment {
 /// A segment the map does not name takes nothing from this input.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Labelled {
-    pub from_decl: TyId<Poly>,
-    pub to_decl: TyId<Poly>,
+    /// The declaration whose signature's ends the segments are read off.
+    pub declared: Declared,
     pub map: Box<[Box<[usize]>]>,
+}
+
+/// An extern fn's declared signature: the scheme's own, or one concrete
+/// instance's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Declared {
+    pub function: QualifiedRef,
+    pub instance: Option<usize>,
 }
 
 /// The segments of the declared type `ty`, in order: a reference's own
 /// position before its target's, an extern-defined type's lifetimes before
 /// its arguments', a structural type's parts in order, and one element's
-/// for a sequence. A function value's one position is no segment.
+/// for a sequence. A function value's one position is one segment.
 ///
 /// # Panics
 /// `ty` holds a `Handle` or an `Order`, which no declaration writes.

@@ -3,7 +3,7 @@
 
 use acvus_utils::QualifiedRef;
 
-use super::kind::{Mutability, ObjectTy, TyKind};
+use super::kind::{Holds, Mutability, ObjectTy, TyKind};
 use super::{Concrete, Ty, Types};
 
 /// The lifetimes each extern-defined type declares (extern-fn §8). The
@@ -42,17 +42,40 @@ fn copies_level(types: &Types<Concrete>, ty: Ty) -> bool {
     }
 }
 
-/// How many positions a value of `ty` holds loans at (ownership §5): one
-/// per reference and then its target's, one per function value, one per
-/// lifetime an extern-defined type declares and then its arguments', the
-/// parts' of a structural type, and one element's for a sequence. A started
-/// call holds its arguments' loans at one position until it is taken
-/// (effects §6).
-pub fn positions(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty) -> usize {
-    acvus_utils::grow(|| positions_level(types, lifetimes, ty))
+/// What one position of a type is (ownership §5, effects §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionKind {
+    /// A reference's own position; its target's follow.
+    Ref(Mutability),
+    /// A function value's one position: what its captures hold.
+    Captures(Holds),
+    /// One lifetime an extern-defined type declares.
+    Lifetime,
+    /// A started call's arguments, held until it is taken.
+    InFlight,
 }
 
-fn positions_level(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty) -> usize {
+/// Every position a value of `ty` holds loans at, in order (ownership §5):
+/// a reference's own before its target's; a function value's one; a
+/// started call's one before its result's; an extern-defined type's
+/// lifetimes before its arguments'; a structural type's parts in order,
+/// `Result`'s `Ok` before its `Err`; one element's for a sequence. This is
+/// the only walk of positions: `positions` and `position_kinds` read it.
+pub fn for_each_position(
+    types: &Types<Concrete>,
+    lifetimes: &impl LifetimesOf,
+    ty: Ty,
+    on_position: &mut impl FnMut(PositionKind),
+) {
+    acvus_utils::grow(|| for_each_position_level(types, lifetimes, ty, on_position))
+}
+
+fn for_each_position_level(
+    types: &Types<Concrete>,
+    lifetimes: &impl LifetimesOf,
+    ty: Ty,
+    on_position: &mut impl FnMut(PositionKind),
+) {
     match types.kind(ty) {
         TyKind::Int(_)
         | TyKind::Float
@@ -62,31 +85,60 @@ fn positions_level(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty
         | TyKind::Unit
         | TyKind::Never
         | TyKind::Order
-        | TyKind::Str => 0,
-        TyKind::Ref(_, target) => 1 + positions(types, lifetimes, target.ty()),
-        TyKind::Fn { .. } => 1,
-        TyKind::Handle(result) => 1 + positions(types, lifetimes, *result),
-        TyKind::Array(element, _) | TyKind::Slice(element) => positions(types, lifetimes, *element),
-        TyKind::Option(payload) => positions(types, lifetimes, *payload),
-        TyKind::Result(ok, err) => positions(types, lifetimes, *ok) + positions(types, lifetimes, *err),
-        TyKind::Tuple(items) => items.iter().map(|item| positions(types, lifetimes, *item)).sum(),
-        TyKind::Object(object) => object
-            .fields()
-            .iter()
-            .map(|(_, field)| positions(types, lifetimes, *field))
-            .sum(),
-        TyKind::Enum { variants, .. } => variants
-            .iter()
-            .filter_map(|(_, payload)| *payload)
-            .map(|payload| positions(types, lifetimes, payload))
-            .sum(),
+        | TyKind::Str => {}
+        TyKind::Ref(mutability, target) => {
+            on_position(PositionKind::Ref(*mutability));
+            for_each_position(types, lifetimes, target.ty(), on_position);
+        }
+        TyKind::Fn { holds, .. } => on_position(PositionKind::Captures(*holds)),
+        TyKind::Handle(result) => {
+            on_position(PositionKind::InFlight);
+            for_each_position(types, lifetimes, *result, on_position);
+        }
+        TyKind::Array(element, _) | TyKind::Slice(element) | TyKind::Option(element) => {
+            for_each_position(types, lifetimes, *element, on_position);
+        }
+        TyKind::Result(ok, err) => {
+            for_each_position(types, lifetimes, *ok, on_position);
+            for_each_position(types, lifetimes, *err, on_position);
+        }
+        TyKind::Tuple(items) => {
+            for item in items.iter() {
+                for_each_position(types, lifetimes, *item, on_position);
+            }
+        }
+        TyKind::Object(object) => {
+            for (_, field) in object.fields() {
+                for_each_position(types, lifetimes, *field, on_position);
+            }
+        }
+        TyKind::Enum { variants, .. } => {
+            for payload in variants.iter().filter_map(|(_, payload)| *payload) {
+                for_each_position(types, lifetimes, payload, on_position);
+            }
+        }
         TyKind::UserDefined { id, type_args, .. } => {
-            lifetimes.lifetimes_of(*id)
-                + type_args
-                    .iter()
-                    .map(|arg| positions(types, lifetimes, arg.ty()))
-                    .sum::<usize>()
+            for _ in 0..lifetimes.lifetimes_of(*id) {
+                on_position(PositionKind::Lifetime);
+            }
+            for arg in type_args.iter() {
+                for_each_position(types, lifetimes, arg.ty(), on_position);
+            }
         }
         TyKind::Var(var) => match *var {},
     }
+}
+
+/// The kind of every position of `ty`, in order.
+pub fn position_kinds(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty) -> Vec<PositionKind> {
+    let mut kinds = Vec::new();
+    for_each_position(types, lifetimes, ty, &mut |kind| kinds.push(kind));
+    kinds
+}
+
+/// How many positions a value of `ty` holds loans at.
+pub fn positions(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty) -> usize {
+    let mut count = 0;
+    for_each_position(types, lifetimes, ty, &mut |_| count += 1);
+    count
 }

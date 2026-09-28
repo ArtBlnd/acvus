@@ -21,7 +21,7 @@ use rustc_hash::FxBuildHasher;
 
 pub use arg::{EffectArg, IdentityId, IdentityTerm, LenTerm, TypeArg};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
-pub use facts::{LifetimesOf, copies, positions};
+pub use facts::{LifetimesOf, PositionKind, copies, for_each_position, position_kinds, positions};
 pub use kind::{Calls, Holds, Mutability, ObjectTy, ParamTerm, TyKind};
 pub use num::{CastTy, IntTy, WordTy};
 

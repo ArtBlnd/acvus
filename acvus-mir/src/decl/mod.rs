@@ -9,6 +9,7 @@
 
 mod bound;
 mod casts;
+mod core;
 mod labels;
 mod loop_markers;
 mod scheme;
@@ -22,6 +23,7 @@ use crate::ty::{LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
 pub use casts::{CastRule, CastTree, Head, VerifiedExternCast};
+pub use core::{Core, Tags};
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use scheme::{DeclaredFacts, GenericSig, InstanceSig, Instances, Requirement, Scheme};
@@ -40,6 +42,8 @@ pub struct RawDeclarations {
     /// Each input `$x` with its type (programs §4).
     pub inputs: Vec<(Astr, TyId<Poly>)>,
     pub loop_markers: LoopMarkers,
+    /// `core`'s names, from `Core::of`.
+    pub core: Core,
 }
 
 /// A verified set of declarations.
@@ -54,6 +58,7 @@ pub struct Declarations {
     contexts: FxHashMap<QualifiedRef, TyId<Poly>>,
     inputs: FxHashMap<Astr, TyId<Poly>>,
     loop_markers: LoopMarkers,
+    core: Core,
 }
 
 impl Declarations {
@@ -93,6 +98,15 @@ impl Declarations {
 
     pub fn loop_markers(&self) -> &LoopMarkers {
         &self.loop_markers
+    }
+
+    pub fn core(&self) -> &Core {
+        &self.core
+    }
+
+    /// Every declared function with its scheme, in no promised order.
+    pub fn functions(&self) -> impl Iterator<Item = (QualifiedRef, &Scheme)> {
+        self.functions.iter().map(|(id, scheme)| (*id, scheme))
     }
 }
 

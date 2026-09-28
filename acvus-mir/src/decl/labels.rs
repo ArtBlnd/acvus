@@ -3,7 +3,8 @@
 //! of the declared function type, and nothing after intake sees a lifetime.
 //!
 //! A *segment* of a declared type is one of: the position of a reference;
-//! the position of a lifetime an extern-defined type declares; a type
+//! the position of a lifetime an extern-defined type declares; a function
+//! value's one position (what its captures hold, ownership §5); a type
 //! variable's part, which stands for every position of what instantiates
 //! it, the k-th of the input reaching the k-th of the output. Segments are
 //! read off the declared type itself, in order, so a call's instantiated
