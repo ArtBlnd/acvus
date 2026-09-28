@@ -40,4 +40,4 @@ A declaration may be a cast from its parameter's type to its result's type. Decl
 
 ## 8. Types an extern fn defines
 
-Every type a declaration writes, except a type parameter, is extern-defined, with all its parts, and follows the transparency rule (types §1).
+Every type a declaration writes, except a type parameter, is extern-defined, with all its parts, and follows the transparency rule (types §1). An extern-defined type may declare lifetimes; each is a position of its values (ownership §5).

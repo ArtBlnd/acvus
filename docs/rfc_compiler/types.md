@@ -6,7 +6,7 @@ A type is widened, joined or unioned only where the compiler sees every use of i
 
 ## 2. Join
 
-Two object types join at the union of their fields. Two enums of one name join at the union of their variants; enums of two names do not join. A variant is written with its enum's name, except `Some`, `None`, `Ok` and `Err`, the variants of `core`'s `Option` and `Result`. Two function types join at the join of their effects, which form a lattice, so a joined function is never assumed to do less than either side; laws, `ensures` and `means` do not join, and a joined function carries none.
+Two object types join at the union of their fields. Two enums of one name join at the union of their variants; enums of two names do not join. A variant is written with its enum's name, except `Some`, `None`, `Ok` and `Err`, the variants of `core`'s `Option` and `Result`. Two function types join at the join of their effects and of their flows, which form lattices, so a joined function is never assumed to do less than either side; laws, `ensures` and `means` do not join, and a joined function carries none.
 
 ## 3. Subtyping
 
@@ -31,3 +31,7 @@ A call reaches by its arguments in order, and a tuple by its parts in order: at 
 ## 7. Conversions
 
 Where a value's type is not the type its slot asks for and no subtyping relates them, the value converts only by a declared conversion, and exactly one must apply. Otherwise the program is refused.
+
+## 8. Specialization
+
+A type argument may carry `#`, the mark that it can always be specialized; an argument without it is never specialized. `#τ` and `τ` are different types. `#` stands only at the root of a type argument: `T<#(X, Y)>` is a type, `T<(X, #Y)>` is not.

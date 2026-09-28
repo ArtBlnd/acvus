@@ -28,7 +28,9 @@ On the one path that reaches `f(a)`, every field of `a`'s type is written before
 
 ## 5. Borrows
 
-A `&mut T` does not copy. Each use reborrows it implicitly.
+A reference lends its storage: `&` shared, `&mut` exclusive. A value holds loans only at the positions of its type: each reference, each function value (what it captured), and each lifetime an extern-defined type declares. A structural type holds its parts' positions, and all elements of a sequence share one. A loan lives while a value holding it is live. While an exclusive loan lives, its storage is reached only through it; while a shared one lives, its storage is not written, moved or lent exclusively, and a shared reborrow of a `&mut` keeps its storage so excluded. A `&mut` does not copy; each use reborrows it implicitly.
+
+A call moves loans only as its function type's flows state (extern-fn §4); a lambda's flows are what its body does. A body's result holds no loan on the body's own storage. A run's result has a type with no positions.
 
 ## 6. Where a value ends
 

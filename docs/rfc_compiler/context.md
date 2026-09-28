@@ -18,4 +18,4 @@ What a load, a store or a commit does beyond the program is unknown to the langu
 
 The load and the commit are the effects. An assignment to a context inside the run is an assignment to a plain value and carries no effect of its own. Only promoting the context to a plain value removes a load or a commit; nothing else does.
 
-A value stored into a context outlives the run, so it holds no reference into the run. It may carry an identity.
+A value stored into a context outlives the run, so its type has no positions (ownership §5). It may carry an identity.
