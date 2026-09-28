@@ -18,7 +18,7 @@ The runtime's value crosses to the extern side as the extern side's own owning h
 - **Views.** A script array's slice view, shared or mutable, is a contract operation.
 - **References.** The runtime makes a reference value from a target, a writable one only from an exclusive borrow of it.
 - **Aggregates.** A tuple, an object and a variant are the runtime's associated types. Their bodies are safe traits, bounded `Send + Sync + 'static`, whose parts are owning holders.
-- **Instances.** The runtime makes a value from an instance entry, reads an entry back at a signature family and task the caller names, and reads an instance value's task (instances).
+- **Impls.** The runtime makes a value from an impl entry, reads an entry back at a generic function's family and task the caller names, and reads an impl value's task (impls).
 - **Callbacks.** Calling a script closure synchronously and awaited.
 - **Rust functions.** An extern may return a Rust function as a script function value of its declared function type. The script calls it as it calls a lambda, and each call crosses its arguments at that call's settled types, so no value is made from a Rust value (§1).
 - **Names.** The extern side interns a name in the interner the contract returns; a runtime maps no name itself.
