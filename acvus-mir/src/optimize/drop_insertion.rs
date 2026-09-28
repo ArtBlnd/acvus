@@ -893,6 +893,7 @@ fn is_consumed_by_terminator(term: &Terminator, val: ValueId) -> bool {
 mod tests {
     use super::*;
     use crate::cfg::promote;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::*;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps, QualifiedRef};
 
@@ -900,18 +901,46 @@ mod tests {
         ValueId::from_raw(n)
     }
 
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    fn test_laws() -> LawTable {
+        LawTable::of(&empty_declarations(&Interner::new()))
+    }
+
+    /// `insert_drops` at an empty `Declarations`.
+    fn insert_drops_test(
+        cfg: &mut CfgBody,
+        types: &mut Types<Concrete>,
+        val_types: &FxHashMap<ValueId, Ty>,
+        laws: &LawTable,
+    ) {
+        let decls = empty_declarations(&Interner::new());
+        insert_drops(cfg, types, &decls, val_types, laws);
+    }
+
     /// A user-defined type with an identity: a source of its own, so move-only.
-    fn user_defined_ty() -> Ty {
+    fn user_defined_ty(types: &mut Types<Concrete>) -> Ty {
         let i = Interner::new();
-        Ty::UserDefined {
+        types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(i.intern("TestType")),
-            type_args: vec![],
-            effect_args: vec![],
-            identity_args: vec![crate::ty::IdentityTerm::Known(
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([crate::ty::IdentityTerm::Known(
                 <crate::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
-            )],
-            region_params: 0,
-        }
+            )]),
+        })
     }
 
     fn make_cfg_with_types(
@@ -980,6 +1009,7 @@ mod tests {
 
     #[test]
     fn no_drop_for_copy_types() {
+        let mut types = Types::<Concrete>::new();
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -991,10 +1021,10 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), Ty::I64)],
+            vec![(v(0), types.intern(TyKind::Int(IntTy::I64)))],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         assert_eq!(count_drops(&cfg), 0);
     }
 
@@ -1002,6 +1032,7 @@ mod tests {
 
     #[test]
     fn drop_after_last_use() {
+        let mut types = Types::<Concrete>::new();
         // v0 = UserDefined (move-only)
         // v1 = FieldGet(v0, "x")  -> v0's last use
         // return v1
@@ -1022,10 +1053,10 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
+            vec![(v(0), user_defined_ty(&mut types)), (v(1), types.intern(TyKind::Int(IntTy::I64)))],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         assert_eq!(count_drops(&cfg), 1);
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
@@ -1034,6 +1065,7 @@ mod tests {
 
     #[test]
     fn no_drop_for_returned_value() {
+        let mut types = Types::<Concrete>::new();
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -1045,10 +1077,10 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty())],
+            vec![(v(0), user_defined_ty(&mut types))],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         assert_eq!(count_drops(&cfg), 0);
     }
 
@@ -1058,6 +1090,7 @@ mod tests {
     /// write, so a drop follows each write, not two after the first.
     #[test]
     fn an_unread_storage_is_dropped_after_every_write() {
+        let mut types = Types::<Concrete>::new();
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -1090,14 +1123,14 @@ mod tests {
                 },
             ],
             vec![
-                (v(0), user_defined_ty()),
-                (v(1), user_defined_ty()),
-                (v(5), user_defined_ty()),
-                (v(2), Ty::I64),
+                (v(0), user_defined_ty(&mut types)),
+                (v(1), user_defined_ty(&mut types)),
+                (v(5), user_defined_ty(&mut types)),
+                (v(2), types.intern(TyKind::Int(IntTy::I64))),
             ],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         let kinds: Vec<&InstKind> = cfg.blocks[0].insts.iter().map(|i| &i.kind).collect();
         let dropped_after = |write: usize| matches!(kinds.get(write + 1), Some(InstKind::Drop { src }) if *src == v(5));
         let writes: Vec<usize> = kinds
@@ -1112,6 +1145,7 @@ mod tests {
 
     #[test]
     fn drop_unused_move_only() {
+        let mut types = Types::<Concrete>::new();
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -1127,10 +1161,10 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
+            vec![(v(0), user_defined_ty(&mut types)), (v(1), types.intern(TyKind::Int(IntTy::I64)))],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         assert_eq!(count_drops(&cfg), 1);
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
@@ -1139,6 +1173,7 @@ mod tests {
 
     #[test]
     fn drop_in_branch_where_not_used() {
+        let mut types = Types::<Concrete>::new();
         // v0 = UserDefined
         // v1 = Bool (cond)
         // v2 = Int
@@ -1185,14 +1220,14 @@ mod tests {
                 },
             ],
             vec![
-                (v(0), user_defined_ty()),
-                (v(1), Ty::Bool),
-                (v(2), Ty::I64),
-                (v(3), user_defined_ty()),
+                (v(0), user_defined_ty(&mut types)),
+                (v(1), types.intern(TyKind::Bool)),
+                (v(2), types.intern(TyKind::Int(IntTy::I64))),
+                (v(3), user_defined_ty(&mut types)),
             ],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
 
         // v0 should be dropped in the else block (block index 2).
         let else_drops = block_drop_targets(&cfg, 2);
@@ -1214,6 +1249,7 @@ mod tests {
 
     #[test]
     fn no_edge_drop_when_forwarded_to_both() {
+        let mut types = Types::<Concrete>::new();
         // v0 = UserDefined, forwarded to both branches
         // if cond -> then(v0), else(v0)
         let (mut cfg, val_types) = make_cfg_with_types(
@@ -1251,14 +1287,14 @@ mod tests {
                 },
             ],
             vec![
-                (v(0), user_defined_ty()),
-                (v(1), Ty::Bool),
-                (v(2), user_defined_ty()),
-                (v(3), user_defined_ty()),
+                (v(0), user_defined_ty(&mut types)),
+                (v(1), types.intern(TyKind::Bool)),
+                (v(2), user_defined_ty(&mut types)),
+                (v(3), user_defined_ty(&mut types)),
             ],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         // v0 is forwarded to both branches -> no edge drops.
         // v2, v3 are returned -> no drops.
         assert_eq!(count_drops(&cfg), 0);
@@ -1268,6 +1304,7 @@ mod tests {
 
     #[test]
     fn multiple_move_only_different_lifetimes() {
+        let mut types = Types::<Concrete>::new();
         // v0 = UserDefined, used at inst 1 only
         // v1 = UserDefined, used at inst 2 only
         // v2 = Int (result of inst 1)
@@ -1302,14 +1339,14 @@ mod tests {
                 },
             ],
             vec![
-                (v(0), user_defined_ty()),
-                (v(1), user_defined_ty()),
-                (v(2), Ty::I64),
-                (v(3), Ty::I64),
+                (v(0), user_defined_ty(&mut types)),
+                (v(1), user_defined_ty(&mut types)),
+                (v(2), types.intern(TyKind::Int(IntTy::I64))),
+                (v(3), types.intern(TyKind::Int(IntTy::I64))),
             ],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         // v0 dropped after FieldGet(v0), v1 dropped after FieldGet(v1).
         assert_eq!(count_drops(&cfg), 2);
         let targets = drop_targets(&cfg);
@@ -1321,6 +1358,7 @@ mod tests {
 
     #[test]
     fn drop_after_multiple_uses() {
+        let mut types = Types::<Concrete>::new();
         // v0 = UserDefined
         // v1 = FieldGet(v0, "x")  - first use
         // v2 = FieldGet(v0, "y")  - last use -> drop here
@@ -1349,10 +1387,10 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::I64), (v(2), Ty::I64)],
+            vec![(v(0), user_defined_ty(&mut types)), (v(1), types.intern(TyKind::Int(IntTy::I64))), (v(2), types.intern(TyKind::Int(IntTy::I64)))],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         assert_eq!(count_drops(&cfg), 1);
         // v0 should be dropped after the second FieldGet (its last use).
         let targets = drop_targets(&cfg);
@@ -1363,6 +1401,10 @@ mod tests {
 
     #[test]
     fn container_with_move_only_needs_drop() {
+        let mut types = Types::<Concrete>::new();
+        let elem_ty = user_defined_ty(&mut types);
+        let array_ty = types.intern(TyKind::Array(elem_ty, crate::ty::LenTerm::Known(3)));
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -1379,15 +1421,12 @@ mod tests {
                 },
             ],
             vec![
-                (
-                    v(0),
-                    Ty::Array(Box::new(user_defined_ty()), crate::ty::LenTerm::Known(3)),
-                ), // List<MoveOnly> = move-only
-                (v(1), Ty::I64),
+                (v(0), array_ty), // List<MoveOnly> = move-only
+                (v(1), i64_ty),
             ],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         assert_eq!(count_drops(&cfg), 1);
         assert!(drop_targets(&cfg).contains(&v(0)));
     }
@@ -1396,6 +1435,9 @@ mod tests {
 
     #[test]
     fn list_of_ints_moves_and_is_dropped() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {
@@ -1411,16 +1453,10 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![
-                (
-                    v(0),
-                    Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-                ),
-                (v(1), Ty::I64),
-            ],
+            vec![(v(0), array_ty), (v(1), i64_ty)],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         assert_eq!(count_drops(&cfg), 1);
     }
 
@@ -1428,6 +1464,7 @@ mod tests {
 
     #[test]
     fn both_branches_drop_different_values() {
+        let mut types = Types::<Concrete>::new();
         // v0 = MoveOnly, v1 = MoveOnly
         // if cond -> then(v0), else(v1)
         // then: return v0 -> v1 needs drop in then
@@ -1471,15 +1508,15 @@ mod tests {
                 },
             ],
             vec![
-                (v(0), user_defined_ty()),
-                (v(1), user_defined_ty()),
-                (v(2), Ty::Bool),
-                (v(3), user_defined_ty()),
-                (v(4), user_defined_ty()),
+                (v(0), user_defined_ty(&mut types)),
+                (v(1), user_defined_ty(&mut types)),
+                (v(2), types.intern(TyKind::Bool)),
+                (v(3), user_defined_ty(&mut types)),
+                (v(4), user_defined_ty(&mut types)),
             ],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         // then block should drop v1 (not forwarded to then).
         let then_drops = block_drop_targets(&cfg, 1);
         assert!(
@@ -1502,6 +1539,7 @@ mod tests {
 
     #[test]
     fn no_double_drop() {
+        let mut types = Types::<Concrete>::new();
         // v0 = MoveOnly, used once -> exactly 1 Drop.
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
@@ -1520,10 +1558,10 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(0), user_defined_ty()), (v(1), Ty::I64)],
+            vec![(v(0), user_defined_ty(&mut types)), (v(1), types.intern(TyKind::Int(IntTy::I64)))],
         );
 
-        insert_drops(&mut cfg, &val_types, &LawTable::default());
+        insert_drops_test(&mut cfg, &mut types, &val_types, &test_laws());
         let targets = drop_targets(&cfg);
         let v0_drops = targets.iter().filter(|&&t| t == v(0)).count();
         assert_eq!(v0_drops, 1, "v0 should be dropped exactly once");
