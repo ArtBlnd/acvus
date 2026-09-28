@@ -1,7 +1,7 @@
 //! Dead Code Elimination (DCE) - mark-sweep on CfgBody.
 //!
 //! Removes instructions that don't contribute to observable behavior.
-//! Observable = Return value, context Store, IO (Eval), effectful FunctionCall.
+//! Observable = Return value, context Store, IO (TakeEffect), effectful FunctionCall.
 //!
 //! Algorithm:
 //! 1. **Root**: instructions with side effects are unconditionally live.
@@ -26,8 +26,11 @@ use crate::analysis::raise::{FunctionSummary, Removal};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, Label, ValueId};
 use crate::laws::LawTable;
-use crate::ty::Ty;
 use crate::validate::move_check::is_move_only;
+use crate::ty::{Concrete, Types};
+use crate::decl::Declarations;
+use crate::ty::{Reissue, TyKind};
+use crate::ir::fn_effect;
 
 /// An instruction of a body, or a block's terminator at the index one past
 /// that block's last instruction.
@@ -114,8 +117,8 @@ fn filled_slot(kind: &InstKind) -> Option<ValueId> {
 /// Whether a slot's type has a release: a word owns nothing, so a store
 /// into it releases nothing whatever the slot held (RFC-0048 rule 4). A type
 /// the classification cannot read is taken to have one.
-fn releases(slot: ValueId, cfg: &CfgBody) -> bool {
-    cfg.val_types.get(&slot).and_then(is_move_only) != Some(false)
+fn releases(slot: ValueId, cfg: &CfgBody, types: &Types<Concrete>) -> bool {
+    cfg.val_types.get(&slot).is_none_or(|ty| is_move_only(types, *ty))
 }
 
 /// Which slots may hold a value at a point: a store lands on an occupant
@@ -126,7 +129,7 @@ struct Occupancy {
 }
 
 impl Occupancy {
-    fn of(cfg: &CfgBody) -> Self {
+    fn of(cfg: &CfgBody, types: &Types<Concrete>) -> Self {
         let mut entry = vec![FxHashSet::default(); cfg.blocks.len()];
         // A parameter's and a capture's slot arrives full.
         entry[0] = cfg.entry_defs().collect();
@@ -135,7 +138,7 @@ impl Occupancy {
         while changed {
             changed = false;
             for bi in 0..cfg.blocks.len() {
-                let exit = Self::through(cfg, &entry[bi], &cfg.blocks[bi].insts);
+                let exit = Self::through(cfg, types, &entry[bi], &cfg.blocks[bi].insts);
                 for succ in cfg.successors(BlockIdx(bi)) {
                     for slot in &exit {
                         changed |= entry[succ.0].insert(*slot);
@@ -147,12 +150,12 @@ impl Occupancy {
         Self { entry }
     }
 
-    fn may_hold(&self, cfg: &CfgBody, at: Point, slot: ValueId) -> bool {
+    fn may_hold(&self, cfg: &CfgBody, types: &Types<Concrete>, at: Point, slot: ValueId) -> bool {
         let before = &cfg.blocks[at.block].insts[..at.inst];
-        Self::through(cfg, &self.entry[at.block], before).contains(&slot)
+        Self::through(cfg, types, &self.entry[at.block], before).contains(&slot)
     }
 
-    fn through(cfg: &CfgBody, entry: &FxHashSet<ValueId>, insts: &[Inst]) -> FxHashSet<ValueId> {
+    fn through(cfg: &CfgBody, types: &Types<Concrete>, entry: &FxHashSet<ValueId>, insts: &[Inst]) -> FxHashSet<ValueId> {
         let mut held = entry.clone();
         for inst in insts {
             if let Some(slot) = filled_slot(&inst.kind) {
@@ -164,7 +167,7 @@ impl Occupancy {
             if let InstKind::Take { target, path, .. } = &inst.kind
                 && path.is_empty()
                 && let Some(slot) = inst_info::storage(target)
-                && releases(slot, cfg)
+                && releases(slot, cfg, types)
             {
                 held.remove(&slot);
             }
@@ -187,7 +190,7 @@ struct Stores {
 impl Stores {
     fn of(loans: &Loans<'_>) -> Self {
         let cfg = loans.cfg();
-        let occupancy = Occupancy::of(cfg);
+        let occupancy = Occupancy::of(cfg, loans.layout().types);
         let mut this = Self {
             conditional: FxHashSet::default(),
             read_at: FxHashMap::default(),
@@ -203,7 +206,7 @@ impl Stores {
                 let Some(slot) = filled_slot(&inst.kind) else {
                     continue;
                 };
-                if releases(slot, cfg) && occupancy.may_hold(cfg, at, slot) {
+                if releases(slot, cfg, loans.layout().types) && occupancy.may_hold(cfg, loans.layout().types, at, slot) {
                     continue;
                 }
                 this.conditional.insert(at);
@@ -311,6 +314,8 @@ pub(crate) fn unused_may_drop(
 /// this answer does not apply to it.
 fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, removal: &Removal<'_>) -> bool {
     let val_types = &loans.cfg().val_types;
+    let types = loans.layout().types;
+
     if !loans.storage_effect(kind).writes.is_empty() {
         return true;
     }
@@ -329,8 +334,8 @@ fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, removal: &Removal<'_>)
         && (matches!(callee, crate::ir::Callee::Indirect(_))
             || args.iter().any(|arg| {
                 matches!(
-                    val_types.get(arg),
-                    Some(Ty::Ref(crate::ty::Mutability::Mut, _))
+                    val_types.get(arg).map(|ty| types.kind(*ty)),
+                    Some(TyKind::Ref(crate::ty::Mutability::Mut, _))
                 )
             }))
     {
@@ -347,18 +352,17 @@ fn is_root(at: Point, kind: &InstKind, loans: &Loans<'_>, removal: &Removal<'_>)
         | InstKind::IndexSet { .. }
         | InstKind::StringAppend { .. } => true,
 
-        // Eval - IO execution point.
-        InstKind::Eval { .. } => true,
+        // TakeEffect - IO execution point.
+        InstKind::TakeEffect { .. } => true,
 
         // A Pure call that writes no context has no effect (RFC-0007,
         // RFC-0025 rule 4): dead if its result is unused. A call whose effect is
         // unknown stays.
-        InstKind::FunctionCall { callee_ty, .. } => !callee_ty
-            .effect()
-            .is_some_and(|e| e.is_pure() && e.writes.is_empty()),
+        InstKind::FunctionCall { callee_ty, .. } => !fn_effect(types, *callee_ty)
+            .is_some_and(|e| e.reissue() == Reissue::Pure && e.writes().is_empty()),
 
-        // Spawn: pure (deferred execution). The actual effect happens at Eval.
-        // Dead if handle is unused (no Eval consumes it).
+        // Spawn: pure (deferred execution). The actual effect happens at TakeEffect.
+        // Dead if handle is unused (no TakeEffect consumes it).
         InstKind::Spawn { .. } => false,
 
         // Everything else: pure computation, dead if result unused.
@@ -419,11 +423,12 @@ fn terminator_values(term: &Terminator) -> Vec<ValueId> {
 // -- Public API ------------------------------------------------------
 
 /// Run DCE on a CfgBody. Removes all instructions that don't contribute
-/// to observable behavior (Return, Store, Eval, effectful calls).
-pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
+/// to observable behavior (Return, Store, TakeEffect, effectful calls).
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, functions: &FunctionSummary) {
     let def_map = build_def_map(cfg);
-    let loans = Loans::build(cfg);
-    let removal = Removal::of(cfg, laws, functions);
+    let loans = Loans::build(cfg, types, decls);
+    let removal = Removal::of(cfg, types, laws, functions);
+
     let stores = Stores::of(&loans);
 
     // Live instruction set.
@@ -740,7 +745,7 @@ mod tests {
                 ret: Box::new(ret),
                 captures: vec![],
                 effect: effect.into(),
-                flows: crate::ty::Flows::Every.into(),
+                flows: crate::flows::Flows::Every.into(),
             },
             args: vec![],
             order: None,
@@ -780,7 +785,6 @@ mod tests {
             params: Vec::new(),
             captures: Vec::new(),
             order_param: None,
-            task: crate::ty::Task::Sync,
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,

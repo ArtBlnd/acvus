@@ -19,7 +19,9 @@ use crate::step::{
     AdaptorFlow, Comparison, ConsumerBlock, ConsumerStmt, RunCall, Step, StreamParam, Term,
     closures_called,
 };
-use crate::ty::{Mutability, ObjectTy, PolyTy, Ty, TypeArg};
+use crate::decl::Declarations;
+use crate::ir::known_effect;
+use crate::ty::{Concrete, IntTy, Mutability, ObjectTy, Poly, Reissue, Ty, TyId, TyKind, TypeArg, Types};
 use scheme::Bindings;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,11 +43,12 @@ pub enum Declined {
     NoField { ty: Ty, field: acvus_utils::Astr },
 }
 
-pub fn run(interner: &Interner, laws: &LawTable, module: &mut MirModule) -> Vec<Declined> {
+pub fn run(interner: &Interner, laws: &LawTable, decls: &Declarations, module: &mut MirModule) -> Vec<Declined> {
     let mut declined = Vec::new();
-    module.main = fused(interner, laws, std::mem::take(&mut module.main), &mut declined);
+    let types = &mut module.types;
+    module.main = fused(interner, laws, decls, types, std::mem::take(&mut module.main), &mut declined);
     for closure in module.closures.values_mut() {
-        *closure = fused(interner, laws, std::mem::take(closure), &mut declined);
+        *closure = fused(interner, laws, decls, types, std::mem::take(closure), &mut declined);
     }
     declined
 }
@@ -53,13 +56,15 @@ pub fn run(interner: &Interner, laws: &LawTable, module: &mut MirModule) -> Vec<
 fn fused(
     interner: &Interner,
     laws: &LawTable,
+    decls: &Declarations,
+    types: &mut Types<Concrete>,
     body: MirBody,
     declined: &mut Vec<Declined>,
 ) -> MirBody {
     let mut cfg = cfg::promote(body);
     let mut left: FxHashSet<ValueId> = FxHashSet::default();
     while let Some(pipeline) = Pipeline::next_in(&cfg, laws, &left) {
-        match Fusion::of(interner, laws, cfg.clone(), &pipeline).written() {
+        match Fusion::of(interner, laws, decls, types, cfg.clone(), &pipeline).written() {
             Ok(fused) => cfg = fused,
             Err(why) => {
                 left.insert(pipeline.result);
@@ -305,11 +310,11 @@ enum Element {
 }
 
 impl Element {
-    fn ty(&self) -> &Ty {
+    fn ty(&self) -> Ty {
         match self {
             Element::Typed(ty)
             | Element::Held(Slot { ty, .. })
-            | Element::Moved(Typed { ty, .. }) => ty,
+            | Element::Moved(Typed { ty, .. }) => *ty,
         }
     }
 }
@@ -324,9 +329,9 @@ enum Local {
 }
 
 impl Local {
-    fn ty(&self) -> &Ty {
+    fn ty(&self) -> Ty {
         match self {
-            Local::Typed(ty) | Local::Held(Slot { ty, .. }) => ty,
+            Local::Typed(ty) | Local::Held(Slot { ty, .. }) => *ty,
         }
     }
 }
@@ -379,6 +384,13 @@ struct Open {
 struct Fusion<'p> {
     interner: &'p Interner,
     laws: &'p LawTable,
+    decls: &'p Declarations,
+    types: &'p mut Types<Concrete>,
+    /// The types every loop the fusion writes names.
+    bool_ty: Ty,
+    unit_ty: Ty,
+    u64_ty: Ty,
+    float_ty: Ty,
     cfg: CfgBody,
     pipeline: &'p Pipeline,
     next_label: u32,
@@ -411,7 +423,14 @@ struct ClosureParam {
 }
 
 impl<'p> Fusion<'p> {
-    fn of(interner: &'p Interner, laws: &'p LawTable, cfg: CfgBody, pipeline: &'p Pipeline) -> Self {
+    fn of(
+        interner: &'p Interner,
+        laws: &'p LawTable,
+        decls: &'p Declarations,
+        types: &'p mut Types<Concrete>,
+        cfg: CfgBody,
+        pipeline: &'p Pipeline,
+    ) -> Self {
         let first_free = cfg
             .blocks
             .iter()
@@ -425,14 +444,20 @@ impl<'p> Fusion<'p> {
                 pipeline
                     .args(link)
                     .iter()
-                    .map(|arg| cfg.val_types[arg].clone())
+                    .map(|arg| cfg.val_types[arg])
                     .collect()
             })
             .collect();
-        let result_ty = cfg.val_types[&pipeline.result].clone();
+        let result_ty = cfg.val_types[&pipeline.result];
         Fusion {
             interner,
             laws,
+            decls,
+            bool_ty: types.intern(TyKind::Bool),
+            unit_ty: types.intern(TyKind::Unit),
+            u64_ty: types.intern(TyKind::Int(IntTy::U64)),
+            float_ty: types.intern(TyKind::Float),
+            types,
             cfg,
             pipeline,
             next_label: first_free + 2,
@@ -453,20 +478,20 @@ impl<'p> Fusion<'p> {
     fn written(mut self) -> Result<CfgBody, Declined> {
         self.explicit_fallthroughs()?;
         let next = self.source_next_call()?;
-        self.element_type_per_link = self.element_type_per_link(next.element.clone())?;
+        self.element_type_per_link = self.element_type_per_link(next.element)?;
         self.remove_adaptor_calls();
         self.split_at_consumer();
 
         let consumer = &self.pipeline.consumer;
         let consumer_link = self.pipeline.consumer_link();
-        let source_ty = self.cfg.val_types[&self.pipeline.source].clone();
-        let pulled = self.slot(source_ty.clone(), "pulled");
+        let source_ty = self.cfg.val_types[&self.pipeline.source];
+        let pulled = self.slot(source_ty, "pulled");
         self.assign(&pulled, self.pipeline.source);
         self.hold_closures();
         if let Some(start) = &consumer.state {
             let ty = self.state_ty()?;
-            let slot = self.slot(ty.clone(), "state");
-            let start = self.term(start, Some(&ty), &Scope::without_element(consumer_link))?;
+            let slot = self.slot(ty, "state");
+            let start = self.term(start, Some(ty), &Scope::without_element(consumer_link))?;
             self.assign(&slot, start.value);
             self.state = Some(slot);
         }
@@ -474,14 +499,16 @@ impl<'p> Fusion<'p> {
         self.jump(header, Vec::new());
 
         self.start(header, Vec::new());
-        let lent = self.value(Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(source_ty))));
+        let lent_ty = self.lent(Mutability::Mut, source_ty);
+        let lent = self.value(lent_ty);
         self.push(InstKind::Ref {
             dst: lent,
             target: RefTarget::Var(pulled.slot),
             path: Vec::new(),
             mutability: Mutability::Mut,
         });
-        let pulled_option = self.value(Ty::Option(Box::new(next.element.clone())));
+        let option_ty = self.types.intern(TyKind::Option(next.element));
+        let pulled_option = self.value(option_ty);
         self.push(InstKind::FunctionCall {
             dst: pulled_option,
             callee: next.callee,
@@ -489,7 +516,7 @@ impl<'p> Fusion<'p> {
             args: vec![lent],
             order: None,
         });
-        let is_some = self.value(Ty::Bool);
+        let is_some = self.value(self.bool_ty);
         self.push(InstKind::TestVariant {
             dst: is_some,
             src: pulled_option,
@@ -516,10 +543,10 @@ impl<'p> Fusion<'p> {
         self.continue_headers.pop();
 
         self.start(finish, Vec::new());
-        let result_ty = self.result_ty.clone();
+        let result_ty = self.result_ty;
         let finished = self.term(
             &consumer.finish,
-            Some(&result_ty),
+            Some(result_ty),
             &Scope::without_element(consumer_link),
         )?;
         let result = self.result;
@@ -564,7 +591,7 @@ impl<'p> Fusion<'p> {
             .collect();
         for closure in called {
             let value = self.pipeline.args(closure.link)[closure.param];
-            let ty = self.arg_types[closure.link][closure.param].clone();
+            let ty = self.arg_types[closure.link][closure.param];
             let held = self.slot(ty, "closure");
             self.assign(&held, value);
             self.held_closures.insert(closure, held);
@@ -635,7 +662,7 @@ impl<'p> Fusion<'p> {
     /// `required` stands one to one against the declaration's requirements
     /// (RFC-0070 rule 3), and `#[extern_fn(step(..))]` numbered the stream's
     /// requirement in that order.
-    fn source_next_call(&self) -> Result<NextCall, Declined> {
+    fn source_next_call(&mut self) -> Result<NextCall, Declined> {
         let Pulling { callee, stream } = match self.pipeline.adaptors_from_source.first() {
             Some(innermost) => Pulling {
                 callee: &innermost.callee,
@@ -666,27 +693,31 @@ impl<'p> Fusion<'p> {
                     chosen.instance, chosen.signature
                 )
             });
-        let source_ty = &self.cfg.val_types[&self.pipeline.source];
-        let lent = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(source_ty.clone())));
+        let instance_ty = instance.ty;
+        let source_ty = self.cfg.val_types[&self.pipeline.source];
+        let lent = self.lent(Mutability::Mut, source_ty);
         let unfit = Declined::NoFittingInstance(chosen.signature);
-        let PolyTy::Fn { params, .. } = &instance.ty else {
+        let poly = self.decls.types();
+        let TyKind::Fn { params, .. } = poly.kind(instance_ty) else {
             return Err(unfit);
         };
-        let [pulled] = params.as_slice() else {
+        let [pulled] = &params[..] else {
             return Err(unfit);
         };
         let mut bindings = Bindings::default();
-        if !bindings.bind(&pulled.ty, &lent) {
+        if !bindings.bind(poly, pulled.ty, self.types, lent) {
             return Err(unfit);
         }
-        let callee_ty = bindings.apply(&instance.ty).ok_or(Declined::UntypedTerm)?;
-        let Ty::Fn { ret, effect, .. } = &callee_ty else {
+        let callee_ty = bindings
+            .apply(poly, instance_ty, self.types)
+            .ok_or(Declined::UntypedTerm)?;
+        let TyKind::Fn { ret, effect, .. } = self.types.kind(callee_ty) else {
             return Err(unfit);
         };
-        if !effect.get().is_pure() {
+        if known_effect(effect).reissue() != Reissue::Pure {
             return Err(Declined::Effectful);
         }
-        let Ty::Option(element) = &**ret else {
+        let TyKind::Option(element) = self.types.kind(*ret) else {
             return Err(unfit);
         };
         Ok(NextCall {
@@ -695,17 +726,18 @@ impl<'p> Fusion<'p> {
                 instance: chosen.instance,
                 required: chosen.required.clone(),
             },
-            element: (**element).clone(),
+            element: *element,
             callee_ty,
         })
     }
 
-    fn element_type_per_link(&self, source: Ty) -> Result<Vec<Ty>, Declined> {
+    fn element_type_per_link(&mut self, source: Ty) -> Result<Vec<Ty>, Declined> {
         let mut types = vec![source];
-        for (link, adaptor) in self.pipeline.adaptors_from_source.iter().enumerate() {
+        let pipeline = self.pipeline;
+        for (link, adaptor) in pipeline.adaptors_from_source.iter().enumerate() {
             let scope = Scope {
                 link,
-                element: Some(Element::Typed(types[link].clone())),
+                element: Some(Element::Typed(types[link])),
                 locals: Vec::new(),
             };
             let out = self
@@ -716,12 +748,12 @@ impl<'p> Fusion<'p> {
         Ok(types)
     }
 
-    fn flow_output_ty(&self, flow: &AdaptorFlow, scope: &Scope) -> Result<Option<Ty>, Declined> {
+    fn flow_output_ty(&mut self, flow: &AdaptorFlow, scope: &Scope) -> Result<Option<Ty>, Declined> {
         acvus_utils::grow(|| self.flow_output_ty_level(flow, scope))
     }
 
     fn flow_output_ty_level(
-        &self,
+        &mut self,
         flow: &AdaptorFlow,
         scope: &Scope,
     ) -> Result<Option<Ty>, Declined> {
@@ -729,7 +761,7 @@ impl<'p> Fusion<'p> {
             AdaptorFlow::Yield(term) => self.type_of(term, None, scope).map(Some),
             AdaptorFlow::Nest(term) => {
                 let container = self.type_of(term, None, scope)?;
-                Ok(Some(self.nested_element(&container)?.element))
+                Ok(Some(self.nested_element(container)?.element))
             }
             AdaptorFlow::Skip | AdaptorFlow::Done => Ok(None),
             AdaptorFlow::If {
@@ -748,11 +780,12 @@ impl<'p> Fusion<'p> {
         }
     }
 
-    fn state_ty(&self) -> Result<Ty, Declined> {
-        let consumer = &self.pipeline.consumer;
-        let consumer_link = self.pipeline.consumer_link();
+    fn state_ty(&mut self) -> Result<Ty, Declined> {
+        let pipeline = self.pipeline;
+        let consumer = &pipeline.consumer;
+        let consumer_link = pipeline.consumer_link();
         if consumer.finish == Term::State {
-            return Ok(self.result_ty.clone());
+            return Ok(self.result_ty);
         }
         let outside = Scope::without_element(consumer_link);
         if let Some(start) = &consumer.state
@@ -762,9 +795,7 @@ impl<'p> Fusion<'p> {
         }
         let scope = Scope {
             link: consumer_link,
-            element: Some(Element::Typed(
-                self.element_type_per_link[consumer_link].clone(),
-            )),
+            element: Some(Element::Typed(self.element_type_per_link[consumer_link])),
             locals: Vec::new(),
         };
         if let Some(ty) = self.set_ty(&consumer.body, &scope) {
@@ -792,9 +823,10 @@ impl<'p> Fusion<'p> {
                 })
                 .collect();
             let resolved = self.resolve(call.name, &known, None)?;
-            return Ok(match (&call.args[at], &resolved.params[at]) {
-                (Term::Lend(..), Ty::Ref(_, lent)) => lent.ty().into_owned(),
-                (_, param) => param.clone(),
+            let param = resolved.params[at];
+            return Ok(match (&call.args[at], self.types.kind(param)) {
+                (Term::Lend(..), TyKind::Ref(_, lent)) => lent.ty(),
+                _ => param,
             });
         }
         Err(Declined::UntypedTerm)
@@ -803,11 +835,11 @@ impl<'p> Fusion<'p> {
     /// The type of the first update `s = e` of the block whose `e` types
     /// without the state's own type: a `match s` whose `None` arm builds
     /// the state it starts.
-    fn set_ty(&self, block: &ConsumerBlock, scope: &Scope) -> Option<Ty> {
+    fn set_ty(&mut self, block: &ConsumerBlock, scope: &Scope) -> Option<Ty> {
         acvus_utils::grow(|| self.set_ty_level(block, scope))
     }
 
-    fn set_ty_level(&self, block: &ConsumerBlock, scope: &Scope) -> Option<Ty> {
+    fn set_ty_level(&mut self, block: &ConsumerBlock, scope: &Scope) -> Option<Ty> {
         let mut scope = scope.clone();
         for stmt in &block.stmts {
             match stmt {
@@ -824,10 +856,10 @@ impl<'p> Fusion<'p> {
                 ConsumerStmt::If {
                     then, otherwise, ..
                 } => {
-                    if let Some(ty) = self
-                        .set_ty(then, &scope)
-                        .or_else(|| self.set_ty(otherwise, &scope))
-                    {
+                    if let Some(ty) = self.set_ty(then, &scope) {
+                        return Some(ty);
+                    }
+                    if let Some(ty) = self.set_ty(otherwise, &scope) {
                         return Some(ty);
                     }
                 }
@@ -843,7 +875,7 @@ impl<'p> Fusion<'p> {
     }
 
     fn link_level(&mut self, link: usize, element: ValueId) -> Result<(), Declined> {
-        let ty = self.element_type_per_link[link].clone();
+        let ty = self.element_type_per_link[link];
         let terms = match self.pipeline.adaptors_from_source.get(link) {
             Some(adaptor) => adaptor.flow.terms(),
             None => self.pipeline.consumer.terms(),
@@ -880,8 +912,8 @@ impl<'p> Fusion<'p> {
     fn flow(&mut self, link: usize, flow: &'p AdaptorFlow, scope: &Scope) -> Result<(), Declined> {
         match flow {
             AdaptorFlow::Yield(term) => {
-                let ty = self.element_type_per_link[link + 1].clone();
-                let passed = self.term(term, Some(&ty), scope)?;
+                let ty = self.element_type_per_link[link + 1];
+                let passed = self.term(term, Some(ty), scope)?;
                 self.link(link + 1, passed.value)
             }
             AdaptorFlow::Skip => {
@@ -901,7 +933,7 @@ impl<'p> Fusion<'p> {
                 then,
                 otherwise,
             } => {
-                let cond = self.term(cond, Some(&Ty::Bool), scope)?;
+                let cond = self.term(cond, Some(self.bool_ty), scope)?;
                 let then_label = self.fresh_label();
                 let otherwise_label = self.fresh_label();
                 self.close(Terminator::JumpIf {
@@ -924,20 +956,18 @@ impl<'p> Fusion<'p> {
     /// below copies the same elements out of the result's slice in that
     /// order, and is left for the enclosing header when it runs out.
     fn nest(&mut self, link: usize, container: Typed) -> Result<(), Declined> {
-        let nested = self.nested_element(&container.ty)?;
-        let held = self.slot(container.ty.clone(), "nested");
+        let nested = self.nested_element(container.ty)?;
+        let held = self.slot(container.ty, "nested");
         self.assign(&held, container.value);
-        let lent = self.value(Ty::Ref(
-            Mutability::Shared,
-            Box::new(TypeArg::uniform(container.ty)),
-        ));
+        let lent_ty = self.lent(Mutability::Shared, container.ty);
+        let lent = self.value(lent_ty);
         self.push(InstKind::Ref {
             dst: lent,
             target: RefTarget::Var(held.slot),
             path: Vec::new(),
             mutability: Mutability::Shared,
         });
-        let slice = self.value(nested.view.ret.clone());
+        let slice = self.value(nested.view.ret);
         self.push(InstKind::AsSlice {
             dst: slice,
             container: lent,
@@ -958,13 +988,11 @@ impl<'p> Fusion<'p> {
             exit_args: Vec::new(),
         });
 
-        let at = self.value(Ty::Ref(
-            Mutability::Shared,
-            Box::new(TypeArg::uniform(nested.element.clone())),
-        ));
-        let counter = self.value(Ty::U64);
+        let at_ty = self.lent(Mutability::Shared, nested.element);
+        let at = self.value(at_ty);
+        let counter = self.value(self.u64_ty);
         self.start(body, vec![at, counter]);
-        let element = self.value(nested.element.clone());
+        let element = self.value(nested.element);
         self.push(InstKind::Take {
             dst: element,
             target: RefTarget::Through(at),
@@ -980,31 +1008,13 @@ impl<'p> Fusion<'p> {
         Ok(())
     }
 
-    fn nested_element(&self, container: &Ty) -> Result<Nested, Declined> {
-        let lent = Ty::Ref(
-            Mutability::Shared,
-            Box::new(TypeArg::uniform(container.clone())),
-        );
-        let unfit = || Declined::NestOverNoWordSlice(container.clone());
-        let view = self
-            .laws
-            .shared_slice_views()
-            .iter()
-            .find_map(|view| self.resolve(*view, &[Some(lent.clone())], None).ok())
-            .ok_or_else(unfit)?;
-        let Ty::Ref(_, slice) = &view.ret else {
-            return Err(unfit());
-        };
-        let Ty::Slice(element) = slice.ty().into_owned() else {
-            return Err(unfit());
-        };
-        if element.is_word() != Some(true) {
-            return Err(unfit());
-        }
-        Ok(Nested {
-            view,
-            element: *element,
-        })
+    fn nested_element(&mut self, container: Ty) -> Result<Nested, Declined> {
+        let _ = container;
+        todo!(
+            "the shared slice view of a container: the declarations name no machine view; is it \
+             `core::as_slice`'s instances (operators §3), and by what name does the compiler know \
+             `core::as_slice`? (stopped for the coordinator)"
+        )
     }
 
     fn block(&mut self, block: &'p ConsumerBlock, scope: &Scope) -> Result<BlockEnd, Declined> {
@@ -1014,24 +1024,24 @@ impl<'p> Fusion<'p> {
             match stmt {
                 ConsumerStmt::Let { local, value } => {
                     let value = self.term(value, None, scope)?;
-                    let held = self.slot(value.ty.clone(), "local");
+                    let held = self.slot(value.ty, "local");
                     self.assign(&held, value.value);
                     *scope = scope.with_local(*local, Local::Held(held));
                 }
                 ConsumerStmt::Set(term) => {
                     let state = self.state.clone().ok_or(Declined::UntypedTerm)?;
-                    let next = self.term(term, Some(&state.ty), scope)?;
+                    let next = self.term(term, Some(state.ty), scope)?;
                     self.assign(&state, next.value);
                 }
                 ConsumerStmt::Run { name, args } => {
-                    self.call_extern(*name, args, Some(&Ty::Unit), scope)?;
+                    self.call_extern(*name, args, Some(self.unit_ty), scope)?;
                 }
                 ConsumerStmt::If {
                     cond,
                     then,
                     otherwise,
                 } => {
-                    let cond = self.term(cond, Some(&Ty::Bool), scope)?;
+                    let cond = self.term(cond, Some(self.bool_ty), scope)?;
                     let then_label = self.fresh_label();
                     let otherwise_label = self.fresh_label();
                     let join = self.fresh_label();
@@ -1062,15 +1072,14 @@ impl<'p> Fusion<'p> {
         let Some(breaks) = &block.breaks else {
             return Ok(BlockEnd::FellThrough);
         };
-        let result_ty = self.result_ty.clone();
-        let result = self.term(breaks, Some(&result_ty), scope)?;
+        let result = self.term(breaks, Some(self.result_ty), scope)?;
         self.jump(self.result, vec![result.value]);
         Ok(BlockEnd::Broke)
     }
 
     // -- Terms ------------------------------------------------------------
 
-    fn term(&mut self, term: &Term, expected: Option<&Ty>, scope: &Scope) -> Result<Typed, Declined> {
+    fn term(&mut self, term: &Term, expected: Option<Ty>, scope: &Scope) -> Result<Typed, Declined> {
         let typed = match term {
             Term::Elem => match &scope.element {
                 Some(Element::Held(held)) => self.take(held),
@@ -1083,7 +1092,7 @@ impl<'p> Fusion<'p> {
             }
             Term::ValueParam(param) => Typed {
                 value: self.pipeline.args(scope.link)[*param],
-                ty: self.arg_types[scope.link][*param].clone(),
+                ty: self.arg_types[scope.link][*param],
             },
             Term::CallClosure { param, args } => {
                 let held = self
@@ -1094,54 +1103,51 @@ impl<'p> Fusion<'p> {
                     })
                     .cloned()
                     .expect("`hold_closures` holds every closure a step calls");
-                let closure_ty = held.ty.clone();
-                let Ty::Fn {
+                let closure_ty = held.ty;
+                let TyKind::Fn {
                     params,
                     ret,
                     effect,
                     ..
-                } = &closure_ty
+                } = self.types.kind(closure_ty)
                 else {
                     return Err(Declined::UntypedTerm);
                 };
-                if !effect.get().is_pure() {
+                if known_effect(effect).reissue() != Reissue::Pure {
                     return Err(Declined::Effectful);
                 }
                 if params.len() != args.len() {
                     return Err(Declined::UntypedTerm);
                 }
+                let ret = *ret;
+                let param_tys: Vec<Ty> = params.iter().map(|param| param.ty).collect();
                 let mut values = Vec::with_capacity(args.len());
-                for (arg, param) in args.iter().zip(params) {
-                    values.push(self.term(arg, Some(&param.ty), scope)?.value);
+                for (arg, param) in args.iter().zip(param_tys) {
+                    values.push(self.term(arg, Some(param), scope)?.value);
                 }
-                let lent = self.value(Ty::Ref(
-                    Mutability::Shared,
-                    Box::new(TypeArg::uniform(closure_ty.clone())),
-                ));
+                let lent_ty = self.lent(Mutability::Shared, closure_ty);
+                let lent = self.value(lent_ty);
                 self.push(InstKind::Ref {
                     dst: lent,
                     target: RefTarget::Var(held.slot),
                     path: Vec::new(),
                     mutability: Mutability::Shared,
                 });
-                let dst = self.value((**ret).clone());
+                let dst = self.value(ret);
                 self.push(InstKind::FunctionCall {
                     dst,
                     callee: Callee::Indirect(lent),
-                    callee_ty: closure_ty.clone(),
+                    callee_ty: closure_ty,
                     args: values,
                     order: None,
                 });
-                Typed {
-                    value: dst,
-                    ty: (**ret).clone(),
-                }
+                Typed { value: dst, ty: ret }
             }
             Term::CallExtern { name, args } => self.call_extern(*name, args, expected, scope)?,
             Term::Const(constant) => {
-                let ty = expected.ok_or(Declined::UntypedTerm)?.clone();
-                let value = constant_at(constant, &ty)?;
-                let dst = self.value(ty.clone());
+                let ty = expected.ok_or(Declined::UntypedTerm)?;
+                let value = constant_at(self.types, constant, ty)?;
+                let dst = self.value(ty);
                 self.push(InstKind::Const { dst, value });
                 Typed { value: dst, ty }
             }
@@ -1156,8 +1162,8 @@ impl<'p> Fusion<'p> {
                     Term::State => self.state.clone().ok_or(Declined::UntypedTerm)?,
                     _ => return Err(Declined::UntypedTerm),
                 };
-                let ty = lent_ty(*mutability, &held.ty, expected);
-                let dst = self.value(ty.clone());
+                let ty = self.lent_ty(*mutability, held.ty, expected);
+                let dst = self.value(ty);
                 self.push(InstKind::Ref {
                     dst,
                     target: RefTarget::Var(held.slot),
@@ -1168,9 +1174,9 @@ impl<'p> Fusion<'p> {
             }
             Term::WrappingAdd { left, right } => {
                 let ty = self.shared_operand_ty(left, right, expected, scope)?;
-                let left = self.term(left, Some(&ty), scope)?;
-                let right = self.term(right, Some(&ty), scope)?;
-                let dst = self.value(ty.clone());
+                let left = self.term(left, Some(ty), scope)?;
+                let right = self.term(right, Some(ty), scope)?;
+                let dst = self.value(ty);
                 self.push(InstKind::BinOp {
                     dst,
                     op: BinOp::Add(Overflow::Wrap),
@@ -1190,8 +1196,8 @@ impl<'p> Fusion<'p> {
                 let Local::Held(held) = scope.local(*local)?.clone() else {
                     return Err(Declined::UntypedTerm);
                 };
-                let ty = field_ty(&held.ty, *field)?;
-                let dst = self.value(ty.clone());
+                let ty = field_ty(self.types, held.ty, *field)?;
+                let dst = self.value(ty);
                 self.push(InstKind::Take {
                     dst,
                     target: RefTarget::Var(held.slot),
@@ -1204,10 +1210,10 @@ impl<'p> Fusion<'p> {
                 let ty = self.type_of(term, expected, scope)?;
                 let mut values = Vec::with_capacity(fields.len());
                 for (name, field) in fields {
-                    let field_ty = field_ty(&ty, *name)?;
-                    values.push((*name, self.term(field, Some(&field_ty), scope)?.value));
+                    let field_ty = field_ty(self.types, ty, *name)?;
+                    values.push((*name, self.term(field, Some(field_ty), scope)?.value));
                 }
-                let dst = self.value(ty.clone());
+                let dst = self.value(ty);
                 self.push(InstKind::MakeObject {
                     dst,
                     fields: values,
@@ -1215,13 +1221,10 @@ impl<'p> Fusion<'p> {
                 Typed { value: dst, ty }
             }
             Term::Some(payload) => {
-                let wanted = match expected {
-                    Some(Ty::Option(payload)) => Some(&**payload),
-                    _ => None,
-                };
+                let wanted = self.option_payload(expected);
                 let payload = self.term(payload, wanted, scope)?;
-                let ty = Ty::Option(Box::new(payload.ty));
-                let dst = self.value(ty.clone());
+                let ty = self.types.intern(TyKind::Option(payload.ty));
+                let dst = self.value(ty);
                 self.push(InstKind::MakeVariant {
                     dst,
                     tag: self.interner.intern("Some"),
@@ -1230,11 +1233,10 @@ impl<'p> Fusion<'p> {
                 Typed { value: dst, ty }
             }
             Term::None => {
-                let ty = match expected {
-                    Some(ty @ Ty::Option(_)) => ty.clone(),
-                    _ => return Err(Declined::UntypedTerm),
-                };
-                let dst = self.value(ty.clone());
+                let ty = expected
+                    .filter(|ty| self.option_payload(Some(*ty)).is_some())
+                    .ok_or(Declined::UntypedTerm)?;
+                let dst = self.value(ty);
                 self.push(InstKind::MakeVariant {
                     dst,
                     tag: self.interner.intern("None"),
@@ -1244,9 +1246,9 @@ impl<'p> Fusion<'p> {
             }
             Term::Compare { op, left, right } => {
                 let ty = self.compared_ty(left, right, scope)?;
-                let left = self.term(left, Some(&ty), scope)?;
-                let right = self.term(right, Some(&ty), scope)?;
-                let dst = self.value(Ty::Bool);
+                let left = self.term(left, Some(ty), scope)?;
+                let right = self.term(right, Some(ty), scope)?;
+                let dst = self.value(self.bool_ty);
                 self.push(InstKind::BinOp {
                     dst,
                     op: match op {
@@ -1262,7 +1264,7 @@ impl<'p> Fusion<'p> {
                 });
                 Typed {
                     value: dst,
-                    ty: Ty::Bool,
+                    ty: self.bool_ty,
                 }
             }
             Term::If {
@@ -1271,7 +1273,7 @@ impl<'p> Fusion<'p> {
                 otherwise,
             } => {
                 let ty = self.type_of(term, expected, scope)?;
-                let cond = self.term(cond, Some(&Ty::Bool), scope)?;
+                let cond = self.term(cond, Some(self.bool_ty), scope)?;
                 let then_label = self.fresh_label();
                 let else_label = self.fresh_label();
                 let join = self.fresh_label();
@@ -1284,12 +1286,12 @@ impl<'p> Fusion<'p> {
                     join,
                 });
                 self.start(then_label, Vec::new());
-                let then = self.term(then, Some(&ty), scope)?;
+                let then = self.term(then, Some(ty), scope)?;
                 self.jump(join, vec![then.value]);
                 self.start(else_label, Vec::new());
-                let otherwise = self.term(otherwise, Some(&ty), scope)?;
+                let otherwise = self.term(otherwise, Some(ty), scope)?;
                 self.jump(join, vec![otherwise.value]);
-                let joined = self.value(ty.clone());
+                let joined = self.value(ty);
                 self.start(join, vec![joined]);
                 Typed { value: joined, ty }
             }
@@ -1301,26 +1303,21 @@ impl<'p> Fusion<'p> {
             } => self.match_option(scrutinee, *some, then, none, expected, scope)?,
         };
         match expected {
-            Some(wanted) if *wanted != typed.ty => Err(Declined::Mismatch {
-                wanted: wanted.clone(),
+            Some(wanted) if wanted != typed.ty => Err(Declined::Mismatch {
+                wanted,
                 found: typed.ty,
             }),
             _ => Ok(typed),
         }
     }
 
-    fn type_of(&self, term: &Term, expected: Option<&Ty>, scope: &Scope) -> Result<Ty, Declined> {
+    fn type_of(&mut self, term: &Term, expected: Option<Ty>, scope: &Scope) -> Result<Ty, Declined> {
         let ty = match term {
-            Term::Elem => scope
-                .element
-                .as_ref()
-                .ok_or(Declined::UntypedTerm)?
-                .ty()
-                .clone(),
-            Term::State => self.state.as_ref().ok_or(Declined::UntypedTerm)?.ty.clone(),
-            Term::ValueParam(param) => self.arg_types[scope.link][*param].clone(),
-            Term::CallClosure { param, .. } => match &self.arg_types[scope.link][*param] {
-                Ty::Fn { ret, .. } => (**ret).clone(),
+            Term::Elem => scope.element.as_ref().ok_or(Declined::UntypedTerm)?.ty(),
+            Term::State => self.state.as_ref().ok_or(Declined::UntypedTerm)?.ty,
+            Term::ValueParam(param) => self.arg_types[scope.link][*param],
+            Term::CallClosure { param, .. } => match self.types.kind(self.arg_types[scope.link][*param]) {
+                TyKind::Fn { ret, .. } => *ret,
                 _ => return Err(Declined::UntypedTerm),
             },
             Term::CallExtern { name, args } => {
@@ -1328,50 +1325,52 @@ impl<'p> Fusion<'p> {
                 self.resolve(*name, &known, expected)?.ret
             }
             Term::Const(constant) => {
-                let ty = expected.ok_or(Declined::UntypedTerm)?.clone();
-                constant_at(constant, &ty)?;
+                let ty = expected.ok_or(Declined::UntypedTerm)?;
+                constant_at(self.types, constant, ty)?;
                 ty
             }
             Term::Lend(mutability, lent) => {
                 let ty = self.type_of(lent, None, scope)?;
-                lent_ty(*mutability, &ty, expected)
+                self.lent_ty(*mutability, ty, expected)
             }
-            Term::WrappingAdd { left, right } => {
-                self.shared_operand_ty(left, right, expected, scope)?
-            }
-            Term::Local(local) => scope.local(*local)?.ty().clone(),
-            Term::Field { local, field } => field_ty(scope.local(*local)?.ty(), *field)?,
+            Term::WrappingAdd { left, right } => self.shared_operand_ty(left, right, expected, scope)?,
+            Term::Local(local) => scope.local(*local)?.ty(),
+            Term::Field { local, field } => field_ty(self.types, scope.local(*local)?.ty(), *field)?,
             Term::Record(fields) => {
-                let mut typed = FxHashMap::default();
+                let mut typed = Vec::with_capacity(fields.len());
                 for (name, field) in fields {
-                    let wanted = match expected {
-                        Some(Ty::Object(object)) => object.get(name),
+                    let wanted = expected.and_then(|expected| match self.types.kind(expected) {
+                        TyKind::Object(object) => object
+                            .fields()
+                            .iter()
+                            .find(|(field, _)| field == name)
+                            .map(|(_, ty)| *ty),
                         _ => None,
-                    };
-                    typed.insert(*name, self.type_of(field, wanted, scope)?);
+                    });
+                    typed.push((*name, self.type_of(field, wanted, scope)?));
                 }
-                Ty::Object(ObjectTy::written(typed))
+                typed.sort_by_key(|(name, _)| *name);
+                self.types
+                    .intern(TyKind::Object(ObjectTy::Structural(typed.into_boxed_slice(), ())))
             }
             Term::Some(payload) => {
-                let wanted = match expected {
-                    Some(Ty::Option(payload)) => Some(&**payload),
-                    _ => None,
-                };
-                Ty::Option(Box::new(self.type_of(payload, wanted, scope)?))
+                let wanted = self.option_payload(expected);
+                let payload = self.type_of(payload, wanted, scope)?;
+                self.types.intern(TyKind::Option(payload))
             }
-            Term::None => match expected {
-                Some(ty @ Ty::Option(_)) => ty.clone(),
-                _ => return Err(Declined::UntypedTerm),
-            },
+            Term::None => expected
+                .filter(|ty| self.option_payload(Some(*ty)).is_some())
+                .ok_or(Declined::UntypedTerm)?,
             Term::Compare { left, right, .. } => {
                 self.compared_ty(left, right, scope)?;
-                Ty::Bool
+                self.bool_ty
             }
             Term::If {
                 then, otherwise, ..
-            } => self
-                .type_of(then, expected, scope)
-                .or_else(|_| self.type_of(otherwise, expected, scope))?,
+            } => match self.type_of(then, expected, scope) {
+                Ok(ty) => ty,
+                Err(_) => self.type_of(otherwise, expected, scope)?,
+            },
             Term::Match {
                 scrutinee,
                 some,
@@ -1379,22 +1378,28 @@ impl<'p> Fusion<'p> {
                 none,
             } => {
                 let payload = match self.type_of(scrutinee, None, scope) {
-                    Ok(Ty::Option(payload)) => Some(*payload),
-                    Ok(other) => {
-                        return Err(Declined::Mismatch {
-                            wanted: Ty::Option(Box::new(other.clone())),
-                            found: other,
-                        });
-                    }
+                    Ok(scrutinee_ty) => match self.option_payload(Some(scrutinee_ty)) {
+                        Some(payload) => Some(payload),
+                        None => {
+                            let wanted = self.types.intern(TyKind::Option(scrutinee_ty));
+                            return Err(Declined::Mismatch {
+                                wanted,
+                                found: scrutinee_ty,
+                            });
+                        }
+                    },
                     Err(_) => None,
                 };
-                let typed_then = payload.and_then(|payload| {
-                    let arm = match some {
-                        Some(local) => scope.with_local(*local, Local::Typed(payload)),
-                        None => scope.clone(),
-                    };
-                    self.type_of(then, expected, &arm).ok()
-                });
+                let typed_then = match payload {
+                    Some(payload) => {
+                        let arm = match some {
+                            Some(local) => scope.with_local(*local, Local::Typed(payload)),
+                            None => scope.clone(),
+                        };
+                        self.type_of(then, expected, &arm).ok()
+                    }
+                    None => None,
+                };
                 match typed_then {
                     Some(ty) => ty,
                     None => self.type_of(none, expected, scope)?,
@@ -1402,48 +1407,66 @@ impl<'p> Fusion<'p> {
             }
         };
         match expected {
-            Some(wanted) if *wanted != ty => Err(Declined::Mismatch {
-                wanted: wanted.clone(),
-                found: ty,
-            }),
+            Some(wanted) if wanted != ty => Err(Declined::Mismatch { wanted, found: ty }),
             _ => Ok(ty),
         }
+    }
+
+    /// The payload of `ty`, where it is an `Option`.
+    fn option_payload(&self, ty: Option<Ty>) -> Option<Ty> {
+        match self.types.kind(ty?) {
+            TyKind::Option(payload) => Some(*payload),
+            _ => None,
+        }
+    }
+
+    /// The lowering types a reference to a local at the uniform
+    /// representation (`inliner::Emit::lend_local`, `lower_for`), and a
+    /// parameter that lends the same type takes the reference at its own.
+    fn lent_ty(&mut self, mutability: Mutability, ty: Ty, expected: Option<Ty>) -> Ty {
+        match expected.map(|wanted| (wanted, self.types.kind(wanted))) {
+            Some((wanted, TyKind::Ref(m, lent))) if *m == mutability && lent.ty() == ty => wanted,
+            _ => self.lent(mutability, ty),
+        }
+    }
+
+    fn lent(&mut self, mutability: Mutability, ty: Ty) -> Ty {
+        self.types.intern(TyKind::Ref(mutability, TypeArg::Uniform(ty)))
     }
 
     /// Each argument's type where the argument types itself, a constant's
     /// being `None`: `resolve` binds those by the instance the others choose,
     /// and the call types every argument again at that instance's parameter.
-    fn self_typed_args(&self, args: &[Term], scope: &Scope) -> Vec<Option<Ty>> {
+    fn self_typed_args(&mut self, args: &[Term], scope: &Scope) -> Vec<Option<Ty>> {
         args.iter()
             .map(|arg| self.type_of(arg, None, scope).ok())
             .collect()
     }
 
     fn shared_operand_ty(
-        &self,
+        &mut self,
         left: &Term,
         right: &Term,
-        expected: Option<&Ty>,
+        expected: Option<Ty>,
         scope: &Scope,
     ) -> Result<Ty, Declined> {
-        let ty = match (
-            self.type_of(left, None, scope),
-            self.type_of(right, None, scope),
-        ) {
+        let left = self.type_of(left, None, scope);
+        let right = self.type_of(right, None, scope);
+        let ty = match (left, right) {
             (Ok(ty), _) | (Err(_), Ok(ty)) => ty,
-            (Err(why), Err(_)) => expected.cloned().ok_or(why)?,
+            (Err(why), Err(_)) => expected.ok_or(why)?,
         };
-        match ty {
-            Ty::Int(_) | Ty::Float => Ok(ty),
-            other => Err(Declined::Mismatch {
-                wanted: Ty::Float,
-                found: other,
+        match self.types.kind(ty) {
+            TyKind::Int(_) | TyKind::Float => Ok(ty),
+            _ => Err(Declined::Mismatch {
+                wanted: self.float_ty,
+                found: ty,
             }),
         }
     }
 
     /// The one number type both operands of a comparison have.
-    fn compared_ty(&self, left: &Term, right: &Term, scope: &Scope) -> Result<Ty, Declined> {
+    fn compared_ty(&mut self, left: &Term, right: &Term, scope: &Scope) -> Result<Ty, Declined> {
         let left_ty = self.type_of(left, None, scope);
         let right_ty = self.type_of(right, None, scope);
         let ty = match (left_ty, right_ty) {
@@ -1456,9 +1479,9 @@ impl<'p> Fusion<'p> {
             (Ok(ty), _) | (Err(_), Ok(ty)) => ty,
             (Err(why), Err(_)) => return Err(why),
         };
-        match ty {
-            Ty::Int(_) | Ty::Float => Ok(ty),
-            other => Err(Declined::ComparesNoNumbers(other)),
+        match self.types.kind(ty) {
+            TyKind::Int(_) | TyKind::Float => Ok(ty),
+            _ => Err(Declined::ComparesNoNumbers(ty)),
         }
     }
 
@@ -1472,7 +1495,7 @@ impl<'p> Fusion<'p> {
         some: Option<usize>,
         then: &Term,
         none: &Term,
-        expected: Option<&Ty>,
+        expected: Option<Ty>,
         scope: &Scope,
     ) -> Result<Typed, Declined> {
         let ty = self.type_of(
@@ -1489,21 +1512,20 @@ impl<'p> Fusion<'p> {
             Term::State => self.state.clone().ok_or(Declined::UntypedTerm)?,
             other => {
                 let value = self.term(other, None, scope)?;
-                let held = self.slot(value.ty.clone(), "matched");
+                let held = self.slot(value.ty, "matched");
                 self.assign(&held, value.value);
                 held
             }
         };
-        let Ty::Option(payload_ty) = holder.ty.clone() else {
+        let Some(payload_ty) = self.option_payload(Some(holder.ty)) else {
+            let wanted = self.types.intern(TyKind::Option(holder.ty));
             return Err(Declined::Mismatch {
-                wanted: Ty::Option(Box::new(holder.ty.clone())),
+                wanted,
                 found: holder.ty,
             });
         };
-        let lent = self.value(Ty::Ref(
-            Mutability::Shared,
-            Box::new(TypeArg::uniform(holder.ty.clone())),
-        ));
+        let lent_ty = self.lent(Mutability::Shared, holder.ty);
+        let lent = self.value(lent_ty);
         self.push(InstKind::Ref {
             dst: lent,
             target: RefTarget::Var(holder.slot),
@@ -1530,27 +1552,27 @@ impl<'p> Fusion<'p> {
             default: None,
         });
         self.start(none_label, Vec::new());
-        let otherwise = self.term(none, Some(&ty), scope)?;
+        let otherwise = self.term(none, Some(ty), scope)?;
         self.jump(join, vec![otherwise.value]);
         self.start(some_label, Vec::new());
         let arm = match some {
             Some(local) => {
-                let payload = self.value((*payload_ty).clone());
+                let payload = self.value(payload_ty);
                 self.push(InstKind::Take {
                     dst: payload,
                     target: RefTarget::Var(holder.slot),
                     path: vec![PathSeg::Payload],
                     taken_out: false,
                 });
-                let held = self.slot(*payload_ty, "payload");
+                let held = self.slot(payload_ty, "payload");
                 self.assign(&held, payload);
                 scope.with_local(local, Local::Held(held))
             }
             None => scope.clone(),
         };
-        let then = self.term(then, Some(&ty), &arm)?;
+        let then = self.term(then, Some(ty), &arm)?;
         self.jump(join, vec![then.value]);
-        let joined = self.value(ty.clone());
+        let joined = self.value(ty);
         self.start(join, vec![joined]);
         Ok(Typed { value: joined, ty })
     }
@@ -1559,16 +1581,16 @@ impl<'p> Fusion<'p> {
         &mut self,
         name: QualifiedRef,
         args: &[Term],
-        expected: Option<&Ty>,
+        expected: Option<Ty>,
         scope: &Scope,
     ) -> Result<Typed, Declined> {
         let known = self.self_typed_args(args, scope);
         let resolved = self.resolve(name, &known, expected)?;
         let mut values = Vec::with_capacity(args.len());
         for (arg, param) in args.iter().zip(&resolved.params) {
-            values.push(self.term(arg, Some(param), scope)?.value);
+            values.push(self.term(arg, Some(*param), scope)?.value);
         }
-        let dst = self.value(resolved.ret.clone());
+        let dst = self.value(resolved.ret);
         self.push(InstKind::FunctionCall {
             dst,
             callee: Callee::Extern {
@@ -1589,18 +1611,12 @@ impl<'p> Fusion<'p> {
     /// The instance `laws::resolve` would choose for a law naming `name` at
     /// these types: the one concrete instance they have the shape of, and
     /// otherwise the generic one.
-    fn resolve(
-        &self,
-        name: QualifiedRef,
-        args: &[Option<Ty>],
-        ret: Option<&Ty>,
-    ) -> Result<Resolved, Declined> {
+    fn resolve(&mut self, name: QualifiedRef, args: &[Option<Ty>], ret: Option<Ty>) -> Result<Resolved, Declined> {
         let unfit = Declined::NoFittingInstance(name);
-        let fits = |ty: &PolyTy| -> Option<Bindings> {
-            let PolyTy::Fn {
-                params, ret: to, ..
-            } = ty
-            else {
+        let poly = self.decls.types();
+        let types: &Types<Concrete> = self.types;
+        let fits = |ty: TyId<Poly>| -> Option<Bindings> {
+            let TyKind::Fn { params, ret: to, .. } = poly.kind(ty) else {
                 return None;
             };
             if params.len() != args.len() {
@@ -1609,13 +1625,13 @@ impl<'p> Fusion<'p> {
             let mut bindings = Bindings::default();
             for (param, arg) in params.iter().zip(args) {
                 if let Some(arg) = arg
-                    && !bindings.bind(&param.ty, arg)
+                    && !bindings.bind(poly, param.ty, types, *arg)
                 {
                     return None;
                 }
             }
             if let Some(ret) = ret
-                && !bindings.bind(to, ret)
+                && !bindings.bind(poly, *to, types, ret)
             {
                 return None;
             }
@@ -1630,7 +1646,7 @@ impl<'p> Fusion<'p> {
                 .filter_map(|(at, instance)| {
                     Some(Fitting {
                         instance: at,
-                        bindings: fits(&instance.ty)?,
+                        bindings: fits(instance.ty)?,
                     })
                 })
                 .collect()
@@ -1647,18 +1663,18 @@ impl<'p> Fusion<'p> {
         }
         let callee_ty = chosen
             .bindings
-            .apply(&instance.ty)
+            .apply(poly, instance.ty, self.types)
             .ok_or(Declined::UntypedTerm)?;
-        let Ty::Fn {
+        let TyKind::Fn {
             params,
             ret,
             effect,
             ..
-        } = &callee_ty
+        } = self.types.kind(callee_ty)
         else {
             return Err(unfit);
         };
-        if !effect.get().is_pure() {
+        if known_effect(effect).reissue() != Reissue::Pure {
             return Err(Declined::Effectful);
         }
         Ok(Resolved {
@@ -1666,9 +1682,9 @@ impl<'p> Fusion<'p> {
                 id: name,
                 instance: chosen.instance,
             },
-            params: params.iter().map(|param| param.ty.clone()).collect(),
-            ret: (**ret).clone(),
-            callee_ty: callee_ty.clone(),
+            params: params.iter().map(|param| param.ty).collect(),
+            ret: *ret,
+            callee_ty,
         })
     }
 
@@ -1694,7 +1710,7 @@ impl<'p> Fusion<'p> {
     }
 
     fn slot(&mut self, ty: Ty, name: &str) -> Slot {
-        let slot = self.value(ty.clone());
+        let slot = self.value(ty);
         let name = self.interner.intern(name);
         self.cfg.debug.set(slot, ValOrigin::Named(name));
         Slot { slot, ty }
@@ -1710,17 +1726,14 @@ impl<'p> Fusion<'p> {
     }
 
     fn take(&mut self, held: &Slot) -> Typed {
-        let dst = self.value(held.ty.clone());
+        let dst = self.value(held.ty);
         self.push(InstKind::Take {
             dst,
             target: RefTarget::Var(held.slot),
             path: Vec::new(),
             taken_out: false,
         });
-        Typed {
-            value: dst,
-            ty: held.ty.clone(),
-        }
+        Typed { value: dst, ty: held.ty }
     }
 
     fn push(&mut self, kind: InstKind) {
@@ -1766,13 +1779,15 @@ impl<'p> Fusion<'p> {
     }
 }
 
-fn field_ty(record: &Ty, field: acvus_utils::Astr) -> Result<Ty, Declined> {
-    let no_field = || Declined::NoField {
-        ty: record.clone(),
-        field,
-    };
-    match record {
-        Ty::Object(object) => object.get(&field).cloned().ok_or_else(no_field),
+fn field_ty(types: &Types<Concrete>, record: Ty, field: acvus_utils::Astr) -> Result<Ty, Declined> {
+    let no_field = || Declined::NoField { ty: record, field };
+    match types.kind(record) {
+        TyKind::Object(object) => object
+            .fields()
+            .iter()
+            .find(|(name, _)| *name == field)
+            .map(|(_, ty)| *ty)
+            .ok_or_else(no_field),
         _ => Err(no_field()),
     }
 }
@@ -1785,32 +1800,22 @@ fn reads_the_state(term: &Term) -> bool {
     }
 }
 
-/// The lowering types a reference to a local at the uniform
-/// representation (`inliner::Emit::lend_local`, `lower_for`), and a
-/// parameter that lends the same type takes the reference at its own.
-fn lent_ty(mutability: Mutability, ty: &Ty, expected: Option<&Ty>) -> Ty {
-    match expected {
-        Some(wanted @ Ty::Ref(m, lent)) if *m == mutability && *lent.ty() == *ty => wanted.clone(),
-        _ => Ty::Ref(mutability, Box::new(TypeArg::uniform(ty.clone()))),
-    }
-}
-
-fn constant_at(constant: &Literal, ty: &Ty) -> Result<Literal, Declined> {
+fn constant_at(types: &Types<Concrete>, constant: &Literal, ty: Ty) -> Result<Literal, Declined> {
     let out_of_type = || Declined::ConstantOutOfType {
         constant: constant.clone(),
-        ty: ty.clone(),
+        ty,
     };
-    match (constant, ty) {
-        (Literal::Int(value), Ty::Int(width)) if width.holds(*value) => Ok(Literal::Int(*value)),
-        (Literal::Int(value), Ty::Float) => {
+    match (constant, types.kind(ty)) {
+        (Literal::Int(value), TyKind::Int(width)) if width.holds(*value) => Ok(Literal::Int(*value)),
+        (Literal::Int(value), TyKind::Float) => {
             let float = *value as f64;
             match float as i128 == *value {
                 true => Ok(Literal::Float(float)),
                 false => Err(out_of_type()),
             }
         }
-        (Literal::Float(value), Ty::Float) => Ok(Literal::Float(*value)),
-        (Literal::Bool(value), Ty::Bool) => Ok(Literal::Bool(*value)),
+        (Literal::Float(value), TyKind::Float) => Ok(Literal::Float(*value)),
+        (Literal::Bool(value), TyKind::Bool) => Ok(Literal::Bool(*value)),
         _ => Err(out_of_type()),
     }
 }

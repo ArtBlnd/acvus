@@ -42,14 +42,24 @@ use crate::ir::{
 };
 use crate::laws::LawTable;
 use crate::optimize::dce;
-use crate::ty::{CastTy, IntTy, LenTerm, Ty};
+use crate::ir::known_len;
+use crate::ty::{CastTy, Concrete, IntTy, Ty, TyKind, Types};
+use crate::decl::Declarations;
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
-    while let Some(empty) = first_empty(cfg, laws, functions) {
-        remove(cfg, empty);
+pub fn run(
+    cfg: &mut CfgBody,
+    types: &mut Types<Concrete>,
+    decls: &Declarations,
+    laws: &LawTable,
+    functions: &FunctionSummary,
+) {
+    let u64_ty = types.intern(TyKind::Int(IntTy::U64));
+    let types: &Types<Concrete> = types;
+    while let Some(empty) = first_empty(cfg, types, laws, functions) {
+        remove(cfg, u64_ty, empty);
         let alive = reachable(cfg);
         prune(cfg, &alive);
-        dce::run(cfg, laws, functions);
+        dce::run(cfg, types, decls, laws, functions);
     }
 }
 
@@ -57,7 +67,8 @@ enum Count {
     Range {
         at: ValueId,
         hi: ValueId,
-        width: IntTy,
+        /// The type of `at` and `hi`.
+        ty: Ty,
     },
     Array {
         len: u64,
@@ -83,16 +94,16 @@ struct Stepped {
     right: ValueId,
 }
 
-fn first_empty(cfg: &CfgBody, laws: &LawTable, functions: &FunctionSummary) -> Option<Empty> {
+fn first_empty(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable, functions: &FunctionSummary) -> Option<Empty> {
     let domtree = DomTree::build(cfg);
-    let removal = Removal::of(cfg, laws, functions);
+    let removal = Removal::of(cfg, types, laws, functions);
     natural_loops_innermost_first(cfg, &domtree)
         .iter()
-        .find_map(|loop_| Empty::of(cfg, loop_, &removal))
+        .find_map(|loop_| Empty::of(cfg, types, loop_, &removal))
 }
 
 impl Empty {
-    fn of(cfg: &CfgBody, loop_: &NaturalLoop, removal: &Removal<'_>) -> Option<Empty> {
+    fn of(cfg: &CfgBody, types: &Types<Concrete>, loop_: &NaturalLoop, removal: &Removal<'_>) -> Option<Empty> {
         let header = &cfg.blocks[loop_.header.0];
         let Terminator::For {
             source,
@@ -124,14 +135,14 @@ impl Empty {
         if !body.iter().all(|block| only_jumps_within(*block)) {
             return None;
         }
-        let slopes = Slopes::of(cfg, loop_, source, &body, removal)?;
+        let slopes = Slopes::of(cfg, types, loop_, source, &body, removal)?;
         let checks = slopes.checks()?;
         let defs = slopes
             .defs
             .iter()
             .map(|(value, kind)| (*value, (*kind).clone()))
             .collect();
-        let count = Count::of(cfg, source)?;
+        let count = Count::of(cfg, types, source)?;
         Some(Empty {
             header: loop_.header,
             count,
@@ -172,6 +183,7 @@ impl Slope {
 /// The body's instructions, read as how each value moves with the counter.
 struct Slopes<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
     counter: ValueId,
     defs: FxHashMap<ValueId, &'a InstKind>,
     params: Vec<ValueId>,
@@ -181,6 +193,7 @@ struct Slopes<'a> {
 impl<'a> Slopes<'a> {
     fn of(
         cfg: &'a CfgBody,
+        types: &'a Types<Concrete>,
         loop_: &NaturalLoop,
         source: ForSource,
         body: &[BlockIdx],
@@ -208,7 +221,7 @@ impl<'a> Slopes<'a> {
                         dst,
                         to: CastTy::Int(_),
                         ..
-                    } if !stays && matches!(cfg.val_types[dst], Ty::Int(_)) => {
+                    } if !stays && matches!(types.kind(cfg.val_types[dst]), TyKind::Int(_)) => {
                         defs.insert(*dst, &inst.kind);
                     }
                     InstKind::BinOp {
@@ -218,7 +231,7 @@ impl<'a> Slopes<'a> {
                             | BinOp::Sub(Overflow::Wrap)
                             | BinOp::Mul(Overflow::Wrap),
                         ..
-                    } if !stays && matches!(cfg.val_types[dst], Ty::Int(_)) => {
+                    } if !stays && matches!(types.kind(cfg.val_types[dst]), TyKind::Int(_)) => {
                         defs.insert(*dst, &inst.kind);
                     }
                     _ => return None,
@@ -227,6 +240,7 @@ impl<'a> Slopes<'a> {
         }
         Some(Slopes {
             cfg,
+            types,
             counter,
             defs,
             params,
@@ -235,10 +249,10 @@ impl<'a> Slopes<'a> {
     }
 
     fn width(&self, value: ValueId) -> IntTy {
-        let Ty::Int(width) = self.cfg.val_types[&value] else {
+        let TyKind::Int(width) = self.types.kind(self.cfg.val_types[&value]) else {
             panic!("{value:?} is a value `Slopes::of` admitted as an integer")
         };
-        width
+        *width
     }
 
     /// The value of a constant the body or the function defines.
@@ -349,22 +363,20 @@ impl<'a> Slopes<'a> {
 }
 
 impl Count {
-    fn of(cfg: &CfgBody, source: ForSource) -> Option<Count> {
+    fn of(cfg: &CfgBody, types: &Types<Concrete>, source: ForSource) -> Option<Count> {
         match source {
             ForSource::Range { at, hi } => {
-                let Ty::Int(width) = cfg.val_types[&at] else {
+                let ty = cfg.val_types[&at];
+                let TyKind::Int(_) = types.kind(ty) else {
                     panic!("a range's bound {at:?} is an integer (RFC-0057 rule 1)")
                 };
-                Some(Count::Range { at, hi, width })
+                Some(Count::Range { at, hi, ty })
             }
             ForSource::Array(array) => {
-                let Ty::Array(_, len) = &cfg.val_types[&array] else {
+                let TyKind::Array(_, len) = types.kind(cfg.val_types[&array]) else {
                     panic!("an array source {array:?} is an `Array`")
                 };
-                let len = match len {
-                    LenTerm::Known(len) => *len,
-                    LenTerm::Var(never) => match *never {},
-                };
+                let len = known_len(len);
                 let len = u64::try_from(len).expect("an array's length is a `u64`");
                 Some(Count::Array { len })
             }
@@ -373,7 +385,7 @@ impl Count {
     }
 }
 
-fn remove(cfg: &mut CfgBody, empty: Empty) {
+fn remove(cfg: &mut CfgBody, u64_ty: Ty, empty: Empty) {
     let Empty {
         header,
         count,
@@ -383,8 +395,8 @@ fn remove(cfg: &mut CfgBody, empty: Empty) {
         checks,
         defs,
     } = empty;
-    let first = first_counter(cfg, header, &count);
-    let mut tail = HeaderTail { cfg, header };
+    let first = first_counter(cfg, u64_ty, header, &count);
+    let mut tail = HeaderTail { cfg, u64_ty, header };
     let trip = match (exit_trip, checks.is_empty()) {
         (ExitTrip::Absent, true) => None,
         (ExitTrip::Defined, _) | (ExitTrip::Absent, false) => Some(tail.trip(count)),
@@ -421,13 +433,13 @@ fn remove(cfg: &mut CfgBody, empty: Empty) {
 
 /// The counter's value on the first iteration: a range's `at`, an array's
 /// index `0`.
-fn first_counter(cfg: &mut CfgBody, header: BlockIdx, count: &Count) -> ValueId {
+fn first_counter(cfg: &mut CfgBody, u64_ty: Ty, header: BlockIdx, count: &Count) -> ValueId {
     match count {
         Count::Range { at, .. } => *at,
         Count::Array { .. } => {
-            let mut tail = HeaderTail { cfg, header };
+            let mut tail = HeaderTail { cfg, u64_ty, header };
             let counter = tail.counter();
-            let ty = tail.cfg.val_types[&counter].clone();
+            let ty = tail.cfg.val_types[&counter];
             let zero = tail.fresh(ty);
             tail.push(InstKind::Const {
                 dst: zero,
@@ -490,6 +502,7 @@ impl Clones<'_, '_> {
 
 struct HeaderTail<'a> {
     cfg: &'a mut CfgBody,
+    u64_ty: Ty,
     header: BlockIdx,
 }
 
@@ -526,10 +539,10 @@ impl HeaderTail<'_> {
     }
 
     fn as_u64(&mut self, value: ValueId) -> ValueId {
-        if self.cfg.val_types[&value] == Ty::U64 {
+        if self.cfg.val_types[&value] == self.u64_ty {
             return value;
         }
-        let dst = self.fresh(Ty::U64);
+        let dst = self.fresh(self.u64_ty);
         self.push(InstKind::Cast {
             dst,
             src: value,
@@ -540,8 +553,8 @@ impl HeaderTail<'_> {
 
     fn trip(&mut self, count: Count) -> ValueId {
         match count {
-            Count::Range { at, hi, width } => {
-                let reached = self.fresh(Ty::Int(width));
+            Count::Range { at, hi, ty } => {
+                let reached = self.fresh(ty);
                 self.push(InstKind::BinOp {
                     dst: reached,
                     op: BinOp::Max,
@@ -549,7 +562,7 @@ impl HeaderTail<'_> {
                     right: at,
                 });
                 let (reached, at) = (self.as_u64(reached), self.as_u64(at));
-                let trip = self.fresh(Ty::U64);
+                let trip = self.fresh(self.u64_ty);
                 self.push(InstKind::BinOp {
                     dst: trip,
                     op: BinOp::Sub(Overflow::Wrap),
@@ -559,7 +572,7 @@ impl HeaderTail<'_> {
                 trip
             }
             Count::Array { len } => {
-                let trip = self.fresh(Ty::U64);
+                let trip = self.fresh(self.u64_ty);
                 self.push(InstKind::Const {
                     dst: trip,
                     value: Literal::Int(i128::from(len)),

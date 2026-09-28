@@ -1,14 +1,14 @@
 //! Reorder pass: dependency-preserving instruction scheduling.
 //!
-//! After spawn_split, IO calls are Spawn (async start) + Eval (blocking wait).
+//! After spawn_split, IO calls are Spawn (async start) + TakeEffect (blocking wait).
 //! This pass reorders instructions within each basic block to maximize the
-//! distance between Spawn and Eval, hiding IO latency.
+//! distance between Spawn and TakeEffect, hiding IO latency.
 //!
 //! # Scheduling strategy
 //!
 //! - **Spawn**: as early as possible (fire async work before anything blocks).
-//! - **Eval**: just before its result's first use (not unconditionally last).
-//!   This prevents one Eval from blocking another Eval's consumer.
+//! - **TakeEffect**: just before its result's first use (not unconditionally last).
+//!   This prevents one TakeEffect from blocking another TakeEffect's consumer.
 //! - **Normal**: original order (stability for non-IO instructions).
 //!
 //! # Dependency constraints (soundness)
@@ -33,10 +33,13 @@ use acvus_utils::QualifiedRef;
 use crate::ir::*;
 use crate::optimize::context_ops::{context_read, context_written};
 use crate::ty::Ty;
+use crate::ty::{Concrete, Types};
+use crate::decl::Declarations;
+use crate::ty::TyKind;
 
-/// Reorder instructions within each basic block for optimal Spawn/Eval scheduling.
-pub fn run(cfg: &mut CfgBody) {
-    let loans = Loans::build(cfg);
+/// Reorder instructions within each basic block for optimal Spawn/TakeEffect scheduling.
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) {
+    let loans = Loans::build(cfg, types, decls);
     let reordered: Vec<Option<Vec<Inst>>> = (0..cfg.blocks.len())
         .map(|block| reordered_block(&loans, BlockIdx(block)))
         .collect();
@@ -51,12 +54,12 @@ pub fn run(cfg: &mut CfgBody) {
 ///
 /// Spawn goes first (fire-and-forget, maximizes async overlap).
 /// Normal instructions keep their original order.
-/// Eval is placed just before the first use of its result -
-/// not at the end of the block, so independent Evals don't
+/// TakeEffect is placed just before the first use of its result -
+/// not at the end of the block, so independent TakeEffects don't
 /// block each other's consumers.
 ///
 /// The `sub` field breaks ties at the same position:
-/// `0` (Eval) sorts before `1` (Normal), so an Eval lands
+/// `0` (TakeEffect) sorts before `1` (Normal), so a TakeEffect lands
 /// right before the instruction that consumes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Priority {
@@ -102,34 +105,35 @@ impl Touch {
     }
 }
 
-fn effect_touch(ty: &Ty) -> Touch {
-    match ty.effect() {
-        Some(effect) => Touch::Of(effect.reads.union(&effect.writes).copied().collect()),
+fn effect_touch(types: &Types<Concrete>, ty: Ty) -> Touch {
+    match fn_effect(types, ty) {
+        Some(effect) => Touch::Of(effect.reads().union(effect.writes()).copied().collect()),
         None => Touch::Every,
     }
 }
 
 /// The summary of a call: the callee's effect joined with the effect of
 /// every function-typed argument.
-fn call_touch(callee_ty: &Ty, args: &[ValueId], val_types: &FxHashMap<ValueId, Ty>) -> Touch {
+fn call_touch(types: &Types<Concrete>, callee_ty: Ty, args: &[ValueId], val_types: &FxHashMap<ValueId, Ty>) -> Touch {
     args.iter()
-        .filter_map(|arg| val_types.get(arg))
-        .filter(|ty| matches!(ty, Ty::Fn { .. }))
-        .fold(effect_touch(callee_ty), |touch, ty| {
-            touch.join(effect_touch(ty))
+        .filter_map(|arg| val_types.get(arg).copied())
+        .filter(|ty| matches!(types.kind(*ty), TyKind::Fn { .. }))
+        .fold(effect_touch(types, callee_ty), |touch, ty| {
+            touch.join(effect_touch(types, ty))
         })
 }
 
+
 /// What each instruction of the block touches; `None` for one that never
 /// reaches the page.
-fn touches(insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> Vec<Option<Touch>> {
+fn touches(types: &Types<Concrete>, insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> Vec<Option<Touch>> {
     let mut spawn_of: FxHashMap<ValueId, usize> = FxHashMap::default();
     let mut out: Vec<Option<Touch>> = Vec::with_capacity(insts.len());
     for (i, inst) in insts.iter().enumerate() {
         let touch = match &inst.kind {
             InstKind::FunctionCall {
                 callee_ty, args, ..
-            } => Some(call_touch(callee_ty, args, val_types)),
+            } => Some(call_touch(types, *callee_ty, args, val_types)),
             InstKind::Spawn {
                 dst,
                 callee_ty,
@@ -137,9 +141,9 @@ fn touches(insts: &[Inst], val_types: &FxHashMap<ValueId, Ty>) -> Vec<Option<Tou
                 ..
             } => {
                 spawn_of.insert(*dst, i);
-                Some(call_touch(callee_ty, args, val_types))
+                Some(call_touch(types, *callee_ty, args, val_types))
             }
-            InstKind::Eval { src, .. } => Some(
+            InstKind::TakeEffect { src, .. } => Some(
                 spawn_of
                     .get(src)
                     .and_then(|&si| out[si].clone())
@@ -225,7 +229,7 @@ fn build_dependency_graph(loans: &Loans<'_>, block: BlockIdx) -> Vec<SmallVec<[u
     // last that touched every context, precede the next one that touches it.
     let mut last_of: FxHashMap<QualifiedRef, usize> = FxHashMap::default();
     let mut last_every: Option<usize> = None;
-    for (i, touch) in touches(insts, val_types).into_iter().enumerate() {
+    for (i, touch) in touches(loans.layout().types, insts, val_types).into_iter().enumerate() {
         match touch {
             None => {}
             Some(Touch::Every) => {
@@ -250,15 +254,15 @@ fn build_dependency_graph(loans: &Loans<'_>, block: BlockIdx) -> Vec<SmallVec<[u
 
 /// Assign scheduling priority to each instruction.
 ///
-/// An Eval, and every instruction its result reaches through the dependency
+/// A TakeEffect, and every instruction its result reaches through the dependency
 /// graph, runs as late as what depends on it allows: it cannot run before the
-/// Eval anyway, so running it later delays nothing, and the Spawns and the
+/// TakeEffect anyway, so running it later delays nothing, and the Spawns and the
 /// instructions they wait for are free to run first.
 fn compute_priorities(insts: &[Inst], deps: &[SmallVec<[usize; 4]>]) -> Vec<Priority> {
     let n = insts.len();
     let mut after_an_eval = vec![false; n];
     for i in 0..n {
-        after_an_eval[i] = matches!(insts[i].kind, InstKind::Eval { .. })
+        after_an_eval[i] = matches!(insts[i].kind, InstKind::TakeEffect { .. })
             || deps[i].iter().any(|&d| after_an_eval[d]);
     }
     let mut successors: Vec<SmallVec<[usize; 4]>> = vec![SmallVec::new(); n];
@@ -371,7 +375,6 @@ mod tests {
             val_factory: factory,
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         })
     }
 
@@ -439,7 +442,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: effect.into(),
-                flows: crate::ty::Flows::Every.into(),
+                flows: crate::flows::Flows::Every.into(),
             },
         )
     }
@@ -481,7 +484,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(4),
                     src: v(3),
                     order: None,
@@ -511,8 +514,8 @@ mod tests {
     }
 
     /// `spawn f; eval; b = it; y = 1; spawn g(y); eval; read b`: the store of
-    /// the first result cannot run before its Eval, so it waits with the Eval
-    /// for `b`'s read, and the second Spawn is issued before the first Eval
+    /// the first result cannot run before its TakeEffect, so it waits with the TakeEffect
+    /// for `b`'s read, and the second Spawn is issued before the first TakeEffect
     /// blocks.
     #[test]
     fn a_store_of_an_eval_result_waits_with_it_for_its_reader() {
@@ -523,7 +526,7 @@ mod tests {
             ret: Box::new(Ty::String),
             captures: vec![],
             effect: crate::ty::Effect::PURE.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         };
         let b = v(9);
         let mut cfg = make_cfg(
@@ -535,7 +538,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(2),
                     src: v(1),
                     order: None,
@@ -557,7 +560,7 @@ mod tests {
                     args: vec![v(3)],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(5),
                     src: v(4),
                     order: None,
@@ -591,7 +594,7 @@ mod tests {
             .filter(|(_, inst)| matches!(inst.kind, InstKind::Spawn { .. }))
             .map(|(at, _)| at)
             .collect();
-        let first_eval = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
+        let first_eval = find_idx(&cfg, |k| matches!(k, InstKind::TakeEffect { .. })).unwrap();
         assert!(
             spawns.iter().all(|&spawn| spawn < first_eval),
             "both spawns precede the first eval (spawns {spawns:?}, eval {first_eval})"
@@ -623,7 +626,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(2),
                     src: v(1),
                     order: None,
@@ -644,7 +647,7 @@ mod tests {
 
         let commit = find_idx(&cfg, |k| matches!(k, InstKind::Commit { .. })).unwrap();
         let spawn = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
-        let eval = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
+        let eval = find_idx(&cfg, |k| matches!(k, InstKind::TakeEffect { .. })).unwrap();
         let fetch = find_idx(&cfg, |k| matches!(k, InstKind::Fetch { .. })).unwrap();
         assert!(
             commit < spawn && spawn < eval && eval < fetch,
@@ -661,7 +664,7 @@ mod tests {
                 ret: Box::new(Ty::String),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::ty::Flows::Every.into(),
+                flows: crate::flows::Flows::Every.into(),
             },
         )
     }
@@ -676,7 +679,7 @@ mod tests {
         all_insts(cfg).iter().position(|i| pred(&i.kind))
     }
 
-    // -- Basic: Spawn moves before Eval ------------------------------
+    // -- Basic: Spawn moves before TakeEffect ------------------------------
 
     #[test]
     fn two_independent_spawns_before_evals() {
@@ -699,7 +702,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(1),
                     src: v(0),
                     order: None,
@@ -711,7 +714,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(3),
                     src: v(2),
                     order: None,
@@ -748,12 +751,12 @@ mod tests {
         .unwrap();
         let eval_a = find_idx(
             &cfg,
-            |k| matches!(k, InstKind::Eval { src, .. } if *src == v(0)),
+            |k| matches!(k, InstKind::TakeEffect { src, .. } if *src == v(0)),
         )
         .unwrap();
         let eval_b = find_idx(
             &cfg,
-            |k| matches!(k, InstKind::Eval { src, .. } if *src == v(2)),
+            |k| matches!(k, InstKind::TakeEffect { src, .. } if *src == v(2)),
         )
         .unwrap();
 
@@ -769,7 +772,7 @@ mod tests {
         );
     }
 
-    // -- Dependency: Eval must wait for its Spawn --------------------
+    // -- Dependency: TakeEffect must wait for its Spawn --------------------
 
     #[test]
     fn eval_after_its_spawn() {
@@ -785,7 +788,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(1),
                     src: v(0),
                     order: None,
@@ -802,11 +805,11 @@ mod tests {
         run(&mut cfg);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
-        let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
+        let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::TakeEffect { .. })).unwrap();
         assert!(spawn_idx < eval_idx);
     }
 
-    // -- Independent work fills Spawn-Eval gap -----------------------
+    // -- Independent work fills Spawn-TakeEffect gap -----------------------
 
     #[test]
     fn independent_work_between_spawn_and_eval() {
@@ -832,7 +835,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(1),
                     src: v(0),
                     order: None,
@@ -855,7 +858,7 @@ mod tests {
         run(&mut cfg);
 
         let spawn_idx = find_idx(&cfg, |k| matches!(k, InstKind::Spawn { .. })).unwrap();
-        let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::Eval { .. })).unwrap();
+        let eval_idx = find_idx(&cfg, |k| matches!(k, InstKind::TakeEffect { .. })).unwrap();
 
         // Spawn should be early, eval should be late.
         // BinOp(v5+v6) is independent of spawn/eval, can go between.

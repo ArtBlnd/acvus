@@ -86,16 +86,26 @@ use crate::ir::{
 };
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::{CastTy, IntTy, LenTerm, Mutability, Ty};
+use crate::ir::{ScalarTypes, is_word, known_len};
+use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
+use crate::decl::Declarations;
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
+pub fn run(
+    cfg: &mut CfgBody,
+    types: &mut Types<Concrete>,
+    decls: &Declarations,
+    laws: &LawTable,
+    functions: &FunctionSummary,
+) {
+    let scalars = ScalarTypes::of(types);
+    let types: &Types<Concrete> = types;
     let domtree = DomTree::build(cfg);
-    let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
+    let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg, types, decls));
     for (_, loop_) in nest.iter() {
         let Some(shape) = Shape::of(cfg, loop_) else {
             continue;
         };
-        let affine = AffineValues::of(cfg, loop_, &Invariants::of(cfg), laws);
+        let affine = AffineValues::of(cfg, types, decls, loop_, &Invariants::of(cfg, types, decls), laws);
         let reads = Reads::in_body(cfg);
         let ivs: Vec<Iv> = cfg.blocks[shape.header.0]
             .params
@@ -103,32 +113,37 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
             .into_iter()
             .enumerate()
             .filter_map(|(header_index, param)| {
-                Iv::of(cfg, loop_, &shape, &domtree, &affine, &reads, header_index, param)
+                Iv::of(cfg, types, loop_, &shape, &domtree, &affine, &reads, header_index, param)
             })
             .collect();
         if !ivs.is_empty() {
-            canonicalize(cfg, loop_, &shape, &domtree, &ivs);
+            canonicalize(cfg, types, decls, scalars, loop_, &shape, &domtree, &ivs);
         }
-        read_lengths_from_entry(cfg, loop_, &shape, &domtree, laws, functions);
+        read_lengths_from_entry(cfg, types, decls, scalars, loop_, &shape, &domtree, laws, functions);
     }
-    rewrite_neighbours(cfg);
+    rewrite_neighbours(cfg, types, decls, scalars);
 }
 
-fn canonicalize(cfg: &mut CfgBody, loop_: &Loop, shape: &Shape, domtree: &DomTree, ivs: &[Iv]) {
-    let invariants = Invariants::of(cfg);
+fn canonicalize(
+    cfg: &mut CfgBody,
+    types: &Types<Concrete>,
+    decls: &Declarations,
+    scalars: ScalarTypes,
+    loop_: &Loop, shape: &Shape, domtree: &DomTree, ivs: &[Iv]) {
+    let invariants = Invariants::of(cfg, types, decls);
     let can_trap: Vec<&Iv> = ivs
         .iter()
         .filter(|iv| {
-            !iv.is_the_counter(cfg, shape, &invariants)
-                && !iv.fits_on_every_iteration(cfg, shape, &invariants)
+            !iv.is_the_counter(cfg, types, shape, &invariants)
+                && !iv.fits_on_every_iteration(cfg, types, shape, &invariants)
         })
         .collect();
     for iv in can_trap {
         keep_step_trap(cfg, loop_, iv);
     }
     let replacements = Replacements {
-        inside: rewrite_inside(cfg, shape, ivs),
-        after: rewrite_after(cfg, shape, ivs),
+        inside: rewrite_inside(cfg, scalars, shape, ivs),
+        after: rewrite_after(cfg, scalars, shape, ivs),
     };
     substitute(cfg, loop_, shape, domtree, &replacements);
     drop_header_params(cfg, shape, ivs);
@@ -211,7 +226,7 @@ impl Iv {
     /// can state (the module's text).
     #[allow(clippy::too_many_arguments)]
     fn of(
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>,
         loop_: &Loop,
         shape: &Shape,
         domtree: &DomTree,
@@ -228,7 +243,7 @@ impl Iv {
         // `base + k·step` is written at the head of the body and after the
         // loop, where a standing step is not yet computed, or never is.
         let step = step.invariance.above()?;
-        let Ty::Int(width) = cfg.val_types[&param] else {
+        let TyKind::Int(width) = *types.kind(cfg.val_types[&param]) else {
             return None;
         };
         let header = &cfg.blocks[shape.header.0];
@@ -280,7 +295,7 @@ impl Iv {
     /// Whether the variable is the range's own counter, entered with `at`
     /// and stepped by one at the range's width: then its step is at most
     /// `hi`, which the width holds, and cannot trap (RFC-0081 rule 4).
-    fn is_the_counter(&self, cfg: &CfgBody, shape: &Shape, invariants: &Invariants) -> bool {
+    fn is_the_counter(&self, cfg: &CfgBody, types: &Types<Concrete>, shape: &Shape, invariants: &Invariants) -> bool {
         let ForSource::Range { at, .. } = shape.source else {
             return false;
         };
@@ -297,7 +312,7 @@ impl Iv {
                 .zip(invariants.word(at))
                 .is_some_and(|(init, at)| init.desugared() == at.desugared());
         entered_at
-            && cfg.val_types[&at] == Ty::Int(self.width)
+            && types.kind(cfg.val_types[&at]) == &TyKind::Int(self.width)
             && one.is_some_and(|literal| literal.desugared() == Literal::Int(1))
     }
 
@@ -306,12 +321,12 @@ impl Iv {
     /// count, fits the width: the step cannot trap.
     fn fits_on_every_iteration(
         &self,
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>,
         shape: &Shape,
         invariants: &Invariants,
     ) -> bool {
-        let int = |value: ValueId| match (invariants.word(value), &cfg.val_types[&value]) {
-            (Some(literal), Ty::Int(width)) => match literal.desugared() {
+        let int = |value: ValueId| match (invariants.word(value), types.kind(cfg.val_types[&value])) {
+            (Some(literal), TyKind::Int(width)) => match literal.desugared() {
                 Literal::Int(n) => Some(width.read(n as u64)),
                 _ => None,
             },
@@ -326,8 +341,8 @@ impl Iv {
         };
         let trip = match shape.source {
             ForSource::Range { at, hi } => int(at).zip(int(hi)).map(|(at, hi)| (hi - at).max(0)),
-            ForSource::Array(array) => match &cfg.val_types[&array] {
-                Ty::Array(_, LenTerm::Known(len)) => i128::try_from(*len).ok(),
+            ForSource::Array(array) => match types.kind(cfg.val_types[&array]) {
+                TyKind::Array(_, len) => i128::try_from(known_len(len)).ok(),
                 _ => None,
             },
             ForSource::Slice(_) | ForSource::SliceMut(_) => None,
@@ -432,19 +447,21 @@ struct Converted {
 
 struct BlockHead<'a> {
     cfg: &'a mut CfgBody,
+    scalars: ScalarTypes,
     span: Span,
     insts: Vec<Inst>,
     conversions: FxHashMap<Converted, ValueId>,
 }
 
 impl<'a> BlockHead<'a> {
-    fn of(cfg: &'a mut CfgBody, block: BlockIdx) -> Self {
+    fn of(cfg: &'a mut CfgBody, scalars: ScalarTypes, block: BlockIdx) -> Self {
         let span = cfg.blocks[block.0]
             .insts
             .first()
             .map_or(Span::ZERO, |inst| inst.span);
         Self {
             cfg,
+            scalars,
             span,
             insts: Vec::new(),
             conversions: FxHashMap::default(),
@@ -453,7 +470,7 @@ impl<'a> BlockHead<'a> {
 
     fn fresh(&mut self, width: IntTy) -> ValueId {
         let value = self.cfg.val_factory.next();
-        let previous = self.cfg.val_types.insert(value, Ty::Int(width));
+        let previous = self.cfg.val_types.insert(value, self.scalars.int(width));
         assert!(
             previous.is_none(),
             "{value:?} is fresh from the factory and already carried a type"
@@ -470,7 +487,7 @@ impl<'a> BlockHead<'a> {
     }
 
     fn at_width(&mut self, value: ValueId, width: IntTy) -> ValueId {
-        if self.cfg.val_types[&value] == Ty::Int(width) {
+        if self.cfg.val_types[&value] == self.scalars.int(width) {
             return value;
         }
         let key = Converted { value, width };
@@ -525,8 +542,8 @@ impl<'a> BlockHead<'a> {
     }
 }
 
-fn rewrite_inside(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> FxHashMap<ValueId, ValueId> {
-    let mut head = BlockHead::of(cfg, shape.body);
+fn rewrite_inside(cfg: &mut CfgBody, scalars: ScalarTypes, shape: &Shape, ivs: &[Iv]) -> FxHashMap<ValueId, ValueId> {
+    let mut head = BlockHead::of(cfg, scalars, shape.body);
     let mut iteration = IterationNumber::default();
     let mut inside = FxHashMap::default();
     for iv in ivs {
@@ -606,6 +623,9 @@ enum ArgAbove {
 /// run no iteration, leaves the run as it was.
 fn read_lengths_from_entry(
     cfg: &mut CfgBody,
+    types: &Types<Concrete>,
+    decls: &Declarations,
+    scalars: ScalarTypes,
     loop_: &Loop,
     shape: &Shape,
     domtree: &DomTree,
@@ -615,7 +635,7 @@ fn read_lengths_from_entry(
     let [entering] = loop_.natural.entering[..] else {
         return;
     };
-    let reads = LengthRead::all(cfg, loop_, shape, laws, functions);
+    let reads = LengthRead::all(cfg, types, decls, loop_, shape, laws, functions);
     if reads.is_empty() {
         return;
     }
@@ -628,7 +648,7 @@ fn read_lengths_from_entry(
     for (block, at) in removed {
         cfg.blocks[block.0].insts.remove(at);
     }
-    let mut head = BlockHead::of(cfg, shape.body);
+    let mut head = BlockHead::of(cfg, scalars, shape.body);
     let mut iteration = IterationNumber::default();
     let mut inside: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     for (read, len) in reads.iter().zip(on_entry) {
@@ -648,16 +668,16 @@ fn read_lengths_from_entry(
 
 impl LengthRead {
     fn all(
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations,
         loop_: &Loop,
         shape: &Shape,
         laws: &LawTable,
         functions: &FunctionSummary,
     ) -> Vec<LengthRead> {
-        let removal = Removal::of(cfg, laws, functions);
+        let removal = Removal::of(cfg, types, laws, functions);
         let natural = &loop_.natural;
-        let invariants = Invariants::of(cfg);
-        let affine = AffineValues::of(cfg, loop_, &invariants, laws);
+        let invariants = Invariants::of(cfg, types, decls);
+        let affine = AffineValues::of(cfg, types, decls, loop_, &invariants, laws);
         let refs: FxHashMap<ValueId, (&RefTarget, &Vec<PathSeg>)> = natural
             .blocks()
             .flat_map(|block| &cfg.blocks[block.0].insts)
@@ -695,7 +715,7 @@ impl LengthRead {
                 else {
                     continue;
                 };
-                let Ty::Int(width) = cfg.val_types[dst] else {
+                let TyKind::Int(width) = *types.kind(cfg.val_types[dst]) else {
                     continue;
                 };
                 let step = match step {
@@ -786,14 +806,14 @@ impl LengthRead {
     }
 }
 
-fn rewrite_after(cfg: &mut CfgBody, shape: &Shape, ivs: &[Iv]) -> FxHashMap<ValueId, ValueId> {
+fn rewrite_after(cfg: &mut CfgBody, scalars: ScalarTypes, shape: &Shape, ivs: &[Iv]) -> FxHashMap<ValueId, ValueId> {
     let read_after: Vec<&Iv> = ivs.iter().filter(|iv| iv.read_after).collect();
     let mut after = FxHashMap::default();
     let Some(exit) = shape.exit.filter(|_| !read_after.is_empty()) else {
         return after;
     };
-    let trip = trip_count_on_exit(cfg, shape.header, exit);
-    let mut head = BlockHead::of(cfg, exit);
+    let trip = trip_count_on_exit(cfg, scalars, shape.header, exit);
+    let mut head = BlockHead::of(cfg, scalars, exit);
     for iv in read_after {
         let trip = head.at_width(trip, iv.width);
         after.insert(iv.param, head.advanced_by(iv, trip));
@@ -846,7 +866,7 @@ fn reads_value(block: &crate::cfg::Block, value: ValueId) -> bool {
         .any(|used| used == value)
 }
 
-fn trip_count_on_exit(cfg: &mut CfgBody, header: BlockIdx, exit: BlockIdx) -> ValueId {
+fn trip_count_on_exit(cfg: &mut CfgBody, scalars: ScalarTypes, header: BlockIdx, exit: BlockIdx) -> ValueId {
     let Terminator::For { exit_trip, .. } = &mut cfg.blocks[header.0].terminator else {
         panic!("block {} is a `for` header and does not end in `For`", header.0)
     };
@@ -857,7 +877,7 @@ fn trip_count_on_exit(cfg: &mut CfgBody, header: BlockIdx, exit: BlockIdx) -> Va
         ExitTrip::Absent => {
             *exit_trip = ExitTrip::Defined;
             let trip = cfg.val_factory.next();
-            let previous = cfg.val_types.insert(trip, Ty::U64);
+            let previous = cfg.val_types.insert(trip, scalars.int(IntTy::U64));
             assert!(
                 previous.is_none(),
                 "{trip:?} is fresh from the factory and already carried a type"
@@ -1000,25 +1020,25 @@ struct InstAt {
 
 /// Rewrites one such parameter at a time, since each rewrite adds blocks
 /// to its loop and the nest is read again after it.
-fn rewrite_neighbours(cfg: &mut CfgBody) {
+fn rewrite_neighbours(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, scalars: ScalarTypes) {
     loop {
         let domtree = DomTree::build(cfg);
-        let invariants = Invariants::of(cfg);
+        let invariants = Invariants::of(cfg, types, decls);
         let nest = LoopNest::of(cfg, &domtree, &invariants);
         let found = nest.iter().find_map(|(_, loop_)| {
             let shape = Shape::of(cfg, loop_)?;
-            let neighbour = Neighbour::find(cfg, loop_, &shape, &invariants)?;
+            let neighbour = Neighbour::find(cfg, types, loop_, &shape, &invariants)?;
             Some((shape, neighbour))
         });
         let Some((shape, neighbour)) = found else {
             return;
         };
-        neighbour.rewrite(cfg, &shape);
+        neighbour.rewrite(cfg, scalars, &shape);
     }
 }
 
 impl Neighbour {
-    fn find(cfg: &CfgBody, loop_: &Loop, shape: &Shape, invariants: &Invariants) -> Option<Self> {
+    fn find(cfg: &CfgBody, types: &Types<Concrete>, loop_: &Loop, shape: &Shape, invariants: &Invariants) -> Option<Self> {
         let ForSource::Slice(source) = shape.source else {
             return None;
         };
@@ -1046,6 +1066,7 @@ impl Neighbour {
                 }
                 let mut reading = PreviousWork {
                     cfg,
+                    types,
                     loop_,
                     invariants,
                     source,
@@ -1080,7 +1101,7 @@ impl Neighbour {
     /// run there. Each trapping step of `f` left in the body, which `dce`
     /// sweeps once nothing reads it, keeps its trap by a `Check` at its
     /// place (RFC-0037 rule 3).
-    fn rewrite(self, cfg: &mut CfgBody, shape: &Shape) {
+    fn rewrite(self, cfg: &mut CfgBody, scalars: ScalarTypes, shape: &Shape) {
         let mut checks: Vec<(InstAt, InstKind)> = self
             .work
             .iter()
@@ -1133,10 +1154,11 @@ impl Neighbour {
 
         let held = cfg.val_types[&self.param].clone();
         let joined = fresh(cfg, held);
-        let zero = fresh(cfg, Ty::U64);
-        let first = fresh(cfg, Ty::Bool);
-        let one = fresh(cfg, Ty::U64);
-        let before = fresh(cfg, Ty::U64);
+        let u64_ty = scalars.int(IntTy::U64);
+        let zero = fresh(cfg, u64_ty);
+        let first = fresh(cfg, scalars.bool);
+        let one = fresh(cfg, u64_ty);
+        let before = fresh(cfg, u64_ty);
         let element_ty = cfg.val_types[&self.element].clone();
         let previous = fresh(cfg, element_ty);
 
@@ -1269,6 +1291,7 @@ fn remove_unread_element_take(cfg: &mut CfgBody, element: ValueId) {
 /// pure work on the one element read at the counter and on invariants.
 struct PreviousWork<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
     loop_: &'a Loop,
     invariants: &'a Invariants,
     source: ValueId,
@@ -1350,7 +1373,7 @@ impl PreviousWork<'_> {
         if self.element.is_some_and(|read| read != value) {
             return None;
         }
-        self.cfg.val_types[&value].is_word().filter(|word| *word)?;
+        is_word(self.types, self.cfg.val_types[&value]).then_some(())?;
         self.element = Some(value);
         Some(())
     }

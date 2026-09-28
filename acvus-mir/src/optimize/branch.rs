@@ -27,19 +27,20 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::known::KnownValues;
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{Label, ValueId};
+use crate::ty::{Concrete, Types};
 
-pub fn run(interner: &Interner, cfg: &mut CfgBody) {
-    while decide_once(interner, cfg) {}
+pub fn run(interner: &Interner, cfg: &mut CfgBody, types: &Types<Concrete>) {
+    while decide_once(interner, cfg, types) {}
 }
 
-fn decide_once(interner: &Interner, cfg: &mut CfgBody) -> bool {
-    let known = KnownValues::of(interner, cfg);
+fn decide_once(interner: &Interner, cfg: &mut CfgBody, types: &Types<Concrete>) -> bool {
+    let known = KnownValues::of(interner, cfg, types);
     let headers = LoopHeaders::of(cfg);
     let decided: Vec<Decided> = (0..cfg.blocks.len())
         .map(BlockIdx)
         .filter(|at| !headers.holds(*at))
         .filter_map(|at| {
-            let taken = decide(interner, cfg, &known, &cfg.blocks[at.0].terminator)?;
+            let taken = decide(interner, cfg, types, &known, &cfg.blocks[at.0].terminator)?;
             Some(Decided { at, taken })
         })
         .collect();
@@ -103,6 +104,7 @@ struct Taken {
 fn decide(
     interner: &Interner,
     cfg: &CfgBody,
+    types: &Types<Concrete>,
     known: &KnownValues,
     terminator: &Terminator,
 ) -> Option<Taken> {
@@ -151,7 +153,8 @@ fn decide(
         // dispatch stands as the source wrote it.
         Terminator::Switch { tag, arms, default } => {
             let (kind, _, _) = arms.first()?;
-            let key = known.switch_key(interner, *tag, cfg.val_types.get(tag)?, *kind)?;
+            let key = known.switch_key(interner, types, *tag, *cfg.val_types.get(tag)?, *kind)?;
+
             let arm = arms.iter().find(|(held, _, _)| *held == key);
             match arm {
                 Some((_, label, args)) => Some(Taken {

@@ -49,26 +49,28 @@ use crate::laws::LawTable;
 use crate::optimize::dce;
 use crate::optimize::forward::edges_mut;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::Ty;
 
 use super::{const_literals, converts, fresh};
+use crate::ty::{Concrete, Types};
+use crate::decl::Declarations;
+use crate::ty::TyKind;
 
-pub(super) fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub(super) fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable) {
     let mut tried: FxHashSet<Label> = FxHashSet::default();
-    while let Some(left) = next(cfg, laws, &mut tried) {
+    while let Some(left) = next(cfg, types, decls, laws, &mut tried) {
         *cfg = left;
     }
 }
 
 /// The body with the first loop not tried yet whose leaving edges make it
 /// a loop rules 1 to 5 convert.
-fn next(cfg: &CfgBody, laws: &LawTable, tried: &mut FxHashSet<Label>) -> Option<CfgBody> {
+fn next(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, tried: &mut FxHashSet<Label>) -> Option<CfgBody> {
     let domtree = DomTree::build(cfg);
-    let invariants = Invariants::of(cfg);
+    let invariants = Invariants::of(cfg, types, decls);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     let functions = FunctionSummary::unknown();
-    let removal = Removal::of(cfg, laws, &functions);
+    let removal = Removal::of(cfg, types, laws, &functions);
     let preds = cfg.predecessors();
     let literals = const_literals(cfg);
     let defs = definitions(cfg);
@@ -97,7 +99,8 @@ fn next(cfg: &CfgBody, laws: &LawTable, tried: &mut FxHashSet<Label>) -> Option<
         let Some(left) = reading.leaving() else {
             continue;
         };
-        if converts(&left, laws, header) {
+        if converts(&left, types, decls, laws, header) {
+
             return Some(left);
         }
     }
@@ -437,7 +440,11 @@ impl Reading<'_> {
     }
 
     fn leaving_on(&self, flag: &Flag, paths: &[BackPath]) -> Option<CfgBody> {
-        if self.cfg.val_types.get(&flag.param) != Some(&Ty::Bool) {
+        if !matches!(
+            self.cfg.val_types.get(&flag.param).map(|ty| self.loans.layout().types.kind(*ty)),
+            Some(TyKind::Bool)
+        ) {
+
             return None;
         }
         let entered = self.boolean(flag.entered)?;
@@ -688,7 +695,8 @@ impl Reading<'_> {
         demote_the_unjoined(&mut cfg);
 
         substitute(&mut cfg, &FxHashMap::from_iter([(flag.param, flag.entered)]));
-        reduce(&mut cfg, self.laws, header_label, exit.label)?;
+        let layout = self.loans.layout();
+        reduce(&mut cfg, layout.types, layout.decls, self.laws, header_label, exit.label)?;
         Some(cfg)
     }
 }
@@ -721,7 +729,7 @@ fn pass_on_its_one_jump(cfg: &mut CfgBody, label: Label) {
 /// removal drops them. `None` where no single test is left, where a step
 /// after it is not one an unused removal may drop, or where a value of a
 /// block that is gone is still read.
-fn reduce(cfg: &mut CfgBody, laws: &LawTable, header: Label, exit: Label) -> Option<()> {
+fn reduce(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, header: Label, exit: Label) -> Option<()> {
     let defs = definitions(cfg);
     let literals = const_literals(cfg);
     let at = cfg.label_to_block[&header];
@@ -744,9 +752,9 @@ fn reduce(cfg: &mut CfgBody, laws: &LawTable, header: Label, exit: Label) -> Opt
     if !decided_alike {
         return None;
     }
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     let functions = FunctionSummary::unknown();
-    let removal = Removal::of(cfg, laws, &functions);
+    let removal = Removal::of(cfg, types, laws, &functions);
     let dropped_unused = ways
         .iter()
         .flat_map(|way| &way.trace.ran[decision.ran_before..])

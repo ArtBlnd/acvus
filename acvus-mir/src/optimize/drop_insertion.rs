@@ -32,12 +32,23 @@ use crate::analysis::{inst_info, liveness};
 use crate::cfg::{Block, BlockIdx, CfgBody, Terminator};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, ValueId};
 use crate::laws::LawTable;
-use crate::ty::Ty;
+use crate::decl::Declarations;
+use crate::ty::{Concrete, Ty, Types};
+
 use crate::validate::move_check::{emptied_by, is_move_only};
+use crate::ty::{IntTy, TyKind};
 
 /// Insert Drop instructions for non-Copy values at the end of their live ranges.
-pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws: &LawTable) {
-    let loans = Loans::build(cfg);
+pub fn insert_drops(
+    cfg: &mut CfgBody,
+    types: &mut Types<Concrete>,
+    decls: &Declarations,
+    val_types: &FxHashMap<ValueId, Ty>,
+    laws: &LawTable,
+) {
+    let trip_ty = types.intern(TyKind::Int(IntTy::U64));
+    let types: &Types<Concrete> = types;
+    let loans = Loans::build(cfg, types, decls);
     let liveness = liveness::analyze_with(&loans);
 
     // Build label -> block index mapping.
@@ -50,7 +61,8 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
 
     // -- Phase 1: within-block drops --------------------------------
 
-    let stage_entries = stage_entries(cfg, &loans, laws);
+    let stage_entries = stage_entries(cfg, types, decls, &loans, laws);
+
     let mut block_drops: Vec<Vec<BlockDrop>> = Vec::with_capacity(cfg.blocks.len());
     for bi in 0..cfg.blocks.len() {
         let block_idx = BlockIdx(bi);
@@ -76,7 +88,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
         let ended: FxHashSet<ValueId> = block
             .insts
             .iter()
-            .flat_map(|inst| ended_by(&inst.kind, val_types))
+            .flat_map(|inst| ended_by(&inst.kind, val_types, types))
             .collect();
 
         for (ii, read) in reads.iter().enumerate() {
@@ -85,8 +97,8 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
                 let last_use_in_block = last_read.get(&u) == Some(&ii) && !term_uses.contains(&u);
                 if !liveness.is_live_out(block_idx, u)
                     && last_use_in_block
-                    && needs_drop(u, val_types)
-                    && !ends_ownership(&inst.kind, u, val_types)
+                    && needs_drop(types, u, val_types)
+                    && !ends_ownership(&inst.kind, u, val_types, types)
                 {
                     drops.push(BlockDrop {
                         at: ii + 1,
@@ -121,7 +133,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
         for v in all_defs {
             if !liveness.is_live_out(block_idx, v)
                 && !already_dropped.contains(&v)
-                && needs_drop(v, val_types)
+                && needs_drop(types, v, val_types)
             {
                 // Check if consumed by any instruction or terminator.
                 let consumed_by_inst = ended.contains(&v);
@@ -163,7 +175,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
 
     // The registers each block leaves empty, for phase 2.
     let emptied: Vec<FxHashSet<ValueId>> = (0..cfg.blocks.len())
-        .map(|bi| emptied_in(&loans, BlockIdx(bi), val_types))
+        .map(|bi| emptied_in(&loans, BlockIdx(bi), val_types, types))
         .collect();
 
     // Drops at one point run in the reverse of their order in `drops`: the
@@ -209,7 +221,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
                     !edge.forwarded.contains(v)
                         && !emptied.contains(v)
                         && !liveness.is_live_in(target, *v)
-                        && needs_drop(*v, val_types)
+                        && needs_drop(types, *v, val_types)
                 })
                 .collect();
             if dying.is_empty() {
@@ -243,7 +255,7 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
         block.insts = drop_insts;
     }
 
-    apply_edge_splits(cfg, splits);
+    apply_edge_splits(cfg, trip_ty, splits);
 }
 
 /// The stage entries at which values dying on a `For`'s body edge are
@@ -252,11 +264,11 @@ pub fn insert_drops(cfg: &mut CfgBody, val_types: &FxHashMap<ValueId, Ty>, laws:
 /// stage reads, which the stage holding its cycle releases, or a value one
 /// stage alone touches. A value two stages touch has no entry here and is
 /// dropped where the body begins.
-fn stage_entries(cfg: &CfgBody, loans: &Loans<'_>, laws: &LawTable) -> StageEntries {
+fn stage_entries(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, loans: &Loans<'_>, laws: &LawTable) -> StageEntries {
     let mut carried_entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut entries: FxHashMap<ValueId, BlockIdx> = FxHashMap::default();
     let mut shared: FxHashSet<ValueId> = FxHashSet::default();
-    for HeaderDeps { header, deps } in BodyDeps::of(cfg, laws).loops {
+    for HeaderDeps { header, deps } in BodyDeps::of(cfg, types, decls, laws).loops {
         // A chain whose shape fails is refused by `validate::stages`, which
         // reads this pass's output; its values are dropped where the body
         // begins.
@@ -422,7 +434,7 @@ where
 
 /// Give each split edge a block holding its drops and a jump onward, placed
 /// directly after the block it leaves so that no `Fallthrough` changes target.
-fn apply_edge_splits(cfg: &mut CfgBody, splits: Vec<EdgeSplit>) {
+fn apply_edge_splits(cfg: &mut CfgBody, trip_ty: Ty, splits: Vec<EdgeSplit>) {
     if splits.is_empty() {
         return;
     }
@@ -445,7 +457,8 @@ fn apply_edge_splits(cfg: &mut CfgBody, splits: Vec<EdgeSplit>) {
             ExitTrip::Absent => vec![],
             ExitTrip::Defined => {
                 let trip = cfg.val_factory.next();
-                cfg.val_types.insert(trip, Ty::U64);
+                cfg.val_types.insert(trip, trip_ty);
+
                 vec![trip]
             }
         };
@@ -707,9 +720,9 @@ fn terminator_edges(term: &Terminator) -> Vec<OutEdge> {
 
 /// The values that leave this instruction owning nothing, by either road:
 /// the instruction took them, or the payload that was all one held left it.
-fn ended_by(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> SmallVec<[ValueId; 4]> {
+fn ended_by(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>, types: &Types<Concrete>) -> SmallVec<[ValueId; 4]> {
     let mut ended = consumed_by_inst(kind);
-    ended.extend(emptied_by(kind, val_types));
+    ended.extend(emptied_by(types, kind, val_types));
     ended
 }
 
@@ -717,9 +730,9 @@ fn ended_by(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> SmallVec<[Va
 pub(crate) fn ends_ownership(
     kind: &InstKind,
     val: ValueId,
-    val_types: &FxHashMap<ValueId, Ty>,
+    val_types: &FxHashMap<ValueId, Ty>, types: &Types<Concrete>,
 ) -> bool {
-    ended_by(kind, val_types).contains(&val)
+    ended_by(kind, val_types, types).contains(&val)
 }
 
 /// The registers a block leaves empty: the payload left them, and nothing
@@ -727,11 +740,11 @@ pub(crate) fn ends_ownership(
 fn emptied_in(
     loans: &Loans<'_>,
     block: BlockIdx,
-    val_types: &FxHashMap<ValueId, Ty>,
+    val_types: &FxHashMap<ValueId, Ty>, types: &Types<Concrete>,
 ) -> FxHashSet<ValueId> {
     let mut emptied = FxHashSet::default();
     for inst in &loans.cfg().blocks[block.0].insts {
-        if let Some(register) = emptied_by(&inst.kind, val_types) {
+        if let Some(register) = emptied_by(types, &inst.kind, val_types) {
             emptied.insert(register);
             continue;
         }
@@ -749,11 +762,8 @@ struct BlockDrop {
 }
 
 /// Does this value need a Drop instruction?
-fn needs_drop(val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
-    val_types
-        .get(&val)
-        .and_then(|ty| is_move_only(ty))
-        .unwrap_or(false)
+fn needs_drop(types: &Types<Concrete>, val: ValueId, val_types: &FxHashMap<ValueId, Ty>) -> bool {
+    val_types.get(&val).is_some_and(|ty| is_move_only(types, *ty))
 }
 
 /// The values this instruction takes ownership of: no Drop follows them.
@@ -770,7 +780,7 @@ fn consumed_by_inst(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
                 consumed.push(*f);
             }
         }
-        InstKind::Eval { src, .. } => consumed.push(*src),
+        InstKind::TakeEffect { src, .. } => consumed.push(*src),
         // A whole Take moves the value out of its slot (RFC-0018); a Take
         // of a part leaves the rest for a Drop.
         InstKind::Take { target, path, .. } => {
@@ -929,7 +939,6 @@ mod tests {
             val_factory: factory,
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         });
         (cfg, val_types)
     }

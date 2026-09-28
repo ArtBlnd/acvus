@@ -1,147 +1,215 @@
-use std::convert::Infallible;
-
 use rustc_hash::FxHashMap;
 
 use crate::flows::FlowTerm;
+use crate::ir::{known_effect, known_len};
 use crate::ty::{
-    Concrete, EffectTerm, IdentityTerm, LenTerm, PolyTy, Repr, Ty, TyTerm, TypeArg,
+    Concrete, EffectArg, EffectTerm, IdentityTerm, LenTerm, ObjectTy, ParamTerm, Poly, Ty, TyId, TyKind, TypeArg,
+    Types,
 };
 
+/// Whether an argument carries `#` (types §8), as a concrete argument
+/// settles an open mark of a declared one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Uniform,
+    Specialized,
+}
+
+/// A declared type's variables, bound where it is matched against a
+/// concrete type.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Bindings {
     tys: FxHashMap<u32, Ty>,
     effects: FxHashMap<u32, EffectTerm<Concrete>>,
     identities: FxHashMap<u32, IdentityTerm<Concrete>>,
     lens: FxHashMap<u32, LenTerm<Concrete>>,
-    reprs: FxHashMap<u32, Repr<Concrete>>,
+    marks: FxHashMap<u32, Mark>,
 }
 
-/// The representation an open `ρ` no position fixed takes: the solve takes
-/// the least element, `Uniform`, for it (RFC-0042 rule 3), as
-/// `Solver::freeze_repr` does.
-fn unfixed_repr() -> Repr<Concrete> {
-    Repr::Uniform
+/// The mark an open `ρ` no position fixed takes: the solve takes the least
+/// element, `Uniform`, for it (RFC-0042 rule 3), as `Solver::freeze_repr`
+/// does.
+fn unfixed_mark() -> Mark {
+    Mark::Uniform
 }
 
 impl Bindings {
-    pub(super) fn bind(&mut self, pattern: &PolyTy, ty: &Ty) -> bool {
-        acvus_utils::grow(|| self.bind_level(pattern, ty))
+    pub(super) fn bind(&mut self, poly: &Types<Poly>, pattern: TyId<Poly>, types: &Types<Concrete>, ty: Ty) -> bool {
+        acvus_utils::grow(|| self.bind_level(poly, pattern, types, ty))
     }
 
-    fn bind_level(&mut self, pattern: &PolyTy, ty: &Ty) -> bool {
-        match (pattern, ty) {
-            (TyTerm::Var(v), _) => match self.tys.get(v) {
-                Some(bound) => bound == ty,
+    fn bind_all(
+        &mut self,
+        poly: &Types<Poly>,
+        types: &Types<Concrete>,
+        pairs: impl IntoIterator<Item = (TyId<Poly>, Ty)>,
+    ) -> bool {
+        pairs.into_iter().all(|(pattern, ty)| self.bind(poly, pattern, types, ty))
+    }
+
+    fn bind_level(&mut self, poly: &Types<Poly>, pattern: TyId<Poly>, types: &Types<Concrete>, ty: Ty) -> bool {
+        match (poly.kind(pattern), types.kind(ty)) {
+            (TyKind::Var(v), _) => match self.tys.get(v) {
+                Some(bound) => *bound == ty,
                 None => {
-                    self.tys.insert(*v, ty.clone());
+                    self.tys.insert(*v, ty);
                     true
                 }
             },
-            (TyTerm::Int(a), TyTerm::Int(b)) => a == b,
-            (TyTerm::Float, TyTerm::Float)
-            | (TyTerm::Char, TyTerm::Char)
-            | (TyTerm::String, TyTerm::String)
-            | (TyTerm::Bool, TyTerm::Bool)
-            | (TyTerm::Unit, TyTerm::Unit)
-            | (TyTerm::Never, TyTerm::Never)
-            | (TyTerm::Order, TyTerm::Order)
-            | (TyTerm::Str, TyTerm::Str) => true,
-            (TyTerm::Array(p, p_len), TyTerm::Array(t, t_len)) => {
-                self.bind(p, t) && self.bind_len(p_len, t_len)
+            (TyKind::Int(a), TyKind::Int(b)) => a == b,
+            (TyKind::Float, TyKind::Float)
+            | (TyKind::Char, TyKind::Char)
+            | (TyKind::String, TyKind::String)
+            | (TyKind::Bool, TyKind::Bool)
+            | (TyKind::Unit, TyKind::Unit)
+            | (TyKind::Never, TyKind::Never)
+            | (TyKind::Order, TyKind::Order)
+            | (TyKind::Str, TyKind::Str) => true,
+            (TyKind::Array(p, p_len), TyKind::Array(t, t_len)) => {
+                self.bind_len(p_len, t_len) && self.bind(poly, *p, types, *t)
             }
-            (TyTerm::Tuple(ps), TyTerm::Tuple(ts)) => {
-                ps.len() == ts.len() && ps.iter().zip(ts).all(|(p, t)| self.bind(p, t))
+            (TyKind::Tuple(ps), TyKind::Tuple(ts)) => {
+                ps.len() == ts.len() && self.bind_all(poly, types, ps.iter().copied().zip(ts.iter().copied()))
             }
-            (TyTerm::Option(p), TyTerm::Option(t))
-            | (TyTerm::Slice(p), TyTerm::Slice(t))
-            | (TyTerm::Handle(p), TyTerm::Handle(t)) => self.bind(p, t),
-            (TyTerm::Result(p_ok, p_err), TyTerm::Result(t_ok, t_err)) => {
-                self.bind(p_ok, t_ok) && self.bind(p_err, t_err)
+            (TyKind::Option(p), TyKind::Option(t))
+            | (TyKind::Slice(p), TyKind::Slice(t))
+            | (TyKind::Handle(p), TyKind::Handle(t)) => self.bind(poly, *p, types, *t),
+            (TyKind::Result(p_ok, p_err), TyKind::Result(t_ok, t_err)) => {
+                self.bind(poly, *p_ok, types, *t_ok) && self.bind(poly, *p_err, types, *t_err)
             }
             (
-                TyTerm::Fn {
+                TyKind::Fn {
                     params: p_params,
                     ret: p_ret,
-                    captures: p_captures,
                     effect: p_effect,
+                    calls: p_calls,
+                    holds: p_holds,
                     ..
                 },
-                TyTerm::Fn {
+                TyKind::Fn {
                     params: t_params,
                     ret: t_ret,
-                    captures: t_captures,
                     effect: t_effect,
+                    calls: t_calls,
+                    holds: t_holds,
                     ..
                 },
             ) => {
                 p_params.len() == t_params.len()
-                    && p_captures.len() == t_captures.len()
-                    && p_params
-                        .iter()
-                        .zip(t_params)
-                        .all(|(p, t)| self.bind(&p.ty, &t.ty))
-                    && p_captures.iter().zip(t_captures).all(|(p, t)| self.bind(p, t))
-                    && self.bind(p_ret, t_ret)
+                    && p_calls == t_calls
+                    && p_holds == t_holds
+                    && self.bind_all(
+                        poly,
+                        types,
+                        p_params.iter().map(|p| p.ty).zip(t_params.iter().map(|t| t.ty)),
+                    )
+                    && self.bind(poly, *p_ret, types, *t_ret)
                     && self.bind_effect(p_effect, t_effect)
             }
             (
-                TyTerm::UserDefined {
+                TyKind::UserDefined {
                     id: p_id,
                     type_args: p_args,
                     effect_args: p_effects,
                     identity_args: p_identities,
-                    region_params: p_regions,
                 },
-                TyTerm::UserDefined {
+                TyKind::UserDefined {
                     id: t_id,
                     type_args: t_args,
                     effect_args: t_effects,
                     identity_args: t_identities,
-                    region_params: t_regions,
                 },
             ) => {
                 p_id == t_id
-                    && p_regions == t_regions
                     && p_args.len() == t_args.len()
                     && p_effects.len() == t_effects.len()
                     && p_identities.len() == t_identities.len()
-                    && p_args.iter().zip(t_args).all(|(p, t)| self.bind_arg(p, t))
+                    && p_args
+                        .iter()
+                        .zip(t_args.iter())
+                        .all(|(p, t)| self.bind_arg(poly, p, types, t))
                     && p_effects
                         .iter()
-                        .zip(t_effects)
+                        .zip(t_effects.iter())
                         .all(|(p, t)| self.bind_effect(p.effect(), t.effect()))
                     && p_identities
                         .iter()
-                        .zip(t_identities)
+                        .zip(t_identities.iter())
                         .all(|(p, t)| self.bind_identity(p, t))
             }
-            (TyTerm::Ref(p_mut, p_arg), TyTerm::Ref(t_mut, t_arg)) => {
-                p_mut == t_mut && self.bind_arg(p_arg, t_arg)
+            (TyKind::Ref(p_mut, p_arg), TyKind::Ref(t_mut, t_arg)) => {
+                p_mut == t_mut && self.bind_arg(poly, p_arg, types, t_arg)
             }
-            (TyTerm::Object(_) | TyTerm::Enum { .. }, _) => {
-                Bindings::default().apply(pattern).is_some_and(|closed| closed == *ty)
+            (TyKind::Object(p_object), TyKind::Object(t_object)) => {
+                let same_kind = match (p_object, t_object) {
+                    (ObjectTy::Structural(..), ObjectTy::Structural(..)) => true,
+                    (ObjectTy::Declared(p_id, _), ObjectTy::Declared(t_id, _)) => p_id == t_id,
+                    (ObjectTy::Structural(..), ObjectTy::Declared(..))
+                    | (ObjectTy::Declared(..), ObjectTy::Structural(..)) => false,
+                };
+                let (p_fields, t_fields) = (p_object.fields(), t_object.fields());
+                same_kind
+                    && p_fields.len() == t_fields.len()
+                    && p_fields.iter().zip(t_fields.iter()).all(|((p, _), (t, _))| p == t)
+                    && self.bind_all(
+                        poly,
+                        types,
+                        p_fields.iter().map(|(_, p)| *p).zip(t_fields.iter().map(|(_, t)| *t)),
+                    )
+            }
+            (
+                TyKind::Enum {
+                    name: p_name,
+                    variants: p_variants,
+                    ..
+                },
+                TyKind::Enum {
+                    name: t_name,
+                    variants: t_variants,
+                    ..
+                },
+            ) => {
+                p_name == t_name
+                    && p_variants.len() == t_variants.len()
+                    && p_variants
+                        .iter()
+                        .zip(t_variants.iter())
+                        .all(|((p_tag, p_payload), (t_tag, t_payload))| {
+                            p_tag == t_tag
+                                && match (p_payload, t_payload) {
+                                    (Some(p), Some(t)) => self.bind(poly, *p, types, *t),
+                                    (None, None) => true,
+                                    (Some(_), None) | (None, Some(_)) => false,
+                                }
+                        })
             }
             _ => false,
         }
     }
 
-    fn bind_arg(&mut self, pattern: &TypeArg<crate::ty::Poly>, arg: &TypeArg<Concrete>) -> bool {
-        if let TypeArg::Open(repr, _) = pattern {
-            let held = arg.repr();
-            match self.reprs.get(repr) {
-                Some(bound) if *bound != held => return false,
-                Some(_) => {}
+    fn bind_arg(&mut self, poly: &Types<Poly>, pattern: &TypeArg<Poly>, types: &Types<Concrete>, arg: &TypeArg<Concrete>) -> bool {
+        let held = match arg {
+            TypeArg::Uniform(_) => Mark::Uniform,
+            TypeArg::Specialized(_) => Mark::Specialized,
+            TypeArg::Open(var, _) => match *var {},
+        };
+        let fits = match pattern {
+            TypeArg::Uniform(_) => held == Mark::Uniform,
+            TypeArg::Specialized(_) => held == Mark::Specialized,
+            TypeArg::Open(mark, _) => match self.marks.get(mark) {
+                Some(bound) => *bound == held,
                 None => {
-                    self.reprs.insert(*repr, held);
+                    self.marks.insert(*mark, held);
+                    true
                 }
-            }
-        }
-        self.bind(&pattern.ty(), &arg.ty())
+            },
+        };
+        fits && self.bind(poly, pattern.ty(), types, arg.ty())
     }
 
-    fn bind_effect(&mut self, pattern: &EffectTerm<crate::ty::Poly>, effect: &EffectTerm<Concrete>) -> bool {
+    fn bind_effect(&mut self, pattern: &EffectTerm<Poly>, effect: &EffectTerm<Concrete>) -> bool {
         match pattern {
-            EffectTerm::Known(known) => known == effect.get(),
+            EffectTerm::Known(known) => known == known_effect(effect),
             EffectTerm::Var(v) => match self.effects.get(v) {
                 Some(bound) => bound == effect,
                 None => {
@@ -152,13 +220,13 @@ impl Bindings {
         }
     }
 
-    fn bind_identity(
-        &mut self,
-        pattern: &IdentityTerm<crate::ty::Poly>,
-        identity: &IdentityTerm<Concrete>,
-    ) -> bool {
+    fn bind_identity(&mut self, pattern: &IdentityTerm<Poly>, identity: &IdentityTerm<Concrete>) -> bool {
+        let id = match identity {
+            IdentityTerm::Known(id) => *id,
+            IdentityTerm::Var(var) => match *var {},
+        };
         match pattern {
-            IdentityTerm::Known(known) => *known == identity.get(),
+            IdentityTerm::Known(known) => *known == id,
             IdentityTerm::Var(v) => match self.identities.get(v) {
                 Some(bound) => bound == identity,
                 None => {
@@ -169,9 +237,9 @@ impl Bindings {
         }
     }
 
-    fn bind_len(&mut self, pattern: &LenTerm<crate::ty::Poly>, len: &LenTerm<Concrete>) -> bool {
+    fn bind_len(&mut self, pattern: &LenTerm<Poly>, len: &LenTerm<Concrete>) -> bool {
         match pattern {
-            LenTerm::Known(known) => *known == len.get(),
+            LenTerm::Known(known) => *known == known_len(len),
             LenTerm::Var(v) => match self.lens.get(v) {
                 Some(bound) => bound == len,
                 None => {
@@ -182,16 +250,150 @@ impl Bindings {
         }
     }
 
-    pub(super) fn apply(&self, pattern: &PolyTy) -> Option<Ty> {
-        pattern
-            .try_map::<Concrete, ()>(
-                &mut |v| self.tys.get(&v).cloned().ok_or(()),
-                &mut |v| self.identities.get(&v).copied().ok_or(()),
-                &mut |v| self.effects.get(&v).cloned().ok_or(()),
-                &mut |v| self.lens.get(&v).copied().ok_or(()),
-                &mut |v| Ok(self.reprs.get(&v).cloned().unwrap_or_else(unfixed_repr)),
-                &mut |v: Infallible| -> Result<FlowTerm<Concrete>, ()> { match v {} },
-            )
-            .ok()
+    /// `pattern` with its variables replaced by what they are bound to, in
+    /// `types`; `None` where a variable is unbound.
+    pub(super) fn apply(&self, poly: &Types<Poly>, pattern: TyId<Poly>, types: &mut Types<Concrete>) -> Option<Ty> {
+        acvus_utils::grow(|| self.apply_level(poly, pattern, types))
+    }
+
+    fn apply_level(&self, poly: &Types<Poly>, pattern: TyId<Poly>, types: &mut Types<Concrete>) -> Option<Ty> {
+        let kind = match poly.kind(pattern) {
+            TyKind::Var(v) => return self.tys.get(v).copied(),
+            TyKind::Int(k) => TyKind::Int(*k),
+            TyKind::Float => TyKind::Float,
+            TyKind::Char => TyKind::Char,
+            TyKind::String => TyKind::String,
+            TyKind::Bool => TyKind::Bool,
+            TyKind::Unit => TyKind::Unit,
+            TyKind::Never => TyKind::Never,
+            TyKind::Order => TyKind::Order,
+            TyKind::Str => TyKind::Str,
+            TyKind::Handle(inner) => TyKind::Handle(self.apply(poly, *inner, types)?),
+            TyKind::Slice(inner) => TyKind::Slice(self.apply(poly, *inner, types)?),
+            TyKind::Option(inner) => TyKind::Option(self.apply(poly, *inner, types)?),
+            TyKind::Array(inner, len) => {
+                TyKind::Array(self.apply(poly, *inner, types)?, self.apply_len(len)?)
+            }
+            TyKind::Result(ok, err) => {
+                TyKind::Result(self.apply(poly, *ok, types)?, self.apply(poly, *err, types)?)
+            }
+            TyKind::Tuple(items) => TyKind::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.apply(poly, *item, types))
+                    .collect::<Option<_>>()?,
+            ),
+            TyKind::Object(object) => {
+                let fields = object
+                    .fields()
+                    .iter()
+                    .map(|(name, field)| Some((*name, self.apply(poly, *field, types)?)))
+                    .collect::<Option<_>>()?;
+                TyKind::Object(match object {
+                    ObjectTy::Structural(_, ()) => ObjectTy::Structural(fields, ()),
+                    ObjectTy::Declared(id, _) => ObjectTy::Declared(*id, fields),
+                })
+            }
+            TyKind::Enum { name, variants, .. } => TyKind::Enum {
+                name: *name,
+                variants: variants
+                    .iter()
+                    .map(|(tag, payload)| {
+                        Some((
+                            *tag,
+                            match payload {
+                                Some(payload) => Some(self.apply(poly, *payload, types)?),
+                                None => None,
+                            },
+                        ))
+                    })
+                    .collect::<Option<_>>()?,
+                label: (),
+            },
+            TyKind::Fn {
+                params,
+                ret,
+                effect,
+                flows,
+                calls,
+                holds,
+            } => TyKind::Fn {
+                params: params
+                    .iter()
+                    .map(|param| {
+                        Some(ParamTerm {
+                            name: param.name,
+                            ty: self.apply(poly, param.ty, types)?,
+                        })
+                    })
+                    .collect::<Option<_>>()?,
+                ret: self.apply(poly, *ret, types)?,
+                effect: self.apply_effect(effect)?,
+                flows: match flows {
+                    FlowTerm::Known(flows) => FlowTerm::Known(flows.clone()),
+                    FlowTerm::Var(var) => match *var {},
+                },
+                calls: *calls,
+                holds: *holds,
+            },
+            TyKind::UserDefined {
+                id,
+                type_args,
+                effect_args,
+                identity_args,
+            } => TyKind::UserDefined {
+                id: *id,
+                type_args: type_args
+                    .iter()
+                    .map(|arg| self.apply_arg(poly, arg, types))
+                    .collect::<Option<_>>()?,
+                effect_args: effect_args
+                    .iter()
+                    .map(|arg| {
+                        let effect = self.apply_effect(arg.effect())?;
+                        Some(match arg {
+                            EffectArg::Uniform(_) => EffectArg::Uniform(effect),
+                            EffectArg::Specialized(_) => EffectArg::Specialized(effect),
+                        })
+                    })
+                    .collect::<Option<_>>()?,
+                identity_args: identity_args
+                    .iter()
+                    .map(|identity| match identity {
+                        IdentityTerm::Known(id) => Some(IdentityTerm::Known(*id)),
+                        IdentityTerm::Var(v) => self.identities.get(v).copied(),
+                    })
+                    .collect::<Option<_>>()?,
+            },
+            TyKind::Ref(mutability, arg) => TyKind::Ref(*mutability, self.apply_arg(poly, arg, types)?),
+        };
+        Some(types.intern(kind))
+    }
+
+    fn apply_arg(&self, poly: &Types<Poly>, arg: &TypeArg<Poly>, types: &mut Types<Concrete>) -> Option<TypeArg<Concrete>> {
+        let ty = self.apply(poly, arg.ty(), types)?;
+        let mark = match arg {
+            TypeArg::Uniform(_) => Mark::Uniform,
+            TypeArg::Specialized(_) => Mark::Specialized,
+            TypeArg::Open(mark, _) => self.marks.get(mark).copied().unwrap_or_else(unfixed_mark),
+        };
+        Some(match mark {
+            Mark::Uniform => TypeArg::Uniform(ty),
+            Mark::Specialized => TypeArg::Specialized(ty),
+        })
+    }
+
+    fn apply_effect(&self, effect: &EffectTerm<Poly>) -> Option<EffectTerm<Concrete>> {
+        match effect {
+            EffectTerm::Known(effect) => Some(EffectTerm::Known(effect.clone())),
+            EffectTerm::Var(v) => self.effects.get(v).cloned(),
+        }
+    }
+
+    fn apply_len(&self, len: &LenTerm<Poly>) -> Option<LenTerm<Concrete>> {
+        match len {
+            LenTerm::Known(len) => Some(LenTerm::Known(*len)),
+            LenTerm::Var(v) => self.lens.get(v).copied(),
+        }
     }
 }

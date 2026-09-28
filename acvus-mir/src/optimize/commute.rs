@@ -29,16 +29,18 @@ use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::{Inst, InstKind, OrderEdge, ValueId};
 use crate::optimize::context_ops::{context_read, context_written};
-use crate::ty::{Effect, Ty};
+use crate::ir::fn_effect;
+use crate::ty::{Concrete, Effect, Types};
+use crate::decl::Declarations;
 
-pub fn run(cfg: &mut CfgBody) {
-    while let Some(m) = find_move(cfg) {
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) {
+    while let Some(m) = find_move(cfg, types, decls) {
         let inst = cfg.blocks[m.from.0].insts.remove(m.at);
         cfg.blocks[m.to.0].insts.insert(m.after + 1, inst);
     }
     let mut subst: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     for bi in 0..cfg.blocks.len() {
-        let runs = runs_in_block(&cfg.blocks[bi].insts);
+        let runs = runs_in_block(types, &cfg.blocks[bi].insts);
         for run in runs.into_iter().rev() {
             let merge = release(cfg, bi, &run);
             subst.insert(run.last_after, merge);
@@ -117,7 +119,7 @@ fn def_sites(cfg: &CfgBody) -> FxHashMap<ValueId, DefSite> {
 /// The first commutative call that can be issued next to the commutative
 /// call it follows: its block post-dominates that call's block, and every
 /// operand is available there.
-fn find_move(cfg: &mut CfgBody) -> Option<Move> {
+fn find_move(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) -> Option<Move> {
     let dom = DomTree::build(cfg);
     let pdom = PostDomTree::build(cfg);
     let sites = def_sites(cfg);
@@ -126,15 +128,13 @@ fn find_move(cfg: &mut CfgBody) -> Option<Move> {
             callee_ty,
             order: Some(edge),
             ..
-        } if callee_ty.effect().is_some_and(|e| e.commutes) => Some(*edge),
+        } if fn_effect(types, *callee_ty).is_some_and(|e| e.commutes()) => Some(*edge),
         _ => None,
     };
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     let touches_nothing = |inst: &Inst| match &inst.kind {
         InstKind::FunctionCall { callee_ty, .. } => {
-            callee_ty
-                .effect()
-                .is_some_and(|e| e.reads.is_empty() && e.writes.is_empty())
+            fn_effect(types, *callee_ty).is_some_and(|e| e.reads().is_empty() && e.writes().is_empty())
                 && loans.storage_effect(&inst.kind).is_empty()
         }
         _ => false,
@@ -193,7 +193,7 @@ struct Run {
 
 /// Find the runs of a block. A call joins the current run when its effect
 /// commutes and it takes the `Order` the run's last call yielded.
-fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
+fn runs_in_block(types: &Types<Concrete>, insts: &[Inst]) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
     let mut open: Option<Run> = None;
     for (idx, inst) in insts.iter().enumerate() {
@@ -205,15 +205,15 @@ fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
         else {
             continue;
         };
-        let Some(effect) = callee_ty.effect() else {
+        let Some(effect) = fn_effect(types, *callee_ty) else {
             continue;
         };
-        let commutes = effect.commutes;
+        let commutes = effect.commutes();
         match open.take() {
             Some(mut run)
                 if commutes
                     && run.last_after == edge.before
-                    && !accesses_between(&insts[run.calls[0] + 1..idx], &effect) =>
+                    && !accesses_between(&insts[run.calls[0] + 1..idx], effect) =>
             {
                 run.calls.push(idx);
                 run.last_after = edge.after;
@@ -238,8 +238,9 @@ fn runs_in_block(insts: &[Inst]) -> Vec<Run> {
 /// `Fetch` of a context it writes.
 fn accesses_between(insts: &[Inst], effect: &Effect) -> bool {
     insts.iter().any(|inst| {
-        context_written(&inst.kind).is_some_and(|ctx| effect.touches(ctx))
-            || context_read(&inst.kind).is_some_and(|ctx| effect.writes.contains(&ctx))
+        context_written(&inst.kind)
+            .is_some_and(|ctx| effect.reads().contains(&ctx) || effect.writes().contains(&ctx))
+            || context_read(&inst.kind).is_some_and(|ctx| effect.writes().contains(&ctx))
     })
 }
 
@@ -259,7 +260,9 @@ fn release(cfg: &mut CfgBody, bi: usize, run: &Run) -> ValueId {
         yielded.push(edge.after);
     }
     let merge = cfg.val_factory.next();
-    cfg.val_types.insert(merge, Ty::Order);
+    let order_ty = cfg.val_types[&run.entry];
+    cfg.val_types.insert(merge, order_ty);
+
     let last = *run.calls.last().expect("a run has at least two calls");
     let span = cfg.blocks[bi].insts[last].span;
     cfg.blocks[bi].insts.insert(
@@ -295,7 +298,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: effect.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         }
     }
 
@@ -346,7 +349,6 @@ mod tests {
             params: Vec::new(),
             captures: Vec::new(),
             order_param: Some(v(0)),
-            task: crate::ty::Task::Sync,
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,

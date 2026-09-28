@@ -71,7 +71,7 @@ fn analyze_block(
             // A commit that did not write overwrites nothing.
         } else if matches!(
             &inst.kind,
-            InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
+            InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::TakeEffect { .. }
         ) {
             kills.clear();
             reads.extend(written_contexts.iter().copied());
@@ -188,7 +188,7 @@ pub fn run(cfg: &mut CfgBody) {
                 }
             } else if matches!(
                 &inst.kind,
-                InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
+                InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::TakeEffect { .. }
             ) {
                 live.extend(written_contexts.iter().copied());
             }
@@ -246,7 +246,6 @@ mod tests {
             val_factory: factory,
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         }
     }
 

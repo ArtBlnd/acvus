@@ -10,8 +10,9 @@ use rustc_hash::FxHashMap;
 use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{InstKind, RefTarget, ValueId};
 use crate::optimize::ssa_pass::map_uses;
-use crate::ty::Ty;
 use crate::validate::move_check::is_move_only;
+use crate::ty::TyKind;
+use crate::ty::{Concrete, Types};
 
 /// A `Ref` that defines no value of its own: `of` and `source` are one
 /// reference, to one storage, at one type and mutability, and that type is
@@ -22,7 +23,7 @@ struct Reborrow {
 }
 
 impl Reborrow {
-    fn of_inst(cfg: &CfgBody, kind: &InstKind) -> Option<Self> {
+    fn of_inst(cfg: &CfgBody, types: &Types<Concrete>, kind: &InstKind) -> Option<Self> {
         let InstKind::Ref {
             dst,
             target: RefTarget::Through(source),
@@ -32,11 +33,13 @@ impl Reborrow {
         else {
             return None;
         };
-        let through = cfg.val_types.get(source);
+        let through = cfg.val_types.get(source).copied();
         (path.is_empty()
-            && matches!(through, Some(Ty::Ref(..)))
-            && through.and_then(is_move_only) == Some(false)
-            && through == cfg.val_types.get(dst))
+            && through.is_some_and(|through| {
+                matches!(types.kind(through), TyKind::Ref(..)) && !is_move_only(types, through)
+            })
+            && through == cfg.val_types.get(dst).copied())
+
         .then_some(Reborrow {
             of: *dst,
             source: *source,
@@ -44,12 +47,12 @@ impl Reborrow {
     }
 }
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>) {
     let sources: FxHashMap<ValueId, ValueId> = cfg
         .blocks
         .iter()
         .flat_map(|block| block.insts.iter())
-        .filter_map(|inst| Reborrow::of_inst(cfg, &inst.kind))
+        .filter_map(|inst| Reborrow::of_inst(cfg, types, &inst.kind))
         .map(|r| (r.of, r.source))
         .collect();
     if sources.is_empty() {
@@ -145,7 +148,6 @@ mod tests {
             params: vec![],
             captures: vec![],
             order_param: None,
-            task: crate::ty::Task::Sync,
             debug: DebugInfo::new(),
             label_count: 0,
             val_factory: factory,

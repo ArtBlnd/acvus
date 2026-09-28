@@ -1,24 +1,18 @@
-//! Spawn-split pass: a `FunctionCall` whose effect `runs_apart` becomes a
-//! `Spawn` and an `Eval`, whether or not an argument holds a loan
-//! (RFC-0046 rule 3, RFC-0079 rule 9). The loan is held in the `Handle`'s
-//! in-flight position until the `Eval`, and a run that ends before the
-//! `Eval` keeps its storage until the task has finished (the interpreter's
+//! Spawn-split pass: a `FunctionCall` whose effect may be split becomes a
+//! `Spawn` and a `TakeEffect` (effects §6), whether or not an argument
+//! holds a loan. The loan is held in the `Handle`'s in-flight position
+//! until the `TakeEffect`, and a run that ends before the `TakeEffect`
+//! keeps its storage until the task has finished (the interpreter's
 //! `flight`).
 //!
 //! This pass does not reorder. Moving independent instructions between a
-//! `Spawn` and its `Eval` is `optimize::reorder`'s job.
+//! `Spawn` and its `TakeEffect` is `optimize::reorder`'s job.
 
 use crate::cfg::CfgBody;
 use crate::ir::*;
-use crate::ty::{Task, Ty};
+use crate::ty::{Concrete, SplitCost, Ty, TyKind, Types};
 
-/// An `Eval` awaits, so a body this pass splits anything in runs at
-/// `Task::Async` however synchronous its callees were declared: the pass
-/// is a third source of suspension beside the two RFC-0046's table names,
-/// and it raises the body's task itself (found by the interpreter's
-/// `may_suspend` assertion, RFC-0046).
-pub fn run(cfg: &mut CfgBody) {
-    let mut split_one = false;
+pub fn run(cfg: &mut CfgBody, types: &mut Types<Concrete>) {
     for block in &mut cfg.blocks {
         let mut new_insts = Vec::with_capacity(block.insts.len() + 4);
 
@@ -27,39 +21,36 @@ pub fn run(cfg: &mut CfgBody) {
                 InstKind::FunctionCall {
                     dst,
                     callee: ref callee @ (Callee::Direct(_) | Callee::Extern { .. }),
-                    ref callee_ty,
+                    callee_ty,
                     ref args,
                     order,
-                } if runs_apart(callee_ty) => {
-                    // Allocate a Handle ValueId.
+                } if splits(types, callee_ty) => {
+                    let TyKind::Fn { ret, .. } = types.kind(callee_ty) else {
+                        panic!("a call's callee type is a function type")
+                    };
+                    let handle_ty = types.intern(TyKind::Handle(*ret));
                     let handle = cfg.val_factory.next();
-
-                    // Register Handle type: Handle<ReturnTy>.
-                    if let Ty::Fn { ret, .. } = callee_ty {
-                        cfg.val_types.insert(handle, Ty::Handle(ret.clone()));
-                    }
+                    cfg.val_types.insert(handle, handle_ty);
 
                     new_insts.push(Inst {
                         span: inst.span,
                         kind: InstKind::Spawn {
                             dst: handle,
                             callee: callee.clone(),
-                            callee_ty: callee_ty.clone(),
+                            callee_ty,
                             args: args.clone(),
                             order: order.map(|edge| edge.before),
                         },
                     });
                     new_insts.push(Inst {
                         span: inst.span,
-                        kind: InstKind::Eval {
+                        kind: InstKind::TakeEffect {
                             dst,
                             src: handle,
                             order: order.map(|edge| edge.after),
                         },
                     });
-                    split_one = true;
                 }
-                // Everything else: pass through.
                 _ => {
                     new_insts.push(inst);
                 }
@@ -68,13 +59,14 @@ pub fn run(cfg: &mut CfgBody) {
 
         block.insts = new_insts;
     }
-    if split_one {
-        cfg.task = cfg.task.join(Task::Async);
-    }
 }
 
-fn runs_apart(callee_ty: &Ty) -> bool {
-    matches!(callee_ty.effect(), Some(e) if e.runs_apart())
+/// Whether a call of `callee_ty` may be split (effects §6).
+pub fn splits(types: &Types<Concrete>, callee_ty: Ty) -> bool {
+    let Some(effect) = fn_effect(types, callee_ty) else {
+        panic!("a call's callee type is a function type")
+    };
+    matches!(effect.split(), SplitCost::WithCost(_))
 }
 
 #[cfg(test)]
@@ -113,7 +105,6 @@ mod tests {
             val_factory: factory,
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         })
     }
 
@@ -123,7 +114,7 @@ mod tests {
     }
 
     /// RFC-0079 rule 9: a call handed a reference is spawned like any
-    /// other; the `Handle` holds the loan until its `Eval`.
+    /// other; the `Handle` holds the loan until its `TakeEffect`.
     #[test]
     fn a_call_handed_a_reference_is_spawned() {
         let i = Interner::new();
@@ -137,7 +128,7 @@ mod tests {
             ret: Box::new(Ty::Unit),
             captures: vec![],
             effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::ty::Flows::none().into(),
+            flows: crate::flows::Flows::none().into(),
         };
         let mut cfg = make_cfg(
             vec![
@@ -164,7 +155,7 @@ mod tests {
             matches!(&insts[0].kind, InstKind::Spawn { args, .. } if *args == vec![v(0)]),
             "a call whose argument holds a loan is spawned with that argument"
         );
-        assert!(matches!(insts[1].kind, InstKind::Eval { dst, .. } if dst == v(1)));
+        assert!(matches!(insts[1].kind, InstKind::TakeEffect { dst, .. } if dst == v(1)));
         assert_eq!(cfg.task, Task::Async);
     }
 
@@ -182,7 +173,7 @@ mod tests {
                 captures: vec![],
 
                 effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::ty::Flows::Every.into(),
+                flows: crate::flows::Flows::Every.into(),
             },
         );
 
@@ -210,20 +201,20 @@ mod tests {
 
         run(&mut cfg);
 
-        // Should be: Const, Spawn, Eval in block insts (Return is terminator).
+        // Should be: Const, Spawn, TakeEffect in block insts (Return is terminator).
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 3);
         assert!(matches!(insts[1].kind, InstKind::Spawn { .. }));
-        assert!(matches!(insts[2].kind, InstKind::Eval { .. }));
+        assert!(matches!(insts[2].kind, InstKind::TakeEffect { .. }));
 
-        // Verify Spawn dst -> Eval src chain.
-        if let (InstKind::Spawn { dst: handle, .. }, InstKind::Eval { src, dst, .. }) =
+        // Verify Spawn dst -> TakeEffect src chain.
+        if let (InstKind::Spawn { dst: handle, .. }, InstKind::TakeEffect { src, dst, .. }) =
             (&insts[1].kind, &insts[2].kind)
         {
-            assert_eq!(handle, src, "Eval.src must reference Spawn.dst");
-            assert_eq!(*dst, v(1), "Eval.dst must be original FunctionCall.dst");
+            assert_eq!(handle, src, "TakeEffect.src must reference Spawn.dst");
+            assert_eq!(*dst, v(1), "TakeEffect.dst must be original FunctionCall.dst");
         } else {
-            panic!("expected Spawn + Eval");
+            panic!("expected Spawn + TakeEffect");
         }
 
         // Handle should have Handle type.
@@ -253,7 +244,7 @@ mod tests {
                 captures: vec![],
 
                 effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::ty::Flows::Every.into(),
+                flows: crate::flows::Flows::Every.into(),
             },
         );
 
@@ -282,7 +273,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![],
             effect: effect.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         }
     }
 
@@ -323,8 +314,8 @@ mod tests {
             "a pure call carries no entry Order, so its Spawn takes none"
         );
         assert!(
-            matches!(insts[2].kind, InstKind::Eval { order: None, .. }),
-            "and its Eval yields none"
+            matches!(insts[2].kind, InstKind::TakeEffect { order: None, .. }),
+            "and its TakeEffect yields none"
         );
     }
 
@@ -374,7 +365,7 @@ mod tests {
                     captures: vec![],
 
                     effect: crate::ty::Effect::OPAQUE.into(),
-                    flows: crate::ty::Flows::Every.into(),
+                    flows: crate::flows::Flows::Every.into(),
                 },
             );
         }
@@ -412,7 +403,7 @@ mod tests {
 
         run(&mut cfg);
 
-        // 2 calls -> 2 Spawn + 2 Eval + BinOp = 5 (Return is terminator)
+        // 2 calls -> 2 Spawn + 2 TakeEffect + BinOp = 5 (Return is terminator)
         let insts = all_insts(&cfg);
         assert_eq!(insts.len(), 5);
 
@@ -422,7 +413,7 @@ mod tests {
             .count();
         let eval_count = insts
             .iter()
-            .filter(|i| matches!(i.kind, InstKind::Eval { .. }))
+            .filter(|i| matches!(i.kind, InstKind::TakeEffect { .. }))
             .count();
         assert_eq!(spawn_count, 2);
         assert_eq!(eval_count, 2);

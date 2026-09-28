@@ -83,23 +83,29 @@ use crate::ir::{
 use crate::laws::{LawTable, Reaches};
 use crate::optimize::forward::edges_mut;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator, map_value_defs};
-use crate::ty::{CastTy, IntTy, Mutability, Ty};
+use crate::ir::{ScalarTypes, fn_effect, is_scalar};
+use crate::ty::{CastTy, Concrete, IntTy, Mutability, Reissue, SplitCost, Ty, TyKind, Types};
+use crate::decl::Declarations;
 
 mod leave;
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
-    leave::run(cfg, laws);
+pub fn run(cfg: &mut CfgBody, types: &mut Types<Concrete>, decls: &Declarations, laws: &LawTable) {
+    let scalars = ScalarTypes::of(types);
+    let types: &Types<Concrete> = types;
+    leave::run(cfg, types, decls, laws);
     let domtree = DomTree::build(cfg);
-    let invariants = Invariants::of(cfg);
+    let invariants = Invariants::of(cfg, types, decls);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
     let preds = cfg.predecessors();
     let literals = const_literals(cfg);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     let mut counted: Vec<Counted> = Vec::new();
     let mut pulls: Vec<Pull> = Vec::new();
     for (_, loop_) in nest.iter() {
         let recognizer = Recognizer {
             cfg,
+            types,
+            decls,
             loop_,
             invariants: &invariants,
             laws,
@@ -115,7 +121,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
     }
     let mut labels = LabelFactory::of(cfg);
     for loop_ in counted {
-        loop_.apply(cfg, &mut labels);
+        loop_.apply(cfg, scalars, &mut labels);
     }
     for loop_ in pulls {
         loop_.apply(cfg);
@@ -123,18 +129,20 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
 }
 
 /// Whether rules 1 to 5 convert the loop headed at `header`.
-fn converts(cfg: &CfgBody, laws: &LawTable, header: Label) -> bool {
+fn converts(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, header: Label) -> bool {
     let domtree = DomTree::build(cfg);
-    let invariants = Invariants::of(cfg);
+    let invariants = Invariants::of(cfg, types, decls);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
     let preds = cfg.predecessors();
     let literals = const_literals(cfg);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     nest.iter()
         .filter(|(_, loop_)| cfg.blocks[loop_.natural.header.0].label == header)
         .any(|(_, loop_)| {
             Recognizer {
                 cfg,
+                types,
+                decls,
                 loop_,
                 invariants: &invariants,
                 laws,
@@ -358,6 +366,8 @@ struct OwnExit {
 
 struct Recognizer<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
+    decls: &'a Declarations,
     loop_: &'a Loop,
     invariants: &'a Invariants,
     laws: &'a LawTable,
@@ -403,14 +413,14 @@ impl Recognizer<'_> {
             }),
         };
 
-        let affine = AffineValues::of(self.cfg, self.loop_, self.invariants, self.laws);
+        let affine = AffineValues::of(self.cfg, self.types, self.decls, self.loop_, self.invariants, self.laws);
         let recognized = self
             .conditions(header, *cond)
             .into_iter()
             .find_map(|condition| self.form(&affine, condition, body_block))?;
-        let ty = Ty::Int(recognized.width);
-        if self.cfg.val_types[&recognized.bound] != ty
-            || self.cfg.val_types[&recognized.init] != ty
+        let ty = TyKind::Int(recognized.width);
+        if self.types.kind(self.cfg.val_types[&recognized.bound]) != &ty
+            || self.types.kind(self.cfg.val_types[&recognized.init]) != &ty
         {
             return None;
         }
@@ -512,7 +522,7 @@ impl Recognizer<'_> {
         body_block: BlockIdx,
     ) -> Option<Recognized> {
         let Compared { counter, sum } = self.compared(condition.compared)?;
-        let Ty::Int(width) = self.cfg.val_types[&counter] else {
+        let TyKind::Int(width) = *self.types.kind(self.cfg.val_types[&counter]) else {
             return None;
         };
         let Counting { init, form } = match (&affine.get(counter)?.derivation, sum) {
@@ -668,7 +678,7 @@ impl Recognizer<'_> {
     }
 
     fn below_the_maximum(&self, bound: ValueId, width: IntTy, at: BlockIdx) -> bool {
-        let [bounds] = constant_bounds_on_entry(self.cfg, self.laws, at, &[bound])[..] else {
+        let [bounds] = constant_bounds_on_entry(self.cfg, self.types, self.laws, at, &[bound])[..] else {
             return false;
         };
         bounds.hi.is_some_and(|hi| hi < width.max())
@@ -700,7 +710,7 @@ impl Recognizer<'_> {
             } if self.left_alone(target, *dst) => StepKind::Borrow,
             InstKind::BinOp {
                 op, left, right, ..
-            } if matches!(self.cfg.val_types[&value], Ty::Int(_)) => {
+            } if matches!(self.types.kind(self.cfg.val_types[&value]), TyKind::Int(_)) => {
                 let op = Arith::of(*op)?;
                 self.evaluate(*left, steps)?;
                 self.evaluate(*right, steps)?;
@@ -711,7 +721,12 @@ impl Recognizer<'_> {
                 callee_ty,
                 args,
                 ..
-            } if callee_ty.effect().is_some_and(|effect| effect.is_empty()) => {
+            } if fn_effect(self.types, *callee_ty).is_some_and(|effect| {
+                effect.reissue() == Reissue::Pure
+                    && effect.split() == SplitCost::Unavailable
+                    && effect.reads().is_empty()
+                    && effect.writes().is_empty()
+            }) => {
                 for &arg in args {
                     self.argument(arg, steps)?;
                 }
@@ -729,8 +744,8 @@ impl Recognizer<'_> {
     }
 
     fn argument(&self, arg: ValueId, steps: &mut Vec<Step>) -> Option<Operand> {
-        match &self.cfg.val_types[&arg] {
-            Ty::Ref(mutability, _) => {
+        match self.types.kind(self.cfg.val_types[&arg]) {
+            TyKind::Ref(mutability, _) => {
                 if *mutability == Mutability::Mut {
                     return None;
                 }
@@ -742,7 +757,7 @@ impl Recognizer<'_> {
                         .then_some(Operand::Step(step)),
                 }
             }
-            ty if ty.is_scalar() => self.evaluate(arg, steps),
+            kind if is_scalar(kind) => self.evaluate(arg, steps),
             _ => None,
         }
     }
@@ -813,7 +828,7 @@ impl Recognizer<'_> {
             .iter()
             .enumerate()
             .filter(|(position, _)| !steps.iter().any(|step| step.header_position == *position))
-            .all(|(_, inst)| inst_info::cannot_end_run(&inst.kind, &self.cfg.val_types))
+            .all(|(_, inst)| inst_info::cannot_end_run(self.types, &inst.kind, &self.cfg.val_types))
     }
 
     fn only_enters_the_header(&self, block: BlockIdx) -> bool {
@@ -974,10 +989,10 @@ impl Recognizer<'_> {
             return None;
         };
         let storage = inst_info::storage(target)?;
-        let some = self.laws.option_tags()?.some;
+        let some = self.laws.option_tags().some;
         let pulls = self.laws.pulls(callee)
             && args[..] == [*lent]
-            && matches!(self.cfg.val_types.get(pulled), Some(Ty::Option(_)))
+            && matches!(self.cfg.val_types.get(pulled).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_)))
             && src == pulled
             && *tag == some
             && dst == cond;
@@ -1035,10 +1050,10 @@ impl Pull {
 }
 
 impl Counted {
-    fn apply(self, cfg: &mut CfgBody, labels: &mut LabelFactory) {
+    fn apply(self, cfg: &mut CfgBody, scalars: ScalarTypes, labels: &mut LabelFactory) {
         let header = cfg.label_to_block[&self.header];
         let entering = cfg.label_to_block[&self.entering];
-        let ty = Ty::Int(self.width);
+        let ty = scalars.int(self.width);
         let mut moved: Vec<Inst> = Vec::with_capacity(self.steps.len());
         let mut start: Option<ValueId> = None;
         for step in &self.steps {
@@ -1133,13 +1148,13 @@ impl Counted {
                     ascending,
                     stride,
                 }
-                .write(cfg, labels);
+                .write(cfg, scalars, labels);
                 Traversal {
                     source: ForSource::Range {
                         at: trip.zero,
                         hi: trip.count,
                     },
-                    counter: Ty::Int(unsigned(self.width)),
+                    counter: scalars.int(unsigned(self.width)),
                 }
             }
         };
@@ -1371,16 +1386,16 @@ struct WrittenTrip {
 }
 
 impl TripCount {
-    fn write(self, cfg: &mut CfgBody, labels: &mut LabelFactory) -> WrittenTrip {
-        let width = Ty::Int(self.width);
+    fn write(self, cfg: &mut CfgBody, scalars: ScalarTypes, labels: &mut LabelFactory) -> WrittenTrip {
+        let width = scalars.int(self.width);
         let unsigned_width = unsigned(self.width);
-        let unsigned = Ty::Int(unsigned_width);
+        let unsigned = scalars.int(unsigned_width);
         let then_label = labels.fresh();
         let else_label = labels.fresh();
         let join = labels.fresh();
         let entering = cfg.label_to_block[&self.entering];
 
-        let before = fresh(cfg, &Ty::Bool);
+        let before = fresh(cfg, &scalars.bool);
         let Interval { from, to } = match self.ascending {
             true => Interval {
                 from: self.init,

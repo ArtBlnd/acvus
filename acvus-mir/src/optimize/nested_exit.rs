@@ -34,17 +34,19 @@ use crate::analysis::targets::touched_slots;
 use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
 use crate::ir::{ExitTrip, ForSource, Inst, InstKind, Label, ValueId};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::Ty;
+use crate::ir::is_word;
+use crate::ty::{Concrete, Ty, TyKind, Types};
+use crate::decl::Declarations;
 
 type Preds = FxHashMap<BlockIdx, SmallVec<[BlockIdx; 2]>>;
 
-pub fn run(interner: &Interner, cfg: &mut CfgBody) {
+pub fn run(interner: &Interner, cfg: &mut CfgBody, types: &mut Types<Concrete>, decls: &Declarations) {
     let tags = Tags {
         some: interner.intern("Some"),
         none: interner.intern("None"),
     };
-    while let Some(moved) = Move::find(cfg) {
-        moved.apply(cfg, &tags);
+    while let Some(moved) = Move::find(cfg, types, decls) {
+        moved.apply(cfg, types, &tags);
     }
 }
 
@@ -59,22 +61,20 @@ enum Verdict {
 }
 
 impl Verdict {
-    fn of(carried: &[Ty]) -> Verdict {
+    fn of(types: &mut Types<Concrete>, carried: &[Ty]) -> Verdict {
         match carried {
             [] => Verdict::BoolLeaves,
-            [one] => Verdict::SomeCarries {
-                payload: one.clone(),
-            },
+            [one] => Verdict::SomeCarries { payload: *one },
             many => Verdict::SomeCarries {
-                payload: Ty::Tuple(many.to_vec()),
+                payload: types.intern(TyKind::Tuple(many.into())),
             },
         }
     }
 
-    fn ty(&self) -> Ty {
+    fn ty(&self, types: &mut Types<Concrete>) -> Ty {
         match self {
-            Verdict::BoolLeaves => Ty::Bool,
-            Verdict::SomeCarries { payload } => Ty::Option(Box::new(payload.clone())),
+            Verdict::BoolLeaves => types.intern(TyKind::Bool),
+            Verdict::SomeCarries { payload } => types.intern(TyKind::Option(*payload)),
         }
     }
 }
@@ -101,6 +101,9 @@ struct Rewrite<'m> {
     moved: &'m Move,
     tags: &'m Tags,
     verdict: Verdict,
+    /// What the verdict parameter holds, and what a test of it gives.
+    verdict_ty: Ty,
+    bool_ty: Ty,
     carried: Vec<Ty>,
     target_params: Vec<ValueId>,
 }
@@ -111,22 +114,22 @@ struct Edge {
 }
 
 impl Move {
-    fn find(cfg: &CfgBody) -> Option<Move> {
+    fn find(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations) -> Option<Move> {
         let domtree = DomTree::build(cfg);
         let loops = natural_loops_innermost_first(cfg, &domtree);
         let preds = cfg.predecessors();
-        let loans = Loans::build(cfg);
+        let loans = Loans::build(cfg, types, decls);
         loops.iter().find_map(|nested| {
             let parent = loops
                 .iter()
                 .filter(|other| other.header != nested.header && other.contains(nested.header))
                 .min_by_key(|other| other.block_count())?;
-            Self::out_of(cfg, &domtree, &preds, &loans, &Nest { nested, parent })
+            Self::out_of(cfg, types, &domtree, &preds, &loans, &Nest { nested, parent })
         })
     }
 
     fn out_of(
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>,
         domtree: &DomTree,
         preds: &Preds,
         loans: &Loans<'_>,
@@ -182,7 +185,7 @@ impl Move {
             .iter()
             .chain(&read_of_body);
         for value in carried {
-            if !Self::an_option_holds(cfg.val_types.get(value)?) {
+            if !Self::an_option_holds(types, *cfg.val_types.get(value)?) {
                 return None;
             }
         }
@@ -254,8 +257,8 @@ impl Move {
         read
     }
 
-    fn an_option_holds(ty: &Ty) -> bool {
-        !matches!(ty, Ty::Ref(..) | Ty::Order | Ty::Never) && ty.is_word() == Some(true)
+    fn an_option_holds(types: &Types<Concrete>, ty: Ty) -> bool {
+        !matches!(types.kind(ty), TyKind::Ref(..) | TyKind::Order | TyKind::Never) && is_word(types, ty)
     }
 
     fn touches_a_storage_of_the_iteration(
@@ -293,17 +296,20 @@ impl Move {
         })
     }
 
-    fn apply(self, cfg: &mut CfgBody, tags: &Tags) {
+    fn apply(self, cfg: &mut CfgBody, types: &mut Types<Concrete>, tags: &Tags) {
         let target_params = cfg.blocks[self.target_outside_parent.0].params.clone();
         let carried: Vec<Ty> = target_params
             .iter()
             .chain(&self.read_of_body)
-            .map(|value| cfg.val_types[value].clone())
+            .map(|value| cfg.val_types[value])
             .collect();
+        let verdict = Verdict::of(types, &carried);
         let rewrite = Rewrite {
             moved: &self,
             tags,
-            verdict: Verdict::of(&carried),
+            verdict_ty: verdict.ty(types),
+            bool_ty: types.intern(TyKind::Bool),
+            verdict,
             carried,
             target_params,
         };
@@ -327,7 +333,7 @@ impl Rewrite<'_> {
     }
 
     fn pass_stay_on_the_header_exit(&self, cfg: &mut CfgBody) {
-        let stay = fresh(cfg, self.verdict.ty());
+        let stay = fresh(cfg, self.verdict_ty);
         let kind = match self.verdict {
             Verdict::BoolLeaves => InstKind::Const {
                 dst: stay,
@@ -362,7 +368,7 @@ impl Rewrite<'_> {
                 fresh(cfg, ty)
             })
             .collect();
-        let leave = fresh(cfg, self.verdict.ty());
+        let leave = fresh(cfg, self.verdict_ty);
         let mut insts: Vec<Inst> = Vec::new();
         match &self.verdict {
             Verdict::BoolLeaves => self.emit(
@@ -381,7 +387,7 @@ impl Rewrite<'_> {
                 let held = match elements[..] {
                     [one] => one,
                     _ => {
-                        let tuple = fresh(cfg, payload.clone());
+                        let tuple = fresh(cfg, *payload);
                         self.emit(
                             &mut insts,
                             InstKind::MakeTuple {
@@ -426,7 +432,7 @@ impl Rewrite<'_> {
         labels: &mut Labels,
         leave: Label,
     ) -> ValueId {
-        let received = fresh(cfg, self.verdict.ty());
+        let received = fresh(cfg, self.verdict_ty);
         let exit = self.moved.exit;
         let exit_block = &mut cfg.blocks[exit.0];
         exit_block.params.push(received);
@@ -455,7 +461,7 @@ impl Rewrite<'_> {
         let cond = match self.verdict {
             Verdict::BoolLeaves => received,
             Verdict::SomeCarries { .. } => {
-                let holds = fresh(cfg, Ty::Bool);
+                let holds = fresh(cfg, self.bool_ty);
                 self.emit(
                     &mut insts,
                     InstKind::TestVariant {
@@ -483,7 +489,7 @@ impl Rewrite<'_> {
         let mut insts: Vec<Inst> = Vec::new();
         let mut unpacked: Vec<ValueId> = Vec::new();
         if let Verdict::SomeCarries { payload } = &self.verdict {
-            let held = fresh(cfg, payload.clone());
+            let held = fresh(cfg, *payload);
             self.emit(
                 &mut insts,
                 InstKind::UnwrapVariant {

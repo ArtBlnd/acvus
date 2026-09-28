@@ -8,13 +8,15 @@ use crate::cfg::{CfgBody, Terminator};
 use crate::ir::{Inst, InstKind, ValueId};
 use crate::optimize::drop_insertion::ends_ownership;
 use crate::optimize::ssa_pass::map_uses;
-use crate::ty::Ty;
+use crate::ty::{Concrete, Types};
+use crate::decl::Declarations;
+use crate::ty::TyKind;
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) {
     if cfg.blocks.is_empty() {
         return;
     }
-    let live = liveness::analyze(cfg);
+    let live = liveness::analyze(cfg, types, decls);
     for bi in 0..cfg.blocks.len() {
         let live_after = live_after_each(cfg, bi, &live);
         let old = std::mem::take(&mut cfg.blocks[bi].insts);
@@ -23,9 +25,9 @@ pub fn run(cfg: &mut CfgBody) {
             let consumed: Vec<ValueId> = inst_info::uses(&inst.kind)
                 .iter()
                 .copied()
-                .filter(|v| ends_ownership(&inst.kind, *v, &cfg.val_types))
+                .filter(|v| ends_ownership(&inst.kind, *v, &cfg.val_types, types))
                 .collect();
-            let copies = copies_for(cfg, &live_after[ii], consumed.into_iter());
+            let copies = copies_for(cfg, types, &live_after[ii], consumed.into_iter());
             for (src, dst) in &copies.clones {
                 new.push(clone_inst(inst.span, *src, *dst));
             }
@@ -48,7 +50,7 @@ pub fn run(cfg: &mut CfgBody) {
                 .copied()
                 .filter(|v| !params.contains(v))
                 .collect();
-            let copies = copies_for(cfg, &live_by_own_name, args.iter().map(|arg| **arg));
+            let copies = copies_for(cfg, types, &live_by_own_name, args.iter().map(|arg| **arg));
             for (src, dst) in &copies.clones {
                 new.push(clone_inst(span, *src, *dst));
             }
@@ -99,13 +101,14 @@ impl Copies {
 
 fn copies_for(
     cfg: &mut CfgBody,
+    types: &Types<Concrete>,
     live_after: &FxHashSet<ValueId>,
     uses: impl Iterator<Item = ValueId>,
 ) -> Copies {
     let mut occurrences: FxHashMap<ValueId, usize> = FxHashMap::default();
     let mut order: Vec<ValueId> = Vec::new();
     for v in uses {
-        if !matches!(cfg.val_types.get(&v), Some(Ty::String)) {
+        if !matches!(cfg.val_types.get(&v).map(|ty| types.kind(*ty)), Some(TyKind::String)) {
             continue;
         }
         let n = occurrences.entry(v).or_insert(0);
@@ -119,12 +122,14 @@ fn copies_for(
         pending: FxHashMap::default(),
     };
     for v in order {
+        let string = cfg.val_types[&v];
         let k = occurrences[&v];
         let needed = if live_after.contains(&v) { k } else { k - 1 };
         let mut queue: Vec<ValueId> = (0..needed)
             .map(|_| {
                 let c = cfg.val_factory.next();
-                cfg.val_types.insert(c, Ty::String);
+                cfg.val_types.insert(c, string);
+
                 copies.clones.push((v, c));
                 c
             })
@@ -234,7 +239,6 @@ mod tests {
             params: vec![],
             captures: vec![],
             order_param: None,
-            task: crate::ty::Task::Sync,
             debug: DebugInfo::new(),
             label_count: 0,
             val_factory: factory,

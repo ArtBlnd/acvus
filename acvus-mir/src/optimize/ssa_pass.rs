@@ -153,7 +153,7 @@ pub(crate) fn map_uses(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueId)) {
                 s(o);
             }
         }
-        InstKind::Eval { src, .. } => {
+        InstKind::TakeEffect { src, .. } => {
             s(src);
         }
         InstKind::Merge { orders, .. } => orders.iter_mut().for_each(|v| s(v)),
@@ -303,7 +303,7 @@ pub(crate) fn map_value_defs(kind: &mut InstKind, s: &mut impl FnMut(&mut ValueI
                 s(&mut edge.after);
             }
         }
-        InstKind::Eval { dst, order, .. } => {
+        InstKind::TakeEffect { dst, order, .. } => {
             s(dst);
             if let Some(order) = order {
                 s(order);

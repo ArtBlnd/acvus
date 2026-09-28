@@ -26,25 +26,28 @@ use crate::cfg::{Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, Stages, ValueId};
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
+use crate::ty::{Concrete, Types};
+use crate::decl::Declarations;
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable) {
     let mut examined: FxHashSet<Label> = FxHashSet::default();
-    while let Some(header) = innermost_unexamined_for(cfg, &examined) {
+    while let Some(header) = innermost_unexamined_for(cfg, types, decls, &examined) {
         examined.insert(header);
         let at = cfg.label_to_block[&header];
         let Some((_, stages)) = Head::of(&cfg.blocks[at.0].terminator) else {
             continue;
         };
         match stages.len() {
-            1 => cut(cfg, laws, header),
-            _ => merge_boundaries(cfg, laws, at),
+            1 => cut(cfg, types, decls, laws, header),
+            _ => merge_boundaries(cfg, types, decls, laws, at),
+
         }
     }
 }
 
-fn innermost_unexamined_for(cfg: &CfgBody, examined: &FxHashSet<Label>) -> Option<Label> {
+fn innermost_unexamined_for(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, examined: &FxHashSet<Label>) -> Option<Label> {
     let domtree = DomTree::build(cfg);
-    let invariants = Invariants::of(cfg);
+    let invariants = Invariants::of(cfg, types, decls);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
     nest.iter()
         .map(|(_, loop_)| &cfg.blocks[loop_.natural.header.0])
@@ -56,8 +59,8 @@ fn innermost_unexamined_for(cfg: &CfgBody, examined: &FxHashSet<Label>) -> Optio
 /// Removes each boundary before a stage that holds no instruction, or that
 /// is free and follows a free stage. A chain whose shape fails is left for
 /// `validate::stages` to refuse.
-fn merge_boundaries(cfg: &mut CfgBody, laws: &LawTable, header: BlockIdx) {
-    let Ok(deps) = LoopDeps::of(cfg, laws, header) else {
+fn merge_boundaries(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, header: BlockIdx) {
+    let Ok(deps) = LoopDeps::of(cfg, types, decls, laws, header) else {
         return;
     };
     let stages = deps.membership.stages();
@@ -95,24 +98,24 @@ struct Facts {
     slots: TargetSlots,
 }
 
-fn cut(cfg: &mut CfgBody, laws: &LawTable, header_label: Label) {
-    let Some(facts) = Facts::of(cfg, header_label) else {
+fn cut(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, header_label: Label) {
+    let Some(facts) = Facts::of(cfg, types, decls, header_label) else {
         return;
     };
-    if let Some(written) = plan(cfg, laws, &facts) {
+    if let Some(written) = plan(cfg, types, decls, laws, &facts) {
         *cfg = written;
     }
 }
 
 impl Facts {
-    fn of(cfg: &CfgBody, header_label: Label) -> Option<Facts> {
+    fn of(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, header_label: Label) -> Option<Facts> {
         let header = cfg.label_to_block[&header_label];
         let (head, _) = Head::of(&cfg.blocks[header.0].terminator)?;
         let domtree = DomTree::build(cfg);
-        let invariants = Invariants::of(cfg);
+        let invariants = Invariants::of(cfg, types, decls);
         let nest = LoopNest::of(cfg, &domtree, &invariants);
         let loop_ = nest.get(nest.by_header(header)?);
-        let loans = Loans::build(cfg);
+        let loans = Loans::build(cfg, types, decls);
         let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
         let slots = TargetSlots::of(&loans, head.source(), &loop_blocks);
         Some(Facts { header, slots })
@@ -127,7 +130,7 @@ struct Planned {
 
 /// The body rewritten as the chain the cycles cut it into, or `None` where
 /// the loop stays one stage.
-fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
+fn plan(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
     let header = facts.header;
     let (head, _) = Head::of(&cfg.blocks[header.0].terminator)?;
     // A pull loop's header holds its pull, which is the first stage and
@@ -136,7 +139,7 @@ fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
         return None;
     }
     let domtree = DomTree::build(cfg);
-    let invariants = Invariants::of(cfg);
+    let invariants = Invariants::of(cfg, types, decls);
     let nest = LoopNest::of(cfg, &domtree, &invariants);
     let loop_ = nest.get(nest.by_header(header)?);
     if leaves_from_a_nested_loop(cfg, &nest, loop_) {
@@ -166,12 +169,12 @@ fn plan(cfg: &CfgBody, laws: &LawTable, facts: &Facts) -> Option<CfgBody> {
     }
     let shape = Shape::of(&work, &region)?;
     let stages = {
-        let loans = Loans::build(&work);
+        let loans = Loans::build(&work, types, decls);
         let units = Units::of(&work, &region, &shape, &loans, facts)?;
         let mut graph = Graph::of(&work, &region, &shape, &units, facts)?;
-        let deps = LoopDeps::of(&work, laws, region.header).ok()?;
+        let deps = LoopDeps::of(&work, types, decls, laws, region.header).ok()?;
         let joins = graph.joins(&units, &deps);
-        let run_ahead = RunAhead::of(&work, laws, region.header);
+        let run_ahead = RunAhead::of(&work, types, decls, laws, region.header);
         let joins = ExitSides::settle(&work, &mut graph, &units, joins, &run_ahead);
         graph.order(&units, &joins)?
     };

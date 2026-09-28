@@ -326,7 +326,7 @@ pub(crate) fn remap_uses(kind: &mut InstKind, remap: &FxHashMap<ValueId, ValueId
             }
         }
 
-        InstKind::Eval { src, .. } => remap_val(src, remap),
+        InstKind::TakeEffect { src, .. } => remap_val(src, remap),
     }
 }
 
@@ -352,7 +352,6 @@ mod tests {
             val_factory: LocalFactory::new(),
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         }
     }
 

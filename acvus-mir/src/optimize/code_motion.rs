@@ -1,6 +1,6 @@
 //! Cross-block code motion: an instruction moves only between
 //! control-equivalent blocks - except a shared borrow of a storage, which
-//! moves under a borrow condition instead - and an Eval sinks toward its
+//! moves under a borrow condition instead - and a TakeEffect sinks toward its
 //! use. A shared borrow that lands beside one of its own kind is then
 //! merged into it, under the same borrow condition read within one block.
 //!
@@ -100,10 +100,12 @@ use crate::ir::*;
 use crate::optimize::const_dedup::{remap_uses, remap_val, remap_vec};
 use crate::optimize::context_ops::{context_read, context_written};
 use crate::ty::{Mutability, Ty};
+use crate::ty::{Concrete, Types};
+use crate::decl::Declarations;
 
 // -- Entry point ----------------------------------------------------
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) {
     // Phase 1: the hoist, the merge and the dedup to a fixed point. Each
     // is the others' opportunity, in both directions. In the attention
     // kernel every one of the merge's four pairs is the hoist's work -
@@ -115,24 +117,25 @@ pub fn run(cfg: &mut CfgBody) {
     // the dedup leave the inner one's `AsSlice` an operand from outside
     // the loop for the next hoist to lift.
     loop {
-        let mut moved = hoist_pass(cfg);
-        moved |= merge_pass(cfg);
-        moved |= dedup_pass(cfg);
-        moved |= coalesce_pass(cfg);
+        let mut moved = hoist_pass(cfg, types, decls);
+        moved |= merge_pass(cfg, types, decls);
+        moved |= dedup_pass(cfg, types, decls);
+        moved |= coalesce_pass(cfg, types, decls);
         if !moved {
             break;
         }
     }
 
-    // Phase 2: Sink - move Eval and blocking instructions DOWN.
-    sink_pass(cfg);
+    // Phase 2: Sink - move TakeEffect and blocking instructions DOWN.
+    sink_pass(cfg, types, decls);
+
 }
 
 // -- Single hoist pass ----------------------------------------------
 
 /// One iteration: find hoistable instructions, move them to the highest
 /// valid dominator. Returns true if anything moved.
-fn hoist_pass(cfg: &mut CfgBody) -> bool {
+fn hoist_pass(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) -> bool {
     if cfg.blocks.len() < 2 {
         return false;
     }
@@ -140,7 +143,7 @@ fn hoist_pass(cfg: &mut CfgBody) -> bool {
     let domtree = DomTree::build(cfg);
     let postdom = PostDomTree::build(cfg);
     let depth = LoopDepth::of(cfg, &domtree);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     let writes = StorageWrites::of(&loans);
     let mut def_block = build_def_block(cfg);
 
@@ -332,9 +335,9 @@ impl At {
 /// One iteration: every address-naming instruction a dominating one already
 /// named becomes that one. Returns true if anything was replaced, so that a
 /// chain - the `Index`, then the `Ref` through it - resolves a link a pass.
-fn dedup_pass(cfg: &mut CfgBody) -> bool {
+fn dedup_pass(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) -> bool {
     let domtree = DomTree::build(cfg);
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     let writes = StorageWrites::of(&loans);
 
     let named: Vec<At> = cfg
@@ -722,7 +725,7 @@ struct SliceOfStorage {
 /// `as_slice_mut` of its own container, which `validate::borrow_check`
 /// refuses - `conflicts(Shared, Touch::Reference(Mut))` - so the read
 /// slice and the write slice become one or neither leaves.
-fn coalesce_pass(cfg: &mut CfgBody) -> bool {
+fn coalesce_pass(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) -> bool {
     let domtree = DomTree::build(cfg);
     let mut loops = natural_loops_innermost_first(cfg, &domtree);
     loops.reverse();
@@ -736,7 +739,7 @@ fn coalesce_pass(cfg: &mut CfgBody) -> bool {
             if !pairs.iter().any(|p| p.mutability == Mutability::Mut) {
                 continue;
             }
-            if !every_touch_goes_through(cfg, loop_, storage, &pairs) {
+            if !every_touch_goes_through(cfg, types, decls, loop_, storage, &pairs) {
                 continue;
             }
             coalesce(cfg, preheader, &pairs);
@@ -826,12 +829,12 @@ fn definition_in(cfg: &CfgBody, loop_: &NaturalLoop, value: ValueId) -> Option<A
 /// anything but an `Index` / `IndexSet` of it - a `for` over it, a jump
 /// carrying it - is such a touch as well (`read_only_elementwise`).
 fn every_touch_goes_through(
-    cfg: &CfgBody,
+    cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations,
     loop_: &NaturalLoop,
     storage: ValueId,
     pairs: &[SliceOfStorage],
 ) -> bool {
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     let slices: Vec<ValueId> = pairs
         .iter()
         .map(|p| {
@@ -990,8 +993,8 @@ impl<'a> BorrowKey<'a> {
 /// A block is a straight line, so the instructions between the two borrows
 /// are exactly what runs between them: the question needs no dominance and
 /// no reachability, only a walk.
-fn merge_pass(cfg: &mut CfgBody) -> bool {
-    let loans = Loans::build(cfg);
+fn merge_pass(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) -> bool {
+    let loans = Loans::build(cfg, types, decls);
     let CfgBody {
         blocks, val_types, ..
     } = loans.cfg();
@@ -1144,7 +1147,7 @@ fn remap_terminator(term: &mut Terminator, remap: &FxHashMap<ValueId, ValueId>) 
 
 // -- Sink pass -----------------------------------------------------
 //
-// Sinking widens the distance between a Spawn and the Eval that awaits it,
+// Sinking widens the distance between a Spawn and the TakeEffect that awaits it,
 // which is the window the executor has to run the call concurrently.
 
 /// Position of a use: (block_idx, instruction_index_within_block or TERMINATOR).
@@ -1200,29 +1203,29 @@ fn terminator_uses_vec(term: &crate::cfg::Terminator) -> Vec<ValueId> {
 
 // -- Sink infrastructure ---------------------------------------------
 
-/// Move each Eval as late as possible within its block. A page op
+/// Move each TakeEffect as late as possible within its block. A page op
 /// (`Fetch`, `Commit`) is never moved.
 ///
-/// One Eval per iteration, then re-scan: a move invalidates the indices the
+/// One TakeEffect per iteration, then re-scan: a move invalidates the indices the
 /// rest of the scan holds.
 ///
 /// The loop has no iteration cap - not an omission, a decision. Every
 /// `sink_one` that moves strictly decreases `tests::sink_measure`, the sum
-/// over every Eval of the positions left below it in its block, so the pass
+/// over every TakeEffect of the positions left below it in its block, so the pass
 /// ends within that measure's initial value, which
-/// `the_sink_ends_within_its_measure` asserts on a body whose Evals must
+/// `the_sink_ends_within_its_measure` asserts on a body whose TakeEffects must
 /// move in cascade.
-fn sink_pass(cfg: &mut CfgBody) {
-    while sink_one(cfg) {}
+fn sink_pass(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) {
+    while sink_one(cfg, types, decls) {}
 }
 
-/// Try to sink ONE Eval. Returns true if something moved.
-fn sink_one(cfg: &mut CfgBody) -> bool {
-    let loans = Loans::build(cfg);
+/// Try to sink ONE TakeEffect. Returns true if something moved.
+fn sink_one(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations) -> bool {
+    let loans = Loans::build(cfg, types, decls);
     for bi in 0..cfg.blocks.len() {
         for ii in 0..cfg.blocks[bi].insts.len() {
             let kind = &cfg.blocks[bi].insts[ii].kind;
-            let InstKind::Eval { .. } = kind else {
+            let InstKind::TakeEffect { .. } = kind else {
                 continue;
             };
             let effect = loans.storage_effect(kind);
@@ -1273,7 +1276,7 @@ fn is_page_op(kind: &InstKind) -> bool {
 fn is_call(kind: &InstKind) -> bool {
     matches!(
         kind,
-        InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::Eval { .. }
+        InstKind::FunctionCall { .. } | InstKind::Spawn { .. } | InstKind::TakeEffect { .. }
     )
 }
 
@@ -1313,7 +1316,6 @@ mod tests {
             val_factory: factory,
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         })
     }
 
@@ -1326,7 +1328,7 @@ mod tests {
                 ret: Box::new(Ty::I64),
                 captures: vec![],
                 effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::ty::Flows::Every.into(),
+                flows: crate::flows::Flows::Every.into(),
             },
         )
     }
@@ -1498,7 +1500,7 @@ mod tests {
     fn classified(insts: Vec<InstKind>) -> Hoistable {
         let last = insts.last().expect("a body to classify").clone();
         let cfg = make_cfg(insts, 8);
-        hoistable(&Loans::build(&cfg), &last)
+        hoistable(&Loans::build(&cfg, types, decls), &last)
     }
 
     fn as_slice_of(container: ValueId, mutability: Mutability) -> InstKind {
@@ -1710,7 +1712,7 @@ mod tests {
                     label: Label(2),
                     params: vec![],
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(1),
                     src: v(0),
                     order: None,
@@ -1728,7 +1730,7 @@ mod tests {
         let k = kinds(&body);
         let eval_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Eval { .. }))
+            .position(|k| matches!(k, InstKind::TakeEffect { .. }))
             .unwrap();
         let merge_idx = k
             .iter()
@@ -2685,17 +2687,17 @@ mod tests {
 
     // -- Sink tests --------------------------------------------------
 
-    /// Eval is sunk past pure computation to just before its result is used.
+    /// TakeEffect is sunk past pure computation to just before its result is used.
     ///
-    /// Before: Spawn, Eval, BinOp(uses eval result), Return
-    /// After:  Spawn, BinOp...(doesn't use eval), Eval, BinOp(uses eval result), Return
+    /// Before: Spawn, TakeEffect, BinOp(uses eval result), Return
+    /// After:  Spawn, BinOp...(doesn't use eval), TakeEffect, BinOp(uses eval result), Return
     #[test]
     fn eval_sunk_past_independent_computation() {
         let i = Interner::new();
         let (fetch_id, fetch_ty) = io_fn_type(&i, "fetch");
 
         // v0 = Spawn fetch
-        // v1 = Eval v0              <- should sink
+        // v1 = TakeEffect v0              <- should sink
         // v2 = BinOp(v3, v3)       <- independent of eval result
         // v4 = BinOp(v1, v2)       <- uses eval result
         // Return v4
@@ -2708,7 +2710,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(1),
                     src: v(0),
                     order: None,
@@ -2739,7 +2741,7 @@ mod tests {
 
         let eval_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Eval { .. }))
+            .position(|k| matches!(k, InstKind::TakeEffect { .. }))
             .unwrap();
         let use_idx = k
             .iter()
@@ -2829,7 +2831,7 @@ mod tests {
                     args: vec![],
                     order: None,
                 },
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(1),
                     src: v(0),
                     order: None,
@@ -2863,7 +2865,7 @@ mod tests {
         let k = kinds(&body);
         let eval_idx = k
             .iter()
-            .position(|k| matches!(k, InstKind::Eval { .. }))
+            .position(|k| matches!(k, InstKind::TakeEffect { .. }))
             .unwrap();
         let load_idx = k
             .iter()
@@ -3013,7 +3015,7 @@ mod tests {
         );
     }
 
-    /// The sink's measure: over every Eval, the positions left below it in
+    /// The sink's measure: over every TakeEffect, the positions left below it in
     /// its block.
     fn sink_measure(cfg: &CfgBody) -> usize {
         cfg.blocks
@@ -3023,16 +3025,16 @@ mod tests {
                     .insts
                     .iter()
                     .enumerate()
-                    .filter(|(_, inst)| matches!(inst.kind, InstKind::Eval { .. }))
+                    .filter(|(_, inst)| matches!(inst.kind, InstKind::TakeEffect { .. }))
                     .map(move |(index, _)| block.insts.len() - 1 - index)
             })
             .sum()
     }
 
-    /// Three Evals in one block, each used after the Eval below it: the
-    /// first Eval reaches its use only after the third, then the second,
-    /// has moved out of its way, since an Eval is a call and so a barrier
-    /// to the Eval above it.
+    /// Three TakeEffects in one block, each used after the TakeEffect below it: the
+    /// first TakeEffect reaches its use only after the third, then the second,
+    /// has moved out of its way, since a TakeEffect is a call and so a barrier
+    /// to the TakeEffect above it.
     fn three_evals_whose_uses_interleave() -> CfgBody {
         let i = Interner::new();
         let (qref, ty) = io_fn_type(&i, "io_fn");
@@ -3043,7 +3045,7 @@ mod tests {
             args,
             order: None,
         };
-        let eval = |dst, src| InstKind::Eval {
+        let eval = |dst, src| InstKind::TakeEffect {
             dst,
             src,
             order: None,
@@ -3078,7 +3080,7 @@ mod tests {
         )
     }
 
-    /// The index of every Eval in the one block, and of the instruction
+    /// The index of every TakeEffect in the one block, and of the instruction
     /// that first uses what it defines.
     fn evals_and_their_first_uses(cfg: &CfgBody) -> Vec<(usize, usize)> {
         let insts = &cfg.blocks[0].insts;
@@ -3086,7 +3088,7 @@ mod tests {
             .iter()
             .enumerate()
             .filter_map(|(index, inst)| {
-                let InstKind::Eval { dst, .. } = inst.kind else {
+                let InstKind::TakeEffect { dst, .. } = inst.kind else {
                     return None;
                 };
                 let use_index = insts[index + 1..]
@@ -3129,6 +3131,6 @@ mod tests {
                 "the sink moved {moves} times, past its measure of {bound}"
             );
         }
-        assert_eq!(moves, 2, "the third Eval moves, then the second");
+        assert_eq!(moves, 2, "the third TakeEffect moves, then the second");
     }
 }

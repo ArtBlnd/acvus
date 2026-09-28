@@ -102,23 +102,28 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ForSource, Inst, InstKind, Label, ValOrigin, ValueId};
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass::apply_subst;
-use crate::ty::{LenTerm, Ty};
+use crate::ir::known_len;
+use crate::ty::{Concrete, Ty, TyKind, Types};
+use crate::decl::Declarations;
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable) {
     let domtree = DomTree::build(cfg);
-    let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg));
+    let nest = LoopNest::of(cfg, &domtree, &Invariants::of(cfg, types, decls));
     for (_, loop_) in nest.iter() {
         let Some(frame) = Frame::of(cfg, &loop_.natural) else {
             continue;
         };
-        let Some(chain) = Chain::of(cfg, &frame, laws) else {
+        let Some(chain) = Chain::of(cfg, types, decls, &frame, laws) else {
             continue;
         };
-        let invariants = Invariants::of(cfg);
-        let affine = AffineValues::of(cfg, loop_, &invariants, laws);
+        let invariants = Invariants::of(cfg, types, decls);
+        let affine = AffineValues::of(cfg, types, decls, loop_, &invariants, laws);
         let uses = use_blocks(cfg);
         let reductions = Scope {
             cfg,
+            types,
+            decls,
+
             loop_: &loop_.natural,
             frame: &frame,
             chain: &chain,
@@ -175,11 +180,11 @@ struct Chain {
 }
 
 impl Chain {
-    fn of(cfg: &CfgBody, frame: &Frame, laws: &LawTable) -> Option<Chain> {
+    fn of(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, frame: &Frame, laws: &LawTable) -> Option<Chain> {
         let Terminator::For { source, .. } = &cfg.blocks[frame.header.0].terminator else {
             return None;
         };
-        let deps = LoopDeps::of(cfg, laws, frame.header).ok()?;
+        let deps = LoopDeps::of(cfg, types, decls, laws, frame.header).ok()?;
         let ends: Vec<BlockIdx> = deps
             .membership
             .stages()
@@ -189,7 +194,7 @@ impl Chain {
         if ends.last() != Some(&frame.latch) {
             return None;
         }
-        let judged = deps.judge(cfg, laws);
+        let judged = deps.judge(cfg, types, decls, laws);
         let reducible = (0..ends.len())
             .map(|stage| {
                 let mut held = deps
@@ -338,6 +343,8 @@ struct Reduction {
 
 struct Scope<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
+    decls: &'a Declarations,
     loop_: &'a NaturalLoop,
     frame: &'a Frame,
     chain: &'a Chain,
@@ -479,10 +486,10 @@ impl Scope<'_> {
         offset: &Invariant,
         product: ValueId,
     ) -> bool {
-        let Ty::Int(width) = self.cfg.val_types[&product] else {
+        let TyKind::Int(width) = *self.types.kind(self.cfg.val_types[&product]) else {
             return false;
         };
-        let invariants = Invariants::of(self.cfg);
+        let invariants = Invariants::of(self.cfg, self.types, self.decls);
         let int = |invariant: &Invariant| {
             let literal = match invariant {
                 Invariant::Outside(value) => invariants.word(*value)?.desugared(),
@@ -497,12 +504,11 @@ impl Scope<'_> {
             (Counted::Range { at }, ForSource::Range { hi, .. }) => int(&Invariant::Outside(*at))
                 .zip(int(&Invariant::Outside(hi)))
                 .map(|(at, hi)| (at, hi - 1)),
-            (Counted::Index, ForSource::Array(array)) => match &self.cfg.val_types[&array] {
-                Ty::Array(_, LenTerm::Known(len)) => {
-                    i128::try_from(*len).ok().map(|len| (0, len - 1))
-                }
+            (Counted::Index, ForSource::Array(array)) => match self.types.kind(self.cfg.val_types[&array]) {
+                TyKind::Array(_, len) => i128::try_from(known_len(len)).ok().map(|len| (0, len - 1)),
                 _ => None,
             },
+
             _ => None,
         };
         let (Some((first, last)), Some(k), Some(x)) = (ends, int(factor), int(offset)) else {

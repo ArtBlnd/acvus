@@ -39,7 +39,7 @@ use crate::analysis::domtree::DomTree;
 use crate::analysis::{escape, inst_info};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, prune, reachable};
 use crate::ir::{ExitTrip, Inst, InstKind, Label, PathSeg, RefTarget, SwitchKey, ValueId};
-use crate::ty::Ty;
+use crate::ty::{Concrete, IntTy, Ty, TyKind, Types};
 
 /// The registers one storage slot is replaced by, and -- for an enum --
 /// the number each variant name stands for once the tag is a register.
@@ -159,14 +159,26 @@ struct Tail {
     action: Action,
 }
 
-pub fn run(cfg: &mut CfgBody) {
+pub fn run(cfg: &mut CfgBody, types: &mut Types<Concrete>) {
     if cfg.blocks.is_empty() {
         return;
     }
-    let Some(plan) = plan(cfg) else {
+    let scalars = Scalars {
+        tag: types.intern(TyKind::Int(IntTy::I64)),
+        test: types.intern(TyKind::Bool),
+    };
+    let Some(plan) = plan(cfg, types, scalars) else {
         return;
     };
     rewrite(cfg, plan);
+}
+
+/// The types of the registers this pass makes beside the parts: a tag's
+/// number and a tag test's outcome.
+#[derive(Clone, Copy)]
+struct Scalars {
+    tag: Ty,
+    test: Ty,
 }
 
 // -- Step 1: what can be replaced, and into what --------------------
@@ -180,9 +192,10 @@ struct Plan {
     /// it reads.
     dispatches: Vec<Option<Dispatch>>,
     decisions: Vec<Option<Decision>>,
+    scalars: Scalars,
 }
 
-fn plan(cfg: &CfgBody) -> Option<Plan> {
+fn plan(cfg: &CfgBody, types: &Types<Concrete>, scalars: Scalars) -> Option<Plan> {
     let escaped = escaped_storages(cfg);
     let from_outside: FxHashSet<ValueId> = cfg
         .params
@@ -201,7 +214,7 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
     {
         // A slot whose type this body does not record has no types to give
         // its parts, so it keeps its aggregate.
-        let Some(shape) = cfg.val_types.get(&slot).and_then(shape_of) else {
+        let Some(shape) = cfg.val_types.get(&slot).and_then(|ty| shape_of(types, *ty, scalars.tag)) else {
             continue;
         };
         shapes.insert(slot, shape);
@@ -231,6 +244,7 @@ fn plan(cfg: &CfgBody) -> Option<Plan> {
         tails: vec![Vec::new(); cfg.blocks.len()],
         dispatches: vec![None; cfg.blocks.len()],
         decisions: vec![None; cfg.blocks.len()],
+        scalars,
     };
     // Refusing a slot invalidates the actions already recorded for it, so
     // the walk starts over until it refuses nothing. Each round refuses at
@@ -777,19 +791,20 @@ fn escaped_storages(cfg: &CfgBody) -> escape::Escaped {
 /// register undefined on that arm; and an enum whose variants disagree on
 /// the payload type, whose merge would have no type at all. Each of those
 /// keeps its aggregate.
-fn shape_of(ty: &Ty) -> Option<Shape> {
-    match ty {
-        Ty::Object(fields) => Some(Shape {
-            parts: fields
+fn shape_of(types: &Types<Concrete>, ty: Ty, tag_ty: Ty) -> Option<Shape> {
+    match types.kind(ty) {
+        TyKind::Object(object) => Some(Shape {
+            parts: object
+                .fields()
                 .iter()
-                .map(|(name, ty)| (Part::Field(*name), ty.clone()))
+                .map(|(name, ty)| (Part::Field(*name), *ty))
                 .collect(),
             tags: BTreeMap::new(),
         }),
-        Ty::Enum { variants, .. } => {
-            let mut payload: Option<&Ty> = None;
-            for carried in variants.values() {
-                let carried = carried.as_deref()?;
+        TyKind::Enum { variants, .. } => {
+            let mut payload: Option<Ty> = None;
+            for (_, carried) in variants.iter() {
+                let carried = (*carried)?;
                 match payload {
                     None => payload = Some(carried),
                     Some(seen) if seen == carried => {}
@@ -797,8 +812,8 @@ fn shape_of(ty: &Ty) -> Option<Shape> {
                 }
             }
             let tags = variants
-                .keys()
-                .copied()
+                .iter()
+                .map(|(tag, _)| *tag)
                 .collect::<BTreeSet<Astr>>()
                 .into_iter()
                 .enumerate()
@@ -809,7 +824,7 @@ fn shape_of(ty: &Ty) -> Option<Shape> {
                 })
                 .collect();
             Some(Shape {
-                parts: BTreeMap::from([(Part::Tag, Ty::I64), (Part::Payload, payload?.clone())]),
+                parts: BTreeMap::from([(Part::Tag, tag_ty), (Part::Payload, payload?)]),
                 tags,
             })
         }
@@ -1204,7 +1219,7 @@ impl Rewriter<'_> {
     fn tag_const(&mut self, slot: ValueId, tag: Astr, span: Span) -> ValueId {
         let number = self.plan.shapes[&slot].tags[&tag];
         let dst = self.val_factory.next();
-        self.val_types.insert(dst, Ty::I64);
+        self.val_types.insert(dst, self.plan.scalars.tag);
         self.out.push(Inst {
             span,
             kind: InstKind::Const {
@@ -1260,7 +1275,8 @@ impl Rewriter<'_> {
     /// already, and what a `Switch` becomes when it has none.
     fn compare(&mut self, slot: ValueId, tag: Astr, span: Span, label: Label) -> ValueId {
         let dst = self.val_factory.next();
-        self.val_types.insert(dst, Ty::Bool);
+        self.val_types.insert(dst, self.plan.scalars.test);
+
         self.apply(&Action::TestTag { dst, slot, tag }, span, label);
         dst
     }

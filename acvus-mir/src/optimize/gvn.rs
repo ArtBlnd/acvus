@@ -12,10 +12,10 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::{BinOp, InstKind, ValueId};
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator};
-use crate::ty::{CastTy, IntTy, Ty};
+use crate::ty::{CastTy, Concrete, IntTy, TyKind, Types};
 
-pub fn run(cfg: &mut CfgBody) {
-    let replacements = Numbering::of(cfg).walk(cfg);
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>) {
+    let replacements = Numbering::of(cfg, types).walk(cfg, types);
     for block in &mut cfg.blocks {
         for inst in &mut block.insts {
             apply_subst(&mut inst.kind, &replacements);
@@ -24,10 +24,12 @@ pub fn run(cfg: &mut CfgBody) {
     }
 }
 
-fn ty_of(cfg: &CfgBody, value: ValueId) -> &Ty {
-    cfg.val_types
-        .get(&value)
-        .unwrap_or_else(|| panic!("lowering gives {value:?} a type"))
+fn ty_of<'t>(cfg: &CfgBody, types: &'t Types<Concrete>, value: ValueId) -> &'t TyKind<Concrete> {
+    types.kind(
+        *cfg.val_types
+            .get(&value)
+            .unwrap_or_else(|| panic!("lowering gives {value:?} a type")),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,17 +41,17 @@ enum Word {
 }
 
 impl Word {
-    fn of_const(ty: &Ty, literal: &Literal) -> Option<Word> {
+    fn of_const(ty: &TyKind<Concrete>, literal: &Literal) -> Option<Word> {
         match (ty, literal.desugared()) {
-            (Ty::Int(width), Literal::Int(value)) => Some(Word::Int {
+            (TyKind::Int(width), Literal::Int(value)) => Some(Word::Int {
                 width: *width,
                 value,
             }),
-            (Ty::Float, Literal::Float(value)) => Some(Word::Float {
+            (TyKind::Float, Literal::Float(value)) => Some(Word::Float {
                 bits: value.to_bits(),
             }),
-            (Ty::Bool, Literal::Bool(value)) => Some(Word::Bool(value)),
-            (Ty::Char, Literal::Char(value)) => Some(Word::Char(value)),
+            (TyKind::Bool, Literal::Bool(value)) => Some(Word::Bool(value)),
+            (TyKind::Char, Literal::Char(value)) => Some(Word::Char(value)),
             _ => None,
         }
     }
@@ -62,15 +64,15 @@ impl Word {
     }
 }
 
-fn is_scalar(ty: &Ty) -> bool {
-    matches!(ty, Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Char)
+fn is_scalar(ty: &TyKind<Concrete>) -> bool {
+    matches!(ty, TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char)
 }
 
 /// A float `+` and `*` do not commute here: given two NaN operands the
 /// machine returns the payload of one of them, chosen by operand order.
-fn commutes(op: BinOp, operand: &Ty) -> bool {
+fn commutes(op: BinOp, operand: &TyKind<Concrete>) -> bool {
     match operand {
-        Ty::Int(_) => matches!(
+        TyKind::Int(_) => matches!(
             op,
             BinOp::Add(_)
                 | BinOp::Mul(_)
@@ -82,8 +84,8 @@ fn commutes(op: BinOp, operand: &Ty) -> bool {
                 | BinOp::Min
                 | BinOp::Max
         ),
-        Ty::Bool => matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Xor),
-        Ty::Float | Ty::Char => matches!(op, BinOp::Eq | BinOp::Neq),
+        TyKind::Bool => matches!(op, BinOp::Eq | BinOp::Neq | BinOp::Xor),
+        TyKind::Float | TyKind::Char => matches!(op, BinOp::Eq | BinOp::Neq),
         _ => false,
     }
 }
@@ -187,7 +189,7 @@ struct Numbering {
 }
 
 impl Numbering {
-    fn of(cfg: &CfgBody) -> Self {
+    fn of(cfg: &CfgBody, types: &Types<Concrete>) -> Self {
         let domtree = DomTree::build(cfg);
         let mut dom_children = vec![Vec::new(); cfg.blocks.len()];
         for block in (0..cfg.blocks.len()).map(BlockIdx) {
@@ -205,7 +207,7 @@ impl Numbering {
                     storages.extend(inst_info::storage(target));
                 }
                 InstKind::Const { dst, value } => {
-                    if let Some(word) = Word::of_const(ty_of(cfg, *dst), value) {
+                    if let Some(word) = Word::of_const(ty_of(cfg, types, *dst), value) {
                         words.insert(*dst, word);
                     }
                 }
@@ -223,7 +225,7 @@ impl Numbering {
         }
     }
 
-    fn walk(mut self, cfg: &CfgBody) -> FxHashMap<ValueId, ValueId> {
+    fn walk(mut self, cfg: &CfgBody, types: &Types<Concrete>) -> FxHashMap<ValueId, ValueId> {
         let mut stack: Vec<Visit> = match cfg.blocks.is_empty() {
             true => Vec::new(),
             false => vec![Visit::Enter(BlockIdx(0))],
@@ -235,7 +237,7 @@ impl Numbering {
                     let children = self.dom_children[block.0].iter().rev();
                     stack.extend(children.map(|child| Visit::Enter(*child)));
                     for inst in &cfg.blocks[block.0].insts {
-                        self.number(cfg, &inst.kind);
+                        self.number(cfg, types, &inst.kind);
                     }
                 }
                 Visit::LeaveKeeping(kept) => {
@@ -265,8 +267,8 @@ impl Numbering {
         }
     }
 
-    fn number(&mut self, cfg: &CfgBody, kind: &InstKind) {
-        let Some(Numbered { dst, found }) = self.found(cfg, kind) else {
+    fn number(&mut self, cfg: &CfgBody, types: &Types<Concrete>, kind: &InstKind) {
+        let Some(Numbered { dst, found }) = self.found(cfg, types, kind) else {
             return;
         };
         match found {
@@ -277,11 +279,11 @@ impl Numbering {
                 }
                 None => self.enter(Expr::Const(word), dst),
             },
-            Found::Simplified(by) => self.replace(cfg, Replacement { replaced: dst, by }),
+            Found::Simplified(by) => self.replace(cfg, types, Replacement { replaced: dst, by }),
             Found::Expr(expr) => match self.table.get(&expr) {
                 Some(earlier) => {
                     let by = *earlier;
-                    self.replace(cfg, Replacement { replaced: dst, by });
+                    self.replace(cfg, types, Replacement { replaced: dst, by });
                 }
                 None => self.enter(expr, dst),
             },
@@ -293,11 +295,11 @@ impl Numbering {
         self.entered.push(expr);
     }
 
-    fn replace(&mut self, cfg: &CfgBody, replacement: Replacement) {
+    fn replace(&mut self, cfg: &CfgBody, types: &Types<Concrete>, replacement: Replacement) {
         let Replacement { replaced, by } = replacement;
         assert_eq!(
-            ty_of(cfg, replaced),
-            ty_of(cfg, by),
+            ty_of(cfg, types, replaced),
+            ty_of(cfg, types, by),
             "{replaced:?} is replaced by {by:?}, which holds another type"
         );
         let previous = self.replacements.insert(replaced, by);
@@ -314,7 +316,7 @@ impl Numbering {
         })
     }
 
-    fn found(&self, cfg: &CfgBody, kind: &InstKind) -> Option<Numbered> {
+    fn found(&self, cfg: &CfgBody, types: &Types<Concrete>, kind: &InstKind) -> Option<Numbered> {
         let numbered = |dst: ValueId, found: Found| Some(Numbered { dst, found });
         match kind {
             InstKind::Const { dst, .. } if !self.storages.contains(dst) => {
@@ -327,7 +329,7 @@ impl Numbering {
                 right,
             } => {
                 let (left, right) = (self.operand(*left)?, self.operand(*right)?);
-                let ty = ty_of(cfg, left.value);
+                let ty = ty_of(cfg, types, left.value);
                 if let Some(value) = self.simplified(*op, [left, right], ty) {
                     return numbered(*dst, Found::Simplified(value));
                 }
@@ -355,18 +357,18 @@ impl Numbering {
                     field: *field,
                     rest: rest.clone(),
                 };
-                self.part(cfg, PartRead { dst: *dst, container: *object, part })
+                self.part(cfg, types, PartRead { dst: *dst, container: *object, part })
             }
             InstKind::ObjectGet { dst, object, key } => self.part(
-                cfg,
+                cfg, types,
                 PartRead { dst: *dst, container: *object, part: Part::Key(*key) },
             ),
             InstKind::TupleIndex { dst, tuple, index } => self.part(
-                cfg,
+                cfg, types,
                 PartRead { dst: *dst, container: *tuple, part: Part::TupleElement(*index) },
             ),
             InstKind::ArrayIndex { dst, array, index } => self.part(
-                cfg,
+                cfg, types,
                 PartRead { dst: *dst, container: *array, part: Part::ArrayElement(*index) },
             ),
             _ => None,
@@ -375,16 +377,16 @@ impl Numbering {
 
     /// Only a scalar part of an aggregate held by value is numbered. A
     /// non-scalar part would have two owners once two reads were one.
-    fn part(&self, cfg: &CfgBody, read: PartRead) -> Option<Numbered> {
+    fn part(&self, cfg: &CfgBody, types: &Types<Concrete>, read: PartRead) -> Option<Numbered> {
         let PartRead { dst, container, part } = read;
-        if !is_scalar(ty_of(cfg, dst)) {
+        if !is_scalar(ty_of(cfg, types, dst)) {
             return None;
         }
         let container = self.operand(container)?.number;
-        let held_by_value = match (&part, ty_of(cfg, container)) {
-            (Part::Field { .. } | Part::Key(_), Ty::Object(_)) => true,
-            (Part::TupleElement(_), Ty::Tuple(_)) => true,
-            (Part::ArrayElement(_), Ty::Array(..)) => true,
+        let held_by_value = match (&part, ty_of(cfg, types, container)) {
+            (Part::Field { .. } | Part::Key(_), TyKind::Object(_)) => true,
+            (Part::TupleElement(_), TyKind::Tuple(_)) => true,
+            (Part::ArrayElement(_), TyKind::Array(..)) => true,
             _ => false,
         };
         held_by_value.then_some(Numbered {
@@ -401,8 +403,8 @@ impl Numbering {
     ///
     /// The result is the operand's value, not its number, so an `x * 0`
     /// reads the `0` written beside it rather than an equal one above.
-    fn simplified(&self, op: BinOp, operands: [Operand; 2], ty: &Ty) -> Option<ValueId> {
-        let Ty::Int(_) = ty else {
+    fn simplified(&self, op: BinOp, operands: [Operand; 2], ty: &TyKind<Concrete>) -> Option<ValueId> {
+        let TyKind::Int(_) = ty else {
             return None;
         };
         let [left, right] = operands;

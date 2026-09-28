@@ -6,9 +6,11 @@ use crate::analysis::interval::{InstAt, bounded_indices};
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::{IndexBound, InstKind};
 use crate::laws::LawTable;
+use crate::ty::{Concrete, Types};
 
-pub fn run(cfg: &mut CfgBody, laws: &LawTable) {
-    let bounded = bounded_indices(cfg, laws);
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>, laws: &LawTable) {
+    let bounded = bounded_indices(cfg, types, laws);
+
     for (b, block) in cfg.blocks.iter_mut().enumerate() {
         for (at, inst) in block.insts.iter_mut().enumerate() {
             if !bounded.contains(&InstAt {

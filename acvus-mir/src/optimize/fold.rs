@@ -27,10 +27,10 @@ use rustc_hash::FxHashMap;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, InstKind, Overflow, UnaryOp, ValueId};
-use crate::ty::{CastTy, IntTy, Ty, WordTy};
+use crate::ty::{CastTy, Concrete, IntTy, TyKind, Types, WordTy};
 
-pub fn run(cfg: &mut CfgBody) {
-    while rewrite_once(cfg) {}
+pub fn run(cfg: &mut CfgBody, types: &Types<Concrete>) {
+    while rewrite_once(cfg, types) {}
 }
 
 /// Whether two constants under `op` at one integer width join.
@@ -80,7 +80,7 @@ struct Facts {
 }
 
 /// Apply the first rewrite any rule finds; `true` when one was applied.
-fn rewrite_once(cfg: &mut CfgBody) -> bool {
+fn rewrite_once(cfg: &mut CfgBody, types: &Types<Concrete>) -> bool {
     let facts = Facts::of(cfg);
     let sites = (0..cfg.blocks.len()).flat_map(|block| {
         (0..cfg.blocks[block].insts.len()).map(move |at| Site {
@@ -89,11 +89,11 @@ fn rewrite_once(cfg: &mut CfgBody) -> bool {
         })
     });
     for site in sites.collect::<Vec<Site>>() {
-        if fold_constant(cfg, &facts, site)
-            || fold_cast(cfg, &facts, site)
+        if fold_constant(cfg, types, &facts, site)
+            || fold_cast(cfg, types, &facts, site)
             || fold_not(cfg, &facts, site)
             || fold_string_eq(cfg, &facts, site)
-            || join_constants(cfg, &facts, site)
+            || join_constants(cfg, types, &facts, site)
         {
             return true;
         }
@@ -216,7 +216,7 @@ fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
 
 // -- A binary operation on two constants is the constant --------------
 
-fn fold_constant(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
+fn fold_constant(cfg: &mut CfgBody, types: &Types<Concrete>, facts: &Facts, site: Site) -> bool {
     let InstKind::BinOp {
         dst,
         op,
@@ -232,7 +232,7 @@ fn fold_constant(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     let Some(ty) = cfg.val_types.get(&left) else {
         return false;
     };
-    let Some(value) = evaluate(op, ty, a, b) else {
+    let Some(value) = evaluate(op, types.kind(*ty), a, b) else {
         return false;
     };
     *kind_mut(cfg, site) = InstKind::Const { dst, value };
@@ -278,11 +278,11 @@ fn fold_string_eq(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
 
 // -- A cast of a constant is the constant (RFC-0049) -------------------
 
-fn fold_cast(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
+fn fold_cast(cfg: &mut CfgBody, types: &Types<Concrete>, facts: &Facts, site: Site) -> bool {
     let InstKind::Cast { dst, src, to } = kind_at(cfg, site) else {
         return false;
     };
-    let Some(from) = cfg.val_types.get(&src).and_then(CastTy::of_ty) else {
+    let Some(from) = cfg.val_types.get(&src).and_then(|ty| CastTy::of_kind(types.kind(*ty))) else {
         return false;
     };
     let Some(value) = facts
@@ -349,7 +349,7 @@ fn float_cast(x: f64, to: WordTy) -> Literal {
 
 // -- Two constants under one associative operator join ----------------
 
-fn join_constants(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
+fn join_constants(cfg: &mut CfgBody, types: &Types<Concrete>, facts: &Facts, site: Site) -> bool {
     let InstKind::BinOp {
         dst,
         op,
@@ -359,7 +359,7 @@ fn join_constants(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     else {
         return false;
     };
-    let Some(k) = int_width(cfg, left) else {
+    let Some(k) = int_width(cfg, types, left) else {
         return false;
     };
     if !associative(op) {
@@ -383,7 +383,7 @@ fn join_constants(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     else {
         return false;
     };
-    if inner_op != op || int_width(cfg, inner_left) != Some(k) {
+    if inner_op != op || int_width(cfg, types, inner_left) != Some(k) {
         return false;
     }
     let Some(inner) = facts.split(inner_left, inner_right) else {
@@ -399,7 +399,7 @@ fn join_constants(cfg: &mut CfgBody, facts: &Facts, site: Site) -> bool {
     if traps && !traps_alike(op, k.read(register_word(b)), k.read(register_word(a))) {
         return false;
     }
-    if traps && !nothing_ends_the_run_between(cfg, inner_site, site) {
+    if traps && !nothing_ends_the_run_between(cfg, types, inner_site, site) {
         return false;
     }
     *kind_mut(cfg, inner_site) = InstKind::Const {
@@ -444,11 +444,11 @@ fn traps_alike(op: BinOp, inner: i128, outer: i128) -> bool {
     }
 }
 
-fn nothing_ends_the_run_between(cfg: &CfgBody, inner: Site, outer: Site) -> bool {
+fn nothing_ends_the_run_between(cfg: &CfgBody, types: &Types<Concrete>, inner: Site, outer: Site) -> bool {
     inner.block == outer.block
         && cfg.blocks[outer.block.0].insts[inner.at + 1..outer.at]
             .iter()
-            .all(|inst| inst_info::cannot_end_run(&inst.kind, &cfg.val_types))
+            .all(|inst| inst_info::cannot_end_run(types, &inst.kind, &cfg.val_types))
 }
 
 fn kind_at(cfg: &CfgBody, site: Site) -> InstKind {
@@ -460,9 +460,9 @@ fn kind_mut(cfg: &mut CfgBody, site: Site) -> &mut InstKind {
 }
 
 /// The integer width an operand is read at, where it is an integer.
-fn int_width(cfg: &CfgBody, v: ValueId) -> Option<IntTy> {
-    match cfg.val_types.get(&v) {
-        Some(Ty::Int(k)) => Some(*k),
+fn int_width(cfg: &CfgBody, types: &Types<Concrete>, v: ValueId) -> Option<IntTy> {
+    match cfg.val_types.get(&v).map(|ty| types.kind(*ty)) {
+        Some(TyKind::Int(k)) => Some(*k),
         _ => None,
     }
 }
@@ -471,11 +471,12 @@ fn int_width(cfg: &CfgBody, v: ValueId) -> Option<IntTy> {
 
 /// The constant `op` gives on `left` and `right` at the operand type `ty`,
 /// or nothing where the run-time operation panics instead of giving one.
-fn evaluate(op: BinOp, ty: &Ty, left: &Literal, right: &Literal) -> Option<Literal> {
+fn evaluate(op: BinOp, ty: &TyKind<Concrete>, left: &Literal, right: &Literal) -> Option<Literal> {
     match (ty, left, right) {
-        (Ty::Int(k), Literal::Int(a), Literal::Int(b)) => int_result(op, *k, *a, *b),
-        (Ty::Float, Literal::Float(a), Literal::Float(b)) => float_result(op, *a, *b),
-        (Ty::Bool, Literal::Bool(a), Literal::Bool(b)) => bool_result(op, *a, *b),
+        (TyKind::Int(k), Literal::Int(a), Literal::Int(b)) => int_result(op, *k, *a, *b),
+        (TyKind::Float, Literal::Float(a), Literal::Float(b)) => float_result(op, *a, *b),
+        (TyKind::Bool, Literal::Bool(a), Literal::Bool(b)) => bool_result(op, *a, *b),
+
         _ => None,
     }
 }
