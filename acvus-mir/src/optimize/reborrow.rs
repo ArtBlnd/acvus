@@ -120,7 +120,7 @@ mod tests {
     use super::*;
     use crate::cfg::promote;
     use crate::ir::{DebugInfo, Inst, MirBody, PathSeg};
-    use crate::ty::{Mutability, TypeArg};
+    use crate::ty::{IntTy, Mutability, Ty, TypeArg};
     use acvus_ast::Span;
     use acvus_utils::{LocalFactory, LocalIdOps};
 
@@ -128,7 +128,7 @@ mod tests {
         ValueId::from_raw(n)
     }
 
-    fn body(insts: Vec<InstKind>, types: Vec<(ValueId, Ty)>) -> CfgBody {
+    fn body(insts: Vec<InstKind>, val_types: Vec<(ValueId, Ty)>) -> CfgBody {
         let mut factory = LocalFactory::<ValueId>::new();
         for _ in 0..16 {
             factory.next();
@@ -142,7 +142,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
-            val_types: types.into_iter().collect(),
+            val_types: val_types.into_iter().collect(),
             params: vec![],
             captures: vec![],
             order_param: None,
@@ -152,8 +152,8 @@ mod tests {
         })
     }
 
-    fn reference(m: Mutability, inner: Ty) -> Ty {
-        Ty::Ref(m, Box::new(TypeArg::uniform(inner)))
+    fn reference(types: &mut Types<Concrete>, m: Mutability, inner: Ty) -> Ty {
+        types.intern(TyKind::Ref(m, TypeArg::Uniform(inner)))
     }
 
     fn refs(cfg: &CfgBody) -> usize {
@@ -182,6 +182,9 @@ mod tests {
 
     #[test]
     fn a_whole_reborrow_is_the_reference_it_reborrows() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let ref_ty = reference(&mut types, Mutability::Shared, i64_ty);
         let mut cfg = body(
             vec![
                 take(v(1), RefTarget::Var(v(0))),
@@ -191,19 +194,18 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![
-                (v(0), Ty::I64),
-                (v(1), reference(Mutability::Shared, Ty::I64)),
-                (v(2), reference(Mutability::Shared, Ty::I64)),
-            ],
+            vec![(v(0), i64_ty), (v(1), ref_ty), (v(2), ref_ty)],
         );
-        run(&mut cfg);
+        run(&mut cfg, &types);
         assert_eq!(refs(&cfg), 1);
         assert_eq!(returned(&cfg), v(1));
     }
 
     #[test]
     fn a_chain_of_reborrows_collapses_to_its_source() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let ref_ty = reference(&mut types, Mutability::Shared, i64_ty);
         let mut cfg = body(
             vec![
                 take(v(1), RefTarget::Var(v(0))),
@@ -214,20 +216,18 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![
-                (v(0), Ty::I64),
-                (v(1), reference(Mutability::Shared, Ty::I64)),
-                (v(2), reference(Mutability::Shared, Ty::I64)),
-                (v(3), reference(Mutability::Shared, Ty::I64)),
-            ],
+            vec![(v(0), i64_ty), (v(1), ref_ty), (v(2), ref_ty), (v(3), ref_ty)],
         );
-        run(&mut cfg);
+        run(&mut cfg, &types);
         assert_eq!(refs(&cfg), 1);
         assert_eq!(returned(&cfg), v(1));
     }
 
     #[test]
     fn a_reborrow_at_a_path_stands() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let ref_ty = reference(&mut types, Mutability::Shared, i64_ty);
         let mut cfg = body(
             vec![
                 InstKind::Ref {
@@ -241,18 +241,19 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![
-                (v(1), reference(Mutability::Shared, Ty::I64)),
-                (v(2), reference(Mutability::Shared, Ty::I64)),
-            ],
+            vec![(v(1), ref_ty), (v(2), ref_ty)],
         );
-        run(&mut cfg);
+        run(&mut cfg, &types);
         assert_eq!(refs(&cfg), 1);
         assert_eq!(returned(&cfg), v(2));
     }
 
     #[test]
     fn a_shared_reborrow_of_a_mutable_reference_stands() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let mut_ref_ty = reference(&mut types, Mutability::Mut, i64_ty);
+        let shared_ref_ty = reference(&mut types, Mutability::Shared, i64_ty);
         let mut cfg = body(
             vec![
                 take(v(2), RefTarget::Through(v(1))),
@@ -261,19 +262,19 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![
-                (v(1), reference(Mutability::Mut, Ty::I64)),
-                (v(2), reference(Mutability::Shared, Ty::I64)),
-            ],
+            vec![(v(1), mut_ref_ty), (v(2), shared_ref_ty)],
         );
-        run(&mut cfg);
+        run(&mut cfg, &types);
         assert_eq!(refs(&cfg), 1);
         assert_eq!(returned(&cfg), v(2));
     }
 
     #[test]
     fn a_reborrow_of_a_slice_reference_folds() {
-        let slice = || reference(Mutability::Shared, Ty::Slice(Box::new(Ty::I64)));
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let slice_ty = types.intern(TyKind::Slice(i64_ty));
+        let slice_ref_ty = reference(&mut types, Mutability::Shared, slice_ty);
         let mut cfg = body(
             vec![
                 take(v(2), RefTarget::Through(v(1))),
@@ -282,15 +283,18 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![(v(1), slice()), (v(2), slice())],
+            vec![(v(1), slice_ref_ty), (v(2), slice_ref_ty)],
         );
-        run(&mut cfg);
+        run(&mut cfg, &types);
         assert_eq!(refs(&cfg), 0);
         assert_eq!(returned(&cfg), v(1));
     }
 
     #[test]
     fn a_reference_to_a_value_that_is_not_a_reference_stands() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let ref_ty = reference(&mut types, Mutability::Shared, i64_ty);
         let mut cfg = body(
             vec![
                 take(v(2), RefTarget::Through(v(1))),
@@ -299,12 +303,9 @@ mod tests {
                     order: None,
                 },
             ],
-            vec![
-                (v(1), Ty::I64),
-                (v(2), reference(Mutability::Shared, Ty::I64)),
-            ],
+            vec![(v(1), i64_ty), (v(2), ref_ty)],
         );
-        run(&mut cfg);
+        run(&mut cfg, &types);
         assert_eq!(refs(&cfg), 1);
         assert_eq!(returned(&cfg), v(2));
     }
