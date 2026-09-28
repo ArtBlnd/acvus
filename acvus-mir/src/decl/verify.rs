@@ -78,7 +78,6 @@ pub enum Written {
     Input(acvus_utils::Astr),
     Cast(QualifiedRef),
     Conversion(QualifiedRef),
-    Type(QualifiedRef),
 }
 
 /// Build the verified set, or every refusal the set earns.
