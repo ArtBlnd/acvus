@@ -1,6 +1,6 @@
 # declared facts
 
-What the attribute states beyond the signature: the effect, laws, `ensures`, `means`, and flows. Their meaning is the compiler's (compiler: extern fn §2-4); the compiler trusts each absolutely.
+What the attribute states beyond the signature: the effect, the declared facts (access, action, source, relation), and flows. Their meaning is the compiler's (compiler: extern fn §2-4); the compiler trusts each absolutely.
 
 ## 1. Checks by build level
 
