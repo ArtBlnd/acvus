@@ -861,17 +861,32 @@ fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::{DebugInfo, Inst, Label};
-    use crate::ty::TypeArg;
+    use crate::ty::{IntTy, TypeArg};
     use acvus_ast::Span;
-    use acvus_utils::{LocalFactory, LocalIdOps};
+    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
     }
 
-    fn body(insts: Vec<InstKind>, types: Vec<(ValueId, Ty)>) -> MirBody {
-        let max = types.iter().map(|(v, _)| v.to_raw()).max().unwrap_or(0);
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    fn body(insts: Vec<InstKind>, val_types: Vec<(ValueId, Ty)>) -> MirBody {
+        let max = val_types.iter().map(|(v, _)| v.to_raw()).max().unwrap_or(0);
         let mut factory = LocalFactory::<ValueId>::new();
         for _ in 0..=max.max(16) {
             factory.next();
@@ -885,7 +900,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
-            val_types: types.into_iter().collect(),
+            val_types: val_types.into_iter().collect(),
             params: vec![],
             captures: vec![],
             debug: DebugInfo::new(),
@@ -895,18 +910,21 @@ mod tests {
         }
     }
 
-    fn module(main: MirBody) -> MirModule {
+    fn module(main: MirBody, mut types: Types<Concrete>) -> MirModule {
+        let unit_ty = types.intern(TyKind::Unit);
         MirModule {
             declared_params: main.params.len(),
             main,
             closures: FxHashMap::default(),
-            ret: crate::ty::Ty::Unit,
+            ret: unit_ty,
             flows: crate::flows::Flows::Every,
+            types,
         }
     }
 
-    fn errors(main: MirBody) -> Vec<ValidationErrorKind> {
-        check_borrows(&module(main))
+    fn errors(main: MirBody, types: Types<Concrete>) -> Vec<ValidationErrorKind> {
+        let decls = empty_declarations(&Interner::new());
+        check_borrows(&module(main, types), &decls)
             .into_iter()
             .map(|e| e.kind)
             .collect()
@@ -966,19 +984,17 @@ mod tests {
         }
     }
 
-    fn string_slot() -> Vec<(ValueId, Ty)> {
+    fn string_slot(types: &mut Types<Concrete>) -> Vec<(ValueId, Ty)> {
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string_ty)));
+        let mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string_ty)));
         vec![
-            (slot(), Ty::String),
-            (
-                v(1),
-                Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
-            ),
-            (
-                v(2),
-                Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String))),
-            ),
-            (v(3), Ty::String),
-            (v(4), Ty::I64),
+            (slot(), string_ty),
+            (v(1), shared_ref),
+            (v(2), mut_ref),
+            (v(3), string_ty),
+            (v(4), i64_ty),
         ]
     }
 
@@ -986,6 +1002,7 @@ mod tests {
 
     #[test]
     fn two_shared_references_may_be_live_together() {
+        let mut types = Types::<Concrete>::new();
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -996,13 +1013,14 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
-        assert_eq!(conflict_count(&errors(m)), 0);
+        assert_eq!(conflict_count(&errors(m, types)), 0);
     }
 
     #[test]
     fn a_mutable_reference_whose_last_use_passed_no_longer_excludes() {
+        let mut types = Types::<Concrete>::new();
         let m = body(
             vec![
                 reference(2, Mutability::Mut),
@@ -1015,16 +1033,19 @@ mod tests {
                 take(7),
                 ret(7),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
-        assert_eq!(conflict_count(&errors(m)), 0, "the &mut died at the store");
+        assert_eq!(conflict_count(&errors(m, types)), 0, "the &mut died at the store");
     }
 
     #[test]
     fn a_primitive_is_read_while_shared_referenced() {
-        let mut types = string_slot();
-        types[0] = (slot(), Ty::I64);
-        types.push((v(7), Ty::I64));
+        let mut types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let mut val_types = string_slot(&mut types);
+        val_types[0] = (slot(), i64_ty);
+        val_types.push((v(7), i64_ty));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1032,10 +1053,10 @@ mod tests {
                 load(4, 1),
                 ret(7),
             ],
-            types,
+            val_types,
         );
         assert_eq!(
-            conflict_count(&errors(m)),
+            conflict_count(&errors(m, types)),
             0,
             "a word copy does not move the storage"
         );
@@ -1045,6 +1066,7 @@ mod tests {
 
     #[test]
     fn a_take_while_a_shared_reference_is_live_is_rejected() {
+        let mut types = Types::<Concrete>::new();
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1055,13 +1077,14 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
-        assert_eq!(conflict_count(&errors(m)), 1);
+        assert_eq!(conflict_count(&errors(m, types)), 1);
     }
 
     #[test]
     fn an_assign_while_a_shared_reference_is_live_is_rejected() {
+        let mut types = Types::<Concrete>::new();
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1072,13 +1095,14 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
-        assert_eq!(conflict_count(&errors(m)), 1);
+        assert_eq!(conflict_count(&errors(m, types)), 1);
     }
 
     #[test]
     fn a_second_reference_while_a_mutable_one_is_live_is_rejected() {
+        let mut types = Types::<Concrete>::new();
         let m = body(
             vec![
                 reference(2, Mutability::Mut),
@@ -1089,13 +1113,14 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
-        assert_eq!(conflict_count(&errors(m)), 1);
+        assert_eq!(conflict_count(&errors(m, types)), 1);
     }
 
     #[test]
     fn a_mutable_reference_while_a_shared_one_is_live_is_rejected() {
+        let mut types = Types::<Concrete>::new();
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1106,16 +1131,19 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
-        assert_eq!(conflict_count(&errors(m)), 1);
+        assert_eq!(conflict_count(&errors(m, types)), 1);
     }
 
     #[test]
     fn a_read_of_the_storage_while_a_mutable_reference_is_live_is_rejected() {
-        let mut types = string_slot();
-        types[0] = (slot(), Ty::I64);
-        types.push((v(7), Ty::I64));
+        let mut types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let mut val_types = string_slot(&mut types);
+        val_types[0] = (slot(), i64_ty);
+        val_types.push((v(7), i64_ty));
         let m = body(
             vec![
                 reference(2, Mutability::Mut),
@@ -1126,10 +1154,10 @@ mod tests {
                 },
                 ret(6),
             ],
-            types,
+            val_types,
         );
         assert_eq!(
-            conflict_count(&errors(m)),
+            conflict_count(&errors(m, types)),
             1,
             "even a word copy reads through the &mut"
         );
@@ -1137,6 +1165,7 @@ mod tests {
 
     #[test]
     fn a_reference_live_across_a_branch_still_excludes() {
+        let mut types = Types::<Concrete>::new();
         // ref &mut; jump L1; L1: take; use ref
         let m = body(
             vec![
@@ -1156,9 +1185,9 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
-        assert_eq!(conflict_count(&errors(m)), 1);
+        assert_eq!(conflict_count(&errors(m, types)), 1);
     }
 
     // -- holders in storage and parameters (RFC-0029) ------------------
@@ -1183,15 +1212,12 @@ mod tests {
 
     #[test]
     fn a_reference_assigned_into_a_storage_keeps_its_loan_live() {
-        let mut types = string_slot();
-        types.push((
-            v(7),
-            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
-        ));
-        types.push((
-            v(8),
-            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String))),
-        ));
+        let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let string_ty = types.intern(TyKind::String);
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string_ty)));
+        val_types.push((v(7), shared_ref));
+        val_types.push((v(8), shared_ref));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1201,13 +1227,14 @@ mod tests {
                 load(4, 8),
                 ret(4),
             ],
-            types,
+            val_types,
         );
-        assert_eq!(conflict_count(&errors(m)), 1);
+        assert_eq!(conflict_count(&errors(m, types)), 1);
     }
 
     #[test]
     fn a_reborrow_of_a_parameter_conflicts_with_a_write_through_it() {
+        let mut types = Types::<Concrete>::new();
         let param = v(9);
         let mut main = body(
             vec![
@@ -1226,21 +1253,22 @@ mod tests {
                 load(4, 1),
                 ret(4),
             ],
-            string_slot(),
+            string_slot(&mut types),
         );
         main.params
             .push((acvus_utils::Interner::new().intern("p"), param));
-        main.val_types.insert(
-            param,
-            Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String))),
-        );
-        assert_eq!(conflict_count(&errors(main)), 1);
+        let string_ty = types.intern(TyKind::String);
+        let mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string_ty)));
+        main.val_types.insert(param, mut_ref);
+        assert_eq!(conflict_count(&errors(main, types)), 1);
     }
 
     #[test]
     fn a_parameter_stored_and_read_back_is_reborrowed_as_itself() {
+        let mut types = Types::<Concrete>::new();
         let param = v(9);
-        let mutable = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String)));
+        let string_ty = types.intern(TyKind::String);
+        let mutable = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string_ty)));
         let mut main = body(
             vec![
                 store(1, 9),
@@ -1254,17 +1282,19 @@ mod tests {
                 load(4, 3),
                 ret(4),
             ],
-            vec![(v(1), mutable.clone()), (v(2), mutable.clone())],
+            vec![(v(1), mutable), (v(2), mutable)],
         );
         main.params
             .push((acvus_utils::Interner::new().intern("p"), param));
         main.val_types.insert(param, mutable);
-        assert_eq!(conflict_count(&errors(main)), 0);
+        assert_eq!(conflict_count(&errors(main, types)), 0);
     }
 
     #[test]
     fn a_mutable_reference_read_out_of_its_storage_while_another_read_is_live_is_rejected() {
-        let mutable = Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::String)));
+        let mut types = Types::<Concrete>::new();
+        let string_ty = types.intern(TyKind::String);
+        let mutable = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string_ty)));
         let main = body(
             vec![
                 reference(1, Mutability::Mut),
@@ -1276,25 +1306,23 @@ mod tests {
                 ret(5),
             ],
             vec![
-                (v(1), mutable.clone()),
-                (v(2), mutable.clone()),
-                (v(3), mutable.clone()),
+                (v(1), mutable),
+                (v(2), mutable),
+                (v(3), mutable),
                 (v(4), mutable),
-                (slot(), Ty::String),
-                (v(5), Ty::String),
-                (v(6), Ty::String),
+                (slot(), string_ty),
+                (v(5), string_ty),
+                (v(6), string_ty),
             ],
         );
         // The second read is refused where it is made, before either
         // reference is used; the use through the first is the second.
-        assert_eq!(conflict_count(&errors(main)), 2);
+        assert_eq!(conflict_count(&errors(main, types)), 2);
     }
 
-    fn param_mut_word() -> (ValueId, Ty) {
-        (
-            v(9),
-            Ty::Ref(Mutability::Mut, Box::new(TypeArg::uniform(Ty::I64))),
-        )
+    fn param_mut_word(types: &mut Types<Concrete>) -> (ValueId, Ty) {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        (v(9), types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(i64_ty))))
     }
 
     fn shared_through(dst: usize, through: usize) -> InstKind {
@@ -1308,7 +1336,10 @@ mod tests {
 
     #[test]
     fn two_shared_reborrows_of_one_mutable_reference_read_side_by_side() {
-        let (param, ty) = param_mut_word();
+        let mut types = Types::<Concrete>::new();
+        let (param, ty) = param_mut_word(&mut types);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
         let mut main = body(
             vec![
                 shared_through(1, 9),
@@ -1317,25 +1348,22 @@ mod tests {
                 load(4, 2),
                 ret(3),
             ],
-            vec![(v(3), Ty::I64), (v(4), Ty::I64)],
+            vec![(v(3), i64_ty), (v(4), i64_ty)],
         );
         main.params
             .push((acvus_utils::Interner::new().intern("p"), param));
-        main.val_types.insert(param, ty.clone());
-        main.val_types.insert(
-            v(1),
-            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
-        );
-        main.val_types.insert(
-            v(2),
-            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
-        );
-        assert_eq!(conflict_count(&errors(main)), 0);
+        main.val_types.insert(param, ty);
+        main.val_types.insert(v(1), shared_ref);
+        main.val_types.insert(v(2), shared_ref);
+        assert_eq!(conflict_count(&errors(main, types)), 0);
     }
 
     #[test]
     fn a_write_through_the_mutable_reference_while_its_shared_reborrow_lives_is_rejected() {
-        let (param, ty) = param_mut_word();
+        let mut types = Types::<Concrete>::new();
+        let (param, ty) = param_mut_word(&mut types);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
         let mut main = body(
             vec![
                 shared_through(1, 9),
@@ -1348,15 +1376,12 @@ mod tests {
                 load(3, 1),
                 ret(3),
             ],
-            vec![(v(3), Ty::I64), (v(5), Ty::I64)],
+            vec![(v(3), i64_ty), (v(5), i64_ty)],
         );
         main.params
             .push((acvus_utils::Interner::new().intern("p"), param));
         main.val_types.insert(param, ty);
-        main.val_types.insert(
-            v(1),
-            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
-        );
-        assert_eq!(conflict_count(&errors(main)), 1);
+        main.val_types.insert(v(1), shared_ref);
+        assert_eq!(conflict_count(&errors(main, types)), 1);
     }
 }
