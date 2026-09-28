@@ -62,20 +62,23 @@ pub enum PositionKind {
 /// lifetimes before its arguments'; a structural type's parts in order,
 /// `Result`'s `Ok` before its `Err`; one element's for a sequence. This is
 /// the only walk of positions: `positions` and `position_kinds` read it.
+///
+/// The callback is a trait object: the walk recurses, and a generic one would
+/// be instantiated anew at every depth.
 pub fn for_each_position(
     types: &Types<Concrete>,
-    lifetimes: &impl LifetimesOf,
+    lifetimes: &dyn LifetimesOf,
     ty: Ty,
-    on_position: &mut impl FnMut(PositionKind),
+    on_position: &mut dyn FnMut(PositionKind),
 ) {
     acvus_utils::grow(|| for_each_position_level(types, lifetimes, ty, on_position))
 }
 
 fn for_each_position_level(
     types: &Types<Concrete>,
-    lifetimes: &impl LifetimesOf,
+    lifetimes: &dyn LifetimesOf,
     ty: Ty,
-    on_position: &mut impl FnMut(PositionKind),
+    on_position: &mut dyn FnMut(PositionKind),
 ) {
     match types.kind(ty) {
         TyKind::Int(_)
