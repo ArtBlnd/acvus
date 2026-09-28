@@ -5,7 +5,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::casts::{Base, CastTree, Head, VerifiedExternCast};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
-use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, UserTypeDecl};
+use super::instance_fit::is_instance_of;
+use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, TyVarBound, UserTypeDecl};
 use crate::flows::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Segment, segments};
 use crate::ty::{Holds, LifetimesOf, Mutability, ObjectTy, ParamTerm, Poly, TyId, TyKind, Types};
 
@@ -65,7 +66,17 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let mut refused = Vec::new();
 
     let user_types = extern_types(user_types, &mut refused);
-    let naming_undeclared = refuse_undeclared_types(&types, &functions, &casts, &user_types, &mut refused);
+    let naming_undeclared = refuse_undeclared_types(
+        &types,
+        Written {
+            functions: &functions,
+            user_types: &user_types,
+            casts: &casts,
+            contexts: &contexts,
+            inputs: &inputs,
+        },
+        &mut refused,
+    );
     refuse_array_types(&types, &functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
     let declared_order = first_of_each(functions.iter().map(|(id, _)| *id));
@@ -73,7 +84,8 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let functions = first_stands(functions, &mut refused, |id| Refused::DuplicateFunction { id });
     let contexts = first_stands(contexts, &mut refused, |id| Refused::DuplicateContext { id });
     let inputs = first_stands(inputs, &mut refused, |name| Refused::DuplicateInput { name });
-    let casts = cast_tree(&types, &casts, &functions, &core, &mut refused);
+    let misfits = refuse_misfit_instances(&types, &declared_order, &functions, &mut refused);
+    let casts = cast_tree(&types, &casts, &functions, &misfits, &core, &mut refused);
 
     let mut decls = Declarations {
         types,
@@ -257,28 +269,79 @@ impl TreeSizes<'_> {
     }
 }
 
-/// extern-fn §8: every extern-defined type a signature, an instance or a
-/// cast names is declared. Returns the functions that name an undeclared
-/// one, whose segments cannot be read.
-fn refuse_undeclared_types(
-    types: &Types<Poly>,
-    functions: &[(QualifiedRef, Scheme)],
-    casts: &[CastRule],
-    user_types: &FxHashMap<QualifiedRef, UserTypeDecl>,
-    refused: &mut Vec<Refused>,
-) -> FxHashSet<QualifiedRef> {
-    let mut naming_undeclared = FxHashSet::default();
-    let signatures = functions
-        .iter()
-        .flat_map(|(id, scheme)| signature_types(scheme).map(|ty| (*id, ty)));
-    let cast_ends = casts
-        .iter()
-        .flat_map(|rule| [(rule.via, rule.from), (rule.via, rule.to)]);
-    let mut reported = FxHashSet::default();
-    for (declaration, ty) in signatures.chain(cast_ends) {
+/// Every type the declarations write, by what writes it.
+struct Written<'d> {
+    functions: &'d [(QualifiedRef, Scheme)],
+    user_types: &'d FxHashMap<QualifiedRef, UserTypeDecl>,
+    casts: &'d [CastRule],
+    contexts: &'d [(QualifiedRef, TyId<Poly>)],
+    inputs: &'d [(Astr, TyId<Poly>)],
+}
+
+/// The types a bound names.
+fn bound_types(bound: &TyVarBound) -> &[TyId<Poly>] {
+    match bound {
+        TyVarBound::OneOf(shapes) => shapes,
+        TyVarBound::Any | TyVarBound::Integer { .. } | TyVarBound::Settled => &[],
+    }
+}
+
+/// Every type a scheme writes: its signature, its instances', every
+/// requirement's pattern and every bound's shapes.
+fn scheme_types(scheme: &Scheme) -> impl Iterator<Item = TyId<Poly>> + '_ {
+    let concrete = scheme.instances.iter().flat_map(|instances| instances.concrete.iter());
+    signature_types(scheme)
+        .chain(scheme.requires.iter().map(|requirement| requirement.pattern))
+        .chain(
+            concrete
+                .flat_map(|instance| instance.requires.iter())
+                .map(|requirement| requirement.pattern),
+        )
+        .chain(scheme.bounds.iter().flat_map(bound_types).copied())
+}
+
+/// extern-fn §8: a type term names only declared types, so every
+/// extern-defined type the declarations write is declared. Returns the
+/// functions that name an undeclared one, whose segments cannot be read.
+///
+/// # Panics
+/// An input's type names an undeclared type: `UndeclaredType` names its
+/// declaration by a qualified name, and an input has only a bare one.
+fn refuse_undeclared_types(types: &Types<Poly>, written: Written<'_>, refused: &mut Vec<Refused>) -> FxHashSet<QualifiedRef> {
+    let declared = written.user_types;
+    let undeclared_in = |ty: TyId<Poly>| {
         let mut named = Vec::new();
         named_types(types, ty, &mut FxHashSet::default(), &mut named);
-        for id in named.into_iter().filter(|id| !user_types.contains_key(id)) {
+        named.retain(|id| !declared.contains_key(id));
+        named
+    };
+
+    for (name, ty) in written.inputs {
+        if let [id, ..] = undeclared_in(*ty)[..] {
+            todo!("decl::verify: the input {name:?} names the undeclared type {id:?}; UndeclaredType has no way to name an input")
+        }
+    }
+
+    let functions = written
+        .functions
+        .iter()
+        .flat_map(|(id, scheme)| scheme_types(scheme).map(|ty| (*id, ty)));
+    let user_types = written.user_types.values().flat_map(|decl| {
+        decl.type_params
+            .iter()
+            .flat_map(bound_types)
+            .map(|ty| (decl.id, *ty))
+    });
+    let casts = written
+        .casts
+        .iter()
+        .flat_map(|rule| [(rule.via, rule.from), (rule.via, rule.to)]);
+    let contexts = written.contexts.iter().copied();
+
+    let mut naming_undeclared = FxHashSet::default();
+    let mut reported = FxHashSet::default();
+    for (declaration, ty) in functions.chain(user_types).chain(casts).chain(contexts) {
+        for id in undeclared_in(ty) {
             naming_undeclared.insert(declaration);
             if reported.insert((declaration, id)) {
                 refused.push(Refused::UndeclaredType { declaration, id });
@@ -286,6 +349,33 @@ fn refuse_undeclared_types(
         }
     }
     naming_undeclared
+}
+
+/// extern-fn §6: every concrete instance of a shared signature is the
+/// signature's type at some choice of its variables. Returns the misfits,
+/// by function and instance.
+fn refuse_misfit_instances(
+    types: &Types<Poly>,
+    declared_order: &[QualifiedRef],
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    refused: &mut Vec<Refused>,
+) -> FxHashSet<(QualifiedRef, usize)> {
+    let mut misfits = FxHashSet::default();
+    for signature in declared_order {
+        let Some(scheme) = functions.get(signature) else {
+            continue;
+        };
+        for (instance, sig) in scheme.instances.iter().flat_map(|instances| instances.concrete.iter().enumerate()) {
+            if !is_instance_of(types, scheme.ty, sig.ty) {
+                misfits.insert((*signature, instance));
+                refused.push(Refused::InstanceNotOfSignature {
+                    signature: *signature,
+                    instance,
+                });
+            }
+        }
+    }
+    misfits
 }
 
 /// Every extern-defined type `ty` names, each once, into `named`.
@@ -309,12 +399,15 @@ fn named_types(
     })
 }
 
-/// The head a cast steps from or to (types §3), or `None` for a type
-/// variable, `!`, the order token or a started call, or a reference to one
-/// of those.
+/// The head a tree step joins at `ty` (types §3), or `None` where there
+/// is none: a type variable, `!`, the order token or a started call, a
+/// reference to one of those, or a reference to a reference.
 fn head(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Head> {
     match types.kind(ty) {
-        TyKind::Ref(mutability, target) => Some(Head::Ref(*mutability, base(types, target.ty())?)),
+        TyKind::Ref(mutability, target) => match base(types, target.ty())? {
+            Base::Ref => None,
+            target => Some(Head::Ref(*mutability, target)),
+        },
         _ => Some(Head::Base(base(types, ty)?)),
     }
 }
@@ -350,34 +443,34 @@ struct Step {
     rule: CastRule,
 }
 
+impl Step {
+    /// `rule` as a step, or `CastWithoutHead` where an end has no head.
+    fn of(types: &Types<Poly>, rule: CastRule) -> Result<Step, Refused> {
+        match (head(types, rule.from), head(types, rule.to)) {
+            (Some(from), Some(to)) => Ok(Step { from, to, rule }),
+            (None, _) | (_, None) => Err(Refused::CastWithoutHead { via: rule.via }),
+        }
+    }
+}
+
 /// The declared casts and the views as one tree (types §3): every head
 /// steps up at most once, and no path of steps returns to its start.
 fn cast_tree(
     types: &Types<Poly>,
     casts: &[CastRule],
     functions: &FxHashMap<QualifiedRef, Scheme>,
+    misfits: &FxHashSet<(QualifiedRef, usize)>,
     core: &Core,
     refused: &mut Vec<Refused>,
 ) -> CastTree {
+    let rules = casts.iter().cloned().map(Ok).chain(view_rules(types, functions, misfits, core));
     let mut steps = Vec::new();
-    for rule in casts {
-        let (Some(from), Some(to)) = (head(types, rule.from), head(types, rule.to)) else {
-            refused.push(Refused::CastWithoutHead { via: rule.via });
-            continue;
-        };
-        if let Head::Ref(_, Base::Ref) = from {
-            todo!(
-                "decl::verify: the declared cast {:?} steps from a reference to a reference, which no step leaves; no refusal is settled for it",
-                rule.via
-            )
+    for rule in rules {
+        match rule.and_then(|rule| Step::of(types, rule)) {
+            Ok(step) => steps.push(step),
+            Err(refusal) => refused.push(refusal),
         }
-        steps.push(Step {
-            from,
-            to,
-            rule: rule.clone(),
-        });
     }
-    steps.extend(view_steps(types, functions, core));
 
     let mut tree = CastTree::default();
     let mut above: FxHashMap<Head, Head> = FxHashMap::default();
@@ -399,67 +492,49 @@ fn cast_tree(
     tree
 }
 
-/// Each concrete instance of `core::as_slice`, `core::as_slice_mut` and
-/// `core::as_str` as a step from `&C` to its view (operators §3, §5):
-/// `&C` or `&[T; n]` to `&[T]`, the same under `&mut`, and `&String` to
-/// `&str`.
+/// Each instance of `core::as_slice`, `core::as_slice_mut` and
+/// `core::as_str` as a cast from its parameter to its result (operators
+/// §3, §5). A generic instance's container is a variable, which has no
+/// head. An instance refused as not of its signature is left out.
 ///
 /// # Panics
-/// A view signature has a generic instance, or a concrete instance whose
-/// type is not a function from one of those heads to its view. Neither a
-/// step nor a refusal is settled for either.
-fn view_steps(types: &Types<Poly>, functions: &FxHashMap<QualifiedRef, Scheme>, core: &Core) -> Vec<Step> {
-    let views = [
-        (core.as_slice, Mutability::Shared, Base::Slice),
-        (core.as_slice_mut, Mutability::Mut, Base::Slice),
-        (core.as_str, Mutability::Shared, Base::Str),
-    ];
-    let mut steps = Vec::new();
-    for (via, mutability, view) in views {
+/// A fitting instance is not a function of one parameter. Every fitting
+/// instance has its view signature's shape, and core declares each view
+/// as a function of one parameter.
+fn view_rules(
+    types: &Types<Poly>,
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    misfits: &FxHashSet<(QualifiedRef, usize)>,
+    core: &Core,
+) -> Vec<Result<CastRule, Refused>> {
+    let mut rules = Vec::new();
+    for via in [core.as_slice, core.as_slice_mut, core.as_str] {
         let Some(instances) = functions.get(&via).and_then(|scheme| scheme.instances.as_ref()) else {
             continue;
         };
-        if instances.generic.is_some() {
-            todo!("decl::verify: the view {via:?} has a generic instance; no step or refusal is settled for it")
-        }
-        for instance in instances.concrete.iter() {
+        let fitting = instances
+            .concrete
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| !misfits.contains(&(via, *at)));
+        for (_, instance) in fitting {
             let TyKind::Fn { params, ret, .. } = types.kind(instance.ty) else {
-                todo!("decl::verify: an instance of the view {via:?} is not a function type; no refusal is settled for it")
+                panic!("a view instance is a function type, as core declares its view")
             };
             let [param] = &params[..] else {
-                todo!("decl::verify: an instance of the view {via:?} does not take one parameter; no refusal is settled for it")
+                panic!("a view instance takes one parameter, as core declares its view")
             };
-            let to = Head::Ref(mutability, view);
-            match (head(types, param.ty), head(types, *ret)) {
-                (Some(from), Some(ret_head)) if views_from(from, mutability, view) && ret_head == to => {
-                    steps.push(Step {
-                        from,
-                        to,
-                        rule: CastRule {
-                            from: param.ty,
-                            to: *ret,
-                            via,
-                        },
-                    })
-                }
-                _ => todo!(
-                    "decl::verify: an instance of the view {via:?} is not a step from a container to its view; no refusal is settled for it"
-                ),
-            }
+            rules.push(Ok(CastRule {
+                from: param.ty,
+                to: *ret,
+                via,
+            }));
+        }
+        if instances.generic.is_some() {
+            rules.push(Err(Refused::CastWithoutHead { via }));
         }
     }
-    steps
-}
-
-/// Whether a view to `view` under `mutability` leaves from `from`: a slice
-/// from a named container or an array, a `str` from a shared `String`.
-fn views_from(from: Head, mutability: Mutability, view: Base) -> bool {
-    match (from, view) {
-        (Head::Ref(at, Base::Named(_) | Base::Array), Base::Slice) | (Head::Ref(at, Base::String), Base::Str) => {
-            at == mutability
-        }
-        _ => false,
-    }
+    rules
 }
 
 /// One `CastCycle` per cycle of `above`, at the first head of the cycle a
@@ -1539,6 +1614,22 @@ mod tests {
         }
     }
 
+    /// core's view signature: `fn(&C) -> &[T]` under `mutability`, or
+    /// `fn(&C) -> &str` where `slice` is false.
+    fn view_signature(fixture: &mut Fixture, mutability: Mutability, slice: bool) -> TyId<Poly> {
+        let container = fixture.ty(TyKind::Var(0));
+        let container_ref = fixture.reference(mutability, container);
+        let view = match slice {
+            true => {
+                let element = fixture.ty(TyKind::Var(1));
+                fixture.ty(TyKind::Slice(element))
+            }
+            false => fixture.ty(TyKind::Str),
+        };
+        let view_ref = fixture.reference(mutability, view);
+        fixture.function(&[container_ref], view_ref)
+    }
+
     /// operators §5, types §3: `as_slice` at `&Vec` is a step from
     /// `Ref(Shared, Named(Vec))` to `Ref(Shared, Slice)`; `as_str` at
     /// `&String` from `Ref(Shared, String)` to `Ref(Shared, Str)`. Two views
@@ -1558,11 +1649,9 @@ mod tests {
         let string_ref = fixture.reference(Mutability::Shared, string);
         let str_ref = fixture.shared_str();
         let as_str_at_string = fixture.function(&[string_ref], str_ref);
-        let var = fixture.ty(TyKind::Var(0));
-        let unit = fixture.ty(TyKind::Unit);
-        let own_ty = fixture.function(&[var], unit);
-        fixture.declare(core.as_slice, with_instances(own_ty, &[as_slice_at_vec]));
-        fixture.declare(core.as_str, with_instances(own_ty, &[as_str_at_string]));
+        let (as_slice_ty, as_str_ty) = (view_signature(&mut fixture, Mutability::Shared, true), view_signature(&mut fixture, Mutability::Shared, false));
+        fixture.declare(core.as_slice, with_instances(as_slice_ty, &[as_slice_at_vec]));
+        fixture.declare(core.as_str, with_instances(as_str_ty, &[as_str_at_string]));
         let decls = fixture.verify().expect("two views from two heads are a tree");
         let from_vec = decls
             .casts()
@@ -1754,6 +1843,176 @@ mod tests {
                 Refused::LabelsDoNotFit { declaration: f },
                 Refused::LabelsDoNotFit { declaration: g }
             ]
+        );
+    }
+
+    /// extern-fn §6: an instance is its signature's type at some choice of
+    /// the signature's variables. `fn(i64) -> String` is no choice of `T` in
+    /// `fn(T) -> T`; `fn(i64) -> i64` is.
+    #[test]
+    fn an_instance_not_of_its_signature_is_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let var = fixture.ty(TyKind::Var(0));
+        let own_ty = fixture.function(&[var], var);
+        let (int, string) = (fixture.ty(TyKind::Int(IntTy::I64)), fixture.ty(TyKind::String));
+        let fits = fixture.function(&[int], int);
+        let misfit = fixture.function(&[int], string);
+        fixture.declare(f, with_instances(own_ty, &[fits, misfit]));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::InstanceNotOfSignature {
+                signature: f,
+                instance: 1
+            }]
+        );
+    }
+
+    /// extern-fn §6: a choice fixes each variable once, so `fn(&T) -> &T`
+    /// has no instance `fn(&i64) -> &mut i64`, nor one with a different
+    /// constructor.
+    #[test]
+    fn an_instance_is_matched_constructor_by_constructor() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let var = fixture.ty(TyKind::Var(0));
+        let var_ref = fixture.reference(Mutability::Shared, var);
+        let own_ty = fixture.function(&[var_ref], var_ref);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let int_ref = fixture.reference(Mutability::Shared, int);
+        let int_mut = fixture.reference(Mutability::Mut, int);
+        let option = fixture.ty(TyKind::Option(int));
+        let fits = fixture.function(&[int_ref], int_ref);
+        let wrong_mutability = fixture.function(&[int_ref], int_mut);
+        let wrong_constructor = fixture.function(&[option], int_ref);
+        fixture.declare(f, with_instances(own_ty, &[fits, wrong_mutability, wrong_constructor]));
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::InstanceNotOfSignature {
+                    signature: f,
+                    instance: 1
+                },
+                Refused::InstanceNotOfSignature {
+                    signature: f,
+                    instance: 2
+                }
+            ]
+        );
+    }
+
+    /// types §3: a reference to a reference is no head the tree steps
+    /// between.
+    #[test]
+    fn a_cast_from_a_reference_to_a_reference_is_refused() {
+        let mut fixture = Fixture::new();
+        let via = fixture.name("m", "deref");
+        let string = fixture.ty(TyKind::String);
+        let inner = fixture.reference(Mutability::Shared, string);
+        let from = fixture.reference(Mutability::Shared, inner);
+        fixture.raw.casts.push(CastRule { from, to: string, via });
+        assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via }]);
+    }
+
+    /// types §3: a view signature's generic instance has a variable for its
+    /// container, which has no head.
+    #[test]
+    fn a_generic_view_is_refused() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let ty = view_signature(&mut fixture, Mutability::Shared, true);
+        fixture.declare(
+            core.as_slice,
+            Scheme {
+                instances: Some(Instances {
+                    concrete: Box::new([]),
+                    generic: Some(GenericSig::default()),
+                }),
+                ..plain(ty)
+            },
+        );
+        assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via: core.as_slice }]);
+    }
+
+    /// A view signature core declares with no instance adds no step.
+    #[test]
+    fn a_view_signature_without_instances_adds_no_step() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let ty = view_signature(&mut fixture, Mutability::Shared, true);
+        fixture.declare(core.as_slice, plain(ty));
+        let decls = fixture.verify().expect("nothing to refuse");
+        assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)).is_none());
+    }
+
+    /// types §3: a view instance's heads are what it states, and the tree
+    /// judges them. `as_slice` at `&String` and `as_str` at `&String` are
+    /// two steps up from `Ref(Shared, String)`.
+    #[test]
+    fn a_view_at_any_container_is_judged_by_the_tree() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let as_slice_ty = view_signature(&mut fixture, Mutability::Shared, true);
+        let as_str_ty = view_signature(&mut fixture, Mutability::Shared, false);
+        let string = fixture.ty(TyKind::String);
+        let string_ref = fixture.reference(Mutability::Shared, string);
+        let byte = fixture.ty(TyKind::Int(IntTy::U8));
+        let bytes = fixture.ty(TyKind::Slice(byte));
+        let bytes_ref = fixture.reference(Mutability::Shared, bytes);
+        let str_ref = fixture.shared_str();
+        let as_slice_at_string = fixture.function(&[string_ref], bytes_ref);
+        let as_str_at_string = fixture.function(&[string_ref], str_ref);
+        fixture.declare(core.as_slice, with_instances(as_slice_ty, &[as_slice_at_string]));
+        fixture.declare(core.as_str, with_instances(as_str_ty, &[as_str_at_string]));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::TwoStepsUp {
+                head: Head::Ref(Mutability::Shared, Base::String),
+                via: [core.as_slice, core.as_str]
+            }]
+        );
+    }
+
+    /// extern-fn §8: a type term names only declared types; a context's
+    /// type is one.
+    #[test]
+    fn a_context_naming_an_undeclared_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let (context, ghost) = (fixture.name("m", "user"), fixture.name("m", "Ghost"));
+        let ghost_ty = undeclared(&mut fixture, ghost);
+        fixture.raw.contexts.push((context, ghost_ty));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::UndeclaredType {
+                declaration: context,
+                id: ghost
+            }]
+        );
+    }
+
+    /// extern-fn §8: a requirement's pattern is a type term too.
+    #[test]
+    fn a_requirement_naming_an_undeclared_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let (f, shared, ghost) = (fixture.name("m", "f"), fixture.name("m", "hash"), fixture.name("m", "Ghost"));
+        let ghost_ty = undeclared(&mut fixture, ghost);
+        let var = fixture.ty(TyKind::Var(0));
+        let pair = fixture.ty(TyKind::Tuple(Box::new([var, var])));
+        let unit = fixture.ty(TyKind::Unit);
+        let ty = fixture.function(&[pair], unit);
+        fixture.declare(
+            f,
+            Scheme {
+                requires: requiring(shared, ghost_ty),
+                ..plain(ty)
+            },
+        );
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::UndeclaredType {
+                declaration: f,
+                id: ghost
+            }]
         );
     }
 

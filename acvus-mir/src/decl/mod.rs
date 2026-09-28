@@ -10,6 +10,7 @@
 mod bound;
 mod casts;
 mod core;
+mod instance_fit;
 mod labels;
 mod loop_markers;
 mod scheme;
