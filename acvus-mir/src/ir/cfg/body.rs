@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 
 use super::op::Op;
 use crate::ir::{DebugInfo, ExitTrip, ForSource, OrderEdge, SwitchKey, ValueId};
-use crate::ty::{Concrete, Flows, Ty, Types};
+use crate::ty::{Concrete, Ty, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BodyId(pub(super) u32);
@@ -28,13 +28,13 @@ impl BlockId {
     }
 }
 
-/// A compiled module: its bodies, the entry's flows, and the one table
-/// every type of the module is an id of. The module's result type is its
-/// entry body's.
+/// A compiled module: its bodies and the one table every type of the module
+/// is an id of. The module's result type is its entry body's; a run's result
+/// holds no positions (ownership §5), so the module states no flows, and a
+/// closure's flows are on its function type.
 pub struct Module {
     pub(super) bodies: Vec<Body>,
     pub(super) entry: Option<BodyId>,
-    pub(super) flows: Flows,
     pub(super) types: Types<Concrete>,
 }
 
@@ -264,15 +264,16 @@ impl Stages {
     }
 }
 
-/// Control flow. `Diamond` and `For` hold structure on purpose (D44, D45):
-/// the core keeps their structural blocks in step with every edit, and a
-/// `Diamond` is made only by the Builder for an `if` region.
+/// Control flow. `Diamond`, `Switch` and the loops hold structure on purpose
+/// (D44, D45, D57): the core keeps their structural blocks in step with every
+/// edit, and a `Diamond` or a `Switch` is made only by the Builder, for an
+/// `if` or a `match` region whose join it knows.
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Jump { to: BlockId, args: Vec<ValueId> },
     JumpIf { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId> },
     Diamond { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId>, join: BlockId },
-    Switch { tag: ValueId, arms: Vec<(SwitchKey, BlockId, Vec<ValueId>)>, default: Option<(BlockId, Vec<ValueId>)> },
+    Switch { tag: ValueId, arms: Vec<(SwitchKey, BlockId, Vec<ValueId>)>, default: Option<(BlockId, Vec<ValueId>)>, join: BlockId },
     For { source: ForSource, stages: Stages, exit: BlockId, exit_trip: ExitTrip, exit_args: Vec<ValueId> },
     While { cond: ValueId, stages: Stages, exit: BlockId, exit_args: Vec<ValueId> },
     Return { value: ValueId, order: Option<ValueId>, span: Span },
@@ -289,8 +290,8 @@ pub struct Edge<'t> {
 }
 
 impl Terminator {
-    /// Every edge, in the terminator's own order; a `Diamond`'s join and a
-    /// loop's later stages are not edges. Cost: O(its edges).
+    /// Every edge, in the terminator's own order; a `Diamond`'s or a
+    /// `Switch`'s join and a loop's later stages are not edges. Cost: O(its edges).
     pub fn edges(&self) -> SmallVec<[Edge<'_>; 2]> {
         fn plain(to: BlockId, args: &[ValueId]) -> Edge<'_> {
             Edge { to, supplied: 0, args }
@@ -351,8 +352,34 @@ impl Terminator {
         }
     }
 
+    /// The target of the edge at `position`, in `edges`' order. Cost: O(1).
+    ///
+    /// # Panics
+    /// The terminator has no edge at `position`.
+    pub(super) fn edge_target_mut(&mut self, position: usize) -> &mut BlockId {
+        let edges = self.edges().len();
+        assert!(position < edges, "the terminator has {edges} edges, and none at position {position}");
+        match self {
+            Terminator::Jump { to, .. } => to,
+            Terminator::JumpIf { then_to, else_to, .. } | Terminator::Diamond { then_to, else_to, .. } => {
+                if position == 0 { then_to } else { else_to }
+            }
+            Terminator::Switch { arms, default, .. } => match arms.get_mut(position) {
+                Some((_, to, _)) => to,
+                None => &mut default.as_mut().expect("a Switch's edges past its arms are its default").0,
+            },
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+                if position == 0 { &mut stages.body } else { exit }
+            }
+            Terminator::Return { .. } | Terminator::Diverge => {
+                panic!("a terminator without edges has no edge at position {position}")
+            }
+        }
+    }
+
     /// Every block the terminator names: its edges' targets and its
-    /// structural blocks (a `Diamond`'s join, every stage entry).
+    /// structural blocks (a `Diamond`'s or a `Switch`'s join, every stage
+    /// entry).
     pub(super) fn for_each_block_mut(&mut self, mut on_block: impl FnMut(&mut BlockId)) {
         match self {
             Terminator::Jump { to, .. } => on_block(to),
@@ -365,13 +392,14 @@ impl Terminator {
                 on_block(else_to);
                 on_block(join);
             }
-            Terminator::Switch { arms, default, .. } => {
+            Terminator::Switch { arms, default, join, .. } => {
                 for (_, to, _) in arms {
                     on_block(to);
                 }
                 if let Some((to, _)) = default {
                     on_block(to);
                 }
+                on_block(join);
             }
             Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
                 stages.entries_mut().for_each(&mut on_block);
@@ -383,13 +411,12 @@ impl Terminator {
 
     pub(super) fn for_each_block(&self, mut on_block: impl FnMut(BlockId)) {
         match self {
-            Terminator::Diamond { join, .. } => on_block(*join),
+            Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => on_block(*join),
             Terminator::For { stages, .. } | Terminator::While { stages, .. } => {
                 stages.entries().skip(1).for_each(&mut on_block);
             }
             Terminator::Jump { .. }
             | Terminator::JumpIf { .. }
-            | Terminator::Switch { .. }
             | Terminator::Return { .. }
             | Terminator::Diverge => {}
         }
@@ -414,7 +441,7 @@ impl Terminator {
                 on_use(*cond);
                 then_args.iter().chain(else_args).copied().for_each(on_use);
             }
-            Terminator::Switch { tag, arms, default } => {
+            Terminator::Switch { tag, arms, default, .. } => {
                 on_use(*tag);
                 for (_, _, args) in arms {
                     args.iter().copied().for_each(&mut on_use);
@@ -447,7 +474,7 @@ impl Terminator {
                 on_use(cond);
                 then_args.iter_mut().chain(else_args).for_each(on_use);
             }
-            Terminator::Switch { tag, arms, default } => {
+            Terminator::Switch { tag, arms, default, .. } => {
                 on_use(tag);
                 for (_, _, args) in arms {
                     args.iter_mut().for_each(&mut on_use);
@@ -478,13 +505,8 @@ impl Module {
     /// body, and so no entry, until `set_entry`.
     ///
     /// Cost: O(1).
-    pub fn new(types: Types<Concrete>, flows: Flows) -> Module {
-        Module {
-            bodies: Vec::new(),
-            entry: None,
-            flows,
-            types,
-        }
+    pub fn new(types: Types<Concrete>) -> Module {
+        Module { bodies: Vec::new(), entry: None, types }
     }
 
     /// A Builder for a new body of this module, whose every return yields
@@ -524,9 +546,6 @@ impl Module {
     /// No entry was set.
     pub fn entry(&self) -> BodyId {
         self.entry.expect("the module's entry was set before it is read")
-    }
-    pub fn flows(&self) -> &Flows {
-        &self.flows
     }
     pub fn types(&self) -> &Types<Concrete> {
         &self.types

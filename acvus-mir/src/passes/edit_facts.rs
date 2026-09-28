@@ -11,9 +11,11 @@ use std::rc::Rc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::cfg::edit::{DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position};
-use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module, Op, Site};
-use crate::ir::{ValueId, fn_effect};
+use smallvec::SmallVec;
+
+use crate::ir::cfg::edit::{DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module, Op, Site, Terminator};
+use crate::ir::{PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{AnalysisManager, Dominators, Escapes, LoopTree, Loans, Point, PostDominators, Storage};
 use crate::ty::{Concrete, Ty, Types};
 
@@ -31,6 +33,9 @@ pub struct EditFacts<'a, 'd> {
     /// The instructions, by block and index, that are calls, or a call's
     /// start or taking, whose callee's declared effect commutes.
     commuting: FxHashSet<(BlockId, usize)>,
+    /// The fact that makes each instruction unobservable, by block and
+    /// index, where one is proven.
+    unobserved: FxHashMap<(BlockId, usize), Unobserved>,
 }
 
 /// Where a value becomes defined.
@@ -56,6 +61,7 @@ impl<'a, 'd> EditFacts<'a, 'd> {
             defined: definitions(of),
             named: named_storages(of, &loans),
             commuting: commuting_calls(of, module.types()),
+            unobserved: unobserved_insts(of, &loans),
             loans,
             am,
         }
@@ -83,6 +89,7 @@ impl Facts for EditFacts<'_, '_> {
         self.defined = definitions(of);
         self.named = named_storages(of, &self.loans);
         self.commuting = commuting_calls(of, module.types());
+        self.unobserved = unobserved_insts(of, &self.loans);
     }
 }
 
@@ -144,6 +151,15 @@ impl OrderFacts for EditFacts<'_, '_> {
     }
 }
 
+impl DischargeFacts for EditFacts<'_, '_> {
+    /// Read from the table the last refresh made: a store or a load never
+    /// read, and a commit of a context never written. No analysis proves a
+    /// check never fires yet, so none is `NeverFires`. Cost: O(1).
+    fn discharged(&self, inst: InstRef) -> Option<Unobserved> {
+        self.unobserved.get(&(inst.block(), inst.index())).copied()
+    }
+}
+
 fn site(inst: InstRef) -> Site {
     Site::Inst(inst.block(), inst.index())
 }
@@ -202,6 +218,148 @@ fn definitions(body: &Body) -> FxHashMap<ValueId, Defined> {
         .collect()
 }
 
+/// The instructions of `body` a fact proves unobservable (D55, G1):
+/// - a store whose storage no read reaches before a write replaces it or
+///   the body ends, per `loans`;
+/// - a load whose result has no use;
+/// - a commit of the slot its value is taken whole from, where no write to
+///   that slot stands on a path from the body's entry to it.
+///
+/// Cost: O(stores · storages each writes · the body's sites and edges), and
+/// O(commits · the body's sites and edges).
+fn unobserved_insts(body: &Body, loans: &Loans) -> FxHashMap<(BlockId, usize), Unobserved> {
+    let preds = body.predecessors();
+    let mut unobserved = FxHashMap::default();
+    for (block, record) in body.blocks() {
+        for (index, inst) in record.insts().iter().enumerate() {
+            let proven = match inst.op() {
+                Op::Assign { .. } => store_never_read(body, loans, block, index).then_some(Unobserved::NeverRead),
+                Op::Fetch { .. } => {
+                    let result = inst.result().expect("a load yields a value");
+                    (body.use_count(result) == 0).then_some(Unobserved::NeverRead)
+                }
+                Op::Commit { value, .. } => {
+                    commit_never_written(body, loans, &preds, block, index, *value).then_some(Unobserved::NeverWritten)
+                }
+                _ => None,
+            };
+            if let Some(fact) = proven {
+                unobserved.insert((block, index), fact);
+            }
+        }
+    }
+    unobserved
+}
+
+/// The storage and path an `Assign` names directly, by a slot or a
+/// by-value parameter's own storage; `None` for one through a reference.
+fn direct_place(op: &Op) -> Option<(Storage, &[PathSeg])> {
+    let Op::Assign { target, path, .. } = op else {
+        return None;
+    };
+    match target {
+        RefTarget::Var(slot) => Some((Storage::Slot(*slot), path)),
+        RefTarget::Param(param) => Some((Storage::Param(*param), path)),
+        RefTarget::Through(_) => None,
+    }
+}
+
+/// Whether no read of any storage the store at `index` of `block` writes is
+/// reached from just after it, before a write that replaces what it stored
+/// or the body's end. A write replaces it where it assigns a place that
+/// holds the stored one: a prefix of its path in the same storage, or the
+/// whole storage where the store went through a reference. The body's end
+/// ends its own slots and parameters' storage, and not an outside storage,
+/// which the caller reads after the return; a run that dies owes nothing
+/// (effects §5).
+fn store_never_read(body: &Body, loans: &Loans, block: BlockId, index: usize) -> bool {
+    let store = &body.block(block).insts()[index];
+    let stored_path = direct_place(store.op()).map(|(_, path)| path);
+    let replaces = |site_op: &Op, storage: Storage| {
+        let Some((written, path)) = direct_place(site_op) else {
+            return false;
+        };
+        let covers = match stored_path {
+            Some(stored) => stored.starts_with(path),
+            None => path.is_empty(),
+        };
+        written == storage && covers
+    };
+    loans.writes(Site::Inst(block, index)).iter().all(|storage| {
+        let mut visited: FxHashSet<BlockId> = FxHashSet::default();
+        let mut pending: Vec<(BlockId, usize)> = vec![(block, index + 1)];
+        while let Some((at, from)) = pending.pop() {
+            let record = body.block(at);
+            let mut replaced = false;
+            for (offset, inst) in record.insts().iter().enumerate().skip(from) {
+                if loans.reads(Site::Inst(at, offset)).contains(storage) {
+                    return false;
+                }
+                if replaces(inst.op(), *storage) {
+                    replaced = true;
+                    break;
+                }
+            }
+            if replaced {
+                continue;
+            }
+            if loans.reads(Site::Term(at)).contains(storage) {
+                return false;
+            }
+            match record.terminator() {
+                Terminator::Return { .. } if matches!(storage, Storage::Outside { .. }) => return false,
+                terminator => {
+                    for edge in terminator.edges() {
+                        if visited.insert(edge.to) {
+                            pending.push((edge.to, 0));
+                        }
+                    }
+                }
+            }
+        }
+        true
+    })
+}
+
+/// Whether the commit at `index` of `block`, whose value is a whole `Take`
+/// of a slot, has no write to that slot on any path from the body's entry
+/// to it. A commit whose value is taken from no slot has no slot to read
+/// this from, and is not proven.
+fn commit_never_written(
+    body: &Body,
+    loans: &Loans,
+    preds: &FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
+    block: BlockId,
+    index: usize,
+    value: ValueId,
+) -> bool {
+    let Definition::Inst(taken_at, taken_index) = body.definition(value) else {
+        return false;
+    };
+    let slot = match body.block(taken_at).insts()[taken_index].op() {
+        Op::Take { target: RefTarget::Var(slot), path, .. } if path.is_empty() => *slot,
+        _ => return false,
+    };
+    let storage = Storage::Slot(slot);
+    let writes = |site: Site| loans.writes(site).contains(&storage);
+    if (0..index).any(|earlier| writes(Site::Inst(block, earlier))) {
+        return false;
+    }
+    let mut visited: FxHashSet<BlockId> = FxHashSet::default();
+    let mut pending: Vec<BlockId> = preds[&block].to_vec();
+    while let Some(at) = pending.pop() {
+        if !visited.insert(at) {
+            continue;
+        }
+        let sites = (0..body.block(at).insts().len()).map(|offset| Site::Inst(at, offset));
+        if sites.chain([Site::Term(at)]).any(writes) {
+            return false;
+        }
+        pending.extend(preds[&at].iter().copied());
+    }
+    true
+}
+
 /// The calls, starts and takings of `body` whose callee's declared effect
 /// commutes (effects §1, §6). A taking's callee is its start's. Cost:
 /// O(instructions).
@@ -250,7 +408,7 @@ mod tests {
 
     use super::*;
     use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
-    use crate::ir::cfg::edit::{CannotMove, Editor, Motion, NoFacts, Remove, Value};
+    use crate::ir::cfg::edit::{CannotDischarge, CannotMove, Discharge, Editor, Motion, NoFacts, Remove, Value};
     use crate::ir::cfg::{Inst, Terminator};
     use crate::ir::{BinOp, Callee, Overflow, RefTarget};
     use crate::ty::{
@@ -295,7 +453,7 @@ mod tests {
         let opaque = call_ty(Effect::opaque());
         let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
         Fixture {
-            module: Module::new(types, Flows::none()),
+            module: Module::new(types),
             interner: Interner::new(),
             int,
             bool,
@@ -693,5 +851,156 @@ mod tests {
         assert!(facts.dominates(s.u, Position::Before(make_ref)), "the load now stands before the Ref");
         assert!(!facts.dominates(s.u, Position::Before(moved)));
         assert!(facts.conflicts(moved, assign_y), "the load's storage is known at its new place");
+    }
+
+    fn commit(context: QualifiedRef, value: ValueId) -> Op {
+        Op::Commit { context, value, wrote: true }
+    }
+
+    /// ```text
+    /// one = 1; s = one; s = one; t = s; check(one + one); return t
+    /// ```
+    /// with `s` a slot: the first store is replaced before any read, and the
+    /// second is read.
+    #[test]
+    fn a_store_replaced_before_any_read_is_never_read() {
+        let mut f = fixture();
+        let int = f.int;
+        let mut builder = f.module.build_body(false, int);
+        let s = builder.slot(int, Span::ZERO);
+        let one = builder.push(constant(1), int, Span::ZERO);
+        builder.push_unit(assign(s, one), Span::ZERO);
+        builder.push_unit(assign(s, one), Span::ZERO);
+        let t = builder.push(take(s), int, Span::ZERO);
+        builder.push_unit(Op::Check { op: crate::ir::Checked::Add, left: one, right: one }, Span::ZERO);
+        builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO });
+        let id = builder.seal().expect("the body has no open state");
+        let [_, first, second, _, check] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has five instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let facts = EditFacts::new(&mut am, &f.module, id);
+
+        assert_eq!(facts.discharged(first), Some(Unobserved::NeverRead));
+        assert_eq!(facts.discharged(second), None, "the load of s reads it");
+        assert_eq!(facts.discharged(check), None, "no analysis proves a check never fires yet");
+    }
+
+    /// `s = 1; if c { t = s } else {}; return 0`: the store is read on one
+    /// arm, and a store no path reads before the end is never read.
+    #[test]
+    fn a_store_read_on_one_path_is_read_and_one_left_at_the_end_is_not() {
+        let mut f = fixture();
+        let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
+        let mut builder = f.module.build_body(false, int);
+        let c = builder.param(nc, bool);
+        let (s, unread) = (builder.slot(int, Span::ZERO), builder.slot(int, Span::ZERO));
+        let one = builder.push(constant(1), int, Span::ZERO);
+        builder.push_unit(assign(s, one), Span::ZERO);
+        builder.push_unit(assign(unread, one), Span::ZERO);
+        let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
+        builder.terminate(Terminator::Diamond {
+            cond: c,
+            then_to: then_block,
+            then_args: Vec::new(),
+            else_to: else_block,
+            else_args: Vec::new(),
+            join,
+        });
+        builder.switch_to(then_block);
+        builder.push(take(s), int, Span::ZERO);
+        builder.terminate(Terminator::Jump { to: join, args: Vec::new() });
+        builder.switch_to(else_block);
+        builder.terminate(Terminator::Jump { to: join, args: Vec::new() });
+        builder.switch_to(join);
+        builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO });
+        let id = builder.seal().expect("the body has no open state");
+        let [_, read_store, unread_store, _] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has four instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let facts = EditFacts::new(&mut am, &f.module, id);
+
+        assert_eq!(facts.discharged(read_store), None);
+        assert_eq!(facts.discharged(unread_store), Some(Unobserved::NeverRead));
+    }
+
+    /// ```text
+    /// v = fetch page; w = fetch page; t = c; commit page = t;
+    /// u = s; commit page = u; commit page = w; return w
+    /// ```
+    /// with `c` and `s` slots, `s` written first.
+    #[test]
+    fn a_load_nothing_reads_and_a_commit_of_a_slot_never_written_are_unobserved() {
+        let mut f = fixture();
+        let int = f.int;
+        let page = QualifiedRef::root(f.interner.intern("page"));
+        let mut builder = f.module.build_body(false, int);
+        let (c, s) = (builder.slot(int, Span::ZERO), builder.slot(int, Span::ZERO));
+        let one = builder.push(constant(1), int, Span::ZERO);
+        builder.push_unit(assign(s, one), Span::ZERO);
+        builder.push(Op::Fetch { context: page }, int, Span::ZERO);
+        let w = builder.push(Op::Fetch { context: page }, int, Span::ZERO);
+        let t = builder.push(take(c), int, Span::ZERO);
+        builder.push_unit(commit(page, t), Span::ZERO);
+        let u = builder.push(take(s), int, Span::ZERO);
+        builder.push_unit(commit(page, u), Span::ZERO);
+        builder.push_unit(commit(page, w), Span::ZERO);
+        builder.terminate(Terminator::Return { value: w, order: None, span: Span::ZERO });
+        let id = builder.seal().expect("the body has no open state");
+        let [_, _, unread, read, _, never_written, _, written, from_no_slot] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has nine instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let facts = EditFacts::new(&mut am, &f.module, id);
+
+        assert_eq!(facts.discharged(unread), Some(Unobserved::NeverRead));
+        assert_eq!(facts.discharged(read), None);
+        assert_eq!(facts.discharged(never_written), Some(Unobserved::NeverWritten));
+        assert_eq!(facts.discharged(written), None, "s is written before its commit");
+        assert_eq!(facts.discharged(from_no_slot), None, "its value is taken from no slot");
+    }
+
+    /// Through `Editor<Discharge>` over `EditFacts`: a dead store, an unread
+    /// load and an unwritten commit go, each on the fact the refresh after
+    /// the one before still proves, and the facts refuse what is observed.
+    #[test]
+    fn discharge_through_the_editor_removes_what_the_facts_prove_unobserved() {
+        let mut f = fixture();
+        let int = f.int;
+        let page = QualifiedRef::root(f.interner.intern("page"));
+        let mut builder = f.module.build_body(false, int);
+        let (c, s) = (builder.slot(int, Span::ZERO), builder.slot(int, Span::ZERO));
+        let one = builder.push(constant(1), int, Span::ZERO);
+        builder.push_unit(assign(s, one), Span::ZERO);
+        builder.push_unit(assign(s, one), Span::ZERO);
+        builder.push(Op::Fetch { context: page }, int, Span::ZERO);
+        let t = builder.push(take(c), int, Span::ZERO);
+        builder.push_unit(commit(page, t), Span::ZERO);
+        let u = builder.push(take(s), int, Span::ZERO);
+        builder.terminate(Terminator::Return { value: u, order: None, span: Span::ZERO });
+        let id = builder.seal().expect("the body has no open state");
+        let [_, dead, live, load, _, unwritten, _] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has seven instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let mut facts = EditFacts::new(&mut am, &f.module, id);
+
+        {
+            let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
+            assert_eq!(editor.discharge(live), Err(CannotDischarge::NotProven));
+            assert_eq!(editor.discharge(unwritten), Ok(()));
+            assert_eq!(editor.discharge(load), Ok(()));
+            assert_eq!(editor.discharge(dead), Ok(()));
+            editor.finish();
+        }
+        let ops: Vec<&Op> = f.module.body(id).blocks().flat_map(|(_, block)| block.insts()).map(Inst::op).collect();
+        assert_eq!(ops.len(), 4);
+        assert!(!ops.iter().any(|op| matches!(op, Op::Fetch { .. } | Op::Commit { .. })));
+        assert_eq!(ops.iter().filter(|op| matches!(op, Op::Assign { .. })).count(), 1);
     }
 }

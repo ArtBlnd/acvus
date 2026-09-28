@@ -47,7 +47,7 @@ fn fixture() -> Fixture {
         holds: Holds::Nothing,
     });
     Fixture {
-        module: Module::new(types, Flows::none()),
+        module: Module::new(types),
         interner: Interner::new(),
         int,
         bool,
@@ -1423,7 +1423,7 @@ fn loan_fixture() -> LoanFixture {
     let passes_nothing = function(&[ref_int], ref_int, Flows::none());
     let takes_int = function(&[int], int, Flows::none());
     LoanFixture {
-        module: Module::new(types, Flows::none()),
+        module: Module::new(types),
         interner: Interner::new(),
         int,
         bool,

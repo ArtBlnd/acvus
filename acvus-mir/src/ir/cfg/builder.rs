@@ -128,6 +128,14 @@ impl<'m> Builder<'m> {
         }
     }
 
+    /// A Builder for another body of the module, built while this one is
+    /// open, as a lambda's body is: this one is paused until the nested one
+    /// seals, and that seal yields the body's id for this body's
+    /// `MakeClosure`. Cost: O(1).
+    pub fn build_nested(&mut self, ordered: bool, ret: Ty) -> Builder<'_> {
+        Builder::new(self.module, ordered, ret)
+    }
+
     /// The block instructions are appended to. Cost: O(1).
     pub fn current_block(&self) -> BlockId {
         self.at

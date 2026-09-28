@@ -11,8 +11,9 @@
 //!   `anyorder` scope gives its entry token inside and merges on close and
 //!   on every edge that leaves it.
 //! - `Spawn` and `TakeEffect` are made only together (effects §6).
-//! - A `Diamond`'s join and a `For`'s or `While`'s stages and exit follow
-//!   every retarget and block split.
+//! - A `Diamond`'s or a `Switch`'s join and a `For`'s or `While`'s stages
+//!   and exit follow every retarget, edge split, block split and block
+//!   removal.
 
 use acvus_ast::Span;
 use acvus_utils::LocalFactory;
@@ -21,8 +22,8 @@ use smallvec::SmallVec;
 
 use super::body::{Block, BlockId, Body, Def, Edge, Inst, OrderUse, Site, Terminator, UseSites, ValueDef};
 use super::op::Op;
-use crate::ir::{DebugInfo, OrderEdge, RefTarget, ValueId, fn_effect};
-use crate::ty::{Concrete, Reissue, SplitCost, Ty, TyKind, Types};
+use crate::ir::{DebugInfo, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
+use crate::ty::{Concrete, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types};
 
 /// A value that still has uses, removed without a replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +89,17 @@ impl Body {
         self.values.insert(value, value_def);
         self.uses.insert(value, UseSites::default());
         value
+    }
+
+    /// A new value of `like`'s type, an order token exactly where `like` is
+    /// one, defined at `def`. `like` may be a value of another body of the
+    /// module, whose types are the same table's. Cost: O(1).
+    fn make_like(&mut self, like: ValueDef, def: Def) -> ValueId {
+        self.insert_value(ValueDef { def, ..like })
+    }
+
+    fn value_def(&self, value: ValueId) -> ValueDef {
+        *self.values.get(&value).unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
     }
 
     fn value_def_mut(&mut self, value: ValueId) -> &mut ValueDef {
@@ -816,6 +828,409 @@ impl Body {
             }
         }
         shifts
+    }
+
+    /// `block`'s `Switch` becomes a jump into the arm whose key is `key`, or
+    /// into its default where no arm has that key, passing that edge's
+    /// arguments; the tag and every other edge's arguments lose their use
+    /// here. The `Switch`'s join stays a block of the body (D45, D57). Cost:
+    /// O(the terminator's operands).
+    ///
+    /// # Panics
+    /// `block` does not end in a `Switch`, or no arm has `key` and the
+    /// `Switch` has no default.
+    pub(super) fn take_case(&mut self, block: BlockId, key: &SwitchKey) {
+        let terminator = &mut self.blocks[block.index()].terminator;
+        let Terminator::Switch { arms, default, .. } = terminator else {
+            panic!("{block:?} ends in {terminator:?}, not in a Switch")
+        };
+        let chosen = arms.iter().position(|(arm_key, _, _)| arm_key == key);
+        assert!(
+            chosen.is_some() || default.is_some(),
+            "{block:?}'s Switch has no arm for {key:?} and no default, so no run reaches it with that key"
+        );
+        let Terminator::Switch { tag, arms, default, .. } = std::mem::replace(terminator, Terminator::Diverge) else {
+            panic!("{block:?} ended in a Switch a moment ago")
+        };
+        let mut released = vec![tag];
+        let mut taken = None;
+        for (position, (_, to, args)) in arms.into_iter().enumerate() {
+            match Some(position) == chosen {
+                true => taken = Some((to, args)),
+                false => released.extend(args),
+            }
+        }
+        if let Some((to, args)) = default {
+            match taken {
+                Some(_) => released.extend(args),
+                None => taken = Some((to, args)),
+            }
+        }
+        let (to, args) = taken.expect("an arm or the default is taken, as checked above");
+        self.blocks[block.index()].terminator = Terminator::Jump { to, args };
+        let site = Site::Term(block);
+        for value in released {
+            self.use_sites_mut(value).remove_one(site);
+        }
+    }
+
+    /// A new block stands on the edge at `position` of `from`'s terminator:
+    /// it takes parameters like the edge's target, the edge enters it with
+    /// the arguments it passed and the parameters it supplied, and it jumps
+    /// to the old target passing every parameter on. A loop's body or exit,
+    /// named by the edge, is the new block from now on, as every structural
+    /// label follows its edge. Cost: O(the target's parameters).
+    ///
+    /// # Panics
+    /// `from`'s terminator has no edge at `position`.
+    pub(super) fn split_edge(&mut self, from: BlockId, position: usize) -> BlockId {
+        let to = *self.blocks[from.index()].terminator.edge_target_mut(position);
+        let middle = BlockId::of_index(self.blocks.len());
+        let params: Vec<ValueId> = self.blocks[to.index()]
+            .params
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(index, param)| self.make_like(self.value_def(param), Def::BlockParam(middle, index)))
+            .collect();
+        let terminator = Terminator::Jump { to, args: params.clone() };
+        self.record_terminator(middle, &terminator);
+        self.new_block(Block { params, insts: Vec::new(), terminator });
+        *self.blocks[from.index()].terminator.edge_target_mut(position) = middle;
+        middle
+    }
+
+    /// `block`, whose only predecessor is `pred` and which `pred` enters by
+    /// its one `Jump`, joins `pred`: its parameters become the jump's
+    /// arguments, its instructions follow `pred`'s, its terminator is
+    /// `pred`'s, and the block goes. The result names each old block's new
+    /// id, as `remove_blocks` does. Cost: O(the moved instructions' operands
+    /// and results, and the parameters' uses), and `remove_blocks`'.
+    ///
+    /// # Panics
+    /// `pred` does not end in a `Jump` to `block`; or an argument of that
+    /// jump is a parameter of `block`, which only a cycle no run enters
+    /// passes.
+    pub(super) fn merge_into_predecessor(&mut self, block: BlockId, pred: BlockId) -> Vec<Option<BlockId>> {
+        let jump = std::mem::replace(&mut self.blocks[pred.index()].terminator, Terminator::Diverge);
+        let Terminator::Jump { to, args } = jump else {
+            panic!("{pred:?} ends in {jump:?}, not in a jump to {block:?}")
+        };
+        assert_eq!(to, block, "{pred:?} jumps to {to:?}, not to {block:?}");
+        for arg in &args {
+            self.use_sites_mut(*arg).remove_one(Site::Term(pred));
+        }
+        let params = std::mem::take(&mut self.blocks[block.index()].params);
+        for (param, arg) in params.iter().zip(&args) {
+            assert!(
+                !params.contains(arg),
+                "{pred:?} passes {block:?}'s own parameter {arg:?} to it, on a cycle no run enters"
+            );
+            self.replace_all_uses(*param, *arg);
+        }
+        for param in params {
+            self.drop_value(param);
+        }
+        let base = self.blocks[pred.index()].insts.len();
+        let insts = std::mem::take(&mut self.blocks[block.index()].insts);
+        for (offset, inst) in insts.iter().enumerate() {
+            for value in inst.defs() {
+                self.value_def_mut(value).def = Def::Inst(pred, base + offset);
+            }
+            for value in inst.operands() {
+                self.use_sites_mut(value).move_site(Site::Inst(block, offset), Site::Inst(pred, base + offset));
+            }
+        }
+        let terminator = std::mem::replace(&mut self.blocks[block.index()].terminator, Terminator::Diverge);
+        for value in terminator.operands() {
+            self.use_sites_mut(value).move_site(Site::Term(block), Site::Term(pred));
+        }
+        let merged = &mut self.blocks[pred.index()];
+        merged.insts.extend(insts);
+        merged.terminator = terminator;
+        let keep: Vec<bool> = (0..self.blocks.len()).map(|index| index != block.index()).collect();
+        self.remove_blocks(&keep)
+    }
+
+    /// The operands of the instruction or terminator at `site` that are `of`
+    /// become `with`; no other site changes. Cost: O(the site's operands).
+    ///
+    /// # Panics
+    /// Their types differ, or `site` does not read `of`.
+    pub(super) fn replace_uses_at(&mut self, site: Site, of: ValueId, with: ValueId) {
+        let (of_ty, with_ty) = (self.ty_of(of), self.ty_of(with));
+        assert!(
+            of_ty == with_ty,
+            "{of:?} of {of_ty:?} is replaced only by a value of its type, not {with:?} of {with_ty:?}"
+        );
+        if of == with {
+            return;
+        }
+        let mut count = 0;
+        let swap = |value: &mut ValueId| {
+            if *value == of {
+                *value = with;
+                count += 1;
+            }
+        };
+        match site {
+            Site::Inst(block, index) => self.blocks[block.index()].insts[index].for_each_operand_mut(swap),
+            Site::Term(block) => self.blocks[block.index()].terminator.for_each_operand_mut(swap),
+        }
+        assert!(count > 0, "{site:?} does not read {of:?}");
+        for _ in 0..count {
+            self.use_sites_mut(of).remove_one(site);
+        }
+        self.use_sites_mut(with).add(site, count);
+    }
+
+    /// The effectful calls at `first` and `second` of `block`, where
+    /// `second` consumes what `first` yields and nothing else does, trade
+    /// places on the chain (effects §3): `second` consumes what `first`
+    /// consumed, `first` consumes what `second` yields, and what used
+    /// `second`'s yield uses `first`'s. `second` moves to stand just before
+    /// `first`, so every token is defined before its uses. It returns the
+    /// position `second` left and the one it took. Cost: O(the uses of
+    /// `second`'s yield and the block's instructions from `first` on).
+    ///
+    /// # Panics
+    /// `first` does not come before `second`; either is not an effectful
+    /// call; `second` does not consume `first`'s yield, or another site
+    /// also does; or `second` reads a value defined from `first` up to it.
+    pub(super) fn swap_effects(&mut self, block: BlockId, first: usize, second: usize) -> [InstShift; 2] {
+        assert!(first < second, "{block:?}[{first}] comes before {block:?}[{second}] on the chain");
+        let edge_at = |body: &Body, index: usize| match body.blocks[block.index()].insts[index].order {
+            Some(OrderUse::Edge(edge)) => edge,
+            other => panic!("{block:?}[{index}] is not an effectful call on one chain: {other:?}"),
+        };
+        let (a, b) = (edge_at(self, first), edge_at(self, second));
+        assert_eq!(b.before, a.after, "{block:?}[{second}] consumes what {block:?}[{first}] yields");
+        assert_eq!(self.use_count(a.after), 1, "only {block:?}[{second}] consumes {:?}", a.after);
+        let defined_between = |body: &Body, value: ValueId| {
+            matches!(body.def_of(value), Def::Inst(at, index) if at == block && (first..second).contains(&index))
+        };
+        let mut reads_between = None;
+        self.blocks[block.index()].insts[second].op.for_each_operand(|value| {
+            if reads_between.is_none() && defined_between(self, value) {
+                reads_between = Some(value);
+            }
+        });
+        assert!(reads_between.is_none(), "{block:?}[{second}] reads {reads_between:?}, defined since {block:?}[{first}]");
+
+        self.replace_all_uses(b.after, a.after);
+        self.replace_uses_at(Site::Inst(block, second), a.after, a.before);
+        self.replace_uses_at(Site::Inst(block, first), a.before, b.after);
+        self.move_inst(block, second, block, first)
+    }
+
+    /// `slot`, of a tuple or a structural object, becomes one slot per
+    /// field, in field order, each with `slot`'s span; every `Take`,
+    /// `Assign` and `Ref` of `slot` goes to the slot of the field its path
+    /// names first, with the rest of its path, and `slot` goes. Cost: O(the
+    /// fields and the slot's uses), and the removal of a slot's.
+    ///
+    /// # Panics
+    /// `slot` is not a slot of a tuple or structural object type; or a use
+    /// other than a `Take`, `Assign` or `Ref` whose path names a field of
+    /// it names it.
+    pub(super) fn split_slot(&mut self, types: &Types<Concrete>, slot: ValueId) -> Vec<ValueId> {
+        let Def::Slot(_) = self.def_of(slot) else {
+            panic!("{slot:?} is not a slot")
+        };
+        let fields = structural_fields(types, self.ty_of(slot))
+            .unwrap_or_else(|| panic!("{slot:?} is not of a tuple or a structural object type"));
+        let span = self.slot_spans[&slot];
+        let parts: Vec<ValueId> = fields
+            .iter()
+            .map(|(_, ty)| {
+                let part = self.make_value(types, *ty, Def::Slot(self.slots.len()));
+                self.slots.push(part);
+                self.slot_spans.insert(part, span);
+                part
+            })
+            .collect();
+        let sites: Vec<Site> = self.users(slot).collect();
+        for site in sites {
+            let Site::Inst(block, index) = site else {
+                panic!("{slot:?} is named whole by {site:?}; a split rewrites only paths into its fields")
+            };
+            let inst = &mut self.blocks[block.index()].insts[index];
+            let Some((target, path)) = inst.op.place_mut() else {
+                panic!("{slot:?} is named whole by {block:?}[{index}] {:?}", inst.op)
+            };
+            let field = path
+                .first()
+                .and_then(|seg| fields.iter().position(|(named, _)| named == seg))
+                .unwrap_or_else(|| panic!("{block:?}[{index}] names {slot:?} whole, through {path:?}"));
+            assert_eq!(*target, RefTarget::Var(slot), "{block:?}[{index}] names {slot:?} as its place");
+            *target = RefTarget::Var(parts[field]);
+            path.remove(0);
+            self.use_sites_mut(slot).remove_one(site);
+            self.use_sites_mut(parts[field]).add(site, 1);
+        }
+        self.remove_value(slot).expect("every use of a split slot went to a field's slot");
+        parts
+    }
+
+    /// Inserts a `Drop` of `value` at `index` of `block`. Cost: O(operands
+    /// of the instructions from `index` on).
+    ///
+    /// # Panics
+    /// `index` is past the block's end, or `value` is an order token, which
+    /// no drop ends.
+    pub(super) fn insert_drop(&mut self, block: BlockId, index: usize, value: ValueId, span: Span) {
+        assert!(index <= self.blocks[block.index()].insts.len(), "{block:?} has no position {index}");
+        assert!(!self.is_token(value), "{value:?} is an order token, which no drop ends");
+        self.insert_inst(block, index, Inst { op: Op::Drop { src: value }, result: None, order: None, span });
+    }
+
+    /// The call at `index` of `block` becomes a copy of `callee`: `block`
+    /// ends before it and jumps to the copy's entry; the copy's parameters
+    /// are the call's arguments, its captures are `captures`, its order
+    /// parameter is the token the call consumed, and each of its returns
+    /// jumps to a new continuation block that holds what followed the call.
+    /// The continuation's parameters are the call's result and, where the
+    /// call is on the chain, the token it yielded; a return of a callee
+    /// without an order parameter passes the token the call consumed.
+    /// Values of the callee are copied with their types, the module's one
+    /// table typing both bodies. It returns the continuation. Cost:
+    /// O(the callee's values, instructions and edges), and O(the uses of
+    /// the call's result and yield).
+    ///
+    /// # Panics
+    /// The instruction is not a `FunctionCall` whose order, if any, is an
+    /// edge; the arguments or `captures` do not match the callee's
+    /// parameters or captures in count; the callee is ordered and the call
+    /// is not on the chain; or the callee's entry has parameters.
+    pub(super) fn inline_call(&mut self, block: BlockId, index: usize, callee: &Body, captures: &[ValueId]) -> BlockId {
+        let call = &self.blocks[block.index()].insts[index];
+        let Op::FunctionCall { args, .. } = &call.op else {
+            panic!("{block:?}[{index}] is {:?}, not a call", call.op)
+        };
+        let args = args.clone();
+        let result = call.result.expect("a call yields a value");
+        let edge = call.order.map(|order| match order {
+            OrderUse::Edge(edge) => edge,
+            OrderUse::Start(_) | OrderUse::Take(_) => panic!("a call's order is an edge"),
+        });
+        assert_eq!(args.len(), callee.params.len(), "a call passes one argument per parameter of its callee");
+        assert_eq!(captures.len(), callee.captures.len(), "a closure holds one value per capture of its body");
+        assert!(
+            callee.order_param.is_none() || edge.is_some(),
+            "an ordered callee body is called on the order chain (effects §3)"
+        );
+        assert!(callee.block(callee.entry).params.is_empty(), "a body's entry takes no parameters");
+
+        let continuation = self.split_block(block, index + 1);
+        let result_param = self.make_like(self.value_def(result), Def::BlockParam(continuation, 0));
+        self.blocks[continuation.index()].params.push(result_param);
+        self.replace_all_uses(result, result_param);
+        if let Some(edge) = edge {
+            let token_param = self.make_like(self.value_def(edge.after), Def::BlockParam(continuation, 1));
+            self.blocks[continuation.index()].params.push(token_param);
+            self.replace_all_uses(edge.after, token_param);
+        }
+        let removed = self.take_inst(block, index);
+        for defined in removed.defs() {
+            self.drop_value(defined);
+        }
+
+        let mut copied: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+        let interface = callee.params.iter().map(|(_, param)| *param).zip(args);
+        copied.extend(interface.chain(callee.captures.iter().map(|(_, capture)| *capture).zip(captures.iter().copied())));
+        if let (Some(order_param), Some(edge)) = (callee.order_param, edge) {
+            copied.insert(order_param, edge.before);
+        }
+        for slot in &callee.slots {
+            let copy = self.make_like(callee.value_def(*slot), Def::Slot(self.slots.len()));
+            self.slots.push(copy);
+            self.slot_spans.insert(copy, callee.slot_spans[slot]);
+            copied.insert(*slot, copy);
+        }
+        let base = self.blocks.len();
+        let moved = |block: BlockId| BlockId::of_index(base + block.index());
+        for (id, callee_block) in callee.blocks() {
+            for (at, param) in callee_block.params.iter().enumerate() {
+                copied.insert(*param, self.make_like(callee.value_def(*param), Def::BlockParam(moved(id), at)));
+            }
+            for (at, inst) in callee_block.insts.iter().enumerate() {
+                for value in inst.defs() {
+                    copied.insert(value, self.make_like(callee.value_def(value), Def::Inst(moved(id), at)));
+                }
+            }
+        }
+        let copy_of = |value: &mut ValueId| {
+            *value = *copied.get(value).unwrap_or_else(|| panic!("{value:?} is a value the callee defines"));
+        };
+        for (_, callee_block) in callee.blocks() {
+            let insts: Vec<Inst> = callee_block
+                .insts
+                .iter()
+                .map(|inst| {
+                    let mut inst = inst.clone();
+                    inst.for_each_operand_mut(copy_of);
+                    inst.result.iter_mut().for_each(copy_of);
+                    match &mut inst.order {
+                        Some(OrderUse::Edge(OrderEdge { after, .. })) | Some(OrderUse::Take(after)) => copy_of(after),
+                        Some(OrderUse::Start(_)) | None => {}
+                    }
+                    inst
+                })
+                .collect();
+            let terminator = match &callee_block.terminator {
+                Terminator::Return { value, order, .. } => {
+                    let mut args = vec![*value];
+                    args.iter_mut().for_each(copy_of);
+                    match (order, edge) {
+                        (Some(order), Some(_)) => {
+                            let mut order = *order;
+                            copy_of(&mut order);
+                            args.push(order);
+                        }
+                        (None, Some(edge)) => args.push(edge.before),
+                        (None, None) => {}
+                        (Some(_), None) => panic!("an ordered callee body is called on the order chain (effects §3)"),
+                    }
+                    Terminator::Jump { to: continuation, args }
+                }
+                other => {
+                    let mut terminator = other.clone();
+                    terminator.for_each_operand_mut(copy_of);
+                    terminator.for_each_block_mut(|named| *named = moved(*named));
+                    terminator
+                }
+            };
+            let params: Vec<ValueId> = callee_block.params.iter().map(|param| copied[param]).collect();
+            self.new_block(Block { params, insts, terminator });
+        }
+        for id in (base..self.blocks.len()).map(BlockId::of_index) {
+            for at in 0..self.blocks[id.index()].insts.len() {
+                let inst = self.blocks[id.index()].insts[at].clone();
+                self.record_inst(id, at, &inst);
+            }
+            let terminator = self.blocks[id.index()].terminator.clone();
+            self.record_terminator(id, &terminator);
+        }
+        for (value, origin) in &callee.debug.val_origins {
+            if let Some(copy) = copied.get(value) {
+                self.debug.val_origins.insert(*copy, origin.clone());
+            }
+        }
+        self.blocks[block.index()].terminator = Terminator::Jump { to: moved(callee.entry), args: Vec::new() };
+        continuation
+    }
+}
+
+/// The fields of a tuple or a structural object, each with the path segment
+/// that names it; `None` for any other type, an extern-defined object among
+/// them (compilation §3).
+pub(super) fn structural_fields(types: &Types<Concrete>, ty: Ty) -> Option<Vec<(PathSeg, Ty)>> {
+    match types.kind(ty) {
+        TyKind::Tuple(elements) => Some(elements.iter().enumerate().map(|(index, ty)| (PathSeg::Index(index), *ty)).collect()),
+        TyKind::Object(ObjectTy::Structural(fields, _)) => {
+            Some(fields.iter().map(|(name, ty)| (PathSeg::Field(*name), *ty)).collect())
+        }
+        _ => None,
     }
 }
 

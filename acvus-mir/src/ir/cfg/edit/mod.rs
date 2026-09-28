@@ -31,9 +31,10 @@ use std::collections::BTreeSet;
 
 use acvus_ast::Span;
 
-use super::core::InstShift;
-use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, Rewriter, Site};
-use crate::ir::{ValueId, fn_effect};
+use super::body::Def;
+use super::core::{InstShift, structural_fields};
+use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
+use crate::ir::{Callee, RefTarget, SwitchKey, ValueId, fn_effect};
 use crate::ty::{Reissue, SplitCost, Ty};
 
 /// An instruction of the body being edited.
@@ -142,6 +143,29 @@ impl Walk {
             InstShift::Inserted { block, index } if block == self.block && index < self.next => self.next += 1,
             InstShift::Removed { block, index } if block == self.block && index < self.next => self.next -= 1,
             InstShift::Inserted { .. } | InstShift::Removed { .. } => {}
+        }
+    }
+
+    /// Keeps the walk on the same instructions across a merge of `block`,
+    /// whose instructions now follow the `base` instructions of `pred`:
+    /// a walk inside `block` goes on at the same instruction in `pred`, and
+    /// a walk past the end of `pred`, where `block` came before it and so
+    /// was walked already, goes on past what `block` brought. An instruction
+    /// of `block` the walk passed while `pred` was still ahead of it is
+    /// walked again inside `pred`.
+    fn merge(&mut self, block: BlockId, pred: BlockId, base: usize, moved: usize) {
+        if self.block == block {
+            *self = Walk { block: pred, next: base + self.next };
+        } else if self.block == pred && self.next >= base && block.index() < pred.index() {
+            self.next = base + moved;
+        }
+    }
+
+    /// Keeps the walk on the same instructions across an edit that moved
+    /// the instructions of `block` from `at` on to the start of `tail`.
+    fn split(&mut self, block: BlockId, at: usize, tail: BlockId) {
+        if self.block == block && self.next > at {
+            *self = Walk { block: tail, next: self.next - at };
         }
     }
 
@@ -392,10 +416,22 @@ where
         self.edit(|rewriter| rewriter.take_arm(block, then));
     }
 
-    /// Removes blocks no edge reaches. A block a surviving `Diamond` names
-    /// as its join, or a surviving loop as a stage or its exit, stays, as
-    /// does every block such a block reaches or takes a value from, so the
-    /// body stays whole.
+    /// A `Switch` whose tag is known takes the arm of `key`, or its default
+    /// where no arm has that key, and becomes a jump into it; its join
+    /// stays a block of the body, and no structure is recovered afterwards
+    /// (D45, D57).
+    ///
+    /// # Panics
+    /// `block` does not end in a `Switch`, or no arm has `key` and the
+    /// `Switch` has no default.
+    pub fn take_case(&mut self, block: BlockId, key: &SwitchKey) {
+        self.edit(|rewriter| rewriter.take_case(block, key));
+    }
+
+    /// Removes blocks no edge reaches. A block a surviving `Diamond` or
+    /// `Switch` names as its join, or a surviving loop as a stage or its
+    /// exit, stays, as does every block such a block reaches or takes a
+    /// value from, so the body stays whole.
     pub fn prune(&mut self) {
         let keep = kept_blocks(self.body_ref());
         if keep.iter().all(|kept| *kept) {
@@ -721,10 +757,24 @@ where
     S: ReplacesValues,
     S::Needs<'m>: DominanceFacts,
 {
-    /// G3: the one use at `site` takes `with` instead of `of`; refused where
-    /// `with` does not dominate `site`.
+    /// G3: the operands at `site` that are `of` take `with` instead, and no
+    /// other use changes; refused where `with` does not dominate `site`.
+    ///
+    /// # Panics
+    /// `of` and `with` differ in type, or `site` does not read `of`.
     pub fn replace_use(&mut self, site: Site, of: ValueId, with: ValueId) -> Result<(), DoesNotDominate> {
-        todo!("ir::cfg::edit::Editor::replace_use")
+        let body = self.body_ref();
+        let (of_ty, with_ty) = (body.ty_of(of), body.ty_of(with));
+        assert!(of_ty == with_ty, "{of:?} of {of_ty:?} is replaced only by a value of its type, not {with:?} of {with_ty:?}");
+        assert!(site_operands(body, site).contains(&of), "{site:?} does not read {of:?}");
+        if of == with {
+            return Ok(());
+        }
+        if !self.needs.dominates(with, site_position(site)) {
+            return Err(DoesNotDominate { use_at: site });
+        }
+        self.edit(|rewriter| rewriter.replace_uses_at(site, of, with));
+        Ok(())
     }
 }
 
@@ -732,15 +782,74 @@ impl<S> Editor<'_, S>
 where
     S: EditsCfg,
 {
-    /// G2: a new empty block on the edge `from -> to`; the edge's arguments
-    /// pass through it. Structure follows (core rule 6).
+    /// G2: a new empty block on the edge `from -> to`; it takes parameters
+    /// like `to`, the edge passes its arguments to it and it passes them
+    /// on. Structure follows the edge: where the edge enters a loop's body
+    /// or leaves by its exit, the new block is that body or exit.
+    ///
+    /// # Panics
+    /// `from` has no edge to `to`, or more than one, so the edge is not
+    /// named.
     pub fn split_edge(&mut self, from: BlockId, to: BlockId) -> BlockId {
-        todo!("ir::cfg::edit::Editor::split_edge")
+        let positions: Vec<usize> = self
+            .body_ref()
+            .block(from)
+            .terminator()
+            .edges()
+            .iter()
+            .enumerate()
+            .filter(|(_, edge)| edge.to == to)
+            .map(|(position, _)| position)
+            .collect();
+        let [position] = positions[..] else {
+            panic!("{from:?} has {} edges to {to:?}; split_edge names exactly one", positions.len())
+        };
+        self.edit(|rewriter| rewriter.split_edge(from, position))
     }
 
-    /// G2: `block` joins its sole predecessor, whose sole successor it is.
+    /// G2: `block` joins its sole predecessor, which enters it by a `Jump`,
+    /// its only edge. Refused where `block` is a `Diamond`'s or a `Switch`'s
+    /// join, or a loop's stage or exit, which never merge away (D45, D57);
+    /// and where another block or the body's start enters it, or its
+    /// predecessor ends otherwise than in that jump.
     pub fn merge_into_predecessor(&mut self, block: BlockId) -> Result<(), CannotMerge> {
-        todo!("ir::cfg::edit::Editor::merge_into_predecessor")
+        let body = self.body_ref();
+        if names_structurally(body, block) {
+            return Err(CannotMerge::Structural);
+        }
+        let preds = body.predecessors();
+        let [pred] = preds[&block][..] else {
+            return Err(CannotMerge::NotStraight);
+        };
+        let jumps = matches!(body.block(pred).terminator(), Terminator::Jump { .. });
+        if !jumps || pred == block || block == body.entry() {
+            return Err(CannotMerge::NotStraight);
+        }
+        let (base, moved) = (body.block(pred).insts().len(), body.block(block).insts().len());
+        let renamed = self.edit(|rewriter| rewriter.merge_into_predecessor(block, pred));
+        self.walk.merge(block, pred, base, moved);
+        self.walk.rename(&renamed);
+        Ok(())
+    }
+}
+
+/// Whether a terminator of `body` names `block` as a structural label: a
+/// `Diamond`'s or a `Switch`'s join, or a loop's stage or exit.
+fn names_structurally(body: &Body, block: BlockId) -> bool {
+    body.blocks().any(|(_, from)| match from.terminator() {
+        Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => *join == block,
+        Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+            *exit == block || stages.entries().any(|stage| stage == block)
+        }
+        Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => false,
+    })
+}
+
+/// Every operand of the instruction or terminator at `site`.
+fn site_operands(body: &Body, site: Site) -> smallvec::SmallVec<[ValueId; 4]> {
+    match site {
+        Site::Inst(block, index) => body.block(block).insts()[index].operands(),
+        Site::Term(block) => body.block(block).terminator().operands(),
     }
 }
 
@@ -749,11 +858,42 @@ where
     S: EditsOrder,
     S::Needs<'m>: OrderFacts,
 {
-    /// G4: two adjacent effects on one chain trade places, where the
-    /// declarations let them (effects §1). Tokens are rethreaded between the
-    /// two only.
+    /// G4: two effects adjacent on one chain trade places, where the
+    /// declarations let them (effects §1). `b` consumes what `a` yields, and
+    /// nothing else does; afterwards `b` consumes what `a` consumed, `a`
+    /// consumes what `b` yields, and what used `b`'s yield uses `a`'s. `b`
+    /// moves to stand just before `a`, so each token is still defined
+    /// before its uses (effects §3).
+    ///
+    /// Refused as `NotAdjacent` where either is not an effectful call on a
+    /// chain, `b` does not consume `a`'s yield alone, or the two do not
+    /// stand in one block with `a` first; as `Ordered` where the
+    /// declarations keep their order, or where `b` reads a value defined
+    /// from `a` up to it, which `b` cannot run before.
     pub fn swap(&mut self, a: InstRef, b: InstRef) -> Result<(), CannotSwap> {
-        todo!("ir::cfg::edit::Editor::swap")
+        let (first, second) = (self.inst(a), self.inst(b));
+        let (Some(OrderUse::Edge(yielded)), Some(OrderUse::Edge(consumed))) = (first.order(), second.order()) else {
+            return Err(CannotSwap::NotAdjacent);
+        };
+        let body = self.body_ref();
+        let chained = consumed.before == yielded.after && body.use_count(yielded.after) == 1;
+        if !chained || a.block != b.block || a.index >= b.index {
+            return Err(CannotSwap::NotAdjacent);
+        }
+        if !self.needs.may_reorder(a, b) {
+            return Err(CannotSwap::Ordered);
+        }
+        let mut reads_between = false;
+        second.op().for_each_operand(|value| {
+            reads_between |=
+                matches!(body.def_of(value), Def::Inst(block, index) if block == a.block && (a.index..b.index).contains(&index));
+        });
+        if reads_between {
+            return Err(CannotSwap::Ordered);
+        }
+        let shifts = self.edit(|rewriter| rewriter.swap_effects(a.block, a.index, b.index));
+        self.shifted(shifts);
+        Ok(())
     }
 }
 
@@ -762,10 +902,33 @@ where
     S: Discharges,
     S::Needs<'m>: DischargeFacts,
 {
-    /// G1: removes an instruction the core would keep (a check, a store, a
-    /// load, a commit) on the fact that proves it unobservable.
+    /// G1: removes an instruction the core would keep, on the fact that
+    /// proves it unobservable: a check (`Check`, `CheckSteps`) on
+    /// `NeverFires`, a store (`Assign`) or a load (`Fetch`) on `NeverRead`,
+    /// a commit on `NeverWritten`. An effect's token is handed on to what
+    /// used the token it yields. The body is unchanged on a refusal.
+    ///
+    /// # Panics
+    /// `inst` is none of those kinds; or the facts call a load never read
+    /// whose result has a use.
     pub fn discharge(&mut self, inst: InstRef) -> Result<(), CannotDischarge> {
-        todo!("ir::cfg::edit::Editor::discharge")
+        let needed = match self.inst(inst).op() {
+            Op::Check { .. } | Op::CheckSteps { .. } => Unobserved::NeverFires,
+            Op::Assign { .. } | Op::Fetch { .. } => Unobserved::NeverRead,
+            Op::Commit { .. } => Unobserved::NeverWritten,
+            other => panic!("discharge removes a check, a store, a load or a commit, not {other:?}"),
+        };
+        match self.needs.discharged(inst) {
+            None => Err(CannotDischarge::NotProven),
+            Some(fact) if fact != needed => Err(CannotDischarge::WrongFact),
+            Some(_) => {
+                let shifts = self
+                    .edit(|rewriter| rewriter.remove_inst(inst.block, inst.index))
+                    .expect("a load the facts call never read has no use");
+                self.shifted(shifts);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -774,9 +937,38 @@ where
     S: PromotesStorage,
     S::Needs<'m>: LoanFacts,
 {
-    /// S1: a structural slot becomes one slot per field (sroa).
+    /// S1: a slot of a tuple or a structural object becomes one slot per
+    /// field, in field order, and every `Take`, `Assign` and `Ref` of it
+    /// goes to the slot of the field its path names first. Refused as
+    /// `NotStructural` for any other type, an extern-defined one among them
+    /// (compilation §3), and as `Escapes` at the first use that names the
+    /// slot whole.
+    ///
+    /// # Panics
+    /// `slot` is not a slot of the body.
     pub fn split_slot(&mut self, slot: ValueId) -> Result<Vec<ValueId>, CannotSplitSlot> {
-        todo!("ir::cfg::edit::Editor::split_slot")
+        let body = self.body_ref();
+        assert!(matches!(body.def_of(slot), Def::Slot(_)), "{slot:?} is not a slot of the body");
+        let Some(fields) = structural_fields(self.module.types(), body.ty_of(slot)) else {
+            return Err(CannotSplitSlot::NotStructural);
+        };
+        let mut sites: Vec<Site> = body.users(slot).collect();
+        sites.sort_by_key(|site| site_order(*site));
+        let names_a_field = |site: Site| {
+            let Site::Inst(block, index) = site else {
+                return false;
+            };
+            let inst = &body.block(block).insts()[index];
+            let once = inst.operands().iter().filter(|value| **value == slot).count() == 1;
+            let field = inst.op().place().is_some_and(|(target, path)| {
+                *target == RefTarget::Var(slot) && path.first().is_some_and(|seg| fields.iter().any(|(named, _)| named == seg))
+            });
+            once && field
+        };
+        if let Some(site) = sites.into_iter().find(|site| !names_a_field(*site)) {
+            return Err(CannotSplitSlot::Escapes(site));
+        }
+        Ok(self.edit(|rewriter| rewriter.split_slot(slot)))
     }
 }
 
@@ -784,11 +976,40 @@ impl<S> Editor<'_, S>
 where
     S: Inlines,
 {
-    /// S2: the call's callee body stands in its place; its parameters take
-    /// the arguments, its token chain continues the caller's, and its returns
-    /// join at the call's continuation.
+    /// S2: the call's callee body stands in its place. The callee is known
+    /// where the call is indirect through a `MakeClosure` of this module:
+    /// its parameters take the arguments, its captures take the closure's
+    /// captured values, its token chain continues the caller's, and its
+    /// returns jump to a new continuation block, whose parameter is the
+    /// call's result and which holds what followed the call. Refused as
+    /// `NoBody` where the callee is not such a body, and as `Recursive`
+    /// where it is the caller's own body.
+    ///
+    /// # Panics
+    /// `call` is not a `FunctionCall`.
     pub fn inline(&mut self, call: InstRef) -> Result<(), CannotInline> {
-        todo!("ir::cfg::edit::Editor::inline")
+        let inst = self.inst(call);
+        let Op::FunctionCall { callee, .. } = inst.op() else {
+            panic!("{call:?} is {:?}, not a call", inst.op())
+        };
+        let Callee::Indirect(function) = callee else {
+            return Err(CannotInline::NoBody);
+        };
+        let body = self.body_ref();
+        let Def::Inst(block, index) = body.def_of(*function) else {
+            return Err(CannotInline::NoBody);
+        };
+        let Op::MakeClosure { body: callee_body, captures } = body.block(block).insts()[index].op() else {
+            return Err(CannotInline::NoBody);
+        };
+        if *callee_body == self.body {
+            return Err(CannotInline::Recursive);
+        }
+        let (callee_body, captures) = (*callee_body, captures.clone());
+        let continuation = self.edit(|rewriter| rewriter.inline_call(call.block, call.index, callee_body, &captures));
+        self.walk.split(call.block, call.index + 1, continuation);
+        self.shifted([InstShift::Removed { block: call.block, index: call.index }]);
+        Ok(())
     }
 }
 
@@ -797,8 +1018,30 @@ where
     S: InsertsDrops,
     S::Needs<'m>: DominanceFacts,
 {
-    /// S3: a `Drop` of `value` at `at`, where nothing uses it after.
+    /// S3: a `Drop` of `value` at `at`, where nothing uses it after:
+    /// refused as `UsedAfter` at the first use, in block order, that a path
+    /// from `at` reaches, the instruction at `at` included.
+    ///
+    /// # Panics
+    /// `value` is not defined at `at`, or is an order token, which no drop
+    /// ends; or `at` names no position of the body.
     pub fn insert_drop(&mut self, value: ValueId, at: Position, span: Span) -> Result<(), CannotDrop> {
-        todo!("ir::cfg::edit::Editor::insert_drop")
+        let (block, index) = self.place(at);
+        assert!(self.needs.dominates(value, at), "a drop of {value:?} stands where {value:?} is defined");
+        let body = self.body_ref();
+        let points = Points::of(body);
+        let reached = points.reach(body, points.id(block, index), None, Direction::Forward);
+        let follows = |site: Site| match site {
+            Site::Inst(block, index) => reached[points.id(block, index)],
+            Site::Term(block) => reached[points.id(block, body.block(block).insts().len())],
+        };
+        let mut uses: Vec<Site> = body.users(value).collect();
+        uses.sort_by_key(|site| site_order(*site));
+        if let Some(site) = uses.into_iter().find(|site| follows(*site)) {
+            return Err(CannotDrop::UsedAfter(site));
+        }
+        self.edit(|rewriter| rewriter.insert_drop(block, index, value, span));
+        self.shifted([InstShift::Inserted { block, index }]);
+        Ok(())
     }
 }

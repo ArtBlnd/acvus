@@ -5,10 +5,10 @@ use acvus_ast::Span;
 use smallvec::SmallVec;
 
 use super::aspect::{Aspect, Changes};
-use super::body::{BlockId, Body, Def, Inst, Module};
+use super::body::{BlockId, Body, BodyId, Def, Inst, Module, Site};
 use super::core::{InstShift, StillUsed};
 use super::op::Op;
-use crate::ir::ValueId;
+use crate::ir::{SwitchKey, ValueId};
 use crate::ty::{Concrete, Ty, TyKind, Types};
 
 /// Made by `Module::rewrite`, over one body of the module.
@@ -207,6 +207,136 @@ impl<'m> Rewriter<'m> {
         self.changes.record(Aspect::Instructions);
         self.changes.record(Aspect::Storage);
         shifts
+    }
+
+    /// `block`'s `Switch` becomes a jump into the arm `key` selects. Cost:
+    /// `Body::take_case`'s.
+    ///
+    /// # Panics
+    /// As `Body::take_case`.
+    pub fn take_case(&mut self, block: BlockId, key: &SwitchKey) {
+        self.body_mut().take_case(block, key);
+        self.changes.record(Aspect::CfgShape);
+    }
+
+    /// A new block on the edge at `position` of `from`. Cost:
+    /// `Body::split_edge`'s.
+    ///
+    /// # Panics
+    /// As `Body::split_edge`.
+    pub fn split_edge(&mut self, from: BlockId, position: usize) -> BlockId {
+        let middle = self.body_mut().split_edge(from, position);
+        self.changes.record(Aspect::CfgShape);
+        let body = self.body();
+        let params = body.block(middle).params();
+        let (any, tokens) = (!params.is_empty(), params.iter().any(|param| body.is_token(*param)));
+        if any {
+            self.changes.record(Aspect::Instructions);
+        }
+        if tokens {
+            self.changes.record(Aspect::OrderTokens);
+        }
+        middle
+    }
+
+    /// `block` joins its one predecessor `pred`. The moved instructions keep
+    /// what they read and write, and stand in another block: the shape and
+    /// the instructions' places change, and the order tokens where a
+    /// parameter that goes is one. Cost: `Body::merge_into_predecessor`'s.
+    ///
+    /// # Panics
+    /// As `Body::merge_into_predecessor`.
+    pub fn merge_into_predecessor(&mut self, block: BlockId, pred: BlockId) -> Vec<Option<BlockId>> {
+        let body = self.body();
+        let tokens = body.block(block).params().iter().any(|param| body.is_token(*param));
+        let renamed = self.body_mut().merge_into_predecessor(block, pred);
+        self.changes.record(Aspect::CfgShape);
+        self.changes.record(Aspect::Instructions);
+        if tokens {
+            self.changes.record(Aspect::OrderTokens);
+        }
+        renamed
+    }
+
+    /// The operands at `site` that are `of` become `with`. Cost:
+    /// `Body::replace_uses_at`'s.
+    ///
+    /// # Panics
+    /// As `Body::replace_uses_at`.
+    pub fn replace_uses_at(&mut self, site: Site, of: ValueId, with: ValueId) {
+        self.body_mut().replace_uses_at(site, of, with);
+        self.changes.record(Aspect::Instructions);
+        if self.is_order(self.body().ty_of(of)) {
+            self.changes.record(Aspect::OrderTokens);
+        }
+    }
+
+    /// Two adjacent effects on one chain trade places. Cost:
+    /// `Body::swap_effects`'s.
+    ///
+    /// # Panics
+    /// As `Body::swap_effects`.
+    pub fn swap_effects(&mut self, block: BlockId, first: usize, second: usize) -> [InstShift; 2] {
+        let shifts = self.body_mut().swap_effects(block, first, second);
+        self.changes.record(Aspect::Instructions);
+        self.changes.record(Aspect::OrderTokens);
+        shifts
+    }
+
+    /// `slot` becomes one slot per field. Cost: `Body::split_slot`'s.
+    ///
+    /// # Panics
+    /// As `Body::split_slot`.
+    pub fn split_slot(&mut self, slot: ValueId) -> Vec<ValueId> {
+        let module = &mut *self.module;
+        let parts = module.bodies[self.body.0 as usize].split_slot(&module.types, slot);
+        self.changes.record(Aspect::Instructions);
+        self.changes.record(Aspect::Storage);
+        parts
+    }
+
+    /// Inserts a `Drop` of `value`. Cost: `Body::insert_drop`'s.
+    ///
+    /// # Panics
+    /// As `Body::insert_drop`.
+    pub fn insert_drop(&mut self, block: BlockId, index: usize, value: ValueId, span: Span) {
+        self.body_mut().insert_drop(block, index, value, span);
+        self.changes.record(Aspect::Instructions);
+    }
+
+    /// The call at `index` of `block` becomes a copy of `callee`'s body,
+    /// with `captures` for its captures; it returns the continuation. Cost:
+    /// `Body::inline_call`'s.
+    ///
+    /// # Panics
+    /// `callee` is the body being rewritten, or as `Body::inline_call`.
+    pub fn inline_call(&mut self, block: BlockId, index: usize, callee: BodyId, captures: &[ValueId]) -> BlockId {
+        self.module.assert_body(callee);
+        let (caller, callee) = (self.body.0 as usize, callee.0 as usize);
+        assert_ne!(caller, callee, "a body is not inlined into itself");
+        let (caller_body, callee_body) = match caller < callee {
+            true => {
+                let (low, high) = self.module.bodies.split_at_mut(callee);
+                (&mut low[caller], &high[0])
+            }
+            false => {
+                let (low, high) = self.module.bodies.split_at_mut(caller);
+                (&mut high[0], &low[callee])
+            }
+        };
+        let ordered = caller_body.block(block).insts()[index].order().is_some();
+        let continuation = caller_body.inline_call(block, index, callee_body, captures);
+        let body = self.body();
+        let mut aspects = vec![Aspect::CfgShape, Aspect::Instructions];
+        let copied = (continuation.index()..body.blocks().count()).map(BlockId::of_index);
+        aspects.extend(copied.flat_map(|block| body.block(block).insts().iter().flat_map(inst_aspects).collect::<Vec<_>>()));
+        if ordered {
+            aspects.push(Aspect::OrderTokens);
+        }
+        for aspect in aspects {
+            self.changes.record(aspect);
+        }
+        continuation
     }
 
     pub fn finish(self) -> Changes {

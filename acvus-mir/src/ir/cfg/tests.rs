@@ -5,7 +5,7 @@ use acvus_ast::{Literal, Span};
 use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
-use crate::ir::{BinOp, Callee, OrderEdge, Overflow, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, OrderEdge, Overflow, SwitchKey, UnaryOp, ValueId};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue,
     SplitCost, Ty, TyKind, TypeArg, Types,
@@ -45,7 +45,7 @@ fn fixture() -> Fixture {
     let whole = call_ty(opaque(SplitCost::Unavailable));
     let pure = call_ty(Effect::pure());
     Fixture {
-        module: Module::new(types, Flows::none()),
+        module: Module::new(types),
         interner: Interner::new(),
         int,
         bool,
@@ -784,6 +784,135 @@ fn a_split_keeps_the_block_named_and_moves_the_diamond_with_the_tail() {
     rewriter.replace_all_uses(c, d);
     assert!(matches!(rewriter.body().block(tail).terminator(), Terminator::Diamond { cond, .. } if *cond == d));
     assert_eq!(rewriter.body().use_count(c), 0);
+}
+
+/// `switch a { 1 => one, 2 => two, _ => other }` joining at `join`, and a
+/// block `spare` that also returns. Every arm jumps to the join.
+struct SwitchBody {
+    id: BodyId,
+    entry: BlockId,
+    arms: [BlockId; 3],
+    join: BlockId,
+    spare: BlockId,
+}
+
+fn switch_body(f: &mut Fixture) -> SwitchBody {
+    let (na, int) = (f.name("a"), f.int);
+    let mut builder = build(&mut f.module, false, f.int);
+    let a = builder.param(na, int);
+    let entry = builder.current_block();
+    let [one, two, other, join, spare] = [(); 5].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::Switch {
+        tag: a,
+        arms: vec![(SwitchKey::Int(1), one, Vec::new()), (SwitchKey::Int(2), two, Vec::new())],
+        default: Some((other, Vec::new())),
+        join,
+    });
+    for block in [one, two, other] {
+        builder.switch_to(block);
+        builder.terminate(jump(join));
+    }
+    for block in [join, spare] {
+        builder.switch_to(block);
+        builder.terminate(ret(a));
+    }
+    let id = builder.seal().expect("the body has no open state");
+    SwitchBody { id, entry, arms: [one, two, other], join, spare }
+}
+
+fn switch_join(body: &Body, block: BlockId) -> BlockId {
+    let Terminator::Switch { join, .. } = body.block(block).terminator() else {
+        panic!("{block:?} ends in its Switch")
+    };
+    *join
+}
+
+#[test]
+fn a_retarget_updates_a_switchs_join() {
+    let mut f = fixture();
+    let s = switch_body(&mut f);
+    let mut rewriter = f.module.rewrite(s.id);
+    rewriter.retarget(s.join, s.spare);
+    let body = rewriter.body();
+    assert_eq!(switch_join(body, s.entry), s.spare);
+    for arm in s.arms {
+        assert!(matches!(body.block(arm).terminator(), Terminator::Jump { to, .. } if *to == s.spare));
+    }
+}
+
+#[test]
+fn a_split_keeps_a_switchs_join_named_and_moves_the_switch_with_the_tail() {
+    let mut f = fixture();
+    let s = switch_body(&mut f);
+    let mut rewriter = f.module.rewrite(s.id);
+    let join_tail = rewriter.split_block(s.join, 0);
+    let entry_tail = rewriter.split_block(s.entry, 0);
+    let body = rewriter.body();
+    assert_eq!(switch_join(body, entry_tail), s.join, "the join keeps its id, and the Switch still names it");
+    assert!(matches!(body.block(s.join).terminator(), Terminator::Jump { to, .. } if *to == join_tail));
+    assert!(matches!(body.block(s.entry).terminator(), Terminator::Jump { to, .. } if *to == entry_tail));
+}
+
+#[test]
+#[should_panic(expected = "is not a block of this body")]
+fn the_builder_refuses_a_switch_whose_join_is_not_a_block() {
+    let mut f = fixture();
+    let (na, int) = (f.name("a"), f.int);
+    let mut builder = build(&mut f.module, false, f.int);
+    let a = builder.param(na, int);
+    let arm = builder.new_block(&[]);
+    builder.terminate(Terminator::Switch {
+        tag: a,
+        arms: vec![(SwitchKey::Int(1), arm, Vec::new())],
+        default: None,
+        join: BlockId::of_index(7),
+    });
+}
+
+// -- Builder: a nested body --------------------------------------------------
+
+/// A lambda's body is built while its enclosing body is open, and the
+/// enclosing body's `MakeClosure` names the id the nested seal gave.
+#[test]
+fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
+    let mut f = fixture();
+    let (na, nx, nk, int) = (f.name("a"), f.name("x"), f.name("k"), f.int);
+    let lambda_ty = f.module.types.intern(TyKind::Fn {
+        params: Box::new([int]),
+        ret: int,
+        effect: EffectTerm::Known(Effect::pure()),
+        flows: FlowTerm::Known(Flows::none()),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+    });
+    let mut outer = build(&mut f.module, false, int);
+    let a = outer.param(na, int);
+    let k = outer.push(Op::Const { value: Literal::Int(1) }, int, at(1));
+    let lambda = {
+        let mut inner = outer.build_nested(false, int);
+        let x = inner.param(nx, int);
+        let captured = inner.capture(nk, int);
+        let sum = inner.push(add(x, captured), int, at(2));
+        inner.terminate(ret(sum));
+        inner.seal().expect("the lambda's body has no open state")
+    };
+    let closure = outer.push(Op::MakeClosure { body: lambda, captures: vec![k] }, lambda_ty, at(3));
+    let called = outer.push(
+        Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a] },
+        int,
+        at(4),
+    );
+    outer.terminate(ret(called));
+    let enclosing = outer.seal().expect("the enclosing body has no open state");
+
+    assert_ne!(lambda, enclosing);
+    assert_eq!(f.body(lambda).params().len(), 1);
+    assert_eq!(f.body(lambda).captures().len(), 1);
+    let entry = f.body(enclosing).entry();
+    assert!(matches!(
+        f.body(enclosing).block(entry).insts()[1].op(),
+        Op::MakeClosure { body, .. } if *body == lambda
+    ));
 }
 
 // -- Builder: seal reports each kind of open state -----------------------

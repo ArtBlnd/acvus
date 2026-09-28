@@ -417,6 +417,27 @@ impl Op {
         walk_operands!(self, on_use, &mut)
     }
 
+    /// The place a `Take`, an `Assign` or a `Ref` names: its target and its
+    /// path. Cost: O(1).
+    pub(super) fn place(&self) -> Option<(&RefTarget, &[PathSeg])> {
+        match self {
+            Op::Take { target, path, .. } | Op::Assign { target, path, .. } | Op::Ref { target, path, .. } => {
+                Some((target, path))
+            }
+            _ => None,
+        }
+    }
+
+    /// As `place`, to rewrite it. Cost: O(1).
+    pub(super) fn place_mut(&mut self) -> Option<(&mut RefTarget, &mut Vec<PathSeg>)> {
+        match self {
+            Op::Take { target, path, .. } | Op::Assign { target, path, .. } | Op::Ref { target, path, .. } => {
+                Some((target, path))
+            }
+            _ => None,
+        }
+    }
+
     /// Whether the operation yields a value; the ones that do not only
     /// write or check.
     pub fn has_result(&self) -> bool {

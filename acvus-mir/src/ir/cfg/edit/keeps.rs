@@ -68,7 +68,7 @@ macro_rules! invariant {
 invariant!(TypesAgree, types_agree, "Every operand's type is what its instruction takes, and every edge's arguments agree with its target's parameters.");
 invariant!(DefDominatesUses, def_dominates_uses, "Every value's definition dominates each of its uses.");
 invariant!(OrderChainWhole, order_chain_whole, "Every effectful instruction consumes exactly one live token, and the chain reaches the body's return (effects §2-3).");
-invariant!(StructureKept, structure_kept, "Every `Diamond`'s join and every loop's stages and exit are blocks of the body (D45).");
+invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's stages and exit are blocks of the body (D45, D57).");
 invariant!(SplitTakenOnce, split_taken_once, "Every start of a split call is taken exactly once on every path from it (effects §6).");
 
 /// A checker's finding: what breaks the invariant, in words.
@@ -903,16 +903,15 @@ fn structure_kept(body: &Body, _: &Types<Concrete>) -> Found {
             Terminator::Diamond { join, .. } => {
                 found(is_block(*join), || format!("{id:?}'s Diamond joins at {join:?}, which is not a block"))?
             }
+            Terminator::Switch { join, .. } => {
+                found(is_block(*join), || format!("{id:?}'s Switch joins at {join:?}, which is not a block"))?
+            }
             Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
                 for stage in stages.entries().chain(std::iter::once(*exit)) {
                     found(is_block(stage), || format!("{id:?}'s loop names {stage:?}, which is not a block"))?;
                 }
             }
-            Terminator::Jump { .. }
-            | Terminator::JumpIf { .. }
-            | Terminator::Switch { .. }
-            | Terminator::Return { .. }
-            | Terminator::Diverge => {}
+            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => {}
         }
     }
     Ok(())
