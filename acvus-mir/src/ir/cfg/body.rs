@@ -2,27 +2,38 @@
 //! is through `Builder` and `Rewriter` only.
 
 use acvus_ast::Span;
-use acvus_utils::Astr;
+use acvus_utils::{Astr, LocalFactory};
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use super::op::Op;
 use crate::ir::{DebugInfo, ExitTrip, ForSource, SwitchKey, ValueId};
 use crate::ty::{Concrete, Flows, Ty, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BodyId(u32);
+pub struct BodyId(pub(super) u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BlockId(u32);
+pub struct BlockId(pub(super) u32);
+
+impl BlockId {
+    pub(super) fn of_index(index: usize) -> BlockId {
+        BlockId(u32::try_from(index).expect("a body holds at most u32::MAX blocks"))
+    }
+
+    pub(super) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 /// A compiled module: its bodies, the entry's result type and flows, and
 /// the one table every type of the module is an id of.
 pub struct Module {
-    bodies: Vec<Body>,
-    entry: BodyId,
-    ret: Ty,
-    flows: Flows,
-    types: Types<Concrete>,
+    pub(super) bodies: Vec<Body>,
+    pub(super) entry: Option<BodyId>,
+    pub(super) ret: Ty,
+    pub(super) flows: Flows,
+    pub(super) types: Types<Concrete>,
 }
 
 /// What a value is: its type, and where it is defined.
@@ -41,20 +52,68 @@ pub(super) enum Def {
     Inst(BlockId, usize),
 }
 
+/// Where a use stands: an instruction, by block and position, or a block's
+/// terminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Site {
+    Inst(BlockId, usize),
+    Term(BlockId),
+}
+
+/// The sites that use one value, each with how many of its operands do.
+#[derive(Debug, Clone, Default)]
+pub(super) struct UseSites {
+    counts: FxHashMap<Site, u32>,
+}
+
+impl UseSites {
+    pub(super) fn add(&mut self, site: Site, count: u32) {
+        *self.counts.entry(site).or_insert(0) += count;
+    }
+
+    /// # Panics
+    /// `site` does not use the value.
+    pub(super) fn remove_one(&mut self, site: Site) {
+        let count = self.counts.get_mut(&site).expect("a use being removed was recorded");
+        *count -= 1;
+        if *count == 0 {
+            self.counts.remove(&site);
+        }
+    }
+
+    /// Moves every use recorded at `from` to `to`.
+    pub(super) fn move_site(&mut self, from: Site, to: Site) {
+        if let Some(count) = self.counts.remove(&from) {
+            self.add(to, count);
+        }
+    }
+
+    pub(super) fn total(&self) -> usize {
+        self.counts.values().map(|n| *n as usize).sum()
+    }
+
+    pub(super) fn into_sites(self) -> impl Iterator<Item = (Site, u32)> {
+        self.counts.into_iter()
+    }
+}
+
 pub struct Body {
-    blocks: Vec<Block>,
-    entry: BlockId,
-    params: Vec<(Astr, ValueId)>,
-    captures: Vec<(Astr, ValueId)>,
-    order_param: Option<ValueId>,
-    values: FxHashMap<ValueId, ValueDef>,
-    debug: DebugInfo,
+    pub(super) blocks: Vec<Block>,
+    pub(super) entry: BlockId,
+    pub(super) params: Vec<(Astr, ValueId)>,
+    pub(super) captures: Vec<(Astr, ValueId)>,
+    pub(super) order_param: Option<ValueId>,
+    pub(super) values: FxHashMap<ValueId, ValueDef>,
+    /// Every value's uses; a value has an entry from its birth.
+    pub(super) uses: FxHashMap<ValueId, UseSites>,
+    pub(super) value_ids: LocalFactory<ValueId>,
+    pub(super) debug: DebugInfo,
 }
 
 pub struct Block {
-    params: Vec<ValueId>,
-    insts: Vec<(Op, Span)>,
-    terminator: Terminator,
+    pub(super) params: Vec<ValueId>,
+    pub(super) insts: Vec<(Op, Span)>,
+    pub(super) terminator: Terminator,
 }
 
 /// A loop's stage chain (effects: loop deps): the entry block of each stage,
@@ -63,6 +122,25 @@ pub struct Block {
 pub struct Stages {
     body: BlockId,
     rest: Vec<BlockId>,
+}
+
+impl Stages {
+    /// The chain a loop is lowered with: one stage, the body.
+    pub fn lowered(body: BlockId) -> Stages {
+        Stages { body, rest: Vec::new() }
+    }
+
+    pub fn body(&self) -> BlockId {
+        self.body
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = BlockId> + '_ {
+        std::iter::once(self.body).chain(self.rest.iter().copied())
+    }
+
+    fn entries_mut(&mut self) -> impl Iterator<Item = &mut BlockId> {
+        std::iter::once(&mut self.body).chain(self.rest.iter_mut())
+    }
 }
 
 /// Control flow. `Diamond` and `For` hold structure on purpose (D44, D45):
@@ -80,31 +158,239 @@ pub enum Terminator {
     Diverge,
 }
 
+/// One edge out of a terminator: the target's leading `supplied`
+/// parameters are filled by the terminator itself, and `args` fill the rest.
+pub(super) struct Edge<'t> {
+    pub to: BlockId,
+    pub supplied: usize,
+    pub args: &'t [ValueId],
+}
+
+impl Terminator {
+    /// Every edge, in the terminator's own order.
+    pub(super) fn edges(&self) -> SmallVec<[Edge<'_>; 2]> {
+        fn plain(to: BlockId, args: &[ValueId]) -> Edge<'_> {
+            Edge { to, supplied: 0, args }
+        }
+        match self {
+            Terminator::Jump { to, args } => smallvec::smallvec![plain(*to, args)],
+            Terminator::JumpIf { then_to, then_args, else_to, else_args, .. }
+            | Terminator::Diamond { then_to, then_args, else_to, else_args, .. } => {
+                smallvec::smallvec![plain(*then_to, then_args), plain(*else_to, else_args)]
+            }
+            Terminator::Switch { arms, default, .. } => arms
+                .iter()
+                .map(|(_, to, args)| plain(*to, args))
+                .chain(default.iter().map(|(to, args)| plain(*to, args)))
+                .collect(),
+            Terminator::For { source, stages, exit, exit_trip, exit_args } => smallvec::smallvec![
+                Edge { to: stages.body(), supplied: source.supplied_params(), args: &[] },
+                Edge { to: *exit, supplied: exit_trip.supplied_params(), args: exit_args },
+            ],
+            Terminator::While { stages, exit, exit_args, .. } => {
+                smallvec::smallvec![plain(stages.body(), &[]), plain(*exit, exit_args)]
+            }
+            Terminator::Return { .. } | Terminator::Diverge => SmallVec::new(),
+        }
+    }
+
+    /// Every edge's target, how many leading parameters the terminator
+    /// supplies, and the edge's argument list where it has one; a loop's
+    /// edge into its body has none.
+    pub(super) fn for_each_edge_mut(
+        &mut self,
+        mut on_edge: impl FnMut(BlockId, usize, Option<&mut Vec<ValueId>>),
+    ) {
+        match self {
+            Terminator::Jump { to, args } => on_edge(*to, 0, Some(args)),
+            Terminator::JumpIf { then_to, then_args, else_to, else_args, .. }
+            | Terminator::Diamond { then_to, then_args, else_to, else_args, .. } => {
+                on_edge(*then_to, 0, Some(then_args));
+                on_edge(*else_to, 0, Some(else_args));
+            }
+            Terminator::Switch { arms, default, .. } => {
+                for (_, to, args) in arms {
+                    on_edge(*to, 0, Some(args));
+                }
+                if let Some((to, args)) = default {
+                    on_edge(*to, 0, Some(args));
+                }
+            }
+            Terminator::For { source, stages, exit, exit_trip, exit_args } => {
+                on_edge(stages.body(), source.supplied_params(), None);
+                on_edge(*exit, exit_trip.supplied_params(), Some(exit_args));
+            }
+            Terminator::While { stages, exit, exit_args, .. } => {
+                on_edge(stages.body(), 0, None);
+                on_edge(*exit, 0, Some(exit_args));
+            }
+            Terminator::Return { .. } | Terminator::Diverge => {}
+        }
+    }
+
+    /// Every block the terminator names: its edges' targets and its
+    /// structural blocks (a `Diamond`'s join, every stage entry).
+    pub(super) fn for_each_block_mut(&mut self, mut on_block: impl FnMut(&mut BlockId)) {
+        match self {
+            Terminator::Jump { to, .. } => on_block(to),
+            Terminator::JumpIf { then_to, else_to, .. } => {
+                on_block(then_to);
+                on_block(else_to);
+            }
+            Terminator::Diamond { then_to, else_to, join, .. } => {
+                on_block(then_to);
+                on_block(else_to);
+                on_block(join);
+            }
+            Terminator::Switch { arms, default, .. } => {
+                for (_, to, _) in arms {
+                    on_block(to);
+                }
+                if let Some((to, _)) = default {
+                    on_block(to);
+                }
+            }
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+                stages.entries_mut().for_each(&mut on_block);
+                on_block(exit);
+            }
+            Terminator::Return { .. } | Terminator::Diverge => {}
+        }
+    }
+
+    pub(super) fn for_each_block(&self, mut on_block: impl FnMut(BlockId)) {
+        match self {
+            Terminator::Diamond { join, .. } => on_block(*join),
+            Terminator::For { stages, .. } | Terminator::While { stages, .. } => {
+                stages.entries().skip(1).for_each(&mut on_block);
+            }
+            Terminator::Jump { .. }
+            | Terminator::JumpIf { .. }
+            | Terminator::Switch { .. }
+            | Terminator::Return { .. }
+            | Terminator::Diverge => {}
+        }
+        for edge in self.edges() {
+            on_block(edge.to);
+        }
+    }
+
+    pub(super) fn for_each_operand(&self, mut on_use: impl FnMut(ValueId)) {
+        match self {
+            Terminator::Jump { args, .. } => args.iter().copied().for_each(on_use),
+            Terminator::JumpIf { cond, then_args, else_args, .. }
+            | Terminator::Diamond { cond, then_args, else_args, .. } => {
+                on_use(*cond);
+                then_args.iter().chain(else_args).copied().for_each(on_use);
+            }
+            Terminator::Switch { tag, arms, default } => {
+                on_use(*tag);
+                for (_, _, args) in arms {
+                    args.iter().copied().for_each(&mut on_use);
+                }
+                if let Some((_, args)) = default {
+                    args.iter().copied().for_each(&mut on_use);
+                }
+            }
+            Terminator::For { source, exit_args, .. } => {
+                source.uses().into_iter().for_each(&mut on_use);
+                exit_args.iter().copied().for_each(on_use);
+            }
+            Terminator::While { cond, exit_args, .. } => {
+                on_use(*cond);
+                exit_args.iter().copied().for_each(on_use);
+            }
+            Terminator::Return { value, order, .. } => {
+                on_use(*value);
+                order.iter().copied().for_each(on_use);
+            }
+            Terminator::Diverge => {}
+        }
+    }
+
+    pub(super) fn for_each_operand_mut(&mut self, mut on_use: impl FnMut(&mut ValueId)) {
+        match self {
+            Terminator::Jump { args, .. } => args.iter_mut().for_each(on_use),
+            Terminator::JumpIf { cond, then_args, else_args, .. }
+            | Terminator::Diamond { cond, then_args, else_args, .. } => {
+                on_use(cond);
+                then_args.iter_mut().chain(else_args).for_each(on_use);
+            }
+            Terminator::Switch { tag, arms, default } => {
+                on_use(tag);
+                for (_, _, args) in arms {
+                    args.iter_mut().for_each(&mut on_use);
+                }
+                if let Some((_, args)) = default {
+                    args.iter_mut().for_each(&mut on_use);
+                }
+            }
+            Terminator::For { source, exit_args, .. } => {
+                source.for_each_use(&mut on_use);
+                exit_args.iter_mut().for_each(on_use);
+            }
+            Terminator::While { cond, exit_args, .. } => {
+                on_use(cond);
+                exit_args.iter_mut().for_each(on_use);
+            }
+            Terminator::Return { value, order, .. } => {
+                on_use(value);
+                order.iter_mut().for_each(on_use);
+            }
+            Terminator::Diverge => {}
+        }
+    }
+}
+
 impl Module {
-    /// A module over the type table typeck's writeback filled.
+    /// A module over the type table typeck's writeback filled. It has no
+    /// body, and so no entry, until `set_entry`.
+    ///
+    /// Cost: O(1).
     pub fn new(types: Types<Concrete>, ret: Ty, flows: Flows) -> Module {
-        todo!("ir::cfg::Module::new")
+        Module {
+            bodies: Vec::new(),
+            entry: None,
+            ret,
+            flows,
+            types,
+        }
     }
 
     /// A Builder for a new body of this module; its `seal` adds the body.
+    ///
+    /// Cost: O(1).
     pub fn build_body(&mut self) -> super::Builder<'_> {
-        todo!("ir::cfg::Module::build_body")
+        super::Builder::new(self)
     }
 
     /// A Rewriter over one body of this module.
+    ///
+    /// Cost: O(1).
+    ///
+    /// # Panics
+    /// `body` is not a body of this module.
     pub fn rewrite(&mut self, body: BodyId) -> super::Rewriter<'_> {
-        todo!("ir::cfg::Module::rewrite")
+        self.assert_body(body);
+        super::Rewriter::new(self, body)
     }
 
+    /// Cost: O(1).
+    ///
+    /// # Panics
+    /// `body` is not a body of this module.
     pub fn set_entry(&mut self, body: BodyId) {
-        todo!("ir::cfg::Module::set_entry")
+        self.assert_body(body);
+        self.entry = Some(body);
     }
 
     pub fn body(&self, id: BodyId) -> &Body {
         &self.bodies[id.0 as usize]
     }
+    /// # Panics
+    /// No entry was set.
     pub fn entry(&self) -> BodyId {
-        self.entry
+        self.entry.expect("the module's entry was set before it is read")
     }
     pub fn ret(&self) -> Ty {
         self.ret
@@ -115,6 +401,13 @@ impl Module {
     pub fn types(&self) -> &Types<Concrete> {
         &self.types
     }
+
+    fn assert_body(&self, body: BodyId) {
+        assert!(
+            (body.0 as usize) < self.bodies.len(),
+            "{body:?} is not a body of this module"
+        );
+    }
 }
 
 impl Body {
@@ -122,15 +415,23 @@ impl Body {
         self.entry
     }
     pub fn block(&self, id: BlockId) -> &Block {
-        &self.blocks[id.0 as usize]
+        &self.blocks[id.index()]
     }
     pub fn blocks(&self) -> impl Iterator<Item = (BlockId, &Block)> {
-        self.blocks.iter().enumerate().map(|(i, b)| (BlockId(i as u32), b))
+        self.blocks.iter().enumerate().map(|(i, b)| (BlockId::of_index(i), b))
     }
     /// # Panics
     /// `value` is not a value of this body: every value has a recorded type.
     pub fn ty_of(&self, value: ValueId) -> Ty {
         self.values.get(&value).expect("every IR value has a recorded type").ty
+    }
+    /// How many operands, over every instruction and terminator, are
+    /// `value`. Cost: O(sites that use it).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn use_count(&self, value: ValueId) -> usize {
+        self.uses.get(&value).expect("every IR value has a use record").total()
     }
     pub fn params(&self) -> &[(Astr, ValueId)] {
         &self.params

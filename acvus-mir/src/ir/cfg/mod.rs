@@ -13,4 +13,8 @@ pub use aspect::{Aspect, Changes};
 pub use body::{Block, BlockId, Body, BodyId, Module, Stages, Terminator};
 pub use builder::{Builder, Unsealed};
 pub use op::Op;
+pub use core::StillUsed;
 pub use rewriter::Rewriter;
+
+#[cfg(test)]
+mod tests;

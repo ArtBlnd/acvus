@@ -4,6 +4,7 @@
 
 use acvus_ast::Literal;
 use acvus_utils::{Astr, QualifiedRef};
+use smallvec::SmallVec;
 
 use super::BodyId;
 use crate::ir::{
@@ -349,4 +350,194 @@ pub enum Op {
     Drop {
         src: ValueId,
     },
+}
+
+/// Walks every operand of an `Op`, by shared or by mutable reference: one
+/// list, so the two walks cannot disagree on what an operand is.
+macro_rules! walk_operands {
+    ($op:expr, $on:ident, $($r:tt)*) => {{
+        let on_target = |target: $($r)* RefTarget, $on: &mut dyn FnMut($($r)* ValueId)| match target {
+            RefTarget::Var(v) | RefTarget::Param(v) | RefTarget::Through(v) => $on(v),
+        };
+        let on_callee = |callee: $($r)* Callee, $on: &mut dyn FnMut($($r)* ValueId)| match callee {
+            Callee::Indirect(v) => $on(v),
+            Callee::Direct(_) | Callee::Extern { .. } => {}
+        };
+        match $op {
+            Op::Const { .. }
+            | Op::ConstStr { .. }
+            | Op::Fetch { .. }
+            | Op::LoadFunction { .. }
+            | Op::ArrayBegin { .. }
+            | Op::Undef { .. } => {}
+            Op::StringConcat { parts, .. } => parts.into_iter().for_each(|v| $on(v)),
+            Op::StringAppend { target, part } => {
+                $on(target);
+                $on(part);
+            }
+            Op::StringEq { a, b, .. } | Op::StructuralEq { a, b, .. } => {
+                $on(a);
+                $on(b);
+            }
+            Op::StringClone { src, .. }
+            | Op::StructuralClone { src, .. }
+            | Op::Cast { src, .. }
+            | Op::TakeEffect { src, .. }
+            | Op::TestLiteral { src, .. }
+            | Op::TestObjectKey { src, .. }
+            | Op::TestVariant { src, .. }
+            | Op::UnwrapVariant { src, .. }
+            | Op::Drop { src } => $on(src),
+            Op::Ref { target, .. } | Op::Take { target, .. } => on_target(target, $on),
+            Op::Assign { target, value, .. } => {
+                on_target(target, $on);
+                $on(value);
+            }
+            Op::AsSlice { container, .. } => $on(container),
+            Op::Index { slice, index, .. } => {
+                $on(slice);
+                $on(index);
+            }
+            Op::IndexSet { slice, index, value, .. } => {
+                $on(slice);
+                $on(index);
+                $on(value);
+            }
+            Op::Commit { value, .. } => $on(value),
+            Op::FieldGet { object, .. } | Op::ObjectGet { object, .. } => $on(object),
+            Op::FieldSet { object, value, .. } => {
+                $on(object);
+                $on(value);
+            }
+            Op::BinOp { left, right, .. } | Op::Check { left, right, .. } => {
+                $on(left);
+                $on(right);
+            }
+            Op::UnaryOp { operand, .. } => $on(operand),
+            Op::CheckSteps { from, step, count } => {
+                $on(from);
+                $on(step);
+                $on(count);
+            }
+            Op::FunctionCall { callee, args, order, .. } => {
+                on_callee(callee, $on);
+                args.into_iter().for_each(|v| $on(v));
+                if let Some(OrderEdge { before, .. }) = order {
+                    $on(before);
+                }
+            }
+            Op::Spawn { callee, args, order, .. } => {
+                on_callee(callee, $on);
+                args.into_iter().for_each(|v| $on(v));
+                if let Some(before) = order {
+                    $on(before);
+                }
+            }
+            Op::Merge { orders, .. } => orders.into_iter().for_each(|v| $on(v)),
+            Op::ArrayPush { array, value, .. } => {
+                $on(array);
+                $on(value);
+            }
+            Op::MakeObject { fields, .. } => fields.into_iter().for_each(|(_, v)| $on(v)),
+            Op::MakeTuple { elements, .. } => elements.into_iter().for_each(|v| $on(v)),
+            Op::TupleIndex { tuple, .. } => $on(tuple),
+            Op::ArrayIndex { array, .. } => $on(array),
+            Op::MakeClosure { captures, .. } => captures.into_iter().for_each(|v| $on(v)),
+            Op::MakeVariant { payload, .. } => {
+                if let Some(payload) = payload {
+                    $on(payload);
+                }
+            }
+        }
+    }};
+}
+
+impl Op {
+    /// Every value the instruction reads, once per operand.
+    pub(super) fn for_each_operand(&self, mut on_use: impl FnMut(ValueId)) {
+        let on_use: &mut dyn FnMut(&ValueId) = &mut |v| on_use(*v);
+        walk_operands!(self, on_use, &)
+    }
+
+    pub(super) fn for_each_operand_mut(&mut self, mut on_use: impl FnMut(&mut ValueId)) {
+        let on_use: &mut dyn FnMut(&mut ValueId) = &mut on_use;
+        walk_operands!(self, on_use, &mut)
+    }
+
+    /// Every value the instruction defines: its result, and the order token
+    /// an effectful call or a taking yields.
+    pub(super) fn defs(&self) -> SmallVec<[ValueId; 2]> {
+        match self {
+            Op::StringAppend { .. }
+            | Op::Assign { .. }
+            | Op::IndexSet { .. }
+            | Op::Commit { .. }
+            | Op::Check { .. }
+            | Op::CheckSteps { .. }
+            | Op::Drop { .. } => SmallVec::new(),
+            Op::FunctionCall { dst, order, .. } => {
+                std::iter::once(*dst).chain(order.map(|edge| edge.after)).collect()
+            }
+            Op::TakeEffect { dst, order, .. } => std::iter::once(*dst).chain(*order).collect(),
+            Op::Const { dst, .. }
+            | Op::ConstStr { dst, .. }
+            | Op::StringConcat { dst, .. }
+            | Op::StringEq { dst, .. }
+            | Op::StringClone { dst, .. }
+            | Op::StructuralEq { dst, .. }
+            | Op::StructuralClone { dst, .. }
+            | Op::Ref { dst, .. }
+            | Op::Take { dst, .. }
+            | Op::AsSlice { dst, .. }
+            | Op::Index { dst, .. }
+            | Op::Fetch { dst, .. }
+            | Op::FieldGet { dst, .. }
+            | Op::FieldSet { dst, .. }
+            | Op::BinOp { dst, .. }
+            | Op::UnaryOp { dst, .. }
+            | Op::Cast { dst, .. }
+            | Op::LoadFunction { dst, .. }
+            | Op::Spawn { dst, .. }
+            | Op::Merge { dst, .. }
+            | Op::ArrayBegin { dst, .. }
+            | Op::ArrayPush { dst, .. }
+            | Op::MakeObject { dst, .. }
+            | Op::MakeTuple { dst, .. }
+            | Op::TupleIndex { dst, .. }
+            | Op::TestLiteral { dst, .. }
+            | Op::TestObjectKey { dst, .. }
+            | Op::ArrayIndex { dst, .. }
+            | Op::ObjectGet { dst, .. }
+            | Op::MakeClosure { dst, .. }
+            | Op::MakeVariant { dst, .. }
+            | Op::TestVariant { dst, .. }
+            | Op::UnwrapVariant { dst, .. }
+            | Op::Undef { dst } => smallvec::smallvec![*dst],
+        }
+    }
+
+    /// Whether the instruction reads or writes a storage or the page.
+    pub(super) fn touches_storage(&self) -> bool {
+        matches!(
+            self,
+            Op::Ref { .. }
+                | Op::Take { .. }
+                | Op::Assign { .. }
+                | Op::IndexSet { .. }
+                | Op::StringAppend { .. }
+                | Op::Fetch { .. }
+                | Op::Commit { .. }
+        )
+    }
+
+    /// Whether the instruction consumes or yields an order token.
+    pub(super) fn is_on_order_chain(&self) -> bool {
+        matches!(
+            self,
+            Op::FunctionCall { order: Some(_), .. }
+                | Op::Spawn { order: Some(_), .. }
+                | Op::TakeEffect { order: Some(_), .. }
+                | Op::Merge { .. }
+        )
+    }
 }
