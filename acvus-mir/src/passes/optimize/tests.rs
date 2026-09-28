@@ -35,6 +35,8 @@ pub(super) struct Fixture {
     pub opaque: Ty,
     /// `(i64, i64)`.
     pub pair: Ty,
+    /// `(i64, i64, i64)`.
+    pub triple: Ty,
     /// `(i64, i64, i64, i64)`.
     pub quad: Ty,
 }
@@ -60,6 +62,7 @@ impl Fixture {
         let pure = call_ty(Effect::new(Reissue::Pure, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
         let opaque = call_ty(Effect::opaque());
         let pair = types.intern(TyKind::Tuple(Box::new([int, int])));
+        let triple = types.intern(TyKind::Tuple(Box::new([int, int, int])));
         let quad = types.intern(TyKind::Tuple(Box::new([int, int, int, int])));
         Fixture {
             module: Module::new(types),
@@ -72,6 +75,7 @@ impl Fixture {
             pure,
             opaque,
             pair,
+            triple,
             quad,
         }
     }

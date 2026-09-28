@@ -260,6 +260,39 @@ impl<'m> Builder<'m> {
         result
     }
 
+    /// Test only: the order token current at the end of the current block.
+    ///
+    /// # Panics
+    /// The body is not ordered.
+    #[cfg(test)]
+    pub(crate) fn current_token(&mut self) -> ValueId {
+        assert!(self.order.is_some(), "a body whose effect is pure has no order token (effects §3)");
+        let at = self.at;
+        self.read_order(OrderVar::Token, at)
+    }
+
+    /// Test only: appends a `Merge` of `orders`, which the Builder itself
+    /// never writes in this shape, such as a merge of one token or one
+    /// repeating another's set, and the chain goes on from its result.
+    /// Cost: O(|orders|).
+    ///
+    /// # Panics
+    /// The body is not ordered, or an input is not a token of it.
+    #[cfg(test)]
+    pub(crate) fn push_merge(&mut self, orders: Vec<ValueId>, span: Span) -> ValueId {
+        assert!(self.order.is_some(), "a body whose effect is pure has no order token to merge (effects §3)");
+        for order in &orders {
+            assert!(self.body.is_token(*order), "{order:?} is not an order token");
+        }
+        let order_ty = self.order().order_ty;
+        let merged = self.new_token_result(order_ty);
+        let merge = self.body.make_inst(Op::Merge { orders }, Some(merged), None, span);
+        self.append(merge);
+        let at = self.at;
+        self.write_order(OrderVar::Token, at, merged);
+        merged
+    }
+
     /// A block with parameters of `params`, made now. Cost: O(|params|).
     pub fn new_block(&mut self, params: &[Ty]) -> BlockId {
         let block = BlockId::of_index(self.blocks.len());

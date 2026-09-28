@@ -545,15 +545,86 @@ mod tests {
         assert_whole(&f.module, id);
     }
 
+    /// The token an effectful call consumes.
+    fn consumed(f: &Fixture, body: BodyId, call: ValueId) -> ValueId {
+        let inst = f
+            .module
+            .body(body)
+            .blocks()
+            .flat_map(|(_, block)| block.insts())
+            .find(|inst| inst.result() == Some(call));
+        let Some(order) = inst.and_then(|inst| inst.order()) else {
+            panic!("{call:?} is an effectful call's result")
+        };
+        order.consumed().expect("an effectful call consumes a token")
+    }
+
+    /// `a = g(); t = token; m = merge(t, t); b = g()` with `b` consuming
+    /// `m`: `m` is `t`.
+    #[test]
+    #[ignore = "blocked: replacing a merge token records OrderTokens, outside scope Value's CHANGES; question to the coordinator"]
+    fn a_merge_of_one_token_becomes_that_token() {
+        let mut f = Fixture::new();
+        let (int, tuple, opaque_call) = (f.int, f.pair, f.call(f.opaque));
+        let mut builder = f.module.build_body(true, tuple);
+        let a = builder.push_effect(opaque_call.clone(), int, Span::ZERO);
+        let t = builder.current_token();
+        let m = builder.push_merge(vec![t, t], Span::ZERO);
+        let b = builder.push_effect(opaque_call, int, Span::ZERO);
+        let all = builder.push(Op::MakeTuple { elements: vec![a, b] }, tuple, Span::ZERO);
+        builder.terminate(ret(all));
+        let id = builder.seal().expect("the body has no open state");
+        assert_eq!(consumed(&f, id, b), m);
+
+        f.run::<Gvn>(id);
+
+        assert_eq!(consumed(&f, id, b), t, "{}", f.snapshot(id));
+        assert_eq!(f.module.body(id).use_count(m), 0);
+        assert_whole(&f.module, id);
+    }
+
+    /// ```text
+    /// a = g(); t1 = token; b = g(); t2 = token
+    /// m1 = merge(t1, t2); m2 = merge(m1, t1); m3 = merge(m2, t2, t2)
+    /// c = g()   consuming m3
+    /// ```
+    /// `m2` nests `m1` over the same set, and `m3` repeats it: both are
+    /// `m1`.
+    #[test]
+    #[ignore = "blocked: replacing a merge token records OrderTokens, outside scope Value's CHANGES; question to the coordinator"]
+    fn nested_and_duplicate_merges_collapse() {
+        let mut f = Fixture::new();
+        let (int, triple, opaque_call) = (f.int, f.triple, f.call(f.opaque));
+        let mut builder = f.module.build_body(true, triple);
+        let a = builder.push_effect(opaque_call.clone(), int, Span::ZERO);
+        let t1 = builder.current_token();
+        let b = builder.push_effect(opaque_call.clone(), int, Span::ZERO);
+        let t2 = builder.current_token();
+        let m1 = builder.push_merge(vec![t1, t2], Span::ZERO);
+        let m2 = builder.push_merge(vec![m1, t1], Span::ZERO);
+        let m3 = builder.push_merge(vec![m2, t2, t2], Span::ZERO);
+        let c = builder.push_effect(opaque_call, int, Span::ZERO);
+        let all = builder.push(Op::MakeTuple { elements: vec![a, b, c] }, triple, Span::ZERO);
+        builder.terminate(ret(all));
+        let id = builder.seal().expect("the body has no open state");
+        assert_eq!(consumed(&f, id, c), m3);
+
+        f.run::<Gvn>(id);
+
+        let body = f.module.body(id);
+        assert_eq!(consumed(&f, id, c), m1, "{}", f.snapshot(id));
+        assert_eq!((body.use_count(m2), body.use_count(m3)), (0, 0));
+        assert_whole(&f.module, id);
+    }
+
     fn value(index: usize) -> ValueId {
         ValueId::try_from_raw(index).expect("a small index is a value id")
     }
 
-    /// The Builder makes no merge of one token, nor two merges of one set,
-    /// so the merge key is checked on values directly: a merge nesting
-    /// another over the same tokens, and one repeating a token, key as the
-    /// set they order after, and a merge of one token, directly or once
-    /// flattened, is that token.
+    /// The merge key on values directly: a merge nesting another over the
+    /// same tokens, and one repeating a token, key as the set they order
+    /// after, and a merge of one token, directly or once flattened, is that
+    /// token.
     #[test]
     fn merges_key_by_their_flattened_set_and_a_merge_of_one_token_is_it() {
         let (a, b, c) = (value(1), value(2), value(3));
