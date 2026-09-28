@@ -33,3 +33,7 @@ A run's outcome is the effects it issued, followed by a value, a trap, or no end
 ## 5. Panic
 
 A panic is death. Nothing runs after it, nothing is cleaned up, and nothing is owed.
+
+## 6. Split
+
+A call is its start and its taking. The start stands where every argument and its order token are ready; the taking is where its effect and its result enter, and the call means what it means there. Between the two the call holds its arguments' loans (ownership §5). A start is taken exactly once, on every path from it. Only the compiler splits a call, and only where its declaration states that it may be split. The declaration also states a cost, which is the backend's: the compiler carries it and never reads it.

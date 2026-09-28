@@ -16,7 +16,7 @@ A type parameter is parametric, and carries one bound: any type; one of a listed
 
 ## 2. Effect
 
-A call's effect states whether reissuing it is pure, idempotent or opaque; whether it commutes with other calls; and which contexts it reads and writes. An opaque effect is always sound (effects).
+A call's effect states whether reissuing it is pure, idempotent or opaque; whether it commutes with other calls; whether it may be split, and at what cost (effects §6); and which contexts it reads and writes. An opaque effect is always sound (effects).
 
 ## 3. Laws, ensures, means
 
