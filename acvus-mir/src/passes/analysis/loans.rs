@@ -651,7 +651,9 @@ impl Forward<'_> {
                 self.write(state, &place, self.body.ty_of(*value), &written);
                 return None;
             }
-            Op::AsSlice { container, mutability, .. } => self.reborrow(state, *container, mode(*mutability)),
+            Op::AsSlice { container: lent, mutability, .. } | Op::ArrayView { src: lent, mutability } => {
+                self.reborrow(state, *lent, mode(*mutability))
+            }
             Op::Index { slice, mode: IndexMode::Ref, .. } => {
                 let held = match self.types.kind(self.body.ty_of(*slice)) {
                     TyKind::Ref(held, _) => mode(*held),
@@ -948,6 +950,7 @@ impl Forward<'_> {
             | Op::StringConcat { .. }
             | Op::Ref { .. }
             | Op::AsSlice { .. }
+            | Op::ArrayView { .. }
             | Op::Fetch { .. }
             | Op::Commit { .. }
             | Op::FieldGet { .. }

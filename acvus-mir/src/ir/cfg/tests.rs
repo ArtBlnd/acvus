@@ -600,6 +600,108 @@ fn removing_an_effectful_call_rethreads_the_token_around_it() {
     assert!(rewriter.finish().touched(Aspect::OrderTokens));
 }
 
+/// context §3: the load and the commit are the effects, so each stands on
+/// the chain as a call whose effect is not pure does.
+#[test]
+fn a_load_and_a_commit_are_threaded_on_the_chain() {
+    let mut f = fixture();
+    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
+    let mut builder = build(&mut f.module, true, f.int);
+    let loaded = builder.push_effect(Op::Fetch { context: page }, int, at(30));
+    builder.push_effect_unit(Op::Commit { context: page, value: loaded, wrote: true }, at(31));
+    builder.terminate(ret(loaded));
+    let id = builder.seal().expect("the body has no open state");
+
+    let body = f.body(id);
+    let o0 = body.order_param().expect("an ordered body takes an order token");
+    let insts = body.block(body.entry()).insts();
+    let load = edge_of(&insts[0]);
+    let commit = edge_of(&insts[1]);
+    assert_eq!(load.before, o0);
+    assert_eq!(commit.before, load.after);
+    assert_eq!(insts[1].result(), None);
+    assert_eq!(returned_order(body, body.entry()), Some(commit.after));
+}
+
+#[test]
+#[should_panic(expected = "context's load or commit is an effect")]
+fn a_load_is_not_pushed_as_pure() {
+    let mut f = fixture();
+    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
+    build(&mut f.module, true, f.int).push(Op::Fetch { context: page }, int, at(32));
+}
+
+#[test]
+#[should_panic(expected = "context's load or commit is an effect")]
+fn a_commit_is_not_pushed_as_pure() {
+    let mut f = fixture();
+    let (name, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
+    let mut builder = build(&mut f.module, true, f.int);
+    let a = builder.param(name, int);
+    builder.push_unit(Op::Commit { context: page, value: a, wrote: true }, at(33));
+}
+
+#[test]
+#[should_panic(expected = "issues no effect")]
+fn a_pure_body_loads_no_context() {
+    let mut f = fixture();
+    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
+    build(&mut f.module, false, f.int).push_effect(Op::Fetch { context: page }, int, at(34));
+}
+
+#[test]
+fn removing_a_load_rethreads_the_token_around_it() {
+    let mut f = fixture();
+    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
+    let mut builder = build(&mut f.module, true, f.int);
+    let unread = builder.push_effect(Op::Fetch { context: page }, int, at(35));
+    let read = builder.push_effect(Op::Fetch { context: page }, int, at(36));
+    builder.terminate(ret(read));
+    let id = builder.seal().expect("the body has no open state");
+    let o0 = f.body(id).order_param().expect("ordered");
+
+    let mut rewriter = f.module.rewrite(id);
+    assert_eq!(rewriter.remove(unread), Ok(()));
+    let body = rewriter.body();
+    let insts = body.block(body.entry()).insts();
+    assert_eq!(insts.len(), 1);
+    assert_eq!(edge_of(&insts[0]).before, o0);
+    assert!(rewriter.finish().touched(Aspect::OrderTokens));
+}
+
+#[test]
+#[should_panic(expected = "not inserted as pure")]
+fn a_load_is_not_inserted_as_pure() {
+    let mut f = fixture();
+    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
+    let (id, ..) = straight_line(&mut f);
+    let entry = f.body(id).entry();
+    f.module.rewrite(id).insert(entry, 0, Op::Fetch { context: page }, int, at(37));
+}
+
+// -- Interning through the Builder ---------------------------------------
+
+#[test]
+fn intern_finds_a_type_already_in_the_table_and_adds_a_new_one() {
+    let mut f = fixture();
+    let bool = f.bool;
+    let mut builder = build(&mut f.module, false, f.int);
+    assert_eq!(builder.intern(TyKind::Bool), bool);
+    let u64 = builder.intern(TyKind::Int(IntTy::U64));
+    builder.seal().expect_err("the entry block has no terminator");
+    assert_eq!(f.module.types().kind(u64), &TyKind::Int(IntTy::U64));
+}
+
+#[test]
+#[should_panic(expected = "types §4")]
+fn intern_refuses_a_reference_to_a_reference() {
+    let mut f = fixture();
+    let int = f.int;
+    let mut builder = build(&mut f.module, false, f.int);
+    let inner = builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(inner)));
+}
+
 // -- 5. Spawn and TakeEffect are made only together (effects §6) ---------
 
 #[test]

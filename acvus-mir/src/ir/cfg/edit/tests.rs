@@ -109,6 +109,10 @@ impl Fixture {
         self.module.build_body(ordered, ret)
     }
 
+    fn module_types_intern(&mut self, kind: TyKind<Concrete>) -> Ty {
+        self.module.types.intern(kind)
+    }
+
     fn insts(&self, body: BodyId, block: BlockId) -> &[Inst] {
         self.body(body).block(block).insts()
     }
@@ -1312,11 +1316,44 @@ fn types_agree_checks_a_loops_source_against_what_it_hands_its_body() {
     assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
 }
 
+/// `&a[..]` of an array parameter `a: &[i64; 2]` through `ArrayView`, the
+/// view's result typed `viewed`.
+fn viewing(f: &mut Fixture, mutability: Mutability, viewed: Ty) -> BodyId {
+    let (na, int) = (f.name("a"), f.int);
+    let mut builder = f.build(false, f.int);
+    let array = builder.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2)));
+    let lent = builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));
+    let a = builder.param(na, lent);
+    builder.push(Op::ArrayView { src: a, mutability }, viewed, at(1));
+    let zero = builder.push(Op::Const { value: Literal::Int(0) }, int, at(2));
+    builder.terminate(ret(zero));
+    builder.seal().expect("the body has no open state")
+}
+
+#[test]
+fn types_agree_checks_an_array_view_against_the_array_it_views() {
+    let mut f = fixture();
+    let (int, bool) = (f.int, f.bool);
+    let slice_of = |f: &mut Fixture, element: Ty, mutability: Mutability| {
+        let slice = f.module_types_intern(TyKind::Slice(element));
+        f.module_types_intern(TyKind::Ref(mutability, TypeArg::Uniform(slice)))
+    };
+    let shared_ints = slice_of(&mut f, int, Mutability::Shared);
+    let good = viewing(&mut f, Mutability::Shared, shared_ints);
+    assert_eq!(types_agree(&f, good), Ok(()));
+    let shared_bools = slice_of(&mut f, bool, Mutability::Shared);
+    let other_element = viewing(&mut f, Mutability::Shared, shared_bools);
+    assert!(matches!(types_agree(&f, other_element), Err(Violation { invariant: "TypesAgree", .. })));
+    let mut_ints = slice_of(&mut f, int, Mutability::Mut);
+    let through_shared = viewing(&mut f, Mutability::Mut, mut_ints);
+    assert!(matches!(types_agree(&f, through_shared), Err(Violation { invariant: "TypesAgree", .. })));
+}
+
 fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
-    let mut builder = f.build(false, f.int);
+    let mut builder = f.build(true, f.int);
     let a = builder.param(na, int);
-    builder.push(Op::Fetch { context: page }, ty, at(1));
+    builder.push_effect(Op::Fetch { context: page }, ty, at(1));
     builder.terminate(ret(a));
     builder.seal().expect("the body has no open state")
 }
@@ -1737,13 +1774,13 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
 /// `s` a slot.
 fn dischargeable(f: &mut Fixture) -> BodyId {
     let (name, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
-    let mut builder = f.build(false, f.int);
+    let mut builder = f.build(true, f.int);
     let a = builder.param(name, int);
     let s = builder.slot(int, at(0));
     builder.push_unit(check_add(a, a), at(1));
     builder.push_unit(assign(s, a), at(2));
-    builder.push(Op::Fetch { context: page }, int, at(3));
-    builder.push_unit(Op::Commit { context: page, value: a, wrote: true }, at(4));
+    builder.push_effect(Op::Fetch { context: page }, int, at(3));
+    builder.push_effect_unit(Op::Commit { context: page, value: a, wrote: true }, at(4));
     builder.terminate(ret(a));
     builder.seal().expect("the body has no open state")
 }
@@ -1765,6 +1802,9 @@ fn discharge_removes_a_check_a_dead_store_an_unread_load_and_an_unwritten_commit
     let changes = editor.finish();
     assert!(f.insts(id, entry).is_empty());
     assert!(changes.touched(Aspect::Storage));
+    assert!(changes.touched(Aspect::OrderTokens));
+    let order_param = f.body(id).order_param();
+    assert_eq!(returned_order(f.body(id), entry), order_param, "the removed load and commit hand the token on");
 }
 
 #[test]

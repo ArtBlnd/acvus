@@ -17,7 +17,7 @@ use rustc_hash::FxHashMap;
 use super::body::{Block, BlockId, Body, BodyId, Def, Inst, Module, OrderUse, Terminator};
 use super::op::Op;
 use crate::ir::{OrderEdge, ValueId, fn_effect};
-use crate::ty::{Reissue, Ty, TyKind};
+use crate::ty::{Concrete, Reissue, Ty, TyKind};
 
 /// Open state left at `seal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +136,22 @@ impl<'m> Builder<'m> {
         Builder::new(self.module, ordered, ret)
     }
 
+    /// The id of `kind` in the module's one type table, for a type the IR's
+    /// shape needs and typeck did not record. Cost: O(kind).
+    ///
+    /// # Panics
+    /// `kind` is a reference to a reference (types §4), or names a type of
+    /// another table.
+    pub fn intern(&mut self, kind: TyKind<Concrete>) -> Ty {
+        if let TyKind::Ref(_, target) = &kind {
+            assert!(
+                !matches!(self.module.types.kind(target.ty()), TyKind::Ref(..)),
+                "a reference's target is never a reference (types §4): {kind:?}"
+            );
+        }
+        self.module.types.intern(kind)
+    }
+
     /// The block instructions are appended to. Cost: O(1).
     pub fn current_block(&self) -> BlockId {
         self.at
@@ -209,8 +225,9 @@ impl<'m> Builder<'m> {
     /// operands).
     ///
     /// # Panics
-    /// `op` yields a value; it is a call whose effect is not pure, a
-    /// `Spawn`, a `TakeEffect` or a `Merge`, which only the core writes; an
+    /// `op` yields a value; it is a call whose effect is not pure or a
+    /// context's load or commit, which are effects; it is a `Spawn`, a
+    /// `TakeEffect` or a `Merge`, which only the core writes; an
     /// operand is not a value of this body; the current block is
     /// terminated.
     pub fn push_unit(&mut self, op: Op, span: Span) {
@@ -220,32 +237,50 @@ impl<'m> Builder<'m> {
         self.append(inst);
     }
 
-    /// Appends an effectful call typed `ty` and returns its result. It
-    /// consumes the current token and yields the next (effects §3); inside
-    /// an `anyorder` scope it consumes the scope's entry token instead, and
-    /// what it yields joins the scope's merge, a `Merge` placed with the
-    /// call's `span`. Cost: O(its operands), and
+    /// Appends an effect with one result, typed `ty`, and returns the
+    /// result: a call whose callee's effect is not pure, or a context's load
+    /// (context §3). It consumes the current token and yields the next
+    /// (effects §3); inside an `anyorder` scope it consumes the scope's
+    /// entry token instead, and what it yields joins the scope's merge, a
+    /// `Merge` placed with the effect's `span`. Cost: O(its operands), and
     /// O(1) for the token.
     ///
     /// # Panics
-    /// The body is not ordered; `op` is not a `FunctionCall` whose callee's
-    /// effect is not pure; an operand is not a value of this body; the
-    /// current block is terminated.
+    /// The body is not ordered; `op` is neither such a call nor a `Fetch`;
+    /// an operand is not a value of this body; the current block is
+    /// terminated.
     pub fn push_effect(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
-        assert!(self.order.is_some(), "a body whose effect is pure issues no effect (effects §3)");
         assert!(
-            self.effectful_call(&op),
-            "push_effect takes a call whose effect is not pure, not {op:?}"
+            self.effectful_call(&op) || matches!(op, Op::Fetch { .. }),
+            "push_effect takes a call whose effect is not pure or a context's load, not {op:?}"
         );
+        let result = self.new_result(ty);
+        self.append_effect(op, Some(result), span);
+        result
+    }
+
+    /// Appends an effect with no result: a context's commit (context §3).
+    /// It stands on the order chain as `push_effect` states. Cost: O(its
+    /// operands), and O(1) for the token.
+    ///
+    /// # Panics
+    /// The body is not ordered; `op` is not a `Commit`; an operand is not a
+    /// value of this body; the current block is terminated.
+    pub fn push_effect_unit(&mut self, op: Op, span: Span) {
+        assert!(matches!(op, Op::Commit { .. }), "push_effect_unit takes a context's commit, not {op:?}");
+        self.append_effect(op, None, span);
+    }
+
+    fn append_effect(&mut self, op: Op, result: Option<ValueId>, span: Span) {
+        assert!(self.order.is_some(), "a body whose effect is pure issues no effect (effects §3)");
         let at = self.at;
         let before = match &self.order().scope {
             Some(scope) => scope.entry,
             None => self.read_order(OrderVar::Token, at),
         };
         let order_ty = self.order().order_ty;
-        let result = self.new_result(ty);
         let after = self.new_token_result(order_ty);
-        let inst = self.body.make_inst(op, Some(result), Some(OrderUse::Edge(OrderEdge { before, after })), span);
+        let inst = self.body.make_inst(op, result, Some(OrderUse::Edge(OrderEdge { before, after })), span);
         self.append(inst);
         match self.order().scope.as_ref().map(|scope| scope.id) {
             Some(scope) => {
@@ -257,7 +292,6 @@ impl<'m> Builder<'m> {
             }
             None => self.write_order(OrderVar::Token, at, after),
         }
-        result
     }
 
     /// Test only: the order token current at the end of the current block.
@@ -581,6 +615,10 @@ impl<'m> Builder<'m> {
             "{op:?} is written only by the core (effects §3, §6)"
         );
         assert!(!self.effectful_call(op), "a call whose effect is not pure is pushed by push_effect");
+        assert!(
+            !op.touches_context(),
+            "a context's load or commit is an effect (context §3), pushed by push_effect or push_effect_unit"
+        );
     }
 
     fn new_result(&mut self, ty: Ty) -> ValueId {

@@ -597,8 +597,8 @@ impl Body {
     ///
     /// # Panics
     /// `op` yields no value; it is a `Spawn`, a `TakeEffect` or a `Merge`,
-    /// which only the core writes; it is a call whose effect is not pure,
-    /// which takes an order token (effects §3); `index` is past the block's
+    /// which only the core writes; it is a call whose effect is not pure or
+    /// a context's load, which take an order token (effects §3, context §3); `index` is past the block's
     /// end; or `ty` is refused by `make_value`.
     pub(super) fn insert_pure(
         &mut self,
@@ -613,6 +613,10 @@ impl Body {
         assert!(
             !matches!(op, Op::Spawn { .. } | Op::TakeEffect { .. } | Op::Merge { .. }),
             "{op:?} is written only by the core (effects §3, §6)"
+        );
+        assert!(
+            !op.touches_context(),
+            "a context's load or commit is an effect (context §3), which takes an order token; it is not inserted as pure"
         );
         if let Op::FunctionCall { callee_ty, .. } = &op {
             let Some(effect) = fn_effect(types, *callee_ty) else {

@@ -108,6 +108,14 @@ pub enum Op {
         mutability: Mutability,
         r#impl: ExternImpl,
     },
+    /// The whole run of the elements of the array `src` names: a
+    /// `&[T; N]` becomes a `&[T]`, and a `&mut [T; N]` a `&mut [T]`. It is
+    /// the language's own view, since no declaration carries an array
+    /// (extern-fn §1), so no impl runs; it neither traps nor has an effect.
+    ArrayView {
+        src: ValueId,
+        mutability: Mutability,
+    },
     /// Element `index` of `slice`. The index is `u64`; the one check is
     /// `index < len`, made unless `bound` is `Proven`.
     Index {
@@ -356,6 +364,7 @@ macro_rules! walk_operands {
                 $on(value);
             }
             Op::AsSlice { container, .. } => $on(container),
+            Op::ArrayView { src, .. } => $on(src),
             Op::Index { slice, index, .. } => {
                 $on(slice);
                 $on(index);
@@ -459,6 +468,7 @@ impl Op {
             | Op::Ref { .. }
             | Op::Take { .. }
             | Op::AsSlice { .. }
+            | Op::ArrayView { .. }
             | Op::Index { .. }
             | Op::Fetch { .. }
             | Op::FieldGet { .. }
@@ -510,6 +520,7 @@ impl Op {
             | Op::Take { .. }
             | Op::Assign { .. }
             | Op::AsSlice { .. }
+            | Op::ArrayView { .. }
             | Op::Fetch { .. }
             | Op::Commit { .. }
             | Op::FieldGet { .. }

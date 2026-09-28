@@ -262,6 +262,19 @@ impl TypeCheck<'_> {
                     "a slice reference of the stated mutability",
                 )
             }
+            Op::ArrayView { src, mutability } => {
+                let TyKind::Ref(held, lent) = self.kind(self.ty(*src)) else {
+                    return Err(format!("{src:?} is not a reference"));
+                };
+                found(held == mutability, || format!("{src:?} is not a {mutability:?} reference"))?;
+                let TyKind::Array(element, _) = self.kind(lent.ty()) else {
+                    return Err(format!("{src:?} lends {:?}, not an array", self.kind(lent.ty())));
+                };
+                let (made, viewed) = self.slice(Self::result(inst)?)?;
+                found(made == *mutability && viewed == *element, || {
+                    format!("the view is not a {mutability:?} slice of the array's elements")
+                })
+            }
             Op::Index { slice, index, mode, .. } => {
                 self.is_u64(*index)?;
                 let (held, element) = self.slice(*slice)?;
