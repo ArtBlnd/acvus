@@ -117,15 +117,17 @@ pub enum CastTy {
     Int(IntTy),
     F64,
     Char,
+    Bool,
 }
 
 impl CastTy {
-    pub const NAMES: &'static str = "i8, i16, i32, i64, u8, u16, u32, u64, f64 or char";
+    pub const NAMES: &'static str = "i8, i16, i32, i64, u8, u16, u32, u64, f64, char or bool";
 
     pub fn of_name(name: &str) -> Option<CastTy> {
         match name {
             "f64" => Some(CastTy::F64),
             "char" => Some(CastTy::Char),
+            "bool" => Some(CastTy::Bool),
             _ => IntTy::ALL
                 .into_iter()
                 .find(|k| k.name() == name)
@@ -138,6 +140,7 @@ impl CastTy {
             CastTy::Int(k) => k.name(),
             CastTy::F64 => "f64",
             CastTy::Char => "char",
+            CastTy::Bool => "bool",
         }
     }
 
@@ -146,6 +149,7 @@ impl CastTy {
             TyKind::Int(k) => Some(CastTy::Int(*k)),
             TyKind::Float => Some(CastTy::F64),
             TyKind::Char => Some(CastTy::Char),
+            TyKind::Bool => Some(CastTy::Bool),
             _ => None,
         }
     }
@@ -153,22 +157,25 @@ impl CastTy {
     /// The numeric type whose word this type's word is. A `char` is a
     /// Unicode scalar value, which is its `u32`, and every cast Rust admits
     /// at either end of a `char` has the value of the same cast through
-    /// `u32`.
+    /// `u32`. A `bool` is `0` or `1`, which is its `u8`.
     pub fn word(self) -> WordTy {
         match self {
             CastTy::Int(k) => WordTy::Int(k),
             CastTy::F64 => WordTy::F64,
             CastTy::Char => WordTy::Int(IntTy::U32),
+            CastTy::Bool => WordTy::Int(IntTy::U8),
         }
     }
 
     /// Whether `self as to` is a cast Rust admits: every pair of numbers,
-    /// a `char` to any integer, and `u8` to `char` and nothing else.
+    /// a `char` or a `bool` to any integer, `u8` to `char`, and nothing to
+    /// `bool`.
     pub fn admits(self, to: CastTy) -> bool {
         match (self, to) {
+            (_, CastTy::Bool) => false,
             (_, CastTy::Char) => self == CastTy::Int(IntTy::U8),
-            (CastTy::Char, CastTy::F64) => false,
-            (CastTy::Char, _) | (CastTy::Int(_) | CastTy::F64, _) => true,
+            (CastTy::Char | CastTy::Bool, CastTy::F64) => false,
+            (CastTy::Char | CastTy::Bool, CastTy::Int(_)) | (CastTy::Int(_) | CastTy::F64, _) => true,
         }
     }
 }
@@ -179,6 +186,7 @@ impl<V: Phase> From<CastTy> for TyKind<V> {
             CastTy::Int(k) => TyKind::Int(k),
             CastTy::F64 => TyKind::Float,
             CastTy::Char => TyKind::Char,
+            CastTy::Bool => TyKind::Bool,
         }
     }
 }
