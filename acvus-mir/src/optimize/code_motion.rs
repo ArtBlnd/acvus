@@ -1283,8 +1283,10 @@ mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
     use acvus_utils::QualifiedRef;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
+    use crate::flows::{Flows, FlowTerm};
     use crate::ir::IndexBound;
-    use crate::ty::Ty;
+    use crate::ty::{Calls, Effect, EffectTerm, Holds, IntTy, Ty, TyKind};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
@@ -1315,18 +1317,44 @@ mod tests {
         })
     }
 
-    fn io_fn_type(i: &Interner, name: &str) -> (QualifiedRef, Ty) {
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: crate::ty::Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    /// `run` at an empty `Declarations`, over `types`.
+    fn run_test(cfg: &mut CfgBody, types: &Types<Concrete>) {
+        let decls = empty_declarations(&Interner::new());
+        run(cfg, types, &decls);
+    }
+
+    /// A type value these tests do not read further: a placeholder
+    /// `callee_ty` for an instruction whose test is not about its type.
+    fn dummy_ty(types: &mut Types<Concrete>) -> Ty {
+        types.intern(TyKind::Int(IntTy::I64))
+    }
+
+    fn io_fn_type(types: &mut Types<Concrete>, i: &Interner, name: &str) -> (QualifiedRef, Ty) {
         let qref = QualifiedRef::root(i.intern(name));
-        (
-            qref,
-            Ty::Fn {
-                params: vec![],
-                ret: Box::new(Ty::I64),
-                captures: vec![],
-                effect: crate::ty::Effect::OPAQUE.into(),
-                flows: crate::flows::Flows::Every.into(),
-            },
-        )
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        (qref, ty)
     }
 
     fn demoted(c: CfgBody) -> MirBody {
@@ -1340,7 +1368,8 @@ mod tests {
     #[test]
     fn spawn_stays_below_branch() {
         let i = Interner::new();
-        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let mut types = Types::<Concrete>::new();
+        let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
 
         let mut cfg = make_cfg(
             vec![
@@ -1390,7 +1419,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let spawn_idx = k
@@ -1410,7 +1439,8 @@ mod tests {
     #[test]
     fn block_param_dependency_prevents_hoist() {
         let i = Interner::new();
-        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let mut types = Types::<Concrete>::new();
+        let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
 
         let mut cfg = make_cfg(
             vec![
@@ -1460,7 +1490,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let spawn_idx = k
@@ -1496,7 +1526,9 @@ mod tests {
     fn classified(insts: Vec<InstKind>) -> Hoistable {
         let last = insts.last().expect("a body to classify").clone();
         let cfg = make_cfg(insts, 8);
-        hoistable(&Loans::build(&cfg, types, decls), &last)
+        let types = Types::<Concrete>::new();
+        let decls = empty_declarations(&Interner::new());
+        hoistable(&Loans::build(&cfg, &types, &decls), &last)
     }
 
     fn as_slice_of(container: ValueId, mutability: Mutability) -> InstKind {
@@ -1602,6 +1634,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "irreducible control flow")]
     fn an_irreducible_cycle_is_refused() {
+        let mut types = Types::<Concrete>::new();
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -1635,7 +1668,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
     }
 
     #[test]
@@ -1666,7 +1699,8 @@ mod tests {
     #[test]
     fn eval_not_hoisted() {
         let i = Interner::new();
-        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let mut types = Types::<Concrete>::new();
+        let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
 
         let mut cfg = make_cfg(
             vec![
@@ -1721,7 +1755,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let eval_idx = k
@@ -1746,8 +1780,9 @@ mod tests {
     #[test]
     fn spawn_is_not_hoisted_across_a_branch() {
         let i = Interner::new();
-        let (qref1, ty1) = io_fn_type(&i, "io1");
-        let (qref2, ty2) = io_fn_type(&i, "io2");
+        let mut types = Types::<Concrete>::new();
+        let (qref1, ty1) = io_fn_type(&mut types, &i, "io1");
+        let (qref2, ty2) = io_fn_type(&mut types, &i, "io2");
 
         let mut cfg = make_cfg(
             vec![
@@ -1804,7 +1839,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let spawn2_idx = k
@@ -1831,6 +1866,7 @@ mod tests {
 
     #[test]
     fn multi_level_hoist() {
+        let mut types = Types::<Concrete>::new();
         // B0 -> diamond -> B3 -> diamond -> B6
         // The pure op in B6 hoists directly to B0 in one pass.
         let mut cfg = make_cfg(
@@ -1906,7 +1942,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let op_idx = k
@@ -1925,6 +1961,7 @@ mod tests {
 
     #[test]
     fn pure_instruction_hoisted() {
+        let mut types = Types::<Concrete>::new();
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -1972,7 +2009,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let binop_idx = k
@@ -1994,7 +2031,8 @@ mod tests {
     #[test]
     fn a_spawn_operand_rises_to_the_dominator_and_the_spawn_stays() {
         let i = Interner::new();
-        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let mut types = Types::<Concrete>::new();
+        let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
 
         let mut cfg = make_cfg(
             vec![
@@ -2050,7 +2088,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let binop_idx = k
@@ -2079,6 +2117,7 @@ mod tests {
     /// control-equivalent to it.
     #[test]
     fn a_loop_body_instruction_does_not_rise_into_the_head() {
+        let mut types = Types::<Concrete>::new();
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -2126,7 +2165,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let binop_idx = k
@@ -2226,7 +2265,8 @@ mod tests {
     /// Where the shared borrow of `v(1)` sits, relative to the loop's test.
     fn shared_borrow_is_below_the_test(insts: Vec<InstKind>) -> bool {
         let mut cfg = make_cfg(insts, 10);
-        run(&mut cfg);
+        let types = Types::<Concrete>::new();
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let borrow = k
@@ -2258,6 +2298,7 @@ mod tests {
 
     #[test]
     fn the_same_loop_without_that_write_lets_the_borrow_out() {
+        let mut types = Types::<Concrete>::new();
         assert!(
             !shared_borrow_is_below_the_test(a_loop_that_borrows_a_storage(false)),
             "nothing the borrow would span writes the storage"
@@ -2472,7 +2513,8 @@ mod tests {
 
     fn depths_of_the_slice_and_the_read(insts: Vec<InstKind>) -> Depths {
         let mut cfg = make_cfg(insts, 24);
-        run(&mut cfg);
+        let types = Types::<Concrete>::new();
+        run_test(&mut cfg, &types);
         let domtree = DomTree::build(&cfg);
         let depth = LoopDepth::of(&cfg, &domtree);
         let block_of = |wanted: fn(&InstKind) -> bool| {
@@ -2500,7 +2542,8 @@ mod tests {
 
     fn index_refs_left(insts: Vec<InstKind>) -> usize {
         let mut cfg = make_cfg(insts, 24);
-        run(&mut cfg);
+        let types = Types::<Concrete>::new();
+        run_test(&mut cfg, &types);
         cfg.blocks
             .iter()
             .flat_map(|block| block.insts.iter())
@@ -2550,7 +2593,8 @@ mod tests {
     /// Where the `AsSlice` sits, relative to the loop's test.
     fn as_slice_is_below_the_test(insts: Vec<InstKind>) -> bool {
         let mut cfg = make_cfg(insts, 10);
-        run(&mut cfg);
+        let types = Types::<Concrete>::new();
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let taken = k
@@ -2582,8 +2626,9 @@ mod tests {
 
     #[test]
     fn an_index_never_leaves_the_loop() {
+        let mut types = Types::<Concrete>::new();
         let mut cfg = make_cfg(a_loop_that_slices_a_container(false), 10);
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let indexed = k
@@ -2647,7 +2692,8 @@ mod tests {
 
     fn shared_borrows_left(insts: Vec<InstKind>) -> usize {
         let mut cfg = make_cfg(insts, 10);
-        run(&mut cfg);
+        let types = Types::<Concrete>::new();
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         kinds(&body)
             .iter()
@@ -2690,7 +2736,8 @@ mod tests {
     #[test]
     fn eval_sunk_past_independent_computation() {
         let i = Interner::new();
-        let (fetch_id, fetch_ty) = io_fn_type(&i, "fetch");
+        let mut types = Types::<Concrete>::new();
+        let (fetch_id, fetch_ty) = io_fn_type(&mut types, &i, "fetch");
 
         // v0 = Spawn fetch
         // v1 = TakeEffect v0              <- should sink
@@ -2731,7 +2778,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
 
@@ -2761,6 +2808,7 @@ mod tests {
     #[test]
     fn fetch_not_sunk_past_call() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let f = QualifiedRef::root(i.intern("f"));
         let mut cfg = make_cfg(
@@ -2778,7 +2826,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(3),
                     callee: Callee::Direct(f),
-                    callee_ty: Ty::error(),
+                    callee_ty: dummy_ty(&mut types),
                     args: vec![],
                     order: None,
                 },
@@ -2796,7 +2844,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let load_idx = k
@@ -2816,8 +2864,9 @@ mod tests {
     #[test]
     fn eval_not_sunk_past_fetch() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
-        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
         let mut cfg = make_cfg(
             vec![
                 InstKind::Spawn {
@@ -2856,7 +2905,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
         let eval_idx = k
@@ -2877,6 +2926,7 @@ mod tests {
     #[test]
     fn fetch_stays_in_place() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // v1 = fetch @x
@@ -2915,7 +2965,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
 
@@ -2946,6 +2996,7 @@ mod tests {
     #[test]
     fn commit_stays_in_place() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // commit @x = v5
@@ -2984,7 +3035,7 @@ mod tests {
             10,
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
 
@@ -3031,9 +3082,10 @@ mod tests {
     /// first TakeEffect reaches its use only after the third, then the second,
     /// has moved out of its way, since a TakeEffect is a call and so a barrier
     /// to the TakeEffect above it.
-    fn three_evals_whose_uses_interleave() -> CfgBody {
+    fn three_evals_whose_uses_interleave() -> (CfgBody, Types<Concrete>) {
         let i = Interner::new();
-        let (qref, ty) = io_fn_type(&i, "io_fn");
+        let mut types = Types::<Concrete>::new();
+        let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
         let spawn = |dst, args| InstKind::Spawn {
             dst,
             callee: Callee::Direct(qref),
@@ -3052,7 +3104,7 @@ mod tests {
             left,
             right,
         };
-        make_cfg(
+        let cfg = make_cfg(
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -3073,7 +3125,8 @@ mod tests {
                 },
             ],
             10,
-        )
+        );
+        (cfg, types)
     }
 
     /// The index of every TakeEffect in the one block, and of the instruction
@@ -3099,14 +3152,14 @@ mod tests {
 
     #[test]
     fn every_eval_lands_immediately_before_its_first_use() {
-        let mut cfg = three_evals_whose_uses_interleave();
+        let (mut cfg, types) = three_evals_whose_uses_interleave();
         assert_eq!(
             evals_and_their_first_uses(&cfg),
             vec![(4, 7), (5, 8), (6, 9)],
             "the body before the pass"
         );
 
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         assert_eq!(
             evals_and_their_first_uses(&cfg),
@@ -3117,10 +3170,11 @@ mod tests {
 
     #[test]
     fn the_sink_ends_within_its_measure() {
-        let mut cfg = three_evals_whose_uses_interleave();
+        let (mut cfg, types) = three_evals_whose_uses_interleave();
+        let decls = empty_declarations(&Interner::new());
         let bound = sink_measure(&cfg);
         let mut moves = 0;
-        while sink_one(&mut cfg) {
+        while sink_one(&mut cfg, &types, &decls) {
             moves += 1;
             assert!(
                 moves <= bound,
