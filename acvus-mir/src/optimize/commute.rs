@@ -283,8 +283,10 @@ mod tests {
     use super::*;
     use crate::cfg;
     use acvus_utils::QualifiedRef;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
+    use crate::flows::{Flows, FlowTerm};
     use crate::ir::{Callee, DebugInfo, MirBody};
-    use crate::ty::Effect;
+    use crate::ty::{Calls, Contexts, Effect, EffectTerm, Holds, IntTy, Reissue, SplitCost, Ty, TyKind};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
 
@@ -292,14 +294,47 @@ mod tests {
         ValueId::from_raw(n)
     }
 
-    fn fn_ty(effect: Effect) -> Ty {
-        Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::I64),
-            captures: vec![],
-            effect: effect.into(),
-            flows: crate::flows::Flows::Every.into(),
-        }
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: crate::ty::Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    /// `run` at an empty `Declarations`, over `types`.
+    fn run_test(cfg: &mut CfgBody, types: &Types<Concrete>) {
+        let decls = empty_declarations(&Interner::new());
+        run(cfg, types, &decls);
+    }
+
+    /// `Idempotent`, not commutative: two of these in a row do not form a
+    /// run.
+    fn idempotent() -> Effect {
+        Effect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable)
+    }
+
+    /// `Idempotent` and commutative, touching no context.
+    fn commutative_idempotent() -> Effect {
+        Effect::new(Reissue::Idempotent, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable)
+    }
+
+    fn fn_ty(effect: Effect, types: &mut Types<Concrete>) -> Ty {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(effect),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        })
     }
 
     /// The value slots a test call uses: its result and its order edge.
@@ -309,11 +344,14 @@ mod tests {
         after: usize,
     }
 
-    fn call(i: &Interner, name: &str, effect: Effect, slots: Slots) -> InstKind {
+    /// `types` trails every helper here, so a `call` nested in the `Vec` an
+    /// enclosing `body`/`diamond` builds never borrows it at the same time
+    /// as that outer call's own trailing borrow.
+    fn call(i: &Interner, name: &str, effect: Effect, slots: Slots, types: &mut Types<Concrete>) -> InstKind {
         InstKind::FunctionCall {
             dst: v(slots.dst),
             callee: Callee::Direct(QualifiedRef::root(i.intern(name))),
-            callee_ty: fn_ty(effect),
+            callee_ty: fn_ty(effect, types),
             args: vec![],
             order: Some(OrderEdge {
                 before: v(slots.before),
@@ -324,16 +362,14 @@ mod tests {
 
     /// A body with `order_param` v0 and `val_count` values; orders are
     /// the values named by the caller.
-    fn body(insts: Vec<InstKind>, val_count: usize, orders: &[usize]) -> CfgBody {
+    fn body(insts: Vec<InstKind>, val_count: usize, orders: &[usize], types: &mut Types<Concrete>) -> CfgBody {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let order_ty = types.intern(TyKind::Order);
         let mut factory = LocalFactory::<ValueId>::new();
         let mut val_types = FxHashMap::default();
         for n in 0..val_count {
             let vid = factory.next();
-            let ty = if orders.contains(&n) {
-                Ty::Order
-            } else {
-                Ty::I64
-            };
+            let ty = if orders.contains(&n) { order_ty } else { i64_ty };
             val_types.insert(vid, ty);
         }
         cfg::promote(MirBody {
@@ -388,14 +424,16 @@ mod tests {
     #[test]
     fn a_commit_to_a_read_context_breaks_a_run() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
         let n = QualifiedRef::root(i.intern("n"));
         // Two commutative calls that read @n, with a commit of @n between
         // them: o0 -> f -> o2 ; commit @n ; o2 -> f -> o4. They do not merge.
-        let c = Effect::with_contexts(
-            crate::ty::Reissue::Idempotent,
+        let c = Effect::new(
+            Reissue::Idempotent,
             true,
             [n].into_iter().collect(),
-            Default::default(),
+            Contexts::new(),
+            SplitCost::Unavailable,
         );
         let mut cfg = body(
             vec![
@@ -408,6 +446,7 @@ mod tests {
                         before: 0,
                         after: 2,
                     },
+                    &mut types,
                 ),
                 InstKind::Commit {
                     context: n,
@@ -423,6 +462,7 @@ mod tests {
                         before: 2,
                         after: 4,
                     },
+                    &mut types,
                 ),
                 InstKind::Return {
                     value: v(1),
@@ -431,8 +471,9 @@ mod tests {
             ],
             6,
             &[0, 2, 4],
+            &mut types,
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         assert_eq!(
             edges(&cfg),
@@ -454,7 +495,8 @@ mod tests {
     #[test]
     fn a_run_shares_its_entry_and_ends_in_a_merge() {
         let i = Interner::new();
-        let c = Effect::IDEMPOTENT.commutative();
+        let mut types = Types::<Concrete>::new();
+        let c = commutative_idempotent();
         // o0 -> draw -> o2 -> draw -> o4 -> return [o4]
         let mut cfg = body(
             vec![
@@ -467,6 +509,7 @@ mod tests {
                         before: 0,
                         after: 2,
                     },
+                    &mut types,
                 ),
                 call(
                     &i,
@@ -477,6 +520,7 @@ mod tests {
                         before: 2,
                         after: 4,
                     },
+                    &mut types,
                 ),
                 InstKind::Return {
                     value: v(1),
@@ -485,8 +529,9 @@ mod tests {
             ],
             5,
             &[0, 2, 4],
+            &mut types,
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
 
         assert_eq!(
             edges(&cfg),
@@ -513,7 +558,7 @@ mod tests {
 
     /// B0: `first`, branch; L0 and L1 empty; L2: `second`, return. `second`
     /// takes the Order `first` yielded.
-    fn diamond(first: InstKind, second: InstKind, early_return: bool) -> CfgBody {
+    fn diamond(first: InstKind, second: InstKind, early_return: bool, types: &mut Types<Concrete>) -> CfgBody {
         use crate::ir::Label;
         let l0 = Label(0);
         let l1 = Label(1);
@@ -566,7 +611,7 @@ mod tests {
                 order: Some(v(4)),
             },
         ]);
-        body(insts, 10, &[0, 2, 4, 6])
+        body(insts, 10, &[0, 2, 4, 6], types)
     }
 
     fn block_of_call(cfg: &CfgBody, dst: ValueId) -> Option<usize> {
@@ -580,7 +625,8 @@ mod tests {
     #[test]
     fn a_commutative_call_after_a_branch_is_issued_before_it() {
         let i = Interner::new();
-        let c = Effect::IDEMPOTENT.commutative();
+        let mut types = Types::<Concrete>::new();
+        let c = commutative_idempotent();
         let mut cfg = diamond(
             call(
                 &i,
@@ -591,6 +637,7 @@ mod tests {
                     before: 0,
                     after: 2,
                 },
+                &mut types,
             ),
             call(
                 &i,
@@ -601,10 +648,12 @@ mod tests {
                     before: 2,
                     after: 4,
                 },
+                &mut types,
             ),
             false,
+            &mut types,
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(
             block_of_call(&cfg, v(3)),
             Some(0),
@@ -630,7 +679,8 @@ mod tests {
     #[test]
     fn a_call_is_not_issued_on_a_path_that_may_skip_it() {
         let i = Interner::new();
-        let c = Effect::IDEMPOTENT.commutative();
+        let mut types = Types::<Concrete>::new();
+        let c = commutative_idempotent();
         let mut cfg = diamond(
             call(
                 &i,
@@ -641,6 +691,7 @@ mod tests {
                     before: 0,
                     after: 2,
                 },
+                &mut types,
             ),
             call(
                 &i,
@@ -651,10 +702,12 @@ mod tests {
                     before: 2,
                     after: 4,
                 },
+                &mut types,
             ),
             true,
+            &mut types,
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(
             block_of_call(&cfg, v(3)),
             Some(3),
@@ -666,17 +719,19 @@ mod tests {
     #[test]
     fn a_call_following_one_that_does_not_commute_stays() {
         let i = Interner::new();
-        let c = Effect::IDEMPOTENT.commutative();
+        let mut types = Types::<Concrete>::new();
+        let c = commutative_idempotent();
         let mut cfg = diamond(
             call(
                 &i,
                 "put",
-                Effect::IDEMPOTENT,
+                idempotent(),
                 Slots {
                     dst: 1,
                     before: 0,
                     after: 2,
                 },
+                &mut types,
             ),
             call(
                 &i,
@@ -687,10 +742,12 @@ mod tests {
                     before: 2,
                     after: 4,
                 },
+                &mut types,
             ),
             false,
+            &mut types,
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(block_of_call(&cfg, v(3)), Some(3));
         assert!(merges(&cfg).is_empty());
     }
@@ -698,7 +755,8 @@ mod tests {
     #[test]
     fn a_call_that_does_not_commute_breaks_the_run() {
         let i = Interner::new();
-        let c = Effect::IDEMPOTENT.commutative();
+        let mut types = Types::<Concrete>::new();
+        let c = commutative_idempotent();
         // draw, put, draw: no run.
         let mut cfg = body(
             vec![
@@ -711,16 +769,18 @@ mod tests {
                         before: 0,
                         after: 2,
                     },
+                    &mut types,
                 ),
                 call(
                     &i,
                     "put",
-                    Effect::IDEMPOTENT,
+                    idempotent(),
                     Slots {
                         dst: 3,
                         before: 2,
                         after: 4,
                     },
+                    &mut types,
                 ),
                 call(
                     &i,
@@ -731,6 +791,7 @@ mod tests {
                         before: 4,
                         after: 6,
                     },
+                    &mut types,
                 ),
                 InstKind::Return {
                     value: v(1),
@@ -739,9 +800,10 @@ mod tests {
             ],
             7,
             &[0, 2, 4, 6],
+            &mut types,
         );
         let before = edges(&cfg);
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         assert_eq!(edges(&cfg), before, "the chain is unchanged");
         assert!(merges(&cfg).is_empty());
     }
@@ -749,7 +811,8 @@ mod tests {
     #[test]
     fn the_call_after_a_run_waits_for_the_merge() {
         let i = Interner::new();
-        let c = Effect::IDEMPOTENT.commutative();
+        let mut types = Types::<Concrete>::new();
+        let c = commutative_idempotent();
         // draw, draw, put: put takes the merge of both draws.
         let mut cfg = body(
             vec![
@@ -762,6 +825,7 @@ mod tests {
                         before: 0,
                         after: 2,
                     },
+                    &mut types,
                 ),
                 call(
                     &i,
@@ -772,16 +836,18 @@ mod tests {
                         before: 2,
                         after: 4,
                     },
+                    &mut types,
                 ),
                 call(
                     &i,
                     "put",
-                    Effect::OPAQUE,
+                    Effect::opaque(),
                     Slots {
                         dst: 5,
                         before: 4,
                         after: 6,
                     },
+                    &mut types,
                 ),
                 InstKind::Return {
                     value: v(1),
@@ -790,8 +856,9 @@ mod tests {
             ],
             7,
             &[0, 2, 4, 6],
+            &mut types,
         );
-        run(&mut cfg);
+        run_test(&mut cfg, &types);
         let m = merges(&cfg);
         assert_eq!(m.len(), 1);
         let put = edges(&cfg)[2];
