@@ -10,6 +10,8 @@ The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integ
 
 Each operator is a call of a `core` signature: `+` of `core::add`, `-` of `core::sub`, `*` of `core::mul`, `/` of `core::div`, `%` of `core::rem`, unary `-` of `core::neg`, `==` of `core::eq`, the orderings of `core::cmp`. The operands' types decide which instance answers. Where no instance answers, the program is refused. An extern type joins an operator by declaring an instance.
 
+`&&`, `||` and `!` on `bool`, `^` on `bool` and the integers, and `&`, `|`, `<<` and `>>` on the integers are the language's own operations, as Rust defines them, with overflow as §1 states. They are not calls.
+
 ## 3. Slices
 
 `a[i]` reaches an element through its container's `core::as_slice`, or `core::as_slice_mut` where the place is written or lent mutably. A `for` over `&v` or `&mut v` reaches its elements through the same instance. Any type that gives these instances is indexed and iterated as a slice.
@@ -20,7 +22,7 @@ Equality and ordering mean what they mean in Rust, with one exception: `NaN == N
 
 ## 5. Casts and coercion
 
-`as` casts between the numbers and `bool` as Rust casts them.
+`as` casts between the numbers, `bool` and `char` as Rust casts them.
 
 A coercion is applied without being written. A reference to a container reads as its view: `&Vec<T>` as `&[T]`, `&String` as `&str`. A declared extern cast coerces as types §3 and §7 state.
 
