@@ -21,7 +21,7 @@
 //! and a recursive `tryRemoveTrivialPhi`; `finish` answers it as a fixpoint
 //! over the PHIs that are left.
 
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use crate::ir::{Label, ValueId};
 use acvus_utils::Astr;
 use rustc_hash::{FxHashMap, FxHashSet};

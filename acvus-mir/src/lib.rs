@@ -1,6 +1,5 @@
 pub mod analysis;
 pub mod cfg;
-mod entry_fetch;
 pub mod error;
 pub mod flows;
 pub mod graph;
@@ -8,18 +7,12 @@ pub mod ir;
 pub mod laws;
 pub mod means;
 pub mod step;
-pub mod lower;
 pub mod optimize;
-pub mod place;
 pub mod printer;
-mod pvec;
 pub mod ser_ty;
-pub mod solver;
 pub mod structural;
 pub mod ty;
-pub mod typeck;
 pub mod validate;
-pub mod variant;
 
 #[cfg(test)]
 pub(crate) mod test;

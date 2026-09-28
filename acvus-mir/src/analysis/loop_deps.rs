@@ -24,7 +24,7 @@ use crate::analysis::loops::{
 use crate::analysis::raise::{self, FunctionSummary};
 use crate::analysis::targets::{TargetSlots, Written, effect, slots_lent_mutably, touched_slots};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use crate::ir::{
     BinOp, Callee, ForSource, IndexMode, InstKind, Label, PathSeg, RefTarget, Stages, ValueId,
 };

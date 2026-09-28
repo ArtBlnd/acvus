@@ -29,7 +29,7 @@ use smallvec::SmallVec;
 use crate::analysis::inst_info;
 use crate::analysis::loans::{Loans, StorageEffect};
 use crate::cfg::{BlockIdx, CfgBody};
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use crate::ir::*;
 use crate::optimize::context_ops::{context_read, context_written};
 use crate::ty::Ty;

@@ -13,7 +13,8 @@
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
-use crate::graph::{FnKind, Function, QualifiedRef};
+use crate::graph::{FnKind, Function};
+use acvus_utils::QualifiedRef;
 use crate::ir::{Callee, Chosen};
 use crate::means::{EntryReading, Means, Named, Stmt as MeansStmt, Term as MeansTerm};
 use crate::step::Step;

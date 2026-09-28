@@ -16,7 +16,7 @@ use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use crate::ir::InstKind;
 use crate::optimize::context_ops::{context_read, context_written};
 

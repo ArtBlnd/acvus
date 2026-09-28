@@ -81,7 +81,7 @@ fn runs_apart(callee_ty: &Ty) -> bool {
 mod tests {
     use super::*;
     use crate::cfg::promote;
-    use crate::graph::QualifiedRef;
+    use acvus_utils::QualifiedRef;
     use crate::ty::Param;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;

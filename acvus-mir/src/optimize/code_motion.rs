@@ -1283,7 +1283,7 @@ fn is_call(kind: &InstKind) -> bool {
 mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
-    use crate::graph::QualifiedRef;
+    use acvus_utils::QualifiedRef;
     use crate::ir::IndexBound;
     use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};

@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use acvus_utils::Interner;
 use serde::{Deserialize, Serialize};
 
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use acvus_utils::LocalIdOps;
 
 use crate::ty::{
@@ -563,7 +563,7 @@ impl SerTy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::QualifiedRef;
+    use acvus_utils::QualifiedRef;
 
     #[test]
     fn effect_survives_serialization() {

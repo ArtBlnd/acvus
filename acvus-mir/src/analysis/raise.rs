@@ -21,7 +21,7 @@ use crate::analysis::interval::{InstAt, untrapping};
 use crate::analysis::loans::Loans;
 use crate::analysis::loops::natural_loops_innermost_first;
 use crate::cfg::{self, CfgBody};
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use crate::ir::{BinOp, Callee, IndexBound, InstKind, MirBody};
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass;

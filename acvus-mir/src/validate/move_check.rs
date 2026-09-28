@@ -1155,7 +1155,7 @@ fn process_inst(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::QualifiedRef;
+    use acvus_utils::QualifiedRef;
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
     use crate::ty::{Param, TypeArg};
     use acvus_utils::{Interner, LocalFactory};

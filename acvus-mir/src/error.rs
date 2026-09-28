@@ -4,7 +4,7 @@ use acvus_ast::Span;
 use acvus_ast::report::Label;
 use acvus_utils::Interner;
 
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use crate::ir::SwitchKey;
 use crate::ty::Ty;
 

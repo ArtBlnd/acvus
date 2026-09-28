@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::fmt;
 
 pub use crate::flows::{Alignment, Flow, FlowEnd, FlowTerm, Flows, Labelled, Laid, Source, Take};
-use crate::graph::types::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -5255,7 +5255,7 @@ impl Default for PolyBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::types::QualifiedRef;
+    use acvus_utils::QualifiedRef;
     use crate::solver::{Answer, Conversion, Decision};
     use acvus_utils::Interner;
 

@@ -279,7 +279,7 @@ fn release(cfg: &mut CfgBody, bi: usize, run: &Run) -> ValueId {
 mod tests {
     use super::*;
     use crate::cfg;
-    use crate::graph::QualifiedRef;
+    use acvus_utils::QualifiedRef;
     use crate::ir::{Callee, DebugInfo, MirBody};
     use crate::ty::Effect;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};

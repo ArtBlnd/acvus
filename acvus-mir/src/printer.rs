@@ -583,7 +583,7 @@ struct PrintCtx<'a> {
     facts: StageFacts<'a>,
     lit_to_tidx: &'a FxHashMap<String, usize>,
     /// FunctionId -> canonical index (order of first appearance across all bodies).
-    fn_id_map: FxHashMap<crate::graph::QualifiedRef, usize>,
+    fn_id_map: FxHashMap<acvus_utils::QualifiedRef, usize>,
 }
 
 impl PrintCtx<'_> {
@@ -591,7 +591,7 @@ impl PrintCtx<'_> {
         self.interner.resolve(*tag).to_string()
     }
 
-    fn fmt_fn_id(&self, id: crate::graph::QualifiedRef) -> String {
+    fn fmt_fn_id(&self, id: acvus_utils::QualifiedRef) -> String {
         match self.fn_id_map.get(&id) {
             Some(&idx) => format!("#{idx}"),
             None => {
@@ -605,10 +605,10 @@ impl PrintCtx<'_> {
 /// Collect FunctionIds from a body in order of first appearance.
 fn collect_fn_ids_from_body(
     body: &MirBody,
-    fn_id_map: &mut FxHashMap<crate::graph::QualifiedRef, usize>,
+    fn_id_map: &mut FxHashMap<acvus_utils::QualifiedRef, usize>,
 ) {
     for inst in &body.insts {
-        let ids: &[crate::graph::QualifiedRef] = match &inst.kind {
+        let ids: &[acvus_utils::QualifiedRef] = match &inst.kind {
             InstKind::LoadFunction { id, .. } => std::slice::from_ref(id),
             InstKind::FunctionCall {
                 callee: Callee::Direct(id) | Callee::Extern { id, .. },
@@ -1585,7 +1585,7 @@ impl fmt::Display for MirModuleDisplay<'_> {
         }
 
         // Collect FunctionIds across all bodies for canonical numbering.
-        let mut fn_id_map: FxHashMap<crate::graph::QualifiedRef, usize> = FxHashMap::default();
+        let mut fn_id_map: FxHashMap<acvus_utils::QualifiedRef, usize> = FxHashMap::default();
         collect_fn_ids_from_body(&module.main, &mut fn_id_map);
         for label in &labels {
             collect_fn_ids_from_body(&module.closures[label], &mut fn_id_map);

@@ -714,7 +714,7 @@ pub fn run(cfg: &mut CfgBody, laws: &LawTable, functions: &FunctionSummary) {
 mod tests {
     use super::*;
     use crate::cfg;
-    use crate::graph::QualifiedRef;
+    use acvus_utils::QualifiedRef;
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, RefTarget};
     use crate::ty::Effect;
     use crate::ty::Ty;

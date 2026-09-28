@@ -3,7 +3,7 @@ use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::graph::QualifiedRef;
+use acvus_utils::QualifiedRef;
 use crate::ty::{CastTy, Mutability, Task, Ty};
 
 /// A call that is an instruction of the language (RFC-0020): the
