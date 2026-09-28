@@ -156,6 +156,11 @@ mod tests {
     const SUM: usize = 11;
     const SPARE: usize = 12;
     const COND_2: usize = 13;
+    /// What `work_not_known_to_finish_ahead_of_the_exit_is_refused` forces
+    /// with its inserted `TakeEffect`: a value of its own, typed `Handle` in
+    /// `val_types`, so the read stays what rule 3 asks and `I`, the
+    /// counter, keeps its own type.
+    const HANDLE: usize = 14;
 
     const HEADER: Label = Label(0);
     const PURE: Label = Label(1);
@@ -256,11 +261,13 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let bool_ty = types.intern(TyKind::Bool);
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
         let mut val_types: FxHashMap<ValueId, Ty> = (0..=COND_2).map(|n| (v(n), i64_ty)).collect();
         val_types.insert(v(COND), bool_ty);
         val_types.insert(v(COND_2), bool_ty);
+        val_types.insert(v(HANDLE), handle_ty);
         let mut factory = LocalFactory::<ValueId>::new();
-        for _ in 0..=COND_2 {
+        for _ in 0..=HANDLE {
             factory.next();
         }
         MirModule {
@@ -550,7 +557,7 @@ mod tests {
                 t + 1,
                 InstKind::TakeEffect {
                     dst: v(SPARE),
-                    src: v(I),
+                    src: v(HANDLE),
                     order: None,
                 },
             );

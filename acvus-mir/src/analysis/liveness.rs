@@ -183,9 +183,8 @@ mod tests {
     use crate::cfg::promote;
     use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::*;
-    use crate::ty::{Concrete, Types};
+    use crate::ty::{Concrete, IntTy, Ty, TyKind, Types};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
-    use rustc_hash::FxHashMap;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
@@ -205,16 +204,14 @@ mod tests {
         .unwrap()
     }
 
-    /// `analyze` at an empty `Types`/`Declarations`: these bodies name no
-    /// value whose type liveness reads.
-    fn analyze_test(cfg: &CfgBody) -> LivenessResult {
+    /// `analyze` at an empty `Declarations`, over `types`.
+    fn analyze_test(cfg: &CfgBody, types: &Types<Concrete>) -> LivenessResult {
         let interner = Interner::new();
-        let types = Types::<Concrete>::new();
         let decls = empty_declarations(&interner);
-        analyze(cfg, &types, &decls)
+        analyze(cfg, types, &decls)
     }
 
-    fn make_cfg(insts: Vec<InstKind>) -> CfgBody {
+    fn make_cfg(insts: Vec<InstKind>, val_types: Vec<(ValueId, Ty)>) -> CfgBody {
         let mut factory = LocalFactory::<ValueId>::new();
         for _ in 0..20 {
             factory.next();
@@ -228,7 +225,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
-            val_types: FxHashMap::default(),
+            val_types: val_types.into_iter().collect(),
             params: Vec::new(),
             captures: Vec::new(),
             debug: DebugInfo::new(),
@@ -242,28 +239,33 @@ mod tests {
 
     #[test]
     fn simple_linear() {
-        let cfg = make_cfg(vec![
-            InstKind::Const {
-                dst: v(0),
-                value: acvus_ast::Literal::Int(1),
-            },
-            InstKind::Const {
-                dst: v(1),
-                value: acvus_ast::Literal::Int(2),
-            },
-            InstKind::BinOp {
-                dst: v(2),
-                op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
-                left: v(0),
-                right: v(1),
-            },
-            InstKind::Return {
-                value: v(2),
-                order: None,
-            },
-        ]);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::Int(2),
+                },
+                InstKind::BinOp {
+                    dst: v(2),
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
+                    left: v(0),
+                    right: v(1),
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+            ],
+            vec![(v(0), i64_ty), (v(1), i64_ty), (v(2), i64_ty)],
+        );
 
-        let result = analyze_test(&cfg);
+        let result = analyze_test(&cfg, &types);
         // v(0), v(1) are defined in block 0 -> not live-in.
         assert!(!result.is_live_in(BlockIdx(0), v(0)));
         assert!(!result.is_live_in(BlockIdx(0), v(1)));
@@ -271,22 +273,27 @@ mod tests {
 
     #[test]
     fn dead_value_not_live() {
-        let cfg = make_cfg(vec![
-            InstKind::Const {
-                dst: v(0),
-                value: acvus_ast::Literal::Int(1),
-            },
-            InstKind::Const {
-                dst: v(1),
-                value: acvus_ast::Literal::Int(2),
-            },
-            InstKind::Return {
-                value: v(1),
-                order: None,
-            },
-        ]);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::Int(2),
+                },
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
+            ],
+            vec![(v(0), i64_ty), (v(1), i64_ty)],
+        );
 
-        let result = analyze_test(&cfg);
+        let result = analyze_test(&cfg, &types);
         assert!(!result.is_live_out(BlockIdx(0), v(0)));
     }
 
@@ -294,73 +301,84 @@ mod tests {
 
     #[test]
     fn branch_both_arms_use_value() {
-        let cfg = make_cfg(vec![
-            InstKind::Const {
-                dst: v(0),
-                value: acvus_ast::Literal::Int(1),
-            },
-            InstKind::Const {
-                dst: v(1),
-                value: acvus_ast::Literal::Bool(true),
-            },
-            InstKind::JumpIf {
-                cond: v(1),
-                then_label: Label(0),
-                then_args: vec![v(0)],
-                else_label: Label(1),
-                else_args: vec![v(0)],
-            },
-            InstKind::BlockLabel {
-                label: Label(0),
-                params: vec![v(2)],
-            },
-            InstKind::Return {
-                value: v(2),
-                order: None,
-            },
-            InstKind::BlockLabel {
-                label: Label(1),
-                params: vec![v(3)],
-            },
-            InstKind::Return {
-                value: v(3),
-                order: None,
-            },
-        ]);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let bool_ty = types.intern(TyKind::Bool);
+        let cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::Bool(true),
+                },
+                InstKind::JumpIf {
+                    cond: v(1),
+                    then_label: Label(0),
+                    then_args: vec![v(0)],
+                    else_label: Label(1),
+                    else_args: vec![v(0)],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![v(2)],
+                },
+                InstKind::Return {
+                    value: v(2),
+                    order: None,
+                },
+                InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![v(3)],
+                },
+                InstKind::Return {
+                    value: v(3),
+                    order: None,
+                },
+            ],
+            vec![(v(0), i64_ty), (v(1), bool_ty), (v(2), i64_ty), (v(3), i64_ty)],
+        );
 
-        let result = analyze_test(&cfg);
+        let result = analyze_test(&cfg, &types);
         assert!(result.is_live_out(BlockIdx(0), v(0)));
         assert!(result.is_live_out(BlockIdx(0), v(1)));
     }
 
     #[test]
     fn value_live_across_blocks() {
-        let cfg = make_cfg(vec![
-            InstKind::Const {
-                dst: v(0),
-                value: acvus_ast::Literal::Int(1),
-            },
-            InstKind::Jump {
-                label: Label(0),
-                args: vec![],
-            },
-            InstKind::BlockLabel {
-                label: Label(0),
-                params: vec![],
-            },
-            InstKind::BinOp {
-                dst: v(1),
-                op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
-                left: v(0),
-                right: v(0),
-            },
-            InstKind::Return {
-                value: v(1),
-                order: None,
-            },
-        ]);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(1),
+                },
+                InstKind::Jump {
+                    label: Label(0),
+                    args: vec![],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![],
+                },
+                InstKind::BinOp {
+                    dst: v(1),
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
+                    left: v(0),
+                    right: v(0),
+                },
+                InstKind::Return {
+                    value: v(1),
+                    order: None,
+                },
+            ],
+            vec![(v(0), i64_ty), (v(1), i64_ty)],
+        );
 
-        let result = analyze_test(&cfg);
+        let result = analyze_test(&cfg, &types);
         assert!(result.is_live_out(BlockIdx(0), v(0)));
         assert!(result.is_live_in(BlockIdx(1), v(0)));
     }
@@ -369,49 +387,62 @@ mod tests {
 
     #[test]
     fn loop_keeps_value_live() {
-        let cfg = make_cfg(vec![
-            InstKind::Const {
-                dst: v(0),
-                value: acvus_ast::Literal::Int(0),
-            },
-            InstKind::Jump {
-                label: Label(0),
-                args: vec![v(0)],
-            },
-            InstKind::BlockLabel {
-                label: Label(0),
-                params: vec![v(1)],
-            },
-            InstKind::BinOp {
-                dst: v(2),
-                op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
-                left: v(1),
-                right: v(1),
-            },
-            InstKind::BinOp {
-                dst: v(3),
-                op: crate::ir::BinOp::Lt,
-                left: v(2),
-                right: v(5),
-            },
-            InstKind::JumpIf {
-                cond: v(3),
-                then_label: Label(0),
-                then_args: vec![v(2)],
-                else_label: Label(1),
-                else_args: vec![v(2)],
-            },
-            InstKind::BlockLabel {
-                label: Label(1),
-                params: vec![v(4)],
-            },
-            InstKind::Return {
-                value: v(4),
-                order: None,
-            },
-        ]);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let bool_ty = types.intern(TyKind::Bool);
+        let cfg = make_cfg(
+            vec![
+                InstKind::Const {
+                    dst: v(0),
+                    value: acvus_ast::Literal::Int(0),
+                },
+                InstKind::Jump {
+                    label: Label(0),
+                    args: vec![v(0)],
+                },
+                InstKind::BlockLabel {
+                    label: Label(0),
+                    params: vec![v(1)],
+                },
+                InstKind::BinOp {
+                    dst: v(2),
+                    op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
+                    left: v(1),
+                    right: v(1),
+                },
+                InstKind::BinOp {
+                    dst: v(3),
+                    op: crate::ir::BinOp::Lt,
+                    left: v(2),
+                    right: v(5),
+                },
+                InstKind::JumpIf {
+                    cond: v(3),
+                    then_label: Label(0),
+                    then_args: vec![v(2)],
+                    else_label: Label(1),
+                    else_args: vec![v(2)],
+                },
+                InstKind::BlockLabel {
+                    label: Label(1),
+                    params: vec![v(4)],
+                },
+                InstKind::Return {
+                    value: v(4),
+                    order: None,
+                },
+            ],
+            vec![
+                (v(0), i64_ty),
+                (v(1), i64_ty),
+                (v(2), i64_ty),
+                (v(3), bool_ty),
+                (v(4), i64_ty),
+                (v(5), i64_ty),
+            ],
+        );
 
-        let result = analyze_test(&cfg);
+        let result = analyze_test(&cfg, &types);
         assert!(result.is_live_in(BlockIdx(1), v(1)));
         assert!(result.is_live_out(BlockIdx(1), v(2)));
     }
