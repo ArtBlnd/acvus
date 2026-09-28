@@ -59,7 +59,19 @@ pub enum TryExit<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conversion<T> {
     pub via: Chosen,
+    /// `via`'s function type, instantiated at this coercion's two ends.
+    pub via_ty: T,
     pub to: T,
+}
+
+/// A declared conversion applied while checking (types §7): its `via`
+/// reached at `node`, where `reached` records what it chose, and its
+/// function type there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Converted {
+    pub node: AstId,
+    pub via_ty: Term,
+    pub to: Term,
 }
 
 /// How a lambda holds a name it captured (functions §2).
@@ -132,7 +144,7 @@ pub(super) struct Output {
     pub tries: FxHashMap<AstId, TryExit<Term>>,
     /// Each value converted by a declared conversion (types §7), at its
     /// site.
-    pub conversions: FxHashMap<AstId, Conversion<Term>>,
+    pub conversions: FxHashMap<AstId, Converted>,
     /// Each value folded into a slot, in the order it entered.
     pub entered: Vec<Entered>,
     pub casts: FxHashMap<AstId, AsCast>,

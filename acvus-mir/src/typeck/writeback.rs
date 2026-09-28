@@ -5,7 +5,7 @@ use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{Chosen, Closure, Comparing, Comparison, Conversion, Entered, Typeck};
+use super::output::{Closure, Comparing, Comparison, Conversion, Entered, Typeck};
 use crate::decl::{Base, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
@@ -278,53 +278,52 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
         }
         out.insert(site, steps);
     };
-    for (site, conversion) in std::mem::take(&mut cx.out.conversions) {
-        if let Some(to) = freeze(cx, types, memo, conversion.to) {
-            record(site, vec![Conversion { via: conversion.via, to }]);
-        }
-    }
-    let mut climbed = Vec::new();
+    let mut applied: Vec<(AstId, Vec<Step>)> = std::mem::take(&mut cx.out.conversions)
+        .into_iter()
+        .map(|(site, converted)| {
+            let step = Step {
+                node: converted.node,
+                via_ty: converted.via_ty,
+                to: converted.to,
+            };
+            (site, vec![step])
+        })
+        .collect();
     for entered in std::mem::take(&mut cx.out.entered) {
-        if let Some(steps) = climb(cx, types, memo, entered) {
-            climbed.push((entered.site, steps));
+        if let Some(steps) = climb(cx, entered) {
+            applied.push((entered.site, steps));
         }
     }
-    // A view step's requirements are reaches of their own, fired now that
+    // Each step's requirements are reaches of their own, fired now that
     // every type they read is known.
     super::decision::solve(cx);
-    for (site, steps) in climbed {
-        let steps = steps
-            .into_iter()
-            .map(|Step { via, to }| {
-                let via = match via {
-                    StepVia::Cast(chosen) => chosen,
-                    StepVia::View(node) => cx
-                        .out
-                        .reached
-                        .remove(&node)
-                        .expect("a view step is recorded in `reached` at its node"),
-                };
-                Conversion { via, to }
-            })
-            .collect();
-        record(site, steps);
+    for (site, steps) in applied {
+        let mut frozen = Vec::with_capacity(steps.len());
+        let mut left_open = false;
+        for Step { node, via_ty, to } in steps {
+            let via = cx
+                .out
+                .reached
+                .remove(&node)
+                .expect("a coercion step is recorded in `reached` at its node");
+            match (freeze(cx, types, memo, via_ty), freeze(cx, types, memo, to)) {
+                (Some(via_ty), Some(to)) => frozen.push(Conversion { via, via_ty, to }),
+                _ => left_open = true,
+            }
+        }
+        if !left_open {
+            record(site, frozen);
+        }
     }
     out
 }
 
-/// One step up the cast tree, before a view step's requirements are
-/// reached.
+/// One coercion step, its `via` reached at `node` (`decision::reach_step`),
+/// before its requirements are reached and its types frozen.
 struct Step {
-    via: StepVia,
-    to: Ty,
-}
-
-enum StepVia {
-    /// A declared cast, through a function that has no impls.
-    Cast(Chosen),
-    /// A view, whose impl and requirements are recorded in `reached` at
-    /// this node.
-    View(AstId),
+    node: AstId,
+    via_ty: Term,
+    to: Term,
 }
 
 /// The steps up the cast tree from `value`'s head to `slot`'s, each with
@@ -333,7 +332,7 @@ enum StepVia {
 /// # Panics
 /// With no refusal made, the slot's head is not up the tree from the
 /// value's: `enter` folded the value into it, so it is.
-fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, entered: Entered) -> Option<Vec<Step>> {
+fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
     let Entered { span, value, slot, .. } = entered;
     let (Some(mut at), Some(to)) = (cx.closed(value), cx.closed(slot)) else {
         return None;
@@ -369,22 +368,9 @@ fn climb(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, 
                 above
             }
         };
-        let via = match view_impl {
-            Some(view) => {
-                let node = AstId::alloc();
-                super::decision::reach_view_step(cx, node, span, rule.via, view, at.term, reached);
-                StepVia::View(node)
-            }
-            None => StepVia::Cast(Chosen {
-                declaration: rule.via,
-                r#impl: None,
-                required: Box::new([]),
-            }),
-        };
-        steps.push(Step {
-            via,
-            to: freeze(cx, types, memo, reached)?,
-        });
+        let node = AstId::alloc();
+        let via_ty = super::decision::reach_step(cx, node, span, rule.via, view_impl, at.term, reached);
+        steps.push(Step { node, via_ty, to: reached });
         at = cx.closed(reached)?;
     }
     Some(steps)

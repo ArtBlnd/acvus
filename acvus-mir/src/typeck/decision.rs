@@ -24,7 +24,7 @@ use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashSet;
 
 use super::ctxt::Ctxt;
-use super::output::{AsCast, Chosen, Conversion, Impl, Iteration, TryExit};
+use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
@@ -583,12 +583,9 @@ fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: T
             slot,
         }),
         Ok(Entered::Converted(conversion)) => {
-            let via = Chosen {
-                declaration: conversion.rule().via,
-                r#impl: None,
-                required: Box::new([]),
-            };
-            cx.out.conversions.insert(site, Conversion { via, to: slot });
+            let node = AstId::alloc();
+            let via_ty = reach_step(cx, node, span, conversion.rule().via, None, value.term, slot);
+            cx.out.conversions.insert(site, Converted { node, via_ty, to: slot });
         }
         Err(mismatch) => refusal::mismatch(cx, mismatch, span),
     }
@@ -1079,32 +1076,50 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
     }
 }
 
-/// A view step (operators §5) from `from` up to `to` at `node`: the view's
-/// concrete impl `at` of `via`, instantiated with `from` its parameter and
-/// `to` its result, and each of its requirements a reach of its own
-/// (extern-fn §6), as a reached call's are. What it chose is recorded in
-/// `reached` at `node`.
+/// A coercion step from `from` to `to` at `node`, performed by `via`: a
+/// declared cast's or conversion's function (types §3, §7), or for a view
+/// (operators §5) its concrete impl `view`. Its type is instantiated with
+/// `from` its parameter and `to` its result, and each of its requirements
+/// is a reach of its own (extern-fn §6), as a reached call's are. What it
+/// chose is recorded in `reached` at `node`; its function type there is
+/// returned.
 ///
 /// # Panics
-/// `via` names no declaration: a view step's `via` is the view whose
-/// impl it is, which the compiler builds (`Core::generic_functions`).
-pub(super) fn reach_view_step(cx: &mut Ctxt<'_>, node: AstId, span: Span, via: QualifiedRef, at: usize, from: Term, to: Term) {
+/// `via` names no function of one parameter: verify refuses a cast or a
+/// conversion whose `via` is not its function (`ViaNotItsFunction`), and a
+/// view is the compiler's, built as a function of one parameter
+/// (`Core::generic_functions`).
+pub(super) fn reach_step(
+    cx: &mut Ctxt<'_>,
+    node: AstId,
+    span: Span,
+    via: QualifiedRef,
+    view: Option<usize>,
+    from: Term,
+    to: Term,
+) -> Term {
     let scheme = cx
         .decls
         .scheme(via)
-        .expect("a view step's `via` is a lang item the compiler builds");
-    let sig = &scheme.impls.as_ref().expect("a view step is an impl of its view").concrete[at];
-    let offer = Offer {
-        declaration: via,
-        r#impl: Some(Impl::Concrete(at)),
-        ty: sig.ty,
+        .expect("a step's `via` is declared: verify refuses one that is not (ViaNotItsFunction)");
+    let offer = match view {
+        Some(at) => Offer {
+            declaration: via,
+            r#impl: Some(Impl::Concrete(at)),
+            ty: scheme.impls.as_ref().expect("a view step is an impl of its view").concrete[at].ty,
+        },
+        None => Offer {
+            declaration: via,
+            r#impl: None,
+            ty: scheme.ty,
+        },
     };
     let Instantiated { ty, requirements } = instantiate(cx, offer, span);
     let TyKind::Fn { params, ret, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
-        panic!("an instantiated view impl is a function type (NotAFunction)");
+        panic!("a step's `via` is a function type (ViaNotItsFunction, NotAFunction)");
     };
     let [param] = &params[..] else {
-        panic!("a view impl in the tree takes one parameter, as the compiler builds each view (operators §2)");
+        panic!("a step's `via` takes one parameter (ViaNotItsFunction, operators §2)");
     };
     cx.eq(*param, from, span);
     cx.eq(ret, to, span);
@@ -1112,7 +1127,7 @@ pub(super) fn reach_view_step(cx: &mut Ctxt<'_>, node: AstId, span: Span, via: Q
         node,
         Chosen {
             declaration: via,
-            r#impl: Some(Impl::Concrete(at)),
+            r#impl: offer.r#impl,
             required: Box::new([]),
         },
     );
@@ -1120,6 +1135,7 @@ pub(super) fn reach_view_step(cx: &mut Ctxt<'_>, node: AstId, span: Span, via: Q
     for required in requirements {
         push_required(cx, node, span, required);
     }
+    ty
 }
 
 /// A requirement a reached declaration states, as a reach of its own over

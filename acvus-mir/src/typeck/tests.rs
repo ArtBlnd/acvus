@@ -265,6 +265,11 @@ fn binding(checked: &Checked, script: &Script, names: &Interner, name: &str) -> 
         .expect("the test's script binds the name")
 }
 
+/// The type recorded at an argument's site.
+fn args_ty(checked: &Checked, arg: &Expr) -> Ty {
+    checked.typeck.types[&arg.id()]
+}
+
 /// The binder of the `let` at statement `at`.
 fn let_binder(script: &Script, at: usize) -> acvus_ast::AstId {
     match &script.stmts[at] {
@@ -1161,6 +1166,11 @@ fn a_return_and_the_tail_each_enter_the_runs_result() {
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].via.declaration, widen);
     assert!(is_int(&checked, steps[0].to, IntTy::I64));
+    let TyKind::Fn { params, ret, .. } = checked.kind(steps[0].via_ty) else {
+        panic!("a step's `via` is a function");
+    };
+    assert!(is_int(&checked, params[0], IntTy::U8));
+    assert!(is_int(&checked, *ret, IntTy::I64));
     let tail_site = script.tail.as_ref().unwrap().id();
     assert!(!checked.typeck.conversions.contains_key(&tail_site));
 }
@@ -1207,6 +1217,11 @@ fn a_view_step_names_its_impl() {
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].via.declaration, as_slice);
     assert_eq!(steps[0].via.r#impl, Some(Impl::Concrete(1)));
+    let TyKind::Fn { params, ret, .. } = checked.kind(steps[0].via_ty) else {
+        panic!("a view's `via` is a function");
+    };
+    assert_eq!(params[0], args_ty(&checked, &args[0]));
+    assert_eq!(*ret, steps[0].to);
 }
 
 /// control-flow, types §6: a block whose last statement's type is `!` is

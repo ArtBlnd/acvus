@@ -61,6 +61,10 @@ pub enum Refused {
     /// is one value of one fixed type (context §2), so no use chooses the
     /// variable.
     TypeVariableInValueType { written: Written },
+    /// A declared cast or conversion whose `via` is no declared function
+    /// of type `fn(from) -> to` at the rule's own ends: the rule is
+    /// performed by its `via` (types §3, §7).
+    ViaNotItsFunction { written: Written },
     /// A scheme whose bounds do not give each of its type variables exactly
     /// one bound (extern-fn §1: a type parameter carries one bound).
     BoundsDoNotFit { function: QualifiedRef },
@@ -130,6 +134,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let contexts = first_stands(contexts, &mut refused, |id| Refused::DuplicateContext { id });
     let inputs = first_stands(inputs, &mut refused, |name| Refused::DuplicateInput { name });
     let misfits = refuse_misfit_impls(&types, &declared_order, &functions, &mut refused);
+    refuse_vias_not_their_functions(&types, &functions, &casts, &conversions, &mut refused);
     let casts = cast_tree(&types, &casts, &functions, &misfits, &core, &mut refused);
     let conversions = conversions_by_head(&types, conversions, &mut refused);
 
@@ -709,6 +714,31 @@ fn cast_tree(
     }
     refuse_cycles(&above, &from_order, refused);
     tree
+}
+
+/// types §3, §7: a declared cast or conversion is performed by its `via`,
+/// so the `via` is a declared function of type `fn(from) -> to` at the
+/// rule's own ends.
+fn refuse_vias_not_their_functions(
+    types: &Types<Poly>,
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    casts: &[CastRule],
+    conversions: &[ConversionRule],
+    refused: &mut Vec<Refused>,
+) {
+    let casts = casts.iter().map(|rule| (Written::Cast(rule.via), rule.via, rule.from, rule.to));
+    let conversions = conversions
+        .iter()
+        .map(|rule| (Written::Conversion(rule.via), rule.via, rule.from, rule.to));
+    for (written, via, from, to) in casts.chain(conversions) {
+        let performs = functions.get(&via).is_some_and(|scheme| match types.kind(scheme.ty) {
+            TyKind::Fn { params, ret, .. } => params[..] == [from] && *ret == to,
+            _ => false,
+        });
+        if !performs {
+            refused.push(Refused::ViaNotItsFunction { written });
+        }
+    }
 }
 
 /// Whether a cast's or a conversion's `from` or `to` is a reference to a
@@ -1333,6 +1363,33 @@ mod tests {
         fn verify(self) -> Result<Declarations, Vec<Refused>> {
             Declarations::verify(self.raw)
         }
+
+        /// `via`, declared as the function `fn(from) -> to` that performs a
+        /// cast or a conversion between those ends (types §3, §7).
+        fn performing(&mut self, via: QualifiedRef, from: TyId<Poly>, to: TyId<Poly>) {
+            let ty = self.function(&[from], to);
+            let variables = [from, to]
+                .into_iter()
+                .filter_map(|end| match self.raw.types.kind(end) {
+                    TyKind::Var(at) => Some(*at as usize + 1),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0);
+            self.declare(via, self.plain(ty, variables));
+        }
+
+        /// A declared cast from `from` to `to`, performed by `via`.
+        fn cast(&mut self, from: TyId<Poly>, to: TyId<Poly>, via: QualifiedRef) {
+            self.performing(via, from, to);
+            self.raw.casts.push(CastRule { from, to, via });
+        }
+
+        /// A declared conversion from `from` to `to`, performed by `via`.
+        fn conversion(&mut self, from: TyId<Poly>, to: TyId<Poly>, via: QualifiedRef) {
+            self.performing(via, from, to);
+            self.raw.conversions.push(ConversionRule { from, to, via });
+        }
     }
 
     fn lt(at: u32) -> SegmentLabel {
@@ -1499,11 +1556,47 @@ mod tests {
         let (a, b, via) = (fixture.name("m", "A"), fixture.name("m", "B"), fixture.name("m", "a_to_b"));
         let from = fixture.user_type(a, 0);
         let to = fixture.user_type(b, 0);
-        fixture.raw.casts.push(CastRule { from, to, via });
+        fixture.cast(from, to, via);
         let decls = fixture.verify().expect("one step up is a tree");
         let step = decls.casts().step_up(Head::Base(Base::Named(a))).expect("A steps up");
         assert_eq!(step.rule().via, via);
         assert!(decls.casts().step_up(Head::Base(Base::Named(b))).is_none());
+    }
+
+    /// types §3, §7: a cast or a conversion is performed by its `via`, so
+    /// a `via` that is not declared, or not of type `fn(from) -> to`, is
+    /// refused.
+    #[test]
+    fn a_via_that_is_not_its_function_is_refused() {
+        let mut fixture = Fixture::new();
+        let (i32_, i64_, string) = (
+            fixture.ty(TyKind::Int(IntTy::I32)),
+            fixture.ty(TyKind::Int(IntTy::I64)),
+            fixture.ty(TyKind::String),
+        );
+        let (undeclared_via, other_type) = (fixture.name("m", "widen"), fixture.name("m", "parse"));
+        fixture.raw.casts.push(CastRule {
+            from: i32_,
+            to: i64_,
+            via: undeclared_via,
+        });
+        fixture.performing(other_type, string, i32_);
+        fixture.raw.conversions.push(ConversionRule {
+            from: string,
+            to: i64_,
+            via: other_type,
+        });
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::ViaNotItsFunction {
+                    written: Written::Cast(undeclared_via)
+                },
+                Refused::ViaNotItsFunction {
+                    written: Written::Conversion(other_type)
+                },
+            ]
+        );
     }
 
     /// types §3: every type has at most one next step up.
@@ -1515,16 +1608,8 @@ mod tests {
         let a_ty = fixture.user_type(a, 0);
         let b_ty = fixture.user_type(b, 0);
         let c_ty = fixture.user_type(c, 0);
-        fixture.raw.casts.push(CastRule {
-            from: a_ty,
-            to: b_ty,
-            via: to_b,
-        });
-        fixture.raw.casts.push(CastRule {
-            from: a_ty,
-            to: c_ty,
-            via: to_c,
-        });
+        fixture.cast(a_ty, b_ty, to_b);
+        fixture.cast(a_ty, c_ty, to_c);
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
@@ -1543,16 +1628,8 @@ mod tests {
         let (to_b, to_a) = (fixture.name("m", "to_b"), fixture.name("m", "to_a"));
         let a_ty = fixture.user_type(a, 0);
         let b_ty = fixture.user_type(b, 0);
-        fixture.raw.casts.push(CastRule {
-            from: a_ty,
-            to: b_ty,
-            via: to_b,
-        });
-        fixture.raw.casts.push(CastRule {
-            from: b_ty,
-            to: a_ty,
-            via: to_a,
-        });
+        fixture.cast(a_ty, b_ty, to_b);
+        fixture.cast(b_ty, a_ty, to_a);
         assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Named(a)) }]);
     }
 
@@ -1566,7 +1643,7 @@ mod tests {
         let string = fixture.ty(TyKind::String);
         let from = fixture.ty(TyKind::Option(int));
         let to = fixture.ty(TyKind::Option(string));
-        fixture.raw.casts.push(CastRule { from, to, via });
+        fixture.cast(from, to, via);
         assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Option) }]);
     }
 
@@ -1963,11 +2040,7 @@ mod tests {
         let slice_ref = fixture.reference(Mutability::Shared, slice);
         let as_slice_at_vec = fixture.function(&[vec_ref], slice_ref);
         fixture.give(core.as_slice, &[as_slice_at_vec]);
-        fixture.raw.casts.push(CastRule {
-            from: vec_ref,
-            to: other_ref,
-            via: to_other,
-        });
+        fixture.cast(vec_ref, other_ref, to_other);
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
@@ -1984,7 +2057,7 @@ mod tests {
         let via = fixture.name("m", "from_any");
         let from = fixture.ty(TyKind::Var(0));
         let to = fixture.ty(TyKind::String);
-        fixture.raw.casts.push(CastRule { from, to, via });
+        fixture.cast(from, to, via);
         assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via }]);
     }
 
@@ -1996,7 +2069,7 @@ mod tests {
         let via = fixture.name("m", "from_any");
         let from = fixture.ty(TyKind::Var(0));
         let to = fixture.ty(TyKind::String);
-        fixture.raw.conversions.push(ConversionRule { from, to, via });
+        fixture.conversion(from, to, via);
         assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via }]);
     }
 
@@ -2016,13 +2089,10 @@ mod tests {
             fixture.ty(TyKind::Int(IntTy::I32)),
             fixture.ty(TyKind::Int(IntTy::I64)),
         );
-        fixture.raw.casts.push(CastRule {
-            from: i32_,
-            to: i64_,
-            via: widen,
-        });
-        for (from, via) in [(string, parse), (string, parse_again), (i32_, parse)] {
-            fixture.raw.conversions.push(ConversionRule { from, to: i64_, via });
+        fixture.cast(i32_, i64_, widen);
+        let parse_i32 = fixture.name("m", "parse_i32");
+        for (from, via) in [(string, parse), (string, parse_again), (i32_, parse_i32)] {
+            fixture.conversion(from, i64_, via);
         }
         let decls = fixture.verify().expect("conversions form no tree");
         let vias = |head| {
@@ -2033,7 +2103,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(vias(Head::Base(Base::String)), vec![parse, parse_again]);
-        assert_eq!(vias(Head::Base(Base::Int(IntTy::I32))), vec![parse]);
+        assert_eq!(vias(Head::Base(Base::Int(IntTy::I32))), vec![parse_i32]);
         assert_eq!(vias(Head::Base(Base::Int(IntTy::I64))), Vec::new());
     }
 
@@ -2049,9 +2119,14 @@ mod tests {
         fixture.raw.conversions.push(ConversionRule { from, to: string, via });
         assert_eq!(
             refusals(fixture),
-            vec![Refused::ReferenceToReference {
-                written: Written::Conversion(via)
-            }]
+            vec![
+                Refused::ReferenceToReference {
+                    written: Written::Conversion(via)
+                },
+                Refused::ViaNotItsFunction {
+                    written: Written::Conversion(via)
+                },
+            ]
         );
     }
 
@@ -2065,10 +2140,15 @@ mod tests {
         fixture.raw.conversions.push(ConversionRule { from, to, via });
         assert_eq!(
             refusals(fixture),
-            vec![Refused::UndeclaredType {
-                written: Written::Conversion(via),
-                id: ghost
-            }]
+            vec![
+                Refused::UndeclaredType {
+                    written: Written::Conversion(via),
+                    id: ghost
+                },
+                Refused::ViaNotItsFunction {
+                    written: Written::Conversion(via)
+                },
+            ]
         );
     }
 
@@ -2167,10 +2247,15 @@ mod tests {
         fixture.raw.casts.push(CastRule { from, to, via });
         assert_eq!(
             refusals(fixture),
-            vec![Refused::UndeclaredType {
-                written: Written::Cast(via),
-                id: ghost
-            }]
+            vec![
+                Refused::UndeclaredType {
+                    written: Written::Cast(via),
+                    id: ghost
+                },
+                Refused::ViaNotItsFunction {
+                    written: Written::Cast(via)
+                },
+            ]
         );
     }
 
@@ -2292,9 +2377,14 @@ mod tests {
         fixture.raw.casts.push(CastRule { from, to: string, via });
         assert_eq!(
             refusals(fixture),
-            vec![Refused::ReferenceToReference {
-                written: Written::Cast(via)
-            }]
+            vec![
+                Refused::ReferenceToReference {
+                    written: Written::Cast(via)
+                },
+                Refused::ViaNotItsFunction {
+                    written: Written::Cast(via)
+                },
+            ]
         );
     }
 
