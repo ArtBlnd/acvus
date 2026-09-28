@@ -34,9 +34,9 @@ for x in &@xs {
 (s, @big)
 ```
 
-## 3. Model (`acvum`, to-be)
+## 3. Module (`acvum`, to-be)
 
-Declarations: `fn`, `struct` and `impl`. Lambdas only inside a `fn`. No concrete type is written, and a model does not refer to any context `@x`. Seen from outside the model, its structs are opaque: by the transparency rule, the type of `Self` does not change, and nothing outside adds a field to it.
+Declarations: `fn`, `struct` and `impl`. Lambdas only inside a `fn`. No concrete type is written, and a module does not refer to any context `@x`. Seen from outside the module, its structs are opaque: by the transparency rule, the type of `Self` does not change, and nothing outside adds a field to it.
 
 ```acvum
 struct Point { a, b }
