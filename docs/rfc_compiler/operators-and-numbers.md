@@ -10,6 +10,14 @@ The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integ
 
 Each operator is a call of a `core` signature: `+` of `core::add`, `-` of `core::sub`, `*` of `core::mul`, `/` of `core::div`, `%` of `core::rem`, unary `-` of `core::neg`, `==` of `core::eq`, the orderings of `core::cmp`. The operands' types decide which instance answers. Where no instance answers, the program is refused. An extern type joins an operator by declaring an instance.
 
+`core`'s signatures are Rust's, but for two:
+
+- `clone<T>(&T) -> T`, `eq<T>(&T, &T) -> bool`.
+- `cmp<T>(&T, &T) -> i64`, answering `-1`, `0` or `1`.
+- `add`, `sub`, `mul`, `div`, `rem`: `<T, O>(&T, &T) -> O`, and `neg<T, O>(&T) -> O`; the instance chooses `O`.
+- `display<T>(&T, out: &mut String)`, appending to `out`.
+- `as_slice<C, T>(&C) -> &[T]`, `as_slice_mut<C, T>(&mut C) -> &mut [T]`, `as_str<S>(&S) -> &str`: the views.
+
 `&&`, `||` and `!` on `bool`, `^` on `bool` and the integers, and `&`, `|`, `<<` and `>>` on the integers are the language's own operations, as Rust defines them, with overflow as §1 states. They are not calls.
 
 ## 3. Slices
