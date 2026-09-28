@@ -1156,14 +1156,18 @@ fn process_inst(
 mod tests {
     use super::*;
     use acvus_utils::QualifiedRef;
+    use crate::flows::{Flows, FlowTerm};
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
-    use crate::ty::{Param, TypeArg};
+    use crate::ty::{Calls, Effect, EffectTerm, Holds, IntTy, ParamTerm, TypeArg};
     use acvus_utils::{Interner, LocalFactory};
 
-    /// Create a dummy Param for tests where parameter name is irrelevant.
-    fn param(ty: Ty) -> Param {
+    /// Create a dummy `ParamTerm` for tests where parameter name is irrelevant.
+    fn param(ty: Ty) -> ParamTerm<Concrete> {
         let interner = Interner::new();
-        Param::new(interner.intern("_"), ty)
+        ParamTerm {
+            name: interner.intern("_"),
+            ty,
+        }
     }
 
     fn span() -> Span {
@@ -1174,7 +1178,8 @@ mod tests {
         Inst { span: span(), kind }
     }
 
-    fn make_module(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>) -> MirModule {
+    fn make_module(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>, mut types: Types<Concrete>) -> MirModule {
+        let unit_ty = types.intern(TyKind::Unit);
         MirModule {
             declared_params: 0,
             main: MirBody {
@@ -1189,142 +1194,146 @@ mod tests {
                 order_param: None,
             },
             closures: FxHashMap::default(),
-            ret: crate::ty::Ty::Unit,
+            ret: unit_ty,
             flows: crate::flows::Flows::Every,
+            types,
         }
+    }
+
+    /// A type value these tests do not read further: a placeholder
+    /// `callee_ty` for a call whose test is not about its type.
+    fn dummy_ty(types: &mut Types<Concrete>) -> Ty {
+        types.intern(TyKind::Int(IntTy::I64))
     }
 
     // -- is_move_only tests --
 
     /// A user-defined type with an identity: a source of its own, so move-only.
-    fn test_user_defined() -> Ty {
+    fn test_user_defined(types: &mut Types<Concrete>) -> Ty {
         let i = Interner::new();
-        Ty::UserDefined {
+        types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(i.intern("TestType")),
-            type_args: vec![],
-            effect_args: vec![],
-            identity_args: vec![crate::ty::IdentityTerm::Known(
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([crate::ty::IdentityTerm::Known(
                 <crate::ty::IdentityId as acvus_utils::LocalIdOps>::from_raw(0),
-            )],
-            region_params: 0,
-        }
+            )]),
+        })
     }
 
     #[test]
     fn an_option_moves_exactly_when_its_payload_does() {
-        let option = |ty| Ty::Option(Box::new(ty));
-        assert_eq!(is_move_only(&option(Ty::Float)), Some(false));
-        assert_eq!(is_move_only(&option(Ty::String)), Some(true));
-        assert_eq!(is_move_only(&option(option(Ty::Float))), Some(false));
-        assert_eq!(
-            is_move_only(&option(option(test_user_defined()))),
-            Some(true)
-        );
+        let mut types = Types::<Concrete>::new();
+        let float_ty = types.intern(TyKind::Float);
+        let string_ty = types.intern(TyKind::String);
+        let option_float = types.intern(TyKind::Option(float_ty));
+        let option_string = types.intern(TyKind::Option(string_ty));
+        let option_option_float = types.intern(TyKind::Option(option_float));
+        let user = test_user_defined(&mut types);
+        let option_user = types.intern(TyKind::Option(user));
+        let option_option_user = types.intern(TyKind::Option(option_user));
+        assert_eq!(is_move_only(&types, option_float), false);
+        assert_eq!(is_move_only(&types, option_string), true);
+        assert_eq!(is_move_only(&types, option_option_float), false);
+        assert_eq!(is_move_only(&types, option_option_user), true);
     }
 
     #[test]
     fn words_copy_and_owners_move() {
-        assert_eq!(is_move_only(&Ty::I64), Some(false));
-        assert_eq!(is_move_only(&Ty::Bool), Some(false));
-        assert_eq!(
-            is_move_only(&Ty::Ref(
-                crate::ty::Mutability::Shared,
-                Box::new(TypeArg::uniform(Ty::String))
-            )),
-            Some(false)
-        );
-        assert_eq!(is_move_only(&Ty::String), Some(true));
-        assert_eq!(
-            is_move_only(&Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3))),
-            Some(true)
-        );
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let bool_ty = types.intern(TyKind::Bool);
+        let string_ty = types.intern(TyKind::String);
+        let shared_string_ref = types.intern(TyKind::Ref(crate::ty::Mutability::Shared, TypeArg::Uniform(string_ty)));
+        let array_of_i64 = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        assert_eq!(is_move_only(&types, i64_ty), false);
+        assert_eq!(is_move_only(&types, bool_ty), false);
+        assert_eq!(is_move_only(&types, shared_string_ref), false);
+        assert_eq!(is_move_only(&types, string_ty), true);
+        assert_eq!(is_move_only(&types, array_of_i64), true);
     }
 
     #[test]
     fn user_defined_without_identity_moves() {
+        let mut types = Types::<Concrete>::new();
         let i = Interner::new();
-        let plain = Ty::UserDefined {
+        let plain = types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(i.intern("Plain")),
-            type_args: vec![],
-            effect_args: vec![],
-            identity_args: vec![],
-            region_params: 0,
-        };
-        assert_eq!(is_move_only(&plain), Some(true));
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([]),
+        });
+        assert_eq!(is_move_only(&types, plain), true);
     }
 
     #[test]
     fn user_defined_is_move() {
-        assert_eq!(is_move_only(&test_user_defined()), Some(true));
+        let mut types = Types::<Concrete>::new();
+        let user = test_user_defined(&mut types);
+        assert_eq!(is_move_only(&types, user), true);
     }
 
     #[test]
     fn tuple_with_user_defined_is_move() {
-        let ty = Ty::Tuple(vec![Ty::I64, test_user_defined()]);
-        assert_eq!(is_move_only(&ty), Some(true));
-    }
-
-    #[test]
-    fn fn_with_user_defined_capture_is_move() {
-        let ty = Ty::Fn {
-            params: vec![param(Ty::I64)],
-            ret: Box::new(Ty::I64),
-            captures: vec![test_user_defined()],
-            effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::flows::Flows::Every.into(),
-        };
-        assert_eq!(is_move_only(&ty), Some(true));
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let user = test_user_defined(&mut types);
+        let ty = types.intern(TyKind::Tuple(Box::new([i64_ty, user])));
+        assert_eq!(is_move_only(&types, ty), true);
     }
 
     #[test]
     fn fn_moves() {
-        let ty = Ty::Fn {
-            params: vec![param(Ty::I64)],
-            ret: Box::new(Ty::I64),
-            captures: vec![Ty::I64, Ty::String],
-            effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::flows::Flows::Every.into(),
-        };
-        assert_eq!(is_move_only(&ty), Some(true));
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let ty = types.intern(TyKind::Fn {
+            params: Box::new([param(i64_ty)]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        assert_eq!(is_move_only(&types, ty), true);
     }
 
     // -- move check integration tests --
 
     #[test]
     fn error_for_user_defined_reuse() {
+        let mut types = Types::<Concrete>::new();
+        let user_ty = test_user_defined(&mut types);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
         let v2 = vf.next();
         // v0 = UserDefined (move-only), used twice -> ERROR
         let mut val_types = FxHashMap::default();
-        val_types.insert(v0, test_user_defined());
-        val_types.insert(
-            v1,
-            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-        );
-        val_types.insert(
-            v2,
-            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-        );
+        val_types.insert(v0, user_ty);
+        val_types.insert(v1, array_ty);
+        val_types.insert(v2, array_ty);
 
         let call = |dst, span| Inst {
             span,
             kind: InstKind::FunctionCall {
                 dst,
                 callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                callee_ty: Ty::error(),
+                callee_ty: dummy,
                 args: vec![v0],
                 order: None,
             },
         };
         let first = Span { start: 0, end: 7 };
-        let module = make_module(
+        let mut module = make_module(
             vec![call(v1, first), call(v2, Span { start: 9, end: 16 })],
             val_types,
+            types,
         );
 
-        let errors = check_moves(&module);
+        let errors = check_moves(&mut module);
         assert_eq!(errors.len(), 1, "UserDefined reuse should be rejected");
         assert!(matches!(
             errors[0].kind,
@@ -1338,34 +1347,42 @@ mod tests {
 
     #[test]
     fn no_error_for_single_use_user_defined() {
+        let mut types = Types::<Concrete>::new();
+        let user_ty = test_user_defined(&mut types);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
         // v0 = UserDefined, used once -> OK
         let mut val_types = FxHashMap::default();
-        val_types.insert(v0, test_user_defined());
-        val_types.insert(
-            v1,
-            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-        );
+        val_types.insert(v0, user_ty);
+        val_types.insert(v1, array_ty);
 
-        let module = make_module(
+        let mut module = make_module(
             vec![inst(InstKind::FunctionCall {
                 dst: v1,
                 callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                callee_ty: Ty::error(),
+                callee_ty: dummy,
                 args: vec![v0],
                 order: None,
             })],
             val_types,
+            types,
         );
 
-        let errors = check_moves(&module);
+        let errors = check_moves(&mut module);
         assert!(errors.is_empty());
     }
 
     #[test]
     fn var_reassign_revives() {
+        let mut types = Types::<Concrete>::new();
+        let move_ty = test_user_defined(&mut types);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
@@ -1376,22 +1393,15 @@ mod tests {
         let a = vf.next(); // storage slot for variable "a"
         // $a = move-only (v0), Take (v1) -> moved, $a = new value (v2) -> alive, Take (v3) -> OK
         let mut val_types = FxHashMap::default();
-        let move_ty = test_user_defined();
-        val_types.insert(a, move_ty.clone());
-        val_types.insert(v0, move_ty.clone());
-        val_types.insert(v1, move_ty.clone());
-        val_types.insert(v2, move_ty.clone());
-        val_types.insert(v3, move_ty.clone());
-        val_types.insert(
-            v4,
-            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-        );
-        val_types.insert(
-            v5,
-            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-        );
+        val_types.insert(a, move_ty);
+        val_types.insert(v0, move_ty);
+        val_types.insert(v1, move_ty);
+        val_types.insert(v2, move_ty);
+        val_types.insert(v3, move_ty);
+        val_types.insert(v4, array_ty);
+        val_types.insert(v5, array_ty);
 
-        let module = make_module(
+        let mut module = make_module(
             vec![
                 // $a = v0 (move-only)
                 inst(InstKind::Assign {
@@ -1411,7 +1421,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v4,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    callee_ty: Ty::error(),
+                    callee_ty: dummy,
                     args: vec![v1],
                     order: None,
                 }),
@@ -1433,15 +1443,16 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v5,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    callee_ty: Ty::error(),
+                    callee_ty: dummy,
                     args: vec![v3],
                     order: None,
                 }),
             ],
             val_types,
+            types,
         );
 
-        let errors = check_moves(&module);
+        let errors = check_moves(&mut module);
         assert!(
             errors.is_empty(),
             "reassigned variable should be alive: {errors:?}"
@@ -1450,6 +1461,11 @@ mod tests {
 
     #[test]
     fn var_use_after_move() {
+        let mut types = Types::<Concrete>::new();
+        let move_ty = test_user_defined(&mut types);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
@@ -1459,21 +1475,14 @@ mod tests {
         let a = vf.next(); // storage slot for variable "a"
         // $a = move-only, Take -> moved, Take again -> ERROR
         let mut val_types = FxHashMap::default();
-        let move_ty = test_user_defined();
-        val_types.insert(a, move_ty.clone());
-        val_types.insert(v0, move_ty.clone());
-        val_types.insert(v1, move_ty.clone());
-        val_types.insert(v2, move_ty.clone());
-        val_types.insert(
-            v3,
-            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-        );
-        val_types.insert(
-            v4,
-            Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3)),
-        );
+        val_types.insert(a, move_ty);
+        val_types.insert(v0, move_ty);
+        val_types.insert(v1, move_ty);
+        val_types.insert(v2, move_ty);
+        val_types.insert(v3, array_ty);
+        val_types.insert(v4, array_ty);
 
-        let module = make_module(
+        let mut module = make_module(
             vec![
                 inst(InstKind::Assign {
                     target: RefTarget::Var(a),
@@ -1490,7 +1499,7 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v3,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    callee_ty: Ty::error(),
+                    callee_ty: dummy,
                     args: vec![v1],
                     order: None,
                 }),
@@ -1504,15 +1513,16 @@ mod tests {
                 inst(InstKind::FunctionCall {
                     dst: v4,
                     callee: Callee::Direct(QualifiedRef::root(Interner::new().intern("test"))),
-                    callee_ty: Ty::error(),
+                    callee_ty: dummy,
                     args: vec![v2],
                     order: None,
                 }),
             ],
             val_types,
+            types,
         );
 
-        let errors = check_moves(&module);
+        let errors = check_moves(&mut module);
         assert_eq!(errors.len(), 1, "use after move of $var should be rejected");
     }
 
@@ -1523,21 +1533,22 @@ mod tests {
     #[test]
     fn a_context_committed_after_its_move_is_named_at_the_move() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
+        let move_ty = test_user_defined(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let slot = vf.next();
         let filled = vf.next();
         let taken = vf.next();
         let committed = vf.next();
-        let move_ty = test_user_defined();
         let mut val_types = FxHashMap::default();
         for v in [slot, filled, taken, committed] {
-            val_types.insert(v, move_ty.clone());
+            val_types.insert(v, move_ty);
         }
         let query = QualifiedRef::root(i.intern("query"));
         let moved_at = Span { start: 8, end: 14 };
         let whole = Span { start: 0, end: 40 };
 
-        let module = make_module(
+        let mut module = make_module(
             vec![
                 Inst {
                     span: whole,
@@ -1576,9 +1587,10 @@ mod tests {
                 },
             ],
             val_types,
+            types,
         );
 
-        let errors = check_moves(&module);
+        let errors = check_moves(&mut module);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].span, moved_at);
         assert!(
@@ -1600,6 +1612,7 @@ mod tests {
         slot: ValueId,
         vf: LocalFactory<ValueId>,
         val_types: FxHashMap<ValueId, Ty>,
+        types: Types<Concrete>,
         insts: Vec<Inst>,
         v: PathSeg,
         w: PathSeg,
@@ -1608,14 +1621,17 @@ mod tests {
     impl Storage {
         fn new() -> Self {
             let interner = Interner::new();
+            let mut types = Types::<Concrete>::new();
+            let user_ty = test_user_defined(&mut types);
             let mut vf = LocalFactory::<ValueId>::new();
             let slot = vf.next();
             let mut val_types = FxHashMap::default();
-            val_types.insert(slot, test_user_defined());
+            val_types.insert(slot, user_ty);
             Self {
                 slot,
                 vf,
                 val_types,
+                types,
                 insts: Vec::new(),
                 v: PathSeg::Field(interner.intern("v")),
                 w: PathSeg::Field(interner.intern("w")),
@@ -1637,7 +1653,8 @@ mod tests {
         }
 
         fn take(&mut self, path: &[PathSeg]) {
-            self.take_as(path, test_user_defined(), false);
+            let user_ty = test_user_defined(&mut self.types);
+            self.take_as(path, user_ty, false);
         }
 
         /// The take-out of a place lent to a call, of a value of type `ty`.
@@ -1667,7 +1684,8 @@ mod tests {
 
         fn assign_as(&mut self, path: &[PathSeg], restores: bool) {
             let value = self.vf.next();
-            self.val_types.insert(value, test_user_defined());
+            let user_ty = test_user_defined(&mut self.types);
+            self.val_types.insert(value, user_ty);
             self.push(InstKind::Assign {
                 target: RefTarget::Var(self.slot),
                 path: path.to_vec(),
@@ -1678,13 +1696,11 @@ mod tests {
 
         fn lend(&mut self, path: &[PathSeg]) {
             let dst = self.vf.next();
-            self.val_types.insert(
-                dst,
-                Ty::Ref(
-                    crate::ty::Mutability::Shared,
-                    Box::new(TypeArg::uniform(test_user_defined())),
-                ),
-            );
+            let user_ty = test_user_defined(&mut self.types);
+            let shared_ref = self
+                .types
+                .intern(TyKind::Ref(crate::ty::Mutability::Shared, TypeArg::Uniform(user_ty)));
+            self.val_types.insert(dst, shared_ref);
             self.push(InstKind::Ref {
                 dst,
                 target: RefTarget::Var(self.slot),
@@ -1694,7 +1710,7 @@ mod tests {
         }
 
         fn errors(self) -> Vec<ValidationError> {
-            check_moves(&make_module(self.insts, self.val_types))
+            check_moves(&mut make_module(self.insts, self.val_types, self.types))
         }
     }
 
@@ -1774,7 +1790,8 @@ mod tests {
         let mut o = Storage::new();
         o.assign(&[]);
         let v = o.v;
-        o.take_out(&[v], test_user_defined());
+        let user_ty = test_user_defined(&mut o.types);
+        o.take_out(&[v], user_ty);
         o.assign(&[v]);
         o.assign(&[]);
         o.lend(&[v]);
@@ -1808,7 +1825,8 @@ mod tests {
         let mut o = Storage::new();
         o.assign(&[]);
         let v = o.v;
-        o.take_out(&[v], Ty::I64);
+        let i64_ty = o.types.intern(TyKind::Int(IntTy::I64));
+        o.take_out(&[v], i64_ty);
         o.take(&[v]);
         o.restore(&[v]);
         o.lend(&[v]);
@@ -1825,32 +1843,6 @@ mod tests {
             "{:?}",
             errors[0].kind
         );
-    }
-
-    #[test]
-    fn ty_param_skipped() {
-        let mut vf = LocalFactory::<ValueId>::new();
-        let v0 = vf.next();
-        // v0 = Ty::Error (unresolved), used twice -> no error (analysis mode)
-        let mut val_types = FxHashMap::default();
-        val_types.insert(v0, Ty::error());
-
-        let module = make_module(
-            vec![
-                inst(InstKind::Return {
-                    value: v0,
-                    order: None,
-                }),
-                inst(InstKind::Return {
-                    value: v0,
-                    order: None,
-                }),
-            ],
-            val_types,
-        );
-
-        let errors = check_moves(&module);
-        assert!(errors.is_empty(), "Ty::Error should be skipped");
     }
 
     // E2E compile pipeline tests have been migrated to acvus-mir-test/tests/e2e.rs

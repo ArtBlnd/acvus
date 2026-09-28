@@ -1634,7 +1634,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "irreducible control flow")]
     fn an_irreducible_cycle_is_refused() {
-        let mut types = Types::<Concrete>::new();
+        let types = Types::<Concrete>::new();
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -1866,7 +1866,7 @@ mod tests {
 
     #[test]
     fn multi_level_hoist() {
-        let mut types = Types::<Concrete>::new();
+        let types = Types::<Concrete>::new();
         // B0 -> diamond -> B3 -> diamond -> B6
         // The pure op in B6 hoists directly to B0 in one pass.
         let mut cfg = make_cfg(
@@ -1961,7 +1961,7 @@ mod tests {
 
     #[test]
     fn pure_instruction_hoisted() {
-        let mut types = Types::<Concrete>::new();
+        let types = Types::<Concrete>::new();
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -2117,7 +2117,7 @@ mod tests {
     /// control-equivalent to it.
     #[test]
     fn a_loop_body_instruction_does_not_rise_into_the_head() {
-        let mut types = Types::<Concrete>::new();
+        let types = Types::<Concrete>::new();
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -2298,7 +2298,6 @@ mod tests {
 
     #[test]
     fn the_same_loop_without_that_write_lets_the_borrow_out() {
-        let mut types = Types::<Concrete>::new();
         assert!(
             !shared_borrow_is_below_the_test(a_loop_that_borrows_a_storage(false)),
             "nothing the borrow would span writes the storage"
@@ -2626,7 +2625,7 @@ mod tests {
 
     #[test]
     fn an_index_never_leaves_the_loop() {
-        let mut types = Types::<Concrete>::new();
+        let types = Types::<Concrete>::new();
         let mut cfg = make_cfg(a_loop_that_slices_a_container(false), 10);
         run_test(&mut cfg, &types);
         let body = demoted(cfg);
@@ -2926,7 +2925,7 @@ mod tests {
     #[test]
     fn fetch_stays_in_place() {
         let i = Interner::new();
-        let mut types = Types::<Concrete>::new();
+        let types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // v1 = fetch @x
@@ -2996,7 +2995,7 @@ mod tests {
     #[test]
     fn commit_stays_in_place() {
         let i = Interner::new();
-        let mut types = Types::<Concrete>::new();
+        let types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // commit @x = v5

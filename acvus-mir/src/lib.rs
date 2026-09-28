@@ -29,7 +29,7 @@ mod tests {
         Calls, Concrete, Effect, EffectTerm, Holds, IntTy, LenTerm, ObjectTy, ParamTerm, Ty, TyKind, Types,
     };
     use acvus_utils::{Astr, Interner};
-    use rustc_hash::{FxHashMap, FxHashSet};
+    use rustc_hash::FxHashSet;
 
     /// A structural object type, its fields sorted by name as
     /// `ObjectTy::Structural` requires.

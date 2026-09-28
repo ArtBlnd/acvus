@@ -1197,7 +1197,7 @@ fn remap_inst(
 
 #[cfg(test)]
 mod tests {
-    use crate::ty::{IntTy, Ty};
+    use crate::ty::IntTy;
 
     use super::*;
     use acvus_ast::Span;
