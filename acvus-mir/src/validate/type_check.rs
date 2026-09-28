@@ -317,83 +317,14 @@ struct BranchEdge<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Structural type equality (invariant)
+// Fitting a slot
 // ---------------------------------------------------------------------------
 
-/// Returns `true` if `expected` and `actual` are structurally equal under
-/// invariant variance.
+/// Whether a value of type `actual` fits a slot of type `expected`. Types
+/// are hash-consed, so two are the same exactly when their ids are equal; a
+/// value of the bottom type fits any slot (types §4).
 fn types_match(types: &Types<Concrete>, expected: Ty, actual: Ty) -> bool {
-    acvus_utils::grow(|| types_match_level(types, expected, actual))
-}
-
-fn types_match_level(types: &Types<Concrete>, expected: Ty, actual: Ty) -> bool {
-    if expected == actual {
-        return true;
-    }
-    let arg_match = |a: &TypeArg<Concrete>, b: &TypeArg<Concrete>| match (a, b) {
-        (TypeArg::Uniform(x), TypeArg::Uniform(y)) | (TypeArg::Specialized(x), TypeArg::Specialized(y)) => {
-            types_match(types, *x, *y)
-        }
-        (TypeArg::Open(var, _), _) | (_, TypeArg::Open(var, _)) => match *var {},
-        (TypeArg::Uniform(_), TypeArg::Specialized(_)) | (TypeArg::Specialized(_), TypeArg::Uniform(_)) => false,
-    };
-    match (types.kind(expected), types.kind(actual)) {
-        // A slot declared `!` states no type, so it accepts any value
-        // (RFC-0054).
-        (TyKind::Never, _) => true,
-        (TyKind::Var(v), _) | (_, TyKind::Var(v)) => match *v {},
-
-        // Primitives are one id each; unequal ids are unequal types.
-        (TyKind::Int(a), TyKind::Int(b)) => a == b,
-
-        // Containers (invariant inner)
-        (TyKind::Array(a, la), TyKind::Array(b, lb)) => {
-            known_len(la) == known_len(lb) && types_match(types, *a, *b)
-        }
-        (TyKind::Option(a), TyKind::Option(b)) | (TyKind::Slice(a), TyKind::Slice(b)) => {
-            types_match(types, *a, *b)
-        }
-        (TyKind::Handle(a), TyKind::Handle(b)) => types_match(types, *a, *b),
-        (TyKind::Result(ta, ea), TyKind::Result(tb, eb)) => {
-            types_match(types, *ta, *tb) && types_match(types, *ea, *eb)
-        }
-        (TyKind::Ref(ma, a), TyKind::Ref(mb, b)) => ma == mb && arg_match(a, b),
-        (TyKind::Tuple(a), TyKind::Tuple(b)) => {
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| types_match(types, *x, *y))
-        }
-        (TyKind::Object(a), TyKind::Object(b)) => {
-            let (a, b) = (a.fields(), b.fields());
-            a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .all(|((ka, va), (kb, vb))| ka == kb && types_match(types, *va, *vb))
-        }
-        // Functions
-        (
-            TyKind::Fn {
-                params: p1,
-                ret: r1,
-                ..
-            },
-            TyKind::Fn {
-                params: p2,
-                ret: r2,
-                ..
-            },
-        ) => {
-            p1.len() == p2.len()
-                && p1.iter().zip(p2.iter()).all(|(a, b)| types_match(types, a.ty, b.ty))
-                && types_match(types, *r1, *r2)
-        }
-
-        // Enum - same name is sufficient (variants are open/unified elsewhere)
-        (TyKind::Enum { name: n1, .. }, TyKind::Enum { name: n2, .. }) => n1 == n2,
-
-        // UserDefined - same id
-        (TyKind::UserDefined { id: a, .. }, TyKind::UserDefined { id: b, .. }) => a == b,
-
-        _ => false,
-    }
+    expected == actual || matches!(types.kind(actual), TyKind::Never)
 }
 
 // ---------------------------------------------------------------------------
@@ -584,7 +515,27 @@ impl<'t> CheckCtx<'t> {
                             got: captures.len(),
                         },
                     }),
-                    Some(_) => {}
+                    // Each captured value against the register of the body
+                    // it is bound to.
+                    Some(closure) => {
+                        for (i, (captured, (_, register))) in captures.iter().zip(&closure.captures).enumerate() {
+                            let (Some(captured_ty), Some(register_ty)) = (
+                                self.ty_of(*captured, &body.val_types, inst.span, pc, errors),
+                                self.ty_of(*register, &closure.val_types, inst.span, pc, errors),
+                            ) else {
+                                continue;
+                            };
+                            self.assert_match(
+                                pc,
+                                inst.span,
+                                "MakeClosure",
+                                &format!("capture[{i}]"),
+                                register_ty,
+                                captured_ty,
+                                errors,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1251,8 +1202,8 @@ impl<'t> CheckCtx<'t> {
                 }
             }
 
-            // A function type states no capture list (D-c): the count of
-            // captures is checked against the body it makes, in `check_body`.
+            // A function type states no capture list (D-c): the captures are
+            // checked against the body it makes, in `check_body`.
             InstKind::MakeClosure { dst, .. } => {
                 let dst_ty = ty!(*dst);
                 if !matches!(self.kind(dst_ty), TyKind::Fn { .. }) {
@@ -2046,9 +1997,7 @@ impl<'t> CheckCtx<'t> {
             InstKind::Return { value, order } => {
                 let value_ty = ty!(*value);
                 // `!` has no value, so it satisfies any slot (RFC-0038).
-                if let Some(declared) = self.declared_ret
-                    && !matches!(self.kind(value_ty), TyKind::Never)
-                {
+                if let Some(declared) = self.declared_ret {
                     self.assert_match(pc, span, "Return", "value", declared, value_ty, errors);
                 }
                 if let Some(o) = order {
