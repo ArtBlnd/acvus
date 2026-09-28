@@ -284,9 +284,8 @@ mod tests {
     use crate::cfg;
     use acvus_utils::QualifiedRef;
     use crate::decl::{Core, LoopMarkers, RawDeclarations};
-    use crate::flows::{Flows, FlowTerm};
     use crate::ir::{Callee, DebugInfo, MirBody};
-    use crate::ty::{Calls, Contexts, Effect, EffectTerm, Holds, IntTy, Reissue, SplitCost, Ty, TyKind};
+    use crate::ty::{Calls, Contexts, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Reissue, SplitCost, Ty, TyKind};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
 

@@ -10,7 +10,7 @@
 //! read off the declared type itself, in order, so a call's instantiated
 //! type has them by construction.
 
-use crate::flows::FlowEnd;
+use crate::ty::FlowEnd;
 
 /// A lifetime as the signature names it, by position among its lifetimes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

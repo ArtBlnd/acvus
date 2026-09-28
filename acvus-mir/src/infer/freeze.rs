@@ -4,10 +4,9 @@ use rustc_hash::FxHashMap;
 
 use super::cells::{Cells, End as CellEnd, MarkTerm, VarTerm};
 use super::{Infer, Mark, Term, VarState, product_parts};
-use crate::flows::FlowTerm;
 use crate::ty::{
-    Concrete, EffectArg, EffectTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, ParamTerm, Ty, TyKind,
-    TyVarId, TypeArg, Types,
+    Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, ParamTerm, Ty,
+    TyKind, TyVarId, TypeArg, Types,
 };
 
 /// Each term already frozen, so a shared subterm freezes once.

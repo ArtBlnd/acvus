@@ -4,8 +4,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use acvus_utils::QualifiedRef;
-use crate::flows::Flows;
-use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, Types};
+use crate::ty::{CastTy, Concrete, Flows, IntTy, Mutability, Ty, Types};
 
 /// A call that is an instruction of the language (RFC-0020): the
 /// compiler's own instance of a shared signature.

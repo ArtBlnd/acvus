@@ -346,8 +346,7 @@ mod tests {
     use super::*;
     use crate::cfg;
     use crate::decl::{Core, LoopMarkers, RawDeclarations};
-    use crate::flows::{Flows, FlowTerm};
-    use crate::ty::{Calls, Contexts, Effect, EffectTerm, Holds, IntTy, Reissue, SplitCost, Ty};
+    use crate::ty::{Calls, Contexts, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Reissue, SplitCost, Ty};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {

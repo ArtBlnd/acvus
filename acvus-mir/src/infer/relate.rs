@@ -16,10 +16,9 @@ use super::{End, Infer, Mark, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedExternCast};
-use crate::flows::Flows;
 use crate::ty::{
-    Calls, Effect, EffectArg, EffectTerm, Holds, IdentityTerm, Infer as InferPhase, Label, ObjectTy, ParamTerm, TyKind, TyVarId,
-    TypeArg,
+    Calls, Effect, EffectArg, EffectTerm, Flows, Holds, IdentityTerm, Infer as InferPhase, Label, ObjectTy, ParamTerm,
+    TyKind, TyVarId, TypeArg,
 };
 
 /// Why two terms do not relate: B's refusals (refusals).

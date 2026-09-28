@@ -7,8 +7,11 @@ use super::casts::{Base, CastTree, Head, VerifiedExternCast};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::instance_fit::is_instance_of;
 use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, TyVarBound, UserTypeDecl};
-use crate::flows::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Segment, segments};
-use crate::ty::{Holds, LifetimesOf, Mutability, ObjectTy, ParamTerm, Poly, TyId, TyKind, Types};
+use crate::flows::{Segment, segments};
+use crate::ty::{
+    Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LifetimesOf, Mutability, ObjectTy, ParamTerm,
+    Poly, TyId, TyKind, Types,
+};
 
 /// Why a set of declarations is not taken in.
 #[derive(Debug, Clone, PartialEq, Eq)]

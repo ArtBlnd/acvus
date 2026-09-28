@@ -291,7 +291,7 @@ mod tests {
             },
             closures: FxHashMap::default(),
             ret: i64_ty,
-            flows: crate::flows::Flows::Every,
+            flows: crate::ty::Flows::Every,
             types,
         }
     }

@@ -22,11 +22,11 @@ pub(crate) mod test;
 
 #[cfg(test)]
 mod tests {
-    use crate::flows::{Flows, FlowTerm};
     use crate::ir::{InstKind, MirModule, RefTarget};
     use crate::test::{compile_script, compile_template};
     use crate::ty::{
-        Calls, Concrete, Effect, EffectTerm, Holds, IntTy, LenTerm, ObjectTy, ParamTerm, Ty, TyKind, Types,
+        Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, ObjectTy, ParamTerm, Ty, TyKind,
+        Types,
     };
     use acvus_utils::{Astr, Interner};
     use rustc_hash::FxHashSet;

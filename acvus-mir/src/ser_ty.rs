@@ -18,11 +18,11 @@ use std::collections::BTreeMap;
 use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use serde::{Deserialize, Serialize};
 
-use crate::flows::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled};
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
-    Calls, Concrete, Contexts, Effect, EffectArg, EffectTerm, Holds, IdentityId, IdentityTerm, IntTy, LenTerm,
-    ObjectTy, ParamTerm, Reissue, SplitCost, Ty, TyKind, TypeArg, Types,
+    Alignment, Calls, Concrete, Contexts, Declared, Effect, EffectArg, EffectTerm, Flow, FlowEnd, FlowTerm, Flows,
+    Holds, IdentityId, IdentityTerm, IntTy, Labelled, LenTerm, ObjectTy, ParamTerm, Reissue, SplitCost, Ty, TyKind,
+    TypeArg, Types,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

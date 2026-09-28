@@ -74,8 +74,10 @@ mod tests {
     use super::*;
     use crate::cfg::promote;
     use acvus_utils::QualifiedRef;
-    use crate::ty::{Calls, Contexts, Cost, Effect, EffectTerm, Holds, IntTy, Mutability, ParamTerm, Reissue, SplitCost, TypeArg};
-    use crate::flows::{Flows, FlowTerm};
+    use crate::ty::{
+        Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, ParamTerm, Reissue,
+        SplitCost, TypeArg,
+    };
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
 

@@ -231,10 +231,10 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 write!(f, "a reference to {named} cannot leave the body")
             }
             ValidationErrorKind::FlowNotStated { to, from } => {
-                let end = |end: &crate::flows::FlowEnd| match end {
-                    crate::flows::FlowEnd::Result => "the result".to_string(),
-                    crate::flows::FlowEnd::Param(index) => format!("parameter {index}"),
-                    crate::flows::FlowEnd::Captures => "what the lambda captured".to_string(),
+                let end = |end: &crate::ty::FlowEnd| match end {
+                    crate::ty::FlowEnd::Result => "the result".to_string(),
+                    crate::ty::FlowEnd::Param(index) => format!("parameter {index}"),
+                    crate::ty::FlowEnd::Captures => "what the lambda captured".to_string(),
                 };
                 write!(
                     f,

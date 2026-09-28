@@ -3,10 +3,9 @@
 //! made one with another variable of its kind, so that two variables made
 //! one stay one whatever either learns later.
 
-use crate::flows::{FlowTerm, Flows};
 use crate::ty::{
-    Effect, EffectTerm, EffectVarId, FlowVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, LenTerm,
-    LenVarId, ReprVarId,
+    Effect, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Flows, IdentityId, IdentityTerm, IdentityVarId,
+    Infer as InferPhase, LenTerm, LenVarId, ReprVarId,
 };
 
 use super::{Mark, Unsettled};

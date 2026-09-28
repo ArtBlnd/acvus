@@ -1244,7 +1244,7 @@ mod tests {
             main: body,
             closures: FxHashMap::default(),
             ret: unit_ty,
-            flows: crate::flows::Flows::Every,
+            flows: crate::ty::Flows::Every,
             types,
         }
     }
@@ -1598,7 +1598,7 @@ mod tests {
             main,
             closures: [(Label(0), closure)].into_iter().collect(),
             ret: unit_ty,
-            flows: crate::flows::Flows::Every,
+            flows: crate::ty::Flows::Every,
             types,
         }
     }

@@ -5,11 +5,10 @@ use rustc_hash::FxHashMap;
 
 use super::{Bound, Infer, Term, VarState};
 use crate::decl::{CastRule, Declarations, Scheme, TyVarBound};
-use crate::flows::FlowTerm;
 use crate::laws::NamedLaw;
 use crate::ty::{
-    EffectArg, EffectTerm, EffectVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId,
-    ObjectTy, ParamTerm, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
+    EffectArg, EffectTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
+    LenVarId, ObjectTy, ParamTerm, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
 };
 
 /// A requirement at the use's own terms: an instance of `signature` whose

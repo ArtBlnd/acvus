@@ -720,9 +720,10 @@ mod tests {
     use crate::cfg;
     use acvus_utils::QualifiedRef;
     use crate::decl::{Core, LoopMarkers, RawDeclarations};
-    use crate::flows::{Flows, FlowTerm};
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
-    use crate::ty::{Calls, Contexts, EffectTerm, Holds, IntTy, Mutability, Reissue, SplitCost, TypeArg};
+    use crate::ty::{
+        Calls, Contexts, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost, TypeArg,
+    };
     use crate::ty::Effect;
     use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};

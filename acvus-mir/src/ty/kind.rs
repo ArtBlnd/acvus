@@ -2,9 +2,9 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::arg::{EffectArg, IdentityTerm, LenTerm, TypeArg};
 use super::effect::EffectTerm;
+use super::flow::FlowTerm;
 use super::num::IntTy;
 use super::{Phase, TyId};
-use crate::flows::FlowTerm;
 
 /// One shape of a type. Its parts are ids of the same table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

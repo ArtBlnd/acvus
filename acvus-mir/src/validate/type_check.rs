@@ -213,8 +213,8 @@ pub enum ValidationErrorKind {
     /// flows do not name (RFC-0079 rule 5): the checker's inference of the
     /// flows missed what the body does.
     FlowNotStated {
-        to: crate::flows::FlowEnd,
-        from: crate::flows::FlowEnd,
+        to: crate::ty::FlowEnd,
+        from: crate::ty::FlowEnd,
     },
     /// A parameter's register is storage the call fills before the body's
     /// first instruction. Any other register is a definition, and
@@ -2083,8 +2083,7 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
 mod tests {
     use super::*;
     use crate::ir::{DebugInfo, Inst, MirBody, MirModule};
-    use crate::ty::{Calls, Effect, EffectTerm, Holds, LenTerm};
-    use crate::flows::FlowTerm;
+    use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, LenTerm};
     use acvus_ast::Literal;
     use acvus_utils::LocalFactory;
 
@@ -2113,7 +2112,7 @@ mod tests {
             },
             closures: FxHashMap::default(),
             ret: unit_ty,
-            flows: crate::flows::Flows::Every,
+            flows: crate::ty::Flows::Every,
             types,
         }
     }
@@ -2132,7 +2131,7 @@ mod tests {
             params: Box::new([]),
             ret: declared,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(crate::flows::Flows::Every),
+            flows: FlowTerm::Known(crate::ty::Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
         });

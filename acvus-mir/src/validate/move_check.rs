@@ -1156,9 +1156,8 @@ fn process_inst(
 mod tests {
     use super::*;
     use acvus_utils::QualifiedRef;
-    use crate::flows::{Flows, FlowTerm};
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
-    use crate::ty::{Calls, Effect, EffectTerm, Holds, IntTy, ParamTerm, TypeArg};
+    use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ParamTerm, TypeArg};
     use acvus_utils::{Interner, LocalFactory};
 
     /// Create a dummy `ParamTerm` for tests where parameter name is irrelevant.
@@ -1195,7 +1194,7 @@ mod tests {
             },
             closures: FxHashMap::default(),
             ret: unit_ty,
-            flows: crate::flows::Flows::Every,
+            flows: crate::ty::Flows::Every,
             types,
         }
     }

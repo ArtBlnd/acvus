@@ -16,10 +16,9 @@ mod scheme;
 #[cfg(test)]
 mod tests;
 
-use crate::flows::FlowTerm;
 use crate::ty::{
-    EffectTerm, EffectVarId, FlowVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId,
-    ReprVarId, TyId, TyKind, TyVarId, Types,
+    EffectTerm, EffectVarId, FlowTerm, FlowVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm,
+    LenVarId, ReprVarId, TyId, TyKind, TyVarId, Types,
 };
 
 use cells::{Cells, MarkTerm};

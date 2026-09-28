@@ -14,8 +14,7 @@ use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId, recorded};
 use crate::decl::Declarations;
-use crate::flows::{Alignment, FlowEnd, FlowTerm, Flows};
-use crate::ty::{Concrete, Mutability, Ty, TyKind, Types};
+use crate::ty::{Alignment, Concrete, FlowEnd, FlowTerm, Flows, Mutability, Ty, TyKind, Types};
 use crate::validate::move_check::is_move_only;
 use crate::validate::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
 use acvus_ast::Span;
@@ -917,7 +916,7 @@ mod tests {
             main,
             closures: FxHashMap::default(),
             ret: unit_ty,
-            flows: crate::flows::Flows::Every,
+            flows: crate::ty::Flows::Every,
             types,
         }
     }

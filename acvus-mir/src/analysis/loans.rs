@@ -22,8 +22,11 @@ use crate::ir::{
     Callee, ForSource, IndexMode, Inst, InstKind, PathSeg, RefTarget, ValueId,
 };
 use crate::decl::Declarations;
-use crate::flows::{Alignment, FlowEnd, FlowTerm, Flows, Labelled, Segment, Source, segment_positions, segments};
-use crate::ty::{Concrete, Holds, Mutability, ParamTerm, PositionKind, Ty, TyKind, Types, position_kinds, positions};
+use crate::flows::{Segment, segment_positions, segments};
+use crate::ty::{
+    Alignment, Concrete, FlowEnd, FlowTerm, Flows, Holds, Labelled, Mutability, ParamTerm, PositionKind, Source, Ty,
+    TyKind, Types, position_kinds, positions,
+};
 
 // -- Positions (ownership §5) ---------------------------------------
 

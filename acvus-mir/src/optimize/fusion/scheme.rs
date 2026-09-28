@@ -1,10 +1,9 @@
 use rustc_hash::FxHashMap;
 
-use crate::flows::FlowTerm;
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
-    Concrete, EffectArg, EffectTerm, IdentityTerm, LenTerm, ObjectTy, ParamTerm, Poly, Ty, TyId, TyKind, TypeArg,
-    Types,
+    Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, LenTerm, ObjectTy, ParamTerm, Poly, Ty, TyId, TyKind,
+    TypeArg, Types,
 };
 
 /// Whether an argument carries `#` (types §8), as a concrete argument

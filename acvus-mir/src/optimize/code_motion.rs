@@ -1284,9 +1284,8 @@ mod tests {
     use crate::cfg::{self, CfgBody};
     use acvus_utils::QualifiedRef;
     use crate::decl::{Core, LoopMarkers, RawDeclarations};
-    use crate::flows::{Flows, FlowTerm};
     use crate::ir::IndexBound;
-    use crate::ty::{Calls, Effect, EffectTerm, Holds, IntTy, Ty, TyKind, TypeArg};
+    use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Ty, TyKind, TypeArg};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {

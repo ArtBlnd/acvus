@@ -4,10 +4,9 @@ use super::*;
 use crate::decl::{
     CastRule, CastTree, Core, Declarations, Head, LoopMarkers, RawDeclarations, Requirement, Scheme, TyVarBound,
 };
-use crate::flows::{Alignment, Flow, FlowEnd, FlowTerm, Flows};
 use crate::ty::{
-    Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Holds, IdentityId, IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reissue,
-    SplitCost, TyKind, TypeArg, Types,
+    Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
+    IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reissue, SplitCost, TyKind, TypeArg, Types,
 };
 
 struct Fixture {
