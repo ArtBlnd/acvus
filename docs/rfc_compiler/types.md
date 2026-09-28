@@ -16,7 +16,7 @@ Type constructors stay invariant: subtyping applies to a value entering a slot, 
 
 ## 4. Bottom and invariance
 
-`!` is the bottom type, and every type constructor is invariant. A product with a part of type `!` is `!`.
+`!` is the bottom type, and every type constructor is invariant. A product with a part of type `!` is `!`. A reference's target is never a reference.
 
 ## 5. Defaults
 
