@@ -1157,17 +1157,8 @@ mod tests {
     use super::*;
     use acvus_utils::QualifiedRef;
     use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
-    use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ParamTerm, TypeArg};
+    use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, TypeArg};
     use acvus_utils::{Interner, LocalFactory};
-
-    /// Create a dummy `ParamTerm` for tests where parameter name is irrelevant.
-    fn param(ty: Ty) -> ParamTerm<Concrete> {
-        let interner = Interner::new();
-        ParamTerm {
-            name: interner.intern("_"),
-            ty,
-        }
-    }
 
     fn span() -> Span {
         Span { start: 0, end: 0 }
@@ -1292,7 +1283,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let ty = types.intern(TyKind::Fn {
-            params: Box::new([param(i64_ty)]),
+            params: Box::new([i64_ty]),
             ret: i64_ty,
             effect: EffectTerm::Known(Effect::opaque()),
             flows: FlowTerm::Known(Flows::Every),

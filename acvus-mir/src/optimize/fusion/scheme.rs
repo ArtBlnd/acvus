@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
-    Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, LenTerm, ObjectTy, ParamTerm, Poly, Ty, TyId, TyKind,
+    Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, LenTerm, ObjectTy, Poly, Ty, TyId, TyKind,
     TypeArg, Types,
 };
 
@@ -104,7 +104,7 @@ impl Bindings {
                     && self.bind_all(
                         poly,
                         types,
-                        p_params.iter().map(|p| p.ty).zip(t_params.iter().map(|t| t.ty)),
+                        p_params.iter().copied().zip(t_params.iter().copied()),
                     )
                     && self.bind(poly, *p_ret, types, *t_ret)
                     && self.bind_effect(p_effect, t_effect)
@@ -336,12 +336,7 @@ impl Bindings {
             } => TyKind::Fn {
                 params: params
                     .iter()
-                    .map(|param| {
-                        Some(ParamTerm {
-                            name: param.name,
-                            ty: self.apply(poly, param.ty, types, built)?,
-                        })
-                    })
+                    .map(|param| self.apply(poly, *param, types, built))
                     .collect::<Option<_>>()?,
                 ret: self.apply(poly, *ret, types, built)?,
                 effect: self.apply_effect(effect)?,

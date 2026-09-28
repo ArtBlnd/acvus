@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use super::cells::{Cells, End as CellEnd, MarkTerm, VarTerm};
 use super::{Infer, Mark, Term, VarState, product_parts};
 use crate::ty::{
-    Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, ParamTerm, Ty,
+    Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, Ty,
     TyKind, TyVarId, TypeArg, Types,
 };
 
@@ -109,12 +109,7 @@ impl Infer {
             } => TyKind::Fn {
                 params: params
                     .iter()
-                    .map(|param| {
-                        Ok(ParamTerm {
-                            name: param.name,
-                            ty: freeze(param.ty)?,
-                        })
-                    })
+                    .map(|param| freeze(*param))
                     .collect::<Result<_, _>>()?,
                 ret: freeze(*ret)?,
                 effect: EffectTerm::Known(self.settled(&self.effect_vars, effect)?),

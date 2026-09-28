@@ -1983,7 +1983,7 @@ impl TyDisplay<'_> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", self.nested(p.ty))?;
+                    write!(f, "{}", self.nested(*p))?;
                 }
                 write!(f, ") -> {}", self.nested(*ret))?;
                 write_effect(known_effect(effect), interner, f)

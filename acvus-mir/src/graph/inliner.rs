@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{escape, inst_info};
 use crate::ir::*;
-use crate::ty::{Concrete, Mutability, ObjectTy, ParamTerm, Ty, TyKind, TypeArg, Types};
+use crate::ty::{Concrete, Mutability, ObjectTy, Ty, TyKind, TypeArg, Types};
 
 use acvus_utils::QualifiedRef;
 
@@ -176,10 +176,7 @@ impl<'s> Import<'s> {
             } => TyKind::Fn {
                 params: params
                     .iter()
-                    .map(|param| ParamTerm {
-                        name: param.name,
-                        ty: self.ty(param.ty, to),
-                    })
+                    .map(|param| self.ty(*param, to))
                     .collect(),
                 ret: self.ty(ret, to),
                 effect,

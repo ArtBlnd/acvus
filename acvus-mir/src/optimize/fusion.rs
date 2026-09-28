@@ -705,7 +705,7 @@ impl<'p> Fusion<'p> {
             return Err(unfit);
         };
         let mut bindings = Bindings::default();
-        if !bindings.bind(poly, pulled.ty, self.types, lent) {
+        if !bindings.bind(poly, *pulled, self.types, lent) {
             return Err(unfit);
         }
         let callee_ty = bindings
@@ -1133,7 +1133,7 @@ impl<'p> Fusion<'p> {
                     return Err(Declined::UntypedTerm);
                 }
                 let ret = *ret;
-                let param_tys: Vec<Ty> = params.iter().map(|param| param.ty).collect();
+                let param_tys: Vec<Ty> = params.to_vec();
                 let mut values = Vec::with_capacity(args.len());
                 for (arg, param) in args.iter().zip(param_tys) {
                     values.push(self.term(arg, Some(param), scope)?.value);
@@ -1639,7 +1639,7 @@ impl<'p> Fusion<'p> {
             let mut bindings = Bindings::default();
             for (param, arg) in params.iter().zip(args) {
                 if let Some(arg) = arg
-                    && !bindings.bind(poly, param.ty, types, *arg)
+                    && !bindings.bind(poly, *param, types, *arg)
                 {
                     return None;
                 }
@@ -1696,7 +1696,7 @@ impl<'p> Fusion<'p> {
                 id: name,
                 instance: chosen.instance,
             },
-            params: params.iter().map(|param| param.ty).collect(),
+            params: params.to_vec(),
             ret: *ret,
             callee_ty,
         })

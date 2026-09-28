@@ -1,4 +1,4 @@
-use acvus_utils::QualifiedRef;
+use acvus_utils::{Astr, QualifiedRef};
 
 use super::TyVarBound;
 use super::labels::LabelledSignature;
@@ -12,6 +12,10 @@ use crate::ty::{Poly, TyId};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: TyId<Poly>,
+    /// One name per parameter of `ty`, in order (extern-fn §1). A name
+    /// exists only in its declaration: a function type's parameters are
+    /// types alone. `verify` refuses any other count.
+    pub param_names: Box<[Astr]>,
     /// Exactly one bound per type variable of `ty`, by position; `verify`
     /// refuses any other count.
     pub bounds: Box<[TyVarBound]>,
@@ -31,6 +35,8 @@ pub struct Instances {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceSig {
     pub ty: TyId<Poly>,
+    /// One name per parameter of `ty`, in order, as `Scheme::param_names`.
+    pub param_names: Box<[Astr]>,
     pub requires: Box<[Requirement]>,
     pub facts: DeclaredFacts,
 }

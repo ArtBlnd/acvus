@@ -75,7 +75,7 @@ mod tests {
     use crate::cfg::promote;
     use acvus_utils::QualifiedRef;
     use crate::ty::{
-        Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, ParamTerm, Reissue,
+        Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue,
         SplitCost, TypeArg,
     };
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
@@ -146,10 +146,7 @@ mod tests {
         let unit_ty = types.intern(TyKind::Unit);
         let taken = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string_ty)));
         let print_ty = types.intern(TyKind::Fn {
-            params: Box::new([ParamTerm {
-                name: i.intern("s"),
-                ty: taken,
-            }]),
+            params: Box::new([taken]),
             ret: unit_ty,
             effect: EffectTerm::Known(splittable()),
             flows: FlowTerm::Known(Flows::none()),
@@ -197,10 +194,7 @@ mod tests {
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let string_ty = types.intern(TyKind::String);
         let fetch_ty = types.intern(TyKind::Fn {
-            params: Box::new([ParamTerm {
-                name: i.intern("id"),
-                ty: i64_ty,
-            }]),
+            params: Box::new([i64_ty]),
             ret: string_ty,
             effect: EffectTerm::Known(splittable()),
             flows: FlowTerm::Known(Flows::Every),
@@ -266,14 +260,8 @@ mod tests {
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let add_ty = types.intern(TyKind::Fn {
             params: Box::new([
-                ParamTerm {
-                    name: i.intern("a"),
-                    ty: i64_ty,
-                },
-                ParamTerm {
-                    name: i.intern("b"),
-                    ty: i64_ty,
-                },
+                i64_ty,
+                i64_ty,
             ]),
             ret: i64_ty,
             effect: EffectTerm::Known(Effect::opaque()),
@@ -302,13 +290,10 @@ mod tests {
         assert!(matches!(insts[0].kind, InstKind::FunctionCall { .. }));
     }
 
-    fn burner(types: &mut Types<Concrete>, i: &Interner, effect: Effect) -> Ty {
+    fn burner(types: &mut Types<Concrete>, effect: Effect) -> Ty {
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         types.intern(TyKind::Fn {
-            params: Box::new([ParamTerm {
-                name: i.intern("seed"),
-                ty: i64_ty,
-            }]),
+            params: Box::new([i64_ty]),
             ret: i64_ty,
             effect: EffectTerm::Known(effect),
             flows: FlowTerm::Known(Flows::Every),
@@ -320,7 +305,7 @@ mod tests {
     fn split_once(i: &Interner, effect: Effect) -> CfgBody {
         let mut types = Types::<Concrete>::new();
         let hash = QualifiedRef::root(i.intern("hash"));
-        let burner_ty = burner(&mut types, i, effect);
+        let burner_ty = burner(&mut types, effect);
         let mut cfg = make_cfg(
             &mut types,
             vec![

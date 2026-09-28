@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
     Alignment, Calls, Concrete, Contexts, Declared, Effect, EffectArg, EffectTerm, Flow, FlowEnd, FlowTerm, Flows,
-    Holds, IdentityId, IdentityTerm, IntTy, Labelled, LenTerm, ObjectTy, ParamTerm, Reissue, SplitCost, Ty, TyKind,
+    Holds, IdentityId, IdentityTerm, IntTy, Labelled, LenTerm, ObjectTy, Reissue, SplitCost, Ty, TyKind,
     TypeArg, Types,
 };
 
@@ -159,13 +159,6 @@ fn ser_to_flows(flows: &SerFlows, interner: &Interner) -> Flows {
     }
 }
 
-/// A named parameter of a serialized function type.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SerParam {
-    pub name: String,
-    pub ty: SerTy,
-}
-
 /// A type argument of a user-defined type, with its mark (types §8).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "repr", rename_all = "camelCase")]
@@ -296,7 +289,7 @@ pub enum SerTy {
         elems: Vec<SerTy>,
     },
     Fn {
-        params: Vec<SerParam>,
+        params: Vec<SerTy>,
         ret: Box<SerTy>,
         effect: SerEffect,
         flows: SerFlows,
@@ -387,10 +380,7 @@ fn to_ser_level(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> SerTy {
         } => SerTy::Fn {
             params: params
                 .iter()
-                .map(|p| SerParam {
-                    name: interner.resolve(p.name).to_string(),
-                    ty: to_ser(types, p.ty, interner),
-                })
+                .map(|param| to_ser(types, *param, interner))
                 .collect(),
             ret: part(*ret),
             effect: effect_to_ser(known_effect(effect), interner),
@@ -497,10 +487,7 @@ impl SerTy {
             } => TyKind::Fn {
                 params: params
                     .iter()
-                    .map(|p| ParamTerm {
-                        name: interner.intern(&p.name),
-                        ty: p.ty.to_ty(types, interner),
-                    })
+                    .map(|param| param.to_ty(types, interner))
                     .collect(),
                 ret: ret.to_ty(types, interner),
                 effect: EffectTerm::Known(ser_to_effect(effect, interner)),

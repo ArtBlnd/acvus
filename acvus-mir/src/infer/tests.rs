@@ -382,28 +382,6 @@ fn a_shared_fields_types_are_related_by_eq() {
     assert_eq!(fx.infer.join(a, b), Err(Mismatch::Heads { a: x, b: y }));
 }
 
-/// types §2: a function type's identity is not its parameter names, so
-/// `|x| ..` and `|y| ..` meet.
-#[test]
-fn parameter_names_do_not_part_function_types() {
-    let mut fx = Fixture::new();
-    let int = fx.int(IntTy::I64);
-    let unit = fx.kind(TyKind::Unit);
-    let named = |fx: &mut Fixture, name: &str| {
-        let name = fx.name(name);
-        fx.kind(TyKind::Fn {
-            params: Box::new([crate::ty::ParamTerm { name, ty: int }]),
-            ret: unit,
-            effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
-            calls: Calls::Many,
-            holds: Holds::Nothing,
-        })
-    };
-    let (f, g) = (named(&mut fx, "x"), named(&mut fx, "y"));
-    assert_eq!(fx.infer.eq(f, g), Ok(()));
-}
-
 /// types §2: two enums of one name join at the union of their variants.
 #[test]
 fn enums_of_one_name_join_at_the_union_of_their_variants() {
@@ -658,7 +636,7 @@ fn freeze_follows_variables_and_answers_a_frozen_term_from_the_memo() {
 
 // Tests that build a `Declarations`: they wait on `Declarations::verify`.
 
-fn pure_fn(types: &mut Types<Poly>, params: Vec<crate::ty::ParamTerm<Poly>>, ret: crate::ty::TyId<Poly>) -> crate::ty::TyId<Poly> {
+fn pure_fn(types: &mut Types<Poly>, params: Vec<crate::ty::TyId<Poly>>, ret: crate::ty::TyId<Poly>) -> crate::ty::TyId<Poly> {
     types.intern(TyKind::Fn {
         params: params.into(),
         ret,
@@ -702,10 +680,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     let option = types.intern(TyKind::Option(t));
     let signature = pure_fn(
         &mut types,
-        vec![
-            crate::ty::ParamTerm { name: a, ty: object },
-            crate::ty::ParamTerm { name: b, ty: t },
-        ],
+        vec![object, t],
         option,
     );
     let integer = TyVarBound::Integer {
@@ -714,6 +689,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     };
     let scheme = Scheme {
         ty: signature,
+        param_names: Box::new([a, b]),
         bounds: Box::new([integer]),
         instances: None,
         requires: Box::new([Requirement {
@@ -730,12 +706,12 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     let TyKind::Fn { params, ret, .. } = fx.infer.types().kind(used.ty).clone() else {
         panic!("a function type")
     };
-    let var = params[1].ty;
+    let var = params[1];
     let TyKind::Var(id) = *fx.infer.types().kind(var) else {
         panic!("a type parameter's place is its variable")
     };
     assert_eq!(
-        fx.infer.types().kind(params[0].ty),
+        fx.infer.types().kind(params[0]),
         &TyKind::Object(ObjectTy::Structural(Box::new([(x, var)]), Label::Opaque))
     );
     assert_eq!(fx.infer.types().kind(ret), &TyKind::Option(var));
@@ -770,9 +746,10 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
     let (widen, v) = (QualifiedRef::root(fx.name("widen")), fx.name("v"));
     let mut types = Types::<Poly>::new();
     let (i32_, i64_) = (types.intern(TyKind::Int(IntTy::I32)), types.intern(TyKind::Int(IntTy::I64)));
-    let signature = pure_fn(&mut types, vec![crate::ty::ParamTerm { name: v, ty: i32_ }], i64_);
+    let signature = pure_fn(&mut types, vec![i32_], i64_);
     let scheme = Scheme {
         ty: signature,
+        param_names: Box::new([v]),
         bounds: Box::new([]),
         instances: None,
         requires: Box::new([]),
@@ -884,11 +861,12 @@ fn with_casts(
     let mut rules = Vec::new();
     for (via, from, to) in casts {
         let via = QualifiedRef::root(names.intern(via));
-        let ty = pure_fn(&mut types, vec![crate::ty::ParamTerm { name: v, ty: *from }], *to);
+        let ty = pure_fn(&mut types, vec![*from], *to);
         functions.push((
             via,
             Scheme {
                 ty,
+                param_names: Box::new([v]),
                 bounds: Box::new([]),
                 instances: None,
                 requires: Box::new([]),

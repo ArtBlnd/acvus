@@ -48,7 +48,7 @@ pub(super) fn is_instance_of(types: &Types<Poly>, signature: TyId<Poly>, instanc
                 && signature_params
                     .iter()
                     .zip(params.iter())
-                    .all(|(signature_param, param)| choice.ty(signature_param.ty, param.ty))
+                    .all(|(signature_param, param)| choice.ty(*signature_param, *param))
                 && choice.ty(*signature_ret, *ret)
         }
         _ => false,
@@ -193,7 +193,7 @@ impl Choice<'_> {
                     && a_calls == b_calls
                     && a_holds == b_holds
                     && self.effect(a_effect, b_effect)
-                    && all_pairs(a_params, b_params, |a, b| self.ty(a.ty, b.ty))
+                    && all_pairs(a_params, b_params, |a, b| self.ty(*a, *b))
                     && self.ty(*a_ret, *b_ret)
             }
             (

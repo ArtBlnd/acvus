@@ -18,7 +18,7 @@ use crate::ir::{Callee, Chosen};
 use crate::means::{EntryReading, Means, Named, Stmt as MeansStmt, Term as MeansTerm};
 use crate::step::Step;
 use crate::ty::{
-    EffectArg, EffectTerm, IdentityTerm, IntTy, LenTerm, Mutability, ObjectTy, ParamTerm, Poly, TyId, TyKind,
+    EffectArg, EffectTerm, IdentityTerm, IntTy, LenTerm, Mutability, ObjectTy, Poly, TyId, TyKind,
     TypeArg, Types,
 };
 
@@ -393,7 +393,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             identity,
             commutative,
         }) => {
-            let Some(TyKind::Ref(Mutability::Mut, state)) = params.first().map(|p| poly.kind(p.ty)) else {
+            let Some(TyKind::Ref(Mutability::Mut, state)) = params.first().map(|param| poly.kind(*param)) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
             let state = state.ty();
@@ -413,7 +413,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             let ([state], TyKind::Option(payload)) = (&params[..], poly.kind(ret)) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
-            let TyKind::Ref(Mutability::Mut, state) = poly.kind(state.ty) else {
+            let TyKind::Ref(Mutability::Mut, state) = poly.kind(*state) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
             Ok(ResolvedLaws::Inverse(instance_of(
@@ -426,7 +426,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             )?))
         }
         Laws::Payload => match &params[..] {
-            [option] if poly.kind(option.ty) == &TyKind::Option(ret) => Ok(ResolvedLaws::Payload),
+            [option] if poly.kind(*option) == &TyKind::Option(ret) => Ok(ResolvedLaws::Payload),
             _ => Err(Unresolved::UnfitDeclaration),
         },
         Laws::Equivalence => match compares_two_shared(poly, params) && poly.kind(ret) == &TyKind::Bool {
@@ -451,9 +451,9 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
 }
 
 /// `f(a: &T, b: &T)`: two shared references to one type.
-fn compares_two_shared(poly: &Types<Poly>, params: &[ParamTerm<Poly>]) -> bool {
+fn compares_two_shared(poly: &Types<Poly>, params: &[TyId<Poly>]) -> bool {
     match params {
-        [a, b] => match (poly.kind(a.ty), poly.kind(b.ty)) {
+        [a, b] => match (poly.kind(*a), poly.kind(*b)) {
             (TyKind::Ref(Mutability::Shared, a), TyKind::Ref(Mutability::Shared, b)) => a.ty() == b.ty(),
             _ => false,
         },
@@ -464,9 +464,9 @@ fn compares_two_shared(poly: &Types<Poly>, params: &[ParamTerm<Poly>]) -> bool {
 /// RFC-0099 rule 1, over the declaration's type: the stream is a parameter,
 /// a closure a step calls is a parameter of function type, and a value
 /// parameter it reads is one of neither.
-fn step_fits(poly: &Types<Poly>, step: &Step, params: &[ParamTerm<Poly>]) -> bool {
+fn step_fits(poly: &Types<Poly>, step: &Step, params: &[TyId<Poly>]) -> bool {
     let stream = step.stream().param;
-    let is_fn = |at: usize| matches!(params.get(at).map(|p| poly.kind(p.ty)), Some(TyKind::Fn { .. }));
+    let is_fn = |at: usize| matches!(params.get(at).map(|param| poly.kind(*param)), Some(TyKind::Fn { .. }));
     let mut values = Vec::new();
     for term in step.terms() {
         term.visit(&mut |term| {
@@ -486,7 +486,7 @@ fn step_fits(poly: &Types<Poly>, step: &Step, params: &[ParamTerm<Poly>]) -> boo
 }
 
 /// RFC-0082 rule 2.
-fn binary_fits(poly: &Types<Poly>, params: &[ParamTerm<Poly>], ret: TyId<Poly>) -> bool {
+fn binary_fits(poly: &Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> bool {
     let [a, b] = params else {
         return false;
     };
@@ -494,21 +494,21 @@ fn binary_fits(poly: &Types<Poly>, params: &[ParamTerm<Poly>], ret: TyId<Poly>) 
         TyKind::Ref(Mutability::Shared, lent) => poly.kind(lent.ty()) == &TyKind::Str,
         _ => false,
     };
-    let over_values = a.ty == b.ty && a.ty == ret;
-    let over_string_views = poly.kind(ret) == &TyKind::String && str_view(a.ty) && str_view(b.ty);
+    let over_values = a == b && *a == ret;
+    let over_string_views = poly.kind(ret) == &TyKind::String && str_view(*a) && str_view(*b);
     over_values || over_string_views
 }
 
 /// RFC-0082 rule 2's `f(a: T, b: T) -> Option<T>`: `T`, the type a law
 /// stated there is `f`'s extension's over.
-fn extension_of(poly: &Types<Poly>, params: &[ParamTerm<Poly>], ret: TyId<Poly>) -> Option<TyId<Poly>> {
+fn extension_of(poly: &Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> Option<TyId<Poly>> {
     let [a, b] = params else {
         return None;
     };
     let TyKind::Option(payload) = poly.kind(ret) else {
         return None;
     };
-    (a.ty == b.ty && a.ty == *payload).then_some(a.ty)
+    (a == b && a == payload).then_some(*a)
 }
 
 /// Whether `means`, declared on an instance of type `declaring`, reads each
@@ -520,11 +520,11 @@ pub fn means_fits(poly: &Types<Poly>, means: &Means, declaring: TyId<Poly>) -> b
     let TyKind::Fn { params, .. } = poly.kind(declaring) else {
         return false;
     };
-    let is_ref = |at: usize| matches!(params.get(at).map(|p| poly.kind(p.ty)), Some(TyKind::Ref(..)));
+    let is_ref = |at: usize| matches!(params.get(at).map(|param| poly.kind(*param)), Some(TyKind::Ref(..)));
     let is_value = |at: usize| {
         params
             .get(at)
-            .is_some_and(|p| !matches!(poly.kind(p.ty), TyKind::Ref(..)))
+            .is_some_and(|param| !matches!(poly.kind(*param), TyKind::Ref(..)))
     };
     let entry_fits = means
         .entry
@@ -574,15 +574,15 @@ impl Wanted {
         let returns_unit = poly.kind(*ret) == &TyKind::Unit;
         match (self, &params[..]) {
             (Self::Returning(value), []) => pattern.matches(*value, *ret),
-            (Self::Combining(state), [into, part]) if returns_unit => match poly.kind(into.ty) {
+            (Self::Combining(state), [into, part]) if returns_unit => match poly.kind(*into) {
                 TyKind::Ref(Mutability::Mut, into) => {
-                    pattern.matches(*state, into.ty()) && pattern.matches(*state, part.ty)
+                    pattern.matches(*state, into.ty()) && pattern.matches(*state, *part)
                 }
                 _ => false,
             },
-            (Self::Restoring { state, payload }, [into, x]) if returns_unit => match poly.kind(into.ty) {
+            (Self::Restoring { state, payload }, [into, x]) if returns_unit => match poly.kind(*into) {
                 TyKind::Ref(Mutability::Mut, into) => {
-                    pattern.matches(*state, into.ty()) && pattern.matches(*payload, x.ty)
+                    pattern.matches(*state, into.ty()) && pattern.matches(*payload, *x)
                 }
                 _ => false,
             },
@@ -686,7 +686,7 @@ impl<'a> PatternMatch<'a> {
             ) => {
                 params.len() == p_params.len()
                     && effect_matches(effect, p_effect)
-                    && self.all(params.iter().map(|p| p.ty).zip(p_params.iter().map(|p| p.ty)))
+                    && self.all(params.iter().copied().zip(p_params.iter().copied()))
                     && self.matches(*ret, *p_ret)
             }
             (

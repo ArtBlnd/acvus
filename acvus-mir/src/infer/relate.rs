@@ -17,7 +17,7 @@ use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedExternCast};
 use crate::ty::{
-    Calls, Effect, EffectArg, EffectTerm, Flows, Holds, IdentityTerm, Infer as InferPhase, Label, ObjectTy, ParamTerm,
+    Calls, Effect, EffectArg, EffectTerm, Flows, Holds, IdentityTerm, Infer as InferPhase, Label, ObjectTy,
     TyKind, TyVarId, TypeArg,
 };
 
@@ -466,12 +466,7 @@ impl Infer {
                 let params = params_a
                     .iter()
                     .zip(params_b.iter())
-                    .map(|(x, y)| {
-                        Ok(ParamTerm {
-                            name: x.name,
-                            ty: self.relate(x.ty, y.ty, Relation::Eq)?,
-                        })
-                    })
+                    .map(|(x, y)| self.relate(*x, *y, Relation::Eq))
                     .collect::<Result<_, Mismatch>>()?;
                 let ret = self.relate(ret_a, ret_b, Relation::Eq)?;
                 let (effect, flows, calls, holds) = match how {

@@ -25,7 +25,7 @@ mod tests {
     use crate::ir::{InstKind, MirModule, RefTarget};
     use crate::test::{compile_script, compile_template};
     use crate::ty::{
-        Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, ObjectTy, ParamTerm, Ty, TyKind,
+        Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, ObjectTy, Ty, TyKind,
         Types,
     };
     use acvus_utils::{Astr, Interner};
@@ -516,10 +516,7 @@ mod tests {
         let mut types = Types::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let fn_ty = types.intern(TyKind::Fn {
-            params: Box::new([ParamTerm {
-                name: i.intern("x"),
-                ty: i64_ty,
-            }]),
+            params: Box::new([i64_ty]),
             ret: i64_ty,
             effect: EffectTerm::Known(Effect::opaque()),
             flows: FlowTerm::Known(Flows::Every),
@@ -536,10 +533,7 @@ mod tests {
         let mut types = Types::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let fn_ty = types.intern(TyKind::Fn {
-            params: Box::new([ParamTerm {
-                name: i.intern("x"),
-                ty: i64_ty,
-            }]),
+            params: Box::new([i64_ty]),
             ret: i64_ty,
             effect: EffectTerm::Known(Effect::opaque()),
             flows: FlowTerm::Known(Flows::Every),
@@ -556,10 +550,7 @@ mod tests {
         let mut types = Types::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let fn_ty = types.intern(TyKind::Fn {
-            params: Box::new([ParamTerm {
-                name: i.intern("x"),
-                ty: i64_ty,
-            }]),
+            params: Box::new([i64_ty]),
             ret: i64_ty,
             effect: EffectTerm::Known(Effect::opaque()),
             flows: FlowTerm::Known(Flows::Every),

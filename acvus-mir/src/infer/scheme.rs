@@ -8,7 +8,7 @@ use crate::decl::{CastRule, Declarations, Scheme, TyVarBound};
 use crate::laws::NamedLaw;
 use crate::ty::{
     EffectArg, EffectTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
-    LenVarId, ObjectTy, ParamTerm, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
+    LenVarId, ObjectTy, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
 };
 
 /// A requirement at the use's own terms: an instance of `signature` whose
@@ -188,10 +188,7 @@ impl Infer {
             } => TyKind::Fn {
                 params: params
                     .iter()
-                    .map(|param| ParamTerm {
-                        name: param.name,
-                        ty: self.instantiate_ty(at, param.ty),
-                    })
+                    .map(|param| self.instantiate_ty(at, *param))
                     .collect(),
                 ret: self.instantiate_ty(at, *ret),
                 effect: self.effect_at(at, effect),

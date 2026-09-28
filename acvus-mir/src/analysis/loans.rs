@@ -24,7 +24,7 @@ use crate::ir::{
 use crate::decl::Declarations;
 use crate::flows::{Segment, segment_positions, segments};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, FlowTerm, Flows, Holds, Labelled, Mutability, ParamTerm, PositionKind, Source, Ty,
+    Alignment, Concrete, FlowEnd, FlowTerm, Flows, Holds, Labelled, Mutability, PositionKind, Source, Ty,
     TyKind, Types, position_kinds, positions,
 };
 
@@ -1643,7 +1643,7 @@ struct Written {
 
 /// The parts of a callee's function type a call reads.
 struct CalleeFn<'t> {
-    params: &'t [ParamTerm<Concrete>],
+    params: &'t [Ty],
     ret: Ty,
     flows: &'t Flows,
 }
@@ -1690,10 +1690,9 @@ impl RegionAnalysis<'_> {
         let FlowEnd::Param(index) = from else {
             panic!("a Labelled flow's input is a parameter of the extern it is read off")
         };
-        let from_ty = params
+        let from_ty = *params
             .get(index)
-            .expect("a Labelled flow's input is a parameter of its function type")
-            .ty;
+            .expect("a Labelled flow's input is a parameter of its function type");
         let poly = decls.types();
         let to_decl = map.declared.end_ty(decls, FlowEnd::Result);
         let from_decl = map.declared.end_ty(decls, from);

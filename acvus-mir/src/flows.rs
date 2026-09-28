@@ -57,12 +57,9 @@ impl Declared {
         };
         match end {
             FlowEnd::Result => *ret,
-            FlowEnd::Param(index) => {
-                params
-                    .get(index)
-                    .expect("a Labelled flow's end is a parameter of its signature")
-                    .ty
-            }
+            FlowEnd::Param(index) => *params
+                .get(index)
+                .expect("a Labelled flow's end is a parameter of its signature"),
             FlowEnd::Captures => panic!("a Labelled flow's ends are an extern's parameters and result"),
         }
     }

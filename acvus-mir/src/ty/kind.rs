@@ -39,7 +39,7 @@ pub enum TyKind<V: Phase> {
         label: V::Label,
     },
     Fn {
-        params: Box<[ParamTerm<V>]>,
+        params: Box<[TyId<V>]>,
         ret: TyId<V>,
         effect: EffectTerm<V>,
         flows: FlowTerm<V>,
@@ -106,12 +106,6 @@ impl Calls {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ParamTerm<V: Phase> {
-    pub name: Astr,
-    pub ty: TyId<V>,
-}
-
 /// Whether a reference may write through to its storage (ownership §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Mutability {
@@ -155,7 +149,7 @@ impl<V: Phase> TyKind<V> {
                 .filter_map(|(_, payload)| *payload)
                 .for_each(on_child),
             TyKind::Fn { params, ret, .. } => {
-                params.iter().for_each(|param| on_child(param.ty));
+                params.iter().copied().for_each(&mut on_child);
                 on_child(*ret);
             }
             TyKind::UserDefined { type_args, .. } => {

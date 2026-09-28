@@ -757,7 +757,7 @@ impl<'t> CheckCtx<'t> {
         match self.kind(fn_ty) {
             TyKind::Fn {
                 params, ret, effect, ..
-            } => Some((params.iter().map(|param| param.ty).collect(), *ret, effect)),
+            } => Some((params.to_vec(), *ret, effect)),
             _ => None,
         }
     }
