@@ -6,7 +6,7 @@
 use std::any::{Any, TypeId};
 use std::rc::Rc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::decl::Declarations;
 use crate::ir::cfg::{Aspect, BodyId, Changes, Module};
@@ -24,11 +24,13 @@ pub trait Analysis: 'static {
 pub struct AnalysisManager<'d> {
     decls: &'d Declarations,
     kept: FxHashMap<(TypeId, BodyId), (Rc<dyn Any>, &'static [Aspect])>,
+    /// The analyses being computed, each until its `compute` returns.
+    computing: FxHashSet<(TypeId, BodyId)>,
 }
 
 impl<'d> AnalysisManager<'d> {
     pub fn new(decls: &'d Declarations) -> Self {
-        Self { decls, kept: FxHashMap::default() }
+        Self { decls, kept: FxHashMap::default(), computing: FxHashSet::default() }
     }
 
     pub fn decls(&self) -> &'d Declarations {
@@ -37,6 +39,11 @@ impl<'d> AnalysisManager<'d> {
 
     /// The facts of `A` for `body`, computed on first request. Cost: O(1)
     /// when kept, else `A`'s own.
+    ///
+    /// # Panics
+    /// `A` for `body` is requested while it is being computed: an analysis
+    /// that depends on itself, directly or through others, is a compiler
+    /// defect.
     pub fn get<A>(&mut self, module: &Module, body: BodyId) -> Rc<A::Facts>
     where
         A: Analysis,
@@ -47,7 +54,13 @@ impl<'d> AnalysisManager<'d> {
                 .downcast::<A::Facts>()
                 .unwrap_or_else(|_| panic!("the facts kept under an analysis's TypeId are its own"));
         }
+        assert!(
+            self.computing.insert(key),
+            "{} for {body:?} was requested while it is being computed; an analysis that depends on itself is a compiler defect",
+            std::any::type_name::<A>()
+        );
         let facts = Rc::new(A::compute(self, module, body));
+        self.computing.remove(&key);
         self.kept.insert(key, (Rc::clone(&facts) as Rc<dyn Any>, A::READS));
         facts
     }

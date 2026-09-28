@@ -6,14 +6,16 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use acvus_ast::{Literal, Span};
-use acvus_utils::{Interner, LocalIdOps};
+use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 
 use super::*;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Inst, Module, Op, Stages, Terminator};
-use crate::ir::{BinOp, Overflow, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
-use crate::ty::{CastTy, Flows, IntTy, Ty, TyKind, Types};
+use crate::ty::{
+    Calls, CastTy, Contexts, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Reissue, SplitCost, Ty, TyKind, Types,
+};
 
 // -- Fixture ------------------------------------------------------------
 
@@ -22,13 +24,34 @@ struct Fixture {
     interner: Interner,
     int: Ty,
     bool: Ty,
+    order: Ty,
+    /// A callee type of no parameters returning an `int`, whose effect is
+    /// not pure, so a call of it is ordered.
+    effectful: Ty,
 }
 
 fn fixture() -> Fixture {
     let mut types = Types::new();
     let int = types.intern(TyKind::Int(IntTy::I64));
     let bool = types.intern(TyKind::Bool);
-    Fixture { module: Module::new(types, int, Flows::none()), interner: Interner::new(), int, bool }
+    let order = types.intern(TyKind::Order);
+    let effect = Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
+    let effectful = types.intern(TyKind::Fn {
+        params: Box::new([]),
+        ret: int,
+        effect: EffectTerm::Known(effect),
+        flows: FlowTerm::Known(Flows::none()),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+    });
+    Fixture {
+        module: Module::new(types, int, Flows::none()),
+        interner: Interner::new(),
+        int,
+        bool,
+        order,
+        effectful,
+    }
 }
 
 fn constant(n: i128) -> Op {
@@ -261,6 +284,11 @@ where
             Terminator::While { stages, exit, .. } => branch(operands[0], stages.body(), *exit),
             _ => Executable::All,
         }
+    }
+
+    /// It knows nothing of what a terminator supplies.
+    fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&D::Value]) -> D::Value {
+        self.domain.top()
     }
 }
 
@@ -526,6 +554,156 @@ fn sparse_ends_on_an_infinite_domain_by_widening_at_the_header() {
     assert_eq!(*facts.of(lp.one), Bound::AtMost(1));
 }
 
+// -- What a terminator supplies ---------------------------------------------
+
+/// Constants, and a `For` over `at..hi` whose bounds are known: its counter
+/// on the body edge is `at` where the range holds one value, and its trip
+/// count on the exit edge is `hi - at` where that is not negative.
+struct Ranges;
+
+impl SparseAnalysis for Ranges {
+    type Domain = ConstDomain;
+
+    fn domain(&self) -> &ConstDomain {
+        &ConstDomain
+    }
+
+    fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
+        Propagate { domain: ConstDomain }.transfer(inst, operands)
+    }
+
+    fn executable(&self, terminator: &Terminator, operands: &[&Const]) -> Executable {
+        Propagate { domain: ConstDomain }.executable(terminator, operands)
+    }
+
+    fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Const]) -> Const {
+        let Terminator::For { source: ForSource::Range { .. }, stages, exit, .. } = terminator else {
+            return Const::Top;
+        };
+        let [Const::Int(at), Const::Int(hi), ..] = operands else {
+            return Const::Top;
+        };
+        match (to, index) {
+            (to, 0) if to == stages.body() && *hi == at + 1 => Const::Int(*at),
+            (to, 0) if to == *exit && hi >= at => Const::Int(hi - at),
+            _ => Const::Top,
+        }
+    }
+}
+
+/// ```text
+/// entry:  at = 3; hi = 4; jump header
+/// header: for counter in at..hi { body } else exit(trip)
+/// body(counter): one = 1; x = counter + one; jump header
+/// exit(trip): return trip
+/// ```
+#[test]
+fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
+    let mut f = fixture();
+    let int = f.int;
+    let mut builder = f.module.build_body(false);
+    let at = builder.push(constant(3), int, Span::ZERO);
+    let hi = builder.push(constant(4), int, Span::ZERO);
+    let header = builder.new_block(&[]);
+    let loop_body = builder.new_block(&[int]);
+    let exit = builder.new_block(&[int]);
+    let (counter, trip) = (builder.block_params(loop_body)[0], builder.block_params(exit)[0]);
+    builder.terminate(jump(header, Vec::new()));
+    builder.switch_to(header);
+    builder.terminate(Terminator::For {
+        source: ForSource::Range { at, hi },
+        stages: Stages::lowered(loop_body),
+        exit,
+        exit_trip: ExitTrip::Defined,
+        exit_args: Vec::new(),
+    });
+    builder.switch_to(loop_body);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    let x = builder.push(add(counter, one), int, Span::ZERO);
+    builder.terminate(jump(header, Vec::new()));
+    builder.switch_to(exit);
+    builder.terminate(ret(trip));
+    let id = builder.seal().expect("the body has no open state");
+
+    let facts = solve_sparse(&Ranges, f.module.body(id));
+    assert_eq!(*facts.of(counter), Const::Int(3));
+    assert_eq!(*facts.of(x), Const::Int(4));
+    assert_eq!(*facts.of(trip), Const::Int(1));
+
+    let unknowing = solve_sparse(&Propagate { domain: ConstDomain }, f.module.body(id));
+    assert_eq!(*unknowing.of(counter), Const::Top, "an analysis that knows nothing states top");
+    assert_eq!(*unknowing.of(trip), Const::Top);
+}
+
+// -- Order tokens ------------------------------------------------------------
+
+/// `Propagate`, checking that no order token reaches it: a call of no
+/// arguments has no operand, a `Merge` is never visited, and a `Return`
+/// hands over its value alone.
+struct TokenBlind;
+
+impl SparseAnalysis for TokenBlind {
+    type Domain = ConstDomain;
+
+    fn domain(&self) -> &ConstDomain {
+        &ConstDomain
+    }
+
+    fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
+        match inst.op() {
+            Op::Merge { .. } => panic!("a Merge's result is a token and is not visited"),
+            Op::FunctionCall { .. } => assert!(operands.is_empty(), "the consumed token is left out"),
+            _ => {}
+        }
+        Propagate { domain: ConstDomain }.transfer(inst, operands)
+    }
+
+    fn executable(&self, terminator: &Terminator, operands: &[&Const]) -> Executable {
+        if let Terminator::Return { .. } = terminator {
+            assert_eq!(operands.len(), 1, "a Return's order token is left out");
+        }
+        Propagate { domain: ConstDomain }.executable(terminator, operands)
+    }
+
+    fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&Const]) -> Const {
+        Const::Top
+    }
+}
+
+/// ```text
+/// entry(order): anyorder { r1 = call(); r2 = call() }; k = 7; y = r1 + r2; return y
+/// ```
+#[test]
+fn sparse_analyses_values_and_holds_no_fact_for_a_token() {
+    let mut f = fixture();
+    let (int, order, effectful, name) = (f.int, f.order, f.effectful, f.interner.intern("f"));
+    let call = || Op::FunctionCall { callee: Callee::Direct(QualifiedRef::root(name)), callee_ty: effectful, args: Vec::new() };
+    let mut builder = f.module.build_body(true);
+    builder.open_anyorder();
+    let r1 = builder.push_effect(call(), int, Span::ZERO);
+    let r2 = builder.push_effect(call(), int, Span::ZERO);
+    builder.close_anyorder();
+    let k = builder.push(constant(7), int, Span::ZERO);
+    let y = builder.push(add(r1, r2), int, Span::ZERO);
+    builder.terminate(ret(y));
+    let id = builder.seal().expect("the body has no open state");
+
+    let body = f.module.body(id);
+    let merges = body.blocks().flat_map(|(_, block)| block.insts()).filter(|inst| matches!(inst.op(), Op::Merge { .. }));
+    assert!(merges.count() > 0, "the anyorder scope gathered its calls with a Merge");
+    let facts = solve_sparse(&TokenBlind, body);
+    assert_eq!(*facts.of(k), Const::Int(7));
+    assert_eq!(*facts.of(r1), Const::Top);
+    assert_eq!(*facts.of(y), Const::Top);
+
+    let tokens: Vec<ValueId> = body.values().filter(|value| body.ty_of(*value) == order).collect();
+    assert!(tokens.len() >= 4, "the order parameter, two yielded tokens and a merge: {tokens:?}");
+    for token in tokens {
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| facts.of(token).clone()));
+        assert!(read.is_err(), "{token:?} is a token and has no fact");
+    }
+}
+
 // -- Dense ------------------------------------------------------------------
 
 /// A set of values; finite over a body, so its widening is its join.
@@ -716,6 +894,41 @@ impl Analysis for Size {
         let insts = module.body(body).blocks().map(|(_, block)| block.insts().len()).sum();
         SizeFacts { blocks, insts }
     }
+}
+
+/// Requests itself through `Echo`.
+struct Narcissus;
+
+impl Analysis for Narcissus {
+    type Facts = ();
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) {
+        am.get::<Echo>(module, body);
+    }
+}
+
+struct Echo;
+
+impl Analysis for Echo {
+    type Facts = ();
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) {
+        am.get::<Narcissus>(module, body);
+    }
+}
+
+#[test]
+#[should_panic(expected = "Narcissus for BodyId(0) was requested while it is being computed")]
+fn an_analysis_that_depends_on_itself_is_refused() {
+    let mut f = fixture();
+    let [body] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    am.get::<Narcissus>(&f.module, body);
 }
 
 fn changed(aspect: Aspect) -> Changes {

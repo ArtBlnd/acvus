@@ -12,12 +12,18 @@
 //! with no back edge every definition would precede the next in reverse
 //! postorder, and that parameter widens, so h is finite whenever the
 //! widening terminates.
+//!
+//! An order token carries order, not a value, so it is outside every sparse
+//! analysis: the engine holds no fact for one, never queues one, and hands
+//! no analysis a token's fact among an instruction's or a terminator's
+//! operands. Effect order is read through the editor's `OrderFacts`.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::cfg::{BlockId, Body, Inst, Site, Terminator};
 use crate::ir::ValueId;
+use crate::ty::Ty;
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 
 /// Which successors of a terminator may run, read from the facts of its
@@ -36,19 +42,33 @@ pub trait SparseAnalysis {
     fn domain(&self) -> &Self::Domain;
 
     /// The fact of an instruction's result from its operands' facts, in the
-    /// order the instruction lists its operands.
+    /// order the instruction lists its operands, order tokens left out.
     fn transfer(
         &self,
         inst: &Inst,
         operands: &[&<Self::Domain as ValueDomain>::Value],
     ) -> <Self::Domain as ValueDomain>::Value;
 
-    /// Which successors may run, from the facts of the terminator's operands.
+    /// Which successors may run, from the facts of the terminator's
+    /// operands, order tokens left out.
     fn executable(
         &self,
         terminator: &Terminator,
         operands: &[&<Self::Domain as ValueDomain>::Value],
     ) -> Executable;
+
+    /// The fact of the parameter of `to` that `terminator` fills itself on
+    /// its executable edge into `to`: the `index`th of the leading
+    /// parameters that edge supplies, such as a `For`'s counter and element
+    /// or its exit's trip count. `operands` are the facts of the
+    /// terminator's operands, order tokens left out.
+    fn supplied(
+        &self,
+        terminator: &Terminator,
+        to: BlockId,
+        index: usize,
+        operands: &[&<Self::Domain as ValueDomain>::Value],
+    ) -> <Self::Domain as ValueDomain>::Value;
 }
 
 pub struct SparseFacts<D>
@@ -56,6 +76,7 @@ where
     D: ValueDomain,
 {
     values: FxHashMap<ValueId, D::Value>,
+    tokens: FxHashSet<ValueId>,
 }
 
 impl<D> SparseFacts<D>
@@ -63,16 +84,21 @@ where
     D: ValueDomain,
 {
     /// # Panics
-    /// `value` is not a value of the body the facts were computed for.
+    /// `value` is an order token, which has no value fact, or is not a
+    /// value of the body the facts were computed for.
     pub fn of(&self, value: ValueId) -> &D::Value {
+        assert!(
+            !self.tokens.contains(&value),
+            "{value:?} is an order token; a token carries order, not a value, and has no value fact"
+        );
         self.values.get(&value).expect("sparse facts cover every value of their body")
     }
 }
 
 /// Every value's fact over the blocks the entry reaches through executable
 /// edges. A value those blocks never define keeps `bottom`; the body's
-/// parameters, captures, order parameter and slots hold `top`, since they
-/// come from outside the body.
+/// parameters, captures and slots hold `top`, since they come from outside
+/// the body.
 pub fn solve_sparse<A>(analysis: &A, body: &Body) -> SparseFacts<A::Domain>
 where
     A: SparseAnalysis,
@@ -80,7 +106,8 @@ where
     let mut solver = Solver::new(analysis, body);
     solver.reach(body.entry());
     solver.run();
-    SparseFacts { values: solver.facts }
+    let tokens = body.values().filter(|value| solver.is_token(*value)).collect();
+    SparseFacts { values: solver.facts, tokens }
 }
 
 type Value<A> = <<A as SparseAnalysis>::Domain as ValueDomain>::Value;
@@ -91,6 +118,10 @@ where
 {
     analysis: &'a A,
     body: &'a Body,
+    /// The type every order token of the body has: the order parameter's,
+    /// since the module's one table interns `Order` once. A body without an
+    /// order parameter is pure and holds no token.
+    token_ty: Option<Ty>,
     facts: FxHashMap<ValueId, Value<A>>,
     preds: FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
     loop_headers: FxHashSet<BlockId>,
@@ -106,21 +137,27 @@ where
     A: SparseAnalysis,
 {
     fn new(analysis: &'a A, body: &'a Body) -> Self {
-        let mut facts: FxHashMap<ValueId, Value<A>> =
-            body.values().map(|value| (value, Value::<A>::bottom())).collect();
+        let token_ty = body.order_param().map(|token| body.ty_of(token));
+        let is_token = |value: &ValueId| Some(body.ty_of(*value)) == token_ty;
+        let mut facts: FxHashMap<ValueId, Value<A>> = body
+            .values()
+            .filter(|value| !is_token(value))
+            .map(|value| (value, Value::<A>::bottom()))
+            .collect();
         let outside = body
             .params()
             .iter()
             .chain(body.captures())
             .map(|(_, value)| *value)
-            .chain(body.order_param())
-            .chain(body.slots().iter().copied());
+            .chain(body.slots().iter().copied())
+            .filter(|value| !is_token(value));
         for value in outside {
             facts.insert(value, analysis.domain().top());
         }
         Solver {
             analysis,
             body,
+            token_ty,
             facts,
             preds: body.predecessors(),
             loop_headers: body.loop_headers(),
@@ -169,61 +206,78 @@ where
         }
     }
 
-    fn fact(&self, value: ValueId) -> &Value<A> {
-        self.facts.get(&value).expect("the solver holds a fact for every value of its body")
+    fn is_token(&self, value: ValueId) -> bool {
+        Some(self.body.ty_of(value)) == self.token_ty
     }
 
+    fn fact(&self, value: ValueId) -> &Value<A> {
+        self.facts.get(&value).expect("the solver holds a fact for every value of its body but tokens")
+    }
+
+    /// The facts of `operands` that are not order tokens, in their order.
     fn operand_facts(&self, operands: &[ValueId]) -> SmallVec<[&Value<A>; 4]> {
-        operands.iter().map(|value| self.fact(*value)).collect()
+        operands
+            .iter()
+            .filter(|value| !self.is_token(**value))
+            .map(|value| self.fact(*value))
+            .collect()
     }
 
     /// Joins `next` into `value`'s fact, or widens it by `next`, and queues
     /// `value`'s users when the fact rose.
     fn rise(&mut self, value: ValueId, next: &Value<A>, widen: bool) {
-        let fact = self.facts.get_mut(&value).expect("the solver holds a fact for every value of its body");
+        let fact = self
+            .facts
+            .get_mut(&value)
+            .expect("the solver holds a fact for every value of its body but tokens");
         let rose = if widen { fact.widen(next) } else { fact.join(next) };
         if rose {
             self.risen.push(value);
         }
     }
 
-    /// Each parameter's fact is the join of its arguments on the executable
-    /// edges into `block`, widened where `block` is a loop header.
+    /// Each parameter's fact is the join, over the executable edges into
+    /// `block`, of its argument or, where the edge's terminator supplies it,
+    /// of what the analysis says the terminator supplies; widened where
+    /// `block` is a loop header.
     fn eval_params(&mut self, block: BlockId) {
         let body = self.body;
         let widen = self.loop_headers.contains(&block);
         let preds = self.preds.get(&block).expect("every block has a predecessor entry").clone();
         for (index, param) in body.block(block).params().iter().enumerate() {
+            if self.is_token(*param) {
+                continue;
+            }
             let mut incoming = Value::<A>::bottom();
             for pred in &preds {
-                let edges = body.block(*pred).terminator().edges();
-                for (position, edge) in edges.iter().enumerate() {
+                let terminator = body.block(*pred).terminator();
+                for (position, edge) in terminator.edges().iter().enumerate() {
                     if edge.to != block || !self.executable.contains(&(*pred, position)) {
                         continue;
                     }
-                    let Some(arg) = index.checked_sub(edge.supplied).map(|at| edge.args[at]) else {
-                        todo!(
-                            "the fact of {param:?}, a parameter the terminator of {pred:?} supplies itself, \
-                             is not settled: the sparse analysis has no transfer for it"
-                        )
-                    };
-                    incoming.join(self.fact(arg));
+                    match index.checked_sub(edge.supplied) {
+                        Some(at) => {
+                            incoming.join(self.fact(edge.args[at]));
+                        }
+                        None => {
+                            let operands = terminator.operands();
+                            let supplied =
+                                self.analysis.supplied(terminator, block, index, &self.operand_facts(&operands));
+                            incoming.join(&supplied);
+                        }
+                    }
                 }
             }
             self.rise(*param, &incoming, widen);
         }
     }
 
+    /// A result that is an order token, such as a `Merge`'s, is not
+    /// evaluated, and the token an instruction yields has no fact.
     fn eval_inst(&mut self, block: BlockId, index: usize) {
         let body = self.body;
         let inst = &body.block(block).insts()[index];
-        if let Some(yielded) = inst.order().and_then(|order| order.yielded()) {
-            todo!(
-                "the fact of {yielded:?}, the order token an instruction yields, is not settled: \
-                 the sparse analysis's transfer gives the fact of the result only"
-            )
-        }
-        let Some(result) = inst.result() else {
+        let Some(result) = inst.result().filter(|result| !self.is_token(*result)) else {
             return;
         };
         let operands = inst.operands();
