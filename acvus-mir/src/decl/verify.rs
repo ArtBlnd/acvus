@@ -24,10 +24,14 @@ pub enum Refused {
     /// An end's labels are not one per segment of its declared type, or
     /// name a lifetime the signature does not have.
     LabelsDoNotFit { declaration: QualifiedRef },
-    /// A declared cast whose `from` or `to` has no head (a type variable,
-    /// `!`, the order token, a started call): a tree step joins two heads
-    /// (types §3).
+    /// A declared cast, or a view instance, whose `from` or `to` has no
+    /// head the tree can step between: a type variable, `!`, the order
+    /// token, a started call, or a reference to a reference. A tree step
+    /// joins two heads (types §3).
     CastWithoutHead { via: QualifiedRef },
+    /// An instance whose type is not its shared signature's type at some
+    /// choice of the signature's variables (extern-fn §6).
+    InstanceNotOfSignature { signature: QualifiedRef, instance: usize },
     /// Two declarations under one qualified name: reach could not tell
     /// them apart (types §6).
     DuplicateFunction { id: QualifiedRef },
