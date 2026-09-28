@@ -3,6 +3,8 @@ use acvus_utils::LocalFactory;
 use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+pub mod cfg;
+
 use acvus_utils::QualifiedRef;
 use crate::ty::{CastTy, Concrete, Flows, IntTy, Mutability, Ty, Types};
 
