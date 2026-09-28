@@ -359,7 +359,35 @@ impl Infer {
             .ok_or(Mismatch::Bound { var: v, term: w_term })?;
         self.ty_vars[w.0 as usize] = VarState::Unbound(bound);
         self.ty_vars[v.0 as usize] = VarState::Bound(w_term);
+        self.keep_reference_target(v, w_term);
         Ok(())
+    }
+
+    /// `var`, linked to `to`, passes its mark as a reference's target to
+    /// the last variable on `to`'s chain, the one later rebound: two
+    /// variables made one keep the mark if either has it (types §4).
+    fn keep_reference_target(&mut self, var: TyVarId, to: Term) {
+        if !self.reference_targets.contains(&var) {
+            return;
+        }
+        match self.end(to) {
+            End::Unbound(last, _) | End::Node { holder: Some((last, _)), .. } => {
+                self.reference_targets.insert(last);
+            }
+            End::Node { holder: None, .. } => {}
+        }
+    }
+
+    /// Refuses `var` becoming `to` where `var` is a reference's target and
+    /// `to` is a reference (types §4).
+    fn refuse_reference_target(&self, var: TyVarId, to: Term) -> Result<(), Mismatch> {
+        let End::Node { node, .. } = self.end(to) else {
+            return Ok(());
+        };
+        match self.reference_targets.contains(&var) && matches!(self.types.kind(node), TyKind::Ref(..)) {
+            true => Err(Mismatch::ReferenceToReference { target: node }),
+            false => Ok(()),
+        }
     }
 
     /// Binds the unbound `var` to `node`, through the variable that holds
@@ -374,8 +402,10 @@ impl Infer {
         if !bound.admits(self.types.kind(node)) {
             return Err(Mismatch::Bound { var, term: node });
         }
+        self.refuse_reference_target(var, node)?;
         let target = holder.map_or(node, |(_, held)| held);
         self.ty_vars[var.0 as usize] = VarState::Bound(target);
+        self.keep_reference_target(var, target);
         Ok(target)
     }
 
@@ -410,7 +440,9 @@ impl Infer {
         if self.occurs(var, to) {
             return Err(Mismatch::Occurs { var, in_term: to });
         }
+        self.refuse_reference_target(var, to)?;
         self.ty_vars[var.0 as usize] = VarState::Bound(to);
+        self.keep_reference_target(var, to);
         Ok(())
     }
 

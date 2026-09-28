@@ -128,6 +128,38 @@ fn eq_refuses_a_variable_that_would_contain_itself() {
     assert_eq!(fx.infer.eq(var, option), Err(Mismatch::Occurs { var: id, in_term: option }));
 }
 
+/// types §4: a reference's target is never a reference, so a variable
+/// under `&` is not bound to one.
+#[test]
+fn a_variable_under_a_reference_is_not_bound_to_a_reference() {
+    let mut fx = Fixture::new();
+    let var = fx.infer.fresh(Bound::Any);
+    fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(var)));
+    let int = fx.int(IntTy::I64);
+    let reference = fx.kind(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+    assert_eq!(
+        fx.infer.eq(var, reference),
+        Err(Mismatch::ReferenceToReference { target: reference })
+    );
+}
+
+/// types §4: two variables made one keep the mark of a reference's target
+/// if either has it, so the other is not bound to a reference either.
+#[test]
+fn a_variable_linked_to_a_references_target_is_not_bound_to_a_reference() {
+    let mut fx = Fixture::new();
+    let (target, other) = (fx.infer.fresh(Bound::Any), fx.infer.fresh(Bound::Any));
+    fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(target)));
+    fx.infer.eq(target, other).expect("two unbound variables link");
+    let int = fx.int(IntTy::I64);
+    let reference = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    assert_eq!(
+        fx.infer.eq(other, reference),
+        Err(Mismatch::ReferenceToReference { target: reference })
+    );
+    assert_eq!(fx.infer.eq(other, int), Ok(()));
+}
+
 /// types §4: every constructor is invariant, so two arguments must be one.
 #[test]
 fn every_constructor_is_invariant() {

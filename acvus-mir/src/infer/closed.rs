@@ -38,12 +38,7 @@ impl Infer {
     /// # Panics
     /// `node` is the order token or a started call, or a reference to one:
     /// only the compiler's IR writes those (effects §3, §6), so no term of
-    /// typeck's is one. Or `node` is a reference to a reference, which
-    /// types §4 excludes.
-    ///
-    /// NOTE: verify refuses a declared reference to a reference, but nothing
-    /// here yet refuses binding a variable under a reference to a reference,
-    /// as instantiating `&T` at `T = &U` would.
+    /// typeck's is one.
     pub(super) fn head_of(&self, node: Term) -> Option<Head> {
         match self.types.kind(node) {
             TyKind::Ref(mutability, target) => {
@@ -89,8 +84,9 @@ fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!(
-            "a reference's target is never a reference (types §4): verify refuses a declared one \
-             (ReferenceToReference), and a reference's own head is read before its target's"
+            "a reference's target is never a reference (types §4): verify refuses a declared one, \
+             Infer::intern refuses to build one, and a variable a reference targets is never bound \
+             to one (Mismatch::ReferenceToReference)"
         ),
         TyKind::Order | TyKind::Handle(_) => panic!(
             "only the compiler's IR writes the order token and a started call (effects §3, §6); \

@@ -21,6 +21,8 @@ use crate::ty::{
     LenVarId, ReprVarId, TyId, TyKind, TyVarId, Types,
 };
 
+use rustc_hash::FxHashSet;
+
 use cells::{Cells, MarkTerm};
 
 pub use closed::{Closed, OpenSources};
@@ -60,6 +62,9 @@ pub enum Mark {
 pub struct Infer {
     types: Types<InferPhase>,
     ty_vars: Vec<VarState>,
+    /// Every variable a reference's target is, which types §4 keeps from
+    /// being bound to a reference.
+    reference_targets: FxHashSet<TyVarId>,
     effect_vars: Cells<EffectTerm<InferPhase>>,
     len_vars: Cells<LenTerm<InferPhase>>,
     identity_vars: Cells<IdentityTerm<InferPhase>>,
@@ -80,6 +85,7 @@ impl Infer {
         Self {
             types: Types::new(),
             ty_vars: Vec::new(),
+            reference_targets: FxHashSet::default(),
             effect_vars: Cells::new(),
             len_vars: Cells::new(),
             identity_vars: Cells::new(),
@@ -95,8 +101,26 @@ impl Infer {
     /// A term of a written shape. A structural object or enum the program
     /// writes carries `Label::Transparent`; one instantiated from a
     /// declaration carries `Label::Opaque` (`scheme`). A product with a
-    /// part of type `!` is `!` (types §4).
+    /// part of type `!` is `!` (types §4). A reference's target is never a
+    /// reference (types §4): a variable it targets is marked so, and is
+    /// never bound to one.
+    ///
+    /// # Panics
+    /// `kind` is a reference whose target is a reference, through bound
+    /// variables or not. Every caller builds a reference over a target it
+    /// already holds to types §4.
     pub fn intern(&mut self, kind: TyKind<InferPhase>) -> Term {
+        if let TyKind::Ref(_, target) = &kind {
+            match self.end(target.ty()) {
+                End::Unbound(var, _) => {
+                    self.reference_targets.insert(var);
+                }
+                End::Node { node, .. } => assert!(
+                    !matches!(self.types.kind(node), TyKind::Ref(..)),
+                    "a reference's target is never a reference (types §4)"
+                ),
+            }
+        }
         let bottom = product_parts(&kind).any(|part| matches!(self.types.kind(part), TyKind::Never));
         self.types.intern(if bottom { TyKind::Never } else { kind })
     }
