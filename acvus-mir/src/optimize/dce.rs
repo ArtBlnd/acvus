@@ -719,7 +719,10 @@ mod tests {
     use super::*;
     use crate::cfg;
     use acvus_utils::QualifiedRef;
-    use crate::ir::{Callee, DebugInfo, Inst, MirBody, RefTarget};
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
+    use crate::flows::{Flows, FlowTerm};
+    use crate::ir::{Callee, DebugInfo, Inst, MirBody, MirModule, RefTarget};
+    use crate::ty::{Calls, Contexts, EffectTerm, Holds, IntTy, Mutability, Reissue, SplitCost, TypeArg};
     use crate::ty::Effect;
     use crate::ty::Ty;
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
@@ -729,23 +732,69 @@ mod tests {
         ValueId::from_raw(n)
     }
 
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: crate::ty::Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    fn test_laws() -> LawTable {
+        LawTable::of(&empty_declarations(&Interner::new()))
+    }
+
+    /// `Idempotent` and commutative, touching no context.
+    fn commutative_idempotent() -> Effect {
+        Effect::new(Reissue::Idempotent, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable)
+    }
+
+    /// `run` at an empty `Declarations`.
+    fn run_test(cfg: &mut CfgBody, types: &Types<Concrete>, laws: &LawTable, functions: &FunctionSummary) {
+        let decls = empty_declarations(&Interner::new());
+        run(cfg, types, &decls, laws, functions);
+    }
+
+    /// `body`, wrapped as the one module `FunctionSummary::of` reads: its
+    /// `ret`/`flows`/`closures` are not read there.
+    fn callee_module(body: MirBody, mut types: Types<Concrete>) -> MirModule {
+        let unit_ty = types.intern(TyKind::Unit);
+        MirModule {
+            declared_params: body.params.len(),
+            main: body,
+            closures: FxHashMap::default(),
+            ret: unit_ty,
+            flows: Flows::Every,
+            types,
+        }
+    }
+
     /// `dst = name()` with the given effect; its result is never used.
-    fn unused_call(i: &Interner, name: &str, effect: Effect, dst: usize) -> InstKind {
-        returning_call(i, name, effect, dst, Ty::I64)
+    fn unused_call(types: &mut Types<Concrete>, i: &Interner, name: &str, effect: Effect, dst: usize) -> InstKind {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        returning_call(types, i, name, effect, dst, i64_ty)
     }
 
     /// `dst = name() -> ret` with the given effect.
-    fn returning_call(i: &Interner, name: &str, effect: Effect, dst: usize, ret: Ty) -> InstKind {
+    fn returning_call(types: &mut Types<Concrete>, i: &Interner, name: &str, effect: Effect, dst: usize, ret: Ty) -> InstKind {
+        let callee_ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret,
+            effect: EffectTerm::Known(effect),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
         InstKind::FunctionCall {
             dst: v(dst),
             callee: Callee::Direct(QualifiedRef::root(i.intern(name))),
-            callee_ty: Ty::Fn {
-                params: vec![],
-                ret: Box::new(ret),
-                captures: vec![],
-                effect: effect.into(),
-                flows: crate::flows::Flows::Every.into(),
-            },
+            callee_ty,
             args: vec![],
             order: None,
         }
@@ -761,8 +810,9 @@ mod tests {
         }
     }
 
-    fn body(insts: Vec<InstKind>, val_count: usize) -> CfgBody {
-        typed_body(insts, &vec![Ty::I64; val_count])
+    fn body(types: &mut Types<Concrete>, insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        typed_body(insts, &vec![i64_ty; val_count])
     }
 
     fn typed_body(insts: Vec<InstKind>, types: &[Ty]) -> CfgBody {
@@ -820,9 +870,11 @@ mod tests {
 
     /// `v0 = opaque() -> String` into a slot `v1` of the same type, and a
     /// word returned: the store has no reader.
-    fn opaque_store_never_read(i: &Interner, tail: Vec<InstKind>) -> CfgBody {
+    fn opaque_store_never_read(i: &Interner, tail: Vec<InstKind>) -> (CfgBody, Types<Concrete>) {
+        let mut types = Types::<Concrete>::new();
+        let string_ty = types.intern(TyKind::String);
         let mut insts = vec![
-            returning_call(i, "make", Effect::OPAQUE, 0, Ty::String),
+            returning_call(&mut types, i, "make", Effect::opaque(), 0, string_ty),
             assign(1, 0),
         ];
         insts.extend(tail);
@@ -834,25 +886,17 @@ mod tests {
             value: v(3),
             order: None,
         });
-        typed_body(
-            insts,
-            &[
-                Ty::String,
-                Ty::String,
-                Ty::Ref(
-                    crate::ty::Mutability::Shared,
-                    Box::new(crate::ty::TypeArg::uniform(Ty::String)),
-                ),
-                Ty::I64,
-            ],
-        )
+        let ref_ty = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string_ty)));
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let cfg = typed_body(insts, &[string_ty, string_ty, ref_ty, i64_ty]);
+        (cfg, types)
     }
 
     #[test]
     fn a_store_no_one_reads_is_dead_and_its_producer_stays() {
         let i = Interner::new();
-        let mut cfg = opaque_store_never_read(&i, Vec::new());
-        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
+        let (mut cfg, types) = opaque_store_never_read(&i, Vec::new());
+        run_test(&mut cfg, &types, &test_laws(), &FunctionSummary::unknown());
         assert_eq!(stored(&cfg), Vec::new(), "a store with no reader is dead");
         assert_eq!(
             calls(&cfg),
@@ -864,7 +908,7 @@ mod tests {
     #[test]
     fn a_dead_ref_of_the_slot_does_not_keep_the_store() {
         let i = Interner::new();
-        let mut cfg = opaque_store_never_read(
+        let (mut cfg, types) = opaque_store_never_read(
             &i,
             vec![InstKind::Ref {
                 dst: v(2),
@@ -873,7 +917,7 @@ mod tests {
                 mutability: crate::ty::Mutability::Shared,
             }],
         );
-        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
+        run_test(&mut cfg, &types, &test_laws(), &FunctionSummary::unknown());
         assert_eq!(refs(&cfg), 0, "a reference no one reads is dead");
         assert_eq!(
             stored(&cfg),
@@ -885,11 +929,14 @@ mod tests {
     #[test]
     fn a_store_onto_an_occupant_stays() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut cfg = typed_body(
             vec![
-                returning_call(&i, "make", Effect::OPAQUE, 0, Ty::String),
+                returning_call(&mut types, &i, "make", Effect::opaque(), 0, string_ty),
                 assign(2, 0),
-                returning_call(&i, "make", Effect::OPAQUE, 1, Ty::String),
+                returning_call(&mut types, &i, "make", Effect::opaque(), 1, string_ty),
                 assign(2, 1),
                 InstKind::Const {
                     dst: v(3),
@@ -900,9 +947,9 @@ mod tests {
                     order: None,
                 },
             ],
-            &[Ty::String, Ty::String, Ty::String, Ty::I64],
+            &[string_ty, string_ty, string_ty, i64_ty],
         );
-        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
+        run_test(&mut cfg, &types, &test_laws(), &FunctionSummary::unknown());
         assert_eq!(
             stored(&cfg),
             vec![v(1)],
@@ -913,7 +960,9 @@ mod tests {
 
     #[test]
     fn a_store_into_a_word_slot_is_dead_whatever_the_slot_holds() {
+        let mut types = Types::<Concrete>::new();
         let mut cfg = body(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -932,7 +981,7 @@ mod tests {
             ],
             4,
         );
-        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
+        run_test(&mut cfg, &types, &test_laws(), &FunctionSummary::unknown());
         assert_eq!(
             stored(&cfg),
             Vec::new(),
@@ -940,14 +989,16 @@ mod tests {
         );
     }
 
-    fn unused_pure_call_body(i: &Interner) -> CfgBody {
+    fn unused_pure_call_body(types: &mut Types<Concrete>, i: &Interner) -> CfgBody {
+        let call = unused_call(types, i, "len", Effect::pure(), 1);
         body(
+            types,
             vec![
                 InstKind::Const {
                     dst: v(0),
                     value: acvus_ast::Literal::Int(1),
                 },
-                unused_call(i, "len", Effect::PURE, 1),
+                call,
                 InstKind::Return {
                     value: v(0),
                     order: None,
@@ -960,8 +1011,11 @@ mod tests {
     #[test]
     fn an_unused_pure_call_of_a_callee_that_cannot_raise_is_dead() {
         let i = Interner::new();
-        let laws = LawTable::default();
-        let callee = cfg::demote(body(
+        let decls = empty_declarations(&i);
+        let laws = LawTable::of(&decls);
+        let mut callee_types = Types::<Concrete>::new();
+        let callee_body = cfg::demote(body(
+            &mut callee_types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -974,44 +1028,54 @@ mod tests {
             ],
             1,
         ));
+        let callee = callee_module(callee_body, callee_types);
         let functions =
-            FunctionSummary::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
-        let mut cfg = unused_pure_call_body(&i);
-        run(&mut cfg, &laws, &functions);
+            FunctionSummary::of([(QualifiedRef::root(i.intern("len")), &callee)], &decls, &laws);
+        let mut types = Types::<Concrete>::new();
+        let mut cfg = unused_pure_call_body(&mut types, &i);
+        run_test(&mut cfg, &types, &laws, &functions);
         assert_eq!(calls(&cfg), 0);
     }
 
     #[test]
     fn an_unused_pure_call_of_a_callee_that_calls_itself_stays() {
         let i = Interner::new();
-        let laws = LawTable::default();
-        let callee = cfg::demote(unused_pure_call_body(&i));
+        let decls = empty_declarations(&i);
+        let laws = LawTable::of(&decls);
+        let mut callee_types = Types::<Concrete>::new();
+        let callee_body = cfg::demote(unused_pure_call_body(&mut callee_types, &i));
+        let callee = callee_module(callee_body, callee_types);
         let functions =
-            FunctionSummary::of([(QualifiedRef::root(i.intern("len")), &callee)], &laws);
-        let mut cfg = unused_pure_call_body(&i);
-        run(&mut cfg, &laws, &functions);
+            FunctionSummary::of([(QualifiedRef::root(i.intern("len")), &callee)], &decls, &laws);
+        let mut types = Types::<Concrete>::new();
+        let mut cfg = unused_pure_call_body(&mut types, &i);
+        run_test(&mut cfg, &types, &laws, &functions);
         assert_eq!(calls(&cfg), 1);
     }
 
     #[test]
     fn an_unused_pure_call_of_a_callee_that_may_raise_stays() {
         let i = Interner::new();
-        let mut cfg = unused_pure_call_body(&i);
-        run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
+        let mut types = Types::<Concrete>::new();
+        let mut cfg = unused_pure_call_body(&mut types, &i);
+        run_test(&mut cfg, &types, &test_laws(), &FunctionSummary::unknown());
         assert_eq!(calls(&cfg), 1);
     }
 
     #[test]
     fn an_unused_effectful_call_stays() {
         let i = Interner::new();
-        for effect in [Effect::IDEMPOTENT.commutative(), Effect::OPAQUE] {
+        for effect in [commutative_idempotent(), Effect::opaque()] {
+            let mut types = Types::<Concrete>::new();
+            let call = unused_call(&mut types, &i, "put", effect, 1);
             let mut cfg = body(
+                &mut types,
                 vec![
                     InstKind::Const {
                         dst: v(0),
                         value: acvus_ast::Literal::Int(1),
                     },
-                    unused_call(&i, "put", effect, 1),
+                    call,
                     InstKind::Return {
                         value: v(0),
                         order: None,
@@ -1019,7 +1083,7 @@ mod tests {
                 ],
                 2,
             );
-            run(&mut cfg, &LawTable::default(), &FunctionSummary::unknown());
+            run_test(&mut cfg, &types, &test_laws(), &FunctionSummary::unknown());
             assert_eq!(
                 calls(&cfg),
                 1,
