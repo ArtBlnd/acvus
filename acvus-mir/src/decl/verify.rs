@@ -95,6 +95,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     );
     refuse_array_types(&types, &functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
+    refuse_unfit_bounds(&types, &functions, &mut refused);
     let declared_order = first_of_each(functions.iter().map(|(id, _)| *id));
     let overloads = overloads(&declared_order);
     let functions = first_stands(functions, &mut refused, |id| Refused::DuplicateFunction { id });
@@ -220,6 +221,42 @@ fn holds_array(types: &Types<Poly>, ty: TyId<Poly>, clear: &mut FxHashSet<TyId<P
             clear.insert(ty);
         }
         found
+    })
+}
+
+/// extern-fn §1: a type parameter carries one bound. A scheme's type
+/// variables are `0..n` for its `n` bounds, each one mentioned by its type.
+fn refuse_unfit_bounds(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
+    for (function, scheme) in functions {
+        let mut variables = FxHashSet::default();
+        type_variables(types, scheme.ty, &mut FxHashSet::default(), &mut variables);
+        let bounded = scheme.bounds.len();
+        let one_per_variable = variables.len() == bounded
+            && variables
+                .iter()
+                .all(|var| usize::try_from(*var).is_ok_and(|at| at < bounded));
+        if !one_per_variable {
+            refused.push(Refused::BoundsDoNotFit { function: *function });
+        }
+    }
+}
+
+/// Every type variable `ty` mentions, into `variables`.
+fn type_variables(
+    types: &Types<Poly>,
+    ty: TyId<Poly>,
+    seen: &mut FxHashSet<TyId<Poly>>,
+    variables: &mut FxHashSet<u32>,
+) {
+    acvus_utils::grow(|| {
+        if !seen.insert(ty) {
+            return;
+        }
+        let kind = types.kind(ty);
+        if let TyKind::Var(var) = kind {
+            variables.insert(*var);
+        }
+        kind.for_each_child(|child| type_variables(types, child, seen, variables));
     })
 }
 
@@ -1037,16 +1074,18 @@ mod tests {
         }
     }
 
-    fn plain(ty: TyId<Poly>) -> Scheme {
+    /// A scheme at `ty`, whose type variables are `0..variables`, each
+    /// bounded by any type.
+    fn plain(ty: TyId<Poly>, variables: usize) -> Scheme {
         Scheme {
             ty,
-            bounds: Box::new([]),
+            bounds: vec![TyVarBound::Any; variables].into(),
             instances: None,
             requires: Box::new([]),
         }
     }
 
-    fn labelled(ty: TyId<Poly>, lifetimes: LabelledSignature) -> Scheme {
+    fn labelled(ty: TyId<Poly>, variables: usize, lifetimes: LabelledSignature) -> Scheme {
         Scheme {
             instances: Some(Instances {
                 concrete: Box::new([]),
@@ -1057,7 +1096,7 @@ mod tests {
                     },
                 }),
             }),
-            ..plain(ty)
+            ..plain(ty, variables)
         }
     }
 
@@ -1136,7 +1175,7 @@ mod tests {
         let array = fixture.ty(TyKind::Array(int, LenTerm::Known(3)));
         let unit = fixture.ty(TyKind::Unit);
         let ty = fixture.function(&[array], unit);
-        fixture.declare(f, plain(ty));
+        fixture.declare(f, plain(ty, 0));
         assert_eq!(refusals(fixture), vec![Refused::ArrayType { declaration: f }]);
     }
 
@@ -1163,7 +1202,7 @@ mod tests {
                     }]),
                     generic: None,
                 }),
-                ..plain(own_ty)
+                ..plain(own_ty, 1)
             },
         );
         assert_eq!(refusals(fixture), vec![Refused::ArrayType { declaration: f }]);
@@ -1299,7 +1338,7 @@ mod tests {
             f,
             Scheme {
                 requires: requiring(shared, pattern),
-                ..plain(ty)
+                ..plain(ty, 1)
             },
         );
         assert_eq!(
@@ -1324,7 +1363,7 @@ mod tests {
             f,
             Scheme {
                 requires: requiring(shared, var),
-                ..plain(ty)
+                ..plain(ty, 1)
             },
         );
         assert!(fixture.verify().is_ok());
@@ -1357,7 +1396,7 @@ mod tests {
                     }]),
                     generic: None,
                 }),
-                ..plain(own_ty)
+                ..plain(own_ty, 1)
             },
         );
         assert!(fixture.verify().is_ok());
@@ -1379,7 +1418,7 @@ mod tests {
             ],
             &[],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
         assert_eq!(
             own_flows(&decls, f),
@@ -1405,7 +1444,7 @@ mod tests {
             ],
             &[(0, 1), (1, 2)],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
         assert_eq!(
             own_flows(&decls, f),
@@ -1433,7 +1472,7 @@ mod tests {
             ],
             &[(0, 1)],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
         assert_eq!(
             own_flows(&decls, f),
@@ -1461,7 +1500,7 @@ mod tests {
             ],
             &[],
         );
-        fixture.declare(push, labelled(ty, lifetimes));
+        fixture.declare(push, labelled(ty, 1, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
         assert_eq!(
             segments(decls.types(), &decls, v),
@@ -1490,7 +1529,7 @@ mod tests {
             vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
             &[],
         );
-        fixture.declare(iter, labelled(ty, lifetimes));
+        fixture.declare(iter, labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
         assert_eq!(
             own_flows(&decls, iter),
@@ -1510,7 +1549,7 @@ mod tests {
             vec![end(FlowEnd::Result, &[lt(0), lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
             &[],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         assert_eq!(refusals(fixture), vec![Refused::LabelsDoNotFit { declaration: f }]);
     }
 
@@ -1523,7 +1562,7 @@ mod tests {
         let s = fixture.shared_str();
         let ty = fixture.function(&[s], s);
         let lifetimes = signature(vec![end(FlowEnd::Result, &[lt(0)])], &[]);
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         assert_eq!(refusals(fixture), vec![Refused::LabelsDoNotFit { declaration: f }]);
     }
 
@@ -1539,7 +1578,7 @@ mod tests {
             vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
             &[(1, 0)],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         assert_eq!(refusals(fixture), vec![Refused::LabelsDoNotFit { declaration: f }]);
     }
 
@@ -1551,7 +1590,7 @@ mod tests {
         let f = fixture.name("m", "f");
         let s = fixture.shared_str();
         let ty = fixture.function(&[s], s);
-        fixture.declare(f, plain(ty));
+        fixture.declare(f, plain(ty, 0));
         let decls = fixture.verify().expect("nothing to refuse");
         assert_eq!(own_flows(&decls, f), Flows::Every);
     }
@@ -1585,7 +1624,7 @@ mod tests {
                     }]),
                     generic: None,
                 }),
-                ..plain(own_ty)
+                ..plain(own_ty, 1)
             },
         );
         let decls = fixture.verify().expect("the labels fit");
@@ -1611,8 +1650,8 @@ mod tests {
         let (a_len, b_len) = (fixture.name("a", "len"), fixture.name("b", "len"));
         let unit = fixture.ty(TyKind::Unit);
         let ty = fixture.function(&[], unit);
-        fixture.declare(a_len, plain(ty));
-        fixture.declare(b_len, plain(ty));
+        fixture.declare(a_len, plain(ty, 0));
+        fixture.declare(b_len, plain(ty, 0));
         let len = fixture.interner.intern("len");
         let other = fixture.interner.intern("other");
         let decls = fixture.verify().expect("nothing to refuse");
@@ -1621,7 +1660,7 @@ mod tests {
     }
 
     /// A scheme whose concrete instances are `tys`.
-    fn with_instances(own_ty: TyId<Poly>, tys: &[TyId<Poly>]) -> Scheme {
+    fn with_instances(own_ty: TyId<Poly>, variables: usize, tys: &[TyId<Poly>]) -> Scheme {
         Scheme {
             instances: Some(Instances {
                 concrete: tys
@@ -1634,7 +1673,7 @@ mod tests {
                     .collect(),
                 generic: None,
             }),
-            ..plain(own_ty)
+            ..plain(own_ty, variables)
         }
     }
 
@@ -1674,8 +1713,8 @@ mod tests {
         let str_ref = fixture.shared_str();
         let as_str_at_string = fixture.function(&[string_ref], str_ref);
         let (as_slice_ty, as_str_ty) = (view_signature(&mut fixture, Mutability::Shared, true), view_signature(&mut fixture, Mutability::Shared, false));
-        fixture.declare(core.as_slice, with_instances(as_slice_ty, &[as_slice_at_vec]));
-        fixture.declare(core.as_str, with_instances(as_str_ty, &[as_str_at_string]));
+        fixture.declare(core.as_slice, with_instances(as_slice_ty, 2, &[as_slice_at_vec]));
+        fixture.declare(core.as_str, with_instances(as_str_ty, 1, &[as_str_at_string]));
         let decls = fixture.verify().expect("two views from two heads are a tree");
         let from_vec = decls
             .casts()
@@ -1706,7 +1745,7 @@ mod tests {
         let other_ref = fixture.reference(Mutability::Shared, other_ty);
         let slice_ref = fixture.reference(Mutability::Shared, slice);
         let as_slice_at_vec = fixture.function(&[vec_ref], slice_ref);
-        fixture.declare(core.as_slice, with_instances(as_slice_at_vec, &[as_slice_at_vec]));
+        fixture.declare(core.as_slice, with_instances(as_slice_at_vec, 0, &[as_slice_at_vec]));
         fixture.raw.casts.push(CastRule {
             from: vec_ref,
             to: other_ref,
@@ -1740,8 +1779,8 @@ mod tests {
         let f = fixture.name("m", "f");
         let unit = fixture.ty(TyKind::Unit);
         let ty = fixture.function(&[], unit);
-        fixture.declare(f, plain(ty));
-        fixture.declare(f, plain(ty));
+        fixture.declare(f, plain(ty, 0));
+        fixture.declare(f, plain(ty, 0));
         assert_eq!(refusals(fixture), vec![Refused::DuplicateFunction { id: f }]);
     }
 
@@ -1792,7 +1831,7 @@ mod tests {
             vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
             &[],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
@@ -1831,7 +1870,7 @@ mod tests {
             vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
             &[],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 1, lifetimes));
         assert_eq!(refusals(fixture), vec![Refused::LabelsDoNotFit { declaration: f }]);
     }
 
@@ -1859,8 +1898,8 @@ mod tests {
             ],
             &[],
         );
-        fixture.declare(f, labelled(f_ty, off_variable));
-        fixture.declare(g, labelled(g_ty, on_reference));
+        fixture.declare(f, labelled(f_ty, 2, off_variable));
+        fixture.declare(g, labelled(g_ty, 0, on_reference));
         assert_eq!(
             refusals(fixture),
             vec![
@@ -1882,7 +1921,7 @@ mod tests {
         let (int, string) = (fixture.ty(TyKind::Int(IntTy::I64)), fixture.ty(TyKind::String));
         let fits = fixture.function(&[int], int);
         let misfit = fixture.function(&[int], string);
-        fixture.declare(f, with_instances(own_ty, &[fits, misfit]));
+        fixture.declare(f, with_instances(own_ty, 1, &[fits, misfit]));
         assert_eq!(
             refusals(fixture),
             vec![Refused::InstanceNotOfSignature {
@@ -1909,7 +1948,7 @@ mod tests {
         let fits = fixture.function(&[int_ref], int_ref);
         let wrong_mutability = fixture.function(&[int_ref], int_mut);
         let wrong_constructor = fixture.function(&[option], int_ref);
-        fixture.declare(f, with_instances(own_ty, &[fits, wrong_mutability, wrong_constructor]));
+        fixture.declare(f, with_instances(own_ty, 1, &[fits, wrong_mutability, wrong_constructor]));
         assert_eq!(
             refusals(fixture),
             vec![
@@ -1952,7 +1991,7 @@ mod tests {
                     concrete: Box::new([]),
                     generic: Some(GenericSig::default()),
                 }),
-                ..plain(ty)
+                ..plain(ty, 2)
             },
         );
         assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via: core.as_slice }]);
@@ -1964,7 +2003,7 @@ mod tests {
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
         let ty = view_signature(&mut fixture, Mutability::Shared, true);
-        fixture.declare(core.as_slice, plain(ty));
+        fixture.declare(core.as_slice, plain(ty, 2));
         let decls = fixture.verify().expect("nothing to refuse");
         assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)).is_none());
     }
@@ -1986,8 +2025,8 @@ mod tests {
         let str_ref = fixture.shared_str();
         let as_slice_at_string = fixture.function(&[string_ref], bytes_ref);
         let as_str_at_string = fixture.function(&[string_ref], str_ref);
-        fixture.declare(core.as_slice, with_instances(as_slice_ty, &[as_slice_at_string]));
-        fixture.declare(core.as_str, with_instances(as_str_ty, &[as_str_at_string]));
+        fixture.declare(core.as_slice, with_instances(as_slice_ty, 2, &[as_slice_at_string]));
+        fixture.declare(core.as_str, with_instances(as_str_ty, 1, &[as_str_at_string]));
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
@@ -2028,7 +2067,7 @@ mod tests {
             f,
             Scheme {
                 requires: requiring(shared, ghost_ty),
-                ..plain(ty)
+                ..plain(ty, 1)
             },
         );
         assert_eq!(
@@ -2071,7 +2110,7 @@ mod tests {
             vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
             &[],
         );
-        fixture.declare(f, labelled(ty, lifetimes));
+        fixture.declare(f, labelled(ty, 0, lifetimes));
         assert_eq!(
             refusals(fixture),
             vec![Refused::InternalType {
@@ -2096,6 +2135,55 @@ mod tests {
         );
     }
 
+    /// extern-fn §1: a type parameter carries one bound. `fn(T, U) -> T`
+    /// has two type variables, and one bound is too few.
+    #[test]
+    fn too_few_bounds_are_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let (t, u) = (fixture.ty(TyKind::Var(0)), fixture.ty(TyKind::Var(1)));
+        let ty = fixture.function(&[t, u], t);
+        fixture.declare(f, plain(ty, 1));
+        assert_eq!(refusals(fixture), vec![Refused::BoundsDoNotFit { function: f }]);
+    }
+
+    /// extern-fn §1: a type parameter carries one bound. `fn(T) -> T` has
+    /// one type variable, and a second bound bounds none.
+    #[test]
+    fn too_many_bounds_are_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let t = fixture.ty(TyKind::Var(0));
+        let ty = fixture.function(&[t], t);
+        fixture.declare(f, plain(ty, 2));
+        assert_eq!(refusals(fixture), vec![Refused::BoundsDoNotFit { function: f }]);
+    }
+
+    /// extern-fn §1: bounds are by position, one per type variable, so the
+    /// variables are `0..n`. `fn(T0, T2) -> ()` with two bounds leaves the
+    /// second bound on `T1`, which does not exist, and `T2` unbounded.
+    #[test]
+    fn bounds_over_sparse_variables_are_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let (first, third) = (fixture.ty(TyKind::Var(0)), fixture.ty(TyKind::Var(2)));
+        let unit = fixture.ty(TyKind::Unit);
+        let ty = fixture.function(&[first, third], unit);
+        fixture.declare(f, plain(ty, 2));
+        assert_eq!(refusals(fixture), vec![Refused::BoundsDoNotFit { function: f }]);
+    }
+
+    /// extern-fn §1: one bound per variable, by position, is taken in.
+    #[test]
+    fn one_bound_per_variable_is_taken_in() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let (t, u) = (fixture.ty(TyKind::Var(0)), fixture.ty(TyKind::Var(1)));
+        let ty = fixture.function(&[t, u], t);
+        fixture.declare(f, plain(ty, 2));
+        assert!(fixture.verify().is_ok());
+    }
+
     /// `Refused`: every refusal a set earns is reported, not the first.
     #[test]
     fn every_refusal_is_reported() {
@@ -2106,7 +2194,7 @@ mod tests {
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let array = fixture.ty(TyKind::Array(int, LenTerm::Known(1)));
         let ty = fixture.function(&[], array);
-        fixture.declare(f, plain(ty));
+        fixture.declare(f, plain(ty, 0));
         let refused = refusals(fixture);
         assert!(refused.contains(&Refused::DuplicateType { id: t }));
         assert!(refused.contains(&Refused::ArrayType { declaration: f }));
