@@ -24,6 +24,21 @@ pub enum Refused {
     /// An end's labels are not one per segment of its declared type, or
     /// name a lifetime the signature does not have.
     LabelsDoNotFit { declaration: QualifiedRef },
+    /// A declared cast whose `from` or `to` has no head (a type variable,
+    /// `!`, the order token, a started call): a tree step joins two heads
+    /// (types §3).
+    CastWithoutHead { via: QualifiedRef },
+    /// Two declarations under one qualified name: reach could not tell
+    /// them apart (types §6).
+    DuplicateFunction { id: QualifiedRef },
+    /// Two declarations of one context, which is one value of one fixed
+    /// type (context).
+    DuplicateContext { id: QualifiedRef },
+    /// Two declarations of one input (programs §4).
+    DuplicateInput { name: acvus_utils::Astr },
+    /// A signature names an extern-defined type no declaration gives
+    /// (extern-fn §8).
+    UndeclaredType { declaration: QualifiedRef, id: QualifiedRef },
     /// Two types under one name.
     DuplicateType { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in

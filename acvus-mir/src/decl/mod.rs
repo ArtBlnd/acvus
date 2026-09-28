@@ -22,7 +22,7 @@ use rustc_hash::FxHashMap;
 use crate::ty::{LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
-pub use casts::{CastRule, CastTree, Head, VerifiedExternCast};
+pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
 pub use core::{Core, Tags};
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
