@@ -2,8 +2,8 @@
 //! closed term.
 
 use super::{End, Infer, Term};
-use crate::decl::{CastTree, Head};
-use crate::ty::{Infer as InferPhase, ObjectTy, TyKind};
+use crate::decl::{Base, CastTree, Head};
+use crate::ty::{ObjectTy, Phase, Poly, TyId, TyKind, Types};
 
 /// What the decisions still pending may do: typeck answers from its
 /// decision graph; B only asks.
@@ -27,36 +27,69 @@ impl Infer {
         let End::Node { node, .. } = self.end(term) else {
             return None;
         };
-        let head = head_of(self.types.kind(node));
+        let head = self.head_of(node)?;
         (casts.step_up(head).is_none() || !open.may_change(term)).then_some(Closed { head, term: node })
+    }
+
+    /// The head a cast step is taken from at `node` (types §3): its
+    /// constructor, and for a reference its target's too. `None` while a
+    /// reference's target is an unbound variable.
+    ///
+    /// # Panics
+    /// `node` is the order token or a started call, or a reference to one:
+    /// only the compiler's IR writes those (effects §3, §6), so no term of
+    /// typeck's is one.
+    pub(super) fn head_of(&self, node: Term) -> Option<Head> {
+        match self.types.kind(node) {
+            TyKind::Ref(mutability, target) => {
+                let End::Node { node: target, .. } = self.end(target.ty()) else {
+                    return None;
+                };
+                Some(Head::Ref(*mutability, base_of(self.types.kind(target))))
+            }
+            kind => Some(Head::Base(base_of(kind))),
+        }
     }
 }
 
-/// The head a cast step is taken from: the constructor, a named type by
-/// its name.
-fn head_of(kind: &TyKind<InferPhase>) -> Head {
+/// The head of a declared cast's end (types §3).
+///
+/// # Panics
+/// `ty` has no head: verify admits no such cast (`CastWithoutHead`).
+pub(super) fn poly_head(types: &Types<Poly>, ty: TyId<Poly>) -> Head {
+    match types.kind(ty) {
+        TyKind::Ref(mutability, target) => Head::Ref(*mutability, base_of(types.kind(target.ty()))),
+        kind => Head::Base(base_of(kind)),
+    }
+}
+
+fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
     match kind {
-        TyKind::Int(width) => Head::Int(*width),
-        TyKind::Float => Head::Float,
-        TyKind::Char => Head::Char,
-        TyKind::String => Head::String,
-        TyKind::Bool => Head::Bool,
-        TyKind::Unit => Head::Unit,
-        TyKind::Str => Head::Str,
-        TyKind::Array(..) => Head::Array,
-        TyKind::Slice(_) => Head::Slice,
-        TyKind::Tuple(items) => Head::Tuple(items.len()),
-        TyKind::Option(_) => Head::Option,
-        TyKind::Result(..) => Head::Result,
-        TyKind::Object(ObjectTy::Structural(..)) => Head::Object,
-        TyKind::Object(ObjectTy::Declared(id, _)) | TyKind::UserDefined { id, .. } => Head::Named(*id),
-        TyKind::Enum { name, .. } => Head::Enum(*name),
-        TyKind::Fn { .. } => Head::Fn,
-        TyKind::Ref(mutability, _) => Head::Ref(*mutability),
-        TyKind::Never | TyKind::Order | TyKind::Handle(_) => todo!(
-            "stop: Head has no form for `!`, the order token or a started call, so whether their head \
-             is closed cannot be answered"
+        TyKind::Never => Base::Never,
+        TyKind::Int(width) => Base::Int(*width),
+        TyKind::Float => Base::Float,
+        TyKind::Char => Base::Char,
+        TyKind::String => Base::String,
+        TyKind::Bool => Base::Bool,
+        TyKind::Unit => Base::Unit,
+        TyKind::Str => Base::Str,
+        TyKind::Array(..) => Base::Array,
+        TyKind::Slice(_) => Base::Slice,
+        TyKind::Tuple(items) => Base::Tuple(items.len()),
+        TyKind::Option(_) => Base::Option,
+        TyKind::Result(..) => Base::Result,
+        TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
+        TyKind::Object(ObjectTy::Declared(id, _)) | TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::Enum { name, .. } => Base::Enum(*name),
+        TyKind::Fn { .. } => Base::Fn,
+        TyKind::Ref(..) => Base::Ref,
+        TyKind::Order | TyKind::Handle(_) => panic!(
+            "only the compiler's IR writes the order token and a started call (effects §3, §6); \
+             verify refuses a declared one (InternalType)"
         ),
-        TyKind::Var(_) => unreachable!("head_of: a node is never a variable"),
+        TyKind::Var(_) => panic!(
+            "a head is read off a node: typeck's variables are followed first, and verify admits no \
+             cast whose end is a variable (CastWithoutHead)"
+        ),
     }
 }

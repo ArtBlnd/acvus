@@ -1,4 +1,4 @@
-use acvus_utils::{Astr, Interner, QualifiedRef};
+use acvus_utils::{Astr, Interner, LocalIdOps, QualifiedRef};
 
 use super::*;
 use crate::decl::{
@@ -6,7 +6,7 @@ use crate::decl::{
 };
 use crate::flows::{Alignment, Flow, FlowEnd, FlowTerm, Flows};
 use crate::ty::{
-    Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Holds, IntTy, Label, Mutability, ObjectTy, Poly, Reissue,
+    Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Holds, IdentityId, IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reissue,
     SplitCost, TyKind, TypeArg, Types,
 };
 
@@ -223,6 +223,7 @@ fn an_integer_bound_admits_only_its_widths() {
         fx.infer.fresh(Bound::Integer {
             signed: false,
             among: among.clone(),
+            literal: false,
         })
     };
     let (u8_, i8_, u16_, string) = (
@@ -240,6 +241,14 @@ fn an_integer_bound_admits_only_its_widths() {
     }
 }
 
+fn literal() -> Bound {
+    Bound::Integer {
+        signed: true,
+        among: IntTy::ALL.into(),
+        literal: true,
+    }
+}
+
 /// extern-fn §1, types §5: a settled bound is never taken as `!`; a
 /// literal's width is an integer's.
 #[test]
@@ -248,7 +257,7 @@ fn a_settled_bound_refuses_never_and_a_literal_admits_integers() {
     let never = fx.kind(TyKind::Never);
     let settled = fx.infer.fresh(Bound::Settled);
     assert!(matches!(fx.infer.eq(settled, never), Err(Mismatch::Bound { .. })));
-    let literal = fx.infer.fresh(Bound::Literal);
+    let literal = fx.infer.fresh(literal());
     let float = fx.kind(TyKind::Float);
     assert!(matches!(fx.infer.eq(literal, float), Err(Mismatch::Bound { .. })));
     let u32_ = fx.int(IntTy::U32);
@@ -263,10 +272,12 @@ fn two_bounded_variables_made_one_admit_what_both_admit() {
     let a = fx.infer.fresh(Bound::Integer {
         signed: true,
         among: Box::new([IntTy::I32, IntTy::I64]),
+        literal: false,
     });
     let b = fx.infer.fresh(Bound::Integer {
         signed: true,
         among: Box::new([IntTy::I64, IntTy::U8]),
+        literal: false,
     });
     fx.infer.eq(a, b).unwrap();
     let i32_ = fx.int(IntTy::I32);
@@ -277,10 +288,12 @@ fn two_bounded_variables_made_one_admit_what_both_admit() {
     let c = fx.infer.fresh(Bound::Integer {
         signed: false,
         among: Box::new([IntTy::U8]),
+        literal: false,
     });
     let d = fx.infer.fresh(Bound::Integer {
         signed: true,
         among: Box::new([IntTy::I8]),
+        literal: false,
     });
     assert!(matches!(fx.infer.eq(c, d), Err(Mismatch::Bound { .. })));
 
@@ -337,21 +350,59 @@ fn a_transparent_side_grows_to_an_opaque_one() {
     assert_eq!(fx.infer.shallow(a), wide);
 }
 
-/// types §2: a transparent node inside a term grows through the variable
-/// that holds the term.
+/// types §2, §4: `join` grows only a node's own members; a constructor's
+/// arguments are related by `eq`, since every constructor is invariant.
 #[test]
-fn a_nested_transparent_node_grows_through_the_variable_above_it() {
+fn join_relates_a_constructors_arguments_by_eq() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
     let x = fx.object(&[("x", int)], Label::Transparent);
     let y = fx.object(&[("y", int)], Label::Transparent);
     let (some_x, some_y) = (fx.kind(TyKind::Option(x)), fx.kind(TyKind::Option(y)));
     let (a, b) = (fx.held(some_x), fx.held(some_y));
+    assert_eq!(fx.infer.join(a, b), Err(Mismatch::Heads { a: x, b: y }));
+
+    let (inner_x, inner_y) = (fx.held(x), fx.held(y));
+    let (some_x, some_y) = (fx.kind(TyKind::Option(inner_x)), fx.kind(TyKind::Option(inner_y)));
+    fx.infer.join(inner_x, inner_y).unwrap();
+    let (a, b) = (fx.held(some_x), fx.held(some_y));
     fx.infer.join(a, b).unwrap();
-    let TyKind::Option(inner) = *fx.infer.types().kind(fx.infer.shallow(a)) else {
-        panic!("an option")
+    assert_eq!(fx.fields_of(inner_y), (vec![fx.name("x"), fx.name("y")], Label::Transparent));
+}
+
+/// types §2, §4: an object's fields are its members, and their types are
+/// related by `eq`, not grown.
+#[test]
+fn a_shared_fields_types_are_related_by_eq() {
+    let mut fx = Fixture::new();
+    let int = fx.int(IntTy::I64);
+    let x = fx.object(&[("x", int)], Label::Transparent);
+    let y = fx.object(&[("y", int)], Label::Transparent);
+    let (px, py) = (fx.object(&[("p", x)], Label::Transparent), fx.object(&[("p", y)], Label::Transparent));
+    let (a, b) = (fx.held(px), fx.held(py));
+    assert_eq!(fx.infer.join(a, b), Err(Mismatch::Heads { a: x, b: y }));
+}
+
+/// types §2: a function type's identity is not its parameter names, so
+/// `|x| ..` and `|y| ..` meet.
+#[test]
+fn parameter_names_do_not_part_function_types() {
+    let mut fx = Fixture::new();
+    let int = fx.int(IntTy::I64);
+    let unit = fx.kind(TyKind::Unit);
+    let named = |fx: &mut Fixture, name: &str| {
+        let name = fx.name(name);
+        fx.kind(TyKind::Fn {
+            params: Box::new([crate::ty::ParamTerm { name, ty: int }]),
+            ret: unit,
+            effect: EffectTerm::Known(Effect::pure()),
+            flows: FlowTerm::Known(Flows::none()),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        })
     };
-    assert_eq!(fx.fields_of(inner), (vec![fx.name("x"), fx.name("y")], Label::Transparent));
+    let (f, g) = (named(&mut fx, "x"), named(&mut fx, "y"));
+    assert_eq!(fx.infer.eq(f, g), Ok(()));
 }
 
 /// types §2: two enums of one name join at the union of their variants.
@@ -550,7 +601,7 @@ fn the_top_of_the_cast_tree_is_closed() {
     assert_eq!(
         fx.infer.closed(&CastTree::default(), &Open(true), held),
         Some(Closed {
-            head: Head::Int(IntTy::I64),
+            head: Head::Base(crate::decl::Base::Int(IntTy::I64)),
             term: int
         })
     );
@@ -563,13 +614,19 @@ fn the_top_of_the_cast_tree_is_closed() {
 #[test]
 fn an_unbound_variable_at_freeze_is_unsettled() {
     let mut fx = Fixture::new();
-    let var = fx.infer.fresh(Bound::Literal);
+    let var = fx.infer.fresh(literal());
     let TyKind::Var(id) = *fx.infer.types().kind(var) else { unreachable!() };
     let option = fx.kind(TyKind::Option(var));
     let mut into = Types::new();
     assert_eq!(
         fx.infer.freeze(&mut into, &mut FreezeMemo::default(), option),
-        Err(Unsettled { var: id })
+        Err(Unsettled::Ty(id))
+    );
+    let effect = fx.infer.fresh_effect();
+    let f = fx.function(EffectTerm::Var(effect), Flows::none(), Calls::Many, Holds::Nothing);
+    assert_eq!(
+        fx.infer.freeze(&mut into, &mut FreezeMemo::default(), f),
+        Err(Unsettled::Effect(effect))
     );
 }
 
@@ -599,15 +656,6 @@ fn freeze_follows_variables_and_answers_a_frozen_term_from_the_memo() {
 }
 
 // enter (types §3, §7)
-
-/// types §6, §7: a value whose head is not known yet does not enter.
-#[test]
-fn a_value_of_no_known_head_does_not_enter_yet() {
-    let mut fx = Fixture::new();
-    let value = fx.infer.fresh(Bound::Any);
-    let slot = fx.infer.fresh(Bound::Any);
-    assert_eq!(fx.infer.enter(&CastTree::default(), value, slot), Ok(Entered::NotYet));
-}
 
 // Tests that build a `Declarations`: they wait on `Declarations::verify`.
 
@@ -698,7 +746,8 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
             id,
             &Bound::Integer {
                 signed: true,
-                among: Box::new([IntTy::I32, IntTy::I64])
+                among: Box::new([IntTy::I32, IntTy::I64]),
+                literal: false,
             }
         )]
     );
@@ -742,8 +791,315 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
     assert_eq!(
         fx.infer.closed(decls.casts(), &Open(false), held),
         Some(Closed {
-            head: Head::Int(IntTy::I32),
+            head: Head::Base(crate::decl::Base::Int(IntTy::I32)),
             term: int
         })
     );
+}
+
+/// types §5: a literal's variable made one with an integer bound takes the
+/// widths both admit, and stays a literal only where both are.
+#[test]
+fn a_literal_made_one_with_an_integer_bound_narrows_and_is_no_longer_a_literal() {
+    let mut fx = Fixture::new();
+    let a = fx.infer.fresh(literal());
+    let b = fx.infer.fresh(Bound::Integer {
+        signed: false,
+        among: Box::new([IntTy::U8, IntTy::U16]),
+        literal: false,
+    });
+    fx.infer.eq(a, b).unwrap();
+    assert_eq!(
+        fx.infer.unbound().map(|(_, bound)| bound.clone()).collect::<Vec<_>>(),
+        vec![Bound::Integer {
+            signed: true,
+            among: Box::new([IntTy::U8, IntTy::U16]),
+            literal: false,
+        }]
+    );
+    let i8_ = fx.int(IntTy::I8);
+    assert!(matches!(fx.infer.eq(a, i8_), Err(Mismatch::Bound { .. })));
+}
+
+// The bottom type (types §4)
+
+/// types §4: a product with a part of type `!` is `!`.
+#[test]
+fn a_product_with_a_part_of_type_never_is_never() {
+    let mut fx = Fixture::new();
+    let (never, int) = (fx.kind(TyKind::Never), fx.int(IntTy::I64));
+    assert_eq!(fx.kind(TyKind::Tuple(Box::new([int, never]))), never);
+    assert_eq!(fx.object(&[("x", int), ("y", never)], Label::Transparent), never);
+    let option = fx.kind(TyKind::Option(never));
+    assert_ne!(option, never, "an option is a sum, not a product");
+
+    let var = fx.infer.fresh(Bound::Any);
+    let pair = fx.kind(TyKind::Tuple(Box::new([int, var])));
+    fx.infer.eq(var, never).unwrap();
+    let (types, frozen) = fx.freeze(pair);
+    assert_eq!(types.kind(frozen), &TyKind::Never);
+}
+
+/// types §2, §4: `!` is the bottom type: its join with `T` is `T`, and it
+/// equals only itself.
+#[test]
+fn never_joins_to_the_other_side_and_equals_only_itself() {
+    let mut fx = Fixture::new();
+    let (never, int) = (fx.kind(TyKind::Never), fx.int(IntTy::I64));
+    let (a, b) = (fx.held(never), fx.held(int));
+    fx.infer.join(a, b).unwrap();
+    assert_eq!(fx.infer.shallow(a), int);
+    assert_eq!(fx.infer.join(never, b), Ok(()));
+    assert_eq!(fx.infer.eq(never, int), Err(Mismatch::Heads { a: never, b: int }));
+    assert_eq!(fx.infer.eq(never, never), Ok(()));
+}
+
+/// types §4, §6: `!` has a head, and no step leaves it, so it is closed.
+#[test]
+fn never_is_closed() {
+    let mut fx = Fixture::new();
+    let never = fx.kind(TyKind::Never);
+    let held = fx.held(never);
+    assert_eq!(
+        fx.infer.closed(&CastTree::default(), &Open(true), held),
+        Some(Closed {
+            head: Head::Base(crate::decl::Base::Never),
+            term: never
+        })
+    );
+}
+
+// enter (types §3, §7)
+
+/// Declarations whose casts are `from -> to` through a one-parameter
+/// function named `via`, each of its own types.
+fn with_casts(
+    names: &Interner,
+    types: Types<Poly>,
+    user_types: Vec<crate::decl::UserTypeDecl>,
+    casts: &[(&str, crate::ty::TyId<Poly>, crate::ty::TyId<Poly>)],
+) -> Declarations {
+    let mut types = types;
+    let v = names.intern("v");
+    let mut functions = Vec::new();
+    let mut rules = Vec::new();
+    for (via, from, to) in casts {
+        let via = QualifiedRef::root(names.intern(via));
+        let ty = pure_fn(&mut types, vec![crate::ty::ParamTerm { name: v, ty: *from }], *to);
+        functions.push((
+            via,
+            Scheme {
+                ty,
+                bounds: Box::new([]),
+                instances: None,
+                requires: Box::new([]),
+            },
+        ));
+        rules.push(CastRule {
+            from: *from,
+            to: *to,
+            via,
+        });
+    }
+    let mut raw = raw(names, types, functions, rules);
+    raw.user_types = user_types;
+    Declarations::verify(raw).expect("verified")
+}
+
+/// `i8 -> i64` and `i16 -> i64`.
+fn widening(names: &Interner) -> Declarations {
+    let mut types = Types::<Poly>::new();
+    let (i8_, i16_, i64_) = (
+        types.intern(TyKind::Int(IntTy::I8)),
+        types.intern(TyKind::Int(IntTy::I16)),
+        types.intern(TyKind::Int(IntTy::I64)),
+    );
+    with_casts(names, types, Vec::new(), &[("widen8", i8_, i64_), ("widen16", i16_, i64_)])
+}
+
+impl Fixture {
+    fn closed_of(&self, decls: &Declarations, term: Term) -> Closed {
+        self.infer.closed(decls.casts(), &Open(false), term).expect("closed")
+    }
+
+    fn enter(&mut self, decls: &Declarations, value: Term, slot: Term) -> Result<Entered, Mismatch> {
+        let value = self.closed_of(decls, value);
+        self.infer.enter(decls, value, slot)
+    }
+}
+
+/// types §3: an unbound slot takes the value's type as its own term; the
+/// value keeps its type, so what the slot learns later the value does not.
+#[test]
+fn an_unbound_slot_takes_the_values_type_as_its_own() {
+    let mut fx = Fixture::new();
+    let decls = widening(&fx.names);
+    let int = fx.int(IntTy::I64);
+    let x = fx.object(&[("x", int)], Label::Transparent);
+    let value = fx.held(x);
+    let slot = fx.infer.fresh(Bound::Any);
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.infer.shallow(slot), x);
+    let y = fx.object(&[("y", int)], Label::Transparent);
+    let more = fx.held(y);
+    fx.infer.join(slot, more).unwrap();
+    assert_eq!(fx.fields_of(value), (vec![fx.name("x")], Label::Transparent));
+}
+
+/// types §2, §3: a value and a slot of one head but two shapes meet at
+/// their join, which the slot takes; the value keeps its own type.
+#[test]
+fn a_value_of_the_slots_head_joins_into_it() {
+    let mut fx = Fixture::new();
+    let decls = widening(&fx.names);
+    let int = fx.int(IntTy::I64);
+    let (x, y) = (
+        fx.object(&[("x", int)], Label::Transparent),
+        fx.object(&[("y", int)], Label::Transparent),
+    );
+    let (value, slot) = (fx.held(y), fx.held(x));
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.fields_of(slot), (vec![fx.name("x"), fx.name("y")], Label::Transparent));
+    assert_eq!(fx.fields_of(value), (vec![fx.name("y")], Label::Transparent));
+}
+
+/// types §3: a slot folds its values by ⊔, the nearest common ancestor,
+/// which is commutative and idempotent, and a value below the slot's head
+/// leaves the slot as it is.
+#[test]
+fn a_slot_folds_its_values_to_their_nearest_common_ancestor() {
+    let mut fx = Fixture::new();
+    let decls = widening(&fx.names);
+    let (i8_, i16_, i64_) = (fx.int(IntTy::I8), fx.int(IntTy::I16), fx.int(IntTy::I64));
+    for (first, second) in [(i8_, i16_), (i16_, i8_)] {
+        let slot = fx.held(first);
+        let value = fx.held(second);
+        assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+        assert_eq!(fx.infer.shallow(slot), i64_);
+        assert_eq!(fx.infer.shallow(value), second, "the value keeps its type");
+    }
+    let slot = fx.held(i8_);
+    let value = fx.held(i8_);
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.infer.shallow(slot), i8_);
+    let slot = fx.held(i64_);
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.infer.shallow(slot), i64_);
+}
+
+/// types §3, §7: where no subtyping relates a value and its slot, and no
+/// declared conversion takes one to the other, they do not meet.
+#[test]
+fn a_value_and_a_slot_of_no_common_ancestor_do_not_meet() {
+    let mut fx = Fixture::new();
+    let decls = widening(&fx.names);
+    let (i8_, string) = (fx.int(IntTy::I8), fx.kind(TyKind::String));
+    let (value, slot) = (fx.held(string), fx.held(i8_));
+    assert_eq!(fx.enter(&decls, value, slot), Err(Mismatch::Heads { a: string, b: i8_ }));
+}
+
+/// types §3: a slot no variable holds cannot move up the tree.
+#[test]
+fn a_slot_no_variable_holds_does_not_move() {
+    let mut fx = Fixture::new();
+    let decls = widening(&fx.names);
+    let (i8_, i16_, i64_) = (fx.int(IntTy::I8), fx.int(IntTy::I16), fx.int(IntTy::I64));
+    let value = fx.held(i16_);
+    assert!(fx.enter(&decls, value, i8_).is_err());
+    assert_eq!(fx.enter(&decls, value, i64_), Ok(Entered::Folded));
+}
+
+/// types §3, §4: `!` enters any slot and leaves it as it is; a slot of
+/// type `!` takes the value's type.
+#[test]
+fn never_enters_any_slot() {
+    let mut fx = Fixture::new();
+    let decls = widening(&fx.names);
+    let (never, i8_) = (fx.kind(TyKind::Never), fx.int(IntTy::I8));
+    let (value, slot) = (fx.held(never), fx.held(i8_));
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.infer.shallow(slot), i8_);
+    let (value, slot) = (fx.held(i8_), fx.held(never));
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.infer.shallow(slot), i8_);
+}
+
+/// Extern types `Token` and `Span`, each with one identity parameter, and
+/// the casts `Token<'i> -> Span<'i>` and, where `to_string`, `Span<'i> ->
+/// String`.
+fn identities(names: &Interner, to_string: bool) -> Declarations {
+    let mut types = Types::<Poly>::new();
+    let (token, span) = (
+        QualifiedRef::root(names.intern("Token")),
+        QualifiedRef::root(names.intern("Span")),
+    );
+    let with_identity = |types: &mut Types<Poly>, id| {
+        types.intern(TyKind::UserDefined {
+            id,
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([IdentityTerm::Var(0)]),
+        })
+    };
+    let (token_ty, span_ty) = (with_identity(&mut types, token), with_identity(&mut types, span));
+    let string = types.intern(TyKind::String);
+    let declared = |id| crate::decl::UserTypeDecl {
+        id,
+        type_params: Box::new([]),
+        specializes: Box::new([]),
+        effect_params: 0,
+        identity_params: 1,
+        lifetimes: 0,
+    };
+    let mut casts = vec![("token_span", token_ty, span_ty)];
+    if to_string {
+        casts.push(("span_text", span_ty, string));
+    }
+    with_casts(names, types, vec![declared(token), declared(span)], &casts)
+}
+
+impl Fixture {
+    fn token(&mut self, identity: usize) -> Term {
+        let token = QualifiedRef::root(self.name("Token"));
+        self.kind(TyKind::UserDefined {
+            id: token,
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([IdentityTerm::Known(IdentityId::from_raw(identity))]),
+        })
+    }
+}
+
+/// types §3: values of one identity keep it.
+#[test]
+fn values_of_one_identity_keep_it() {
+    let mut fx = Fixture::new();
+    let decls = identities(&fx.names, true);
+    let token = fx.token(0);
+    let (value, slot) = (fx.held(token), fx.held(token));
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.infer.shallow(slot), token);
+}
+
+/// types §3: values of two identities meet at the nearest common ancestor
+/// that carries no identity; an identity-carrying ancestor is passed.
+#[test]
+fn two_identities_meet_past_every_identity_carrying_ancestor() {
+    let mut fx = Fixture::new();
+    let decls = identities(&fx.names, true);
+    let (first, second) = (fx.token(0), fx.token(1));
+    let (value, slot) = (fx.held(second), fx.held(first));
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert_eq!(fx.infer.types().kind(fx.infer.shallow(slot)), &TyKind::String);
+}
+
+/// types §3: two identities with no identity-free common ancestor do not
+/// meet; no identity is made to join two others.
+#[test]
+fn two_identities_with_no_identity_free_ancestor_do_not_meet() {
+    let mut fx = Fixture::new();
+    let decls = identities(&fx.names, false);
+    let (first, second) = (fx.token(0), fx.token(1));
+    let (value, slot) = (fx.held(second), fx.held(first));
+    assert_eq!(fx.enter(&decls, value, slot), Err(Mismatch::Heads { a: second, b: first }));
 }

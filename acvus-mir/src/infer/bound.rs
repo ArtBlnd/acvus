@@ -9,10 +9,9 @@ impl Bound {
         match self {
             Bound::Any => true,
             Bound::Settled => !matches!(kind, TyKind::Never),
-            Bound::Integer { signed, among } => {
+            Bound::Integer { signed, among, .. } => {
                 matches!(kind, TyKind::Int(width) if Self::integer_admits(*signed, among, *width))
             }
-            Bound::Literal => matches!(kind, TyKind::Int(_)),
             Bound::OneOf(shapes) => todo!(
                 "stop: when a OneOf bound of {} shapes admits a node is not settled: by head, by eq \
                  with one shape (binding what?), or only once the node is closed",
@@ -30,29 +29,32 @@ impl Bound {
                 "stop: the meet of a OneOf bound waits on what a OneOf bound admits"
             ),
             (Bound::Settled, bound) | (bound, Bound::Settled) => Some(bound.clone()),
-            (Bound::Literal, Bound::Literal) => Some(Bound::Literal),
             (
                 Bound::Integer {
                     signed: signed_a,
                     among: among_a,
+                    literal: literal_a,
                 },
                 Bound::Integer {
                     signed: signed_b,
                     among: among_b,
+                    literal: literal_b,
                 },
             ) => {
-                let signed = *signed_a && *signed_b;
                 let among: Box<[IntTy]> = among_a
                     .iter()
                     .copied()
-                    .filter(|width| among_b.contains(width) && Self::integer_admits(signed, among_a, *width))
+                    .filter(|width| {
+                        Self::integer_admits(*signed_a, among_a, *width)
+                            && Self::integer_admits(*signed_b, among_b, *width)
+                    })
                     .collect();
-                (!among.is_empty()).then_some(Bound::Integer { signed, among })
+                (!among.is_empty()).then_some(Bound::Integer {
+                    signed: *signed_a || *signed_b,
+                    among,
+                    literal: *literal_a && *literal_b,
+                })
             }
-            (Bound::Literal, Bound::Integer { .. }) | (Bound::Integer { .. }, Bound::Literal) => todo!(
-                "stop: a literal's variable made one with an Integer bound: Bound has no form for \
-                 an integer bound that still defaults to i64 (types §5)"
-            ),
         }
     }
 

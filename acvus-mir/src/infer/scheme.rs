@@ -3,8 +3,8 @@
 use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
-use super::{Infer, Term};
-use crate::decl::{Declarations, Scheme, TyVarBound};
+use super::{Bound, Infer, Term, VarState};
+use crate::decl::{CastRule, Declarations, Scheme, TyVarBound};
 use crate::flows::FlowTerm;
 use crate::laws::NamedLaw;
 use crate::ty::{
@@ -28,11 +28,20 @@ pub struct Instantiated {
     pub requirements: Vec<RequiredAt>,
 }
 
-/// One use's fresh variables, one per placeholder of the scheme, and each
-/// declared type already instantiated, so a shared subterm is built once.
+/// Where a placeholder's variable comes from.
+#[derive(Clone, Copy)]
+enum Placeholders {
+    /// A scheme's: each made up front with its declared bound.
+    Declared,
+    /// A cast's patterns': declared with no bound, so any type.
+    Unbounded,
+}
+
+/// One use's fresh variables, one per placeholder, and each declared type
+/// already instantiated, so a shared subterm is built once.
 struct AtUse<'a> {
     poly: &'a Types<Poly>,
-    bounds: &'a [TyVarBound],
+    placeholders: Placeholders,
     built: FxHashMap<TyId<Poly>, Term>,
     ty_vars: FxHashMap<u32, Term>,
     effect_vars: FxHashMap<u32, EffectVarId>,
@@ -41,21 +50,36 @@ struct AtUse<'a> {
     repr_vars: FxHashMap<u32, ReprVarId>,
 }
 
-impl Infer {
-    /// `scheme` at fresh variables, each with its declared bound. Every
-    /// structural node it builds is `Label::Opaque`; a type parameter's
-    /// place takes the program's term as it is (types §1).
-    pub fn instantiate(&mut self, decls: &Declarations, scheme: &Scheme) -> Instantiated {
-        let mut at = AtUse {
-            poly: decls.types(),
-            bounds: &scheme.bounds,
+impl<'a> AtUse<'a> {
+    fn new(poly: &'a Types<Poly>, placeholders: Placeholders) -> Self {
+        Self {
+            poly,
+            placeholders,
             built: FxHashMap::default(),
             ty_vars: FxHashMap::default(),
             effect_vars: FxHashMap::default(),
             len_vars: FxHashMap::default(),
             identity_vars: FxHashMap::default(),
             repr_vars: FxHashMap::default(),
-        };
+        }
+    }
+}
+
+impl Infer {
+    /// `scheme` at fresh variables, each with its declared bound. Every
+    /// structural node it builds is `Label::Opaque`; a type parameter's
+    /// place takes the program's term as it is (types §1).
+    pub fn instantiate(&mut self, decls: &Declarations, scheme: &Scheme) -> Instantiated {
+        let mut at = AtUse::new(decls.types(), Placeholders::Declared);
+        let vars: Vec<Term> = (0..scheme.bounds.len()).map(|_| self.fresh(Bound::Any)).collect();
+        at.ty_vars.extend((0u32..).zip(vars.iter().copied()));
+        for (var, declared) in vars.into_iter().zip(scheme.bounds.iter()) {
+            let bound = self.bound_of(&mut at, declared);
+            let TyKind::Var(var) = *self.types.kind(var) else {
+                unreachable!("instantiate: fresh gives a variable")
+            };
+            self.ty_vars[var.0 as usize] = VarState::Unbound(bound);
+        }
         let ty = self.instantiate_ty(&mut at, scheme.ty);
         let requirements = scheme
             .requires
@@ -67,6 +91,31 @@ impl Infer {
             })
             .collect();
         Instantiated { ty, requirements }
+    }
+
+    /// A cast's two patterns at one use, sharing their fresh variables
+    /// (extern-fn §7).
+    pub(super) fn instantiate_cast(&mut self, poly: &Types<Poly>, rule: &CastRule) -> (Term, Term) {
+        let mut at = AtUse::new(poly, Placeholders::Unbounded);
+        let from = self.instantiate_ty(&mut at, rule.from);
+        let to = self.instantiate_ty(&mut at, rule.to);
+        (from, to)
+    }
+
+    /// A declaration's bound as a variable's, its shapes at this use.
+    fn bound_of(&mut self, at: &mut AtUse<'_>, bound: &TyVarBound) -> Bound {
+        match bound {
+            TyVarBound::Any => Bound::Any,
+            TyVarBound::Settled => Bound::Settled,
+            TyVarBound::Integer { signed, among } => Bound::Integer {
+                signed: *signed,
+                among: among.clone(),
+                literal: false,
+            },
+            TyVarBound::OneOf(shapes) => {
+                Bound::OneOf(shapes.iter().map(|shape| self.instantiate_ty(at, *shape)).collect())
+            }
+        }
     }
 
     fn instantiate_ty(&mut self, at: &mut AtUse<'_>, ty: TyId<Poly>) -> Term {
@@ -183,24 +232,20 @@ impl Infer {
         term
     }
 
-    /// The fresh variable of the scheme's type variable `index`, with its
-    /// declared bound.
+    /// The variable of the placeholder `index`.
     ///
     /// # Panics
-    /// The scheme declares no bound at `index`: every type parameter
-    /// carries one (extern-fn §1).
+    /// A scheme's placeholder has no variable made up front: `verify`
+    /// refuses a scheme whose bounds are not one per type variable
+    /// (`BoundsDoNotFit`), so a verified scheme's variables are all made.
     fn ty_var_at(&mut self, at: &mut AtUse<'_>, index: u32) -> Term {
-        if let Some(var) = at.ty_vars.get(&index) {
-            return *var;
+        match at.placeholders {
+            Placeholders::Declared => *at
+                .ty_vars
+                .get(&index)
+                .expect("a verified scheme gives each of its type variables one bound (BoundsDoNotFit)"),
+            Placeholders::Unbounded => *at.ty_vars.entry(index).or_insert_with(|| self.fresh(Bound::Any)),
         }
-        let declared = at
-            .bounds
-            .get(index as usize)
-            .expect("every type parameter of a scheme carries one bound (extern-fn §1)");
-        let bound = self.bound_of(declared);
-        let var = self.fresh(bound);
-        at.ty_vars.insert(index, var);
-        var
     }
 
     fn effect_at(&mut self, at: &mut AtUse<'_>, effect: &EffectTerm<Poly>) -> EffectTerm<InferPhase> {

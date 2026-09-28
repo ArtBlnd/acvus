@@ -9,7 +9,7 @@ use crate::ty::{
     LenVarId, ReprVarId,
 };
 
-use super::Mark;
+use super::{Mark, Unsettled};
 
 /// A term of one variable kind: a known value or a variable.
 pub(super) trait VarTerm: Clone {
@@ -21,6 +21,7 @@ pub(super) trait VarTerm: Clone {
     fn of_var(var: Self::Var) -> Self;
     fn of_value(value: Self::Value) -> Self;
     fn read(&self) -> Read<'_, Self>;
+    fn unsettled(var: Self::Var) -> Unsettled;
 }
 
 pub(super) enum Read<'a, T: VarTerm> {
@@ -46,14 +47,6 @@ impl<T: VarTerm> End<T> {
         match self {
             End::Known(value) => T::of_value(value.clone()),
             End::Var { var, .. } => T::of_var(*var),
-        }
-    }
-
-    /// The value, when one is known.
-    pub(super) fn value(self) -> Option<T::Value> {
-        match self {
-            End::Known(value) => Some(value),
-            End::Var { value, .. } => value,
         }
     }
 }
@@ -171,6 +164,9 @@ impl VarTerm for EffectTerm<InferPhase> {
     fn index(var: EffectVarId) -> usize {
         var.0 as usize
     }
+    fn unsettled(var: EffectVarId) -> Unsettled {
+        Unsettled::Effect(var)
+    }
     fn of_var(var: EffectVarId) -> Self {
         EffectTerm::Var(var)
     }
@@ -194,6 +190,9 @@ impl VarTerm for FlowTerm<InferPhase> {
     }
     fn index(var: FlowVarId) -> usize {
         var.0 as usize
+    }
+    fn unsettled(var: FlowVarId) -> Unsettled {
+        Unsettled::Flow(var)
     }
     fn of_var(var: FlowVarId) -> Self {
         FlowTerm::Var(var)
@@ -219,6 +218,9 @@ impl VarTerm for LenTerm<InferPhase> {
     fn index(var: LenVarId) -> usize {
         var.0 as usize
     }
+    fn unsettled(var: LenVarId) -> Unsettled {
+        Unsettled::Len(var)
+    }
     fn of_var(var: LenVarId) -> Self {
         LenTerm::Var(var)
     }
@@ -243,6 +245,9 @@ impl VarTerm for IdentityTerm<InferPhase> {
     fn index(var: IdentityVarId) -> usize {
         var.0 as usize
     }
+    fn unsettled(var: IdentityVarId) -> Unsettled {
+        Unsettled::Identity(var)
+    }
     fn of_var(var: IdentityVarId) -> Self {
         IdentityTerm::Var(var)
     }
@@ -266,6 +271,9 @@ impl VarTerm for MarkTerm {
     }
     fn index(var: ReprVarId) -> usize {
         var.0 as usize
+    }
+    fn unsettled(var: ReprVarId) -> Unsettled {
+        Unsettled::Mark(var)
     }
     fn of_var(var: ReprVarId) -> Self {
         MarkTerm::Var(var)

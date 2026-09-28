@@ -13,10 +13,12 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::cells::{End as CellEnd, MarkTerm, Unequal};
 use super::{End, Infer, Mark, Term, VarState};
-use crate::decl::{CastTree, VerifiedExternCast};
+use super::closed::poly_head;
+use super::Closed;
+use crate::decl::{Base, Declarations, Head, VerifiedExternCast};
 use crate::flows::Flows;
 use crate::ty::{
-    Calls, Effect, EffectArg, EffectTerm, Holds, Infer as InferPhase, Label, ObjectTy, ParamTerm, TyKind, TyVarId,
+    Calls, Effect, EffectArg, EffectTerm, Holds, IdentityTerm, Infer as InferPhase, Label, ObjectTy, ParamTerm, TyKind, TyVarId,
     TypeArg,
 };
 
@@ -95,6 +97,29 @@ fn members<T: Copy>(a: &[(Astr, T)], b: &[(Astr, T)]) -> Vec<Member<T>> {
     }
 }
 
+/// `head` and every head up the tree from it, in order.
+fn heads_up(decls: &Declarations, head: Head) -> Vec<Head> {
+    let mut heads = vec![head];
+    let mut at = head;
+    while let Some(step) = decls.casts().step_up(at) {
+        at = poly_head(decls.types(), step.rule().to);
+        heads.push(at);
+    }
+    heads
+}
+
+/// Whether a value of `head` carries an identity (types §3): its type, or
+/// a reference's target, is an extern-defined type with an identity
+/// parameter.
+fn carries_identity(decls: &Declarations, head: Head) -> bool {
+    match head {
+        Head::Base(Base::Named(id)) | Head::Ref(_, Base::Named(id)) => {
+            decls.user_type(id).is_some_and(|declared| declared.identity_params > 0)
+        }
+        Head::Base(_) | Head::Ref(..) => false,
+    }
+}
+
 /// Two shapes made one are opaque where either is (types §1).
 fn either_opaque(a: Label, b: Label) -> Label {
     match (a, b) {
@@ -124,7 +149,9 @@ impl Infer {
     pub fn join(&mut self, a: Term, b: Term) -> Result<(), Mismatch> {
         let joined = self.relate(a, b, Relation::Join)?;
         for side in [a, b] {
-            if let End::Node { holder: None, .. } = self.end(side) {
+            if let End::Node { holder: None, node } = self.end(side)
+                && !matches!(self.types.kind(node), TyKind::Never)
+            {
                 self.relate(side, joined, Relation::Eq)?;
             }
         }
@@ -136,15 +163,102 @@ impl Infer {
     /// converts by exactly one declared conversion.
     /// The value is closed: a decision fires only on closed terms (types §6),
     /// and the caller checked with `closed`.
+    ///
+    /// Every declared cast is a step of the tree (extern-fn §7, `verify`),
+    /// so two heads no step path relates have no declared conversion
+    /// between them either: that is a mismatch.
     pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
-        if let End::Unbound(..) = self.end(value) {
-            return Ok(Entered::NotYet);
+        let (holder, slot_node) = match self.end(slot) {
+            End::Unbound(var, _) => {
+                self.bind(var, None, value.term)?;
+                return Ok(Entered::Folded);
+            }
+            End::Node { holder, node } => (holder, node),
+        };
+        let mismatch = Mismatch::Heads {
+            a: value.term,
+            b: slot_node,
+        };
+        let never = Head::Base(Base::Never);
+        let target = match self.head_of(slot_node) {
+            None => None,
+            Some(slot_head) if value.head == never || slot_head == never => None,
+            Some(slot_head) => {
+                let target = self.nearest_common_ancestor(decls, value, slot_node, slot_head);
+                Some((slot_head, target.ok_or(mismatch.clone())?))
+            }
+        };
+        let (value_at, slot_at) = match target {
+            None => (value.term, slot_node),
+            Some((slot_head, target)) => (
+                self.climb(decls, value.term, value.head, target)?,
+                self.climb(decls, slot_node, slot_head, target)?,
+            ),
+        };
+        let made = self.relate(slot_at, value_at, Relation::Join)?;
+        match holder {
+            Some((var, _)) => self.rebind(var, made)?,
+            None => {
+                self.relate(slot_node, made, Relation::Eq).map_err(|_| mismatch)?;
+            }
         }
-        todo!(
-            "stop: enter cannot walk the cast tree from a CastTree alone ({casts:?}, slot {slot:?}): a step's \
-             target is a TyId<Poly> in the declarations' table, and whether an ancestor carries an identity \
-             is a user type's declaration"
-        )
+        Ok(Entered::Folded)
+    }
+
+    /// Where `value` and a slot of `slot_head` meet (types §3): the first
+    /// head up from the value's that is also up from the slot's; for two
+    /// identities, the first such head that carries none. `None` where
+    /// there is no such head.
+    fn nearest_common_ancestor(
+        &mut self,
+        decls: &Declarations,
+        value: Closed,
+        slot_node: Term,
+        slot_head: Head,
+    ) -> Option<Head> {
+        let value_chain = heads_up(decls, value.head);
+        let slot_chain = heads_up(decls, slot_head);
+        let common = value_chain.iter().copied().filter(|head| slot_chain.contains(head));
+        let two_identities = match (self.identity_of(value.term), self.identity_of(slot_node)) {
+            (Some(x), Some(y)) => self.identity_vars.unify(&x, &y).is_err(),
+            _ => false,
+        };
+        let mut meeting = common.filter(|head| !two_identities || !carries_identity(decls, *head));
+        meeting.next()
+    }
+
+    /// The identity a value of `node` carries: an extern-defined type's
+    /// one identity argument, through references.
+    fn identity_of(&self, node: Term) -> Option<IdentityTerm<InferPhase>> {
+        match self.types.kind(node) {
+            TyKind::UserDefined { identity_args, .. } => identity_args.first().copied(),
+            TyKind::Ref(_, target) => match self.end(target.ty()) {
+                End::Node { node, .. } => self.identity_of(node),
+                End::Unbound(..) => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// `node`, of head `from`, stepped up the tree to `to` through each
+    /// step's cast: the cast's `from` pattern is made one with the type
+    /// reached, and its `to` pattern is the type above.
+    ///
+    /// # Panics
+    /// `to` is not up from `from`: callers climb to a common ancestor.
+    fn climb(&mut self, decls: &Declarations, node: Term, from: Head, to: Head) -> Result<Term, Mismatch> {
+        let (mut at, mut head) = (node, from);
+        while head != to {
+            let step = decls
+                .casts()
+                .step_up(head)
+                .expect("climb: the target is up the tree from the start");
+            let (pattern_from, pattern_to) = self.instantiate_cast(decls.types(), step.rule());
+            self.relate(pattern_from, at, Relation::Eq)?;
+            at = pattern_to;
+            head = poly_head(decls.types(), step.rule().to);
+        }
+        Ok(at)
     }
 
     /// The join of two effects (types §2).
@@ -175,7 +289,11 @@ impl Infer {
                 self.bind(var, holder, node)
             }
             (End::Node { holder: holder_a, node: a }, End::Node { holder: holder_b, node: b }) => {
-                let made = self.relate_nodes(a, b, how)?;
+                let made = match (how, self.types.kind(a), self.types.kind(b)) {
+                    (Relation::Join, TyKind::Never, _) => b,
+                    (Relation::Join, _, TyKind::Never) => a,
+                    _ => self.relate_nodes(a, b, how)?,
+                };
                 self.settle(holder_a, holder_b, made)
             }
         }
@@ -270,23 +388,26 @@ impl Infer {
         false
     }
 
-    /// The node both nodes are made into.
+    /// The node both nodes are made into. Under `join` only a node's own
+    /// member set grows, and a function type's effect, flows, calls and
+    /// holds join (types §2); every part is related by `eq`, since every
+    /// constructor is invariant (types §4).
     fn relate_nodes(&mut self, a: Term, b: Term, how: Relation) -> Result<Term, Mismatch> {
         if a == b {
             return Ok(a);
         }
         let heads = Mismatch::Heads { a, b };
         let kind = match (self.types.kind(a).clone(), self.types.kind(b).clone()) {
-            (TyKind::Handle(x), TyKind::Handle(y)) => TyKind::Handle(self.relate(x, y, how)?),
+            (TyKind::Handle(x), TyKind::Handle(y)) => TyKind::Handle(self.relate(x, y, Relation::Eq)?),
             (TyKind::Array(x, len_x), TyKind::Array(y, len_y)) => {
-                let element = self.relate(x, y, how)?;
+                let element = self.relate(x, y, Relation::Eq)?;
                 let len = self.len_vars.unify(&len_x, &len_y).map_err(|Unequal| heads)?;
                 TyKind::Array(element, len)
             }
-            (TyKind::Slice(x), TyKind::Slice(y)) => TyKind::Slice(self.relate(x, y, how)?),
-            (TyKind::Option(x), TyKind::Option(y)) => TyKind::Option(self.relate(x, y, how)?),
+            (TyKind::Slice(x), TyKind::Slice(y)) => TyKind::Slice(self.relate(x, y, Relation::Eq)?),
+            (TyKind::Option(x), TyKind::Option(y)) => TyKind::Option(self.relate(x, y, Relation::Eq)?),
             (TyKind::Result(ok_x, err_x), TyKind::Result(ok_y, err_y)) => {
-                TyKind::Result(self.relate(ok_x, ok_y, how)?, self.relate(err_x, err_y, how)?)
+                TyKind::Result(self.relate(ok_x, ok_y, Relation::Eq)?, self.relate(err_x, err_y, Relation::Eq)?)
             }
             (TyKind::Tuple(xs), TyKind::Tuple(ys)) => {
                 if xs.len() != ys.len() {
@@ -295,7 +416,7 @@ impl Infer {
                 let items = xs
                     .iter()
                     .zip(ys.iter())
-                    .map(|(x, y)| self.relate(*x, *y, how))
+                    .map(|(x, y)| self.relate(*x, *y, Relation::Eq))
                     .collect::<Result<_, _>>()?;
                 TyKind::Tuple(items)
             }
@@ -340,9 +461,7 @@ impl Infer {
                     holds: holds_b,
                 },
             ) => {
-                if params_a.len() != params_b.len()
-                    || params_a.iter().zip(params_b.iter()).any(|(x, y)| x.name != y.name)
-                {
+                if params_a.len() != params_b.len() {
                     return Err(heads);
                 }
                 let params = params_a
@@ -351,11 +470,11 @@ impl Infer {
                     .map(|(x, y)| {
                         Ok(ParamTerm {
                             name: x.name,
-                            ty: self.relate(x.ty, y.ty, how)?,
+                            ty: self.relate(x.ty, y.ty, Relation::Eq)?,
                         })
                     })
                     .collect::<Result<_, Mismatch>>()?;
-                let ret = self.relate(ret_a, ret_b, how)?;
+                let ret = self.relate(ret_a, ret_b, Relation::Eq)?;
                 let (effect, flows, calls, holds) = match how {
                     Relation::Eq => (
                         self.effect_vars.unify(&effect_a, &effect_b).map_err(|Unequal| heads.clone())?,
@@ -403,7 +522,7 @@ impl Infer {
                 let type_args = type_args_a
                     .iter()
                     .zip(type_args_b.iter())
-                    .map(|(x, y)| self.relate_type_arg(a, b, x, y, how))
+                    .map(|(x, y)| self.relate_type_arg(a, b, x, y))
                     .collect::<Result<_, _>>()?;
                 let effect_args = effect_args_a
                     .iter()
@@ -426,14 +545,14 @@ impl Infer {
                 if mutability_a != mutability_b {
                     return Err(heads);
                 }
-                TyKind::Ref(mutability_a, self.relate_type_arg(a, b, &x, &y, how)?)
+                TyKind::Ref(mutability_a, self.relate_type_arg(a, b, &x, &y)?)
             }
             (TyKind::Var(_), _) | (_, TyKind::Var(_)) => {
                 unreachable!("relate_nodes: an end is never a variable")
             }
             _ => return Err(heads),
         };
-        Ok(self.types.intern(kind))
+        Ok(self.intern(kind))
     }
 
     fn same<T: PartialEq>(a: T, b: T) -> Option<T> {
@@ -453,7 +572,7 @@ impl Infer {
                 let mut fields = Vec::new();
                 for member in members(&fields_a, &fields_b) {
                     let field = match member {
-                        Member::Both(name, x, y) => (name, self.relate(x, y, how)?),
+                        Member::Both(name, x, y) => (name, self.relate(x, y, Relation::Eq)?),
                         Member::OnlyA(name, x) => {
                             Self::may_grow(how, (a, b), (b, label_b), |object| Mismatch::OpaqueLacksField {
                                 object,
@@ -483,7 +602,7 @@ impl Infer {
                 let fields = fields_a
                     .iter()
                     .zip(fields_b.iter())
-                    .map(|((name, x), (_, y))| Ok((*name, self.relate(*x, *y, how)?)))
+                    .map(|((name, x), (_, y))| Ok((*name, self.relate(*x, *y, Relation::Eq)?)))
                     .collect::<Result<_, Mismatch>>()?;
                 Ok(ObjectTy::Declared(id_a, fields))
             }
@@ -519,7 +638,7 @@ impl Infer {
         let mut variants = Vec::new();
         for member in members(variants_a, variants_b) {
             let variant = match member {
-                Member::Both(tag, Some(x), Some(y)) => (tag, Some(self.relate(x, y, how)?)),
+                Member::Both(tag, Some(x), Some(y)) => (tag, Some(self.relate(x, y, Relation::Eq)?)),
                 Member::Both(tag, None, None) => (tag, None),
                 Member::Both(_, Some(_), None) | Member::Both(_, None, Some(_)) => {
                     return Err(Mismatch::Heads { a, b });
@@ -544,13 +663,12 @@ impl Infer {
         b: Term,
         x: &TypeArg<InferPhase>,
         y: &TypeArg<InferPhase>,
-        how: Relation,
     ) -> Result<TypeArg<InferPhase>, Mismatch> {
         let mark = self
             .repr_vars
             .unify(&mark_term(x), &mark_term(y))
             .map_err(|Unequal| Mismatch::Mark { a, b })?;
-        let ty = self.relate(x.ty(), y.ty(), how)?;
+        let ty = self.relate(x.ty(), y.ty(), Relation::Eq)?;
         Ok(match self.repr_vars.end(&mark) {
             CellEnd::Known(Mark::Uniform) | CellEnd::Var { value: Some(Mark::Uniform), .. } => TypeArg::Uniform(ty),
             CellEnd::Known(Mark::Specialized) | CellEnd::Var { value: Some(Mark::Specialized), .. } => {

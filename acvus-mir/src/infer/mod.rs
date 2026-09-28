@@ -16,7 +16,6 @@ mod scheme;
 #[cfg(test)]
 mod tests;
 
-use crate::decl::TyVarBound;
 use crate::flows::FlowTerm;
 use crate::ty::{
     EffectTerm, EffectVarId, FlowVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId,
@@ -97,9 +96,11 @@ impl Infer {
 
     /// A term of a written shape. A structural object or enum the program
     /// writes carries `Label::Transparent`; one instantiated from a
-    /// declaration carries `Label::Opaque` (`scheme`).
+    /// declaration carries `Label::Opaque` (`scheme`). A product with a
+    /// part of type `!` is `!` (types §4).
     pub fn intern(&mut self, kind: TyKind<InferPhase>) -> Term {
-        self.types.intern(kind)
+        let bottom = product_parts(&kind).any(|part| matches!(self.types.kind(part), TyKind::Never));
+        self.types.intern(if bottom { TyKind::Never } else { kind })
     }
 
     pub fn fresh(&mut self, bound: Bound) -> Term {
@@ -166,23 +167,20 @@ impl Infer {
             VarState::Bound(_) => None,
         })
     }
+}
 
-    /// A declaration's bound as a variable's (`scheme`).
-    pub(crate) fn bound_of(&mut self, bound: &TyVarBound) -> Bound {
-        match bound {
-            TyVarBound::Any => Bound::Any,
-            TyVarBound::Settled => Bound::Settled,
-            TyVarBound::Integer { signed, among } => Bound::Integer {
-                signed: *signed,
-                among: among.clone(),
-            },
-            TyVarBound::OneOf(shapes) => todo!(
-                "stop: a OneOf bound's {} shapes are TyId<Poly> in the declarations' table, which bound_of \
-                 cannot read, and a shape may name the scheme's own variables, which bound_of cannot map",
-                shapes.len()
-            ),
-        }
-    }
+/// The parts of a product: a tuple's items, an object's fields. An array is
+/// not among them, since one of length zero holds no part.
+pub(super) fn product_parts<V: crate::ty::Phase>(kind: &TyKind<V>) -> impl Iterator<Item = TyId<V>> + '_ {
+    let parts: &[TyId<V>] = match kind {
+        TyKind::Tuple(items) => items,
+        _ => &[],
+    };
+    let fields = match kind {
+        TyKind::Object(object) => object.fields(),
+        _ => &[],
+    };
+    parts.iter().copied().chain(fields.iter().map(|(_, field)| *field))
 }
 
 impl Default for Infer {
