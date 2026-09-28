@@ -6,17 +6,19 @@ use crate::analysis::interval::{InstAt, bounded_indices};
 use crate::cfg::{self, BlockIdx};
 use crate::ir::{IndexBound, InstKind, MirBody, MirModule};
 use crate::laws::LawTable;
+use crate::ty::{Concrete, Types};
 use crate::validate::type_check::{ValidationError, ValidationErrorKind};
 
 pub fn check_bounds(module: &MirModule, laws: &LawTable) -> Vec<ValidationError> {
-    let mut errors = check_body("main", &module.main, laws);
+    let types = &module.types;
+    let mut errors = check_body("main", &module.main, types, laws);
     for (label, closure) in &module.closures {
-        errors.extend(check_body(&format!("closure({label:?})"), closure, laws));
+        errors.extend(check_body(&format!("closure({label:?})"), closure, types, laws));
     }
     errors
 }
 
-fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationError> {
+fn check_body(scope: &str, body: &MirBody, types: &Types<Concrete>, laws: &LawTable) -> Vec<ValidationError> {
     let marked = |kind: &InstKind| {
         matches!(
             kind,
@@ -33,7 +35,7 @@ fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationErr
         return Vec::new();
     }
     let cfg = cfg::promote(body.clone());
-    let bounded = bounded_indices(&cfg, laws);
+    let bounded = bounded_indices(&cfg, types, laws);
     let mut underived = Vec::new();
     for (b, block) in cfg.blocks.iter().enumerate() {
         for (at, inst) in block.insts.iter().enumerate() {

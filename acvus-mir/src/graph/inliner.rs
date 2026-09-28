@@ -8,6 +8,8 @@
 //! insert PHIs at merge points.
 
 use acvus_utils::LocalIdOps;
+use std::borrow::Cow;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use acvus_ast::Span;
@@ -15,9 +17,9 @@ use acvus_utils::Astr;
 
 use crate::analysis::{escape, inst_info};
 use crate::ir::*;
-use crate::ty::{Mutability, Ty, TypeArg};
+use crate::ty::{Concrete, Mutability, ObjectTy, ParamTerm, Ty, TyKind, TypeArg, Types};
 
-use super::types::QualifiedRef;
+use acvus_utils::QualifiedRef;
 
 /// Result of the inlining pass.
 #[derive(Debug)]
@@ -45,17 +47,30 @@ pub fn inline(
 }
 
 /// Inline all eligible calls within a single MirModule.
+///
+/// The inlined module has a table of its own: the module's types, and the
+/// types of every callee spliced into it, are imported into that table.
 fn inline_module(
     module: &MirModule,
     all_modules: &FxHashMap<QualifiedRef, MirModule>,
     recursive_fns: &FxHashSet<QualifiedRef>,
 ) -> MirModule {
-    let body = inline_body(&module.main, all_modules, recursive_fns, &module.closures);
+    let mut types = Types::new();
+    let mut own = Import::from(&module.types);
+    let main = own.body(&module.main, &mut types);
+    let own_closures: FxHashMap<Label, MirBody> = module
+        .closures
+        .iter()
+        .map(|(label, closure)| (*label, own.body(closure, &mut types)))
+        .collect();
+    let ret = own.ty(module.ret, &mut types);
+
+    let body = inline_body(&main, all_modules, recursive_fns, &own_closures, &mut types);
 
     // Inline within closures too.
     let mut closures = FxHashMap::default();
-    for (label, closure) in &module.closures {
-        let mut inlined_body = inline_body(closure, all_modules, recursive_fns, &module.closures);
+    for (label, closure) in &own_closures {
+        let mut inlined_body = inline_body(closure, all_modules, recursive_fns, &own_closures, &mut types);
         inlined_body.captures = closure.captures.clone();
         inlined_body.params = closure.params.clone();
         closures.insert(*label, inlined_body);
@@ -65,8 +80,129 @@ fn inline_module(
         declared_params: module.declared_params,
         main: body,
         closures,
-        ret: module.ret.clone(),
+        ret,
         flows: module.flows.clone(),
+        types,
+    }
+}
+
+/// The types of one module's table, re-interned into another table.
+struct Import<'s> {
+    from: &'s Types<Concrete>,
+    imported: FxHashMap<Ty, Ty>,
+}
+
+impl<'s> Import<'s> {
+    fn from(from: &'s Types<Concrete>) -> Self {
+        Import {
+            from,
+            imported: FxHashMap::default(),
+        }
+    }
+
+    /// `body` with every type it names imported into `to`.
+    fn body(&mut self, body: &MirBody, to: &mut Types<Concrete>) -> MirBody {
+        let mut body = body.clone();
+        for ty in body.val_types.values_mut() {
+            *ty = self.ty(*ty, to);
+        }
+        for inst in &mut body.insts {
+            if let InstKind::FunctionCall { callee_ty, .. } | InstKind::Spawn { callee_ty, .. } = &mut inst.kind {
+                *callee_ty = self.ty(*callee_ty, to);
+            }
+        }
+        body
+    }
+
+    fn ty(&mut self, ty: Ty, to: &mut Types<Concrete>) -> Ty {
+        if let Some(imported) = self.imported.get(&ty) {
+            return *imported;
+        }
+        let imported = acvus_utils::grow(|| self.ty_level(ty, to));
+        self.imported.insert(ty, imported);
+        imported
+    }
+
+    fn arg(&mut self, arg: &TypeArg<Concrete>, to: &mut Types<Concrete>) -> TypeArg<Concrete> {
+        match arg {
+            TypeArg::Uniform(ty) => TypeArg::Uniform(self.ty(*ty, to)),
+            TypeArg::Specialized(ty) => TypeArg::Specialized(self.ty(*ty, to)),
+            TypeArg::Open(var, _) => match *var {},
+        }
+    }
+
+    fn ty_level(&mut self, ty: Ty, to: &mut Types<Concrete>) -> Ty {
+        let kind = match self.from.kind(ty).clone() {
+            kind @ (TyKind::Int(_)
+            | TyKind::Float
+            | TyKind::Char
+            | TyKind::String
+            | TyKind::Bool
+            | TyKind::Unit
+            | TyKind::Never
+            | TyKind::Order
+            | TyKind::Str) => kind,
+            TyKind::Handle(inner) => TyKind::Handle(self.ty(inner, to)),
+            TyKind::Array(inner, len) => TyKind::Array(self.ty(inner, to), len),
+            TyKind::Slice(inner) => TyKind::Slice(self.ty(inner, to)),
+            TyKind::Option(inner) => TyKind::Option(self.ty(inner, to)),
+            TyKind::Result(ok, err) => TyKind::Result(self.ty(ok, to), self.ty(err, to)),
+            TyKind::Tuple(items) => TyKind::Tuple(items.iter().map(|item| self.ty(*item, to)).collect()),
+            TyKind::Object(object) => {
+                let fields = object
+                    .fields()
+                    .iter()
+                    .map(|(name, field)| (*name, self.ty(*field, to)))
+                    .collect();
+                TyKind::Object(match object {
+                    ObjectTy::Structural(_, ()) => ObjectTy::Structural(fields, ()),
+                    ObjectTy::Declared(id, _) => ObjectTy::Declared(id, fields),
+                })
+            }
+            TyKind::Enum { name, variants, label } => TyKind::Enum {
+                name,
+                variants: variants
+                    .iter()
+                    .map(|(tag, payload)| (*tag, payload.map(|payload| self.ty(payload, to))))
+                    .collect(),
+                label,
+            },
+            TyKind::Fn {
+                params,
+                ret,
+                effect,
+                flows,
+                calls,
+                holds,
+            } => TyKind::Fn {
+                params: params
+                    .iter()
+                    .map(|param| ParamTerm {
+                        name: param.name,
+                        ty: self.ty(param.ty, to),
+                    })
+                    .collect(),
+                ret: self.ty(ret, to),
+                effect,
+                flows,
+                calls,
+                holds,
+            },
+            TyKind::UserDefined {
+                id,
+                type_args,
+                effect_args,
+                identity_args,
+            } => TyKind::UserDefined {
+                id,
+                type_args: type_args.iter().map(|arg| self.arg(arg, to)).collect(),
+                effect_args,
+                identity_args,
+            },
+            TyKind::Ref(mutability, target) => TyKind::Ref(mutability, self.arg(&target, to)),
+            TyKind::Var(var) => match var {},
+        };
+        to.intern(kind)
     }
 }
 
@@ -78,6 +214,7 @@ fn inline_body(
     all_modules: &FxHashMap<QualifiedRef, MirModule>,
     recursive_fns: &FxHashSet<QualifiedRef>,
     closures: &FxHashMap<Label, MirBody>,
+    types: &mut Types<Concrete>,
 ) -> MirBody {
     let mut current = body.clone();
 
@@ -87,13 +224,14 @@ fn inline_body(
         let mut val_remap: FxHashMap<ValueId, ValueId> = FxHashMap::default();
 
         let insts = std::mem::take(&mut current.insts);
-        let plans = ClosurePlans::of_body(&insts, &current.val_types, closures);
+        let plans = ClosurePlans::of_body(&insts, types, &current.val_types, closures);
         let mut bound: FxHashMap<PlanId, Vec<CaptureBound>> = FxHashMap::default();
 
         for (idx, inst) in insts.iter().enumerate() {
             if let Some(plan) = plans.made_at(idx) {
                 let mut emit = Emit {
                     body: &mut current,
+                    types,
                     insts: &mut new_insts,
                 };
                 let captures = plan.bind_captures(&mut emit, &val_remap, inst.span);
@@ -114,7 +252,7 @@ fn inline_body(
                          which every call of it follows",
                     ),
                 )),
-                None => direct_target(&inst.kind, all_modules, recursive_fns),
+                None => direct_target(&inst.kind, all_modules, recursive_fns, types),
             };
 
             if let Some(InlineTarget {
@@ -153,7 +291,7 @@ fn inline_body(
                 // `validate::type_check` refuses a `RefTarget::Param` that
                 // names anything but a parameter of its body.
                 for ((_, param_reg), arg) in callee_body.params.iter().zip(args.iter()) {
-                    if names_as_storage(callee_body, *param_reg) {
+                    if names_as_storage(&callee_body, *param_reg) {
                         new_insts.push(Inst {
                             span: inst.span,
                             kind: InstKind::Assign {
@@ -259,7 +397,8 @@ fn inline_body(
 /// A call the inliner replaces with its callee's body.
 struct InlineTarget<'a> {
     dst: ValueId,
-    callee_body: &'a MirBody,
+    /// The callee's body, its types in the caller's table.
+    callee_body: Cow<'a, MirBody>,
     args: Vec<ValueId>,
     captures: Vec<CaptureBound>,
     /// Callee instructions a [`CaptureBound`] has already answered.
@@ -286,6 +425,7 @@ fn direct_target<'a>(
     kind: &InstKind,
     all_modules: &'a FxHashMap<QualifiedRef, MirModule>,
     recursive_fns: &FxHashSet<QualifiedRef>,
+    types: &mut Types<Concrete>,
 ) -> Option<InlineTarget<'a>> {
     let InstKind::FunctionCall {
         dst,
@@ -306,7 +446,7 @@ fn direct_target<'a>(
     }
     Some(InlineTarget {
         dst: *dst,
-        callee_body: &callee.main,
+        callee_body: Cow::Owned(Import::from(&callee.types).body(&callee.main, types)),
         args: args.clone(),
         captures: Vec::new(),
         skip: FxHashSet::default(),
@@ -446,7 +586,7 @@ impl<'a> ClosurePlan<'a> {
         };
         InlineTarget {
             dst: *dst,
-            callee_body: self.body,
+            callee_body: Cow::Borrowed(self.body),
             args: args.clone(),
             captures: bound.to_vec(),
             skip: bound
@@ -460,6 +600,7 @@ impl<'a> ClosurePlan<'a> {
 
 struct Emit<'b> {
     body: &'b mut MirBody,
+    types: &'b mut Types<Concrete>,
     insts: &'b mut Vec<Inst>,
 }
 
@@ -477,14 +618,13 @@ impl Emit<'_> {
     /// The reference an inlined capture register reads, not the local it
     /// reads it out of.
     fn lend_local(&mut self, span: Span, name: Astr, value: ValueId) -> ValueId {
-        let ty = self
+        let ty = *self
             .body
             .val_types
             .get(&value)
-            .expect("a MakeClosure capture is typed where the caller takes it")
-            .clone();
+            .expect("a MakeClosure capture is typed where the caller takes it");
 
-        let slot = self.value(ty.clone());
+        let slot = self.value(ty);
         self.body
             .debug
             .val_origins
@@ -499,7 +639,8 @@ impl Emit<'_> {
             },
         );
 
-        let lent = self.value(Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(ty))));
+        let lent_ty = self.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(ty)));
+        let lent = self.value(lent_ty);
         self.inst(
             span,
             InstKind::Ref {
@@ -525,6 +666,7 @@ struct ClosurePlans<'a> {
 impl<'a> ClosurePlans<'a> {
     fn of_body(
         insts: &[Inst],
+        types: &Types<Concrete>,
         val_types: &FxHashMap<ValueId, Ty>,
         closures: &'a FxHashMap<Label, MirBody>,
     ) -> Self {
@@ -553,7 +695,7 @@ impl<'a> ClosurePlans<'a> {
             let Some(uses) = ClosureUses::of(insts, idx, *dst) else {
                 continue;
             };
-            let Some(planned) = plan_captures(closure, captures, val_types) else {
+            let Some(planned) = plan_captures(types, closure, captures, val_types) else {
                 continue;
             };
             if uses.overlaps(&this) {
@@ -708,6 +850,7 @@ fn starts_or_ends_a_block(kind: &InstKind) -> bool {
 /// Each capture of `closure` against the value `MakeClosure` takes for it, or
 /// `None` where one of them is a shape the splice cannot answer.
 fn plan_captures(
+    types: &Types<Concrete>,
     closure: &MirBody,
     args: &[ValueId],
     caller_types: &FxHashMap<ValueId, Ty>,
@@ -721,21 +864,21 @@ fn plan_captures(
                 name: *name,
                 reg: *reg,
                 arg: *arg,
-                binding: capture_binding(closure, *reg, caller_types.get(arg)?)?,
+                binding: capture_binding(types, closure, *reg, *caller_types.get(arg)?)?,
             })
         })
         .collect()
 }
 
-fn capture_binding(closure: &MirBody, reg: ValueId, arg_ty: &Ty) -> Option<CaptureBinding> {
-    let cap_ty = closure.val_types.get(&reg)?;
+fn capture_binding(types: &Types<Concrete>, closure: &MirBody, reg: ValueId, arg_ty: Ty) -> Option<CaptureBinding> {
+    let cap_ty = *closure.val_types.get(&reg)?;
     if cap_ty == arg_ty {
         return Some(CaptureBinding::Reference);
     }
-    let Ty::Ref(Mutability::Shared, inner) = cap_ty else {
+    let TyKind::Ref(Mutability::Shared, inner) = types.kind(cap_ty) else {
         return None;
     };
-    if *inner.ty() != *arg_ty {
+    if inner.ty() != arg_ty {
         return None;
     }
     Some(match word_reads(closure, reg) {
@@ -1025,7 +1168,7 @@ fn remap_inst(
                 order: order.map(r),
             }
         }
-        InstKind::Eval { dst, src, order } => InstKind::Eval {
+        InstKind::TakeEffect { dst, src, order } => InstKind::TakeEffect {
             dst: r(*dst),
             src: r(*src),
             order: order.map(r),
@@ -1277,7 +1420,6 @@ mod tests {
             val_factory: factory,
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         }
     }
 
@@ -1287,7 +1429,7 @@ mod tests {
             main: body,
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
-            flows: crate::ty::Flows::Every,
+            flows: crate::flows::Flows::Every,
         }
     }
 
@@ -1614,7 +1756,7 @@ mod tests {
             main,
             closures: [(Label(0), closure)].into_iter().collect(),
             ret: crate::ty::Ty::Unit,
-            flows: crate::ty::Flows::Every,
+            flows: crate::flows::Flows::Every,
         }
     }
 

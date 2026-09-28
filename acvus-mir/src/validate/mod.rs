@@ -15,7 +15,10 @@ use std::fmt;
 use acvus_utils::Interner;
 
 use crate::ir::{MirModule, ValOrigin};
+use crate::decl::Declarations;
 use crate::laws::LawTable;
+use crate::printer::show_ty;
+use crate::ty::{Concrete, Types};
 
 /// Every rule a `MirModule` answers on its own, for a module no phase of
 /// `graph::optimize` was run over — the hand-built and directly lowered
@@ -27,10 +30,10 @@ use crate::laws::LawTable;
 /// refusal pass 0 already reported a second time.
 /// `acvus-cli/tests/cli.rs::a_write_while_a_reference_is_live_is_refused_once`
 /// is what fails then.
-pub fn validate(module: &MirModule, laws: &LawTable) -> Vec<ValidationError> {
-    let mut errors = type_check::check_types(module);
-    errors.extend(stages::check(module, laws));
-    errors.extend(borrow_check::check_borrows(module));
+pub fn validate(module: &MirModule, decls: &Declarations, laws: &LawTable) -> Vec<ValidationError> {
+    let mut errors = type_check::check_types(module, decls);
+    errors.extend(stages::check(module, decls, laws));
+    errors.extend(borrow_check::check_borrows(module, decls));
     errors.extend(exhaustive::check_exhaustive(module));
     errors
 }
@@ -53,13 +56,17 @@ fn written_as(interner: &Interner, origin: Option<&ValOrigin>) -> Option<String>
 /// program's words, naming its subject as the source wrote it.
 pub struct ValidationErrorDisplay<'a> {
     error: &'a ValidationError,
+    types: &'a Types<Concrete>,
     interner: &'a Interner,
 }
 
 impl ValidationError {
-    pub fn display<'a>(&'a self, interner: &'a Interner) -> ValidationErrorDisplay<'a> {
+    /// The refusal in words, its types read in `types`, the table of the
+    /// module it was raised in.
+    pub fn display<'a>(&'a self, types: &'a Types<Concrete>, interner: &'a Interner) -> ValidationErrorDisplay<'a> {
         ValidationErrorDisplay {
             error: self,
+            types,
             interner,
         }
     }
@@ -89,8 +96,8 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             } => write!(
                 f,
                 "{inst_name} takes {desc} as {}, and it is {}",
-                expected.display(self.interner),
-                actual.display(self.interner)
+                show_ty(self.types, *expected, self.interner),
+                show_ty(self.types, *actual, self.interner)
             ),
             ValidationErrorKind::MissingType { value_id } => {
                 write!(f, "Val({value_id}) has no type")
@@ -120,7 +127,7 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             } => write!(
                 f,
                 "{inst_name} takes {expected_constructor} and got {}",
-                actual.display(self.interner)
+                show_ty(self.types, *actual, self.interner)
             ),
             ValidationErrorKind::NonExhaustiveMatch { over } => {
                 write!(f, "non-exhaustive match: {}; add a `_` arm", over.shown())
@@ -195,8 +202,8 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             ValidationErrorKind::ForRangeWidths { at, hi } => write!(
                 f,
                 "a `for` over `{}..{}` needs one integer width at both bounds",
-                at.display(self.interner),
-                hi.display(self.interner)
+                show_ty(self.types, *at, self.interner),
+                show_ty(self.types, *hi, self.interner)
             ),
             ValidationErrorKind::MatchMissesVariants { enum_name, missing } => {
                 let written = missing
@@ -230,10 +237,10 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
                 write!(f, "a reference to {named} cannot leave the body")
             }
             ValidationErrorKind::FlowNotStated { to, from } => {
-                let end = |end: &crate::ty::FlowEnd| match end {
-                    crate::ty::FlowEnd::Result => "the result".to_string(),
-                    crate::ty::FlowEnd::Param(index) => format!("parameter {index}"),
-                    crate::ty::FlowEnd::Captures => "what the lambda captured".to_string(),
+                let end = |end: &crate::flows::FlowEnd| match end {
+                    crate::flows::FlowEnd::Result => "the result".to_string(),
+                    crate::flows::FlowEnd::Param(index) => format!("parameter {index}"),
+                    crate::flows::FlowEnd::Captures => "what the lambda captured".to_string(),
                 };
                 write!(
                     f,

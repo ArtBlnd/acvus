@@ -9,12 +9,13 @@ use crate::analysis::inst_info;
 use crate::analysis::raise::FunctionSummary;
 use crate::cfg::{self, CfgBody};
 use crate::graph::inliner;
-use crate::graph::ContextInfo;
 use acvus_utils::QualifiedRef;
 use crate::ir::{Callee, InstKind, Label, MirBody, MirModule, ValueId};
 use crate::laws::LawTable;
 use crate::optimize;
-use crate::ty::Ty;
+use crate::decl::Declarations;
+use crate::ty::{Concrete, Ty, TyKind, Types};
+
 
 #[cfg(debug_assertions)]
 use crate::validate::type_check::ValidationErrorKind;
@@ -28,7 +29,15 @@ pub struct OptimizeResult {
     pub errors: Vec<(QualifiedRef, Vec<ValidationError>)>,
     /// Read off the code that survived the passes, which is what makes this
     /// the set RFC-0071 rule 5 calls required.
-    pub inputs: FxHashMap<QualifiedRef, Vec<ContextInfo>>,
+    pub inputs: FxHashMap<QualifiedRef, Vec<RequiredInput>>,
+}
+
+/// An input a module's body still reads after the passes, which a host
+/// must pass for the module to run (programs §4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequiredInput {
+    pub name: QualifiedRef,
+    pub ty: Ty,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,15 +52,17 @@ pub enum Opt {
 pub fn optimize(
     interner: &Interner,
     laws: &LawTable,
+    decls: &Declarations,
     modules: FxHashMap<QualifiedRef, MirModule>,
     opt: Opt,
 ) -> OptimizeResult {
-    acvus_utils::grow(|| optimize_level(interner, laws, modules, opt))
+    acvus_utils::grow(|| optimize_level(interner, laws, decls, modules, opt))
 }
 
 fn optimize_level(
     interner: &Interner,
     laws: &LawTable,
+    decls: &Declarations,
     modules: FxHashMap<QualifiedRef, MirModule>,
     opt: Opt,
 ) -> OptimizeResult {
@@ -68,7 +79,7 @@ fn optimize_level(
         for &qref in members {
             let module = &modules[&qref];
             let mut errors = validate::move_check::check_moves(module);
-            errors.extend(validate::borrow_check::check_outputs_and_borrows(module));
+            errors.extend(validate::borrow_check::check_outputs_and_borrows(module, decls));
             // A `match` is exhaustive (RFC-0051). Like the move check, it reads
             // the shape the source wrote, before any pass has moved it.
             errors.extend(validate::exhaustive::check_exhaustive(module));
@@ -83,7 +94,8 @@ fn optimize_level(
         sccs.iter()
             .flatten()
             .filter(|qref| called.contains(qref))
-            .map(|qref| (*qref, &modules[qref].main)),
+            .map(|qref| (*qref, &modules[qref])),
+        decls,
         laws,
     );
 
@@ -96,16 +108,16 @@ fn optimize_level(
         },
         Opt::Full => {
             for module in ssa_modules.values_mut() {
-                run_pass1_body(laws, &functions, &mut module.main);
+                run_pass1_body(laws, decls, &functions, &module.types, &mut module.main);
                 for closure in module.closures.values_mut() {
-                    run_pass1_body(laws, &functions, closure);
+                    run_pass1_body(laws, decls, &functions, &module.types, closure);
                 }
                 // RFC-0099 rule 5: before the inliner, which then splices
                 // each closure the fused loop alone calls (RFC-0060).
                 // A declined pipeline runs its handlers, the program the
                 // source wrote.
                 let _declined: Vec<optimize::fusion::Declined> =
-                    optimize::fusion::run(interner, laws, module);
+                    optimize::fusion::run(interner, laws, decls, module);
             }
             inliner::inline(&ssa_modules, &recursive)
         }
@@ -120,26 +132,26 @@ fn optimize_level(
     let mut undropped: Vec<Undropped> = inlined
         .modules
         .into_iter()
-        .map(|(qref, module)| Undropped::optimized(interner, laws, &functions, qref, module, opt))
+        .map(|(qref, module)| Undropped::optimized(interner, laws, decls, &functions, qref, module, opt))
         .collect();
-    settle_inputs(&mut undropped, laws, &functions);
+    settle_inputs(&mut undropped, laws, decls, &functions);
 
     for module in undropped {
         let qref = module.qref;
         inputs.insert(qref, required_inputs(&module.main));
-        let module = module.finished(laws);
+        let module = module.finished(laws, decls);
 
-        let mut errors = validate::type_check::check_types(&module);
+        let mut errors = validate::type_check::check_types(&module, decls);
         errors.extend(validate::bounds::check_bounds(&module, laws));
         // RFC-0089 rules 1, 3 and 5, asked of the module after
         // `insert_drops`, which is the last pass: the form must hold on the
         // body the machine runs.
-        errors.extend(validate::stages::check(&module, laws));
+        errors.extend(validate::stages::check(&module, decls, laws));
         if !errors.is_empty() {
             all_errors.push((qref, errors));
         }
         if !refused.contains(&qref) {
-            debug_rules_pass_0_held(qref, &module);
+            debug_rules_pass_0_held(qref, &module, decls);
         }
 
         result_modules.insert(qref, module);
@@ -155,17 +167,16 @@ fn optimize_level(
 /// A name every read of which a fold removed is absent here: it constrains
 /// nothing, so its type closes to `!` and it is not required (RFC-0071
 /// rule 5).
-fn required_inputs(cfg: &CfgBody) -> Vec<ContextInfo> {
+fn required_inputs(cfg: &CfgBody) -> Vec<RequiredInput> {
     let read = values_read(cfg);
     cfg.params
         .iter()
         .filter(|(_, slot)| read.contains(slot))
-        .map(|(name, slot)| ContextInfo {
+        .map(|(name, slot)| RequiredInput {
             name: QualifiedRef::root(*name),
-            ty: cfg
+            ty: *cfg
                 .val_types
                 .get(slot)
-                .cloned()
                 .expect("lowering gives every parameter of a body its type"),
         })
         .collect()
@@ -204,7 +215,75 @@ fn call_graph_sccs(modules: &FxHashMap<QualifiedRef, MirModule>) -> Vec<Vec<Qual
             (*qref, local)
         })
         .collect();
-    crate::graph::infer::tarjan_scc(&ids, &edges)
+    Tarjan::sccs(&ids, &edges)
+}
+
+/// Tarjan's strongly connected components, in reverse topological order:
+/// a component comes after every component it calls into.
+struct Tarjan<'e> {
+    edges: &'e FxHashMap<QualifiedRef, Vec<QualifiedRef>>,
+    next_index: u32,
+    stack: Vec<QualifiedRef>,
+    on_stack: FxHashSet<QualifiedRef>,
+    index: FxHashMap<QualifiedRef, u32>,
+    lowlink: FxHashMap<QualifiedRef, u32>,
+    components: Vec<Vec<QualifiedRef>>,
+}
+
+impl<'e> Tarjan<'e> {
+    fn sccs(ids: &[QualifiedRef], edges: &'e FxHashMap<QualifiedRef, Vec<QualifiedRef>>) -> Vec<Vec<QualifiedRef>> {
+        let mut tarjan = Tarjan {
+            edges,
+            next_index: 0,
+            stack: Vec::new(),
+            on_stack: FxHashSet::default(),
+            index: FxHashMap::default(),
+            lowlink: FxHashMap::default(),
+            components: Vec::new(),
+        };
+        for &id in ids {
+            if !tarjan.index.contains_key(&id) {
+                tarjan.connect(id);
+            }
+        }
+        tarjan.components
+    }
+
+    fn connect(&mut self, v: QualifiedRef) {
+        acvus_utils::grow(|| self.connect_level(v))
+    }
+
+    fn connect_level(&mut self, v: QualifiedRef) {
+        self.index.insert(v, self.next_index);
+        self.lowlink.insert(v, self.next_index);
+        self.next_index += 1;
+        self.stack.push(v);
+        self.on_stack.insert(v);
+
+        let edges = self.edges;
+        for &w in edges.get(&v).into_iter().flatten() {
+            if !self.index.contains_key(&w) {
+                self.connect(w);
+                let low = self.lowlink[&v].min(self.lowlink[&w]);
+                self.lowlink.insert(v, low);
+            } else if self.on_stack.contains(&w) {
+                let low = self.lowlink[&v].min(self.index[&w]);
+                self.lowlink.insert(v, low);
+            }
+        }
+
+        if self.lowlink[&v] == self.index[&v] {
+            let mut component = Vec::new();
+            while let Some(w) = self.stack.pop() {
+                self.on_stack.remove(&w);
+                component.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            self.components.push(component);
+        }
+    }
 }
 
 /// One strongly connected component of the call graph: whether its members
@@ -237,12 +316,18 @@ impl Component {
     }
 }
 
-fn run_pass1_body(laws: &LawTable, functions: &FunctionSummary, body: &mut crate::ir::MirBody) {
+fn run_pass1_body(
+    laws: &LawTable,
+    decls: &Declarations,
+    functions: &FunctionSummary,
+    types: &Types<Concrete>,
+    body: &mut crate::ir::MirBody,
+) {
     let mut cfg = cfg::promote(std::mem::take(body));
     optimize::ssa_pass::run(&mut cfg);
-    optimize::string_copy::run(&mut cfg);
+    optimize::string_copy::run(&mut cfg, types, decls);
     optimize::dse::run(&mut cfg);
-    optimize::dce::run(&mut cfg, laws, functions);
+    optimize::dce::run(&mut cfg, types, decls, laws, functions);
     *body = cfg::demote(cfg);
 }
 
@@ -260,23 +345,24 @@ impl Undropped {
     fn optimized(
         interner: &Interner,
         laws: &LawTable,
+        decls: &Declarations,
         functions: &FunctionSummary,
         qref: QualifiedRef,
         mut module: MirModule,
         opt: Opt,
     ) -> Undropped {
-        let optimized = |body: MirBody| {
+        let optimized = |body: MirBody, types: &mut Types<Concrete>| {
             let mut cfg = cfg::promote(body);
             match opt {
-                Opt::None => run_pass2_required(interner, laws, functions, &mut cfg),
-                Opt::Full => run_pass2(interner, laws, functions, &mut cfg),
+                Opt::None => run_pass2_required(interner, laws, functions, &mut cfg, types, decls),
+                Opt::Full => run_pass2(interner, laws, functions, &mut cfg, types, decls),
             }
             cfg
         };
-        let main = optimized(std::mem::take(&mut module.main));
+        let main = optimized(std::mem::take(&mut module.main), &mut module.types);
         let closures = std::mem::take(&mut module.closures)
             .into_iter()
-            .map(|(label, closure)| (label, optimized(closure)))
+            .map(|(label, closure)| (label, optimized(closure, &mut module.types)))
             .collect();
         Undropped {
             qref,
@@ -286,25 +372,31 @@ impl Undropped {
         }
     }
 
-    fn bodies_mut(&mut self) -> impl Iterator<Item = &mut CfgBody> {
-        std::iter::once(&mut self.main).chain(self.closures.iter_mut().map(|(_, body)| body))
+    /// Every body, and the table their types are ids of.
+    fn bodies_mut(&mut self) -> (&mut Types<Concrete>, impl Iterator<Item = &mut CfgBody>) {
+        (
+            &mut self.shell.types,
+            std::iter::once(&mut self.main).chain(self.closures.iter_mut().map(|(_, body)| body)),
+        )
     }
 
-    fn finished(self, laws: &LawTable) -> MirModule {
-        let finish = |mut cfg: CfgBody| {
-            debug_validate(&cfg);
-            let val_types = cfg.val_types.clone();
-            optimize::drop_insertion::insert_drops(&mut cfg, &val_types, laws);
-            let mut body = cfg::demote(cfg);
-            optimize::rejoin::run(&mut body);
-            body
-        };
+    fn finished(self, laws: &LawTable, decls: &Declarations) -> MirModule {
         let Undropped {
             shell,
             main,
             closures,
             ..
         } = self;
+        let mut shell = shell;
+        let types = &mut shell.types;
+        let mut finish = |mut cfg: CfgBody| {
+            debug_validate(&cfg);
+            let val_types = cfg.val_types.clone();
+            optimize::drop_insertion::insert_drops(&mut cfg, types, decls, &val_types, laws);
+            let mut body = cfg::demote(cfg);
+            optimize::rejoin::run(&mut body);
+            body
+        };
         MirModule {
             main: finish(main),
             closures: closures
@@ -321,7 +413,7 @@ impl Undropped {
 /// so a parameter removed here is removed from every call to the module, and
 /// a value a caller read only to pass it is unread in turn: the removal
 /// repeats until no module loses one.
-fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable, functions: &FunctionSummary) {
+fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable, decls: &Declarations, functions: &FunctionSummary) {
     loop {
         let mut removed: FxHashMap<QualifiedRef, Vec<usize>> = FxHashMap::default();
         for module in undropped.iter_mut() {
@@ -340,12 +432,13 @@ fn settle_inputs(undropped: &mut [Undropped], laws: &LawTable, functions: &Funct
             return;
         }
         for module in undropped.iter_mut() {
-            for body in module.bodies_mut() {
-                if strip_arguments(body, &removed) {
-                    optimize::dce::run(body, laws, functions);
+            let (types, bodies) = module.bodies_mut();
+            for body in bodies {
+                if strip_arguments(body, types, &removed) {
+                    optimize::dce::run(body, types, decls, laws, functions);
                     // RFC-0089 rule 6: what `dce` removed may have freed a
                     // stage, and cutting again merges the boundaries it left.
-                    optimize::stages::run(body, laws);
+                    optimize::stages::run(body, types, decls, laws);
                 }
             }
         }
@@ -366,7 +459,12 @@ fn values_read(cfg: &CfgBody) -> FxHashSet<ValueId> {
     read
 }
 
-fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usize>>) -> bool {
+fn strip_arguments(
+    cfg: &mut CfgBody,
+    types: &mut Types<Concrete>,
+    removed: &FxHashMap<QualifiedRef, Vec<usize>>,
+) -> bool {
+
     let mut stripped = false;
     for inst in cfg.blocks.iter_mut().flat_map(|block| &mut block.insts) {
         let (InstKind::FunctionCall {
@@ -387,13 +485,30 @@ fn strip_arguments(cfg: &mut CfgBody, removed: &FxHashMap<QualifiedRef, Vec<usiz
         let Some(unread) = removed.get(callee) else {
             continue;
         };
-        let Ty::Fn { params, .. } = callee_ty else {
+        let TyKind::Fn {
+            params,
+            ret,
+            effect,
+            flows,
+            calls,
+            holds,
+        } = types.kind(*callee_ty).clone()
+        else {
             panic!("a call to {callee:?} is typed by its function type, not {callee_ty:?}")
         };
+        let mut params = params.into_vec();
         for at in unread.iter().rev() {
             args.remove(*at);
             params.remove(*at);
         }
+        *callee_ty = types.intern(TyKind::Fn {
+            params: params.into_boxed_slice(),
+            ret,
+            effect,
+            flows,
+            calls,
+            holds,
+        });
         stripped = true;
     }
     stripped
@@ -408,77 +523,86 @@ fn run_pass2_required(
     laws: &LawTable,
     functions: &FunctionSummary,
     cfg: &mut CfgBody,
+    types: &mut Types<Concrete>,
+    decls: &Declarations,
 ) {
     optimize::ssa_pass::run(cfg);
     // A `String` copies (RFC-0018), and the copy is emitted here: without
     // it two names own one string and each drops it.
-    optimize::string_copy::run(cfg);
-    optimize::reborrow::run(cfg);
-    optimize::fold::run(cfg);
-    optimize::branch::run(interner, cfg);
-    optimize::dce::run(cfg, laws, functions);
+    optimize::string_copy::run(cfg, types, decls);
+    optimize::reborrow::run(cfg, types);
+    optimize::fold::run(cfg, types);
+    optimize::branch::run(interner, cfg, types);
+    optimize::dce::run(cfg, types, decls, laws, functions);
 }
 
-fn run_pass2(interner: &Interner, laws: &LawTable, functions: &FunctionSummary, cfg: &mut CfgBody) {
-    optimize::commute::run(cfg);
-    optimize::spawn_split::run(cfg);
+fn run_pass2(
+    interner: &Interner,
+    laws: &LawTable,
+    functions: &FunctionSummary,
+    cfg: &mut CfgBody,
+    types: &mut Types<Concrete>,
+    decls: &Declarations,
+) {
+    optimize::commute::run(cfg, types, decls);
+    optimize::spawn_split::run(cfg, types);
     // RFC-0050: an aggregate no use lets out of the body never exists.
     // Before `ssa_pass`, whose builder places the phis its parts need;
     // before `dce`, which sweeps the constructor left with no reader.
-    optimize::sroa::run(cfg);
+    optimize::sroa::run(cfg, types);
     optimize::ssa_pass::run(cfg);
-    optimize::string_copy::run(cfg);
+    optimize::string_copy::run(cfg, types, decls);
     // RFC-0055: after `ssa_pass`, which brings a constant and its reader
     // into one body; before `dse`/`dce`, which sweep the operands a fold
     // left with no reader.
-    optimize::fold::run(cfg);
+    optimize::fold::run(cfg, types);
     // RFC-0071: after the fold, which is what makes a condition constant;
     // before `dse`/`dce`, which sweep what the arms it dropped had read.
-    optimize::branch::run(interner, cfg);
-    optimize::reborrow::run(cfg);
+    optimize::branch::run(interner, cfg, types);
+    optimize::reborrow::run(cfg, types);
     optimize::dse::run(cfg);
     // RFC-0081: after `ssa_pass`, which makes the counter a header
     // parameter, and after the fold, which settles a constant bound; before
     // `dce`, which sweeps the comparison the new terminator leaves unread.
-    optimize::while_to_for::run(cfg, laws);
-    optimize::dce::run(cfg, laws, functions);
-    optimize::code_motion::run(cfg);
+    optimize::while_to_for::run(cfg, types, decls, laws);
+    optimize::dce::run(cfg, types, decls, laws, functions);
+    optimize::code_motion::run(cfg, types, decls);
     // RFC-0066 rule 7: every induction variable of a `for` that anything
     // besides its own step reads is computed from the counter, decided per
     // variable; after the hoist, which leaves each loop's invariants above
     // its header.
-    optimize::iv_canon::run(cfg, laws, functions);
+    optimize::iv_canon::run(cfg, types, decls, laws, functions);
     // RFC-0083: after IV canonicalization, whose arithmetic it simplifies
     // and merges; before a `dce` of its own, which sweeps what it leaves
     // unread, the header arguments the canonicalization removed included.
-    optimize::gvn::run(cfg);
-    optimize::dce::run(cfg, laws, functions);
+    optimize::gvn::run(cfg, types);
+    optimize::dce::run(cfg, types, decls, laws, functions);
     // RFC-0088: after that `dce`, which sweeps the arithmetic the loop passes
     // left in a body that nothing reads, so a body that does nothing holds
     // no instruction; before `forward`, which collapses the header the
     // removal leaves only jumping.
-    optimize::empty_loop::run(cfg, laws, functions);
+    optimize::empty_loop::run(cfg, types, decls, laws, functions);
     // A block that only jumps is its target; before `reorder`, which
     // schedules within a block.
     optimize::forward::run(cfg);
-    optimize::reorder::run(cfg);
+    optimize::reorder::run(cfg, types, decls);
     // RFC-0066 rule 1: an exit that leaves a nested loop's parent moves into
     // the nested loop's own exit, so the parent is cut around an exit of its
     // own (RFC-0089 rule 5); before the cut, which reads the exits, and
     // after `forward`, which would take the exit block's plain jump for it.
-    optimize::nested_exit::run(interner, cfg);
+    optimize::nested_exit::run(interner, cfg, types, decls);
     // RFC-0089 rule 6: after every pass that moves or merges a body's
     // instructions -- `code_motion` and `forward` across blocks, `gvn`
     // merging, `reorder` within one block -- since a stage is a set of
     // instructions and a pass that moved one across a stage's boundary
     // would leave a dependence cycle crossing it after the fact; after
     // `iv_canon`, so a canonicalized induction variable is no token.
-    optimize::stages::run(cfg, laws);
+    optimize::stages::run(cfg, types, decls, laws);
     // RFC-0056, RFC-0066 rule 7: after the stages, since it reduces only a
     // counter expression that one `InOrder` stage reads, and puts the
     // derived counter's step in that stage. It adds instructions to the
     // preheader, the end of that stage and nowhere else, and moves none.
-    optimize::lsr::run(cfg, laws);
+    optimize::lsr::run(cfg, types, decls, laws);
     // Before `bce`, which then reads the chain the stage pass wrote as the
     // order `validate::bounds` reads again, and before the drops, which it
     // places in the stage that touches each value.
@@ -487,7 +611,7 @@ fn run_pass2(interner: &Interner, laws: &LawTable, functions: &FunctionSummary, 
     // pass that moves an instruction, so that `validate::bounds` reads the
     // order this pass read; what follows adds only `Drop`s, which the
     // interval domain does not read as a write.
-    optimize::bce::run(cfg, laws);
+    optimize::bce::run(cfg, types, laws);
 }
 
 /// Until this assertion replaced it, pass 2 reported these two rules to the
@@ -503,8 +627,8 @@ fn run_pass2(interner: &Interner, laws: &LawTable, functions: &FunctionSummary, 
 /// borrow only where no block it would newly span writes the storage. A pass
 /// that stops asking `Loans` compiles, and this is what fires.
 #[cfg(debug_assertions)]
-fn debug_rules_pass_0_held(qref: QualifiedRef, module: &MirModule) {
-    let broken: Vec<ValidationErrorKind> = validate::borrow_check::check_borrows(module)
+fn debug_rules_pass_0_held(qref: QualifiedRef, module: &MirModule, decls: &Declarations) {
+    let broken: Vec<ValidationErrorKind> = validate::borrow_check::check_borrows(module, decls)
         .into_iter()
         .chain(validate::exhaustive::check_exhaustive(module))
         .map(|error| error.kind)
@@ -516,7 +640,7 @@ fn debug_rules_pass_0_held(qref: QualifiedRef, module: &MirModule) {
 }
 
 #[cfg(not(debug_assertions))]
-fn debug_rules_pass_0_held(_qref: QualifiedRef, _module: &MirModule) {}
+fn debug_rules_pass_0_held(_qref: QualifiedRef, _module: &MirModule, _decls: &Declarations) {}
 
 /// Validate CfgBody after optimization: check use-def integrity, SSA dominance, and type coverage.
 /// Collects all violations and panics if any are found.

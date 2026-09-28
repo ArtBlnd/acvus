@@ -27,7 +27,7 @@ use crate::cfg::{BlockIdx, Terminator, promote};
 use crate::ir::{
     Callee, DebugInfo, Inst, InstKind, MirBody, MirModule, PathSeg, RefTarget, ValueId,
 };
-use crate::ty::Ty;
+use crate::ty::{Concrete, Ty, TyKind, Types, copies};
 
 use super::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
 
@@ -36,10 +36,9 @@ use super::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
 // ---------------------------------------------------------------------------
 
 /// Whether a type moves at the IR (RFC-0018): every type that is not a word
-/// (`TyTerm::is_word`), `String` included. `None` for a type the analysis
-/// cannot classify.
-pub fn is_move_only(ty: &Ty) -> Option<bool> {
-    ty.is_word().map(|word| !word)
+/// (`ir::is_word`), `String` included.
+pub fn is_move_only(types: &Types<Concrete>, ty: Ty) -> bool {
+    !crate::ir::is_word(types, ty)
 }
 
 // ---------------------------------------------------------------------------
@@ -329,15 +328,16 @@ impl MoveState {
 /// Check move semantics for the entire module.
 pub fn check_moves(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    check_body("main", &module.main, &mut errors);
+    let types = &module.types;
+    check_body(types, "main", &module.main, &mut errors);
     for (label, closure) in &module.closures {
         let scope = format!("closure({:?})", label);
-        check_body(&scope, closure, &mut errors);
+        check_body(types, &scope, closure, &mut errors);
     }
     errors
 }
 
-fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
+fn check_body(types: &Types<Concrete>, scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
     let debug = &body.debug;
     let cfg = promote(body.clone());
     if cfg.blocks.is_empty() {
@@ -377,7 +377,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                 scope,
                 i,
                 inst,
-                &cfg.val_types,
+                &cfg.val_types, types,
                 &commit_of,
                 debug,
                 &mut state,
@@ -396,7 +396,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                         &block_exit[idx.0],
                         args,
                         &cfg.blocks[target_idx.0].params,
-                        &cfg.val_types,
+                        &cfg.val_types, types,
                         errors,
                         &mut block_entry[target_idx.0],
                     );
@@ -430,7 +430,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                             &block_exit[idx.0],
                             args,
                             &cfg.blocks[target_idx.0].params,
-                            &cfg.val_types,
+                            &cfg.val_types, types,
                             errors,
                             &mut block_entry[target_idx.0],
                         );
@@ -468,7 +468,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                             &block_exit[idx.0],
                             args,
                             taking,
-                            &cfg.val_types,
+                            &cfg.val_types, types,
                             errors,
                             &mut block_entry[target_idx.0],
                         );
@@ -495,7 +495,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                             &block_exit[idx.0],
                             args,
                             &cfg.blocks[target_idx.0].params,
-                            &cfg.val_types,
+                            &cfg.val_types, types,
                             errors,
                             &mut block_entry[target_idx.0],
                         );
@@ -523,7 +523,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                             &block_exit[idx.0],
                             args,
                             &cfg.blocks[target_idx.0].params,
-                            &cfg.val_types,
+                            &cfg.val_types, types,
                             errors,
                             &mut block_entry[target_idx.0],
                         );
@@ -560,7 +560,7 @@ fn check_body(scope: &str, body: &MirBody, errors: &mut Vec<ValidationError>) {
                         by: MovedBy::TheProgram,
                     },
                     *value,
-                    &cfg.val_types,
+                    &cfg.val_types, types,
                     debug,
                     &mut state,
                     errors,
@@ -587,7 +587,7 @@ fn propagate_args(
     source: &MoveState,
     args: &[ValueId],
     params: &[ValueId],
-    val_types: &FxHashMap<ValueId, Ty>,
+    val_types: &FxHashMap<ValueId, Ty>, types: &Types<Concrete>,
     _errors: &mut Vec<ValidationError>,
     target_entry: &mut MoveState,
 ) {
@@ -595,7 +595,7 @@ fn propagate_args(
     // If an arg is move-only and moved, the param inherits Moved.
     for (arg, param) in args.iter().zip(params.iter()) {
         let arg_liveness = source.get_value(*arg).unwrap_or(Liveness::Alive);
-        let is_move = val_types.get(param).and_then(is_move_only) == Some(true);
+        let is_move = val_types.get(param).is_some_and(|ty| is_move_only(types, *ty));
         if is_move {
             let entry = target_entry.values.entry(*param).or_insert(Liveness::Alive);
             let joined = entry.join(arg_liveness);
@@ -617,7 +617,7 @@ fn try_consume_value(
     inst_idx: usize,
     site: MoveSite,
     id: ValueId,
-    val_types: &FxHashMap<ValueId, Ty>,
+    val_types: &FxHashMap<ValueId, Ty>, types: &Types<Concrete>,
     debug: &DebugInfo,
     state: &mut MoveState,
     errors: &mut Vec<ValidationError>,
@@ -625,10 +625,9 @@ fn try_consume_value(
     let Some(ty) = val_types.get(&id) else {
         return false;
     };
-    let move_only = is_move_only(ty);
-    let Some(true) = move_only else {
+    if !is_move_only(types, *ty) {
         return false;
-    };
+    }
 
     // Check if already moved
     if let Some(Liveness::Moved { site: moved } | Liveness::PartlyMoved { site: moved }) =
@@ -640,7 +639,7 @@ fn try_consume_value(
             span: site.span,
             kind: ValidationErrorKind::UseAfterMove {
                 value_id: id.to_raw() as u32,
-                ty: ty.clone(),
+                ty: *ty,
                 origin: debug.get(id).cloned(),
                 labels: moved.label(),
             },
@@ -653,9 +652,10 @@ fn try_consume_value(
     true
 }
 
-/// RFC-0018 rule 2.
-pub(crate) fn moves_out(ty: &Ty) -> bool {
-    ty.copies() == Some(false)
+/// Whether a value of `ty` read out of its place leaves the place empty:
+/// it does not copy (ownership §1).
+pub(crate) fn moves_out(types: &Types<Concrete>, ty: Ty) -> bool {
+    !copies(types, ty)
 }
 
 /// The register this instruction leaves owning nothing, and the one
@@ -671,13 +671,17 @@ pub(crate) fn moves_out(ty: &Ty) -> bool {
 /// every variant form: `variant::unwrap_option`, `unwrap_result` and
 /// `unwrap_variant` each open with `machine.take(op.b)` and hand the payload
 /// on, so the box a `Result` or an enum carried is gone with them.
-pub(crate) fn emptied_by(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Option<ValueId> {
+pub(crate) fn emptied_by(
+    types: &Types<Concrete>,
+    kind: &InstKind,
+    val_types: &FxHashMap<ValueId, Ty>,
+) -> Option<ValueId> {
     match kind {
         InstKind::Take { target, path, .. } => {
             let storage = crate::analysis::inst_info::storage(target)?;
             let ty = val_types.get(&storage)?;
-            under_options(ty, path)
-                .is_some_and(moves_out)
+            under_options(types, *ty, path)
+                .is_some_and(|ty| moves_out(types, ty))
                 .then_some(storage)
         }
         InstKind::UnwrapVariant { src, .. } => Some(*src),
@@ -687,13 +691,13 @@ pub(crate) fn emptied_by(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) ->
 
 /// The type a path of payload steps reaches while every type it steps
 /// through is an option.
-fn under_options<'a>(ty: &'a Ty, path: &[PathSeg]) -> Option<&'a Ty> {
+fn under_options(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> Option<Ty> {
     let mut at = ty;
     for seg in path {
-        let (PathSeg::Payload, Ty::Option(payload)) = (seg, at) else {
+        let (PathSeg::Payload, TyKind::Option(payload)) = (seg, types.kind(at)) else {
             return None;
         };
-        at = payload;
+        at = *payload;
     }
     Some(at)
 }
@@ -704,13 +708,13 @@ fn extract_part(
     site: MoveSite,
     container: ValueId,
     dst: ValueId,
-    val_types: &FxHashMap<ValueId, Ty>,
+    val_types: &FxHashMap<ValueId, Ty>, types: &Types<Concrete>,
     debug: &DebugInfo,
     state: &mut MoveState,
     errors: &mut Vec<ValidationError>,
 ) {
     if let Some(ty) = val_types.get(&dst)
-        && moves_out(ty)
+        && moves_out(types, *ty)
     {
         match state.get_value(container) {
             Some(Liveness::Moved { site: moved }) => errors.push(ValidationError {
@@ -812,7 +816,7 @@ fn process_inst(
     scope: &str,
     inst_idx: usize,
     inst: &Inst,
-    val_types: &FxHashMap<ValueId, Ty>,
+    val_types: &FxHashMap<ValueId, Ty>, types: &Types<Concrete>,
     commit_of: &FxHashMap<ValueId, Astr>,
     debug: &DebugInfo,
     state: &mut MoveState,
@@ -882,7 +886,7 @@ fn process_inst(
             );
             if let RefTarget::Var(slot) | RefTarget::Param(slot) = target
                 && let Some(ty) = val_types.get(dst)
-                && (moves_out(ty) || *taken_out)
+                && (moves_out(types, *ty) || *taken_out)
             {
                 let site = MoveSite {
                     span,
@@ -892,7 +896,7 @@ fn process_inst(
                     },
                 };
                 let whole: &[PathSeg] = &[];
-                let moved = match emptied_by(&inst.kind, val_types) == Some(*slot) {
+                let moved = match emptied_by(types, &inst.kind, val_types) == Some(*slot) {
                     true => whole,
                     false => path,
                 };
@@ -910,7 +914,7 @@ fn process_inst(
             restores,
         } => {
             try_consume_value(
-                scope, inst_idx, plain, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, types, debug, state, errors,
             );
             let place = Place { target, path };
             let touch = match restores {
@@ -932,7 +936,7 @@ fn process_inst(
         }
         InstKind::Commit { value, .. } => {
             try_consume_value(
-                scope, inst_idx, plain, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, types, debug, state, errors,
             );
         }
         InstKind::BlockLabel { params, .. } => {
@@ -945,13 +949,13 @@ fn process_inst(
         // === Consuming operations (move operands) ===
         InstKind::Return { value, .. } => {
             try_consume_value(
-                scope, inst_idx, plain, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, types, debug, state, errors,
             );
         }
         InstKind::Diverge => {}
         InstKind::Drop { src } => {
             try_consume_value(
-                scope, inst_idx, plain, *src, val_types, debug, state, errors,
+                scope, inst_idx, plain, *src, val_types, types, debug, state, errors,
             );
         }
 
@@ -965,12 +969,12 @@ fn process_inst(
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(
-                    scope, inst_idx, into_call, *closure, val_types, debug, state, errors,
+                    scope, inst_idx, into_call, *closure, val_types, types, debug, state, errors,
                 );
             }
             for arg in args {
                 try_consume_value(
-                    scope, inst_idx, into_call, *arg, val_types, debug, state, errors,
+                    scope, inst_idx, into_call, *arg, val_types, types, debug, state, errors,
                 );
             }
             state.set_value(*dst, Liveness::Alive);
@@ -985,7 +989,7 @@ fn process_inst(
         }
         InstKind::StringConcat { dst, parts } => {
             for p in parts {
-                try_consume_value(scope, inst_idx, plain, *p, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *p, val_types, types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -993,34 +997,34 @@ fn process_inst(
         InstKind::ArrayPush { dst, array, value } => {
             for moved in [array, value] {
                 try_consume_value(
-                    scope, inst_idx, plain, *moved, val_types, debug, state, errors,
+                    scope, inst_idx, plain, *moved, val_types, types, debug, state, errors,
                 );
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeObject { dst, fields } => {
             for (_, v) in fields {
-                try_consume_value(scope, inst_idx, plain, *v, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *v, val_types, types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeTuple { dst, elements } => {
             for e in elements {
-                try_consume_value(scope, inst_idx, plain, *e, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *e, val_types, types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeClosure { dst, captures, .. } => {
             for cap in captures {
                 try_consume_value(
-                    scope, inst_idx, plain, *cap, val_types, debug, state, errors,
+                    scope, inst_idx, plain, *cap, val_types, types, debug, state, errors,
                 );
             }
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::MakeVariant { dst, payload, .. } => {
             if let Some(p) = payload {
-                try_consume_value(scope, inst_idx, plain, *p, val_types, debug, state, errors);
+                try_consume_value(scope, inst_idx, plain, *p, val_types, types, debug, state, errors);
             }
             state.set_value(*dst, Liveness::Alive);
         }
@@ -1029,7 +1033,7 @@ fn process_inst(
         // These read the value but don't take ownership.
         InstKind::FieldGet { dst, object, .. } => {
             extract_part(
-                scope, inst_idx, plain, *object, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *object, *dst, val_types, types, debug, state, errors,
             );
         }
         InstKind::FieldSet {
@@ -1039,23 +1043,23 @@ fn process_inst(
             ..
         } => {
             try_consume_value(
-                scope, inst_idx, plain, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, types, debug, state, errors,
             );
             state.set_value(*dst, Liveness::Alive);
         }
         InstKind::ObjectGet { dst, object, .. } => {
             extract_part(
-                scope, inst_idx, plain, *object, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *object, *dst, val_types, types, debug, state, errors,
             );
         }
         InstKind::TupleIndex { dst, tuple, .. } => {
             extract_part(
-                scope, inst_idx, plain, *tuple, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *tuple, *dst, val_types, types, debug, state, errors,
             );
         }
         InstKind::ArrayIndex { dst, array, .. } => {
             extract_part(
-                scope, inst_idx, plain, *array, *dst, val_types, debug, state, errors,
+                scope, inst_idx, plain, *array, *dst, val_types, types, debug, state, errors,
             );
         }
 
@@ -1067,18 +1071,18 @@ fn process_inst(
         }
         InstKind::IndexSet { value, .. } => {
             try_consume_value(
-                scope, inst_idx, plain, *value, val_types, debug, state, errors,
+                scope, inst_idx, plain, *value, val_types, types, debug, state, errors,
             );
         }
         InstKind::StringAppend { part, .. } => {
             try_consume_value(
-                scope, inst_idx, plain, *part, val_types, debug, state, errors,
+                scope, inst_idx, plain, *part, val_types, types, debug, state, errors,
             );
         }
         InstKind::UnwrapVariant { dst, src } => {
-            if emptied_by(&inst.kind, val_types) == Some(*src) {
+            if emptied_by(types, &inst.kind, val_types) == Some(*src) {
                 try_consume_value(
-                    scope, inst_idx, plain, *src, val_types, debug, state, errors,
+                    scope, inst_idx, plain, *src, val_types, types, debug, state, errors,
                 );
             }
             state.set_value(*dst, Liveness::Alive);
@@ -1120,20 +1124,20 @@ fn process_inst(
         } => {
             if let Callee::Indirect(closure) = callee {
                 try_consume_value(
-                    scope, inst_idx, into_call, *closure, val_types, debug, state, errors,
+                    scope, inst_idx, into_call, *closure, val_types, types, debug, state, errors,
                 );
             }
             for arg in args {
                 try_consume_value(
-                    scope, inst_idx, into_call, *arg, val_types, debug, state, errors,
+                    scope, inst_idx, into_call, *arg, val_types, types, debug, state, errors,
                 );
             }
             state.set_value(*dst, Liveness::Alive);
         }
-        // Eval - consumes Handle (move-only), defines dst
-        InstKind::Eval { dst, src, .. } => {
+        // TakeEffect - consumes Handle (move-only), defines dst
+        InstKind::TakeEffect { dst, src, .. } => {
             try_consume_value(
-                scope, inst_idx, plain, *src, val_types, debug, state, errors,
+                scope, inst_idx, plain, *src, val_types, types, debug, state, errors,
             );
             state.set_value(*dst, Liveness::Alive);
         }
@@ -1187,11 +1191,10 @@ mod tests {
                 val_factory: LocalFactory::new(),
                 label_count: 10,
                 order_param: None,
-                task: crate::ty::Task::Sync,
             },
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
-            flows: crate::ty::Flows::Every,
+            flows: crate::flows::Flows::Every,
         }
     }
 
@@ -1272,7 +1275,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![test_user_defined()],
             effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }
@@ -1284,7 +1287,7 @@ mod tests {
             ret: Box::new(Ty::I64),
             captures: vec![Ty::I64, Ty::String],
             effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         };
         assert_eq!(is_move_only(&ty), Some(true));
     }

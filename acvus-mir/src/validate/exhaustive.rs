@@ -17,13 +17,12 @@
 //! The pass reads `InstKind::Switch`, the one shape that names a `match`.
 //! An `if let` is two arms and always exhaustive, and never wears one.
 
-use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use acvus_utils::Astr;
 
 use crate::ir::{InstKind, Label, MirBody, MirModule, SwitchKey, ValueId};
-use crate::ty::Ty;
+use crate::ty::{Concrete, TyKind, Types};
 use crate::validate::type_check::{OpenSpace, ValidationError, ValidationErrorKind};
 
 /// A builtin enum whose type names its variants: the count is the whole
@@ -62,14 +61,15 @@ pub enum Known {
 
 pub fn check_exhaustive(module: &MirModule) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    check_body(&module.main, "main", &mut errors);
+    let types = &module.types;
+    check_body(types, &module.main, "main", &mut errors);
     for (label, closure) in &module.closures {
-        check_body(closure, &format!("closure({label:?})"), &mut errors);
+        check_body(types, closure, &format!("closure({label:?})"), &mut errors);
     }
     errors
 }
 
-fn check_body(body: &MirBody, scope: &str, errors: &mut Vec<ValidationError>) {
+fn check_body(types: &Types<Concrete>, body: &MirBody, scope: &str, errors: &mut Vec<ValidationError>) {
     for (at, inst) in body.insts.iter().enumerate() {
         let InstKind::Switch { tag, arms, default } = &inst.kind else {
             continue;
@@ -80,7 +80,7 @@ fn check_body(body: &MirBody, scope: &str, errors: &mut Vec<ValidationError>) {
             continue;
         }
         let kind = match cover(arms) {
-            Cover::Tags(covered) => match missed_variants(body, *tag, &covered) {
+            Cover::Tags(covered) => match missed_variants(types, body, *tag, &covered) {
                 None => continue,
                 Some(kind) => kind,
             },
@@ -129,11 +129,12 @@ fn cover(arms: &[(SwitchKey, Label, Vec<ValueId>)]) -> Cover {
 /// The refusal a tag dispatch earns, or `None` where its arms cover the
 /// variant set the scrutinee's type names.
 fn missed_variants(
+    types: &Types<Concrete>,
     body: &MirBody,
     tag: ValueId,
     covered: &BTreeSet<Astr>,
 ) -> Option<ValidationErrorKind> {
-    match known_variants(body, tag) {
+    match known_variants(types, body, tag) {
         Known::Open => Some(ValidationErrorKind::NonExhaustiveMatch {
             over: OpenSpace::AType,
         }),
@@ -148,7 +149,7 @@ fn missed_variants(
         Known::Closed(set) => {
             let missing: Vec<Astr> = set.difference(covered).copied().collect();
             (!missing.is_empty()).then(|| ValidationErrorKind::MatchMissesVariants {
-                enum_name: enum_name_of(body, tag),
+                enum_name: enum_name_of(types, body, tag),
                 missing,
             })
         }
@@ -157,9 +158,9 @@ fn missed_variants(
 
 /// The name the source gave the enum the value carries, for the refusal to
 /// write `E::B` rather than a bare tag.
-fn enum_name_of(body: &MirBody, value: ValueId) -> Option<Astr> {
-    match &*scrutinee_ty(body, value)? {
-        Ty::Enum { name, .. } => Some(name.name),
+fn enum_name_of(types: &Types<Concrete>, body: &MirBody, value: ValueId) -> Option<Astr> {
+    match scrutinee_ty(types, body, value)? {
+        TyKind::Enum { name, .. } => Some(name.name),
         _ => None,
     }
 }
@@ -168,26 +169,27 @@ fn enum_name_of(body: &MirBody, value: ValueId) -> Option<Astr> {
 /// (RFC-0051 rule 4). The value's type is the answer: a structural enum's type
 /// is the union of every construction the value can flow from, so its
 /// variant list is closed for this value wherever the value came from.
-pub fn known_variants(body: &MirBody, value: ValueId) -> Known {
-    let Some(ty) = scrutinee_ty(body, value) else {
+pub fn known_variants(types: &Types<Concrete>, body: &MirBody, value: ValueId) -> Known {
+    let Some(ty) = scrutinee_ty(types, body, value) else {
         return Known::Open;
     };
-    match &*ty {
-        Ty::Option(_) => Known::ClosedBuiltin(OPTION),
-        Ty::Result(..) => Known::ClosedBuiltin(RESULT),
-        Ty::Enum { variants, .. } => Known::Closed(variants.keys().copied().collect()),
+    match ty {
+        TyKind::Option(_) => Known::ClosedBuiltin(OPTION),
+        TyKind::Result(..) => Known::ClosedBuiltin(RESULT),
+        TyKind::Enum { variants, .. } => Known::Closed(variants.iter().map(|(tag, _)| *tag).collect()),
         _ => Known::Open,
     }
 }
 
 /// The type of the value a `Switch` reads its tag from. A place scrutinee is
 /// lent for the tag read, and what it lends is what names the variants.
-fn scrutinee_ty(body: &MirBody, value: ValueId) -> Option<Cow<'_, Ty>> {
-    match body.val_types.get(&value)? {
-        Ty::Ref(_, inner) => Some(inner.ty()),
-        ty => Some(Cow::Borrowed(ty)),
+fn scrutinee_ty<'t>(types: &'t Types<Concrete>, body: &MirBody, value: ValueId) -> Option<&'t TyKind<Concrete>> {
+    match types.kind(*body.val_types.get(&value)?) {
+        TyKind::Ref(_, inner) => Some(types.kind(inner.ty())),
+        kind => Some(kind),
     }
 }
+
 
 #[cfg(test)]
 mod tests {

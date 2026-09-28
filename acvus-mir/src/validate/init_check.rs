@@ -10,7 +10,7 @@ use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator};
 use crate::error::{DidYouMean, MirError, MirErrorKind, ShownValue};
 use crate::ir::{Inst, InstKind, PathSeg, RefTarget, ValOrigin, ValueId};
-use crate::ty::Ty;
+use crate::ty::{Concrete, Ty, TyKind, Types};
 use acvus_ast::Span;
 
 // -- Domain ----------------------------------------------------------
@@ -86,17 +86,17 @@ impl LeafPaths {
     }
 }
 
-fn leaf_paths(ty: &Ty) -> Vec<FieldPath> {
-    acvus_utils::grow(|| leaf_paths_level(ty))
+fn leaf_paths(types: &Types<Concrete>, ty: Ty) -> Vec<FieldPath> {
+    acvus_utils::grow(|| leaf_paths_level(types, ty))
 }
 
-fn leaf_paths_level(ty: &Ty) -> Vec<FieldPath> {
-    let Ty::Object(object) = ty else {
+fn leaf_paths_level(types: &Types<Concrete>, ty: Ty) -> Vec<FieldPath> {
+    let TyKind::Object(object) = types.kind(ty) else {
         return vec![Vec::new()];
     };
     let mut out = Vec::new();
-    for (name, field) in object.iter() {
-        for mut rest in leaf_paths(field) {
+    for (name, field) in object.fields().iter() {
+        for mut rest in leaf_paths(types, *field) {
             rest.insert(0, *name);
             out.push(rest);
         }
@@ -205,17 +205,18 @@ fn whole_uses(kind: &InstKind) -> Vec<ValueId> {
 
 struct InitCheck<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
     paths: LeafPaths,
     leaves: FxHashMap<ValueId, Vec<LeafId>>,
     parts: FxHashMap<ValueId, PartOf>,
 }
 
 impl<'a> InitCheck<'a> {
-    fn new(cfg: &'a CfgBody) -> Self {
+    fn new(cfg: &'a CfgBody, types: &'a Types<Concrete>) -> Self {
         let mut paths = LeafPaths::default();
         let mut leaves = FxHashMap::default();
         for (value, ty) in &cfg.val_types {
-            let ids = leaf_paths(ty)
+            let ids = leaf_paths(types, *ty)
                 .into_iter()
                 .map(|p| paths.intern(p))
                 .collect();
@@ -230,17 +231,21 @@ impl<'a> InitCheck<'a> {
             .collect();
         Self {
             cfg,
+            types,
             paths,
             leaves,
             parts,
         }
     }
 
-    fn ty_of(&self, value: ValueId) -> &Ty {
-        self.cfg
-            .val_types
-            .get(&value)
-            .expect("every register of a lowered body has a type")
+    fn ty_of(&self, value: ValueId) -> &TyKind<Concrete> {
+        self.types.kind(
+            *self
+                .cfg
+                .val_types
+                .get(&value)
+                .expect("every register of a lowered body has a type"),
+        )
     }
 
     fn leaves_of(&self, value: ValueId) -> &[LeafId] {
@@ -250,7 +255,7 @@ impl<'a> InitCheck<'a> {
     }
 
     fn is_object(&self, value: ValueId) -> bool {
-        matches!(self.ty_of(value), Ty::Object(_))
+        matches!(self.ty_of(value), TyKind::Object(_))
     }
 
     fn leaf_below(&self, prefix: &[Astr], leaf: LeafId) -> LeafId {
@@ -564,12 +569,12 @@ impl DataflowAnalysis for InitCheck<'_> {
 
 // -- Public API ------------------------------------------------------
 
-pub fn check_init(cfg: &CfgBody) -> Vec<UninitError> {
-    let analysis = InitCheck::new(cfg);
+pub fn check_init(cfg: &CfgBody, types: &Types<Concrete>) -> Vec<UninitError> {
+    let analysis = InitCheck::new(cfg, types);
 
     let mut initial = State::new();
     for (value, ty) in &cfg.val_types {
-        if !matches!(ty, Ty::Object(_)) {
+        if !matches!(types.kind(*ty), TyKind::Object(_)) {
             continue;
         }
         let holder = Holder::Storage(RefTarget::Var(*value));
@@ -612,8 +617,8 @@ fn near_stored(interner: &Interner, error: &UninitError) -> DidYouMean {
 
 /// The definite-assignment refusals of a body, in the words a reader of the
 /// source knows it by.
-pub fn refusals(interner: &Interner, cfg: &CfgBody) -> Vec<MirError> {
-    check_init(cfg)
+pub fn refusals(interner: &Interner, cfg: &CfgBody, types: &Types<Concrete>) -> Vec<MirError> {
+    check_init(cfg, types)
         .into_iter()
         .map(|error| MirError {
             kind: MirErrorKind::FieldNotStored {

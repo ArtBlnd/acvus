@@ -9,13 +9,13 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::analysis::loans::{
-    Held, HeldInput, Loan, LoanStorage, Loans, RegionsAt, Via, held_positions, positions,
-};
+use crate::analysis::loans::{Held, HeldInput, Layout, Loan, LoanStorage, Loans, RegionsAt, Via};
 use crate::analysis::{inst_info, liveness};
 use crate::cfg::{BlockIdx, CfgBody, Terminator, promote};
 use crate::ir::{Callee, InstKind, Label as ClosureLabel, MirBody, MirModule, RefTarget, ValueId};
-use crate::ty::{Alignment, FlowEnd, Flows, Mutability, Ty};
+use crate::decl::Declarations;
+use crate::flows::{Alignment, FlowEnd, FlowTerm, Flows};
+use crate::ty::{Concrete, Mutability, Ty, TyKind, Types};
 use crate::validate::move_check::is_move_only;
 use crate::validate::type_check::{ConflictTouch, ValidationError, ValidationErrorKind};
 use acvus_ast::Span;
@@ -23,10 +23,11 @@ use acvus_ast::report::Label;
 
 /// The exclusion rule alone, which holds of a module at any point in the
 /// pipeline.
-pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
+pub fn check_borrows(module: &MirModule, decls: &Declarations) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let promoted = Promoted::of(module);
-    for checking in Bodies::of(&promoted).all() {
+    let layout = Layout::new(&module.types, decls);
+    for checking in Bodies::of(&promoted, layout).all() {
         checking.check_exclusion(&mut errors);
     }
     errors
@@ -41,10 +42,10 @@ pub fn check_borrows(module: &MirModule) -> Vec<ValidationError> {
 /// and that is a decision: the flows are the checker's inference from the
 /// source, and a pass that splices a callee into its caller leaves a body
 /// whose outputs the inference never saw.
-pub fn check_outputs_and_borrows(module: &MirModule) -> Vec<ValidationError> {
+pub fn check_outputs_and_borrows(module: &MirModule, decls: &Declarations) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let promoted = Promoted::of(module);
-    let bodies = Bodies::of(&promoted);
+    let bodies = Bodies::of(&promoted, Layout::new(&module.types, decls));
     let made = closure_flows(module);
     for (label, checking) in &bodies.closures {
         for flows in made.get(label).into_iter().flatten() {
@@ -72,8 +73,11 @@ fn closure_flows(module: &MirModule) -> FxHashMap<ClosureLabel, Vec<Flows>> {
             else {
                 continue;
             };
-            let flows = match body.val_types.get(dst) {
-                Some(Ty::Fn { flows, .. }) => flows.get().clone(),
+            let flows = match body.val_types.get(dst).map(|ty| module.types.kind(*ty)) {
+                Some(TyKind::Fn {
+                    flows: FlowTerm::Known(flows),
+                    ..
+                }) => flows.clone(),
                 // A closure the validator finds untyped is refused there;
                 // the union is what it is checked against here.
                 Some(_) | None => Flows::Every,
@@ -117,16 +121,16 @@ struct Bodies<'cfg> {
 }
 
 impl<'cfg> Bodies<'cfg> {
-    fn of(promoted: &'cfg Promoted) -> Self {
+    fn of(promoted: &'cfg Promoted, layout: Layout<'cfg>) -> Self {
         Self {
             main: promoted
                 .main
                 .as_ref()
-                .map(|cfg| Checking::of("main".to_string(), cfg)),
+                .map(|cfg| Checking::of("main".to_string(), cfg, layout)),
             closures: promoted
                 .closures
                 .iter()
-                .map(|(label, cfg)| (*label, Checking::of(format!("closure({label:?})"), cfg)))
+                .map(|(label, cfg)| (*label, Checking::of(format!("closure({label:?})"), cfg, layout)))
                 .collect(),
         }
     }
@@ -162,8 +166,8 @@ struct Output {
 }
 
 impl<'cfg> Checking<'cfg> {
-    fn of(scope: String, cfg: &'cfg CfgBody) -> Self {
-        let loans = Loans::build(cfg);
+    fn of(scope: String, cfg: &'cfg CfgBody, layout: Layout<'cfg>) -> Self {
+        let loans = Loans::build(cfg, layout.types, layout.decls);
         let sites = HolderSites::of(&loans);
         Self {
             scope,
@@ -185,7 +189,11 @@ impl<'cfg> Checking<'cfg> {
                 continue;
             };
             let regions = self.loans.regions(value);
-            let width = self.cfg().val_types.get(&value).map_or(0, positions);
+            let width = self
+                .cfg()
+                .val_types
+                .get(&value)
+                .map_or(0, |ty| self.loans.layout().positions(*ty));
             for position in 0..width {
                 for loan in regions.position(position) {
                     outputs.push(Output {
@@ -232,7 +240,12 @@ impl<'cfg> Checking<'cfg> {
             .iter()
             .find_map(|block| match block.terminator {
                 Terminator::Return { value, .. } => {
-                    Some(self.cfg().val_types.get(&value).map_or(0, positions))
+                    Some(
+                        self.cfg()
+                            .val_types
+                            .get(&value)
+                            .map_or(0, |ty| self.loans.layout().positions(*ty)),
+                    )
                 }
                 _ => None,
             });
@@ -299,7 +312,7 @@ impl<'cfg> Checking<'cfg> {
                 .params
                 .get(index)
                 .and_then(|(_, value)| self.cfg().val_types.get(value))
-                .map(positions),
+                .map(|ty| self.loans.layout().positions(*ty)),
             FlowEnd::Captures => Some(1),
             FlowEnd::Result => None,
         };
@@ -313,15 +326,12 @@ impl<'cfg> Checking<'cfg> {
 // -- Exclusion ---------------------------------------------------------
 
 /// A `Take` whose result has no type entry is checked as a move: the
-/// stricter reading, so a missing type never hides a conflict. A result
-/// typed `<error>` is already reported by the type checker and moves
-/// nothing here.
+/// stricter reading, so a missing type never hides a conflict.
 const UNTYPED_TAKE_MOVES: bool = true;
 
-fn take_moves(val_types: &FxHashMap<ValueId, Ty>, dst: &ValueId) -> bool {
+fn take_moves(types: &Types<Concrete>, val_types: &FxHashMap<ValueId, Ty>, dst: &ValueId) -> bool {
     match val_types.get(dst) {
-        Some(ty) if ty.is_error() => false,
-        Some(ty) => is_move_only(ty).unwrap_or(UNTYPED_TAKE_MOVES),
+        Some(ty) => is_move_only(types, *ty),
         None => UNTYPED_TAKE_MOVES,
     }
 }
@@ -371,7 +381,7 @@ enum Touched {
 /// the storage's own reference (RFC-0029), taken again: it touches, through
 /// the storage, what each position of the storage the value is read from
 /// names, as the loan's mutability does.
-fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(Touched, Touch)> {
+fn touches(layout: Layout<'_>, kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(Touched, Touch)> {
     match kind {
         InstKind::Ref {
             target, mutability, ..
@@ -385,13 +395,13 @@ fn touches(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> Vec<(Touched,
             let mut touches = vec![(
                 Touched::Place(target.clone()),
                 Touch::Take {
-                    moves: take_moves(val_types, dst),
+                    moves: take_moves(layout.types, val_types, dst),
                 },
             )];
             if let Some(slot) = inst_info::storage(target)
                 && let (Some(slot_ty), Some(taken)) = (val_types.get(&slot), val_types.get(dst))
             {
-                touches.extend(held_positions(slot_ty, path, taken).into_iter().map(
+                touches.extend(layout.held_positions(*slot_ty, path, *taken).into_iter().map(
                     |(position, mutability)| {
                         (
                             Touched::Held { slot, position },
@@ -457,6 +467,7 @@ fn reached(
     touched: &Touched,
     loans: &Loans<'_>,
     regions: &RegionsAt<'_>,
+    types: &Types<Concrete>,
     val_types: &FxHashMap<ValueId, Ty>,
 ) -> Reached {
     match touched {
@@ -474,7 +485,10 @@ fn reached(
         Touched::Place(RefTarget::Param(s)) => Reached {
             storage: vec![at_place(loans.storage_of(*s))],
             via: Via::new().with(*s),
-            at_place: !matches!(val_types.get(s), Some(Ty::Ref(..) | Ty::Fn { .. })),
+            at_place: !matches!(
+                val_types.get(s).map(|ty| types.kind(*ty)),
+                Some(TyKind::Ref(..) | TyKind::Fn { .. })
+            ),
         },
         Touched::Place(RefTarget::Through(r)) => {
             let held = regions.regions(*r);
@@ -729,8 +743,9 @@ impl Checking<'_> {
             // not by every loan it takes anywhere in the body.
             let mut regions = self.loans.at_entry(BlockIdx(bi));
             for (ii, inst) in block.insts.iter().enumerate() {
-                for (target, touch) in touches(&inst.kind, &self.cfg().val_types) {
-                    let reach = reached(&target, &self.loans, &regions, &self.cfg().val_types);
+                let layout = self.loans.layout();
+                for (target, touch) in touches(layout, &inst.kind, &self.cfg().val_types) {
+                    let reach = reached(&target, &self.loans, &regions, layout.types, &self.cfg().val_types);
                     let mut holders: Vec<ValueId> = live_before[ii]
                         .iter()
                         .copied()
@@ -897,7 +912,6 @@ mod tests {
             val_factory: factory,
             label_count: 2,
             order_param: None,
-            task: crate::ty::Task::Sync,
         }
     }
 
@@ -907,7 +921,7 @@ mod tests {
             main,
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
-            flows: crate::ty::Flows::Every,
+            flows: crate::flows::Flows::Every,
         }
     }
 

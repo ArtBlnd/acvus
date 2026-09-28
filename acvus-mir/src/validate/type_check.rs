@@ -17,6 +17,7 @@ use crate::ir::{
 };
 use crate::ir::{ExternInstance, ForSource, IndexMode};
 use crate::ty::{CastTy, Mutability, Ty, TypeArg};
+use crate::decl::Declarations;
 use crate::validate::move_check::is_move_only;
 use acvus_ast::{Literal, Span};
 
@@ -219,8 +220,8 @@ pub enum ValidationErrorKind {
     /// flows do not name (RFC-0079 rule 5): the checker's inference of the
     /// flows missed what the body does.
     FlowNotStated {
-        to: crate::ty::FlowEnd,
-        from: crate::ty::FlowEnd,
+        to: crate::flows::FlowEnd,
+        from: crate::flows::FlowEnd,
     },
     /// A parameter's register is storage the call fills before the body's
     /// first instruction. Any other register is a definition, and
@@ -263,7 +264,7 @@ impl ConflictTouch {
 // ---------------------------------------------------------------------------
 
 /// Check type consistency of the entire module.  Returns all errors found.
-pub fn check_types(module: &MirModule) -> Vec<ValidationError> {
+pub fn check_types(module: &MirModule, decls: &Declarations) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     let declared = declared_closure_returns(module);
@@ -1939,7 +1940,7 @@ impl CheckCtx {
                 }
             }
 
-            // === Spawn / Eval ===
+            // === Spawn / TakeEffect ===
             InstKind::Spawn {
                 dst,
                 callee,
@@ -2016,21 +2017,21 @@ impl CheckCtx {
                 }
             }
 
-            InstKind::Eval { dst, src, order } => {
+            InstKind::TakeEffect { dst, src, order } => {
                 if let Some(o) = order {
                     self.expect_order(*o, vt, span, pc, errors);
                 }
                 let src_ty = ty!(*src);
                 if let Ty::Handle(inner) = src_ty {
                     let dst_ty = ty!(*dst);
-                    self.assert_match(pc, span, "Eval", "dst", inner, dst_ty, errors);
+                    self.assert_match(pc, span, "TakeEffect", "dst", inner, dst_ty, errors);
                 } else if !src_ty.is_error() {
                     errors.push(ValidationError {
                         scope: self.scope_name.clone(),
                         inst_index: pc,
                         span,
                         kind: ValidationErrorKind::InvalidConstructor {
-                            inst_name: "Eval".to_string(),
+                            inst_name: "TakeEffect".to_string(),
                             expected_constructor: "Handle".to_string(),
                             actual: src_ty.clone(),
                         },
@@ -2500,11 +2501,10 @@ mod tests {
                 val_factory: LocalFactory::new(),
                 label_count: 10,
                 order_param: None,
-                task: crate::ty::Task::Sync,
             },
             closures: FxHashMap::default(),
             ret: crate::ty::Ty::Unit,
-            flows: crate::ty::Flows::Every,
+            flows: crate::flows::Flows::Every,
         }
     }
 
@@ -2523,7 +2523,7 @@ mod tests {
                 ret: Box::new(declared),
                 captures: Vec::new(),
                 effect: crate::ty::Effect::PURE.into(),
-                flows: crate::ty::Flows::Every.into(),
+                flows: crate::flows::Flows::Every.into(),
             },
         );
         let mut module = make_module(

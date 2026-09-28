@@ -16,18 +16,28 @@
 use crate::analysis::loop_deps::{BodyDeps, HeaderDeps};
 use crate::cfg::promote;
 use crate::ir::{InstKind, Label, MirBody, MirModule};
+use crate::decl::Declarations;
 use crate::laws::LawTable;
+use crate::ty::{Concrete, Types};
+
 use crate::validate::{ValidationError, ValidationErrorKind};
 
-pub fn check(module: &MirModule, laws: &LawTable) -> Vec<ValidationError> {
-    let mut errors = check_body("main", &module.main, laws);
+pub fn check(module: &MirModule, decls: &Declarations, laws: &LawTable) -> Vec<ValidationError> {
+    let types = &module.types;
+    let mut errors = check_body("main", &module.main, types, decls, laws);
     for (label, closure) in &module.closures {
-        errors.extend(check_body(&format!("closure({label:?})"), closure, laws));
+        errors.extend(check_body(&format!("closure({label:?})"), closure, types, decls, laws));
     }
     errors
 }
 
-fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationError> {
+fn check_body(
+    scope: &str,
+    body: &MirBody,
+    types: &Types<Concrete>,
+    decls: &Declarations,
+    laws: &LawTable,
+) -> Vec<ValidationError> {
     let mut stated_at: Vec<StatedAt> = Vec::new();
     let mut block = crate::cfg::ENTRY_LABEL;
     for (at, inst) in body.insts.iter().enumerate() {
@@ -44,7 +54,7 @@ fn check_body(scope: &str, body: &MirBody, laws: &LawTable) -> Vec<ValidationErr
     }
     let cfg = promote(body.clone());
     let mut errors: Vec<ValidationError> = Vec::new();
-    for HeaderDeps { header, deps } in BodyDeps::of(&cfg, laws).loops {
+    for HeaderDeps { header, deps } in BodyDeps::of(&cfg, types, decls, laws).loops {
         let header = cfg.blocks[header.0].label;
         let inst_index = stated_at
             .iter()
@@ -242,14 +252,13 @@ mod tests {
                 params: Vec::new(),
                 captures: Vec::new(),
                 order_param: None,
-                task: Task::Sync,
                 debug: DebugInfo::new(),
                 val_factory: factory,
                 label_count: 9,
             },
             closures: FxHashMap::default(),
             ret: Ty::I64,
-            flows: crate::ty::Flows::Every,
+            flows: crate::flows::Flows::Every,
         }
     }
 
@@ -507,7 +516,7 @@ mod tests {
             let t = position(insts, defines(T));
             insts.insert(
                 t + 1,
-                InstKind::Eval {
+                InstKind::TakeEffect {
                     dst: v(SPARE),
                     src: v(I),
                     order: None,
