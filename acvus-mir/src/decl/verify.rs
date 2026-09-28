@@ -4,6 +4,7 @@ use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::casts::{Base, CastTree, Head, VerifiedExternCast};
+use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::instance_fit::is_instance_of;
 use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, TyVarBound, UserTypeDecl};
@@ -28,10 +29,10 @@ pub enum Refused {
     /// An end's labels are not one per segment of its declared type, or
     /// name a lifetime the signature does not have.
     LabelsDoNotFit { declaration: QualifiedRef },
-    /// A declared cast, or a view instance, whose `from` or `to` has no
-    /// head the tree can step between: a type variable, `!`, the order
-    /// token, a started call, or a reference to one of those. A tree step
-    /// joins two heads (types §3).
+    /// A declared cast, a view instance or a declared conversion whose
+    /// `from` or `to` has no head: a type variable, `!`, the order token, a
+    /// started call, or a reference to one of those. A tree step joins two
+    /// heads (types §3), and so does a conversion (types §7).
     CastWithoutHead { via: QualifiedRef },
     /// An instance whose type is not its shared signature's type at some
     /// choice of the signature's variables (extern-fn §6).
@@ -83,6 +84,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         functions,
         user_types,
         casts,
+        conversions,
         contexts,
         inputs,
         loop_markers,
@@ -97,6 +99,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
             functions: &functions,
             user_types: &user_types,
             casts: &casts,
+            conversions: &conversions,
             contexts: &contexts,
             inputs: &inputs,
         },
@@ -113,6 +116,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let inputs = first_stands(inputs, &mut refused, |name| Refused::DuplicateInput { name });
     let misfits = refuse_misfit_instances(&types, &declared_order, &functions, &mut refused);
     let casts = cast_tree(&types, &casts, &functions, &misfits, &core, &mut refused);
+    let conversions = conversions_by_head(&types, conversions, &mut refused);
 
     let mut decls = Declarations {
         types,
@@ -120,6 +124,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         overloads,
         user_types,
         casts,
+        conversions,
         contexts,
         inputs,
         loop_markers,
@@ -355,6 +360,7 @@ struct DeclaredTypes<'d> {
     functions: &'d [(QualifiedRef, Scheme)],
     user_types: &'d FxHashMap<QualifiedRef, UserTypeDecl>,
     casts: &'d [CastRule],
+    conversions: &'d [ConversionRule],
     contexts: &'d [(QualifiedRef, TyId<Poly>)],
     inputs: &'d [(Astr, TyId<Poly>)],
 }
@@ -397,9 +403,18 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
         .casts
         .iter()
         .flat_map(|rule| [(Written::Cast(rule.via), rule.from), (Written::Cast(rule.via), rule.to)]);
+    let conversions = declared
+        .conversions
+        .iter()
+        .flat_map(|rule| [(Written::Cast(rule.via), rule.from), (Written::Cast(rule.via), rule.to)]);
     let contexts = declared.contexts.iter().map(|(id, ty)| (Written::Context(*id), *ty));
     let inputs = declared.inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
-    functions.chain(user_types).chain(casts).chain(contexts).chain(inputs)
+    functions
+        .chain(user_types)
+        .chain(casts)
+        .chain(conversions)
+        .chain(contexts)
+        .chain(inputs)
 }
 
 /// extern-fn §8: a type term names only declared types; effects §3, §6:
@@ -570,7 +585,11 @@ fn cast_tree(
         .cloned()
         .map(Ok)
         .chain(view_rules(types, functions, misfits, core))
-        .filter(|rule| !rule.as_ref().is_ok_and(|rule| ends_in_reference_to_reference(types, rule)));
+        .filter(|rule| {
+            !rule
+                .as_ref()
+                .is_ok_and(|rule| ends_in_reference_to_reference(types, [rule.from, rule.to]))
+        });
     let mut steps = Vec::new();
     for rule in rules {
         match rule.and_then(|rule| Step::of(types, rule)) {
@@ -599,13 +618,38 @@ fn cast_tree(
     tree
 }
 
-/// Whether an end of `rule` is a reference to a reference, which is
-/// refused as `ReferenceToReference` and has no head (types §4).
-fn ends_in_reference_to_reference(types: &Types<Poly>, rule: &CastRule) -> bool {
-    [rule.from, rule.to].into_iter().any(|end| match types.kind(end) {
+/// Whether a cast's or a conversion's `from` or `to` is a reference to a
+/// reference, which is refused as `ReferenceToReference` and has no head
+/// (types §4).
+fn ends_in_reference_to_reference(types: &Types<Poly>, ends: [TyId<Poly>; 2]) -> bool {
+    ends.into_iter().any(|end| match types.kind(end) {
         TyKind::Ref(_, target) => matches!(types.kind(target.ty()), TyKind::Ref(..)),
         _ => false,
     })
+}
+
+/// The declared conversions by the head they convert from (extern-fn §7).
+/// Each joins two heads, as a tree step does, but none is a step: a head
+/// may have several, and they form no tree (types §7).
+fn conversions_by_head(
+    types: &Types<Poly>,
+    conversions: Vec<ConversionRule>,
+    refused: &mut Vec<Refused>,
+) -> FxHashMap<Head, Box<[VerifiedConversion]>> {
+    let mut by_head: FxHashMap<Head, Vec<VerifiedConversion>> = FxHashMap::default();
+    for rule in conversions {
+        if ends_in_reference_to_reference(types, [rule.from, rule.to]) {
+            continue;
+        }
+        match (head(types, rule.from), head(types, rule.to)) {
+            (Some(from), Some(_)) => by_head.entry(from).or_default().push(VerifiedConversion(rule)),
+            (None, _) | (_, None) => refused.push(Refused::CastWithoutHead { via: rule.via }),
+        }
+    }
+    by_head
+        .into_iter()
+        .map(|(head, conversions)| (head, conversions.into_boxed_slice()))
+        .collect()
 }
 
 /// Each instance of `core::as_slice`, `core::as_slice_mut` and
@@ -1059,6 +1103,7 @@ mod tests {
                     functions: Vec::new(),
                     user_types: Vec::new(),
                     casts: Vec::new(),
+                    conversions: Vec::new(),
                     contexts: Vec::new(),
                     inputs: Vec::new(),
                     loop_markers: LoopMarkers::default(),
@@ -1823,6 +1868,90 @@ mod tests {
         let to = fixture.ty(TyKind::String);
         fixture.raw.casts.push(CastRule { from, to, via });
         assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via }]);
+    }
+
+    /// types §7: a conversion joins two heads, as a tree step does; a type
+    /// variable has none.
+    #[test]
+    fn a_conversion_without_a_head_is_refused() {
+        let mut fixture = Fixture::new();
+        let via = fixture.name("m", "from_any");
+        let from = fixture.ty(TyKind::Var(0));
+        let to = fixture.ty(TyKind::String);
+        fixture.raw.conversions.push(ConversionRule { from, to, via });
+        assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via }]);
+    }
+
+    /// extern-fn §7, types §7: a conversion is no tree step, so a head may
+    /// have several, even to one head, and a head with a cast up may have
+    /// conversions too.
+    #[test]
+    fn several_conversions_from_one_head_are_taken_in() {
+        let mut fixture = Fixture::new();
+        let (parse, parse_again, widen) = (
+            fixture.name("m", "parse"),
+            fixture.name("m", "parse_again"),
+            fixture.name("m", "widen"),
+        );
+        let (string, i32_, i64_) = (
+            fixture.ty(TyKind::String),
+            fixture.ty(TyKind::Int(IntTy::I32)),
+            fixture.ty(TyKind::Int(IntTy::I64)),
+        );
+        fixture.raw.casts.push(CastRule {
+            from: i32_,
+            to: i64_,
+            via: widen,
+        });
+        for (from, via) in [(string, parse), (string, parse_again), (i32_, parse)] {
+            fixture.raw.conversions.push(ConversionRule { from, to: i64_, via });
+        }
+        let decls = fixture.verify().expect("conversions form no tree");
+        let vias = |head| {
+            decls
+                .conversions_from(head)
+                .iter()
+                .map(|conversion| conversion.rule().via)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(vias(Head::Base(Base::String)), vec![parse, parse_again]);
+        assert_eq!(vias(Head::Base(Base::Int(IntTy::I32))), vec![parse]);
+        assert_eq!(vias(Head::Base(Base::Int(IntTy::I64))), Vec::new());
+    }
+
+    /// types §4: a conversion's types are declared types, and a reference's
+    /// target is never a reference; it is refused as that alone.
+    #[test]
+    fn a_conversion_from_a_reference_to_a_reference_is_refused() {
+        let mut fixture = Fixture::new();
+        let via = fixture.name("m", "deref");
+        let string = fixture.ty(TyKind::String);
+        let inner = fixture.reference(Mutability::Shared, string);
+        let from = fixture.reference(Mutability::Shared, inner);
+        fixture.raw.conversions.push(ConversionRule { from, to: string, via });
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::ReferenceToReference {
+                written: Written::Cast(via)
+            }]
+        );
+    }
+
+    /// extern-fn §8: a type a conversion names is declared.
+    #[test]
+    fn a_conversion_naming_an_undeclared_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let (via, ghost) = (fixture.name("m", "to_ghost"), fixture.name("m", "Ghost"));
+        let from = fixture.ty(TyKind::String);
+        let to = undeclared(&mut fixture, ghost);
+        fixture.raw.conversions.push(ConversionRule { from, to, via });
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::UndeclaredType {
+                written: Written::Cast(via),
+                id: ghost
+            }]
+        );
     }
 
     /// types §6: two declarations under one qualified name cannot be told

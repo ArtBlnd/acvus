@@ -359,6 +359,7 @@ mod tests {
             functions: Vec::new(),
             user_types: Vec::new(),
             casts: Vec::new(),
+            conversions: Vec::new(),
             contexts: Vec::new(),
             inputs: Vec::new(),
             loop_markers: LoopMarkers::default(),

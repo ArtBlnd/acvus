@@ -2,7 +2,7 @@ use acvus_utils::{Astr, Interner, LocalIdOps, QualifiedRef};
 
 use super::*;
 use crate::decl::{
-    CastRule, CastTree, Core, Declarations, Head, LoopMarkers, RawDeclarations, Requirement, Scheme, TyVarBound,
+    CastRule, CastTree, ConversionRule, Core, Declarations, Head, LoopMarkers, RawDeclarations, Requirement, Scheme, TyVarBound,
 };
 use crate::ty::{
     Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
@@ -653,6 +653,7 @@ fn raw(names: &Interner, types: Types<Poly>, functions: Vec<(QualifiedRef, Schem
         functions,
         user_types: Vec::new(),
         casts,
+        conversions: Vec::new(),
         contexts: Vec::new(),
         inputs: Vec::new(),
         loop_markers: LoopMarkers::default(),
@@ -678,11 +679,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     let t = types.intern(TyKind::Var(0));
     let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(x, t)]), ())));
     let option = types.intern(TyKind::Option(t));
-    let signature = pure_fn(
-        &mut types,
-        vec![object, t],
-        option,
-    );
+    let signature = pure_fn(&mut types, vec![object, t], option);
     let integer = TyVarBound::Integer {
         signed: true,
         among: Box::new([IntTy::I32, IntTy::I64]),
@@ -855,13 +852,24 @@ fn with_casts(
     user_types: Vec<crate::decl::UserTypeDecl>,
     casts: &[(&str, crate::ty::TyId<Poly>, crate::ty::TyId<Poly>)],
 ) -> Declarations {
+    with_casts_and_conversions(names, types, user_types, casts, &[])
+}
+
+/// Declarations whose casts and conversions are `from -> to` through a
+/// one-parameter function named `via`, each of its own types.
+fn with_casts_and_conversions(
+    names: &Interner,
+    types: Types<Poly>,
+    user_types: Vec<crate::decl::UserTypeDecl>,
+    casts: &[(&str, crate::ty::TyId<Poly>, crate::ty::TyId<Poly>)],
+    conversions: &[(&str, crate::ty::TyId<Poly>, crate::ty::TyId<Poly>)],
+) -> Declarations {
     let mut types = types;
     let v = names.intern("v");
     let mut functions = Vec::new();
-    let mut rules = Vec::new();
-    for (via, from, to) in casts {
+    let mut declare = |types: &mut Types<Poly>, via: &str, from, to| {
         let via = QualifiedRef::root(names.intern(via));
-        let ty = pure_fn(&mut types, vec![*from], *to);
+        let ty = pure_fn(types, vec![from], to);
         functions.push((
             via,
             Scheme {
@@ -872,14 +880,29 @@ fn with_casts(
                 requires: Box::new([]),
             },
         ));
-        rules.push(CastRule {
+        via
+    };
+    let mut cast_rules = Vec::new();
+    for (via, from, to) in casts {
+        let via = declare(&mut types, via, *from, *to);
+        cast_rules.push(CastRule {
             from: *from,
             to: *to,
             via,
         });
     }
-    let mut raw = raw(names, types, functions, rules);
+    let mut conversion_rules = Vec::new();
+    for (via, from, to) in conversions {
+        let via = declare(&mut types, via, *from, *to);
+        conversion_rules.push(ConversionRule {
+            from: *from,
+            to: *to,
+            via,
+        });
+    }
+    let mut raw = raw(names, types, functions, cast_rules);
     raw.user_types = user_types;
+    raw.conversions = conversion_rules;
     Declarations::verify(raw).expect("verified")
 }
 
@@ -965,14 +988,82 @@ fn a_slot_folds_its_values_to_their_nearest_common_ancestor() {
 }
 
 /// types §3, §7: where no subtyping relates a value and its slot, and no
-/// declared conversion takes one to the other, they do not meet.
+/// declared conversion takes one to the other, they do not meet, and the
+/// refusal names no conversion.
 #[test]
 fn a_value_and_a_slot_of_no_common_ancestor_do_not_meet() {
     let mut fx = Fixture::new();
     let decls = widening(&fx.names);
     let (i8_, string) = (fx.int(IntTy::I8), fx.kind(TyKind::String));
     let (value, slot) = (fx.held(string), fx.held(i8_));
-    assert_eq!(fx.enter(&decls, value, slot), Err(Mismatch::Heads { a: string, b: i8_ }));
+    assert_eq!(
+        fx.enter(&decls, value, slot),
+        Err(Mismatch::Conversions {
+            candidates: Box::new([])
+        })
+    );
+}
+
+/// `i8 -> i64` and `i16 -> i64` as casts, and as conversions `String ->
+/// i64` through `parse`, `String -> i16` through `parse16`, and, where
+/// `twice`, `String -> i64` through `parse_again`.
+fn parsing(names: &Interner, twice: bool) -> Declarations {
+    let mut types = Types::<Poly>::new();
+    let (i8_, i16_, i64_, string) = (
+        types.intern(TyKind::Int(IntTy::I8)),
+        types.intern(TyKind::Int(IntTy::I16)),
+        types.intern(TyKind::Int(IntTy::I64)),
+        types.intern(TyKind::String),
+    );
+    let mut conversions = vec![("parse", string, i64_), ("parse16", string, i16_)];
+    if twice {
+        conversions.push(("parse_again", string, i64_));
+    }
+    with_casts_and_conversions(
+        names,
+        types,
+        Vec::new(),
+        &[("widen8", i8_, i64_), ("widen16", i16_, i64_)],
+        &conversions,
+    )
+}
+
+/// types §7: where no subtyping relates a value and its slot, the one
+/// declared conversion from the value's head to the slot's applies, and
+/// the slot takes the type it converts to.
+#[test]
+fn a_value_converts_by_the_one_conversion_to_its_slots_head() {
+    let mut fx = Fixture::new();
+    let decls = parsing(&fx.names, false);
+    let (i64_, string) = (fx.int(IntTy::I64), fx.kind(TyKind::String));
+    let (value, slot) = (fx.held(string), fx.held(i64_));
+    let parse = QualifiedRef::root(fx.name("parse"));
+    let Ok(Entered::Converted(conversion)) = fx.enter(&decls, value, slot) else {
+        panic!("String enters an i64 slot by parse")
+    };
+    assert_eq!(conversion.rule().via, parse);
+    assert_eq!(fx.infer.shallow(slot), i64_);
+    assert_eq!(fx.infer.shallow(value), string, "the value keeps its type");
+}
+
+/// types §7: where several declared conversions apply, the value does not
+/// enter, and the refusal names every one that left it undecided.
+#[test]
+fn several_conversions_to_the_slots_head_are_refused_by_name() {
+    let mut fx = Fixture::new();
+    let decls = parsing(&fx.names, true);
+    let (i64_, string) = (fx.int(IntTy::I64), fx.kind(TyKind::String));
+    let (value, slot) = (fx.held(string), fx.held(i64_));
+    let (parse, parse_again) = (
+        QualifiedRef::root(fx.name("parse")),
+        QualifiedRef::root(fx.name("parse_again")),
+    );
+    assert_eq!(
+        fx.enter(&decls, value, slot),
+        Err(Mismatch::Conversions {
+            candidates: Box::new([parse, parse_again])
+        })
+    );
 }
 
 /// types §3: a slot no variable holds cannot move up the tree.
@@ -1070,13 +1161,19 @@ fn two_identities_meet_past_every_identity_carrying_ancestor() {
     assert_eq!(fx.infer.types().kind(fx.infer.shallow(slot)), &TyKind::String);
 }
 
-/// types §3: two identities with no identity-free common ancestor do not
-/// meet; no identity is made to join two others.
+/// types §3, §7: two identities with no identity-free common ancestor do
+/// not meet, and no conversion takes one to the other; no identity is made
+/// to join two others.
 #[test]
 fn two_identities_with_no_identity_free_ancestor_do_not_meet() {
     let mut fx = Fixture::new();
     let decls = identities(&fx.names, false);
     let (first, second) = (fx.token(0), fx.token(1));
     let (value, slot) = (fx.held(second), fx.held(first));
-    assert_eq!(fx.enter(&decls, value, slot), Err(Mismatch::Heads { a: second, b: first }));
+    assert_eq!(
+        fx.enter(&decls, value, slot),
+        Err(Mismatch::Conversions {
+            candidates: Box::new([])
+        })
+    );
 }

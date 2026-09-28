@@ -1,14 +1,15 @@
 //! The declarations the compiler takes in (rfc_compiler: extern fn, context,
 //! programs §4), verified once. A `Declarations` exists only as
 //! `Declarations::verify` built it, so every reader holds a verified set:
-//! the casts form a tree (types §3), every requirement is smaller than its
-//! declaration (extern-fn §6), and no declaration carries an array type
-//! (extern-fn §1).
+//! the casts form a tree (types §3), every cast and conversion joins two
+//! heads, every requirement is smaller than its declaration (extern-fn §6),
+//! and no declaration carries an array type (extern-fn §1).
 //!
 //! Every declared type lives in the one `Types<Poly>` table the set owns.
 
 mod bound;
 mod casts;
+mod conversions;
 mod core;
 mod instance_fit;
 mod labels;
@@ -24,6 +25,7 @@ use crate::ty::{LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
 pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
+pub use conversions::{ConversionRule, VerifiedConversion};
 pub use core::{Core, Tags};
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
@@ -38,6 +40,7 @@ pub struct RawDeclarations {
     pub functions: Vec<(QualifiedRef, Scheme)>,
     pub user_types: Vec<UserTypeDecl>,
     pub casts: Vec<CastRule>,
+    pub conversions: Vec<ConversionRule>,
     /// Each context with its fixed type (context).
     pub contexts: Vec<(QualifiedRef, TyId<Poly>)>,
     /// Each input `$x` with its type (programs §4).
@@ -56,6 +59,8 @@ pub struct Declarations {
     overloads: FxHashMap<Astr, Box<[QualifiedRef]>>,
     user_types: FxHashMap<QualifiedRef, UserTypeDecl>,
     casts: CastTree,
+    /// Each head's declared conversions, in declaration order.
+    conversions: FxHashMap<Head, Box<[VerifiedConversion]>>,
     contexts: FxHashMap<QualifiedRef, TyId<Poly>>,
     inputs: FxHashMap<Astr, TyId<Poly>>,
     loop_markers: LoopMarkers,
@@ -87,6 +92,11 @@ impl Declarations {
 
     pub fn casts(&self) -> &CastTree {
         &self.casts
+    }
+
+    /// The declared conversions from a value of `head`; empty when none.
+    pub fn conversions_from(&self, head: Head) -> &[VerifiedConversion] {
+        self.conversions.get(&head).map_or(&[], |all| all)
     }
 
     pub fn context(&self, context: QualifiedRef) -> Option<TyId<Poly>> {

@@ -4,7 +4,7 @@ use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
 use super::{Bound, Infer, Term, VarState};
-use crate::decl::{CastRule, Declarations, Scheme, TyVarBound};
+use crate::decl::{Declarations, Scheme, TyVarBound};
 use crate::laws::NamedLaw;
 use crate::ty::{
     EffectArg, EffectTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
@@ -92,12 +92,12 @@ impl Infer {
         Instantiated { ty, requirements }
     }
 
-    /// A cast's two patterns at one use, sharing their fresh variables
-    /// (extern-fn §7).
-    pub(super) fn instantiate_cast(&mut self, poly: &Types<Poly>, rule: &CastRule) -> (Term, Term) {
+    /// A cast's or a conversion's two patterns at one use, sharing their
+    /// fresh variables (extern-fn §7).
+    pub(super) fn instantiate_ends(&mut self, poly: &Types<Poly>, from: TyId<Poly>, to: TyId<Poly>) -> (Term, Term) {
         let mut at = AtUse::new(poly, Placeholders::Unbounded);
-        let from = self.instantiate_ty(&mut at, rule.from);
-        let to = self.instantiate_ty(&mut at, rule.to);
+        let from = self.instantiate_ty(&mut at, from);
+        let to = self.instantiate_ty(&mut at, to);
         (from, to)
     }
 

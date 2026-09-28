@@ -15,7 +15,7 @@ use super::cells::{End as CellEnd, MarkTerm, Unequal};
 use super::{End, Infer, Mark, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
-use crate::decl::{Base, Declarations, Head, VerifiedExternCast};
+use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::{
     Calls, Effect, EffectArg, EffectTerm, Flows, Holds, IdentityTerm, Infer as InferPhase, Label, ObjectTy,
     TyKind, TyVarId, TypeArg,
@@ -36,6 +36,10 @@ pub enum Mismatch {
     TwoEnums { a: QualifiedRef, b: QualifiedRef },
     /// A variable's bound does not admit the term.
     Bound { var: TyVarId, term: Term },
+    /// No subtyping relates a value and its slot, and not exactly one
+    /// declared conversion takes the value's head to the slot's: these are
+    /// the ones that do, none or several (types §7).
+    Conversions { candidates: Box<[QualifiedRef]> },
     /// `#` on one side only (types §8).
     Mark { a: Term, b: Term },
 }
@@ -46,7 +50,7 @@ pub enum Entered {
     /// The slot took the value's type, or folded it up the tree.
     Folded,
     /// The value converts to the slot through one declared conversion.
-    Converted(VerifiedExternCast),
+    Converted(VerifiedConversion),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,14 +162,11 @@ impl Infer {
     }
 
     /// A value entering a slot (types §3, §7): once the value's head is
-    /// closed, the slot folds it by ⊔ along the cast tree, or the value
-    /// converts by exactly one declared conversion.
+    /// closed, the slot folds it by ⊔ along the cast tree; where the two
+    /// have no common ancestor, the value converts by the one declared
+    /// conversion from its head to the slot's.
     /// The value is closed: a decision fires only on closed terms (types §6),
     /// and the caller checked with `closed`.
-    ///
-    /// Every declared cast is a step of the tree (extern-fn §7, `verify`),
-    /// so two heads no step path relates have no declared conversion
-    /// between them either: that is a mismatch.
     pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
         let (holder, slot_node) = match self.end(slot) {
             End::Unbound(var, _) => {
@@ -182,10 +183,10 @@ impl Infer {
         let target = match self.head_of(slot_node) {
             None => None,
             Some(slot_head) if value.head == never || slot_head == never => None,
-            Some(slot_head) => {
-                let target = self.nearest_common_ancestor(decls, value, slot_node, slot_head);
-                Some((slot_head, target.ok_or(mismatch.clone())?))
-            }
+            Some(slot_head) => match self.nearest_common_ancestor(decls, value, slot_node, slot_head) {
+                Some(target) => Some((slot_head, target)),
+                None => return self.convert(decls, value, slot_head, holder, slot_node),
+            },
         };
         let (value_at, slot_at) = match target {
             None => (value.term, slot_node),
@@ -194,14 +195,58 @@ impl Infer {
                 self.climb(decls, slot_node, slot_head, target)?,
             ),
         };
+        self.settle_slot(holder, slot_node, slot_at, value_at, mismatch)?;
+        Ok(Entered::Folded)
+    }
+
+    /// A value of no common ancestor with its slot converts by the one
+    /// declared conversion from its head to the slot's (types §7): the
+    /// conversion's `from` pattern is made one with the value, and its `to`
+    /// pattern enters the slot as a value of the slot's head.
+    fn convert(
+        &mut self,
+        decls: &Declarations,
+        value: Closed,
+        slot_head: Head,
+        holder: Option<(TyVarId, Term)>,
+        slot_node: Term,
+    ) -> Result<Entered, Mismatch> {
+        let applying: Vec<&VerifiedConversion> = decls
+            .conversions_from(value.head)
+            .iter()
+            .filter(|conversion| poly_head(decls.types(), conversion.rule().to) == slot_head)
+            .collect();
+        let [conversion] = applying[..] else {
+            return Err(Mismatch::Conversions {
+                candidates: applying.iter().map(|conversion| conversion.rule().via).collect(),
+            });
+        };
+        let rule = conversion.rule();
+        let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
+        self.relate(pattern_from, value.term, Relation::Eq)?;
+        let mismatch = Mismatch::Heads {
+            a: value.term,
+            b: slot_node,
+        };
+        self.settle_slot(holder, slot_node, slot_node, pattern_to, mismatch)?;
+        Ok(Entered::Converted(conversion.clone()))
+    }
+
+    /// The slot takes the join of `slot_at` and `value_at`: its variable is
+    /// rebound to it, or a slot no variable holds must already be it.
+    fn settle_slot(
+        &mut self,
+        holder: Option<(TyVarId, Term)>,
+        slot_node: Term,
+        slot_at: Term,
+        value_at: Term,
+        mismatch: Mismatch,
+    ) -> Result<(), Mismatch> {
         let made = self.relate(slot_at, value_at, Relation::Join)?;
         match holder {
-            Some((var, _)) => self.rebind(var, made)?,
-            None => {
-                self.relate(slot_node, made, Relation::Eq).map_err(|_| mismatch)?;
-            }
+            Some((var, _)) => self.rebind(var, made),
+            None => self.relate(slot_node, made, Relation::Eq).map(drop).map_err(|_| mismatch),
         }
-        Ok(Entered::Folded)
     }
 
     /// Where `value` and a slot of `slot_head` meet (types §3): the first
@@ -252,7 +297,8 @@ impl Infer {
                 .casts()
                 .step_up(head)
                 .expect("climb: the target is up the tree from the start");
-            let (pattern_from, pattern_to) = self.instantiate_cast(decls.types(), step.rule());
+            let rule = step.rule();
+            let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
             self.relate(pattern_from, at, Relation::Eq)?;
             at = pattern_to;
             head = poly_head(decls.types(), step.rule().to);

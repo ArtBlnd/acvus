@@ -917,6 +917,7 @@ mod tests {
                 lifetimes: 0,
             }],
             casts: Vec::new(),
+            conversions: Vec::new(),
             contexts: Vec::new(),
             inputs: Vec::new(),
             loop_markers: LoopMarkers::default(),
