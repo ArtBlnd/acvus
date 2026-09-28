@@ -1087,10 +1087,7 @@ impl RegionAnalysis<'_> {
             let storage = reach.storages[at];
             let holder = self.held(state, storage.holder());
             for k in self.content_range(storage) {
-                let Some(region) = holder.positions.get(k) else {
-                    continue;
-                };
-                reach.take(region);
+                reach.take(&holder.positions[k]);
             }
             at += 1;
         }
