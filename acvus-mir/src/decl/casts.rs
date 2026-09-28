@@ -22,10 +22,19 @@ impl VerifiedExternCast {
     }
 }
 
-/// The head a cast step is taken from and to: the constructor of a type,
-/// with a named type by its name.
+/// The head a cast step is taken from and to: a type's constructor, and for
+/// a reference, its mutability and its target's constructor, so a view
+/// (`&C` to `&[T]`, operators §5) is a step between two heads (types §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Head {
+    Base(Base),
+    Ref(Mutability, Base),
+}
+
+/// A constructor. `Ref` here is a reference's target that is itself a
+/// reference: no view or declared cast steps from one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Base {
     Int(IntTy),
     Float,
     Char,
@@ -42,7 +51,7 @@ pub enum Head {
     Enum(QualifiedRef),
     Fn,
     Named(QualifiedRef),
-    Ref(Mutability),
+    Ref,
 }
 
 /// The declared casts and the views (operators §5) as one tree: every head

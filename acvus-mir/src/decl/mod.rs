@@ -10,6 +10,7 @@
 mod bound;
 mod casts;
 mod core;
+mod instance_fit;
 mod labels;
 mod loop_markers;
 mod scheme;
@@ -22,13 +23,13 @@ use rustc_hash::FxHashMap;
 use crate::ty::{LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
-pub use casts::{CastRule, CastTree, Head, VerifiedExternCast};
+pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
 pub use core::{Core, Tags};
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use scheme::{DeclaredFacts, GenericSig, InstanceSig, Instances, Requirement, Scheme};
 pub use user_type::UserTypeDecl;
-pub use verify::Refused;
+pub use verify::{Refused, Written};
 
 /// What the embedder and the extern registries hand the compiler, before
 /// verification.

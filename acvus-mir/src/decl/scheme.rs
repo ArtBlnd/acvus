@@ -12,6 +12,8 @@ use crate::ty::{Poly, TyId};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: TyId<Poly>,
+    /// Exactly one bound per type variable of `ty`, by position; `verify`
+    /// refuses any other count.
     pub bounds: Box<[TyVarBound]>,
     /// `Some` for a shared signature's instances (extern-fn §6).
     pub instances: Option<Instances>,
