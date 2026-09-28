@@ -17,7 +17,7 @@ use rustc_hash::FxHashMap;
 use super::body::{Block, BlockId, Body, BodyId, Def, Inst, Module, OrderUse, Terminator};
 use super::op::Op;
 use crate::ir::{OrderEdge, ValueId, fn_effect};
-use crate::ty::{Concrete, Reissue, Ty, TyKind};
+use crate::ty::{Concrete, Reissue, Ty, TyKind, Types};
 
 /// Open state left at `seal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +150,19 @@ impl<'m> Builder<'m> {
             );
         }
         self.module.types.intern(kind)
+    }
+
+    /// The module's one type table, for reading. Cost: O(1).
+    pub fn types(&self) -> &Types<Concrete> {
+        &self.module.types
+    }
+
+    /// The type `value` was made with. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn ty_of(&self, value: ValueId) -> Ty {
+        self.body.ty_of(value)
     }
 
     /// The block instructions are appended to. Cost: O(1).
