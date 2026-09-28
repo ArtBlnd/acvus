@@ -160,7 +160,7 @@ impl SparseAnalysis for Constants<'_> {
 }
 
 /// The switch key a known value is, where it is one a switch narrows on.
-fn switch_key(known: &Literal) -> Option<SwitchKey> {
+pub(in crate::passes) fn switch_key(known: &Literal) -> Option<SwitchKey> {
     match known {
         Literal::Int(n) => Some(SwitchKey::Int(*n)),
         Literal::Bool(b) => Some(SwitchKey::Bool(*b)),

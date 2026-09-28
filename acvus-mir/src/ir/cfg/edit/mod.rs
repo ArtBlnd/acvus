@@ -37,7 +37,7 @@ use super::body::{Def, InstId};
 use super::core::{InstShift, structural_fields};
 use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
 use crate::ir::{Callee, IndexBound, RefTarget, SwitchKey, ValueId, fn_effect};
-use crate::ty::{Reissue, SplitCost, Ty};
+use crate::ty::{Concrete, Reissue, SplitCost, Ty, Types};
 
 /// An instruction of the body being edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -218,6 +218,33 @@ where
     /// already been checked against `S::CHANGES` and `S::Keeps`.
     pub fn finish(self) -> Changes {
         self.changes
+    }
+
+    /// The body as the last edit left it. Cost: O(1).
+    pub fn body(&self) -> &Body {
+        self.body_ref()
+    }
+
+    /// The module's one type table. Cost: O(1).
+    pub fn types(&self) -> &Types<Concrete> {
+        self.module.types()
+    }
+
+    /// The instruction whose result or yielded token `value` is; none for a
+    /// value defined elsewhere, such as a parameter or a slot. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is not a value of the body.
+    pub fn defining_inst(&self, value: ValueId) -> Option<InstRef> {
+        match self.body_ref().def_of(value) {
+            super::body::Def::Inst(block, index) => Some(InstRef { block, index }),
+            super::body::Def::Param(_)
+            | super::body::Def::Capture(_)
+            | super::body::Def::OrderParam
+            | super::body::Def::Slot { .. }
+            | super::body::Def::BlockParam(..)
+            | super::body::Def::UnplacedParam(_) => None,
+        }
     }
 
     fn body_ref(&self) -> &Body {

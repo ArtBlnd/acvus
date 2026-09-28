@@ -25,3 +25,4 @@ pub use post_dominators::PostDominators;
 pub use manager::{Analysis, AnalysisManager};
 pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};
 pub use values::{ConstantValues, IntervalValues};
+pub(in crate::passes) use values::switch_key;

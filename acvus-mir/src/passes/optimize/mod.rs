@@ -22,6 +22,8 @@ mod simplify_cfg;
 mod sink;
 mod split_calls;
 mod sroa;
+#[cfg(test)]
+mod tests;
 
 pub use bce::Bce;
 pub use commute::Commute;
