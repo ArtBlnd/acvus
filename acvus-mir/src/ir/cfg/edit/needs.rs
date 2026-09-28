@@ -41,3 +41,20 @@ pub trait OrderFacts: Facts {
     /// Whether the declarations let `a` and `b` trade places (effects §2).
     fn may_reorder(&self, a: InstRef, b: InstRef) -> bool;
 }
+
+/// Why an instruction the core would keep is unobservable here: the fact an
+/// analysis proves, which lets it go (D55, general capability G1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unobserved {
+    /// A check never fires on any run that reaches it.
+    NeverFires,
+    /// A store or a load whose value no read reaches.
+    NeverRead,
+    /// A commit of a context the body never writes (context §3).
+    NeverWritten,
+}
+
+pub trait DischargeFacts: Facts {
+    /// The fact that makes `inst` unobservable, if an analysis proves one.
+    fn discharged(&self, inst: InstRef) -> Option<Unobserved>;
+}

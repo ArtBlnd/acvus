@@ -3,7 +3,7 @@
 //! everything.
 
 use super::keeps::{DefDominatesUses, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree};
-use super::needs::{DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+use super::needs::{DischargeFacts, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
 use crate::ir::cfg::Aspect;
 
 mod sealed {
@@ -27,6 +27,12 @@ pub trait MovesInsts: Scope {}
 pub trait EditsOrder: Scope {}
 pub trait PromotesStorage: Scope {}
 pub trait EditsLoops: Scope {}
+/// Removal of what the core keeps, on a proven fact (G1).
+pub trait Discharges: Scope {}
+/// Inlining a call's callee body into the caller (S2).
+pub trait Inlines: Scope {}
+/// Drop insertion, the required step of ownership §6 only (S3).
+pub trait InsertsDrops: Scope {}
 
 /// Values: replace uses, insert pure instructions (GVN, reborrow).
 pub struct Value;
@@ -44,6 +50,13 @@ pub struct Effect;
 pub struct Storage;
 /// Loop structure (compilation §4); its operations come with the loop design.
 pub struct Loop;
+/// Removal on a proven fact: dse, bce, and the required removal of unread
+/// loads and unwritten commits (G1).
+pub struct Discharge;
+/// Inlining (S2).
+pub struct Inline;
+/// Drop insertion, used by the required step only (S3).
+pub struct Drops;
 
 /// Every scope keeps these.
 type Base = (TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept);
@@ -68,6 +81,9 @@ scope!(Motion, [Instructions, OrderTokens, Storage], dyn MotionFacts, (Base, Spl
 scope!(Effect, [Instructions, OrderTokens], dyn OrderFacts, (Base, SplitTakenOnce), [EditsOrder]);
 scope!(Storage, [Instructions, Storage], dyn LoanFacts, Base, [PromotesStorage]);
 scope!(Loop, [CfgShape, Instructions], NoFacts, Base, [EditsLoops]);
+scope!(Discharge, [Instructions, Storage, OrderTokens], dyn DischargeFacts, Base, [Discharges]);
+scope!(Inline, [CfgShape, Instructions, Storage, OrderTokens, Types], NoFacts, (Base, SplitTakenOnce), [Inlines]);
+scope!(Drops, [Instructions, Storage], dyn DominanceFacts, Base, [InsertsDrops]);
 
 /// What motion reads: dominance and loans. Effect order is not motion's:
 /// an effect's token keeps it on its chain, so dominance alone keeps it in

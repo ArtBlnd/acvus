@@ -21,10 +21,10 @@ pub use cursor::Cursor;
 pub use keeps::{
     DefDominatesUses, Invariant, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
-pub use needs::{DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+pub use needs::{DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
 pub use scopes::{
     MotionFacts, Cfg, EditsCfg, EditsLoops, EditsOrder, Effect, Loop, Motion, MovesInsts, PromotesStorage, Remove, RemovesInsts,
-    ReplacesValues, Sccp, Scope, Storage, Value,
+    ReplacesValues, Sccp, Scope, Storage, Value, Discharge, Discharges, Drops, Inline, Inlines, InsertsDrops,
 };
 
 use std::collections::BTreeSet;
@@ -657,5 +657,148 @@ impl Points {
             }
         }
         reached
+    }
+}
+
+// ---- D55: the general capabilities G1-G4 and the narrow operations S1-S3 ----
+
+/// Why an instruction cannot be discharged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotDischarge {
+    /// No analysis proves it unobservable.
+    NotProven,
+    /// The proven fact is not the one this instruction needs (a check needs
+    /// `NeverFires`, a store or load `NeverRead`, a commit `NeverWritten`).
+    WrongFact,
+}
+
+/// Why two effects cannot trade places.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotSwap {
+    /// They are not adjacent on one token chain.
+    NotAdjacent,
+    /// The declarations keep their order (effects §1).
+    Ordered,
+}
+
+/// Why a block cannot merge into its predecessor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotMerge {
+    /// It has other predecessors, or its predecessor other successors.
+    NotStraight,
+    /// It is a `Diamond`'s join or a loop's stage or exit (D45).
+    Structural,
+}
+
+/// Why a slot cannot be split into its fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotSplitSlot {
+    /// Its type is not structural; an extern-defined type is never split
+    /// (compilation §3).
+    NotStructural,
+    /// A reference to the whole of it escapes.
+    Escapes(InstRef),
+}
+
+/// Why a call cannot be inlined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotInline {
+    /// Its callee is not a body of this module.
+    NoBody,
+    /// The callee is the caller, directly.
+    Recursive,
+}
+
+/// Why a drop cannot stand at a position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotDrop {
+    /// The value is used after the position.
+    UsedAfter(Site),
+}
+
+impl<S> Editor<'_, S>
+where
+    S: ReplacesValues,
+    S::Needs: DominanceFacts,
+{
+    /// G3: the one use at `site` takes `with` instead of `of`; refused where
+    /// `with` does not dominate `site`.
+    pub fn replace_use(&mut self, site: Site, of: ValueId, with: ValueId) -> Result<(), DoesNotDominate> {
+        todo!("ir::cfg::edit::Editor::replace_use")
+    }
+}
+
+impl<S> Editor<'_, S>
+where
+    S: EditsCfg,
+{
+    /// G2: a new empty block on the edge `from -> to`; the edge's arguments
+    /// pass through it. Structure follows (core rule 6).
+    pub fn split_edge(&mut self, from: BlockId, to: BlockId) -> BlockId {
+        todo!("ir::cfg::edit::Editor::split_edge")
+    }
+
+    /// G2: `block` joins its sole predecessor, whose sole successor it is.
+    pub fn merge_into_predecessor(&mut self, block: BlockId) -> Result<(), CannotMerge> {
+        todo!("ir::cfg::edit::Editor::merge_into_predecessor")
+    }
+}
+
+impl<S> Editor<'_, S>
+where
+    S: EditsOrder,
+    S::Needs: OrderFacts,
+{
+    /// G4: two adjacent effects on one chain trade places, where the
+    /// declarations let them (effects §1). Tokens are rethreaded between the
+    /// two only.
+    pub fn swap(&mut self, a: InstRef, b: InstRef) -> Result<(), CannotSwap> {
+        todo!("ir::cfg::edit::Editor::swap")
+    }
+}
+
+impl<S> Editor<'_, S>
+where
+    S: Discharges,
+    S::Needs: DischargeFacts,
+{
+    /// G1: removes an instruction the core would keep (a check, a store, a
+    /// load, a commit) on the fact that proves it unobservable.
+    pub fn discharge(&mut self, inst: InstRef) -> Result<(), CannotDischarge> {
+        todo!("ir::cfg::edit::Editor::discharge")
+    }
+}
+
+impl<S> Editor<'_, S>
+where
+    S: PromotesStorage,
+    S::Needs: LoanFacts,
+{
+    /// S1: a structural slot becomes one slot per field (sroa).
+    pub fn split_slot(&mut self, slot: ValueId) -> Result<Vec<ValueId>, CannotSplitSlot> {
+        todo!("ir::cfg::edit::Editor::split_slot")
+    }
+}
+
+impl<S> Editor<'_, S>
+where
+    S: Inlines,
+{
+    /// S2: the call's callee body stands in its place; its parameters take
+    /// the arguments, its token chain continues the caller's, and its returns
+    /// join at the call's continuation.
+    pub fn inline(&mut self, call: InstRef) -> Result<(), CannotInline> {
+        todo!("ir::cfg::edit::Editor::inline")
+    }
+}
+
+impl<S> Editor<'_, S>
+where
+    S: InsertsDrops,
+    S::Needs: DominanceFacts,
+{
+    /// S3: a `Drop` of `value` at `at`, where nothing uses it after.
+    pub fn insert_drop(&mut self, value: ValueId, at: Position, span: Span) -> Result<(), CannotDrop> {
+        todo!("ir::cfg::edit::Editor::insert_drop")
     }
 }
