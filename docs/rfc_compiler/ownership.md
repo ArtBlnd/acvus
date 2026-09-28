@@ -2,7 +2,7 @@
 
 ## 1. Copy
 
-A value copies when its type is a primitive (the integer types, `f64`, `bool`, `char`, `()`), a shared reference `&T`, or a structural type (a tuple, an array, an object) whose every part copies.
+A value copies when its type is a primitive (the integer types, `f64`, `bool`, `char`, `()`), a shared reference `&T`, or a structural type (a tuple, an array, an object, an `Option`, a `Result`) whose every part copies.
 
 ## 2. Clone and move
 
