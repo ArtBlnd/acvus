@@ -4,8 +4,7 @@ use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
 use super::{Bound, Infer, Term};
-use crate::decl::{Declarations, Scheme, TyVarBound};
-use crate::laws::NamedLaw;
+use crate::decl::{Declarations, NamedLaw, Scheme, TyVarBound};
 use crate::ty::{
     EffectArg, EffectTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
     LenVarId, ObjectTy, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,

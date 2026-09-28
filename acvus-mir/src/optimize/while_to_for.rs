@@ -80,12 +80,12 @@ use crate::ir::{
     BinOp, Callee, Checked, ExitTrip, ForSource, Inst, InstKind, Label, Overflow, RefTarget,
     Stages, ValOrigin, ValueId,
 };
-use crate::laws::{LawTable, Reaches};
+use crate::laws::LawTable;
 use crate::optimize::forward::edges_mut;
 use crate::optimize::ssa_pass::{apply_subst, apply_subst_terminator, map_value_defs};
 use crate::ir::{ScalarTypes, fn_effect, is_scalar};
 use crate::ty::{CastTy, Concrete, IntTy, Mutability, Reissue, SplitCost, Ty, TyKind, Types};
-use crate::decl::Declarations;
+use crate::decl::{Declarations, Reaches};
 
 mod leave;
 

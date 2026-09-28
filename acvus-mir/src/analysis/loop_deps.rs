@@ -28,14 +28,11 @@ use acvus_utils::QualifiedRef;
 use crate::ir::{
     BinOp, Callee, ForSource, IndexMode, InstKind, Label, PathSeg, RefTarget, Stages, ValueId,
 };
-use crate::laws::{
-    ExternInstance, LawTable, ReachedElement, ReachedPlace, Reaches, ResolvedBinary, ResolvedFold,
-    ResolvedIdentity, ResolvedLaws,
-};
+use crate::laws::{ExternInstance, LawTable, ResolvedBinary, ResolvedFold, ResolvedIdentity, ResolvedLaws};
 use crate::means::{EntryAccess, EntryReading, Stored, Term as MeansTerm};
 use crate::ty::Mutability;
 use crate::ty::{Concrete, Types};
-use crate::decl::Declarations;
+use crate::decl::{Declarations, ReachedElement, ReachedPlace, Reaches};
 use crate::analysis::loans::Layout;
 use crate::ty::TyKind;
 use crate::ir::is_word;

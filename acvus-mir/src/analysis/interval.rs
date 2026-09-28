@@ -23,7 +23,8 @@ use acvus_ast::Literal;
 use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
-use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
+use crate::laws::LawTable;
+use crate::decl::{PostTerm, Postcondition, Relation, Subject};
 use crate::ir::known_len;
 use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
 

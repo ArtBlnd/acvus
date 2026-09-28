@@ -13,7 +13,9 @@ use rustc_hash::FxHashMap;
 
 use acvus_utils::QualifiedRef;
 
-use crate::decl::{Declarations, Scheme};
+use crate::decl::{
+    BinaryLaws, Declarations, FoldLaw, Identity, Laws, Postcondition, Reaches, Returns, Scheme,
+};
 use crate::ir::{Callee, Chosen};
 use crate::means::{EntryReading, Means, Named, Stmt as MeansStmt, Term as MeansTerm};
 use crate::step::Step;
@@ -22,185 +24,7 @@ use crate::ty::{
     TypeArg, Types,
 };
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum Laws {
-    #[default]
-    None,
-    /// `#[extern_fn(law(associative, commutative, identity = e))]` on
-    /// `f(a: T, b: T) -> T`.
-    Binary(BinaryLaws),
-    /// `#[extern_fn(law(fold(combine = g, identity = e)))]` on
-    /// `f(s: &mut S, x: X)`.
-    Fold(FoldLaw),
-    /// `#[extern_fn(law(total_order))]` on `f(a: &T, b: &T) -> i64`: `f`'s
-    /// sign is a total order's comparison of `a` with `b`, under which equal
-    /// values are one value (RFC-0082 rule 10).
-    TotalOrder,
-    /// `#[extern_fn(law(inverse = g))]` on `f(s: &mut S) -> Option<X>`:
-    /// after `g(s, x)`, `f(s)` gives `Some(x)` and leaves `s` as before `g`;
-    /// `g(s, x)` after `f(s)` gave `Some(x)` leaves `s` as before `f`; and
-    /// `f(s)` giving `None` leaves `s` as it was (RFC-0082 rule 3).
-    /// `acvus_extern::Externs::combine` holds `g` to a registered
-    /// `g(s: &mut S, x: X)`.
-    Inverse(QualifiedRef),
-    /// `#[extern_fn(payload(o))]` on `f(o: Option<T>) -> T`: `f(Some(x))`
-    /// is `x` and `f(None)` traps (RFC-0082 rule 3). The signature it is
-    /// stated over states no other law, so it is one of this enum's forms.
-    Payload,
-    /// `#[extern_fn(law(equivalence))]` on a `core::eq` instance: it is
-    /// reflexive, symmetric and transitive, and the `core::hash` instance at
-    /// its type hashes values it calls equal alike (RFC-0082 rule 11). A
-    /// requirement naming [`NamedLaw::Equivalence`] is resolved only by an
-    /// instance stating it (RFC-0070 rule 6).
-    Equivalence,
-    /// `#[extern_fn(step(..))]` on a stream adaptor or consumer (RFC-0099
-    /// rule 1).
-    Step(Step),
-}
-
-/// A law a requirement names at its type (RFC-0070 rule 6), which only an
-/// instance stating it resolves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NamedLaw {
-    /// `law::Equivalence`: a `core::eq` instance stating `law(equivalence)`
-    /// (RFC-0082 rule 11).
-    Equivalence,
-}
-
-impl NamedLaw {
-    /// Whether an instance declaring `laws` states this law.
-    pub fn stated_by(self, laws: &Laws) -> bool {
-        match self {
-            NamedLaw::Equivalence => matches!(laws, Laws::Equivalence),
-        }
-    }
-
-    /// The law as a declaration names it.
-    pub fn written(self) -> &'static str {
-        match self {
-            NamedLaw::Equivalence => "law::Equivalence",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct BinaryLaws {
-    pub associative: bool,
-    pub commutative: bool,
-    pub identity: Option<Identity>,
-}
-
-/// `acvus_extern::Externs::combine` holds a constant to the declaration's
-/// result type and an extern to a registered one of no argument.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Identity {
-    Const(Literal),
-    Extern(QualifiedRef),
-}
-
-/// The promise: a run of `f` over `s` equals `combine` applied to the
-/// states that runs over its parts reach, each part started from what
-/// `identity` returns. Without `commutative`, `combine` keeps the parts in
-/// order. `acvus_extern::Externs::combine` holds `combine` to a registered
-/// `g(s: &mut S, part: S)` and `identity` to a registered `e() -> S`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FoldLaw {
-    pub combine: QualifiedRef,
-    pub identity: QualifiedRef,
-    pub commutative: bool,
-}
-
-/// `#[extern_fn(ensures(left relation right))]` (RFC-0082 rule 4).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Postcondition {
-    pub left: PostTerm,
-    pub relation: Relation,
-    pub right: PostTerm,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Relation {
-    /// `=`
-    Eq,
-    /// `≤`, written `<=`
-    Le,
-    /// `<`
-    Lt,
-}
-
-/// A term of RFC-0066 rule 3 over one call: a constant, a parameter, the
-/// result, the length of either, `+`, `−`, `×` and `max` of terms, and
-/// `old(t)`, `t` as it stood when the call began (RFC-0082 rule 4). It
-/// denotes an integer. A parameter is numbered as the declaration's acvus
-/// parameters are, which is the order of a call's arguments.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PostTerm {
-    Const(i128),
-    Param(usize),
-    Ret,
-    /// The element count of a slice or a container.
-    Len(Subject),
-    Add(Box<PostTerm>, Box<PostTerm>),
-    Sub(Box<PostTerm>, Box<PostTerm>),
-    Mul(Box<PostTerm>, Box<PostTerm>),
-    Max(Box<PostTerm>, Box<PostTerm>),
-    /// The term as it stood when the call began, over the state of `&mut`
-    /// parameters; `#[extern_fn]` refuses one that reads anything else.
-    Old(Box<PostTerm>),
-}
-
-/// What `len(x)` reads: a parameter or the result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Subject {
-    Param(usize),
-    Ret,
-}
-
-/// `#[extern_fn(reaches(p, ..))]` (RFC-0082 rule 7): what a call reaches
-/// of the storages its reference arguments lend, which `analysis::loop_deps`
-/// reads (RFC-0089 rule 4).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum Reaches {
-    /// No declaration: a call reaches all each reference argument lends it.
-    #[default]
-    Lent,
-    /// A call reaches these places and nothing else through its reference
-    /// arguments.
-    Places(Vec<ReachedPlace>),
-}
-
-/// How a call of the instance ends, as its declaration states it (RFC-0082
-/// rules 8 and 9): the author's promise. A call reads it through
-/// [`LawTable::returns_of`], over the instance tree it chose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Returns {
-    #[default]
-    Unstated,
-    /// `#[extern_fn(returns)]`: every call returns or traps. RFC-0089 rule 5
-    /// reads it to run the call ahead of its iteration's control token.
-    Stated,
-    /// `#[extern_fn(total)]`: the instance's own body returns a value and
-    /// never traps. An instance with requirements states it of that body
-    /// alone, and the instances its requirements choose answer for
-    /// themselves.
-    Total,
-}
-
 impl Returns {
-    pub fn returns_or_traps(self) -> bool {
-        match self {
-            Returns::Unstated => false,
-            Returns::Stated | Returns::Total => true,
-        }
-    }
-
-    pub fn never_traps(self) -> bool {
-        match self {
-            Returns::Unstated | Returns::Stated => false,
-            Returns::Total => true,
-        }
-    }
-
     fn meet(self, other: Returns) -> Returns {
         match (self, other) {
             (Returns::Unstated, _) | (_, Returns::Unstated) => Returns::Unstated,
@@ -208,27 +32,6 @@ impl Returns {
             (Returns::Total, Returns::Total) => Returns::Total,
         }
     }
-}
-
-/// `x`, the whole of what reference parameter `x` lends, `x[i]`, its
-/// element at the `u64` parameter `i`, or `x[k]`, a map or set's entry at
-/// the key parameter `k`. A parameter is numbered as [`PostTerm::Param`]
-/// numbers it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReachedPlace {
-    pub param: usize,
-    pub element: Option<ReachedElement>,
-}
-
-/// What names the part of a reached place (RFC-0082 rule 7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReachedElement {
-    /// The element at the `u64` parameter this numbers.
-    Index(usize),
-    /// The entry at the key parameter this numbers, which meets other keys
-    /// by the map's equivalence where its type carries `Equiv` (RFC-0098
-    /// rule 2).
-    Key(usize),
 }
 
 /// An extern and one of its instances, numbered as `Callee::Extern`

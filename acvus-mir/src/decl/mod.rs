@@ -11,6 +11,7 @@ mod bound;
 mod casts;
 mod conversions;
 mod core;
+mod facts;
 mod instance_fit;
 mod labels;
 mod loop_markers;
@@ -27,6 +28,10 @@ pub use bound::TyVarBound;
 pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
 pub use conversions::{ConversionRule, VerifiedConversion};
 pub use core::{Core, Tags};
+pub use facts::{
+    BinaryLaws, FoldLaw, Identity, Laws, NamedLaw, PostTerm, Postcondition, Reaches, ReachedElement, ReachedPlace,
+    Relation, Returns, Subject,
+};
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use scheme::{DeclaredFacts, GenericSig, InstanceSig, Instances, Requirement, Scheme};

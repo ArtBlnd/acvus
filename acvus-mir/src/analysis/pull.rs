@@ -13,7 +13,8 @@ use crate::analysis::loop_deps::InstAt;
 use crate::analysis::loops::{NaturalLoop, Term};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, InstKind, ValueId};
-use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
+use crate::laws::LawTable;
+use crate::decl::{PostTerm, Postcondition, Relation, Subject};
 use crate::ir::fn_effect;
 use crate::ty::{Concrete, Mutability, Reissue, TyKind, Types};
 

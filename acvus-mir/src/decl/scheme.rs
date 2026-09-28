@@ -2,7 +2,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::TyVarBound;
 use super::labels::LabelledSignature;
-use crate::laws::{Laws, NamedLaw, Postcondition, Reaches, Returns};
+use super::facts::{Laws, NamedLaw, Postcondition, Reaches, Returns};
 use crate::means::Means;
 use crate::ty::{Poly, TyId};
 

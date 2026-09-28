@@ -62,8 +62,8 @@ use crate::analysis::loops::{
 use crate::analysis::targets;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ForSource, InstKind, RefTarget, ValueId};
-use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
-use crate::decl::Declarations;
+use crate::laws::LawTable;
+use crate::decl::{Declarations, PostTerm, Postcondition, Relation, Subject};
 use crate::ty::{Concrete, Mutability, Ty, TyKind, Types};
 
 /// Whether `+` and `*` at `ty` are arithmetic in a ring on every run that
