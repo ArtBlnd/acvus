@@ -18,9 +18,12 @@ use acvus_utils::QualifiedRef;
 
 use crate::decl::Declarations;
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module, Op, Site, Terminator};
-use crate::ir::{PathSeg, RefTarget, ValueId, fn_effect};
-use crate::passes::analysis::{AnalysisManager, Dominators, Escapes, LoopTree, Loans, Point, PostDominators, Storage};
-use crate::ty::{Concrete, Ty, Types};
+use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect, known_len};
+use crate::passes::analysis::{
+    AnalysisManager, Dominators, Escapes, IntervalValues, LoopTree, Loans, Point, PostDominators, SparseFacts, Storage,
+};
+use crate::passes::domain::{Bound, Interval, IntervalDomain, JoinSemiLattice};
+use crate::ty::{CastTy, Concrete, Ty, TyKind, Types};
 
 pub struct EditFacts<'a, 'd> {
     am: &'a mut AnalysisManager<'d>,
@@ -56,6 +59,8 @@ impl<'a, 'd> EditFacts<'a, 'd> {
     pub fn new(am: &'a mut AnalysisManager<'d>, module: &Module, body: BodyId) -> Self {
         let of = module.body(body);
         let loans = am.get::<Loans>(module, body);
+        let intervals = am.get::<IntervalValues>(module, body);
+        let proven = Proven { body: of, types: module.types(), loans: &loans, intervals: &intervals, decls: am.decls() };
         EditFacts {
             dominators: am.get::<Dominators>(module, body),
             post_dominators: am.get::<PostDominators>(module, body),
@@ -64,7 +69,7 @@ impl<'a, 'd> EditFacts<'a, 'd> {
             defined: definitions(of),
             named: named_storages(of, &loans),
             commuting: commuting_calls(of, module.types()),
-            unobserved: unobserved_insts(of, &loans, am.decls()),
+            unobserved: proven.unobserved_insts(),
             loans,
             am,
         }
@@ -88,11 +93,14 @@ impl Facts for EditFacts<'_, '_> {
         self.loop_tree = self.am.get::<LoopTree>(module, body);
         self.loans = self.am.get::<Loans>(module, body);
         self.escapes = self.am.get::<Escapes>(module, body);
+        let intervals = self.am.get::<IntervalValues>(module, body);
         let of = module.body(body);
         self.defined = definitions(of);
         self.named = named_storages(of, &self.loans);
         self.commuting = commuting_calls(of, module.types());
-        self.unobserved = unobserved_insts(of, &self.loans, self.am.decls());
+        let proven =
+            Proven { body: of, types: module.types(), loans: &self.loans, intervals: &intervals, decls: self.am.decls() };
+        self.unobserved = proven.unobserved_insts();
     }
 }
 
@@ -155,9 +163,9 @@ impl OrderFacts for EditFacts<'_, '_> {
 }
 
 impl DischargeFacts for EditFacts<'_, '_> {
-    /// Read from the table the last refresh made: a store or a load never
-    /// read, and a commit of a context never written. No analysis proves a
-    /// check never fires yet, so none is `NeverFires`. Cost: O(1).
+    /// Read from the table the last refresh made: a check that never fires,
+    /// a store or a load never read, and a commit of a context never
+    /// written. Cost: O(1).
     fn discharged(&self, inst: InstRef) -> Option<Unobserved> {
         self.unobserved.get(&(inst.block(), inst.index())).copied()
     }
@@ -221,46 +229,143 @@ fn definitions(body: &Body) -> FxHashMap<ValueId, Defined> {
         .collect()
 }
 
-/// The instructions of `body` a fact proves unobservable (D55, G1):
-/// - a store whose storage no read reaches before a write replaces it or
-///   the body ends, per `loans`;
-/// - a load whose result has no use;
-/// - a commit of a context whose slot no write reaches from the body's
-///   entry.
-///
-/// A load or a commit of a volatile context is never proven: nothing merges
-/// or removes them (context §3). Cost: O(stores · storages each writes · the
-/// body's sites and edges), and O(commits · the body's sites and edges).
-///
-/// # Panics
-/// A load or a commit names a context `decls` does not declare.
-fn unobserved_insts(body: &Body, loans: &Loans, decls: &Declarations) -> FxHashMap<(BlockId, usize), Unobserved> {
-    let preds = body.predecessors();
-    let volatile = |context: QualifiedRef| {
-        decls
-            .context_is_volatile(context)
-            .unwrap_or_else(|| panic!("the context {context:?} a body loads or commits is declared"))
-    };
-    let mut unobserved = FxHashMap::default();
-    for (block, record) in body.blocks() {
-        for (index, inst) in record.insts().iter().enumerate() {
-            let proven = match inst.op() {
-                Op::Assign { .. } => store_never_read(body, loans, block, index).then_some(Unobserved::NeverRead),
-                Op::Fetch { context } if !volatile(*context) => {
-                    let result = inst.result().expect("a load yields a value");
-                    (body.use_count(result) == 0).then_some(Unobserved::NeverRead)
+/// What a refresh proves the instructions of `body` from.
+struct Proven<'f> {
+    body: &'f Body,
+    types: &'f Types<Concrete>,
+    loans: &'f Loans,
+    intervals: &'f SparseFacts<IntervalDomain>,
+    decls: &'f Declarations,
+}
+
+impl Proven<'_> {
+    /// The instructions of `body` a fact proves unobservable (D55, G1):
+    /// - a check whose condition the intervals show holds on every run
+    ///   that reaches it;
+    /// - a store whose storage no read reaches before a write replaces it
+    ///   or the body ends, per the loans;
+    /// - a load whose result has no use;
+    /// - a commit of a context whose slot no write reaches from the body's
+    ///   entry.
+    ///
+    /// A load or a commit of a volatile context is never proven: nothing
+    /// merges or removes them (context §3). Cost: O(checks · the relations
+    /// of a slice's impl), O(stores · storages each writes · the body's
+    /// sites and edges), and O(commits · the body's sites and edges).
+    ///
+    /// # Panics
+    /// A load or a commit names a context `decls` does not declare.
+    fn unobserved_insts(&self) -> FxHashMap<(BlockId, usize), Unobserved> {
+        let body = self.body;
+        let preds = body.predecessors();
+        let volatile = |context: QualifiedRef| {
+            self.decls
+                .context_is_volatile(context)
+                .unwrap_or_else(|| panic!("the context {context:?} a body loads or commits is declared"))
+        };
+        let mut unobserved = FxHashMap::default();
+        for (block, record) in body.blocks() {
+            for (index, inst) in record.insts().iter().enumerate() {
+                let proven = match inst.op() {
+                    Op::Check { op, left, right } => self.check_holds(*op, *left, *right).then_some(Unobserved::NeverFires),
+                    Op::CheckSteps { from, step, count } => {
+                        self.steps_hold(*from, *step, *count).then_some(Unobserved::NeverFires)
+                    }
+                    Op::Index { slice, index, bound: IndexBound::Checked, .. }
+                    | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
+                        self.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
+                    }
+                    Op::Assign { .. } => {
+                        store_never_read(body, self.loans, block, index).then_some(Unobserved::NeverRead)
+                    }
+                    Op::Fetch { context } if !volatile(*context) => {
+                        let result = inst.result().expect("a load yields a value");
+                        (body.use_count(result) == 0).then_some(Unobserved::NeverRead)
+                    }
+                    Op::Commit { context, .. } if !volatile(*context) => {
+                        commit_never_written(body, self.loans, &preds, block, index, *context)
+                            .then_some(Unobserved::NeverWritten)
+                    }
+                    _ => None,
+                };
+                if let Some(fact) = proven {
+                    unobserved.insert((block, index), fact);
                 }
-                Op::Commit { context, .. } if !volatile(*context) => {
-                    commit_never_written(body, loans, &preds, block, index, *context).then_some(Unobserved::NeverWritten)
-                }
-                _ => None,
-            };
-            if let Some(fact) = proven {
-                unobserved.insert((block, index), fact);
+            }
+        }
+        unobserved
+    }
+
+    /// Whether `left op right`, over the integers, fits the width the two
+    /// share on every run that reaches the check.
+    fn check_holds(&self, op: Checked, left: ValueId, right: ValueId) -> bool {
+        let (left_at, right_at) = (self.intervals.of(left), self.intervals.of(right));
+        let exact = match op {
+            Checked::Add => left_at.sum(right_at),
+            Checked::Sub => left_at.difference(right_at),
+            Checked::Mul => left_at.product(right_at),
+        };
+        exact.le(&self.width_of(left))
+    }
+
+    /// Whether `from + count·step`, over the integers, fits the width `from`
+    /// and `step` share on every run that reaches the check; the value is
+    /// monotone in the steps, so every step fits where the last one does.
+    fn steps_hold(&self, from: ValueId, step: ValueId, count: ValueId) -> bool {
+        let (from_at, step_at, count_at) = (self.intervals.of(from), self.intervals.of(step), self.intervals.of(count));
+        from_at.sum(&count_at.product(step_at)).le(&self.width_of(from))
+    }
+
+    /// Whether `0 ≤ index < len` on every run that reaches the index, with
+    /// `len` where the declared relations of the slice's impl and the length
+    /// its container's type carries put it. A slice whose relations admit
+    /// no length is made by no run.
+    fn index_in_bounds(&self, slice: ValueId, index: ValueId) -> bool {
+        let declared = self.intervals.declared_len(self.decls, self.body, slice);
+        let carried = self.carried_len(slice);
+        let Some(len) = declared.into_iter().chain(carried).reduce(|len, other| len.meet(&other)) else {
+            return false;
+        };
+        match (self.intervals.of(index), len) {
+            (Interval::Empty, _) | (_, Interval::Empty) => true,
+            (Interval::Range { lo, hi }, Interval::Range { lo: shortest, .. }) => {
+                *lo >= Bound::Finite(0) && *hi < shortest
             }
         }
     }
-    unobserved
+
+    /// The length a slice's type carries: an `AsSlice` of a reference to an
+    /// `Array<T, N>` has `N` elements. A relation of a later call and the
+    /// length of another container are not read (D66).
+    fn carried_len(&self, slice: ValueId) -> Option<Interval> {
+        let Definition::Inst(block, index) = self.body.definition(slice) else {
+            return None;
+        };
+        let Op::AsSlice { container, .. } = self.body.block(block).insts()[index].op() else {
+            return None;
+        };
+        let TyKind::Ref(_, lent) = self.types.kind(self.body.ty_of(*container)) else {
+            panic!("an AsSlice's container {container:?} is a reference")
+        };
+        match self.types.kind(lent.ty()) {
+            TyKind::Array(_, len) => {
+                let len = i128::try_from(known_len(len)).expect("an array's length fits an i128");
+                Some(Interval::exactly(len))
+            }
+            _ => None,
+        }
+    }
+
+    /// Every integer of `value`'s width.
+    ///
+    /// # Panics
+    /// `value` is not of an integer type: a check's operands are.
+    fn width_of(&self, value: ValueId) -> Interval {
+        match CastTy::of_kind(self.types.kind(self.body.ty_of(value))) {
+            Some(CastTy::Int(width)) => Interval::Range { lo: Bound::Finite(width.min()), hi: Bound::Finite(width.max()) },
+            other => panic!("a check's operand {value:?} is of an integer type, not {other:?}"),
+        }
+    }
 }
 
 /// The storage and path an `Assign` names directly, by a slot or a
@@ -926,7 +1031,7 @@ mod tests {
 
         assert_eq!(facts.discharged(first), Some(Unobserved::NeverRead));
         assert_eq!(facts.discharged(second), None, "the load of s reads it");
-        assert_eq!(facts.discharged(check), None, "no analysis proves a check never fires yet");
+        assert_eq!(facts.discharged(check), Some(Unobserved::NeverFires), "1 + 1 fits an i64");
     }
 
     /// `s = 1; if c { t = s } else {}; return 0`: the store is read on one

@@ -709,6 +709,19 @@ impl Body {
         preds
     }
 
+    /// Whether a terminator of the body names `block` as a structural
+    /// label: a `Diamond`'s or a `Switch`'s join, or a loop's stage or exit
+    /// (D45, D57). Cost: O(blocks + stages).
+    pub fn is_structural(&self, block: BlockId) -> bool {
+        self.blocks().any(|(_, from)| match from.terminator() {
+            Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => *join == block,
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+                *exit == block || stages.entries().any(|stage| stage == block)
+            }
+            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => false,
+        })
+    }
+
     /// The loop headers: the targets of the back edges of a depth-first walk
     /// of the edges from the entry, a back edge being one into a block still
     /// on the walk's path. A block the entry does not reach is none. Cost:

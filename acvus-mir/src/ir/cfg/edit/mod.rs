@@ -431,12 +431,36 @@ impl<S> Editor<'_, S>
 where
     S: EditsCfg,
 {
-    /// Every edge into `from` goes to `to`; structure follows (core rule 6).
-    ///
-    /// # Panics
-    /// The parameters of `from` and `to` differ.
-    pub fn retarget(&mut self, from: BlockId, to: BlockId) {
+    /// Every edge into `from` goes to `to`, with its arguments; structure
+    /// follows (core rule 6), so a `Diamond`'s or a `Switch`'s join or a
+    /// loop's stage or exit that is `from` becomes `to`. Refused as `Entry`
+    /// where `from` is the entry, which no edge enters; as `ParamsDisagree`
+    /// where the two blocks' parameters differ in count or type; and as
+    /// `ParamsUsedBeyond` at the first use, in block order, of a parameter
+    /// of `from` other than `from`'s own terminator, which would be left
+    /// without its definition.
+    pub fn retarget(&mut self, from: BlockId, to: BlockId) -> Result<(), CannotRetarget> {
+        let body = self.body_ref();
+        if from == body.entry() {
+            return Err(CannotRetarget::Entry);
+        }
+        let param_tys = |block: BlockId| -> Vec<Ty> { body.block(block).params().iter().map(|param| body.ty_of(*param)).collect() };
+        if param_tys(from) != param_tys(to) {
+            return Err(CannotRetarget::ParamsDisagree);
+        }
+        let mut beyond: Vec<Site> = body
+            .block(from)
+            .params()
+            .iter()
+            .flat_map(|param| body.users(*param))
+            .filter(|site| *site != Site::Term(from))
+            .collect();
+        beyond.sort_by_key(|site| site_order(*site));
+        if let Some(site) = beyond.first() {
+            return Err(CannotRetarget::ParamsUsedBeyond(*site));
+        }
         self.edit(|rewriter| rewriter.retarget(from, to));
+        Ok(())
     }
 
     /// A branch whose condition is known takes its one arm. A `Diamond`
@@ -753,6 +777,18 @@ pub enum CannotSwap {
     DependsOn(ValueId),
 }
 
+/// Why the edges into a block cannot go to another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotRetarget {
+    /// It is the entry, which no edge enters.
+    Entry,
+    /// A parameter of it is used here, beyond its own terminator; the use
+    /// would be left without its definition.
+    ParamsUsedBeyond(Site),
+    /// The two blocks' parameters differ in count or type.
+    ParamsDisagree,
+}
+
 /// Why a block cannot merge into its predecessor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CannotMerge {
@@ -850,7 +886,7 @@ where
     /// predecessor ends otherwise than in that jump.
     pub fn merge_into_predecessor(&mut self, block: BlockId) -> Result<(), CannotMerge> {
         let body = self.body_ref();
-        if names_structurally(body, block) {
+        if body.is_structural(block) {
             return Err(CannotMerge::Structural);
         }
         let preds = body.predecessors();
@@ -867,18 +903,6 @@ where
         self.walk.rename(&renamed);
         Ok(())
     }
-}
-
-/// Whether a terminator of `body` names `block` as a structural label: a
-/// `Diamond`'s or a `Switch`'s join, or a loop's stage or exit.
-fn names_structurally(body: &Body, block: BlockId) -> bool {
-    body.blocks().any(|(_, from)| match from.terminator() {
-        Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => *join == block,
-        Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
-            *exit == block || stages.entries().any(|stage| stage == block)
-        }
-        Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => false,
-    })
 }
 
 /// Every operand of the instruction or terminator at `site`.

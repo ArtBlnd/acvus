@@ -595,13 +595,50 @@ fn retarget_moves_every_edge_and_the_diamonds_join() {
     let entry = entry_of(&f, id);
     let mut facts = NoFacts;
     let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
-    editor.retarget(join, spare);
+    editor.retarget(join, spare).expect("the join and the spare block take no parameters");
     editor.finish();
     let Terminator::Diamond { join: now, .. } = f.body(id).block(entry).terminator() else {
         panic!("the entry still branches")
     };
     assert_eq!(*now, spare);
     assert!(matches!(f.body(id).block(else_block).terminator(), Terminator::Jump { to, .. } if *to == spare));
+}
+
+/// `retarget` refuses the entry, blocks whose parameters differ, and a
+/// block whose parameter a later instruction reads, and leaves the body as
+/// it was.
+#[test]
+fn retarget_refuses_the_entry_disagreeing_parameters_and_a_parameter_read_beyond_the_jump() {
+    let mut f = fixture();
+    let (int, bool) = (f.int, f.bool);
+    let mut builder = f.build(false, int);
+    let one = builder.push(int_const(1), int, at(0));
+    let [passes, reads, target] = [(); 3].map(|()| builder.new_block(&[int]));
+    let takes_bool = builder.new_block(&[bool]);
+    builder.terminate(Terminator::Jump { to: passes, args: vec![one] });
+    builder.switch_to(passes);
+    let p = builder.block_params(passes)[0];
+    builder.terminate(Terminator::Jump { to: reads, args: vec![p] });
+    builder.switch_to(reads);
+    let r = builder.block_params(reads)[0];
+    let doubled = builder.push(add(r, r), int, at(1));
+    builder.terminate(Terminator::Jump { to: target, args: vec![doubled] });
+    builder.switch_to(target);
+    let t = builder.block_params(target)[0];
+    builder.terminate(ret(t));
+    builder.switch_to(takes_bool);
+    builder.terminate(ret(one));
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(&f, id);
+    let before = snapshot(f.body(id));
+
+    let mut facts = NoFacts;
+    let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.retarget(entry, passes), Err(CannotRetarget::Entry));
+    assert_eq!(editor.retarget(passes, takes_bool), Err(CannotRetarget::ParamsDisagree));
+    assert_eq!(editor.retarget(reads, target), Err(CannotRetarget::ParamsUsedBeyond(Site::Inst(reads, 0))));
+    editor.finish();
+    assert_eq!(snapshot(f.body(id)), before);
 }
 
 #[test]
@@ -1375,7 +1412,7 @@ fn retarget_moves_a_switchs_join() {
     let entry = entry_of(&f, id);
     let mut facts = NoFacts;
     let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
-    editor.retarget(join, spare);
+    editor.retarget(join, spare).expect("the join and the spare block take no parameters");
     editor.finish();
     let body = f.body(id);
     assert!(matches!(body.block(entry).terminator(), Terminator::Switch { join, .. } if *join == spare));

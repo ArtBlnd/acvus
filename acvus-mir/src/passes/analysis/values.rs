@@ -7,8 +7,8 @@
 use acvus_ast::Literal;
 
 use crate::decl::{Declarations, DeclaredFacts, PostTerm, Postcondition, Relation, Subject};
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Inst, Module, Op, Terminator};
-use crate::ir::{Callee, ForSource, SwitchKey, ValueId};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Inst, Module, Op, Terminator};
+use crate::ir::{Callee, ExternImpl, ForSource, SwitchKey, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, Executable, SparseAnalysis, SparseFacts, solve_sparse};
 use crate::passes::domain::{Constant, ConstantDomain, Interval, IntervalDomain, ValueDomain};
 use crate::ty::{CastTy, Concrete, Types};
@@ -52,6 +52,33 @@ impl SparseFacts<ConstantDomain> {
             Constant::Known(literal) => Some(literal),
             Constant::Bottom | Constant::Top => None,
         }
+    }
+}
+
+impl SparseFacts<IntervalDomain> {
+    /// The interval the length of `slice` lies in, as the declared
+    /// Relations (extern-fn §3) of the extern impl whose result it is put
+    /// it: a call's, or an `AsSlice`'s, whose one argument is its
+    /// container. `None` where `slice` is no such result, or where no
+    /// relation of its impl bounds the result's length by a term of known
+    /// interval. Cost: O(the impl's relations and their terms).
+    pub fn declared_len(&self, decls: &Declarations, body: &Body, slice: ValueId) -> Option<Interval> {
+        let Definition::Inst(block, index) = body.definition(slice) else {
+            return None;
+        };
+        let (made_by, args) = match body.block(block).insts()[index].op() {
+            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } => {
+                (ExternImpl { id: *id, r#impl: *r#impl }, args.as_slice())
+            }
+            Op::AsSlice { container, r#impl, .. } => (*r#impl, std::slice::from_ref(container)),
+            _ => return None,
+        };
+        let relations = &declared_facts(decls, made_by.id, made_by.r#impl)?.ensures;
+        let args: Vec<&Interval> = args.iter().map(|arg| self.of(*arg)).collect();
+        let counts = Interval::exactly(0).at_least_lo();
+        related(relations, &args, &PostTerm::Len(Subject::Ret))
+            .reduce(|len, range| len.meet(&range))
+            .map(|len| len.meet(&counts))
     }
 }
 
@@ -202,7 +229,8 @@ impl SparseAnalysis for Intervals<'_> {
         match inst.op() {
             Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, .. } => {
                 let facts = declared_facts(self.decls, *id, *r#impl);
-                related_result(facts.map_or(&[], |facts| &facts.ensures), operands)
+                let relations = facts.map_or(&[][..], |facts| &facts.ensures);
+                related(relations, operands, &PostTerm::Ret).fold(Interval::full(), |result, range| result.meet(&range))
             }
             _ => Interval::full(),
         }
@@ -253,32 +281,29 @@ fn declared_facts(decls: &Declarations, id: acvus_utils::QualifiedRef, r#impl: u
     })
 }
 
-/// The intersection of the ranges the relations put a call's result in,
-/// each where one side is the bare result and the other a term of known
-/// interval.
-fn related_result(relations: &[Postcondition], args: &[&Interval]) -> Interval {
-    let mut result = Interval::full();
-    for Postcondition { left, relation, right } in relations {
-        let (term, result_on_left) = match (left, right) {
-            (PostTerm::Ret, PostTerm::Ret) => continue,
-            (PostTerm::Ret, term) => (term, true),
-            (term, PostTerm::Ret) => (term, false),
-            _ => continue,
+/// The range each relation puts `subject` in, where one side is `subject`
+/// alone and the other a term of known interval over the call's arguments.
+fn related<'r>(
+    relations: &'r [Postcondition],
+    args: &'r [&Interval],
+    subject: &'r PostTerm,
+) -> impl Iterator<Item = Interval> + 'r {
+    relations.iter().filter_map(move |Postcondition { left, relation, right }| {
+        let (term, subject_on_left) = match (left == subject, right == subject) {
+            (true, false) => (right, true),
+            (false, true) => (left, false),
+            (true, true) | (false, false) => return None,
         };
-        let Some(term) = term_interval(term, args) else {
-            continue;
-        };
+        let term = term_interval(term, args)?;
         let one = Interval::exactly(1);
-        let range = match (relation, result_on_left) {
+        Some(match (relation, subject_on_left) {
             (Relation::Eq, _) => term,
             (Relation::Le, true) => term.at_most_hi(),
             (Relation::Lt, true) => term.difference(&one).at_most_hi(),
             (Relation::Le, false) => term.at_least_lo(),
             (Relation::Lt, false) => term.sum(&one).at_least_lo(),
-        };
-        result = result.meet(&range);
-    }
-    result
+        })
+    })
 }
 
 /// A term's interval over the call's arguments, where every leaf of it has
