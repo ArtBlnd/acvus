@@ -60,6 +60,9 @@ pub enum Refused {
     /// A scheme whose bounds do not give each of its type variables exactly
     /// one bound (extern-fn §1: a type parameter carries one bound).
     BoundsDoNotFit { function: QualifiedRef },
+    /// A scheme or an impl whose type is not a function type: an extern fn
+    /// is a function (extern-fn §1).
+    NotAFunction { function: QualifiedRef },
     /// Two types under one name.
     DuplicateType { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in
@@ -74,6 +77,7 @@ pub enum Written {
     Context(QualifiedRef),
     Input(acvus_utils::Astr),
     Cast(QualifiedRef),
+    Conversion(QualifiedRef),
     Type(QualifiedRef),
 }
 

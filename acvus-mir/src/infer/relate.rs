@@ -40,6 +40,8 @@ pub enum Mismatch {
     /// declared conversion takes the value's head to the slot's: these are
     /// the ones that do, none or several (types §7).
     Conversions { candidates: Box<[QualifiedRef]> },
+    /// A reference whose target would be a reference (types §4).
+    ReferenceToReference { target: Term },
     /// `#` on one side only (types §8).
     Mark { a: Term, b: Term },
 }
