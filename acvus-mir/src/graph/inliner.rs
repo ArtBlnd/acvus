@@ -1197,7 +1197,7 @@ fn remap_inst(
 
 #[cfg(test)]
 mod tests {
-    use crate::ty::Ty;
+    use crate::ty::{IntTy, Ty};
 
     use super::*;
     use acvus_ast::Span;
@@ -1210,12 +1210,17 @@ mod tests {
         }
     }
 
-    fn make_body(insts: Vec<InstKind>, val_count: usize) -> MirBody {
+    /// A body of `val_count` values, every one an `i64` of `types`: the
+    /// table `insts` names it in, so a caller builds `types` and its
+    /// `callee_ty`/etc. placeholders before this call, from the same
+    /// `TyKind::Int(IntTy::I64)` interning re-reads.
+    fn make_body(types: &mut Types<Concrete>, insts: Vec<InstKind>, val_count: usize) -> MirBody {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut factory = LocalFactory::<ValueId>::new();
         let mut val_types = FxHashMap::default();
         for _ in 0..val_count {
             let v = factory.next();
-            val_types.insert(v, Ty::I64);
+            val_types.insert(v, i64_ty);
         }
         MirBody {
             demoted_diamonds: Default::default(),
@@ -1230,13 +1235,17 @@ mod tests {
         }
     }
 
-    fn make_module(body: MirBody) -> MirModule {
+    /// `body`, wrapped as the one module owning `types`: `inline`'s doc
+    /// says every module owns its own table.
+    fn make_module(body: MirBody, mut types: Types<Concrete>) -> MirModule {
+        let unit_ty = types.intern(TyKind::Unit);
         MirModule {
             declared_params: body.params.len(),
             main: body,
             closures: FxHashMap::default(),
-            ret: crate::ty::Ty::Unit,
+            ret: unit_ty,
             flows: crate::flows::Flows::Every,
+            types,
         }
     }
 
@@ -1251,7 +1260,9 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let callee_id = QualifiedRef::root(i.intern("callee"));
 
+        let mut callee_types = Types::<Concrete>::new();
         let mut callee_body = make_body(
+            &mut callee_types,
             vec![
                 InstKind::BinOp {
                     dst: v(1),
@@ -1268,7 +1279,10 @@ mod tests {
         );
         callee_body.params = vec![(i.intern("p0"), v(0))];
 
+        let mut caller_types = Types::<Concrete>::new();
+        let caller_i64 = caller_types.intern(TyKind::Int(IntTy::I64));
         let caller_body = make_body(
+            &mut caller_types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -1277,7 +1291,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(callee_id),
-                    callee_ty: Ty::error(),
+                    callee_ty: caller_i64,
                     args: vec![v(0)],
                     order: None,
                 },
@@ -1290,11 +1304,11 @@ mod tests {
         );
 
         let mut modules = FxHashMap::default();
-        modules.insert(callee_id, make_module(callee_body));
+        modules.insert(callee_id, make_module(callee_body, callee_types));
         let caller_id = QualifiedRef::root(i.intern("caller"));
-        modules.insert(caller_id, make_module(caller_body));
+        modules.insert(caller_id, make_module(caller_body, caller_types));
 
-        let result = inline(&modules, &FxHashSet::default());
+        let result = inline(modules, &FxHashSet::default());
         let inlined = &result.modules[&caller_id];
 
         // After inlining, there should be no FunctionCall instruction.
@@ -1327,7 +1341,10 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let extern_id = QualifiedRef::root(i.intern("ext"));
 
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let caller_body = make_body(
+            &mut types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -1336,7 +1353,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Direct(extern_id),
-                    callee_ty: Ty::error(),
+                    callee_ty: i64_ty,
                     args: vec![v(0)],
                     order: None,
                 },
@@ -1350,10 +1367,10 @@ mod tests {
 
         let caller_id = QualifiedRef::root(i.intern("caller"));
         let mut modules = FxHashMap::default();
-        modules.insert(caller_id, make_module(caller_body));
+        modules.insert(caller_id, make_module(caller_body, types));
         // extern_id is NOT in modules -> cannot be inlined.
 
-        let result = inline(&modules, &FxHashSet::default());
+        let result = inline(modules, &FxHashSet::default());
         let inlined = &result.modules[&caller_id];
 
         let has_call = inlined
@@ -1369,7 +1386,9 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let rec_id = QualifiedRef::root(i.intern("rec"));
 
+        let mut rec_types = Types::<Concrete>::new();
         let rec_body = make_body(
+            &mut rec_types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -1383,12 +1402,15 @@ mod tests {
             1,
         );
 
+        let mut caller_types = Types::<Concrete>::new();
+        let caller_i64 = caller_types.intern(TyKind::Int(IntTy::I64));
         let caller_body = make_body(
+            &mut caller_types,
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(rec_id),
-                    callee_ty: Ty::error(),
+                    callee_ty: caller_i64,
                     args: vec![],
                     order: None,
                 },
@@ -1402,13 +1424,13 @@ mod tests {
 
         let caller_id = QualifiedRef::root(i.intern("caller"));
         let mut modules = FxHashMap::default();
-        modules.insert(rec_id, make_module(rec_body));
-        modules.insert(caller_id, make_module(caller_body));
+        modules.insert(rec_id, make_module(rec_body, rec_types));
+        modules.insert(caller_id, make_module(caller_body, caller_types));
 
         let mut recursive = FxHashSet::default();
         recursive.insert(rec_id);
 
-        let result = inline(&modules, &recursive);
+        let result = inline(modules, &recursive);
         let inlined = &result.modules[&caller_id];
 
         let has_call = inlined
@@ -1430,7 +1452,9 @@ mod tests {
         let f_id = QualifiedRef::root(i.intern("f"));
         let main_id = QualifiedRef::root(i.intern("main"));
 
+        let mut g_types = Types::<Concrete>::new();
         let g_body = make_body(
+            &mut g_types,
             vec![
                 InstKind::Const {
                     dst: v(0),
@@ -1444,12 +1468,15 @@ mod tests {
             1,
         );
 
+        let mut f_types = Types::<Concrete>::new();
+        let f_i64 = f_types.intern(TyKind::Int(IntTy::I64));
         let f_body = make_body(
+            &mut f_types,
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(g_id),
-                    callee_ty: Ty::error(),
+                    callee_ty: f_i64,
                     args: vec![],
                     order: None,
                 },
@@ -1461,12 +1488,15 @@ mod tests {
             1,
         );
 
+        let mut main_types = Types::<Concrete>::new();
+        let main_i64 = main_types.intern(TyKind::Int(IntTy::I64));
         let main_body = make_body(
+            &mut main_types,
             vec![
                 InstKind::FunctionCall {
                     dst: v(0),
                     callee: Callee::Direct(f_id),
-                    callee_ty: Ty::error(),
+                    callee_ty: main_i64,
                     args: vec![],
                     order: None,
                 },
@@ -1479,11 +1509,11 @@ mod tests {
         );
 
         let mut modules = FxHashMap::default();
-        modules.insert(g_id, make_module(g_body));
-        modules.insert(f_id, make_module(f_body));
-        modules.insert(main_id, make_module(main_body));
+        modules.insert(g_id, make_module(g_body, g_types));
+        modules.insert(f_id, make_module(f_body, f_types));
+        modules.insert(main_id, make_module(main_body, main_types));
 
-        let result = inline(&modules, &FxHashSet::default());
+        let result = inline(modules, &FxHashSet::default());
         let inlined = &result.modules[&main_id];
 
         let has_call = inlined
@@ -1506,8 +1536,11 @@ mod tests {
     /// `let`-bound lambda: `MakeClosure`, an `Assign` into the variable's
     /// slot, a `Ref` of that slot, and the call through the reference.
     fn closure_of(i: &acvus_utils::Interner, len: usize) -> MirModule {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let adds = len - 1;
         let mut closure = make_body(
+            &mut types,
             (0..adds)
                 .map(|n| InstKind::BinOp {
                     dst: ValueId::from_raw(n + 1),
@@ -1525,6 +1558,7 @@ mod tests {
         closure.params = vec![(i.intern("x"), v(0))];
 
         let main = make_body(
+            &mut types,
             vec![
                 InstKind::MakeClosure {
                     dst: v(0),
@@ -1546,7 +1580,7 @@ mod tests {
                 InstKind::FunctionCall {
                     dst: v(2),
                     callee: Callee::Indirect(v(1)),
-                    callee_ty: Ty::error(),
+                    callee_ty: i64_ty,
                     args: vec![v(4)],
                     order: None,
                 },
@@ -1558,12 +1592,14 @@ mod tests {
             5,
         );
 
+        let unit_ty = types.intern(TyKind::Unit);
         MirModule {
             declared_params: main.params.len(),
             main,
             closures: [(Label(0), closure)].into_iter().collect(),
-            ret: crate::ty::Ty::Unit,
+            ret: unit_ty,
             flows: crate::flows::Flows::Every,
+            types,
         }
     }
 
@@ -1573,7 +1609,7 @@ mod tests {
         let mut modules = FxHashMap::default();
         modules.insert(caller_id, closure_of(&i, len));
 
-        let result = inline(&modules, &FxHashSet::default());
+        let result = inline(modules, &FxHashSet::default());
         !result.modules[&caller_id]
             .main
             .insts
@@ -1589,12 +1625,15 @@ mod tests {
 
     #[test]
     fn an_indirect_call_to_no_make_closure_is_preserved() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let caller_body = make_body(
+            &mut types,
             vec![
                 InstKind::FunctionCall {
                     dst: v(1),
                     callee: Callee::Indirect(v(0)),
-                    callee_ty: Ty::error(),
+                    callee_ty: i64_ty,
                     args: vec![],
                     order: None,
                 },
@@ -1609,9 +1648,9 @@ mod tests {
         let i = acvus_utils::Interner::new();
         let caller_id = QualifiedRef::root(i.intern("caller"));
         let mut modules = FxHashMap::default();
-        modules.insert(caller_id, make_module(caller_body));
+        modules.insert(caller_id, make_module(caller_body, types));
 
-        let result = inline(&modules, &FxHashSet::default());
+        let result = inline(modules, &FxHashSet::default());
         let inlined = &result.modules[&caller_id];
 
         let has_call = inlined.main.insts.iter().any(|inst| {

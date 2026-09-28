@@ -837,7 +837,7 @@ mod tests {
     use super::*;
     use crate::cfg::{self, CfgBody};
     use crate::test::{compile_script, compile_template};
-    use crate::ty::Ty;
+    use crate::ty::{Concrete, IntTy, TyKind, Types};
     use acvus_utils::Interner;
 
     fn count_phi_blocks(cfg_body: &CfgBody) -> usize {
@@ -884,10 +884,12 @@ mod tests {
     #[test]
     fn a_stored_copy_of_a_promoted_load_defines_the_ssa_value() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let module = compile_script(
             &i,
             "let x = 1; let y = x; @out = y; @out",
-            &[("out", Ty::I64)],
+            &[("out", i64_ty)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -903,10 +905,12 @@ mod tests {
     #[test]
     fn if_one_arm_write_phi() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let module = compile_template(
             &i,
             "% if @n == 1\n% @x = 42\n% else\nnoop\n% end\n",
-            &[("x", Ty::I64), ("n", Ty::I64)],
+            &[("x", i64_ty), ("n", i64_ty)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -920,10 +924,12 @@ mod tests {
     #[test]
     fn if_both_arms_write_phi() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let module = compile_template(
             &i,
             "% if @n == 1\n% @x = 1\n% else\n% @x = 2\n% end\n",
-            &[("x", Ty::I64), ("n", Ty::I64)],
+            &[("x", i64_ty), ("n", i64_ty)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -936,10 +942,12 @@ mod tests {
     #[test]
     fn if_no_write_keeps_commits() {
         let i = Interner::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let module = compile_template(
             &i,
             "% if @n == 1\nyes\n% else\nno\n% end\n",
-            &[("n", Ty::I64)],
+            &[("n", i64_ty)],
         )
         .unwrap();
         let mut cfg_body = cfg::promote(module.main);
@@ -951,7 +959,9 @@ mod tests {
     #[test]
     fn straight_line_write_keeps_commits() {
         let i = Interner::new();
-        let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::I64)]).unwrap();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "@x = 42; @x", &[("x", i64_ty)]).unwrap();
         let mut cfg_body = cfg::promote(module.main);
         let commits_before = count_commits(&cfg_body);
         run(&mut cfg_body);
