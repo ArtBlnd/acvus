@@ -991,3 +991,309 @@ fn invalidation_drops_exactly_the_analyses_whose_reads_changed() {
         "another body's analyses are kept"
     );
 }
+
+// -- Dominators, post-dominators, loops --------------------------------------
+
+/// The facts of `A` for `body`, through a manager over no declarations.
+fn facts_of<A>(f: &Fixture, body: BodyId) -> Rc<A::Facts>
+where
+    A: Analysis,
+{
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    am.get::<A>(&f.module, body)
+}
+
+struct DiamondBody {
+    id: BodyId,
+    entry: BlockId,
+    then_block: BlockId,
+    else_block: BlockId,
+    join: BlockId,
+}
+
+/// ```text
+/// entry(c): x = 0; diamond c { then } else { else } join
+/// then:     t = 1; jump join
+/// else:     jump join
+/// join:     return x
+/// ```
+fn diamond_body(f: &mut Fixture) -> DiamondBody {
+    let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
+    let mut builder = f.module.build_body(false, f.int);
+    let c = builder.param(nc, bool);
+    let entry = builder.current_block();
+    let x = builder.push(constant(0), int, Span::ZERO);
+    let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.switch_to(then_block);
+    builder.push(constant(1), int, Span::ZERO);
+    builder.terminate(jump(join, Vec::new()));
+    builder.switch_to(else_block);
+    builder.terminate(jump(join, Vec::new()));
+    builder.switch_to(join);
+    builder.terminate(ret(x));
+    let id = builder.seal().expect("the body has no open state");
+    DiamondBody { id, entry, then_block, else_block, join }
+}
+
+#[test]
+fn dominators_of_a_diamond() {
+    let mut f = fixture();
+    let d = diamond_body(&mut f);
+    let dom = facts_of::<Dominators>(&f, d.id);
+    assert_eq!(dom.idom(d.entry), None);
+    for block in [d.then_block, d.else_block, d.join] {
+        assert_eq!(dom.idom(block), Some(d.entry), "{block:?} is entered only through the entry");
+        assert!(dom.dominates(d.entry, block));
+        assert!(!dom.dominates(block, d.entry));
+    }
+    assert!(!dom.dominates(d.then_block, d.join), "the join is reached through the else arm too");
+    assert!(dom.dominates(d.join, d.join), "a block dominates itself");
+
+    assert!(dom.point_dominates(Point::Before(d.entry, 0), Point::End(d.entry)));
+    assert!(!dom.point_dominates(Point::End(d.entry), Point::Before(d.entry, 0)));
+    assert!(dom.point_dominates(Point::Before(d.entry, 1), Point::Before(d.entry, 1)), "a point dominates itself");
+    assert!(dom.point_dominates(Point::End(d.entry), Point::Before(d.join, 0)));
+    assert!(!dom.point_dominates(Point::End(d.then_block), Point::Before(d.join, 0)));
+}
+
+#[test]
+fn post_dominators_of_a_diamond() {
+    let mut f = fixture();
+    let d = diamond_body(&mut f);
+    let post = facts_of::<PostDominators>(&f, d.id);
+    for block in [d.entry, d.then_block, d.else_block] {
+        assert_eq!(post.ipdom(block), Some(d.join), "every path from {block:?} passes the join");
+        assert!(post.post_dominates(d.join, block));
+    }
+    assert_eq!(post.ipdom(d.join), None, "the join returns: its immediate post-dominator is the exit");
+    assert!(post.reaches_exit(d.join));
+    assert!(!post.post_dominates(d.then_block, d.entry), "the else arm avoids the then arm");
+    assert!(!post.post_dominates(d.entry, d.join));
+
+    assert!(post.point_post_dominates(Point::End(d.entry), Point::Before(d.entry, 0)));
+    assert!(!post.point_post_dominates(Point::Before(d.entry, 0), Point::End(d.entry)));
+    assert!(post.point_post_dominates(Point::Before(d.join, 0), Point::End(d.entry)));
+    assert!(!post.point_post_dominates(Point::Before(d.then_block, 0), Point::End(d.entry)));
+}
+
+struct WhileBody {
+    id: BodyId,
+    entry: BlockId,
+    header: BlockId,
+    loop_body: BlockId,
+    exit: BlockId,
+}
+
+/// ```text
+/// entry(c): jump header
+/// header:   while c { body } else exit
+/// body:     jump header
+/// exit:     return 0
+/// ```
+fn while_body(f: &mut Fixture) -> WhileBody {
+    let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
+    let mut builder = f.module.build_body(false, int);
+    let c = builder.param(nc, bool);
+    let entry = builder.current_block();
+    let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header, Vec::new()));
+    builder.switch_to(header);
+    builder.terminate(while_loop(c, loop_body, exit));
+    builder.switch_to(loop_body);
+    builder.terminate(jump(header, Vec::new()));
+    builder.switch_to(exit);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+    WhileBody { id, entry, header, loop_body, exit }
+}
+
+#[test]
+fn dominators_and_post_dominators_of_a_loop() {
+    let mut f = fixture();
+    let w = while_body(&mut f);
+    let dom = facts_of::<Dominators>(&f, w.id);
+    assert_eq!(dom.idom(w.header), Some(w.entry));
+    assert_eq!(dom.idom(w.loop_body), Some(w.header));
+    assert_eq!(dom.idom(w.exit), Some(w.header));
+    assert!(!dom.dominates(w.loop_body, w.header), "the back edge's source does not dominate its target");
+
+    let post = facts_of::<PostDominators>(&f, w.id);
+    assert_eq!(post.ipdom(w.entry), Some(w.header));
+    assert_eq!(post.ipdom(w.loop_body), Some(w.header), "every way out of the body returns to the header");
+    assert_eq!(post.ipdom(w.header), Some(w.exit));
+    assert!(!post.post_dominates(w.loop_body, w.header), "the header may leave without running the body");
+}
+
+/// ```text
+/// entry(c): diamond c { then } else { else } join
+/// then:     diverge
+/// else:     jump join
+/// join:     return 0
+/// ```
+#[test]
+fn a_diverging_arm_reaches_the_exit_without_the_join() {
+    let mut f = fixture();
+    let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
+    let mut builder = f.module.build_body(false, int);
+    let c = builder.param(nc, bool);
+    let entry = builder.current_block();
+    let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.switch_to(then_block);
+    builder.terminate(Terminator::Diverge);
+    builder.switch_to(else_block);
+    builder.terminate(jump(join, Vec::new()));
+    builder.switch_to(join);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+
+    let dom = facts_of::<Dominators>(&f, id);
+    assert_eq!(dom.idom(then_block), Some(entry));
+    assert_eq!(dom.idom(join), Some(else_block), "the join's one way in is the else arm");
+
+    let post = facts_of::<PostDominators>(&f, id);
+    assert!(post.reaches_exit(then_block));
+    assert_eq!(post.ipdom(then_block), None, "a diverging block's immediate post-dominator is the exit");
+    assert_eq!(post.ipdom(entry), None, "the two arms meet only at the exit");
+    assert!(!post.post_dominates(join, entry), "the diverging arm leaves without the join");
+    assert_eq!(post.ipdom(else_block), Some(join));
+}
+
+/// ```text
+/// entry: jump spin
+/// spin:  jump spin
+/// ```
+#[test]
+fn a_block_that_reaches_no_exit_is_post_dominated_by_itself_alone() {
+    let mut f = fixture();
+    let mut builder = f.module.build_body(false, f.int);
+    let entry = builder.current_block();
+    let spin = builder.new_block(&[]);
+    builder.terminate(jump(spin, Vec::new()));
+    builder.switch_to(spin);
+    builder.terminate(jump(spin, Vec::new()));
+    let id = builder.seal().expect("the body has no open state");
+
+    let post = facts_of::<PostDominators>(&f, id);
+    assert!(!post.reaches_exit(entry) && !post.reaches_exit(spin));
+    assert_eq!(post.ipdom(entry), None);
+    assert!(!post.post_dominates(spin, entry), "not vacuously: the runs from the entry never end");
+    assert!(post.post_dominates(spin, spin));
+}
+
+struct NestedLoops {
+    id: BodyId,
+    entry: BlockId,
+    outer: BlockId,
+    outer_body: BlockId,
+    inner: BlockId,
+    inner_body: BlockId,
+    outer_latch: BlockId,
+    exit: BlockId,
+}
+
+/// ```text
+/// entry(c):    jump outer
+/// outer:       while c { outer_body } else exit
+/// outer_body:  jump inner
+/// inner:       while c { inner_body } else outer_latch
+/// inner_body:  jump inner
+/// outer_latch: jump outer
+/// exit:        return 0
+/// ```
+fn nested_loops(f: &mut Fixture) -> NestedLoops {
+    let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
+    let mut builder = f.module.build_body(false, int);
+    let c = builder.param(nc, bool);
+    let entry = builder.current_block();
+    let [outer, outer_body, inner, inner_body, outer_latch, exit] = [(); 6].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(outer, Vec::new()));
+    builder.switch_to(outer);
+    builder.terminate(while_loop(c, outer_body, exit));
+    builder.switch_to(outer_body);
+    builder.terminate(jump(inner, Vec::new()));
+    builder.switch_to(inner);
+    builder.terminate(while_loop(c, inner_body, outer_latch));
+    builder.switch_to(inner_body);
+    builder.terminate(jump(inner, Vec::new()));
+    builder.switch_to(outer_latch);
+    builder.terminate(jump(outer, Vec::new()));
+    builder.switch_to(exit);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+    NestedLoops { id, entry, outer, outer_body, inner, inner_body, outer_latch, exit }
+}
+
+#[test]
+fn the_loop_tree_nests_an_inner_loop_in_an_outer_one_with_their_preheaders() {
+    let mut f = fixture();
+    let n = nested_loops(&mut f);
+    let tree = facts_of::<LoopTree>(&f, n.id);
+    assert_eq!(tree.loops().count(), 2);
+    let outer = tree.innermost(n.outer).expect("the outer header is in a loop");
+    let inner = tree.innermost(n.inner_body).expect("the inner body is in a loop");
+    assert_ne!(outer, inner);
+
+    assert_eq!(tree.header(outer), n.outer);
+    assert_eq!(tree.header(inner), n.inner);
+    let mut outer_blocks = tree.blocks(outer).to_vec();
+    outer_blocks.sort();
+    let mut expected = vec![n.outer, n.outer_body, n.inner, n.inner_body, n.outer_latch];
+    expected.sort();
+    assert_eq!(outer_blocks, expected);
+    assert_eq!(tree.blocks(inner), [n.inner, n.inner_body]);
+    assert!(!tree.contains(outer, n.exit) && !tree.contains(outer, n.entry));
+    assert!(tree.contains(outer, n.inner_body) && !tree.contains(inner, n.outer_body));
+
+    assert_eq!(tree.parent(inner), Some(outer));
+    assert_eq!(tree.parent(outer), None);
+    assert_eq!(tree.innermost(n.outer_body), Some(outer));
+    assert_eq!(tree.innermost(n.inner), Some(inner));
+    assert_eq!(tree.innermost(n.entry), None);
+    assert_eq!(tree.innermost(n.exit), None);
+
+    assert_eq!(tree.preheader(outer), Some(n.entry));
+    assert_eq!(tree.preheader(inner), Some(n.outer_body));
+}
+
+/// ```text
+/// entry(c): diamond c { left } else { right } header
+/// left:     jump header
+/// right:    jump header
+/// header:   while c { body } else exit
+/// body:     jump header
+/// exit:     return 0
+/// ```
+#[test]
+fn a_header_entered_from_two_blocks_has_no_preheader() {
+    let mut f = fixture();
+    let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
+    let mut builder = f.module.build_body(false, int);
+    let c = builder.param(nc, bool);
+    let [left, right, header, loop_body, exit] = [(); 5].map(|()| builder.new_block(&[]));
+    builder.terminate(diamond(c, left, right, header));
+    for arm in [left, right] {
+        builder.switch_to(arm);
+        builder.terminate(jump(header, Vec::new()));
+    }
+    builder.switch_to(header);
+    builder.terminate(while_loop(c, loop_body, exit));
+    builder.switch_to(loop_body);
+    builder.terminate(jump(header, Vec::new()));
+    builder.switch_to(exit);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+
+    let tree = facts_of::<LoopTree>(&f, id);
+    let [the_loop] = tree.loops().collect::<Vec<_>>()[..] else {
+        panic!("the body has one loop")
+    };
+    assert_eq!(tree.header(the_loop), header);
+    assert_eq!(tree.preheader(the_loop), None);
+}

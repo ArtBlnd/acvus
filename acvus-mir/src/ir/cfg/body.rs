@@ -21,7 +21,9 @@ impl BlockId {
         BlockId(u32::try_from(index).expect("a body holds at most u32::MAX blocks"))
     }
 
-    pub(super) fn index(self) -> usize {
+    /// The block's place among its body's blocks, which `Body::blocks`
+    /// yields in this order. Cost: O(1).
+    pub fn index(self) -> usize {
         self.0 as usize
     }
 }
@@ -55,6 +57,18 @@ pub(super) enum Def {
     /// A parameter the Builder adds to a block for the order token, whose
     /// position is fixed at `seal`, after the caller's parameters.
     UnplacedParam(BlockId),
+    Inst(BlockId, usize),
+}
+
+/// Where a value of a whole body is defined, as `Body::definition` gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Definition {
+    Param(usize),
+    Capture(usize),
+    OrderParam,
+    Slot(usize),
+    BlockParam(BlockId, usize),
+    /// An instruction's result, or the order token it yields.
     Inst(BlockId, usize),
 }
 
@@ -581,6 +595,24 @@ impl Body {
             .get(&value)
             .unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
             .token
+    }
+
+    /// Where `value` is defined. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn definition(&self, value: ValueId) -> Definition {
+        match self.def_of(value) {
+            Def::Param(index) => Definition::Param(index),
+            Def::Capture(index) => Definition::Capture(index),
+            Def::OrderParam => Definition::OrderParam,
+            Def::Slot(index) => Definition::Slot(index),
+            Def::BlockParam(block, index) => Definition::BlockParam(block, index),
+            Def::Inst(block, index) => Definition::Inst(block, index),
+            Def::UnplacedParam(block) => {
+                panic!("a sealed body has no unplaced parameter, and {block:?} has one for {value:?}")
+            }
+        }
     }
 
     /// Every value of the body, in no stated order. Cost: O(values).
