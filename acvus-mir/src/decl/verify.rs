@@ -79,9 +79,9 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let mut refused = Vec::new();
 
     let user_types = extern_types(user_types, &mut refused);
-    let naming_undeclared = refuse_undeclared_types(
+    let unreadable = refuse_unwritable_types(
         &types,
-        Written {
+        DeclaredTypes {
             functions: &functions,
             user_types: &user_types,
             casts: &casts,
@@ -113,7 +113,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     };
     let lifetimes_readable: Vec<QualifiedRef> = declared_order
         .into_iter()
-        .filter(|id| !naming_undeclared.contains(id))
+        .filter(|id| !unreadable.contains(id))
         .collect();
     take_in_lifetimes(&mut decls, &lifetimes_readable, &mut refused);
 
@@ -283,7 +283,7 @@ impl TreeSizes<'_> {
 }
 
 /// Every type the declarations write, by what writes it.
-struct Written<'d> {
+struct DeclaredTypes<'d> {
     functions: &'d [(QualifiedRef, Scheme)],
     user_types: &'d FxHashMap<QualifiedRef, UserTypeDecl>,
     casts: &'d [CastRule],
@@ -313,55 +313,84 @@ fn scheme_types(scheme: &Scheme) -> impl Iterator<Item = TyId<Poly>> + '_ {
         .chain(scheme.bounds.iter().flat_map(bound_types).copied())
 }
 
-/// extern-fn §8: a type term names only declared types, so every
-/// extern-defined type the declarations write is declared. Returns the
-/// functions that name an undeclared one, whose segments cannot be read.
-///
-/// # Panics
-/// An input's type names an undeclared type: `UndeclaredType` names its
-/// declaration by a qualified name, and an input has only a bare one.
-fn refuse_undeclared_types(types: &Types<Poly>, written: Written<'_>, refused: &mut Vec<Refused>) -> FxHashSet<QualifiedRef> {
-    let declared = written.user_types;
-    let undeclared_in = |ty: TyId<Poly>| {
-        let mut named = Vec::new();
-        named_types(types, ty, &mut FxHashSet::default(), &mut named);
-        named.retain(|id| !declared.contains_key(id));
-        named
-    };
-
-    for (name, ty) in written.inputs {
-        if let [id, ..] = undeclared_in(*ty)[..] {
-            todo!("decl::verify: the input {name:?} names the undeclared type {id:?}; UndeclaredType has no way to name an input")
-        }
-    }
-
-    let functions = written
+/// Every type the declarations write, each with where it is written.
+fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Written, TyId<Poly>)> + 'd {
+    let functions = declared
         .functions
         .iter()
-        .flat_map(|(id, scheme)| scheme_types(scheme).map(|ty| (*id, ty)));
-    let user_types = written.user_types.values().flat_map(|decl| {
+        .flat_map(|(id, scheme)| scheme_types(scheme).map(|ty| (Written::Function(*id), ty)));
+    let user_types = declared.user_types.values().flat_map(|decl| {
         decl.type_params
             .iter()
             .flat_map(bound_types)
-            .map(|ty| (decl.id, *ty))
+            .map(|ty| (Written::Type(decl.id), *ty))
     });
-    let casts = written
+    let casts = declared
         .casts
         .iter()
-        .flat_map(|rule| [(rule.via, rule.from), (rule.via, rule.to)]);
-    let contexts = written.contexts.iter().copied();
+        .flat_map(|rule| [(Written::Cast(rule.via), rule.from), (Written::Cast(rule.via), rule.to)]);
+    let contexts = declared.contexts.iter().map(|(id, ty)| (Written::Context(*id), *ty));
+    let inputs = declared.inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
+    functions.chain(user_types).chain(casts).chain(contexts).chain(inputs)
+}
 
-    let mut naming_undeclared = FxHashSet::default();
-    let mut reported = FxHashSet::default();
-    for (declaration, ty) in functions.chain(user_types).chain(casts).chain(contexts) {
-        for id in undeclared_in(ty) {
-            naming_undeclared.insert(declaration);
-            if reported.insert((declaration, id)) {
-                refused.push(Refused::UndeclaredType { declaration, id });
+/// extern-fn §8: a type term names only declared types; effects §3, §6:
+/// `Order` and `Handle` are written by the compiler's IR alone. Every type
+/// the declarations write is held to both. Returns the functions that
+/// break either, whose segments are not read.
+fn refuse_unwritable_types(
+    types: &Types<Poly>,
+    declared: DeclaredTypes<'_>,
+    refused: &mut Vec<Refused>,
+) -> FxHashSet<QualifiedRef> {
+    let mut unreadable = FxHashSet::default();
+    let mut reported: Vec<Refused> = Vec::new();
+    for (written, ty) in written_types(&declared) {
+        let mut terms = TypeTerms::default();
+        terms.read(types, ty);
+        let internal = terms.internal.then_some(Refused::InternalType { written });
+        let undeclared = terms
+            .named
+            .into_iter()
+            .filter(|id| !declared.user_types.contains_key(id))
+            .map(|id| Refused::UndeclaredType { written, id });
+        for refusal in internal.into_iter().chain(undeclared) {
+            if let Written::Function(function) = written {
+                unreadable.insert(function);
+            }
+            if !reported.contains(&refusal) {
+                reported.push(refusal.clone());
+                refused.push(refusal);
             }
         }
     }
-    naming_undeclared
+    unreadable
+}
+
+/// What a type term names: every extern-defined type, each once, and
+/// whether it holds a type only the IR writes.
+#[derive(Default)]
+struct TypeTerms {
+    seen: FxHashSet<TyId<Poly>>,
+    named: Vec<QualifiedRef>,
+    internal: bool,
+}
+
+impl TypeTerms {
+    fn read(&mut self, types: &Types<Poly>, ty: TyId<Poly>) {
+        acvus_utils::grow(|| {
+            if !self.seen.insert(ty) {
+                return;
+            }
+            let kind = types.kind(ty);
+            match kind {
+                TyKind::UserDefined { id, .. } if !self.named.contains(id) => self.named.push(*id),
+                TyKind::Order | TyKind::Handle(_) => self.internal = true,
+                _ => {}
+            }
+            kind.for_each_child(|child| self.read(types, child));
+        })
+    }
 }
 
 /// extern-fn §6: every concrete instance of a shared signature is the
@@ -389,27 +418,6 @@ fn refuse_misfit_instances(
         }
     }
     misfits
-}
-
-/// Every extern-defined type `ty` names, each once, into `named`.
-fn named_types(
-    types: &Types<Poly>,
-    ty: TyId<Poly>,
-    seen: &mut FxHashSet<TyId<Poly>>,
-    named: &mut Vec<QualifiedRef>,
-) {
-    acvus_utils::grow(|| {
-        if !seen.insert(ty) {
-            return;
-        }
-        let kind = types.kind(ty);
-        if let TyKind::UserDefined { id, .. } = kind
-            && !named.contains(id)
-        {
-            named.push(*id);
-        }
-        kind.for_each_child(|child| named_types(types, child, seen, named));
-    })
 }
 
 /// The head a tree step joins at `ty` (types §3), or `None` where there
@@ -1785,7 +1793,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
-                declaration: f,
+                written: Written::Function(f),
                 id: ghost
             }]
         );
@@ -1802,7 +1810,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
-                declaration: via,
+                written: Written::Cast(via),
                 id: ghost
             }]
         );
@@ -1997,7 +2005,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
-                declaration: context,
+                written: Written::Context(context),
                 id: ghost
             }]
         );
@@ -2023,8 +2031,64 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
-                declaration: f,
+                written: Written::Function(f),
                 id: ghost
+            }]
+        );
+    }
+
+    /// extern-fn §8: an input's type is a type term too.
+    #[test]
+    fn an_input_naming_an_undeclared_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let ghost = fixture.name("m", "Ghost");
+        let name = fixture.interner.intern("x");
+        let ghost_ty = undeclared(&mut fixture, ghost);
+        fixture.raw.inputs.push((name, ghost_ty));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::UndeclaredType {
+                written: Written::Input(name),
+                id: ghost
+            }]
+        );
+    }
+
+    /// effects §3, §6: only the compiler's IR writes `Handle` and `Order`.
+    /// A labelled signature holding one is refused for it alone: its
+    /// segments are not read.
+    #[test]
+    fn a_signature_holding_a_handle_is_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let s = fixture.shared_str();
+        let handle = fixture.ty(TyKind::Handle(s));
+        let ty = fixture.function(&[s], handle);
+        let lifetimes = signature(
+            vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
+            &[],
+        );
+        fixture.declare(f, labelled(ty, lifetimes));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::InternalType {
+                written: Written::Function(f)
+            }]
+        );
+    }
+
+    /// effects §3: a context's type holding the order token is refused.
+    #[test]
+    fn a_context_holding_the_order_token_is_refused() {
+        let mut fixture = Fixture::new();
+        let context = fixture.name("m", "token");
+        let order = fixture.ty(TyKind::Order);
+        let option = fixture.ty(TyKind::Option(order));
+        fixture.raw.contexts.push((context, option));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::InternalType {
+                written: Written::Context(context)
             }]
         );
     }
