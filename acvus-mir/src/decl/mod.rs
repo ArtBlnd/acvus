@@ -16,6 +16,7 @@ mod instance_fit;
 mod labels;
 mod loop_markers;
 mod scheme;
+mod segments;
 mod user_type;
 mod verify;
 
@@ -34,6 +35,7 @@ pub use facts::{
 };
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
+pub use segments::{Segment, segments};
 pub use scheme::{DeclaredFacts, GenericSig, InstanceSig, Instances, Requirement, Scheme};
 pub use user_type::UserTypeDecl;
 pub use verify::{Refused, Written};

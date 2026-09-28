@@ -21,8 +21,8 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{
     Callee, ForSource, IndexMode, Inst, InstKind, PathSeg, RefTarget, ValueId,
 };
-use crate::decl::Declarations;
-use crate::flows::{Segment, segment_positions, segments};
+use crate::decl::{Declarations, Segment, segments};
+use crate::flows::segment_positions;
 use crate::ty::{
     Alignment, Concrete, FlowEnd, FlowTerm, Flows, Holds, Labelled, Mutability, PositionKind, Source, Ty,
     TyKind, Types, position_kinds, positions,

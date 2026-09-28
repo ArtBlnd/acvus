@@ -8,7 +8,7 @@ use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::instance_fit::is_instance_of;
 use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, UserTypeDecl};
-use crate::flows::{Segment, segments};
+use super::segments::{Segment, segments};
 use crate::ty::{
     Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LifetimesOf, Mutability, ObjectTy,
     Poly, TyId, TyKind, Types,
@@ -1010,7 +1010,7 @@ fn outlives_closure(
     }
 }
 
-/// For each segment of a parameter's declared type, in `flows::segments`
+/// For each segment of a parameter's declared type, in `segments`
 /// order, whether a call may write into it: it lies in what a `&mut`
 /// names, or it is a function value that captures mutably (`FlowEnd`).
 fn written_segments(types: &Types<Poly>, lifetimes: &dyn LifetimesOf, ty: TyId<Poly>) -> Vec<bool> {
