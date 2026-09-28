@@ -1295,3 +1295,21 @@ fn an_index_is_a_u64() {
     let (checked, _) = fx.script("@xs[0u8]");
     assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
 }
+
+/// context §3, effects §1: a context's load and commit are effects, so a
+/// body that reads and writes a context and calls nothing has it among its
+/// effect's reads and writes, opaque as an unknown load and commit are.
+#[test]
+fn a_bodys_effect_holds_the_contexts_it_touches() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let n = QualifiedRef::root(fx.name("n"));
+    let (checked, _) = fx.script("let v = @n; @n = v; 1");
+    checked.admitted();
+    assert!(checked.typeck.reached.is_empty());
+    let effect = &checked.typeck.body_effect;
+    assert_eq!(effect.reads(), &crate::ty::Contexts::from([n]));
+    assert_eq!(effect.writes(), &crate::ty::Contexts::from([n]));
+    assert_eq!(effect.reissue(), crate::ty::Reissue::Opaque);
+}

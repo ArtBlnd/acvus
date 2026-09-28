@@ -8,6 +8,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::call::reach_in;
 use super::closure::refuse_recursion;
+use super::context::Access;
 use super::ctxt::Ctxt;
 use super::decision::{Callee, CoreSig, Decision};
 use super::expr::check_expr;
@@ -262,17 +263,20 @@ pub(super) fn check_store<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, place: &Plac
     {
         refuse_recursion(cx, stored, *name, span);
     }
-    let Some(slot) = place_slot(cx, place) else {
+    let Some(slot) = place_slot(cx, place, Access::Write) else {
         return;
     };
     cx.enter(value.id(), stored, slot, value.span());
 }
 
 /// The term a store into `place` enters, `None` where the place is refused.
-fn place_slot<S: Slot>(cx: &mut Ctxt<'_>, place: &Place<S>) -> Option<Term> {
+/// A context at its root is touched by `access`: written where it is the
+/// whole place, and read and written where a part of it is stored into
+/// (context §3).
+fn place_slot<S: Slot>(cx: &mut Ctxt<'_>, place: &Place<S>, access: Access) -> Option<Term> {
     acvus_utils::grow(|| {
         let slot = match place {
-            Place::Base(PlaceBase::Root { id, root, span }) => root_slot(cx, *id, *root, *span)?,
+            Place::Base(PlaceBase::Root { id, root, span }) => root_slot(cx, *id, *root, access, *span)?,
             Place::Base(PlaceBase::Element {
                 id,
                 callee_id,
@@ -283,7 +287,7 @@ fn place_slot<S: Slot>(cx: &mut Ctxt<'_>, place: &Place<S>) -> Option<Term> {
             Place::Field {
                 object, field, span, ..
             } => {
-                let object = place_slot(cx, object)?;
+                let object = place_slot(cx, object, Access::ReadWrite)?;
                 field_of(cx, object, *field, *span)
             }
         };
@@ -292,7 +296,7 @@ fn place_slot<S: Slot>(cx: &mut Ctxt<'_>, place: &Place<S>) -> Option<Term> {
     })
 }
 
-fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, span: Span) -> Option<Term> {
+fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, access: Access, span: Span) -> Option<Term> {
     match root {
         Root::Local(name) => match cx.scope.lookup(name) {
             Some(found) => {
@@ -315,6 +319,7 @@ fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, span: Span) -> Option<T
             let term = super::context::context_term(cx, site, context, span)?;
             super::context::refuse_held_loans(cx, term, span);
             cx.out.names.insert(site, Name::Context(context));
+            super::context::note_access(cx, context, access);
             Some(term)
         }
     }

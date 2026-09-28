@@ -118,7 +118,7 @@ fn check_form<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Ter
             cx.scope.pop();
             term
         }
-        Expr::ContextRef { id, name, span } => context::check_context_ref(cx, *id, *name, *span),
+        Expr::ContextRef { id, name, span } => context::check_context_ref(cx, *id, *name, demand, *span),
         Expr::Variant {
             id,
             enum_name,

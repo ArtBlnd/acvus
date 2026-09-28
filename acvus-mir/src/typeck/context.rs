@@ -8,18 +8,57 @@ use super::ctxt::Ctxt;
 use super::decision::Decision;
 use super::output::Name;
 use super::refusal::{self, RefusalKind};
+use super::place::Demand;
 use crate::infer::Term;
-use crate::ty::{LifetimesOf, TyKind};
+use crate::ty::{Contexts, Effect, EffectTerm, LifetimesOf, Mutability, Reissue, SplitCost, TyKind};
 
-/// `@x`: the declared type, invariant (context §2).
-pub(super) fn check_context_ref(cx: &mut Ctxt<'_>, site: AstId, context: QualifiedRef, span: Span) -> Term {
+/// How a body touches a context: its load and its commit are the effects
+/// (context §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Access {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl Access {
+    /// A read of a value for `demand`: one lent mutably or written in part
+    /// is read and may be written.
+    pub fn of(demand: Demand) -> Access {
+        match demand {
+            Demand::Read | Demand::Lend(Mutability::Shared) => Access::Read,
+            Demand::Lend(Mutability::Mut) | Demand::Write => Access::ReadWrite,
+        }
+    }
+}
+
+/// `@x` read for `demand`: the declared type, invariant (context §2).
+pub(super) fn check_context_ref(cx: &mut Ctxt<'_>, site: AstId, context: QualifiedRef, demand: Demand, span: Span) -> Term {
     match context_term(cx, site, context, span) {
         Some(term) => {
             cx.out.names.insert(site, Name::Context(context));
+            note_access(cx, context, Access::of(demand));
             term
         }
         None => cx.fresh(),
     }
+}
+
+/// The body touching `context` has it in its effect, joined as a call's
+/// effect is (effects §1): among the effect's reads where it is loaded,
+/// and its writes where it is committed (context §3). What a load or a
+/// commit does beyond the program is unknown to the language, as a
+/// syscall's is (context §3), so it is opaque, which is always sound
+/// (extern-fn §2).
+pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Access) {
+    let touched = Contexts::from([context]);
+    let (reads, writes) = match access {
+        Access::Read => (touched, Contexts::new()),
+        Access::Write => (Contexts::new(), touched),
+        Access::ReadWrite => (touched.clone(), touched),
+    };
+    let effect = Effect::new(Reissue::Opaque, false, reads, writes, SplitCost::Unavailable);
+    super::effect::note_call_effect(cx, &EffectTerm::Known(effect));
 }
 
 /// A context's declared type at this body, every node `Opaque`, so it never
