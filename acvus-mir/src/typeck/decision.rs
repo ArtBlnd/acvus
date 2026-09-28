@@ -83,8 +83,10 @@ pub(super) enum Callee {
 pub(super) enum Decision {
     /// Which declaration a call reaches, and at which impl (types §6).
     /// `effect` is the call's effect as its body already joined it
-    /// (effects §1): the reached declaration's effect joins into it. A
-    /// required impl is no call and has none.
+    /// (effects §1): the reached declaration's effect joins into it. For a
+    /// required impl it is the effect of the call the requirement serves,
+    /// which the reached declaration's own declared effect already covers,
+    /// so nothing joins it.
     Reach {
         site: AstId,
         span: Span,
@@ -93,7 +95,7 @@ pub(super) enum Decision {
         /// into its parameter is recorded.
         args: Box<[(AstId, Term)]>,
         result: Term,
-        effect: Option<EffectTerm<InferPhase>>,
+        effect: EffectTerm<InferPhase>,
     },
     /// What a `for` iterates by (control-flow); by reference, its
     /// container's `as_slice(_mut)` is reached at `callee_site`.
@@ -108,8 +110,15 @@ pub(super) enum Decision {
     },
     /// What a `?` unwraps (control-flow).
     Try { site: AstId, span: Span, operand: Term, value: Term, exit: Term },
-    /// A value entering a slot (types §3, §7).
-    Enter { site: AstId, span: Span, value: Term, slot: Term },
+    /// A value entering a slot (types §3, §7), in the body whose effect is
+    /// `body`: a coercion's function joins it (effects §1).
+    Enter {
+        site: AstId,
+        span: Span,
+        value: Term,
+        slot: Term,
+        body: EffectTerm<InferPhase>,
+    },
     /// `as` from its source's type (operators §5).
     Cast { site: AstId, span: Span, source: Term, to: CastTy },
     /// A bounded variable some use must answer (types §5), refused where
@@ -357,11 +366,23 @@ fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<Closed> {
 /// Fires `decision` if its inputs are closed; hands it back otherwise.
 fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), Decision> {
     match decision {
-        Decision::Enter { site, span, value, slot } => {
+        Decision::Enter {
+            site,
+            span,
+            value,
+            slot,
+            body,
+        } => {
             let Some(closed) = closed_for(cx, value, reading) else {
-                return Err(Decision::Enter { site, span, value, slot });
+                return Err(Decision::Enter {
+                    site,
+                    span,
+                    value,
+                    slot,
+                    body,
+                });
             };
-            fire_enter(cx, site, span, closed, slot);
+            fire_enter(cx, site, span, closed, slot, body);
             Ok(())
         }
         Decision::Iterate {
@@ -574,17 +595,25 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
     }
 }
 
-fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: Term) {
+fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: Term, body: EffectTerm<InferPhase>) {
     match cx.infer.enter(cx.decls, value, slot) {
         Ok(Entered::Folded) => cx.out.entered.push(super::output::Entered {
             site,
             span,
             value: value.term,
             slot,
+            body,
         }),
         Ok(Entered::Converted(conversion)) => {
             let node = AstId::alloc();
-            let via_ty = reach_step(cx, node, span, conversion.rule().via, None, value.term, slot);
+            let step = Step {
+                node,
+                span,
+                via: conversion.rule().via,
+                view: None,
+                body: &body,
+            };
+            let via_ty = reach_step(cx, step, value.term, slot);
             cx.out.conversions.insert(site, Converted { node, via_ty, to: slot });
         }
         Err(mismatch) => refusal::mismatch(cx, mismatch, span),
@@ -706,7 +735,7 @@ struct Reach {
     callee: Callee,
     args: Box<[(AstId, Term)]>,
     result: Term,
-    effect: Option<EffectTerm<InferPhase>>,
+    effect: EffectTerm<InferPhase>,
 }
 
 impl Reach {
@@ -1060,28 +1089,36 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
         }
         _ => {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
-                cx.enter(*arg_site, *arg, *param, span);
+                cx.enter_in(effect.clone(), *arg_site, *arg, *param, span);
             }
             cx.eq(result, ret, span);
-            if let Some(effect) = effect {
-                cx.infer.join_effects(&effect, &declared_effect);
-            }
+            cx.infer.join_effects(&effect, &declared_effect);
             cx.out.reached.insert(site, chosen);
             cx.out.callees.insert(site, ty);
         }
     }
     settle_bounded(cx, ty, span);
     for required in requirements {
-        push_required(cx, site, span, required);
+        push_required(cx, site, span, required, &effect);
     }
 }
 
-/// A coercion step from `from` to `to` at `node`, performed by `via`: a
-/// declared cast's or conversion's function (types §3, §7), or for a view
-/// (operators §5) its concrete impl `view`. Its type is instantiated with
-/// `from` its parameter and `to` its result, and each of its requirements
-/// is a reach of its own (extern-fn §6), as a reached call's are. What it
-/// chose is recorded in `reached` at `node`; its function type there is
+/// One coercion step's `via` at `node`: a declared cast's or conversion's
+/// function (types §3, §7), or for a view (operators §5) its concrete impl
+/// `view`, in the body whose effect is `body`.
+pub(super) struct Step<'b> {
+    pub node: AstId,
+    pub span: Span,
+    pub via: QualifiedRef,
+    pub view: Option<usize>,
+    pub body: &'b EffectTerm<InferPhase>,
+}
+
+/// A coercion step from `from` to `to`, performed by its `via` as a call
+/// is: its type is instantiated with `from` its parameter and `to` its
+/// result, its effect joins the body's (effects §1), and each of its
+/// requirements is a reach of its own (extern-fn §6). What it chose is
+/// recorded in `reached` at the step's node; its function type there is
 /// returned.
 ///
 /// # Panics
@@ -1089,15 +1126,14 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
 /// conversion whose `via` is not its function (`ViaNotItsFunction`), and a
 /// view is the compiler's, built as a function of one parameter
 /// (`Core::generic_functions`).
-pub(super) fn reach_step(
-    cx: &mut Ctxt<'_>,
-    node: AstId,
-    span: Span,
-    via: QualifiedRef,
-    view: Option<usize>,
-    from: Term,
-    to: Term,
-) -> Term {
+pub(super) fn reach_step(cx: &mut Ctxt<'_>, step: Step<'_>, from: Term, to: Term) -> Term {
+    let Step {
+        node,
+        span,
+        via,
+        view,
+        body,
+    } = step;
     let scheme = cx
         .decls
         .scheme(via)
@@ -1115,7 +1151,7 @@ pub(super) fn reach_step(
         },
     };
     let Instantiated { ty, requirements } = instantiate(cx, offer, span);
-    let TyKind::Fn { params, ret, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
+    let TyKind::Fn { params, ret, effect, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
         panic!("a step's `via` is a function type (ViaNotItsFunction, NotAFunction)");
     };
     let [param] = &params[..] else {
@@ -1123,6 +1159,7 @@ pub(super) fn reach_step(
     };
     cx.eq(*param, from, span);
     cx.eq(ret, to, span);
+    cx.infer.join_effects(body, &effect);
     cx.out.reached.insert(
         node,
         Chosen {
@@ -1133,7 +1170,7 @@ pub(super) fn reach_step(
     );
     settle_bounded(cx, ty, span);
     for required in requirements {
-        push_required(cx, node, span, required);
+        push_required(cx, node, span, required, body);
     }
     ty
 }
@@ -1141,7 +1178,7 @@ pub(super) fn reach_step(
 /// A requirement a reached declaration states, as a reach of its own over
 /// the required generic function's impls, by the pattern's parameters
 /// (extern-fn §6).
-pub(super) fn push_required(cx: &mut Ctxt<'_>, site: AstId, span: Span, required: RequiredAt) {
+pub(super) fn push_required(cx: &mut Ctxt<'_>, site: AstId, span: Span, required: RequiredAt, serves: &EffectTerm<InferPhase>) {
     let TyKind::Fn { params, .. } = cx.infer.types().kind(cx.infer.shallow(required.pattern)).clone() else {
         // An impl is a function (extern-fn §1), so a pattern of another type
         // is answered by none.
@@ -1157,7 +1194,7 @@ pub(super) fn push_required(cx: &mut Ctxt<'_>, site: AstId, span: Span, required
         callee: Callee::Required(required),
         args,
         result,
-        effect: None,
+        effect: serves.clone(),
     });
 }
 

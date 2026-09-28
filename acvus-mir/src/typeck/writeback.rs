@@ -25,6 +25,10 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
     }
 
     let mut memo = FreezeMemo::default();
+    // Coercions first: each step's function is reached as a call is, and
+    // its effect joins its body's, before any type holding that effect is
+    // frozen (effects §1).
+    let conversions = conversions(&mut cx, types, &mut memo);
     let sites: Vec<_> = cx.out.types.iter().map(|(site, term)| (*site, *term)).collect();
     let mut frozen = FxHashMap::default();
     for (site, term) in sites {
@@ -46,7 +50,6 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
         .into_iter()
         .filter_map(|(site, callee)| Some((site, freeze(&mut cx, types, &mut memo, callee)?)))
         .collect();
-    let conversions = conversions(&mut cx, types, &mut memo);
     let comparisons = comparisons(&mut cx);
     let body_effect = match cx.out.body_effect.take() {
         Some(effect) => effect_of(&mut cx, effect),
@@ -290,8 +293,9 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
         })
         .collect();
     for entered in std::mem::take(&mut cx.out.entered) {
+        let site = entered.site;
         if let Some(steps) = climb(cx, entered) {
-            applied.push((entered.site, steps));
+            applied.push((site, steps));
         }
     }
     // Each step's requirements are reaches of their own, fired now that
@@ -333,7 +337,9 @@ struct Step {
 /// With no refusal made, the slot's head is not up the tree from the
 /// value's: `enter` folded the value into it, so it is.
 fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
-    let Entered { span, value, slot, .. } = entered;
+    let Entered {
+        span, value, slot, body, ..
+    } = entered;
     let (Some(mut at), Some(to)) = (cx.closed(value), cx.closed(slot)) else {
         return None;
     };
@@ -369,7 +375,14 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
             }
         };
         let node = AstId::alloc();
-        let via_ty = super::decision::reach_step(cx, node, span, rule.via, view_impl, at.term, reached);
+        let step = super::decision::Step {
+            node,
+            span,
+            via: rule.via,
+            view: view_impl,
+            body: &body,
+        };
+        let via_ty = super::decision::reach_step(cx, step, at.term, reached);
         steps.push(Step { node, via_ty, to: reached });
         at = cx.closed(reached)?;
     }

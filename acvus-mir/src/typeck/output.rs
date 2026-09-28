@@ -116,12 +116,15 @@ pub(super) enum Comparing {
 /// A value that entered a slot and was folded there (types §3); its
 /// coercion is read at writeback, from the value's final type up to the
 /// slot's, since the slot may rise after the value entered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Entered {
     pub site: AstId,
     pub span: Span,
     pub value: Term,
     pub slot: Term,
+    /// The effect of the body the value entered in, which each step's
+    /// function joins (effects §1).
+    pub body: EffectTerm<InferPhase>,
 }
 
 /// An `as` cast, at either end a `CastTy` (operators §5).

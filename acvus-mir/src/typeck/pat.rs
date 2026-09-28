@@ -20,7 +20,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::Binding;
 use crate::decl::{Base, Head};
 use crate::infer::Term;
-use crate::ty::{Label, LenTerm, Mutability, ObjectTy, TyKind};
+use crate::ty::{EffectTerm, Infer as InferPhase, Label, LenTerm, Mutability, ObjectTy, TyKind};
 
 /// A checked pattern, waiting for its scrutinee's head.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,8 +34,10 @@ pub(super) struct Shape {
 enum Form {
     /// A name, bound to `term`.
     Bind { term: Term },
-    /// `@x`: the matched value enters the context.
-    Context { context: Term },
+    /// `@x`: the matched value enters the context. `body` is the effect of
+    /// the body the pattern is written in, which a coercion into the
+    /// context joins (effects §1).
+    Context { context: Term, body: EffectTerm<InferPhase> },
     Ignore,
     /// A literal the scrutinee is compared with.
     Literal { literal: Term },
@@ -108,7 +110,8 @@ fn shape_level<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>) -> Shape {
                 super::context::refuse_held_loans(cx, context, *span);
                 cx.out.names.insert(*id, Name::Context(*name));
                 super::context::note_access(cx, *name, super::context::Access::Write);
-                Form::Context { context }
+                let body = super::effect::body_effect(cx);
+                Form::Context { context, body }
             }
             None => Form::Ignore,
         },
@@ -203,9 +206,9 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
             let value = bound_value(cx, scrutinee, lent, span);
             cx.eq(term, value, span);
         }
-        Form::Context { context } => {
+        Form::Context { context, body } => {
             let value = bound_value(cx, scrutinee, lent, span);
-            cx.enter(site, value, context, span);
+            cx.enter_in(body, site, value, context, span);
         }
         Form::Ignore => {}
         Form::Literal { literal } => cx.join(scrutinee, literal, span),

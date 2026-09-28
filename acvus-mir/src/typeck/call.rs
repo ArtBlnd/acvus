@@ -117,7 +117,7 @@ pub(super) fn reach_call(cx: &mut Ctxt<'_>, site: AstId, callee: Callee, args: V
         callee,
         args: args.into(),
         result,
-        effect: Some(effect),
+        effect,
     });
     result
 }
@@ -142,7 +142,7 @@ pub(super) fn reach_in(
         callee,
         args: args.into(),
         result,
-        effect: Some(effect),
+        effect,
     });
     result
 }
@@ -178,8 +178,9 @@ pub(super) fn declaration_value(cx: &mut Ctxt<'_>, site: AstId, declaration: Qua
         },
     );
     decision::settle_bounded(cx, instantiated.ty, span);
+    let body = super::effect::body_effect(cx);
     for required in instantiated.requirements {
-        decision::push_required(cx, site, span, required);
+        decision::push_required(cx, site, span, required, &body);
     }
     instantiated.ty
 }

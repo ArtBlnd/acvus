@@ -6,7 +6,7 @@ use super::refusal;
 use super::scope::Scope;
 use crate::decl::Declarations;
 use crate::infer::{Bound, Closed, Infer, Term};
-use crate::ty::{Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind};
+use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind};
 
 /// The shared state of one checked body (S1): the declarations it reads,
 /// and four things it builds. No rule holds state of its own.
@@ -76,11 +76,26 @@ impl<'d> Ctxt<'d> {
         }
     }
 
-    /// `value` enters `slot` once `value` is closed (types §3, §7). A value
-    /// already closed at the top of its cast tree can never change, so it
-    /// enters at once.
+    /// `value` enters `slot` once `value` is closed (types §3, §7), in the
+    /// body being checked. A value already closed at the top of its cast
+    /// tree can never change, so it enters at once.
     pub fn enter(&mut self, site: AstId, value: Term, slot: Term, span: Span) {
-        super::decision::decide(self, Decision::Enter { site, span, value, slot });
+        let body = super::effect::body_effect(self);
+        self.enter_in(body, site, value, slot, span);
+    }
+
+    /// `value` enters `slot` in the body whose effect is `body`, which the
+    /// coercion's function joins (effects §1): a decision firing after the
+    /// walk names the body it was written in.
+    pub fn enter_in(&mut self, body: EffectTerm<InferPhase>, site: AstId, value: Term, slot: Term, span: Span) {
+        let enter = Decision::Enter {
+            site,
+            span,
+            value,
+            slot,
+            body,
+        };
+        super::decision::decide(self, enter);
     }
 
     /// A range's end, an integer (control-flow). Its width is a use's to

@@ -1399,3 +1399,48 @@ fn a_pattern_never_binds_a_function_into_a_context() {
     let (checked, _) = fx.script("match @f { @f => 1, }");
     assert_eq!(checked.refusals(), vec![&RefusalKind::HoldsLoans]);
 }
+
+/// effects §1: a coercion is performed by its function, as a call is, so
+/// that function's effect joins the body's, for a declared cast and for a
+/// view alike.
+#[test]
+fn a_coercions_effect_joins_its_bodys() {
+    use crate::ty::{Contexts, Effect, Reissue, SplitCost};
+    let idempotent = || EffectTerm::Known(Effect::new(Reissue::Idempotent, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
+
+    let mut fx = Fixture::new();
+    let (u8_ty, i64_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64));
+    let widening = fx.function(&[u8_ty], i64_ty, idempotent());
+    let widen = fx.declare("widen", widening, &[]);
+    fx.raw.casts.push(CastRule {
+        from: u8_ty,
+        to: i64_ty,
+        via: widen,
+    });
+    let (checked, _) = fx.script("if true { return 1u8; }; 2i64");
+    checked.admitted();
+    assert_eq!(checked.typeck.body_effect.reissue(), Reissue::Idempotent);
+
+    let mut fx = Fixture::new();
+    let (vec_id, _) = fx.vec_and_its_view();
+    let e = fx.var(0);
+    let vec_e = fx.vec_of(vec_id, e);
+    let shared_vec_e = fx.reference(Mutability::Shared, vec_e);
+    let slice_e = fx.ty(TyKind::Slice(e));
+    let shared_slice_e = fx.reference(Mutability::Shared, slice_e);
+    let view = fx.function(&[shared_vec_e], shared_slice_e, idempotent());
+    let as_slice = fx.raw.core.as_slice;
+    fx.lang_item(as_slice, &[view]);
+    let bool_ty = fx.ty(TyKind::Bool);
+    let bools = fx.ty(TyKind::Slice(bool_ty));
+    let shared_bools = fx.reference(Mutability::Shared, bools);
+    let unit = fx.ty(TyKind::Unit);
+    let takes_slice = fx.pure(&[shared_bools], unit);
+    fx.declare("first", takes_slice, &[]);
+    let vec_bool = fx.vec_of(vec_id, bool_ty);
+    let makes = fx.pure(&[], vec_bool);
+    fx.declare("make", makes, &[]);
+    let (checked, _) = fx.script("let v = make(); first(&v)");
+    checked.admitted();
+    assert_eq!(checked.typeck.body_effect.reissue(), Reissue::Idempotent);
+}
