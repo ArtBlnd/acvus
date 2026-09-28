@@ -2,10 +2,10 @@
 //! state, and yields a `Body` only by `seal`, which checks that no open state
 //! is left.
 
-use super::body::{BlockId, Body, Terminator};
+use super::body::{BlockId, Body, BodyId, Module, Terminator};
 use super::op::Op;
 use crate::ir::ValueId;
-use crate::ty::{Concrete, Ty, Types};
+use crate::ty::Ty;
 
 /// Open state left at `seal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,16 +15,15 @@ pub enum Unsealed {
     OpenAnyorder,
 }
 
-pub struct Builder<'t> {
+/// Made by `Module::build_body`; building borrows the module, and the
+/// module's one table types every value.
+pub struct Builder<'m> {
+    module: &'m mut Module,
     body: Body,
-    types: &'t mut Types<Concrete>,
     at: BlockId,
 }
 
-impl<'t> Builder<'t> {
-    pub fn new(types: &'t mut Types<Concrete>) -> Self {
-        todo!("ir::cfg::Builder::new")
-    }
+impl<'m> Builder<'m> {
 
     /// Appends a non-effectful instruction; its result is typed `ty`.
     pub fn push(&mut self, op: Op, ty: Ty) -> ValueId {
@@ -56,7 +55,8 @@ impl<'t> Builder<'t> {
         todo!("ir::cfg::Builder::close_anyorder")
     }
 
-    pub fn seal(self) -> Result<Body, Unsealed> {
+    /// Checks that no open state is left and adds the body to the module.
+    pub fn seal(self) -> Result<BodyId, Unsealed> {
         todo!("ir::cfg::Builder::seal")
     }
 }

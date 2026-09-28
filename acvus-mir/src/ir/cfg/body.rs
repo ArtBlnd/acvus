@@ -81,6 +81,25 @@ pub enum Terminator {
 }
 
 impl Module {
+    /// A module over the type table typeck's writeback filled.
+    pub fn new(types: Types<Concrete>, ret: Ty, flows: Flows) -> Module {
+        todo!("ir::cfg::Module::new")
+    }
+
+    /// A Builder for a new body of this module; its `seal` adds the body.
+    pub fn build_body(&mut self) -> super::Builder<'_> {
+        todo!("ir::cfg::Module::build_body")
+    }
+
+    /// A Rewriter over one body of this module.
+    pub fn rewrite(&mut self, body: BodyId) -> super::Rewriter<'_> {
+        todo!("ir::cfg::Module::rewrite")
+    }
+
+    pub fn set_entry(&mut self, body: BodyId) {
+        todo!("ir::cfg::Module::set_entry")
+    }
+
     pub fn body(&self, id: BodyId) -> &Body {
         &self.bodies[id.0 as usize]
     }

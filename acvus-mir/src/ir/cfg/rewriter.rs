@@ -2,21 +2,18 @@
 //! between any two operations, recording what each changed.
 
 use super::aspect::Changes;
-use super::body::{BlockId, Body};
+use super::body::{BlockId, Body, Module};
 use super::core::StillUsed;
 use crate::ir::ValueId;
-use crate::ty::{Concrete, Types};
 
-pub struct Rewriter<'b> {
-    body: &'b mut Body,
-    types: &'b mut Types<Concrete>,
+/// Made by `Module::rewrite`, over one body of the module.
+pub struct Rewriter<'m> {
+    module: &'m mut Module,
+    body: super::BodyId,
     changes: Changes,
 }
 
-impl<'b> Rewriter<'b> {
-    pub fn new(body: &'b mut Body, types: &'b mut Types<Concrete>) -> Self {
-        Self { body, types, changes: Changes::default() }
-    }
+impl<'m> Rewriter<'m> {
 
     pub fn replace_all_uses(&mut self, of: ValueId, with: ValueId) {
         todo!("ir::cfg::Rewriter::replace_all_uses")
