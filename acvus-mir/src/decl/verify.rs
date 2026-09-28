@@ -30,7 +30,7 @@ pub enum Refused {
     LabelsDoNotFit { declaration: QualifiedRef },
     /// A declared cast, or a view instance, whose `from` or `to` has no
     /// head the tree can step between: a type variable, `!`, the order
-    /// token, a started call, or a reference to a reference. A tree step
+    /// token, a started call, or a reference to one of those. A tree step
     /// joins two heads (types §3).
     CastWithoutHead { via: QualifiedRef },
     /// An instance whose type is not its shared signature's type at some
@@ -53,6 +53,9 @@ pub enum Refused {
     /// A declared type holds `Handle` or `Order`, which only the compiler's
     /// IR writes (effects §3, §6).
     InternalType { written: Written },
+    /// A declared type holds a reference whose target is a reference
+    /// (types §4).
+    ReferenceToReference { written: Written },
     /// A scheme whose bounds do not give each of its type variables exactly
     /// one bound (extern-fn §1: a type parameter carries one bound).
     BoundsDoNotFit { function: QualifiedRef },
@@ -400,9 +403,10 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
 }
 
 /// extern-fn §8: a type term names only declared types; effects §3, §6:
-/// `Order` and `Handle` are written by the compiler's IR alone. Every type
-/// the declarations write is held to both. Returns the functions that
-/// break either, whose segments are not read.
+/// `Order` and `Handle` are written by the compiler's IR alone; types §4: a
+/// reference's target is never a reference. Every type the declarations
+/// write is held to all three. Returns the functions that break any, whose
+/// segments are not read.
 fn refuse_unwritable_types(
     types: &Types<Poly>,
     declared: DeclaredTypes<'_>,
@@ -414,12 +418,15 @@ fn refuse_unwritable_types(
         let mut terms = TypeTerms::default();
         terms.read(types, ty);
         let internal = terms.internal.then_some(Refused::InternalType { written });
+        let reference_to_reference = terms
+            .reference_to_reference
+            .then_some(Refused::ReferenceToReference { written });
         let undeclared = terms
             .named
             .into_iter()
             .filter(|id| !declared.user_types.contains_key(id))
             .map(|id| Refused::UndeclaredType { written, id });
-        for refusal in internal.into_iter().chain(undeclared) {
+        for refusal in internal.into_iter().chain(reference_to_reference).chain(undeclared) {
             if let Written::Function(function) = written {
                 unreadable.insert(function);
             }
@@ -432,13 +439,15 @@ fn refuse_unwritable_types(
     unreadable
 }
 
-/// What a type term names: every extern-defined type, each once, and
-/// whether it holds a type only the IR writes.
+/// What a type term names: every extern-defined type, each once, whether
+/// it holds a type only the IR writes, and whether it holds a reference to
+/// a reference.
 #[derive(Default)]
 struct TypeTerms {
     seen: FxHashSet<TyId<Poly>>,
     named: Vec<QualifiedRef>,
     internal: bool,
+    reference_to_reference: bool,
 }
 
 impl TypeTerms {
@@ -451,6 +460,9 @@ impl TypeTerms {
             match kind {
                 TyKind::UserDefined { id, .. } if !self.named.contains(id) => self.named.push(*id),
                 TyKind::Order | TyKind::Handle(_) => self.internal = true,
+                TyKind::Ref(_, target) if matches!(types.kind(target.ty()), TyKind::Ref(..)) => {
+                    self.reference_to_reference = true
+                }
                 _ => {}
             }
             kind.for_each_child(|child| self.read(types, child));
@@ -486,18 +498,19 @@ fn refuse_misfit_instances(
 }
 
 /// The head a tree step joins at `ty` (types §3), or `None` where there
-/// is none: a type variable, `!`, the order token or a started call, a
-/// reference to one of those, or a reference to a reference.
+/// is none: a type variable, `!`, the order token or a started call, or a
+/// reference to one of those.
 fn head(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Head> {
     match types.kind(ty) {
-        TyKind::Ref(mutability, target) => match base(types, target.ty())? {
-            Base::Ref => None,
-            target => Some(Head::Ref(*mutability, target)),
-        },
+        TyKind::Ref(mutability, target) => Some(Head::Ref(*mutability, base(types, target.ty())?)),
         _ => Some(Head::Base(base(types, ty)?)),
     }
 }
 
+/// # Panics
+/// `ty` is a reference: `head` reads a reference as its own head, and
+/// `cast_tree` leaves out every rule whose end is a reference to a
+/// reference, which `refuse_unwritable_types` refuses.
 fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
     Some(match types.kind(ty) {
         TyKind::Int(width) => Base::Int(*width),
@@ -517,7 +530,10 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::UserDefined { id, .. } => Base::Named(*id),
-        TyKind::Ref(..) => Base::Ref,
+        TyKind::Ref(..) => panic!(
+            "a reference's target is never a reference (types §4): a rule with such an end is refused as \
+             ReferenceToReference and left out of the tree"
+        ),
         TyKind::Var(_) | TyKind::Never | TyKind::Order | TyKind::Handle(_) => return None,
     })
 }
@@ -549,7 +565,12 @@ fn cast_tree(
     core: &Core,
     refused: &mut Vec<Refused>,
 ) -> CastTree {
-    let rules = casts.iter().cloned().map(Ok).chain(view_rules(types, functions, misfits, core));
+    let rules = casts
+        .iter()
+        .cloned()
+        .map(Ok)
+        .chain(view_rules(types, functions, misfits, core))
+        .filter(|rule| !rule.as_ref().is_ok_and(|rule| ends_in_reference_to_reference(types, rule)));
     let mut steps = Vec::new();
     for rule in rules {
         match rule.and_then(|rule| Step::of(types, rule)) {
@@ -576,6 +597,15 @@ fn cast_tree(
     }
     refuse_cycles(&above, &from_order, refused);
     tree
+}
+
+/// Whether an end of `rule` is a reference to a reference, which is
+/// refused as `ReferenceToReference` and has no head (types §4).
+fn ends_in_reference_to_reference(types: &Types<Poly>, rule: &CastRule) -> bool {
+    [rule.from, rule.to].into_iter().any(|end| match types.kind(end) {
+        TyKind::Ref(_, target) => matches!(types.kind(target.ty()), TyKind::Ref(..)),
+        _ => false,
+    })
 }
 
 /// Each instance of `core::as_slice`, `core::as_slice_mut` and
@@ -1988,8 +2018,8 @@ mod tests {
         );
     }
 
-    /// types §3: a reference to a reference is no head the tree steps
-    /// between.
+    /// types §4: a reference's target is never a reference, so a cast from
+    /// `&&String` is refused as that, and as nothing else.
     #[test]
     fn a_cast_from_a_reference_to_a_reference_is_refused() {
         let mut fixture = Fixture::new();
@@ -1998,7 +2028,32 @@ mod tests {
         let inner = fixture.reference(Mutability::Shared, string);
         let from = fixture.reference(Mutability::Shared, inner);
         fixture.raw.casts.push(CastRule { from, to: string, via });
-        assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via }]);
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::ReferenceToReference {
+                written: Written::Cast(via)
+            }]
+        );
+    }
+
+    /// types §4: a reference's target is never a reference, wherever a
+    /// declared type holds one: `fn(Option<&&i64>) -> ()`.
+    #[test]
+    fn a_signature_holding_a_reference_to_a_reference_is_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let (int, unit) = (fixture.ty(TyKind::Int(IntTy::I64)), fixture.ty(TyKind::Unit));
+        let inner = fixture.reference(Mutability::Shared, int);
+        let outer = fixture.reference(Mutability::Mut, inner);
+        let option = fixture.ty(TyKind::Option(outer));
+        let ty = fixture.function(&[option], unit);
+        fixture.declare(f, fixture.plain(ty, 0));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::ReferenceToReference {
+                written: Written::Function(f)
+            }]
+        );
     }
 
     /// types §3: a view signature's generic instance has a variable for its

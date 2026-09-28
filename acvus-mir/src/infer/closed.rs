@@ -38,7 +38,12 @@ impl Infer {
     /// # Panics
     /// `node` is the order token or a started call, or a reference to one:
     /// only the compiler's IR writes those (effects §3, §6), so no term of
-    /// typeck's is one.
+    /// typeck's is one. Or `node` is a reference to a reference, which
+    /// types §4 excludes.
+    ///
+    /// NOTE: verify refuses a declared reference to a reference, but nothing
+    /// here yet refuses binding a variable under a reference to a reference,
+    /// as instantiating `&T` at `T = &U` would.
     pub(super) fn head_of(&self, node: Term) -> Option<Head> {
         match self.types.kind(node) {
             TyKind::Ref(mutability, target) => {
@@ -55,7 +60,8 @@ impl Infer {
 /// The head of a declared cast's end (types §3).
 ///
 /// # Panics
-/// `ty` has no head: verify admits no such cast (`CastWithoutHead`).
+/// `ty` has no head: verify admits no such cast (`CastWithoutHead`,
+/// `ReferenceToReference`).
 pub(super) fn poly_head(types: &Types<Poly>, ty: TyId<Poly>) -> Head {
     match types.kind(ty) {
         TyKind::Ref(mutability, target) => Head::Ref(*mutability, base_of(types.kind(target.ty()))),
@@ -82,7 +88,10 @@ fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
         TyKind::Object(ObjectTy::Declared(id, _)) | TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
-        TyKind::Ref(..) => Base::Ref,
+        TyKind::Ref(..) => panic!(
+            "a reference's target is never a reference (types §4): verify refuses a declared one \
+             (ReferenceToReference), and a reference's own head is read before its target's"
+        ),
         TyKind::Order | TyKind::Handle(_) => panic!(
             "only the compiler's IR writes the order token and a started call (effects §3, §6); \
              verify refuses a declared one (InternalType)"

@@ -31,8 +31,8 @@ pub enum Head {
     Ref(Mutability, Base),
 }
 
-/// A constructor. `Ref` here is a reference's target that is itself a
-/// reference: no view or declared cast steps from one.
+/// A constructor. A reference's target is never a reference (types §4), so
+/// no reference is a `Base`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Base {
     /// The bottom type (types §4): a closed head for decisions on a diverging
@@ -54,7 +54,6 @@ pub enum Base {
     Enum(QualifiedRef),
     Fn,
     Named(QualifiedRef),
-    Ref,
 }
 
 /// The declared casts and the views (operators §5) as one tree: every head
