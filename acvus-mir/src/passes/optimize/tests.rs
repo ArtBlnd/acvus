@@ -19,7 +19,7 @@ use crate::ty::{
     TyKind, TypeArg, Types,
 };
 
-pub(super) struct Fixture {
+pub(in crate::passes) struct Fixture {
     pub module: Module,
     pub interner: Interner,
     pub int: Ty,
@@ -156,7 +156,7 @@ impl Fixture {
     }
 }
 
-fn declarations(interner: &Interner) -> Declarations {
+pub(in crate::passes) fn declarations(interner: &Interner) -> Declarations {
     Declarations::verify(RawDeclarations {
         types: Types::new(),
         functions: Vec::new(),
@@ -173,7 +173,7 @@ fn declarations(interner: &Interner) -> Declarations {
 }
 
 /// The invariants every scope keeps hold on the transform's output.
-pub(super) fn assert_whole(module: &Module, body: BodyId) {
+pub(in crate::passes) fn assert_whole(module: &Module, body: BodyId) {
     type Base = (TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept);
     if let Err(violation) = Base::check(module.body(body), module.types()) {
         panic!("the output breaks {}: {}", violation.invariant, violation.detail);
@@ -181,38 +181,38 @@ pub(super) fn assert_whole(module: &Module, body: BodyId) {
 }
 
 /// A direct call of `name`, typed `callee_ty`, with `args`.
-pub(super) fn direct_call(name: Astr, callee_ty: Ty, args: Vec<ValueId>) -> Op {
+pub(in crate::passes) fn direct_call(name: Astr, callee_ty: Ty, args: Vec<ValueId>) -> Op {
     Op::FunctionCall { callee: Callee::Direct(QualifiedRef::root(name)), callee_ty, args }
 }
 
-pub(super) fn int_const(value: i128) -> Op {
+pub(in crate::passes) fn int_const(value: i128) -> Op {
     Op::Const { value: Literal::Int(value) }
 }
 
-pub(super) fn bool_const(value: bool) -> Op {
+pub(in crate::passes) fn bool_const(value: bool) -> Op {
     Op::Const { value: Literal::Bool(value) }
 }
 
-pub(super) fn trapping_add(left: ValueId, right: ValueId) -> Op {
+pub(in crate::passes) fn trapping_add(left: ValueId, right: ValueId) -> Op {
     Op::BinOp { op: BinOp::Add(Overflow::Trap), left, right }
 }
 
-pub(super) fn wrapping_add(left: ValueId, right: ValueId) -> Op {
+pub(in crate::passes) fn wrapping_add(left: ValueId, right: ValueId) -> Op {
     Op::BinOp { op: BinOp::Add(Overflow::Wrap), left, right }
 }
 
-pub(super) fn take(slot: ValueId) -> Op {
+pub(in crate::passes) fn take(slot: ValueId) -> Op {
     Op::Take { target: RefTarget::Var(slot), path: Vec::new(), taken_out: false }
 }
 
-pub(super) fn assign(slot: ValueId, value: ValueId) -> Op {
+pub(in crate::passes) fn assign(slot: ValueId, value: ValueId) -> Op {
     Op::Assign { target: RefTarget::Var(slot), path: Vec::new(), value, restores: false }
 }
 
-pub(super) fn ret(value: ValueId) -> Terminator {
+pub(in crate::passes) fn ret(value: ValueId) -> Terminator {
     Terminator::Return { value, order: None, span: Span::ZERO }
 }
 
-pub(super) fn jump(to: BlockId) -> Terminator {
+pub(in crate::passes) fn jump(to: BlockId) -> Terminator {
     Terminator::Jump { to, args: Vec::new() }
 }

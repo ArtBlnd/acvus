@@ -23,7 +23,7 @@ mod sink;
 mod split_calls;
 mod sroa;
 #[cfg(test)]
-mod tests;
+pub(in crate::passes) mod tests;
 
 pub use bce::Bce;
 pub use commute::Commute;
@@ -58,7 +58,7 @@ pub trait ModuleTransform {
 
 /// What a transform that edits through several editors in turn changed:
 /// every aspect any of them recorded. Cost: O(aspects) per editor.
-fn union_of<I>(changes: I) -> Changes
+pub(in crate::passes) fn union_of<I>(changes: I) -> Changes
 where
     I: IntoIterator<Item = Changes>,
 {
