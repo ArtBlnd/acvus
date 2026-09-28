@@ -847,3 +847,82 @@ fn a_return_does_not_take_a_token_from_its_caller() {
     let flag = builder.push(Op::Const { value: Literal::Bool(false) }, bool, at(34));
     builder.terminate(Terminator::Return { value: a, order: Some(flag), span: Span::ZERO });
 }
+
+// -- Order tokens are the core's alone (ir-core-structure §2) -------------
+
+#[test]
+fn the_core_records_every_token_it_makes() {
+    let mut f = fixture();
+    let (nc, int, bool, whole) = (f.name("c"), f.int, f.bool, f.whole);
+    let (loop_call, scoped_call) = (f.call(whole), f.call(whole));
+    let mut builder = build(&mut f.module, true);
+    let c = builder.param(nc, bool);
+    let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header));
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.switch_to(loop_body);
+    let looped = builder.push_effect(loop_call, int, at(40));
+    builder.terminate(jump(header));
+    builder.switch_to(exit);
+    builder.open_anyorder();
+    let scoped = builder.push_effect(scoped_call, int, at(41));
+    builder.close_anyorder();
+    builder.terminate(ret(scoped));
+    let id = builder.seal().expect("the body has no open state");
+
+    let body = f.body(id);
+    let order_param = body.order_param().expect("an ordered body takes an order token");
+    let yielded = edge_of(&body.block(loop_body).insts()[0]).after;
+    let [placed] = body.block(header).params() else {
+        panic!("the header takes the token around the loop: {:?}", body.block(header).params())
+    };
+    let merge = body.block(exit).insts().iter().find(|inst| matches!(inst.op(), Op::Merge { .. }));
+    let merged = result_of(merge.expect("the anyorder scope merges what its call yielded"));
+    for token in [order_param, yielded, *placed, merged] {
+        assert!(body.is_token(token), "{token:?} is a token the core made");
+    }
+    for value in [c, looped, scoped] {
+        assert!(!body.is_token(value), "{value:?} is a value");
+    }
+}
+
+#[test]
+#[should_panic(expected = "only the core makes")]
+fn a_parameter_of_order_type_is_refused() {
+    let mut f = fixture();
+    let (name, order) = (f.name("o"), f.order);
+    build(&mut f.module, false).param(name, order);
+}
+
+#[test]
+#[should_panic(expected = "only the core makes")]
+fn a_capture_of_order_type_is_refused() {
+    let mut f = fixture();
+    let (name, order) = (f.name("o"), f.order);
+    build(&mut f.module, false).capture(name, order);
+}
+
+#[test]
+#[should_panic(expected = "only the core makes")]
+fn a_slot_of_order_type_is_refused() {
+    let mut f = fixture();
+    let order = f.order;
+    build(&mut f.module, false).slot(order);
+}
+
+#[test]
+#[should_panic(expected = "only the core makes")]
+fn a_block_parameter_of_order_type_is_refused() {
+    let mut f = fixture();
+    let order = f.order;
+    build(&mut f.module, true).new_block(&[order]);
+}
+
+#[test]
+#[should_panic(expected = "only the core makes")]
+fn a_result_of_order_type_is_refused() {
+    let mut f = fixture();
+    let order = f.order;
+    build(&mut f.module, true).push(Op::Undef, order, at(42));
+}

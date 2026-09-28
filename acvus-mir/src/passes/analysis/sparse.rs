@@ -23,7 +23,6 @@ use smallvec::SmallVec;
 
 use crate::ir::cfg::{BlockId, Body, Inst, Site, Terminator};
 use crate::ir::ValueId;
-use crate::ty::Ty;
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 
 /// Which successors of a terminator may run, read from the facts of its
@@ -106,7 +105,7 @@ where
     let mut solver = Solver::new(analysis, body);
     solver.reach(body.entry());
     solver.run();
-    let tokens = body.values().filter(|value| solver.is_token(*value)).collect();
+    let tokens = body.values().filter(|value| body.is_token(*value)).collect();
     SparseFacts { values: solver.facts, tokens }
 }
 
@@ -118,10 +117,6 @@ where
 {
     analysis: &'a A,
     body: &'a Body,
-    /// The type every order token of the body has: the order parameter's,
-    /// since the module's one table interns `Order` once. A body without an
-    /// order parameter is pure and holds no token.
-    token_ty: Option<Ty>,
     facts: FxHashMap<ValueId, Value<A>>,
     preds: FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
     loop_headers: FxHashSet<BlockId>,
@@ -137,8 +132,7 @@ where
     A: SparseAnalysis,
 {
     fn new(analysis: &'a A, body: &'a Body) -> Self {
-        let token_ty = body.order_param().map(|token| body.ty_of(token));
-        let is_token = |value: &ValueId| Some(body.ty_of(*value)) == token_ty;
+        let is_token = |value: &ValueId| body.is_token(*value);
         let mut facts: FxHashMap<ValueId, Value<A>> = body
             .values()
             .filter(|value| !is_token(value))
@@ -157,7 +151,6 @@ where
         Solver {
             analysis,
             body,
-            token_ty,
             facts,
             preds: body.predecessors(),
             loop_headers: body.loop_headers(),
@@ -207,7 +200,7 @@ where
     }
 
     fn is_token(&self, value: ValueId) -> bool {
-        Some(self.body.ty_of(value)) == self.token_ty
+        self.body.is_token(value)
     }
 
     fn fact(&self, value: ValueId) -> &Value<A> {

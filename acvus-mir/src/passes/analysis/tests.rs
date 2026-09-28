@@ -696,7 +696,11 @@ fn sparse_analyses_values_and_holds_no_fact_for_a_token() {
     assert_eq!(*facts.of(r1), Const::Top);
     assert_eq!(*facts.of(y), Const::Top);
 
-    let tokens: Vec<ValueId> = body.values().filter(|value| body.ty_of(*value) == order).collect();
+    let tokens: Vec<ValueId> = body.values().filter(|value| body.is_token(*value)).collect();
+    assert!(
+        body.values().all(|value| body.is_token(value) == (body.ty_of(value) == order)),
+        "exactly the values of Order type are tokens"
+    );
     assert!(tokens.len() >= 4, "the order parameter, two yielded tokens and a merge: {tokens:?}");
     for token in tokens {
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| facts.of(token).clone()));

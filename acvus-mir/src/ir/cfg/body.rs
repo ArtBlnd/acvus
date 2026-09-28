@@ -36,11 +36,13 @@ pub struct Module {
     pub(super) types: Types<Concrete>,
 }
 
-/// What a value is: its type, and where it is defined.
+/// What a value is: its type, where it is defined, and whether it is an
+/// order token, which only the core makes.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ValueDef {
     pub ty: Ty,
     pub def: Def,
+    pub token: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,6 +550,19 @@ impl Body {
     }
     pub fn debug(&self) -> &DebugInfo {
         &self.debug
+    }
+
+    /// Whether `value` is an order token: the order parameter, a token an
+    /// instruction yields, a token parameter the Builder placed, or a
+    /// `Merge`'s result. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn is_token(&self, value: ValueId) -> bool {
+        self.values
+            .get(&value)
+            .unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
+            .token
     }
 
     /// Every value of the body, in no stated order. Cost: O(values).

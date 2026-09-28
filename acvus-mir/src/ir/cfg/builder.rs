@@ -104,7 +104,7 @@ impl<'m> Builder<'m> {
         let mut body = Body::empty();
         let order = ordered.then(|| {
             let order_ty = module.types.intern(TyKind::Order);
-            let token = body.make_value(&module.types, order_ty, Def::OrderParam);
+            let token = body.make_token(&module.types, order_ty, Def::OrderParam);
             body.order_param = Some(token);
             OrderThread {
                 order_ty,
@@ -134,6 +134,9 @@ impl<'m> Builder<'m> {
     }
 
     /// A parameter of the body, after those declared so far. Cost: O(1).
+    ///
+    /// # Panics
+    /// `ty` is `Order`: only the core makes an order token.
     pub fn param(&mut self, name: Astr, ty: Ty) -> ValueId {
         let def = Def::Param(self.body.params.len());
         let value = self.body.make_value(&self.module.types, ty, def);
@@ -142,6 +145,9 @@ impl<'m> Builder<'m> {
     }
 
     /// A capture of the body, after those declared so far. Cost: O(1).
+    ///
+    /// # Panics
+    /// `ty` is `Order`: only the core makes an order token.
     pub fn capture(&mut self, name: Astr, ty: Ty) -> ValueId {
         let def = Def::Capture(self.body.captures.len());
         let value = self.body.make_value(&self.module.types, ty, def);
@@ -151,6 +157,9 @@ impl<'m> Builder<'m> {
 
     /// A storage slot of the body holding a `ty`, which `RefTarget::Var`
     /// names. Cost: O(1).
+    ///
+    /// # Panics
+    /// `ty` is `Order`: only the core makes an order token.
     pub fn slot(&mut self, ty: Ty) -> ValueId {
         let def = Def::Slot(self.body.slots.len());
         let value = self.body.make_value(&self.module.types, ty, def);
@@ -162,7 +171,8 @@ impl<'m> Builder<'m> {
     /// returns the result. Cost: O(its operands).
     ///
     /// # Panics
-    /// See `push_unit`; also, `op` yields no value.
+    /// See `push_unit`; also, `op` yields no value, or `ty` is `Order`,
+    /// since only the core makes an order token.
     pub fn push(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
         assert!(op.has_result(), "{op:?} yields no value; it is pushed by push_unit");
         self.assert_not_on_chain(&op);
@@ -209,12 +219,12 @@ impl<'m> Builder<'m> {
         };
         let order_ty = self.order().order_ty;
         let result = self.new_result(ty);
-        let after = self.new_result(order_ty);
+        let after = self.new_token_result(order_ty);
         self.append(Inst { op, result: Some(result), order: Some(OrderUse::Edge(OrderEdge { before, after })), span });
         match self.order().scope.as_ref().map(|scope| scope.id) {
             Some(scope) => {
                 let gathered = self.read_order(OrderVar::Gathered(scope), at);
-                let merged = self.new_result(order_ty);
+                let merged = self.new_token_result(order_ty);
                 self.append(Inst {
                     op: Op::Merge { orders: vec![gathered, after] },
                     result: Some(merged),
@@ -249,8 +259,9 @@ impl<'m> Builder<'m> {
     /// terminators made so far).
     ///
     /// # Panics
-    /// `block` is not a reserved block of this body, or an edge into it
-    /// disagrees with `params`.
+    /// `block` is not a reserved block of this body; an edge into it
+    /// disagrees with `params`; or a parameter is of `Order` type, since
+    /// only the core makes an order token, and places a block's.
     pub fn make_block(&mut self, block: BlockId, params: &[Ty]) {
         let slot = self.building(block);
         assert!(matches!(slot, Building::Unmade), "{block:?} is made already");
@@ -479,7 +490,7 @@ impl<'m> Builder<'m> {
         }
         assert_ne!(block, self.body.entry, "{var:?} is read in the entry block before it is defined");
         let order_ty = self.order().order_ty;
-        let param = self.body.make_value(&self.module.types, order_ty, Def::UnplacedParam(block));
+        let param = self.body.make_token(&self.module.types, order_ty, Def::UnplacedParam(block));
         let thread = self.order_mut();
         thread.incomplete.push(IncompleteParam { var, block, param });
         thread.added.push(param);
@@ -520,6 +531,13 @@ impl<'m> Builder<'m> {
     fn new_result(&mut self, ty: Ty) -> ValueId {
         let index = self.current().insts.len();
         self.body.make_value(&self.module.types, ty, Def::Inst(self.at, index))
+    }
+
+    /// A token the next instruction appended yields or, for a `Merge`,
+    /// results in.
+    fn new_token_result(&mut self, order_ty: Ty) -> ValueId {
+        let index = self.current().insts.len();
+        self.body.make_token(&self.module.types, order_ty, Def::Inst(self.at, index))
     }
 
     fn append(&mut self, inst: Inst) {

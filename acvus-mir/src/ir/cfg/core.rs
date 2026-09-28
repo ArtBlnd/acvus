@@ -47,20 +47,42 @@ impl Body {
         }
     }
 
-    /// A new value of type `ty`, defined at `def`. Cost: O(1).
+    /// A new value of type `ty`, defined at `def`, which is not an order
+    /// token. Cost: O(1).
     ///
     /// # Panics
-    /// `ty` is an id of another table than `types`, or a reference whose
-    /// target is a reference (types §4).
+    /// `ty` is an id of another table than `types`; a reference whose
+    /// target is a reference (types §4); or `Order`, since an order token
+    /// is made only by `make_token`, on the Builder's order thread
+    /// (ir-core-structure §2).
     pub(super) fn make_value(&mut self, types: &Types<Concrete>, ty: Ty, def: Def) -> ValueId {
-        if let TyKind::Ref(_, target) = types.kind(ty) {
-            assert!(
+        match types.kind(ty) {
+            TyKind::Ref(_, target) => assert!(
                 !matches!(types.kind(target.ty()), TyKind::Ref(..)),
                 "a reference's target is never a reference (types §4): {ty:?}"
-            );
+            ),
+            TyKind::Order => panic!(
+                "a value of Order type is an order token, which only the core makes on the Builder's order \
+                 thread (ir-core-structure §2); no caller makes one"
+            ),
+            _ => {}
         }
+        self.insert_value(ValueDef { ty, def, token: false })
+    }
+
+    /// A new order token of `order_ty`, defined at `def`. Only the
+    /// Builder's order thread calls it. Cost: O(1).
+    ///
+    /// # Panics
+    /// `order_ty` is not `Order`.
+    pub(super) fn make_token(&mut self, types: &Types<Concrete>, order_ty: Ty, def: Def) -> ValueId {
+        assert!(matches!(types.kind(order_ty), TyKind::Order), "an order token's type is Order, not {order_ty:?}");
+        self.insert_value(ValueDef { ty: order_ty, def, token: true })
+    }
+
+    fn insert_value(&mut self, value_def: ValueDef) -> ValueId {
         let value = self.value_ids.next();
-        self.values.insert(value, ValueDef { ty, def });
+        self.values.insert(value, value_def);
         self.uses.insert(value, UseSites::default());
         value
     }
