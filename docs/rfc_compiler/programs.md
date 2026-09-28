@@ -4,7 +4,7 @@ A program is written in one of three kinds of source.
 
 ## 1. Template (`acvt`)
 
-Text with values interpolated in `{{ }}`, each formatted by `core::display`, and control lines that begin with `%`. Lambdas are limited.
+Text with values interpolated in `{{ }}`, each formatted by `core::display`, and control lines that begin with `%`. Lambdas are a script's.
 
 ```acvt
 You talk with {{ $user }}.
