@@ -18,6 +18,8 @@ What a load, a store or a commit does beyond the program is unknown to the langu
 
 The load and the commit are the effects. An assignment to a context inside the run is an assignment to a plain value and carries no effect of its own. Only promoting the context to a plain value removes a load or a commit; nothing else does.
 
-A body loads each context it names when it is entered. Before a call whose effect may read or write a context, it commits that context and loads it again after the call; a call whose effect declares the contexts it touches brackets only those, and an opaque one brackets every context the body holds. When the body returns, it commits every context it holds. A load whose value is never read does not exist.
+A body loads each context it names when it is entered. Before a call whose effect may read or write a context, it commits that context and loads it again after the call; a call whose effect declares the contexts it touches brackets only those, and an opaque one brackets every context the body holds. When the body returns, it commits every context it holds. A load whose value is never read does not exist, and neither does a commit of a context the body never writes.
+
+A context may be declared volatile. A volatile context is never promoted and is held in no slot: each read of it is one load, and each write one commit. They are effects and are ordered as effects are (effects §2): nothing merges or removes them, and against them only an effect, or what depends on their values, keeps its order. Pure work passes them freely.
 
 A value stored into a context outlives the run, so its type has no positions (ownership §5). It may carry an identity.
