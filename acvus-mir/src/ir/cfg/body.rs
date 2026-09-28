@@ -3,7 +3,7 @@
 
 use acvus_ast::Span;
 use acvus_utils::{Astr, LocalFactory};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::op::Op;
@@ -59,7 +59,7 @@ pub(super) enum Def {
 /// Where a use stands: an instruction, by block and position, or a block's
 /// terminator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum Site {
+pub enum Site {
     Inst(BlockId, usize),
     Term(BlockId),
 }
@@ -181,9 +181,9 @@ impl Inst {
         self.result.into_iter().chain(self.order.and_then(OrderUse::yielded)).collect()
     }
 
-    /// Every value the instruction reads: its operation's operands and the
-    /// token it consumes.
-    pub(super) fn operands(&self) -> SmallVec<[ValueId; 4]> {
+    /// Every value the instruction reads, once per operand: its operation's
+    /// operands and then the token it consumes. Cost: O(its operands).
+    pub fn operands(&self) -> SmallVec<[ValueId; 4]> {
         let mut operands = SmallVec::new();
         self.op.for_each_operand(|value| operands.push(value));
         operands.extend(self.order.and_then(OrderUse::consumed));
@@ -248,15 +248,17 @@ pub enum Terminator {
 
 /// One edge out of a terminator: the target's leading `supplied`
 /// parameters are filled by the terminator itself, and `args` fill the rest.
-pub(super) struct Edge<'t> {
+#[derive(Debug, Clone, Copy)]
+pub struct Edge<'t> {
     pub to: BlockId,
     pub supplied: usize,
     pub args: &'t [ValueId],
 }
 
 impl Terminator {
-    /// Every edge, in the terminator's own order.
-    pub(super) fn edges(&self) -> SmallVec<[Edge<'_>; 2]> {
+    /// Every edge, in the terminator's own order; a `Diamond`'s join and a
+    /// loop's later stages are not edges. Cost: O(its edges).
+    pub fn edges(&self) -> SmallVec<[Edge<'_>; 2]> {
         fn plain(to: BlockId, args: &[ValueId]) -> Edge<'_> {
             Edge { to, supplied: 0, args }
         }
@@ -361,6 +363,14 @@ impl Terminator {
         for edge in self.edges() {
             on_block(edge.to);
         }
+    }
+
+    /// Every value the terminator reads, once per operand, in the order
+    /// `for_each_operand` walks them. Cost: O(its operands).
+    pub fn operands(&self) -> SmallVec<[ValueId; 4]> {
+        let mut operands = SmallVec::new();
+        self.for_each_operand(|value| operands.push(value));
+        operands
     }
 
     pub(super) fn for_each_operand(&self, mut on_use: impl FnMut(ValueId)) {
@@ -538,6 +548,72 @@ impl Body {
     }
     pub fn debug(&self) -> &DebugInfo {
         &self.debug
+    }
+
+    /// Every value of the body, in no stated order. Cost: O(values).
+    pub fn values(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.values.keys().copied()
+    }
+
+    /// Every site that reads `value`, each once however many of its
+    /// operands do. Cost: O(those sites).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn users(&self, value: ValueId) -> impl Iterator<Item = Site> + '_ {
+        self.uses
+            .get(&value)
+            .unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
+            .counts
+            .keys()
+            .copied()
+    }
+
+    /// Every block's predecessors, each once; every block of the body has an
+    /// entry, empty where no edge enters it. Cost: O(blocks + edges).
+    pub fn predecessors(&self) -> FxHashMap<BlockId, SmallVec<[BlockId; 2]>> {
+        let mut preds: FxHashMap<BlockId, SmallVec<[BlockId; 2]>> =
+            self.blocks().map(|(id, _)| (id, SmallVec::new())).collect();
+        for (from, block) in self.blocks() {
+            for edge in block.terminator.edges() {
+                let into = preds.get_mut(&edge.to).expect("an edge names a block of its body");
+                if !into.contains(&from) {
+                    into.push(from);
+                }
+            }
+        }
+        preds
+    }
+
+    /// The loop headers: the targets of the back edges of a depth-first walk
+    /// of the edges from the entry, a back edge being one into a block still
+    /// on the walk's path. A block the entry does not reach is none. Cost:
+    /// O(blocks + edges).
+    pub fn loop_headers(&self) -> FxHashSet<BlockId> {
+        let mut headers = FxHashSet::default();
+        let mut visited = vec![false; self.blocks.len()];
+        let mut on_path = vec![false; self.blocks.len()];
+        let mut path: Vec<(BlockId, usize)> = vec![(self.entry, 0)];
+        visited[self.entry.index()] = true;
+        on_path[self.entry.index()] = true;
+        while let Some((block, next)) = path.last_mut() {
+            let edges = self.blocks[block.index()].terminator.edges();
+            let Some(edge) = edges.get(*next) else {
+                on_path[block.index()] = false;
+                path.pop();
+                continue;
+            };
+            *next += 1;
+            let to = edge.to;
+            if on_path[to.index()] {
+                headers.insert(to);
+            } else if !visited[to.index()] {
+                visited[to.index()] = true;
+                on_path[to.index()] = true;
+                path.push((to, 0));
+            }
+        }
+        headers
     }
 }
 

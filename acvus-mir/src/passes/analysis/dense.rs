@@ -1,9 +1,20 @@
-//! The dense engine: a state per program point over the CFG, forward or
-//! backward. Cost: each block's state rises at most the lattice's height
-//! and each rise revisits its successors (O(edges × height)); a state of
-//! infinite height widens at loop heads.
+//! The dense engine: a state per block over the CFG, forward or backward,
+//! by a worklist in reverse postorder, or postorder when backward (Kildall,
+//! "A Unified Approach to Global Program Optimization", 1973).
+//!
+//! Cost: a block's stored state only rises, and each rise re-runs the
+//! transfer of every block it flows into, so the engine is O(h · (blocks +
+//! edges) · the transfer's cost per block), where h bounds how often one
+//! state rises: the lattice's height, or, for a state of infinite height,
+//! the length of its widening's chains. Every cycle of the CFG holds a back
+//! edge of the depth-first walk from the entry, and the stored state of that
+//! edge's target, a loop header, widens in either direction, so h is finite
+//! whenever the widening terminates.
 
-use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
+
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use crate::ir::cfg::{BlockId, Body, Inst, Terminator};
 use crate::passes::domain::{JoinSemiLattice, Widen};
@@ -47,9 +58,102 @@ where
     }
 }
 
+/// Every block's state. Forward, the entry block starts from `entry`; backward,
+/// every block with no successor ends in it. A block the entry does not
+/// reach keeps `bottom`. Within a block, a forward analysis sees its
+/// instructions in order and then its terminator, and a backward one its
+/// terminator and then its instructions in reverse.
 pub fn solve_dense<A>(analysis: &A, body: &Body) -> DenseFacts<A::State>
 where
     A: DenseAnalysis,
 {
-    todo!("passes::analysis::solve_dense")
+    let postorder = postorder(body);
+    let visit_order: Vec<BlockId> = match A::DIRECTION {
+        Direction::Forward => postorder.iter().rev().copied().collect(),
+        Direction::Backward => postorder,
+    };
+    let rank: FxHashMap<BlockId, usize> =
+        visit_order.iter().enumerate().map(|(rank, block)| (*block, rank)).collect();
+    let loop_headers = body.loop_headers();
+    let flows_into: FxHashMap<BlockId, SmallVec<[BlockId; 2]>> = match A::DIRECTION {
+        Direction::Forward => visit_order.iter().map(|block| (*block, successors(body, *block))).collect(),
+        Direction::Backward => body.predecessors(),
+    };
+
+    let mut states: FxHashMap<BlockId, A::State> =
+        body.blocks().map(|(block, _)| (block, A::State::bottom())).collect();
+    let boundary: SmallVec<[BlockId; 2]> = match A::DIRECTION {
+        Direction::Forward => smallvec::smallvec![body.entry()],
+        Direction::Backward => visit_order
+            .iter()
+            .copied()
+            .filter(|block| body.block(*block).terminator().edges().is_empty())
+            .collect(),
+    };
+    for block in boundary {
+        states.insert(block, analysis.entry(body));
+    }
+
+    let mut worklist: BTreeSet<usize> = (0..visit_order.len()).collect();
+    while let Some(rank_of_block) = worklist.pop_first() {
+        let block = visit_order[rank_of_block];
+        let mut state = states.get(&block).expect("every block has a state").clone();
+        let record = body.block(block);
+        match A::DIRECTION {
+            Direction::Forward => {
+                for inst in record.insts() {
+                    analysis.transfer(inst, &mut state);
+                }
+                analysis.transfer_terminator(record.terminator(), &mut state);
+            }
+            Direction::Backward => {
+                analysis.transfer_terminator(record.terminator(), &mut state);
+                for inst in record.insts().iter().rev() {
+                    analysis.transfer(inst, &mut state);
+                }
+            }
+        }
+        for next in flows_into.get(&block).expect("every visited block has its flow targets") {
+            let Some(next_rank) = rank.get(next) else {
+                continue;
+            };
+            let stored = states.get_mut(next).expect("every block has a state");
+            let rose = if loop_headers.contains(next) { stored.widen(&state) } else { stored.join(&state) };
+            if rose {
+                worklist.insert(*next_rank);
+            }
+        }
+    }
+    DenseFacts { at_entry: states }
+}
+
+/// Each block's successors, each once. Cost: O(its edges).
+fn successors(body: &Body, block: BlockId) -> SmallVec<[BlockId; 2]> {
+    let mut successors: SmallVec<[BlockId; 2]> = SmallVec::new();
+    for edge in body.block(block).terminator().edges() {
+        if !successors.contains(&edge.to) {
+            successors.push(edge.to);
+        }
+    }
+    successors
+}
+
+/// The blocks the entry reaches, in the postorder of a depth-first walk of
+/// the edges from it. Cost: O(blocks + edges).
+fn postorder(body: &Body) -> Vec<BlockId> {
+    let mut order = Vec::new();
+    let mut visited = FxHashSet::default();
+    let mut path: Vec<(BlockId, SmallVec<[BlockId; 2]>)> = vec![(body.entry(), successors(body, body.entry()))];
+    visited.insert(body.entry());
+    while let Some((block, pending)) = path.last_mut() {
+        let Some(next) = pending.pop() else {
+            order.push(*block);
+            path.pop();
+            continue;
+        };
+        if visited.insert(next) {
+            path.push((next, successors(body, next)));
+        }
+    }
+    order
 }

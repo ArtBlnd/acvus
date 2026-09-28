@@ -35,17 +35,28 @@ impl<'d> AnalysisManager<'d> {
         self.decls
     }
 
-    /// The facts of `A` for `body`, computed on first request.
+    /// The facts of `A` for `body`, computed on first request. Cost: O(1)
+    /// when kept, else `A`'s own.
     pub fn get<A>(&mut self, module: &Module, body: BodyId) -> Rc<A::Facts>
     where
         A: Analysis,
     {
-        todo!("passes::analysis::AnalysisManager::get")
+        let key = (TypeId::of::<A>(), body);
+        if let Some((facts, _)) = self.kept.get(&key) {
+            return Rc::clone(facts)
+                .downcast::<A::Facts>()
+                .unwrap_or_else(|_| panic!("the facts kept under an analysis's TypeId are its own"));
+        }
+        let facts = Rc::new(A::compute(self, module, body));
+        self.kept.insert(key, (Rc::clone(&facts) as Rc<dyn Any>, A::READS));
+        facts
     }
 
     /// Drops every kept analysis of `body` that reads an aspect `changes`
-    /// touched.
+    /// touched. Cost: O(kept analyses · aspects).
     pub fn invalidate(&mut self, body: BodyId, changes: &Changes) {
-        todo!("passes::analysis::AnalysisManager::invalidate")
+        self.kept.retain(|(_, of), (_, reads)| {
+            *of != body || !reads.iter().any(|aspect| changes.touched(*aspect))
+        });
     }
 }

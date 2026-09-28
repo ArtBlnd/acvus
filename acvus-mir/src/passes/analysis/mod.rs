@@ -5,6 +5,9 @@ mod dense;
 mod manager;
 mod sparse;
 
+#[cfg(test)]
+mod tests;
+
 pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
 pub use manager::{Analysis, AnalysisManager};
 pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};
