@@ -2,9 +2,10 @@
 //! relations between them. It knows no syntax. C's label is on the terms it
 //! relates (`ty::Label`); it asks nothing of the program.
 //!
-//! A variable is bound at most once to a term, or rebound only to a larger
-//! term of one head under `join` where the label allows growth, or under
-//! `enter` along the cast tree. Knowledge only grows (types §6).
+//! A variable is bound at most once to a term, or rebound only: to a larger
+//! term of one head under `join` where the label allows growth; up the cast
+//! tree under `enter`; or to the more opaque of two equal shapes under
+//! `eq` (types §1, §6). Knowledge only grows.
 
 mod bound;
 mod cells;
@@ -43,11 +44,12 @@ pub enum VarState {
 pub enum Bound {
     Any,
     OneOf(Box<[Term]>),
-    Integer { signed: bool, among: Box<[IntTy]> },
+    /// An integer type among `among`, signed only where `signed`. A literal
+    /// (`literal`) is one whose width a use narrows; at a stall it is `i64`
+    /// if `among` has it, the one width if one remains, and refused
+    /// otherwise (types §5).
+    Integer { signed: bool, among: Box<[IntTy]>, literal: bool },
     Settled,
-    /// An integer literal's width, which a use narrows and the default
-    /// settles to `i64` (types §5).
-    Literal,
 }
 
 /// What an open `#` settles to (types §8).

@@ -42,8 +42,6 @@ pub enum Mismatch {
 /// What an `enter` did (types §3, §7).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entered {
-    /// The value's head is not closed yet; ask again.
-    NotYet,
     /// The slot took the value's type, or folded it up the tree.
     Folded,
     /// The value converts to the slot through one declared conversion.
@@ -136,7 +134,9 @@ impl Infer {
     /// A value entering a slot (types §3, §7): once the value's head is
     /// closed, the slot folds it by ⊔ along the cast tree, or the value
     /// converts by exactly one declared conversion.
-    pub fn enter(&mut self, casts: &CastTree, value: Term, slot: Term) -> Result<Entered, Mismatch> {
+    /// The value is closed: a decision fires only on closed terms (types §6),
+    /// and the caller checked with `closed`.
+    pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
         if let End::Unbound(..) = self.end(value) {
             return Ok(Entered::NotYet);
         }

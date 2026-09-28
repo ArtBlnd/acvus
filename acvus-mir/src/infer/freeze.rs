@@ -19,8 +19,13 @@ pub struct FreezeMemo {
 /// A variable still unbound at freeze: defaults and the final refusal ran
 /// before freezing, so this is the checker's defect, reported as such.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Unsettled {
-    pub var: TyVarId,
+pub enum Unsettled {
+    Ty(TyVarId),
+    Effect(crate::ty::EffectVarId),
+    Len(crate::ty::LenVarId),
+    Identity(crate::ty::IdentityVarId),
+    Mark(crate::ty::ReprVarId),
+    Flow(crate::ty::FlowVarId),
 }
 
 impl Infer {

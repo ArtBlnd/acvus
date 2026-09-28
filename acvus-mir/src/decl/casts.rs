@@ -35,6 +35,9 @@ pub enum Head {
 /// reference: no view or declared cast steps from one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Base {
+    /// The bottom type (types §4): a closed head for decisions on a diverging
+    /// term. No tree step leaves or reaches it.
+    Never,
     Int(IntTy),
     Float,
     Char,
