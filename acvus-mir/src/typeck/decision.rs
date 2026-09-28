@@ -159,6 +159,19 @@ pub(super) enum Decision {
     /// A pattern against its scrutinee, through a reference as Rust's
     /// default binding modes do (patterns §1).
     Destructure { shape: Box<Shape>, scrutinee: Term, lent: Option<Mutability> },
+    /// A binding of term `value` read inside `lambdas`, which captured it:
+    /// `seen` is how the read sees it. A `&mut` captured by shared
+    /// reference is seen through that reference, a shared reborrow, since
+    /// a reference never targets a reference (functions §2, types §4); any
+    /// other capture sees the value itself. It waits until the lambdas'
+    /// captures are all known, which is after the walk.
+    ThroughCaptures {
+        span: Span,
+        binder: AstId,
+        lambdas: Box<[AstId]>,
+        value: Term,
+        seen: Term,
+    },
     /// A block with no tail whose last statement is the expression of
     /// term `last`: `block` is `!` where `last` is, and `()` otherwise
     /// (control-flow).
@@ -191,6 +204,7 @@ impl Decision {
             Decision::Index { element, .. } => vec![*element],
             Decision::Deref { target, .. } => vec![*target],
             Decision::BlockEnd { block, .. } => vec![*block],
+            Decision::ThroughCaptures { seen, .. } => vec![*seen],
             Decision::Destructure { shape, .. } => shape.bindings(),
             Decision::Compare { .. }
             | Decision::Operand { .. }
@@ -216,6 +230,7 @@ impl Decision {
             Decision::Index { container, element, .. } => vec![*container, *element],
             Decision::Deref { reference, target, .. } => vec![*reference, *target],
             Decision::BlockEnd { last, block, .. } => vec![*last, *block],
+            Decision::ThroughCaptures { value, seen, .. } => vec![*value, *seen],
             Decision::Destructure { shape, scrutinee, .. } => {
                 let mut terms = shape.bindings();
                 terms.push(*scrutinee);
@@ -313,6 +328,7 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Destructure { scrutinee, .. } => Some(*scrutinee),
         Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => Some(*operand),
         Decision::BlockEnd { last, .. } => Some(*last),
+        Decision::ThroughCaptures { value, .. } => Some(*value),
         Decision::Iterate { head, .. } => Some(*head),
         Decision::Try { operand, .. } => Some(*operand),
         Decision::Cast { source, .. } => Some(*source),
@@ -549,6 +565,25 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             super::op::fire_compare(cx, node, span, sig, closed, &body);
+            Ok(())
+        }
+        Decision::ThroughCaptures {
+            span,
+            binder,
+            lambdas,
+            value,
+            seen,
+        } => {
+            let Some(closed) = closed_for(cx, value, reading) else {
+                return Err(Decision::ThroughCaptures {
+                    span,
+                    binder,
+                    lambdas,
+                    value,
+                    seen,
+                });
+            };
+            super::closure::fire_through_captures(cx, span, binder, &lambdas, value, closed, seen);
             Ok(())
         }
         Decision::BlockEnd { span, last, block } => {
@@ -1426,7 +1461,8 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::Deref { span, .. }
         | Decision::Compare { span, .. }
         | Decision::Operand { span, .. }
-        | Decision::BlockEnd { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
+        | Decision::BlockEnd { span, .. }
+        | Decision::ThroughCaptures { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
         Decision::Destructure { shape, .. } => refusal::push(cx, RefusalKind::Undecided, shape.span()),
     }
 }

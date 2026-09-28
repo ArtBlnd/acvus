@@ -4,7 +4,7 @@
 use acvus_ast::{ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
-use super::{Capture, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
+use super::{Capture, CaptureOf, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
 use crate::decl::{CastRule, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
@@ -707,7 +707,7 @@ fn a_lambda_captures_by_reference_and_takes_its_arguments_types() {
         &closure.captures[..],
         &[Captured {
             name: y,
-            binder: let_binder(&script, 0),
+            binder: CaptureOf::Binding(let_binder(&script, 0)),
             capture: Capture::Ref(Mutability::Shared)
         }]
     );
@@ -844,7 +844,7 @@ fn a_move_lambda_captures_by_move() {
         &closure.captures[..],
         &[Captured {
             name: y,
-            binder: let_binder(&script, 0),
+            binder: CaptureOf::Binding(let_binder(&script, 0)),
             capture: Capture::Move
         }]
     );
@@ -1001,7 +1001,7 @@ fn a_tuple_compares_part_by_part() {
     let reached: Vec<Option<Impl>> = parts
         .iter()
         .map(|part| match part {
-            super::Comparison::Reached(chosen) => chosen.r#impl,
+            super::Comparison::Reached { chosen, .. } => chosen.r#impl,
             super::Comparison::Parts(_) => panic!("an integer and a bool reach an impl"),
         })
         .collect();
@@ -1249,8 +1249,8 @@ fn a_capture_names_its_binder() {
     let (checked, script) = fx.script("let y = 1; let y = true; let f = |z| -> y; f(1)");
     checked.admitted();
     let closure = checked.typeck.closures.values().next().expect("one lambda");
-    let binders: Vec<acvus_ast::AstId> = closure.captures.iter().map(|captured| captured.binder).collect();
-    assert_eq!(binders, vec![let_binder(&script, 1)]);
+    let binders: Vec<CaptureOf> = closure.captures.iter().map(|captured| captured.binder).collect();
+    assert_eq!(binders, vec![CaptureOf::Binding(let_binder(&script, 1))]);
 }
 
 /// extern-fn §5-6: a reached call records its callee's function type as
@@ -1443,4 +1443,92 @@ fn a_coercions_effect_joins_its_bodys() {
     let (checked, _) = fx.script("let v = make(); first(&v)");
     checked.admitted();
     assert_eq!(checked.typeck.body_effect.reissue(), Reissue::Idempotent);
+}
+
+/// operators §4: each part of a comparison names the function type its
+/// `core::eq` impl has there, which lower calls.
+#[test]
+fn a_comparison_part_names_its_callee_type() {
+    let mut fx = Fixture::new();
+    let eq = fx.raw.core.eq;
+    let bool_ty = fx.ty(TyKind::Bool);
+    let i64_ty = fx.int(IntTy::I64);
+    let shared = fx.reference(Mutability::Shared, i64_ty);
+    let at_int = fx.pure(&[shared, shared], bool_ty);
+    fx.lang_item(eq, &[at_int]);
+    let (checked, script) = fx.script("(1, 2) == (3, 4)");
+    checked.admitted();
+    let site = script.tail.as_ref().unwrap().id();
+    let super::Comparison::Parts(parts) = &checked.typeck.comparisons[&site] else {
+        panic!("a tuple compares its parts");
+    };
+    for part in parts.iter() {
+        let super::Comparison::Reached { callee, .. } = part else {
+            panic!("an integer reaches an impl");
+        };
+        let TyKind::Fn { params, ret, .. } = checked.kind(*callee) else {
+            panic!("a callee is a function type");
+        };
+        let TyKind::Ref(Mutability::Shared, target) = checked.kind(params[0]) else {
+            panic!("`eq` takes its operands by `&`");
+        };
+        assert!(is_int(&checked, target.ty(), IntTy::I64));
+        assert_eq!(checked.kind(*ret), &TyKind::Bool);
+    }
+}
+
+/// functions §2, programs §4: an input read inside a lambda is captured,
+/// as a binding is, by reference.
+#[test]
+fn an_input_read_in_a_lambda_is_captured() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.input("n", i64_ty);
+    let n = fx.name("n");
+    let (checked, _) = fx.script("let f = |x| -> $n; f(1)");
+    checked.admitted();
+    let closure = checked.typeck.closures.values().next().expect("one lambda");
+    assert_eq!(
+        &closure.captures[..],
+        &[Captured {
+            name: n,
+            binder: CaptureOf::Input(n),
+            capture: Capture::Ref(Mutability::Shared)
+        }]
+    );
+}
+
+/// types §3: the run's result is the slot every tail and `return` enters,
+/// and a template's is the `String` it builds.
+#[test]
+fn the_runs_result_type_is_recorded() {
+    let (checked, _) = Fixture::new().script("if true { return 1u8; }; 2");
+    checked.admitted();
+    assert!(is_int(&checked, checked.typeck.result.expect("a script's result is known"), IntTy::U8));
+    let (checked, _) = Fixture::new().template("% let x = 1");
+    checked.admitted();
+    assert_eq!(checked.kind(checked.typeck.result.expect("a template's result is known")), &TyKind::String);
+}
+
+/// functions §2, types §4: a `&mut` captured by shared reference is read
+/// through that reference, as a shared reborrow; used as `&mut`, it is
+/// captured and read as `&mut`.
+#[test]
+fn a_mut_reference_captured_shared_is_read_shared() {
+    let fx = Fixture::new();
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let x = 1; let r = &mut x; let f = |z| -> r; let g = f(0); 1");
+    checked.admitted();
+    let TyKind::Ref(mutability, _) = checked.kind(binding(&checked, &script, &names, "g")) else {
+        panic!("a reference is read");
+    };
+    assert_eq!(*mutability, Mutability::Shared);
+    let fx = Fixture::new();
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let x = 1; let r = &mut x; let f = |z| -> { *r = 2; r }; let g = f(0); 1");
+    checked.admitted();
+    let TyKind::Ref(mutability, _) = checked.kind(binding(&checked, &script, &names, "g")) else {
+        panic!("a reference is read");
+    };
+    assert_eq!(*mutability, Mutability::Mut);
 }

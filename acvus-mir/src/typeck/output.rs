@@ -81,12 +81,19 @@ pub enum Capture {
     Ref(Mutability),
 }
 
-/// One name a lambda captured, the binding it names by its binder's
-/// site, and how.
+/// What a captured name names: a binding, by its binder's site, or an
+/// input (programs §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureOf {
+    Binding(AstId),
+    Input(Astr),
+}
+
+/// One name a lambda captured, what it names, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Captured {
     pub name: Astr,
-    pub binder: AstId,
+    pub binder: CaptureOf,
     pub capture: Capture,
 }
 
@@ -102,7 +109,8 @@ pub struct Closure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Comparison {
     Parts(Box<[Comparison]>),
-    Reached(Chosen),
+    /// The impl reached, and its function type as instantiated there.
+    Reached { chosen: Chosen, callee: Ty },
 }
 
 /// A comparison node while checking: its parts' nodes, or a reach at the
@@ -173,5 +181,9 @@ pub struct Typeck {
     pub closures: FxHashMap<AstId, Closure>,
     pub comparisons: FxHashMap<AstId, Comparison>,
     pub body_effect: Effect,
+    /// The run's result type: the slot every tail and `return` enters, and
+    /// for a template the `String` it builds. `None` only where a refusal
+    /// left it open.
+    pub result: Option<Ty>,
     pub refusals: Vec<Refusal>,
 }

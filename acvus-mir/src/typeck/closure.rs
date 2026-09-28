@@ -17,11 +17,11 @@ use rustc_hash::FxHashSet;
 use super::ctxt::Ctxt;
 use super::decision::Decision;
 use super::expr::check_expr;
-use super::output::{Capture, Closure};
+use super::output::{Capture, CaptureOf, Closure};
 use super::place::Demand;
 use super::refusal::{self, RefusalKind};
 use super::scope::Binding;
-use crate::infer::Term;
+use crate::infer::{Closed, Term};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, LifetimesOf, Mutability, ObjectTy, TyKind};
 
 /// The lambda's parameters start as fresh variables, constrained by their
@@ -92,16 +92,18 @@ fn holds(closure: &Closure) -> Holds {
 }
 
 /// A value of `expr` read whole, where `expr` is a place rooted at a name
-/// some `move` lambda around it captured: that lambda's body may move it
-/// out (functions §3), decided once its type is solved.
+/// or an input some `move` lambda around it captured: that lambda's body
+/// may move it out (functions §3), decided once its type is solved.
 pub(super) fn note_whole_use<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, term: Term) {
-    let Some(root) = place_root(expr) else {
-        return;
+    let crossed = match place_root(expr) {
+        Some(Root::Binding(name)) => match cx.scope.lookup(name) {
+            Some(found) => found.crossed,
+            None => return,
+        },
+        Some(Root::Input) => cx.scope.lambdas(),
+        None => return,
     };
-    let Some(found) = cx.scope.lookup(root) else {
-        return;
-    };
-    for lambda in found.crossed {
+    for lambda in crossed {
         if cx.scope.captures_by_move(lambda) {
             let span = expr.span();
             cx.decisions.push(Decision::MovesOut { lambda, span, term });
@@ -109,17 +111,59 @@ pub(super) fn note_whole_use<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, term: T
     }
 }
 
-/// The binding a place expression is rooted at.
-fn place_root<S: Slot>(expr: &Expr<S>) -> Option<Astr> {
+/// What a place expression is rooted at.
+enum Root {
+    Binding(Astr),
+    Input,
+}
+
+fn place_root<S: Slot>(expr: &Expr<S>) -> Option<Root> {
     match expr {
         Expr::Ident {
             name,
             ref_kind: RefKind::Value,
             ..
-        } if name.namespace.is_none() => Some(name.name),
+        } if name.namespace.is_none() => Some(Root::Binding(name.name)),
+        Expr::Ident {
+            ref_kind: RefKind::ExternParam,
+            ..
+        } => Some(Root::Input),
         Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => place_root(object),
         Expr::Paren { inner, .. } => place_root(inner),
         _ => None,
+    }
+}
+
+/// A binding read inside `lambdas` fired on its value's head: a `&mut`
+/// that some lambda captured by shared reference is seen as a shared
+/// reborrow of its target (functions §2, types §4); otherwise the read
+/// sees the value itself.
+pub(super) fn fire_through_captures(
+    cx: &mut Ctxt<'_>,
+    span: Span,
+    binder: AstId,
+    lambdas: &[AstId],
+    value: Term,
+    closed: Closed,
+    seen: Term,
+) {
+    let of = CaptureOf::Binding(binder);
+    let shared = lambdas.iter().any(|lambda| {
+        cx.out.closures[lambda]
+            .captures
+            .iter()
+            .any(|captured| captured.binder == of && captured.capture == Capture::Ref(Mutability::Shared))
+    });
+    let TyKind::Ref(Mutability::Mut, target) = cx.infer.types().kind(closed.term).clone() else {
+        cx.eq(seen, value, span);
+        return;
+    };
+    match shared {
+        true => {
+            let reborrow = cx.node(TyKind::Ref(Mutability::Shared, target));
+            cx.eq(seen, reborrow, span);
+        }
+        false => cx.eq(seen, value, span),
     }
 }
 

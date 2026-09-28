@@ -83,11 +83,13 @@ pub(super) fn refuse_held_loans(cx: &mut Ctxt<'_>, context: Term, span: Span) {
 
 /// A run's result holds no loan (ownership §5), read once its type is
 /// solved. The tail enters the run's result at `site`, its own, as a
-/// `return` or a `?` enters it at theirs (types §3, §7).
-pub(super) fn check_run_result(cx: &mut Ctxt<'_>, site: AstId, tail: Term, span: Span) {
+/// `return` or a `?` enters it at theirs (types §3, §7). The run's result
+/// slot is returned.
+pub(super) fn check_run_result(cx: &mut Ctxt<'_>, site: AstId, tail: Term, span: Span) -> Term {
     let result = super::control::body_result(cx);
     cx.enter(site, tail, result, span);
     cx.decisions.push(Decision::HoldsNoLoans { span, term: result });
+    result
 }
 
 /// Whether a value of a closed term holds a loan at some position

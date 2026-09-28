@@ -14,7 +14,7 @@ use super::decision::{Callee, CoreSig, Decision};
 use super::expr::check_expr;
 use super::output::Name;
 use super::refusal::{self, RefusalKind};
-use super::scope::note_captures;
+use super::scope::{capturing_binding, note_captures};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
 use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, TyKind, TypeArg};
@@ -301,7 +301,7 @@ fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, access: Access, span: S
         Root::Local(name) => match cx.scope.lookup(name) {
             Some(found) => {
                 cx.out.names.insert(site, Name::Binding(found.binding.binder));
-                note_captures(cx, name, &found, Demand::Write, span);
+                note_captures(cx, capturing_binding(name, &found), Demand::Write, span);
                 Some(found.binding.term)
             }
             None => {

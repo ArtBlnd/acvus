@@ -13,7 +13,8 @@ use crate::ty::{
     Mutability, Ty, TyKind, Types,
 };
 
-pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
+/// Freezes every decision, `result` being the run's result term.
+pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term) -> Typeck {
     let lambdas: Vec<Term> = cx
         .out
         .closures
@@ -46,11 +47,12 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
             Some((site, exit))
         })
         .collect();
+    let comparisons = comparisons(&mut cx, types, &mut memo);
+    let result = freeze(&mut cx, types, &mut memo, result);
     let callees = std::mem::take(&mut cx.out.callees)
         .into_iter()
         .filter_map(|(site, callee)| Some((site, freeze(&mut cx, types, &mut memo, callee)?)))
         .collect();
-    let comparisons = comparisons(&mut cx);
     let body_effect = match cx.out.body_effect.take() {
         Some(effect) => effect_of(&mut cx, effect),
         // A run that calls nothing has no effect to order (effects §1).
@@ -70,6 +72,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
         closures,
         comparisons,
         body_effect,
+        result,
         refusals: std::mem::take(&mut cx.out.refusals),
     }
 }
@@ -392,7 +395,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
 /// Every comparison tree, from each root the program wrote down to the
 /// parts that reach `core::eq` or `core::cmp` (operators §4). A tree some
 /// refusal left open is left out.
-fn comparisons(cx: &mut Ctxt<'_>) -> FxHashMap<AstId, Comparison> {
+fn comparisons(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, Comparison> {
     let nodes = std::mem::take(&mut cx.out.comparisons);
     let children: FxHashSet<AstId> = nodes
         .values()
@@ -404,19 +407,33 @@ fn comparisons(cx: &mut Ctxt<'_>) -> FxHashMap<AstId, Comparison> {
     let roots: Vec<AstId> = nodes.keys().copied().filter(|node| !children.contains(node)).collect();
     let mut out = FxHashMap::default();
     for root in roots {
-        if let Some(tree) = comparison(cx, &nodes, root) {
+        if let Some(tree) = comparison(cx, types, memo, &nodes, root) {
             out.insert(root, tree);
         }
     }
     out
 }
 
-fn comparison(cx: &mut Ctxt<'_>, nodes: &FxHashMap<AstId, Comparing>, node: AstId) -> Option<Comparison> {
+fn comparison(
+    cx: &mut Ctxt<'_>,
+    types: &mut Types<Concrete>,
+    memo: &mut FreezeMemo,
+    nodes: &FxHashMap<AstId, Comparing>,
+    node: AstId,
+) -> Option<Comparison> {
     match nodes.get(&node)? {
         Comparing::Parts(parts) => {
-            let parts: Option<Vec<Comparison>> = parts.iter().map(|part| comparison(cx, nodes, *part)).collect();
+            let parts: Option<Vec<Comparison>> = parts
+                .iter()
+                .map(|part| comparison(cx, types, memo, nodes, *part))
+                .collect();
             Some(Comparison::Parts(parts?.into()))
         }
-        Comparing::Reached => cx.out.reached.remove(&node).map(Comparison::Reached),
+        Comparing::Reached => {
+            let chosen = cx.out.reached.remove(&node);
+            let callee = cx.out.callees.remove(&node);
+            let callee = freeze(cx, types, memo, callee?)?;
+            Some(Comparison::Reached { chosen: chosen?, callee })
+        }
     }
 }

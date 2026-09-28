@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 
 use super::ctxt::Ctxt;
 use super::decision::Decision;
-use super::output::{Capture, Captured, Name};
+use super::output::{Capture, CaptureOf, Captured, Name};
 use super::place::Demand;
 use super::refusal::{self, RefusalKind};
 use crate::infer::Term;
@@ -153,6 +153,16 @@ impl Scope {
             .insert(name, binding);
     }
 
+    /// Every lambda whose body is in scope, innermost first.
+    pub fn lambdas(&self) -> Vec<AstId> {
+        self.frames
+            .iter()
+            .rev()
+            .filter_map(|frame| frame.body.as_ref())
+            .map(|body| body.lambda)
+            .collect()
+    }
+
     pub fn lookup(&self, name: Astr) -> Option<Found> {
         let mut crossed = Vec::new();
         for frame in self.frames.iter().rev() {
@@ -218,8 +228,8 @@ pub(super) fn check_ident(
         && let Some(found) = cx.scope.lookup(name.name)
     {
         cx.out.names.insert(site, Name::Binding(found.binding.binder));
-        note_captures(cx, name.name, &found, Demand::Read, span);
-        return found.binding.term;
+        note_captures(cx, capturing_binding(name.name, &found), Demand::Read, span);
+        return seen_through_captures(cx, &found, span);
     }
     let declarations: Box<[QualifiedRef]> = match name.namespace {
         Some(_) => cx.decls.scheme(name).map(|_| name).into_iter().collect(),
@@ -244,12 +254,41 @@ pub(super) fn check_ident(
     }
 }
 
+/// A binding read inside lambdas that captured it: its term as the
+/// lambdas see it, which a decision settles once their captures are all
+/// known (functions §2, types §4).
+fn seen_through_captures(cx: &mut Ctxt<'_>, found: &Found, span: Span) -> Term {
+    if found.crossed.is_empty() {
+        return found.binding.term;
+    }
+    let seen = cx.fresh();
+    cx.decisions.push(Decision::ThroughCaptures {
+        span,
+        binder: found.binding.binder,
+        lambdas: found.crossed.clone().into(),
+        value: found.binding.term,
+        seen,
+    });
+    seen
+}
+
 /// `$name`: the value the host passes, at its declared type (programs §4).
+/// Read inside a lambda, it is a capture of each lambda around it, as a
+/// binding is (functions §2).
 fn check_input(cx: &mut Ctxt<'_>, site: AstId, name: Astr, span: Span) -> Term {
     match cx.decls.input(name) {
         Some(ty) => {
             cx.out.names.insert(site, Name::Input(name));
-            cx.declared(ty)
+            let term = cx.declared(ty);
+            let crossed = cx.scope.lambdas();
+            let capturing = Capturing {
+                name,
+                of: CaptureOf::Input(name),
+                crossed: &crossed,
+                term,
+            };
+            note_captures(cx, capturing, Demand::Read, span);
+            term
         }
         None => {
             refusal::push(cx, RefusalKind::UnknownName { name }, span);
@@ -258,16 +297,25 @@ fn check_input(cx: &mut Ctxt<'_>, site: AstId, name: Astr, span: Span) -> Term {
     }
 }
 
-/// `name`, found crossing lambdas, is a capture of each of them
-/// (functions §2): by move in a lambda written with `move`, whose holds
-/// then wait for the captured value's type; otherwise by reference, and
-/// mutably where it is written or lent mutably.
-pub(super) fn note_captures(cx: &mut Ctxt<'_>, name: Astr, found: &Found, demand: Demand, span: Span) {
+/// A name read inside the lambdas `crossed`, innermost first, is a
+/// capture of each of them (functions §2): by move in a lambda written
+/// with `move`, whose holds then wait for the captured value's type, of
+/// term `term`; otherwise by reference, and mutably where it is written or
+/// lent mutably.
+pub(super) struct Capturing<'a> {
+    pub name: Astr,
+    pub of: CaptureOf,
+    pub crossed: &'a [AstId],
+    pub term: Term,
+}
+
+pub(super) fn note_captures(cx: &mut Ctxt<'_>, capturing: Capturing<'_>, demand: Demand, span: Span) {
+    let Capturing { name, of, crossed, term } = capturing;
     let wanted = match demand {
         Demand::Read | Demand::Lend(Mutability::Shared) => Mutability::Shared,
         Demand::Write | Demand::Lend(Mutability::Mut) => Mutability::Mut,
     };
-    for lambda in &found.crossed {
+    for lambda in crossed {
         let by_move = cx.scope.captures_by_move(*lambda);
         let mut captures = cx
             .out
@@ -276,8 +324,7 @@ pub(super) fn note_captures(cx: &mut Ctxt<'_>, name: Astr, found: &Found, demand
             .expect("a lambda records its closure before its body is checked")
             .captures
             .to_vec();
-        let binder = found.binding.binder;
-        match captures.iter_mut().find(|captured| captured.binder == binder) {
+        match captures.iter_mut().find(|captured| captured.binder == of) {
             Some(Captured {
                 capture: Capture::Ref(mutability),
                 ..
@@ -292,18 +339,18 @@ pub(super) fn note_captures(cx: &mut Ctxt<'_>, name: Astr, found: &Found, demand
             None if by_move => {
                 captures.push(Captured {
                     name,
-                    binder,
+                    binder: of,
                     capture: Capture::Move,
                 });
                 cx.decisions.push(Decision::MovedCapture {
                     lambda: *lambda,
                     span,
-                    term: found.binding.term,
+                    term,
                 });
             }
             None => captures.push(Captured {
                 name,
-                binder,
+                binder: of,
                 capture: Capture::Ref(wanted),
             }),
         }
@@ -313,6 +360,16 @@ pub(super) fn note_captures(cx: &mut Ctxt<'_>, name: Astr, found: &Found, demand
             .get_mut(lambda)
             .expect("a lambda records its closure before its body is checked");
         closure.captures = captures.into();
+    }
+}
+
+/// `found`'s binding as a capture.
+pub(super) fn capturing_binding(name: Astr, found: &Found) -> Capturing<'_> {
+    Capturing {
+        name,
+        of: CaptureOf::Binding(found.binding.binder),
+        crossed: &found.crossed,
+        term: found.binding.term,
     }
 }
 
@@ -327,7 +384,7 @@ pub(super) fn check_assign(cx: &mut Ctxt<'_>, site: AstId, name: Astr, value: Te
         return;
     };
     cx.out.names.insert(site, Name::Binding(found.binding.binder));
-    note_captures(cx, name, &found, Demand::Write, span);
+    note_captures(cx, capturing_binding(name, &found), Demand::Write, span);
     super::closure::refuse_recursion(cx, value, name, span);
     cx.enter(site, value, found.binding.term, span);
 }

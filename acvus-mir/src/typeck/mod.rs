@@ -40,9 +40,9 @@ mod writeback;
 use acvus_ast::{Expr, Script, Slot, Template};
 
 use crate::decl::Declarations;
-use crate::ty::{Concrete, Types};
+use crate::ty::{Concrete, TyKind, Types};
 
-pub use output::{AsCast, Capture, Captured, Chosen, Closure, Comparison, Conversion, Impl, Iteration, Name, TryExit, Typeck};
+pub use output::{AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Comparison, Conversion, Impl, Iteration, Name, TryExit, Typeck};
 pub use refusal::{Refusal, RefusalKind};
 
 use ctxt::Ctxt;
@@ -54,9 +54,9 @@ pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, 
     let value = stmt::check_body(&mut cx, &script.stmts, tail);
     let site = tail.map_or(script.id, Expr::id);
     let span = tail.map_or(script.span, Expr::span);
-    context::check_run_result(&mut cx, site, value, span);
+    let result = context::check_run_result(&mut cx, site, value, span);
     decision::solve(&mut cx);
-    writeback::finish(cx, types)
+    writeback::finish(cx, types, result)
 }
 
 /// A template (programs §1): text and `{{ }}`, each a call of
@@ -65,7 +65,8 @@ pub fn check_template<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>
     let mut cx = Ctxt::new(decls);
     stmt::check_stmts(&mut cx, &template.body);
     decision::solve(&mut cx);
-    writeback::finish(cx, types)
+    let built = cx.node(TyKind::String);
+    writeback::finish(cx, types, built)
 }
 
 // A module (programs §3) is to-be: its entry gives its declarations'

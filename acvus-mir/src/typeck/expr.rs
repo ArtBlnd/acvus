@@ -1,14 +1,14 @@
 //! Dispatch over expression forms; literals (operators §1). Every form is
 //! its own function; the large ones live in the files that own their rule.
 
-use acvus_ast::{Expr, Literal, ObjectExprField, Slot, Span, TupleElem, UnaryOp};
-use acvus_utils::Astr;
+use acvus_ast::{Expr, Literal, ObjectExprField, RefKind, Slot, Span, TupleElem, UnaryOp};
+use acvus_utils::{Astr, QualifiedRef};
 
 use super::ctxt::Ctxt;
 use super::decision::Decision;
 use super::place::Demand;
 use super::refusal::{self, RefusalKind};
-use super::scope::note_captures;
+use super::scope::{Capturing, capturing_binding, note_captures};
 use super::{call, cast, closure, context, control, method, op, place, scope, stmt, variant};
 use crate::infer::{Bound, Term};
 use crate::ty::{IntTy, LenTerm, Label, Mutability, ObjectTy, TyKind, TypeArg};
@@ -24,6 +24,31 @@ pub(super) fn check_expr<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Dem
     term
 }
 
+/// A name read for more than a shared read: each lambda that captures it
+/// captures it as `demand` asks (functions §2). An input is found in no
+/// frame; it crosses every lambda around it.
+fn note_demanded_capture(cx: &mut Ctxt<'_>, name: QualifiedRef, ref_kind: RefKind, term: Term, demand: Demand, span: Span) {
+    match ref_kind {
+        RefKind::ExternParam => {
+            let crossed = cx.scope.lambdas();
+            let capturing = Capturing {
+                name: name.name,
+                of: super::output::CaptureOf::Input(name.name),
+                crossed: &crossed,
+                term,
+            };
+            note_captures(cx, capturing, demand, span);
+        }
+        RefKind::Value => {
+            if name.namespace.is_none()
+                && let Some(found) = cx.scope.lookup(name.name)
+            {
+                note_captures(cx, capturing_binding(name.name, &found), demand, span);
+            }
+        }
+    }
+}
+
 fn check_form<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Term {
     match expr {
         Expr::Ident {
@@ -33,11 +58,8 @@ fn check_form<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Ter
             span,
         } => {
             let term = scope::check_ident(cx, *id, *name, *ref_kind, *span);
-            if demand != Demand::Read
-                && name.namespace.is_none()
-                && let Some(found) = cx.scope.lookup(name.name)
-            {
-                note_captures(cx, name.name, &found, demand, *span);
+            if demand != Demand::Read {
+                note_demanded_capture(cx, *name, *ref_kind, term, demand, *span);
             }
             term
         }
