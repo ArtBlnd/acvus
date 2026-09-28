@@ -10,7 +10,7 @@ Two object types join at the union of their fields. Two enums of one name join a
 
 ## 3. Subtyping
 
-A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it. Values of one identity keep it; two identities meet at the type without identity, as two `Deque`s meet at `Deque`.
+A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it. Values of one identity keep it; values of two identities meet at their nearest common ancestor that carries no identity, and where there is none, they do not meet. No identity is made to join two others.
 
 Type constructors stay invariant: subtyping applies to a value entering a slot, not to a constructor's argument.
 
