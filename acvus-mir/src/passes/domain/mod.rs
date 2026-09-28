@@ -1,6 +1,12 @@
 //! Value domains (passes-structure §1). A domain knows values and the
 //! language's value operations, and nothing of CFG, storage or calls.
 
+mod constant;
+mod interval;
+
+pub use constant::{Constant, ConstantDomain};
+pub use interval::{Bound, Interval, IntervalDomain};
+
 use acvus_ast::Literal;
 
 use crate::ir::{BinOp, UnaryOp};
