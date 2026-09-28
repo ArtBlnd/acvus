@@ -27,6 +27,10 @@ pub enum TyKind<V: Phase> {
     /// The run of bytes a `String` lends; only under a shared `Ref`.
     Str,
     Tuple(Box<[TyId<V>]>),
+    /// A primitive, closed like an extern enum (types §2).
+    Option(TyId<V>),
+    /// A primitive, closed like an extern enum (types §2).
+    Result(TyId<V>, TyId<V>),
     Object(ObjectTy<V>),
     /// An enum the program names; its variants sorted by tag (types §2).
     Enum {
@@ -41,8 +45,7 @@ pub enum TyKind<V: Phase> {
         flows: FlowTerm<V>,
         calls: Calls,
     },
-    /// An extern-defined type (extern-fn §8). `core`'s `Option` and
-    /// `Result` are two of them (types §2).
+    /// An extern-defined type (extern-fn §8).
     UserDefined {
         id: QualifiedRef,
         type_args: Box<[TypeArg<V>]>,
@@ -122,7 +125,13 @@ impl<V: Phase> TyKind<V> {
             | TyKind::Order
             | TyKind::Str
             | TyKind::Var(_) => {}
-            TyKind::Handle(inner) | TyKind::Array(inner, _) | TyKind::Slice(inner) => on_child(*inner),
+            TyKind::Handle(inner) | TyKind::Array(inner, _) | TyKind::Slice(inner) | TyKind::Option(inner) => {
+                on_child(*inner)
+            }
+            TyKind::Result(ok, err) => {
+                on_child(*ok);
+                on_child(*err);
+            }
             TyKind::Tuple(items) => items.iter().copied().for_each(on_child),
             TyKind::Object(object) => object.fields().iter().for_each(|(_, ty)| on_child(*ty)),
             TyKind::Enum { variants, .. } => variants

@@ -13,7 +13,8 @@ pub trait LifetimesOf {
 }
 
 /// Whether a value of `ty` copies: a primitive, a shared reference, or a
-/// structural tuple, array or object whose every part copies (ownership §1).
+/// structural tuple, array, object, `Option` or `Result` whose every part
+/// copies (ownership §1).
 pub fn copies(types: &Types<Concrete>, ty: Ty) -> bool {
     acvus_utils::grow(|| copies_level(types, ty))
 }
@@ -23,7 +24,8 @@ fn copies_level(types: &Types<Concrete>, ty: Ty) -> bool {
         TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char | TyKind::Unit => true,
         TyKind::Ref(Mutability::Shared, _) => true,
         TyKind::Tuple(items) => items.iter().all(|item| copies(types, *item)),
-        TyKind::Array(element, _) => copies(types, *element),
+        TyKind::Array(element, _) | TyKind::Option(element) => copies(types, *element),
+        TyKind::Result(ok, err) => copies(types, *ok) && copies(types, *err),
         TyKind::Object(ObjectTy::Structural(fields, ())) => fields.iter().all(|(_, field)| copies(types, *field)),
         TyKind::String
         | TyKind::Never
@@ -65,6 +67,8 @@ fn positions_level(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty
         TyKind::Fn { .. } => 1,
         TyKind::Handle(result) => 1 + positions(types, lifetimes, *result),
         TyKind::Array(element, _) | TyKind::Slice(element) => positions(types, lifetimes, *element),
+        TyKind::Option(payload) => positions(types, lifetimes, *payload),
+        TyKind::Result(ok, err) => positions(types, lifetimes, *ok) + positions(types, lifetimes, *err),
         TyKind::Tuple(items) => items.iter().map(|item| positions(types, lifetimes, *item)).sum(),
         TyKind::Object(object) => object
             .fields()

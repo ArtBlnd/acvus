@@ -36,6 +36,8 @@ pub enum Head {
     Array,
     Slice,
     Tuple(usize),
+    Option,
+    Result,
     Object,
     Enum(QualifiedRef),
     Fn,
