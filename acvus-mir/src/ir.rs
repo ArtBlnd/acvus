@@ -4,7 +4,8 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use acvus_utils::QualifiedRef;
-use crate::ty::{CastTy, Mutability, Task, Ty};
+use crate::flows::Flows;
+use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, Types};
 
 /// A call that is an instruction of the language (RFC-0020): the
 /// compiler's own instance of a shared signature.
@@ -771,7 +772,7 @@ pub enum InstKind {
         id: QualifiedRef,
     },
     /// Unified function call. Callee can be a direct graph function or an indirect value.
-    /// Semantically equivalent to Spawn + Eval (synchronous call = spawn then immediately eval).
+    /// Semantically equivalent to Spawn + TakeEffect (synchronous call = spawn then immediately eval).
     /// A call whose effect is not Pure carries an `OrderEdge`; a Pure call carries none.
     FunctionCall {
         dst: ValueId,
@@ -793,7 +794,7 @@ pub enum InstKind {
     /// Evaluate (force) a Handle, consuming it.
     /// `src` must be a Handle<T>. `dst` receives T; `order` receives the
     /// `Order` that follows the call when the call is effectful.
-    Eval {
+    TakeEffect {
         dst: ValueId,
         src: ValueId,
         order: Option<ValueId>,
@@ -1228,9 +1229,6 @@ pub struct MirBody {
     pub captures: Vec<(Astr, ValueId)>,
     /// The `Order` the body takes first when its effect is not Pure.
     pub order_param: Option<ValueId>,
-    /// The join of the tasks of everything the body does (RFC-0046). The
-    /// interpreter's `Code::may_suspend` is `task > Sync`.
-    pub task: Task,
     pub debug: DebugInfo,
     pub val_factory: LocalFactory<ValueId>,
     pub label_count: u32,
@@ -1254,7 +1252,6 @@ impl MirBody {
             val_types: FxHashMap::default(),
             params: Vec::new(),
             captures: Vec::new(),
-            task: Task::Sync,
             order_param: None,
             debug: DebugInfo::new(),
             val_factory: LocalFactory::new(),
@@ -1274,7 +1271,6 @@ impl MirBody {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct MirModule {
     /// How many of `main.params`, first, the function's declaration names:
     /// a call or a run passes them whether or not the body reads them. The
@@ -1288,7 +1284,111 @@ pub struct MirModule {
     /// entry, what the host declared (RFC-0054).
     pub ret: Ty,
     /// What `main` joins into its outputs, as the checker inferred it from
-    /// the body (RFC-0079 rule 5); a closure's are on the function type of
-    /// the `MakeClosure` that makes it.
-    pub flows: crate::ty::Flows,
+    /// the body (ownership §5); a closure's are on the function type of the
+    /// `MakeClosure` that makes it.
+    pub flows: Flows,
+    /// Every type the module's bodies name is an id of this table.
+    pub types: Types<Concrete>,
+}
+
+impl std::fmt::Debug for MirModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MirModule")
+            .field("declared_params", &self.declared_params)
+            .field("main", &self.main)
+            .field("closures", &self.closures)
+            .field("ret", &self.ret)
+            .field("flows", &self.flows)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Whether a value of `ty` is a word (RFC-0018 rule 1): a type with no
+/// parts held as one word, a reference, or an `Option` of a word.
+///
+/// The answer for an option is one half of a contract with the runtime's
+/// representation of one, written in RFC-0039 and `docs/runtime-value.md`:
+/// a host gives an option no storage of its own, so `Some(v)` is `v` and a
+/// `None` is a word counting the `Some`s around it. A host that gave an
+/// option a box would have to move this arm with it.
+pub fn is_word(types: &Types<Concrete>, ty: Ty) -> bool {
+    acvus_utils::grow(|| match types.kind(ty) {
+        crate::ty::TyKind::Option(payload) => is_word(types, *payload),
+        kind => is_scalar(kind) || matches!(kind, crate::ty::TyKind::Ref(..)),
+    })
+}
+
+/// A type with no parts, held as one word.
+pub fn is_scalar(kind: &crate::ty::TyKind<Concrete>) -> bool {
+    use crate::ty::TyKind;
+    match kind {
+        TyKind::Int(_) | TyKind::Float | TyKind::Char | TyKind::Bool | TyKind::Unit | TyKind::Never | TyKind::Order => {
+            true
+        }
+        TyKind::String
+        | TyKind::Array(..)
+        | TyKind::Object(_)
+        | TyKind::Tuple(_)
+        | TyKind::Option(_)
+        | TyKind::Result(..)
+        | TyKind::Fn { .. }
+        | TyKind::UserDefined { .. }
+        | TyKind::Enum { .. }
+        | TyKind::Slice(_)
+        | TyKind::Str
+        | TyKind::Handle(_)
+        | TyKind::Ref(..) => false,
+        TyKind::Var(var) => match *var {},
+    }
+}
+
+/// The effect of a concrete type's effect term, which holds no variable.
+pub fn known_effect(effect: &crate::ty::EffectTerm<Concrete>) -> &crate::ty::Effect {
+    match effect {
+        crate::ty::EffectTerm::Known(effect) => effect,
+        crate::ty::EffectTerm::Var(var) => match *var {},
+    }
+}
+
+/// The length of a concrete type's length term, which holds no variable.
+pub fn known_len(len: &crate::ty::LenTerm<Concrete>) -> usize {
+    match len {
+        crate::ty::LenTerm::Known(len) => *len,
+        crate::ty::LenTerm::Var(var) => match *var {},
+    }
+}
+
+/// The effect a value of `ty` has when called, where `ty` is a function
+/// type.
+pub fn fn_effect(types: &Types<Concrete>, ty: Ty) -> Option<&crate::ty::Effect> {
+    match types.kind(ty) {
+        crate::ty::TyKind::Fn { effect, .. } => Some(known_effect(effect)),
+        _ => None,
+    }
+}
+
+/// The scalar types a pass writes new values at, interned before the pass
+/// reads the table, so it can read the table while it writes values of
+/// them.
+#[derive(Debug, Clone, Copy)]
+pub struct ScalarTypes {
+    ints: [Ty; IntTy::ALL.len()],
+    pub bool: Ty,
+}
+
+impl ScalarTypes {
+    pub fn of(types: &mut Types<Concrete>) -> Self {
+        ScalarTypes {
+            ints: IntTy::ALL.map(|width| types.intern(crate::ty::TyKind::Int(width))),
+            bool: types.intern(crate::ty::TyKind::Bool),
+        }
+    }
+
+    pub fn int(&self, width: IntTy) -> Ty {
+        let at = IntTy::ALL
+            .iter()
+            .position(|of| *of == width)
+            .expect("IntTy::ALL holds every width");
+        self.ints[at]
+    }
 }

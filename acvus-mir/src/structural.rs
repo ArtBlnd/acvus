@@ -3,7 +3,7 @@
 
 use acvus_utils::{Astr, Interner};
 
-use crate::ty::{Phase, Ty, TyTerm};
+use crate::ty::{Concrete, Phase, Ty, TyId, TyKind, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StructuralSignature {
@@ -27,32 +27,29 @@ pub enum Component {
 
 /// `!` is structural with no component: no value of it exists, so there is
 /// nothing to compare or copy.
-pub fn components<V>(ty: &TyTerm<V>) -> Option<Vec<(Component, &TyTerm<V>)>>
+pub fn components<V>(types: &Types<V>, ty: TyId<V>) -> Option<Vec<(Component, TyId<V>)>>
 where
     V: Phase,
 {
-    let out = match ty {
-        TyTerm::Object(object) => object
+    let out = match types.kind(ty) {
+        TyKind::Object(object) => object
+            .fields()
             .iter()
-            .map(|(name, field)| (Component::Field(*name), field))
+            .map(|(name, field)| (Component::Field(*name), *field))
             .collect(),
-        TyTerm::Tuple(elements) => elements
+        TyKind::Tuple(elements) => elements
             .iter()
             .enumerate()
-            .map(|(at, element)| (Component::TupleElement(at), element))
+            .map(|(at, element)| (Component::TupleElement(at), *element))
             .collect(),
-        TyTerm::Array(element, _) => vec![(Component::ArrayElement, &**element)],
-        TyTerm::Enum { variants, .. } => variants
+        TyKind::Array(element, _) => vec![(Component::ArrayElement, *element)],
+        TyKind::Enum { variants, .. } => variants
             .iter()
-            .filter_map(|(tag, payload)| {
-                payload
-                    .as_deref()
-                    .map(|payload| (Component::VariantPayload(*tag), payload))
-            })
+            .filter_map(|(tag, payload)| payload.map(|payload| (Component::VariantPayload(*tag), payload)))
             .collect(),
-        TyTerm::Option(payload) => vec![(Component::Some, &**payload)],
-        TyTerm::Result(ok, err) => vec![(Component::Ok, &**ok), (Component::Err, &**err)],
-        TyTerm::Never => Vec::new(),
+        TyKind::Option(payload) => vec![(Component::Some, *payload)],
+        TyKind::Result(ok, err) => vec![(Component::Ok, *ok), (Component::Err, *err)],
+        TyKind::Never => Vec::new(),
         _ => return None,
     };
     Some(out)
@@ -61,8 +58,8 @@ where
 /// Obligation across artifacts: fields sort by their spelled names, which is
 /// `acvus_interpreter::layout::sorted_fields`'s order and so the position of
 /// each field in a heap object (RFC-0050 rule 8). Variants sort the same way.
-pub fn ordered_components<'t>(ty: &'t Ty, interner: &Interner) -> Option<Vec<(Component, &'t Ty)>> {
-    let mut out = components(ty)?;
+pub fn ordered_components(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> Option<Vec<(Component, Ty)>> {
+    let mut out = components(types, ty)?;
     out.sort_by(|(a, _), (b, _)| match (a, b) {
         (Component::Field(a), Component::Field(b))
         | (Component::VariantPayload(a), Component::VariantPayload(b)) => {
@@ -74,23 +71,23 @@ pub fn ordered_components<'t>(ty: &'t Ty, interner: &Interner) -> Option<Vec<(Co
     Some(out)
 }
 
-pub fn language_owned(ty: &Ty) -> bool {
+pub fn language_owned(types: &Types<Concrete>, ty: Ty) -> bool {
     matches!(
-        ty,
-        TyTerm::Int(_)
-            | TyTerm::Float
-            | TyTerm::Bool
-            | TyTerm::Char
-            | TyTerm::Unit
-            | TyTerm::String
-            | TyTerm::Str
+        types.kind(ty),
+        TyKind::Int(_)
+            | TyKind::Float
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::Unit
+            | TyKind::String
+            | TyKind::Str
     )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Leaf<'t> {
+pub struct Leaf {
     pub path: Vec<Component>,
-    pub ty: &'t Ty,
+    pub ty: Ty,
 }
 
 /// Obligation across artifacts: the lowering writes the registry instance of
@@ -98,30 +95,25 @@ pub struct Leaf<'t> {
 /// `InstKind::StructuralClone::leaves` in this order, and
 /// `acvus_interpreter::prepare` finds each leaf's instance by its position
 /// here.
-pub fn structural_leaves<'t>(ty: &'t Ty, interner: &Interner) -> Vec<Leaf<'t>> {
+pub fn structural_leaves(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> Vec<Leaf> {
     let mut out = Vec::new();
-    walk(ty, interner, &mut Vec::new(), &mut out);
+    walk(types, ty, interner, &mut Vec::new(), &mut out);
     out
 }
 
-fn walk<'t>(ty: &'t Ty, interner: &Interner, path: &mut Vec<Component>, out: &mut Vec<Leaf<'t>>) {
-    acvus_utils::grow(|| walk_level(ty, interner, path, out))
+fn walk(types: &Types<Concrete>, ty: Ty, interner: &Interner, path: &mut Vec<Component>, out: &mut Vec<Leaf>) {
+    acvus_utils::grow(|| walk_level(types, ty, interner, path, out))
 }
 
-fn walk_level<'t>(
-    ty: &'t Ty,
-    interner: &Interner,
-    path: &mut Vec<Component>,
-    out: &mut Vec<Leaf<'t>>,
-) {
-    let Some(parts) = ordered_components(ty, interner) else {
+fn walk_level(types: &Types<Concrete>, ty: Ty, interner: &Interner, path: &mut Vec<Component>, out: &mut Vec<Leaf>) {
+    let Some(parts) = ordered_components(types, ty, interner) else {
         return;
     };
     for (component, part) in parts {
         path.push(component);
-        if !language_owned(part) {
-            match components(part) {
-                Some(_) => walk(part, interner, path, out),
+        if !language_owned(types, part) {
+            match components(types, part) {
+                Some(_) => walk(types, part, interner, path, out),
                 None => out.push(Leaf {
                     path: path.clone(),
                     ty: part,

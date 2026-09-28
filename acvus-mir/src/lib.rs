@@ -463,7 +463,7 @@ mod tests {
             captures: vec![],
 
             effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         };
         // Storing a function to context must fail.
         assert!(compile_script(&i, "@f = @f; @f", &[("f", fn_ty)]).is_err());
@@ -478,7 +478,7 @@ mod tests {
             captures: vec![],
 
             effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         };
         let list_fn_ty = Ty::Array(Box::new(fn_ty), crate::ty::LenTerm::Known(3));
         assert!(compile_script(&i, "@x = @x; @x", &[("x", list_fn_ty)]).is_err());
@@ -493,7 +493,7 @@ mod tests {
             captures: vec![],
 
             effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::ty::Flows::Every.into(),
+            flows: crate::flows::Flows::Every.into(),
         };
         let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
             (i.intern("name"), Ty::String),

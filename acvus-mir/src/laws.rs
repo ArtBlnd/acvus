@@ -1,7 +1,5 @@
 //! The algebraic laws and the postconditions an extern declares (RFC-0082
-//! rules 2 to 4), read by a MIR pass through a call's callee, and the
-//! weight it states (RFC-0066 rule 8), which only `analysis::cost` reads
-//! and no pass does.
+//! rules 2 to 4), read by a MIR pass through a call's callee.
 //!
 //! A law or a postcondition is the author's promise, trusted as an effect
 //! is. Nothing here checks that a function is associative or that its
@@ -13,12 +11,16 @@
 use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
-use crate::graph::{FnKind, Function};
-use acvus_utils::QualifiedRef;
+use acvus_utils::{Astr, Interner, QualifiedRef};
+
+use crate::decl::{Declarations, Scheme};
 use crate::ir::{Callee, Chosen};
 use crate::means::{EntryReading, Means, Named, Stmt as MeansStmt, Term as MeansTerm};
 use crate::step::Step;
-use crate::ty::{Mutability, PolyTy, Task, View, Viewed, matches_pattern};
+use crate::ty::{
+    EffectArg, EffectTerm, IdentityTerm, IntTy, LenTerm, Mutability, ObjectTy, ParamTerm, Poly, TyId, TyKind,
+    TypeArg, Types,
+};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Laws {
@@ -314,12 +316,9 @@ pub enum Unresolved {
 /// its generic instance. A name picks the extern and the types pick its
 /// instance: `num::min` over `i32` names `i32::MAX`, and a fold on `push`
 /// at `Vec<T>` combines through `extend` at `Vec<T>`.
-pub fn resolve<'a>(
-    laws: &Laws,
-    declaring: &PolyTy,
-    function: impl Fn(QualifiedRef) -> Option<&'a Function>,
-) -> Result<ResolvedLaws, Unresolved> {
-    let PolyTy::Fn { params, ret, .. } = declaring else {
+pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Result<ResolvedLaws, Unresolved> {
+    let poly = decls.types();
+    let TyKind::Fn { params, ret, .. } = poly.kind(declaring) else {
         return match laws {
             Laws::None => Ok(ResolvedLaws::None),
             Laws::Binary(_)
@@ -331,30 +330,28 @@ pub fn resolve<'a>(
             | Laws::Step(_) => Err(Unresolved::UnfitDeclaration),
         };
     };
+    let ret = *ret;
     let instance_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
         let unfit = Unresolved::NoFittingInstance { role, named };
-        let found = function(named).ok_or(unfit)?;
-        let FnKind::Extern { instances, .. } = &found.kind else {
-            return Err(unfit);
-        };
-        let at = |instance: usize| ExternInstance {
-            id: named,
-            instance,
+        let scheme = decls.scheme(named).ok_or(unfit)?;
+        let at = |instance: usize| ExternInstance { id: named, instance };
+        let Some(instances) = &scheme.instances else {
+            return match wanted.fits(poly, scheme.ty) {
+                true => Ok(at(0)),
+                false => Err(unfit),
+            };
         };
         let concrete: Vec<usize> = instances
             .concrete
             .iter()
             .enumerate()
-            .filter(|(_, instance)| wanted.fits(&instance.ty))
+            .filter(|(_, instance)| wanted.fits(poly, instance.ty))
             .map(|(instance, _)| instance)
             .collect();
         match concrete[..] {
             [instance] => Ok(at(instance)),
-            [] if wanted.fits(&found.ty) => match &instances.generic {
-                Some(_) => Ok(at(instances.generic_index())),
-                // The solver calls an extern that lists no instance at all
-                // through its scheme, as instance 0 (`fixed_generic` in
-                // `solver.rs`).
+            [] if wanted.fits(poly, scheme.ty) => match &instances.generic {
+                Some(_) => Ok(at(instances.concrete.len())),
                 None if instances.concrete.is_empty() => Ok(at(0)),
                 None => Err(unfit),
             },
@@ -368,8 +365,8 @@ pub fn resolve<'a>(
             commutative,
             identity,
         }) => {
-            let (value, extension) = match (binary_fits(params, ret), extension_of(params, ret)) {
-                (true, _) => ((**ret).clone(), false),
+            let (value, extension) = match (binary_fits(poly, params, ret), extension_of(poly, params, ret)) {
+                (true, _) => (ret, false),
                 (false, Some(value)) => (value, true),
                 (false, None) => return Err(Unresolved::UnfitDeclaration),
             };
@@ -378,9 +375,7 @@ pub fn resolve<'a>(
                 commutative: *commutative,
                 identity: match identity {
                     None => None,
-                    Some(Identity::Const(constant)) => {
-                        Some(ResolvedIdentity::Const(constant.clone()))
-                    }
+                    Some(Identity::Const(constant)) => Some(ResolvedIdentity::Const(constant.clone())),
                     Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(instance_of(
                         LawRole::Identity,
                         *named,
@@ -398,86 +393,56 @@ pub fn resolve<'a>(
             identity,
             commutative,
         }) => {
-            let Some(PolyTy::Ref(Mutability::Mut, state)) = params.first().map(|p| &p.ty) else {
+            let Some(TyKind::Ref(Mutability::Mut, state)) = params.first().map(|p| poly.kind(p.ty)) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
-            let state = state.ty().into_owned();
+            let state = state.ty();
             Ok(ResolvedLaws::Fold(ResolvedFold {
-                combine: instance_of(
-                    LawRole::FoldCombine,
-                    *combine,
-                    &Wanted::Combining(state.clone()),
-                )?,
+                combine: instance_of(LawRole::FoldCombine, *combine, &Wanted::Combining(state))?,
                 identity: instance_of(LawRole::FoldIdentity, *identity, &Wanted::Returning(state))?,
                 commutative: *commutative,
             }))
         }
         Laws::TotalOrder => {
-            let compares = match params.as_slice() {
-                [a, b] => match (&a.ty, &b.ty) {
-                    (PolyTy::Ref(Mutability::Shared, a), PolyTy::Ref(Mutability::Shared, b)) => {
-                        a.ty() == b.ty()
-                    }
-                    _ => false,
-                },
-                _ => false,
-            };
-            match compares && matches!(**ret, PolyTy::Int(crate::ty::IntTy::I64)) {
+            match compares_two_shared(poly, params) && matches!(poly.kind(ret), TyKind::Int(IntTy::I64)) {
                 true => Ok(ResolvedLaws::TotalOrder),
                 false => Err(Unresolved::UnfitDeclaration),
             }
         }
         Laws::Inverse(restore) => {
-            let ([state], PolyTy::Option(payload)) = (params.as_slice(), &**ret) else {
+            let ([state], TyKind::Option(payload)) = (&params[..], poly.kind(ret)) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
-            let PolyTy::Ref(Mutability::Mut, state) = &state.ty else {
+            let TyKind::Ref(Mutability::Mut, state) = poly.kind(state.ty) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
             Ok(ResolvedLaws::Inverse(instance_of(
                 LawRole::Inverse,
                 *restore,
                 &Wanted::Restoring {
-                    state: state.ty().into_owned(),
-                    payload: (**payload).clone(),
+                    state: state.ty(),
+                    payload: *payload,
                 },
             )?))
         }
-        Laws::Payload => match (params.as_slice(), &**ret) {
-            ([option], payload)
-                if option.ty == PolyTy::Option(Box::new(payload.clone())) =>
-            {
-                Ok(ResolvedLaws::Payload)
-            }
+        Laws::Payload => match &params[..] {
+            [option] if poly.kind(option.ty) == &TyKind::Option(ret) => Ok(ResolvedLaws::Payload),
             _ => Err(Unresolved::UnfitDeclaration),
         },
-        Laws::Equivalence => {
-            let compares = match params.as_slice() {
-                [a, b] => match (&a.ty, &b.ty) {
-                    (PolyTy::Ref(Mutability::Shared, a), PolyTy::Ref(Mutability::Shared, b)) => {
-                        a.ty() == b.ty()
-                    }
-                    _ => false,
-                },
-                _ => false,
-            };
-            match compares && **ret == PolyTy::Bool {
-                true => Ok(ResolvedLaws::Equivalence),
-                false => Err(Unresolved::UnfitDeclaration),
-            }
-        }
+        Laws::Equivalence => match compares_two_shared(poly, params) && poly.kind(ret) == &TyKind::Bool {
+            true => Ok(ResolvedLaws::Equivalence),
+            false => Err(Unresolved::UnfitDeclaration),
+        },
         Laws::Step(step) => {
-            if !step_fits(step, params) {
+            if !step_fits(poly, step, params) {
                 return Err(Unresolved::UnfitDeclaration);
             }
             for named in step.named_externs() {
-                let unfit = Unresolved::NoFittingInstance {
-                    role: LawRole::Step,
-                    named,
-                };
-                match function(named).map(|found| &found.kind) {
-                    Some(FnKind::Extern { .. }) => {}
-                    Some(FnKind::Local(..)) | None => return Err(unfit),
+                if decls.scheme(named).is_none() {
+                    return Err(Unresolved::NoFittingInstance {
+                        role: LawRole::Step,
+                        named,
+                    });
                 }
             }
             Ok(ResolvedLaws::Step(step.clone()))
@@ -485,12 +450,23 @@ pub fn resolve<'a>(
     }
 }
 
+/// `f(a: &T, b: &T)`: two shared references to one type.
+fn compares_two_shared(poly: &Types<Poly>, params: &[ParamTerm<Poly>]) -> bool {
+    match params {
+        [a, b] => match (poly.kind(a.ty), poly.kind(b.ty)) {
+            (TyKind::Ref(Mutability::Shared, a), TyKind::Ref(Mutability::Shared, b)) => a.ty() == b.ty(),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// RFC-0099 rule 1, over the declaration's type: the stream is a parameter,
 /// a closure a step calls is a parameter of function type, and a value
 /// parameter it reads is one of neither.
-fn step_fits(step: &Step, params: &[crate::ty::PolyParam]) -> bool {
+fn step_fits(poly: &Types<Poly>, step: &Step, params: &[ParamTerm<Poly>]) -> bool {
     let stream = step.stream().param;
-    let is_fn = |at: usize| matches!(params.get(at).map(|p| &p.ty), Some(PolyTy::Fn { .. }));
+    let is_fn = |at: usize| matches!(params.get(at).map(|p| poly.kind(p.ty)), Some(TyKind::Fn { .. }));
     let mut values = Vec::new();
     for term in step.terms() {
         term.visit(&mut |term| {
@@ -510,28 +486,29 @@ fn step_fits(step: &Step, params: &[crate::ty::PolyParam]) -> bool {
 }
 
 /// RFC-0082 rule 2.
-fn binary_fits(params: &[crate::ty::PolyParam], ret: &PolyTy) -> bool {
+fn binary_fits(poly: &Types<Poly>, params: &[ParamTerm<Poly>], ret: TyId<Poly>) -> bool {
     let [a, b] = params else {
         return false;
     };
-    let str_view = |ty: &PolyTy| {
-        matches!(ty, PolyTy::Ref(Mutability::Shared, lent) if *lent.ty() == PolyTy::Str)
+    let str_view = |ty: TyId<Poly>| match poly.kind(ty) {
+        TyKind::Ref(Mutability::Shared, lent) => poly.kind(lent.ty()) == &TyKind::Str,
+        _ => false,
     };
-    let over_values = a.ty == b.ty && a.ty == *ret;
-    let over_string_views = *ret == PolyTy::String && str_view(&a.ty) && str_view(&b.ty);
+    let over_values = a.ty == b.ty && a.ty == ret;
+    let over_string_views = poly.kind(ret) == &TyKind::String && str_view(a.ty) && str_view(b.ty);
     over_values || over_string_views
 }
 
 /// RFC-0082 rule 2's `f(a: T, b: T) -> Option<T>`: `T`, the type a law
 /// stated there is `f`'s extension's over.
-fn extension_of(params: &[crate::ty::PolyParam], ret: &PolyTy) -> Option<PolyTy> {
+fn extension_of(poly: &Types<Poly>, params: &[ParamTerm<Poly>], ret: TyId<Poly>) -> Option<TyId<Poly>> {
     let [a, b] = params else {
         return None;
     };
-    let PolyTy::Option(payload) = ret else {
+    let TyKind::Option(payload) = poly.kind(ret) else {
         return None;
     };
-    (a.ty == b.ty && a.ty == **payload).then(|| a.ty.clone())
+    (a.ty == b.ty && a.ty == *payload).then_some(a.ty)
 }
 
 /// Whether `means`, declared on an instance of type `declaring`, reads each
@@ -539,12 +516,16 @@ fn extension_of(params: &[crate::ty::PolyParam], ret: &PolyTy) -> Option<PolyTy>
 /// parameter, a parameter by value, and the entry `x[k]` of a `&` or `&mut`
 /// table at a parameter by value or by `&`. What else the term computes is
 /// typed where the model checker runs it.
-pub fn means_fits(means: &Means, declaring: &PolyTy) -> bool {
-    let PolyTy::Fn { params, .. } = declaring else {
+pub fn means_fits(poly: &Types<Poly>, means: &Means, declaring: TyId<Poly>) -> bool {
+    let TyKind::Fn { params, .. } = poly.kind(declaring) else {
         return false;
     };
-    let is_ref = |at: usize| matches!(params.get(at).map(|p| &p.ty), Some(PolyTy::Ref(..)));
-    let is_value = |at: usize| params.get(at).is_some_and(|p| !matches!(p.ty, PolyTy::Ref(..)));
+    let is_ref = |at: usize| matches!(params.get(at).map(|p| poly.kind(p.ty)), Some(TyKind::Ref(..)));
+    let is_value = |at: usize| {
+        params
+            .get(at)
+            .is_some_and(|p| !matches!(poly.kind(p.ty), TyKind::Ref(..)))
+    };
     let entry_fits = means
         .entry
         .is_none_or(|entry| is_ref(entry.table) && entry.key < params.len() && entry.key != entry.table);
@@ -575,53 +556,215 @@ pub fn means_fits(means: &Means, declaring: &PolyTy) -> bool {
 /// types.
 enum Wanted {
     /// `e() -> T`.
-    Returning(PolyTy),
+    Returning(TyId<Poly>),
     /// `g(s: &mut S, part: S)`.
-    Combining(PolyTy),
+    Combining(TyId<Poly>),
     /// `g(s: &mut S, x: X)`.
-    Restoring { state: PolyTy, payload: PolyTy },
+    Restoring { state: TyId<Poly>, payload: TyId<Poly> },
 }
 
 impl Wanted {
     /// Whether a call at the wanted types has the shape of an instance of
     /// type `candidate`.
-    fn fits(&self, candidate: &PolyTy) -> bool {
-        let PolyTy::Fn { params, ret, .. } = candidate else {
+    fn fits(&self, poly: &Types<Poly>, candidate: TyId<Poly>) -> bool {
+        let TyKind::Fn { params, ret, .. } = poly.kind(candidate) else {
             return false;
         };
-        match (self, params.as_slice()) {
-            (Self::Returning(value), []) => matches_pattern(value, ret),
-            (Self::Combining(state), [into, part]) if **ret == PolyTy::Unit => match &into.ty {
-                PolyTy::Ref(Mutability::Mut, into) => matches_pattern(
-                    &PolyTy::Tuple(vec![state.clone(), state.clone()]),
-                    &PolyTy::Tuple(vec![into.ty().into_owned(), part.ty.clone()]),
-                ),
+        let mut pattern = PatternMatch::new(poly);
+        let returns_unit = poly.kind(*ret) == &TyKind::Unit;
+        match (self, &params[..]) {
+            (Self::Returning(value), []) => pattern.matches(*value, *ret),
+            (Self::Combining(state), [into, part]) if returns_unit => match poly.kind(into.ty) {
+                TyKind::Ref(Mutability::Mut, into) => {
+                    pattern.matches(*state, into.ty()) && pattern.matches(*state, part.ty)
+                }
                 _ => false,
             },
-            (Self::Restoring { state, payload }, [into, x]) if **ret == PolyTy::Unit => {
-                match &into.ty {
-                    PolyTy::Ref(Mutability::Mut, into) => matches_pattern(
-                        &PolyTy::Tuple(vec![state.clone(), payload.clone()]),
-                        &PolyTy::Tuple(vec![into.ty().into_owned(), x.ty.clone()]),
-                    ),
-                    _ => false,
+            (Self::Restoring { state, payload }, [into, x]) if returns_unit => match poly.kind(into.ty) {
+                TyKind::Ref(Mutability::Mut, into) => {
+                    pattern.matches(*state, into.ty()) && pattern.matches(*payload, x.ty)
                 }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+/// Whether a declared type has the shape of a declared pattern. A pattern
+/// variable stands for any one type, the same wherever it recurs; effect,
+/// length and identity variables of the pattern stand for any effect,
+/// length or identity. A variable of the matched type matches only a
+/// pattern variable, and a `#` mark matches only itself: the generic
+/// instance is the uniform one (types §8).
+struct PatternMatch<'a> {
+    poly: &'a Types<Poly>,
+    bound: FxHashMap<u32, TyId<Poly>>,
+}
+
+impl<'a> PatternMatch<'a> {
+    fn new(poly: &'a Types<Poly>) -> Self {
+        PatternMatch {
+            poly,
+            bound: FxHashMap::default(),
+        }
+    }
+
+    fn matches(&mut self, ty: TyId<Poly>, pattern: TyId<Poly>) -> bool {
+        acvus_utils::grow(|| self.matches_level(ty, pattern))
+    }
+
+    fn all(&mut self, pairs: impl IntoIterator<Item = (TyId<Poly>, TyId<Poly>)>) -> bool {
+        pairs.into_iter().all(|(ty, pattern)| self.matches(ty, pattern))
+    }
+
+    fn arg_matches(&mut self, arg: &TypeArg<Poly>, pattern: &TypeArg<Poly>) -> bool {
+        match (arg, pattern) {
+            (TypeArg::Uniform(ty), TypeArg::Uniform(p) | TypeArg::Open(_, p))
+            | (TypeArg::Specialized(ty), TypeArg::Specialized(p))
+            | (TypeArg::Open(_, ty), TypeArg::Open(_, p)) => self.matches(*ty, *p),
+            (TypeArg::Uniform(_) | TypeArg::Specialized(_) | TypeArg::Open(..), _) => false,
+        }
+    }
+
+    fn matches_level(&mut self, ty: TyId<Poly>, pattern: TyId<Poly>) -> bool {
+        let poly = self.poly;
+        match (poly.kind(ty), poly.kind(pattern)) {
+            (_, TyKind::Var(var)) => match self.bound.get(var) {
+                Some(bound) => *bound == ty,
+                None => {
+                    self.bound.insert(*var, ty);
+                    true
+                }
+            },
+            (TyKind::Var(_), _) => false,
+            (TyKind::Int(a), TyKind::Int(b)) => a == b,
+            (TyKind::Float, TyKind::Float)
+            | (TyKind::Char, TyKind::Char)
+            | (TyKind::String, TyKind::String)
+            | (TyKind::Str, TyKind::Str)
+            | (TyKind::Bool, TyKind::Bool)
+            | (TyKind::Unit, TyKind::Unit)
+            | (TyKind::Never, TyKind::Never)
+            | (TyKind::Order, TyKind::Order) => true,
+            (TyKind::Array(element, len), TyKind::Array(p_element, p_len)) => {
+                len_matches(len, p_len) && self.matches(*element, *p_element)
+            }
+            (TyKind::Option(inner), TyKind::Option(p_inner))
+            | (TyKind::Handle(inner), TyKind::Handle(p_inner))
+            | (TyKind::Slice(inner), TyKind::Slice(p_inner)) => self.matches(*inner, *p_inner),
+            (TyKind::Result(ok, err), TyKind::Result(p_ok, p_err)) => {
+                self.matches(*ok, *p_ok) && self.matches(*err, *p_err)
+            }
+            (TyKind::Ref(m, target), TyKind::Ref(p_m, p_target)) => m == p_m && self.arg_matches(target, p_target),
+            (TyKind::Tuple(items), TyKind::Tuple(p_items)) => {
+                items.len() == p_items.len() && self.all(items.iter().copied().zip(p_items.iter().copied()))
+            }
+            (TyKind::Object(object), TyKind::Object(p_object)) => {
+                let same_kind = match (object, p_object) {
+                    (ObjectTy::Structural(..), ObjectTy::Structural(..)) => true,
+                    (ObjectTy::Declared(id, _), ObjectTy::Declared(p_id, _)) => id == p_id,
+                    (ObjectTy::Structural(..), ObjectTy::Declared(..))
+                    | (ObjectTy::Declared(..), ObjectTy::Structural(..)) => false,
+                };
+                let (fields, p_fields) = (object.fields(), p_object.fields());
+                same_kind
+                    && fields.len() == p_fields.len()
+                    && fields.iter().zip(p_fields.iter()).all(|((a, _), (b, _))| a == b)
+                    && self.all(fields.iter().map(|(_, ty)| *ty).zip(p_fields.iter().map(|(_, ty)| *ty)))
+            }
+            (
+                TyKind::Fn {
+                    params, ret, effect, ..
+                },
+                TyKind::Fn {
+                    params: p_params,
+                    ret: p_ret,
+                    effect: p_effect,
+                    ..
+                },
+            ) => {
+                params.len() == p_params.len()
+                    && effect_matches(effect, p_effect)
+                    && self.all(params.iter().map(|p| p.ty).zip(p_params.iter().map(|p| p.ty)))
+                    && self.matches(*ret, *p_ret)
+            }
+            (
+                TyKind::UserDefined {
+                    id,
+                    type_args,
+                    effect_args,
+                    identity_args,
+                },
+                TyKind::UserDefined {
+                    id: p_id,
+                    type_args: p_type_args,
+                    effect_args: p_effect_args,
+                    identity_args: p_identity_args,
+                },
+            ) => {
+                id == p_id
+                    && type_args.len() == p_type_args.len()
+                    && effect_args.len() == p_effect_args.len()
+                    && identity_args.len() == p_identity_args.len()
+                    && effect_args.iter().zip(p_effect_args.iter()).all(|(a, p)| {
+                        matches!(
+                            (a, p),
+                            (EffectArg::Uniform(_), EffectArg::Uniform(_))
+                                | (EffectArg::Specialized(_), EffectArg::Specialized(_))
+                        ) && effect_matches(a.effect(), p.effect())
+                    })
+                    && identity_args.iter().zip(p_identity_args.iter()).all(|(a, p)| match (a, p) {
+                        (_, IdentityTerm::Var(_)) => true,
+                        (IdentityTerm::Var(_), IdentityTerm::Known(_)) => false,
+                        (IdentityTerm::Known(a), IdentityTerm::Known(p)) => a == p,
+                    })
+                    && type_args
+                        .iter()
+                        .zip(p_type_args.iter())
+                        .all(|(a, p)| self.arg_matches(a, p))
+            }
+            (
+                TyKind::Enum { name, variants, .. },
+                TyKind::Enum {
+                    name: p_name,
+                    variants: p_variants,
+                    ..
+                },
+            ) => {
+                name == p_name
+                    && variants.len() == p_variants.len()
+                    && variants
+                        .iter()
+                        .zip(p_variants.iter())
+                        .all(|((tag, payload), (p_tag, p_payload))| {
+                            tag == p_tag
+                                && match (payload, p_payload) {
+                                    (Some(payload), Some(p_payload)) => self.matches(*payload, *p_payload),
+                                    (None, None) => true,
+                                    (Some(_), None) | (None, Some(_)) => false,
+                                }
+                        })
             }
             _ => false,
         }
     }
 }
 
-/// One instance's type and what its declaration states.
-struct DeclaredAt<'a> {
-    ty: &'a PolyTy,
-    laws: &'a Laws,
-    ensures: &'a [Postcondition],
-    reaches: &'a Reaches,
-    returns: Returns,
-    means: Option<&'a Means>,
-    cost: Option<u64>,
-    task: Task,
+fn effect_matches(effect: &EffectTerm<Poly>, pattern: &EffectTerm<Poly>) -> bool {
+    match (effect, pattern) {
+        (_, EffectTerm::Var(_)) => true,
+        (EffectTerm::Var(_), EffectTerm::Known(_)) => false,
+        (EffectTerm::Known(e), EffectTerm::Known(p)) => e == p,
+    }
+}
+
+fn len_matches(len: &LenTerm<Poly>, pattern: &LenTerm<Poly>) -> bool {
+    match (len, pattern) {
+        (_, LenTerm::Var(_)) => true,
+        (LenTerm::Var(_), LenTerm::Known(_)) => false,
+        (LenTerm::Known(n), LenTerm::Known(k)) => n == k,
+    }
 }
 
 /// What one instance of an extern declares.
@@ -632,165 +775,100 @@ struct Declared {
     reaches: Reaches,
     returns: Returns,
     means: Option<Means>,
-    cost: Option<u64>,
-    task: Task,
+}
+
+impl Declared {
+    /// # Panics
+    /// A law or a `means` of `id` does not fit its declaration, which
+    /// `acvus_extern::Externs::combine` refuses.
+    fn of(id: QualifiedRef, ty: TyId<Poly>, facts: &crate::decl::DeclaredFacts, decls: &Declarations) -> Self {
+        Declared {
+            laws: resolve(&facts.laws, ty, decls).unwrap_or_else(|unresolved| {
+                panic!(
+                    "a law of {id:?} does not resolve ({unresolved:?}), and combining the \
+                     registries refuses it"
+                )
+            }),
+            ensures: facts.ensures.to_vec(),
+            reaches: facts.reaches.clone(),
+            returns: facts.returns,
+            means: facts
+                .means
+                .as_ref()
+                .inspect(|means| {
+                    assert!(
+                        means_fits(decls.types(), means, ty),
+                        "the `means` of {id:?} reads a parameter as its type does not lend it, \
+                         and combining the registries refuses it"
+                    )
+                })
+                .cloned(),
+        }
+    }
 }
 
 /// One instance of an extern: its type, and whether its declaration
-/// requires an instance of a signature (RFC-0067), which a call names in
-/// `Callee::Extern::required`.
+/// requires an instance of a signature (extern-fn §6), which a call names
+/// in `Callee::Extern::required`.
 #[derive(Debug, Clone)]
 pub struct InstanceType {
-    pub ty: PolyTy,
+    pub ty: TyId<Poly>,
     pub requires: bool,
     pub generic: bool,
 }
 
-#[derive(Debug, Default)]
+/// The tags of an `Option`'s two variants (types §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptionTags {
+    pub some: Astr,
+    pub none: Astr,
+}
+
+#[derive(Debug)]
 pub struct LawTable {
     by_instance: FxHashMap<QualifiedRef, Vec<Declared>>,
     /// Numbered as `Callee::Extern` numbers an extern's instances.
     instance_types: FxHashMap<QualifiedRef, Vec<InstanceType>>,
-    /// The declarations the registries made the machine's shared slice view
-    /// of a container (RFC-0047 rule 3).
-    shared_slice_views: Vec<QualifiedRef>,
     /// The declaration of the `Equiv` keying marker (RFC-0098 rule 2),
-    /// where the registries declared it.
+    /// where the declarations name it.
     equiv: Option<QualifiedRef>,
-    option_tags: Option<crate::ty::OptionTags>,
+    option_tags: OptionTags,
     pull_signature: Option<QualifiedRef>,
 }
 
 impl LawTable {
+    /// The laws of every instance of each of `externs`, numbered as
+    /// `Callee::Extern` numbers them: the concrete instances in order, then
+    /// the generic one; an extern that lists no instances is instance 0.
+    ///
     /// # Panics
-    /// If a law names an extern with no instance of the types it asks:
-    /// `acvus_extern::Externs::combine` refuses such a registry by the same
-    /// [`resolve`].
-    pub fn of<'a>(
-        functions: impl IntoIterator<Item = &'a Function>,
-        types: &crate::ty::TypeRegistry,
+    /// An extern of `externs` is not declared, or a law names an extern
+    /// with no instance of the types it asks: `acvus_extern::Externs::combine`
+    /// refuses such a registry by the same [`resolve`].
+    pub fn of(
+        decls: &Declarations,
+        interner: &Interner,
+        externs: impl IntoIterator<Item = QualifiedRef>,
     ) -> Self {
-        let functions: FxHashMap<QualifiedRef, &Function> = functions
-            .into_iter()
-            .map(|function| (function.qref, function))
-            .collect();
-        let by_instance = functions
-            .values()
-            .filter_map(|function| {
-                let FnKind::Extern { instances, .. } = &function.kind else {
-                    return None;
-                };
-                let declared_at = instances
-                    .concrete
-                    .iter()
-                    .map(|instance| DeclaredAt {
-                        ty: &instance.ty,
-                        laws: &instance.laws,
-                        ensures: &instance.ensures,
-                        reaches: &instance.reaches,
-                        returns: instance.returns,
-                        means: instance.means.as_ref(),
-                        cost: instance.cost,
-                        task: instance.task,
-                    })
-                    .chain(instances.generic.as_ref().map(|generic| DeclaredAt {
-                        ty: &function.ty,
-                        laws: &generic.laws,
-                        ensures: &generic.ensures,
-                        reaches: &generic.reaches,
-                        returns: generic.returns,
-                        means: generic.means.as_ref(),
-                        cost: generic.cost,
-                        task: generic.task,
-                    }));
-                let mut declared: Vec<Declared> = declared_at
-                    .map(|DeclaredAt {
-                             ty,
-                             laws,
-                             ensures,
-                             reaches,
-                             returns,
-                             means,
-                             cost,
-                             task,
-                         }| Declared {
-                        laws: resolve(laws, ty, |named| functions.get(&named).copied())
-                            .unwrap_or_else(|unresolved| {
-                                panic!(
-                                    "a law of {:?} does not resolve ({unresolved:?}), and \
-                                     combining the registries refuses it",
-                                    function.qref
-                                )
-                            }),
-                        ensures: ensures.to_vec(),
-                        reaches: reaches.clone(),
-                        returns,
-                        means: means.inspect(|means| {
-                            assert!(
-                                means_fits(means, ty),
-                                "the `means` of {:?} reads a parameter as its type does not \
-                                 lend it, and combining the registries refuses it",
-                                function.qref
-                            )
-                        })
-                        .cloned(),
-                        cost,
-                        task,
-                    })
-                    .collect();
-                if declared.is_empty() {
-                    declared.push(Declared::default());
-                }
-                Some((function.qref, declared))
-            })
-            .collect();
-        let instance_types = functions
-            .values()
-            .filter_map(|function| {
-                let FnKind::Extern {
-                    instances,
-                    requires,
-                    ..
-                } = &function.kind
-                else {
-                    return None;
-                };
-                let mut typed: Vec<InstanceType> = instances
-                    .concrete
-                    .iter()
-                    .map(|instance| InstanceType {
-                        ty: instance.ty.clone(),
-                        requires: !instance.requires.is_empty(),
-                        generic: false,
-                    })
-                    .collect();
-                if instances.generic.is_some() || typed.is_empty() {
-                    typed.push(InstanceType {
-                        ty: function.ty.clone(),
-                        requires: !requires.is_empty(),
-                        generic: true,
-                    });
-                }
-                Some((function.qref, typed))
-            })
-            .collect();
-        let shared = Viewed {
-            view: View::Slice,
-            mutability: Mutability::Shared,
-        };
-        let mut shared_slice_views: Vec<QualifiedRef> = functions
-            .keys()
-            .filter(|qref| types.machine_view(**qref) == Some(shared))
-            .copied()
-            .collect();
-        shared_slice_views.sort_unstable();
+        let mut by_instance = FxHashMap::default();
+        let mut instance_types = FxHashMap::default();
+        for id in externs {
+            let Some(scheme) = decls.scheme(id) else {
+                panic!("the law table is asked for {id:?}, which is not declared")
+            };
+            by_instance.insert(id, declared_instances(id, scheme, decls));
+            instance_types.insert(id, typed_instances(scheme));
+        }
+        let markers = decls.loop_markers();
         Self {
             by_instance,
             instance_types,
-            shared_slice_views,
-            equiv: types.keying().map(|markers| markers.equiv),
-            option_tags: types.option_tags(),
-            pull_signature: types.pull_signature(),
+            equiv: markers.keying.map(|keying| keying.equiv),
+            option_tags: OptionTags {
+                some: interner.intern("Some"),
+                none: interner.intern("None"),
+            },
+            pull_signature: markers.pull,
         }
     }
 
@@ -808,10 +886,6 @@ impl LawTable {
         self.instance_types.get(&id).map_or(&[], Vec::as_slice)
     }
 
-    pub fn shared_slice_views(&self) -> &[QualifiedRef] {
-        &self.shared_slice_views
-    }
-
     /// Whether `id` is the declaration of the `Equiv` keying marker
     /// (RFC-0098 rule 2): the marker is known by the declaration the
     /// registries named from its Rust type, not by how a script spells it.
@@ -819,8 +893,8 @@ impl LawTable {
         self.equiv == Some(id)
     }
 
-    /// The tags of an `Option`'s variants, where the registries combined.
-    pub fn option_tags(&self) -> Option<crate::ty::OptionTags> {
+    /// The tags of an `Option`'s variants.
+    pub fn option_tags(&self) -> OptionTags {
         self.option_tags
     }
 
@@ -930,21 +1004,6 @@ impl LawTable {
         }
     }
 
-    /// The weight in ticks the instance a call names states of one call
-    /// (`cost = N`, RFC-0066 rule 8), read by instance as a law is; `None`
-    /// where it states none, and for a call of a local function or through
-    /// a value, which no declaration weighs.
-    pub fn cost_of(&self, callee: &Callee) -> Option<u64> {
-        self.declared(callee).and_then(|declared| declared.cost)
-    }
-
-    /// The task the handler of the instance a call names runs at, as its
-    /// declaration named it; `None` for a call of a local function or
-    /// through a value.
-    pub fn task_of(&self, callee: &Callee) -> Option<Task> {
-        self.declared(callee).map(|declared| declared.task)
-    }
-
     fn declared(&self, callee: &Callee) -> Option<&Declared> {
         let Callee::Extern { id, instance, .. } = callee else {
             return None;
@@ -964,4 +1023,53 @@ impl LawTable {
         };
         declared
     }
+}
+
+/// Each instance's declared facts, numbered as `LawTable` numbers them.
+fn declared_instances(id: QualifiedRef, scheme: &Scheme, decls: &Declarations) -> Vec<Declared> {
+    let Some(instances) = &scheme.instances else {
+        return vec![Declared::default()];
+    };
+    let mut declared: Vec<Declared> = instances
+        .concrete
+        .iter()
+        .map(|instance| Declared::of(id, instance.ty, &instance.facts, decls))
+        .chain(
+            instances
+                .generic
+                .as_ref()
+                .map(|generic| Declared::of(id, scheme.ty, &generic.facts, decls)),
+        )
+        .collect();
+    if declared.is_empty() {
+        declared.push(Declared::default());
+    }
+    declared
+}
+
+fn typed_instances(scheme: &Scheme) -> Vec<InstanceType> {
+    let Some(instances) = &scheme.instances else {
+        return vec![InstanceType {
+            ty: scheme.ty,
+            requires: !scheme.requires.is_empty(),
+            generic: true,
+        }];
+    };
+    let mut typed: Vec<InstanceType> = instances
+        .concrete
+        .iter()
+        .map(|instance| InstanceType {
+            ty: instance.ty,
+            requires: !instance.requires.is_empty(),
+            generic: false,
+        })
+        .collect();
+    if instances.generic.is_some() || typed.is_empty() {
+        typed.push(InstanceType {
+            ty: scheme.ty,
+            requires: !scheme.requires.is_empty(),
+            generic: true,
+        });
+    }
+    typed
 }

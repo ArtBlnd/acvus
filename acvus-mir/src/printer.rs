@@ -19,6 +19,10 @@ use crate::ir::{
     ValueId,
 };
 use crate::laws::LawTable;
+use crate::ir::{known_effect, known_len};
+use crate::ty::{Calls, Concrete, Effect, EffectArg, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, TypeArg, Types};
+
+use crate::decl::Declarations;
 
 /// Normalizes ValueIds to sequential order of first appearance.
 struct ValNormalizer {
@@ -219,6 +223,7 @@ pub enum StageFacts<'a> {
     Boundaries,
     Computed {
         laws: &'a LawTable,
+        decls: &'a Declarations,
         costs: Option<&'a CostTable>,
     },
 }
@@ -228,12 +233,12 @@ pub enum StageFacts<'a> {
 /// crosses a boundary; and the loop's control.
 fn fmt_loop_facts(
     deps: &LoopDeps,
-    cfg: &CfgBody,
+    cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations,
     laws: &LawTable,
     ctx: &PrintCtx<'_>,
     vn: &mut ValNormalizer,
 ) -> Vec<String> {
-    let judged = deps.judge(cfg, laws);
+    let judged = deps.judge(cfg, types, decls, laws);
     let mut lines = Vec::new();
     for (stage, blocks) in deps.membership.stages().iter().enumerate() {
         let entry = fmt_label(blocks.entry);
@@ -473,7 +478,7 @@ fn mnemonic(kind: &InstKind, ctx: &PrintCtx<'_>) -> String {
         InstKind::FieldSet { .. } => "field_set",
         InstKind::Cast { .. } => "cast",
         InstKind::LoadFunction { .. } => "load_function",
-        InstKind::Eval { .. } => "eval",
+        InstKind::TakeEffect { .. } => "eval",
         InstKind::Merge { .. } => "merge",
         InstKind::ArrayBegin { .. } => "array_begin",
         InstKind::ArrayPush { .. } => "array_push",
@@ -580,6 +585,7 @@ fn fmt_unaryop(op: UnaryOp) -> &'static str {
 
 struct PrintCtx<'a> {
     interner: &'a Interner,
+    types: &'a Types<Concrete>,
     facts: StageFacts<'a>,
     lit_to_tidx: &'a FxHashMap<String, usize>,
     /// FunctionId -> canonical index (order of first appearance across all bodies).
@@ -692,6 +698,8 @@ struct Computed<'a> {
     cfg: CfgBody,
     deps: BodyDeps,
     laws: &'a LawTable,
+    decls: &'a Declarations,
+
     costs: Option<&'a CostTable>,
 }
 
@@ -720,7 +728,7 @@ fn loop_fact_lines(
         .expect("promoting a body keeps each loop terminator at the end of its block");
     let mut lines = match &found.deps {
         Ok(deps) => {
-            let mut lines = fmt_loop_facts(deps, &computed.cfg, computed.laws, ctx, vn);
+            let mut lines = fmt_loop_facts(deps, &computed.cfg, ctx.types, computed.decls, computed.laws, ctx, vn);
             if let Some(costs) = &readers.costs {
                 let trip = costs
                     .count(found.header)
@@ -791,10 +799,11 @@ fn write_body(
     let mut vn = ValNormalizer::new();
     let computed = match ctx.facts {
         StageFacts::Boundaries => None,
-        StageFacts::Computed { laws, costs } => {
+        StageFacts::Computed { laws, decls, costs } => {
             let cfg = promote(body.clone());
             Some(Computed {
-                deps: BodyDeps::of(&cfg, laws),
+                deps: BodyDeps::of(&cfg, ctx.types, decls, laws),
+                decls,
                 cfg,
                 laws,
                 costs,
@@ -804,8 +813,8 @@ fn write_body(
     let readers = computed.as_ref().map(|computed| LoopReaders {
         costs: computed
             .costs
-            .map(|table| Costs::of(&computed.cfg, computed.laws, table)),
-        lowerer: Lowerer::of(&computed.cfg, computed.laws),
+            .map(|table| Costs::of(&computed.cfg, ctx.types, computed.decls, computed.laws, table)),
+        lowerer: Lowerer::of(&computed.cfg, ctx.types, computed.decls, computed.laws),
     });
     let mut block = crate::cfg::ENTRY_LABEL;
 
@@ -882,7 +891,7 @@ fn write_body(
                 f,
                 "{} = ref {}{}",
                 vn.fmt_val(*dst),
-                mutability.prefix(),
+                ref_prefix(*mutability),
                 fmt_place(body, ctx, &mut vn, target, path)
             )?,
             InstKind::Take {
@@ -1061,7 +1070,7 @@ fn write_body(
                 vn.fmt_uses(orders, &consts, &texts)
             )?,
 
-            // Spawn / Eval
+            // Spawn / TakeEffect
             InstKind::Spawn {
                 dst,
                 callee,
@@ -1085,7 +1094,7 @@ fn write_body(
                 }
                 writeln!(f)?
             }
-            InstKind::Eval { dst, src, order } => {
+            InstKind::TakeEffect { dst, src, order } => {
                 write!(
                     f,
                     "{} = eval {}",
@@ -1200,7 +1209,7 @@ fn write_body(
                 f,
                 "{} = as_slice {}{}",
                 vn.fmt_val(*dst),
-                mutability.prefix(),
+                ref_prefix(*mutability),
                 vn.fmt_use(*container, &consts, &texts)
             )?,
             InstKind::Index {
@@ -1310,7 +1319,7 @@ fn write_body(
                             let ty = body
                                 .val_types
                                 .get(v)
-                                .map(|t| format!("{}", t.display(ctx.interner)))
+                                .map(|t| format!("{}", show_ty(ctx.types, *t, ctx.interner)))
                                 .unwrap_or_else(|| "?".into());
                             format!("{}: {ty}", vn.fmt_val(*v))
                         })
@@ -1554,7 +1563,7 @@ fn write_body(
                 f,
                 "{indent}  ; {} ({origin}) : {}",
                 vn.fmt_val(*val),
-                ty.display(ctx.interner),
+                show_ty(ctx.types, *ty, ctx.interner),
             )?;
         }
     }
@@ -1601,6 +1610,7 @@ impl fmt::Display for MirModuleDisplay<'_> {
 
         let ctx = PrintCtx {
             interner: self.interner,
+            types: &module.types,
             facts: self.facts,
             lit_to_tidx: &lit_to_tidx,
             fn_id_map,
@@ -1634,11 +1644,16 @@ impl MirModule {
         &'a self,
         interner: &'a Interner,
         laws: &'a LawTable,
+        decls: &'a Declarations,
     ) -> MirModuleDisplay<'a> {
         MirModuleDisplay {
             module: self,
             interner,
-            facts: StageFacts::Computed { laws, costs: None },
+            facts: StageFacts::Computed {
+                laws,
+                decls,
+                costs: None,
+            },
         }
     }
 
@@ -1648,6 +1663,7 @@ impl MirModule {
         &'a self,
         interner: &'a Interner,
         laws: &'a LawTable,
+        decls: &'a Declarations,
         table: &'a CostTable,
     ) -> MirModuleDisplay<'a> {
         MirModuleDisplay {
@@ -1655,6 +1671,7 @@ impl MirModule {
             interner,
             facts: StageFacts::Computed {
                 laws,
+                decls,
                 costs: Some(table),
             },
         }
@@ -1723,7 +1740,7 @@ fn write_order_tree(
                     },
                 );
             }
-            InstKind::Eval {
+            InstKind::TakeEffect {
                 src,
                 order: Some(o),
                 ..
@@ -1828,6 +1845,7 @@ fn write_closure(
 /// Display wrapper for MirBody that requires an interner.
 pub struct MirBodyDisplay<'a> {
     body: &'a MirBody,
+    types: &'a Types<Concrete>,
     interner: &'a Interner,
 }
 
@@ -1838,6 +1856,7 @@ impl fmt::Display for MirBodyDisplay<'_> {
         collect_fn_ids_from_body(self.body, &mut fn_id_map);
         let ctx = PrintCtx {
             interner: self.interner,
+            types: self.types,
             facts: StageFacts::Boundaries,
             lit_to_tidx: &empty_lits,
             fn_id_map,
@@ -1848,9 +1867,10 @@ impl fmt::Display for MirBodyDisplay<'_> {
 
 impl MirBody {
     /// Create a display wrapper that resolves Astr values via the interner.
-    pub fn display<'a>(&'a self, interner: &'a Interner) -> MirBodyDisplay<'a> {
+    pub fn display<'a>(&'a self, types: &'a Types<Concrete>, interner: &'a Interner) -> MirBodyDisplay<'a> {
         MirBodyDisplay {
             body: self,
+            types,
             interner,
         }
     }
@@ -1867,8 +1887,8 @@ pub fn dump_with(interner: &Interner, module: &MirModule) -> String {
 }
 
 /// `dump`, with each `For`'s computed stage facts.
-pub fn dump_with_facts(interner: &Interner, module: &MirModule, laws: &LawTable) -> String {
-    format!("{}", module.display_with_facts(interner, laws))
+pub fn dump_with_facts(interner: &Interner, module: &MirModule, laws: &LawTable, decls: &Declarations) -> String {
+    format!("{}", module.display_with_facts(interner, laws, decls))
 }
 
 /// `dump_with_facts`, with each `For`'s cost against `table`.
@@ -1876,9 +1896,223 @@ pub fn dump_with_costs(
     interner: &Interner,
     module: &MirModule,
     laws: &LawTable,
+    decls: &Declarations,
     table: &CostTable,
 ) -> String {
-    format!("{}", module.display_with_costs(interner, laws, table))
+    format!("{}", module.display_with_costs(interner, laws, decls, table))
+}
+
+// -- Types ------------------------------------------------------------
+
+/// A concrete type as the printer and every refusal show it.
+pub struct TyDisplay<'a> {
+    types: &'a Types<Concrete>,
+    ty: Ty,
+    interner: &'a Interner,
+}
+
+/// `ty` of `types`, its names resolved through `interner`.
+pub fn show_ty<'a>(types: &'a Types<Concrete>, ty: Ty, interner: &'a Interner) -> TyDisplay<'a> {
+    TyDisplay { types, ty, interner }
+}
+
+impl TyDisplay<'_> {
+    fn nested(&self, ty: Ty) -> Self {
+        TyDisplay {
+            types: self.types,
+            ty,
+            interner: self.interner,
+        }
+    }
+
+    fn arg(&self, arg: &TypeArg<Concrete>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match arg {
+            TypeArg::Uniform(ty) => write!(f, "{}", self.nested(*ty)),
+            TypeArg::Specialized(ty) => write!(f, "#{}", self.nested(*ty)),
+            TypeArg::Open(var, _) => match *var {},
+        }
+    }
+
+    fn fmt_level(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let interner = self.interner;
+        match self.types.kind(self.ty) {
+            TyKind::Int(k) => write!(f, "{}", k.name()),
+            TyKind::Order => write!(f, "Order"),
+            TyKind::Slice(elem) => write!(f, "[{}]", self.nested(*elem)),
+            TyKind::Str => write!(f, "str"),
+            TyKind::Float => write!(f, "Float"),
+            TyKind::Char => write!(f, "char"),
+            TyKind::String => write!(f, "String"),
+            TyKind::Bool => write!(f, "Bool"),
+            TyKind::Unit => write!(f, "Unit"),
+            TyKind::Never => write!(f, "!"),
+            TyKind::Object(object) => {
+                let mut sorted: Vec<_> = object.fields().iter().collect();
+                sorted.sort_by_key(|(k, _)| interner.resolve(*k).to_string());
+                if let ObjectTy::Declared(name, _) = object {
+                    write!(f, "{}", interner.resolve(name.name))?;
+                }
+                write!(f, "{{")?;
+                for (i, (k, v)) in sorted.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", interner.resolve(*k), self.nested(*v))?;
+                }
+                write!(f, "}}")
+            }
+            TyKind::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", self.nested(*e))?;
+                }
+                write!(f, ")")
+            }
+            TyKind::Fn {
+                params,
+                ret,
+                effect,
+                calls,
+                ..
+            } => {
+                let once = match calls {
+                    Calls::Once => "Once",
+                    Calls::Many => "",
+                };
+                write!(f, "Fn{once}(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", self.nested(p.ty))?;
+                }
+                write!(f, ") -> {}", self.nested(*ret))?;
+                write_effect(known_effect(effect), interner, f)
+            }
+            TyKind::Array(inner, len) => write!(f, "Array<{}, {}>", self.nested(*inner), known_len(len)),
+            TyKind::Handle(inner) => write!(f, "Handle<{}>", self.nested(*inner)),
+            TyKind::Option(inner) => write!(f, "Option<{}>", self.nested(*inner)),
+            TyKind::Result(ok, err) => write!(f, "Result<{}, {}>", self.nested(*ok), self.nested(*err)),
+            // Identity arguments are not printed. An identity is a source,
+            // and its number names that source to nobody: a reader told
+            // `Iterator<i64, Pure, #1>` learns only that there is a `#1`.
+            TyKind::UserDefined {
+                id,
+                type_args,
+                effect_args,
+                ..
+            } => {
+                write!(f, "{}", interner.resolve(id.name))?;
+                if type_args.is_empty() && effect_args.is_empty() {
+                    return Ok(());
+                }
+                write!(f, "<")?;
+                let mut first = true;
+                for arg in type_args.iter() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    first = false;
+                    self.arg(arg, f)?;
+                }
+                for arg in effect_args.iter() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    first = false;
+                    if let EffectArg::Specialized(_) = arg {
+                        write!(f, "#")?;
+                    }
+                    write_level(known_effect(arg.effect()), f)?;
+                }
+                write!(f, ">")
+            }
+            TyKind::Enum { name, variants, .. } => {
+                write!(f, "{}{{", interner.resolve(name.name))?;
+                let mut sorted: Vec<_> = variants.iter().collect();
+                sorted.sort_by_key(|(tag, _)| interner.resolve(*tag).to_string());
+                for (i, (tag, payload)) in sorted.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", interner.resolve(*tag))?;
+                    if let Some(payload) = payload {
+                        write!(f, "({})", self.nested(*payload))?;
+                    }
+                }
+                write!(f, "}}")
+            }
+            TyKind::Ref(m, inner) => {
+                write!(f, "{}", ref_prefix(*m))?;
+                self.arg(inner, f)
+            }
+            TyKind::Var(var) => match *var {},
+        }
+    }
+}
+
+impl fmt::Display for TyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        acvus_utils::grow(|| self.fmt_level(f))
+    }
+}
+
+impl fmt::Debug for TyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+/// How a reference of `mutability` is written before its target.
+fn ref_prefix(mutability: Mutability) -> &'static str {
+    match mutability {
+        Mutability::Shared => "&",
+        Mutability::Mut => "&mut ",
+    }
+}
+
+/// A function type's effect after its signature: nothing for a pure call
+/// that splits nowhere and touches no context.
+fn write_effect(effect: &Effect, interner: &Interner, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let level_shown = effect.reissue() != Reissue::Pure || effect.split() != SplitCost::Unavailable;
+    if !level_shown && effect.reads().is_empty() && effect.writes().is_empty() {
+        return Ok(());
+    }
+    write!(f, " with")?;
+    if level_shown {
+        write!(f, " ")?;
+        write_level(effect, f)?;
+    }
+    for (label, set) in [("reads", effect.reads()), ("writes", effect.writes())] {
+        if set.is_empty() {
+            continue;
+        }
+        write!(f, " {label} {{")?;
+        for (i, ctx) in set.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "@{}", interner.resolve(ctx.name))?;
+        }
+        write!(f, "}}")?;
+    }
+    Ok(())
+}
+
+/// An effect's reissue level, whether it splits, and whether it commutes.
+/// A split's cost is the backend's and is not shown.
+fn write_level(effect: &Effect, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "{:?}", effect.reissue())?;
+    if let SplitCost::WithCost(_) = effect.split() {
+        write!(f, "/split")?;
+    }
+    if effect.commutes() && effect.reissue() != Reissue::Pure {
+        write!(f, "+commutative")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
