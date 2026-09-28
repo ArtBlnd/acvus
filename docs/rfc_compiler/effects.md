@@ -18,7 +18,7 @@ Order is a value. A body that issues effects holds one order token at a time. An
 
 `anyorder { … }` cuts that chain inside the block. It takes the current token once, at its entry, and every effectful call inside consumes that same entry token, so no call inside is chained to another. The block yields a merge of every token its calls yielded, and the chain resumes after the block from that merge.
 
-A merge follows every token it joins. It is associative and commutative: it orders what comes after it behind all of its inputs, and it orders its inputs against nothing.
+A merge follows every token it joins. It is associative, commutative and idempotent: it orders what comes after it behind all of its inputs, taken as a set, and it orders its inputs against nothing. A merge of one token is that token.
 
 The tokens are the only record of order. Nothing else states which effect comes before which, so a transformation keeps the order of effects exactly by keeping every token defined before each of its uses, as any value is. A transformation that satisfies dominance over tokens and merges needs no other rule for order.
 
