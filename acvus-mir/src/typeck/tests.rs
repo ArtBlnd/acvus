@@ -1387,3 +1387,15 @@ fn a_view_steps_requirements_are_reached() {
         steps[0].via.required.iter().map(|chosen| (chosen.declaration, chosen.r#impl)).collect();
     assert_eq!(required, vec![(clone, Some(Impl::Concrete(0)))]);
 }
+
+/// ownership §5, context §3: a pattern that binds into a context stores
+/// into it, so the context's type has no positions, as for `@x = v`.
+#[test]
+fn a_pattern_never_binds_a_function_into_a_context() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let function = fx.pure(&[i64_ty], i64_ty);
+    fx.context("f", function);
+    let (checked, _) = fx.script("match @f { @f => 1, }");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::HoldsLoans]);
+}
