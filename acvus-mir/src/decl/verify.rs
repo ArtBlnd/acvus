@@ -112,7 +112,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     refuse_array_types(&types, &functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
     refuse_unfit_bounds(&types, &functions, &mut refused);
-    refuse_unfit_param_names(&types, &functions, &mut refused);
+    refuse_unfit_signatures(&types, &functions, &mut refused);
     let declared_order = first_of_each(functions.iter().map(|(id, _)| *id));
     let overloads = overloads(&declared_order);
     let functions = first_stands(functions, &mut refused, |id| Refused::DuplicateFunction { id });
@@ -260,19 +260,33 @@ fn refuse_unfit_bounds(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)]
     }
 }
 
-/// extern-fn §1: a declaration names its parameters, one name per
-/// parameter of each signature's function type. A signature that is no
-/// function type has no parameter to name, so it fits no names.
-fn refuse_unfit_param_names(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
-    let fits = |ty: TyId<Poly>, names: &[Astr]| match types.kind(ty) {
-        TyKind::Fn { params, .. } => params.len() == names.len(),
-        _ => false,
-    };
+/// extern-fn §1: an extern fn is a function, so its signature and each of
+/// its instances' is a function type; and it names its parameters, one name
+/// per parameter of that function type. A declaration with a signature of
+/// another type is refused as `NotAFunction` alone, since it has no
+/// parameters to name.
+fn refuse_unfit_signatures(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
     for (function, scheme) in functions {
         let concrete = scheme.instances.iter().flat_map(|instances| instances.concrete.iter());
-        let every_fits = fits(scheme.ty, &scheme.param_names)
-            && concrete.into_iter().all(|instance| fits(instance.ty, &instance.param_names));
-        if !every_fits {
+        let signatures: Vec<(TyId<Poly>, &[Astr])> = std::iter::once((scheme.ty, &scheme.param_names[..]))
+            .chain(concrete.map(|instance| (instance.ty, &instance.param_names[..])))
+            .collect();
+        let arities: Option<Vec<usize>> = signatures
+            .iter()
+            .map(|(ty, _)| match types.kind(*ty) {
+                TyKind::Fn { params, .. } => Some(params.len()),
+                _ => None,
+            })
+            .collect();
+        let Some(arities) = arities else {
+            refused.push(Refused::NotAFunction { function: *function });
+            continue;
+        };
+        let names_fit = arities
+            .iter()
+            .zip(&signatures)
+            .all(|(arity, (_, names))| *arity == names.len());
+        if !names_fit {
             refused.push(Refused::ParamNamesDoNotFit { function: *function });
         }
     }
@@ -392,10 +406,12 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
         .casts
         .iter()
         .flat_map(|rule| [(Written::Cast(rule.via), rule.from), (Written::Cast(rule.via), rule.to)]);
-    let conversions = declared
-        .conversions
-        .iter()
-        .flat_map(|rule| [(Written::Cast(rule.via), rule.from), (Written::Cast(rule.via), rule.to)]);
+    let conversions = declared.conversions.iter().flat_map(|rule| {
+        [
+            (Written::Conversion(rule.via), rule.from),
+            (Written::Conversion(rule.via), rule.to),
+        ]
+    });
     let contexts = declared.contexts.iter().map(|(id, ty)| (Written::Context(*id), *ty));
     let inputs = declared.inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
     functions
@@ -1922,7 +1938,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::ReferenceToReference {
-                written: Written::Cast(via)
+                written: Written::Conversion(via)
             }]
         );
     }
@@ -1938,7 +1954,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
-                written: Written::Cast(via),
+                written: Written::Conversion(via),
                 id: ghost
             }]
         );
@@ -2351,6 +2367,42 @@ mod tests {
             },
         );
         assert_eq!(refusals(fixture), vec![Refused::ParamNamesDoNotFit { function: f }]);
+    }
+
+    /// extern-fn §1: an extern fn is a function. A declaration whose
+    /// signature is `i64` is refused as that, and not for its parameter
+    /// names, since it has no parameters to name.
+    #[test]
+    fn a_signature_that_is_no_function_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        fixture.declare(f, fixture.plain(int, 0));
+        assert_eq!(refusals(fixture), vec![Refused::NotAFunction { function: f }]);
+    }
+
+    /// extern-fn §1: an instance of an extern fn is a function too.
+    #[test]
+    fn an_instance_that_is_no_function_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let (var, int, unit) = (
+            fixture.ty(TyKind::Var(0)),
+            fixture.ty(TyKind::Int(IntTy::I64)),
+            fixture.ty(TyKind::Unit),
+        );
+        let own_ty = fixture.function(&[var], unit);
+        fixture.declare(f, fixture.with_instances(own_ty, 1, &[int]));
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::NotAFunction { function: f },
+                Refused::InstanceNotOfSignature {
+                    signature: f,
+                    instance: 0
+                },
+            ]
+        );
     }
 
     /// extern-fn §1: an instance names its own parameters too. Its
