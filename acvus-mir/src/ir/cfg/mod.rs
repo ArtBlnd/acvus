@@ -15,7 +15,7 @@ pub use body::{Block, BlockId, Body, BodyId, Edge, Inst, Module, OrderUse, Site,
 pub use builder::{Builder, Unsealed};
 pub use op::Op;
 pub use core::StillUsed;
-pub use rewriter::Rewriter;
+pub(in crate::ir::cfg) use rewriter::Rewriter;
 
 #[cfg(test)]
 mod tests;

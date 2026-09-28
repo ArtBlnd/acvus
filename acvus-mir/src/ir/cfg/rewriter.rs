@@ -8,7 +8,7 @@ use crate::ir::ValueId;
 use crate::ty::{Concrete, Ty, TyKind, Types};
 
 /// Made by `Module::rewrite`, over one body of the module.
-pub struct Rewriter<'m> {
+pub(in crate::ir::cfg) struct Rewriter<'m> {
     module: &'m mut Module,
     body: super::BodyId,
     changes: Changes,

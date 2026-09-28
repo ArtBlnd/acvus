@@ -472,7 +472,7 @@ impl Module {
     ///
     /// # Panics
     /// `body` is not a body of this module.
-    pub fn rewrite(&mut self, body: BodyId) -> super::Rewriter<'_> {
+    pub(in crate::ir::cfg) fn rewrite(&mut self, body: BodyId) -> super::Rewriter<'_> {
         self.assert_body(body);
         super::Rewriter::new(self, body)
     }
