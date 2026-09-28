@@ -83,8 +83,8 @@ impl<'d> Ctxt<'d> {
         super::decision::decide(self, Decision::Enter { site, span, value, slot });
     }
 
-    /// An integer the language's own operations read (operators §2), or an
-    /// index or a range's end. Its width is a use's to decide, and `i64`
+    /// An integer the language's own operations read (operators §2), or a
+    /// range's end. Its width is a use's to decide, and `i64`
     /// where none does, as a literal's (types §5).
     pub fn integer(&mut self, span: Span) -> Term {
         let term = self.infer.fresh(Bound::Integer {

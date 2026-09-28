@@ -42,6 +42,10 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
             Some((site, exit))
         })
         .collect();
+    let callees = std::mem::take(&mut cx.out.callees)
+        .into_iter()
+        .filter_map(|(site, callee)| Some((site, freeze(&mut cx, types, &mut memo, callee)?)))
+        .collect();
     let conversions = conversions(&mut cx, types, &mut memo);
     let comparisons = comparisons(&mut cx);
     let body_effect = match cx.out.body_effect.take() {
@@ -55,6 +59,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>) -> Typeck {
         types: frozen,
         names: std::mem::take(&mut cx.out.names),
         reached: std::mem::take(&mut cx.out.reached),
+        callees,
         iteration: std::mem::take(&mut cx.out.iteration),
         tries,
         conversions,

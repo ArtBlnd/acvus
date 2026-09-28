@@ -16,7 +16,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::note_captures;
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ty::{EffectTerm, Infer as InferPhase, Label, Mutability, ObjectTy, TyKind, TypeArg};
+use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, TyKind, TypeArg};
 
 /// What an expression is read for, passed down and never held: `a[i]`
 /// reaches `as_slice` or `as_slice_mut` by it (operators §3).
@@ -111,6 +111,8 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, object: Term, head: Opti
 /// `a[i]`: its container's `as_slice` or `as_slice_mut` by `demand`,
 /// reached at `callee_site` (operators §3). An array or a slice is the
 /// language's own, since no declaration carries an array (extern-fn §1).
+/// `i` enters a `u64`: Rust indexes by `usize`, which is 64 bits wide
+/// here (D67).
 pub(super) fn check_index<S: Slot>(
     cx: &mut Ctxt<'_>,
     _site: AstId,
@@ -122,8 +124,8 @@ pub(super) fn check_index<S: Slot>(
 ) -> Term {
     let container = check_expr(cx, object, demand.of_container());
     let at = check_expr(cx, index, Demand::Read);
-    let integer = cx.integer(index.span());
-    cx.eq(at, integer, index.span());
+    let usize_ty = cx.node(TyKind::Int(IntTy::U64));
+    cx.enter(index.id(), at, usize_ty, index.span());
     element(cx, callee_site, container, demand.mutability(), span)
 }
 

@@ -276,7 +276,8 @@ pub(super) fn note_captures(cx: &mut Ctxt<'_>, name: Astr, found: &Found, demand
             .expect("a lambda records its closure before its body is checked")
             .captures
             .to_vec();
-        match captures.iter_mut().find(|captured| captured.name == name) {
+        let binder = found.binding.binder;
+        match captures.iter_mut().find(|captured| captured.binder == binder) {
             Some(Captured {
                 capture: Capture::Ref(mutability),
                 ..
@@ -291,6 +292,7 @@ pub(super) fn note_captures(cx: &mut Ctxt<'_>, name: Astr, found: &Found, demand
             None if by_move => {
                 captures.push(Captured {
                     name,
+                    binder,
                     capture: Capture::Move,
                 });
                 cx.decisions.push(Decision::MovedCapture {
@@ -301,6 +303,7 @@ pub(super) fn note_captures(cx: &mut Ctxt<'_>, name: Astr, found: &Found, demand
             }
             None => captures.push(Captured {
                 name,
+                binder,
                 capture: Capture::Ref(wanted),
             }),
         }

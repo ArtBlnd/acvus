@@ -276,6 +276,14 @@ fn binding(checked: &Checked, script: &Script, names: &Interner, name: &str) -> 
         .expect("the test's script binds the name")
 }
 
+/// The binder of the `let` at statement `at`.
+fn let_binder(script: &Script, at: usize) -> acvus_ast::AstId {
+    match &script.stmts[at] {
+        Stmt::LetBind { binder, .. } | Stmt::LetUninit { binder, .. } => binder.id,
+        other => panic!("statement {at} is not a `let`: {other:?}"),
+    }
+}
+
 fn is_int(checked: &Checked, ty: Ty, width: IntTy) -> bool {
     checked.kind(ty) == &TyKind::Int(width)
 }
@@ -705,6 +713,7 @@ fn a_lambda_captures_by_reference_and_takes_its_arguments_types() {
         &closure.captures[..],
         &[Captured {
             name: y,
+            binder: let_binder(&script, 0),
             capture: Capture::Ref(Mutability::Shared)
         }]
     );
@@ -834,13 +843,14 @@ fn an_interpolation_no_display_answers_is_refused() {
 fn a_move_lambda_captures_by_move() {
     let fx = Fixture::new();
     let y = fx.name("y");
-    let (checked, _) = fx.script("let y = true; let f = move |x| -> y; f(1u8)");
+    let (checked, script) = fx.script("let y = true; let f = move |x| -> y; f(1u8)");
     checked.admitted();
     let closure = checked.typeck.closures.values().next().expect("one lambda");
     assert_eq!(
         &closure.captures[..],
         &[Captured {
             name: y,
+            binder: let_binder(&script, 0),
             capture: Capture::Move
         }]
     );
@@ -1208,4 +1218,80 @@ fn a_block_ending_in_a_call_of_type_never_is_never() {
         panic!("not an if");
     };
     assert!(matches!(else_branch.as_deref(), Some(ElseBranch::Else { tail: None, .. })));
+}
+
+/// functions §2: a capture names the binding it captured, by its binder's
+/// site; here the outer `y`, not the shadowed one before it.
+#[test]
+fn a_capture_names_its_binder() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("let y = 1; let y = true; let f = |z| -> y; f(1)");
+    checked.admitted();
+    let closure = checked.typeck.closures.values().next().expect("one lambda");
+    let binders: Vec<acvus_ast::AstId> = closure.captures.iter().map(|captured| captured.binder).collect();
+    assert_eq!(binders, vec![let_binder(&script, 1)]);
+}
+
+/// extern-fn §5-6: a reached call records its callee's function type as
+/// instantiated at the call, at the site `reached` has.
+#[test]
+fn a_call_records_its_callees_type() {
+    let mut fx = Fixture::new();
+    let t = fx.var(0);
+    let identity = fx.pure(&[t], t);
+    fx.declare("id", identity, &[TyVarBound::Any]);
+    let (checked, script) = fx.script("id(true)");
+    checked.admitted();
+    let site = script.tail.as_ref().unwrap().id();
+    assert!(checked.typeck.reached.contains_key(&site));
+    let TyKind::Fn { params, ret, .. } = checked.kind(checked.typeck.callees[&site]) else {
+        panic!("a callee is a function type");
+    };
+    assert_eq!(checked.kind(params[0]), &TyKind::Bool);
+    assert_eq!(checked.kind(*ret), &TyKind::Bool);
+}
+
+/// patterns §1: a name bound through a reference is a reference, and its
+/// binder's type is the binding's, not the matched part's.
+#[test]
+fn a_binder_through_a_reference_has_the_bindings_type() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("let p = &(1u8, true); let r = match p { (x, y) => x, }; 1");
+    checked.admitted();
+    let Stmt::LetBind { expr: Expr::Match { arms, .. }, .. } = &script.stmts[1] else {
+        panic!("not a match");
+    };
+    let acvus_ast::Pattern::Tuple { elements, .. } = &arms[0].pattern else {
+        panic!("not a tuple pattern");
+    };
+    let acvus_ast::TuplePatternElem::Pattern(x) = &elements[0] else {
+        panic!("not a binding");
+    };
+    let TyKind::Ref(Mutability::Shared, target) = checked.kind(checked.typeck.types[&x.id()]) else {
+        panic!("a binder through a `&` has a `&` type");
+    };
+    assert!(is_int(&checked, target.ty(), IntTy::U8));
+}
+
+/// operators §3, D67: an index is a `u64`, as Rust's `usize` at 64 bits.
+/// An unsuffixed index takes it; an index of another width, which no cast
+/// takes up to `u64`, has no conversion into it (types §3, §7).
+#[test]
+fn an_index_is_a_u64() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    fx.context("xs", array);
+    let (checked, script) = fx.script("@xs[0]");
+    checked.admitted();
+    let Some(Expr::Index { index, .. }) = script.tail.as_deref() else {
+        panic!("not an index");
+    };
+    assert!(is_int(&checked, checked.typeck.types[&index.id()], IntTy::U64));
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    fx.context("xs", array);
+    let (checked, _) = fx.script("@xs[0u8]");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
 }

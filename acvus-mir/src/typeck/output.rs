@@ -69,10 +69,12 @@ pub enum Capture {
     Ref(Mutability),
 }
 
-/// One name a lambda captured, and how.
+/// One name a lambda captured, the binding it names by its binder's
+/// site, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Captured {
     pub name: Astr,
+    pub binder: AstId,
     pub capture: Capture,
 }
 
@@ -122,6 +124,9 @@ pub(super) struct Output {
     pub types: FxHashMap<AstId, Term>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,
+    /// Each reached call's function type as its declaration was
+    /// instantiated there, at the site `reached` has it.
+    pub callees: FxHashMap<AstId, Term>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Term>>,
     /// Each value converted by a declared conversion (types §7), at its
@@ -141,6 +146,9 @@ pub struct Typeck {
     pub types: FxHashMap<AstId, Ty>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,
+    /// Each reached call's function type at its site, the site `reached`
+    /// has it at.
+    pub callees: FxHashMap<AstId, Ty>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,
     /// Each coercion at a site, its steps in order.

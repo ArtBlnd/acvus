@@ -182,7 +182,7 @@ pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term,
             destructure(cx, shape, target, Some(through));
         }
         Some(Head::Base(Base::Never)) => {
-            cx.record(shape.site, scrutinee);
+            record_matched(cx, &shape, scrutinee);
             for term in shape.bindings() {
                 let never = cx.never();
                 cx.eq(term, never, shape.span);
@@ -194,8 +194,8 @@ pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term,
 
 /// `shape` applied to `scrutinee`, whose head is `known` where it is known.
 fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, lent: Option<Mutability>) {
+    record_matched(cx, &shape, scrutinee);
     let Shape { site, span, form } = shape;
-    cx.record(site, scrutinee);
     match form {
         Form::Bind { term } => {
             let value = bound_value(cx, scrutinee, lent, span);
@@ -241,6 +241,15 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
             tag,
             payload,
         } => variant(cx, enum_name, tag, payload.map(|payload| *payload), scrutinee, lent, span),
+    }
+}
+
+/// The type a pattern's site has: what it matched, except at a name,
+/// whose site is its binder and has the binding's type, lent where the
+/// match passed through a reference (patterns §1).
+fn record_matched(cx: &mut Ctxt<'_>, shape: &Shape, scrutinee: Term) {
+    if !matches!(shape.form, Form::Bind { .. }) {
+        cx.record(shape.site, scrutinee);
     }
 }
 

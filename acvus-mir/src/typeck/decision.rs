@@ -1058,6 +1058,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
                 cx.infer.join_effects(&effect, &declared_effect);
             }
             cx.out.reached.insert(site, chosen);
+            cx.out.callees.insert(site, ty);
         }
     }
     settle_bounded(cx, ty, span);
