@@ -1286,16 +1286,17 @@ mod tests {
     use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::flows::{Flows, FlowTerm};
     use crate::ir::IndexBound;
-    use crate::ty::{Calls, Effect, EffectTerm, Holds, IntTy, Ty, TyKind};
+    use crate::ty::{Calls, Effect, EffectTerm, Holds, IntTy, Ty, TyKind, TypeArg};
     use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
     }
 
-    fn make_cfg(insts: Vec<InstKind>, val_count: usize) -> CfgBody {
+    fn make_cfg(insts: Vec<InstKind>, val_types: Vec<(ValueId, Ty)>) -> CfgBody {
+        let max = val_types.iter().map(|(id, _)| id.to_raw()).max().unwrap_or(0);
         let mut factory = LocalFactory::<ValueId>::new();
-        for _ in 0..val_count {
+        for _ in 0..=max.max(23) {
             factory.next();
         }
         cfg::promote(MirBody {
@@ -1307,7 +1308,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
-            val_types: FxHashMap::default(),
+            val_types: val_types.into_iter().collect(),
             params: Vec::new(),
             captures: Vec::new(),
             debug: DebugInfo::new(),
@@ -1337,10 +1338,20 @@ mod tests {
         run(cfg, types, &decls);
     }
 
-    /// A type value these tests do not read further: a placeholder
-    /// `callee_ty` for an instruction whose test is not about its type.
+    /// A function type these tests do not read further beyond its shape: a
+    /// placeholder `callee_ty` for an instruction whose test is not about
+    /// its type, at the minimum a call's callee type must be (`callee_fn`,
+    /// `analysis/loans.rs`): a function of no parameters.
     fn dummy_ty(types: &mut Types<Concrete>) -> Ty {
-        types.intern(TyKind::Int(IntTy::I64))
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        })
     }
 
     fn io_fn_type(types: &mut Types<Concrete>, i: &Interner, name: &str) -> (QualifiedRef, Ty) {
@@ -1370,6 +1381,9 @@ mod tests {
         let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
+        let bool_ty = types.intern(TyKind::Bool);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
 
         let mut cfg = make_cfg(
             vec![
@@ -1416,7 +1430,7 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![(v(0), bool_ty), (v(1), handle_ty)],
         );
 
         run_test(&mut cfg, &types);
@@ -1441,6 +1455,9 @@ mod tests {
         let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
+        let bool_ty = types.intern(TyKind::Bool);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
 
         let mut cfg = make_cfg(
             vec![
@@ -1487,7 +1504,13 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![
+                (v(0), bool_ty),
+                (v(1), bool_ty),
+                (v(2), bool_ty),
+                (v(3), bool_ty),
+                (v(4), handle_ty),
+            ],
         );
 
         run_test(&mut cfg, &types);
@@ -1523,12 +1546,11 @@ mod tests {
 
     /// How the hoist classifies the last instruction of a body, with the
     /// regions that body gives its values.
-    fn classified(insts: Vec<InstKind>) -> Hoistable {
+    fn classified(insts: Vec<InstKind>, types: &Types<Concrete>, val_types: Vec<(ValueId, Ty)>) -> Hoistable {
         let last = insts.last().expect("a body to classify").clone();
-        let cfg = make_cfg(insts, 8);
-        let types = Types::<Concrete>::new();
+        let cfg = make_cfg(insts, val_types);
         let decls = empty_declarations(&Interner::new());
-        hoistable(&Loans::build(&cfg, &types, &decls), &last)
+        hoistable(&Loans::build(&cfg, types, &decls), &last)
     }
 
     fn as_slice_of(container: ValueId, mutability: Mutability) -> InstKind {
@@ -1545,85 +1567,149 @@ mod tests {
 
     #[test]
     fn which_borrow_carries_the_condition_and_which_does_not_move() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
+        let mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(i64_ty)));
         assert!(matches!(
-            classified(vec![ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared)]),
+            classified(
+                vec![ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared)],
+                &types,
+                vec![(v(0), i64_ty), (v(1), shared_ref)],
+            ),
             Hoistable::SharedBorrow { storage } if storage == v(0)
         ));
         assert!(matches!(
-            classified(vec![ref_of(RefTarget::Param(v(0)), vec![], Mutability::Shared)]),
+            classified(
+                vec![ref_of(RefTarget::Param(v(0)), vec![], Mutability::Shared)],
+                &types,
+                vec![(v(0), i64_ty), (v(1), shared_ref)],
+            ),
             Hoistable::SharedBorrow { storage } if storage == v(0)
         ));
         assert!(matches!(
-            classified(vec![ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut)]),
+            classified(
+                vec![ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut)],
+                &types,
+                vec![(v(0), i64_ty), (v(1), mut_ref)],
+            ),
             Hoistable::No
         ));
         assert!(matches!(
-            classified(vec![ref_of(
-                RefTarget::Through(v(0)),
-                vec![],
-                Mutability::Shared
-            )]),
+            classified(
+                vec![ref_of(
+                    RefTarget::Through(v(0)),
+                    vec![],
+                    Mutability::Shared
+                )],
+                &types,
+                vec![(v(0), mut_ref), (v(1), shared_ref)],
+            ),
             Hoistable::No
         ));
         assert!(matches!(
-            classified(vec![ref_of(
-                RefTarget::Var(v(0)),
-                vec![PathSeg::Payload],
-                Mutability::Shared
-            )]),
+            classified(
+                vec![ref_of(
+                    RefTarget::Var(v(0)),
+                    vec![PathSeg::Payload],
+                    Mutability::Shared
+                )],
+                &types,
+                vec![(v(0), i64_ty), (v(1), shared_ref)],
+            ),
             Hoistable::No
         ));
     }
 
     #[test]
     fn a_shared_as_slice_is_a_borrow_of_the_storage_its_container_names() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
+        let slice_ty = types.intern(TyKind::Slice(i64_ty));
+        let slice_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice_ty)));
         assert!(matches!(
-            classified(vec![
-                ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared),
-                as_slice_of(v(1), Mutability::Shared),
-            ]),
+            classified(
+                vec![
+                    ref_of(RefTarget::Var(v(0)), vec![], Mutability::Shared),
+                    as_slice_of(v(1), Mutability::Shared),
+                ],
+                &types,
+                vec![(v(0), i64_ty), (v(1), shared_ref), (v(2), slice_ref)],
+            ),
             Hoistable::SharedBorrow { storage } if storage == v(0)
         ));
     }
 
     #[test]
     fn an_exclusive_as_slice_does_not_move() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(i64_ty)));
+        let slice_ty = types.intern(TyKind::Slice(i64_ty));
+        let slice_mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(slice_ty)));
         assert!(matches!(
-            classified(vec![
-                ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut),
-                as_slice_of(v(1), Mutability::Mut),
-            ]),
+            classified(
+                vec![
+                    ref_of(RefTarget::Var(v(0)), vec![], Mutability::Mut),
+                    as_slice_of(v(1), Mutability::Mut),
+                ],
+                &types,
+                vec![(v(0), i64_ty), (v(1), mut_ref), (v(2), slice_mut_ref)],
+            ),
             Hoistable::No
         ));
     }
 
     #[test]
     fn an_as_slice_of_a_container_no_one_storage_backs_does_not_move() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
+        let slice_ty = types.intern(TyKind::Slice(i64_ty));
+        let slice_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice_ty)));
         assert!(matches!(
-            classified(vec![as_slice_of(v(7), Mutability::Shared)]),
+            classified(
+                vec![as_slice_of(v(7), Mutability::Shared)],
+                &types,
+                vec![(v(7), shared_ref), (v(2), slice_ref)],
+            ),
             Hoistable::No
         ));
     }
 
     #[test]
     fn indexing_does_not_move() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let slice_ty = types.intern(TyKind::Slice(i64_ty));
+        let slice_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice_ty)));
+        let slice_mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(slice_ty)));
         assert!(matches!(
-            classified(vec![InstKind::Index {
-                dst: v(3),
-                slice: v(2),
-                index: v(1),
-                mode: IndexMode::Copy,
-                bound: IndexBound::Checked,
-            }]),
+            classified(
+                vec![InstKind::Index {
+                    dst: v(3),
+                    slice: v(2),
+                    index: v(1),
+                    mode: IndexMode::Copy,
+                    bound: IndexBound::Checked,
+                }],
+                &types,
+                vec![(v(1), i64_ty), (v(2), slice_ref), (v(3), i64_ty)],
+            ),
             Hoistable::No
         ));
         assert!(matches!(
-            classified(vec![InstKind::IndexSet {
-                slice: v(2),
-                index: v(1),
-                value: v(0),
-                bound: IndexBound::Checked,
-            }]),
+            classified(
+                vec![InstKind::IndexSet {
+                    slice: v(2),
+                    index: v(1),
+                    value: v(0),
+                    bound: IndexBound::Checked,
+                }],
+                &types,
+                vec![(v(0), i64_ty), (v(1), i64_ty), (v(2), slice_mut_ref)],
+            ),
             Hoistable::No
         ));
     }
@@ -1665,7 +1751,7 @@ mod tests {
                     args: vec![],
                 },
             ],
-            10,
+            vec![],
         );
 
         run_test(&mut cfg, &types);
@@ -1673,25 +1759,41 @@ mod tests {
 
     #[test]
     fn a_heap_constant_is_never_hoisted() {
+        let mut types = Types::<Concrete>::new();
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(0)));
         assert!(matches!(
-            classified(vec![InstKind::Const {
-                dst: v(1),
-                value: acvus_ast::Literal::String("a".into()),
-            }]),
+            classified(
+                vec![InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::String("a".into()),
+                }],
+                &types,
+                vec![(v(1), string_ty)],
+            ),
             Hoistable::No
         ));
         assert!(matches!(
-            classified(vec![InstKind::Const {
-                dst: v(1),
-                value: acvus_ast::Literal::Int(1),
-            }]),
+            classified(
+                vec![InstKind::Const {
+                    dst: v(1),
+                    value: acvus_ast::Literal::Int(1),
+                }],
+                &types,
+                vec![(v(1), i64_ty)],
+            ),
             Hoistable::ControlEquivalent
         ));
         assert!(matches!(
-            classified(vec![InstKind::ArrayBegin {
-                dst: v(1),
-                capacity: 0,
-            }]),
+            classified(
+                vec![InstKind::ArrayBegin {
+                    dst: v(1),
+                    capacity: 0,
+                }],
+                &types,
+                vec![(v(1), array_ty)],
+            ),
             Hoistable::No
         ));
     }
@@ -1701,6 +1803,9 @@ mod tests {
         let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
+        let bool_ty = types.intern(TyKind::Bool);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
 
         let mut cfg = make_cfg(
             vec![
@@ -1752,7 +1857,7 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![(v(0), handle_ty), (v(5), bool_ty), (v(1), i64_ty)],
         );
 
         run_test(&mut cfg, &types);
@@ -1783,6 +1888,9 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let (qref1, ty1) = io_fn_type(&mut types, &i, "io1");
         let (qref2, ty2) = io_fn_type(&mut types, &i, "io2");
+        let bool_ty = types.intern(TyKind::Bool);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
 
         let mut cfg = make_cfg(
             vec![
@@ -1836,7 +1944,7 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![(v(0), handle_ty), (v(5), bool_ty), (v(1), handle_ty)],
         );
 
         run_test(&mut cfg, &types);
@@ -1866,7 +1974,8 @@ mod tests {
 
     #[test]
     fn multi_level_hoist() {
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let bool_ty = types.intern(TyKind::Bool);
         // B0 -> diamond -> B3 -> diamond -> B6
         // The pure op in B6 hoists directly to B0 in one pass.
         let mut cfg = make_cfg(
@@ -1939,7 +2048,7 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![(v(0), bool_ty), (v(1), bool_ty)],
         );
 
         run_test(&mut cfg, &types);
@@ -1961,7 +2070,8 @@ mod tests {
 
     #[test]
     fn pure_instruction_hoisted() {
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let bool_ty = types.intern(TyKind::Bool);
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -2006,7 +2116,7 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![(v(0), bool_ty), (v(1), bool_ty)],
         );
 
         run_test(&mut cfg, &types);
@@ -2033,6 +2143,8 @@ mod tests {
         let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
 
         let mut cfg = make_cfg(
             vec![
@@ -2085,7 +2197,7 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![(v(0), i64_ty), (v(1), i64_ty), (v(2), handle_ty)],
         );
 
         run_test(&mut cfg, &types);
@@ -2117,7 +2229,8 @@ mod tests {
     /// control-equivalent to it.
     #[test]
     fn a_loop_body_instruction_does_not_rise_into_the_head() {
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut cfg = make_cfg(
             vec![
                 InstKind::Const {
@@ -2162,7 +2275,7 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![(v(0), i64_ty), (v(1), i64_ty)],
         );
 
         run_test(&mut cfg, &types);
@@ -2264,8 +2377,21 @@ mod tests {
 
     /// Where the shared borrow of `v(1)` sits, relative to the loop's test.
     fn shared_borrow_is_below_the_test(insts: Vec<InstKind>) -> bool {
-        let mut cfg = make_cfg(insts, 10);
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let bool_ty = types.intern(TyKind::Bool);
+        let mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(i64_ty)));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
+        let mut cfg = make_cfg(
+            insts,
+            vec![
+                (v(0), i64_ty),
+                (v(1), i64_ty),
+                (v(2), mut_ref),
+                (v(3), bool_ty),
+                (v(4), shared_ref),
+            ],
+        );
         run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
@@ -2504,6 +2630,31 @@ mod tests {
         insts
     }
 
+    /// `val_types` for `a_loop_that_reindexes_the_row`: `v(1)` the storage
+    /// holding the matrix, `v(10)` the outer reference to it and `v(11)` its
+    /// slice, each row-reference (`v(12..15)`) and the inner slice `v(16)`
+    /// the same shapes one level down, `v(17)` the element `Index` copies out.
+    fn reindex_row_val_types(types: &mut Types<Concrete>) -> Vec<(ValueId, Ty)> {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let bool_ty = types.intern(TyKind::Bool);
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
+        let slice_ty = types.intern(TyKind::Slice(i64_ty));
+        let slice_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice_ty)));
+        vec![
+            (v(0), i64_ty),
+            (v(1), i64_ty),
+            (v(3), bool_ty),
+            (v(10), shared_ref),
+            (v(11), slice_ref),
+            (v(12), shared_ref),
+            (v(13), shared_ref),
+            (v(14), shared_ref),
+            (v(15), shared_ref),
+            (v(16), slice_ref),
+            (v(17), i64_ty),
+        ]
+    }
+
     /// The loop depth of the block each instruction stands in after the pass.
     struct Depths {
         slice: usize,
@@ -2511,8 +2662,9 @@ mod tests {
     }
 
     fn depths_of_the_slice_and_the_read(insts: Vec<InstKind>) -> Depths {
-        let mut cfg = make_cfg(insts, 24);
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let val_types = reindex_row_val_types(&mut types);
+        let mut cfg = make_cfg(insts, val_types);
         run_test(&mut cfg, &types);
         let domtree = DomTree::build(&cfg);
         let depth = LoopDepth::of(&cfg, &domtree);
@@ -2540,8 +2692,9 @@ mod tests {
     }
 
     fn index_refs_left(insts: Vec<InstKind>) -> usize {
-        let mut cfg = make_cfg(insts, 24);
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let val_types = reindex_row_val_types(&mut types);
+        let mut cfg = make_cfg(insts, val_types);
         run_test(&mut cfg, &types);
         cfg.blocks
             .iter()
@@ -2589,10 +2742,30 @@ mod tests {
         );
     }
 
+    /// `val_types` for `a_loop_that_slices_a_container`: `v(1)` the storage,
+    /// `v(4)` the shared reference to it, `v(2)` the `AsSlice` of `v(4)`,
+    /// `v(6)` the element `Index` reads out.
+    fn slice_container_val_types(types: &mut Types<Concrete>) -> Vec<(ValueId, Ty)> {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let bool_ty = types.intern(TyKind::Bool);
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
+        let slice_ty = types.intern(TyKind::Slice(i64_ty));
+        let slice_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice_ty)));
+        vec![
+            (v(0), i64_ty),
+            (v(1), i64_ty),
+            (v(2), slice_ref),
+            (v(3), bool_ty),
+            (v(4), shared_ref),
+            (v(6), i64_ty),
+        ]
+    }
+
     /// Where the `AsSlice` sits, relative to the loop's test.
     fn as_slice_is_below_the_test(insts: Vec<InstKind>) -> bool {
-        let mut cfg = make_cfg(insts, 10);
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let val_types = slice_container_val_types(&mut types);
+        let mut cfg = make_cfg(insts, val_types);
         run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
@@ -2625,8 +2798,9 @@ mod tests {
 
     #[test]
     fn an_index_never_leaves_the_loop() {
-        let types = Types::<Concrete>::new();
-        let mut cfg = make_cfg(a_loop_that_slices_a_container(false), 10);
+        let mut types = Types::<Concrete>::new();
+        let val_types = slice_container_val_types(&mut types);
+        let mut cfg = make_cfg(a_loop_that_slices_a_container(false), val_types);
         run_test(&mut cfg, &types);
         let body = demoted(cfg);
         let k = kinds(&body);
@@ -2690,8 +2864,20 @@ mod tests {
     }
 
     fn shared_borrows_left(insts: Vec<InstKind>) -> usize {
-        let mut cfg = make_cfg(insts, 10);
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
+        let mut_ref = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(i64_ty)));
+        let mut cfg = make_cfg(
+            insts,
+            vec![
+                (v(0), i64_ty),
+                (v(1), i64_ty),
+                (v(2), shared_ref),
+                (v(3), mut_ref),
+                (v(4), shared_ref),
+            ],
+        );
         run_test(&mut cfg, &types);
         let body = demoted(cfg);
         kinds(&body)
@@ -2737,6 +2923,8 @@ mod tests {
         let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let (fetch_id, fetch_ty) = io_fn_type(&mut types, &i, "fetch");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
 
         // v0 = Spawn fetch
         // v1 = TakeEffect v0              <- should sink
@@ -2774,7 +2962,13 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![
+                (v(0), handle_ty),
+                (v(1), i64_ty),
+                (v(2), i64_ty),
+                (v(3), i64_ty),
+                (v(4), i64_ty),
+            ],
         );
 
         run_test(&mut cfg, &types);
@@ -2810,6 +3004,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let f = QualifiedRef::root(i.intern("f"));
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut cfg = make_cfg(
             vec![
                 InstKind::Fetch {
@@ -2840,7 +3035,13 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![
+                (v(1), i64_ty),
+                (v(2), i64_ty),
+                (v(3), i64_ty),
+                (v(5), i64_ty),
+                (v(6), i64_ty),
+            ],
         );
 
         run_test(&mut cfg, &types);
@@ -2866,6 +3067,8 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let ctx = QualifiedRef::root(i.intern("x"));
         let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
         let mut cfg = make_cfg(
             vec![
                 InstKind::Spawn {
@@ -2901,7 +3104,14 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![
+                (v(0), handle_ty),
+                (v(1), i64_ty),
+                (v(2), i64_ty),
+                (v(4), i64_ty),
+                (v(5), i64_ty),
+                (v(6), i64_ty),
+            ],
         );
 
         run_test(&mut cfg, &types);
@@ -2925,7 +3135,8 @@ mod tests {
     #[test]
     fn fetch_stays_in_place() {
         let i = Interner::new();
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // v1 = fetch @x
@@ -2961,7 +3172,12 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![
+                (v(1), i64_ty),
+                (v(2), i64_ty),
+                (v(5), i64_ty),
+                (v(6), i64_ty),
+            ],
         );
 
         run_test(&mut cfg, &types);
@@ -2995,7 +3211,8 @@ mod tests {
     #[test]
     fn commit_stays_in_place() {
         let i = Interner::new();
-        let types = Types::<Concrete>::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let ctx = QualifiedRef::root(i.intern("x"));
 
         // commit @x = v5
@@ -3031,7 +3248,12 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![
+                (v(2), i64_ty),
+                (v(4), i64_ty),
+                (v(5), i64_ty),
+                (v(6), i64_ty),
+            ],
         );
 
         run_test(&mut cfg, &types);
@@ -3085,6 +3307,8 @@ mod tests {
         let i = Interner::new();
         let mut types = Types::<Concrete>::new();
         let (qref, ty) = io_fn_type(&mut types, &i, "io_fn");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let handle_ty = types.intern(TyKind::Handle(i64_ty));
         let spawn = |dst, args| InstKind::Spawn {
             dst,
             callee: Callee::Direct(qref),
@@ -3123,7 +3347,18 @@ mod tests {
                     order: None,
                 },
             ],
-            10,
+            vec![
+                (v(0), i64_ty),
+                (v(1), handle_ty),
+                (v(2), handle_ty),
+                (v(3), handle_ty),
+                (v(4), i64_ty),
+                (v(5), i64_ty),
+                (v(6), i64_ty),
+                (v(7), i64_ty),
+                (v(8), i64_ty),
+                (v(9), i64_ty),
+            ],
         );
         (cfg, types)
     }

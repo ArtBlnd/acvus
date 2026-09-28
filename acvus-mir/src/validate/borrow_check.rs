@@ -1003,6 +1003,11 @@ mod tests {
     #[test]
     fn two_shared_references_may_be_live_together() {
         let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let shared_ref = val_types[1].1;
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, shared_ref])));
+        val_types.push((v(5), shared_ref));
+        val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1013,7 +1018,7 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(&mut types),
+            val_types,
         );
         assert_eq!(conflict_count(&errors(m, types)), 0);
     }
@@ -1021,6 +1026,9 @@ mod tests {
     #[test]
     fn a_mutable_reference_whose_last_use_passed_no_longer_excludes() {
         let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let string_ty = val_types[0].1;
+        val_types.push((v(7), string_ty));
         let m = body(
             vec![
                 reference(2, Mutability::Mut),
@@ -1033,7 +1041,7 @@ mod tests {
                 take(7),
                 ret(7),
             ],
-            string_slot(&mut types),
+            val_types,
         );
         assert_eq!(conflict_count(&errors(m, types)), 0, "the &mut died at the store");
     }
@@ -1066,6 +1074,11 @@ mod tests {
     #[test]
     fn a_take_while_a_shared_reference_is_live_is_rejected() {
         let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let (shared_ref, string_ty) = (val_types[1].1, val_types[0].1);
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, string_ty])));
+        val_types.push((v(7), string_ty));
+        val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1076,7 +1089,7 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(&mut types),
+            val_types,
         );
         assert_eq!(conflict_count(&errors(m, types)), 1);
     }
@@ -1084,6 +1097,10 @@ mod tests {
     #[test]
     fn an_assign_while_a_shared_reference_is_live_is_rejected() {
         let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let shared_ref = val_types[1].1;
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref])));
+        val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1094,7 +1111,7 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(&mut types),
+            val_types,
         );
         assert_eq!(conflict_count(&errors(m, types)), 1);
     }
@@ -1102,6 +1119,10 @@ mod tests {
     #[test]
     fn a_second_reference_while_a_mutable_one_is_live_is_rejected() {
         let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let (shared_ref, mut_ref) = (val_types[1].1, val_types[2].1);
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, mut_ref])));
+        val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
                 reference(2, Mutability::Mut),
@@ -1112,7 +1133,7 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(&mut types),
+            val_types,
         );
         assert_eq!(conflict_count(&errors(m, types)), 1);
     }
@@ -1120,6 +1141,10 @@ mod tests {
     #[test]
     fn a_mutable_reference_while_a_shared_one_is_live_is_rejected() {
         let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let (shared_ref, mut_ref) = (val_types[1].1, val_types[2].1);
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, mut_ref])));
+        val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
                 reference(1, Mutability::Shared),
@@ -1130,7 +1155,7 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(&mut types),
+            val_types,
         );
         assert_eq!(conflict_count(&errors(m, types)), 1);
     }
@@ -1140,8 +1165,11 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut val_types = string_slot(&mut types);
+        let mut_ref = val_types[2].1;
         val_types[0] = (slot(), i64_ty);
         val_types.push((v(7), i64_ty));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([mut_ref, i64_ty])));
+        val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
                 reference(2, Mutability::Mut),
@@ -1164,6 +1192,11 @@ mod tests {
     #[test]
     fn a_reference_live_across_a_branch_still_excludes() {
         let mut types = Types::<Concrete>::new();
+        let mut val_types = string_slot(&mut types);
+        let (mut_ref, string_ty) = (val_types[2].1, val_types[0].1);
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([mut_ref, string_ty])));
+        val_types.push((v(7), string_ty));
+        val_types.push((v(6), tuple_ty));
         // ref &mut; jump L1; L1: take; use ref
         let m = body(
             vec![
@@ -1183,7 +1216,7 @@ mod tests {
                 },
                 ret(6),
             ],
-            string_slot(&mut types),
+            val_types,
         );
         assert_eq!(conflict_count(&errors(m, types)), 1);
     }
@@ -1267,6 +1300,7 @@ mod tests {
         let param = v(9);
         let string_ty = types.intern(TyKind::String);
         let mutable = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string_ty)));
+        let shared = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string_ty)));
         let mut main = body(
             vec![
                 store(1, 9),
@@ -1280,7 +1314,7 @@ mod tests {
                 load(4, 3),
                 ret(4),
             ],
-            vec![(v(1), mutable), (v(2), mutable)],
+            vec![(v(1), mutable), (v(2), mutable), (v(3), shared), (v(4), string_ty)],
         );
         main.params
             .push((acvus_utils::Interner::new().intern("p"), param));
