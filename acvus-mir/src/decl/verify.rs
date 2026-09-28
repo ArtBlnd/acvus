@@ -3,10 +3,10 @@ use std::hash::Hash;
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::casts::{CastTree, Head, VerifiedExternCast};
+use super::casts::{Base, CastTree, Head, VerifiedExternCast};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, UserTypeDecl};
-use crate::flows::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, segments};
+use crate::flows::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Segment, segments};
 use crate::ty::{Holds, LifetimesOf, Mutability, ObjectTy, ParamTerm, Poly, TyId, TyKind, Types};
 
 /// Why a set of declarations is not taken in.
@@ -61,11 +61,14 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let mut refused = Vec::new();
 
     let user_types = extern_types(user_types, &mut refused);
-    let declared_order: Vec<QualifiedRef> = functions.iter().map(|(id, _)| *id).collect();
+    let naming_undeclared = refuse_undeclared_types(&types, &functions, &casts, &user_types, &mut refused);
     refuse_array_types(&types, &functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
+    let declared_order = first_of_each(functions.iter().map(|(id, _)| *id));
     let overloads = overloads(&declared_order);
-    let functions = unique(functions, "function");
+    let functions = first_stands(functions, &mut refused, |id| Refused::DuplicateFunction { id });
+    let contexts = first_stands(contexts, &mut refused, |id| Refused::DuplicateContext { id });
+    let inputs = first_stands(inputs, &mut refused, |name| Refused::DuplicateInput { name });
     let casts = cast_tree(&types, &casts, &functions, &core, &mut refused);
 
     let mut decls = Declarations {
@@ -74,12 +77,16 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         overloads,
         user_types,
         casts,
-        contexts: unique(contexts, "context"),
-        inputs: unique(inputs, "input"),
+        contexts,
+        inputs,
         loop_markers,
         core,
     };
-    take_in_lifetimes(&mut decls, &declared_order, &mut refused);
+    let lifetimes_readable: Vec<QualifiedRef> = declared_order
+        .into_iter()
+        .filter(|id| !naming_undeclared.contains(id))
+        .collect();
+    take_in_lifetimes(&mut decls, &lifetimes_readable, &mut refused);
 
     match refused.is_empty() {
         true => Ok(decls),
@@ -87,25 +94,32 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     }
 }
 
-/// Each declared entry by its key.
-///
-/// # Panics
-/// Two entries share a key. rfc_compiler states no rule for two functions,
-/// two contexts or two inputs under one name, and `Refused` has no refusal
-/// for it: which one stands, or whether the set is refused, is not decided
-/// here.
-fn unique<K, V>(entries: Vec<(K, V)>, what: &str) -> FxHashMap<K, V>
+/// Each entry by its key. The first entry of a key stands; every later
+/// one is refused by `duplicate`.
+fn first_stands<K, V>(
+    entries: Vec<(K, V)>,
+    refused: &mut Vec<Refused>,
+    duplicate: impl Fn(K) -> Refused,
+) -> FxHashMap<K, V>
 where
-    K: Eq + Hash + std::fmt::Debug,
+    K: Copy + Eq + Hash,
 {
     let mut by_key = FxHashMap::default();
     for (key, value) in entries {
-        if by_key.contains_key(&key) {
-            todo!("decl::verify: two declarations of the {what} {key:?}; no rule settles it yet")
+        match by_key.contains_key(&key) {
+            true => refused.push(duplicate(key)),
+            false => {
+                by_key.insert(key, value);
+            }
         }
-        by_key.insert(key, value);
     }
     by_key
+}
+
+/// `ids` in order, each once.
+fn first_of_each(ids: impl Iterator<Item = QualifiedRef>) -> Vec<QualifiedRef> {
+    let mut seen = FxHashSet::default();
+    ids.filter(|id| seen.insert(*id)).collect()
 }
 
 /// The extern types by id (extern-fn §8). The first declaration of an id
@@ -131,10 +145,7 @@ fn extern_types(user_types: Vec<UserTypeDecl>, refused: &mut Vec<Refused>) -> Fx
 fn overloads(declared_order: &[QualifiedRef]) -> FxHashMap<Astr, Box<[QualifiedRef]>> {
     let mut by_name: FxHashMap<Astr, Vec<QualifiedRef>> = FxHashMap::default();
     for id in declared_order {
-        let named = by_name.entry(id.name).or_default();
-        if !named.contains(id) {
-            named.push(*id);
-        }
+        by_name.entry(id.name).or_default().push(*id);
     }
     by_name
         .into_iter()
@@ -242,36 +253,97 @@ impl TreeSizes<'_> {
     }
 }
 
-/// The head a cast steps from or to (types §3).
-///
-/// # Panics
-/// `ty` has no head: a type variable, `!`, the order token or a started
-/// call. rfc_compiler does not say what a cast between such types steps
-/// between, and `Refused` has no refusal for it.
-fn head(types: &Types<Poly>, ty: TyId<Poly>) -> Head {
-    match types.kind(ty) {
-        TyKind::Int(width) => Head::Int(*width),
-        TyKind::Float => Head::Float,
-        TyKind::Char => Head::Char,
-        TyKind::String => Head::String,
-        TyKind::Bool => Head::Bool,
-        TyKind::Unit => Head::Unit,
-        TyKind::Str => Head::Str,
-        TyKind::Array(..) => Head::Array,
-        TyKind::Slice(_) => Head::Slice,
-        TyKind::Tuple(items) => Head::Tuple(items.len()),
-        TyKind::Option(_) => Head::Option,
-        TyKind::Result(..) => Head::Result,
-        TyKind::Object(ObjectTy::Structural(..)) => Head::Object,
-        TyKind::Object(ObjectTy::Declared(id, _)) => Head::Named(*id),
-        TyKind::Enum { name, .. } => Head::Enum(*name),
-        TyKind::Fn { .. } => Head::Fn,
-        TyKind::UserDefined { id, .. } => Head::Named(*id),
-        TyKind::Ref(mutability, _) => Head::Ref(*mutability),
-        TyKind::Var(_) | TyKind::Never | TyKind::Order | TyKind::Handle(_) => {
-            todo!("decl::verify: a cast at {ty:?}, which has no head; no rule settles it yet")
+/// extern-fn §8: every extern-defined type a signature, an instance or a
+/// cast names is declared. Returns the functions that name an undeclared
+/// one, whose segments cannot be read.
+fn refuse_undeclared_types(
+    types: &Types<Poly>,
+    functions: &[(QualifiedRef, Scheme)],
+    casts: &[CastRule],
+    user_types: &FxHashMap<QualifiedRef, UserTypeDecl>,
+    refused: &mut Vec<Refused>,
+) -> FxHashSet<QualifiedRef> {
+    let mut naming_undeclared = FxHashSet::default();
+    let signatures = functions
+        .iter()
+        .flat_map(|(id, scheme)| signature_types(scheme).map(|ty| (*id, ty)));
+    let cast_ends = casts
+        .iter()
+        .flat_map(|rule| [(rule.via, rule.from), (rule.via, rule.to)]);
+    let mut reported = FxHashSet::default();
+    for (declaration, ty) in signatures.chain(cast_ends) {
+        let mut named = Vec::new();
+        named_types(types, ty, &mut FxHashSet::default(), &mut named);
+        for id in named.into_iter().filter(|id| !user_types.contains_key(id)) {
+            naming_undeclared.insert(declaration);
+            if reported.insert((declaration, id)) {
+                refused.push(Refused::UndeclaredType { declaration, id });
+            }
         }
     }
+    naming_undeclared
+}
+
+/// Every extern-defined type `ty` names, each once, into `named`.
+fn named_types(
+    types: &Types<Poly>,
+    ty: TyId<Poly>,
+    seen: &mut FxHashSet<TyId<Poly>>,
+    named: &mut Vec<QualifiedRef>,
+) {
+    acvus_utils::grow(|| {
+        if !seen.insert(ty) {
+            return;
+        }
+        let kind = types.kind(ty);
+        if let TyKind::UserDefined { id, .. } = kind
+            && !named.contains(id)
+        {
+            named.push(*id);
+        }
+        kind.for_each_child(|child| named_types(types, child, seen, named));
+    })
+}
+
+/// The head a cast steps from or to (types §3), or `None` for a type
+/// variable, `!`, the order token or a started call, or a reference to one
+/// of those.
+fn head(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Head> {
+    match types.kind(ty) {
+        TyKind::Ref(mutability, target) => Some(Head::Ref(*mutability, base(types, target.ty())?)),
+        _ => Some(Head::Base(base(types, ty)?)),
+    }
+}
+
+fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
+    Some(match types.kind(ty) {
+        TyKind::Int(width) => Base::Int(*width),
+        TyKind::Float => Base::Float,
+        TyKind::Char => Base::Char,
+        TyKind::String => Base::String,
+        TyKind::Bool => Base::Bool,
+        TyKind::Unit => Base::Unit,
+        TyKind::Str => Base::Str,
+        TyKind::Array(..) => Base::Array,
+        TyKind::Slice(_) => Base::Slice,
+        TyKind::Tuple(items) => Base::Tuple(items.len()),
+        TyKind::Option(_) => Base::Option,
+        TyKind::Result(..) => Base::Result,
+        TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
+        TyKind::Object(ObjectTy::Declared(id, _)) => Base::Named(*id),
+        TyKind::Enum { name, .. } => Base::Enum(*name),
+        TyKind::Fn { .. } => Base::Fn,
+        TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::Ref(..) => Base::Ref,
+        TyKind::Var(_) | TyKind::Never | TyKind::Order | TyKind::Handle(_) => return None,
+    })
+}
+
+/// A step of the tree: a cast from one head up to another.
+struct Step {
+    from: Head,
+    to: Head,
+    rule: CastRule,
 }
 
 /// The declared casts and the views as one tree (types §3): every head
@@ -283,20 +355,37 @@ fn cast_tree(
     core: &Core,
     refused: &mut Vec<Refused>,
 ) -> CastTree {
-    refuse_views_until_settled(functions, core);
+    let mut steps = Vec::new();
+    for rule in casts {
+        let (Some(from), Some(to)) = (head(types, rule.from), head(types, rule.to)) else {
+            refused.push(Refused::CastWithoutHead { via: rule.via });
+            continue;
+        };
+        if let Head::Ref(_, Base::Ref) = from {
+            todo!(
+                "decl::verify: the declared cast {:?} steps from a reference to a reference, which no step leaves; no refusal is settled for it",
+                rule.via
+            )
+        }
+        steps.push(Step {
+            from,
+            to,
+            rule: rule.clone(),
+        });
+    }
+    steps.extend(view_steps(types, functions, core));
 
     let mut tree = CastTree::default();
     let mut above: FxHashMap<Head, Head> = FxHashMap::default();
     let mut from_order = Vec::new();
-    for rule in casts {
-        let (from, to) = (head(types, rule.from), head(types, rule.to));
+    for Step { from, to, rule } in steps {
         match tree.up.get(&from) {
             Some(first) => refused.push(Refused::TwoStepsUp {
                 head: from,
                 via: [first.rule().via, rule.via],
             }),
             None => {
-                tree.up.insert(from, VerifiedExternCast(rule.clone()));
+                tree.up.insert(from, VerifiedExternCast(rule));
                 above.insert(from, to);
                 from_order.push(from);
             }
@@ -306,19 +395,66 @@ fn cast_tree(
     tree
 }
 
-/// The views of operators §5 are steps from `&C` to `&[T]` or `&str`, but
-/// both ends have the head `Ref(Shared)`, or `Ref(Mut)` for
-/// `as_slice_mut`: as heads, every view is a step from a head to itself,
-/// and two views are two steps up from one head. Which heads a view steps
-/// between is not decided here.
+/// Each concrete instance of `core::as_slice`, `core::as_slice_mut` and
+/// `core::as_str` as a step from `&C` to its view (operators §3, §5):
+/// `&C` or `&[T; n]` to `&[T]`, the same under `&mut`, and `&String` to
+/// `&str`.
 ///
 /// # Panics
-/// A `core::as_slice`, `core::as_slice_mut` or `core::as_str` is declared.
-fn refuse_views_until_settled(functions: &FxHashMap<QualifiedRef, Scheme>, core: &Core) {
-    for view in [core.as_slice, core.as_slice_mut, core.as_str] {
-        if functions.contains_key(&view) {
-            todo!("decl::verify: the heads a view of {view:?} steps between are not settled")
+/// A view signature has a generic instance, or a concrete instance whose
+/// type is not a function from one of those heads to its view. Neither a
+/// step nor a refusal is settled for either.
+fn view_steps(types: &Types<Poly>, functions: &FxHashMap<QualifiedRef, Scheme>, core: &Core) -> Vec<Step> {
+    let views = [
+        (core.as_slice, Mutability::Shared, Base::Slice),
+        (core.as_slice_mut, Mutability::Mut, Base::Slice),
+        (core.as_str, Mutability::Shared, Base::Str),
+    ];
+    let mut steps = Vec::new();
+    for (via, mutability, view) in views {
+        let Some(instances) = functions.get(&via).and_then(|scheme| scheme.instances.as_ref()) else {
+            continue;
+        };
+        if instances.generic.is_some() {
+            todo!("decl::verify: the view {via:?} has a generic instance; no step or refusal is settled for it")
         }
+        for instance in instances.concrete.iter() {
+            let TyKind::Fn { params, ret, .. } = types.kind(instance.ty) else {
+                todo!("decl::verify: an instance of the view {via:?} is not a function type; no refusal is settled for it")
+            };
+            let [param] = &params[..] else {
+                todo!("decl::verify: an instance of the view {via:?} does not take one parameter; no refusal is settled for it")
+            };
+            let to = Head::Ref(mutability, view);
+            match (head(types, param.ty), head(types, *ret)) {
+                (Some(from), Some(ret_head)) if views_from(from, mutability, view) && ret_head == to => {
+                    steps.push(Step {
+                        from,
+                        to,
+                        rule: CastRule {
+                            from: param.ty,
+                            to: *ret,
+                            via,
+                        },
+                    })
+                }
+                _ => todo!(
+                    "decl::verify: an instance of the view {via:?} is not a step from a container to its view; no refusal is settled for it"
+                ),
+            }
+        }
+    }
+    steps
+}
+
+/// Whether a view to `view` under `mutability` leaves from `from`: a slice
+/// from a named container or an array, a `str` from a shared `String`.
+fn views_from(from: Head, mutability: Mutability, view: Base) -> bool {
+    match (from, view) {
+        (Head::Ref(at, Base::Named(_) | Base::Array), Base::Slice) | (Head::Ref(at, Base::String), Base::Str) => {
+            at == mutability
+        }
+        _ => false,
     }
 }
 
@@ -575,7 +711,9 @@ impl<'s> FittedEnd<'s> {
             Some(labels) => labels,
             None => &[],
         };
-        if labels.len() != segments(&decls.types, decls, ty).len() {
+        let segments = segments(&decls.types, decls, ty);
+        let one_per_segment = labels.len() == segments.len();
+        if !one_per_segment || !labels.iter().zip(&segments).all(|(label, segment)| label.fits(*segment)) {
             return Err(LabelsDoNotFit);
         }
         let written = match end {
@@ -584,6 +722,19 @@ impl<'s> FittedEnd<'s> {
         };
         assert_eq!(written.len(), labels.len(), "one writability per segment, in segment order");
         Ok(FittedEnd { end, labels, written })
+    }
+}
+
+impl SegmentLabel {
+    /// A lifetime labels a reference, a declared lifetime or a function
+    /// value; a type variable's label, that variable's part alone.
+    fn fits(self, segment: Segment) -> bool {
+        match (self, segment) {
+            (SegmentLabel::Lifetime(_), Segment::Reference | Segment::Lifetime | Segment::FunctionValue) => true,
+            (SegmentLabel::TypeVar(label), Segment::TypeVar(var)) => label == var,
+            (SegmentLabel::Lifetime(_), Segment::TypeVar(_))
+            | (SegmentLabel::TypeVar(_), Segment::Reference | Segment::Lifetime | Segment::FunctionValue) => false,
+        }
     }
 }
 
@@ -695,7 +846,6 @@ mod tests {
 
     use super::*;
     use crate::decl::{DeclaredFacts, EndLabels, GenericSig, InstanceSig, Instances, LoopMarkers, Outlives};
-    use crate::flows::Segment;
     use crate::ty::{Calls, Effect, EffectTerm, IntTy, LenTerm, TypeArg};
 
     struct Fixture {
@@ -954,9 +1104,9 @@ mod tests {
         let to = fixture.user_type(b, 0);
         fixture.raw.casts.push(CastRule { from, to, via });
         let decls = fixture.verify().expect("one step up is a tree");
-        let step = decls.casts().step_up(Head::Named(a)).expect("A steps up");
+        let step = decls.casts().step_up(Head::Base(Base::Named(a))).expect("A steps up");
         assert_eq!(step.rule().via, via);
-        assert!(decls.casts().step_up(Head::Named(b)).is_none());
+        assert!(decls.casts().step_up(Head::Base(Base::Named(b))).is_none());
     }
 
     /// types §3: every type has at most one next step up.
@@ -981,7 +1131,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
-                head: Head::Named(a),
+                head: Head::Base(Base::Named(a)),
                 via: [to_b, to_c]
             }]
         );
@@ -1006,7 +1156,7 @@ mod tests {
             to: a_ty,
             via: to_a,
         });
-        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Named(a) }]);
+        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Named(a)) }]);
     }
 
     /// types §3: a cast between two types of one head is a step from that
@@ -1020,7 +1170,7 @@ mod tests {
         let from = fixture.ty(TyKind::Option(int));
         let to = fixture.ty(TyKind::Option(string));
         fixture.raw.casts.push(CastRule { from, to, via });
-        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Option }]);
+        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Option) }]);
     }
 
     fn requiring(signature: QualifiedRef, pattern: TyId<Poly>) -> Box<[Requirement]> {
@@ -1365,6 +1515,242 @@ mod tests {
         let decls = fixture.verify().expect("nothing to refuse");
         assert_eq!(decls.overloads(len), &[a_len, b_len]);
         assert_eq!(decls.overloads(other), &[] as &[QualifiedRef]);
+    }
+
+    /// A scheme whose concrete instances are `tys`.
+    fn with_instances(own_ty: TyId<Poly>, tys: &[TyId<Poly>]) -> Scheme {
+        Scheme {
+            instances: Some(Instances {
+                concrete: tys
+                    .iter()
+                    .map(|ty| InstanceSig {
+                        ty: *ty,
+                        requires: Box::new([]),
+                        facts: DeclaredFacts::default(),
+                    })
+                    .collect(),
+                generic: None,
+            }),
+            ..plain(own_ty)
+        }
+    }
+
+    /// operators §5, types §3: `as_slice` at `&Vec` is a step from
+    /// `Ref(Shared, Named(Vec))` to `Ref(Shared, Slice)`; `as_str` at
+    /// `&String` from `Ref(Shared, String)` to `Ref(Shared, Str)`. Two views
+    /// leave two heads, so they form a tree.
+    #[test]
+    fn a_view_is_a_step_from_a_containers_reference_to_its_view() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let vec = fixture.name("m", "Vec");
+        let vec_ty = fixture.user_type(vec, 0);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let slice = fixture.ty(TyKind::Slice(int));
+        let vec_ref = fixture.reference(Mutability::Shared, vec_ty);
+        let slice_ref = fixture.reference(Mutability::Shared, slice);
+        let as_slice_at_vec = fixture.function(&[vec_ref], slice_ref);
+        let string = fixture.ty(TyKind::String);
+        let string_ref = fixture.reference(Mutability::Shared, string);
+        let str_ref = fixture.shared_str();
+        let as_str_at_string = fixture.function(&[string_ref], str_ref);
+        let var = fixture.ty(TyKind::Var(0));
+        let unit = fixture.ty(TyKind::Unit);
+        let own_ty = fixture.function(&[var], unit);
+        fixture.declare(core.as_slice, with_instances(own_ty, &[as_slice_at_vec]));
+        fixture.declare(core.as_str, with_instances(own_ty, &[as_str_at_string]));
+        let decls = fixture.verify().expect("two views from two heads are a tree");
+        let from_vec = decls
+            .casts()
+            .step_up(Head::Ref(Mutability::Shared, Base::Named(vec)))
+            .expect("&Vec steps up");
+        assert_eq!(from_vec.rule().via, core.as_slice);
+        let from_string = decls
+            .casts()
+            .step_up(Head::Ref(Mutability::Shared, Base::String))
+            .expect("&String steps up");
+        assert_eq!(from_string.rule().via, core.as_str);
+        assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::Slice)).is_none());
+    }
+
+    /// types §3: the one-step-up rule holds for views as for declared casts.
+    /// A declared cast from `&Vec` and `as_slice` at `&Vec` are two steps up
+    /// from one head.
+    #[test]
+    fn a_view_and_a_declared_cast_from_one_head_are_refused() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let (vec, other, to_other) = (fixture.name("m", "Vec"), fixture.name("m", "Other"), fixture.name("m", "to_other"));
+        let vec_ty = fixture.user_type(vec, 0);
+        let other_ty = fixture.user_type(other, 0);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let slice = fixture.ty(TyKind::Slice(int));
+        let vec_ref = fixture.reference(Mutability::Shared, vec_ty);
+        let other_ref = fixture.reference(Mutability::Shared, other_ty);
+        let slice_ref = fixture.reference(Mutability::Shared, slice);
+        let as_slice_at_vec = fixture.function(&[vec_ref], slice_ref);
+        fixture.declare(core.as_slice, with_instances(as_slice_at_vec, &[as_slice_at_vec]));
+        fixture.raw.casts.push(CastRule {
+            from: vec_ref,
+            to: other_ref,
+            via: to_other,
+        });
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::TwoStepsUp {
+                head: Head::Ref(Mutability::Shared, Base::Named(vec)),
+                via: [to_other, core.as_slice]
+            }]
+        );
+    }
+
+    /// types §3: a tree step joins two heads; a type variable has none.
+    #[test]
+    fn a_cast_without_a_head_is_refused() {
+        let mut fixture = Fixture::new();
+        let via = fixture.name("m", "from_any");
+        let from = fixture.ty(TyKind::Var(0));
+        let to = fixture.ty(TyKind::String);
+        fixture.raw.casts.push(CastRule { from, to, via });
+        assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via }]);
+    }
+
+    /// types §6: two declarations under one qualified name cannot be told
+    /// apart, so the set is refused.
+    #[test]
+    fn two_functions_under_one_name_are_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let unit = fixture.ty(TyKind::Unit);
+        let ty = fixture.function(&[], unit);
+        fixture.declare(f, plain(ty));
+        fixture.declare(f, plain(ty));
+        assert_eq!(refusals(fixture), vec![Refused::DuplicateFunction { id: f }]);
+    }
+
+    /// context: a context is one value of one fixed type, so two
+    /// declarations of it are refused.
+    #[test]
+    fn two_contexts_under_one_name_are_refused() {
+        let mut fixture = Fixture::new();
+        let id = fixture.name("m", "user");
+        let (int, string) = (fixture.ty(TyKind::Int(IntTy::I64)), fixture.ty(TyKind::String));
+        fixture.raw.contexts.push((id, int));
+        fixture.raw.contexts.push((id, string));
+        assert_eq!(refusals(fixture), vec![Refused::DuplicateContext { id }]);
+    }
+
+    /// programs §4: an input `$x` has one type, so two declarations of it
+    /// are refused.
+    #[test]
+    fn two_inputs_under_one_name_are_refused() {
+        let mut fixture = Fixture::new();
+        let name = fixture.interner.intern("x");
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        fixture.raw.inputs.push((name, int));
+        fixture.raw.inputs.push((name, int));
+        assert_eq!(refusals(fixture), vec![Refused::DuplicateInput { name }]);
+    }
+
+    fn undeclared(fixture: &mut Fixture, id: QualifiedRef) -> TyId<Poly> {
+        fixture.ty(TyKind::UserDefined {
+            id,
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([]),
+        })
+    }
+
+    /// extern-fn §8: a type a signature names is declared. A labelled
+    /// signature naming an undeclared type is refused for the type alone:
+    /// its segments are not read.
+    #[test]
+    fn a_signature_naming_an_undeclared_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let (f, ghost) = (fixture.name("m", "f"), fixture.name("m", "Ghost"));
+        let ghost_ty = undeclared(&mut fixture, ghost);
+        let s = fixture.shared_str();
+        let ty = fixture.function(&[s], ghost_ty);
+        let lifetimes = signature(
+            vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
+            &[],
+        );
+        fixture.declare(f, labelled(ty, lifetimes));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::UndeclaredType {
+                declaration: f,
+                id: ghost
+            }]
+        );
+    }
+
+    /// extern-fn §8: a type a cast names is declared.
+    #[test]
+    fn a_cast_naming_an_undeclared_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let (via, ghost) = (fixture.name("m", "to_string"), fixture.name("m", "Ghost"));
+        let from = undeclared(&mut fixture, ghost);
+        let to = fixture.ty(TyKind::String);
+        fixture.raw.casts.push(CastRule { from, to, via });
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::UndeclaredType {
+                declaration: via,
+                id: ghost
+            }]
+        );
+    }
+
+    /// Label kinds: a type variable's label fits only that variable's
+    /// part, so `T` labelled with a lifetime does not fit.
+    #[test]
+    fn a_lifetime_on_a_type_variable_is_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let var = fixture.ty(TyKind::Var(0));
+        let ty = fixture.function(&[var], var);
+        let lifetimes = signature(
+            vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
+            &[],
+        );
+        fixture.declare(f, labelled(ty, lifetimes));
+        assert_eq!(refusals(fixture), vec![Refused::LabelsDoNotFit { declaration: f }]);
+    }
+
+    /// Label kinds: `TypeVar(v)` fits only the part of `v`, not a reference
+    /// and not another variable's part.
+    #[test]
+    fn a_type_variable_label_off_its_variable_is_refused() {
+        let mut fixture = Fixture::new();
+        let (f, g) = (fixture.name("m", "f"), fixture.name("m", "g"));
+        let (t, u) = (fixture.ty(TyKind::Var(0)), fixture.ty(TyKind::Var(1)));
+        let s = fixture.shared_str();
+        let f_ty = fixture.function(&[t], u);
+        let g_ty = fixture.function(&[s], s);
+        let off_variable = signature(
+            vec![
+                end(FlowEnd::Result, &[SegmentLabel::TypeVar(0)]),
+                end(FlowEnd::Param(0), &[SegmentLabel::TypeVar(0)]),
+            ],
+            &[],
+        );
+        let on_reference = signature(
+            vec![
+                end(FlowEnd::Result, &[SegmentLabel::TypeVar(0)]),
+                end(FlowEnd::Param(0), &[SegmentLabel::TypeVar(0)]),
+            ],
+            &[],
+        );
+        fixture.declare(f, labelled(f_ty, off_variable));
+        fixture.declare(g, labelled(g_ty, on_reference));
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::LabelsDoNotFit { declaration: f },
+                Refused::LabelsDoNotFit { declaration: g }
+            ]
+        );
     }
 
     /// `Refused`: every refusal a set earns is reported, not the first.
