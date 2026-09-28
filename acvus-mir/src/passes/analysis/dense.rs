@@ -5,8 +5,8 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::ir::cfg::{BlockId, Body, Op, Terminator};
-use crate::passes::domain::JoinSemiLattice;
+use crate::ir::cfg::{BlockId, Body, Inst, Terminator};
+use crate::passes::domain::{JoinSemiLattice, Widen};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -18,12 +18,12 @@ pub enum Direction {
 /// terminator change it. Storage and calls are read here, calls through
 /// their declared facts only.
 pub trait DenseAnalysis {
-    type State: JoinSemiLattice;
+    type State: Widen;
 
     const DIRECTION: Direction;
 
     fn entry(&self, body: &Body) -> Self::State;
-    fn transfer(&self, op: &Op, state: &mut Self::State);
+    fn transfer(&self, inst: &Inst, state: &mut Self::State);
     fn transfer_terminator(&self, terminator: &Terminator, state: &mut Self::State);
 }
 

@@ -4,9 +4,17 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::ir::cfg::{Body, Op};
+use crate::ir::cfg::{BlockId, Body, Inst, Terminator};
 use crate::ir::ValueId;
 use crate::passes::domain::ValueDomain;
+
+/// Which successors of a terminator may run, read from the facts of its
+/// operands (conditional propagation, Wegman-Zadeck): only edges that may
+/// run carry facts into their targets.
+pub enum Executable {
+    All,
+    Only(Vec<BlockId>),
+}
 
 /// A sparse analysis: which value domain it runs, and how an instruction
 /// that is not a value operation maps to it (calls read declared facts only).
@@ -15,12 +23,20 @@ pub trait SparseAnalysis {
 
     fn domain(&self) -> &Self::Domain;
 
-    /// The fact of an instruction's result from its operands' facts.
+    /// The fact of an instruction's result from its operands' facts, in the
+    /// order the instruction lists its operands.
     fn transfer(
         &self,
-        op: &Op,
+        inst: &Inst,
         operands: &[&<Self::Domain as ValueDomain>::Value],
     ) -> <Self::Domain as ValueDomain>::Value;
+
+    /// Which successors may run, from the facts of the terminator's operands.
+    fn executable(
+        &self,
+        terminator: &Terminator,
+        operands: &[&<Self::Domain as ValueDomain>::Value],
+    ) -> Executable;
 }
 
 pub struct SparseFacts<D>

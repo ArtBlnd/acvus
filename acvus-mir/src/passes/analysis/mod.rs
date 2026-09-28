@@ -7,4 +7,4 @@ mod sparse;
 
 pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
 pub use manager::{Analysis, AnalysisManager};
-pub use sparse::{SparseAnalysis, SparseFacts, solve_sparse};
+pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};

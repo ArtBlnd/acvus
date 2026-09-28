@@ -16,8 +16,9 @@ pub trait JoinSemiLattice: Clone + PartialEq {
     fn le(&self, other: &Self) -> bool;
 }
 
-/// A lattice of infinite height names its widening, and an engine that runs
-/// it widens at loop heads, so its fixpoint is bounded (compilation §2).
+/// Every lattice an engine runs names its widening, applied at loop heads, so
+/// every fixpoint is bounded (compilation §2). A lattice of finite height
+/// states that its widening is its join; nothing defaults it.
 pub trait Widen: JoinSemiLattice {
     fn widen(&mut self, next: &Self) -> bool;
 }
@@ -26,7 +27,7 @@ pub trait Widen: JoinSemiLattice {
 /// operation over-approximates the concrete one; `top` is what a value from
 /// outside the body is.
 pub trait ValueDomain {
-    type Value: JoinSemiLattice;
+    type Value: Widen;
 
     fn top(&self) -> Self::Value;
     fn constant(&self, literal: &Literal) -> Self::Value;
