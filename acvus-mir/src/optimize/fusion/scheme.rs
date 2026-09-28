@@ -26,11 +26,15 @@ pub(super) struct Bindings {
     marks: FxHashMap<u32, Mark>,
 }
 
-/// The mark an open `ρ` no position fixed takes: the solve takes the least
-/// element, `Uniform`, for it (RFC-0042 rule 3), as `Solver::freeze_repr`
-/// does.
-fn unfixed_mark() -> Mark {
-    Mark::Uniform
+/// Which value a type `apply` builds is for. A value the program observes,
+/// a consumer's result or anything that leaves the fused loop, is typed by
+/// the IR's recorded type and never built here; every type `apply` builds is
+/// a value's that lives inside the fused loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Built {
+    /// A value inside the fused loop, which nothing outside it observes:
+    /// an argument whose `#` nothing decides is not specialized (types §5).
+    InsideTheLoop,
 }
 
 impl Bindings {
@@ -251,12 +255,25 @@ impl Bindings {
     }
 
     /// `pattern` with its variables replaced by what they are bound to, in
-    /// `types`; `None` where a variable is unbound.
-    pub(super) fn apply(&self, poly: &Types<Poly>, pattern: TyId<Poly>, types: &mut Types<Concrete>) -> Option<Ty> {
-        acvus_utils::grow(|| self.apply_level(poly, pattern, types))
+    /// `types`; `None` where a variable is unbound. `built` says which value
+    /// the type is for, and so what a mark nothing fixed is.
+    pub(super) fn apply(
+        &self,
+        poly: &Types<Poly>,
+        pattern: TyId<Poly>,
+        types: &mut Types<Concrete>,
+        built: Built,
+    ) -> Option<Ty> {
+        acvus_utils::grow(|| self.apply_level(poly, pattern, types, built))
     }
 
-    fn apply_level(&self, poly: &Types<Poly>, pattern: TyId<Poly>, types: &mut Types<Concrete>) -> Option<Ty> {
+    fn apply_level(
+        &self,
+        poly: &Types<Poly>,
+        pattern: TyId<Poly>,
+        types: &mut Types<Concrete>,
+        built: Built,
+    ) -> Option<Ty> {
         let kind = match poly.kind(pattern) {
             TyKind::Var(v) => return self.tys.get(v).copied(),
             TyKind::Int(k) => TyKind::Int(*k),
@@ -268,26 +285,26 @@ impl Bindings {
             TyKind::Never => TyKind::Never,
             TyKind::Order => TyKind::Order,
             TyKind::Str => TyKind::Str,
-            TyKind::Handle(inner) => TyKind::Handle(self.apply(poly, *inner, types)?),
-            TyKind::Slice(inner) => TyKind::Slice(self.apply(poly, *inner, types)?),
-            TyKind::Option(inner) => TyKind::Option(self.apply(poly, *inner, types)?),
+            TyKind::Handle(inner) => TyKind::Handle(self.apply(poly, *inner, types, built)?),
+            TyKind::Slice(inner) => TyKind::Slice(self.apply(poly, *inner, types, built)?),
+            TyKind::Option(inner) => TyKind::Option(self.apply(poly, *inner, types, built)?),
             TyKind::Array(inner, len) => {
-                TyKind::Array(self.apply(poly, *inner, types)?, self.apply_len(len)?)
+                TyKind::Array(self.apply(poly, *inner, types, built)?, self.apply_len(len)?)
             }
             TyKind::Result(ok, err) => {
-                TyKind::Result(self.apply(poly, *ok, types)?, self.apply(poly, *err, types)?)
+                TyKind::Result(self.apply(poly, *ok, types, built)?, self.apply(poly, *err, types, built)?)
             }
             TyKind::Tuple(items) => TyKind::Tuple(
                 items
                     .iter()
-                    .map(|item| self.apply(poly, *item, types))
+                    .map(|item| self.apply(poly, *item, types, built))
                     .collect::<Option<_>>()?,
             ),
             TyKind::Object(object) => {
                 let fields = object
                     .fields()
                     .iter()
-                    .map(|(name, field)| Some((*name, self.apply(poly, *field, types)?)))
+                    .map(|(name, field)| Some((*name, self.apply(poly, *field, types, built)?)))
                     .collect::<Option<_>>()?;
                 TyKind::Object(match object {
                     ObjectTy::Structural(_, ()) => ObjectTy::Structural(fields, ()),
@@ -302,7 +319,7 @@ impl Bindings {
                         Some((
                             *tag,
                             match payload {
-                                Some(payload) => Some(self.apply(poly, *payload, types)?),
+                                Some(payload) => Some(self.apply(poly, *payload, types, built)?),
                                 None => None,
                             },
                         ))
@@ -323,11 +340,11 @@ impl Bindings {
                     .map(|param| {
                         Some(ParamTerm {
                             name: param.name,
-                            ty: self.apply(poly, param.ty, types)?,
+                            ty: self.apply(poly, param.ty, types, built)?,
                         })
                     })
                     .collect::<Option<_>>()?,
-                ret: self.apply(poly, *ret, types)?,
+                ret: self.apply(poly, *ret, types, built)?,
                 effect: self.apply_effect(effect)?,
                 flows: match flows {
                     FlowTerm::Known(flows) => FlowTerm::Known(flows.clone()),
@@ -345,7 +362,7 @@ impl Bindings {
                 id: *id,
                 type_args: type_args
                     .iter()
-                    .map(|arg| self.apply_arg(poly, arg, types))
+                    .map(|arg| self.apply_arg(poly, arg, types, built))
                     .collect::<Option<_>>()?,
                 effect_args: effect_args
                     .iter()
@@ -365,17 +382,26 @@ impl Bindings {
                     })
                     .collect::<Option<_>>()?,
             },
-            TyKind::Ref(mutability, arg) => TyKind::Ref(*mutability, self.apply_arg(poly, arg, types)?),
+            TyKind::Ref(mutability, arg) => TyKind::Ref(*mutability, self.apply_arg(poly, arg, types, built)?),
         };
         Some(types.intern(kind))
     }
 
-    fn apply_arg(&self, poly: &Types<Poly>, arg: &TypeArg<Poly>, types: &mut Types<Concrete>) -> Option<TypeArg<Concrete>> {
-        let ty = self.apply(poly, arg.ty(), types)?;
+    fn apply_arg(
+        &self,
+        poly: &Types<Poly>,
+        arg: &TypeArg<Poly>,
+        types: &mut Types<Concrete>,
+        built: Built,
+    ) -> Option<TypeArg<Concrete>> {
+        let ty = self.apply(poly, arg.ty(), types, built)?;
         let mark = match arg {
             TypeArg::Uniform(_) => Mark::Uniform,
             TypeArg::Specialized(_) => Mark::Specialized,
-            TypeArg::Open(mark, _) => self.marks.get(mark).copied().unwrap_or_else(unfixed_mark),
+            TypeArg::Open(mark, _) => match (self.marks.get(mark), built) {
+                (Some(fixed), _) => *fixed,
+                (None, Built::InsideTheLoop) => Mark::Uniform,
+            },
         };
         Some(match mark {
             Mark::Uniform => TypeArg::Uniform(ty),

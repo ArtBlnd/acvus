@@ -22,7 +22,7 @@ use crate::step::{
 use crate::decl::Declarations;
 use crate::ir::{is_word, known_effect};
 use crate::ty::{Concrete, IntTy, Mutability, ObjectTy, Poly, Reissue, Ty, TyId, TyKind, TypeArg, Types};
-use scheme::Bindings;
+use scheme::{Bindings, Built};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declined {
@@ -709,7 +709,7 @@ impl<'p> Fusion<'p> {
             return Err(unfit);
         }
         let callee_ty = bindings
-            .apply(poly, instance_ty, self.types)
+            .apply(poly, instance_ty, self.types, Built::InsideTheLoop)
             .ok_or(Declined::UntypedTerm)?;
         let TyKind::Fn { ret, effect, .. } = self.types.kind(callee_ty) else {
             return Err(unfit);
@@ -1603,7 +1603,11 @@ impl<'p> Fusion<'p> {
         for (arg, param) in args.iter().zip(&resolved.params) {
             values.push(self.term(arg, Some(*param), scope)?.value);
         }
-        let dst = self.value(resolved.ret);
+        // A result written into a slot takes the slot's type, which the
+        // instance's result was bound to: the consumer's result is the one
+        // the IR records, never one built here.
+        let ret = expected.unwrap_or(resolved.ret);
+        let dst = self.value(ret);
         self.push(InstKind::FunctionCall {
             dst,
             callee: Callee::Extern {
@@ -1615,10 +1619,7 @@ impl<'p> Fusion<'p> {
             args: values,
             order: None,
         });
-        Ok(Typed {
-            value: dst,
-            ty: resolved.ret,
-        })
+        Ok(Typed { value: dst, ty: ret })
     }
 
     /// The instance `laws::resolve` would choose for a law naming `name` at
@@ -1676,7 +1677,7 @@ impl<'p> Fusion<'p> {
         }
         let callee_ty = chosen
             .bindings
-            .apply(poly, instance.ty, self.types)
+            .apply(poly, instance.ty, self.types, Built::InsideTheLoop)
             .ok_or(Declined::UntypedTerm)?;
         let TyKind::Fn {
             params,
