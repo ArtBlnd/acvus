@@ -14,6 +14,7 @@ pub mod printer;
 pub mod ser_ty;
 pub mod structural;
 pub mod ty;
+pub mod typeck;
 pub mod validate;
 
 #[cfg(test)]
