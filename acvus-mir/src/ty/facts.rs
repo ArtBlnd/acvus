@@ -24,7 +24,7 @@ fn copies_level(types: &Types<Concrete>, ty: Ty) -> bool {
         TyKind::Ref(Mutability::Shared, _) => true,
         TyKind::Tuple(items) => items.iter().all(|item| copies(types, *item)),
         TyKind::Array(element, _) => copies(types, *element),
-        TyKind::Object(ObjectTy::Structural(fields)) => fields.iter().all(|(_, field)| copies(types, *field)),
+        TyKind::Object(ObjectTy::Structural(fields, ())) => fields.iter().all(|(_, field)| copies(types, *field)),
         TyKind::String
         | TyKind::Never
         | TyKind::Order

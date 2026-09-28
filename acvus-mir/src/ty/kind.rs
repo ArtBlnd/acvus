@@ -32,6 +32,7 @@ pub enum TyKind<V: Phase> {
     Enum {
         name: QualifiedRef,
         variants: Box<[(Astr, Option<TyId<V>>)]>,
+        label: V::Label,
     },
     Fn {
         params: Box<[ParamTerm<V>]>,
@@ -55,8 +56,8 @@ pub enum TyKind<V: Phase> {
 /// An object's fields, sorted by name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ObjectTy<V: Phase> {
-    /// Written by the program.
-    Structural(Box<[(Astr, TyId<V>)]>),
+    /// A structural object; its label says whether it may grow.
+    Structural(Box<[(Astr, TyId<V>)]>, V::Label),
     /// A struct a declaration names: extern-defined, opaque (types §1).
     Declared(QualifiedRef, Box<[(Astr, TyId<V>)]>),
 }
@@ -64,7 +65,7 @@ pub enum ObjectTy<V: Phase> {
 impl<V: Phase> ObjectTy<V> {
     pub fn fields(&self) -> &[(Astr, TyId<V>)] {
         match self {
-            ObjectTy::Structural(fields) | ObjectTy::Declared(_, fields) => fields,
+            ObjectTy::Structural(fields, _) | ObjectTy::Declared(_, fields) => fields,
         }
     }
 }

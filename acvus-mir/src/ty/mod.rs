@@ -34,6 +34,9 @@ pub trait Phase: 'static + Copy + fmt::Debug + Eq + Hash {
     /// The open `#` of an argument whose mark is not decided yet (types §8).
     type ReprVar: fmt::Debug + Copy + Eq + Hash;
     type FlowVar: fmt::Debug + Copy + Eq + Hash;
+    /// Whether a structural object or enum may grow (types §1): fixed where
+    /// the node is born, and part of its identity. Only solving asks it.
+    type Label: fmt::Debug + Copy + Eq + Hash;
 }
 
 /// Every variable is `Infallible`: a concrete type holds none.
@@ -47,6 +50,7 @@ impl Phase for Concrete {
     type IdentityVar = Infallible;
     type ReprVar = Infallible;
     type FlowVar = Infallible;
+    type Label = ();
 }
 
 /// A declaration's signature: its variables are positional placeholders.
@@ -60,6 +64,7 @@ impl Phase for Poly {
     type IdentityVar = u32;
     type ReprVar = u32;
     type FlowVar = Infallible;
+    type Label = ();
 }
 
 /// A type under solving: its variables are the solver's.
@@ -73,6 +78,15 @@ impl Phase for Infer {
     type IdentityVar = IdentityVarId;
     type ReprVar = ReprVarId;
     type FlowVar = FlowVarId;
+    type Label = crate::ty::Label;
+}
+
+/// C, the transparency rule (types §1): a node the program wrote may grow;
+/// a node a declaration or the host gave never does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Label {
+    Transparent,
+    Opaque,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

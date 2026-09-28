@@ -4,6 +4,7 @@ pub mod decl;
 pub mod error;
 pub mod flows;
 pub mod graph;
+pub mod infer;
 pub mod ir;
 pub mod laws;
 pub mod means;
