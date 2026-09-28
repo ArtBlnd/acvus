@@ -47,6 +47,9 @@ pub enum Refused {
     /// A declared type holds `Handle` or `Order`, which only the compiler's
     /// IR writes (effects §3, §6).
     InternalType { written: Written },
+    /// A scheme whose bounds do not give each of its type variables exactly
+    /// one bound (extern-fn §1: a type parameter carries one bound).
+    BoundsDoNotFit { function: QualifiedRef },
     /// Two types under one name.
     DuplicateType { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in
