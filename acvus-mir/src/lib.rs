@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod cfg;
+pub mod decl;
 pub mod error;
 pub mod flows;
 pub mod graph;
