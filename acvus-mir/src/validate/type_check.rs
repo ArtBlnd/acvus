@@ -2083,6 +2083,8 @@ fn entries_into(label: Label, insts: &[crate::ir::Inst]) -> usize {
 mod tests {
     use super::*;
     use crate::ir::{DebugInfo, Inst, MirBody, MirModule};
+    use crate::ty::{Calls, Effect, EffectTerm, Holds, LenTerm};
+    use crate::flows::FlowTerm;
     use acvus_ast::Literal;
     use acvus_utils::LocalFactory;
 
@@ -2094,7 +2096,8 @@ mod tests {
         Inst { span: span(), kind }
     }
 
-    fn make_module(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>) -> MirModule {
+    fn make_module(insts: Vec<Inst>, val_types: FxHashMap<ValueId, Ty>, mut types: Types<Concrete>) -> MirModule {
+        let unit_ty = types.intern(TyKind::Unit);
         MirModule {
             declared_params: 0,
             main: MirBody {
@@ -2109,29 +2112,31 @@ mod tests {
                 order_param: None,
             },
             closures: FxHashMap::default(),
-            ret: crate::ty::Ty::Unit,
+            ret: unit_ty,
             flows: crate::flows::Flows::Every,
+            types,
         }
     }
 
     /// A module whose `main` builds one closure of type `|| -> declared` and
-    /// whose closure body returns a value of type `returned`.
-    fn make_closure_module(declared: Ty, returned: Ty) -> MirModule {
+    /// whose closure body returns a value of type `returned`; `declared` and
+    /// `returned` are already interned in `types`, which the module then
+    /// owns, so a caller compares against `module.types` afterward.
+    fn make_closure_module(mut types: Types<Concrete>, declared: Ty, returned: Ty) -> MirModule {
         let label = Label(0);
 
         let mut main_types = FxHashMap::default();
         let mut main_factory = LocalFactory::<ValueId>::new();
         let closure = main_factory.next();
-        main_types.insert(
-            closure,
-            Ty::Fn {
-                params: Vec::new(),
-                ret: Box::new(declared),
-                captures: Vec::new(),
-                effect: crate::ty::Effect::PURE.into(),
-                flows: crate::flows::Flows::Every.into(),
-            },
-        );
+        let closure_ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: declared,
+            effect: EffectTerm::Known(Effect::pure()),
+            flows: FlowTerm::Known(crate::flows::Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        main_types.insert(closure, closure_ty);
         let mut module = make_module(
             vec![inst(InstKind::MakeClosure {
                 dst: closure,
@@ -2139,6 +2144,7 @@ mod tests {
                 captures: Vec::new(),
             })],
             main_types,
+            types,
         );
         module.main.val_factory = main_factory;
 
@@ -2159,26 +2165,32 @@ mod tests {
         module
     }
 
-    fn array_of_i64() -> Ty {
-        Ty::Array(Box::new(Ty::I64), crate::ty::LenTerm::Known(3))
+    fn array_of_i64(types: &mut Types<Concrete>) -> Ty {
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        types.intern(TyKind::Array(i64_ty, LenTerm::Known(3)))
+    }
+
+    /// `&str`: a shared reference to the run of bytes a `String` lends.
+    fn str_ty(types: &mut Types<Concrete>) -> Ty {
+        let str_ty = types.intern(TyKind::Str);
+        types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)))
     }
 
     #[test]
     fn a_body_returning_what_it_declares_is_accepted() {
-        let module = make_closure_module(array_of_i64(), array_of_i64());
-        assert!(check_types(&module).is_empty());
+        let mut types = Types::<Concrete>::new();
+        let arr = array_of_i64(&mut types);
+        let mut module = make_closure_module(types, arr, arr);
+        assert!(check_types(&mut module).is_empty());
     }
 
     #[test]
     fn a_body_declaring_a_value_returning_a_reference_is_refused() {
-        let module = make_closure_module(
-            array_of_i64(),
-            Ty::Ref(
-                Mutability::Shared,
-                Box::new(TypeArg::uniform(array_of_i64())),
-            ),
-        );
-        let errors = check_types(&module);
+        let mut types = Types::<Concrete>::new();
+        let arr = array_of_i64(&mut types);
+        let arr_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(arr)));
+        let mut module = make_closure_module(types, arr, arr_ref);
+        let errors = check_types(&mut module);
         let [
             ValidationError {
                 kind:
@@ -2195,19 +2207,21 @@ mod tests {
             panic!("expected one type mismatch, got {errors:?}");
         };
         assert_eq!(inst_name, "Return");
-        assert_eq!(*expected, array_of_i64());
-        assert!(matches!(actual, Ty::Ref(..)), "{actual:?}");
+        assert_eq!(*expected, array_of_i64(&mut module.types));
+        assert!(matches!(module.types.kind(*actual), TyKind::Ref(..)), "{actual:?}");
     }
 
     #[test]
     fn a_closure_made_from_a_body_the_module_does_not_hold_is_refused() {
-        let mut module = make_closure_module(Ty::I64, Ty::I64);
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let mut module = make_closure_module(types, i64_ty, i64_ty);
         let body = module
             .closures
             .remove(&Label(0))
             .expect("the module holds the closure it makes");
         module.closures.insert(Label(1), body);
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         let [
             ValidationError {
                 kind: ValidationErrorKind::UnheldClosure { body: Label(0) },
@@ -2222,14 +2236,20 @@ mod tests {
 
     #[test]
     fn a_body_returning_a_diverging_value_is_accepted() {
-        let module = make_closure_module(array_of_i64(), Ty::Never);
-        assert!(check_types(&module).is_empty());
+        let mut types = Types::<Concrete>::new();
+        let arr = array_of_i64(&mut types);
+        let never_ty = types.intern(TyKind::Never);
+        let mut module = make_closure_module(types, arr, never_ty);
+        assert!(check_types(&mut module).is_empty());
     }
 
     #[test]
     fn a_body_declaring_never_accepts_the_value_it_returns() {
-        let module = make_closure_module(Ty::Never, Ty::I64);
-        assert!(check_types(&module).is_empty());
+        let mut types = Types::<Concrete>::new();
+        let never_ty = types.intern(TyKind::Never);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let mut module = make_closure_module(types, never_ty, i64_ty);
+        assert!(check_types(&mut module).is_empty());
     }
 
     enum LentSlot {
@@ -2238,15 +2258,15 @@ mod tests {
     }
 
     fn lends_through_param(slot_is: LentSlot) -> MirModule {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let shared_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(i64_ty)));
         let mut vf = LocalFactory::<ValueId>::new();
         let slot = vf.next();
         let lent = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(slot, Ty::I64);
-        vt.insert(
-            lent,
-            Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::I64))),
-        );
+        vt.insert(slot, i64_ty);
+        vt.insert(lent, shared_ref);
         let loan = inst(InstKind::Ref {
             dst: lent,
             target: RefTarget::Param(slot),
@@ -2264,7 +2284,7 @@ mod tests {
                 (vec![defined, loan], Vec::new())
             }
         };
-        let mut module = make_module(insts, vt);
+        let mut module = make_module(insts, vt, types);
         module.main.params = params;
         module.main.val_factory = vf;
         module
@@ -2272,12 +2292,12 @@ mod tests {
 
     #[test]
     fn a_parameter_lent_as_a_parameter_is_accepted() {
-        assert!(check_types(&lends_through_param(LentSlot::Parameter)).is_empty());
+        assert!(check_types(&mut lends_through_param(LentSlot::Parameter)).is_empty());
     }
 
     #[test]
     fn a_register_an_instruction_defines_is_not_a_parameter() {
-        let errors = check_types(&lends_through_param(LentSlot::DefinedByConst));
+        let errors = check_types(&mut lends_through_param(LentSlot::DefinedByConst));
         let [
             ValidationError {
                 kind: ValidationErrorKind::NotAParameter { value_id: 0 },
@@ -2292,18 +2312,21 @@ mod tests {
 
     #[test]
     fn const_type_matches() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::I64);
-        let module = make_module(
+        vt.insert(v0, i64_ty);
+        let mut module = make_module(
             vec![inst(InstKind::Const {
                 dst: v0,
                 value: Literal::Int(42),
             })],
             vt,
+            types,
         );
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         assert!(errors.is_empty());
     }
 
@@ -2312,66 +2335,78 @@ mod tests {
     /// this is what holds its arm there.
     #[test]
     fn a_str_constant_matches_its_own_type() {
+        let mut types = Types::<Concrete>::new();
+        let str_ty = str_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, str_ty());
-        let module = make_module(
+        vt.insert(v0, str_ty);
+        let mut module = make_module(
             vec![inst(InstKind::ConstStr {
                 dst: v0,
                 text: "abc".to_string(),
             })],
             vt,
+            types,
         );
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
     fn a_str_constant_at_a_string_destination_is_caught() {
+        let mut types = Types::<Concrete>::new();
+        let string_ty = types.intern(TyKind::String);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::String);
-        let module = make_module(
+        vt.insert(v0, string_ty);
+        let mut module = make_module(
             vec![inst(InstKind::ConstStr {
                 dst: v0,
                 text: "abc".to_string(),
             })],
             vt,
+            types,
         );
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         assert!(!errors.is_empty(), "a `&str` constant is not a `String`");
     }
 
     #[test]
     fn const_type_mismatch() {
+        let mut types = Types::<Concrete>::new();
+        let string_ty = types.intern(TyKind::String);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::String); // wrong: Literal::Int should be Int
-        let module = make_module(
+        vt.insert(v0, string_ty); // wrong: Literal::Int should be Int
+        let mut module = make_module(
             vec![inst(InstKind::Const {
                 dst: v0,
                 value: Literal::Int(42),
             })],
             vt,
+            types,
         );
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         assert!(!errors.is_empty(), "type mismatch should be caught");
     }
 
     #[test]
     fn binop_type_mismatch() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let string_ty = types.intern(TyKind::String);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
         let v2 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::I64);
-        vt.insert(v1, Ty::String); // mismatch
-        vt.insert(v2, Ty::I64);
-        let module = make_module(
+        vt.insert(v0, i64_ty);
+        vt.insert(v1, string_ty); // mismatch
+        vt.insert(v2, i64_ty);
+        let mut module = make_module(
             vec![inst(InstKind::BinOp {
                 dst: v2,
                 op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap),
@@ -2379,40 +2414,48 @@ mod tests {
                 right: v1,
             })],
             vt,
+            types,
         );
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         assert!(!errors.is_empty(), "BinOp type mismatch should be caught");
     }
 
     #[test]
     fn make_tuple_arity_mismatch() {
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let string_ty = types.intern(TyKind::String);
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([i64_ty, string_ty])));
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::I64);
-        vt.insert(v1, Ty::Tuple(vec![Ty::I64, Ty::String])); // expects 2 elements
-        let module = make_module(
+        vt.insert(v0, i64_ty);
+        vt.insert(v1, tuple_ty); // expects 2 elements
+        let mut module = make_module(
             vec![inst(InstKind::MakeTuple {
                 dst: v1,
                 elements: vec![v0],
             })], // only 1
             vt,
+            types,
         );
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         assert!(!errors.is_empty(), "tuple arity mismatch should be caught");
     }
 
     #[test]
     fn jump_args_type_match() {
         // BlockLabel with param, Jump with matching arg type
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(v0, Ty::I64);
-        vt.insert(v1, Ty::I64);
-        let module = make_module(
+        vt.insert(v0, i64_ty);
+        vt.insert(v1, i64_ty);
+        let mut module = make_module(
             vec![
                 inst(InstKind::BlockLabel {
                     label: Label(0),
@@ -2424,8 +2467,9 @@ mod tests {
                 }),
             ],
             vt,
+            types,
         );
-        let errors = check_types(&module);
+        let errors = check_types(&mut module);
         assert!(
             errors.is_empty(),
             "matching jump arg types should pass: {errors:?}"
@@ -2433,12 +2477,15 @@ mod tests {
     }
 
     fn diamond_module(else_rejoins: bool) -> MirModule {
+        let mut types = Types::<Concrete>::new();
+        let bool_ty = types.intern(TyKind::Bool);
+        let unit_ty = types.intern(TyKind::Unit);
         let mut vf = LocalFactory::<ValueId>::new();
         let cond = vf.next();
         let joined = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(cond, Ty::Bool);
-        vt.insert(joined, Ty::Unit);
+        vt.insert(cond, bool_ty);
+        vt.insert(joined, unit_ty);
         let leave_else = match else_rejoins {
             true => inst(InstKind::Jump {
                 label: Label(2),
@@ -2482,16 +2529,20 @@ mod tests {
                 }),
             ],
             vt,
+            types,
         )
     }
 
     fn demoted_module(marked: bool) -> MirModule {
+        let mut types = Types::<Concrete>::new();
+        let bool_ty = types.intern(TyKind::Bool);
+        let unit_ty = types.intern(TyKind::Unit);
         let mut vf = LocalFactory::<ValueId>::new();
         let cond = vf.next();
         let joined = vf.next();
         let mut vt = FxHashMap::default();
-        vt.insert(cond, Ty::Bool);
-        vt.insert(joined, Ty::Unit);
+        vt.insert(cond, bool_ty);
+        vt.insert(joined, unit_ty);
         let mut module = make_module(
             vec![
                 inst(InstKind::JumpIf {
@@ -2527,6 +2578,7 @@ mod tests {
                 }),
             ],
             vt,
+            types,
         );
         if marked {
             module.main.demoted_diamonds.insert(crate::cfg::ENTRY_LABEL);
@@ -2534,7 +2586,7 @@ mod tests {
         module
     }
 
-    fn meets_again_refusals(module: &MirModule) -> usize {
+    fn meets_again_refusals(module: &mut MirModule) -> usize {
         check_types(module)
             .iter()
             .filter(|error| {
@@ -2548,29 +2600,29 @@ mod tests {
 
     #[test]
     fn a_demoted_branch_whose_arms_meet_again_is_refused() {
-        assert_eq!(meets_again_refusals(&demoted_module(true)), 1);
+        assert_eq!(meets_again_refusals(&mut demoted_module(true)), 1);
     }
 
     #[test]
     fn the_same_branch_with_no_demotion_behind_it_is_accepted() {
-        let module = demoted_module(false);
-        assert_eq!(meets_again_refusals(&module), 0);
+        let mut module = demoted_module(false);
+        assert_eq!(meets_again_refusals(&mut module), 0);
         assert!(
-            check_types(&module).is_empty(),
+            check_types(&mut module).is_empty(),
             "{:?}",
-            check_types(&module)
+            check_types(&mut module)
         );
     }
 
     #[test]
     fn a_diamond_whose_arms_both_reach_the_join_is_accepted() {
-        let errors = check_types(&diamond_module(true));
+        let errors = check_types(&mut diamond_module(true));
         assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
     fn a_diamond_whose_arm_does_not_reach_the_join_is_refused() {
-        let errors = check_types(&diamond_module(false));
+        let errors = check_types(&mut diamond_module(false));
         let refusals: Vec<&ValidationErrorKind> = errors
             .iter()
             .map(|error| &error.kind)
