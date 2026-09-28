@@ -41,6 +41,7 @@ impl Body {
             captures: Vec::new(),
             order_param: None,
             slots: Vec::new(),
+            slot_spans: FxHashMap::default(),
             values: FxHashMap::default(),
             uses: FxHashMap::default(),
             value_ids: LocalFactory::new(),
@@ -246,6 +247,7 @@ impl Body {
             Def::Slot(index) => {
                 self.refuse_used(value)?;
                 self.slots.remove(index);
+                self.slot_spans.remove(&value);
                 let later: SmallVec<[ValueId; 4]> = self.slots[index..].iter().copied().collect();
                 for (offset, slot) in later.into_iter().enumerate() {
                     self.value_def_mut(slot).def = Def::Slot(index + offset);
@@ -610,25 +612,6 @@ impl Body {
         result
     }
 
-    /// Every operand `of` at `site` becomes `with`. Cost: O(the site's
-    /// operands).
-    ///
-    /// # Panics
-    /// `site` does not use `of`.
-    fn replace_use_at(&mut self, site: Site, of: ValueId, with: ValueId) {
-        let count = self.use_sites_mut(of).take_site(site);
-        let swap = |value: &mut ValueId| {
-            if *value == of {
-                *value = with;
-            }
-        };
-        match site {
-            Site::Inst(block, index) => self.blocks[block.index()].insts[index].for_each_operand_mut(swap),
-            Site::Term(block) => self.blocks[block.index()].terminator.for_each_operand_mut(swap),
-        }
-        self.use_sites_mut(with).add(site, count);
-    }
-
     /// `block`'s two-way branch becomes a jump into the arm `then` names,
     /// passing that arm's arguments; the condition and the other arm's
     /// arguments lose their use here. A `Diamond`'s join stays a block of
@@ -719,172 +702,31 @@ impl Body {
         renamed
     }
 
-    /// The order token current just before position `index` of `block`: the
-    /// last one yielded or merged above it in the block, or else the one
-    /// that enters the block. Cost: O(the instructions scanned), and for a
-    /// block with no token of its own, O(the body's blocks and edges).
-    ///
-    /// # Panics
-    /// The body is not ordered, or no token reaches `block`, which no edge
-    /// from the entry reaches.
-    pub(super) fn reaching_token(&self, block: BlockId, index: usize) -> Result<ValueId, InFlight> {
-        if let Some(token) = self.token_above(block, index)? {
-            return Ok(token);
-        }
-        let preds = self.predecessors();
-        let mut visited = FxHashSet::default();
-        let mut pending = vec![block];
-        while let Some(at) = pending.pop() {
-            if !visited.insert(at) {
-                continue;
-            }
-            if at != block
-                && let Some(token) = self.token_above(at, self.blocks[at.index()].insts.len())?
-            {
-                return Ok(token);
-            }
-            if let Some(param) = self.blocks[at.index()].params.iter().find(|param| self.is_token(**param)) {
-                return Ok(*param);
-            }
-            if at == self.entry {
-                return Ok(self.order_param.expect("an order token is read only in an ordered body"));
-            }
-            pending.extend(preds[&at].iter().copied());
-        }
-        panic!("no order token reaches {block:?}; no edge from the entry reaches it")
-    }
-
-    /// The last token yielded or merged above position `index` of `block`.
-    fn token_above(&self, block: BlockId, index: usize) -> Result<Option<ValueId>, InFlight> {
-        for (at, inst) in self.blocks[block.index()].insts[..index].iter().enumerate().rev() {
-            if let Some(OrderUse::Start(_)) = inst.order {
-                return Err(InFlight { start_block: block, start_index: at });
-            }
-            if let Some(token) = inst.order.and_then(OrderUse::yielded) {
-                return Ok(Some(token));
-            }
-            if let Op::Merge { .. } = inst.op {
-                return Ok(inst.result);
-            }
-        }
-        Ok(None)
-    }
-
     /// Moves the instruction at `from_index` of `from` to stand before
     /// position `to_index` of `to`, counted before the move, the block's
-    /// length naming its end. It returns the position it left and the one it
-    /// took, each in the coordinates left by the one before.
-    ///
-    /// An effectful call's token is rethreaded (effects §3): its old place
-    /// hands on the token it consumed, and at its new place it consumes the
-    /// token current there and hands its own on to what that token reached,
-    /// with token parameters added where paths now bring different tokens
-    /// (Braun et al. 2013). Any other instruction moves as it is.
-    ///
-    /// Cost: O(operands of the instructions of both blocks from the
-    /// positions on); for an effectful call, also O(the body's blocks, edges
-    /// and the uses of the token it takes).
+    /// length naming its end. It keeps every operand and every value it
+    /// defines, order tokens included: the order chain is their def-use, so
+    /// a move the editor admits, where each still dominates its uses, leaves
+    /// the chain whole. It returns the position it left and the one it took,
+    /// each in the coordinates left by the one before. Cost: O(operands and
+    /// results of the instructions of both blocks from the positions on).
     ///
     /// # Panics
-    /// A split call's start or taking, or a `Merge`, is moved to another
-    /// block or across an instruction on the order chain, which would take
-    /// the chain apart; an effectful call is moved to where a split call is
-    /// in flight, where no token is current; a position is past its block's
-    /// end.
-    pub(super) fn move_inst(
-        &mut self,
-        types: &Types<Concrete>,
-        from: BlockId,
-        from_index: usize,
-        to: BlockId,
-        to_index: usize,
-    ) -> [InstShift; 2] {
+    /// A position is past its block's end.
+    pub(super) fn move_inst(&mut self, from: BlockId, from_index: usize, to: BlockId, to_index: usize) -> [InstShift; 2] {
         assert!(to_index <= self.blocks[to.index()].insts.len(), "{to:?} has no position {to_index}");
-        let moved = &self.blocks[from.index()].insts[from_index];
-        let edge = match moved.order {
-            Some(OrderUse::Edge(edge)) => Some(edge),
-            Some(OrderUse::Start(_) | OrderUse::Take(_)) | None if moved.is_on_order_chain() => {
-                let (low, high) = (from_index.min(to_index), from_index.max(to_index));
-                let crossed = &self.blocks[from.index()].insts[low..high];
-                assert!(
-                    from == to && crossed.iter().enumerate().all(|(at, inst)| low + at == from_index || !inst.is_on_order_chain()),
-                    "a split call's start or taking, or a Merge, moves only within its block and across nothing on the \
-                     order chain (effects §3, §6)"
-                );
-                None
-            }
-            Some(OrderUse::Start(_) | OrderUse::Take(_)) | None => None,
-        };
-        if let Some(edge) = edge {
-            self.replace_all_uses(edge.after, edge.before);
-        }
-        let mut inst = self.take_inst(from, from_index);
+        let inst = self.take_inst(from, from_index);
         let to_index = if to == from && to_index > from_index { to_index - 1 } else { to_index };
-        let Some(edge) = edge else {
-            self.insert_inst(to, to_index, inst);
-            return [InstShift::Removed { block: from, index: from_index }, InstShift::Inserted { block: to, index: to_index }];
-        };
-        let before = self.reaching_token(to, to_index).unwrap_or_else(|InFlight { start_block, start_index }| {
-            panic!(
-                "a split call started at {start_block:?}[{start_index}] is in flight at {to:?}[{to_index}]; no token \
-                 is current there"
-            )
-        });
-        inst.order = Some(OrderUse::Edge(OrderEdge { before, after: edge.after }));
         self.insert_inst(to, to_index, inst);
-        self.hand_on_token(types, before, edge.after, to, to_index);
         [InstShift::Removed { block: from, index: from_index }, InstShift::Inserted { block: to, index: to_index }]
-    }
-
-    /// The effectful call at `index` of `block` now consumes `old` and
-    /// yields `new`: every use of `old` the call now precedes takes `new`,
-    /// through token parameters where paths bring different tokens.
-    fn hand_on_token(&mut self, types: &Types<Concrete>, old: ValueId, new: ValueId, block: BlockId, index: usize) {
-        let old_def = self.def_of(old);
-        let mut reader = Reconstruct::new(self, self.ty_of(old), Made::Token, old);
-        reader.at_end.insert(block, new);
-        match old_def {
-            Def::Inst(defined, _) if defined != block => {
-                reader.at_end.insert(defined, old);
-            }
-            Def::Inst(..) => {}
-            Def::BlockParam(defined, _) => {
-                reader.at_start.insert(defined, old);
-            }
-            Def::OrderParam => reader.seed_entry(self, old),
-            def @ (Def::Param(_) | Def::Capture(_) | Def::Slot(_) | Def::UnplacedParam(_)) => {
-                panic!("{old:?} is an order token, defined by an instruction or an order parameter, not at {def:?}")
-            }
-        }
-        let call = Site::Inst(block, index);
-        let sites: Vec<Site> = self.users(old).filter(|site| *site != call).collect();
-        for site in sites {
-            let defined_in = |at: BlockId, before: Option<usize>| match old_def {
-                Def::Inst(defined, def_index) => defined == at && before.is_none_or(|index| def_index < index),
-                Def::BlockParam(defined, _) => defined == at,
-                Def::OrderParam | Def::Param(_) | Def::Capture(_) | Def::Slot(_) | Def::UnplacedParam(_) => false,
-            };
-            let value = match site {
-                Site::Inst(at, at_index) if at == block => match at_index > index {
-                    true => new,
-                    false => old,
-                },
-                Site::Term(at) if at == block => new,
-                Site::Inst(at, at_index) if defined_in(at, Some(at_index)) => old,
-                Site::Term(at) if defined_in(at, None) => old,
-                Site::Inst(at, _) | Site::Term(at) => reader.read_start(self, types, at),
-            };
-            if value != old {
-                self.replace_use_at(site, old, value);
-            }
-        }
-        self.remove_trivial_params(&reader.added);
     }
 
     /// Replaces the whole-slot `Take`s and `Assign`s of `slot` with values:
     /// a `Take` reads what the last `Assign` above it wrote, through block
     /// parameters at joins and loop headers, and an `Undef` at the entry
-    /// where no `Assign` came first (Braun et al. 2013). The slot goes with
+    /// where no `Assign` came first, with the slot's span (Braun et al.
+    /// 2013). No drop is written: an `Assign` drops nothing, every drop being
+    /// an explicit `Drop` (ownership §6). The slot goes with
     /// them. It returns the positions taken out and put in, in order, each
     /// in the coordinates left by the ones before. Cost: O(the body's
     /// blocks, edges and the slot's uses), and the trivial-parameter removal's.
@@ -899,6 +741,7 @@ impl Body {
             panic!("{slot:?} is not a slot")
         };
         let ty = self.ty_of(slot);
+        let span = self.slot_spans[&slot];
         let mut loads: Vec<SlotAccess> = Vec::new();
         let mut stores: Vec<SlotAccess> = Vec::new();
         for site in self.users(slot) {
@@ -924,7 +767,7 @@ impl Body {
         stores.sort_by_key(SlotAccess::position);
 
         let undef = self.make_value(types, ty, Def::Inst(self.entry, 0));
-        let mut reader = Reconstruct::new(self, ty, Made::Value, undef);
+        let mut reader = Reconstruct::new(self, ty, undef);
         reader.seed_entry(self, undef);
         for store in &stores {
             reader.at_end.insert(store.block, store.value);
@@ -967,7 +810,7 @@ impl Body {
             0 => self.drop_value(undef),
             _ => {
                 let entry = self.entry;
-                self.insert_inst(entry, 0, Inst { op: Op::Undef, result: Some(undef), order: None, span: Span::ZERO });
+                self.insert_inst(entry, 0, Inst { op: Op::Undef, result: Some(undef), order: None, span });
                 shifts.push(InstShift::Inserted { block: entry, index: 0 });
             }
         }
@@ -981,14 +824,6 @@ impl Body {
 pub(super) enum InstShift {
     Inserted { block: BlockId, index: usize },
     Removed { block: BlockId, index: usize },
-}
-
-/// A position between a split call's start and its taking: the start
-/// consumed the token, and the taking has not yielded the next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct InFlight {
-    pub start_block: BlockId,
-    pub start_index: usize,
 }
 
 /// A whole-slot `Take`, with the value it yields, or `Assign`, with the
@@ -1005,20 +840,12 @@ impl SlotAccess {
     }
 }
 
-/// Whether a reconstructed variable's parameters are order tokens.
-#[derive(Clone, Copy)]
-enum Made {
-    Token,
-    Value,
-}
-
 /// On-the-fly SSA construction of one variable over a finished body (Braun
 /// et al. 2013, every block sealed): the value at a block's start is its one
 /// predecessor's value at its end, or a new parameter where edges from more
 /// than one block enter it.
 struct Reconstruct {
     ty: Ty,
-    made: Made,
     /// Every edge into each block, by source block and edge position.
     edges_into: Vec<SmallVec<[(BlockId, usize); 2]>>,
     at_end: FxHashMap<BlockId, ValueId>,
@@ -1032,7 +859,7 @@ struct Reconstruct {
 }
 
 impl Reconstruct {
-    fn new(body: &Body, ty: Ty, made: Made, unreached: ValueId) -> Reconstruct {
+    fn new(body: &Body, ty: Ty, unreached: ValueId) -> Reconstruct {
         let mut edges_into: Vec<SmallVec<[(BlockId, usize); 2]>> = vec![SmallVec::new(); body.blocks.len()];
         for (from, block) in body.blocks() {
             for (position, edge) in block.terminator().edges().iter().enumerate() {
@@ -1041,7 +868,6 @@ impl Reconstruct {
         }
         Reconstruct {
             ty,
-            made,
             edges_into,
             at_end: FxHashMap::default(),
             at_start: FxHashMap::default(),
@@ -1051,8 +877,9 @@ impl Reconstruct {
         }
     }
 
-    /// `value` stands at the entry's start; an entry an edge enters again
-    /// is left unseeded, and a read that reaches it panics.
+    /// `value` stands at the entry's start. An entry an edge enters again is
+    /// left unseeded, and a read that reaches it panics: the Builder never
+    /// makes an entry that is a loop target, so no such body is promoted.
     fn seed_entry(&mut self, body: &Body, value: ValueId) {
         if self.edges_into[body.entry.index()].is_empty() {
             self.at_start.insert(body.entry, value);
@@ -1072,8 +899,8 @@ impl Reconstruct {
         }
         assert_ne!(
             block, body.entry,
-            "the entry block is entered by an edge; a value read at its start would need a parameter the entry \
-             cannot take"
+            "the entry block is entered by an edge, which the Builder never makes; a value read at its start would \
+             need a parameter the entry cannot take"
         );
         let edges = self.edges_into[block.index()].clone();
         let Some(&(first, _)) = edges.first() else {
@@ -1089,10 +916,7 @@ impl Reconstruct {
                 value
             }
             false => {
-                let param = match self.made {
-                    Made::Token => body.make_token(types, self.ty, Def::UnplacedParam(block)),
-                    Made::Value => body.make_value(types, self.ty, Def::UnplacedParam(block)),
-                };
+                let param = body.make_value(types, self.ty, Def::UnplacedParam(block));
                 self.at_start.insert(block, param);
                 let incoming: Vec<(BlockId, usize, ValueId)> = edges
                     .iter()

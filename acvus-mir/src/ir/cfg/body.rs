@@ -102,14 +102,6 @@ impl UseSites {
         self.counts.into_iter()
     }
 
-    /// Takes every use recorded at `site` out, and says how many there were.
-    ///
-    /// # Panics
-    /// `site` does not use the value.
-    pub(super) fn take_site(&mut self, site: Site) -> u32 {
-        self.counts.remove(&site).expect("a site whose uses are taken uses the value")
-    }
-
     /// Renames the block of every site through `rename`. Cost: O(sites).
     pub(super) fn rename_blocks(&mut self, rename: impl Fn(BlockId) -> BlockId) {
         self.counts = std::mem::take(&mut self.counts)
@@ -132,6 +124,8 @@ pub struct Body {
     pub(super) captures: Vec<(Astr, ValueId)>,
     pub(super) order_param: Option<ValueId>,
     pub(super) slots: Vec<ValueId>,
+    /// The span of the binding each slot stores.
+    pub(super) slot_spans: FxHashMap<ValueId, Span>,
     pub(super) values: FxHashMap<ValueId, ValueDef>,
     /// Every value's uses; a value has an entry from its birth.
     pub(super) uses: FxHashMap<ValueId, UseSites>,

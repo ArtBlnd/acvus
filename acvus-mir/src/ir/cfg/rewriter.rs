@@ -147,15 +147,14 @@ impl<'m> Rewriter<'m> {
         Ok(shifts)
     }
 
-    /// Moves an instruction, rethreading an effectful call's token. Cost:
-    /// `Body::move_inst`'s.
+    /// Moves an instruction with its operands and results, order tokens
+    /// included. Cost: `Body::move_inst`'s.
     ///
     /// # Panics
     /// As `Body::move_inst`.
     pub fn move_inst(&mut self, from: BlockId, from_index: usize, to: BlockId, to_index: usize) -> [InstShift; 2] {
         let aspects = inst_aspects(&self.body().block(from).insts()[from_index]);
-        let module = &mut *self.module;
-        let shifts = module.bodies[self.body.0 as usize].move_inst(&module.types, from, from_index, to, to_index);
+        let shifts = self.body_mut().move_inst(from, from_index, to, to_index);
         for aspect in aspects {
             self.changes.record(aspect);
         }

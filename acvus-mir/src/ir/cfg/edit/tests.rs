@@ -13,9 +13,10 @@ use super::dominators::{DefPoint, Dominators, def_points};
 use super::*;
 use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Stages, Terminator};
 use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
+use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{
-    Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Reissue, TyKind,
-    Types,
+    Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability,
+    Reissue, TyKind, TypeArg, Types,
 };
 
 // -- Fixture -------------------------------------------------------------
@@ -35,6 +36,12 @@ struct Fixture {
     pure_splittable: Ty,
     /// A pure callee type that writes a context.
     pure_writing: Ty,
+    /// An idempotent callee type that writes no context.
+    idempotent: Ty,
+    /// `&str`.
+    str_ref: Ty,
+    /// `Result<i64, bool>`.
+    result: Ty,
 }
 
 fn fixture() -> Fixture {
@@ -59,6 +66,11 @@ fn fixture() -> Fixture {
     let pure_splittable = call_ty(CallEffect::new(Reissue::Pure, true, Contexts::new(), Contexts::new(), split));
     let written = Contexts::from([QualifiedRef::root(interner.intern("page"))]);
     let pure_writing = call_ty(CallEffect::new(Reissue::Pure, false, Contexts::new(), written, SplitCost::Unavailable));
+    let idempotent =
+        call_ty(CallEffect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
+    let str_ty = types.intern(TyKind::Str);
+    let str_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)));
+    let result = types.intern(TyKind::Result(int, bool));
     Fixture {
         module: Module::new(types, int, Flows::none()),
         interner,
@@ -69,6 +81,9 @@ fn fixture() -> Fixture {
         pure,
         pure_splittable,
         pure_writing,
+        idempotent,
+        str_ref,
+        result,
     }
 }
 
@@ -178,7 +193,7 @@ fn snapshot(body: &Body) -> String {
 /// fixed tables; and a record of every refresh.
 #[derive(Default)]
 struct TestFacts {
-    dominance: Option<(Dominators, FxHashMap<ValueId, DefPoint>)>,
+    dominance: Option<Dominance>,
     refreshed: Vec<Vec<Aspect>>,
     kept_in_order: FxHashSet<(InstRef, InstRef)>,
     conflicting: FxHashSet<(InstRef, InstRef)>,
@@ -194,7 +209,37 @@ impl TestFacts {
 
     fn compute(&mut self, module: &Module, body: BodyId) {
         let body = module.body(body);
-        self.dominance = Some((Dominators::of(body), def_points(body)));
+        let successors = body
+            .blocks()
+            .map(|(_, block)| block.terminator().edges().iter().map(|edge| edge.to).collect())
+            .collect();
+        self.dominance = Some(Dominance { dominators: Dominators::of(body), points: def_points(body), successors });
+    }
+}
+
+/// Dominance of one body, and its edges for post-dominance, found by
+/// search: `below` post-dominates `above` when no exit is reached from
+/// `above` without passing `below`.
+struct Dominance {
+    dominators: Dominators,
+    points: FxHashMap<ValueId, DefPoint>,
+    successors: Vec<Vec<BlockId>>,
+}
+
+impl Dominance {
+    fn exits_avoiding(&self, from: BlockId, avoided: BlockId) -> bool {
+        let mut seen = FxHashSet::default();
+        let mut pending = vec![from];
+        while let Some(block) = pending.pop() {
+            if block == avoided || !seen.insert(block) {
+                continue;
+            }
+            if self.successors[block.index()].is_empty() {
+                return true;
+            }
+            pending.extend(self.successors[block.index()].iter().copied());
+        }
+        false
     }
 }
 
@@ -207,12 +252,43 @@ impl Facts for TestFacts {
 
 impl DominanceFacts for TestFacts {
     fn dominates(&self, value: ValueId, at: Position) -> bool {
-        let (dominators, points) = self.dominance.as_ref().expect("the facts are computed before they are read");
-        let site = match at {
-            Position::Before(inst) => Site::Inst(inst.block, inst.index),
-            Position::End(block) => Site::Term(block),
+        let dominance = self.dominance.as_ref().expect("the facts are computed before they are read");
+        dominance.dominators.dominates_site(dominance.points[&value], position_site(at))
+    }
+
+    fn position_dominates(&self, at: Position, site: Site) -> bool {
+        let dominators = &self.dominance.as_ref().expect("the facts are computed before they are read").dominators;
+        let (block, index) = match at {
+            Position::Before(inst) => (inst.block, Some(inst.index)),
+            Position::End(block) => (block, None),
         };
-        dominators.dominates_site(points[&value], site)
+        match site {
+            Site::Inst(at, at_index) if at == block => index.is_some_and(|index| index <= at_index),
+            Site::Term(at) if at == block => true,
+            Site::Inst(at, _) | Site::Term(at) => dominators.dominates_block(block, at),
+        }
+    }
+
+    fn control_equivalent(&self, a: Position, b: Position) -> bool {
+        let dominance = self.dominance.as_ref().expect("the facts are computed before they are read");
+        let (a, b) = (position_block(a), position_block(b));
+        let dominates = |above, below| dominance.dominators.dominates_block(above, below);
+        let post_dominates = |below: BlockId, above: BlockId| !dominance.exits_avoiding(above, below);
+        a == b || (dominates(a, b) && post_dominates(b, a)) || (dominates(b, a) && post_dominates(a, b))
+    }
+}
+
+fn position_site(at: Position) -> Site {
+    match at {
+        Position::Before(inst) => Site::Inst(inst.block, inst.index),
+        Position::End(block) => Site::Term(block),
+    }
+}
+
+fn position_block(at: Position) -> BlockId {
+    match at {
+        Position::Before(inst) => inst.block,
+        Position::End(block) => block,
     }
 }
 
@@ -290,7 +366,7 @@ fn replace_uses_refuses_a_value_that_does_not_dominate_a_use_and_leaves_the_body
     let refused = editor.replace_uses(x, z);
     editor.finish();
 
-    assert_eq!(refused, Err(DoesNotDominate { use_at: inst_ref(entry, 1) }));
+    assert_eq!(refused, Err(DoesNotDominate { use_at: Site::Inst(entry, 1) }));
     assert_eq!(snapshot(f.body(id)), before);
     assert!(facts.refreshed.is_empty(), "a refused edit changes nothing to refresh");
 }
@@ -361,7 +437,7 @@ fn remove_takes_out_an_unused_pure_instruction_and_a_pure_call() {
     let mut builder = f.build(false);
     let a = builder.param(name, int);
     builder.push(pure, int, at(1));
-    builder.push(add(a, a), int, at(2));
+    builder.push(min(a, a), int, at(2));
     builder.terminate(ret(a));
     let id = builder.seal().expect("the body has no open state");
     let entry = entry_of(&f, id);
@@ -408,6 +484,30 @@ fn remove_refuses_an_opaque_call_and_a_call_that_writes() {
     let entry = entry_of(&f, id);
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
     assert_eq!(editor.remove(inst_ref(entry, 0)), Err(Unremovable::Effect));
+}
+
+#[test]
+fn remove_refuses_a_check_a_store_and_an_idempotent_call() {
+    let mut f = fixture();
+    let (name, int, idempotent) = (f.name("a"), f.int, f.call(f.idempotent));
+    let mut builder = f.build(true);
+    let a = builder.param(name, int);
+    let x = builder.slot(int, at(0));
+    builder.push_unit(check_add(a, a), at(1));
+    builder.push_unit(Op::Assign { target: RefTarget::Var(x), path: Vec::new(), value: a, restores: false }, at(2));
+    builder.push_effect(idempotent, int, at(3));
+    builder.terminate(ret(a));
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(&f, id);
+    let before = snapshot(f.body(id));
+
+    let mut facts = NoFacts;
+    let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.remove(inst_ref(entry, 0)), Err(Unremovable::Traps));
+    assert_eq!(editor.remove(inst_ref(entry, 1)), Err(Unremovable::Writes));
+    assert_eq!(editor.remove(inst_ref(entry, 2)), Err(Unremovable::Effect));
+    editor.finish();
+    assert_eq!(snapshot(f.body(id)), before);
 }
 
 #[test]
@@ -594,21 +694,6 @@ fn move_to_refuses_a_place_an_operand_does_not_dominate() {
 }
 
 #[test]
-fn move_to_refuses_crossing_an_effect_kept_in_order_and_leaves_the_body() {
-    let mut f = fixture();
-    let (id, _) = { let callee = f.opaque; two_calls(&mut f, callee) };
-    let entry = entry_of(&f, id);
-    let before = snapshot(f.body(id));
-    let mut facts = TestFacts::of(&f.module, id);
-    facts.kept_in_order.insert((inst_ref(entry, 1), inst_ref(entry, 0)));
-    let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    let refused = editor.move_to(inst_ref(entry, 1), Position::Before(inst_ref(entry, 0)));
-    editor.finish();
-    assert_eq!(refused, Err(CannotMove::CrossesOrderedEffect(inst_ref(entry, 0))));
-    assert_eq!(snapshot(f.body(id)), before);
-}
-
-#[test]
 fn move_to_refuses_crossing_a_conflicting_write() {
     let mut f = fixture();
     let (id, _) = { let callee = f.opaque; two_calls(&mut f, callee) };
@@ -622,31 +707,22 @@ fn move_to_refuses_crossing_a_conflicting_write() {
 }
 
 #[test]
-fn moving_an_effectful_call_rethreads_the_token() {
+fn moving_an_effect_across_another_on_its_chain_is_refused_by_dominance() {
     let mut f = fixture();
     let (id, _) = { let callee = f.opaque; two_calls(&mut f, callee) };
     let entry = entry_of(&f, id);
-    let (first, second) = {
-        let insts = f.insts(id, entry);
-        (insts[0].span(), insts[1].span())
-    };
+    let first_yield = edge_of(&f.insts(id, entry)[0]).after;
+    let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.move_to(inst_ref(entry, 1), Position::Before(inst_ref(entry, 0))), Ok(()));
+    let refused = editor.move_to(inst_ref(entry, 1), Position::Before(inst_ref(entry, 0)));
     editor.finish();
-
-    let body = f.body(id);
-    let o0 = body.order_param().expect("the body is ordered");
-    let insts = body.block(entry).insts();
-    assert_eq!((insts[0].span(), insts[1].span()), (second, first));
-    let (now_first, now_second) = (edge_of(&insts[0]), edge_of(&insts[1]));
-    assert_eq!(now_first.before, o0);
-    assert_eq!(now_second.before, now_first.after);
-    assert_eq!(returned_order(body, entry), Some(now_second.after));
+    assert_eq!(refused, Err(CannotMove::OperandNotDominating(first_yield)));
+    assert_eq!(snapshot(f.body(id)), before);
 }
 
 #[test]
-fn moving_a_call_into_one_arm_joins_the_tokens_the_arms_bring() {
+fn moving_an_effect_away_from_what_its_token_reaches_is_refused() {
     let mut f = fixture();
     let (nc, int, bool, call) = (f.name("c"), f.int, f.bool, f.call(f.opaque));
     let mut builder = f.build(true);
@@ -662,26 +738,90 @@ fn moving_a_call_into_one_arm_joins_the_tokens_the_arms_bring() {
     builder.terminate(ret(c));
     let id = builder.seal().expect("the body has no open state");
     let entry = entry_of(&f, id);
-    assert!(f.body(id).block(join).params().is_empty());
+    let before = snapshot(f.body(id));
 
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.move_to(inst_ref(entry, 0), Position::End(then_block)), Ok(()));
+    let refused = editor.move_to(inst_ref(entry, 0), Position::End(then_block));
+    editor.finish();
+    assert_eq!(refused, Err(CannotMove::UseNotDominated(Site::Term(join))));
+    assert_eq!(snapshot(f.body(id)), before);
+}
+
+/// `while c { v = op(a, a); w = v + v }` with `a` a parameter; `op` is the
+/// instruction under test, the body's first.
+fn loop_computing(f: &mut Fixture, op: fn(ValueId, ValueId) -> Op) -> (BodyId, BlockId) {
+    let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
+    let mut builder = f.build(false);
+    let a = builder.param(na, int);
+    let c = builder.param(nc, bool);
+    let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header));
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() });
+    builder.switch_to(loop_body);
+    let v = builder.push(op(a, a), int, at(1));
+    builder.push(Op::BinOp { op: BinOp::Max, left: v, right: v }, int, at(2));
+    builder.terminate(jump(header));
+    builder.switch_to(exit);
+    builder.terminate(ret(a));
+    (builder.seal().expect("the body has no open state"), loop_body)
+}
+
+fn min(left: ValueId, right: ValueId) -> Op {
+    Op::BinOp { op: BinOp::Min, left, right }
+}
+
+#[test]
+fn hoisting_a_pure_value_that_never_traps_out_of_a_loop_succeeds() {
+    let mut f = fixture();
+    let (id, loop_body) = loop_computing(&mut f, min);
+    let entry = entry_of(&f, id);
+    let mut facts = TestFacts::of(&f.module, id);
+    let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.move_to(inst_ref(loop_body, 0), Position::End(entry)), Ok(()));
+    editor.finish();
+    assert!(matches!(f.insts(id, entry), [hoisted] if matches!(hoisted.op(), Op::BinOp { op: BinOp::Min, .. })));
+    assert_eq!(f.insts(id, loop_body).len(), 1);
+}
+
+#[test]
+fn hoisting_a_trapping_value_out_of_a_loop_is_refused() {
+    let mut f = fixture();
+    let (id, loop_body) = loop_computing(&mut f, add);
+    let entry = entry_of(&f, id);
+    let before = snapshot(f.body(id));
+    let mut facts = TestFacts::of(&f.module, id);
+    let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
+    let refused = editor.move_to(inst_ref(loop_body, 0), Position::End(entry));
+    editor.finish();
+    assert_eq!(refused, Err(CannotMove::ChangesWhereItRuns));
+    assert_eq!(snapshot(f.body(id)), before);
+}
+
+#[test]
+fn a_split_calls_start_and_taking_move_while_their_tokens_still_dominate() {
+    let mut f = fixture();
+    let (name, int, call) = (f.name("a"), f.int, f.call(f.splittable));
+    let mut builder = f.build(true);
+    let a = builder.param(name, int);
+    builder.push_effect(call, int, at(1));
+    builder.push_unit(check_add(a, a), at(2));
+    builder.terminate(ret(a));
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(&f, id);
+
+    let mut facts = TestFacts::of(&f.module, id);
+    let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.split_call(inst_ref(entry, 0)), Ok(()));
     editor.finish();
 
-    let body = f.body(id);
-    let o0 = body.order_param().expect("the body is ordered");
-    let moved = edge_of(&body.block(then_block).insts()[0]);
-    assert_eq!(moved.before, o0);
-    let [token] = body.block(join).params() else {
-        panic!("the join takes the token its arms now bring: {:?}", body.block(join).params())
-    };
-    let passed = |block: BlockId| match body.block(block).terminator() {
-        Terminator::Jump { args, .. } => args.clone(),
-        other => panic!("{other:?} is a jump"),
-    };
-    assert_eq!((passed(then_block), passed(else_block)), (vec![moved.after], vec![o0]));
-    assert_eq!(returned_order(body, join), Some(*token));
+    let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
+    assert_eq!(editor.move_to(inst_ref(entry, 1), Position::End(entry)), Ok(()));
+    assert_eq!(editor.move_to(inst_ref(entry, 0), Position::Before(inst_ref(entry, 2))), Ok(()));
+    editor.finish();
+    let ops: Vec<&Op> = f.insts(id, entry).iter().map(Inst::op).collect();
+    assert!(matches!(ops[..], [Op::Check { .. }, Op::Spawn { .. }, Op::TakeEffect { .. }]), "{ops:?}");
 }
 
 // -- split_call --------------------------------------------------------------
@@ -730,7 +870,7 @@ fn slot_across_a_diamond_and_a_loop(f: &mut Fixture) -> (BodyId, ValueId, [Block
     let (nc, int, bool) = (f.name("c"), f.int, f.bool);
     let mut builder = f.build(false);
     let c = builder.param(nc, bool);
-    let x = builder.slot(int);
+    let x = builder.slot(int, at(30));
     let one = builder.push(int_const(1), int, at(1));
     builder.push_unit(assign(x, one), at(2));
     let [then_block, else_block, join, loop_body, exit] = [(); 5].map(|()| builder.new_block(&[]));
@@ -803,7 +943,7 @@ fn promote_reads_undef_where_no_store_comes_first() {
     let mut f = fixture();
     let int = f.int;
     let mut builder = f.build(false);
-    let x = builder.slot(int);
+    let x = builder.slot(int, at(30));
     let read = builder.push(take(x), int, at(1));
     builder.terminate(ret(read));
     let id = builder.seal().expect("the body has no open state");
@@ -813,7 +953,7 @@ fn promote_reads_undef_where_no_store_comes_first() {
     assert_eq!(editor.promote(x), Ok(()));
     editor.finish();
     let insts = f.insts(id, entry);
-    assert!(matches!(insts, [undef] if matches!(undef.op(), Op::Undef)));
+    assert!(matches!(insts, [undef] if matches!(undef.op(), Op::Undef) && undef.span() == at(30)));
     assert!(matches!(f.body(id).block(entry).terminator(), Terminator::Return { value, .. } if *value == result_of(&insts[0])));
 }
 
@@ -838,13 +978,13 @@ fn a_cursor_walks_on_across_the_removals_made_through_it() {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false);
     let a = builder.param(na, int);
-    let kept = builder.push(add(a, a), int, at(1));
-    builder.push(add(a, a), int, at(2));
-    builder.push(add(a, a), int, at(3));
+    let kept = builder.push(min(a, a), int, at(1));
+    builder.push(min(a, a), int, at(2));
+    builder.push(min(a, a), int, at(3));
     let [next_block] = [(); 1].map(|()| builder.new_block(&[]));
     builder.terminate(jump(next_block));
     builder.switch_to(next_block);
-    builder.push(neg(a), int, at(4));
+    builder.push(min(a, a), int, at(4));
     builder.terminate(ret(kept));
     let id = builder.seal().expect("the body has no open state");
 
@@ -996,4 +1136,150 @@ fn split_taken_once_holds_after_a_split_and_catches_a_start_never_taken() {
     body_mut(&mut f, id).blocks[entry.index()].insts[1].op = Op::Drop { src: handle };
     let refused = <SplitTakenOnce as Invariant>::check(f.body(id), f.module.types());
     assert!(matches!(refused, Err(Violation { invariant: "SplitTakenOnce", .. })), "{refused:?}");
+}
+
+#[test]
+fn order_chain_whole_accepts_an_anyorder_fork_that_merges_and_rejects_one_that_does_not() {
+    let mut f = fixture();
+    let (int, calls) = (f.int, [f.call(f.opaque), f.call(f.opaque)]);
+    let [first, second] = calls;
+    let mut builder = f.build(true);
+    builder.open_anyorder();
+    let r = builder.push_effect(first, int, at(1));
+    builder.push_effect(second, int, at(2));
+    builder.close_anyorder();
+    builder.terminate(ret(r));
+    let id = builder.seal().expect("the body has no open state");
+    assert_eq!(<OrderChainWhole as Invariant>::check(f.body(id), f.module.types()), Ok(()));
+
+    let (id, _) = { let callee = f.opaque; two_calls(&mut f, callee) };
+    let entry = entry_of(&f, id);
+    let o0 = f.body(id).order_param().expect("the body is ordered");
+    let Some(OrderUse::Edge(edge)) = &mut body_mut(&mut f, id).blocks[entry.index()].insts[1].order else {
+        panic!("the second call is on the chain")
+    };
+    edge.before = o0;
+    let refused = <OrderChainWhole as Invariant>::check(f.body(id), f.module.types());
+    assert!(
+        matches!(&refused, Err(Violation { invariant: "OrderChainWhole", detail }) if detail.contains("no Merge joins")),
+        "{refused:?}"
+    );
+}
+
+fn types_agree(f: &Fixture, id: BodyId) -> Result<(), Violation> {
+    <TypesAgree as Invariant>::check(f.body(id), f.module.types())
+}
+
+#[test]
+fn types_agree_checks_that_every_return_returns_one_type() {
+    let mut f = fixture();
+    let (id, _) = branching(&mut f);
+    assert_eq!(types_agree(&f, id), Ok(()));
+
+    let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
+    let mut builder = f.build(false);
+    let a = builder.param(na, int);
+    let c = builder.param(nc, bool);
+    let [left, right] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::JumpIf { cond: c, then_to: left, then_args: Vec::new(), else_to: right, else_args: Vec::new() });
+    builder.switch_to(left);
+    builder.terminate(ret(a));
+    builder.switch_to(right);
+    builder.terminate(ret(c));
+    let id = builder.seal().expect("the body has no open state");
+    assert!(matches!(types_agree(&f, id), Err(Violation { invariant: "TypesAgree", .. })));
+}
+
+fn switching_on(f: &mut Fixture, key: SwitchKey) -> BodyId {
+    let (na, int) = (f.name("a"), f.int);
+    let mut builder = f.build(false);
+    let a = builder.param(na, int);
+    let [arm, other] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::Switch { tag: a, arms: vec![(key, arm, Vec::new())], default: Some((other, Vec::new())) });
+    for block in [arm, other] {
+        builder.switch_to(block);
+        builder.terminate(ret(a));
+    }
+    builder.seal().expect("the body has no open state")
+}
+
+#[test]
+fn types_agree_checks_switch_keys_against_the_scrutinee() {
+    let mut f = fixture();
+    let good = switching_on(&mut f, SwitchKey::Int(3));
+    assert_eq!(types_agree(&f, good), Ok(()));
+    let bad = switching_on(&mut f, SwitchKey::Bool(true));
+    assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
+}
+
+fn range_loop(f: &mut Fixture, element: Ty) -> BodyId {
+    let (na, int) = (f.name("a"), f.int);
+    let mut builder = f.build(false);
+    let a = builder.param(na, int);
+    let header = builder.new_block(&[]);
+    let loop_body = builder.new_block(&[element]);
+    let exit = builder.new_block(&[]);
+    builder.terminate(jump(header));
+    builder.switch_to(header);
+    builder.terminate(Terminator::For {
+        source: ForSource::Range { at: a, hi: a },
+        stages: Stages::lowered(loop_body),
+        exit,
+        exit_trip: crate::ir::ExitTrip::Absent,
+        exit_args: Vec::new(),
+    });
+    builder.switch_to(loop_body);
+    builder.terminate(jump(header));
+    builder.switch_to(exit);
+    builder.terminate(ret(a));
+    builder.seal().expect("the body has no open state")
+}
+
+#[test]
+fn types_agree_checks_a_loops_source_against_what_it_hands_its_body() {
+    let mut f = fixture();
+    let (int, bool) = (f.int, f.bool);
+    let good = range_loop(&mut f, int);
+    assert_eq!(types_agree(&f, good), Ok(()));
+    let bad = range_loop(&mut f, bool);
+    assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
+}
+
+fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
+    let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
+    let mut builder = f.build(false);
+    let a = builder.param(na, int);
+    builder.push(Op::Fetch { context: page }, ty, at(1));
+    builder.terminate(ret(a));
+    builder.seal().expect("the body has no open state")
+}
+
+#[test]
+fn types_agree_checks_that_a_context_value_holds_no_position() {
+    let mut f = fixture();
+    let (int, str_ref) = (f.int, f.str_ref);
+    let good = fetching(&mut f, int);
+    assert_eq!(types_agree(&f, good), Ok(()));
+    let bad = fetching(&mut f, str_ref);
+    assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
+}
+
+fn unwrapping(f: &mut Fixture, ty: Ty) -> BodyId {
+    let (na, nr, int, result) = (f.name("a"), f.name("r"), f.int, f.result);
+    let mut builder = f.build(false);
+    let a = builder.param(na, int);
+    let r = builder.param(nr, result);
+    builder.push(Op::UnwrapVariant { src: r }, ty, at(1));
+    builder.terminate(ret(a));
+    builder.seal().expect("the body has no open state")
+}
+
+#[test]
+fn types_agree_checks_a_result_payload_against_its_variants() {
+    let mut f = fixture();
+    let (bool, str_ref) = (f.bool, f.str_ref);
+    let good = unwrapping(&mut f, bool);
+    assert_eq!(types_agree(&f, good), Ok(()));
+    let bad = unwrapping(&mut f, str_ref);
+    assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
 }

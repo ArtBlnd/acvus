@@ -3,7 +3,7 @@
 //! stale, so no check reads a stale fact.
 
 use super::{InstRef, Position};
-use crate::ir::cfg::{BodyId, Changes, Module};
+use crate::ir::cfg::{BodyId, Changes, Module, Site};
 use crate::ir::ValueId;
 
 pub trait Facts {
@@ -20,6 +20,13 @@ impl Facts for NoFacts {
 pub trait DominanceFacts: Facts {
     /// Whether `value`'s definition dominates `at`.
     fn dominates(&self, value: ValueId, at: Position) -> bool;
+    /// Whether an instruction standing at `at` would be defined wherever
+    /// `site` reads it: `at` comes first on every path to `site`, `site`
+    /// itself included when `at` stands just before it.
+    fn position_dominates(&self, at: Position, site: Site) -> bool;
+    /// Whether `a` and `b` run on exactly the same runs: one dominates the
+    /// other and the other post-dominates the one.
+    fn control_equivalent(&self, a: Position, b: Position) -> bool;
 }
 
 pub trait LoanFacts: Facts {

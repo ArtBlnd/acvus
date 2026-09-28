@@ -32,7 +32,7 @@ use std::collections::BTreeSet;
 use acvus_ast::Span;
 
 use super::core::InstShift;
-use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site};
+use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, Rewriter, Site};
 use crate::ir::{ValueId, fn_effect};
 use crate::ty::{Reissue, SplitCost, Ty};
 
@@ -53,26 +53,33 @@ pub enum Position {
 /// A replacement whose value does not dominate a use it would take over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DoesNotDominate {
-    pub use_at: InstRef,
+    pub use_at: Site,
 }
 
 /// Why an instruction cannot be removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unremovable {
     StillUsed,
-    /// Its effect is one the declarations do not allow to vanish.
+    /// It may trap, and whether a run traps is its meaning (compilation §1).
+    Traps,
+    /// It writes storage.
+    Writes,
+    /// It loads or commits a context, or calls a callee whose reissue is not
+    /// pure: an effect the declarations do not let vanish.
     Effect,
 }
 
 /// Why an instruction cannot move to a position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CannotMove {
-    /// An operand is not defined where it would stand.
+    /// An operand, order token included, is not defined where it would stand.
     OperandNotDominating(ValueId),
-    /// A use would stand where the moved result is not defined.
-    UseNotDominated(InstRef),
-    /// It would cross an effect the declarations keep in order with it.
-    CrossesOrderedEffect(InstRef),
+    /// A use of what it defines, order token included, would not be reached
+    /// from where it would stand.
+    UseNotDominated(Site),
+    /// It may trap or has an effect, and the new place does not run on
+    /// exactly the runs the old one does (compilation §1).
+    ChangesWhereItRuns,
     /// It would cross a write to storage its loans name.
     CrossesConflictingWrite(InstRef),
 }
@@ -106,7 +113,8 @@ where
 }
 
 /// Where a cursor stands: the next instruction it yields is at `next` of
-/// `block`, or in a later block when `next` is past `block`'s end.
+/// `block`, or in a later block when `next` is past `block`'s end. A
+/// `block` past the body's last block is the end of the walk.
 #[derive(Debug, Clone, Copy)]
 struct Walk {
     block: BlockId,
@@ -128,21 +136,23 @@ impl Walk {
         }
     }
 
-    /// Keeps the walk across a removal of blocks: a removed block's walk
-    /// goes on at the start of the next block kept.
+    /// The walk past the last of `blocks` blocks.
+    fn end(blocks: usize) -> Walk {
+        Walk { block: BlockId::of_index(blocks), next: 0 }
+    }
+
+    /// Keeps the walk across a removal of blocks: a walk in a removed block
+    /// goes on at the start of the first kept block after it, and ends
+    /// where no kept block follows.
     fn rename(&mut self, renamed: &[Option<BlockId>]) {
-        let kept_after = |old: usize| {
-            renamed[old..]
-                .iter()
-                .flatten()
-                .next()
-                .copied()
-                .unwrap_or_else(|| BlockId::of_index(renamed.iter().flatten().count()))
-        };
-        *self = match renamed.get(self.block.index()) {
-            Some(Some(block)) => Walk { block: *block, next: self.next },
-            Some(None) => Walk { block: kept_after(self.block.index()), next: 0 },
-            None => Walk { block: kept_after(renamed.len()), next: 0 },
+        if let Some(Some(block)) = renamed.get(self.block.index()) {
+            self.block = *block;
+            return;
+        }
+        let kept_after = renamed.get(self.block.index()..).into_iter().flatten().flatten().next();
+        *self = match kept_after {
+            Some(block) => Walk { block: *block, next: 0 },
+            None => Walk::end(renamed.iter().flatten().count()),
         };
     }
 }
@@ -262,14 +272,7 @@ where
             if self.needs.dominates(with, site_position(site)) {
                 continue;
             }
-            return Err(match site {
-                Site::Inst(block, index) => DoesNotDominate { use_at: InstRef { block, index } },
-                Site::Term(block) => todo!(
-                    "question for the coordinator: {with:?} does not dominate {block:?}'s terminator, which uses \
-                     {of:?}; DoesNotDominate names its use by an InstRef, and a terminator's use (a branch \
-                     condition, an edge argument, a return) has none"
-                ),
-            });
+            return Err(DoesNotDominate { use_at: site });
         }
         self.edit(|rewriter| rewriter.replace_all_uses(of, with));
         Ok(())
@@ -293,14 +296,21 @@ impl<S> Editor<'_, S>
 where
     S: RemovesInsts,
 {
-    /// Removes an instruction whose result nothing uses and whose effect,
-    /// if any, the declarations allow to vanish.
+    /// Removes an instruction whose result nothing uses, that neither
+    /// traps, nor writes storage, nor has an effect. Removing a dead store
+    /// is not this operation's.
     pub fn remove(&mut self, inst: InstRef) -> Result<(), Unremovable> {
         let removed = self.inst(inst);
         if removed.result().is_some_and(|result| self.body_ref().use_count(result) > 0) {
             return Err(Unremovable::StillUsed);
         }
-        if !self.may_vanish(removed) {
+        if removed.op().may_trap() {
+            return Err(Unremovable::Traps);
+        }
+        if removed.op().writes_storage() {
+            return Err(Unremovable::Writes);
+        }
+        if self.has_effect(removed) {
             return Err(Unremovable::Effect);
         }
         let shifts = self
@@ -309,10 +319,21 @@ where
         self.shifted(shifts);
         Ok(())
     }
+}
 
-    /// Whether the declarations let the call `inst` makes, if it makes one,
-    /// vanish (effects §1): its reissue allows it and it writes nothing.
-    fn may_vanish(&self, inst: &Inst) -> bool {
+impl<S> Editor<'_, S>
+where
+    S: Scope,
+{
+    /// Whether `inst` has an effect (effects §1, context §3): it stands on
+    /// the order chain, loads or commits a context, or calls, starts or
+    /// takes a call whose callee's reissue is not pure or that writes a
+    /// context. `Idempotent` is safe to repeat, not to skip, and `Opaque`
+    /// never vanishes.
+    fn has_effect(&self, inst: &Inst) -> bool {
+        if inst.order().is_some() || inst.op().touches_context() {
+            return true;
+        }
         let callee_ty = match inst.op() {
             Op::FunctionCall { callee_ty, .. } | Op::Spawn { callee_ty, .. } => *callee_ty,
             Op::TakeEffect { src } => {
@@ -324,23 +345,12 @@ where
                     other => panic!("a taking's handle is a start's result (effects §6), not {other:?}'s"),
                 }
             }
-            _ => return true,
+            _ => return false,
         };
         let Some(effect) = fn_effect(self.module.types(), callee_ty) else {
             panic!("a call's callee type is a function type")
         };
-        if !effect.writes().is_empty() {
-            return false;
-        }
-        match effect.reissue() {
-            Reissue::Pure => true,
-            Reissue::Opaque => false,
-            Reissue::Idempotent => todo!(
-                "question for the coordinator: may an idempotent call that writes no context vanish? Idempotence \
-                 says issuing it twice is issuing it once; whether issuing it no times is the same is not in the \
-                 effect type"
-            ),
-        }
+        effect.reissue() != Reissue::Pure || !effect.writes().is_empty()
     }
 
     fn defining_site(&self, value: ValueId) -> Site {
@@ -416,13 +426,16 @@ fn kept_blocks(body: &Body) -> Vec<bool> {
 impl<S> Editor<'_, S>
 where
     S: MovesInsts,
-    S::Needs: DominanceFacts + LoanFacts + OrderFacts,
+    S::Needs: DominanceFacts + LoanFacts,
 {
-    /// Moves `inst` to stand at `at`. It is refused where an operand is not
-    /// defined at `at`, where `at` does not dominate a use of its result,
-    /// where the way between its place and `at` crosses an effect the
-    /// declarations keep in order with it, or a write to storage it or that
-    /// write names (ownership §5). An effectful call's token is rethreaded.
+    /// Moves `inst` to stand at `at`, with its operands and what it
+    /// defines, order tokens included; the order chain is their def-use, so
+    /// dominance keeps it whole and no token is rethreaded (D54). It is
+    /// refused where an operand is not defined at `at`; where `at` does not
+    /// come first on every path to a use of what it defines; where it may
+    /// trap or has an effect and `at` does not run on exactly the runs its
+    /// place does (compilation §1); or where the way between its place and
+    /// `at` crosses a write to storage it or that write names (ownership §5).
     ///
     /// # Panics
     /// `inst` or `at` names no position of the body.
@@ -432,86 +445,32 @@ where
         if to_block == inst.block && (to_index == inst.index || to_index == inst.index + 1) {
             return Ok(());
         }
-        let rethreaded = match moved.order() {
-            Some(OrderUse::Edge(edge)) => Some(edge.before),
-            Some(OrderUse::Start(_) | OrderUse::Take(_)) | None => None,
-        };
-        for operand in moved.operands().into_iter().filter(|operand| Some(*operand) != rethreaded) {
+        for operand in moved.operands() {
             if !self.needs.dominates(operand, at) {
                 return Err(CannotMove::OperandNotDominating(operand));
             }
         }
         let body = self.body_ref();
-        let defined = moved.result().into_iter().chain(moved.order().and_then(|order| match order {
-            OrderUse::Take(after) => Some(after),
-            OrderUse::Edge(_) | OrderUse::Start(_) => None,
-        }));
-        for value in defined {
-            if body.use_count(value) > 0 {
-                todo!(
-                    "question for the coordinator: whether {at:?} dominates each use of {value:?} is a fact of \
-                     position against position, and DominanceFacts answers only whether a value's definition \
-                     dominates a position"
-                );
-            }
+        let mut uses: Vec<Site> = moved.defs().into_iter().flat_map(|value| body.users(value)).collect();
+        uses.sort_by_key(|site| site_order(*site));
+        if let Some(site) = uses.into_iter().find(|site| !self.needs.position_dominates(at, *site)) {
+            return Err(CannotMove::UseNotDominated(site));
         }
-
+        let pinned = moved.op().may_trap() || self.has_effect(moved);
+        if pinned && !self.needs.control_equivalent(Position::Before(inst), at) {
+            return Err(CannotMove::ChangesWhereItRuns);
+        }
         let crossed = crossed_insts(body, inst, to_block, to_index);
-        let moved_is_effect = moved.order().is_some();
-        for crossed_inst in &crossed {
-            let is_effect = self.inst(*crossed_inst).order().is_some();
-            if (moved_is_effect || is_effect) && !self.needs.may_reorder(inst, *crossed_inst) {
-                return Err(CannotMove::CrossesOrderedEffect(*crossed_inst));
-            }
+        let conflicting = crossed
+            .into_iter()
+            .find(|crossed| self.needs.conflicts(inst, *crossed) || self.needs.conflicts(*crossed, inst));
+        if let Some(crossed) = conflicting {
+            return Err(CannotMove::CrossesConflictingWrite(crossed));
         }
-        for crossed_inst in &crossed {
-            if self.needs.conflicts(inst, *crossed_inst) || self.needs.conflicts(*crossed_inst, inst) {
-                return Err(CannotMove::CrossesConflictingWrite(*crossed_inst));
-            }
-        }
-        self.assert_chain_movable(moved, inst, &crossed, to_block, to_index);
 
         let shifts = self.edit(|rewriter| rewriter.move_inst(inst.block, inst.index, to_block, to_index));
         self.shifted(shifts);
         Ok(())
-    }
-
-    /// Stops where moving an instruction on the order chain is not settled.
-    fn assert_chain_movable(&self, moved: &Inst, inst: InstRef, crossed: &[InstRef], to_block: BlockId, to_index: usize) {
-        let body = self.body_ref();
-        match moved.order() {
-            Some(OrderUse::Edge(edge)) => {
-                let in_anyorder = body.users(edge.after).any(|site| match site {
-                    Site::Inst(block, index) => matches!(body.block(block).insts()[index].op(), Op::Merge { .. }),
-                    Site::Term(_) => false,
-                });
-                if in_anyorder {
-                    todo!(
-                        "question for the coordinator: {inst:?} is a call inside an anyorder scope (its token is \
-                         merged); effects §3 keeps each call there consuming the scope's entry token, and the IR \
-                         marks no scope boundary to say where a moved call stays inside it"
-                    );
-                }
-                if let Err(super::core::InFlight { start_block, start_index }) = body.reaching_token(to_block, to_index) {
-                    todo!(
-                        "question for the coordinator: moving the effectful {inst:?} to {to_block:?}[{to_index}] puts \
-                         it between the split call started at {start_block:?}[{start_index}] and its taking, where no \
-                         token is current"
-                    );
-                }
-            }
-            Some(OrderUse::Start(_) | OrderUse::Take(_)) | None if moved.is_on_order_chain() => {
-                let crosses_chain = crossed.iter().any(|crossed| self.inst(*crossed).is_on_order_chain());
-                if to_block != inst.block || crosses_chain {
-                    todo!(
-                        "question for the coordinator: {inst:?} is a split call's start or taking, or a Merge; \
-                         moving it to another block or across the order chain changes which token it holds, and \
-                         how the chain is rethreaded around it is not settled"
-                    );
-                }
-            }
-            Some(OrderUse::Start(_) | OrderUse::Take(_)) | None => {}
-        }
     }
 }
 
@@ -598,7 +557,7 @@ fn site_position(site: Site) -> Position {
 }
 
 /// The instructions a move from `from` to position `to_index` of `to`
-/// passes over: those on a way between the two places. The way runs from the
+/// passes over, for its loans: those on a way between the two places. The way runs from the
 /// new place to the old one for a move up a block, from the old place to the
 /// new one for a move down it, and both ways between blocks; it may pass the
 /// old place, and it meets the new place only at its end. Around a loop the

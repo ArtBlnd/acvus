@@ -156,14 +156,15 @@ impl<'m> Builder<'m> {
     }
 
     /// A storage slot of the body holding a `ty`, which `RefTarget::Var`
-    /// names. Cost: O(1).
+    /// names; `span` is the span of the binding it stores. Cost: O(1).
     ///
     /// # Panics
     /// `ty` is `Order`: only the core makes an order token.
-    pub fn slot(&mut self, ty: Ty) -> ValueId {
+    pub fn slot(&mut self, ty: Ty, span: Span) -> ValueId {
         let def = Def::Slot(self.body.slots.len());
         let value = self.body.make_value(&self.module.types, ty, def);
         self.body.slots.push(value);
+        self.body.slot_spans.insert(value, span);
         value
     }
 

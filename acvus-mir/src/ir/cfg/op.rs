@@ -7,7 +7,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::BodyId;
 use crate::ir::{
-    BinOp, Callee, Checked, Chosen, ExternImpl, IndexBound, IndexMode, PathSeg, RefTarget,
+    BinOp, Callee, Checked, Chosen, ExternImpl, IndexBound, IndexMode, Overflow, PathSeg, RefTarget,
     UnaryOp, ValueId,
 };
 use crate::ty::{CastTy, Mutability, Ty};
@@ -465,6 +465,70 @@ impl Op {
             | Op::UnwrapVariant { .. }
             | Op::Undef => true,
         }
+    }
+
+    /// Whether the operation may end the run with a trap (compilation §1:
+    /// whether a run traps is its meaning), decided by its kind and its
+    /// checked flags alone. A `Cast` is Rust's total `as` (RFC-0049) and
+    /// never traps.
+    pub fn may_trap(&self) -> bool {
+        match self {
+            Op::Check { .. } | Op::CheckSteps { .. } | Op::UnwrapVariant { .. } => true,
+            Op::BinOp { op, .. } => op.can_trap_on_integers(),
+            Op::UnaryOp { op, .. } => matches!(op, UnaryOp::Neg(Overflow::Trap)),
+            Op::Index { bound, .. } | Op::IndexSet { bound, .. } => *bound == IndexBound::Checked,
+            Op::Const { .. }
+            | Op::ConstStr { .. }
+            | Op::StringConcat { .. }
+            | Op::StringAppend { .. }
+            | Op::StringEq { .. }
+            | Op::StringClone { .. }
+            | Op::StructuralEq { .. }
+            | Op::StructuralClone { .. }
+            | Op::Ref { .. }
+            | Op::Take { .. }
+            | Op::Assign { .. }
+            | Op::AsSlice { .. }
+            | Op::Fetch { .. }
+            | Op::Commit { .. }
+            | Op::FieldGet { .. }
+            | Op::FieldSet { .. }
+            | Op::Cast { .. }
+            | Op::LoadFunction { .. }
+            | Op::FunctionCall { .. }
+            | Op::Spawn { .. }
+            | Op::TakeEffect { .. }
+            | Op::Merge { .. }
+            | Op::ArrayBegin { .. }
+            | Op::ArrayPush { .. }
+            | Op::MakeObject { .. }
+            | Op::MakeTuple { .. }
+            | Op::TupleIndex { .. }
+            | Op::TestLiteral { .. }
+            | Op::TestObjectKey { .. }
+            | Op::ArrayIndex { .. }
+            | Op::ObjectGet { .. }
+            | Op::MakeClosure { .. }
+            | Op::MakeVariant { .. }
+            | Op::TestVariant { .. }
+            | Op::Undef
+            | Op::Drop { .. } => false,
+        }
+    }
+
+    /// Whether the operation writes storage: removing one whose result is
+    /// unused still changes what the storage holds.
+    pub fn writes_storage(&self) -> bool {
+        matches!(
+            self,
+            Op::Assign { .. } | Op::IndexSet { .. } | Op::FieldSet { .. } | Op::StringAppend { .. } | Op::Drop { .. }
+        )
+    }
+
+    /// Whether the operation loads or commits a context, an effect of its
+    /// own (context §3).
+    pub fn touches_context(&self) -> bool {
+        matches!(self, Op::Fetch { .. } | Op::Commit { .. })
     }
 
     /// Whether the instruction reads or writes a storage or the page.

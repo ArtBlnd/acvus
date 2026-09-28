@@ -60,15 +60,17 @@ macro_rules! scope {
     };
 }
 
-scope!(Value, [Instructions], dyn DominanceFacts, Base, [ReplacesValues]);
+scope!(Value, [Instructions, Storage], dyn DominanceFacts, Base, [ReplacesValues]);
 scope!(Remove, [Instructions, Storage, OrderTokens], NoFacts, Base, [RemovesInsts]);
-scope!(Cfg, [CfgShape], NoFacts, Base, [EditsCfg]);
+scope!(Cfg, [CfgShape, Instructions, Storage, OrderTokens], NoFacts, Base, [EditsCfg]);
 scope!(Sccp, [Instructions, CfgShape], dyn DominanceFacts, Base, [ReplacesValues, EditsCfg]);
-scope!(Motion, [Instructions, OrderTokens], dyn MotionFacts, (Base, SplitTakenOnce), [MovesInsts]);
+scope!(Motion, [Instructions, OrderTokens, Storage], dyn MotionFacts, (Base, SplitTakenOnce), [MovesInsts]);
 scope!(Effect, [Instructions, OrderTokens], dyn OrderFacts, (Base, SplitTakenOnce), [EditsOrder]);
 scope!(Storage, [Instructions, Storage], dyn LoanFacts, Base, [PromotesStorage]);
 scope!(Loop, [CfgShape, Instructions], NoFacts, Base, [EditsLoops]);
 
-/// What motion reads: dominance, loans and effect order together.
-pub trait MotionFacts: DominanceFacts + LoanFacts + OrderFacts {}
-impl<T> MotionFacts for T where T: DominanceFacts + LoanFacts + OrderFacts + ?Sized {}
+/// What motion reads: dominance and loans. Effect order is not motion's:
+/// an effect's token keeps it on its chain, so dominance alone keeps it in
+/// order (D54).
+pub trait MotionFacts: DominanceFacts + LoanFacts {}
+impl<T> MotionFacts for T where T: DominanceFacts + LoanFacts + ?Sized {}

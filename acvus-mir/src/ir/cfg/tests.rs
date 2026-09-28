@@ -137,7 +137,7 @@ fn every_value_is_born_typed() {
     let (name, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = build(&mut f.module, false);
     let a = builder.param(name, int);
-    let slot = builder.slot(bool);
+    let slot = builder.slot(bool, at(0));
     let join = builder.new_block(&[bool]);
     let p = builder.block_params(join)[0];
     let t = builder.push(Op::Const { value: Literal::Bool(true) }, bool, at(3));
@@ -908,7 +908,7 @@ fn a_capture_of_order_type_is_refused() {
 fn a_slot_of_order_type_is_refused() {
     let mut f = fixture();
     let order = f.order;
-    build(&mut f.module, false).slot(order);
+    build(&mut f.module, false).slot(order, at(0));
 }
 
 #[test]

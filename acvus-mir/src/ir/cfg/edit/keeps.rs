@@ -2,11 +2,10 @@
 //! in debug and test builds; `validate` reuses them after each transform.
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::SmallVec;
 
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
-use crate::ir::{BinOp, Callee, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, known_len};
+use crate::ir::{BinOp, Callee, ForSource, IndexMode, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
 /// A breach of an invariant: a compiler defect, never a refusal.
@@ -85,13 +84,26 @@ fn found(holds: bool, detail: impl FnOnce() -> String) -> Found {
 // -- TypesAgree --------------------------------------------------------------
 
 /// Checks each instruction's operands and result against what its operation
-/// takes and yields, where the operation and its operands' types determine
-/// that, and every edge against its target's parameters. A payload read of a
-/// `Result` or an enum names no one variant, and a context's value, a
-/// function loaded by name and a switch key are typed by declarations this
-/// body does not hold; those are left to their definers.
+/// takes and yields, every edge against its target's parameters, every
+/// switch key against its scrutinee and every loop source against what it
+/// hands its body, and that every return of the body returns one type. A
+/// body does not record its result type, and a function loaded or called by
+/// name, like a context, is typed by declarations the body does not hold:
+/// those are checked only as far as the body shows (a function type, a type
+/// without positions).
 fn types_agree(body: &Body, types: &Types<Concrete>) -> Found {
     let check = TypeCheck { body, types };
+    let mut returned: Option<(BlockId, Ty)> = None;
+    for (id, block) in body.blocks() {
+        let Terminator::Return { value, .. } = block.terminator() else { continue };
+        let ty = body.ty_of(*value);
+        match returned {
+            Some((first, first_ty)) => found(ty == first_ty, || {
+                format!("{id:?} returns {:?} and {first:?} returns {:?}", types.kind(ty), types.kind(first_ty))
+            })?,
+            None => returned = Some((id, ty)),
+        }
+    }
     for (id, block) in body.blocks() {
         for (index, inst) in block.insts().iter().enumerate() {
             check
@@ -248,22 +260,11 @@ impl TypeCheck<'_> {
                 };
                 found(made == mutability, || format!("{result:?} is not a {mutability:?} reference"))?;
                 let lent = lent.ty();
-                match self.place(target, path)? {
-                    Some(at) => found(at == lent, || format!("{result:?} lends another type than the place holds")),
-                    None => Ok(()),
-                }
+                let places = self.place(target, path)?;
+                found(places.contains(&lent), || format!("{result:?} lends another type than the place holds"))
             }
-            Op::Take { target, path, .. } => {
-                let result = Self::result(inst)?;
-                match self.place(target, path)? {
-                    Some(at) => self.same(result, at, "the place"),
-                    None => Ok(()),
-                }
-            }
-            Op::Assign { target, path, value, .. } => match self.place(target, path)? {
-                Some(at) => self.same(*value, at, "the place"),
-                None => Ok(()),
-            },
+            Op::Take { target, path, .. } => self.one_of(Self::result(inst)?, &self.place(target, path)?, "the place"),
+            Op::Assign { target, path, value, .. } => self.one_of(*value, &self.place(target, path)?, "the place"),
             Op::AsSlice { container, mutability, .. } => {
                 self.is(*container, |kind| matches!(kind, TyKind::Ref(..)), "a reference")?;
                 self.is(
@@ -444,16 +445,19 @@ impl TypeCheck<'_> {
                             }
                         }
                     }
-                    (TyKind::Option(_) | TyKind::Result(..), _) => Ok(()),
+                    (TyKind::Option(_), None) => Ok(()),
+                    (TyKind::Result(ok, err), Some(payload)) => self.one_of(*payload, &[*ok, *err], "a Result's payload"),
+                    (TyKind::Result(..), None) => Err("a Result's variant always carries a payload".to_string()),
                     (other, _) => Err(format!("the result is {other:?}, not a variant type")),
                 }
             }
-            Op::UnwrapVariant { src } => match self.kind(self.ty(*src)) {
-                TyKind::Option(held) => self.same(Self::result(inst)?, *held, "the Option's payload"),
-                TyKind::Result(..) | TyKind::Enum { .. } => Ok(()),
-                other => Err(format!("{src:?} is {other:?}, not a variant type")),
-            },
-            Op::Fetch { .. } | Op::Commit { .. } | Op::Undef | Op::Drop { .. } => Ok(()),
+            Op::UnwrapVariant { src } => {
+                let payloads = self.payloads(self.ty(*src))?;
+                self.one_of(Self::result(inst)?, &payloads, "a payload of the variant type")
+            }
+            Op::Fetch { .. } => self.outlives_the_run(Self::result(inst)?),
+            Op::Commit { value, .. } => self.outlives_the_run(*value),
+            Op::Undef | Op::Drop { .. } => Ok(()),
         }
     }
 
@@ -468,34 +472,72 @@ impl TypeCheck<'_> {
         }
     }
 
-    /// The type `path` reaches under `target`, or `None` where a payload of
-    /// a `Result` or an enum names no one variant, which only the
-    /// instruction's own value types.
-    fn place(&self, target: &RefTarget, path: &[PathSeg]) -> Result<Option<Ty>, String> {
-        let mut at = match target {
+    /// Every type `path` may reach under `target`: one, but at a payload of
+    /// a `Result` or an enum, which names no one variant, each payload's.
+    fn place(&self, target: &RefTarget, path: &[PathSeg]) -> Result<Vec<Ty>, String> {
+        let root = match target {
             RefTarget::Var(storage) | RefTarget::Param(storage) => self.ty(*storage),
             RefTarget::Through(reference) => match self.kind(self.ty(*reference)) {
                 TyKind::Ref(_, lent) => lent.ty(),
                 other => return Err(format!("{reference:?} is {other:?}, not a reference")),
             },
         };
+        let mut reached = vec![root];
         for seg in path {
-            at = match (seg, self.kind(at)) {
-                (PathSeg::Field(field), TyKind::Object(object)) => match object.fields().iter().find(|(name, _)| name == field) {
-                    Some((_, ty)) => *ty,
-                    None => return Err(format!("the object has no field {field:?}")),
-                },
-                (PathSeg::Index(_), TyKind::Array(element, _)) => *element,
-                (PathSeg::Index(index), TyKind::Tuple(elements)) => match elements.get(*index) {
-                    Some(element) => *element,
-                    None => return Err(format!("the tuple has no element {index}")),
-                },
-                (PathSeg::Payload, TyKind::Option(payload)) => *payload,
-                (PathSeg::Payload, TyKind::Result(..) | TyKind::Enum { .. }) => return Ok(None),
-                (seg, other) => return Err(format!("{seg:?} does not step into {other:?}")),
-            };
+            let mut next = Vec::new();
+            for at in reached {
+                match (seg, self.kind(at)) {
+                    (PathSeg::Field(field), TyKind::Object(object)) => {
+                        next.extend(object.fields().iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty))
+                    }
+                    (PathSeg::Index(_), TyKind::Array(element, _)) => next.push(*element),
+                    (PathSeg::Index(index), TyKind::Tuple(elements)) => next.extend(elements.get(*index).copied()),
+                    (PathSeg::Payload, TyKind::Option(_) | TyKind::Result(..) | TyKind::Enum { .. }) => {
+                        next.extend(self.payloads(at)?)
+                    }
+                    _ => {}
+                }
+            }
+            if next.is_empty() {
+                return Err(format!("{seg:?} steps into none of the types the path reached"));
+            }
+            reached = next;
         }
-        Ok(Some(at))
+        Ok(reached)
+    }
+
+    /// The payload types a variant of `ty` may carry.
+    fn payloads(&self, ty: Ty) -> Result<Vec<Ty>, String> {
+        match self.kind(ty) {
+            TyKind::Option(payload) => Ok(vec![*payload]),
+            TyKind::Result(ok, err) => Ok(vec![*ok, *err]),
+            TyKind::Enum { variants, .. } => Ok(variants.iter().filter_map(|(_, payload)| *payload).collect()),
+            other => Err(format!("{other:?} is not a variant type")),
+        }
+    }
+
+    fn one_of(&self, value: ValueId, expected: &[Ty], what: &str) -> Found {
+        let ty = self.ty(value);
+        found(expected.contains(&ty), || {
+            let expected: Vec<&TyKind<Concrete>> = expected.iter().map(|ty| self.kind(*ty)).collect();
+            format!("{value:?} is {:?}, and {what} is one of {expected:?}", self.kind(ty))
+        })
+    }
+
+    /// A value a context holds outlives the run, so its type has no
+    /// positions: no reference and no function value, at any depth
+    /// (context §3, ownership §5).
+    fn outlives_the_run(&self, value: ValueId) -> Found {
+        let mut pending = vec![self.ty(value)];
+        while let Some(ty) = pending.pop() {
+            match self.kind(ty) {
+                TyKind::Ref(..) | TyKind::Fn { .. } => {
+                    return Err(format!("{value:?} goes to or comes from a context, and its type holds {:?}", self.kind(ty)));
+                }
+                kind => kind.for_each_child(|child| pending.push(child)),
+            }
+        }
+        Ok(())
     }
 
     fn field_path(&self, object: Ty, field: acvus_utils::Astr, rest: &[acvus_utils::Astr]) -> Result<Ty, String> {
@@ -521,11 +563,22 @@ impl TypeCheck<'_> {
             Terminator::Return { order: Some(order), .. } => {
                 self.is(*order, |kind| matches!(kind, TyKind::Order), "Order").map_err(at)?
             }
-            Terminator::Jump { .. }
-            | Terminator::Switch { .. }
-            | Terminator::For { .. }
-            | Terminator::Return { order: None, .. }
-            | Terminator::Diverge => {}
+            Terminator::Switch { tag, arms, .. } => {
+                let scrutinee = match self.kind(self.ty(*tag)) {
+                    TyKind::Ref(_, lent) => lent.ty(),
+                    _ => self.ty(*tag),
+                };
+                for (key, _, _) in arms {
+                    self.key_fits(key, scrutinee).map_err(at)?;
+                }
+            }
+            Terminator::For { source, stages, exit, exit_trip, .. } => {
+                self.loop_source(source, stages.body()).map_err(at)?;
+                if let Some(trip) = exit_trip.trip_param(self.body.block(*exit).params()) {
+                    self.is_u64(trip).map_err(at)?;
+                }
+            }
+            Terminator::Jump { .. } | Terminator::Return { order: None, .. } | Terminator::Diverge => {}
         }
         for edge in terminator.edges() {
             let params = self.body.block(edge.to).params();
@@ -544,6 +597,70 @@ impl TypeCheck<'_> {
         }
         Ok(())
     }
+
+    /// Whether a switch key names a value of the scrutinee's type. A tag of
+    /// an `Option` or a `Result` is checked as a tag of a variant type: its
+    /// name is text the interner holds.
+    fn key_fits(&self, key: &SwitchKey, scrutinee: Ty) -> Found {
+        let fits = match (key, self.kind(scrutinee)) {
+            (SwitchKey::Tag(tag), TyKind::Enum { variants, .. }) => variants.iter().any(|(name, _)| name == tag),
+            (SwitchKey::Tag(_), TyKind::Option(_) | TyKind::Result(..)) => true,
+            (SwitchKey::Int(_), TyKind::Int(_)) | (SwitchKey::Bool(_), TyKind::Bool) | (SwitchKey::Char(_), TyKind::Char) => {
+                true
+            }
+            (SwitchKey::Str(_), TyKind::String | TyKind::Str) => true,
+            _ => false,
+        };
+        found(fits, || format!("the key {key:?} names no value of {:?}", self.kind(scrutinee)))
+    }
+
+    /// A `For`'s source against what it hands its body: the element, and
+    /// the counter where the source is a slice or an array.
+    fn loop_source(&self, source: &ForSource, body: BlockId) -> Found {
+        let params = self.body.block(body).params();
+        let (element, counted) = match source {
+            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
+                let wanted = match source {
+                    ForSource::SliceMut(_) => Mutability::Mut,
+                    _ => Mutability::Shared,
+                };
+                let (held, element) = self.slice(*slice)?;
+                found(held == wanted, || format!("{slice:?} is not a {wanted:?} slice reference"))?;
+                (Element::Lent(wanted, element), true)
+            }
+            ForSource::Array(array) => match self.kind(self.ty(*array)) {
+                TyKind::Array(element, _) => (Element::Held(*element), true),
+                other => return Err(format!("{array:?} is {other:?}, not an array")),
+            },
+            ForSource::Range { at, hi } => {
+                self.is_int(*at)?;
+                self.same(*hi, self.ty(*at), "the range's start")?;
+                (Element::Held(self.ty(*at)), false)
+            }
+        };
+        let [first, rest @ ..] = params else {
+            return Err(format!("the loop body {body:?} takes no element"));
+        };
+        match element {
+            Element::Held(element) => self.same(*first, element, "the element")?,
+            Element::Lent(mutability, element) => self.is(
+                *first,
+                |kind| matches!(kind, TyKind::Ref(made, lent) if *made == mutability && lent.ty() == element),
+                "a reference to the element",
+            )?,
+        }
+        match (counted, rest) {
+            (true, [counter, ..]) => self.is_u64(*counter),
+            (true, []) => Err(format!("the loop body {body:?} takes no counter")),
+            (false, _) => Ok(()),
+        }
+    }
+}
+
+/// What a loop hands its body each iteration.
+enum Element {
+    Held(Ty),
+    Lent(Mutability, Ty),
 }
 
 // -- DefDominatesUses --------------------------------------------------------
@@ -570,13 +687,21 @@ fn def_dominates_uses(body: &Body, _: &Types<Concrete>) -> Found {
 
 // -- OrderChainWhole ---------------------------------------------------------
 
-/// Each token reaches the body's return: a use carries it on, to the token
-/// an instruction yields or merges, to the parameter an edge passes it to,
-/// or to a `Return`; a token nothing uses is whole only where no path from
-/// its block returns, since a run that dies owes nothing (effects §5).
+/// Every token is consumed by one instruction, or by several whose yields
+/// all reach one `Merge` joining them, an `anyorder` fork (effects §3). Each
+/// token reaches the body's return: it flows on to the token an instruction
+/// yields or merges, to the parameter an edge passes it to, or to a
+/// `Return`; a token nothing uses is whole only where no path from its block
+/// returns, since a run that dies owes nothing (effects §5).
 fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
     let ordered = body.order_param().is_some();
     let mut defined_in: FxHashMap<ValueId, BlockId> = FxHashMap::default();
+    let mut flows: FxHashMap<ValueId, Vec<Flow>> = FxHashMap::default();
+    let mut consumers: FxHashMap<ValueId, Vec<(BlockId, usize)>> = FxHashMap::default();
+    let mut handles: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+    if let Some(order_param) = body.order_param() {
+        defined_in.insert(order_param, body.entry());
+    }
     for (id, block) in body.blocks() {
         for param in block.params().iter().filter(|param| body.is_token(**param)) {
             defined_in.insert(*param, id);
@@ -591,11 +716,26 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
                 if let Some(token) = order.yielded() {
                     defined_in.insert(token, id);
                 }
+                match order {
+                    OrderUse::Edge(edge) => {
+                        consumers.entry(edge.before).or_default().push((id, index));
+                        flows.entry(edge.before).or_default().push(Flow::Yields(edge.after));
+                    }
+                    OrderUse::Start(before) => {
+                        consumers.entry(before).or_default().push((id, index));
+                        let handle = inst.result().expect("a start yields its handle");
+                        handles.insert(handle, before);
+                    }
+                    OrderUse::Take(_) => {}
+                }
             }
             let tokens_in_op = match inst.op() {
                 Op::Merge { orders } => {
                     let result = inst.result().expect("a Merge yields its token");
                     defined_in.insert(result, id);
+                    for order in orders {
+                        flows.entry(*order).or_default().push(Flow::Merged(result));
+                    }
                     orders.iter().all(|order| body.is_token(*order)) && body.is_token(result)
                 }
                 _ => {
@@ -607,86 +747,112 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
             found(tokens_in_op, || format!("{} reads or yields a token outside the order chain", place()))?;
         }
         let terminator = block.terminator();
-        match terminator {
-            Terminator::Return { order, value, .. } => {
-                found(ordered == order.is_some(), || {
-                    format!("{id:?}'s return carries {order:?} in a body whose order parameter is {:?}", body.order_param())
-                })?;
-                found(!body.is_token(*value), || format!("{id:?} returns a token"))?;
+        if let Terminator::Return { order, value, .. } = terminator {
+            found(ordered == order.is_some(), || {
+                format!("{id:?}'s return carries {order:?} in a body whose order parameter is {:?}", body.order_param())
+            })?;
+            found(!body.is_token(*value), || format!("{id:?} returns a token"))?;
+            if let Some(order) = order {
+                flows.entry(*order).or_default().push(Flow::Returned);
             }
-            Terminator::Diverge => {}
-            _ => {
-                for edge in terminator.edges() {
-                    let params = &body.block(edge.to).params()[edge.supplied..];
-                    for (param, arg) in params.iter().zip(edge.args) {
-                        found(body.is_token(*param) == body.is_token(*arg), || {
-                            format!("{id:?} passes {arg:?} to {param:?}, and only one of them is a token")
-                        })?;
-                    }
+        }
+        for edge in terminator.edges() {
+            let params = &body.block(edge.to).params()[edge.supplied..];
+            for (param, arg) in params.iter().zip(edge.args) {
+                found(body.is_token(*param) == body.is_token(*arg), || {
+                    format!("{id:?} passes {arg:?} to {param:?}, and only one of them is a token")
+                })?;
+                if body.is_token(*arg) {
+                    flows.entry(*arg).or_default().push(Flow::Passed(*param));
                 }
             }
         }
     }
-    if let Some(order_param) = body.order_param() {
-        defined_in.insert(order_param, body.entry());
+    // A start's token flows on to what its taking yields.
+    for (_, block) in body.blocks() {
+        for inst in block.insts() {
+            if let (Op::TakeEffect { src }, Some(OrderUse::Take(after))) = (inst.op(), inst.order())
+                && let Some(before) = handles.get(src)
+            {
+                flows.entry(*before).or_default().push(Flow::Yields(after));
+            }
+        }
+    }
+
+    let yield_of = |(block, index): (BlockId, usize)| -> Option<ValueId> {
+        let inst = &body.block(block).insts()[index];
+        match inst.order()? {
+            OrderUse::Edge(edge) => Some(edge.after),
+            OrderUse::Start(_) => {
+                let handle = inst.result()?;
+                flows_after_take(body, handle)
+            }
+            OrderUse::Take(_) => None,
+        }
+    };
+    let merges_reached = |token: ValueId| -> FxHashSet<ValueId> {
+        let mut reached = FxHashSet::default();
+        let mut pending = vec![token];
+        let mut seen = FxHashSet::default();
+        while let Some(token) = pending.pop() {
+            if !seen.insert(token) {
+                continue;
+            }
+            for flow in flows.get(&token).into_iter().flatten() {
+                match flow {
+                    Flow::Merged(merge) => {
+                        reached.insert(*merge);
+                        pending.push(*merge);
+                    }
+                    Flow::Passed(param) => pending.push(*param),
+                    Flow::Yields(_) | Flow::Returned => {}
+                }
+            }
+        }
+        reached
+    };
+    let mut forks: Vec<(&ValueId, &Vec<(BlockId, usize)>)> = consumers.iter().filter(|(_, by)| by.len() > 1).collect();
+    forks.sort();
+    for (token, by) in forks {
+        let mut joined: Option<FxHashSet<ValueId>> = None;
+        for consumer in by {
+            let reached = match yield_of(*consumer) {
+                Some(yielded) => merges_reached(yielded),
+                None => FxHashSet::default(),
+            };
+            joined = Some(match joined {
+                Some(joined) => joined.intersection(&reached).copied().collect(),
+                None => reached,
+            });
+        }
+        found(joined.is_some_and(|joined| !joined.is_empty()), || {
+            format!("{token:?} is consumed by {by:?}, and no Merge joins what they yield")
+        })?;
     }
 
     let returning = blocks_reaching_return(body);
-    let carried = |token: ValueId| -> SmallVec<[Carried; 2]> {
-        let mut carried = SmallVec::new();
-        for site in body.users(token) {
-            match site {
-                Site::Inst(block, index) => {
-                    let inst = &body.block(block).insts()[index];
-                    match (inst.op(), inst.order()) {
-                        (Op::Merge { .. }, _) => carried.extend(inst.result().map(Carried::To)),
-                        (_, Some(OrderUse::Edge(edge))) => carried.push(Carried::To(edge.after)),
-                        (Op::Spawn { .. }, Some(OrderUse::Start(_))) => {
-                            let handle = inst.result().expect("a start yields its handle");
-                            for taken in body.users(handle) {
-                                let Site::Inst(block, index) = taken else { continue };
-                                if let Some(after) = body.block(block).insts()[index].order().and_then(OrderUse::yielded) {
-                                    carried.push(Carried::To(after));
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                Site::Term(block) => match body.block(block).terminator() {
-                    Terminator::Return { order: Some(order), .. } if *order == token => carried.push(Carried::Returned),
-                    terminator => {
-                        for edge in terminator.edges() {
-                            let params = &body.block(edge.to).params()[edge.supplied..];
-                            for (param, arg) in params.iter().zip(edge.args) {
-                                if *arg == token {
-                                    carried.push(Carried::To(*param));
-                                }
-                            }
-                        }
-                    }
-                },
-            }
-        }
-        carried
-    };
     let tokens: Vec<ValueId> = defined_in.keys().copied().collect();
-    let flows: FxHashMap<ValueId, SmallVec<[Carried; 2]>> = tokens.iter().map(|token| (*token, carried(*token))).collect();
+    for token in &tokens {
+        flows.entry(*token).or_default();
+    }
+    let flows_of = |token: &ValueId| &flows[token];
     let mut whole: FxHashSet<ValueId> = tokens
         .iter()
         .copied()
         .filter(|token| {
-            let carried = &flows[token];
-            carried.contains(&Carried::Returned) || (carried.is_empty() && !returning.contains(&defined_in[token]))
+            let flows = flows_of(token);
+            flows.contains(&Flow::Returned) || (flows.is_empty() && !returning.contains(&defined_in[token]))
         })
         .collect();
     let mut grew = true;
     while grew {
         grew = false;
         for token in &tokens {
-            if !whole.contains(token)
-                && flows[token].iter().any(|carried| matches!(carried, Carried::To(next) if whole.contains(next)))
-            {
+            let carried_on = flows_of(token).iter().any(|flow| match flow {
+                Flow::Yields(next) | Flow::Merged(next) | Flow::Passed(next) => whole.contains(next),
+                Flow::Returned => true,
+            });
+            if !whole.contains(token) && carried_on {
                 whole.insert(*token);
                 grew = true;
             }
@@ -697,9 +863,24 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
     found(broken.is_empty(), || format!("the chain from {broken:?} does not reach the body's return"))
 }
 
+/// The token the taking of the start whose handle is `handle` yields.
+fn flows_after_take(body: &Body, handle: ValueId) -> Option<ValueId> {
+    body.blocks().flat_map(|(_, block)| block.insts()).find_map(|inst| match (inst.op(), inst.order()) {
+        (Op::TakeEffect { src }, Some(OrderUse::Take(after))) if *src == handle => Some(after),
+        _ => None,
+    })
+}
+
+/// Where a token goes on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Carried {
-    To(ValueId),
+enum Flow {
+    /// An instruction consumes it and yields this token.
+    Yields(ValueId),
+    /// A `Merge` joins it into this token.
+    Merged(ValueId),
+    /// An edge passes it to this parameter.
+    Passed(ValueId),
+    /// A `Return` carries it.
     Returned,
 }
 
