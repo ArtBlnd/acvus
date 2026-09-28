@@ -8,7 +8,7 @@ A derived struct is extern-defined. Its declared fields may be read, and written
 
 ## 2. Extern enums
 
-An extern enum is closed. A script path naming one of its variants builds a value of that extern type, exactly as declared, and a struct variant's payload is part of it.
+An extern enum is closed. A script path naming one of its variants builds a value of that extern type, exactly as declared, and a struct variant's payload is part of it. `Option` and `Result` are extern enums core declares, not concepts of the language.
 
 ## 3. Opaque types
 

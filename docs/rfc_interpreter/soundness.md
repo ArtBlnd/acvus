@@ -10,7 +10,7 @@ Each fact `unsafe` relies on is established at exactly one place in the boundary
 
 ## 3. The checker is right
 
-The one unsafe entry trusts the call-site shape built from the checker's decision. Debug assertions cross-check it, as aids to debugging, not as the guarantee.
+The interpreter's unchecked typed reads trust the call-site shape built from the checker's decision (extern: runtime contract §3). Debug assertions cross-check it, as aids to debugging, not as the guarantee.
 
 ## 4. The aliasing model
 

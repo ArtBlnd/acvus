@@ -2,7 +2,7 @@
 
 ## 1. No unsafe for the author
 
-The crossing traits are sealed. The boundary and the derive implement them; an author implements none. The extern side's `unsafe` is the entry, the boundary's layout casts, each under a witness, and the structural signed implementations.
+The crossing traits are sealed. The boundary and the derive implement them; an author implements none. The extern side's `unsafe` is the boundary's layout casts, each under a witness, and the structural signed implementations; the entry is safe.
 
 ## 2. What the author signs
 
@@ -17,4 +17,4 @@ Thread safety, whether a loan lends a word, and a type's lifetime family are typ
 
 ## 3. The axiom
 
-The checker is right. The one unsafe entry trusts the call-site shape built from the checker's decision. Debug assertions cross-check it as aids, not as the guarantee.
+The checker is right. A runtime's unchecked typed read trusts the call-site shape built from the checker's decision; it is the axiom's one entry. Debug assertions cross-check it as aids, not as the guarantee.

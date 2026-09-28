@@ -20,6 +20,7 @@ The runtime's value crosses to the extern side as the extern side's own owning h
 - **Aggregates.** A tuple, an object and a variant are the runtime's associated types. Their bodies are safe traits, bounded `Send + Sync + 'static`, whose parts are owning holders.
 - **Instances.** The runtime makes a value from an instance entry, reads an entry back at a signature family and task the caller names, and reads an instance value's task (instances).
 - **Callbacks.** Calling a script closure synchronously and awaited.
+- **Rust functions.** An extern may return a Rust function as a script function value of its declared function type. The script calls it as it calls a lambda, and each call crosses its arguments at that call's settled types, so no value is made from a Rust value (§1).
 - **Names.** The extern side interns a name in the interner the contract returns; a runtime maps no name itself.
 - **Time.** `sleep`.
 
@@ -29,7 +30,7 @@ Every typed read states its caller's obligation over the checker's typing of the
 
 The extern side reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, and every later typed read of that part goes back to the runtime.
 
-The entry's caller owes that each value is live at the type the checker settled for the site. This is the axiom's one entry (safety §3).
+The entry is safe. The axiom enters only where a runtime trusts its own typed reads: such a runtime owes that each value is live at the type the checker settled for the site (safety §3). A runtime that checks its reads owes nothing, so a safe runtime needs no `unsafe` of its own.
 
 ## 4. What the runtime signs
 
