@@ -139,9 +139,9 @@ fn optimize_level(
     for module in undropped {
         let qref = module.qref;
         inputs.insert(qref, required_inputs(&module.main));
-        let module = module.finished(laws, decls);
+        let mut module = module.finished(laws, decls);
 
-        let mut errors = validate::type_check::check_types(&module, decls);
+        let mut errors = validate::type_check::check_types(&mut module);
         errors.extend(validate::bounds::check_bounds(&module, laws));
         // RFC-0089 rules 1, 3 and 5, asked of the module after
         // `insert_drops`, which is the last pass: the form must hold on the

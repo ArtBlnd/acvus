@@ -30,8 +30,8 @@ use crate::ty::{Concrete, Types};
 /// refusal pass 0 already reported a second time.
 /// `acvus-cli/tests/cli.rs::a_write_while_a_reference_is_live_is_refused_once`
 /// is what fails then.
-pub fn validate(module: &MirModule, decls: &Declarations, laws: &LawTable) -> Vec<ValidationError> {
-    let mut errors = type_check::check_types(module, decls);
+pub fn validate(module: &mut MirModule, decls: &Declarations, laws: &LawTable) -> Vec<ValidationError> {
+    let mut errors = type_check::check_types(module);
     errors.extend(stages::check(module, decls, laws));
     errors.extend(borrow_check::check_borrows(module, decls));
     errors.extend(exhaustive::check_exhaustive(module));
@@ -102,12 +102,6 @@ impl fmt::Display for ValidationErrorDisplay<'_> {
             ValidationErrorKind::MissingType { value_id } => {
                 write!(f, "Val({value_id}) has no type")
             }
-            ValidationErrorKind::ErrorType { value_id, origin } => write!(
-                f,
-                "{} reaches the machine with no type, and no refusal said why",
-                written_as(self.interner, origin.as_ref())
-                    .unwrap_or_else(|| format!("Val({value_id})"))
-            ),
             ValidationErrorKind::OrderEdge { inst_name, pure } => {
                 if *pure {
                     write!(f, "{inst_name} is a pure call and carries an Order")

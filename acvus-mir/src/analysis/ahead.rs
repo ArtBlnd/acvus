@@ -19,7 +19,6 @@ use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, ForSource, InstKind, ValueId};
 use crate::laws::LawTable;
 use crate::optimize::spawn_split::splits;
-use crate::decl::Declarations;
 use crate::ty::{Concrete, Types};
 
 
@@ -94,17 +93,15 @@ pub struct AheadSpawn {
 pub struct Lowerer<'a> {
     cfg: &'a CfgBody,
     types: &'a Types<Concrete>,
-    decls: &'a Declarations,
     laws: &'a LawTable,
     loops: Vec<NaturalLoop>,
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn of(cfg: &'a CfgBody, types: &'a Types<Concrete>, decls: &'a Declarations, laws: &'a LawTable) -> Self {
+    pub fn of(cfg: &'a CfgBody, types: &'a Types<Concrete>, laws: &'a LawTable) -> Self {
         Self {
             cfg,
             types,
-            decls,
             laws,
             loops: natural_loops_innermost_first(cfg, &DomTree::build(cfg)),
         }

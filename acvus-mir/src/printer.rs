@@ -814,7 +814,7 @@ fn write_body(
         costs: computed
             .costs
             .map(|table| Costs::of(&computed.cfg, ctx.types, computed.decls, computed.laws, table)),
-        lowerer: Lowerer::of(&computed.cfg, ctx.types, computed.decls, computed.laws),
+        lowerer: Lowerer::of(&computed.cfg, ctx.types, computed.laws),
     });
     let mut block = crate::cfg::ENTRY_LABEL;
 
