@@ -287,6 +287,7 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::Fn
         | Token::Match
         | Token::Mut
+        | Token::Move
         | Token::As
         | Token::FmtStringStart(_)
         | Token::FmtStringMid(_)

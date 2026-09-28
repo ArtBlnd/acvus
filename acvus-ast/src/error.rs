@@ -351,6 +351,7 @@ pub enum Terminal {
     Fn,
     Match,
     Mut,
+    Move,
     As,
     Amp,
     Plus,
@@ -422,7 +423,7 @@ const OPERAND_START: &[Terminal] = &[
 
 /// Every terminal an expression can begin with that no operand can: a
 /// lambda's `|` and a `return`.
-const EXPRESSION_ONLY_START: &[Terminal] = &[Terminal::Pipe, Terminal::Return];
+const EXPRESSION_ONLY_START: &[Terminal] = &[Terminal::Pipe, Terminal::Move, Terminal::Return];
 
 const STATEMENT_KEYWORDS: &[Terminal] = &[
     Terminal::Let,
@@ -445,7 +446,7 @@ const LITERALS: [Terminal; 7] = [
 ];
 
 impl Terminal {
-    pub const ALL: [Terminal; 67] = [
+    pub const ALL: [Terminal; 68] = [
         Terminal::Int,
         Terminal::IntOf,
         Terminal::Char,
@@ -476,6 +477,7 @@ impl Terminal {
         Terminal::Fn,
         Terminal::Match,
         Terminal::Mut,
+        Terminal::Move,
         Terminal::As,
         Terminal::Amp,
         Terminal::Plus,
@@ -547,6 +549,7 @@ impl Terminal {
             Token::Fn => Terminal::Fn,
             Token::Match => Terminal::Match,
             Token::Mut => Terminal::Mut,
+            Token::Move => Terminal::Move,
             Token::As => Terminal::As,
             Token::Amp => Terminal::Amp,
             Token::Plus => Terminal::Plus,
@@ -623,6 +626,7 @@ impl Terminal {
             Terminal::Fn => "fn",
             Terminal::Match => "match",
             Terminal::Mut => "mut",
+            Terminal::Move => "move",
             Terminal::As => "as",
             Terminal::Amp => "&",
             Terminal::Plus => "+",
@@ -761,6 +765,7 @@ mod tests {
             Token::Fn,
             Token::Match,
             Token::Mut,
+            Token::Move,
             Token::As,
             Token::Amp,
             Token::Plus,

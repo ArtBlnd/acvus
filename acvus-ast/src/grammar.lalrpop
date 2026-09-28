@@ -50,6 +50,7 @@ extern {
         "fn" => Token::Fn,
         "match" => Token::Match,
         "mut" => Token::Mut,
+        "move" => Token::Move,
         "as" => Token::As,
         "&" => Token::Amp,
         "+" => Token::Plus,
@@ -409,9 +410,12 @@ StmtExpr: Nested<Expr<S>> = {
 };
 
 ExprFrom<Lead>: Nested<Expr<S>> = {
-    // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
+    // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside).
+    // `move` before it moves each captured name in (functions §2).
     <l:@L> "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>?
-        holding_one(body, Span::new(l, r), |body, span| Expr::Lambda { id: AstId::alloc(), params, body, span }),
+        holding_one(body, Span::new(l, r), |body, span| Expr::Lambda { id: AstId::alloc(), captures_by_move: false, params, body, span }),
+    <l:@L> "move" "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>?
+        holding_one(body, Span::new(l, r), |body, span| Expr::Lambda { id: AstId::alloc(), captures_by_move: true, params, body, span }),
     // An expression and not a statement, so that it stands where a value is
     // read; `return e;` is then the expression-statement rule. There is no
     // `return;`: every body returns a value (RFC-0054).

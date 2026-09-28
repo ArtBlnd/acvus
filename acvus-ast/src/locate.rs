@@ -453,6 +453,7 @@ impl Nodes {
                 params,
                 body,
                 span,
+                ..
             } => {
                 self.push(*id, *span, None);
                 for param in params {

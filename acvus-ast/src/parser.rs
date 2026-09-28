@@ -1975,6 +1975,33 @@ mod tests {
         );
     }
 
+    /// functions §2: `move |…| -> e` moves each captured name in; a lambda
+    /// without `move` captures by reference.
+    #[test]
+    fn move_before_a_lambda_marks_it_capturing_by_move() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "let f = move |q| -> q; let g = |q| -> q; 1").unwrap();
+        let by_move: Vec<bool> = s
+            .stmts
+            .iter()
+            .map(|stmt| match stmt {
+                Stmt::LetBind {
+                    expr: Expr::Lambda { captures_by_move, .. },
+                    ..
+                } => *captures_by_move,
+                other => panic!("expected a lambda binding, found {other:?}"),
+            })
+            .collect();
+        assert_eq!(by_move, vec![true, false]);
+    }
+
+    /// `move` is reserved: it names no binding.
+    #[test]
+    fn move_is_not_a_name() {
+        let interner = Interner::new();
+        assert!(parse_script(&interner, "let move = 1; move").is_err());
+    }
+
     /// A bare `x = e;` in a lambda body parses as an assignment, not a
     /// binding, exactly as it does at the top level.
     #[test]

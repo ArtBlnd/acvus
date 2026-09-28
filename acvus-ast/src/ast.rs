@@ -433,9 +433,13 @@ pub enum Expr<S = Clean> {
         right: Box<Expr<S>>,
         span: Span,
     },
-    /// Lambda: `|x| -> expr` or `|x, y| -> expr`.
+    /// Lambda: `|x| -> expr` or `|x, y| -> expr`, and with `move` before
+    /// it, `move |x| -> expr`.
     Lambda {
         id: AstId,
+        /// `move`: each captured name is moved into the closure when it is
+        /// made; without it, each is captured by reference (functions §2).
+        captures_by_move: bool,
         params: Vec<Binder>,
         body: Box<Expr<S>>,
         span: Span,
