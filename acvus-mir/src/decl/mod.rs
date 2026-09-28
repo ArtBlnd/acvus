@@ -29,7 +29,7 @@ pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel}
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use scheme::{DeclaredFacts, GenericSig, InstanceSig, Instances, Requirement, Scheme};
 pub use user_type::UserTypeDecl;
-pub use verify::Refused;
+pub use verify::{Refused, Written};
 
 /// What the embedder and the extern registries hand the compiler, before
 /// verification.

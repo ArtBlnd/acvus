@@ -41,14 +41,27 @@ pub enum Refused {
     DuplicateContext { id: QualifiedRef },
     /// Two declarations of one input (programs §4).
     DuplicateInput { name: acvus_utils::Astr },
-    /// A signature names an extern-defined type no declaration gives
-    /// (extern-fn §8).
-    UndeclaredType { declaration: QualifiedRef, id: QualifiedRef },
+    /// A type the declarations write names an extern-defined type no
+    /// declaration gives (extern-fn §8).
+    UndeclaredType { written: Written, id: QualifiedRef },
+    /// A declared type holds `Handle` or `Order`, which only the compiler's
+    /// IR writes (effects §3, §6).
+    InternalType { written: Written },
     /// Two types under one name.
     DuplicateType { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in
     /// rfc_compiler; carried from the registry's rule until it is.
     TwoIdentities { id: QualifiedRef },
+}
+
+/// Where a declaration writes a type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Written {
+    Function(QualifiedRef),
+    Context(QualifiedRef),
+    Input(acvus_utils::Astr),
+    Cast(QualifiedRef),
+    Type(QualifiedRef),
 }
 
 /// Build the verified set, or every refusal the set earns.
