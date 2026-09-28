@@ -71,9 +71,13 @@ impl Fixture {
 }
 
 fn build(module: &mut Module, ordered: bool) -> Builder<'_> {
-    let mut builder = module.build_body(ordered);
-    builder.set_span(Span::ZERO);
-    builder
+    module.build_body(ordered)
+}
+
+/// The span of the `n`th instruction a test writes, distinct so each test
+/// can see that a record keeps the span it was pushed with.
+fn at(n: u32) -> Span {
+    Span::new(n as usize, n as usize + 1)
 }
 
 fn ret(value: ValueId) -> Terminator {
@@ -119,8 +123,8 @@ fn straight_line(f: &mut Fixture) -> (BodyId, ValueId, ValueId, ValueId) {
     let (name, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false);
     let a = builder.param(name, int);
-    let x = builder.push(add(a, a), int);
-    let y = builder.push(neg(x), int);
+    let x = builder.push(add(a, a), int, at(1));
+    let y = builder.push(neg(x), int, at(2));
     builder.terminate(ret(y));
     (builder.seal().expect("the body has no open state"), a, x, y)
 }
@@ -136,7 +140,7 @@ fn every_value_is_born_typed() {
     let slot = builder.slot(bool);
     let join = builder.new_block(&[bool]);
     let p = builder.block_params(join)[0];
-    let t = builder.push(Op::Const { value: Literal::Bool(true) }, bool);
+    let t = builder.push(Op::Const { value: Literal::Bool(true) }, bool, at(3));
     builder.terminate(Terminator::Jump { to: join, args: vec![t] });
     builder.switch_to(join);
     builder.terminate(ret(a));
@@ -175,7 +179,7 @@ fn an_operation_without_a_result_is_not_given_one() {
     let (name, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false);
     let a = builder.param(name, int);
-    builder.push(Op::Drop { src: a }, int);
+    builder.push(Op::Drop { src: a }, int, at(4));
 }
 
 // -- 2. Def-use; a used value is removed only with its replacement -------
@@ -216,9 +220,9 @@ fn a_removal_moves_the_definitions_after_it() {
     let (name, int) = (f.name("a"), f.int);
     let mut builder = build(&mut f.module, false);
     let a = builder.param(name, int);
-    let x = builder.push(add(a, a), int);
-    let y = builder.push(neg(a), int);
-    let z = builder.push(neg(y), int);
+    let x = builder.push(add(a, a), int, at(5));
+    let y = builder.push(neg(a), int, at(6));
+    let z = builder.push(neg(y), int, at(7));
     builder.terminate(ret(z));
     let id = builder.seal().expect("the body has no open state");
 
@@ -342,9 +346,9 @@ fn push_effect_threads_the_token_and_return_carries_the_current_one() {
     let (int, whole, pure) = (f.int, f.whole, f.pure);
     let (first_call, pure_call, second_call) = (f.call(whole), f.call(pure), f.call(whole));
     let mut builder = build(&mut f.module, true);
-    let first = builder.push_effect(first_call, int);
-    builder.push(pure_call, int);
-    let second = builder.push_effect(second_call, int);
+    let first = builder.push_effect(first_call, int, at(8));
+    builder.push(pure_call, int, at(9));
+    let second = builder.push_effect(second_call, int, at(10));
     builder.terminate(ret(second));
     let id = builder.seal().expect("the body has no open state");
 
@@ -359,6 +363,24 @@ fn push_effect_threads_the_token_and_return_carries_the_current_one() {
     let second_edge = edge_of(&insts[2]);
     assert_eq!(second_edge.before, first_edge.after);
     assert_eq!(returned_order(body, body.entry()), Some(second_edge.after));
+    let spans: Vec<Span> = insts.iter().map(Inst::span).collect();
+    assert_eq!(spans, vec![at(8), at(9), at(10)]);
+}
+
+#[test]
+fn every_record_keeps_the_span_it_was_pushed_with() {
+    let mut f = fixture();
+    let (name, int) = (f.name("a"), f.int);
+    let mut builder = build(&mut f.module, false);
+    let a = builder.param(name, int);
+    let x = builder.push(neg(a), int, at(100));
+    builder.push_unit(Op::Drop { src: x }, at(101));
+    builder.terminate(ret(a));
+    let id = builder.seal().expect("the body has no open state");
+    let body = f.body(id);
+    let insts = body.block(body.entry()).insts();
+    assert_eq!((insts[0].span(), insts[1].span()), (at(100), at(101)));
+    assert_eq!(insts[1].result(), None);
 }
 
 #[test]
@@ -366,7 +388,7 @@ fn push_effect_threads_the_token_and_return_carries_the_current_one() {
 fn a_pure_body_takes_no_effect() {
     let mut f = fixture();
     let (int, call) = (f.int, f.call(f.whole));
-    build(&mut f.module, false).push_effect(call, int);
+    build(&mut f.module, false).push_effect(call, int, at(11));
 }
 
 #[test]
@@ -374,7 +396,7 @@ fn a_pure_body_takes_no_effect() {
 fn an_effectful_call_is_not_pushed_as_pure() {
     let mut f = fixture();
     let (int, call) = (f.int, f.call(f.whole));
-    build(&mut f.module, true).push(call, int);
+    build(&mut f.module, true).push(call, int, at(12));
 }
 
 #[test]
@@ -387,12 +409,12 @@ fn the_token_crosses_a_diamond_join() {
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(c, then_block, else_block, join));
     builder.switch_to(then_block);
-    builder.push_effect(arm_call, int);
+    builder.push_effect(arm_call, int, at(13));
     builder.terminate(jump(join));
     builder.switch_to(else_block);
     builder.terminate(jump(join));
     builder.switch_to(join);
-    let joined = builder.push_effect(join_call, int);
+    let joined = builder.push_effect(join_call, int, at(14));
     builder.terminate(ret(joined));
     let id = builder.seal().expect("the body has no open state");
 
@@ -427,7 +449,7 @@ fn a_join_no_arm_advances_takes_no_token_parameter() {
         builder.terminate(jump(join));
     }
     builder.switch_to(join);
-    let joined = builder.push_effect(join_call, int);
+    let joined = builder.push_effect(join_call, int, at(15));
     builder.terminate(ret(joined));
     let id = builder.seal().expect("the body has no open state");
 
@@ -453,7 +475,7 @@ fn the_token_crosses_a_loop_back_edge() {
         exit_args: Vec::new(),
     });
     builder.switch_to(loop_body);
-    builder.push_effect(body_call, int);
+    builder.push_effect(body_call, int, at(16));
     builder.terminate(jump(header));
     builder.switch_to(exit);
     builder.terminate(ret(c));
@@ -481,12 +503,12 @@ fn anyorder_gives_its_entry_token_inside_and_merges_on_close() {
     let [first, second, after] = calls;
     let mut builder = build(&mut f.module, true);
     builder.open_anyorder();
-    builder.push_effect(first, int);
+    builder.push_effect(first, int, at(17));
     builder.open_anyorder();
-    builder.push_effect(second, int);
+    builder.push_effect(second, int, at(18));
     builder.close_anyorder();
     builder.close_anyorder();
-    let last = builder.push_effect(after, int);
+    let last = builder.push_effect(after, int, at(19));
     builder.terminate(ret(last));
     let id = builder.seal().expect("the body has no open state");
 
@@ -503,6 +525,8 @@ fn anyorder_gives_its_entry_token_inside_and_merges_on_close() {
     assert_eq!(orders, vec![o0, a1.after]);
     let (orders, m2) = merged(&insts[3]);
     assert_eq!(orders, vec![m1, a2.after]);
+    // A scope's merge is placed with the span of the call it follows.
+    assert_eq!((insts[1].span(), insts[3].span()), (at(17), at(18)));
     assert_eq!(edge_of(&insts[4]).before, m2);
 }
 
@@ -514,7 +538,7 @@ fn anyorder_merges_on_an_edge_that_leaves_it() {
     let mut builder = build(&mut f.module, true);
     let out = builder.reserve_block();
     builder.open_anyorder();
-    builder.push_effect(inside, int);
+    builder.push_effect(inside, int, at(20));
     builder.terminate(jump(out));
     let rest = builder.new_block(&[]);
     builder.switch_to(rest);
@@ -522,7 +546,7 @@ fn anyorder_merges_on_an_edge_that_leaves_it() {
     builder.terminate(Terminator::Diverge);
     builder.make_block(out, &[]);
     builder.switch_to(out);
-    let last = builder.push_effect(outside, int);
+    let last = builder.push_effect(outside, int, at(21));
     builder.terminate(ret(last));
     let id = builder.seal().expect("the body has no open state");
 
@@ -540,7 +564,7 @@ fn a_return_inside_anyorder_carries_the_merge() {
     let inside = f.call(whole);
     let mut builder = build(&mut f.module, true);
     builder.open_anyorder();
-    let value = builder.push_effect(inside, int);
+    let value = builder.push_effect(inside, int, at(22));
     builder.terminate(ret(value));
     let rest = builder.new_block(&[]);
     builder.switch_to(rest);
@@ -559,8 +583,8 @@ fn removing_an_effectful_call_rethreads_the_token_around_it() {
     let (int, whole) = (f.int, f.whole);
     let (first_call, second_call) = (f.call(whole), f.call(whole));
     let mut builder = build(&mut f.module, true);
-    let first = builder.push_effect(first_call, int);
-    let second = builder.push_effect(second_call, int);
+    let first = builder.push_effect(first_call, int, at(23));
+    let second = builder.push_effect(second_call, int, at(24));
     builder.terminate(ret(second));
     let id = builder.seal().expect("the body has no open state");
     let o0 = f.body(id).order_param().expect("ordered");
@@ -584,8 +608,8 @@ fn split_call_makes_a_start_and_its_taking() {
     let (int, splittable) = (f.int, f.splittable);
     let call_op = f.call(splittable);
     let mut builder = build(&mut f.module, true);
-    let call = builder.push_effect(call_op, int);
-    let user = builder.push(neg(call), int);
+    let call = builder.push_effect(call_op, int, at(25));
+    let user = builder.push(neg(call), int, at(26));
     builder.terminate(ret(user));
     let id = builder.seal().expect("the body has no open state");
     let entry = f.body(id).entry();
@@ -604,6 +628,7 @@ fn split_call_makes_a_start_and_its_taking() {
     assert!(matches!(insts[2].op(), Op::UnaryOp { operand, .. } if *operand == call));
     assert!(matches!(rewriter.types().kind(body.ty_of(handle)), TyKind::Handle(ret) if *ret == f.int));
     assert_eq!(body.use_count(handle), 1);
+    assert_eq!((insts[0].span(), insts[1].span()), (at(25), at(25)));
     let changes = rewriter.finish();
     assert!(changes.touched(Aspect::Instructions));
     assert!(changes.touched(Aspect::OrderTokens));
@@ -615,9 +640,9 @@ fn removing_a_taking_removes_its_start_and_rethreads_the_token() {
     let (int, splittable, whole) = (f.int, f.splittable, f.whole);
     let (call_op, later_op) = (f.call(splittable), f.call(whole));
     let mut builder = build(&mut f.module, true);
-    let call = builder.push_effect(call_op, int);
-    let user = builder.push(neg(call), int);
-    let later = builder.push_effect(later_op, int);
+    let call = builder.push_effect(call_op, int, at(27));
+    let user = builder.push(neg(call), int, at(28));
+    let later = builder.push_effect(later_op, int, at(29));
     builder.terminate(ret(later));
     let id = builder.seal().expect("the body has no open state");
     let o0 = f.body(id).order_param().expect("ordered");
@@ -640,7 +665,7 @@ fn a_call_its_callee_does_not_let_split_is_refused() {
     let mut f = fixture();
     let (int, call_op) = (f.int, f.call(f.whole));
     let mut builder = build(&mut f.module, true);
-    let call = builder.push_effect(call_op, int);
+    let call = builder.push_effect(call_op, int, at(30));
     builder.terminate(ret(call));
     let id = builder.seal().expect("the body has no open state");
     f.module.rewrite(id).split_call(call);
@@ -654,6 +679,7 @@ fn a_start_is_not_pushed_alone() {
     build(&mut f.module, false).push(
         Op::Spawn { callee: Callee::Direct(QualifiedRef::root(name)), callee_ty: splittable, args: Vec::new() },
         int,
+        at(31),
     );
 }
 
@@ -731,8 +757,8 @@ fn a_split_keeps_the_block_named_and_moves_the_diamond_with_the_tail() {
     let d = builder.param(nd, bool);
     let entry = builder.current_block();
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
-    let x = builder.push(add(a, a), int);
-    let y = builder.push(neg(x), int);
+    let x = builder.push(add(a, a), int, at(32));
+    let y = builder.push(neg(x), int, at(33));
     builder.terminate(diamond(c, then_block, else_block, join));
     for block in [then_block, else_block] {
         builder.switch_to(block);
@@ -818,6 +844,6 @@ fn a_return_does_not_take_a_token_from_its_caller() {
     let (na, int, bool) = (f.name("a"), f.int, f.bool);
     let mut builder = build(&mut f.module, false);
     let a = builder.param(na, int);
-    let flag = builder.push(Op::Const { value: Literal::Bool(false) }, bool);
+    let flag = builder.push(Op::Const { value: Literal::Bool(false) }, bool, at(34));
     builder.terminate(Terminator::Return { value: a, order: Some(flag), span: Span::ZERO });
 }

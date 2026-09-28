@@ -37,7 +37,6 @@ pub struct Builder<'m> {
     /// Every block of the body, by id. The body's own block list is filled
     /// from these at `seal`, when each has its terminator.
     blocks: Vec<Building>,
-    span: Option<Span>,
     /// Present exactly when the body is ordered.
     order: Option<OrderThread>,
     anyorder_depth: usize,
@@ -124,7 +123,6 @@ impl<'m> Builder<'m> {
             body,
             at: entry_block,
             blocks: vec![Building::Made(entry)],
-            span: None,
             order,
             anyorder_depth: 0,
         }
@@ -133,11 +131,6 @@ impl<'m> Builder<'m> {
     /// The block instructions are appended to. Cost: O(1).
     pub fn current_block(&self) -> BlockId {
         self.at
-    }
-
-    /// The span every instruction appended from now on carries. Cost: O(1).
-    pub fn set_span(&mut self, span: Span) {
-        self.span = Some(span);
     }
 
     /// A parameter of the body, after those declared so far. Cost: O(1).
@@ -170,11 +163,11 @@ impl<'m> Builder<'m> {
     ///
     /// # Panics
     /// See `push_unit`; also, `op` yields no value.
-    pub fn push(&mut self, op: Op, ty: Ty) -> ValueId {
+    pub fn push(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
         assert!(op.has_result(), "{op:?} yields no value; it is pushed by push_unit");
         self.assert_not_on_chain(&op);
         let result = self.new_result(ty);
-        self.append(Inst { op, result: Some(result), order: None, span: self.span() });
+        self.append(Inst { op, result: Some(result), order: None, span });
         result
     }
 
@@ -185,24 +178,25 @@ impl<'m> Builder<'m> {
     /// `op` yields a value; it is a call whose effect is not pure, a
     /// `Spawn`, a `TakeEffect` or a `Merge`, which only the core writes; an
     /// operand is not a value of this body; the current block is
-    /// terminated; or no span was set.
-    pub fn push_unit(&mut self, op: Op) {
+    /// terminated.
+    pub fn push_unit(&mut self, op: Op, span: Span) {
         assert!(!op.has_result(), "{op:?} yields a value; it is pushed by push");
         self.assert_not_on_chain(&op);
-        self.append(Inst { op, result: None, order: None, span: self.span() });
+        self.append(Inst { op, result: None, order: None, span });
     }
 
     /// Appends an effectful call typed `ty` and returns its result. It
     /// consumes the current token and yields the next (effects §3); inside
     /// an `anyorder` scope it consumes the scope's entry token instead, and
-    /// what it yields joins the scope's merge. Cost: O(its operands), and
+    /// what it yields joins the scope's merge, a `Merge` placed with the
+    /// call's `span`. Cost: O(its operands), and
     /// O(1) for the token.
     ///
     /// # Panics
     /// The body is not ordered; `op` is not a `FunctionCall` whose callee's
     /// effect is not pure; an operand is not a value of this body; the
-    /// current block is terminated; or no span was set.
-    pub fn push_effect(&mut self, op: Op, ty: Ty) -> ValueId {
+    /// current block is terminated.
+    pub fn push_effect(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
         assert!(self.order.is_some(), "a body whose effect is pure issues no effect (effects §3)");
         assert!(
             self.effectful_call(&op),
@@ -216,7 +210,6 @@ impl<'m> Builder<'m> {
         let order_ty = self.order().order_ty;
         let result = self.new_result(ty);
         let after = self.new_result(order_ty);
-        let span = self.span();
         self.append(Inst { op, result: Some(result), order: Some(OrderUse::Edge(OrderEdge { before, after })), span });
         match self.order().scope.as_ref().map(|scope| scope.id) {
             Some(scope) => {
@@ -547,10 +540,6 @@ impl<'m> Builder<'m> {
         };
         assert!(current.terminator.is_none(), "{:?} is terminated; nothing is appended to it", self.at);
         current
-    }
-
-    fn span(&self) -> Span {
-        self.span.expect("a span is set before the first instruction")
     }
 
     /// # Panics
