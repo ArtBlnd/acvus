@@ -163,8 +163,7 @@ impl Fixture {
         self.lang_item(cmp, &cmps);
     }
 
-    /// `display(&i64, &mut String)` and `display(&str, &mut String)`, pure:
-    /// typeck reaches `display` for a template's text too.
+    /// `display(&i64, &mut String)`, pure.
     fn display_ints(&mut self) {
         let int = self.int();
         let shown = self.reference(Mutability::Shared, int);
@@ -172,11 +171,8 @@ impl Fixture {
         let out = self.reference(Mutability::Mut, string);
         let unit = self.ty(TyKind::Unit);
         let impl_ty = self.function(&[shown, out], unit, Effect::pure());
-        let str_ty = self.ty(TyKind::Str);
-        let shown_text = self.reference(Mutability::Shared, str_ty);
-        let text_ty = self.function(&[shown_text, out], unit, Effect::pure());
         let display = self.raw.core.display;
-        self.lang_item(display, &[impl_ty, text_ty]);
+        self.lang_item(display, &[impl_ty]);
     }
 
     fn script(self, source: &str) -> Lowered {
@@ -616,7 +612,8 @@ fn a_template_appends_text_and_displays_values_onto_its_output() {
     fx.display_ints();
     let lowered = fx.template("hello {{ $x }}");
     let ops = lowered.entry_ops();
-    assert!(count(&ops, |op| matches!(op, Op::StringAppend { .. })) >= 1);
+    assert_eq!(count(&ops, |op| matches!(op, Op::ConstStr { text } if text == "hello ")), 1);
+    assert_eq!(count(&ops, |op| matches!(op, Op::StringAppend { .. })), 1);
     let display = QualifiedRef::qualified(lowered.name("core"), lowered.name("display"));
     assert_eq!(
         count(&ops, |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == display)),

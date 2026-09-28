@@ -117,7 +117,12 @@ impl<'t> Namer<'t> {
                 self.stmts(body);
             }
             Stmt::Anyorder { body, .. } => self.stmts(body),
-            Stmt::LetUninit { .. } | Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::FnDecl(_) | Stmt::Error(_) => {}
+            Stmt::LetUninit { .. }
+            | Stmt::Break { .. }
+            | Stmt::Continue { .. }
+            | Stmt::Text { .. }
+            | Stmt::FnDecl(_)
+            | Stmt::Error(_) => {}
         }
     }
 

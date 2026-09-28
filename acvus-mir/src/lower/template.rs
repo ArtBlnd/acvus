@@ -1,5 +1,5 @@
-//! A template's body: one `String` slot it returns; text is appended as a
-//! literal and `{{ x }}` through `core::display(&x, &mut out)` (programs §1,
+//! A template's body: one `String` slot it returns; its text is appended
+//! as a literal and `{{ x }}` through `core::display(&x, &mut out)` (programs §1,
 //! operators §2); `%` lines lower as a script's statements.
 
 use acvus_ast::{AstId, Expr, Literal, Slot, Span};
@@ -8,27 +8,34 @@ use super::call::{call_reached, convert};
 use super::ctxt::Lcx;
 use super::place::{Operand, lend, operand};
 use crate::ir::cfg::Op;
-use crate::ir::RefTarget;
+use crate::ir::{RefTarget, ValueId};
 use crate::ty::{Mutability, TyKind};
 
-/// An `Append`: a text line, which the parser writes as a string literal,
-/// is appended as that text; any other value is formatted onto the output
-/// by the `core::display` impl typeck reached at `site`.
-pub(super) fn lower_append<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span: Span) {
-    let out = cx.out.expect("an `Append` is a template's, and a template's body holds its output");
+/// The output as a `&mut String`, for one append.
+fn output(cx: &mut Lcx<'_, '_>, span: Span) -> ValueId {
+    let out = cx.out.expect("a template's text and `{{ }}` append to its output, which its body holds");
     let string = cx.value_ty(out);
-    let out_ty = cx.ref_ty(Mutability::Mut, string);
-    let target = cx.builder.push(Op::Ref { target: RefTarget::Var(out), path: Vec::new(), mutability: Mutability::Mut }, out_ty, span);
-    if let Expr::Literal { value: Literal::String(text), span, .. } = expr {
-        let str_ty = cx.builder.intern(TyKind::Str);
-        let text_ty = cx.ref_ty(Mutability::Shared, str_ty);
-        let part = cx.builder.push(Op::ConstStr { text: text.clone() }, text_ty, *span);
-        cx.builder.push_unit(Op::StringAppend { target, part }, *span);
-        return;
-    }
+    let ty = cx.ref_ty(Mutability::Mut, string);
+    let op = Op::Ref { target: RefTarget::Var(out), path: Vec::new(), mutability: Mutability::Mut };
+    cx.builder.push(op, ty, span)
+}
+
+/// A template's text, appended as it is written (programs §1).
+pub(super) fn lower_text(cx: &mut Lcx<'_, '_>, text: &str, span: Span) {
+    let target = output(cx, span);
+    let str_ty = cx.builder.intern(TyKind::Str);
+    let text_ty = cx.ref_ty(Mutability::Shared, str_ty);
+    let part = cx.builder.push(Op::ConstStr { text: text.to_string() }, text_ty, span);
+    cx.builder.push_unit(Op::StringAppend { target, part }, span);
+}
+
+/// `{{ x }}`: the value formatted onto the output by the `core::display`
+/// impl typeck reached at `site` (operators §2, §7).
+pub(super) fn lower_append<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span: Span) {
     let shown = operand(cx, expr, Mutability::Shared);
     let shown = lend(cx, shown, Mutability::Shared, expr.span());
     let shown = convert(cx, expr.id(), shown, expr.span());
+    let target = output(cx, span);
     let target = convert(cx, site, target, span);
     call_reached(cx, site, vec![shown, target], span);
 }
@@ -43,7 +50,7 @@ pub(super) fn open_output(cx: &mut Lcx<'_, '_>, span: Span) {
 }
 
 /// The template's output, taken to be returned.
-pub(super) fn take_output(cx: &mut Lcx<'_, '_>, span: Span) -> crate::ir::ValueId {
+pub(super) fn take_output(cx: &mut Lcx<'_, '_>, span: Span) -> ValueId {
     let out = cx.out.expect("a template's body holds its output");
     let ty = cx.value_ty(out);
     let place = super::place::Place { target: RefTarget::Var(out), path: Vec::new(), ty };

@@ -9,7 +9,7 @@ use super::control::{lower_for, lower_loop_exit, lower_while, lower_while_let};
 use super::ctxt::{Home, Lcx};
 use super::expr::lower_expr;
 use super::place::{Place, assign, binding_place, lower_deref_store, lower_store};
-use super::template::lower_append;
+use super::template::{lower_append, lower_text};
 use crate::ir::cfg::Terminator;
 use crate::ir::{RefTarget, ValueId};
 use crate::ty::TyKind;
@@ -75,6 +75,7 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) {
             cx.anyorder -= 1;
             cx.builder.close_anyorder();
         }
+        Stmt::Text { value, span, .. } => lower_text(cx, value, *span),
         Stmt::Append { id, expr, span } => lower_append(cx, *id, expr, *span),
         Stmt::FnDecl(_) => panic!("a `fn` in a script is refused (FnDeclInScript), and never lowered"),
         Stmt::Error(_) => panic!("a statement the parse left in error is refused, and never lowered"),
