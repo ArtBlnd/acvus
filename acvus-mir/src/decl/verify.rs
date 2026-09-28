@@ -7,7 +7,7 @@ use super::casts::{Base, CastTree, Head, VerifiedExternCast};
 use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::instance_fit::is_instance_of;
-use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, TyVarBound, UserTypeDecl};
+use super::{CastRule, Core, Declarations, RawDeclarations, Requirement, Scheme, UserTypeDecl};
 use crate::flows::{Segment, segments};
 use crate::ty::{
     Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LifetimesOf, Mutability, ObjectTy,
@@ -365,16 +365,8 @@ struct DeclaredTypes<'d> {
     inputs: &'d [(Astr, TyId<Poly>)],
 }
 
-/// The types a bound names.
-fn bound_types(bound: &TyVarBound) -> &[TyId<Poly>] {
-    match bound {
-        TyVarBound::OneOf(shapes) => shapes,
-        TyVarBound::Any | TyVarBound::Integer { .. } | TyVarBound::Settled => &[],
-    }
-}
-
-/// Every type a scheme writes: its signature, its instances', every
-/// requirement's pattern and every bound's shapes.
+/// Every type a scheme writes: its signature, its instances' and every
+/// requirement's pattern.
 fn scheme_types(scheme: &Scheme) -> impl Iterator<Item = TyId<Poly>> + '_ {
     let concrete = scheme.instances.iter().flat_map(|instances| instances.concrete.iter());
     signature_types(scheme)
@@ -384,7 +376,6 @@ fn scheme_types(scheme: &Scheme) -> impl Iterator<Item = TyId<Poly>> + '_ {
                 .flat_map(|instance| instance.requires.iter())
                 .map(|requirement| requirement.pattern),
         )
-        .chain(scheme.bounds.iter().flat_map(bound_types).copied())
 }
 
 /// Every type the declarations write, each with where it is written.
@@ -393,12 +384,6 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
         .functions
         .iter()
         .flat_map(|(id, scheme)| scheme_types(scheme).map(|ty| (Written::Function(*id), ty)));
-    let user_types = declared.user_types.values().flat_map(|decl| {
-        decl.type_params
-            .iter()
-            .flat_map(bound_types)
-            .map(|ty| (Written::Type(decl.id), *ty))
-    });
     let casts = declared
         .casts
         .iter()
@@ -410,7 +395,6 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
     let contexts = declared.contexts.iter().map(|(id, ty)| (Written::Context(*id), *ty));
     let inputs = declared.inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
     functions
-        .chain(user_types)
         .chain(casts)
         .chain(conversions)
         .chain(contexts)
@@ -1084,7 +1068,9 @@ mod tests {
     use acvus_utils::Interner;
 
     use super::*;
-    use crate::decl::{DeclaredFacts, EndLabels, GenericSig, InstanceSig, Instances, LoopMarkers, Outlives};
+    use crate::decl::{
+        DeclaredFacts, EndLabels, GenericSig, InstanceSig, Instances, LoopMarkers, Outlives, TyVarBound,
+    };
     use crate::ty::{Calls, Effect, EffectTerm, IntTy, LenTerm, TypeArg};
 
     struct Fixture {

@@ -12,11 +12,6 @@ impl Bound {
             Bound::Integer { signed, among, .. } => {
                 matches!(kind, TyKind::Int(width) if Self::integer_admits(*signed, among, *width))
             }
-            Bound::OneOf(shapes) => todo!(
-                "stop: when a OneOf bound of {} shapes admits a node is not settled: by head, by eq \
-                 with one shape (binding what?), or only once the node is closed",
-                shapes.len()
-            ),
         }
     }
 
@@ -25,9 +20,6 @@ impl Bound {
     pub(super) fn meet(&self, other: &Bound) -> Option<Bound> {
         match (self, other) {
             (Bound::Any, bound) | (bound, Bound::Any) => Some(bound.clone()),
-            (Bound::OneOf(_), _) | (_, Bound::OneOf(_)) => todo!(
-                "stop: the meet of a OneOf bound waits on what a OneOf bound admits"
-            ),
             (Bound::Settled, bound) | (bound, Bound::Settled) => Some(bound.clone()),
             (
                 Bound::Integer {

@@ -3,7 +3,7 @@
 use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
-use super::{Bound, Infer, Term, VarState};
+use super::{Bound, Infer, Term};
 use crate::decl::{Declarations, Scheme, TyVarBound};
 use crate::laws::NamedLaw;
 use crate::ty::{
@@ -70,15 +70,8 @@ impl Infer {
     /// place takes the program's term as it is (types §1).
     pub fn instantiate(&mut self, decls: &Declarations, scheme: &Scheme) -> Instantiated {
         let mut at = AtUse::new(decls.types(), Placeholders::Declared);
-        let vars: Vec<Term> = (0..scheme.bounds.len()).map(|_| self.fresh(Bound::Any)).collect();
-        at.ty_vars.extend((0u32..).zip(vars.iter().copied()));
-        for (var, declared) in vars.into_iter().zip(scheme.bounds.iter()) {
-            let bound = self.bound_of(&mut at, declared);
-            let TyKind::Var(var) = *self.types.kind(var) else {
-                unreachable!("instantiate: fresh gives a variable")
-            };
-            self.ty_vars[var.0 as usize] = VarState::Unbound(bound);
-        }
+        let vars: Vec<Term> = scheme.bounds.iter().map(|declared| self.fresh(bound_of(declared))).collect();
+        at.ty_vars.extend((0u32..).zip(vars));
         let ty = self.instantiate_ty(&mut at, scheme.ty);
         let requirements = scheme
             .requires
@@ -99,22 +92,6 @@ impl Infer {
         let from = self.instantiate_ty(&mut at, from);
         let to = self.instantiate_ty(&mut at, to);
         (from, to)
-    }
-
-    /// A declaration's bound as a variable's, its shapes at this use.
-    fn bound_of(&mut self, at: &mut AtUse<'_>, bound: &TyVarBound) -> Bound {
-        match bound {
-            TyVarBound::Any => Bound::Any,
-            TyVarBound::Settled => Bound::Settled,
-            TyVarBound::Integer { signed, among } => Bound::Integer {
-                signed: *signed,
-                among: among.clone(),
-                literal: false,
-            },
-            TyVarBound::OneOf(shapes) => {
-                Bound::OneOf(shapes.iter().map(|shape| self.instantiate_ty(at, *shape)).collect())
-            }
-        }
     }
 
     fn instantiate_ty(&mut self, at: &mut AtUse<'_>, ty: TyId<Poly>) -> Term {
@@ -262,5 +239,18 @@ impl Infer {
                 TypeArg::Open(mark, self.instantiate_ty(at, *ty))
             }
         }
+    }
+}
+
+/// A declaration's bound as a variable's.
+fn bound_of(bound: &TyVarBound) -> Bound {
+    match bound {
+        TyVarBound::Any => Bound::Any,
+        TyVarBound::Settled => Bound::Settled,
+        TyVarBound::Integer { signed, among } => Bound::Integer {
+            signed: *signed,
+            among: among.clone(),
+            literal: false,
+        },
     }
 }

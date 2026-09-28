@@ -41,7 +41,6 @@ pub enum VarState {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Bound {
     Any,
-    OneOf(Box<[Term]>),
     /// An integer type among `among`, signed only where `signed`. A literal
     /// (`literal`) is one whose width a use narrows; at a stall it is `i64`
     /// if `among` has it, the one width if one remains, and refused
