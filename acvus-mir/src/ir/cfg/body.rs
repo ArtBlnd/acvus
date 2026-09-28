@@ -101,6 +101,28 @@ impl UseSites {
     pub(super) fn into_sites(self) -> impl Iterator<Item = (Site, u32)> {
         self.counts.into_iter()
     }
+
+    /// Takes every use recorded at `site` out, and says how many there were.
+    ///
+    /// # Panics
+    /// `site` does not use the value.
+    pub(super) fn take_site(&mut self, site: Site) -> u32 {
+        self.counts.remove(&site).expect("a site whose uses are taken uses the value")
+    }
+
+    /// Renames the block of every site through `rename`. Cost: O(sites).
+    pub(super) fn rename_blocks(&mut self, rename: impl Fn(BlockId) -> BlockId) {
+        self.counts = std::mem::take(&mut self.counts)
+            .into_iter()
+            .map(|(site, count)| {
+                let site = match site {
+                    Site::Inst(block, index) => Site::Inst(rename(block), index),
+                    Site::Term(block) => Site::Term(rename(block)),
+                };
+                (site, count)
+            })
+            .collect();
+    }
 }
 
 pub struct Body {
@@ -504,7 +526,7 @@ impl Module {
         &self.types
     }
 
-    fn assert_body(&self, body: BodyId) {
+    pub(super) fn assert_body(&self, body: BodyId) {
         assert!(
             (body.0 as usize) < self.bodies.len(),
             "{body:?} is not a body of this module"

@@ -26,4 +26,9 @@ impl Changes {
     pub fn touched(&self, aspect: Aspect) -> bool {
         self.changed.contains(&aspect)
     }
+
+    /// Every aspect recorded, each once. Cost: O(aspects).
+    pub(super) fn aspects(&self) -> impl Iterator<Item = Aspect> + '_ {
+        self.changed.iter().copied()
+    }
 }

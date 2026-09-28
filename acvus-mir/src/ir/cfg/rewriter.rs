@@ -1,9 +1,13 @@
 //! passes' face (ir-core-structure §4): edits over a body that is whole
 //! between any two operations, recording what each changed.
 
+use acvus_ast::Span;
+use smallvec::SmallVec;
+
 use super::aspect::{Aspect, Changes};
-use super::body::{BlockId, Body, Def, Module};
-use super::core::StillUsed;
+use super::body::{BlockId, Body, Def, Inst, Module};
+use super::core::{InstShift, StillUsed};
+use super::op::Op;
 use crate::ir::ValueId;
 use crate::ty::{Concrete, Ty, TyKind, Types};
 
@@ -60,7 +64,7 @@ impl<'m> Rewriter<'m> {
     /// terminator supplies.
     pub fn remove(&mut self, value: ValueId) -> Result<(), StillUsed> {
         let body = self.body();
-        let (ty, aspects) = (body.ty_of(value), removal_aspects(body, value));
+        let (ty, aspects) = (body.ty_of(value), value_removal_aspects(body, value));
         let is_order = self.is_order(ty);
         self.body_mut().remove_value(value)?;
         for aspect in aspects {
@@ -111,25 +115,136 @@ impl<'m> Rewriter<'m> {
         self.changes.record(Aspect::CfgShape);
     }
 
+    /// Inserts an instruction of `op` that takes no order token at `index`
+    /// of `block`, and returns its result, typed `ty`. Cost:
+    /// `Body::insert_pure`'s.
+    ///
+    /// # Panics
+    /// As `Body::insert_pure`.
+    pub fn insert(&mut self, block: BlockId, index: usize, op: Op, ty: Ty, span: Span) -> ValueId {
+        let module = &mut *self.module;
+        let result = module.bodies[self.body.0 as usize].insert_pure(&module.types, block, index, op, ty, span);
+        let inserted = &self.body().block(block).insts()[index];
+        for aspect in inst_aspects(inserted) {
+            self.changes.record(aspect);
+        }
+        result
+    }
+
+    /// Removes the instruction at `index` of `block`, refused while its
+    /// result has uses; the token is rethreaded around an effectful call,
+    /// and a split call's taking goes with its start. It returns the
+    /// positions taken out. Cost: `Body::remove_inst_at`'s.
+    ///
+    /// # Panics
+    /// As `Body::remove_inst_at`.
+    pub fn remove_inst(&mut self, block: BlockId, index: usize) -> Result<SmallVec<[InstShift; 2]>, StillUsed> {
+        let aspects = removal_aspects(self.body(), block, index);
+        let shifts = self.body_mut().remove_inst_at(block, index)?;
+        for aspect in aspects {
+            self.changes.record(aspect);
+        }
+        Ok(shifts)
+    }
+
+    /// Moves an instruction, rethreading an effectful call's token. Cost:
+    /// `Body::move_inst`'s.
+    ///
+    /// # Panics
+    /// As `Body::move_inst`.
+    pub fn move_inst(&mut self, from: BlockId, from_index: usize, to: BlockId, to_index: usize) -> [InstShift; 2] {
+        let aspects = inst_aspects(&self.body().block(from).insts()[from_index]);
+        let module = &mut *self.module;
+        let shifts = module.bodies[self.body.0 as usize].move_inst(&module.types, from, from_index, to, to_index);
+        for aspect in aspects {
+            self.changes.record(aspect);
+        }
+        shifts
+    }
+
+    /// `block`'s two-way branch becomes a jump into one arm. Cost:
+    /// `Body::take_arm`'s.
+    ///
+    /// # Panics
+    /// As `Body::take_arm`.
+    pub fn take_arm(&mut self, block: BlockId, then: bool) {
+        self.body_mut().take_arm(block, then);
+        self.changes.record(Aspect::CfgShape);
+    }
+
+    /// Removes the blocks `keep` does not keep, and renumbers the rest.
+    /// Cost: `Body::remove_blocks`'s.
+    ///
+    /// # Panics
+    /// As `Body::remove_blocks`.
+    pub fn remove_blocks(&mut self, keep: &[bool]) -> Vec<Option<BlockId>> {
+        let body = self.body();
+        let mut aspects = vec![Aspect::CfgShape];
+        for (block, _) in body.blocks().filter(|(block, _)| !keep[block.index()]) {
+            let block = body.block(block);
+            aspects.extend(block.insts().iter().flat_map(inst_aspects));
+            if !block.params().is_empty() {
+                aspects.push(Aspect::Instructions);
+            }
+            if block.params().iter().any(|param| body.is_token(*param)) {
+                aspects.push(Aspect::OrderTokens);
+            }
+        }
+        let renamed = self.body_mut().remove_blocks(keep);
+        for aspect in aspects {
+            self.changes.record(aspect);
+        }
+        renamed
+    }
+
+    /// Replaces `slot`'s whole-slot `Take`s and `Assign`s with values. Cost:
+    /// `Body::promote_slot`'s.
+    ///
+    /// # Panics
+    /// As `Body::promote_slot`.
+    pub fn promote(&mut self, slot: ValueId) -> Vec<InstShift> {
+        let module = &mut *self.module;
+        let shifts = module.bodies[self.body.0 as usize].promote_slot(&module.types, slot);
+        self.changes.record(Aspect::Instructions);
+        self.changes.record(Aspect::Storage);
+        shifts
+    }
+
     pub fn finish(self) -> Changes {
         self.changes
     }
 }
 
+/// What an instruction's insertion, removal or move changes.
+fn inst_aspects(inst: &Inst) -> SmallVec<[Aspect; 3]> {
+    let mut aspects = SmallVec::new();
+    aspects.push(Aspect::Instructions);
+    if inst.op().touches_storage() {
+        aspects.push(Aspect::Storage);
+    }
+    if inst.is_on_order_chain() {
+        aspects.push(Aspect::OrderTokens);
+    }
+    aspects
+}
+
+/// What removing the instruction at `index` of `block` changes: its own
+/// aspects, and a split call's start's where it is a taking.
+fn removal_aspects(body: &Body, block: BlockId, index: usize) -> SmallVec<[Aspect; 3]> {
+    let inst = &body.block(block).insts()[index];
+    let mut aspects = inst_aspects(inst);
+    if let Op::TakeEffect { src } = inst.op()
+        && let Def::Inst(start_block, start_index) = body.def_of(*src)
+    {
+        aspects.extend(inst_aspects(&body.block(start_block).insts()[start_index]));
+    }
+    aspects
+}
+
 /// What removing `value` changes, beyond an order token's rethreading.
-fn removal_aspects(body: &Body, value: ValueId) -> Vec<Aspect> {
+fn value_removal_aspects(body: &Body, value: ValueId) -> Vec<Aspect> {
     match body.def_of(value) {
-        Def::Inst(block, index) => {
-            let inst = &body.blocks[block.index()].insts[index];
-            let mut aspects = vec![Aspect::Instructions];
-            if inst.op().touches_storage() {
-                aspects.push(Aspect::Storage);
-            }
-            if inst.is_on_order_chain() {
-                aspects.push(Aspect::OrderTokens);
-            }
-            aspects
-        }
+        Def::Inst(block, index) => removal_aspects(body, block, index).into_vec(),
         Def::BlockParam(..) => vec![Aspect::Instructions],
         Def::Slot(_) => vec![Aspect::Storage],
         Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::UnplacedParam(_) => Vec::new(),

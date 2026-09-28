@@ -3,22 +3,41 @@
 //! positions to edit later.
 
 use super::{Editor, InstRef, Scope};
+use crate::ir::cfg::BlockId;
 
+/// The editor keeps the cursor's place, and every edit moves that place
+/// with the instructions it shifts: an instruction put in before the place
+/// is not yielded, one put in at or after it is, and a removed one is not.
 pub struct Cursor<'e, 'm, S>
 where
     S: Scope,
 {
     editor: &'e mut Editor<'m, S>,
-    at: Option<InstRef>,
 }
 
 impl<'e, 'm, S> Cursor<'e, 'm, S>
 where
     S: Scope,
 {
+    pub(super) fn new(editor: &'e mut Editor<'m, S>) -> Self {
+        Cursor { editor }
+    }
+
     /// The next instruction in block order, or `None` at the body's end.
     pub fn next(&mut self) -> Option<InstRef> {
-        todo!("ir::cfg::edit::Cursor::next")
+        loop {
+            let walk = self.editor.walk;
+            let body = self.editor.body_ref();
+            if walk.block.index() >= body.blocks().count() {
+                return None;
+            }
+            if walk.next < body.block(walk.block).insts().len() {
+                self.editor.walk.next += 1;
+                return Some(InstRef { block: walk.block, index: walk.next });
+            }
+            self.editor.walk.block = BlockId::of_index(walk.block.index() + 1);
+            self.editor.walk.next = 0;
+        }
     }
 
     /// The editor, for an edit at or around the cursor's instruction.
