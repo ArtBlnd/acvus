@@ -56,11 +56,11 @@ pub struct Labelled {
 }
 
 /// An extern fn's declared signature: the scheme's own, or one concrete
-/// instance's.
+/// impl's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Declared {
     pub function: QualifiedRef,
-    pub instance: Option<usize>,
+    pub r#impl: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

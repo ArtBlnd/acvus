@@ -7,7 +7,7 @@ use acvus_utils::QualifiedRef;
 use crate::ty::{CastTy, Concrete, Flows, IntTy, Mutability, Ty, Types};
 
 /// A call that is an instruction of the language (RFC-0020): the
-/// compiler's own instance of a shared signature.
+/// compiler's own impl of a generic function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intrinsic {
     StringClone,
@@ -287,7 +287,7 @@ pub enum CastKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExternCast {
     pub fn_ref: QualifiedRef,
-    pub instance: usize,
+    pub r#impl: usize,
     pub required: Vec<Chosen>,
     pub callee_ty: Ty,
 }
@@ -321,11 +321,11 @@ pub enum RefTarget {
 pub enum Callee {
     /// A function with a body in the graph. Enables pre-fetch and inlining.
     Direct(QualifiedRef),
-    /// An ExternFn at the instance the checker settled on (RFC-0040), with
+    /// An ExternFn at the impl the checker settled on (RFC-0040), with
     /// what that call's requirements settled on (RFC-0070 rule 3).
     Extern {
         id: QualifiedRef,
-        instance: usize,
+        r#impl: usize,
         required: Vec<Chosen>,
     },
     /// Runtime-determined callable (closure, variable holding a function).
@@ -342,31 +342,31 @@ impl Callee {
     }
 }
 
-/// One node of the instance tree the checker settled (RFC-0070 rule 3).
-/// `instance` numbers `signature`'s instances as the registry numbers its
+/// One node of the impl tree the checker settled (RFC-0070 rule 3).
+/// `impl` numbers `generic_function`'s impls as the registry numbers its
 /// handlers, and `required` stands one to one against the requirements the
-/// chosen instance's declaration states, which is the order
+/// chosen impl's declaration states, which is the order
 /// `InstanceEntry::requires` is read in.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Chosen {
-    pub signature: QualifiedRef,
-    pub instance: usize,
+    pub generic_function: QualifiedRef,
+    pub r#impl: usize,
     pub required: Vec<Chosen>,
 }
 
-/// An ExternFn at the instance the checker settled on (RFC-0040), for an
+/// An ExternFn at the impl the checker settled on (RFC-0040), for an
 /// instruction that runs one without being a `FunctionCall`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExternInstance {
+pub struct ExternImpl {
     pub id: QualifiedRef,
-    pub instance: usize,
+    pub r#impl: usize,
 }
 
-impl From<ExternInstance> for Callee {
-    fn from(ExternInstance { id, instance }: ExternInstance) -> Callee {
+impl From<ExternImpl> for Callee {
+    fn from(ExternImpl { id, r#impl }: ExternImpl) -> Callee {
         Callee::Extern {
             id,
-            instance,
+            r#impl,
             required: Vec::new(),
         }
     }
@@ -653,7 +653,7 @@ pub enum InstKind {
     // -- Slices (RFC-0047) ------------------------------------------
     /// Take the whole run of `container`'s elements: `dst` is a
     /// `Ref(mutability, Slice(T))` holding the loan `container` holds, and
-    /// `instance` is the `core::as_slice` / `core::as_slice_mut` the
+    /// `impl` is the `core::as_slice` / `core::as_slice_mut` the
     /// container's own evidence settled on.
     ///
     /// It is not a `FunctionCall` because the kind itself states what the
@@ -664,7 +664,7 @@ pub enum InstKind {
         dst: ValueId,
         container: ValueId,
         mutability: Mutability,
-        instance: ExternInstance,
+        r#impl: ExternImpl,
     },
     /// Element `index` of `slice`. The index is `u64`; the one check is
     /// `index < len`, made unless `bound` is `Proven`.

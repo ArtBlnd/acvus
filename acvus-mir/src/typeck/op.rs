@@ -1,4 +1,4 @@
-//! Operators: each a call of its `core` signature through `call`
+//! Operators: each a call of its lang item through `call`
 //! (operators §2); equality and ordering structural part by part, or
 //! through `core::eq` and `core::cmp` (operators §4).
 

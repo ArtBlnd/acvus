@@ -1,6 +1,6 @@
 //! The per-element step a stream adaptor or consumer states (RFC-0099
 //! rule 1). `#[extern_fn(step(..))]` writes it, `optimize::fusion` reads
-//! it through the instance a call names, and `acvus-ext`'s differential
+//! it through the impl a call names, and `acvus-ext`'s differential
 //! harness samples the promise that the handler and the step agree.
 //!
 //! A parameter is numbered as the declaration's acvus parameters are, which
@@ -83,7 +83,7 @@ pub enum Term {
         param: usize,
         args: Vec<Term>,
     },
-    /// Named as RFC-0082 rule 2 names an extern, at the instance its
+    /// Named as RFC-0082 rule 2 names an extern, at the impl its
     /// arguments' types choose.
     CallExtern {
         name: QualifiedRef,

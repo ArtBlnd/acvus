@@ -10,11 +10,11 @@ use crate::ty::{
     LenVarId, ObjectTy, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
 };
 
-/// A requirement at the use's own terms: an instance of `signature` whose
+/// A requirement at the use's own terms: an impl of `generic_function` whose
 /// type joins `pattern`, stating `law` where named.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequiredAt {
-    pub signature: QualifiedRef,
+    pub generic_function: QualifiedRef,
     pub pattern: Term,
     pub law: Option<NamedLaw>,
 }
@@ -76,7 +76,7 @@ impl Infer {
             .requires
             .iter()
             .map(|required| RequiredAt {
-                signature: required.signature,
+                generic_function: required.generic_function,
                 pattern: self.instantiate_ty(&mut at, required.pattern),
                 law: required.law,
             })

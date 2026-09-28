@@ -12,21 +12,21 @@ impl Declared {
     /// declarations' table: the result, or the parameter at its index.
     ///
     /// # Panics
-    /// The declaration, its instance or the end does not exist, or `end`
+    /// The declaration, its impl or the end does not exist, or `end`
     /// is the callee's captures: a `Labelled` flow is read off an extern's
     /// signature, whose ends are its parameters and its result.
     pub fn end_ty(self, decls: &Declarations, end: FlowEnd) -> TyId<Poly> {
         let scheme = decls
             .scheme(self.function)
             .expect("a Labelled flow names a declared function");
-        let signature = match self.instance {
+        let signature = match self.r#impl {
             None => scheme.ty,
-            Some(instance) => {
+            Some(r#impl) => {
                 scheme
-                    .instances
+                    .impls
                     .as_ref()
-                    .and_then(|instances| instances.concrete.get(instance))
-                    .expect("a Labelled flow names a concrete instance its declaration has")
+                    .and_then(|impls| impls.concrete.get(r#impl))
+                    .expect("a Labelled flow names a concrete impl its declaration has")
                     .ty
             }
         };
@@ -44,11 +44,11 @@ impl Declared {
 }
 
 /// The positions of a value of `ty` each segment of `decl_ty` covers, in
-/// the order `segments` gives them. `ty` is an instance of `decl_ty`: a
+/// the order `segments` gives them. `ty` instantiates `decl_ty`: a
 /// type variable's part covers every position of what instantiates it.
 ///
 /// # Panics
-/// `ty` is not an instance of `decl_ty`. A call's concrete type is its
+/// `ty` does not instantiate `decl_ty`. A call's concrete type is its
 /// declaration's instantiated, so the two agree by construction.
 pub fn segment_positions(
     poly: &Types<Poly>,
@@ -68,7 +68,7 @@ pub fn segment_positions(
     assert_eq!(
         walk.at,
         positions(types, decls, ty),
-        "a declared type's segments lie within its instance's positions"
+        "a declared type's segments lie within its instantiation's positions"
     );
     walk.out
 }
@@ -92,7 +92,7 @@ impl SegmentWalk<'_> {
     }
 
     fn lay_level(&mut self, decl_ty: TyId<Poly>, ty: Ty) {
-        const DISAGREE: &str = "a call's concrete type is an instance of its declared type";
+        const DISAGREE: &str = "a call's concrete type instantiates its declared type";
         match (self.poly.kind(decl_ty), self.types.kind(ty)) {
             (TyKind::Var(_), _) => self.cover(positions(self.types, self.decls, ty)),
             (TyKind::Order | TyKind::Handle(_), _) => {

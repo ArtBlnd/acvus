@@ -40,7 +40,7 @@ use acvus_ast::{Script, Slot, Template};
 use crate::decl::Declarations;
 use crate::ty::{Concrete, Types};
 
-pub use output::{AsCast, Capture, Captured, Chosen, Closure, Conversion, Instance, Iteration, Name, TryExit, Typeck};
+pub use output::{AsCast, Capture, Captured, Chosen, Closure, Conversion, Impl, Iteration, Name, TryExit, Typeck};
 pub use refusal::{Refusal, RefusalKind};
 
 use ctxt::Ctxt;

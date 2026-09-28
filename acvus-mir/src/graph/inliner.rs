@@ -818,12 +818,12 @@ fn remap_inst(
             dst,
             container,
             mutability,
-            instance,
+            r#impl,
         } => InstKind::AsSlice {
             dst: r(*dst),
             container: r(*container),
             mutability: *mutability,
-            instance: *instance,
+            r#impl: *r#impl,
         },
         InstKind::Index {
             dst,

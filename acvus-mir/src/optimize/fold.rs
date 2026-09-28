@@ -294,7 +294,7 @@ fn fold_cast(cfg: &mut CfgBody, types: &Types<Concrete>, facts: &Facts, site: Si
 
 /// The value `src as to` has, where `src` is a constant of type `from`.
 ///
-/// Every arm is the Rust `as` expression `ops::cast`'s instance for the
+/// Every arm is the Rust `as` expression `ops::cast`'s impl for the
 /// same pair runs, so the two agree by construction;
 /// `acvus-interpreter-test/tests/fold_agreement.rs` runs both.
 fn cast_result(from: CastTy, to: CastTy, held: &Literal) -> Option<Literal> {

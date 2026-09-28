@@ -594,7 +594,7 @@ struct LengthRead {
     call: CallAbove,
 }
 
-/// The call again above the header: the same instance, each argument that
+/// The call again above the header: the same impl, each argument that
 /// lends a place lent again by a `Ref` of that place.
 struct CallAbove {
     span: Span,
@@ -614,7 +614,7 @@ enum ArgAbove {
 
 /// RFC-0066 rule 7: a call rule 4 makes `{len(s) on entry, c}` is read as
 /// that term from `len(s)` read above the header, and removed. The pass
-/// calls the same instance at the end of the one block that enters the
+/// calls the same impl at the end of the one block that enters the
 /// header, where the storage holds its length on entry, and writes
 /// `len(s) on entry + k·c` at the head of the body. That arithmetic wraps:
 /// it is the pass's, and its value is the length the call read, which the

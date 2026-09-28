@@ -15,7 +15,7 @@
 use crate::ir::{
     Callee, InstKind, Label, MirBody, MirModule, PathSeg, RefTarget, ValOrigin, ValueId,
 };
-use crate::ir::{ExternInstance, ForSource, IndexMode};
+use crate::ir::{ExternImpl, ForSource, IndexMode};
 use crate::ir::{known_effect, known_len};
 use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, TypeArg, Types, copies};
 use crate::validate::move_check::is_move_only;
@@ -965,7 +965,7 @@ impl<'t> CheckCtx<'t> {
                 dst,
                 container,
                 mutability,
-                instance: ExternInstance { .. },
+                r#impl: ExternImpl { .. },
             } => {
                 let container_ty = ty!(*container);
                 let TyKind::Ref(held, _) = *self.kind(container_ty) else {

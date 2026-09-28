@@ -34,16 +34,16 @@ impl Returns {
     }
 }
 
-/// An extern and one of its instances, numbered as `Callee::Extern`
+/// An extern and one of its impls, numbered as `Callee::Extern`
 /// numbers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ExternInstance {
+pub struct ExternImpl {
     pub id: QualifiedRef,
-    pub instance: usize,
+    pub r#impl: usize,
 }
 
-/// An instance's [`Laws`] with each extern they name taken at the instance
-/// whose types are the declaring instance's.
+/// An impl's [`Laws`] with each extern they name taken at the impl
+/// whose types are the declaring impl's.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum ResolvedLaws {
     #[default]
@@ -57,9 +57,9 @@ pub enum ResolvedLaws {
     Extension(ResolvedBinary),
     Fold(ResolvedFold),
     TotalOrder,
-    /// `inverse = g`, with `g` taken at the instance whose state and payload
-    /// are the declaring instance's.
-    Inverse(ExternInstance),
+    /// `inverse = g`, with `g` taken at the impl whose state and payload
+    /// are the declaring impl's.
+    Inverse(ExternImpl),
     Payload,
     Equivalence,
     Step(Step),
@@ -75,13 +75,13 @@ pub struct ResolvedBinary {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedIdentity {
     Const(Literal),
-    Extern(ExternInstance),
+    Extern(ExternImpl),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedFold {
-    pub combine: ExternInstance,
-    pub identity: ExternInstance,
+    pub combine: ExternImpl,
+    pub identity: ExternImpl,
     pub commutative: bool,
 }
 
@@ -98,26 +98,26 @@ pub enum LawRole {
     /// An inverse's `g`: `g(s: &mut S, x: X)` at the declaration's `S` and
     /// `X`.
     Inverse,
-    /// An extern a step's term calls, whose instance the call's argument
+    /// An extern a step's term calls, whose impl the call's argument
     /// types choose where the step runs.
     Step,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unresolved {
-    /// The declaring instance's type is not the signature its law is
+    /// The declaring impl's type is not the signature its law is
     /// stated over.
     UnfitDeclaration,
-    /// `named` is no extern, or none of its instances, or more than one,
-    /// has the type `role` asks at the declaring instance's types.
-    NoFittingInstance { role: LawRole, named: QualifiedRef },
+    /// `named` is no extern, or none of its impls, or more than one,
+    /// has the type `role` asks at the declaring impl's types.
+    NoFittingImpl { role: LawRole, named: QualifiedRef },
 }
 
-/// `laws`, declared on an instance of type `declaring`, with each extern
-/// they name taken at the instance a call at `declaring`'s types chooses:
-/// its one concrete instance those types have the shape of, and otherwise
-/// its generic instance. A name picks the extern and the types pick its
-/// instance: `num::min` over `i32` names `i32::MAX`, and a fold on `push`
+/// `laws`, declared on an impl of type `declaring`, with each extern
+/// they name taken at the impl a call at `declaring`'s types chooses:
+/// its one concrete impl those types have the shape of, and otherwise
+/// its generic impl. A name picks the extern and the types pick its
+/// impl: `num::min` over `i32` names `i32::MAX`, and a fold on `push`
 /// at `Vec<T>` combines through `extend` at `Vec<T>`.
 pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Result<ResolvedLaws, Unresolved> {
     let poly = decls.types();
@@ -134,28 +134,28 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
         };
     };
     let ret = *ret;
-    let instance_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
-        let unfit = Unresolved::NoFittingInstance { role, named };
+    let impl_of = |role: LawRole, named: QualifiedRef, wanted: &Wanted| {
+        let unfit = Unresolved::NoFittingImpl { role, named };
         let scheme = decls.scheme(named).ok_or(unfit)?;
-        let at = |instance: usize| ExternInstance { id: named, instance };
-        let Some(instances) = &scheme.instances else {
+        let at = |r#impl: usize| ExternImpl { id: named, r#impl };
+        let Some(impls) = &scheme.impls else {
             return match wanted.fits(poly, scheme.ty) {
                 true => Ok(at(0)),
                 false => Err(unfit),
             };
         };
-        let concrete: Vec<usize> = instances
+        let concrete: Vec<usize> = impls
             .concrete
             .iter()
             .enumerate()
-            .filter(|(_, instance)| wanted.fits(poly, instance.ty))
-            .map(|(instance, _)| instance)
+            .filter(|(_, r#impl)| wanted.fits(poly, r#impl.ty))
+            .map(|(r#impl, _)| r#impl)
             .collect();
         match concrete[..] {
-            [instance] => Ok(at(instance)),
-            [] if wanted.fits(poly, scheme.ty) => match &instances.generic {
-                Some(_) => Ok(at(instances.concrete.len())),
-                None if instances.concrete.is_empty() => Ok(at(0)),
+            [r#impl] => Ok(at(r#impl)),
+            [] if wanted.fits(poly, scheme.ty) => match &impls.generic {
+                Some(_) => Ok(at(impls.concrete.len())),
+                None if impls.concrete.is_empty() => Ok(at(0)),
                 None => Err(unfit),
             },
             _ => Err(unfit),
@@ -179,7 +179,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
                 identity: match identity {
                     None => None,
                     Some(Identity::Const(constant)) => Some(ResolvedIdentity::Const(constant.clone())),
-                    Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(instance_of(
+                    Some(Identity::Extern(named)) => Some(ResolvedIdentity::Extern(impl_of(
                         LawRole::Identity,
                         *named,
                         &Wanted::Returning(value),
@@ -201,8 +201,8 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             };
             let state = state.ty();
             Ok(ResolvedLaws::Fold(ResolvedFold {
-                combine: instance_of(LawRole::FoldCombine, *combine, &Wanted::Combining(state))?,
-                identity: instance_of(LawRole::FoldIdentity, *identity, &Wanted::Returning(state))?,
+                combine: impl_of(LawRole::FoldCombine, *combine, &Wanted::Combining(state))?,
+                identity: impl_of(LawRole::FoldIdentity, *identity, &Wanted::Returning(state))?,
                 commutative: *commutative,
             }))
         }
@@ -219,7 +219,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             let TyKind::Ref(Mutability::Mut, state) = poly.kind(*state) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
-            Ok(ResolvedLaws::Inverse(instance_of(
+            Ok(ResolvedLaws::Inverse(impl_of(
                 LawRole::Inverse,
                 *restore,
                 &Wanted::Restoring {
@@ -242,7 +242,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             }
             for named in step.named_externs() {
                 if decls.scheme(named).is_none() {
-                    return Err(Unresolved::NoFittingInstance {
+                    return Err(Unresolved::NoFittingImpl {
                         role: LawRole::Step,
                         named,
                     });
@@ -314,7 +314,7 @@ fn extension_of(poly: &Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> O
     (a == b && a == payload).then_some(*a)
 }
 
-/// Whether `means`, declared on an instance of type `declaring`, reads each
+/// Whether `means`, declared on an impl of type `declaring`, reads each
 /// parameter as its type lends it (RFC-0104 rule 1): `*x` of a reference
 /// parameter, a parameter by value, and the entry `x[k]` of a `&` or `&mut`
 /// table at a parameter by value or by `&`. What else the term computes is
@@ -355,7 +355,7 @@ pub fn means_fits(poly: &Types<Poly>, means: &Means, declaring: TyId<Poly>) -> b
     entry_fits && reads_fit && stores_fit
 }
 
-/// The type a law asks of an extern it names, at the declaring instance's
+/// The type a law asks of an extern it names, at the declaring impl's
 /// types.
 enum Wanted {
     /// `e() -> T`.
@@ -367,7 +367,7 @@ enum Wanted {
 }
 
 impl Wanted {
-    /// Whether a call at the wanted types has the shape of an instance of
+    /// Whether a call at the wanted types has the shape of an impl of
     /// type `candidate`.
     fn fits(&self, poly: &Types<Poly>, candidate: TyId<Poly>) -> bool {
         let TyKind::Fn { params, ret, .. } = poly.kind(candidate) else {
@@ -570,7 +570,7 @@ fn len_matches(len: &LenTerm<Poly>, pattern: &LenTerm<Poly>) -> bool {
     }
 }
 
-/// What one instance of an extern declares.
+/// What one impl of an extern declares.
 #[derive(Debug, Default)]
 struct Declared {
     laws: ResolvedLaws,
@@ -610,11 +610,11 @@ impl Declared {
     }
 }
 
-/// One instance of an extern: its type, and whether its declaration
-/// requires an instance of a signature (extern-fn §6), which a call names
+/// One impl of an extern: its type, and whether its declaration
+/// requires an impl of a generic function (extern-fn §6), which a call names
 /// in `Callee::Extern::required`.
 #[derive(Debug, Clone)]
-pub struct InstanceType {
+pub struct ImplType {
     pub ty: TyId<Poly>,
     pub requires: bool,
     pub generic: bool,
@@ -622,41 +622,41 @@ pub struct InstanceType {
 
 #[derive(Debug)]
 pub struct LawTable {
-    by_instance: FxHashMap<QualifiedRef, Vec<Declared>>,
-    /// Numbered as `Callee::Extern` numbers an extern's instances.
-    instance_types: FxHashMap<QualifiedRef, Vec<InstanceType>>,
+    by_impl: FxHashMap<QualifiedRef, Vec<Declared>>,
+    /// Numbered as `Callee::Extern` numbers an extern's impls.
+    impl_types: FxHashMap<QualifiedRef, Vec<ImplType>>,
     /// The declaration of the `Equiv` keying marker (RFC-0098 rule 2),
     /// where the declarations name it.
     equiv: Option<QualifiedRef>,
-    pull_signature: Option<QualifiedRef>,
+    pull_generic_function: Option<QualifiedRef>,
 }
 
 impl LawTable {
-    /// The laws of every instance of every declaration, numbered as
-    /// `Callee::Extern` numbers them: the concrete instances in order, then
-    /// the generic one; a declaration that lists no instances is instance 0.
+    /// The laws of every impl of every declaration, numbered as
+    /// `Callee::Extern` numbers them: the concrete impls in order, then
+    /// the generic one; a declaration that lists no impls is impl 0.
     ///
     /// # Panics
-    /// A law names an extern with no instance of the types it asks:
+    /// A law names an extern with no impl of the types it asks:
     /// `acvus_extern::Externs::combine` refuses such a registry by the same
     /// [`resolve`].
     pub fn of(decls: &Declarations) -> Self {
-        let mut by_instance = FxHashMap::default();
-        let mut instance_types = FxHashMap::default();
+        let mut by_impl = FxHashMap::default();
+        let mut impl_types = FxHashMap::default();
         for (id, scheme) in decls.functions() {
-            by_instance.insert(id, declared_instances(id, scheme, decls));
-            instance_types.insert(id, typed_instances(scheme));
+            by_impl.insert(id, declared_impls(id, scheme, decls));
+            impl_types.insert(id, typed_impls(scheme));
         }
         let markers = decls.loop_markers();
         Self {
-            by_instance,
-            instance_types,
+            by_impl,
+            impl_types,
             equiv: markers.keying.map(|keying| keying.equiv),
-            pull_signature: markers.pull,
+            pull_generic_function: markers.pull,
         }
     }
 
-    /// The step the instance a call names states (RFC-0099 rule 1); a call
+    /// The step the impl a call names states (RFC-0099 rule 1); a call
     /// of a local function or through a value states none.
     pub fn step_of(&self, callee: &Callee) -> Option<&Step> {
         match &self.declared(callee)?.laws {
@@ -665,9 +665,9 @@ impl LawTable {
         }
     }
 
-    /// Each instance of the extern `id`, or none where `id` is no extern.
-    pub fn instance_types(&self, id: QualifiedRef) -> &[InstanceType] {
-        self.instance_types.get(&id).map_or(&[], Vec::as_slice)
+    /// Each impl of the extern `id`, or none where `id` is no extern.
+    pub fn impl_types(&self, id: QualifiedRef) -> &[ImplType] {
+        self.impl_types.get(&id).map_or(&[], Vec::as_slice)
     }
 
     /// Whether `id` is the declaration of the `Equiv` keying marker
@@ -677,10 +677,10 @@ impl LawTable {
         self.equiv == Some(id)
     }
 
-    /// Whether a call names an instance of `iter::next`, the signature a
+    /// Whether a call names an impl of `iter::next`, the generic function a
     /// pull loop's header calls (RFC-0089 rule 1).
     pub fn pulls(&self, callee: &Callee) -> bool {
-        matches!(callee, Callee::Extern { id, .. } if Some(*id) == self.pull_signature)
+        matches!(callee, Callee::Extern { id, .. } if Some(*id) == self.pull_generic_function)
     }
 
     pub fn of_callee(&self, callee: &Callee) -> &ResolvedLaws {
@@ -691,7 +691,7 @@ impl LawTable {
         }
     }
 
-    /// The postconditions the instance a call names declares; a call of a
+    /// The postconditions the impl a call names declares; a call of a
     /// local function or through a value has none.
     pub fn postconditions_of(&self, callee: &Callee) -> &[Postcondition] {
         match self.declared(callee) {
@@ -700,7 +700,7 @@ impl LawTable {
         }
     }
 
-    /// What a call of the instance `callee` names reaches through its
+    /// What a call of the impl `callee` names reaches through its
     /// reference arguments; a call of a local function or through a value
     /// states nothing, and reaches all they lend.
     pub fn reaches_of(&self, callee: &Callee) -> &Reaches {
@@ -711,27 +711,27 @@ impl LawTable {
         }
     }
 
-    /// The term the instance a call names states (RFC-0104); a call of a
+    /// The term the impl a call names states (RFC-0104); a call of a
     /// local function or through a value states none.
     pub fn means_of(&self, callee: &Callee) -> Option<&Means> {
         self.declared(callee)?.means.as_ref()
     }
 
-    pub fn means_of_instance(&self, instance: ExternInstance) -> Option<&Means> {
-        self.by_instance
-            .get(&instance.id)?
-            .get(instance.instance)?
+    pub fn means_of_impl(&self, r#impl: ExternImpl) -> Option<&Means> {
+        self.by_impl
+            .get(&r#impl.id)?
+            .get(r#impl.r#impl)?
             .means
             .as_ref()
     }
 
-    /// The argument whose lent value the result of the instance a call
+    /// The argument whose lent value the result of the impl a call
     /// names is, where its term is `*x` alone (RFC-0104 rule 5).
     pub fn lent_value_of(&self, callee: &Callee) -> Option<usize> {
         self.means_of(callee)?.lent_value()
     }
 
-    /// What a call of the instance does to the entry its term names
+    /// What a call of the impl does to the entry its term names
     /// (RFC-0098 rule 5).
     pub fn entry_access(&self, callee: &Callee) -> Option<EntryReading> {
         let means = self.means_of(callee)?;
@@ -739,82 +739,83 @@ impl LawTable {
     }
 
     /// How a term reads a call of `named` it holds: by the one term every
-    /// instance of `named` states, or by the `payload` law every instance
-    /// states. Instances that state different terms leave the call opaque,
-    /// since a term names an extern and not its instance.
+    /// impl of `named` states, or by the `payload` law every impl
+    /// states. Impls that state different terms leave the call opaque,
+    /// since a term names an extern and not its impl.
     fn named_reading(&self, named: QualifiedRef) -> Option<Named<'_>> {
-        let instances = self.by_instance.get(&named)?;
-        let (first, rest) = instances.split_first()?;
+        let impls = self.by_impl.get(&named)?;
+        let (first, rest) = impls.split_first()?;
         if let Some(means) = &first.means
             && rest.iter().all(|other| other.means.as_ref() == Some(means))
         {
             return Some(Named::Means(means));
         }
-        instances
+        impls
             .iter()
             .all(|declared| declared.means.is_none() && declared.laws == ResolvedLaws::Payload)
             .then_some(Named::Payload)
     }
 
-    /// How a call ends, read over the instance tree it chose (RFC-0082
-    /// rule 9). A `returns` instance is not descended into: RFC-0082 rule 8
-    /// makes `returns` a promise of the whole call, read by the instance the
+    /// How a call ends, read over the impl tree it chose (RFC-0082
+    /// rule 9). A `returns` impl is not descended into: RFC-0082 rule 8
+    /// makes `returns` a promise of the whole call, read by the impl the
     /// call names.
     pub fn returns_of(&self, callee: &Callee) -> Returns {
         let Callee::Extern {
             id,
-            instance,
+            r#impl,
             required,
         } = callee
         else {
             return Returns::Unstated;
         };
-        self.returns_over(*id, *instance, required)
+        self.returns_over(*id, *r#impl, required)
     }
 
-    fn returns_over(&self, id: QualifiedRef, instance: usize, required: &[Chosen]) -> Returns {
-        match self.declared_at(id, instance).returns {
+    fn returns_over(&self, id: QualifiedRef, r#impl: usize, required: &[Chosen]) -> Returns {
+        match self.declared_at(id, r#impl).returns {
             Returns::Unstated => Returns::Unstated,
             Returns::Stated => Returns::Stated,
             Returns::Total => required
                 .iter()
-                .map(|chosen| self.returns_over(chosen.signature, chosen.instance, &chosen.required))
+                .map(|chosen| self.returns_over(chosen.generic_function, chosen.r#impl, &chosen.required))
                 .fold(Returns::Total, Returns::meet),
         }
     }
 
     fn declared(&self, callee: &Callee) -> Option<&Declared> {
-        let Callee::Extern { id, instance, .. } = callee else {
+        let Callee::Extern { id, r#impl, .. } = callee else {
             return None;
         };
-        Some(self.declared_at(*id, *instance))
+        Some(self.declared_at(*id, *r#impl))
     }
 
-    fn declared_at(&self, id: QualifiedRef, instance: usize) -> &Declared {
-        let Some(instances) = self.by_instance.get(&id) else {
+    fn declared_at(&self, id: QualifiedRef, r#impl: usize) -> &Declared {
+        let Some(impls) = self.by_impl.get(&id) else {
             panic!("the law table was built without the extern {id:?} a call names")
         };
-        let Some(declared) = instances.get(instance) else {
+        let Some(declared) = impls.get(r#impl) else {
             panic!(
-                "the extern {id:?} has {} instances, and a call names instance {instance}",
-                instances.len()
+                "the extern {id:?} has {} impls, and a call names impl {}",
+                impls.len(),
+                r#impl
             )
         };
         declared
     }
 }
 
-/// Each instance's declared facts, numbered as `LawTable` numbers them.
-fn declared_instances(id: QualifiedRef, scheme: &Scheme, decls: &Declarations) -> Vec<Declared> {
-    let Some(instances) = &scheme.instances else {
+/// Each impl's declared facts, numbered as `LawTable` numbers them.
+fn declared_impls(id: QualifiedRef, scheme: &Scheme, decls: &Declarations) -> Vec<Declared> {
+    let Some(impls) = &scheme.impls else {
         return vec![Declared::default()];
     };
-    let mut declared: Vec<Declared> = instances
+    let mut declared: Vec<Declared> = impls
         .concrete
         .iter()
-        .map(|instance| Declared::of(id, instance.ty, &instance.facts, decls))
+        .map(|r#impl| Declared::of(id, r#impl.ty, &r#impl.facts, decls))
         .chain(
-            instances
+            impls
                 .generic
                 .as_ref()
                 .map(|generic| Declared::of(id, scheme.ty, &generic.facts, decls)),
@@ -826,25 +827,25 @@ fn declared_instances(id: QualifiedRef, scheme: &Scheme, decls: &Declarations) -
     declared
 }
 
-fn typed_instances(scheme: &Scheme) -> Vec<InstanceType> {
-    let Some(instances) = &scheme.instances else {
-        return vec![InstanceType {
+fn typed_impls(scheme: &Scheme) -> Vec<ImplType> {
+    let Some(impls) = &scheme.impls else {
+        return vec![ImplType {
             ty: scheme.ty,
             requires: !scheme.requires.is_empty(),
             generic: true,
         }];
     };
-    let mut typed: Vec<InstanceType> = instances
+    let mut typed: Vec<ImplType> = impls
         .concrete
         .iter()
-        .map(|instance| InstanceType {
-            ty: instance.ty,
-            requires: !instance.requires.is_empty(),
+        .map(|r#impl| ImplType {
+            ty: r#impl.ty,
+            requires: !r#impl.requires.is_empty(),
             generic: false,
         })
         .collect();
-    if instances.generic.is_some() || typed.is_empty() {
-        typed.push(InstanceType {
+    if impls.generic.is_some() || typed.is_empty() {
+        typed.push(ImplType {
             ty: scheme.ty,
             requires: !scheme.requires.is_empty(),
             generic: true,

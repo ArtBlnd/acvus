@@ -8,7 +8,7 @@ use crate::ty::{Poly, TyId};
 
 /// An extern fn's declaration (extern-fn): its signature, a function type
 /// whose effect carries its split (effects §6), the bound of each type
-/// parameter by position, its instances, and what it requires.
+/// parameter by position, its impls, and what it requires.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: TyId<Poly>,
@@ -19,21 +19,21 @@ pub struct Scheme {
     /// Exactly one bound per type variable of `ty`, by position; `verify`
     /// refuses any other count.
     pub bounds: Box<[TyVarBound]>,
-    /// `Some` for a shared signature's instances (extern-fn §6).
-    pub instances: Option<Instances>,
+    /// `Some` for a generic function's impls (extern-fn §6).
+    pub impls: Option<Impls>,
     pub requires: Box<[Requirement]>,
 }
 
-/// The instances of a shared signature: the concrete ones in order, then
+/// The impls of a generic function: the concrete ones in order, then
 /// the generic one.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Instances {
-    pub concrete: Box<[InstanceSig]>,
-    pub generic: Option<GenericSig>,
+pub struct Impls {
+    pub concrete: Box<[ImplSig]>,
+    pub generic: Option<GenericImplSig>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct InstanceSig {
+pub struct ImplSig {
     pub ty: TyId<Poly>,
     /// One name per parameter of `ty`, in order, as `Scheme::param_names`.
     pub param_names: Box<[Astr]>,
@@ -41,9 +41,9 @@ pub struct InstanceSig {
     pub facts: DeclaredFacts,
 }
 
-/// The generic instance: its type is the signature's own.
+/// The generic impl: its type is the generic function's own.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct GenericSig {
+pub struct GenericImplSig {
     pub facts: DeclaredFacts,
 }
 
@@ -62,13 +62,13 @@ pub struct DeclaredFacts {
     pub lifetimes: Option<LabelledSignature>,
 }
 
-/// An instance of `signature` whose type joins `pattern`, written at the
+/// An impl of `generic_function` whose type joins `pattern`, written at the
 /// declaration's own variables, stating `law` where one is named
-/// (extern-fn §6). Its instances are the signature's, read from the
+/// (extern-fn §6). Its impls are the generic function's, read from the
 /// declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Requirement {
-    pub signature: QualifiedRef,
+    pub generic_function: QualifiedRef,
     pub pattern: TyId<Poly>,
     pub law: Option<NamedLaw>,
 }

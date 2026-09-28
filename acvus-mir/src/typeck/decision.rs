@@ -15,7 +15,7 @@ use super::ctxt::Ctxt;
 use crate::infer::{OpenSources, RequiredAt, Term};
 use crate::ty::Mutability;
 
-/// A signature of `core` a form calls (operators §2, §3, §7). `&&`, `||`,
+/// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
 /// `!`, `^`, `&`, `|`, `<<` and `>>` are the language's own operations, not
 /// calls (operators §2): `op` types them without a reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -44,13 +44,13 @@ pub(super) enum Callee {
     /// A method: the declarations of that name, the receiver first.
     Method(Astr),
     Core(CoreSig),
-    /// An instance a reached declaration requires.
+    /// An impl a reached declaration requires.
     Required(RequiredAt),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Decision {
-    /// Which declaration a call reaches, and at which instance (types §6).
+    /// Which declaration a call reaches, and at which impl (types §6).
     Reach { site: AstId, span: Span, callee: Callee, args: Box<[Term]>, result: Term },
     /// What a `for` iterates by (control-flow).
     Iterate { site: AstId, span: Span, head: Term, item: Term },

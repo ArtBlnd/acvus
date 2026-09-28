@@ -12,7 +12,7 @@ mod casts;
 mod conversions;
 mod core;
 mod facts;
-mod instance_fit;
+mod impl_fit;
 mod labels;
 mod loop_markers;
 mod scheme;
@@ -36,7 +36,7 @@ pub use facts::{
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use segments::{Segment, segments};
-pub use scheme::{DeclaredFacts, GenericSig, InstanceSig, Instances, Requirement, Scheme};
+pub use scheme::{DeclaredFacts, GenericImplSig, ImplSig, Impls, Requirement, Scheme};
 pub use user_type::UserTypeDecl;
 pub use verify::{Refused, Written};
 

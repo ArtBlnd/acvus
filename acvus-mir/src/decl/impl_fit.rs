@@ -1,18 +1,18 @@
-//! Whether an instance's type is its shared signature's type at some choice
-//! of the signature's variables (extern-fn §6).
+//! Whether an impl's type is its generic function's type at some choice
+//! of the generic function's variables (extern-fn §6).
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ty::{EffectArg, EffectTerm, IdentityTerm, LenTerm, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
 
-/// Whether `instance` is `signature` with each of the signature's type,
+/// Whether `impl` is `generic` with each of the generic function's type,
 /// effect, length, identity and mark variables replaced by one choice.
 ///
-/// Both are declared function types. Their parameter names are not part of
-/// the comparison, and neither are their own flows: `verify` writes each
-/// declared signature's flows from that signature's own lifetimes. The
+/// Both are declared function types. Their own flows are not part of the
+/// comparison: `verify` writes each declared signature's flows from that
+/// signature's own lifetimes. The
 /// flows of a function type inside either one are compared.
-pub(super) fn is_instance_of(types: &Types<Poly>, signature: TyId<Poly>, instance: TyId<Poly>) -> bool {
+pub(super) fn is_impl_of(types: &Types<Poly>, generic: TyId<Poly>, r#impl: TyId<Poly>) -> bool {
     let mut choice = Choice {
         types,
         tys: FxHashMap::default(),
@@ -22,14 +22,14 @@ pub(super) fn is_instance_of(types: &Types<Poly>, signature: TyId<Poly>, instanc
         marks: FxHashMap::default(),
         matched: FxHashSet::default(),
     };
-    match (types.kind(signature), types.kind(instance)) {
+    match (types.kind(generic), types.kind(r#impl)) {
         (
             TyKind::Fn {
-                params: signature_params,
-                ret: signature_ret,
-                effect: signature_effect,
-                calls: signature_calls,
-                holds: signature_holds,
+                params: generic_params,
+                ret: generic_ret,
+                effect: generic_effect,
+                calls: generic_calls,
+                holds: generic_holds,
                 flows: _,
             },
             TyKind::Fn {
@@ -41,21 +41,22 @@ pub(super) fn is_instance_of(types: &Types<Poly>, signature: TyId<Poly>, instanc
                 flows: _,
             },
         ) => {
-            signature_params.len() == params.len()
-                && signature_calls == calls
-                && signature_holds == holds
-                && choice.effect(signature_effect, effect)
-                && signature_params
+            generic_params.len() == params.len()
+                && generic_calls == calls
+                && generic_holds == holds
+                && choice.effect(generic_effect, effect)
+                && generic_params
                     .iter()
                     .zip(params.iter())
-                    .all(|(signature_param, param)| choice.ty(*signature_param, *param))
-                && choice.ty(*signature_ret, *ret)
+                    .all(|(generic_param, param)| choice.ty(*generic_param, *param))
+                && choice.ty(*generic_ret, *ret)
         }
         _ => false,
     }
 }
 
-/// The mark an argument carries, as a signature's mark variable is chosen.
+/// The mark an argument carries, as a generic function's mark variable is
+/// chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mark {
     Uniform,
@@ -63,7 +64,7 @@ enum Mark {
     Open(u32),
 }
 
-/// One choice of the signature's variables, fixed as matching finds them.
+/// One choice of the generic function's variables, fixed as matching finds them.
 struct Choice<'t> {
     types: &'t Types<Poly>,
     tys: FxHashMap<u32, TyId<Poly>>,
@@ -91,31 +92,31 @@ where
     }
 }
 
-fn all_pairs<T, F>(signature: &[T], instance: &[T], mut each: F) -> bool
+fn all_pairs<T, F>(generic: &[T], r#impl: &[T], mut each: F) -> bool
 where
     F: FnMut(&T, &T) -> bool,
 {
-    signature.len() == instance.len() && signature.iter().zip(instance).all(|(a, b)| each(a, b))
+    generic.len() == r#impl.len() && generic.iter().zip(r#impl).all(|(a, b)| each(a, b))
 }
 
 impl Choice<'_> {
-    fn ty(&mut self, signature: TyId<Poly>, instance: TyId<Poly>) -> bool {
+    fn ty(&mut self, generic: TyId<Poly>, r#impl: TyId<Poly>) -> bool {
         acvus_utils::grow(|| {
-            if self.matched.contains(&(signature, instance)) {
+            if self.matched.contains(&(generic, r#impl)) {
                 return true;
             }
-            let fits = self.kind(signature, instance);
+            let fits = self.kind(generic, r#impl);
             if fits {
-                self.matched.insert((signature, instance));
+                self.matched.insert((generic, r#impl));
             }
             fits
         })
     }
 
-    fn kind(&mut self, signature: TyId<Poly>, instance: TyId<Poly>) -> bool {
+    fn kind(&mut self, generic: TyId<Poly>, r#impl: TyId<Poly>) -> bool {
         let types = self.types;
-        match (types.kind(signature), types.kind(instance)) {
-            (TyKind::Var(var), _) => choose(&mut self.tys, *var, instance),
+        match (types.kind(generic), types.kind(r#impl)) {
+            (TyKind::Var(var), _) => choose(&mut self.tys, *var, r#impl),
             (
                 TyKind::Int(_)
                 | TyKind::Float
@@ -127,7 +128,7 @@ impl Choice<'_> {
                 | TyKind::Order
                 | TyKind::Str,
                 other,
-            ) => types.kind(signature) == other,
+            ) => types.kind(generic) == other,
             (TyKind::Handle(a), TyKind::Handle(b))
             | (TyKind::Slice(a), TyKind::Slice(b))
             | (TyKind::Option(a), TyKind::Option(b)) => self.ty(*a, *b),
@@ -235,46 +236,46 @@ impl Choice<'_> {
         }
     }
 
-    fn type_arg(&mut self, signature: &TypeArg<Poly>, instance: &TypeArg<Poly>) -> bool {
-        let mark = match instance {
+    fn type_arg(&mut self, generic: &TypeArg<Poly>, r#impl: &TypeArg<Poly>) -> bool {
+        let mark = match r#impl {
             TypeArg::Uniform(_) => Mark::Uniform,
             TypeArg::Specialized(_) => Mark::Specialized,
             TypeArg::Open(var, _) => Mark::Open(*var),
         };
-        let marks_fit = match signature {
+        let marks_fit = match generic {
             TypeArg::Open(var, _) => choose(&mut self.marks, *var, mark),
             TypeArg::Uniform(_) => mark == Mark::Uniform,
             TypeArg::Specialized(_) => mark == Mark::Specialized,
         };
-        marks_fit && self.ty(signature.ty(), instance.ty())
+        marks_fit && self.ty(generic.ty(), r#impl.ty())
     }
 
-    fn effect_arg(&mut self, signature: &EffectArg<Poly>, instance: &EffectArg<Poly>) -> bool {
+    fn effect_arg(&mut self, generic: &EffectArg<Poly>, r#impl: &EffectArg<Poly>) -> bool {
         let marks_fit = matches!(
-            (signature, instance),
+            (generic, r#impl),
             (EffectArg::Uniform(_), EffectArg::Uniform(_)) | (EffectArg::Specialized(_), EffectArg::Specialized(_))
         );
-        marks_fit && self.effect(signature.effect(), instance.effect())
+        marks_fit && self.effect(generic.effect(), r#impl.effect())
     }
 
-    fn effect(&mut self, signature: &EffectTerm<Poly>, instance: &EffectTerm<Poly>) -> bool {
-        match signature {
-            EffectTerm::Var(var) => choose(&mut self.effects, *var, instance.clone()),
-            EffectTerm::Known(_) => signature == instance,
+    fn effect(&mut self, generic: &EffectTerm<Poly>, r#impl: &EffectTerm<Poly>) -> bool {
+        match generic {
+            EffectTerm::Var(var) => choose(&mut self.effects, *var, r#impl.clone()),
+            EffectTerm::Known(_) => generic == r#impl,
         }
     }
 
-    fn len(&mut self, signature: &LenTerm<Poly>, instance: &LenTerm<Poly>) -> bool {
-        match signature {
-            LenTerm::Var(var) => choose(&mut self.lens, *var, *instance),
-            LenTerm::Known(_) => signature == instance,
+    fn len(&mut self, generic: &LenTerm<Poly>, r#impl: &LenTerm<Poly>) -> bool {
+        match generic {
+            LenTerm::Var(var) => choose(&mut self.lens, *var, *r#impl),
+            LenTerm::Known(_) => generic == r#impl,
         }
     }
 
-    fn identity(&mut self, signature: &IdentityTerm<Poly>, instance: &IdentityTerm<Poly>) -> bool {
-        match signature {
-            IdentityTerm::Var(var) => choose(&mut self.identities, *var, *instance),
-            IdentityTerm::Known(_) => signature == instance,
+    fn identity(&mut self, generic: &IdentityTerm<Poly>, r#impl: &IdentityTerm<Poly>) -> bool {
+        match generic {
+            IdentityTerm::Var(var) => choose(&mut self.identities, *var, *r#impl),
+            IdentityTerm::Known(_) => generic == r#impl,
         }
     }
 }

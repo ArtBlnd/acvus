@@ -1,7 +1,7 @@
 use crate::ty::IntTy;
 
 /// The one bound a declaration's type parameter carries (extern-fn §1).
-/// Which shapes a function takes is said by its instances (extern-fn §6),
+/// Which shapes a function takes is said by its impls (extern-fn §6),
 /// not by a bound.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TyVarBound {

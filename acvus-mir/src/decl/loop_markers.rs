@@ -16,6 +16,6 @@ pub struct KeyingMarkers {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LoopMarkers {
     pub keying: Option<KeyingMarkers>,
-    /// The shared signature a pull loop steps through.
+    /// The generic function a pull loop steps through.
     pub pull: Option<QualifiedRef>,
 }

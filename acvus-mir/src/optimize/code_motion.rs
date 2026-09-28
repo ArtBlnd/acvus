@@ -1558,9 +1558,9 @@ mod tests {
             dst: v(2),
             container,
             mutability,
-            instance: ExternInstance {
+            r#impl: ExternImpl {
                 id: QualifiedRef::root(Interner::new().intern("as_slice")),
-                instance: 0,
+                r#impl: 0,
             },
         }
     }
@@ -2553,9 +2553,9 @@ mod tests {
                 dst: v(16),
                 container: v(15),
                 mutability: Mutability::Shared,
-                instance: ExternInstance {
+                r#impl: ExternImpl {
                     id: QualifiedRef::root(Interner::new().intern("as_slice")),
-                    instance: 0,
+                    r#impl: 0,
                 },
             },
             InstKind::Index {
@@ -2600,9 +2600,9 @@ mod tests {
                 dst: v(11),
                 container: v(10),
                 mutability: Mutability::Shared,
-                instance: ExternInstance {
+                r#impl: ExternImpl {
                     id: QualifiedRef::root(Interner::new().intern("as_slice")),
-                    instance: 0,
+                    r#impl: 0,
                 },
             },
             jump(0),

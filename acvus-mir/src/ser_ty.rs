@@ -104,7 +104,7 @@ pub enum SerAlignment {
     Labelled {
         function: SerQualifiedRef,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        instance: Option<usize>,
+        r#impl: Option<usize>,
         map: Vec<Vec<usize>>,
     },
     Any,
@@ -124,7 +124,7 @@ fn flows_to_ser(flows: &Flows, interner: &Interner) -> SerFlows {
                         Alignment::Any => SerAlignment::Any,
                         Alignment::Labelled(labelled) => SerAlignment::Labelled {
                             function: qref_to_ser(&labelled.declared.function, interner),
-                            instance: labelled.declared.instance,
+                            r#impl: labelled.declared.r#impl,
                             map: labelled.map.iter().map(|takes| takes.to_vec()).collect(),
                         },
                     },
@@ -144,12 +144,12 @@ fn ser_to_flows(flows: &SerFlows, interner: &Interner) -> Flows {
                 SerAlignment::Aligned => Alignment::Aligned,
                 SerAlignment::Labelled {
                     function,
-                    instance,
+                    r#impl,
                     map,
                 } => Alignment::Labelled(Box::new(Labelled {
                     declared: Declared {
                         function: ser_to_qref(function, interner),
-                        instance: *instance,
+                        r#impl: *r#impl,
                     },
                     map: map.iter().map(|takes| takes.clone().into_boxed_slice()).collect(),
                 })),

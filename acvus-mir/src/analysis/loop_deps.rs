@@ -28,7 +28,7 @@ use acvus_utils::QualifiedRef;
 use crate::ir::{
     BinOp, Callee, ForSource, IndexMode, InstKind, Label, PathSeg, RefTarget, Stages, ValueId,
 };
-use crate::laws::{ExternInstance, LawTable, ResolvedBinary, ResolvedFold, ResolvedIdentity, ResolvedLaws};
+use crate::laws::{ExternImpl, LawTable, ResolvedBinary, ResolvedFold, ResolvedIdentity, ResolvedLaws};
 use crate::means::{EntryAccess, EntryReading, Stored, Term as MeansTerm};
 use crate::ty::Mutability;
 use crate::ty::{Concrete, Types};
@@ -1121,9 +1121,9 @@ fn first<'a, 's, 'cfg>(
 }
 
 /// RFC-0082 rule 6: a storage every write of which in the loop is a call of
-/// one instance of an extern with a `fold` law, lending the storage through
+/// one impl of an extern with a `fold` law, lending the storage through
 /// its first argument and no other, and which the loop reads only to lend it
-/// to those calls, has that instance's `Fold` law.
+/// to those calls, has that impl's `Fold` law.
 struct FoldReading<'a, 'cfg> {
     loans: &'a Loans<'cfg>,
     laws: &'a LawTable,
@@ -1171,7 +1171,7 @@ impl FoldReading<'_, '_> {
 
     fn fold_call(&self, kind: &InstKind, storage: ValueId) -> Option<FoldCall> {
         let InstKind::FunctionCall {
-            callee: callee @ Callee::Extern { id, instance, .. },
+            callee: callee @ Callee::Extern { id, r#impl, .. },
             args,
             ..
         } = kind
@@ -1193,9 +1193,9 @@ impl FoldReading<'_, '_> {
                 .any(|&arg| lends(arg, Mutability::Mut) || lends(arg, Mutability::Shared));
         lent_by_the_state_alone.then_some(FoldCall {
             lender,
-            callee: ExternInstance {
+            callee: ExternImpl {
                 id: *id,
-                instance: *instance,
+                r#impl: *r#impl,
             },
             fold: *fold,
         })
@@ -1205,7 +1205,7 @@ impl FoldReading<'_, '_> {
 #[derive(Debug, Clone, Copy)]
 struct FoldCall {
     lender: ValueId,
-    callee: ExternInstance,
+    callee: ExternImpl,
     fold: ResolvedFold,
 }
 
@@ -1437,7 +1437,7 @@ pub enum Law {
     /// are one value under it, so the choice is associative and commutative.
     /// It has no identity in the token's type: a chunk's partial is `Option`
     /// of it with `None` as identity.
-    Ordered { op: LawOp, order: ExternInstance },
+    Ordered { op: LawOp, order: ExternImpl },
     /// `last` of `carried`, guarded by `guard`, which its arm sets:
     /// `(f, a) · (g, b)` is `(f ‖ g, b)` where `g` holds and `f` does not,
     /// and `(f ‖ g, a)` otherwise, so the earlier set values stay.
@@ -1527,7 +1527,7 @@ impl LawOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallLaw {
-    pub callee: ExternInstance,
+    pub callee: ExternImpl,
     pub identity: CallIdentity,
 }
 
@@ -1542,7 +1542,7 @@ pub enum CallIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FoldAccumulator {
     pub storage: ValueId,
-    pub callee: ExternInstance,
+    pub callee: ExternImpl,
     pub fold: ResolvedFold,
 }
 
@@ -1965,11 +1965,11 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
         }
     }
 
-    /// A call of an instance stating a `fold` law whose first argument lends
+    /// A call of an impl stating a `fold` law whose first argument lends
     /// `slot` and whose others lend none of it.
     fn entry_fold(&self, kind: &InstKind, slot: ValueId) -> Option<FoldCall> {
         let InstKind::FunctionCall {
-            callee: callee @ Callee::Extern { id, instance, .. },
+            callee: callee @ Callee::Extern { id, r#impl, .. },
             args,
             ..
         } = kind
@@ -1984,9 +1984,9 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             self.holds(lender, slot) && !rest.iter().any(|arg| self.holds(*arg, slot));
         lent_by_the_entry_alone.then_some(FoldCall {
             lender,
-            callee: ExternInstance {
+            callee: ExternImpl {
                 id: *id,
-                instance: *instance,
+                r#impl: *r#impl,
             },
             fold: *fold,
         })
@@ -2207,8 +2207,8 @@ fn disjoint_storages(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InverseCell {
     pub slot: ValueId,
-    pub take: ExternInstance,
-    pub restore: ExternInstance,
+    pub take: ExternImpl,
+    pub restore: ExternImpl,
 }
 
 /// The written storages of the loop that RFC-0093 rule 6 holds as a cell.
@@ -2301,16 +2301,16 @@ fn inverse_cells(
             let unordered_call = |at: InstAt| match inst(at) {
                 InstKind::FunctionCall {
                     dst,
-                    callee: callee @ Callee::Extern { id, instance, .. },
+                    callee: callee @ Callee::Extern { id, r#impl, .. },
                     args,
                     order: None,
                     ..
                 } => Some((
                     *dst,
                     callee,
-                    ExternInstance {
+                    ExternImpl {
                         id: *id,
-                        instance: *instance,
+                        r#impl: *r#impl,
                     },
                     args.as_slice(),
                 )),
@@ -2413,9 +2413,9 @@ fn runs_before_the_iteration_ends(
 /// it, or a value its term is (RFC-0104 rule 3); any other value is no
 /// identity here.
 fn is_identity(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable, law: &Law, value: ValueId) -> bool {
-    let called = |named: ExternInstance| {
+    let called = |named: ExternImpl| {
         let as_its_term = laws
-            .means_of_instance(named)
+            .means_of_impl(named)
             .and_then(|means| means.closed())
             .is_some_and(|term| is_term(cfg, types, value, term));
         let a_call_of_it = cfg
@@ -2425,15 +2425,15 @@ fn is_identity(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable, law: &La
             .any(|inst| match &inst.kind {
                 InstKind::FunctionCall {
                     dst,
-                    callee: Callee::Extern { id, instance, .. },
+                    callee: Callee::Extern { id, r#impl, .. },
                     args,
                     ..
                 } => {
                     *dst == value
                         && args.is_empty()
-                        && ExternInstance {
+                        && ExternImpl {
                             id: *id,
-                            instance: *instance,
+                            r#impl: *r#impl,
                         } == named
                 }
                 _ => false,
@@ -2546,7 +2546,7 @@ struct KeyedStorage {
     folds: Vec<EntryFold>,
 }
 
-/// A call of an instance stating a `fold` law that lends a keyed entry
+/// A call of an impl stating a `fold` law that lends a keyed entry
 /// through its first argument and no other (RFC-0082 rule 6, at one key).
 #[derive(Debug, Clone, Copy)]
 struct EntryFold {
@@ -2844,7 +2844,7 @@ fn keyed_storages(
 /// read by an `Index` copy and written by an `IndexSet`; an entry is read and
 /// written by calls whose terms say what each does to it (RFC-0098 rule 5):
 /// one opening call and the reference it returns, read and written whole or
-/// lent to calls of one instance stating `fold`; a view of it read by a
+/// lent to calls of one impl stating `fold`; a view of it read by a
 /// switch ([`viewed_load`]); and calls that store a value whatever the entry
 /// held, whose results the iteration does not read.
 fn keyed_storage(
@@ -4682,7 +4682,7 @@ enum Step<'a> {
         exact: bool,
     },
     Call {
-        callee: ExternInstance,
+        callee: ExternImpl,
         law: &'a ResolvedBinary,
     },
     Order,
@@ -4694,12 +4694,12 @@ enum Step<'a> {
     /// `f(b, y)` for an `f` stating a law over its `Option` result, the
     /// `Some(b)` arm of a switch on the token whose `None` arm leaves it.
     Extension {
-        callee: ExternInstance,
+        callee: ExternImpl,
         law: &'a ResolvedBinary,
     },
     Ordered {
         op: LawOp,
-        order: ExternInstance,
+        order: ExternImpl,
     },
     /// `a·y + x` over an integer (RFC-0093 rule 8).
     AffineMap,
@@ -4729,14 +4729,14 @@ enum Lifted<'a> {
         exact: bool,
     },
     Call {
-        callee: ExternInstance,
+        callee: ExternImpl,
         law: &'a ResolvedBinary,
     },
     Order,
     Last,
     Ordered {
         op: LawOp,
-        order: ExternInstance,
+        order: ExternImpl,
     },
     AffineMap,
     StateMap {
@@ -4972,7 +4972,7 @@ struct Sent {
 struct OrderedCompare {
     op: BinOp,
     sign: ValueId,
-    order: ExternInstance,
+    order: ExternImpl,
     left: ValueId,
     right: ValueId,
 }
@@ -5592,7 +5592,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         }
     }
 
-    /// An entry every update of which is a call of one instance stating a
+    /// An entry every update of which is a call of one impl stating a
     /// `fold` law, lending the entry alone (RFC-0082 rule 6, at one key):
     /// the per-key law is that fold's.
     fn keyed_fold(
@@ -5602,14 +5602,14 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         first: FoldCall,
     ) -> Option<Accumulator> {
         let once = |block: BlockIdx| self.nested_loops_holding(block).is_empty();
-        let one_instance = keyed.loads.is_empty()
+        let one_impl = keyed.loads.is_empty()
             && keyed.stores.is_empty()
             && once(opened.at.block)
             && keyed
                 .folds
                 .iter()
                 .all(|entry| entry.call.callee == first.callee && once(entry.at.block));
-        if !one_instance {
+        if !one_impl {
             return None;
         }
         let law = Law::Fold(FoldAccumulator {
@@ -6435,7 +6435,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 ..
             } => self.form(*container),
             InstKind::FunctionCall {
-                callee: callee @ Callee::Extern { id, instance, .. },
+                callee: callee @ Callee::Extern { id, r#impl, .. },
                 args,
                 ..
             } => {
@@ -6457,9 +6457,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     return None;
                 };
                 let step = Step::Call {
-                    callee: ExternInstance {
+                    callee: ExternImpl {
                         id: *id,
-                        instance: *instance,
+                        r#impl: *r#impl,
                     },
                     law,
                 };
@@ -7324,17 +7324,17 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         })
     }
 
-    /// A call `f(a, b)` defining `value`, `f`'s instance stating a law over
+    /// A call `f(a, b)` defining `value`, `f`'s impl stating a law over
     /// its extension to `Option` (RFC-0082 rule 2).
     fn extension_call(
         &self,
         value: ValueId,
-    ) -> Option<(ExternInstance, &'a ResolvedBinary, ValueId, ValueId)> {
+    ) -> Option<(ExternImpl, &'a ResolvedBinary, ValueId, ValueId)> {
         let Some(Def::Inst(at)) = self.defs.get(&value) else {
             return None;
         };
         let InstKind::FunctionCall {
-            callee: callee @ Callee::Extern { id, instance, .. },
+            callee: callee @ Callee::Extern { id, r#impl, .. },
             args,
             ..
         } = self.inst(*at)
@@ -7348,9 +7348,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return None;
         };
         Some((
-            ExternInstance {
+            ExternImpl {
                 id: *id,
-                instance: *instance,
+                r#impl: *r#impl,
             },
             law,
             first,
@@ -7444,7 +7444,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 Some((Lifted::Op { op, exact }, *left, *right))
             }
             InstKind::FunctionCall {
-                callee: callee @ Callee::Extern { id, instance, .. },
+                callee: callee @ Callee::Extern { id, r#impl, .. },
                 args,
                 ..
             } => {
@@ -7459,9 +7459,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 };
                 Some((
                     Lifted::Call {
-                        callee: ExternInstance {
+                        callee: ExternImpl {
                             id: *id,
-                            instance: *instance,
+                            r#impl: *r#impl,
                         },
                         law,
                     },
@@ -7530,7 +7530,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         }))
     }
 
-    /// A compare of the sign of a call of an instance that states
+    /// A compare of the sign of a call of an impl that states
     /// `law(total_order)` (RFC-0082 rule 10) with `0`, read as the same
     /// compare of the call's two arguments under that order: `f(a, b) > 0`
     /// is `a > b`, and `0 > f(a, b)` is `b > a`.
@@ -7540,7 +7540,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 return None;
             };
             let InstKind::FunctionCall {
-                callee: callee @ Callee::Extern { id, instance, .. },
+                callee: callee @ Callee::Extern { id, r#impl, .. },
                 args,
                 ..
             } = self.inst(*at)
@@ -7553,9 +7553,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             let &[a, b] = args.as_slice() else {
                 return None;
             };
-            let order = ExternInstance {
+            let order = ExternImpl {
                 id: *id,
-                instance: *instance,
+                r#impl: *r#impl,
             };
             Some((value, order, a, b))
         };
@@ -7896,7 +7896,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
 
     /// The reference whose lent value `value` equals: a read of the whole
     /// value through it, the language's clone of the `String` it lends, or a
-    /// call of an instance whose term is `*x` (RFC-0104 rule 5) with it as
+    /// call of an impl whose term is `*x` (RFC-0104 rule 5) with it as
     /// `x`.
     fn copy_of(&self, value: ValueId) -> Option<ValueId> {
         let Some(Def::Inst(at)) = self.defs.get(&value) else {

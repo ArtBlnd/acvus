@@ -2,7 +2,7 @@
 //! its iterator states as `len(ret)` (RFC-0082 rule 4), where nothing but
 //! the header touches the iterator. Each pull yields at most one of the
 //! elements the call stated, so the loop runs at most that many iterations.
-//! And RFC-0089 rule 5: a pull runs ahead of a body exit where its instance
+//! And RFC-0089 rule 5: a pull runs ahead of a body exit where its impl
 //! states `returns` and no effect and nothing reads the iterator after the
 //! loop.
 

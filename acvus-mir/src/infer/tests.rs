@@ -720,9 +720,9 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
         ty: signature,
         param_names: Box::new([a, b]),
         bounds: Box::new([integer]),
-        instances: None,
+        impls: None,
         requires: Box::new([Requirement {
-            signature: shared,
+            generic_function: shared,
             pattern: t,
             law: None,
         }]),
@@ -758,7 +758,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     assert_eq!(
         used.requirements,
         vec![RequiredAt {
-            signature: shared,
+            generic_function: shared,
             pattern: var,
             law: None
         }]
@@ -780,7 +780,7 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
         ty: signature,
         param_names: Box::new([v]),
         bounds: Box::new([]),
-        instances: None,
+        impls: None,
         requires: Box::new([]),
     };
     let cast = CastRule {
@@ -908,7 +908,7 @@ fn with_casts_and_conversions(
                 ty,
                 param_names: Box::new([v]),
                 bounds: Box::new([]),
-                instances: None,
+                impls: None,
                 requires: Box::new([]),
             },
         ));

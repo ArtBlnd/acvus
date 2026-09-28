@@ -12,7 +12,7 @@ pub enum StructuralSignature {
 }
 
 /// A component is named rather than numbered because an object or an enum
-/// can still gain members after its structural instance settled, and the
+/// can still gain members after its structural impl settled, and the
 /// solver opens a decision for each member it gains beside the ones it has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Component {
@@ -90,10 +90,10 @@ pub struct Leaf {
     pub ty: Ty,
 }
 
-/// Obligation across artifacts: the lowering writes the registry instance of
+/// Obligation across artifacts: the lowering writes the registry impl of
 /// each leaf into `InstKind::StructuralEq::leaves` and
 /// `InstKind::StructuralClone::leaves` in this order, and
-/// `acvus_interpreter::prepare` finds each leaf's instance by its position
+/// `acvus_interpreter::prepare` finds each leaf's impl by its position
 /// here.
 pub fn structural_leaves(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> Vec<Leaf> {
     let mut out = Vec::new();

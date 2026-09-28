@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::cfg::{self, Block, BlockIdx, CfgBody, ENTRY_LABEL, Terminator};
 use crate::ir::{
-    BinOp, Callee, ExitTrip, ExternInstance, ForSource, Inst, InstKind, Label, MirBody,
+    BinOp, Callee, ExitTrip, ExternImpl, ForSource, Inst, InstKind, Label, MirBody,
     MirModule, Overflow, PathSeg, RefTarget, Stages, SwitchKey, ValOrigin, ValueId,
 };
 use crate::laws::LawTable;
@@ -30,7 +30,7 @@ pub enum Declined {
     /// the source's `next` included, carries an effect stays with its
     /// handlers.
     Effectful,
-    NoFittingInstance(QualifiedRef),
+    NoFittingImpl(QualifiedRef),
     UntypedTerm,
     Mismatch { wanted: Ty, found: Ty },
     ConstantOutOfType { constant: Literal, ty: Ty },
@@ -277,14 +277,14 @@ struct Typed {
 }
 
 struct Resolved {
-    instance: ExternInstance,
+    r#impl: ExternImpl,
     callee_ty: Ty,
     params: Vec<Ty>,
     ret: Ty,
 }
 
 struct Fitting {
-    instance: usize,
+    r#impl: usize,
     bindings: Bindings,
 }
 
@@ -683,22 +683,22 @@ impl<'p> Fusion<'p> {
                 required.len()
             )
         });
-        let instance = self
+        let r#impl = self
             .laws
-            .instance_types(chosen.signature)
-            .get(chosen.instance)
+            .impl_types(chosen.generic_function)
+            .get(chosen.r#impl)
             .unwrap_or_else(|| {
                 panic!(
-                    "the checker settled instance {} of {:?}, which the law table lacks",
-                    chosen.instance, chosen.signature
+                    "the checker settled impl {} of {:?}, which the law table lacks",
+                    chosen.r#impl, chosen.generic_function
                 )
             });
-        let instance_ty = instance.ty;
+        let impl_ty = r#impl.ty;
         let source_ty = self.cfg.val_types[&self.pipeline.source];
         let lent = self.lent(Mutability::Mut, source_ty);
-        let unfit = Declined::NoFittingInstance(chosen.signature);
+        let unfit = Declined::NoFittingImpl(chosen.generic_function);
         let poly = self.decls.types();
-        let TyKind::Fn { params, .. } = poly.kind(instance_ty) else {
+        let TyKind::Fn { params, .. } = poly.kind(impl_ty) else {
             return Err(unfit);
         };
         let [pulled] = &params[..] else {
@@ -709,7 +709,7 @@ impl<'p> Fusion<'p> {
             return Err(unfit);
         }
         let callee_ty = bindings
-            .apply(poly, instance_ty, self.types, Built::InsideTheLoop)
+            .apply(poly, impl_ty, self.types, Built::InsideTheLoop)
             .ok_or(Declined::UntypedTerm)?;
         let TyKind::Fn { ret, effect, .. } = self.types.kind(callee_ty) else {
             return Err(unfit);
@@ -722,8 +722,8 @@ impl<'p> Fusion<'p> {
         };
         Ok(NextCall {
             callee: Callee::Extern {
-                id: chosen.signature,
-                instance: chosen.instance,
+                id: chosen.generic_function,
+                r#impl: chosen.r#impl,
                 required: chosen.required.clone(),
             },
             element: *element,
@@ -972,7 +972,7 @@ impl<'p> Fusion<'p> {
             dst: slice,
             container: lent,
             mutability: Mutability::Shared,
-            instance: nested.view.instance,
+            r#impl: nested.view.r#impl,
         });
         let header = self.fresh_label();
         let body = self.fresh_label();
@@ -1010,7 +1010,7 @@ impl<'p> Fusion<'p> {
 
     /// The element a nest yields: the word element of the shared slice
     /// `core::as_slice` lends of the container (operators §3), at the
-    /// instance its type chooses.
+    /// impl its type chooses.
     fn nested_element(&mut self, container: Ty) -> Result<Nested, Declined> {
         let unfit = Declined::NestOverNoWordSlice(container);
         let lent = self.lent(Mutability::Shared, container);
@@ -1448,8 +1448,8 @@ impl<'p> Fusion<'p> {
     }
 
     /// Each argument's type where the argument types itself, a constant's
-    /// being `None`: `resolve` binds those by the instance the others choose,
-    /// and the call types every argument again at that instance's parameter.
+    /// being `None`: `resolve` binds those by the impl the others choose,
+    /// and the call types every argument again at that impl's parameter.
     fn self_typed_args(&mut self, args: &[Term], scope: &Scope) -> Vec<Option<Ty>> {
         args.iter()
             .map(|arg| self.type_of(arg, None, scope).ok())
@@ -1604,15 +1604,15 @@ impl<'p> Fusion<'p> {
             values.push(self.term(arg, Some(*param), scope)?.value);
         }
         // A result written into a slot takes the slot's type, which the
-        // instance's result was bound to: the consumer's result is the one
+        // impl's result was bound to: the consumer's result is the one
         // the IR records, never one built here.
         let ret = expected.unwrap_or(resolved.ret);
         let dst = self.value(ret);
         self.push(InstKind::FunctionCall {
             dst,
             callee: Callee::Extern {
-                id: resolved.instance.id,
-                instance: resolved.instance.instance,
+                id: resolved.r#impl.id,
+                r#impl: resolved.r#impl.r#impl,
                 required: Vec::new(),
             },
             callee_ty: resolved.callee_ty,
@@ -1622,11 +1622,11 @@ impl<'p> Fusion<'p> {
         Ok(Typed { value: dst, ty: ret })
     }
 
-    /// The instance `laws::resolve` would choose for a law naming `name` at
-    /// these types: the one concrete instance they have the shape of, and
+    /// The impl `laws::resolve` would choose for a law naming `name` at
+    /// these types: the one concrete impl they have the shape of, and
     /// otherwise the generic one.
     fn resolve(&mut self, name: QualifiedRef, args: &[Option<Ty>], ret: Option<Ty>) -> Result<Resolved, Declined> {
-        let unfit = Declined::NoFittingInstance(name);
+        let unfit = Declined::NoFittingImpl(name);
         let poly = self.decls.types();
         let types: &Types<Concrete> = self.types;
         let fits = |ty: TyId<Poly>| -> Option<Bindings> {
@@ -1651,16 +1651,16 @@ impl<'p> Fusion<'p> {
             }
             Some(bindings)
         };
-        let instances = self.laws.instance_types(name);
+        let impls = self.laws.impl_types(name);
         let fitting = |generic: bool| -> Vec<Fitting> {
-            instances
+            impls
                 .iter()
                 .enumerate()
-                .filter(|(_, instance)| instance.generic == generic)
-                .filter_map(|(at, instance)| {
+                .filter(|(_, r#impl)| r#impl.generic == generic)
+                .filter_map(|(at, r#impl)| {
                     Some(Fitting {
-                        instance: at,
-                        bindings: fits(instance.ty)?,
+                        r#impl: at,
+                        bindings: fits(r#impl.ty)?,
                     })
                 })
                 .collect()
@@ -1671,13 +1671,13 @@ impl<'p> Fusion<'p> {
             0 => fitting(true).into_iter().next().ok_or(unfit.clone())?,
             _ => return Err(unfit),
         };
-        let instance = &instances[chosen.instance];
-        if instance.requires {
+        let r#impl = &impls[chosen.r#impl];
+        if r#impl.requires {
             return Err(unfit);
         }
         let callee_ty = chosen
             .bindings
-            .apply(poly, instance.ty, self.types, Built::InsideTheLoop)
+            .apply(poly, r#impl.ty, self.types, Built::InsideTheLoop)
             .ok_or(Declined::UntypedTerm)?;
         let TyKind::Fn {
             params,
@@ -1692,9 +1692,9 @@ impl<'p> Fusion<'p> {
             return Err(Declined::Effectful);
         }
         Ok(Resolved {
-            instance: ExternInstance {
+            r#impl: ExternImpl {
                 id: name,
-                instance: chosen.instance,
+                r#impl: chosen.r#impl,
             },
             params: params.to_vec(),
             ret: *ret,

@@ -20,19 +20,19 @@ pub enum Name {
     Input(Astr),
 }
 
-/// Which instance of a signature a call reached.
+/// Which impl of a generic function a call reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Instance {
+pub enum Impl {
     Concrete(usize),
     Generic,
 }
 
-/// A reached declaration at the instance chosen, with what its
+/// A reached declaration at the impl chosen, with what its
 /// requirements chose (extern-fn §6).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Chosen {
     pub declaration: QualifiedRef,
-    pub instance: Option<Instance>,
+    pub r#impl: Option<Impl>,
     pub required: Box<[Chosen]>,
 }
 

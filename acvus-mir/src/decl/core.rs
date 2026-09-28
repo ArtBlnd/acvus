@@ -1,9 +1,11 @@
-//! `core`, declared inside the compiler (operators §2): the names its
-//! signatures have, and the tags of the primitive `Option` and `Result`
-//! (types §2). One place for every reader: typeck, laws, fusion.
+//! `core`, declared inside the compiler (operators §2): the names of its
+//! generic functions, the lang items the language's syntax lowers to, and
+//! the tags of the primitive `Option` and `Result` (types §2). One place
+//! for every reader: typeck, laws, fusion.
 
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
+/// The names of `core`'s generic functions: the lang items (operators §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Core {
     pub add: QualifiedRef,

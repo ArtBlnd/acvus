@@ -33,11 +33,11 @@ pub enum Laws {
     /// is `x` and `f(None)` traps (RFC-0082 rule 3). The signature it is
     /// stated over states no other law, so it is one of this enum's forms.
     Payload,
-    /// `#[extern_fn(law(equivalence))]` on a `core::eq` instance: it is
-    /// reflexive, symmetric and transitive, and the `core::hash` instance at
+    /// `#[extern_fn(law(equivalence))]` on a `core::eq` impl: it is
+    /// reflexive, symmetric and transitive, and the `core::hash` impl at
     /// its type hashes values it calls equal alike (RFC-0082 rule 11). A
     /// requirement naming [`NamedLaw::Equivalence`] is resolved only by an
-    /// instance stating it (RFC-0070 rule 6).
+    /// impl stating it (RFC-0070 rule 6).
     Equivalence,
     /// `#[extern_fn(step(..))]` on a stream adaptor or consumer (RFC-0099
     /// rule 1).
@@ -45,16 +45,16 @@ pub enum Laws {
 }
 
 /// A law a requirement names at its type (RFC-0070 rule 6), which only an
-/// instance stating it resolves.
+/// impl stating it resolves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NamedLaw {
-    /// `law::Equivalence`: a `core::eq` instance stating `law(equivalence)`
+    /// `law::Equivalence`: a `core::eq` impl stating `law(equivalence)`
     /// (RFC-0082 rule 11).
     Equivalence,
 }
 
 impl NamedLaw {
-    /// Whether an instance declaring `laws` states this law.
+    /// Whether an impl declaring `laws` states this law.
     pub fn stated_by(self, laws: &Laws) -> bool {
         match self {
             NamedLaw::Equivalence => matches!(laws, Laws::Equivalence),
@@ -155,9 +155,9 @@ pub enum Reaches {
     Places(Vec<ReachedPlace>),
 }
 
-/// How a call of the instance ends, as its declaration states it (RFC-0082
+/// How a call of the impl ends, as its declaration states it (RFC-0082
 /// rules 8 and 9): the author's promise, which a call reads over the
-/// instance tree it chose.
+/// impl tree it chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Returns {
     #[default]
@@ -165,9 +165,9 @@ pub enum Returns {
     /// `#[extern_fn(returns)]`: every call returns or traps. RFC-0089 rule 5
     /// reads it to run the call ahead of its iteration's control token.
     Stated,
-    /// `#[extern_fn(total)]`: the instance's own body returns a value and
-    /// never traps. An instance with requirements states it of that body
-    /// alone, and the instances its requirements choose answer for
+    /// `#[extern_fn(total)]`: the impl's own body returns a value and
+    /// never traps. An impl with requirements states it of that body
+    /// alone, and the impls its requirements choose answer for
     /// themselves.
     Total,
 }
