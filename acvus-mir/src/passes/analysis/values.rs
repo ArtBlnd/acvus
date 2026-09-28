@@ -358,6 +358,7 @@ mod tests {
         Declarations::verify(RawDeclarations {
             types,
             functions,
+            lang_impls: Vec::new(),
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),

@@ -199,7 +199,7 @@ impl Fixture {
 
     fn context(&mut self, name: &str, ty: TyId<Poly>) {
         let id = QualifiedRef::root(self.name(name));
-        self.raw.contexts.push((id, ty));
+        self.raw.contexts.push((id, crate::decl::ContextDecl { ty, volatile: false }));
     }
 
     fn input(&mut self, name: &str, ty: TyId<Poly>) {

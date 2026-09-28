@@ -133,6 +133,7 @@ mod tests {
         let decls = Declarations::verify(RawDeclarations {
             types: poly,
             functions: vec![(make, scheme), (as_slice, as_slice_scheme)],
+            lang_impls: Vec::new(),
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),

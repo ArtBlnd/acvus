@@ -122,6 +122,7 @@ fn declarations(interner: &Interner) -> Declarations {
     Declarations::verify(RawDeclarations {
         types: Types::new(),
         functions: Vec::new(),
+        lang_impls: Vec::new(),
         user_types: Vec::new(),
         casts: Vec::new(),
         conversions: Vec::new(),
