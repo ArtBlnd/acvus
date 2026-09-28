@@ -262,6 +262,10 @@ impl TypeCheck<'_> {
                     "a slice reference of the stated mutability",
                 )
             }
+            Op::SliceLen { src } => {
+                self.slice(*src)?;
+                self.is_u64(Self::result(inst)?)
+            }
             Op::ArrayView { src, mutability } => {
                 let TyKind::Ref(held, lent) = self.kind(self.ty(*src)) else {
                     return Err(format!("{src:?} is not a reference"));
@@ -303,6 +307,11 @@ impl TypeCheck<'_> {
                 let at = self.field_path(object_ty, *field, rest)?;
                 self.same(*value, at, "the field")?;
                 self.same(Self::result(inst)?, object_ty, "the object")
+            }
+            Op::BinOp { op: BinOp::Shl(_) | BinOp::Shr(_), left, right } => {
+                self.is_int(*left)?;
+                self.is_int(*right)?;
+                self.same(Self::result(inst)?, self.ty(*left), "the shifted value")
             }
             Op::BinOp { op, left, right } => {
                 let result = Self::result(inst)?;

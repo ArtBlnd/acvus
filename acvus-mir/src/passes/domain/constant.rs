@@ -85,7 +85,11 @@ impl ValueDomain for ConstantDomain {
             (Constant::Bottom, _) | (_, Constant::Bottom) => Constant::Bottom,
             (Constant::Top, _) | (_, Constant::Top) => Constant::Top,
             (Constant::Known(left), Constant::Known(right)) => {
-                outcome(binary(op, ty, Scalar::of(left, ty), Scalar::of(right, ty)))
+                let right = match op {
+                    BinOp::Shl(_) | BinOp::Shr(_) => Scalar::amount(right),
+                    _ => Scalar::of(right, ty),
+                };
+                outcome(binary(op, ty, Scalar::of(left, ty), right))
             }
         }
     }
@@ -447,6 +451,21 @@ mod tests {
             let got = ConstantDomain.binary(op, ty, &int(a), &int(b));
             assert_eq!(got, expected, "{a} {op:?} {b} at {}", ty.name());
         }
+    }
+
+    /// D79: a shift's amount keeps its own width, so an amount of a wider
+    /// type is read as the integer it is: a trapping shift traps on it
+    /// where it is at least the value's width, and a wrapping one takes it
+    /// modulo that width, never truncated to the value's type first.
+    #[test]
+    fn a_shift_amount_is_read_at_its_own_width() {
+        use BinOp::*;
+        use Overflow::{Trap, Wrap};
+        let wide = 1i128 << 40;
+        assert_eq!(ConstantDomain.binary(Shl(Trap), CastTy::Int(IntTy::U8), &int(1), &int(wide)), Constant::Top);
+        assert_eq!(ConstantDomain.binary(Shr(Trap), CastTy::Int(IntTy::U8), &int(128), &int(-1)), Constant::Top);
+        assert_eq!(ConstantDomain.binary(Shl(Trap), CastTy::Int(IntTy::U8), &int(1), &int(7)), int(128));
+        assert_eq!(ConstantDomain.binary(Shl(Wrap), CastTy::Int(IntTy::U8), &int(1), &int(wide + 1)), int(2));
     }
 
     #[test]

@@ -507,6 +507,17 @@ mod tests {
         Interval::between(lo, hi)
     }
 
+    /// D79: a shift's amount keeps its own width: an amount of a wider type
+    /// at or past the value's width leaves a trapping shift no value.
+    #[test]
+    fn a_shift_amount_past_the_width_of_a_wider_type_leaves_no_value() {
+        let u8_ty = CastTy::Int(IntTy::U8);
+        let wide = Interval::exactly(1i128 << 40);
+        let one = Interval::exactly(1);
+        assert_eq!(IntervalDomain.binary(BinOp::Shl(Overflow::Trap), u8_ty, &one, &wide), Interval::Empty);
+        assert_eq!(IntervalDomain.binary(BinOp::Shl(Overflow::Trap), u8_ty, &one, &Interval::exactly(3)), Interval::exactly(8));
+    }
+
     fn finite(lo: i128, hi: i128) -> Interval {
         range(Bound::Finite(lo), Bound::Finite(hi))
     }

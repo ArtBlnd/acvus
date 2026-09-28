@@ -117,6 +117,12 @@ pub enum Op {
         src: ValueId,
         mutability: Mutability,
     },
+    /// The number of elements of the slice `src`, a `&[T]` or `&mut [T]`,
+    /// references: the language's own, as a `u64`. It neither traps nor has
+    /// an effect.
+    SliceLen {
+        src: ValueId,
+    },
     /// Element `index` of `slice`. The index is `u64`; the one check is
     /// `index < len`, made unless `bound` is `Proven`.
     Index {
@@ -299,6 +305,10 @@ pub enum Op {
         tag: Astr,
         payload: Option<ValueId>,
     },
+    /// Whether the variant `src` holds is `tag`'s. `src` is the variant
+    /// itself, or a reference to it, read through as a `Switch` reads its
+    /// tag through one: a pattern past a reference tests the variant the
+    /// reference names without taking it out.
     TestVariant {
         src: ValueId,
         tag: Astr,
@@ -357,6 +367,7 @@ macro_rules! walk_operands {
             | Op::TestLiteral { src, .. }
             | Op::TestObjectKey { src, .. }
             | Op::TestVariant { src, .. }
+            | Op::SliceLen { src }
             | Op::UnwrapVariant { src }
             | Op::Drop { src } => $on(src),
             Op::Ref { target, .. } | Op::Take { target, .. } => on_target(target, $on),
@@ -494,6 +505,7 @@ impl Op {
             | Op::MakeClosure { .. }
             | Op::MakeVariant { .. }
             | Op::TestVariant { .. }
+            | Op::SliceLen { .. }
             | Op::UnwrapVariant { .. }
             | Op::Undef => true,
         }
@@ -567,6 +579,7 @@ impl Op {
             | Op::MakeClosure { .. }
             | Op::MakeVariant { .. }
             | Op::TestVariant { .. }
+            | Op::SliceLen { .. }
             | Op::Undef
             | Op::Drop { .. } => false,
         }

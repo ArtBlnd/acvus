@@ -206,6 +206,7 @@ enum Shape {
     StructuralClone(Vec<Chosen>),
     AsSlice { mutability: Mutability, id: QualifiedRef, r#impl: usize },
     ArrayView(Mutability),
+    SliceLen,
     /// An `Index`: whether it yields the element itself, and whether it
     /// checks its bound.
     Index { copies_element: bool, checked: bool },
@@ -307,6 +308,7 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
             Shape::AsSlice { mutability: *mutability, id: r#impl.id, r#impl: r#impl.r#impl }
         }
         Op::ArrayView { mutability, .. } => Shape::ArrayView(*mutability),
+        Op::SliceLen { .. } => Shape::SliceLen,
         Op::Index { mode, bound, .. } => Shape::Index {
             copies_element: match mode {
                 IndexMode::Copy => true,

@@ -6,7 +6,9 @@ use acvus_ast::Script;
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{lower_script, lower_template};
-use crate::decl::{ContextDecl, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::decl::{
+    ContextDecl, ConversionRule, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
+};
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, SwitchKey};
@@ -628,4 +630,88 @@ fn a_view_step_of_a_coercion_is_its_as_slice() {
     assert!(view < call);
     let Op::FunctionCall { args, .. } = insts[call].op() else { unreachable!("found as a call above") };
     assert_eq!(Some(args[0]), insts[view].result());
+}
+
+// -- the language's own operations (D79) ---------------------------------------
+
+/// A shift's amount keeps its own width: `u8 << i64` is one `Shl`, and
+/// the amount is never cast (operators §2).
+#[test]
+fn a_shift_amount_keeps_its_own_width() {
+    let lowered = Fixture::new().script("1u8 << 3");
+    let body = lowered.entry();
+    let shift = body
+        .blocks()
+        .flat_map(|(_, block)| block.insts())
+        .find_map(|inst| match inst.op() {
+            Op::BinOp { op: crate::ir::BinOp::Shl(_), left, right } => Some((*left, *right)),
+            _ => None,
+        });
+    let Some((value, amount)) = shift else { panic!("a Shl: {}", shown(body)) };
+    assert!(matches!(lowered.kind_of(body, value), TyKind::Int(IntTy::U8)));
+    assert!(matches!(lowered.kind_of(body, amount), TyKind::Int(IntTy::I64)));
+    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::Cast { .. })), 0);
+}
+
+/// A list pattern on a slice tests the slice's length, the language's own,
+/// before it reaches an element (patterns §1).
+#[test]
+fn a_list_pattern_on_a_slice_tests_its_length() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let slice = fx.ty(TyKind::Slice(int));
+    let shared_slice = fx.reference(Mutability::Shared, slice);
+    fx.input("xs", shared_slice);
+    let lowered = fx.script("match $xs { [a, b] => *a, _ => 0, }");
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let length = insts.iter().position(|inst| matches!(inst.op(), Op::SliceLen { .. })).expect("a SliceLen");
+    let compared = insts
+        .iter()
+        .position(|inst| matches!(inst.op(), Op::BinOp { op: crate::ir::BinOp::Eq, left, .. } if Some(*left) == insts[length].result()))
+        .expect("the length compared with the two elements named");
+    let element = insts.iter().position(|inst| matches!(inst.op(), Op::Index { .. })).expect("an element reached by index");
+    assert!(compared < element, "the length is tested before an element is reached: {}", shown(body));
+}
+
+/// A declared conversion step is a call of its `via` at the function type
+/// typeck recorded for it (types §7, D75): `i64` stored into a `Meters`
+/// context goes through `meters(i64) -> Meters`.
+#[test]
+fn a_declared_conversion_step_is_a_call_of_its_via() {
+    let mut fx = Fixture::new();
+    let meters_id = QualifiedRef::root(fx.name("Meters"));
+    fx.raw.user_types.push(UserTypeDecl {
+        id: meters_id,
+        type_params: Box::new([]),
+        specializes: Box::new([]),
+        effect_params: 0,
+        identity_params: 0,
+        lifetimes: 0,
+    });
+    let meters = fx.ty(TyKind::UserDefined {
+        id: meters_id,
+        type_args: Box::new([]),
+        effect_args: Box::new([]),
+        identity_args: Box::new([]),
+    });
+    let int = fx.int();
+    let via_ty = fx.function(&[int], meters, Effect::pure());
+    let via = fx.declare("meters", via_ty, 1);
+    fx.raw.conversions.push(ConversionRule { from: int, to: meters, via });
+    let m = fx.context("m", meters, false);
+    let lowered = fx.script("@m = 1i64; 0");
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let call = insts
+        .iter()
+        .find(|inst| matches!(inst.op(), Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == via))
+        .and_then(|inst| inst.result())
+        .expect("a call of the conversion's via");
+    assert!(matches!(lowered.kind_of(body, call), TyKind::UserDefined { .. }));
+    let slot = body.slots().iter().copied().find(|slot| body.context_of_slot(*slot) == Some(m)).expect("m's slot");
+    assert!(insts.iter().any(|inst| matches!(
+        inst.op(),
+        Op::Assign { target: crate::ir::RefTarget::Var(target), value, .. } if *target == slot && *value == call
+    )));
 }

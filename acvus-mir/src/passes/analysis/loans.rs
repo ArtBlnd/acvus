@@ -623,6 +623,7 @@ impl Forward<'_> {
             | Op::TestLiteral { .. }
             | Op::TestObjectKey { .. }
             | Op::TestVariant { .. }
+            | Op::SliceLen { .. }
             | Op::Undef => return none(),
             Op::Commit { .. } | Op::Check { .. } | Op::CheckSteps { .. } | Op::Drop { .. } => return None,
             Op::StringAppend { .. } => return None,
@@ -951,6 +952,7 @@ impl Forward<'_> {
             | Op::Ref { .. }
             | Op::AsSlice { .. }
             | Op::ArrayView { .. }
+            | Op::SliceLen { .. }
             | Op::Fetch { .. }
             | Op::Commit { .. }
             | Op::FieldGet { .. }

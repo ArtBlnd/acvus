@@ -49,7 +49,7 @@ pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &
     };
     if let Some(input) = named.inputs.first() {
         todo!(
-            "the input {:?} named inside a lambda: an input is a parameter of the entry body, typeck records no \
+            "D79: the input {:?} named inside a lambda: an input is a parameter of the entry body, typeck records no \
              capture of it, and no rule states how a lambda's body reaches it",
             input.name
         );

@@ -63,6 +63,18 @@ impl Scalar {
     /// # Panics
     /// `literal` is not a value of `ty`, or an integer does not fit its
     /// width: whoever made the constant made a defect.
+    /// A shift's amount: the integer it is, at its own width, which is not
+    /// the shifted value's (D79). Its own constant checked that it fits.
+    ///
+    /// # Panics
+    /// `literal` is not an integer: a shift's amount is one.
+    fn amount(literal: &Literal) -> Scalar {
+        match literal.desugared() {
+            Literal::Int(n) => Scalar::Int(n),
+            other => panic!("a shift's amount is an integer, not {other:?}"),
+        }
+    }
+
     fn of(literal: &Literal, ty: CastTy) -> Scalar {
         if let Literal::IntOf(suffixed) = literal {
             assert!(

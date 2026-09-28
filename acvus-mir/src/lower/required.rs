@@ -241,7 +241,7 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
         Op::MakeTuple { elements } => operands.extend(elements.iter().map(|element| passed(*element))),
         Op::MakeVariant { payload, .. } => operands.extend(payload.iter().map(|payload| passed(*payload))),
         Op::MakeClosure { captures, .. } => operands.extend(captures.iter().map(|capture| passed(*capture))),
-        Op::TestLiteral { src, .. } | Op::TestObjectKey { src, .. } | Op::TestVariant { src, .. } => {
+        Op::TestLiteral { src, .. } | Op::TestObjectKey { src, .. } | Op::TestVariant { src, .. } | Op::SliceLen { src } => {
             operands.push(read(*src))
         }
         Op::Drop { src } => operands.push(taken(*src, Taken::Moved)),

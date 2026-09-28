@@ -64,7 +64,11 @@ pub enum BinOp {
     Xor,
     BitAnd,
     BitOr,
+    /// `value << amount`. The amount is an integer of any width, its own;
+    /// a trapping shift traps where the amount is negative or at least the
+    /// value's width (Rust's `u8 << i64` included).
     Shl(Overflow),
+    /// `value >> amount`, its amount and trap as `Shl`'s.
     Shr(Overflow),
     Mod,
     /// The lesser of two integers of one width, compared at that width's

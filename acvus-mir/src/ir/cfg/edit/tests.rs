@@ -1357,6 +1357,59 @@ fn types_agree_checks_an_array_view_against_the_array_it_views() {
     assert!(matches!(types_agree(&f, through_shared), Err(Violation { invariant: "TypesAgree", .. })));
 }
 
+/// `a << n` of a `u8` `a` by an `amount`-typed `n`, the result typed
+/// `result`.
+fn shifting(f: &mut Fixture, amount: Ty, result: Ty) -> BodyId {
+    let (na, nn, int) = (f.name("a"), f.name("n"), f.int);
+    let mut builder = f.build(false, int);
+    let byte = builder.intern(TyKind::Int(IntTy::U8));
+    let a = builder.param(na, byte, at(0));
+    let n = builder.param(nn, amount, at(0));
+    builder.push(Op::BinOp { op: BinOp::Shl(Overflow::Trap), left: a, right: n }, result, at(1));
+    let zero = builder.push(Op::Const { value: Literal::Int(0) }, int, at(2));
+    builder.terminate(ret(zero), Span::ZERO);
+    builder.seal().expect("the body has no open state")
+}
+
+#[test]
+fn types_agree_takes_a_shift_amount_of_its_own_width() {
+    let mut f = fixture();
+    let (int, bool) = (f.int, f.bool);
+    let byte = f.module_types_intern(TyKind::Int(IntTy::U8));
+    let good = shifting(&mut f, int, byte);
+    assert_eq!(types_agree(&f, good), Ok(()));
+    let wrong_result = shifting(&mut f, int, int);
+    assert!(matches!(types_agree(&f, wrong_result), Err(Violation { invariant: "TypesAgree", .. })));
+    let not_an_integer = shifting(&mut f, bool, byte);
+    assert!(matches!(types_agree(&f, not_an_integer), Err(Violation { invariant: "TypesAgree", .. })));
+}
+
+/// The length of a slice parameter typed `src`, its result typed `len`.
+fn measuring(f: &mut Fixture, src: Ty, len: Ty) -> BodyId {
+    let (ns, int) = (f.name("s"), f.int);
+    let mut builder = f.build(false, int);
+    let s = builder.param(ns, src, at(0));
+    builder.push(Op::SliceLen { src: s }, len, at(1));
+    let zero = builder.push(Op::Const { value: Literal::Int(0) }, int, at(2));
+    builder.terminate(ret(zero), Span::ZERO);
+    builder.seal().expect("the body has no open state")
+}
+
+#[test]
+fn types_agree_checks_a_slice_length() {
+    let mut f = fixture();
+    let int = f.int;
+    let slice = f.module_types_intern(TyKind::Slice(int));
+    let slice_ref = f.module_types_intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
+    let u64_ty = f.module_types_intern(TyKind::Int(IntTy::U64));
+    let good = measuring(&mut f, slice_ref, u64_ty);
+    assert_eq!(types_agree(&f, good), Ok(()));
+    let not_u64 = measuring(&mut f, slice_ref, int);
+    assert!(matches!(types_agree(&f, not_u64), Err(Violation { invariant: "TypesAgree", .. })));
+    let not_a_slice = measuring(&mut f, int, u64_ty);
+    assert!(matches!(types_agree(&f, not_a_slice), Err(Violation { invariant: "TypesAgree", .. })));
+}
+
 fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = f.build(true, f.int);

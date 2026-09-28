@@ -21,7 +21,7 @@ use super::expr::lower_expr;
 use super::place::{Operand, Place, assign, lend, read};
 use super::stmt::lower_body;
 use crate::ir::cfg::{BlockId, Op, Terminator};
-use crate::ir::{PathSeg, RefTarget, SwitchKey, ValueId, known_len};
+use crate::ir::{BinOp, IndexBound, IndexMode, Overflow, PathSeg, RefTarget, SwitchKey, ValueId, known_len};
 use crate::ty::{Mutability, Ty, TyKind};
 
 /// What a pattern is matched against: a value, or, past a reference, a
@@ -38,7 +38,18 @@ enum Part {
     Tuple(usize),
     Field(Astr),
     Payload(Astr),
+    /// An array's element, at an index its type fixes.
     Element(usize),
+}
+
+/// Where an element a list pattern names stands.
+#[derive(Debug, Clone, Copy)]
+enum ListAt {
+    Array(usize),
+    /// A slice's element, counted from its front.
+    SliceHead(usize),
+    /// A slice's element, `back` from its end.
+    SliceTail { back: usize },
 }
 
 impl Matched {
@@ -97,6 +108,44 @@ fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Matc
             Matched::Place { place: place.with(seg, ty), lent: *lent }
         }
     }
+}
+
+/// The element a list pattern names at `at`: an array's is a part; a
+/// slice's is reached by index, past its length test.
+fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> Matched {
+    let (place, lent) = match (at, matched) {
+        (ListAt::Array(index), _) => return part(cx, matched, Part::Element(index), span),
+        (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Place { place, lent }) => (place, *lent),
+        (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Value { .. }) => {
+            panic!("a slice is matched only past the reference that lends it")
+        }
+    };
+    let TyKind::Slice(ty) = cx.kind(place.ty) else {
+        panic!("a slice's element is named of a slice")
+    };
+    let ty = *ty;
+    let slice = slice_ref(cx, place, lent, span);
+    let u64_ty = cx.u64_ty();
+    let index = match at {
+        ListAt::SliceTail { back } => {
+            let len = cx.builder.push(Op::SliceLen { src: slice }, u64_ty, span);
+            let back = cx.constant(Literal::Int(back as i128), u64_ty, span);
+            let op = Op::BinOp { op: BinOp::Sub(Overflow::Trap), left: len, right: back };
+            cx.builder.push(op, u64_ty, span)
+        }
+        ListAt::SliceHead(front) | ListAt::Array(front) => cx.constant(Literal::Int(front as i128), u64_ty, span),
+    };
+    let element_ref = cx.ref_ty(lent, ty);
+    let op = Op::Index { slice, index, mode: IndexMode::Ref, bound: IndexBound::Checked };
+    let reference = cx.builder.push(op, element_ref, span);
+    Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty }, lent }
+}
+
+/// A reference, at `lent`, to the slice `place` holds.
+fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) -> ValueId {
+    let ty = cx.ref_ty(lent, place.ty);
+    let op = Op::Ref { target: place.target, path: place.path.clone(), mutability: lent };
+    cx.builder.push(op, ty, span)
 }
 
 /// The type of `part` of a `whole`.
@@ -220,16 +269,16 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             }
             held
         }
-        Pattern::List { head, tail, .. } => {
+        Pattern::List { head, rest, tail, .. } => {
             let matched = through(cx, matched, span);
-            let mut held = None;
-            for (index, element) in list_elements(cx, &matched, head, tail) {
-                if !refutable(element) {
+            let mut held = slice_length_test(cx, &matched, head.len() + tail.len(), rest.is_some(), span);
+            for (at, part_pattern) in list_elements(cx, &matched, head, tail) {
+                if !refutable(part_pattern) {
                     continue;
                 }
                 held = and(cx, held, span, |cx| {
-                    let inner = part(cx, &matched, Part::Element(index), span);
-                    test(cx, element, &inner)
+                    let inner = element(cx, &matched, at, span);
+                    test(cx, part_pattern, &inner)
                 });
             }
             held
@@ -238,28 +287,48 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
     }
 }
 
-/// Each element a list pattern names, with its index in the array.
-///
-/// # Panics
-/// The list is matched against a slice: its length is known only when
-/// the program runs, and the IR has no operation that reads a slice's
-/// length, so no rule lowers the length test yet.
+/// A list pattern's length test: none on an array, whose type fixes its
+/// length; on a slice, its length equal to the named elements', or at
+/// least that where the list has a `..`.
+fn slice_length_test(cx: &mut Lcx<'_, '_>, matched: &Matched, named: usize, rest: bool, span: Span) -> Option<ValueId> {
+    let Matched::Place { place, lent } = matched else {
+        return None;
+    };
+    if !matches!(cx.kind(place.ty), TyKind::Slice(_)) {
+        return None;
+    }
+    let slice = slice_ref(cx, place, *lent, span);
+    let u64_ty = cx.u64_ty();
+    let len = cx.builder.push(Op::SliceLen { src: slice }, u64_ty, span);
+    let named = cx.constant(Literal::Int(named as i128), u64_ty, span);
+    let op = match rest {
+        true => BinOp::Gte,
+        false => BinOp::Eq,
+    };
+    let bool_ty = cx.bool_ty();
+    Some(cx.builder.push(Op::BinOp { op, left: len, right: named }, bool_ty, span))
+}
+
+/// Each element a list pattern names, with where it stands.
 fn list_elements<'p, S: Slot>(
     cx: &Lcx<'_, '_>,
     matched: &Matched,
     head: &'p [Pattern<S>],
     tail: &'p [Pattern<S>],
-) -> Vec<(usize, &'p Pattern<S>)> {
-    let len = match cx.kind(matched.ty()) {
-        TyKind::Array(_, len) => known_len(len),
-        TyKind::Slice(_) => todo!(
-            "a list pattern on a slice: its length is tested when the program runs, and the IR has no operation \
-             that reads a slice's length"
-        ),
+) -> Vec<(ListAt, &'p Pattern<S>)> {
+    let heads = head.iter().enumerate();
+    match cx.kind(matched.ty()) {
+        TyKind::Array(_, len) => {
+            let from_end = known_len(len) - tail.len();
+            let tails = tail.iter().enumerate().map(|(at, part)| (ListAt::Array(from_end + at), part));
+            heads.map(|(at, part)| (ListAt::Array(at), part)).chain(tails).collect()
+        }
+        TyKind::Slice(_) => {
+            let tails = tail.iter().enumerate().map(|(at, part)| (ListAt::SliceTail { back: tail.len() - at }, part));
+            heads.map(|(at, part)| (ListAt::SliceHead(at), part)).chain(tails).collect()
+        }
         other => panic!("typeck admits a list pattern only on an array or a slice, not {other:?}"),
-    };
-    let from_end = len - tail.len();
-    head.iter().enumerate().chain(tail.iter().enumerate().map(|(at, part)| (from_end + at, part))).collect()
+    }
 }
 
 /// What a tag test reads: the value, or a shared reference to the place,
@@ -326,9 +395,9 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         }
         Pattern::List { head, tail, .. } => {
             let matched = through(cx, matched, span);
-            for (index, element) in list_elements(cx, &matched, head, tail) {
-                let inner = part(cx, &matched, Part::Element(index), span);
-                bind(cx, element, &inner);
+            for (at, part_pattern) in list_elements(cx, &matched, head, tail) {
+                let inner = element(cx, &matched, at, span);
+                bind(cx, part_pattern, &inner);
             }
         }
         Pattern::Error(_) => panic!("a pattern the parse left in error is refused, and never lowered"),
