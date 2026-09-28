@@ -812,6 +812,24 @@ impl RegionAnalysis<'_> {
         self.layout.positions(self.recorded(v))
     }
 
+    /// The regions `v` holds in `state`, one per position of its type. A
+    /// value the dataflow has not reached is the lattice's bottom
+    /// (`DataflowState::get`, `analysis/dataflow.rs:31`), which at `v`'s
+    /// width is every position holding no loan.
+    ///
+    /// # Panics
+    /// A holder's regions are not its type's width: `put`, `join_at` and the
+    /// entry regions keep every holder at its width.
+    fn held(&self, state: &State, v: ValueId) -> Regions {
+        let width = self.width(v);
+        let mut regions = state.get(v);
+        if regions.positions.is_empty() {
+            regions.positions = fill(width, Region::default());
+        }
+        assert_eq!(regions.positions.len(), width, "a holder's regions are its type's width");
+        regions
+    }
+
     /// # Panics
     /// `reference` is not of reference type: every value an instruction
     /// reads through is.
@@ -856,10 +874,7 @@ impl RegionAnalysis<'_> {
     }
 
     fn join_at(&self, state: &mut State, v: ValueId, at: usize, region: &Region, changed: &mut Changed) {
-        let mut regions = state.get(v);
-        if regions.positions.len() <= at {
-            regions.positions.resize_with(at + 1, Region::default);
-        }
+        let mut regions = self.held(state, v);
         if regions.positions[at].join_mut(region) {
             self.read_only_shared(v, &mut regions.positions);
             state.set(v, regions);
@@ -910,8 +925,8 @@ impl RegionAnalysis<'_> {
     /// RFC-0079 rule 3: what a reference naming `storage` reads, as a value
     /// of `width` positions.
     fn storage_view(&self, state: &State, storage: LoanStorage, width: usize) -> Vec<Region> {
-        let held = state.get(storage.holder());
-        let at = |k: usize| held.positions.get(k).cloned().unwrap_or_default();
+        let held = self.held(state, storage.holder());
+        let at = |k: usize| held.positions[k].clone();
         match self.contents(storage) {
             Contents::Positions(range) => reshape(&range.map(at).collect::<Vec<_>>(), width),
             Contents::Summarized(position) => fill(width, at(position)),
@@ -953,9 +968,9 @@ impl RegionAnalysis<'_> {
     /// it names holds (RFC-0079 rule 3).
     fn deref(&self, state: &State, reference: ValueId) -> Vec<Region> {
         let width = self.pointee_width(reference);
-        let held = state.get(reference);
+        let held = self.held(state, reference);
         let mut out: Vec<Region> = (1..1 + width)
-            .map(|k| held.positions.get(k).cloned().unwrap_or_default())
+            .map(|k| held.positions[k].clone())
             .collect();
         for loan in held.names() {
             for (mine, theirs) in out.iter_mut().zip(self.storage_view(state, loan.storage, width)) {
@@ -991,7 +1006,7 @@ impl RegionAnalysis<'_> {
         let mut all = Region::default();
         let mut via = Via::new();
         for u in uses {
-            let held = state.get(*u);
+            let held = self.held(state, *u);
             all.join_mut(&held.folded());
             add_via(&mut via, &held, *u);
         }
@@ -1006,11 +1021,11 @@ impl RegionAnalysis<'_> {
         let mut out = fill(self.width(dst), Region::default());
         let mut via = Via::new();
         for Placed { seg, value } in parts {
-            let held = state.get(*value);
+            let held = self.held(state, *value);
             add_via(&mut via, &held, *value);
             let part_width = self.width(*value);
             let at = self.layout.offsets(ty, std::slice::from_ref(seg), part_width);
-            join_part(&mut out, &at, &padded(held.positions, part_width));
+            join_part(&mut out, &at, &held.positions);
         }
         self.put(state, dst, Regions::with_via(out, &via), changed);
     }
@@ -1018,7 +1033,7 @@ impl RegionAnalysis<'_> {
     /// `v`'s positions with what each of its references points at read from
     /// the storage it names now (RFC-0079 rule 3).
     fn current(&self, state: &State, v: ValueId) -> Vec<Region> {
-        let mut held = padded(state.get(v).positions, self.width(v));
+        let mut held = self.held(state, v).positions;
         for (k, kind) in self.layout.kinds(self.recorded(v)).into_iter().enumerate() {
             let PositionKind::Ref(_, width) = kind else {
                 continue;
@@ -1038,7 +1053,7 @@ impl RegionAnalysis<'_> {
     fn reach(&self, state: &State, values: &[ValueId]) -> Reach {
         let mut reach = Reach::default();
         for v in values {
-            let held = state.get(*v);
+            let held = self.held(state, *v);
             add_via(&mut reach.via, &held, *v);
             for region in &held.positions {
                 reach.take(region);
@@ -1055,7 +1070,7 @@ impl RegionAnalysis<'_> {
     fn captures_reach(&self, state: &State, callee: ValueId) -> Reach {
         let mut reach = Reach::default();
         let held = self.current(state, callee);
-        add_via(&mut reach.via, &state.get(callee), callee);
+        add_via(&mut reach.via, &self.held(state, callee), callee);
         for (kind, region) in self.layout.kinds(self.recorded(callee)).into_iter().zip(&held) {
             if let PositionKind::Captures(_) = kind {
                 reach.take(region);
@@ -1070,7 +1085,7 @@ impl RegionAnalysis<'_> {
         let mut at = 0;
         while at < reach.storages.len() {
             let storage = reach.storages[at];
-            let holder = state.get(storage.holder());
+            let holder = self.held(state, storage.holder());
             for k in self.content_range(storage) {
                 let Some(region) = holder.positions.get(k) else {
                     continue;
@@ -1141,7 +1156,7 @@ impl RegionAnalysis<'_> {
         for Source { from, alignment } in flows.into_end(FlowEnd::Result, arity) {
             let input = self.call_input(state, call, from);
             for v in input.via.iter() {
-                add_via(&mut via, &state.get(*v), *v);
+                add_via(&mut via, &self.held(state, *v), *v);
             }
             match &alignment {
                 Alignment::Aligned if input.positions.len() == width => {
@@ -1236,7 +1251,7 @@ impl RegionAnalysis<'_> {
         };
         let regions = match source {
             ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
-                let held = state.get(*slice).through(*slice);
+                let held = self.held(state, *slice).through(*slice);
                 let names = Region {
                     loans: held.names().to_vec(),
                 };
@@ -1247,7 +1262,7 @@ impl RegionAnalysis<'_> {
                 Regions::with_via(positions, &held.via)
             }
             ForSource::Array(array) => {
-                let held = state.get(*array).through(*array);
+                let held = self.held(state, *array).through(*array);
                 let positions = reshape(&held.positions, self.width(element));
                 Regions::with_via(positions, &held.via)
             }
@@ -1275,10 +1290,10 @@ impl RegionAnalysis<'_> {
                                 taken: *mutability,
                             }],
                         };
-                        let held = state.get(*s).through(*s);
+                        let held = self.held(state, *s).through(*s);
                         let contents: Vec<Region> = self
                             .content_range(storage)
-                            .map(|k| held.positions.get(k).cloned().unwrap_or_default())
+                            .map(|k| held.positions[k].clone())
                             .collect();
                         let slot_ty = self.recorded(*s);
                         let contents_ty = match self.layout.types.kind(slot_ty) {
@@ -1291,7 +1306,7 @@ impl RegionAnalysis<'_> {
                     // A shared reborrow holds what it reborrows as shared
                     // (RFC-0029 rule 3).
                     RefTarget::Through(r) => {
-                        let held = state.get(*r).through(*r);
+                        let held = self.held(state, *r).through(*r);
                         let names = Region {
                             loans: held.names().to_vec(),
                         };
@@ -1312,12 +1327,12 @@ impl RegionAnalysis<'_> {
                 let width = self.width(*dst);
                 let regions = match target {
                     RefTarget::Var(s) | RefTarget::Param(s) => {
-                        let held = state.get(*s).through(*s);
+                        let held = self.held(state, *s).through(*s);
                         let part = self.project(&held.positions, self.recorded(*s), path, width);
                         Regions::with_via(part, &held.via)
                     }
                     RefTarget::Through(r) => {
-                        let held = state.get(*r).through(*r);
+                        let held = self.held(state, *r).through(*r);
                         let whole = self.deref(state, *r);
                         let part = self.project(&whole, self.pointee(*r), path, width);
                         Regions::with_via(part, &held.via)
@@ -1331,9 +1346,9 @@ impl RegionAnalysis<'_> {
                 value,
                 ..
             } => {
-                let held = state.get(*value).through(*value);
+                let held = self.held(state, *value).through(*value);
                 let value_width = self.width(*value);
-                let values = padded(held.positions.clone(), value_width);
+                let values = held.positions.clone();
                 match target {
                     // RFC-0079 rule 4: nothing names a slot while it is
                     // assigned whole (RFC-0029), so the assign replaces.
@@ -1399,9 +1414,9 @@ impl RegionAnalysis<'_> {
                 self.gather(state, *dst, captures, changed);
             }
             InstKind::TakeEffect { dst, src, .. } => {
-                let held = state.get(*src).through(*src);
+                let held = self.held(state, *src).through(*src);
                 let carried: Vec<Region> = (1..1 + self.handled_width(*src))
-                    .map(|k| held.positions.get(k).cloned().unwrap_or_default())
+                    .map(|k| held.positions[k].clone())
                     .collect();
                 let positions = reshape(&carried, self.width(*dst));
                 self.put(state, *dst, Regions::with_via(positions, &held.via), changed);
@@ -1441,12 +1456,12 @@ impl RegionAnalysis<'_> {
                     .chain(rest.iter().copied())
                     .map(PathSeg::Field)
                     .collect();
-                let object_held = state.get(*object).through(*object);
-                let value_held = state.get(*value).through(*value);
+                let object_held = self.held(state, *object).through(*object);
+                let value_held = self.held(state, *value).through(*value);
                 let value_width = self.width(*value);
                 let mut positions = reshape(&object_held.positions, self.width(*dst));
                 let at = self.layout.offsets(self.recorded(*dst), &path, value_width);
-                join_part(&mut positions, &at, &padded(value_held.positions.clone(), value_width));
+                join_part(&mut positions, &at, &value_held.positions);
                 let mut regions = Regions::with_via(positions, &object_held.via);
                 regions.join_mut(&Regions::with_via(Vec::new(), &value_held.via));
                 self.put(state, *dst, regions, changed);
@@ -1468,14 +1483,14 @@ impl RegionAnalysis<'_> {
             }
             InstKind::ArrayBegin { dst, .. } => self.build_from(state, *dst, &[], changed),
             InstKind::ArrayPush { dst, array, value } => {
-                let array_held = state.get(*array).through(*array);
-                let value_held = state.get(*value).through(*value);
+                let array_held = self.held(state, *array).through(*array);
+                let value_held = self.held(state, *value).through(*value);
                 let value_width = self.width(*value);
                 let mut positions = reshape(&array_held.positions, self.width(*dst));
                 let at = self
                     .layout
                     .offsets(self.recorded(*dst), &[PathSeg::Index(0)], value_width);
-                join_part(&mut positions, &at, &padded(value_held.positions.clone(), value_width));
+                join_part(&mut positions, &at, &value_held.positions);
                 let mut regions = Regions::with_via(positions, &array_held.via);
                 regions.join_mut(&Regions::with_via(Vec::new(), &value_held.via));
                 self.put(state, *dst, regions, changed);
@@ -1504,7 +1519,7 @@ impl RegionAnalysis<'_> {
             // A slice is a borrow of what its container names, with the
             // container's elements as its own (RFC-0047).
             InstKind::AsSlice { dst, container, .. } => {
-                let held = state.get(*container).through(*container);
+                let held = self.held(state, *container).through(*container);
                 let names = Region {
                     loans: held.names().to_vec(),
                 };
@@ -1514,7 +1529,7 @@ impl RegionAnalysis<'_> {
             InstKind::Index {
                 dst, slice, mode, ..
             } => {
-                let held = state.get(*slice).through(*slice);
+                let held = self.held(state, *slice).through(*slice);
                 let element = self.deref(state, *slice);
                 let regions = match mode {
                     IndexMode::Ref => {
@@ -1531,7 +1546,7 @@ impl RegionAnalysis<'_> {
                 self.put(state, *dst, regions, changed);
             }
             InstKind::IndexSet { slice, value, .. } => {
-                let values = padded(state.get(*value).positions, self.width(*value));
+                let values = self.held(state, *value).positions;
                 let part = WrittenPart {
                     pointee_width: self.pointee_width(*slice),
                     at: &[0],
@@ -1540,7 +1555,7 @@ impl RegionAnalysis<'_> {
                 self.write_through(state, *slice, &part, changed);
             }
             InstKind::StructuralClone { dst, src, .. } => {
-                let held = state.get(*src).through(*src);
+                let held = self.held(state, *src).through(*src);
                 let from = match self.layout.types.kind(self.recorded(*src)) {
                     TyKind::Ref(..) => self.deref(state, *src),
                     _ => held.positions.clone(),
@@ -1569,7 +1584,7 @@ impl RegionAnalysis<'_> {
     }
 
     fn read_part(&self, state: &mut State, dst: ValueId, src: ValueId, path: &[PathSeg], changed: &mut Changed) {
-        let held = state.get(src).through(src);
+        let held = self.held(state, src).through(src);
         let part = self.project(&held.positions, self.recorded(src), path, self.width(dst));
         self.put(state, dst, Regions::with_via(part, &held.via), changed);
     }
@@ -1577,7 +1592,7 @@ impl RegionAnalysis<'_> {
     /// `*m = v` (RFC-0079 rule 4): the part joined into every storage `m`
     /// names, and into `m`'s own tail.
     fn write_through(&self, state: &mut State, m: ValueId, part: &WrittenPart, changed: &mut Changed) {
-        for loan in state.get(m).names().to_vec() {
+        for loan in self.held(state, m).names().to_vec() {
             self.storage_write(state, loan.storage, part, changed);
         }
         let tail: Vec<usize> = part.at.iter().map(|offset| offset + 1).collect();
@@ -1591,8 +1606,8 @@ impl RegionAnalysis<'_> {
 
     /// The part joined into `v`'s own positions, without a loan on `storage`.
     fn write_part(&self, state: &mut State, v: ValueId, storage: LoanStorage, part: &WrittenPart, changed: &mut Changed) {
-        let before = state.get(v);
-        let mut positions = padded(before.positions.clone(), part.pointee_width);
+        let before = self.held(state, v);
+        let mut positions = before.positions.clone();
         let values: Vec<Region> = part.values.iter().map(|r| r.clone().without(storage)).collect();
         join_part(&mut positions, part.at, &values);
         self.read_only_shared(v, &mut positions);
@@ -1784,9 +1799,9 @@ impl DataflowAnalysis for RegionAnalysis<'_> {
             if width == 0 {
                 continue;
             }
-            let from = source_exit.get(*arg).through(*arg);
+            let from = self.held(source_exit, *arg).through(*arg);
             let incoming = Regions {
-                positions: reshape(&padded(from.positions, self.width(*arg)), width),
+                positions: reshape(&from.positions, width),
                 via: from.via,
             };
             let mut regions = target_entry.get(*param);
@@ -1932,8 +1947,10 @@ impl<'cfg> Loans<'cfg> {
         }
     }
 
-    /// Every region a value holds anywhere in the body; a value that names
-    /// no storage holds none.
+    /// Every region a value holds anywhere in the body. A value no step of
+    /// the dataflow gave regions is the lattice's bottom, as
+    /// `DataflowState::get` reads an unset value (`analysis/dataflow.rs:31`):
+    /// it holds no loan.
     pub fn regions(&self, value: ValueId) -> &Regions {
         self.regions.get(&value).unwrap_or(&NOTHING)
     }
