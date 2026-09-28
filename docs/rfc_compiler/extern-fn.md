@@ -12,7 +12,7 @@ The reason is the language's identity: it is a DSL for DSLs. It defines no domai
 
 Named parameters and a result. A parameter takes its value by value, by `&T` or by `&mut T`; a sequence arrives as a slice. No declaration carries an array type.
 
-A type parameter is parametric, and carries one bound: any type; one of a listed set of shapes; an integer type; or any type that the use must settle, never taken as `!`.
+A type parameter is parametric, and carries one bound: any type; an integer type; or any type that the use must settle, never taken as `!`. Which shapes a function takes is said by its instances (§6), not by a bound.
 
 ## 2. Effect
 
