@@ -67,7 +67,7 @@ macro_rules! invariant {
 
 invariant!(TypesAgree, types_agree, "Every operand's type is what its instruction takes, and every edge's arguments agree with its target's parameters.");
 invariant!(DefDominatesUses, def_dominates_uses, "Every value's definition dominates each of its uses.");
-invariant!(OrderChainWhole, order_chain_whole, "Every effectful instruction consumes exactly one live token, and the chain reaches the body's return (effects §2-3).");
+invariant!(OrderChainWhole, order_chain_whole, "Every effectful instruction consumes exactly one live token, and every token but a Merge's reaches the body's return (effects §2-3); a Merge nothing consumes orders nothing and is a dead value (D65).");
 invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's stages and exit are blocks of the body (D45, D57).");
 invariant!(SplitTakenOnce, split_taken_once, "Every start of a split call is taken exactly once on every path from it (effects §6).");
 
@@ -690,6 +690,7 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
     let mut flows: FxHashMap<ValueId, Vec<Flow>> = FxHashMap::default();
     let mut consumers: FxHashMap<ValueId, Vec<(BlockId, usize)>> = FxHashMap::default();
     let mut handles: FxHashMap<ValueId, ValueId> = FxHashMap::default();
+    let mut merged: FxHashSet<ValueId> = FxHashSet::default();
     if let Some(order_param) = body.order_param() {
         defined_in.insert(order_param, body.entry());
     }
@@ -724,6 +725,7 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
                 Op::Merge { orders } => {
                     let result = inst.result().expect("a Merge yields its token");
                     defined_in.insert(result, id);
+                    merged.insert(result);
                     for order in orders {
                         flows.entry(*order).or_default().push(Flow::Merged(result));
                     }
@@ -849,7 +851,11 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
             }
         }
     }
-    let mut broken: Vec<ValueId> = tokens.into_iter().filter(|token| !whole.contains(token)).collect();
+    // A merge's own token need not reach the return: a merge nothing
+    // consumes is a dead value (D65). What flows into it still must, so a
+    // merge is never seeded as whole, only left out of the report.
+    let mut broken: Vec<ValueId> =
+        tokens.into_iter().filter(|token| !whole.contains(token) && !merged.contains(token)).collect();
     broken.sort();
     found(broken.is_empty(), || format!("the chain from {broken:?} does not reach the body's return"))
 }

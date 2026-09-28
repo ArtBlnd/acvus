@@ -562,7 +562,6 @@ mod tests {
     /// `a = g(); t = token; m = merge(t, t); b = g()` with `b` consuming
     /// `m`: `m` is `t`.
     #[test]
-    #[ignore = "blocked: replacing a merge token records OrderTokens, outside scope Value's CHANGES; question to the coordinator"]
     fn a_merge_of_one_token_becomes_that_token() {
         let mut f = Fixture::new();
         let (int, tuple, opaque_call) = (f.int, f.pair, f.call(f.opaque));
@@ -591,7 +590,6 @@ mod tests {
     /// `m2` nests `m1` over the same set, and `m3` repeats it: both are
     /// `m1`.
     #[test]
-    #[ignore = "blocked: replacing a merge token records OrderTokens, outside scope Value's CHANGES; question to the coordinator"]
     fn nested_and_duplicate_merges_collapse() {
         let mut f = Fixture::new();
         let (int, triple, opaque_call) = (f.int, f.triple, f.call(f.opaque));

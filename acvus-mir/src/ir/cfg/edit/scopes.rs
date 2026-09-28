@@ -77,7 +77,7 @@ macro_rules! scope {
     };
 }
 
-scope!(Value, [Instructions, Storage], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues]);
+scope!(Value, [Instructions, Storage, OrderTokens], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues]);
 scope!(Remove, [Instructions, Storage, OrderTokens], 'n => NoFacts, Base, [RemovesInsts]);
 scope!(Cfg, [CfgShape, Instructions, Storage, OrderTokens], 'n => NoFacts, Base, [EditsCfg]);
 scope!(Sccp, [CfgShape, Instructions, Storage, OrderTokens], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues, EditsCfg]);
