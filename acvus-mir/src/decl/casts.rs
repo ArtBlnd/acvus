@@ -46,9 +46,10 @@ pub enum Head {
 }
 
 /// The declared casts and the views (operators §5) as one tree: every head
-/// has at most one next step up, no step returns to a head below it, and an
-/// identity-carrying head steps first to its own form without identity
-/// (types §3). Every order the tree gives is total.
+/// has at most one next step up, and no step returns to a head below it
+/// (types §3). Every order the tree gives is total. Two values of two
+/// identities meet at their nearest common ancestor that carries no
+/// identity: an identity-carrying ancestor is passed, not joined at.
 #[derive(Debug, Default)]
 pub struct CastTree {
     pub(super) up: FxHashMap<Head, VerifiedExternCast>,

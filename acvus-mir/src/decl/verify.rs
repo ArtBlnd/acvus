@@ -12,9 +12,6 @@ pub enum Refused {
     TwoStepsUp { head: Head, via: [QualifiedRef; 2] },
     /// The steps up from `head` return to it (types §3).
     CastCycle { head: Head },
-    /// A declared cast leaves an identity-carrying head for another head
-    /// before reaching its form without identity (types §3).
-    IdentityNotFirst { via: QualifiedRef },
     /// A required instance's types are not smaller than the declaration's
     /// own (extern-fn §6).
     RequirementNotSmaller { declaration: QualifiedRef, signature: QualifiedRef },
