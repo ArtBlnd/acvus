@@ -10,6 +10,7 @@ pub mod laws;
 pub mod means;
 pub mod step;
 pub mod optimize;
+pub mod passes;
 pub mod printer;
 pub mod ser_ty;
 pub mod structural;
