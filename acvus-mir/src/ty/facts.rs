@@ -45,8 +45,9 @@ fn copies_level(types: &Types<Concrete>, ty: Ty) -> bool {
 /// What one position of a type is (ownership §5, effects §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PositionKind {
-    /// A reference's own position; its target's follow.
-    Ref(Mutability),
+    /// A reference's own position, and how many positions its target
+    /// has; the target's follow it.
+    Ref(Mutability, usize),
     /// A function value's one position: what its captures hold.
     Captures(Holds),
     /// One lifetime an extern-defined type declares.
@@ -87,7 +88,9 @@ fn for_each_position_level(
         | TyKind::Order
         | TyKind::Str => {}
         TyKind::Ref(mutability, target) => {
-            on_position(PositionKind::Ref(*mutability));
+            let mut width = 0;
+            for_each_position(types, lifetimes, target.ty(), &mut |_| width += 1);
+            on_position(PositionKind::Ref(*mutability, width));
             for_each_position(types, lifetimes, target.ty(), on_position);
         }
         TyKind::Fn { holds, .. } => on_position(PositionKind::Captures(*holds)),
