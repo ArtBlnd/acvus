@@ -10,11 +10,13 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 
 use super::*;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Inst, Module, Op, Stages, Terminator};
-use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, UnaryOp, ValueId};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module, Op, Stages, Terminator};
+use crate::ir::cfg::Site;
+use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, RefTarget, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 use crate::ty::{
-    Calls, CastTy, Contexts, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Reissue, SplitCost, Ty, TyKind, Types,
+    Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability,
+    Reissue, SplitCost, Ty, TyKind, TypeArg, Types,
 };
 
 // -- Fixture ------------------------------------------------------------
@@ -763,6 +765,13 @@ impl DenseAnalysis for Liveness {
     fn transfer_terminator(&self, terminator: &Terminator, state: &mut Values) {
         state.0.extend(terminator.operands());
     }
+
+    fn transfer_edge(&self, edge: &Edge<'_>, target_params: &[ValueId], state: &mut Values) {
+        for param in target_params {
+            state.0.remove(param);
+        }
+        state.0.extend(edge.args.iter().copied());
+    }
 }
 
 #[test]
@@ -825,6 +834,10 @@ impl DenseAnalysis for Defined {
     }
 
     fn transfer_terminator(&self, _terminator: &Terminator, _state: &mut Values) {}
+
+    fn transfer_edge(&self, _edge: &Edge<'_>, target_params: &[ValueId], state: &mut Values) {
+        state.0.extend(target_params.iter().copied());
+    }
 }
 
 #[test]
@@ -1296,4 +1309,359 @@ fn a_header_entered_from_two_blocks_has_no_preheader() {
     };
     assert_eq!(tree.header(the_loop), header);
     assert_eq!(tree.preheader(the_loop), None);
+}
+
+// -- Liveness ------------------------------------------------------------------
+
+/// ```text
+/// entry(n):  i0 = 0; jump header(i0)
+/// header(i): jump latch
+/// latch:     one = 1; i1 = i + one; c = i1 < n; jumpif c header(i1) else exit
+/// exit:      return i
+/// ```
+/// The latch passes `i1` to the header's `i`, and exits to a block that
+/// reads the header's `i`: `i` is live at the latch's end through the exit
+/// only, and the edge into the header kills it only on its own way.
+#[test]
+fn liveness_keeps_a_header_parameter_live_through_the_exit_of_a_latch() {
+    let mut f = fixture();
+    let (nn, int, bool) = (f.interner.intern("n"), f.int, f.bool);
+    let mut builder = f.module.build_body(false, int);
+    let n = builder.param(nn, int);
+    let entry = builder.current_block();
+    let i0 = builder.push(constant(0), int, Span::ZERO);
+    let header = builder.new_block(&[int]);
+    let i = builder.block_params(header)[0];
+    let [latch, exit] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header, vec![i0]));
+    builder.switch_to(header);
+    builder.terminate(jump(latch, Vec::new()));
+    builder.switch_to(latch);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    let i1 = builder.push(add(i, one), int, Span::ZERO);
+    let c = builder.push(binary(BinOp::Lt, i1, n), bool, Span::ZERO);
+    builder.terminate(Terminator::JumpIf { cond: c, then_to: header, then_args: vec![i1], else_to: exit, else_args: Vec::new() });
+    builder.switch_to(exit);
+    builder.terminate(ret(i));
+    let id = builder.seal().expect("the body has no open state");
+
+    let live = facts_of::<super::Liveness>(&f, id);
+    let set = |values: &[ValueId]| values.iter().copied().collect::<rustc_hash::FxHashSet<ValueId>>();
+    assert_eq!(*live.live_at_end(latch), set(&[i, i1, n]), "i through the exit, i1 on the edge into the header");
+    assert_eq!(*live.live_at_start(latch), set(&[i, n]));
+    assert_eq!(*live.live_at_start(header), set(&[i, n]));
+    assert_eq!(*live.live_at_end(entry), set(&[i0, n]), "the header's i is defined on the edge, not before it");
+    assert_eq!(*live.live_at_start(exit), set(&[i]));
+    assert_eq!(*live.live_at_end(exit), set(&[]));
+}
+
+// -- Loans and escapes ---------------------------------------------------------
+
+struct LoanFixture {
+    module: Module,
+    interner: Interner,
+    int: Ty,
+    bool: Ty,
+    /// `&i64`.
+    ref_int: Ty,
+    /// `&mut i64`.
+    mut_int: Ty,
+    /// `Option<&i64>`.
+    option_ref: Ty,
+    /// A pure `fn(&i64) -> &i64` whose result takes its argument's loans.
+    passes_through: Ty,
+    /// A pure `fn(&i64) -> &i64` whose result takes no loan.
+    passes_nothing: Ty,
+    /// A pure `fn(i64) -> i64`.
+    takes_int: Ty,
+}
+
+fn loan_fixture() -> LoanFixture {
+    let mut types = Types::new();
+    let int = types.intern(TyKind::Int(IntTy::I64));
+    let bool = types.intern(TyKind::Bool);
+    let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+    let option_ref = types.intern(TyKind::Option(ref_int));
+    let mut function = |params: &[Ty], ret: Ty, flows: Flows| {
+        types.intern(TyKind::Fn {
+            params: params.into(),
+            ret,
+            effect: EffectTerm::Known(Effect::pure()),
+            flows: FlowTerm::Known(flows),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        })
+    };
+    let through = Flows::of([Flow { to: FlowEnd::Result, from: FlowEnd::Param(0), alignment: Alignment::Aligned }]);
+    let passes_through = function(&[ref_int], ref_int, through);
+    let passes_nothing = function(&[ref_int], ref_int, Flows::none());
+    let takes_int = function(&[int], int, Flows::none());
+    LoanFixture {
+        module: Module::new(types, Flows::none()),
+        interner: Interner::new(),
+        int,
+        bool,
+        ref_int,
+        mut_int,
+        option_ref,
+        passes_through,
+        passes_nothing,
+        takes_int,
+    }
+}
+
+impl LoanFixture {
+    fn facts<A>(&self, body: BodyId) -> Rc<A::Facts>
+    where
+        A: Analysis,
+    {
+        let decls = empty_declarations(&self.interner);
+        let mut am = AnalysisManager::new(&decls);
+        am.get::<A>(&self.module, body)
+    }
+
+    fn call(&self, callee_ty: Ty, args: Vec<ValueId>) -> Op {
+        Op::FunctionCall { callee: Callee::Direct(QualifiedRef::root(self.interner.intern("f"))), callee_ty, args }
+    }
+}
+
+fn reference(slot: ValueId, mutability: Mutability) -> Op {
+    Op::Ref { target: RefTarget::Var(slot), path: Vec::new(), mutability }
+}
+
+fn reborrow(of: ValueId, mutability: Mutability) -> Op {
+    Op::Ref { target: RefTarget::Through(of), path: Vec::new(), mutability }
+}
+
+fn assign(slot: ValueId, value: ValueId) -> Op {
+    Op::Assign { target: RefTarget::Var(slot), path: Vec::new(), value, restores: false }
+}
+
+fn take(slot: ValueId) -> Op {
+    Op::Take { target: RefTarget::Var(slot), path: Vec::new(), taken_out: false }
+}
+
+fn loan(storage: Storage, mode: Mode) -> Loan {
+    Loan { storage, mode }
+}
+
+fn loans_of(loans: &Loans, value: ValueId, position: usize) -> Vec<Loan> {
+    loans.of(value, position).iter().copied().collect()
+}
+
+/// `x = 1; r = &x; m = &mut x; s = &*r; return 0`.
+#[test]
+fn a_ref_names_its_slot_and_a_reborrow_names_what_its_source_names() {
+    let mut f = loan_fixture();
+    let (int, ref_int, mut_int) = (f.int, f.ref_int, f.mut_int);
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.slot(int, Span::ZERO);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(x, one), Span::ZERO);
+    let r = builder.push(reference(x, Mutability::Shared), ref_int, Span::ZERO);
+    let m = builder.push(reference(x, Mutability::Mut), mut_int, Span::ZERO);
+    let s = builder.push(reborrow(m, Mutability::Shared), ref_int, Span::ZERO);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(loans_of(&loans, r, 0), [loan(Storage::Slot(x), Mode::Shared)]);
+    assert_eq!(loans_of(&loans, m, 0), [loan(Storage::Slot(x), Mode::Exclusive)]);
+    assert_eq!(loans_of(&loans, s, 0), [loan(Storage::Slot(x), Mode::Shared)], "a shared reborrow of the &mut");
+    assert_eq!(loans.positions_of(one), 0);
+    let entry = f.module.body(id).entry();
+    assert_eq!(*loans.writes(Site::Inst(entry, 1)), BTreeSet::from([Storage::Slot(x)]));
+    assert!(loans.reads(Site::Inst(entry, 2)).is_empty(), "a Ref names its place and reads nothing");
+}
+
+/// ```text
+/// a = 1; b = 2; ra = &a; rb = &b
+/// y = ra; t1 = y; y = rb; t2 = y; return 0
+/// ```
+/// A whole-slot `Assign` replaces what the slot held, so each `Take` sees
+/// only the reference stored last.
+#[test]
+fn a_reference_stored_into_a_slot_is_taken_back_out_as_stored_last() {
+    let mut f = loan_fixture();
+    let (int, ref_int) = (f.int, f.ref_int);
+    let mut builder = f.module.build_body(false, int);
+    let a = builder.slot(int, Span::ZERO);
+    let b = builder.slot(int, Span::ZERO);
+    let y = builder.slot(ref_int, Span::ZERO);
+    let entry = builder.current_block();
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(a, one), Span::ZERO);
+    builder.push_unit(assign(b, one), Span::ZERO);
+    let ra = builder.push(reference(a, Mutability::Shared), ref_int, Span::ZERO);
+    let rb = builder.push(reference(b, Mutability::Shared), ref_int, Span::ZERO);
+    builder.push_unit(assign(y, ra), Span::ZERO);
+    let t1 = builder.push(take(y), ref_int, Span::ZERO);
+    builder.push_unit(assign(y, rb), Span::ZERO);
+    let t2 = builder.push(take(y), ref_int, Span::ZERO);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(loans_of(&loans, t1, 0), [loan(Storage::Slot(a), Mode::Shared)]);
+    assert_eq!(loans_of(&loans, t2, 0), [loan(Storage::Slot(b), Mode::Shared)]);
+    let before_t2 = loans.content_before(Site::Inst(entry, 8), Storage::Slot(y));
+    assert_eq!(before_t2, [BTreeSet::from([loan(Storage::Slot(b), Mode::Shared)])]);
+    assert_eq!(*loans.reads(Site::Inst(entry, 8)), BTreeSet::from([Storage::Slot(y)]));
+}
+
+/// `x = 1; r = &x; p = through(r); q = nothing(r); return 0`.
+#[test]
+fn a_call_moves_loans_to_its_result_only_as_its_flows_state() {
+    let mut f = loan_fixture();
+    let (int, ref_int) = (f.int, f.ref_int);
+    let (through, nothing) = (f.call(f.passes_through, Vec::new()), f.call(f.passes_nothing, Vec::new()));
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.slot(int, Span::ZERO);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(x, one), Span::ZERO);
+    let r = builder.push(reference(x, Mutability::Shared), ref_int, Span::ZERO);
+    let with_arg = |op: Op| match op {
+        Op::FunctionCall { callee, callee_ty, .. } => Op::FunctionCall { callee, callee_ty, args: vec![r] },
+        other => other,
+    };
+    let p = builder.push(with_arg(through), ref_int, Span::ZERO);
+    let q = builder.push(with_arg(nothing), ref_int, Span::ZERO);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(loans_of(&loans, p, 0), [loan(Storage::Slot(x), Mode::Shared)]);
+    assert!(loans.of(q, 0).is_empty(), "no flow reaches the result");
+}
+
+/// ```text
+/// entry(c): a = 1; b = 1; diamond c { then } else { else } join
+/// then:     ra = &a; jump join(ra)
+/// else:     rb = &b; jump join(rb)
+/// join(p):  return 0
+/// ```
+#[test]
+fn a_block_parameter_joins_the_references_its_edges_pass() {
+    let mut f = loan_fixture();
+    let (nc, int, bool, ref_int) = (f.interner.intern("c"), f.int, f.bool, f.ref_int);
+    let mut builder = f.module.build_body(false, int);
+    let c = builder.param(nc, bool);
+    let a = builder.slot(int, Span::ZERO);
+    let b = builder.slot(int, Span::ZERO);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(a, one), Span::ZERO);
+    builder.push_unit(assign(b, one), Span::ZERO);
+    let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
+    let join = builder.new_block(&[ref_int]);
+    let p = builder.block_params(join)[0];
+    builder.terminate(diamond(c, then_block, else_block, join));
+    builder.switch_to(then_block);
+    let ra = builder.push(reference(a, Mutability::Shared), ref_int, Span::ZERO);
+    builder.terminate(jump(join, vec![ra]));
+    builder.switch_to(else_block);
+    let rb = builder.push(reference(b, Mutability::Shared), ref_int, Span::ZERO);
+    builder.terminate(jump(join, vec![rb]));
+    builder.switch_to(join);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero));
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(
+        loans_of(&loans, p, 0),
+        [loan(Storage::Slot(a), Mode::Shared), loan(Storage::Slot(b), Mode::Shared)]
+    );
+}
+
+/// `entry(o: Option<&i64>): u = unwrap o; v = *u; return v`: the parameter's
+/// one position names its own outside storage, and so does the payload.
+#[test]
+fn an_option_of_a_reference_parameter_names_its_outside_storage() {
+    let mut f = loan_fixture();
+    let (no, int, ref_int, option_ref) = (f.interner.intern("o"), f.int, f.ref_int, f.option_ref);
+    let mut builder = f.module.build_body(false, int);
+    let o = builder.param(no, option_ref);
+    let entry = builder.current_block();
+    let u = builder.push(Op::UnwrapVariant { src: o }, ref_int, Span::ZERO);
+    let v = builder.push(Op::Take { target: RefTarget::Through(u), path: Vec::new(), taken_out: false }, int, Span::ZERO);
+    builder.terminate(ret(v));
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    let outside = Storage::Outside { of: o, position: 0 };
+    assert_eq!(loans_of(&loans, o, 0), [loan(outside, Mode::Shared)]);
+    assert_eq!(loans_of(&loans, u, 0), [loan(outside, Mode::Shared)]);
+    assert_eq!(*loans.reads(Site::Inst(entry, 1)), BTreeSet::from([outside]));
+}
+
+/// `x = 1; t = x; return t`: only whole-slot uses.
+#[test]
+fn a_slot_used_only_whole_escapes_nothing() {
+    let mut f = loan_fixture();
+    let int = f.int;
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.slot(int, Span::ZERO);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(x, one), Span::ZERO);
+    let t = builder.push(take(x), int, Span::ZERO);
+    builder.terminate(ret(t));
+    let id = builder.seal().expect("the body has no open state");
+
+    assert_eq!(f.facts::<Escapes>(id).escape(x), None);
+}
+
+/// `x = 1; t = x; r = &x; return t`.
+#[test]
+fn a_ref_of_a_slot_is_where_it_escapes() {
+    let mut f = loan_fixture();
+    let (int, ref_int) = (f.int, f.ref_int);
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.slot(int, Span::ZERO);
+    let entry = builder.current_block();
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(x, one), Span::ZERO);
+    let t = builder.push(take(x), int, Span::ZERO);
+    builder.push(reference(x, Mutability::Shared), ref_int, Span::ZERO);
+    builder.terminate(ret(t));
+    let id = builder.seal().expect("the body has no open state");
+
+    assert_eq!(f.facts::<Escapes>(id).escape(x), Some(Site::Inst(entry, 3)));
+}
+
+/// `x = 1; return x`: the terminator names the slot.
+#[test]
+fn a_returned_slot_escapes_at_the_return() {
+    let mut f = loan_fixture();
+    let int = f.int;
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.slot(int, Span::ZERO);
+    let entry = builder.current_block();
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(x, one), Span::ZERO);
+    builder.terminate(ret(x));
+    let id = builder.seal().expect("the body has no open state");
+
+    assert_eq!(f.facts::<Escapes>(id).escape(x), Some(Site::Term(entry)));
+}
+
+/// `x = 1; t = f(x); return t`: the slot is a call's argument.
+#[test]
+fn a_slot_passed_to_a_call_escapes_at_the_call() {
+    let mut f = loan_fixture();
+    let int = f.int;
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.slot(int, Span::ZERO);
+    let entry = builder.current_block();
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(x, one), Span::ZERO);
+    let callee = Callee::Direct(QualifiedRef::root(f.interner.intern("f")));
+    let t = builder.push(Op::FunctionCall { callee, callee_ty: f.takes_int, args: vec![x] }, int, Span::ZERO);
+    builder.terminate(ret(t));
+    let id = builder.seal().expect("the body has no open state");
+
+    assert_eq!(f.facts::<Escapes>(id).escape(x), Some(Site::Inst(entry, 2)));
 }

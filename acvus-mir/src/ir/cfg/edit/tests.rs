@@ -202,7 +202,7 @@ struct TestFacts {
     refreshed: Vec<Vec<Aspect>>,
     kept_in_order: FxHashSet<(InstRef, InstRef)>,
     conflicting: FxHashSet<(InstRef, InstRef)>,
-    escaping: FxHashMap<ValueId, InstRef>,
+    escaping: FxHashMap<ValueId, Site>,
 }
 
 impl TestFacts {
@@ -308,7 +308,7 @@ impl LoanFacts for TestFacts {
         self.conflicting.contains(&(inst, write))
     }
 
-    fn escapes(&self, slot: ValueId) -> Option<InstRef> {
+    fn escapes(&self, slot: ValueId) -> Option<Site> {
         self.escaping.get(&slot).copied()
     }
 }
@@ -986,9 +986,9 @@ fn promote_refuses_a_slot_whose_reference_escapes() {
     let (id, x, [.., loop_body, _]) = slot_across_a_diamond_and_a_loop(&mut f);
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
-    facts.escaping.insert(x, inst_ref(loop_body, 0));
+    facts.escaping.insert(x, Site::Inst(loop_body, 0));
     let mut editor = Editor::<Storage>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.promote(x), Err(CannotPromote::Escapes(inst_ref(loop_body, 0))));
+    assert_eq!(editor.promote(x), Err(CannotPromote::Escapes(Site::Inst(loop_body, 0))));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }

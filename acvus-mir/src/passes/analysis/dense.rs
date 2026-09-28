@@ -16,7 +16,8 @@ use std::collections::BTreeSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use crate::ir::cfg::{BlockId, Body, Inst, Terminator};
+use crate::ir::ValueId;
+use crate::ir::cfg::{BlockId, Body, Edge, Inst, Terminator};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,11 @@ pub trait DenseAnalysis {
     fn entry(&self, body: &Body) -> Self::State;
     fn transfer(&self, inst: &Inst, state: &mut Self::State);
     fn transfer_terminator(&self, terminator: &Terminator, state: &mut Self::State);
+    /// A state flowing along `edge`, whose target's parameters are
+    /// `target_params`: forward from the source's end to the target's start,
+    /// backward from the target's start to the source's end. The edge
+    /// defines the target's parameters and uses its arguments.
+    fn transfer_edge(&self, edge: &Edge<'_>, target_params: &[ValueId], state: &mut Self::State);
 }
 
 pub struct DenseFacts<S>
@@ -62,7 +68,8 @@ where
 /// every block with no successor ends in it. A block the entry does not
 /// reach keeps `bottom`. Within a block, a forward analysis sees its
 /// instructions in order and then its terminator, and a backward one its
-/// terminator and then its instructions in reverse.
+/// terminator and then its instructions in reverse; between blocks, every
+/// state passes `transfer_edge` of the edge it flows along.
 pub fn solve_dense<A>(analysis: &A, body: &Body) -> DenseFacts<A::State>
 where
     A: DenseAnalysis,
@@ -75,10 +82,6 @@ where
     let rank: FxHashMap<BlockId, usize> =
         visit_order.iter().enumerate().map(|(rank, block)| (*block, rank)).collect();
     let loop_headers = body.loop_headers();
-    let flows_into: FxHashMap<BlockId, SmallVec<[BlockId; 2]>> = match A::DIRECTION {
-        Direction::Forward => visit_order.iter().map(|block| (*block, successors(body, *block))).collect(),
-        Direction::Backward => body.predecessors(),
-    };
 
     let mut states: FxHashMap<BlockId, A::State> =
         body.blocks().map(|(block, _)| (block, A::State::bottom())).collect();
@@ -93,32 +96,47 @@ where
     for block in boundary {
         states.insert(block, analysis.entry(body));
     }
+    let preds = body.predecessors();
 
     let mut worklist: BTreeSet<usize> = (0..visit_order.len()).collect();
     while let Some(rank_of_block) = worklist.pop_first() {
         let block = visit_order[rank_of_block];
         let mut state = states.get(&block).expect("every block has a state").clone();
         let record = body.block(block);
+        let mut flows: SmallVec<[(BlockId, A::State); 2]> = SmallVec::new();
         match A::DIRECTION {
             Direction::Forward => {
                 for inst in record.insts() {
                     analysis.transfer(inst, &mut state);
                 }
                 analysis.transfer_terminator(record.terminator(), &mut state);
+                for edge in record.terminator().edges() {
+                    let mut along = state.clone();
+                    analysis.transfer_edge(&edge, body.block(edge.to).params(), &mut along);
+                    flows.push((edge.to, along));
+                }
             }
             Direction::Backward => {
                 analysis.transfer_terminator(record.terminator(), &mut state);
                 for inst in record.insts().iter().rev() {
                     analysis.transfer(inst, &mut state);
                 }
+                for pred in preds.get(&block).expect("every block has a predecessor entry") {
+                    let edges = body.block(*pred).terminator().edges();
+                    for edge in edges.iter().filter(|edge| edge.to == block) {
+                        let mut along = state.clone();
+                        analysis.transfer_edge(edge, record.params(), &mut along);
+                        flows.push((*pred, along));
+                    }
+                }
             }
         }
-        for next in flows_into.get(&block).expect("every visited block has its flow targets") {
-            let Some(next_rank) = rank.get(next) else {
+        for (next, along) in flows {
+            let Some(next_rank) = rank.get(&next) else {
                 continue;
             };
-            let stored = states.get_mut(next).expect("every block has a state");
-            let rose = if loop_headers.contains(next) { stored.widen(&state) } else { stored.join(&state) };
+            let stored = states.get_mut(&next).expect("every block has a state");
+            let rose = if loop_headers.contains(&next) { stored.widen(&along) } else { stored.join(&along) };
             if rose {
                 worklist.insert(*next_rank);
             }

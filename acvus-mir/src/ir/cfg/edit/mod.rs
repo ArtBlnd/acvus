@@ -103,8 +103,8 @@ pub enum CannotSplit {
 /// Why a storage slot cannot be promoted to values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CannotPromote {
-    /// A reference to it escapes the promotable uses.
-    Escapes(InstRef),
+    /// A use a promotion cannot rewrite names it.
+    Escapes(Site),
 }
 
 /// The editor over one body, of scope `S`. `needs` answers its legality
@@ -116,7 +116,7 @@ where
 {
     module: &'m mut Module,
     body: BodyId,
-    needs: &'m mut S::Needs,
+    needs: &'m mut S::Needs<'m>,
     changes: Changes,
     walk: Walk,
 }
@@ -172,7 +172,7 @@ where
 {
     /// # Panics
     /// `body` is not a body of `module`.
-    pub fn new(module: &'m mut Module, body: BodyId, needs: &'m mut S::Needs) -> Self {
+    pub fn new(module: &'m mut Module, body: BodyId, needs: &'m mut S::Needs<'m>) -> Self {
         module.assert_body(body);
         Editor { module, body, needs, changes: Changes::default(), walk: Walk::start() }
     }
@@ -258,10 +258,10 @@ where
     }
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: ReplacesValues,
-    S::Needs: DominanceFacts,
+    S::Needs<'m>: DominanceFacts,
 {
     /// Every use of `of` takes `with`; refused where `with` does not
     /// dominate a use.
@@ -432,10 +432,10 @@ fn kept_blocks(body: &Body) -> Vec<bool> {
     keep
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: MovesInsts,
-    S::Needs: DominanceFacts + LoanFacts,
+    S::Needs<'m>: DominanceFacts + LoanFacts,
 {
     /// Moves `inst` to stand at `at`, with its operands and what it
     /// defines, order tokens included; the order chain is their def-use, so
@@ -483,10 +483,10 @@ where
     }
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: EditsOrder,
-    S::Needs: OrderFacts,
+    S::Needs<'m>: OrderFacts,
 {
     /// Splits a call into its start and its taking (effects §6).
     ///
@@ -511,17 +511,17 @@ where
     }
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: PromotesStorage,
-    S::Needs: LoanFacts,
+    S::Needs<'m>: LoanFacts,
 {
-    /// Promotes a slot to values (SSA construction); refused where a
-    /// reference to it escapes.
+    /// Promotes a slot to values (SSA construction); refused where a use
+    /// other than a whole-slot `Take` or `Assign` names it.
     ///
     /// # Panics
-    /// `slot` is not a slot of the body, or something other than a
-    /// whole-slot `Take` or `Assign` names it though no reference escapes.
+    /// `slot` is not a slot of the body, or such a use names it though the
+    /// facts say none does.
     pub fn promote(&mut self, slot: ValueId) -> Result<(), CannotPromote> {
         if let Some(at) = self.needs.escapes(slot) {
             return Err(CannotPromote::Escapes(at));
@@ -696,8 +696,8 @@ pub enum CannotSplitSlot {
     /// Its type is not structural; an extern-defined type is never split
     /// (compilation §3).
     NotStructural,
-    /// A reference to the whole of it escapes.
-    Escapes(InstRef),
+    /// A use a split cannot rewrite names it.
+    Escapes(Site),
 }
 
 /// Why a call cannot be inlined.
@@ -716,10 +716,10 @@ pub enum CannotDrop {
     UsedAfter(Site),
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: ReplacesValues,
-    S::Needs: DominanceFacts,
+    S::Needs<'m>: DominanceFacts,
 {
     /// G3: the one use at `site` takes `with` instead of `of`; refused where
     /// `with` does not dominate `site`.
@@ -744,10 +744,10 @@ where
     }
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: EditsOrder,
-    S::Needs: OrderFacts,
+    S::Needs<'m>: OrderFacts,
 {
     /// G4: two adjacent effects on one chain trade places, where the
     /// declarations let them (effects §1). Tokens are rethreaded between the
@@ -757,10 +757,10 @@ where
     }
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: Discharges,
-    S::Needs: DischargeFacts,
+    S::Needs<'m>: DischargeFacts,
 {
     /// G1: removes an instruction the core would keep (a check, a store, a
     /// load, a commit) on the fact that proves it unobservable.
@@ -769,10 +769,10 @@ where
     }
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: PromotesStorage,
-    S::Needs: LoanFacts,
+    S::Needs<'m>: LoanFacts,
 {
     /// S1: a structural slot becomes one slot per field (sroa).
     pub fn split_slot(&mut self, slot: ValueId) -> Result<Vec<ValueId>, CannotSplitSlot> {
@@ -792,10 +792,10 @@ where
     }
 }
 
-impl<S> Editor<'_, S>
+impl<'m, S> Editor<'m, S>
 where
     S: InsertsDrops,
-    S::Needs: DominanceFacts,
+    S::Needs<'m>: DominanceFacts,
 {
     /// S3: a `Drop` of `value` at `at`, where nothing uses it after.
     pub fn insert_drop(&mut self, value: ValueId, at: Position, span: Span) -> Result<(), CannotDrop> {

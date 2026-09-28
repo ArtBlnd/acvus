@@ -24,6 +24,7 @@ pub struct LoopTree {
     loops: Vec<NaturalLoop>,
     /// Each block's innermost loop, by block index.
     innermost: Vec<Option<LoopId>>,
+    graph: Graph,
 }
 
 struct NaturalLoop {
@@ -72,6 +73,36 @@ impl LoopTree {
     pub fn innermost(&self, block: BlockId) -> Option<LoopId> {
         self.innermost[block.index()]
     }
+
+    /// Whether some path from `from` to `to`, both included, passes a block
+    /// of a loop that does not hold both: a loop the run may enter between
+    /// the two and never leave. Cost: O(blocks + edges).
+    pub fn loop_between(&self, from: BlockId, to: BlockId) -> bool {
+        let after = reach(from.index(), &self.graph.successors);
+        let before = reach(to.index(), &self.graph.predecessors);
+        let holds_both = |of: LoopId| self.contains(of, from) && self.contains(of, to);
+        (0..self.graph.blocks.len())
+            .filter(|block| after[*block] && before[*block])
+            .filter_map(|block| self.innermost[block])
+            .any(|of| !holds_both(of))
+    }
+}
+
+/// The nodes `start` reaches along `edges`, itself included. Cost: O(nodes
+/// + edges).
+fn reach(start: usize, edges: &[smallvec::SmallVec<[usize; 2]>]) -> Vec<bool> {
+    let mut reached = vec![false; edges.len()];
+    reached[start] = true;
+    let mut pending = vec![start];
+    while let Some(node) = pending.pop() {
+        for next in edges[node].iter().copied() {
+            if !reached[next] {
+                reached[next] = true;
+                pending.push(next);
+            }
+        }
+    }
+    reached
 }
 
 impl Analysis for LoopTree {
@@ -112,7 +143,7 @@ impl Analysis for LoopTree {
                 innermost[block.index()] = Some(LoopId(at));
             }
         }
-        LoopTree { loops, innermost }
+        LoopTree { loops, innermost, graph }
     }
 }
 

@@ -24,8 +24,10 @@ pub trait DominanceFacts: Facts {
     /// `site` reads it: `at` comes first on every path to `site`, `site`
     /// itself included when `at` stands just before it.
     fn position_dominates(&self, at: Position, site: Site) -> bool;
-    /// Whether `a` and `b` run on exactly the same runs: one dominates the
-    /// other and the other post-dominates the one.
+    /// Whether `a` and `b` run on exactly the same runs (compilation §1):
+    /// one dominates the other and the other post-dominates the one, and no
+    /// path from the earlier to the later enters a block of a loop that does
+    /// not hold both, since such a loop may never end.
     fn control_equivalent(&self, a: Position, b: Position) -> bool;
 }
 
@@ -33,8 +35,10 @@ pub trait LoanFacts: Facts {
     /// Whether `write` writes storage that `inst`'s operands or result name
     /// (ownership §5).
     fn conflicts(&self, inst: InstRef, write: InstRef) -> bool;
-    /// Whether a reference to `slot` escapes the uses a promotion rewrites.
-    fn escapes(&self, slot: ValueId) -> Option<InstRef>;
+    /// The first use of `slot` a promotion cannot rewrite: anything but a
+    /// whole-slot `Take` or `Assign`. `None` is exactly what `promote`
+    /// requires.
+    fn escapes(&self, slot: ValueId) -> Option<Site>;
 }
 
 pub trait OrderFacts: Facts {

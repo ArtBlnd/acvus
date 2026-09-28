@@ -6,6 +6,7 @@
 //! A `Position::End(block)` is the point after every instruction of the
 //! block and before its terminator.
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -13,14 +14,20 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::ir::cfg::edit::{DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position};
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module, Op, Site};
 use crate::ir::{ValueId, fn_effect};
-use crate::passes::analysis::{AnalysisManager, Dominators, Point, PostDominators};
+use crate::passes::analysis::{AnalysisManager, Dominators, Escapes, LoopTree, Loans, Point, PostDominators, Storage};
 use crate::ty::{Concrete, Ty, Types};
 
 pub struct EditFacts<'a, 'd> {
     am: &'a mut AnalysisManager<'d>,
     dominators: Rc<Dominators>,
     post_dominators: Rc<PostDominators>,
+    loop_tree: Rc<LoopTree>,
+    loans: Rc<Loans>,
+    escapes: Rc<Escapes>,
     defined: FxHashMap<ValueId, Defined>,
+    /// The storages each instruction's operands and result name, and those
+    /// it reads and writes, by block and index.
+    named: FxHashMap<Site, BTreeSet<Storage>>,
     /// The instructions, by block and index, that are calls, or a call's
     /// start or taking, whose callee's declared effect commutes.
     commuting: FxHashSet<(BlockId, usize)>,
@@ -39,15 +46,18 @@ impl<'a, 'd> EditFacts<'a, 'd> {
     /// Facts for editing `body`, computed now. Cost: the analyses it serves,
     /// and O(values + instructions) for its own tables.
     pub fn new(am: &'a mut AnalysisManager<'d>, module: &Module, body: BodyId) -> Self {
-        let dominators = am.get::<Dominators>(module, body);
-        let post_dominators = am.get::<PostDominators>(module, body);
         let of = module.body(body);
+        let loans = am.get::<Loans>(module, body);
         EditFacts {
-            am,
-            dominators,
-            post_dominators,
+            dominators: am.get::<Dominators>(module, body),
+            post_dominators: am.get::<PostDominators>(module, body),
+            loop_tree: am.get::<LoopTree>(module, body),
+            escapes: am.get::<Escapes>(module, body),
             defined: definitions(of),
+            named: named_storages(of, &loans),
             commuting: commuting_calls(of, module.types()),
+            loans,
+            am,
         }
     }
 
@@ -66,8 +76,12 @@ impl Facts for EditFacts<'_, '_> {
         self.am.invalidate(body, changes);
         self.dominators = self.am.get::<Dominators>(module, body);
         self.post_dominators = self.am.get::<PostDominators>(module, body);
+        self.loop_tree = self.am.get::<LoopTree>(module, body);
+        self.loans = self.am.get::<Loans>(module, body);
+        self.escapes = self.am.get::<Escapes>(module, body);
         let of = module.body(body);
         self.defined = definitions(of);
+        self.named = named_storages(of, &self.loans);
         self.commuting = commuting_calls(of, module.types());
     }
 }
@@ -90,21 +104,33 @@ impl DominanceFacts for EditFacts<'_, '_> {
         self.dominators.point_dominates(point(at), read)
     }
 
-    /// Cost: O(1).
+    /// Cost: O(blocks + edges), for the loops between the two.
     fn control_equivalent(&self, a: Position, b: Position) -> bool {
         let (a, b) = (point(a), point(b));
         let (dominators, post_dominators) = (&self.dominators, &self.post_dominators);
-        (dominators.point_dominates(a, b) && post_dominators.point_post_dominates(b, a))
-            || (dominators.point_dominates(b, a) && post_dominators.point_post_dominates(a, b))
+        let in_order = |earlier: Point, later: Point| {
+            dominators.point_dominates(earlier, later)
+                && post_dominators.point_post_dominates(later, earlier)
+                && !self.loop_tree.loop_between(earlier.block(), later.block())
+        };
+        in_order(a, b) || in_order(b, a)
     }
 }
 
 impl LoanFacts for EditFacts<'_, '_> {
+    /// Cost: O(storages the two touch · log).
     fn conflicts(&self, inst: InstRef, write: InstRef) -> bool {
-        todo!("passes::EditFacts::conflicts")
+        let written = self.loans.writes(site(write));
+        let named = self
+            .named
+            .get(&site(inst))
+            .unwrap_or_else(|| panic!("{inst:?} is an instruction of the body the facts were refreshed for"));
+        written.iter().any(|storage| named.contains(storage))
     }
-    fn escapes(&self, slot: ValueId) -> Option<InstRef> {
-        todo!("passes::EditFacts::escapes")
+
+    /// Cost: O(1).
+    fn escapes(&self, slot: ValueId) -> Option<Site> {
+        self.escapes.escape(slot)
     }
 }
 
@@ -116,6 +142,39 @@ impl OrderFacts for EditFacts<'_, '_> {
         let commutes = |inst: InstRef| self.commuting.contains(&(inst.block(), inst.index()));
         commutes(a) && commutes(b)
     }
+}
+
+fn site(inst: InstRef) -> Site {
+    Site::Inst(inst.block(), inst.index())
+}
+
+/// The storages each instruction of `body` names: through the loans of its
+/// operands and result, a slot it names directly, and what it reads and
+/// writes. Cost: O(operands · positions · loans).
+fn named_storages(body: &Body, loans: &Loans) -> FxHashMap<Site, BTreeSet<Storage>> {
+    let mut named = FxHashMap::default();
+    for (block, record) in body.blocks() {
+        for (index, inst) in record.insts().iter().enumerate() {
+            let at = Site::Inst(block, index);
+            let mut storages: BTreeSet<Storage> = loans.reads(at).iter().chain(loans.writes(at)).copied().collect();
+            for value in inst.operands().into_iter().chain(inst.result()) {
+                match body.definition(value) {
+                    Definition::Slot(_) => {
+                        storages.insert(Storage::Slot(value));
+                    }
+                    Definition::Param(_)
+                    | Definition::Capture(_)
+                    | Definition::OrderParam
+                    | Definition::BlockParam(..)
+                    | Definition::Inst(..) => {
+                        storages.extend(loans.all_of(value).into_iter().map(|loan| loan.storage));
+                    }
+                }
+            }
+            named.insert(at, storages);
+        }
+    }
+    named
 }
 
 fn point(at: Position) -> Point {
@@ -191,11 +250,12 @@ mod tests {
 
     use super::*;
     use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
-    use crate::ir::cfg::edit::{Editor, NoFacts, Remove, Value};
+    use crate::ir::cfg::edit::{CannotMove, Editor, Motion, NoFacts, Remove, Value};
     use crate::ir::cfg::{Inst, Terminator};
-    use crate::ir::{BinOp, Callee, Overflow};
+    use crate::ir::{BinOp, Callee, Overflow, RefTarget};
     use crate::ty::{
-        Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Reissue, SplitCost, TyKind,
+        Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost,
+        TyKind, TypeArg,
     };
 
     struct Fixture {
@@ -209,6 +269,8 @@ mod tests {
         commuting_splittable: Ty,
         /// Opaque and not commuting.
         opaque: Ty,
+        /// `&i64`.
+        ref_int: Ty,
     }
 
     fn fixture() -> Fixture {
@@ -231,6 +293,7 @@ mod tests {
         let commuting = call_ty(opaque_effect(true, SplitCost::Unavailable));
         let commuting_splittable = call_ty(opaque_effect(true, SplitCost::WithCost(Cost::stated(1))));
         let opaque = call_ty(Effect::opaque());
+        let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
         Fixture {
             module: Module::new(types, Flows::none()),
             interner: Interner::new(),
@@ -239,6 +302,7 @@ mod tests {
             commuting,
             commuting_splittable,
             opaque,
+            ref_int,
         }
     }
 
@@ -255,16 +319,6 @@ mod tests {
             core: Core::of(interner),
         })
         .expect("empty declarations verify")
-    }
-
-    /// A manager that lives for the rest of the test run. A scope's `Needs`
-    /// is a trait object with the default `'static` bound, so the facts an
-    /// `Editor` reads cannot borrow a manager of shorter life; until the
-    /// scopes let them, a test that edits through an `Editor` leaks its
-    /// manager and declarations.
-    fn leaked_manager(interner: &Interner) -> &'static mut AnalysisManager<'static> {
-        let decls: &'static Declarations = Box::leak(Box::new(declarations(interner)));
-        Box::leak(Box::new(AnalysisManager::new(decls)))
     }
 
     fn constant(n: i128) -> Op {
@@ -433,7 +487,9 @@ mod tests {
         let [_, t_at] = inst_refs(&mut f.module, d.id)[..] else {
             panic!("the body has two instructions")
         };
-        let mut facts = EditFacts::new(leaked_manager(&f.interner), &f.module, d.id);
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let mut facts = EditFacts::new(&mut am, &f.module, d.id);
 
         let one = {
             let mut editor = Editor::<Value>::new(&mut f.module, d.id, &mut facts);
@@ -468,7 +524,9 @@ mod tests {
         let [a_at, _] = inst_refs(&mut f.module, id)[..] else {
             panic!("the body has two instructions")
         };
-        let mut facts = EditFacts::new(leaked_manager(&f.interner), &f.module, id);
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let mut facts = EditFacts::new(&mut am, &f.module, id);
 
         {
             let mut editor = Editor::<crate::ir::cfg::edit::Effect>::new(&mut f.module, id, &mut facts);
@@ -486,5 +544,154 @@ mod tests {
         assert!(facts.may_reorder(*start, *other));
         assert!(facts.may_reorder(*take, *other));
         assert!(facts.may_reorder(*start, *take));
+    }
+
+    fn assign(slot: ValueId, value: ValueId) -> Op {
+        Op::Assign { target: RefTarget::Var(slot), path: Vec::new(), value, restores: false }
+    }
+
+    fn take(slot: ValueId) -> Op {
+        Op::Take { target: RefTarget::Var(slot), path: Vec::new(), taken_out: false }
+    }
+
+    /// ```text
+    /// entry(c): x = 0; jump header
+    /// header:   while c { body } else exit
+    /// body:     jump header
+    /// exit:     y = x + x; return y
+    /// ```
+    /// The entry dominates the exit and the exit post-dominates the entry,
+    /// but the loop between them may never end.
+    #[test]
+    fn control_equivalence_is_refused_across_a_loop() {
+        let mut f = fixture();
+        let (nc, int, bool) = (f.interner.intern("c"), f.int, f.bool);
+        let mut builder = f.module.build_body(false, int);
+        let c = builder.param(nc, bool);
+        let entry = builder.current_block();
+        let x = builder.push(constant(0), int, Span::ZERO);
+        let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() });
+        builder.switch_to(header);
+        builder.terminate(Terminator::While {
+            cond: c,
+            stages: crate::ir::cfg::Stages::lowered(loop_body),
+            exit,
+            exit_args: Vec::new(),
+        });
+        builder.switch_to(loop_body);
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() });
+        builder.switch_to(exit);
+        let y = builder.push(add(x, x), int, Span::ZERO);
+        builder.terminate(Terminator::Return { value: y, order: None, span: Span::ZERO });
+        let id = builder.seal().expect("the body has no open state");
+        let [x_at, y_at] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has two instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let facts = EditFacts::new(&mut am, &f.module, id);
+
+        assert!(facts.dominates(x, Position::Before(y_at)));
+        assert!(!facts.control_equivalent(Position::End(entry), Position::Before(y_at)), "a loop lies between");
+        assert!(!facts.control_equivalent(Position::Before(y_at), Position::Before(x_at)));
+        assert!(!facts.control_equivalent(Position::End(header), Position::End(loop_body)));
+        assert!(facts.control_equivalent(Position::Before(x_at), Position::End(entry)), "one block, no loop");
+        assert!(facts.control_equivalent(Position::Before(y_at), Position::End(exit)));
+    }
+
+    struct StorageBody {
+        id: BodyId,
+        x: ValueId,
+        y: ValueId,
+        /// The load of `y`.
+        u: ValueId,
+    }
+
+    /// ```text
+    /// x = 1; y = 2; r = &x; t = *r; u = y; return t
+    /// ```
+    /// with `x`, `y` slots and the stores and loads whole.
+    fn storage_body(f: &mut Fixture) -> StorageBody {
+        let int = f.int;
+        let ref_int = f.ref_int;
+        let mut builder = f.module.build_body(false, int);
+        let x = builder.slot(int, Span::ZERO);
+        let y = builder.slot(int, Span::ZERO);
+        let one = builder.push(constant(1), int, Span::ZERO);
+        builder.push_unit(assign(x, one), Span::ZERO);
+        builder.push_unit(assign(y, one), Span::ZERO);
+        let r = builder.push(Op::Ref { target: RefTarget::Var(x), path: Vec::new(), mutability: Mutability::Shared }, ref_int, Span::ZERO);
+        let t = builder.push(Op::Take { target: RefTarget::Through(r), path: Vec::new(), taken_out: false }, int, Span::ZERO);
+        let u = builder.push(take(y), int, Span::ZERO);
+        builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO });
+        let id = builder.seal().expect("the body has no open state");
+        StorageBody { id, x, y, u }
+    }
+
+    #[test]
+    fn conflicts_intersects_what_a_write_writes_with_what_an_instruction_names() {
+        let mut f = fixture();
+        let s = storage_body(&mut f);
+        let [_, assign_x, assign_y, make_ref, read_through, take_y] = inst_refs(&mut f.module, s.id)[..] else {
+            panic!("the body has six instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let facts = EditFacts::new(&mut am, &f.module, s.id);
+
+        assert!(facts.conflicts(read_through, assign_x), "the read through r reads x");
+        assert!(facts.conflicts(make_ref, assign_x), "r names x");
+        assert!(!facts.conflicts(read_through, assign_y));
+        assert!(facts.conflicts(take_y, assign_y));
+        assert!(!facts.conflicts(take_y, assign_x));
+        assert!(!facts.conflicts(assign_x, read_through), "a read writes nothing");
+    }
+
+    #[test]
+    fn escapes_names_the_first_use_a_promotion_cannot_rewrite() {
+        let mut f = fixture();
+        let s = storage_body(&mut f);
+        let [.., make_ref, _, _] = inst_refs(&mut f.module, s.id)[..] else {
+            panic!("the body has six instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let facts = EditFacts::new(&mut am, &f.module, s.id);
+
+        assert_eq!(facts.escapes(s.x), Some(Site::Inst(make_ref.block(), make_ref.index())));
+        assert_eq!(facts.escapes(s.y), None);
+    }
+
+    /// A move through `Editor<Motion>` above the store to `y` is refused,
+    /// since the load of `y` names what it writes; a move above the reads of
+    /// `x` is made, and the refresh after it knows the load's new place.
+    #[test]
+    fn refresh_after_a_move_through_the_motion_editor_reflects_it() {
+        let mut f = fixture();
+        let s = storage_body(&mut f);
+        let [_, _, assign_y, make_ref, _, take_y] = inst_refs(&mut f.module, s.id)[..] else {
+            panic!("the body has six instructions")
+        };
+        let decls = declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+        let mut facts = EditFacts::new(&mut am, &f.module, s.id);
+
+        {
+            let mut editor = Editor::<Motion>::new(&mut f.module, s.id, &mut facts);
+            assert_eq!(
+                editor.move_to(take_y, Position::Before(assign_y)),
+                Err(CannotMove::CrossesConflictingWrite(assign_y))
+            );
+            editor.move_to(take_y, Position::Before(make_ref)).expect("the load crosses only reads of x");
+            editor.finish();
+        }
+        let [_, _, assign_y, moved, make_ref, _] = inst_refs(&mut f.module, s.id)[..] else {
+            panic!("the body has six instructions")
+        };
+        assert!(matches!(f.module.body(s.id).block(moved.block()).insts()[moved.index()].op(), Op::Take { .. }));
+        assert!(facts.dominates(s.u, Position::Before(make_ref)), "the load now stands before the Ref");
+        assert!(!facts.dominates(s.u, Position::Before(moved)));
+        assert!(facts.conflicts(moved, assign_y), "the load's storage is known at its new place");
     }
 }

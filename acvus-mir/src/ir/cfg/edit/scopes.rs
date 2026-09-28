@@ -10,12 +10,16 @@ mod sealed {
     pub trait Sealed {}
 }
 
-pub trait Scope: sealed::Sealed {
+/// A scope is a type-level name and holds no borrow, so it is `'static`;
+/// that is what lets an editor borrow its needs for exactly its own life.
+pub trait Scope: sealed::Sealed + 'static {
     /// What the editor may change; a recorded change outside this is the
     /// editor's defect (checked in debug and test builds).
     const CHANGES: &'static [Aspect];
-    /// The facts its legality checks read.
-    type Needs: Facts + ?Sized;
+    /// The facts its legality checks read, borrowed for `'n`.
+    type Needs<'n>: Facts + ?Sized
+    where
+        Self: 'n;
     /// The invariants every edit keeps, one checker each.
     type Keeps: Invariants;
 }
@@ -62,28 +66,28 @@ pub struct Drops;
 type Base = (TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept);
 
 macro_rules! scope {
-    ($name:ident, [$($aspect:ident),*], $needs:ty, $keeps:ty, [$($cap:ident),*]) => {
+    ($name:ident, [$($aspect:ident),*], $lt:lifetime => $needs:ty, $keeps:ty, [$($cap:ident),*]) => {
         impl sealed::Sealed for $name {}
         impl Scope for $name {
             const CHANGES: &'static [Aspect] = &[$(Aspect::$aspect),*];
-            type Needs = $needs;
+            type Needs<$lt> = $needs where Self: $lt;
             type Keeps = $keeps;
         }
         $(impl $cap for $name {})*
     };
 }
 
-scope!(Value, [Instructions, Storage], dyn DominanceFacts, Base, [ReplacesValues]);
-scope!(Remove, [Instructions, Storage, OrderTokens], NoFacts, Base, [RemovesInsts]);
-scope!(Cfg, [CfgShape, Instructions, Storage, OrderTokens], NoFacts, Base, [EditsCfg]);
-scope!(Sccp, [Instructions, CfgShape], dyn DominanceFacts, Base, [ReplacesValues, EditsCfg]);
-scope!(Motion, [Instructions, OrderTokens, Storage], dyn MotionFacts, (Base, SplitTakenOnce), [MovesInsts]);
-scope!(Effect, [Instructions, OrderTokens], dyn OrderFacts, (Base, SplitTakenOnce), [EditsOrder]);
-scope!(Storage, [Instructions, Storage], dyn LoanFacts, Base, [PromotesStorage]);
-scope!(Loop, [CfgShape, Instructions], NoFacts, Base, [EditsLoops]);
-scope!(Discharge, [Instructions, Storage, OrderTokens], dyn DischargeFacts, Base, [Discharges]);
-scope!(Inline, [CfgShape, Instructions, Storage, OrderTokens, Types], NoFacts, (Base, SplitTakenOnce), [Inlines]);
-scope!(Drops, [Instructions, Storage], dyn DominanceFacts, Base, [InsertsDrops]);
+scope!(Value, [Instructions, Storage], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues]);
+scope!(Remove, [Instructions, Storage, OrderTokens], 'n => NoFacts, Base, [RemovesInsts]);
+scope!(Cfg, [CfgShape, Instructions, Storage, OrderTokens], 'n => NoFacts, Base, [EditsCfg]);
+scope!(Sccp, [Instructions, CfgShape], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues, EditsCfg]);
+scope!(Motion, [Instructions, OrderTokens, Storage], 'n => dyn MotionFacts + 'n, (Base, SplitTakenOnce), [MovesInsts]);
+scope!(Effect, [Instructions, OrderTokens], 'n => dyn OrderFacts + 'n, (Base, SplitTakenOnce), [EditsOrder]);
+scope!(Storage, [Instructions, Storage], 'n => dyn LoanFacts + 'n, Base, [PromotesStorage]);
+scope!(Loop, [CfgShape, Instructions], 'n => NoFacts, Base, [EditsLoops]);
+scope!(Discharge, [Instructions, Storage, OrderTokens], 'n => dyn DischargeFacts + 'n, Base, [Discharges]);
+scope!(Inline, [CfgShape, Instructions, Storage, OrderTokens, Types], 'n => NoFacts, (Base, SplitTakenOnce), [Inlines]);
+scope!(Drops, [Instructions, Storage], 'n => dyn DominanceFacts + 'n, Base, [InsertsDrops]);
 
 /// What motion reads: dominance and loans. Effect order is not motion's:
 /// an effect's token keeps it on its chain, so dominance alone keeps it in
