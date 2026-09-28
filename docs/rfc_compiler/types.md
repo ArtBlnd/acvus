@@ -30,7 +30,7 @@ A call reaches by its arguments in order, and a tuple by its parts in order: at 
 
 ## 7. Conversions
 
-Where a value's type is not the type its slot asks for and no subtyping relates them, the value converts only by a declared conversion, and exactly one must apply. Otherwise the program is refused.
+Where a value's type is not the type its slot asks for and no subtyping relates them, the value converts only by a declared conversion, and exactly one must apply. Otherwise the program is refused, and the refusal names the conversions that left it undecided. A call reaches its declaration by subtyping alone (§6); a conversion applies once the slot's type decides it. A qualified name reaches one declaration, so a conversion can always be decided by writing one.
 
 ## 8. Specialization
 
