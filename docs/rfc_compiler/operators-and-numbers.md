@@ -2,7 +2,7 @@
 
 ## 1. Numbers
 
-The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integer literal is `i64` where no use decides its width. Integer overflow is undefined. `f64` follows IEEE: division by zero gives an infinity, not a trap.
+The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integer literal defaults as types §5 states. Integer overflow is undefined. `f64` follows IEEE: division by zero gives an infinity, not a trap.
 
 ## 2. Operators are core signatures
 

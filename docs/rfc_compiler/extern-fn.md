@@ -32,7 +32,7 @@ Several declarations may share a name. A call reaches the one its arguments' typ
 
 ## 6. Instances and generics
 
-A shared signature is a name with a polymorphic type and no body. A declaration may be an instance of one, choosing some of its type variables. A declaration may require instances of shared signatures at its own type variables, and may name a law such an instance must state.
+A shared signature is a name with a polymorphic type and no body. A declaration may be an instance of one, choosing some of its type variables. A declaration may require instances of shared signatures at its own type variables, and may name a law such an instance must state. A required instance's types are smaller than the declaration's own, so requirements end.
 
 ## 7. Conversions
 

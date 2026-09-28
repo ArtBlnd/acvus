@@ -10,7 +10,7 @@ Two object types join at the union of their fields. Two enums of one name join a
 
 ## 3. Subtyping
 
-A declared extern cast from `S` to `T` makes `S` a subtype of `T`. Where values of different types meet in one slot, the slot takes their least upper bound, and each value is coerced to it by the declared cast. Two `Deque`s of different identities meet at `Deque` with the identity demoted; values of one identity keep it.
+A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it. Values of one identity keep it; two identities meet at the type without identity, as two `Deque`s meet at `Deque`.
 
 Type constructors stay invariant: subtyping applies to a value entering a slot, not to a constructor's argument.
 
@@ -20,11 +20,13 @@ Type constructors stay invariant: subtyping applies to a value entering a slot, 
 
 ## 5. Defaults
 
-A type variable nothing constrains is `!`. A variable a bound constrains and no use answers is refused. An unsuffixed integer literal is `i64` where no use decides its width.
+Defaults apply only where nothing more can be decided. A type variable nothing constrains is `!`, and an effect nothing constrains is opaque. A variable a bound constrains and no use answers is refused. An unsuffixed integer literal is `i64` where no use decides its width.
 
 ## 6. Deciding by type
 
-What a `for` iterates, what `?` unwraps, and which declaration a name or a method call reaches are decided by a type, wherever in the program that type becomes known. The outcome does not depend on the order the program is checked in. A construct whose type never becomes known is refused.
+What a `for` iterates, what `?` unwraps, and which declaration a name or a method call reaches are decided by a type, wherever in the program that type becomes known. A decision reads a type only once nothing can change it, and what the decision leads back into that type must fit it unchanged. The outcome does not depend on the order the program is checked in. A construct whose type never becomes known is refused.
+
+A call reaches by its arguments in order, and a tuple by its parts in order: at each one, stepping up from its exact type, the declarations that match at the first step where any match are kept. Exactly one must be left; otherwise the call is refused.
 
 ## 7. Conversions
 
