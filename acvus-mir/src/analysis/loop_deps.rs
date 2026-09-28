@@ -33,7 +33,12 @@ use crate::laws::{
     ResolvedIdentity, ResolvedLaws,
 };
 use crate::means::{EntryAccess, EntryReading, Stored, Term as MeansTerm};
-use crate::ty::{Mutability, Ty};
+use crate::ty::Mutability;
+use crate::ty::{Concrete, Types};
+use crate::decl::Declarations;
+use crate::analysis::loans::Layout;
+use crate::ty::TyKind;
+use crate::ir::is_word;
 
 // -- Stage membership (rule 1) ----------------------------------------
 
@@ -270,7 +275,7 @@ enum PullExits {
 /// exit (rule 5). Which externs pull is `optimize::while_to_for`'s to
 /// decide; this is the shape it wrote.
 fn pull_shape(
-    cfg: &CfgBody,
+    cfg: &CfgBody, types: &Types<Concrete>,
     loans: &Loans<'_>,
     laws: &LawTable,
     header: BlockIdx,
@@ -320,7 +325,7 @@ fn pull_shape(
             .all(|loan| loan.storage.slot() == Some(slot))
     });
     let pulls = args[..] == [*lent]
-        && matches!(cfg.val_types.get(option), Some(Ty::Option(_)))
+        && matches!(cfg.val_types.get(option).map(|ty| types.kind(*ty)), Some(TyKind::Option(_)))
         && src == option
         && dst == cond;
     if !lends_one_storage || !pulls {
@@ -516,15 +521,15 @@ pub struct BodyDeps {
 }
 
 impl BodyDeps {
-    pub fn of(cfg: &CfgBody, laws: &LawTable) -> Self {
-        let loans = Loans::build(cfg);
+    pub fn of(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable) -> Self {
+        let loans = Loans::build(cfg, types, decls);
         let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
         let found = (0..cfg.blocks.len())
             .map(BlockIdx)
             .filter(|at| Head::of(&cfg.blocks[at.0].terminator).is_some())
             .map(|header| HeaderDeps {
                 header,
-                deps: LoopDeps::with(cfg, &loans, laws, header, &loop_blocks_of(&loops, header)),
+                deps: LoopDeps::with(cfg, types, decls, &loans, laws, header, &loop_blocks_of(&loops, header)),
             })
             .collect();
         Self { loops: found }
@@ -534,14 +539,14 @@ impl BodyDeps {
 impl LoopDeps {
     /// # Panics
     /// If `header` ends in neither `For` nor `While`.
-    pub fn of(cfg: &CfgBody, laws: &LawTable, header: BlockIdx) -> Result<LoopDeps, ShapeFault> {
-        let loans = Loans::build(cfg);
+    pub fn of(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable, header: BlockIdx) -> Result<LoopDeps, ShapeFault> {
+        let loans = Loans::build(cfg, types, decls);
         let loops = natural_loops_innermost_first(cfg, &DomTree::build(cfg));
-        LoopDeps::with(cfg, &loans, laws, header, &loop_blocks_of(&loops, header))
+        LoopDeps::with(cfg, types, decls, &loans, laws, header, &loop_blocks_of(&loops, header))
     }
 
     fn with(
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations,
         loans: &Loans<'_>,
         laws: &LawTable,
         header: BlockIdx,
@@ -552,7 +557,7 @@ impl LoopDeps {
         };
         let membership = StageMembership::of(cfg, header, head, stages, loop_blocks)?;
         let pull_exits = match head {
-            Head::Pull => Some(pull_shape(cfg, loans, laws, header, loop_blocks)?),
+            Head::Pull => Some(pull_shape(cfg, types, loans, laws, header, loop_blocks)?),
             Head::For(_) => None,
         };
         let graph = Graph::of(cfg, loans, header, loop_blocks, stages.body(), head);
@@ -589,7 +594,7 @@ impl LoopDeps {
         let joined_cycles = |lent: &[LentStorage]| -> (Vec<Cycle>, Vec<Cycle>) {
             let mut cycles: Vec<Cycle> = graph
                 .cycles(
-                    cfg,
+                    cfg, types,
                     loans,
                     &slots,
                     &disjoint,
@@ -744,7 +749,7 @@ impl LoopDeps {
             Control::Upfront => Vec::new(),
             Control::Chained { cycle } => {
                 let exit_stage = cycles[cycle].earliest_stage();
-                let run_ahead = RunAhead::of(cfg, laws, header);
+                let run_ahead = RunAhead::of(cfg, types, decls, laws, header);
                 graph
                     .members
                     .iter()
@@ -816,9 +821,9 @@ impl LoopDeps {
     }
 
     /// Each cycle's order and law, by the index of [`Self::cycles`].
-    pub fn judge(&self, cfg: &CfgBody, laws: &LawTable) -> Vec<Judged> {
+    pub fn judge(&self, cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable) -> Vec<Judged> {
         let domtree = DomTree::build(cfg);
-        let invariants = Invariants::of(cfg);
+        let invariants = Invariants::of(cfg, types, decls);
         let nest = LoopNest::of(cfg, &domtree, &invariants);
         let Some(id) = nest.by_header(self.header) else {
             // No back edge reaches the header: the body runs at most once,
@@ -830,7 +835,7 @@ impl LoopDeps {
                 .collect();
         };
         let loop_ = nest.get(id);
-        let loans = Loans::build(cfg);
+        let loans = Loans::build(cfg, types, decls);
         let loop_blocks: Vec<BlockIdx> = loop_.natural.blocks().collect();
         let slots = TargetSlots::of(&loans, self.membership.head().source(), &loop_blocks);
         let reading_of = |state: State| {
@@ -875,9 +880,9 @@ impl LoopDeps {
         // RFC-0093 rule 8's previous partial is read at the loop's affine
         // places, which only a storage reached at them has.
         let previous_partial = |slot: ValueId| {
-            let affine = AffineValues::of(cfg, loop_, &invariants, laws);
+            let affine = AffineValues::of(cfg, types, decls, loop_, &invariants, laws);
             let places = Places::of(&loans, laws);
-            let found = PreviousPlaces::of(cfg, &places, &affine, laws, self.header, &loop_blocks, slot)?;
+            let found = PreviousPlaces::of(cfg, types, &places, &affine, laws, self.header, &loop_blocks, slot)?;
             LawReading::of(&loans, laws, &slots, self.header, &loop_blocks, State::Previous(slot))
                 .previous_partial(found)
         };
@@ -914,7 +919,7 @@ impl LoopDeps {
                     across: keyed.part.across(),
                 })
             }
-            None => keyed_through_nested_loop(cfg, &loans, laws, self.header, &loop_blocks, slot),
+            None => keyed_through_nested_loop(cfg, types, decls, &loans, laws, self.header, &loop_blocks, slot),
         };
         self.cycles
             .iter()
@@ -1245,7 +1250,7 @@ fn place(found: Found, stage_of: &impl Fn(Member) -> usize) -> Cycle {
 pub fn has_effect(kind: &InstKind) -> bool {
     match kind {
         InstKind::FunctionCall { order, .. } => order.is_some(),
-        InstKind::Spawn { order, .. } | InstKind::Eval { order, .. } => order.is_some(),
+        InstKind::Spawn { order, .. } | InstKind::TakeEffect { order, .. } => order.is_some(),
         InstKind::Commit { .. } => true,
         // An array literal's element carries its own `Order`; building the
         // array around it has none.
@@ -1272,7 +1277,7 @@ pub struct RunAhead<'a> {
 }
 
 impl<'a> RunAhead<'a> {
-    pub fn of(cfg: &'a CfgBody, laws: &'a LawTable, header: BlockIdx) -> Self {
+    pub fn of(cfg: &'a CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &'a LawTable, header: BlockIdx) -> Self {
         let domtree = DomTree::build(cfg);
         let loops = natural_loops_innermost_first(cfg, &domtree);
         let ours = loop_blocks_of(&loops, header);
@@ -1281,7 +1286,7 @@ impl<'a> RunAhead<'a> {
             .filter(|inner| inner.header != header && ours.contains(&inner.header))
             .filter(|inner| inner.is_while(cfg))
             .collect();
-        let loans = (!whiles.is_empty()).then(|| Loans::build(cfg));
+        let loans = (!whiles.is_empty()).then(|| Loans::build(cfg, types, decls));
         let in_while = whiles
             .into_iter()
             .filter(|inner| {
@@ -1657,6 +1662,7 @@ struct ForElement {
 /// whole storage.
 struct Places<'a, 'cfg> {
     cfg: &'cfg CfgBody,
+    types: &'cfg Types<Concrete>,
     loans: &'a Loans<'cfg>,
     laws: &'a LawTable,
     defs: FxHashMap<ValueId, InstAt>,
@@ -1699,6 +1705,7 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
         }
         Self {
             cfg,
+            types: loans.layout().types,
             loans,
             laws,
             defs,
@@ -1838,8 +1845,8 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
                 a_ref == b_ref
                     && a_path == b_path
                     && matches!(
-                        self.cfg.val_types.get(a_ref),
-                        Some(Ty::Ref(Mutability::Shared, _))
+                        self.cfg.val_types.get(a_ref).map(|ty| self.types.kind(*ty)),
+                        Some(TyKind::Ref(Mutability::Shared, _))
                     )
             }
             (
@@ -1924,9 +1931,9 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
                 _ => None,
             }
         };
-        let read = match self.cfg.val_types.get(&key)? {
-            Ty::Ref(Mutability::Shared, _) => lent_through(key)?,
-            Ty::Ref(Mutability::Mut, _) => return None,
+        let read = match self.types.kind(*self.cfg.val_types.get(&key)?) {
+            TyKind::Ref(Mutability::Shared, _) => lent_through(key)?,
+            TyKind::Ref(Mutability::Mut, _) => return None,
             _ => {
                 let at = self.defs.get(&key)?;
                 match &self.cfg.blocks[at.block.0].insts[at.at].kind {
@@ -1948,15 +1955,15 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
             }
         };
         matches!(
-            self.cfg.val_types.get(&read.reference),
-            Some(Ty::Ref(Mutability::Shared, _))
+            self.cfg.val_types.get(&read.reference).map(|ty| self.types.kind(*ty)),
+            Some(TyKind::Ref(Mutability::Shared, _))
         )
         .then_some(read)
     }
 
     fn key_read_of_reference(&self, reference: ValueId) -> Option<LentPlace> {
-        match self.cfg.val_types.get(&reference)? {
-            Ty::Ref(Mutability::Shared, _) => self.key_read(reference),
+        match self.types.kind(*self.cfg.val_types.get(&reference)?) {
+            TyKind::Ref(Mutability::Shared, _) => self.key_read(reference),
             _ => None,
         }
     }
@@ -1991,7 +1998,7 @@ impl<'a, 'cfg> Places<'a, 'cfg> {
     /// An operand of no reference type: an operation over it reads nothing
     /// but the operand.
     fn read_by_value(&self, operand: ValueId) -> bool {
-        matches!(self.cfg.val_types.get(&operand), Some(ty) if !matches!(ty, Ty::Ref(..)))
+        matches!(self.cfg.val_types.get(&operand), Some(ty) if !matches!(self.types.kind(*ty), TyKind::Ref(..)))
     }
 
     fn holds(&self, value: ValueId, slot: ValueId) -> bool {
@@ -2154,12 +2161,14 @@ fn disjoint_storages(
         return Vec::new();
     }
     let cfg = loans.cfg();
-    let invariants = Invariants::of(cfg);
+    let Layout { types, decls } = loans.layout();
+    let invariants = Invariants::of(cfg, types, decls);
     let nest = LoopNest::of(cfg, &DomTree::build(cfg), &invariants);
     let Some(id) = nest.by_header(header) else {
         return Vec::new();
     };
-    let affine = AffineValues::of(cfg, nest.get(id), &invariants, laws);
+    let affine = AffineValues::of(cfg, types, decls, nest.get(id), &invariants, laws);
+
     let places = Places::of(loans, laws);
     let reached = |slot: ValueId| -> Option<Vec<Place>> {
         let mut found: Vec<Place> = Vec::new();
@@ -2183,7 +2192,7 @@ fn disjoint_storages(
         .iter()
         .filter_map(|slot| Some((*slot, reached(*slot)?)))
         .collect();
-    let proven = Proven::of(cfg, laws, header, &affine, &by_slot);
+    let proven = Proven::of(cfg, types, laws, header, &affine, &by_slot);
     by_slot
         .into_iter()
         .filter(|(_, found)| one_affine_component(found, &affine, &proven))
@@ -2344,7 +2353,7 @@ fn inverse_cells(
             let reads_the_payload = matches!(laws.of_callee(reader), ResolvedLaws::Payload)
                 && read == [option]
                 && reads.count(option) == 1;
-            let one_word = cfg.val_types.get(&payload).and_then(|ty| ty.is_word()) == Some(true);
+            let one_word = cfg.val_types.get(&payload).is_some_and(|ty| is_word(loans.layout().types, *ty));
             let lends = loans.holds(payload).next().is_some();
             if !reads_the_payload || !one_word || lends {
                 return None;
@@ -2406,12 +2415,12 @@ fn runs_before_the_iteration_ends(
 /// constant, or the value of the declared extern of no argument: a call of
 /// it, or a value its term is (RFC-0104 rule 3); any other value is no
 /// identity here.
-fn is_identity(cfg: &CfgBody, laws: &LawTable, law: &Law, value: ValueId) -> bool {
+fn is_identity(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable, law: &Law, value: ValueId) -> bool {
     let called = |named: ExternInstance| {
         let as_its_term = laws
             .means_of_instance(named)
             .and_then(|means| means.closed())
-            .is_some_and(|term| is_term(cfg, value, term));
+            .is_some_and(|term| is_term(cfg, types, value, term));
         let a_call_of_it = cfg
             .blocks
             .iter()
@@ -2440,8 +2449,8 @@ fn is_identity(cfg: &CfgBody, laws: &LawTable, law: &Law, value: ValueId) -> boo
         Some(Literal::IntOf(suffixed)) => Some(suffixed.value),
         _ => None,
     };
-    let width = match cfg.val_types.get(&value) {
-        Some(Ty::Int(width)) => Some(*width),
+    let width = match cfg.val_types.get(&value).map(|ty| types.kind(*ty)) {
+        Some(TyKind::Int(width)) => Some(*width),
         _ => None,
     };
     match law {
@@ -2472,11 +2481,11 @@ fn is_identity(cfg: &CfgBody, laws: &LawTable, law: &Law, value: ValueId) -> boo
 /// extern the term names on arguments that are its argument terms, an
 /// array, a variant or a constant. A call the term holds is read as the
 /// call it is, never by what it computes.
-fn is_term(cfg: &CfgBody, value: ValueId, term: &MeansTerm) -> bool {
+fn is_term(cfg: &CfgBody, types: &Types<Concrete>, value: ValueId, term: &MeansTerm) -> bool {
     let Some(kind) = def_of(cfg, value) else {
         return false;
     };
-    let is_option = |dst: &ValueId| matches!(cfg.val_types.get(dst), Some(Ty::Option(_)));
+    let is_option = |dst: &ValueId| matches!(cfg.val_types.get(dst).map(|ty| types.kind(*ty)), Some(TyKind::Option(_)));
     match (term, kind) {
         (
             MeansTerm::Call { name, args },
@@ -2491,14 +2500,14 @@ fn is_term(cfg: &CfgBody, value: ValueId, term: &MeansTerm) -> bool {
                 && args
                     .iter()
                     .zip(passed)
-                    .all(|(term, passed)| is_term(cfg, *passed, term))
+                    .all(|(term, passed)| is_term(cfg, types, *passed, term))
         }
         (MeansTerm::Array(items), InstKind::ArrayBegin { .. }) => items.is_empty(),
         (MeansTerm::Array(items), InstKind::ArrayPush { array, value, .. }) => {
             let Some((last, rest)) = items.split_last() else {
                 return false;
             };
-            is_term(cfg, *value, last) && is_term(cfg, *array, &MeansTerm::Array(rest.to_vec()))
+            is_term(cfg, types, *value, last) && is_term(cfg, types, *array, &MeansTerm::Array(rest.to_vec()))
         }
         (MeansTerm::Const(literal), InstKind::Const { value, .. }) => same_literal(literal, value),
         (MeansTerm::None, InstKind::MakeVariant { dst, payload: None, .. }) => is_option(dst),
@@ -2509,7 +2518,7 @@ fn is_term(cfg: &CfgBody, value: ValueId, term: &MeansTerm) -> bool {
                 payload: Some(held),
                 ..
             },
-        ) => is_option(dst) && is_term(cfg, *held, inner),
+        ) => is_option(dst) && is_term(cfg, types, *held, inner),
         _ => false,
     }
 }
@@ -2617,7 +2626,7 @@ struct ViewedLoad {
 
 fn viewed_load(
     cfg: &CfgBody,
-    tags: crate::ty::OptionTags,
+    tags: crate::laws::OptionTags,
     call: InstAt,
     view: ValueId,
 ) -> Option<ViewedLoad> {
@@ -2829,7 +2838,7 @@ fn keyed_storages(
         .collect();
     candidates
         .into_iter()
-        .filter_map(|slot| keyed_storage(cfg, laws, &places, loop_blocks, &computed_once, slot))
+        .filter_map(|slot| keyed_storage(cfg, loans.layout().types, laws, &places, loop_blocks, &computed_once, slot))
         .collect()
 }
 
@@ -2842,7 +2851,7 @@ fn keyed_storages(
 /// switch ([`viewed_load`]); and calls that store a value whatever the entry
 /// held, whose results the iteration does not read.
 fn keyed_storage(
-    cfg: &CfgBody,
+    cfg: &CfgBody, types: &Types<Concrete>,
     laws: &LawTable,
     places: &Places<'_, '_>,
     loop_blocks: &[BlockIdx],
@@ -2871,7 +2880,7 @@ fn keyed_storage(
             if places.reach_of_inst(&inst.kind, slot).is_none() {
                 continue;
             }
-            let tags = laws.option_tags()?;
+            let tags = laws.option_tags();
             viewed.push(viewed_load(cfg, tags, InstAt { block, at }, *dst)?);
         }
     }
@@ -3005,7 +3014,7 @@ fn keyed_storage(
     let part = match reached? {
         KeyedPlace::Element => KeyedPart::Element,
         KeyedPlace::Entry => {
-            if !keyed_by_equivalence(cfg, laws, slot) {
+            if !keyed_by_equivalence(cfg, types, laws, slot) {
                 return None;
             }
             KeyedPart::Entry(opened)
@@ -3028,7 +3037,7 @@ fn keyed_storage(
 /// split of the outer loop keeps each entry's updates in order within a
 /// chunk and joins chunks as the nested loop's own split does.
 fn keyed_through_nested_loop(
-    cfg: &CfgBody,
+    cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations,
     loans: &Loans<'_>,
     laws: &LawTable,
     header: BlockIdx,
@@ -3036,12 +3045,12 @@ fn keyed_through_nested_loop(
     slot: ValueId,
 ) -> Option<KeyedLaw> {
     acvus_utils::grow(|| {
-        keyed_through_nested_loop_level(cfg, loans, laws, header, loop_blocks, slot)
+        keyed_through_nested_loop_level(cfg, types, decls, loans, laws, header, loop_blocks, slot)
     })
 }
 
 fn keyed_through_nested_loop_level(
-    cfg: &CfgBody,
+    cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations,
     loans: &Loans<'_>,
     laws: &LawTable,
     header: BlockIdx,
@@ -3087,11 +3096,11 @@ fn keyed_through_nested_loop_level(
     }
     let inner = holding?;
     Head::of(&cfg.blocks[inner.0].terminator)?;
-    let deps = LoopDeps::with(cfg, loans, laws, inner, &loop_blocks_of(&loops, inner)).ok()?;
+    let deps = LoopDeps::with(cfg, types, decls, loans, laws, inner, &loop_blocks_of(&loops, inner)).ok()?;
     let token = Token::Storage(Storage::Slot(slot));
     deps.cycles
         .iter()
-        .zip(deps.judge(cfg, laws))
+        .zip(deps.judge(cfg, types, decls, laws))
         .find_map(|(cycle, judged)| match (&cycle.tokens[..], judged) {
             (
                 [only],
@@ -3108,13 +3117,13 @@ fn keyed_through_nested_loop_level(
         })
 }
 
-fn keyed_by_equivalence(cfg: &CfgBody, laws: &LawTable, slot: ValueId) -> bool {
-    let Some(Ty::UserDefined { type_args, .. }) = cfg.val_types.get(&slot) else {
+fn keyed_by_equivalence(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable, slot: ValueId) -> bool {
+    let Some(TyKind::UserDefined { type_args, .. }) = cfg.val_types.get(&slot).map(|ty| types.kind(*ty)) else {
         return false;
     };
     matches!(
-        type_args.last().map(|marker| marker.ty()).as_deref(),
-        Some(Ty::UserDefined { id, .. }) if laws.is_equiv(*id)
+        type_args.last().map(|marker| types.kind(marker.ty())),
+        Some(TyKind::UserDefined { id, .. }) if laws.is_equiv(*id)
     )
 }
 
@@ -3136,7 +3145,7 @@ struct PreviousPlaces {
 
 impl PreviousPlaces {
     fn of(
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>,
         places: &Places<'_, '_>,
         affine: &AffineValues,
         laws: &LawTable,
@@ -3181,7 +3190,7 @@ impl PreviousPlaces {
             }
         }
         let (store, stored, stored_at) = store?;
-        let proven = Proven::of(cfg, laws, header, affine, &[(slot, reached)]);
+        let proven = Proven::of(cfg, types, laws, header, affine, &[(slot, reached)]);
         let stored_at = affine.get(stored_at)?;
         let Stride::Constant(step) = stride(&stored_at.step, &proven)? else {
             return None;
@@ -3217,7 +3226,7 @@ struct Proven {
 
 impl Proven {
     fn of(
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>,
         laws: &LawTable,
         header: BlockIdx,
         affine: &AffineValues,
@@ -3241,7 +3250,7 @@ impl Proven {
                 .iter()
                 .copied()
                 .zip(crate::analysis::interval::constant_bounds_on_entry(
-                    cfg, laws, header, &atoms,
+                    cfg, types, laws, header, &atoms,
                 ))
                 .collect(),
         };
@@ -3827,7 +3836,7 @@ impl Graph {
     #[allow(clippy::too_many_arguments)]
     fn cycles(
         &self,
-        cfg: &CfgBody,
+        cfg: &CfgBody, types: &Types<Concrete>,
         loans: &Loans<'_>,
         slots: &TargetSlots,
         disjoint: &[ValueId],
@@ -3837,7 +3846,7 @@ impl Graph {
         loop_blocks: &[BlockIdx],
         pull_exits: Option<PullExits>,
     ) -> Vec<Found> {
-        let mut found: Vec<Held> = self.carried_cycles(cfg, header, loop_blocks);
+        let mut found: Vec<Held> = self.carried_cycles(cfg, types, header, loop_blocks);
         found.extend(self.storage_cycles(cfg, loans, slots, disjoint, cells, lent));
         // RFC-0089 rule 5: a pull running ahead of a body exit decides its
         // header's exit ahead too, as a `for`'s header does.
@@ -3906,6 +3915,7 @@ impl Graph {
     fn carried_cycles(
         &self,
         cfg: &CfgBody,
+        types: &Types<Concrete>,
         header: BlockIdx,
         loop_blocks: &[BlockIdx],
     ) -> Vec<Held> {
@@ -3948,7 +3958,7 @@ impl Graph {
                 .val_types
                 .get(&param)
                 .expect("lowering types every header parameter");
-            let is_order = *ty == Ty::Order;
+            let is_order = matches!(types.kind(*ty), TyKind::Order);
             let starts: Vec<usize> = self
                 .readers(param)
                 .iter()
@@ -5017,6 +5027,8 @@ struct Select {
 /// a partial of it.
 struct LawReading<'a, 's, 'cfg> {
     cfg: &'cfg CfgBody,
+    types: &'cfg Types<Concrete>,
+    decls: &'cfg Declarations,
     loans: &'a Loans<'cfg>,
     laws: &'a LawTable,
     slots: &'s TargetSlots,
@@ -5118,6 +5130,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let loops = natural_loops_innermost_first(cfg, &domtree);
         let mut reading = LawReading {
             cfg,
+            types: loans.layout().types,
+            decls: loans.layout().decls,
             loans,
             laws,
             slots,
@@ -5566,6 +5580,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         self.dependent = self.values_reading_state(None);
         self.chain.extend(call_result);
         let cfg = self.cfg;
+        let types = self.types;
         let laws = self.laws;
         let update = self.update()?;
         if update.resets {
@@ -5578,7 +5593,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             // identity, so an entry read where the table held none is read
             // at that identity, or the chunk would count it again.
             (KeyedPart::Entry(_), Some(opened)) => {
-                is_identity(cfg, laws, &accumulator.law, opened.default).then_some(accumulator)
+                is_identity(cfg, types, laws, &accumulator.law, opened.default).then_some(accumulator)
             }
             (KeyedPart::Entry(_), None) => keyed.loads.is_empty().then_some(accumulator),
         }
@@ -5609,7 +5624,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             callee: first.callee,
             fold: first.fold,
         });
-        is_identity(self.cfg, self.laws, &law, opened.default).then_some(Accumulator {
+        is_identity(self.cfg, self.types, self.laws, &law, opened.default).then_some(Accumulator {
             law,
             exact: true,
             commutative: first.fold.commutative,
@@ -6332,7 +6347,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 left,
                 right,
                 ..
-            } if matches!(self.cfg.val_types.get(left), Some(Ty::Bool)) => {
+            } if matches!(self.cfg.val_types.get(left).map(|ty| self.types.kind(*ty)), Some(TyKind::Bool)) => {
                 let op = match op {
                     BinOp::Or => LawOp::Or,
                     BinOp::And => LawOp::And,
@@ -6353,10 +6368,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             InstKind::BinOp {
                 op, left, right, ..
             } => {
-                let ty = self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
-                let exact = match ty {
-                    ty if crate::analysis::affine::exact_under_wrapping(ty) => true,
-                    Ty::Float => false,
+                let ty = *self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
+                let exact = match self.types.kind(ty) {
+                    _ if crate::analysis::affine::exact_under_wrapping(self.types, ty) => true,
+                    TyKind::Float => false,
                     _ => return None,
                 };
                 let (left_form, right_form) = (self.form(*left)?, self.form(*right)?);
@@ -6462,7 +6477,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 payload: Some(payload),
                 ..
             } if self.payload_view.is_some()
-                && matches!(self.cfg.val_types.get(dst), Some(Ty::Option(_))) =>
+                && matches!(self.cfg.val_types.get(dst).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_))) =>
             {
                 self.form(*payload)
             }
@@ -6534,7 +6549,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let Some(loop_) = self.loops.iter().find(|loop_| loop_.header == self.header) else {
             return false;
         };
-        if Invariants::of(self.cfg).in_loop(loop_, table).is_none() {
+        if Invariants::of(self.cfg, self.types, self.decls).in_loop(loop_, table).is_none() {
             return false;
         }
         let written = written_in(self.cfg, self.loans, loop_);
@@ -6621,7 +6636,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     dst,
                     payload: Some(payload),
                     ..
-                } if matches!(self.cfg.val_types.get(dst), Some(Ty::Option(_))) => *payload,
+                } if matches!(self.cfg.val_types.get(dst).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_))) => *payload,
                 _ => value,
             },
             _ => value,
@@ -6802,9 +6817,9 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         let State::Param { param: guard, index } = self.state else {
             return None;
         };
-        let unset = match self.cfg.val_types.get(&guard) {
-            Some(Ty::Bool) if !guarded.is_empty() => Unset::Flag,
-            Some(Ty::Int(_)) => {
+        let unset = match self.cfg.val_types.get(&guard).map(|ty| self.types.kind(*ty)) {
+            Some(TyKind::Bool) if !guarded.is_empty() => Unset::Flag,
+            Some(TyKind::Int(_)) => {
                 let sentinel = self.sentinel_compared(guard)?;
                 self.sentinel = Some(int_constant(self.cfg, sentinel)?);
                 Unset::Sentinel(sentinel)
@@ -6936,7 +6951,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return None;
         }
         let summary = FunctionSummary::unknown();
-        let removal = raise::Removal::of(self.cfg, self.laws, &summary);
+        let removal = raise::Removal::of(self.cfg, self.types, self.laws, &summary);
         let reads_harmlessly = self.insts().all(|(at, kind)| {
             let reads_guard = inst_info::uses(kind)
                 .into_iter()
@@ -6990,7 +7005,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// Whether the interval domain proves `value` is not `sentinel` where
     /// `from`, the block whose edge sends it, begins.
     fn never_sent(&self, from: BlockIdx, value: ValueId, sentinel: i128) -> bool {
-        crate::analysis::interval::constant_bounds_on_entry(self.cfg, self.laws, from, &[value])
+        crate::analysis::interval::constant_bounds_on_entry(self.cfg, self.types, self.laws, from, &[value])
             .into_iter()
             .all(|bounds| bounds.excludes(sentinel))
     }
@@ -7121,7 +7136,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return None;
         };
         let cond = *cond;
-        if !matches!(self.cfg.val_types.get(&cond), Some(Ty::Bool)) || self.form(cond)? != Form::State
+        if !matches!(self.cfg.val_types.get(&cond).map(|ty| self.types.kind(*ty)), Some(TyKind::Bool)) || self.form(cond)? != Form::State
         {
             return None;
         }
@@ -7158,7 +7173,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
     /// and none that can raise or may not finish.
     fn runs_ahead_harmlessly(&self, blocks: &[BlockIdx]) -> bool {
         let summary = FunctionSummary::unknown();
-        let removal = raise::Removal::of(self.cfg, self.laws, &summary);
+        let removal = raise::Removal::of(self.cfg, self.types, self.laws, &summary);
         let holds_a_loop = self
             .loops
             .iter()
@@ -7356,7 +7371,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         };
         match self.inst(*at) {
             InstKind::MakeVariant { dst, tag, payload }
-                if matches!(self.cfg.val_types.get(dst), Some(Ty::Option(_))) =>
+                if matches!(self.cfg.val_types.get(dst).map(|ty| self.types.kind(*ty)), Some(TyKind::Option(_))) =>
             {
                 Some(MadeOption {
                     tag: *tag,
@@ -7381,7 +7396,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         };
         let law = inner.step().accumulator();
         let identity_beside = |identity: ValueId, other: ValueId| {
-            is_identity(self.cfg, self.laws, &law.law, identity) && self.one_value(other, y)
+            is_identity(self.cfg, self.types, self.laws, &law.law, identity) && self.one_value(other, y)
         };
         lifted == inner && (identity_beside(left, right) || identity_beside(right, left))
     }
@@ -7420,10 +7435,10 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             InstKind::BinOp {
                 op, left, right, ..
             } => {
-                let ty = self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
-                let exact = match ty {
-                    ty if crate::analysis::affine::exact_under_wrapping(ty) => true,
-                    Ty::Float => false,
+                let ty = *self.cfg.val_types.get(&inst_info::defs(kind)[0])?;
+                let exact = match self.types.kind(ty) {
+                    _ if crate::analysis::affine::exact_under_wrapping(self.types, ty) => true,
+                    TyKind::Float => false,
                     _ => return None,
                 };
                 let op = match op {
@@ -7491,7 +7506,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         if let Some(compare) = self.field_compare(op, left, right) {
             return self.field_select(select, *cond, compare);
         }
-        if !matches!(self.cfg.val_types.get(&left), Some(Ty::Int(_))) {
+        if !matches!(self.cfg.val_types.get(&left).map(|ty| self.types.kind(*ty)), Some(TyKind::Int(_))) {
             return None;
         }
         // The compare as `y ? s`, the value of the iteration on the left.
@@ -7698,7 +7713,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             y,
             y_first,
         } = compare;
-        if self.form(y)? != Form::Free || !matches!(self.cfg.val_types.get(&y), Some(Ty::Int(_))) {
+        if self.form(y)? != Form::Free || !matches!(self.cfg.val_types.get(&y).map(|ty| self.types.kind(*ty)), Some(TyKind::Int(_))) {
             return None;
         }
         let y_less_when_true = match (op, y_first) {
@@ -7941,8 +7956,8 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
             return false;
         };
         let shared = matches!(
-            self.cfg.val_types.get(&ra),
-            Some(Ty::Ref(crate::ty::Mutability::Shared, _))
+            self.cfg.val_types.get(&ra).map(|ty| self.types.kind(*ty)),
+            Some(TyKind::Ref(crate::ty::Mutability::Shared, _))
         );
         ra == rb && pa == pb && shared
     }

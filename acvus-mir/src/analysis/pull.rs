@@ -14,7 +14,9 @@ use crate::analysis::loops::{NaturalLoop, Term};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, InstKind, ValueId};
 use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
-use crate::ty::{Mutability, Ty};
+use crate::ir::fn_effect;
+use crate::ty::{Concrete, Mutability, Reissue, TyKind, Types};
+
 
 /// The call that made a pull loop's iterator, and the most iterations the
 /// loop runs: a term over that call's arguments as they stood when it ran.
@@ -67,7 +69,7 @@ pub fn bound(
                 left: PostTerm::Len(Subject::Ret),
                 relation: Relation::Eq | Relation::Le | Relation::Lt,
                 right,
-            } => over_args(cfg, right, made.args),
+            } => over_args(cfg, loans.layout().types, right, made.args),
             _ => None,
         })?;
     Some(PullBound {
@@ -99,15 +101,18 @@ pub fn runs_ahead(
     };
     let InstKind::FunctionCall {
         callee,
-        callee_ty: Ty::Fn { effect, .. },
+        callee_ty,
         order: None,
         ..
     } = pull
     else {
         return false;
     };
+    let Some(effect) = fn_effect(loans.layout().types, *callee_ty) else {
+        return false;
+    };
     laws.returns_of(callee).returns_or_traps()
-        && effect.get().is_pure()
+        && effect.reissue() == Reissue::Pure
         && !read_after_the_loop(cfg, loans, lend.iterator, loop_blocks)
 }
 
@@ -265,14 +270,14 @@ fn making_call(cfg: &CfgBody, value: ValueId) -> Option<MakingCall<'_>> {
     })
 }
 
-fn over_args(cfg: &CfgBody, term: &PostTerm, args: &[ValueId]) -> Option<Term> {
-    let over = |term: &PostTerm| over_args(cfg, term, args);
+fn over_args(cfg: &CfgBody, types: &Types<Concrete>, term: &PostTerm, args: &[ValueId]) -> Option<Term> {
+    let over = |term: &PostTerm| over_args(cfg, types, term, args);
     Some(match term {
         PostTerm::Const(value) => Term::int(*value),
         PostTerm::Param(at) => {
             let arg = *args.get(*at)?;
-            match cfg.val_types.get(&arg)? {
-                Ty::Int(_) => Term::Value(arg),
+            match types.kind(*cfg.val_types.get(&arg)?) {
+                TyKind::Int(_) => Term::Value(arg),
                 _ => return None,
             }
         }

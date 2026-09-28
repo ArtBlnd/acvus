@@ -22,22 +22,30 @@ use crate::analysis::loans::Loans;
 use crate::analysis::loops::natural_loops_innermost_first;
 use crate::cfg::{self, CfgBody};
 use acvus_utils::QualifiedRef;
-use crate::ir::{BinOp, Callee, IndexBound, InstKind, MirBody};
+use crate::decl::Declarations;
+use crate::ir::{BinOp, Callee, IndexBound, InstKind, MirModule};
 use crate::laws::LawTable;
 use crate::optimize::ssa_pass;
-use crate::ty::Ty;
+use crate::ty::{Concrete, Ty, TyKind, Types};
 
 pub struct Removal<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
     laws: &'a LawTable,
     functions: &'a FunctionSummary,
     untrapping: OnceCell<FxHashSet<InstAt>>,
 }
 
 impl<'a> Removal<'a> {
-    pub fn of(cfg: &'a CfgBody, laws: &'a LawTable, functions: &'a FunctionSummary) -> Self {
+    pub fn of(
+        cfg: &'a CfgBody,
+        types: &'a Types<Concrete>,
+        laws: &'a LawTable,
+        functions: &'a FunctionSummary,
+    ) -> Self {
         Removal {
             cfg,
+            types,
             laws,
             functions,
             untrapping: OnceCell::new(),
@@ -54,7 +62,12 @@ impl<'a> Removal<'a> {
                 op: BinOp::Div | BinOp::Mod,
                 left,
                 ..
-            } => matches!(self.cfg.val_types.get(left), Some(Ty::Int(_))) && !self.ruled_out(at),
+            } => {
+                matches!(
+                    self.cfg.val_types.get(left).map(|ty| self.types.kind(*ty)),
+                    Some(TyKind::Int(_))
+                ) && !self.ruled_out(at)
+            }
             InstKind::Index {
                 bound: IndexBound::Checked,
                 ..
@@ -68,12 +81,12 @@ impl<'a> Removal<'a> {
             }
             | InstKind::Spawn {
                 callee, callee_ty, ..
-            } => self.call_can_raise(callee, callee_ty),
+            } => self.call_can_raise(callee, *callee_ty),
             InstKind::Check { .. }
             | InstKind::CheckSteps { .. }
             | InstKind::Fetch { .. }
             | InstKind::Commit { .. }
-            | InstKind::Eval { .. } => true,
+            | InstKind::TakeEffect { .. } => true,
             // A push writes into the capacity its `ArrayBegin` allocated, or
             // grows it, and neither traps.
             InstKind::ArrayBegin { .. } | InstKind::ArrayPush { .. } => false,
@@ -83,12 +96,12 @@ impl<'a> Removal<'a> {
 
     fn ruled_out(&self, at: InstAt) -> bool {
         self.untrapping
-            .get_or_init(|| untrapping(self.cfg, self.laws))
+            .get_or_init(|| untrapping(self.cfg, self.types, self.laws))
             .contains(&at)
     }
 
-    fn call_can_raise(&self, callee: &Callee, callee_ty: &Ty) -> bool {
-        if matches!(callee_ty, Ty::Fn { ret, .. } if matches!(**ret, Ty::Never)) {
+    fn call_can_raise(&self, callee: &Callee, callee_ty: Ty) -> bool {
+        if matches!(self.types.kind(callee_ty), TyKind::Fn { ret, .. } if matches!(self.types.kind(*ret), TyKind::Never)) {
             return true;
         }
         match callee {
@@ -109,7 +122,7 @@ pub fn finishes(kind: &InstKind, laws: &LawTable, functions: &FunctionSummary) -
             Callee::Direct(function) => functions.finishes(function),
             Callee::Indirect(_) => false,
         },
-        InstKind::Eval { .. } => false,
+        InstKind::TakeEffect { .. } => false,
         _ => true,
     }
 }
@@ -126,12 +139,13 @@ impl FunctionSummary {
     }
 
     pub fn of<'m>(
-        callees_first: impl IntoIterator<Item = (QualifiedRef, &'m MirBody)>,
+        callees_first: impl IntoIterator<Item = (QualifiedRef, &'m MirModule)>,
+        decls: &Declarations,
         laws: &LawTable,
     ) -> Self {
         let mut this = Self::unknown();
-        for (function, main) in callees_first {
-            this.offer(function, main, laws);
+        for (function, module) in callees_first {
+            this.offer(function, module, decls, laws);
         }
         this
     }
@@ -146,10 +160,11 @@ impl FunctionSummary {
 
     /// `back_edges` refuses irreducible control flow, so every cycle of the
     /// body is one of the natural loops read here.
-    fn offer(&mut self, function: QualifiedRef, main: &MirBody, laws: &LawTable) {
-        let mut cfg = cfg::promote(main.clone());
+    fn offer(&mut self, function: QualifiedRef, module: &MirModule, decls: &Declarations, laws: &LawTable) {
+        let types = &module.types;
+        let mut cfg = cfg::promote(module.main.clone());
         ssa_pass::run(&mut cfg);
-        let removal = Removal::of(&cfg, laws, self);
+        let removal = Removal::of(&cfg, types, laws, self);
         let insts = || {
             cfg.blocks.iter().enumerate().flat_map(|(b, block)| {
                 block.insts.iter().enumerate().map(move |(at, inst)| {
@@ -167,11 +182,12 @@ impl FunctionSummary {
         let loans = loops
             .iter()
             .any(|loop_| loop_.is_while(&cfg))
-            .then(|| Loans::build(&cfg));
+            .then(|| Loans::build(&cfg, types, decls));
         let finishes = loops.iter().all(|loop_| {
             !loop_.is_while(&cfg)
                 || loans.as_ref().is_some_and(|loans| {
                     crate::analysis::pull::bound(&cfg, laws, loans, &domtree, loop_).is_some()
+
                 })
         }) && insts().all(|(_, kind)| finishes(kind, laws, self));
         if !raises {

@@ -139,7 +139,7 @@ fn escaping_uses(kind: &InstKind, out: &mut impl FnMut(ValueId)) {
         | InstKind::Index {
             slice: borrowed, ..
         }
-        | InstKind::Eval { src: borrowed, .. } => out(*borrowed),
+        | InstKind::TakeEffect { src: borrowed, .. } => out(*borrowed),
 
         // The instruction reads its operands and hands them nowhere; a
         // block argument stays inside the body.

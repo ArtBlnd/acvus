@@ -7,7 +7,9 @@ use crate::analysis::inst_info;
 use crate::analysis::loans::{Loans, StorageEffect};
 use crate::cfg::{BlockIdx, CfgBody};
 use crate::ir::{ForSource, InstKind, RefTarget, ValueId};
-use crate::ty::Mutability;
+use crate::ir::is_word;
+use crate::ty::{Concrete, Mutability, Types};
+
 
 /// What a write to a slot live at the header changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,14 +90,14 @@ pub fn touched_slots(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {
 /// since a take may empty its slot, and a word's leaves it holding the word.
 pub fn effect(loans: &Loans<'_>, kind: &InstKind) -> StorageEffect {
     let mut effect = loans.storage_effect(kind);
-    if copies_a_word(loans.cfg(), kind) {
+    if copies_a_word(loans.cfg(), loans.layout().types, kind) {
         let written = std::mem::take(&mut effect.writes);
         effect.reads.extend(written);
     }
     effect
 }
 
-fn copies_a_word(cfg: &CfgBody, kind: &InstKind) -> bool {
+fn copies_a_word(cfg: &CfgBody, types: &Types<Concrete>, kind: &InstKind) -> bool {
     let InstKind::Take {
         dst,
         taken_out: false,
@@ -104,7 +106,7 @@ fn copies_a_word(cfg: &CfgBody, kind: &InstKind) -> bool {
     else {
         return false;
     };
-    cfg.val_types.get(dst).and_then(|ty| ty.is_word()) == Some(true)
+    cfg.val_types.get(dst).is_some_and(|ty| is_word(types, *ty))
 }
 
 pub fn slots_lent_mutably(loans: &Loans<'_>, kind: &InstKind) -> Vec<ValueId> {

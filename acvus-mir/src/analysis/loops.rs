@@ -50,7 +50,9 @@ use crate::analysis::loans::Loans;
 use crate::analysis::targets;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, ExitTrip, ForSource, InstKind, Label, ValueId};
-use crate::ty::{Mutability, Ty};
+use crate::decl::Declarations;
+use crate::ir::is_word;
+use crate::ty::{Concrete, Mutability, Types};
 use acvus_ast::Literal;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -241,7 +243,7 @@ pub struct Invariants {
 }
 
 impl Invariants {
-    pub fn of(cfg: &CfgBody) -> Self {
+    pub fn of(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations) -> Self {
         let words = cfg
             .blocks
             .iter()
@@ -263,7 +265,7 @@ impl Invariants {
         if loops.is_empty() {
             return invariants;
         }
-        let loans = Loans::build(cfg);
+        let loans = Loans::build(cfg, types, decls);
         for loop_ in &loops {
             let standing = invariants.standing_in(cfg, &loans, loop_);
             invariants.standing.insert(loop_.header, standing);
@@ -282,7 +284,11 @@ impl Invariants {
             .flat_map(|block| cfg.blocks[block.0].insts.iter())
             .filter_map(|inst| {
                 let dst = standing_operation(&inst.kind)?;
-                let is_word = cfg.val_types.get(&dst).and_then(Ty::is_word) == Some(true);
+                let is_word = cfg
+                    .val_types
+                    .get(&dst)
+                    .is_some_and(|ty| is_word(loans.layout().types, *ty));
+
                 (is_word && touches_none_of(loans, &inst.kind, &written)).then_some((dst, &inst.kind))
             })
             .collect();
@@ -840,7 +846,6 @@ mod tests {
             params: Vec::new(),
             captures: Vec::new(),
             order_param: None,
-            task: crate::ty::Task::Sync,
             debug: DebugInfo::new(),
             val_factory: factory,
             label_count: 0,
@@ -924,7 +929,7 @@ mod tests {
     fn a_value_defined_above_the_header_is_invariant() {
         let cfg = nested_loops();
         let domtree = DomTree::build(&cfg);
-        let invariants = Invariants::of(&cfg);
+        let invariants = Invariants::of(&cfg, types, decls);
         for loop_ in natural_loops_innermost_first(&cfg, &domtree) {
             assert_eq!(invariants.above(&loop_, v(0)), Some(Invariant::Outside(v(0))));
         }

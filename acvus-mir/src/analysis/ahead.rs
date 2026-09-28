@@ -18,7 +18,11 @@ use crate::analysis::raise::{FunctionSummary, Removal};
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, ForSource, InstKind, ValueId};
 use crate::laws::LawTable;
-use crate::ty::Task;
+use crate::optimize::spawn_split::splits;
+use crate::decl::Declarations;
+use crate::ty::{Concrete, Types};
+
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lowering {
@@ -63,7 +67,6 @@ pub struct Plan {
     /// the parameters of the blocks it enters included, and `laid` not:
     /// what `prepare` holds dead at `body` (RFC-0103 rule 4).
     pub written: Vec<ValueId>,
-    pub task: Task,
 }
 
 /// A range's element is its counter.
@@ -83,7 +86,6 @@ pub enum RestStart {
 pub struct AheadSpawn {
     pub at: InstAt,
     pub handle: ValueId,
-    pub task: Task,
 }
 
 /// Decides each loop of one body. A prefix instruction is asked of
@@ -91,14 +93,18 @@ pub struct AheadSpawn {
 /// is the body's own.
 pub struct Lowerer<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
+    decls: &'a Declarations,
     laws: &'a LawTable,
     loops: Vec<NaturalLoop>,
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn of(cfg: &'a CfgBody, laws: &'a LawTable) -> Self {
+    pub fn of(cfg: &'a CfgBody, types: &'a Types<Concrete>, decls: &'a Declarations, laws: &'a LawTable) -> Self {
         Self {
             cfg,
+            types,
+            decls,
             laws,
             loops: natural_loops_innermost_first(cfg, &DomTree::build(cfg)),
         }
@@ -143,7 +149,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let stage = &deps.membership.stages()[first];
-        let units = straight_run(cfg, stage);
+        let units = straight_run(cfg, self.types, stage);
         let Some(last) = units
             .iter()
             .rposition(|step| step.insts().any(|at| self.ahead_spawn(at).is_some()))
@@ -179,7 +185,7 @@ impl<'a> Lowerer<'a> {
         let spawns: Vec<AheadSpawn> = insts().filter_map(|at| self.ahead_spawn(at)).collect();
 
         let summary = FunctionSummary::unknown();
-        let removal = Removal::of(cfg, self.laws, &summary);
+        let removal = Removal::of(cfg, self.types, self.laws, &summary);
         let may_trap = |at: InstAt| {
             let at = interval::InstAt {
                 block: at.block,
@@ -239,10 +245,6 @@ impl<'a> Lowerer<'a> {
             return Err(Refused::EffectBeforeExit(at));
         }
 
-        let task = spawns
-            .iter()
-            .map(|spawn| spawn.task)
-            .fold(Task::Async, Task::join);
         Ok(Plan {
             body,
             laid,
@@ -250,36 +252,28 @@ impl<'a> Lowerer<'a> {
             rest,
             spawns,
             written,
-            task,
         })
     }
 
     fn ahead_spawn(&self, at: InstAt) -> Option<AheadSpawn> {
         let InstKind::Spawn {
             dst,
-            callee: callee @ Callee::Extern { .. },
+            callee: Callee::Extern { .. },
             ..
         } = &self.cfg.blocks[at.block.0].insts[at.at].kind
         else {
             return None;
         };
-        let task = self.laws.task_of(callee).filter(|task| *task > Task::Sync)?;
-        Some(AheadSpawn {
-            at,
-            handle: *dst,
-            task,
-        })
+        Some(AheadSpawn { at, handle: *dst })
     }
 }
 
-/// A callee type that is no function type states no task, and is taken
-/// to suspend.
-fn suspends(kind: &InstKind) -> bool {
+/// A taking suspends, and so does a call that may be split and was not
+/// (effects §6).
+pub(crate) fn suspends(types: &Types<Concrete>, kind: &InstKind) -> bool {
     match kind {
-        InstKind::Eval { .. } => true,
-        InstKind::FunctionCall { callee_ty, .. } => {
-            callee_ty.effect().is_none_or(|effect| effect.task > Task::Sync)
-        }
+        InstKind::TakeEffect { .. } => true,
+        InstKind::FunctionCall { callee_ty, .. } => splits(types, *callee_ty),
         _ => false,
     }
 }
@@ -353,19 +347,19 @@ impl RunStep {
     }
 }
 
-fn straight_run(cfg: &CfgBody, stage: &StageBlocks) -> Vec<RunStep> {
+fn straight_run(cfg: &CfgBody, types: &Types<Concrete>, stage: &StageBlocks) -> Vec<RunStep> {
     let preds = cfg.predecessors();
     let mut units = Vec::new();
     let mut block = stage.entry_block;
     loop {
         for (at, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
-            if suspends(&inst.kind) {
+            if suspends(types, &inst.kind) {
                 return units;
             }
             units.push(RunStep::Inst(InstAt { block, at }));
         }
         let next = match &cfg.blocks[block.0].terminator {
-            Terminator::Diamond { .. } => match Region::rejoining(cfg, stage, block) {
+            Terminator::Diamond { .. } => match Region::rejoining(cfg, types, stage, block) {
                 Some(region) => {
                     let join = region.join;
                     units.push(RunStep::Region(region));
@@ -387,11 +381,11 @@ fn straight_run(cfg: &CfgBody, stage: &StageBlocks) -> Vec<RunStep> {
 }
 
 impl Region {
-    fn rejoining(cfg: &CfgBody, stage: &StageBlocks, branch: BlockIdx) -> Option<Region> {
-        acvus_utils::grow(|| Self::rejoining_level(cfg, stage, branch))
+    fn rejoining(cfg: &CfgBody, types: &Types<Concrete>, stage: &StageBlocks, branch: BlockIdx) -> Option<Region> {
+        acvus_utils::grow(|| Self::rejoining_level(cfg, types, stage, branch))
     }
 
-    fn rejoining_level(cfg: &CfgBody, stage: &StageBlocks, branch: BlockIdx) -> Option<Region> {
+    fn rejoining_level(cfg: &CfgBody, types: &Types<Concrete>, stage: &StageBlocks, branch: BlockIdx) -> Option<Region> {
         let Terminator::Diamond {
             then_label,
             else_label,
@@ -415,7 +409,7 @@ impl Region {
                 }
                 entered.push(block);
                 for (at, inst) in cfg.blocks[block.0].insts.iter().enumerate() {
-                    if suspends(&inst.kind) {
+                    if suspends(types, &inst.kind) {
                         return None;
                     }
                     members.push(Member::Inst(InstAt { block, at }));
@@ -426,7 +420,7 @@ impl Region {
                         *cfg.label_to_block.get(label)?
                     }
                     Terminator::Diamond { .. } => {
-                        let inner = Region::rejoining(cfg, stage, block)?;
+                        let inner = Region::rejoining(cfg, types, stage, block)?;
                         members.push(Member::Term(inner.branch));
                         members.extend(inner.members);
                         entered.extend(inner.entered_blocks);

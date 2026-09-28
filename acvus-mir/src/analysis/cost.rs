@@ -25,7 +25,9 @@ use crate::analysis::pull;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, ValueId};
 use crate::laws::LawTable;
-use crate::ty::{Task, Ty};
+use crate::decl::Declarations;
+use crate::ty::{Concrete, Types};
+
 
 /// A backend's weights in ticks, one row per operation family RFC-0066
 /// rule 8 lists, and the `k` its split compares against.
@@ -38,8 +40,6 @@ pub struct CostTable {
     pub allocation: u64,
     pub local_call: u64,
     pub extern_call: u64,
-    /// An extern call whose settled task is `Heavy` (RFC-0046).
-    pub heavy: u64,
     pub spawn: u64,
     pub merge: u64,
     /// One synchronous executor call that runs a chunk, which is how a
@@ -102,6 +102,8 @@ const UNKNOWN: u64 = 0;
 
 pub struct Costs<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
+    decls: &'a Declarations,
     laws: &'a LawTable,
     table: &'a CostTable,
     nest: LoopNest,
@@ -113,8 +115,14 @@ pub struct Costs<'a> {
 }
 
 impl<'a> Costs<'a> {
-    pub fn of(cfg: &'a CfgBody, laws: &'a LawTable, table: &'a CostTable) -> Self {
-        let nest = LoopNest::of(cfg, &DomTree::build(cfg), &Invariants::of(cfg));
+    pub fn of(
+        cfg: &'a CfgBody,
+        types: &'a Types<Concrete>,
+        decls: &'a Declarations,
+        laws: &'a LawTable,
+        table: &'a CostTable,
+    ) -> Self {
+        let nest = LoopNest::of(cfg, &DomTree::build(cfg), &Invariants::of(cfg, types, decls));
         let mut definitions: FxHashMap<ValueId, usize> = FxHashMap::default();
         let defined = cfg.blocks.iter().flat_map(|block| {
             block
@@ -137,9 +145,11 @@ impl<'a> Costs<'a> {
                 _ => None,
             })
             .collect();
-        let pull_counts = pull_counts(cfg, laws);
+        let pull_counts = pull_counts(cfg, types, decls, laws);
         Self {
             cfg,
+            types,
+            decls,
             laws,
             table,
             nest,
@@ -175,7 +185,7 @@ impl<'a> Costs<'a> {
             return LoopCost::InPlace(InPlace::CountUnknown);
         }
         let stages = deps.membership.stages();
-        let judged = deps.judge(self.cfg, self.laws);
+        let judged = deps.judge(self.cfg, self.types, self.decls, self.laws);
         let runs_apart = |stage: usize| {
             deps.cycles
                 .iter()
@@ -219,9 +229,15 @@ impl<'a> Costs<'a> {
     /// 10); one merge; and one buffered element per boundary between two
     /// stages.
     fn overhead(&self, stages: &[StageBlocks]) -> u128 {
-        let dispatch = match self.cfg.task {
-            Task::Sync => self.table.chunk_dispatch,
-            Task::Async | Task::Heavy => self.table.spawn,
+        let suspends = self
+            .cfg
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .any(|inst| crate::analysis::ahead::suspends(self.types, &inst.kind));
+        let dispatch = match suspends {
+            false => self.table.chunk_dispatch,
+            true => self.table.spawn,
         };
         stages
             .windows(2)
@@ -443,7 +459,7 @@ impl<'a> Costs<'a> {
             | InstKind::MakeVariant { .. } => table.allocation,
             // A word, a `ConstStr` (the prepared code owns the text, the
             // constant being its pointer and length, RFC-0062 rule 2), an
-            // `Eval` (its call is weighed at its `Spawn`), a `Drop` and a
+            // `TakeEffect` (its call is weighed at its `Spawn`), a `Drop` and a
             // marker have no row, and rule 8 weighs an operation with no row
             // as nothing.
             InstKind::Const { value, .. } => match value {
@@ -457,15 +473,9 @@ impl<'a> Costs<'a> {
                 | Literal::Unit => 0,
             },
             InstKind::ConstStr { .. } => 0,
-            InstKind::FunctionCall {
-                callee, callee_ty, ..
-            } => self.call_weight(callee, callee_ty),
-            InstKind::Spawn {
-                callee, callee_ty, ..
-            } => table
-                .spawn
-                .saturating_add(self.call_weight(callee, callee_ty)),
-            InstKind::Eval { .. } => 0,
+            InstKind::FunctionCall { callee, .. } => self.call_weight(callee),
+            InstKind::Spawn { callee, .. } => table.spawn.saturating_add(self.call_weight(callee)),
+            InstKind::TakeEffect { .. } => 0,
             InstKind::Merge { .. } => table.merge,
             InstKind::Drop { .. } => 0,
             InstKind::BlockLabel { .. }
@@ -479,24 +489,13 @@ impl<'a> Costs<'a> {
         }
     }
 
-    /// An extern weighs what the instance the call names states, and
-    /// otherwise its family's row by the call's settled task (RFC-0046
-    /// rule 9).
-    fn call_weight(&self, callee: &Callee, callee_ty: &Ty) -> u64 {
+    /// A call weighs its family's row (RFC-0066 rule 8). The cost a
+    /// declaration states of a split call is the backend's, which no pass
+    /// reads (effects §6).
+    fn call_weight(&self, callee: &Callee) -> u64 {
         match callee {
             Callee::Direct(_) | Callee::Indirect(_) => self.table.local_call,
-            Callee::Extern { .. } => match self.laws.cost_of(callee) {
-                Some(stated) => stated,
-                None => {
-                    let Some(effect) = callee_ty.effect() else {
-                        panic!("a call's callee type is a function type, and {callee_ty:?} is not")
-                    };
-                    match effect.task {
-                        Task::Heavy => self.table.heavy,
-                        Task::Sync | Task::Async => self.table.extern_call,
-                    }
-                }
-            },
+            Callee::Extern { .. } => self.table.extern_call,
         }
     }
 }
@@ -515,7 +514,7 @@ fn integer(literal: &Literal) -> Option<i128> {
     }
 }
 
-fn pull_counts(cfg: &CfgBody, laws: &LawTable) -> FxHashMap<BlockIdx, Term> {
+fn pull_counts(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations, laws: &LawTable) -> FxHashMap<BlockIdx, Term> {
     let domtree = DomTree::build(cfg);
     let pulls: Vec<NaturalLoop> = natural_loops_innermost_first(cfg, &domtree)
         .into_iter()
@@ -524,7 +523,7 @@ fn pull_counts(cfg: &CfgBody, laws: &LawTable) -> FxHashMap<BlockIdx, Term> {
     if pulls.is_empty() {
         return FxHashMap::default();
     }
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
     pulls
         .iter()
         .filter_map(|natural| {

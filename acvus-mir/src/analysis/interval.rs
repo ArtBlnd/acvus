@@ -24,7 +24,9 @@ use crate::analysis::inst_info;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, InstKind, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
-use crate::ty::{IntTy, LenTerm, Mutability, Ty};
+use crate::ir::known_len;
+use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
+
 
 /// How many endpoints a proof follows from the index to a length. A chain
 /// longer than this is left checked; it is a bound on the work, and a cycle
@@ -433,9 +435,9 @@ pub struct InstAt {
 
 /// The `Index` and `IndexSet` instructions of `cfg` whose index the
 /// interval domain puts below their slice's length.
-pub fn bounded_indices(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
+pub fn bounded_indices(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable) -> FxHashSet<InstAt> {
     let mut bounded = FxHashSet::default();
-    let domain = Domain::new(cfg, laws);
+    let domain = Domain::new(cfg, types, laws);
     domain.visit_with_facts_before(|at, kind, facts| {
         if domain.index_below_len(kind, facts) {
             bounded.insert(at);
@@ -446,11 +448,11 @@ pub fn bounded_indices(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
 
 /// The instructions of `cfg` whose trap the interval domain rules out
 /// (RFC-0037 rule 2, RFC-0047 rule 7).
-pub fn untrapping(cfg: &CfgBody, laws: &LawTable) -> FxHashSet<InstAt> {
+pub fn untrapping(cfg: &CfgBody, types: &Types<Concrete>, laws: &LawTable) -> FxHashSet<InstAt> {
     let mut untrapping = FxHashSet::default();
-    let domain = Domain::new(cfg, laws);
+    let domain = Domain::new(cfg, types, laws);
     domain.visit_with_facts_before(|at, kind, facts| {
-        if domain.index_below_len(kind, facts) || division_defined(cfg, kind, facts) {
+        if domain.index_below_len(kind, facts) || division_defined(cfg, types, kind, facts) {
             untrapping.insert(at);
         }
     });
@@ -476,11 +478,12 @@ impl ConstantBounds {
 /// is its literal there whatever a test assumed of it.
 pub fn constant_bounds_on_entry(
     cfg: &CfgBody,
+    types: &Types<Concrete>,
     laws: &LawTable,
     block: BlockIdx,
     values: &[ValueId],
 ) -> Vec<ConstantBounds> {
-    let domain = Domain::new(cfg, laws);
+    let domain = Domain::new(cfg, types, laws);
     let entries = domain.fixpoint();
     let Some(mut facts) = entries[block.0].clone() else {
         return vec![ConstantBounds::default(); values.len()];
@@ -501,7 +504,7 @@ pub fn constant_bounds_on_entry(
         .collect()
 }
 
-fn division_defined(cfg: &CfgBody, kind: &InstKind, facts: &Facts) -> bool {
+fn division_defined(cfg: &CfgBody, types: &Types<Concrete>, kind: &InstKind, facts: &Facts) -> bool {
     let InstKind::BinOp {
         op: BinOp::Div | BinOp::Mod,
         left,
@@ -511,7 +514,7 @@ fn division_defined(cfg: &CfgBody, kind: &InstKind, facts: &Facts) -> bool {
     else {
         return false;
     };
-    let Some(Ty::Int(width)) = cfg.val_types.get(left) else {
+    let Some(TyKind::Int(width)) = cfg.val_types.get(left).map(|ty| types.kind(*ty)) else {
         return false;
     };
     let no_overflow =
@@ -519,19 +522,20 @@ fn division_defined(cfg: &CfgBody, kind: &InstKind, facts: &Facts) -> bool {
     facts.excludes(*right, 0) && no_overflow
 }
 
-fn array_len(container: &Ty) -> Option<u64> {
-    let array = match container {
-        Ty::Ref(_, referent) => referent.ty().into_owned(),
-        other => other.clone(),
+fn array_len(types: &Types<Concrete>, container: Ty) -> Option<u64> {
+    let array = match types.kind(container) {
+        TyKind::Ref(_, referent) => referent.ty(),
+        _ => container,
     };
-    match array {
-        Ty::Array(_, LenTerm::Known(len)) => u64::try_from(len).ok(),
+    match types.kind(array) {
+        TyKind::Array(_, len) => u64::try_from(known_len(len)).ok(),
         _ => None,
     }
 }
 
 struct Domain<'a> {
     cfg: &'a CfgBody,
+    types: &'a Types<Concrete>,
     laws: &'a LawTable,
     /// Each reference a `Ref` made of a variable or a parameter, to the
     /// first reference made of the same target and path: two references of
@@ -582,7 +586,8 @@ enum Supplied {
 }
 
 impl<'a> Domain<'a> {
-    fn new(cfg: &'a CfgBody, laws: &'a LawTable) -> Self {
+    fn new(cfg: &'a CfgBody, types: &'a Types<Concrete>, laws: &'a LawTable) -> Self {
+
         let mut first: FxHashMap<Storage, ValueId> = FxHashMap::default();
         let mut same_storage = FxHashMap::default();
         for inst in cfg.blocks.iter().flat_map(|block| &block.insts) {
@@ -607,15 +612,17 @@ impl<'a> Domain<'a> {
             .flat_map(|block| &block.insts)
             .filter_map(|inst| match &inst.kind {
                 InstKind::AsSlice { dst, container, .. } => {
-                    Some((*dst, array_len(cfg.val_types.get(container)?)?))
+                    Some((*dst, array_len(types, *cfg.val_types.get(container)?)?))
                 }
                 _ => None,
             })
             .collect();
         Domain {
             cfg,
+            types,
             laws,
             same_storage,
+
             array_slice_lens,
         }
     }
@@ -654,18 +661,18 @@ impl<'a> Domain<'a> {
     }
 
     fn int_ty(&self, value: ValueId) -> Option<IntTy> {
-        match self.cfg.val_types.get(&value) {
-            Some(Ty::Int(t)) => Some(*t),
+        match self.cfg.val_types.get(&value).map(|ty| self.types.kind(*ty)) {
+            Some(TyKind::Int(t)) => Some(*t),
             _ => None,
         }
     }
 
     fn reference(&self, value: ValueId) -> Option<Referent> {
-        let Some(Ty::Ref(_, inner)) = self.cfg.val_types.get(&value) else {
+        let Some(TyKind::Ref(_, inner)) = self.cfg.val_types.get(&value).map(|ty| self.types.kind(*ty)) else {
             return None;
         };
-        match &*inner.ty() {
-            Ty::Slice(_) => Some(Referent::Slice),
+        match self.types.kind(inner.ty()) {
+            TyKind::Slice(_) => Some(Referent::Slice),
             _ => Some(Referent::Container),
         }
     }
@@ -685,7 +692,7 @@ impl<'a> Domain<'a> {
             } => !args.iter().all(|arg| self.only_reads(*arg)),
             InstKind::FunctionCall { .. }
             | InstKind::Spawn { .. }
-            | InstKind::Eval { .. }
+            | InstKind::TakeEffect { .. }
             | InstKind::Merge { .. }
             | InstKind::Assign { .. }
             | InstKind::Take { .. }
@@ -746,14 +753,14 @@ impl<'a> Domain<'a> {
     /// cannot write through.
     fn only_reads(&self, value: ValueId) -> bool {
         matches!(
-            self.cfg.val_types.get(&value),
+            self.cfg.val_types.get(&value).map(|ty| self.types.kind(*ty)),
             Some(
-                Ty::Int(_)
-                    | Ty::Float
-                    | Ty::Bool
-                    | Ty::Char
-                    | Ty::Unit
-                    | Ty::Ref(Mutability::Shared, _)
+                TyKind::Int(_)
+                    | TyKind::Float
+                    | TyKind::Bool
+                    | TyKind::Char
+                    | TyKind::Unit
+                    | TyKind::Ref(Mutability::Shared, _)
             )
         )
     }

@@ -28,7 +28,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::inst_info;
 use crate::cfg::{CfgBody, Terminator, reachable};
 use crate::ir::{InstKind, Label, PathSeg, RefTarget, SwitchKey, ValueId};
-use crate::ty::{Mutability, Ty};
+use crate::ty::{Concrete, Mutability, Ty, TyKind, Types};
 
 /// A value every run gives, or the referent every run names.
 #[derive(Debug, Clone, PartialEq)]
@@ -126,9 +126,9 @@ impl Word {
     /// The word `prepare::constant` writes for `value` at `ty`. A list is
     /// not a word, and an integer the checker did not type as one is not
     /// a constant the machine builds.
-    fn of_constant(value: &Literal, ty: &Ty) -> Option<Word> {
+    fn of_constant(value: &Literal, ty: &TyKind<Concrete>) -> Option<Word> {
         match (value.desugared(), ty) {
-            (Literal::Int(n), Ty::Int(width)) => Some(Word::Int(width.read(register_word(n)))),
+            (Literal::Int(n), TyKind::Int(width)) => Some(Word::Int(width.read(register_word(n)))),
             (Literal::Float(x), _) => Some(Word::Float(x.to_bits())),
             (Literal::Bool(b), _) => Some(Word::Bool(b)),
             (Literal::Char(c), _) => Some(Word::Char(c)),
@@ -183,7 +183,7 @@ struct OptionTags {
 }
 
 impl KnownValues {
-    pub fn of(interner: &Interner, cfg: &CfgBody) -> KnownValues {
+    pub fn of(interner: &Interner, cfg: &CfgBody, types: &Types<Concrete>) -> KnownValues {
         let alive = reachable(cfg);
         let once = defined_once(cfg);
         let slots = Slots::of(cfg);
@@ -222,7 +222,7 @@ impl KnownValues {
                     if known.values.contains_key(&dst) || !once.contains(&dst) {
                         continue;
                     }
-                    if let Some(value) = known.eval(cfg, &slots, &tags, &inst.kind) {
+                    if let Some(value) = known.eval(cfg, types, &slots, &tags, &inst.kind) {
                         known.values.insert(dst, value);
                         changed = true;
                     }
@@ -246,25 +246,26 @@ impl KnownValues {
     pub fn switch_key(
         &self,
         interner: &Interner,
+        types: &Types<Concrete>,
         tag: ValueId,
-        tag_ty: &Ty,
+        tag_ty: Ty,
         kind: SwitchKey,
     ) -> Option<SwitchKey> {
         match (kind, self.values.get(&tag)?) {
-            (SwitchKey::Tag(_), Known::Variant { tag, .. }) => match scrutinee(tag_ty).as_ref() {
-                Ty::Option(_) | Ty::Result(..) | Ty::Enum { .. } => Some(SwitchKey::Tag(*tag)),
+            (SwitchKey::Tag(_), Known::Variant { tag, .. }) => match scrutinee(types, tag_ty) {
+                TyKind::Option(_) | TyKind::Result(..) | TyKind::Enum { .. } => Some(SwitchKey::Tag(*tag)),
                 _ => None,
             },
-            (SwitchKey::Int(_), Known::Word(Word::Int(n))) => match tag_ty {
-                Ty::Int(_) => Some(SwitchKey::Int(*n)),
+            (SwitchKey::Int(_), Known::Word(Word::Int(n))) => match types.kind(tag_ty) {
+                TyKind::Int(_) => Some(SwitchKey::Int(*n)),
                 _ => None,
             },
-            (SwitchKey::Char(_), Known::Word(Word::Char(c))) => match tag_ty {
-                Ty::Char => Some(SwitchKey::Char(*c)),
+            (SwitchKey::Char(_), Known::Word(Word::Char(c))) => match types.kind(tag_ty) {
+                TyKind::Char => Some(SwitchKey::Char(*c)),
                 _ => None,
             },
-            (SwitchKey::Bool(_), Known::Word(Word::Bool(b))) => match tag_ty {
-                Ty::Bool => Some(SwitchKey::Bool(*b)),
+            (SwitchKey::Bool(_), Known::Word(Word::Bool(b))) => match types.kind(tag_ty) {
+                TyKind::Bool => Some(SwitchKey::Bool(*b)),
                 _ => None,
             },
             (SwitchKey::Str(_), Known::Text(text)) => Some(SwitchKey::Str(interner.intern(text))),
@@ -289,12 +290,13 @@ impl KnownValues {
     fn eval(
         &self,
         cfg: &CfgBody,
+        types: &Types<Concrete>,
         slots: &Slots,
         tags: &OptionTags,
         kind: &InstKind,
     ) -> Option<Known> {
         let known = |v: &ValueId| self.values.get(v);
-        let ty = |v: &ValueId| cfg.val_types.get(v);
+        let ty = |v: &ValueId| cfg.val_types.get(v).map(|ty| types.kind(*ty));
         match kind {
             InstKind::Const {
                 value: Literal::String(text),
@@ -330,7 +332,7 @@ impl KnownValues {
                 // an `Option` from whether a payload is present and
                 // `prepare::lay_variant` from the tag, so only a value on
                 // which the two agree is known, and a test may read either.
-                if let Ty::Option(_) = ty(dst)? {
+                if let TyKind::Option(_) = ty(dst)? {
                     let some = *tag == tags.some && payload.is_some();
                     let none = *tag == tags.none && payload.is_none();
                     if !(some || none) {
@@ -359,10 +361,10 @@ impl KnownValues {
                 // Decision: a reference to a place that holds a reference is
                 // not known. `Known` holds one referent, and a reader of
                 // such a value would strip one level where two are stacked.
-                let Ty::Ref(_, place) = ty(dst)? else {
+                let TyKind::Ref(_, place) = ty(dst)? else {
                     return None;
                 };
-                if let Ty::Ref(..) = place.ty().as_ref() {
+                if let TyKind::Ref(..) = types.kind(place.ty()) {
                     return None;
                 }
                 self.place(slots, target)?.at(path)
@@ -373,16 +375,16 @@ impl KnownValues {
                 let Known::Variant { tag: held, payload } = known(src)? else {
                     return None;
                 };
-                let matches = match scrutinee(ty(src)?).as_ref() {
+                let matches = match scrutinee(types, *cfg.val_types.get(src)?) {
                     // `ops::variant::TestOption` compares whether the value
                     // is a `Some` with whether the tested tag is `Some`. The
                     // lowering tests an `Option` for `Some` or `None` only,
                     // and any other tag is left unfolded.
-                    Ty::Option(_) if *tag == tags.some || *tag == tags.none => {
+                    TyKind::Option(_) if *tag == tags.some || *tag == tags.none => {
                         payload.is_some() == (*tag == tags.some)
                     }
-                    Ty::Option(_) => return None,
-                    Ty::Result(..) | Ty::Enum { .. } => held == tag,
+                    TyKind::Option(_) => return None,
+                    TyKind::Result(..) | TyKind::Enum { .. } => held == tag,
                     _ => return None,
                 };
                 Some(Known::bool(matches))
@@ -404,7 +406,7 @@ impl KnownValues {
             // itself and never through a reference. It turns a variant
             // without a payload into `()`, and that is left unfolded.
             InstKind::UnwrapVariant { src, .. } => {
-                if let Ty::Ref(..) = ty(src)? {
+                if let TyKind::Ref(..) = ty(src)? {
                     return None;
                 }
                 match known(src)? {
@@ -464,7 +466,7 @@ impl KnownValues {
 /// and a fold that reproduced the machine's `==` would be a second float
 /// semantics to keep in step with it for no dispatch the lowering writes:
 /// RFC-0051 gives a float no switch key.
-fn test_literal(src: &Ty, held: Option<&Known>, value: &Literal) -> Option<bool> {
+fn test_literal(src: &TyKind<Concrete>, held: Option<&Known>, value: &Literal) -> Option<bool> {
     match value.desugared() {
         // `ops::pattern::TestUnit` writes `true` without reading.
         Literal::Unit => Some(true),
@@ -472,11 +474,11 @@ fn test_literal(src: &Ty, held: Option<&Known>, value: &Literal) -> Option<bool>
         // never through a reference, and compares it with the literal as
         // written.
         Literal::Int(want) => match (src, held?) {
-            (Ty::Int(_), Known::Word(Word::Int(n))) => Some(*n == want),
+            (TyKind::Int(_), Known::Word(Word::Int(n))) => Some(*n == want),
             _ => None,
         },
         Literal::Char(want) => match (src, held?) {
-            (Ty::Char, Known::Word(Word::Char(c))) => Some(*c == want),
+            (TyKind::Char, Known::Word(Word::Char(c))) => Some(*c == want),
             _ => None,
         },
         Literal::Bool(want) => match held? {
@@ -496,12 +498,13 @@ fn test_literal(src: &Ty, held: Option<&Known>, value: &Literal) -> Option<bool>
 
 /// The type a reader of a `ty` operand tests, as `prepare::scrutinee_ty`
 /// strips one reference.
-fn scrutinee(ty: &Ty) -> std::borrow::Cow<'_, Ty> {
-    match ty {
-        Ty::Ref(_, referent) => referent.ty(),
-        ty => std::borrow::Cow::Borrowed(ty),
+fn scrutinee(types: &Types<Concrete>, ty: Ty) -> &TyKind<Concrete> {
+    match types.kind(ty) {
+        TyKind::Ref(_, referent) => types.kind(referent.ty()),
+        kind => kind,
     }
 }
+
 
 fn sole_def(kind: &InstKind) -> Option<ValueId> {
     match inst_info::defs(kind).as_slice() {

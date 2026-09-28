@@ -10,7 +10,7 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{Callee, InstKind, Overflow, RefTarget, UnaryOp, ValueId};
-use crate::ty::Ty;
+use crate::ty::{Concrete, Ty, TyKind, Types};
 
 /// ValueIds defined by this instruction.
 pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
@@ -55,7 +55,7 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
             v.extend(order.map(|edge| edge.after));
             v
         }
-        InstKind::Eval { dst, order, .. } => {
+        InstKind::TakeEffect { dst, order, .. } => {
             let mut v: SmallVec<[ValueId; 2]> = smallvec![*dst];
             v.extend(*order);
             v
@@ -87,8 +87,9 @@ pub fn defs(kind: &InstKind) -> SmallVec<[ValueId; 2]> {
 /// Whether `kind` cannot end the run. An effect is not asked about: a trap
 /// is not ordered with effects (RFC-0048 rule 8). Every kind not named here
 /// is taken to end it.
-pub fn cannot_end_run(kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> bool {
-    let on_integers = |value: &ValueId| matches!(val_types[value], Ty::Int(_));
+pub fn cannot_end_run(types: &Types<Concrete>, kind: &InstKind, val_types: &FxHashMap<ValueId, Ty>) -> bool {
+    let on_integers = |value: &ValueId| matches!(types.kind(val_types[value]), TyKind::Int(_));
+
     match kind {
         InstKind::Const { .. }
         | InstKind::Ref { .. }
@@ -216,7 +217,7 @@ pub fn uses(kind: &InstKind) -> SmallVec<[ValueId; 4]> {
             v.extend(*order);
             v
         }
-        InstKind::Eval { src, .. } => smallvec![*src],
+        InstKind::TakeEffect { src, .. } => smallvec![*src],
 
         // Iterator
 
@@ -399,7 +400,7 @@ mod tests {
         assert_eq!(defs(&spawn).as_slice(), &[v(1)]);
         assert_eq!(uses(&spawn).as_slice(), &[v(0)]);
 
-        let eval = InstKind::Eval {
+        let eval = InstKind::TakeEffect {
             dst: v(2),
             src: v(1),
             order: None,

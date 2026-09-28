@@ -15,7 +15,9 @@ use crate::analysis::domain::SemiLattice;
 use crate::analysis::inst_info;
 use crate::analysis::loans::Loans;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
+use crate::decl::Declarations;
 use crate::ir::{Inst, ValueId};
+use crate::ty::{Concrete, Types};
 
 // -- Domain ----------------------------------------------------------
 
@@ -139,8 +141,9 @@ impl LivenessResult {
 }
 
 /// Run liveness analysis on a CfgBody.
-pub fn analyze(cfg: &CfgBody) -> LivenessResult {
-    analyze_with(&Loans::build(cfg))
+pub fn analyze(cfg: &CfgBody, types: &Types<Concrete>, decls: &Declarations) -> LivenessResult {
+
+    analyze_with(&Loans::build(cfg, types, decls))
 }
 
 /// `analyze`, of the CFG `loans` is of.
@@ -207,7 +210,6 @@ mod tests {
             val_factory: factory,
             label_count: 0,
             order_param: None,
-            task: crate::ty::Task::Sync,
         })
     }
 

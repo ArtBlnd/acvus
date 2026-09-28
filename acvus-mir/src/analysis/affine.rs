@@ -63,14 +63,15 @@ use crate::analysis::targets;
 use crate::cfg::{BlockIdx, CfgBody, Terminator};
 use crate::ir::{ForSource, InstKind, RefTarget, ValueId};
 use crate::laws::{LawTable, PostTerm, Postcondition, Relation, Subject};
-use crate::ty::{Mutability, Ty};
+use crate::decl::Declarations;
+use crate::ty::{Concrete, Mutability, Ty, TyKind, Types};
 
 /// Whether `+` and `*` at `ty` are arithmetic in a ring on every run that
 /// reaches them: exact under reassociation and distribution modulo
 /// `2^width`, as a wrapping integer operation is and as a trapping one is
 /// wherever it does not end the run (RFC-0037 rule 3).
-pub fn exact_under_wrapping(ty: &Ty) -> bool {
-    matches!(ty, Ty::Int(_))
+pub fn exact_under_wrapping(types: &Types<Concrete>, ty: Ty) -> bool {
+    matches!(types.kind(ty), TyKind::Int(_))
 }
 
 /// An invariant operand of the instruction a rule read: the value the
@@ -131,10 +132,17 @@ pub struct AffineValues {
 }
 
 impl AffineValues {
-    pub fn of(cfg: &CfgBody, loop_: &Loop, invariants: &Invariants, laws: &LawTable) -> Self {
+    pub fn of(
+        cfg: &CfgBody,
+        types: &Types<Concrete>,
+        decls: &Declarations,
+        loop_: &Loop,
+        invariants: &Invariants,
+        laws: &LawTable,
+    ) -> Self {
         let natural = &loop_.natural;
         let mut values: FxHashMap<ValueId, Affine> = FxHashMap::default();
-        let integer = |value: ValueId| exact_under_wrapping(&cfg.val_types[&value]);
+        let integer = |value: ValueId| exact_under_wrapping(types, cfg.val_types[&value]);
 
         if let LoopKind::For { source } = loop_.kind {
             let body = for_body(cfg, natural.header);
@@ -201,7 +209,7 @@ impl AffineValues {
             );
         }
 
-        values.extend(lengths(cfg, natural, invariants, laws));
+        values.extend(lengths(cfg, types, decls, natural, invariants, laws));
 
         loop {
             let mut found: Vec<(ValueId, Affine)> = Vec::new();
@@ -335,6 +343,8 @@ struct ReadsLength {
 /// `len(s) = old(len(s)) + c`, where nothing else in the loop writes `s`.
 fn lengths(
     cfg: &CfgBody,
+    types: &Types<Concrete>,
+    decls: &Declarations,
     natural: &NaturalLoop,
     invariants: &Invariants,
     laws: &LawTable,
@@ -393,7 +403,7 @@ fn lengths(
                 if let Some(param) = length_of(postcondition)
                     && let Some(storage) =
                         args.get(param).and_then(|arg| whole(*arg, Mutability::Shared))
-                    && exact_under_wrapping(&cfg.val_types[dst])
+                    && exact_under_wrapping(types, cfg.val_types[dst])
                 {
                     reads.push(ReadsLength {
                         at,
@@ -407,7 +417,8 @@ fn lengths(
     if grows.is_empty() || reads.is_empty() {
         return Vec::new();
     }
-    let loans = Loans::build(cfg);
+    let loans = Loans::build(cfg, types, decls);
+
     let domtree = DomTree::build(cfg);
     let mut found = Vec::new();
     for read in reads {
