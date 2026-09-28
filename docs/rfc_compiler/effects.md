@@ -20,6 +20,8 @@ Order is a value. A body that issues effects holds one order token at a time. An
 
 A merge follows every token it joins. It is associative and commutative: it orders what comes after it behind all of its inputs, and it orders its inputs against nothing.
 
+The tokens are the only record of order. Nothing else states which effect comes before which, so a transformation keeps the order of effects exactly by keeping every token defined before each of its uses, as any value is. A transformation that satisfies dominance over tokens and merges needs no other rule for order.
+
 Because `anyorder` cuts by a boundary, it is well defined over any span. Whatever enters the boundary is cut, including calls a transformation later splits, duplicates or moves within it: each still consumes the entry token. An attribute on a call would not survive this. Once a transformation splits the call into several, which of them carry the attribute is not defined.
 
 `anyorder` is lexical. A closure written inside the block belongs to it: its body consumes its own entry token in the same way, wherever it is called from. An `anyorder` inside an open one changes nothing.
