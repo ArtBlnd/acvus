@@ -6,6 +6,7 @@ mod aspect;
 mod body;
 mod builder;
 mod core;
+pub mod edit;
 mod op;
 mod rewriter;
 
