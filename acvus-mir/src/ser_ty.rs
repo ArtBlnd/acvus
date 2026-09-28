@@ -561,25 +561,38 @@ mod tests {
     #[test]
     fn effect_survives_serialization() {
         let i = Interner::new();
-        let fn_ty = Ty::Fn {
-            params: vec![],
-            ret: Box::new(Ty::I64),
-            captures: vec![],
-            effect: Effect::IDEMPOTENT.into(),
-            flows: crate::flows::Flows::Every.into(),
-        };
-        assert_eq!(
-            fn_ty.to_ser(&i).to_ty(&i).effect(),
-            Some(Effect::IDEMPOTENT)
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let idempotent = Effect::new(
+            Reissue::Idempotent,
+            true,
+            Contexts::new(),
+            Contexts::new(),
+            SplitCost::Unavailable,
         );
+        let fn_ty = types.intern(TyKind::Fn {
+            params: Box::new([]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(idempotent.clone()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
 
-        let ud = Ty::UserDefined {
-            id: QualifiedRef::root(i.intern("Iterator")),
-            type_args: vec![TypeArg::uniform(Ty::I64)],
-            effect_args: vec![EffectArg::specialized(Effect::OPAQUE.into())],
-            identity_args: vec![],
-            region_params: 0,
+        let round_tripped = to_ser(&types, fn_ty, &i).to_ty(&mut types, &i);
+        assert_eq!(round_tripped, fn_ty);
+        let TyKind::Fn { effect, .. } = types.kind(round_tripped) else {
+            panic!("expected a function type");
         };
-        assert_eq!(ud.to_ser(&i).to_ty(&i), ud);
+        assert_eq!(known_effect(effect), &idempotent);
+
+        let ud = types.intern(TyKind::UserDefined {
+            id: QualifiedRef::root(i.intern("Iterator")),
+            type_args: Box::new([TypeArg::Uniform(i64_ty)]),
+            effect_args: Box::new([EffectArg::Specialized(EffectTerm::Known(Effect::opaque()))]),
+            identity_args: Box::new([]),
+        });
+        let round_tripped_ud = to_ser(&types, ud, &i).to_ty(&mut types, &i);
+        assert_eq!(round_tripped_ud, ud);
     }
 }

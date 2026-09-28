@@ -22,11 +22,22 @@ pub(crate) mod test;
 
 #[cfg(test)]
 mod tests {
+    use crate::flows::{Flows, FlowTerm};
     use crate::ir::{InstKind, MirModule, RefTarget};
     use crate::test::{compile_script, compile_template};
-    use crate::ty::{ObjectTy, Param, Ty};
-    use acvus_utils::Interner;
+    use crate::ty::{
+        Calls, Concrete, Effect, EffectTerm, Holds, IntTy, LenTerm, ObjectTy, ParamTerm, Ty, TyKind, Types,
+    };
+    use acvus_utils::{Astr, Interner};
     use rustc_hash::{FxHashMap, FxHashSet};
+
+    /// A structural object type, its fields sorted by name as
+    /// `ObjectTy::Structural` requires.
+    fn obj_ty(types: &mut Types<Concrete>, fields: Vec<(Astr, Ty)>) -> Ty {
+        let mut fields = fields;
+        fields.sort_by_key(|(name, _)| *name);
+        types.intern(TyKind::Object(ObjectTy::Structural(fields.into_boxed_slice(), ())))
+    }
 
     // -- Template integration tests ----------------------------------
 
@@ -45,10 +56,12 @@ mod tests {
     #[test]
     fn integration_match_with_wildcard_arm() {
         let i = Interner::new();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         compile_template(
             &i,
             "% match @n\n% 1 =>\n{{ \"v\" }}\n% _ =>\ndefault\n% end\n",
-            &[("n", Ty::I64)],
+            &[("n", i64_ty)],
         )
         .unwrap();
     }
@@ -56,10 +69,10 @@ mod tests {
     #[test]
     fn a_template_that_moves_a_context_out_is_rejected() {
         let i = Interner::new();
-        let user = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
-            i.intern("age"),
-            Ty::I64,
-        )])));
+        let mut types = Types::new();
+        let age = i.intern("age");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let user = obj_ty(&mut types, vec![(age, i64_ty)]);
         let err = compile_template(&i, "% let y = @user\n% let z = y.age", &[("user", user)])
             .unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
@@ -68,43 +81,49 @@ mod tests {
     #[test]
     fn integration_variable_binding() {
         let i = Interner::new();
-        compile_template(&i, "% let x = @n\n{{ \"v\" }}", &[("n", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        compile_template(&i, "% let x = @n\n{{ \"v\" }}", &[("n", i64_ty)]).unwrap();
     }
 
     #[test]
     fn integration_object_field_access() {
         let i = Interner::new();
-        let user_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-            (i.intern("name"), Ty::String),
-            (i.intern("age"), Ty::I64),
-        ])));
+        let mut types = Types::new();
+        let name = i.intern("name");
+        let age = i.intern("age");
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let user_ty = obj_ty(&mut types, vec![(name, string_ty), (age, i64_ty)]);
         compile_template(&i, "% let x = @user.age", &[("user", user_ty)]).unwrap();
     }
 
     #[test]
     fn a_string_field_read_out_of_a_context_is_a_copy() {
         let i = Interner::new();
-        let user_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-            (i.intern("name"), Ty::String),
-            (i.intern("age"), Ty::I64),
-        ])));
+        let mut types = Types::new();
+        let name = i.intern("name");
+        let age = i.intern("age");
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let user_ty = obj_ty(&mut types, vec![(name, string_ty), (age, i64_ty)]);
         compile_template(&i, "{{ @user.name }}", &[("user", user_ty)]).unwrap();
     }
 
     #[test]
     fn integration_nested_pattern() {
         let i = Interner::new();
-        let users_ty = Ty::Array(
-            Box::new(Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-                (i.intern("name"), Ty::String),
-                (i.intern("age"), Ty::I64),
-            ])))),
-            crate::ty::LenTerm::Known(3),
-        );
+        let mut types = Types::new();
+        let name = i.intern("name");
+        let age = i.intern("age");
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let elem_ty = obj_ty(&mut types, vec![(name, string_ty), (age, i64_ty)]);
+        let users_ty = types.intern(TyKind::Array(elem_ty, LenTerm::Known(3)));
         compile_template(
             &i,
             "% if let [{ name, }, ..] = &@users\n{{ name }}\n% end\n",
-            &[("users", users_ty.clone())],
+            &[("users", users_ty)],
         )
         .unwrap();
         let err = compile_template(
@@ -125,10 +144,12 @@ mod tests {
     #[test]
     fn integration_object_pattern() {
         let i = Interner::new();
-        let data_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-            (i.intern("name"), Ty::String),
-            (i.intern("value"), Ty::I64),
-        ])));
+        let mut types = Types::new();
+        let name = i.intern("name");
+        let value = i.intern("value");
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let data_ty = obj_ty(&mut types, vec![(name, string_ty), (value, i64_ty)]);
         compile_template(
             &i,
             "% if let { name, } = @data\n{{ name }}\n% end\n",
@@ -140,10 +161,12 @@ mod tests {
     #[test]
     fn integration_match_over_three_arms() {
         let i = Interner::new();
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
         compile_template(
             &i,
             "% match @role\n% \"admin\" =>\nadmin page\n% \"user\" =>\nuser page\n% _ =>\nguest\n% end\n",
-            &[("role", Ty::String)],
+            &[("role", string_ty)],
         )
         .unwrap();
     }
@@ -172,7 +195,9 @@ mod tests {
     #[test]
     fn script_single_expr() {
         let i = Interner::new();
-        let module = compile_script(&i, "@data", &[("data", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "@data", &[("data", i64_ty)]).unwrap();
         assert!(
             module
                 .main
@@ -185,11 +210,11 @@ mod tests {
     #[test]
     fn a_context_moved_out_and_not_assigned_back_is_rejected() {
         let i = Interner::new();
-        let user = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
-            i.intern("age"),
-            Ty::I64,
-        )])));
-        let err = compile_script(&i, "@data", &[("data", user.clone())]).unwrap_err();
+        let mut types = Types::new();
+        let age = i.intern("age");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let user = obj_ty(&mut types, vec![(age, i64_ty)]);
+        let err = compile_script(&i, "@data", &[("data", user)]).unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
         let err = compile_script(&i, "let x = @data; x", &[("data", user)]).unwrap_err();
         assert!(err.contains("ContextMovedOut"), "{err}");
@@ -198,10 +223,12 @@ mod tests {
     #[test]
     fn a_context_moved_out_and_assigned_back_is_accepted() {
         let i = Interner::new();
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
         compile_script(
             &i,
             r#"let x = @data; @data = "new".to_string(); x"#,
-            &[("data", Ty::String)],
+            &[("data", string_ty)],
         )
         .unwrap();
     }
@@ -209,7 +236,9 @@ mod tests {
     #[test]
     fn script_bind_and_tail() {
         let i = Interner::new();
-        let module = compile_script(&i, "let x = @data; x", &[("data", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "let x = @data; x", &[("data", i64_ty)]).unwrap();
         assert!(
             module
                 .main
@@ -229,10 +258,13 @@ mod tests {
     #[test]
     fn script_trailing_semicolon_returns_unit() {
         let i = Interner::new();
-        let module = compile_script(&i, "let x = @data;", &[("data", Ty::String)]).unwrap();
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
+        let module = compile_script(&i, "let x = @data;", &[("data", string_ty)]).unwrap();
         assert!(module.main.insts.iter().any(|i| matches!(
             &i.kind,
-            InstKind::Return { value, .. } if module.main.val_types.get(value) == Some(&Ty::Unit)
+            InstKind::Return { value, .. }
+                if module.main.val_types.get(value).map(|ty| module.types.kind(*ty)) == Some(&TyKind::Unit)
         )));
     }
 
@@ -243,13 +275,17 @@ mod tests {
     #[test]
     fn context_store_compiles() {
         let i = Interner::new();
-        compile_script(&i, "@x = @x + 1; @x", &[("x", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        compile_script(&i, "@x = @x + 1; @x", &[("x", i64_ty)]).unwrap();
     }
 
     #[test]
     fn context_store_produces_context_store_instruction() {
         let i = Interner::new();
-        let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "@x = 42; @x", &[("x", i64_ty)]).unwrap();
         assert!(
             module
                 .main
@@ -262,10 +298,12 @@ mod tests {
     #[test]
     fn context_store_roundtrip() {
         let i = Interner::new();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         compile_script(
             &i,
             "let tmp = @count + 1; @count = tmp; @count",
-            &[("count", Ty::I64)],
+            &[("count", i64_ty)],
         )
         .unwrap();
     }
@@ -279,7 +317,9 @@ mod tests {
     #[test]
     fn projection_bare_context_read() {
         let i = Interner::new();
-        let module = compile_script(&i, "@x", &[("x", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "@x", &[("x", i64_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         let take_idx = kinds
             .iter()
@@ -294,10 +334,10 @@ mod tests {
     #[test]
     fn projection_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
-            i.intern("age"),
-            Ty::I64,
-        )])));
+        let mut types = Types::new();
+        let age = i.intern("age");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let obj_ty = obj_ty(&mut types, vec![(age, i64_ty)]);
         let module = compile_script(&i, "@obj.age", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         assert!(
@@ -309,10 +349,10 @@ mod tests {
     #[test]
     fn projection_loaded_before_binop() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
-            i.intern("val"),
-            Ty::I64,
-        )])));
+        let mut types = Types::new();
+        let val = i.intern("val");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let obj_ty = obj_ty(&mut types, vec![(val, i64_ty)]);
         let module = compile_script(&i, "@obj.val + 1", &[("obj", obj_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         let take = kinds
@@ -329,7 +369,9 @@ mod tests {
     #[test]
     fn projection_context_store() {
         let i = Interner::new();
-        let module = compile_script(&i, "@x = 42; @x", &[("x", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "@x = 42; @x", &[("x", i64_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         assert!(kinds.iter().any(|k| matches!(k, InstKind::Commit { .. })));
     }
@@ -337,7 +379,9 @@ mod tests {
     #[test]
     fn projection_copy_to_local() {
         let i = Interner::new();
-        let module = compile_script(&i, "let x = @data; x", &[("data", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "let x = @data; x", &[("data", i64_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         assert!(kinds.iter().any(|k| matches!(k, InstKind::Return { .. })));
     }
@@ -345,7 +389,9 @@ mod tests {
     #[test]
     fn projection_multiple_contexts() {
         let i = Interner::new();
-        let module = compile_script(&i, "@a + @b", &[("a", Ty::I64), ("b", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "@a + @b", &[("a", i64_ty), ("b", i64_ty)]).unwrap();
         let kinds = inst_kinds(&module);
         assert_eq!(
             kinds
@@ -359,7 +405,9 @@ mod tests {
     #[test]
     fn projection_no_leak_simple() {
         let i = Interner::new();
-        let module = compile_script(&i, "@x + 1", &[("x", Ty::I64)]).unwrap();
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let module = compile_script(&i, "@x + 1", &[("x", i64_ty)]).unwrap();
         let mut ref_dsts = FxHashSet::default();
         let mut consumed = FxHashSet::default();
         for inst in &module.main.insts {
@@ -391,10 +439,10 @@ mod tests {
     #[test]
     fn projection_no_leak_field_access() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([(
-            i.intern("age"),
-            Ty::I64,
-        )])));
+        let mut types = Types::new();
+        let age = i.intern("age");
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let obj_ty = obj_ty(&mut types, vec![(age, i64_ty)]);
         let module = compile_script(&i, "@obj.age", &[("obj", obj_ty)]).unwrap();
         let mut ref_dsts = FxHashSet::default();
         let mut consumed = FxHashSet::default();
@@ -429,42 +477,55 @@ mod tests {
     #[test]
     fn context_data_int() {
         let i = Interner::new();
-        assert!(compile_script(&i, "@x = 42; @x", &[("x", Ty::I64)]).is_ok());
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        assert!(compile_script(&i, "@x = 42; @x", &[("x", i64_ty)]).is_ok());
     }
 
     #[test]
     fn context_data_string() {
         let i = Interner::new();
-        assert!(compile_script(&i, r#"@x = "hello".to_string(); 1"#, &[("x", Ty::String)]).is_ok());
+        let mut types = Types::new();
+        let string_ty = types.intern(TyKind::String);
+        assert!(compile_script(&i, r#"@x = "hello".to_string(); 1"#, &[("x", string_ty)]).is_ok());
     }
 
     #[test]
     fn context_data_object() {
         let i = Interner::new();
-        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-            (i.intern("name"), Ty::String),
-            (i.intern("age"), Ty::I64),
-        ])));
+        let mut types = Types::new();
+        let name = i.intern("name");
+        let age = i.intern("age");
+        let string_ty = types.intern(TyKind::String);
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let obj_ty = obj_ty(&mut types, vec![(name, string_ty), (age, i64_ty)]);
         assert!(compile_script(&i, "@user = @user; 1", &[("user", obj_ty)]).is_ok());
     }
 
     #[test]
     fn context_data_bool() {
         let i = Interner::new();
-        assert!(compile_script(&i, "@x = true; @x", &[("x", Ty::Bool)]).is_ok());
+        let mut types = Types::new();
+        let bool_ty = types.intern(TyKind::Bool);
+        assert!(compile_script(&i, "@x = true; @x", &[("x", bool_ty)]).is_ok());
     }
 
     #[test]
     fn context_fn_rejected() {
         let i = Interner::new();
-        let fn_ty = Ty::Fn {
-            params: vec![Param::new(i.intern("x"), Ty::I64)],
-            ret: Box::new(Ty::I64),
-            captures: vec![],
-
-            effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::flows::Flows::Every.into(),
-        };
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let fn_ty = types.intern(TyKind::Fn {
+            params: Box::new([ParamTerm {
+                name: i.intern("x"),
+                ty: i64_ty,
+            }]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
         // Storing a function to context must fail.
         assert!(compile_script(&i, "@f = @f; @f", &[("f", fn_ty)]).is_err());
     }
@@ -472,33 +533,43 @@ mod tests {
     #[test]
     fn context_list_of_fn_rejected() {
         let i = Interner::new();
-        let fn_ty = Ty::Fn {
-            params: vec![Param::new(i.intern("x"), Ty::I64)],
-            ret: Box::new(Ty::I64),
-            captures: vec![],
-
-            effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::flows::Flows::Every.into(),
-        };
-        let list_fn_ty = Ty::Array(Box::new(fn_ty), crate::ty::LenTerm::Known(3));
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let fn_ty = types.intern(TyKind::Fn {
+            params: Box::new([ParamTerm {
+                name: i.intern("x"),
+                ty: i64_ty,
+            }]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        let list_fn_ty = types.intern(TyKind::Array(fn_ty, LenTerm::Known(3)));
         assert!(compile_script(&i, "@x = @x; @x", &[("x", list_fn_ty)]).is_err());
     }
 
     #[test]
     fn context_object_with_fn_field_rejected() {
         let i = Interner::new();
-        let fn_ty = Ty::Fn {
-            params: vec![Param::new(i.intern("x"), Ty::I64)],
-            ret: Box::new(Ty::I64),
-            captures: vec![],
-
-            effect: crate::ty::Effect::OPAQUE.into(),
-            flows: crate::flows::Flows::Every.into(),
-        };
-        let obj_ty = Ty::Object(ObjectTy::written(FxHashMap::from_iter([
-            (i.intern("name"), Ty::String),
-            (i.intern("callback"), fn_ty),
-        ])));
+        let mut types = Types::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
+        let fn_ty = types.intern(TyKind::Fn {
+            params: Box::new([ParamTerm {
+                name: i.intern("x"),
+                ty: i64_ty,
+            }]),
+            ret: i64_ty,
+            effect: EffectTerm::Known(Effect::opaque()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        let name = i.intern("name");
+        let callback = i.intern("callback");
+        let string_ty = types.intern(TyKind::String);
+        let obj_ty = obj_ty(&mut types, vec![(name, string_ty), (callback, fn_ty)]);
         assert!(compile_script(&i, "@obj = @obj; @obj", &[("obj", obj_ty)]).is_err());
     }
 }

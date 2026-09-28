@@ -339,11 +339,17 @@ pub fn is_control_flow(kind: &InstKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::Ty;
+    use crate::ty::{Concrete, Ty, TyKind, Types};
     use acvus_utils::LocalIdOps;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
+    }
+
+    /// A type value for a field these tests do not read: `defs`/`uses`
+    /// answer from the instruction's value ids alone.
+    fn dummy_ty() -> Ty {
+        Types::<Concrete>::new().intern(TyKind::Unit)
     }
 
     #[test]
@@ -375,7 +381,7 @@ mod tests {
         let inst = InstKind::FunctionCall {
             dst: v(3),
             callee: crate::ir::Callee::Direct(qref),
-            callee_ty: Ty::error(),
+            callee_ty: dummy_ty(),
             args: vec![v(0), v(1)],
             order: None,
         };
@@ -393,7 +399,7 @@ mod tests {
         let spawn = InstKind::Spawn {
             dst: v(1),
             callee: crate::ir::Callee::Direct(qref),
-            callee_ty: Ty::error(),
+            callee_ty: dummy_ty(),
             args: vec![v(0)],
             order: None,
         };
@@ -440,7 +446,7 @@ mod tests {
         let inst = InstKind::FunctionCall {
             dst: v(2),
             callee: crate::ir::Callee::Indirect(v(0)),
-            callee_ty: Ty::error(),
+            callee_ty: dummy_ty(),
             args: vec![v(1)],
             order: None,
         };

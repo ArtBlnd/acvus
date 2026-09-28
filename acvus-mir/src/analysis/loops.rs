@@ -811,11 +811,26 @@ pub fn def_blocks(cfg: &CfgBody) -> FxHashMap<ValueId, BlockIdx> {
 mod tests {
     use super::*;
     use crate::cfg::promote;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::*;
-    use acvus_utils::{LocalFactory, LocalIdOps};
+    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
+    }
+
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
     }
 
     fn label(n: u32) -> InstKind {
@@ -924,9 +939,12 @@ mod tests {
 
     #[test]
     fn a_value_defined_above_the_header_is_invariant() {
+        let interner = Interner::new();
+        let types = Types::new();
+        let decls = empty_declarations(&interner);
         let cfg = nested_loops();
         let domtree = DomTree::build(&cfg);
-        let invariants = Invariants::of(&cfg, types, decls);
+        let invariants = Invariants::of(&cfg, &types, &decls);
         for loop_ in natural_loops_innermost_first(&cfg, &domtree) {
             assert_eq!(invariants.above(&loop_, v(0)), Some(Invariant::Outside(v(0))));
         }

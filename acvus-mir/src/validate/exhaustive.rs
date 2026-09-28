@@ -198,15 +198,18 @@ mod tests {
 
     use super::*;
     use crate::ir::Inst;
+    use crate::ty::IntTy;
 
     /// `typeck` refuses every source that would reach [`Known::Open`], so the
     /// body is built here.
     #[test]
     fn a_switch_over_a_tag_whose_type_names_no_variants_is_refused() {
         let interner = Interner::new();
+        let mut types = Types::<Concrete>::new();
+        let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let mut body = MirBody::default();
         let tag = body.val_factory.next();
-        body.val_types.insert(tag, Ty::I64);
+        body.val_types.insert(tag, i64_ty);
         body.insts.push(Inst {
             span: Span::ZERO,
             kind: InstKind::Switch {
@@ -217,7 +220,7 @@ mod tests {
         });
 
         let mut errors = Vec::new();
-        check_body(&body, "main", &mut errors);
+        check_body(&types, &body, "main", &mut errors);
         let [error] = errors.as_slice() else {
             panic!("one refusal, got {errors:?}");
         };

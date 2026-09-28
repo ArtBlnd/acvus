@@ -730,11 +730,11 @@ mod tests {
     #[test]
     fn an_integer_constant_is_the_word_its_width_reads_back() {
         assert_eq!(
-            Word::of_constant(&Literal::Int(255), &Ty::Int(IntTy::I8)),
+            Word::of_constant(&Literal::Int(255), &TyKind::Int(IntTy::I8)),
             Some(Word::Int(-1))
         );
         assert_eq!(
-            Word::of_constant(&Literal::Int(7), &Ty::Int(IntTy::U8)),
+            Word::of_constant(&Literal::Int(7), &TyKind::Int(IntTy::U8)),
             Some(Word::Int(7))
         );
     }

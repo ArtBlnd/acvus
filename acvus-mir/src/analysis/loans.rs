@@ -2262,20 +2262,37 @@ fn captured(holds: Holds) -> Option<Mutability> {
 mod tests {
     use super::*;
     use crate::cfg::promote;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::{DebugInfo, MirBody};
-    use crate::ty::{Task, TypeArg};
+    use crate::ty::TypeArg;
     use acvus_ast::Span;
     use acvus_utils::{Interner, LocalFactory};
 
-    fn shared_string() -> Ty {
-        Ty::Ref(Mutability::Shared, Box::new(TypeArg::uniform(Ty::String)))
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    fn shared_string(types: &mut Types<Concrete>) -> Ty {
+        let string_ty = types.intern(TyKind::String);
+        types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string_ty)))
     }
 
     /// Two reference parameters, and a reborrow of the second returned.
-    fn two_parameters() -> CfgBody {
+    fn two_parameters(types: &mut Types<Concrete>) -> CfgBody {
         let i = Interner::new();
         let mut factory = LocalFactory::<ValueId>::new();
         let (p0, p1, dst) = (factory.next(), factory.next(), factory.next());
+        let ref_ty = shared_string(types);
         promote(MirBody {
             insts: vec![
                 Inst {
@@ -2295,13 +2312,9 @@ mod tests {
                     },
                 },
             ],
-            val_types: [
-                (p0, shared_string()),
-                (p1, shared_string()),
-                (dst, shared_string()),
-            ]
-            .into_iter()
-            .collect(),
+            val_types: [(p0, ref_ty), (p1, ref_ty), (dst, ref_ty)]
+                .into_iter()
+                .collect(),
             params: vec![(i.intern("a"), p0), (i.intern("b"), p1)],
             captures: vec![],
             order_param: None,
@@ -2314,8 +2327,11 @@ mod tests {
 
     #[test]
     fn a_param_loan_names_the_parameter_at_its_index() {
-        let cfg = two_parameters();
-        let loans = Loans::build(&cfg, types, decls);
+        let interner = Interner::new();
+        let mut types = Types::new();
+        let decls = empty_declarations(&interner);
+        let cfg = two_parameters(&mut types);
+        let loans = Loans::build(&cfg, &types, &decls);
         let mut seen = 0;
         for value in cfg.val_types.keys() {
             for loan in loans.holds(*value) {
@@ -2331,8 +2347,11 @@ mod tests {
 
     #[test]
     fn the_result_holds_the_parameter_it_reborrows() {
-        let cfg = two_parameters();
-        let loans = Loans::build(&cfg, types, decls);
+        let interner = Interner::new();
+        let mut types = Types::new();
+        let decls = empty_declarations(&interner);
+        let cfg = two_parameters(&mut types);
+        let loans = Loans::build(&cfg, &types, &decls);
         let returned = cfg.params[1].1;
         let dst = *cfg
             .val_types

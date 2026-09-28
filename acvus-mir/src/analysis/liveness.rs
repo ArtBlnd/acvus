@@ -181,12 +181,37 @@ fn extract_live_set(state: &DataflowState<ValueId, Liveness>) -> FxHashSet<Value
 mod tests {
     use super::*;
     use crate::cfg::promote;
+    use crate::decl::{Core, LoopMarkers, RawDeclarations};
     use crate::ir::*;
-    use acvus_utils::{LocalFactory, LocalIdOps};
+    use crate::ty::{Concrete, Types};
+    use acvus_utils::{Interner, LocalFactory, LocalIdOps};
     use rustc_hash::FxHashMap;
 
     fn v(n: usize) -> ValueId {
         ValueId::from_raw(n)
+    }
+
+    fn empty_declarations(interner: &Interner) -> Declarations {
+        Declarations::verify(RawDeclarations {
+            types: Types::new(),
+            functions: Vec::new(),
+            user_types: Vec::new(),
+            casts: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .unwrap()
+    }
+
+    /// `analyze` at an empty `Types`/`Declarations`: these bodies name no
+    /// value whose type liveness reads.
+    fn analyze_test(cfg: &CfgBody) -> LivenessResult {
+        let interner = Interner::new();
+        let types = Types::<Concrete>::new();
+        let decls = empty_declarations(&interner);
+        analyze(cfg, &types, &decls)
     }
 
     fn make_cfg(insts: Vec<InstKind>) -> CfgBody {
@@ -238,7 +263,7 @@ mod tests {
             },
         ]);
 
-        let result = analyze(&cfg);
+        let result = analyze_test(&cfg);
         // v(0), v(1) are defined in block 0 -> not live-in.
         assert!(!result.is_live_in(BlockIdx(0), v(0)));
         assert!(!result.is_live_in(BlockIdx(0), v(1)));
@@ -261,7 +286,7 @@ mod tests {
             },
         ]);
 
-        let result = analyze(&cfg);
+        let result = analyze_test(&cfg);
         assert!(!result.is_live_out(BlockIdx(0), v(0)));
     }
 
@@ -303,7 +328,7 @@ mod tests {
             },
         ]);
 
-        let result = analyze(&cfg);
+        let result = analyze_test(&cfg);
         assert!(result.is_live_out(BlockIdx(0), v(0)));
         assert!(result.is_live_out(BlockIdx(0), v(1)));
     }
@@ -335,7 +360,7 @@ mod tests {
             },
         ]);
 
-        let result = analyze(&cfg);
+        let result = analyze_test(&cfg);
         assert!(result.is_live_out(BlockIdx(0), v(0)));
         assert!(result.is_live_in(BlockIdx(1), v(0)));
     }
@@ -386,7 +411,7 @@ mod tests {
             },
         ]);
 
-        let result = analyze(&cfg);
+        let result = analyze_test(&cfg);
         assert!(result.is_live_in(BlockIdx(1), v(1)));
         assert!(result.is_live_out(BlockIdx(1), v(2)));
     }
