@@ -347,10 +347,10 @@ impl TypeCheck<'_> {
                 Self::result(inst)?,
                 |kind| match kind {
                     TyKind::Fn { .. } => bodies.len() == 1,
-                    TyKind::Closures(signatures) => signatures.len() == bodies.len(),
+                    TyKind::Closures(signatures) => signatures.len() >= 2 && signatures.len() == bodies.len(),
                     _ => false,
                 },
-                "a function of one body, or a closure of one body per signature",
+                "a function of one body, or a closure of one body per signature of at least two",
             ),
             // The closure kept at some of its signatures: a function type
             // for one, and a closure of those, in order, otherwise.
@@ -358,13 +358,18 @@ impl TypeCheck<'_> {
                 let TyKind::Closures(has) = self.kind(self.ty(*closure)) else {
                     return Err(format!("{closure:?} is no closure of signatures"));
                 };
+                found(has.len() >= 2, || format!("{closure:?} is a closure of fewer than two signatures, which is written as a function type"))?;
                 found(signatures.iter().all(|signature| has.contains(signature)), || {
                     format!("{closure:?} has no code at some of {signatures:?}")
                 })?;
                 let result = Self::result(inst)?;
                 match &signatures[..] {
                     [one] => self.same(result, *one, "the one signature"),
-                    _ => self.is(result, |kind| matches!(kind, TyKind::Closures(kept) if kept[..] == signatures[..]), "a closure of the signatures kept"),
+                    _ => self.is(
+                        result,
+                        |kind| matches!(kind, TyKind::Closures(kept) if kept.len() >= 2 && kept[..] == signatures[..]),
+                        "a closure of the signatures kept, at least two",
+                    ),
                 }
             }
             Op::FunctionCall { callee, callee_ty, args } | Op::Spawn { callee, callee_ty, args } => {

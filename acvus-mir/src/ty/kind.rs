@@ -60,8 +60,10 @@ pub enum TyKind<V: Phase> {
     /// written in one canonical order, by `TyId::canonical_key`, only so
     /// that one set interns to one type; the order is no layout, and how a
     /// backend holds such a closure is its own (undefined behaviour §2).
-    /// Only lower writes it; no program and no declaration does
-    /// (`InternalType`).
+    /// A set of one signature is written as that function type, never as a
+    /// `Closures` of one, so that one set is written one way; a `Closures`
+    /// holds at least two. Only lower writes it; no program and no
+    /// declaration does (`InternalType`).
     Closures(Box<[TyId<V>]>),
     Var(V::TyVar),
 }
