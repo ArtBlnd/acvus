@@ -10,6 +10,7 @@ pub mod edit;
 mod op;
 mod order;
 mod rewriter;
+pub mod takings;
 
 pub use aspect::{Aspect, Changes};
 pub use body::{Block, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Insts, Module, OrderUse, Site, Stages, Terminator};
