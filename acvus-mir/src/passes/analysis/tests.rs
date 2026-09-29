@@ -12,7 +12,7 @@ use super::*;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module, Op, Stages, Terminator};
 use crate::ir::cfg::Site;
-use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, RefTarget, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 use crate::ty::{
     Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability,
@@ -1447,6 +1447,11 @@ struct LoanFixture {
     mut_int: Ty,
     /// `Option<&i64>`.
     option_ref: Ty,
+    /// `(&i64, &i64)`.
+    pair_of_refs: Ty,
+    /// `&(&i64, &i64)` and `&mut (&i64, &i64)`.
+    ref_pair: Ty,
+    mut_pair: Ty,
     /// A pure `fn(&i64) -> &i64` whose result takes its argument's loans.
     passes_through: Ty,
     /// A pure `fn(&i64) -> &i64` whose result takes no loan.
@@ -1462,6 +1467,9 @@ fn loan_fixture() -> LoanFixture {
     let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
     let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
     let option_ref = types.intern(TyKind::Option(ref_int, ()));
+    let pair_of_refs = types.intern(TyKind::Tuple(Box::new([ref_int, ref_int]), ()));
+    let ref_pair = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(pair_of_refs)));
+    let mut_pair = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(pair_of_refs)));
     let mut function = |params: &[Ty], ret: Ty, flows: Flows| {
         types.intern(TyKind::Fn {
             params: params.into(),
@@ -1485,6 +1493,9 @@ fn loan_fixture() -> LoanFixture {
         ref_int,
         mut_int,
         option_ref,
+        pair_of_refs,
+        ref_pair,
+        mut_pair,
         passes_through,
         passes_nothing,
         takes_int,
@@ -1676,6 +1687,133 @@ fn an_option_of_a_reference_parameter_names_its_outside_storage() {
     assert_eq!(loans_of(&loans, o, 0), [loan(outside, Mode::Shared)]);
     assert_eq!(loans_of(&loans, u, 0), [loan(outside, Mode::Shared)]);
     assert_eq!(*loans.reads(site_at(&f.module, id, entry, 1)), BTreeSet::from([outside]));
+}
+
+fn loan_at(storage: Storage, path: Vec<PathSeg>, mode: Mode) -> Loan {
+    Loan { storage, path, mode }
+}
+
+/// A pair `p: (&i64, &i64)` of `&a` and `&b`, stored whole into its slot;
+/// the rest of the body is `rest`'s, given `p`, `a` and `b`.
+fn with_pair_of_refs<R>(f: &mut LoanFixture, rest: impl FnOnce(&mut crate::ir::cfg::Builder<'_>, [ValueId; 3]) -> R) -> (BodyId, R) {
+    let (int, ref_int, pair_of_refs) = (f.int, f.ref_int, f.pair_of_refs);
+    let mut builder = f.module.build_body(false, int);
+    let p = builder.slot(pair_of_refs, Span::ZERO);
+    let a = builder.slot(int, Span::ZERO);
+    let b = builder.slot(int, Span::ZERO);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(a, one), Span::ZERO);
+    builder.push_unit(assign(b, one), Span::ZERO);
+    let ra = builder.push(reference(a, Mutability::Shared), ref_int, Span::ZERO);
+    let rb = builder.push(reference(b, Mutability::Shared), ref_int, Span::ZERO);
+    let pair = builder.push(Op::MakeTuple { elements: vec![ra, rb] }, pair_of_refs, Span::ZERO);
+    builder.push_unit(assign(p, pair), Span::ZERO);
+    let made = rest(&mut builder, [p, a, b]);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero), acvus_ast::Span::ZERO);
+    (builder.seal().expect("the body has no open state"), made)
+}
+
+/// Lend: a `Ref` of a part by name makes one loan on that part, at the
+/// reference's mode.
+#[test]
+fn a_ref_of_a_part_by_name_lends_that_part() {
+    let mut f = loan_fixture();
+    let (ref_int, mut_int) = (f.ref_int, f.mut_int);
+    let (id, [shared, exclusive, p]) = with_pair_of_refs(&mut f, |builder, [p, _, _]| {
+        let at = |index, mutability| Op::Ref { target: RefTarget::Var(p), path: vec![PathSeg::Index(index)], mutability };
+        let shared = builder.push(at(0, Mutability::Shared), ref_int, Span::ZERO);
+        let exclusive = builder.push(at(1, Mutability::Mut), mut_int, Span::ZERO);
+        [shared, exclusive, p]
+    });
+
+    let loans = f.facts::<Loans>(id);
+    let on = |index| vec![PathSeg::Index(index)];
+    assert_eq!(loans_of(&loans, shared, 0), [loan_at(Storage::Slot(p), on(0), Mode::Shared)]);
+    assert_eq!(loans_of(&loans, exclusive, 0), [loan_at(Storage::Slot(p), on(1), Mode::Exclusive)]);
+}
+
+/// Reborrow: a `Ref` through `m` makes no loan; it holds `m`'s, the path
+/// extended by its own, at the weaker mode. Through a shared reference a
+/// `&mut`'s loan is read shared.
+#[test]
+fn a_reborrow_extends_its_sources_loans_by_its_path_at_the_weaker_mode() {
+    let mut f = loan_fixture();
+    let (ref_int, mut_pair, ref_pair) = (f.ref_int, f.mut_pair, f.ref_pair);
+    let (id, [m, part, shared, through_shared, p]) = with_pair_of_refs(&mut f, |builder, [p, _, _]| {
+        let m = builder.push(reference(p, Mutability::Mut), mut_pair, Span::ZERO);
+        let through = |of, mutability| Op::Ref { target: RefTarget::Through(of), path: vec![PathSeg::Index(1)], mutability };
+        let part = builder.push(through(m, Mutability::Shared), ref_int, Span::ZERO);
+        let shared = builder.push(reborrow(m, Mutability::Shared), ref_pair, Span::ZERO);
+        let through_shared = builder.push(through(shared, Mutability::Shared), ref_int, Span::ZERO);
+        [m, part, shared, through_shared, p]
+    });
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(loans_of(&loans, m, 0), [loan_at(Storage::Slot(p), Vec::new(), Mode::Exclusive)]);
+    assert_eq!(loans_of(&loans, part, 0), [loan_at(Storage::Slot(p), vec![PathSeg::Index(1)], Mode::Shared)]);
+    assert_eq!(loans_of(&loans, shared, 0), [loan_at(Storage::Slot(p), Vec::new(), Mode::Shared)]);
+    assert_eq!(loans_of(&loans, through_shared, 0), [loan_at(Storage::Slot(p), vec![PathSeg::Index(1)], Mode::Shared)]);
+}
+
+/// Move: an `Assign` gives the content at its path's positions what the
+/// value holds, and a `Take` gives its value what the content holds at the
+/// positions its path reaches.
+#[test]
+fn a_move_gives_what_the_content_holds_at_its_paths_positions() {
+    let mut f = loan_fixture();
+    let (ref_int, mut_pair) = (f.ref_int, f.mut_pair);
+    let (id, [first, second, a]) = with_pair_of_refs(&mut f, |builder, [p, a, _]| {
+        let take_at = |index| Op::Take { target: RefTarget::Var(p), path: vec![PathSeg::Index(index)], taken_out: false };
+        let m = builder.push(reference(p, Mutability::Mut), mut_pair, Span::ZERO);
+        let ra = builder.push(reference(a, Mutability::Shared), ref_int, Span::ZERO);
+        let store = Op::Assign { target: RefTarget::Through(m), path: vec![PathSeg::Index(1)], value: ra, restores: false };
+        builder.push_unit(store, Span::ZERO);
+        let first = builder.push(take_at(0), ref_int, Span::ZERO);
+        let second = builder.push(take_at(1), ref_int, Span::ZERO);
+        [first, second, a]
+    });
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(loans_of(&loans, first, 0), [loan(Storage::Slot(a), Mode::Shared)], "the first part still holds `&a`");
+    assert_eq!(loans_of(&loans, second, 0), [loan(Storage::Slot(a), Mode::Shared)], "the store through `&mut p` replaced `&b`");
+}
+
+/// A `Take` of a `&mut` is a reborrow: the place keeps what it held.
+#[test]
+fn a_take_of_a_mut_reference_leaves_its_place_holding_it() {
+    let mut f = loan_fixture();
+    let (int, mut_int) = (f.int, f.mut_int);
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.slot(int, Span::ZERO);
+    let m = builder.slot(mut_int, Span::ZERO);
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(x, one), Span::ZERO);
+    let rx = builder.push(reference(x, Mutability::Mut), mut_int, Span::ZERO);
+    builder.push_unit(assign(m, rx), Span::ZERO);
+    let taken = builder.push(take(m), mut_int, Span::ZERO);
+    let again = builder.push(take(m), mut_int, Span::ZERO);
+    builder.terminate(ret(one), acvus_ast::Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(loans_of(&loans, taken, 0), [loan(Storage::Slot(x), Mode::Exclusive)]);
+    assert_eq!(loans_of(&loans, again, 0), [loan(Storage::Slot(x), Mode::Exclusive)]);
+}
+
+/// Part: reading a part of a value gives what that part's positions hold.
+#[test]
+fn a_part_of_a_value_holds_what_its_positions_hold() {
+    let mut f = loan_fixture();
+    let (ref_int, pair_of_refs) = (f.ref_int, f.pair_of_refs);
+    let (id, [second, b]) = with_pair_of_refs(&mut f, |builder, [p, _, b]| {
+        let pair = builder.push(take(p), pair_of_refs, Span::ZERO);
+        let second = builder.push(Op::TupleIndex { tuple: pair, index: 1 }, ref_int, Span::ZERO);
+        [second, b]
+    });
+
+    let loans = f.facts::<Loans>(id);
+    assert_eq!(loans_of(&loans, second, 0), [loan(Storage::Slot(b), Mode::Shared)]);
 }
 
 /// `x = 1; t = x; return t`: only whole-slot uses.

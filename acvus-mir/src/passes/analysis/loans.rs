@@ -41,7 +41,7 @@
 //!    access touches only the places that access states, in their modes.
 //! 7. A join: a block's parameter holds what any argument into it holds.
 //!
-//! //! passes-analyses.md.
+//! passes-analyses.md.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -56,7 +56,7 @@ use crate::ir::{Callee, ForSource, IndexMode, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types, copies,
+    Alignment, Concrete, FlowEnd, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types,
     position_kinds, positions,
 };
 
@@ -395,6 +395,17 @@ fn fold(positions: &[LoanSet]) -> LoanSet {
     positions.iter().flatten().cloned().collect()
 }
 
+fn storages_of(place: &[Located]) -> BTreeSet<Storage> {
+    place.iter().map(|located| located.storage).collect()
+}
+
+/// `loans` joined into every one of `positions`.
+fn spread(positions: &mut [LoanSet], loans: &LoanSet) {
+    for position in positions {
+        position.extend(loans.iter().cloned());
+    }
+}
+
 fn mode(mutability: Mutability) -> Mode {
     match mutability {
         Mutability::Shared => Mode::Shared,
@@ -414,12 +425,6 @@ struct Written {
     region: LoanSet,
 }
 
-/// The one part of one storage a write replaces whole.
-struct Replaced {
-    storage: Storage,
-    range: Range<usize>,
-}
-
 /// A part of a type: where its positions lie among the whole's, and its
 /// type.
 struct Part {
@@ -435,12 +440,27 @@ struct Reached {
     exact: bool,
 }
 
-/// The storages a place lies in, the type of what a whole storage holds as
-/// the place's root sees it, and its path.
-struct Place<'p> {
-    storages: BTreeSet<Storage>,
-    root: Ty,
-    path: &'p [PathSeg],
+/// The positions of a storage's content a path names: the range of each
+/// part it may name, and whether it names exactly one part exactly.
+struct Region {
+    ranges: Vec<Range<usize>>,
+    exact: bool,
+}
+
+/// One place an access or a loan names: a storage and a path from its root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Located {
+    storage: Storage,
+    path: crate::ir::parts::Path,
+}
+
+impl Loan {
+    /// What a reborrow of `path` at `mode`, through a reference holding
+    /// this loan, holds of it: the loan with its path extended by `path`,
+    /// at the weaker of the two modes.
+    fn reborrowed(&self, path: &[PathSeg], mode: Mode) -> Loan {
+        Loan { storage: self.storage, path: [&self.path[..], path].concat(), mode: self.mode.min(mode) }
+    }
 }
 
 struct Forward<'b> {
@@ -576,9 +596,12 @@ impl Forward<'_> {
         loans.touched.insert(Site::Term(id), Touched::default());
     }
 
-    /// Where `path` leads within a value of `root`. Cost: O(the path · the
-    /// parts it passes).
-    fn reach(&self, root: Ty, path: &[PathSeg]) -> Reached {
+    /// Where `path` leads within a value of `root`, or `None` where it
+    /// steps into a part `root` does not have: a loan a call's flows or a
+    /// join moved to a reference of another target keeps the path of the
+    /// place it was made on, and a path extended from it need not agree
+    /// with any type. Cost: O(the path · the parts it passes).
+    fn reach(&self, root: Ty, path: &[PathSeg]) -> Option<Reached> {
         let mut parts = vec![Part { range: 0..self.width(root), ty: root }];
         let mut exact = true;
         for seg in path {
@@ -599,11 +622,12 @@ impl Forward<'_> {
                 match (seg, self.types.kind(part.ty)) {
                     (PathSeg::Field(field), TyKind::Object(object)) => {
                         let fields = laid(&mut object.fields().iter().map(|(_, ty)| *ty));
-                        let at = object.fields().iter().position(|(name, _)| name == field);
-                        next.extend(at.map(|at| fields.into_iter().nth(at).expect("one part per field")));
+                        let at = object.fields().iter().position(|(name, _)| name == field)?;
+                        next.extend(fields.into_iter().nth(at));
                     }
                     (PathSeg::Index(index), TyKind::Tuple(items, _)) => {
-                        next.extend(laid(&mut items.iter().copied()).into_iter().nth(*index));
+                        let item = laid(&mut items.iter().copied()).into_iter().nth(*index)?;
+                        next.push(item);
                     }
                     (PathSeg::Index(_), TyKind::Array(element, _, _)) => {
                         exact = false;
@@ -621,131 +645,163 @@ impl Forward<'_> {
                         exact &= payloads.len() == 1;
                         next.extend(laid(&mut payloads.into_iter()));
                     }
-                    (seg, other) => panic!("{seg:?} steps into {other:?}; the path agrees with its type"),
+                    _ => return None,
                 }
             }
             parts = next;
         }
-        Reached { parts, exact }
+        Some(Reached { parts, exact })
+    }
+
+    /// Where `path` leads within a value of `root`, a part of which the body
+    /// reads by its type.
+    ///
+    /// # Panics
+    /// `path` steps into a part `root` does not have.
+    fn reach_value(&self, root: Ty, path: &[PathSeg]) -> Reached {
+        self.reach(root, path).unwrap_or_else(|| panic!("{path:?} steps into {:?}; a part read agrees with its type", self.types.kind(root)))
     }
 
     /// The parts of `reached` of type `ty`.
     fn parts_of(&self, reached: &Reached, ty: Ty) -> Vec<Range<usize>> {
         let ranges: Vec<Range<usize>> =
             reached.parts.iter().filter(|part| part.ty == ty).map(|part| part.range.clone()).collect();
-        assert!(!ranges.is_empty(), "a place's path reaches its type, {:?}", self.types.kind(ty));
+        assert!(!ranges.is_empty(), "a value's path reaches its part's type, {:?}", self.types.kind(ty));
         ranges
     }
 
-    fn place<'p>(&self, state: &State, target: &RefTarget, path: &'p [PathSeg]) -> Place<'p> {
-        match target {
-            RefTarget::Var(slot) => {
-                Place { storages: BTreeSet::from([Storage::Slot(*slot)]), root: self.body.ty_of(*slot), path }
+    /// The parts of `storage`'s content, `width` positions long, that
+    /// `path` names; `None` where the content's layout does not locate
+    /// them. An outside storage's content is its reference's target, whose
+    /// type the storage does not keep, so only its whole is located.
+    fn region(&self, storage: Storage, path: &[PathSeg], width: usize) -> Option<Region> {
+        match storage {
+            Storage::Slot(value) | Storage::Param(value) => {
+                let Reached { parts, exact } = self.reach(self.body.ty_of(value), path)?;
+                Some(Region { ranges: parts.into_iter().map(|part| part.range).collect(), exact })
             }
-            RefTarget::Param(param) => {
-                Place { storages: BTreeSet::from([Storage::Param(*param)]), root: self.body.ty_of(*param), path }
-            }
-            RefTarget::Through(reference) => Place {
-                storages: self.named(state, *reference),
-                root: self.lent(self.body.ty_of(*reference)),
-                path,
-            },
+            Storage::Outside { .. } if path.is_empty() => Some(Region { ranges: vec![0..width], exact: true }),
+            Storage::Outside { .. } => None,
         }
+    }
+
+    /// What a reference names at its own position.
+    fn own(&self, state: &State, reference: ValueId) -> LoanSet {
+        let positions = self.value(state, reference);
+        positions.into_iter().next().expect("a reference has its own position")
+    }
+
+    /// The places `target` and `path` name: by name, the storage and the
+    /// path; through a reference, each place a loan it holds names, its
+    /// path extended by `path`.
+    fn place(&self, state: &State, target: &RefTarget, path: &[PathSeg]) -> Vec<Located> {
+        match target {
+            RefTarget::Var(slot) => vec![Located { storage: Storage::Slot(*slot), path: path.to_vec() }],
+            RefTarget::Param(param) => vec![Located { storage: Storage::Param(*param), path: path.to_vec() }],
+            RefTarget::Through(reference) => self.place_through(state, *reference, path),
+        }
+    }
+
+    fn place_through(&self, state: &State, reference: ValueId, path: &[PathSeg]) -> Vec<Located> {
+        let located: BTreeSet<Located> = self
+            .own(state, reference)
+            .into_iter()
+            .map(|loan| Located { storage: loan.storage, path: [&loan.path[..], path].concat() })
+            .collect();
+        located.into_iter().collect()
     }
 
     /// The storages a reference names, at its own position.
     fn named(&self, state: &State, reference: ValueId) -> BTreeSet<Storage> {
-        let positions = self.value(state, reference);
-        let own = positions.first().expect("a reference has its own position");
-        own.iter().map(|loan| loan.storage).collect()
+        self.own(state, reference).iter().map(|loan| loan.storage).collect()
     }
 
-    /// What the part of `ty` at `place` holds: aligned where a storage is
-    /// covered whole, else every loan of its content at each position.
-    fn read(&self, state: &State, place: &Place<'_>, ty: Ty) -> Vec<LoanSet> {
-        let width = self.width(ty);
+    /// What a value of `width` positions read out of `place` holds: aligned
+    /// where a part it names has as many positions, else every loan of the
+    /// part at each position; every loan of the content where the part is
+    /// not located.
+    fn read(&self, state: &State, place: &[Located], width: usize) -> Vec<LoanSet> {
         let mut out = empty(width);
-        let reached = self.reach(place.root, place.path);
-        let ranges = self.parts_of(&reached, ty);
-        for storage in &place.storages {
+        for Located { storage, path } in place {
             let content = self.content(state, *storage);
-            if content.len() == self.width(place.root) {
-                for range in &ranges {
-                    join_positions(&mut out, &content[range.clone()]);
+            match self.region(*storage, path, content.len()) {
+                Some(region) => {
+                    for range in region.ranges {
+                        let held = &content[range];
+                        match held.len() == width {
+                            true => {
+                                join_positions(&mut out, held);
+                            }
+                            false => spread(&mut out, &fold(held)),
+                        }
+                    }
                 }
-            } else {
-                let all = fold(content);
-                for position in &mut out {
-                    position.extend(all.iter().cloned());
-                }
+                None => spread(&mut out, &fold(content)),
             }
         }
         out
     }
 
-    /// Whether a write to `place` replaces what the one part it names held.
-    fn strong(&self, state: &State, place: &Place<'_>, ty: Ty) -> Option<Replaced> {
-        let [storage] = place.storages.iter().copied().collect::<Vec<_>>()[..] else {
-            return None;
-        };
-        if self.content(state, storage).len() != self.width(place.root) {
-            return None;
+    /// `value` written into `place`: it replaces what the one part of the
+    /// one storage `place` names exactly held, and joins into every part it
+    /// may name otherwise.
+    fn write(&self, state: &mut State, place: &[Located], value: &[LoanSet]) {
+        if let [Located { storage, path }] = place {
+            let width = self.content(state, *storage).len();
+            if let Some(region) = self.region(*storage, path, width)
+                && region.exact
+                && let [range] = &region.ranges[..]
+                && range.len() == value.len()
+            {
+                let content = state.storages.get_mut(storage).expect("a written storage is present");
+                content[range.clone()].clone_from_slice(value);
+                return;
+            }
         }
-        let reached = self.reach(place.root, place.path);
-        let ranges = self.parts_of(&reached, ty);
-        match (reached.exact, &ranges[..]) {
-            (true, [range]) => Some(Replaced { storage, range: range.clone() }),
-            _ => None,
-        }
+        self.join_into(state, place, value);
     }
 
-    fn write(&self, state: &mut State, place: &Place<'_>, ty: Ty, value: &[LoanSet]) {
-        if let Some(Replaced { storage, range }) = self.strong(state, place, ty) {
-            let content = state.storages.get_mut(&storage).expect("a written storage is present");
-            content[range].clone_from_slice(value);
-            return;
-        }
-        let reached = self.reach(place.root, place.path);
-        let ranges = self.parts_of(&reached, ty);
-        let root_width = self.width(place.root);
+    /// `value` joined into every part `place` may name, aligned where the
+    /// part has as many positions and into each of its positions otherwise;
+    /// into every position of the content where the part is not located.
+    fn join_into(&self, state: &mut State, place: &[Located], value: &[LoanSet]) {
         let all = fold(value);
-        for storage in &place.storages {
+        for Located { storage, path } in place {
+            let width = self.content(state, *storage).len();
+            let region = self.region(*storage, path, width);
             let content = state.storages.get_mut(storage).expect("a written storage is present");
-            if content.len() == root_width {
-                for range in &ranges {
-                    join_positions(&mut content[range.clone()], value);
+            match region {
+                Some(region) => {
+                    for range in region.ranges {
+                        match range.len() == value.len() {
+                            true => {
+                                join_positions(&mut content[range], value);
+                            }
+                            false => spread(&mut content[range], &all),
+                        }
+                    }
                 }
-            } else {
-                for position in content.iter_mut() {
-                    position.extend(all.iter().cloned());
-                }
+                None => spread(content, &all),
             }
         }
     }
 
     /// A value's positions with what its references and captures reach read
-    /// from the storages they name now, outer positions first so that an
+    /// from the places they name now, outer positions first so that an
     /// inner one sees what the outer read brought.
     fn deepened(&self, state: &State, value: ValueId) -> Vec<LoanSet> {
         let mut positions = self.value(state, value);
         for (at, kind) in self.kinds(self.body.ty_of(value)).into_iter().enumerate() {
-            let named: Vec<Storage> = positions[at].iter().map(|loan| loan.storage).collect();
+            let named: Vec<Located> =
+                positions[at].iter().map(|loan| Located { storage: loan.storage, path: loan.path.clone() }).collect();
             match kind {
                 PositionKind::Ref(_, width) => {
-                    for storage in named {
-                        let content = self.content(state, storage);
-                        let pointee = &mut positions[at + 1..at + 1 + width];
-                        if content.len() == width {
-                            join_positions(pointee, content);
-                        } else {
-                            let all = fold(content);
-                            pointee.iter_mut().for_each(|position| position.extend(all.iter().cloned()));
-                        }
-                    }
+                    let reached = self.read(state, &named, width);
+                    join_positions(&mut positions[at + 1..at + 1 + width], &reached);
                 }
                 PositionKind::Captures(_) => {
-                    let reached: LoanSet = named.iter().flat_map(|storage| fold(self.content(state, *storage))).collect();
-                    positions[at].extend(reached);
+                    let [reached] = &self.read(state, &named, 1)[..] else { unreachable!("one position was read") };
+                    positions[at].extend(reached.iter().cloned());
                 }
                 PositionKind::Lifetime | PositionKind::InFlight => {}
             }
@@ -753,14 +809,15 @@ impl Forward<'_> {
         positions
     }
 
-    /// A reborrow of the whole of what `reference` lends, of mode `mode`.
+    /// A reborrow of the whole of what `reference` lends, of mode `mode`:
+    /// its loans with their paths, each at the weaker mode.
     fn reborrow(&self, state: &State, reference: ValueId, mode: Mode) -> Vec<LoanSet> {
-        let ty = self.body.ty_of(reference);
-        let place = Place { storages: self.named(state, reference), root: self.lent(ty), path: &[] };
-        let own: LoanSet = place.storages.iter().map(|storage| Loan { storage: *storage, path: Vec::new(), mode }).collect();
+        let own: LoanSet = self.own(state, reference).iter().map(|loan| loan.reborrowed(&[], mode)).collect();
+        let place = self.place_through(state, reference, &[]);
+        let target = &self.value(state, reference)[1..];
         let mut positions = vec![own];
-        positions.extend(self.read(state, &place, self.lent(ty)));
-        join_positions(&mut positions[1..], &self.value(state, reference)[1..]);
+        positions.extend(self.read(state, &place, target.len()));
+        join_positions(&mut positions[1..], target);
         positions
     }
 
@@ -805,28 +862,30 @@ impl Forward<'_> {
             Op::Commit { .. } | Op::Check { .. } | Op::CheckSteps { .. } | Op::Drop { .. } => return None,
             Op::StringAppend { .. } => return None,
             Op::Ref { target, path, mutability } => {
+                let own: LoanSet = match target {
+                    RefTarget::Var(slot) => {
+                        LoanSet::from([Loan { storage: Storage::Slot(*slot), path: path.clone(), mode: mode(*mutability) }])
+                    }
+                    RefTarget::Param(param) => {
+                        LoanSet::from([Loan { storage: Storage::Param(*param), path: path.clone(), mode: mode(*mutability) }])
+                    }
+                    RefTarget::Through(reference) => {
+                        self.own(state, *reference).iter().map(|loan| loan.reborrowed(path, mode(*mutability))).collect()
+                    }
+                };
                 let place = self.place(state, target, path);
-                let own: LoanSet =
-                    place.storages.iter().map(|storage| Loan { storage: *storage, path: Vec::new(), mode: mode(*mutability) }).collect();
                 let mut positions = vec![own];
-                positions.extend(self.read(state, &place, self.lent(ty())));
+                positions.extend(self.read(state, &place, self.width(self.lent(ty()))));
                 positions
             }
             Op::Take { target, path, .. } => {
                 let place = self.place(state, target, path);
-                let taken = self.read(state, &place, ty());
-                if !copies(self.types, ty())
-                    && let Some(Replaced { storage, range }) = self.strong(state, &place, ty())
-                {
-                    let content = state.storages.get_mut(&storage).expect("a taken storage is present");
-                    content[range].iter_mut().for_each(LoanSet::clear);
-                }
-                taken
+                self.read(state, &place, self.width(ty()))
             }
             Op::Assign { target, path, value, .. } => {
                 let place = self.place(state, target, path);
                 let written = self.value(state, *value);
-                self.write(state, &place, self.body.ty_of(*value), &written);
+                self.write(state, &place, &written);
                 return None;
             }
             Op::AsSlice { container: lent, mutability, .. } | Op::ArrayView { src: lent, mutability } => {
@@ -841,9 +900,9 @@ impl Forward<'_> {
             }
             Op::Index { slice, mode: IndexMode::Copy, .. } => self.reborrow(state, *slice, Mode::Shared)[1..].to_vec(),
             Op::IndexSet { slice, value, .. } => {
-                let storages = self.named(state, *slice);
+                let place = self.place_through(state, *slice, &[]);
                 let written = self.value(state, *value);
-                self.write_elements(state, &storages, &written);
+                self.join_into(state, &place, &written);
                 return None;
             }
             Op::FieldGet { object, field, rest } => {
@@ -857,7 +916,7 @@ impl Forward<'_> {
             Op::FieldSet { object, field, rest, value } => {
                 let path: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
                 let mut positions = self.value(state, *object);
-                let reached = self.reach(self.body.ty_of(*object), &path);
+                let reached = self.reach_value(self.body.ty_of(*object), &path);
                 let [range] = &self.parts_of(&reached, self.body.ty_of(*value))[..] else {
                     panic!("a field path names one field")
                 };
@@ -926,26 +985,11 @@ impl Forward<'_> {
         })
     }
 
-    /// Joins `written`, an element's positions, into every element of
-    /// `storages`: the elements of a sequence share one set of positions.
-    fn write_elements(&self, state: &mut State, storages: &BTreeSet<Storage>, written: &[LoanSet]) {
-        let element_width = written.len();
-        let all = fold(written);
-        for storage in storages {
-            let content = state.storages.get_mut(storage).expect("a written storage is present");
-            if content.len() == element_width {
-                join_positions(content, written);
-            } else {
-                content.iter_mut().for_each(|position| position.extend(all.iter().cloned()));
-            }
-        }
-    }
-
     /// The part of `value` at `path` of type `ty`, joined over every part
     /// the path may name.
     fn project(&self, state: &State, value: ValueId, path: &[PathSeg], ty: Ty) -> Vec<LoanSet> {
         let positions = self.value(state, value);
-        let reached = self.reach(self.body.ty_of(value), path);
+        let reached = self.reach_value(self.body.ty_of(value), path);
         let mut out = empty(self.width(ty));
         for range in self.parts_of(&reached, ty) {
             join_positions(&mut out, &positions[range]);
@@ -957,7 +1001,7 @@ impl Forward<'_> {
     /// an `Option`'s one, a `Result`'s of that type, an enum's by its tag.
     fn variant_ranges(&self, ty: Ty, tag: acvus_utils::Astr, payload: Ty) -> Vec<Range<usize>> {
         match self.types.kind(ty) {
-            TyKind::Option(.., _) | TyKind::Result(..) => self.parts_of(&self.reach(ty, &[PathSeg::Payload]), payload),
+            TyKind::Option(.., _) | TyKind::Result(..) => self.parts_of(&self.reach_value(ty, &[PathSeg::Payload]), payload),
             TyKind::Enum { variants, .. } => {
                 let mut at = 0;
                 for (name, declared) in variants.iter() {
@@ -1047,8 +1091,9 @@ impl Forward<'_> {
         result
     }
 
-    /// `region` written through every `&mut` position of `value` and into
-    /// what its mutable captures name, and joined into the pointee positions
+    /// `region` written through every `&mut` position of `value` into the
+    /// places its loans name, and into those its mutable captures name, and
+    /// joined into the pointee positions
     /// of its `&mut` positions.
     fn write_into(&self, state: &mut State, value: ValueId, region: &LoanSet) {
         let held = self.deepened(state, value);
@@ -1062,10 +1107,12 @@ impl Forward<'_> {
                 | PositionKind::Lifetime
                 | PositionKind::InFlight => continue,
             };
-            for loan in held[at].iter().filter(|loan| loan.mode == Mode::Exclusive) {
-                let content = state.storages.get_mut(&loan.storage).expect("a named storage is present");
-                content.iter_mut().for_each(|position| position.extend(region.iter().cloned()));
-            }
+            let written: Vec<Located> = held[at]
+                .iter()
+                .filter(|loan| loan.mode == Mode::Exclusive)
+                .map(|loan| Located { storage: loan.storage, path: loan.path.clone() })
+                .collect();
+            self.join_into(state, &written, std::slice::from_ref(region));
             if let Some(width) = pointee {
                 own[at + 1..at + 1 + width].iter_mut().for_each(|position| position.extend(region.iter().cloned()));
             }
@@ -1124,8 +1171,8 @@ impl Forward<'_> {
             _ => BTreeSet::new(),
         };
         match inst.op() {
-            Op::Take { target, path, .. } => touched.reads = self.place(state, target, path).storages,
-            Op::Assign { target, path, .. } => touched.writes = self.place(state, target, path).storages,
+            Op::Take { target, path, .. } => touched.reads = storages_of(&self.place(state, target, path)),
+            Op::Assign { target, path, .. } => touched.writes = storages_of(&self.place(state, target, path)),
             Op::Index { slice, .. } => touched.reads = self.named(state, *slice),
             Op::IndexSet { slice, .. } => touched.writes = self.named(state, *slice),
             Op::StringAppend { target, part } => {
