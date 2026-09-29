@@ -21,6 +21,7 @@ The lang items are Rust's, but for two:
 - `display<T>(&T, out: &mut String)`, appending to `out`.
 - `as_slice<C, T>(&C) -> &[T]`, `as_slice_mut<C, T>(&mut C) -> &mut [T]`, `as_str<S>(&S) -> &str`: the views.
 - `unwrap<W, T>(W) -> T`, at `Option<T>` and `Result<T, E>`. Its meaning is the language's, since both types are primitive: `Some(x)` and `Ok(x)` give `x`, and `None` and `Err(_)` trap.
+- `as_ref`, `as_mut`: a `&S` to `S` with each part lent `&`, a `&mut S` to `S` with each part lent `&mut`, one level, for a transparent structured type `S` (types §1): `(&(a, b)).as_ref()` is `(&a, &b)`, `(&x).as_ref()` of an `Option<T>` is an `Option<&T>`. Their meaning is the language's (ownership §5): they are used, and no declaration gives them impls.
 
 `&&`, `||` and `!` on `bool`, `^` on `bool` and the integers, and `&`, `<<` and `>>` on the integers are the language's own operations, as Rust defines them, with overflow as §1 states. They are not calls. `|` is the pipe (`x | f` is `f(x)`); bitwise or has no operator.
 
