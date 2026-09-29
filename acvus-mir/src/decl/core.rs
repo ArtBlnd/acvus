@@ -30,6 +30,10 @@ pub struct Core {
     pub clone: QualifiedRef,
     pub unwrap: QualifiedRef,
     pub default: QualifiedRef,
+    /// `as_ref`, `as_mut`: the language's own lend of a transparent
+    /// structured value's parts (operators §2), given no impls.
+    pub as_ref: QualifiedRef,
+    pub as_mut: QualifiedRef,
     pub tags: Tags,
     /// The names an `as` may cast to, each with its type (operators §5).
     cast_targets: [(Astr, CastTy); CAST_TARGETS],
@@ -77,6 +81,8 @@ impl Core {
             clone: name("clone"),
             unwrap: name("unwrap"),
             default: name("default"),
+            as_ref: name("as_ref"),
+            as_mut: name("as_mut"),
             tags: Tags {
                 some: interner.intern("Some"),
                 none: interner.intern("None"),
@@ -123,6 +129,8 @@ impl Core {
             (self.as_str, table.view_of_str()),
             (self.unwrap, table.unwrap()),
             (self.default, table.default()),
+            (self.as_ref, table.lend(Mutability::Shared)),
+            (self.as_mut, table.lend(Mutability::Mut)),
         ]);
         functions
     }
@@ -159,8 +167,26 @@ impl Core {
             self.clone,
             self.unwrap,
             self.default,
+            self.as_ref,
+            self.as_mut,
         ]
         .contains(&function)
+    }
+
+    /// Whether `function` is a lang item whose meaning is the language's
+    /// own, which no declaration gives impls (operators §2).
+    pub(super) fn takes_no_impls(&self, function: QualifiedRef) -> bool {
+        [self.as_ref, self.as_mut].contains(&function)
+    }
+
+    /// The mutability `function` lends a structure's parts at, where it is
+    /// `as_ref` or `as_mut` (operators §2).
+    pub fn lends(&self, function: QualifiedRef) -> Option<Mutability> {
+        match function {
+            _ if function == self.as_ref => Some(Mutability::Shared),
+            _ if function == self.as_mut => Some(Mutability::Mut),
+            _ => None,
+        }
     }
 }
 
@@ -267,6 +293,16 @@ impl Table<'_> {
         let (w, t) = (self.var(0), self.var(1));
         let names = [self.names.receiver];
         self.scheme(&[w], t, &names, 2)
+    }
+
+    /// `as_ref<S, T>(&S) -> T`, `as_mut<S, T>(&mut S) -> T`: `T` is `S`
+    /// with each part lent, which no signature states, so the language
+    /// answers it at the call (operators §2).
+    fn lend(&mut self, mutability: Mutability) -> Scheme {
+        let (s, t) = (self.var(0), self.var(1));
+        let lent_s = self.reference(mutability, s);
+        let names = [self.names.receiver];
+        self.scheme(&[lent_s], t, &names, 2)
     }
 
     /// `default<T>() -> T`.
@@ -439,6 +475,24 @@ mod tests {
                     ret: TyKind::Var(0),
                     names: vec![],
                     variables: 1,
+                },
+            ),
+            (
+                core.as_ref,
+                Expected {
+                    params: vec![shared(t)],
+                    ret: TyKind::Var(1),
+                    names: vec!["self"],
+                    variables: 2,
+                },
+            ),
+            (
+                core.as_mut,
+                Expected {
+                    params: vec![reference(Mutability::Mut, t)],
+                    ret: TyKind::Var(1),
+                    names: vec!["self"],
+                    variables: 2,
                 },
             ),
         ]);

@@ -78,7 +78,9 @@ pub enum Refused {
     /// A generic function declared under a lang item's name: the compiler
     /// builds every lang item's generic function itself (operators §2).
     CoreGenericFunction { id: QualifiedRef },
-    /// Impls given to a name that is no lang item (operators §2).
+    /// Impls given to a name that is no lang item, or to a lang item whose
+    /// meaning is the language's own, `as_ref` and `as_mut`, which take none
+    /// (operators §2).
     NotALangItem { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in
     /// rfc_compiler; carried from the registry's rule until it is.
@@ -241,7 +243,7 @@ fn with_lang_items(
 ) -> Vec<(QualifiedRef, Scheme)> {
     let mut given: FxHashMap<QualifiedRef, Impls> = FxHashMap::default();
     for (id, impls) in lang_impls {
-        if !core.names(id) {
+        if !core.names(id) || core.takes_no_impls(id) {
             refused.push(Refused::NotALangItem { id });
         } else if given.contains_key(&id) {
             refused.push(Refused::DuplicateFunction { id });
@@ -2862,6 +2864,26 @@ mod tests {
         let ty = fixture.function(&[int], int);
         fixture.give(id, &[ty]);
         assert_eq!(refusals(fixture), vec![Refused::NotALangItem { id }]);
+    }
+
+    /// operators §2: `as_ref` and `as_mut` mean what the language says, and
+    /// no declaration gives them impls, nor declares a function under
+    /// their names.
+    #[test]
+    fn impls_of_as_ref_or_as_mut_are_refused() {
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let shared = fixture.ty(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+        let ty = fixture.function(&[shared], shared);
+        fixture.give(core.as_ref, &[ty]);
+        assert_eq!(refusals(fixture), vec![Refused::NotALangItem { id: core.as_ref }]);
+        let mut fixture = Fixture::new();
+        let core = fixture.raw.core;
+        let t = fixture.ty(TyKind::Var(0));
+        let ty = fixture.function(&[t], t);
+        fixture.declare(core.as_mut, fixture.plain(ty, 1));
+        assert_eq!(refusals(fixture), vec![Refused::CoreGenericFunction { id: core.as_mut }]);
     }
 
     /// operators §2, extern-fn §6: an impl of a view that is not a function
