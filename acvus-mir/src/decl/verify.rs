@@ -247,8 +247,10 @@ fn with_lang_items(
         .generic_functions(types)
         .into_iter()
         .map(|(id, scheme)| {
-            let impls = given.remove(&id);
-            (id, Scheme { impls, ..scheme })
+            // A lang item is a generic function: given no impls, it has
+            // none, and no call reaches it (operators §2).
+            let impls = given.remove(&id).unwrap_or_default();
+            (id, Scheme { impls: Some(impls), ..scheme })
         })
         .collect();
     for (id, scheme) in functions {
