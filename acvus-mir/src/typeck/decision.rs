@@ -51,7 +51,6 @@ pub(super) enum CoreSig {
     AsSlice(Mutability),
     AsStr,
     Display,
-    Clone,
     Unwrap,
 }
 
@@ -930,7 +929,6 @@ fn core_name(cx: &Ctxt<'_>, sig: CoreSig) -> QualifiedRef {
         CoreSig::AsSlice(Mutability::Mut) => core.as_slice_mut,
         CoreSig::AsStr => core.as_str,
         CoreSig::Display => core.display,
-        CoreSig::Clone => core.clone,
         CoreSig::Unwrap => core.unwrap,
     }
 }

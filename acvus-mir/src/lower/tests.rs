@@ -1253,63 +1253,6 @@ fn array_ordering_is_one_for_that_exits_at_the_first_nonzero_cmp() {
     assert_eq!(lt, 1, "{}", shown(body));
 }
 
-/// ownership §1-2, D87: `.clone()` of a tuple of a `String` and an `i64`
-/// builds a new tuple: the `String` through its `core::clone` impl, the
-/// `i64` copied out of the receiver.
-#[test]
-fn a_tuple_clone_is_built_part_by_part() {
-    let mut fx = Fixture::new();
-    clones_strings(&mut fx);
-    let string = fx.ty(TyKind::String);
-    let int = fx.int();
-    let pair = fx.ty(TyKind::Tuple(Box::new([string, int])));
-    fx.input("t", pair);
-    let lowered = fx.script("$t.clone()");
-    let body = lowered.entry();
-    let clone = QualifiedRef::qualified(lowered.name("core"), lowered.name("clone"));
-    assert_eq!(calls_of(&lowered, clone), 1, "{}", shown(body));
-    let copied_int = count(&lowered.entry_ops(), |op| {
-        matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if path.is_empty())
-    });
-    assert_eq!(copied_int, 1, "{}", shown(body));
-    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::MakeTuple { elements } if elements.len() == 2)), 1, "{}", shown(body));
-}
-
-/// ownership §1, D87: an array whose element copies is copied whole by
-/// `.clone()`: no loop and no call.
-#[test]
-fn an_array_that_copies_is_copied_by_clone() {
-    let mut fx = Fixture::new();
-    let int = fx.int();
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
-    fx.input("a", array);
-    let lowered = fx.script("$a.clone()");
-    let body = lowered.entry();
-    assert!(fors(&lowered).is_empty(), "{}", shown(body));
-    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { .. })), 0, "{}", shown(body));
-}
-
-/// D87: `Option` and `Result` clones test the tag and rebuild the
-/// variant, and an object compares and clones part by part.
-#[test]
-fn structural_types_compare_and_clone_part_by_part() {
-    let mut fx = Fixture::new();
-    fx.comparisons();
-    clones_strings(&mut fx);
-    let string = fx.ty(TyKind::String);
-    let int = fx.int();
-    let option = fx.ty(TyKind::Option(string));
-    let result = fx.ty(TyKind::Result(string, int));
-    let a = fx.name("a");
-    let object = fx.ty(TyKind::Object(crate::ty::ObjectTy::Structural(Box::new([(a, int)]), ())));
-    fx.input("o", option);
-    fx.input("r", result);
-    fx.input("x", object);
-    let lowered = fx.script("let p = $o.clone(); let q = $r.clone(); let e = $x == $x; let y = $x.clone(); e");
-    let ops = lowered.entry_ops();
-    assert_eq!(count(&ops, |op| matches!(op, Op::MakeVariant { .. })), 4, "{}", shown(lowered.entry()));
-}
-
 /// D87: an array comparison's loop and a tuple clone go through the
 /// required steps and the full pipeline, every body keeping the editor's
 /// invariants.

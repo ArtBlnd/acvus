@@ -43,8 +43,6 @@ pub(super) fn check_method_call<S: Slot>(
     let core = cx.decls.core();
     let callee = if name == core.unwrap.name {
         Callee::Core(CoreSig::Unwrap)
-    } else if name == core.clone.name && args.is_empty() {
-        Callee::Core(CoreSig::Clone)
     } else {
         Callee::Method(name)
     };
