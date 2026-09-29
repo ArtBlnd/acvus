@@ -22,8 +22,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 acvus-ast = { path = "../acvus-ast" }
-acvus-ext = { path = "../acvus-ext" }
-acvus-extern = { path = "../acvus-extern" }
 acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }

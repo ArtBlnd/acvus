@@ -3,7 +3,7 @@
 
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
-use super::{Graph, Refusal, Source, Unit};
+use super::{Graph, Refusal, Source, Stop, Unit};
 use crate::decl::{Core, Declarations, EntryDecl, ImplSig, Impls, LoopMarkers, RawDeclarations};
 use crate::passes::pipeline::Level;
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
@@ -99,7 +99,7 @@ fn an_entry_is_its_unit_at_the_declared_types() {
     let main = fx.script(&["app"], "main", "$n + 1");
     fx.entry(main, &[("n", IntTy::I64)], Some(IntTy::I64));
     let mut graph = fx.graph();
-    let compiled = graph.compile(Level::Full).unwrap_or_else(|refused| panic!("refused: {refused:?}"));
+    let compiled = graph.compile(Stop::Optimized(Level::Full)).unwrap_or_else(|refused| panic!("refused: {refused:?}"));
     assert_eq!(compiled.entries.len(), 1);
     let (unit, entry) = compiled.entries[0];
     assert_eq!((unit, entry.module), (main, main));
@@ -117,7 +117,7 @@ fn a_unit_called_at_two_types_is_two_bodies_of_its_module() {
     let main = fx.script(&["app"], "main", "(lib::inc(x: $n), lib::inc(x: 1u8))");
     fx.entry(main, &[("n", IntTy::I64)], None);
     let mut graph = fx.graph();
-    let compiled = graph.compile(Level::Full).unwrap_or_else(|refused| panic!("refused: {refused:?}"));
+    let compiled = graph.compile(Stop::Optimized(Level::Full)).unwrap_or_else(|refused| panic!("refused: {refused:?}"));
     let (_, module) = compiled.modules.iter().find(|(name, _)| *name == inc).expect("the callee's module");
     let widths: Vec<&TyKind<crate::ty::Concrete>> =
         module.instantiations.iter().map(|(types, _)| module.module.types().kind(types[0])).collect();
@@ -133,7 +133,7 @@ fn a_cycle_of_unit_calls_is_refused() {
     let b = fx.script(&["m"], "b", "m::a(x: $x)");
     fx.entry(a, &[("x", IntTy::I64)], None);
     let mut graph = fx.graph();
-    let Err(refused) = graph.compile(Level::Full) else {
+    let Err(refused) = graph.compile(Stop::Optimized(Level::Full)) else {
         panic!("a cycle is refused");
     };
     let mut on: Vec<QualifiedRef> = refused
@@ -156,7 +156,7 @@ fn an_entry_that_does_not_fit_its_unit_is_refused() {
         let main = fx.script(&["app"], "main", "$n + 1");
         fx.entry(main, &inputs, result);
         let mut graph = fx.graph();
-        let Err(refused) = graph.compile(Level::Full) else {
+        let Err(refused) = graph.compile(Stop::Optimized(Level::Full)) else {
             panic!("the entry does not fit");
         };
         assert!(matches!(refused[..], [super::Refused { unit, ref refusals }] if unit == main && matches!(refusals[..], [Refusal::EntryDoesNotFit { .. }])), "{refused:?}");

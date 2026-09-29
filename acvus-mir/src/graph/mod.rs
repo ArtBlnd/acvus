@@ -62,6 +62,15 @@ use crate::passes::pipeline::Level;
 use crate::ty::{Concrete, Ty, TyKind, Types};
 use crate::typeck::{Inputs, Typeck};
 
+/// How far a compile takes each module: lowered only; through the
+/// required steps and the checks; or on through the pipeline at a level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    Lowered,
+    Required,
+    Optimized(Level),
+}
+
 /// A unit's source.
 pub enum Source {
     Script(acvus_ast::Script),
@@ -140,19 +149,26 @@ impl Graph {
         self.units.remove(&name);
     }
 
-    /// Compiles every unit at `level`: each interface after its callees',
-    /// each instantiation the entries reach, each source's module through
-    /// the required steps, the checks and the pipeline.
-    pub fn compile(&mut self, level: Level) -> Result<Compiled<'_>, Vec<Refused>> {
+    /// Compiles every unit up to `stop`: each interface after its
+    /// callees', each instantiation the entries reach, each source's module
+    /// through the required steps, the checks and the pipeline.
+    pub fn compile(&mut self, stop: Stop) -> Result<Compiled<'_>, Vec<Refused>> {
         let order = self.order()?;
         let interfaces = self.interfaces(&order)?;
         let mut instantiating = Instantiating { graph: self, interfaces: &interfaces, modules: BTreeMap::new(), refused: Vec::new() };
         let entries = instantiating.entries();
         let Instantiating { mut modules, mut refused, .. } = instantiating;
         for (unit, compiled) in modules.iter_mut() {
+            if stop == Stop::Lowered {
+                break;
+            }
             let mut am = AnalysisManager::new(&self.declarations);
             match crate::lower::required::run(&mut compiled.module, &mut am) {
-                Ok(()) => crate::passes::pipeline::optimize(&mut compiled.module, &mut am, level),
+                Ok(()) => {
+                    if let Stop::Optimized(level) = stop {
+                        crate::passes::pipeline::optimize(&mut compiled.module, &mut am, level);
+                    }
+                }
                 Err(refusals) => refused.push(Refused { unit: *unit, refusals: refusals.into_iter().map(Refusal::Check).collect() }),
             }
         }
