@@ -2,7 +2,39 @@
 
 ## 1. Transparency
 
-A type is widened, joined or unioned only where the compiler sees every use of it. A type defined outside the program, by an extern fn or by the host, is not transparent: it equals only itself and crosses exactly as declared. A type parameter of an extern fn is parametric, so a program's type passes through it transparently.
+Every type is written somewhere: in a body of the program, in a declaration, or by the host. Every value is held by one side at a time, and that side sees every use of the value while it holds it: the value is transparent there.
+
+A type is widened, joined or unioned only where it is written, and only where the program writes it, since only there is every value of it made and every use of it seen. A type a declaration or the host writes never grows: it equals only itself and crosses exactly as declared. A type parameter of an extern fn is parametric, so a program's type passes through it transparently. Where values of one type the program writes meet in one slot, the type grows to hold each of them, and a path on which a value lacks what the grown type holds is refused where that value is used whole (ownership §4).
+
+A value passes from one side to another by leaving the side that holds it and entering a slot the other side wrote. It leaves coerced to the slot's type (§3) by the side it leaves, since only that side sees every use of it. It enters unchanged, its type then exactly the slot's (§4). So neither side grows a type the other wrote:
+
+| A value crossing | is coerced by | into a type written by |
+|---|---|---|
+| an argument, into a function's parameter | the caller | the function |
+| a result, out of a function | the function | the function |
+| an argument, into an extern fn's parameter | the caller | the declaration |
+| a result, out of an extern fn | nothing: it is as declared | the declaration |
+| a value stored into a context | the body | the host |
+| a context's or an input's value, into a body | nothing | the host |
+
+A caller never widens a function's result: the result's type is the function's, and the caller only coerces the value when it leaves in turn.
+
+For example, a module's `fn` reads two fields of its parameter, and a script passes it an object of three:
+
+```acvum
+fn sum(p) { p.a + p.b }
+```
+
+```acvus
+let x = { a: 1, b: 2, c: 3 };
+sum(x)
+```
+
+`sum`'s scheme is settled in its module alone (programs §3), so its parameter is `{ a, b }`, and inside `sum` nothing else exists. Object types are invariant (§4): `{ a, b, c }` is not a subtype of `{ a, b }`, so no value reaches `sum` holding a field its type does not name. Were one to, what `sum` decides at `{ a, b }` would not hold of it: `p.clone()` clones `a` and `b`, and a hidden `c` may have no clone. `x` is the script's, so `x` leaves the script narrowed to `{ a, b }` at the call (§3). Neither side reaches into the other: the script does not add `c` to `sum`'s parameter, and `sum` does not narrow a value whose uses it cannot see.
+
+The transparent structured types are six: the object, the enum, the tuple, the array, `Option` and `Result`. No other type is one. Each is transparent recursively: the side that holds a value of one sees each of its parts, and each part that is itself one of the six, at any depth. Only the object and the enum grow; the tuple, the array, `Option` and `Result` have one shape wherever they are written, so where they are written makes no difference to them.
+
+The side that holds such a value sees all of it, and its shape is the language's own, so its meaning is its parts'. It has an impl of a generic function (extern fn §6) where the function's meaning at the type maps one to one onto its parts, every part has an impl of it, and that meaning relies on no law the parts' impls state. `clone` is such a function. `eq` is not: whether the structure's equality would be partial or total cannot be known.
 
 ## 2. Join
 
@@ -13,6 +45,14 @@ Two object types join at the union of their fields. Two enums of one name join a
 A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it. Values of one identity keep it; values of two identities meet at their nearest common ancestor that carries no identity, and where there is none, they do not meet. No identity is made to join two others.
 
 Type constructors stay invariant: subtyping applies to a value entering a slot, not to a constructor's argument.
+
+A value of a transparent structured type that leaves for a slot of the same kind (§1) coerces by its kind's shape, and part by part down to the parts that are not one. Each of those parts, a concrete type, coerces as any value of its type is coerced to a slot: by the tree above and by §7. The shape coerces by its kind:
+
+- An object narrows to the fields the slot names. The value holds each of them; the others end where it is narrowed (ownership §6).
+- An enum widens to the variants the slot names. The slot names every variant the value may hold.
+- A tuple keeps its arity, an array its length, and `Option` and `Result` their variants.
+
+The coercion makes a value of the slot's type. No type becomes a subtype of another, and the constructors stay invariant.
 
 ## 4. Bottom and invariance
 

@@ -30,7 +30,7 @@ The lang items are Rust's, but for two:
 
 ## 4. Equality and ordering
 
-Equality and ordering mean what they mean in Rust, with one exception: `NaN == NaN` is true. A structural type compares part by part where its parts compare; any other type compares through its `core::eq` and `core::cmp` impls.
+Equality and ordering mean what they mean in Rust, with one exception: `NaN == NaN` is true. A transparent structured type (types §1) compares part by part where its parts compare; any other type compares through its `core::eq` and `core::cmp` impls.
 
 ## 5. Casts and coercion
 
