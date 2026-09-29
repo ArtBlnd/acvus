@@ -4,7 +4,7 @@ A program is written in one of three kinds of source.
 
 ## 1. Template (`acvt`)
 
-Text with values interpolated in `{{ }}`, each formatted by `core::display`, and control lines that begin with `%`. Lambdas are a script's.
+Text with values interpolated in `{{ }}`, each formatted by `core::display`, and control lines that begin with `%`. Lambdas are a script's. A template's result is the `String` it builds. So a `return` or a `?` that would leave the template itself is refused: what it leaves with is not that `String`. Inside a lambda, either leaves the lambda only.
 
 ```acvt
 You talk with {{ $user }}.
