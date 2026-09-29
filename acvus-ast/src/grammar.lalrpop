@@ -7,7 +7,7 @@ use crate::error::{BlockStatement, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
 use crate::nesting::{Level, Nested};
 use crate::parser::{
-    BindLine, Declares, ForLine, Recover, binary, block_closed, build_assign, build_call,
+    BindLine, CallArgs, Declares, ForLine, Recover, binary, block_closed, build_assign, build_call,
     expr_stmt, fn_declared, holding_one, holding_two, let_bind, literal_of, match_arm,
     object_field, paren_or_tuple, pattern_of, qualified_name, recovered, resumed, stated,
 };
@@ -555,9 +555,28 @@ CalleeExpr<Lead>: Nested<Expr<S>> = {
         let args = level.all(args);
         level.node(Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver, name, name_span: Span::new(nl, nr), args, span }, span)
     },
-    <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>?
+    <l:@L> <func:CalleeExpr<Lead>> "(" <args:Args> ")" <r:@R> =>?
         build_call(interner, func, args, Span::new(l, r)),
     Lead,
+};
+
+// A call's arguments: all by position or all by name, never both
+// (programs §1, §2). A method call's are by position only.
+Args: CallArgs<S> = {
+    <args:CommaSep<CallArg>> => CallArgs::Positional(args),
+    <args:NamedArgs> => CallArgs::Named(args),
+};
+
+NamedArgs: Vec<(Binder, Nested<Expr<S>>)> = {
+    <args:(<NamedArg> ",")+> => args,
+    <mut args:(<NamedArg> ",")*> <last:NamedArg> => {
+        args.push(last);
+        args
+    },
+};
+
+NamedArg: (Binder, Nested<Expr<S>>) = {
+    <label:Binder> ":" <arg:CallArg> => (label, arg),
 };
 
 CallArg: Nested<Expr<S>> = {

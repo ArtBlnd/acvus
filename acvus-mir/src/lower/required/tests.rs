@@ -95,7 +95,7 @@ fn declarations(interner: &Interner) -> Declarations {
         conversions: Vec::new(),
         lang_impls: Vec::new(),
         contexts: vec![context("page", int, false), context("clock", int, true), context("note", string, false)],
-        inputs: Vec::new(),
+        entries: Vec::new(),
         loop_markers: LoopMarkers::default(),
         core: Core::of(interner),
     })

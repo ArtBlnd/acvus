@@ -419,7 +419,7 @@ pub enum Expr<S = Clean> {
     FuncCall {
         id: AstId,
         func: Box<Expr<S>>,
-        args: Vec<Expr<S>>,
+        args: Args<S>,
         span: Span,
     },
     /// `recv.f(args)`: the call `f(recv', args)` (RFC-0030). `callee_id`
@@ -675,6 +675,34 @@ pub struct Binder {
     pub id: AstId,
     pub name: Astr,
     pub span: Span,
+}
+
+/// A call's arguments: all by position, or all by name (programs §1, §2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Args<S = Clean> {
+    Positional(Vec<Expr<S>>),
+    Named(Vec<(Binder, Expr<S>)>),
+}
+
+impl<S> Args<S> {
+    /// Every argument's expression, in the order written.
+    pub fn exprs(&self) -> Box<dyn Iterator<Item = &Expr<S>> + '_> {
+        match self {
+            Args::Positional(args) => Box::new(args.iter()),
+            Args::Named(args) => Box::new(args.iter().map(|(_, arg)| arg)),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Args::Positional(args) => args.len(),
+            Args::Named(args) => args.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// A field in an object expression.
@@ -1101,7 +1129,7 @@ fn walk_expr_level<S>(expr: &Expr<S>, refs: &mut ContextRefs) {
         }
         Expr::FuncCall { func, args, .. } => {
             walk_expr(func, refs);
-            for arg in args {
+            for arg in args.exprs() {
                 walk_expr(arg, refs);
             }
         }

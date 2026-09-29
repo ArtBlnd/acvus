@@ -52,18 +52,39 @@ pub(super) enum Run {
     Template,
 }
 
-/// The bindings in scope, innermost last, the kind of run, and the run's
-/// own result slot once a `return`, a `?` or the tail names it.
+/// The run's inputs, its parameters (programs §4), each by name with its
+/// term.
+enum Inputs {
+    /// Each `$name` read is a parameter: a fresh term, made at its first
+    /// read, that its uses decide.
+    Open(FxHashMap<Astr, Term>),
+    /// The inputs given, each at its type; no other `$name` is one.
+    Fixed(FxHashMap<Astr, Term>),
+}
+
+/// What `$name` is among the run's inputs.
+pub(super) enum InputRead {
+    Entered(Term),
+    /// An open input read for the first time: its term is to be made.
+    Unread,
+    Unknown,
+}
+
+/// The bindings in scope, innermost last, the kind of run, its inputs, and
+/// the run's own result slot once a `return`, a `?` or the tail names it.
 pub(super) struct Scope {
     frames: Vec<Frame>,
     run: Run,
+    inputs: Inputs,
     run_result: Option<Term>,
 }
 
 impl Scope {
+    /// A run whose inputs are open, until `fix_inputs`.
     pub fn new(run: Run) -> Self {
         Self {
             run,
+            inputs: Inputs::Open(FxHashMap::default()),
             frames: vec![Frame {
                 names: FxHashMap::default(),
                 body: None,
@@ -217,6 +238,45 @@ impl Scope {
         self.run
     }
 
+    /// The run's inputs are `given`, each at its term, and no other.
+    pub fn fix_inputs(&mut self, given: FxHashMap<Astr, Term>) {
+        self.inputs = Inputs::Fixed(given);
+    }
+
+    pub fn input(&self, name: Astr) -> InputRead {
+        let (Inputs::Open(entered) | Inputs::Fixed(entered)) = &self.inputs;
+        match (entered.get(&name), &self.inputs) {
+            (Some(term), _) => InputRead::Entered(*term),
+            (None, Inputs::Open(_)) => InputRead::Unread,
+            (None, Inputs::Fixed(_)) => InputRead::Unknown,
+        }
+    }
+
+    /// Every input's term entered so far: the run's parameters, which the
+    /// run's scope holds wherever each was first read.
+    pub fn input_terms(&self) -> impl Iterator<Item = Term> + '_ {
+        let (Inputs::Open(entered) | Inputs::Fixed(entered)) = &self.inputs;
+        entered.values().copied()
+    }
+
+    /// An open input's term, made at its first read.
+    ///
+    /// # Panics
+    /// The inputs are fixed, or `name` is already read: `input` answers
+    /// `Unread` only for an open input not yet read.
+    pub fn enter_input(&mut self, name: Astr, term: Term) {
+        let Inputs::Open(read) = &mut self.inputs else {
+            panic!("Scope::enter_input: only an open input is made at its read");
+        };
+        assert!(read.insert(name, term).is_none(), "Scope::enter_input: an input is made once, at its first read");
+    }
+
+    /// Whether `name` is a fixed input. An open run knows its inputs only as
+    /// `$name` reads them.
+    pub fn is_fixed_input(&self, name: Astr) -> bool {
+        matches!(&self.inputs, Inputs::Fixed(given) if given.contains_key(&name))
+    }
+
     /// Where the innermost lambda's calls' effects join; `None` outside
     /// every lambda, where they join the run's (`Output::body_effect`).
     pub fn lambda_effect(&mut self) -> Option<&mut Option<EffectTerm<InferPhase>>> {
@@ -273,14 +333,22 @@ pub(super) fn check_ident(
     }
 }
 
-/// `$name`: the value the host passes, at its declared type (programs §4).
-/// Read inside a lambda, it is a capture of each lambda around it, as a
-/// binding is (functions §2).
+/// `$name`: a parameter of the run (programs §4), at its term. Read inside a
+/// lambda, it is a capture of each lambda around it, as a binding is
+/// (functions §2).
 fn check_input(cx: &mut Ctxt<'_>, site: AstId, name: Astr, span: Span) -> Term {
-    match cx.decls.input(name) {
-        Some(ty) => {
+    let entered = match cx.scope.input(name) {
+        InputRead::Entered(term) => Some(term),
+        InputRead::Unread => {
+            let term = cx.fresh();
+            cx.scope.enter_input(name, term);
+            Some(term)
+        }
+        InputRead::Unknown => None,
+    };
+    match entered {
+        Some(term) => {
             cx.out.names.insert(site, Name::Input(name));
-            let term = cx.declared(ty);
             let crossed = cx.scope.lambdas();
             let capturing = Capturing {
                 name,
@@ -335,9 +403,9 @@ pub(super) fn capturing_binding(name: Astr, found: &Found) -> Capturing<'_> {
 /// `x = v`: a binding in scope; an input is never assigned (programs §4).
 pub(super) fn check_assign(cx: &mut Ctxt<'_>, site: AstId, name: Astr, value: Term, span: Span) {
     let Some(found) = cx.scope.lookup(name) else {
-        let kind = match cx.decls.input(name) {
-            Some(_) => RefusalKind::InputAssigned { input: name },
-            None => RefusalKind::UnknownName { name },
+        let kind = match cx.scope.is_fixed_input(name) {
+            true => RefusalKind::InputAssigned { input: name },
+            false => RefusalKind::UnknownName { name },
         };
         refusal::push(cx, kind, span);
         return;

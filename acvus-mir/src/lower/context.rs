@@ -175,7 +175,7 @@ impl<'t> Namer<'t> {
             Expr::Return { value, .. } => self.expr(value),
             Expr::FuncCall { func, args, .. } => {
                 self.expr(func);
-                args.iter().for_each(|arg| self.expr(arg));
+                args.exprs().for_each(|arg| self.expr(arg));
             }
             Expr::MethodCall { receiver, args, .. } => {
                 self.expr(receiver);

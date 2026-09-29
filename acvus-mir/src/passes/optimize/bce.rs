@@ -145,7 +145,7 @@ mod tests {
             casts: Vec::new(),
             conversions: Vec::new(),
             contexts: Vec::new(),
-            inputs: Vec::new(),
+            entries: Vec::new(),
             loop_markers: LoopMarkers::default(),
             core: Core::of(&interner),
         })

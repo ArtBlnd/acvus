@@ -246,14 +246,16 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     spans.push((start, end));
     let own = Own(spans);
 
-    // What outside holds: every variable made elsewhere, and every one its
-    // types reach.
+    // What outside holds: every variable made elsewhere, the run's inputs,
+    // which the run's scope holds wherever each was first read (programs
+    // §4), and every one their types reach.
     let marks = cx.infer.var_marks();
     let elsewhere: Vec<Term> = (0..marks.types)
         .filter(|index| !own.made(|marks| marks.types, *index))
         .collect::<Vec<_>>()
         .into_iter()
         .map(|index| cx.infer.var_term(TyVarId(index)))
+        .chain(cx.scope.input_terms())
         .collect();
     // A body's effect is where its calls' effects flow (effects §1): the
     // run's, and each lambda's outside the binding's own, stay one, whichever

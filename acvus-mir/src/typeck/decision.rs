@@ -1554,14 +1554,20 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
     match &callee {
         Callee::Required(required) => {
             cx.join(required.pattern, ty, crate::ty::Reach::Named, span);
-            let parent = cx
-                .out
-                .reached
-                .get_mut(&site)
-                .expect("a requirement is reached after the call that states it");
-            let mut all = parent.required.to_vec();
-            all.push(chosen);
-            parent.required = all.into();
+            // A unit's instantiation is compiled at the call's types, where
+            // its own calls reach their impls, so what a requirement of a
+            // unit call chose is checked here and passed nowhere.
+            match cx.out.reached.get_mut(&site) {
+                Some(parent) => {
+                    let mut all = parent.required.to_vec();
+                    all.push(chosen);
+                    parent.required = all.into();
+                }
+                None => assert!(
+                    cx.out.units.contains_key(&site),
+                    "a requirement is reached after the call that states it"
+                ),
+            }
         }
         Callee::Part(part) => {
             cx.join(part.pattern, ty, crate::ty::Reach::Named, span);

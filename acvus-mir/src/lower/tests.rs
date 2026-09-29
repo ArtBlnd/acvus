@@ -14,11 +14,13 @@ use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
-use crate::typeck::{check_script, check_template};
+use crate::typeck::{Inputs, Interface, Interfaces, check_script, check_template};
 
 struct Fixture {
     names: Interner,
     raw: RawDeclarations,
+    /// Each input `$x` with its type, at which a run's inputs are fixed.
+    inputs: Vec<(Astr, TyId<Poly>)>,
 }
 
 impl Fixture {
@@ -35,10 +37,11 @@ impl Fixture {
                 casts: Vec::new(),
                 conversions: Vec::new(),
                 contexts: Vec::new(),
-                inputs: Vec::new(),
+                entries: Vec::new(),
                 loop_markers: LoopMarkers::default(),
                 core,
             },
+            inputs: Vec::new(),
         }
     }
 
@@ -91,7 +94,7 @@ impl Fixture {
 
     fn input(&mut self, name: &str, ty: TyId<Poly>) {
         let name = self.name(name);
-        self.raw.inputs.push((name, ty));
+        self.inputs.push((name, ty));
     }
 
     fn context(&mut self, name: &str, ty: TyId<Poly>, volatile: bool) -> QualifiedRef {
@@ -178,10 +181,16 @@ impl Fixture {
     }
 
     fn script(self, source: &str) -> Lowered {
+        self.script_calling(&Interfaces::new(), source)
+    }
+
+    /// `source` lowered, its calls reaching the units of `interfaces` too.
+    fn script_calling(self, interfaces: &Interfaces, source: &str) -> Lowered {
         let script: Script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_script(&self.names, &decls, &mut types, &script);
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_script(&self.names, &decls, interfaces, Inputs::Fixed(&inputs), &mut types, &script);
         assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
         let module = lower_script(&decls, &typeck, types, &script);
         Lowered::checked(module, self.names)
@@ -191,7 +200,8 @@ impl Fixture {
         let template = acvus_ast::parse_template(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_template(&self.names, &decls, &mut types, &template);
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_template(&self.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &template);
         assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
         let module = lower_template(&decls, &typeck, types, &template);
         Lowered::checked(module, self.names)
@@ -470,7 +480,8 @@ fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
     let script: Script = acvus_ast::parse_script(&fx.names, "if let (Some(a), b) = pair() { 1 } else { 2 }").expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&fx.names, &decls, &mut types, &script);
+    let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &fx.inputs);
+    let typeck = check_script(&fx.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -578,6 +589,48 @@ fn effectful_calls_are_chained_in_order() {
     assert_eq!(Some(first.before), lowered.entry().order_param());
     assert_eq!(second.before, first.after);
     assert!(lowered.entry_ops().iter().any(|op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == f)));
+}
+
+/// programs §1, §2, graph: a call of a unit is a call of its instantiation
+/// at the call's types, the unit named directly; its arguments are passed
+/// in the order of its parameters, whatever order they are written in.
+#[test]
+fn a_unit_call_passes_its_arguments_in_the_parameters_order() {
+    let fx = Fixture::new();
+    let mut interfaces = Interfaces::new();
+    let types = interfaces.types_mut();
+    let (bool_ty, i64_ty, string) = (types.intern(TyKind::Bool), types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
+    let ty = types.intern(TyKind::Fn {
+        params: Box::new([bool_ty, i64_ty]),
+        ret: string,
+        effect: EffectTerm::Known(Effect::pure()),
+        flows: FlowTerm::Known(Flows::none()),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+        values: (),
+    });
+    let scheme = Scheme {
+        ty,
+        param_names: Box::new([fx.name("user"), fx.name("times")]),
+        bounds: Box::new([]),
+        impls: None,
+        requires: Box::new([]),
+        facts: DeclaredFacts::default(),
+    };
+    let greet = QualifiedRef::qualified(fx.names.namespace(&[fx.name("ns")]), fx.name("greet"));
+    interfaces.set(greet, Interface { scheme });
+    let lowered = fx.script_calling(&interfaces, "ns::greet(times: 2, user: true)");
+    let body = lowered.entry();
+    let passed = lowered
+        .entry_ops()
+        .into_iter()
+        .find_map(|op| match op {
+            Op::FunctionCall { callee: Callee::Direct(unit), args, .. } if *unit == greet => Some(args.clone()),
+            _ => None,
+        })
+        .expect("the unit is called directly");
+    let kinds: Vec<&TyKind<Concrete>> = passed.iter().map(|arg| lowered.kind_of(body, *arg)).collect();
+    assert_eq!(kinds, vec![&TyKind::Bool, &TyKind::Int(IntTy::I64)]);
 }
 
 /// Inside `anyorder`, every call consumes the entry token, and what they
@@ -890,7 +943,8 @@ fn lowered_with_loans(fx: Fixture, source: &str) -> (Lowered, std::rc::Rc<crate:
     let script: Script = acvus_ast::parse_script(&fx.names, source).expect("the test's source parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&fx.names, &decls, &mut types, &script);
+    let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &fx.inputs);
+    let typeck = check_script(&fx.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -980,7 +1034,8 @@ fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
     .expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&fx.names, &decls, &mut types, &script);
+    let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &fx.inputs);
+    let typeck = check_script(&fx.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -1297,7 +1352,8 @@ fn part_trees_survive_the_required_steps_and_the_pipeline() {
     let script: Script = acvus_ast::parse_script(&fx.names, "let c = $t.clone(); $a < $b").expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&fx.names, &decls, &mut types, &script);
+    let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &fx.inputs);
+    let typeck = check_script(&fx.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -1312,7 +1368,8 @@ fn through_the_pipeline(fx: Fixture, source: &str) -> Result<(), Vec<crate::chec
     let script: Script = acvus_ast::parse_script(&fx.names, source).expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&fx.names, &decls, &mut types, &script);
+    let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &fx.inputs);
+    let typeck = check_script(&fx.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);

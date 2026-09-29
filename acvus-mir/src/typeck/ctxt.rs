@@ -2,6 +2,7 @@ use acvus_ast::{AstId, Span};
 use acvus_utils::Interner;
 
 use super::decision::{Decision, Decisions, Pending};
+use super::interface::Interfaces;
 use super::output::Output;
 use super::refusal;
 use super::scope::{Run, Scope};
@@ -9,11 +10,13 @@ use crate::decl::Declarations;
 use crate::infer::{Bound, Closed, Infer, Term};
 use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind};
 
-/// The shared state of one checked body (S1): the declarations it reads,
-/// and four things it builds. No rule holds state of its own.
+/// The shared state of one checked body (S1): the declarations and the
+/// units' interfaces it reads, and four things it builds. No rule holds
+/// state of its own.
 pub(super) struct Ctxt<'d> {
     pub interner: &'d Interner,
     pub decls: &'d Declarations,
+    pub interfaces: &'d Interfaces,
     pub infer: Infer,
     pub scope: Scope,
     pub decisions: Decisions,
@@ -21,10 +24,11 @@ pub(super) struct Ctxt<'d> {
 }
 
 impl<'d> Ctxt<'d> {
-    pub fn new(interner: &'d Interner, decls: &'d Declarations, run: Run) -> Self {
+    pub fn new(interner: &'d Interner, decls: &'d Declarations, interfaces: &'d Interfaces, run: Run) -> Self {
         Self {
             interner,
             decls,
+            interfaces,
             infer: Infer::new(),
             scope: Scope::new(run),
             decisions: Decisions::default(),
@@ -138,8 +142,8 @@ impl<'d> Ctxt<'d> {
         self.infer.fixed(&pending, term)
     }
 
-    /// A declared type that is not a function's (a context's, an input's)
-    /// at this body: every node `Opaque` (types §1).
+    /// A context's declared type at this body: every node `Opaque`
+    /// (types §1).
     pub fn declared(&mut self, ty: TyId<Poly>) -> Term {
         self.infer.instantiate_type(self.decls, ty)
     }

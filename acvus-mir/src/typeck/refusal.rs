@@ -24,6 +24,18 @@ pub enum RefusalKind {
     UnnamedVariant { tag: Astr },
     UnknownName { name: Astr },
     UnknownContext { context: QualifiedRef },
+    /// A call by name of what is no unit: only a unit's parameters have
+    /// names a call passes by (programs §1, §2).
+    NamedArgumentsToNonUnit,
+    /// A unit called by position: its parameters are passed by name
+    /// (programs §1, §2).
+    UnitCalledByPosition { unit: QualifiedRef },
+    /// An argument named for no parameter of the unit called.
+    UnknownArgument { unit: QualifiedRef, name: Astr },
+    /// Two arguments named for one parameter.
+    DuplicateArgument { unit: QualifiedRef, name: Astr },
+    /// A parameter of the unit called that no argument names.
+    MissingArgument { unit: QualifiedRef, name: Astr },
     /// A context's or a run's value whose type holds a loan (ownership §5).
     HoldsLoans,
     /// A store into a place reached through a shared reference, `*r = v` or

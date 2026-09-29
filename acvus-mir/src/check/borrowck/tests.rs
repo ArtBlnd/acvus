@@ -34,14 +34,14 @@ impl Found {
             casts: Vec::new(),
             conversions: Vec::new(),
             contexts: Vec::new(),
-            inputs: Vec::new(),
+            entries: Vec::new(),
             loop_markers: LoopMarkers::default(),
             core: Core::of(&names),
         };
         let script: Script = acvus_ast::parse_script(&names, source).expect("the test's source parses");
         let decls = Declarations::verify(raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_script(&names, &decls, &mut types, &script);
+        let typeck = check_script(&names, &decls, &crate::typeck::Interfaces::new(), crate::typeck::Inputs::Fixed(&[]), &mut types, &script);
         assert!(typeck.refusals.is_empty(), "typeck refused {source:?}: {:?}", typeck.refusals);
         let mut module: Module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
@@ -195,7 +195,7 @@ fn lambda_returning_its_parameter(flows: Flows) -> Vec<crate::check::Refusal> {
         casts: Vec::new(),
         conversions: Vec::new(),
         contexts: Vec::new(),
-        inputs: Vec::new(),
+        entries: Vec::new(),
         loop_markers: LoopMarkers::default(),
         core: Core::of(&names),
     };

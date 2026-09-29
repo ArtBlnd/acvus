@@ -125,6 +125,7 @@ fn lower_ident<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span:
             let place = operand(cx, expr, Mutability::Shared);
             read(cx, place, span)
         }
+        Some(Name::Unit(unit)) => panic!("a unit is named only as the callee of a call by name, which calls it without reading its name, not {unit:?}"),
         None => panic!("typeck names every name of an admitted program, and not {site:?}"),
     }
 }

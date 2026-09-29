@@ -7,7 +7,7 @@ use super::casts::{Base, CastTree, Head, VerifiedExternCast};
 use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::impl_fit::is_impl_of;
-use super::{CastRule, ContextDecl, Core, Declarations, Impls, RawDeclarations, Requirement, Scheme, UserTypeDecl};
+use super::{CastRule, ContextDecl, Core, Declarations, EntryDecl, Impls, RawDeclarations, Requirement, Scheme, UserTypeDecl};
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
 use crate::ty::{
@@ -47,8 +47,6 @@ pub enum Refused {
     /// Two declarations of one context, which is one value of one fixed
     /// type (context).
     DuplicateContext { id: QualifiedRef },
-    /// Two declarations of one input (programs §4).
-    DuplicateInput { name: acvus_utils::Astr },
     /// A type the declarations write names an extern-defined type no
     /// declaration gives (extern-fn §8).
     UndeclaredType { written: Written, id: QualifiedRef },
@@ -58,9 +56,10 @@ pub enum Refused {
     /// A declared type holds a reference whose target is a reference
     /// (types §4).
     ReferenceToReference { written: Written },
-    /// A context's or an input's declared type holds a type variable. Each
-    /// is one value of one fixed type (context §2), so no use chooses the
-    /// variable.
+    /// A context's or an entry's declared type holds a type variable. A
+    /// context is one value of one fixed type (context §2), and an entry is
+    /// instantiated at the types the host declares for it (programs), so no
+    /// use chooses the variable.
     TypeVariableInValueType { written: Written },
     /// A declared cast or conversion whose `via` is no declared function
     /// of type `fn(from) -> to` at the rule's own ends, or one with impls:
@@ -147,7 +146,8 @@ pub enum Refused {
 pub enum Written {
     Function(QualifiedRef),
     Context(QualifiedRef),
-    Input(acvus_utils::Astr),
+    /// An entry's input or result, by the function it starts at.
+    Entry(QualifiedRef),
     Cast(QualifiedRef),
     Conversion(QualifiedRef),
 }
@@ -162,7 +162,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         casts,
         conversions,
         contexts,
-        inputs,
+        entries,
         loop_markers,
         core,
     } = raw;
@@ -178,11 +178,11 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
             casts: &casts,
             conversions: &conversions,
             contexts: &contexts,
-            inputs: &inputs,
+            entries: &entries,
         },
         &mut refused,
     );
-    refuse_type_variables_in_value_types(&types, &contexts, &inputs, &mut refused);
+    refuse_type_variables_in_value_types(&types, &contexts, &entries, &mut refused);
     refuse_array_types(&types, &functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
     refuse_unfit_bounds(&types, &functions, &mut refused);
@@ -191,7 +191,6 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let overloads = overloads(&declared_order);
     let functions = first_stands(functions, &mut refused, |id| Refused::DuplicateFunction { id });
     let contexts = first_stands(contexts, &mut refused, |id| Refused::DuplicateContext { id });
-    let inputs = first_stands(inputs, &mut refused, |name| Refused::DuplicateInput { name });
     let misfits = refuse_misfit_impls(&types, &declared_order, &functions, &mut refused);
     declared::refuse_ill_formed(&mut types, &core, &functions, &declared_order, &mut refused);
     refuse_vias_not_their_functions(&types, &functions, &casts, &conversions, &mut refused);
@@ -212,7 +211,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         conversions,
         lifts,
         contexts,
-        inputs,
+        entries,
         loop_markers,
         core,
     };
@@ -504,7 +503,7 @@ struct DeclaredTypes<'d> {
     casts: &'d [CastRule],
     conversions: &'d [ConversionRule],
     contexts: &'d [(QualifiedRef, ContextDecl)],
-    inputs: &'d [(Astr, TyId<Poly>)],
+    entries: &'d [EntryDecl],
 }
 
 /// Every type a scheme writes: its signature, its impls' and every
@@ -537,12 +536,11 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
         ]
     });
     let contexts = declared.contexts.iter().map(|(id, declared)| (Written::Context(*id), declared.ty));
-    let inputs = declared.inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
     functions
         .chain(casts)
         .chain(conversions)
         .chain(contexts)
-        .chain(inputs)
+        .chain(declared.entries.iter().flat_map(entry_types))
 }
 
 /// extern-fn §8: a type term names only declared types; effects §3, §6:
@@ -582,17 +580,23 @@ fn refuse_unwritable_types(
     unreadable
 }
 
-/// context §2: a context's and an input's declared type is one fixed type,
-/// so it holds no type variable.
+/// Every type an entry writes: its inputs' and its result's.
+fn entry_types(entry: &EntryDecl) -> impl Iterator<Item = (Written, TyId<Poly>)> + '_ {
+    let written = Written::Entry(entry.function);
+    entry.inputs.iter().map(|(_, ty)| *ty).chain(entry.result).map(move |ty| (written, ty))
+}
+
+/// context §2: a context's declared type is one fixed type; programs: an
+/// entry is instantiated at the types the host declares. So neither holds
+/// a type variable.
 fn refuse_type_variables_in_value_types(
     types: &Types<Poly>,
     contexts: &[(QualifiedRef, ContextDecl)],
-    inputs: &[(Astr, TyId<Poly>)],
+    entries: &[EntryDecl],
     refused: &mut Vec<Refused>,
 ) {
     let contexts = contexts.iter().map(|(id, declared)| (Written::Context(*id), declared.ty));
-    let inputs = inputs.iter().map(|(name, ty)| (Written::Input(*name), *ty));
-    for (written, ty) in contexts.chain(inputs) {
+    for (written, ty) in contexts.chain(entries.iter().flat_map(entry_types)) {
         if holds_type_variable(types, ty) {
             refused.push(Refused::TypeVariableInValueType { written });
         }
@@ -1306,7 +1310,7 @@ mod tests {
                     casts: Vec::new(),
                     conversions: Vec::new(),
                     contexts: Vec::new(),
-                    inputs: Vec::new(),
+                    entries: Vec::new(),
                     loop_markers: LoopMarkers::default(),
                     core,
                 },
@@ -1543,17 +1547,21 @@ mod tests {
         assert!(Fixture::new().verify().is_ok());
     }
 
-    /// context §2: a context's and an input's type is one fixed type, so a
-    /// type variable in either is refused.
+    /// context §2: a context's type is one fixed type; programs: an entry
+    /// is instantiated at the types the host declares. So a type variable
+    /// in either is refused, in an entry's input or its result.
     #[test]
-    fn a_context_or_an_input_holding_a_type_variable_is_refused() {
+    fn a_context_or_an_entry_holding_a_type_variable_is_refused() {
         let mut fixture = Fixture::new();
         let context = fixture.name("m", "c");
+        let (by_input, by_result) = (fixture.name("m", "f"), fixture.name("m", "g"));
         let input = fixture.interner.intern("i");
         let var = fixture.ty(TyKind::Var(0));
         let option = fixture.ty(TyKind::Option(var, ()));
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
         fixture.raw.contexts.push((context, ContextDecl { ty: option, volatile: false }));
-        fixture.raw.inputs.push((input, var));
+        fixture.raw.entries.push(EntryDecl { function: by_input, inputs: vec![(input, var)], result: Some(int) });
+        fixture.raw.entries.push(EntryDecl { function: by_result, inputs: vec![(input, int)], result: Some(option) });
         assert_eq!(
             refusals(fixture),
             vec![
@@ -1561,7 +1569,10 @@ mod tests {
                     written: Written::Context(context)
                 },
                 Refused::TypeVariableInValueType {
-                    written: Written::Input(input)
+                    written: Written::Entry(by_input)
+                },
+                Refused::TypeVariableInValueType {
+                    written: Written::Entry(by_result)
                 },
             ]
         );
@@ -2328,18 +2339,6 @@ mod tests {
         assert_eq!(decls.context(volatile), Some(int));
     }
 
-    /// programs §4: an input `$x` has one type, so two declarations of it
-    /// are refused.
-    #[test]
-    fn two_inputs_under_one_name_are_refused() {
-        let mut fixture = Fixture::new();
-        let name = fixture.interner.intern("x");
-        let int = fixture.ty(TyKind::Int(IntTy::I64));
-        fixture.raw.inputs.push((name, int));
-        fixture.raw.inputs.push((name, int));
-        assert_eq!(refusals(fixture), vec![Refused::DuplicateInput { name }]);
-    }
-
     fn undeclared(fixture: &mut Fixture, id: QualifiedRef) -> TyId<Poly> {
         fixture.ty(TyKind::UserDefined {
             id,
@@ -2637,18 +2636,19 @@ mod tests {
         );
     }
 
-    /// extern-fn §8: an input's type is a type term too.
+    /// extern-fn §8: an entry's types are type terms too.
     #[test]
-    fn an_input_naming_an_undeclared_type_is_refused() {
+    fn an_entry_naming_an_undeclared_type_is_refused() {
         let mut fixture = Fixture::new();
         let ghost = fixture.name("m", "Ghost");
+        let function = fixture.name("m", "f");
         let name = fixture.interner.intern("x");
         let ghost_ty = undeclared(&mut fixture, ghost);
-        fixture.raw.inputs.push((name, ghost_ty));
+        fixture.raw.entries.push(EntryDecl { function, inputs: vec![(name, ghost_ty)], result: None });
         assert_eq!(
             refusals(fixture),
             vec![Refused::UndeclaredType {
-                written: Written::Input(name),
+                written: Written::Entry(function),
                 id: ghost
             }]
         );

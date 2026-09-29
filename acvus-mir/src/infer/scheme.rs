@@ -1,4 +1,7 @@
-//! A declaration's scheme at one use (extern-fn §6).
+//! A declaration's scheme at one use (extern-fn §6), and a type written
+//! elsewhere, declared or concrete, at one use.
+
+use std::convert::Infallible;
 
 use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
@@ -6,8 +9,8 @@ use rustc_hash::FxHashMap;
 use super::{Bound, Infer, Term};
 use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound};
 use crate::ty::{
-    CallsTerm, EffectArg, FnValues, EffectTerm, HoldsTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
-    LenVarId, ObjectTy, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
+    Calls, CallsTerm, Concrete, EffectArg, EffectTerm, EffectVarId, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
+    Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy, Phase, Poly, ReprVarId, Ty, TyId, TyKind, TypeArg, Types,
 };
 
 /// A requirement at the use's own terms: an impl of `generic_function` whose
@@ -26,6 +29,55 @@ pub struct Instantiated {
     pub requirements: Vec<RequiredAt>,
 }
 
+/// A variable of a written type: a declaration's positional placeholder,
+/// or none, in a concrete type.
+pub(super) trait Placeholder: Copy {
+    fn index(self) -> u32;
+}
+
+impl Placeholder for u32 {
+    fn index(self) -> u32 {
+        self
+    }
+}
+
+impl Placeholder for Infallible {
+    fn index(self) -> u32 {
+        match self {}
+    }
+}
+
+/// A phase whose types a use instantiates: written elsewhere, so each has
+/// its flows, holds and calls fixed and no label.
+pub(super) trait Instantiable:
+    Phase<
+        TyVar: Placeholder,
+        EffectVar: Placeholder,
+        LenVar: Placeholder,
+        IdentityVar: Placeholder,
+        ReprVar: Placeholder,
+        FlowVar = Infallible,
+        HoldsTerm = Holds,
+        CallsTerm = Calls,
+        ValuesTerm = (),
+        Label = (),
+    >
+{
+    fn flows(flows: &FlowTerm<Self>) -> &Flows;
+}
+
+impl Instantiable for Poly {
+    fn flows(flows: &FlowTerm<Poly>) -> &Flows {
+        flows.get()
+    }
+}
+
+impl Instantiable for Concrete {
+    fn flows(flows: &FlowTerm<Concrete>) -> &Flows {
+        flows.get()
+    }
+}
+
 /// Where a placeholder's variable comes from.
 #[derive(Clone, Copy)]
 enum Placeholders {
@@ -33,16 +85,19 @@ enum Placeholders {
     Declared,
     /// A cast's patterns': declared with no bound, so any type.
     Unbounded,
-    /// A context's or an input's type, which has none.
+    /// A context's type, or a concrete type, which has none.
     Absent,
 }
 
-/// One use's fresh variables, one per placeholder, and each declared type
+/// One use's fresh variables, one per placeholder, and each written type
 /// already instantiated, so a shared subterm is built once.
-struct AtUse<'a> {
-    poly: &'a Types<Poly>,
+struct AtUse<'a, V>
+where
+    V: Instantiable,
+{
+    written: &'a Types<V>,
     placeholders: Placeholders,
-    built: FxHashMap<TyId<Poly>, Term>,
+    built: FxHashMap<TyId<V>, Term>,
     ty_vars: FxHashMap<u32, Term>,
     effect_vars: FxHashMap<u32, EffectVarId>,
     len_vars: FxHashMap<u32, LenVarId>,
@@ -50,10 +105,13 @@ struct AtUse<'a> {
     repr_vars: FxHashMap<u32, ReprVarId>,
 }
 
-impl<'a> AtUse<'a> {
-    fn new(poly: &'a Types<Poly>, placeholders: Placeholders) -> Self {
+impl<'a, V> AtUse<'a, V>
+where
+    V: Instantiable,
+{
+    fn new(written: &'a Types<V>, placeholders: Placeholders) -> Self {
         Self {
-            poly,
+            written,
             placeholders,
             built: FxHashMap::default(),
             ty_vars: FxHashMap::default(),
@@ -71,7 +129,13 @@ impl Infer {
     /// type it builds may be `Any` function value; a type parameter's place
     /// takes the program's term as it is (types §1-2).
     pub fn instantiate(&mut self, decls: &Declarations, scheme: &Scheme) -> Instantiated {
-        let mut at = AtUse::new(decls.types(), Placeholders::Declared);
+        self.instantiate_in(decls.types(), scheme)
+    }
+
+    /// `scheme`, whose types are in `poly`, at fresh variables, as
+    /// `instantiate` makes a declaration's.
+    pub fn instantiate_in(&mut self, poly: &Types<Poly>, scheme: &Scheme) -> Instantiated {
+        let mut at = AtUse::new(poly, Placeholders::Declared);
         let vars: Vec<Term> = scheme.bounds.iter().map(|declared| self.fresh(bound_of(declared))).collect();
         at.ty_vars.extend((0u32..).zip(vars));
         let ty = self.instantiate_ty(&mut at, scheme.ty);
@@ -100,6 +164,13 @@ impl Infer {
         self.instantiate_ty(&mut at, ty)
     }
 
+    /// A concrete type, such as a fixed input's, at this use, as
+    /// `instantiate_type` makes a declared one: written elsewhere.
+    pub fn instantiate_concrete(&mut self, types: &Types<Concrete>, ty: Ty) -> Term {
+        let mut at = AtUse::new(types, Placeholders::Absent);
+        self.instantiate_ty(&mut at, ty)
+    }
+
     /// A cast's or a conversion's two patterns at one use, sharing their
     /// fresh variables (extern-fn §7).
     pub(super) fn instantiate_ends(&mut self, poly: &Types<Poly>, from: TyId<Poly>, to: TyId<Poly>) -> (Term, Term) {
@@ -109,18 +180,24 @@ impl Infer {
         (from, to)
     }
 
-    fn instantiate_ty(&mut self, at: &mut AtUse<'_>, ty: TyId<Poly>) -> Term {
+    fn instantiate_ty<V>(&mut self, at: &mut AtUse<'_, V>, ty: TyId<V>) -> Term
+    where
+        V: Instantiable,
+    {
         acvus_utils::grow(|| self.instantiate_level(at, ty))
     }
 
-    fn instantiate_level(&mut self, at: &mut AtUse<'_>, ty: TyId<Poly>) -> Term {
+    fn instantiate_level<V>(&mut self, at: &mut AtUse<'_, V>, ty: TyId<V>) -> Term
+    where
+        V: Instantiable,
+    {
         if let Some(built) = at.built.get(&ty) {
             return *built;
         }
-        let poly = at.poly;
-        let kind = match poly.kind(ty) {
+        let written = at.written;
+        let kind = match written.kind(ty) {
             TyKind::Var(index) => {
-                let var = self.ty_var_at(at, *index);
+                let var = self.ty_var_at(at, index.index());
                 at.built.insert(ty, var);
                 return var;
             }
@@ -140,7 +217,7 @@ impl Infer {
                 let len = match len {
                     LenTerm::Known(len) => LenTerm::Known(*len),
                     LenTerm::Var(index) => {
-                        LenTerm::Var(*at.len_vars.entry(*index).or_insert_with(|| self.fresh_len()))
+                        LenTerm::Var(*at.len_vars.entry(index.index()).or_insert_with(|| self.fresh_len()))
                     }
                 };
                 TyKind::Array(element, len, Label::Elsewhere)
@@ -186,7 +263,7 @@ impl Infer {
                     .collect(),
                 ret: self.instantiate_ty(at, *ret),
                 effect: self.effect_at(at, effect),
-                flows: FlowTerm::Known(flows.get().clone()),
+                flows: FlowTerm::Known(V::flows(flows).clone()),
                 calls: CallsTerm::Known(*calls),
                 holds: HoldsTerm::Known(*holds),
                 values: self.fresh_values_of(FnValues::Any),
@@ -211,7 +288,7 @@ impl Infer {
                     .map(|identity| match identity {
                         IdentityTerm::Known(id) => IdentityTerm::Known(*id),
                         IdentityTerm::Var(index) => {
-                            IdentityTerm::Var(*at.identity_vars.entry(*index).or_insert_with(|| self.fresh_identity()))
+                            IdentityTerm::Var(*at.identity_vars.entry(index.index()).or_insert_with(|| self.fresh_identity()))
                         }
                     })
                     .collect(),
@@ -231,7 +308,10 @@ impl Infer {
     /// (`BoundsDoNotFit`), so a verified scheme's variables are all made.
     /// A context's or an input's type holds a placeholder: `verify` refuses
     /// one (`TypeVariableInValueType`).
-    fn ty_var_at(&mut self, at: &mut AtUse<'_>, index: u32) -> Term {
+    fn ty_var_at<V>(&mut self, at: &mut AtUse<'_, V>, index: u32) -> Term
+    where
+        V: Instantiable,
+    {
         match at.placeholders {
             Placeholders::Declared => *at
                 .ty_vars
@@ -239,27 +319,33 @@ impl Infer {
                 .expect("a verified scheme gives each of its type variables one bound (BoundsDoNotFit)"),
             Placeholders::Unbounded => *at.ty_vars.entry(index).or_insert_with(|| self.fresh(Bound::Any)),
             Placeholders::Absent => panic!(
-                "a verified context's or input's type holds no type variable (TypeVariableInValueType), \
-                 but {index} is written in one"
+                "a verified context's type holds no type variable (TypeVariableInValueType), \
+                 and a concrete type none, but {index} is written in one"
             ),
         }
     }
 
-    fn effect_at(&mut self, at: &mut AtUse<'_>, effect: &EffectTerm<Poly>) -> EffectTerm<InferPhase> {
+    fn effect_at<V>(&mut self, at: &mut AtUse<'_, V>, effect: &EffectTerm<V>) -> EffectTerm<InferPhase>
+    where
+        V: Instantiable,
+    {
         match effect {
             EffectTerm::Known(effect) => EffectTerm::Known(effect.clone()),
             EffectTerm::Var(index) => {
-                EffectTerm::Var(*at.effect_vars.entry(*index).or_insert_with(|| self.fresh_effect()))
+                EffectTerm::Var(*at.effect_vars.entry(index.index()).or_insert_with(|| self.fresh_effect()))
             }
         }
     }
 
-    fn type_arg_at(&mut self, at: &mut AtUse<'_>, arg: &TypeArg<Poly>) -> TypeArg<InferPhase> {
+    fn type_arg_at<V>(&mut self, at: &mut AtUse<'_, V>, arg: &TypeArg<V>) -> TypeArg<InferPhase>
+    where
+        V: Instantiable,
+    {
         match arg {
             TypeArg::Uniform(ty) => TypeArg::Uniform(self.instantiate_ty(at, *ty)),
             TypeArg::Specialized(ty) => TypeArg::Specialized(self.instantiate_ty(at, *ty)),
             TypeArg::Open(index, ty) => {
-                let mark = *at.repr_vars.entry(*index).or_insert_with(|| self.fresh_repr());
+                let mark = *at.repr_vars.entry(index.index()).or_insert_with(|| self.fresh_repr());
                 TypeArg::Open(mark, self.instantiate_ty(at, *ty))
             }
         }

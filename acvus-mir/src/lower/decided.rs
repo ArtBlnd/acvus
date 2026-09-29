@@ -8,7 +8,7 @@ use acvus_ast::AstId;
 use rustc_hash::FxHashMap;
 
 use crate::ty::{Concrete, Ty, TyKind, Types};
-use crate::typeck::{Adjustment, AsCast, Chosen, Coercion, InstanceDecided, InstanceId, Iteration, StructureTree, TryExit, Typeck};
+use crate::typeck::{Adjustment, AsCast, Chosen, Coercion, InstanceDecided, InstanceId, Iteration, StructureTree, TryExit, Typeck, UnitCall};
 
 /// A view of `Typeck` at one instance, or at none.
 #[derive(Clone, Copy)]
@@ -119,6 +119,11 @@ impl<'a> Decided<'a> {
 
     pub fn reached(&self, site: AstId) -> Option<&'a Chosen> {
         self.read(|at| at.reached.get(&site), |run| run.reached.get(&site))
+    }
+
+    /// The call of a unit at `site`, the same at every instance.
+    pub fn unit_call(&self, site: AstId) -> Option<&'a UnitCall> {
+        self.typeck.units.get(&site)
     }
 
     pub fn callee(&self, site: AstId) -> Option<Ty> {

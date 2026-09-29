@@ -1327,6 +1327,13 @@ pub(crate) fn qualified_name<S>(
     }
 }
 
+/// A call's arguments as the grammar reads them, before their nesting is
+/// taken.
+pub(crate) enum CallArgs<S> {
+    Positional(Vec<Nested<Expr<S>>>),
+    Named(Vec<(Binder, Nested<Expr<S>>)>),
+}
+
 /// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
@@ -1334,7 +1341,7 @@ pub(crate) fn qualified_name<S>(
 pub(crate) fn build_call<S>(
     interner: &Interner,
     func: Nested<Expr<S>>,
-    args: Vec<Nested<Expr<S>>>,
+    args: CallArgs<S>,
     span: Span,
 ) -> Result<Nested<Expr<S>>, GrammarError> {
     let mut level = Level::new();
@@ -1353,7 +1360,10 @@ pub(crate) fn build_call<S>(
         },
         other => other,
     };
-    let args = level.all(args);
+    let args = match args {
+        CallArgs::Positional(args) => Args::Positional(level.all(args)),
+        CallArgs::Named(args) => Args::Named(args.into_iter().map(|(label, arg)| (label, level.take(arg))).collect()),
+    };
     level.node(
         Expr::FuncCall {
             id: AstId::alloc(),
@@ -1470,6 +1480,7 @@ where
         Expr::FuncCall {
             func, args, span, ..
         } if let Some(enum_name) = enum_name_of_callee(interner, func)
+            && let Args::Positional(args) = args
             && let [payload] = &args[..] =>
         {
             let Expr::Ident { name, .. } = func.as_ref() else {
@@ -2127,7 +2138,7 @@ mod tests {
             ));
             assert!(matches!(
                 one(&format!("let x = f({head});")),
-                Expr::FuncCall { args, .. } if matches!(args[0], Expr::Match { .. } | Expr::If { .. })
+                Expr::FuncCall { args: Args::Positional(args), .. } if matches!(args[0], Expr::Match { .. } | Expr::If { .. })
             ));
             assert!(matches!(
                 one(&format!("let x = ({head}) + 10;")),
@@ -2319,6 +2330,50 @@ mod tests {
             panic!("expected a name as the callee, got {func:?}");
         };
         assert_eq!(*name, QualifiedRef::qualified(interner.namespace(&[ns]), f));
+    }
+
+    /// programs §1, §2: a call's arguments are all by name, each a label
+    /// and its expression in the order written.
+    #[test]
+    fn a_call_takes_its_arguments_by_name() {
+        let interner = Interner::new();
+        let [ns, greet, user, times] = ["ns", "greet", "user", "times"].map(|name| interner.intern(name));
+        let Expr::FuncCall { func, args: Args::Named(args), .. } = parse_expr(&interner, "ns::greet(user: $u, times: 2,)").expect("a call") else {
+            panic!("expected a call by name");
+        };
+        let Expr::Ident { name, .. } = func.as_ref() else {
+            panic!("expected a name as the callee, got {func:?}");
+        };
+        assert_eq!(*name, QualifiedRef::qualified(interner.namespace(&[ns]), greet));
+        let labels: Vec<Astr> = args.iter().map(|(label, _)| label.name).collect();
+        assert_eq!(labels, vec![user, times]);
+        assert!(matches!(args[0].1, Expr::Ident { ref_kind: RefKind::ExternParam, .. }));
+        assert!(matches!(args[1].1, Expr::Literal { value: Literal::Int(2), .. }));
+    }
+
+    /// A call's arguments are all by position, and `f()` is a call by
+    /// position with none.
+    #[test]
+    fn a_call_takes_its_arguments_by_position() {
+        let interner = Interner::new();
+        let Expr::FuncCall { args: Args::Positional(args), .. } = parse_expr(&interner, "f(a, 1)").expect("a call") else {
+            panic!("expected a call by position");
+        };
+        assert_eq!(args.len(), 2);
+        let Expr::FuncCall { args: Args::Positional(args), .. } = parse_expr(&interner, "f()").expect("a call") else {
+            panic!("expected a call by position");
+        };
+        assert!(args.is_empty());
+    }
+
+    /// programs §1, §2: arguments by position and by name are never mixed
+    /// in one call, and a method call takes none by name.
+    #[test]
+    fn a_call_mixing_positions_and_names_does_not_parse() {
+        let interner = Interner::new();
+        for source in ["f(a, b: 1)", "f(b: 1, a)", "x.m(b: 1)"] {
+            assert!(parse_expr(&interner, source).is_err(), "{source} parsed");
+        }
     }
 
     /// A pattern names a variant with two segments, and no variant is
@@ -3001,7 +3056,7 @@ mod tests {
             let source = "f(x., y)";
             let recovered = recovered_script(source);
             assert_eq!(error_spans(&recovered), vec![Span::new(4, 5)]);
-            let Some(Expr::FuncCall { args, .. }) = recovered.tree.tail.as_deref() else {
+            let Some(Expr::FuncCall { args: Args::Positional(args), .. }) = recovered.tree.tail.as_deref() else {
                 panic!("{:?}", recovered.tree.tail);
             };
             let [Expr::Error(first), Expr::Ident { .. }] = args.as_slice() else {

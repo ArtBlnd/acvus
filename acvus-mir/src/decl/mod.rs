@@ -1,5 +1,5 @@
 //! The declarations the compiler takes in (rfc_compiler: extern fn, context,
-//! programs §4), verified once. A `Declarations` exists only as
+//! programs), verified once. A `Declarations` exists only as
 //! `Declarations::verify` built it, so every reader holds a verified set:
 //! the casts form a tree (types §3), every cast and conversion joins two
 //! heads, every requirement is smaller than its declaration (extern-fn §6),
@@ -53,8 +53,8 @@ pub struct RawDeclarations {
     pub conversions: Vec<ConversionRule>,
     /// Each context with its declaration (context).
     pub contexts: Vec<(QualifiedRef, ContextDecl)>,
-    /// Each input `$x` with its type (programs §4).
-    pub inputs: Vec<(Astr, TyId<Poly>)>,
+    /// Each function a run may start at (programs).
+    pub entries: Vec<EntryDecl>,
     pub loop_markers: LoopMarkers,
     /// `core`'s names, from `Core::of`.
     pub core: Core,
@@ -93,7 +93,7 @@ pub struct Declarations {
     /// it has one (types §1).
     lifts: FxHashMap<QualifiedRef, Lift>,
     contexts: FxHashMap<QualifiedRef, ContextDecl>,
-    inputs: FxHashMap<Astr, TyId<Poly>>,
+    entries: Vec<EntryDecl>,
     loop_markers: LoopMarkers,
     core: Core,
 }
@@ -146,8 +146,9 @@ impl Declarations {
         self.contexts.get(&context).map(|declared| declared.volatile)
     }
 
-    pub fn input(&self, name: Astr) -> Option<TyId<Poly>> {
-        self.inputs.get(&name).copied()
+    /// Every function a run may start at, as the host declared them.
+    pub fn entries(&self) -> &[EntryDecl] {
+        &self.entries
     }
 
     pub fn loop_markers(&self) -> &LoopMarkers {

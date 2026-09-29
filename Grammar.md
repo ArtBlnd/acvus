@@ -402,9 +402,17 @@ PostfixExpr  = PostfixExpr "." IDENT       ← field access
              | PostfixExpr "[" Expr "]"    ← index (RFC-0047)
              | PostfixExpr "?"             ← the payload, or an early return (RFC-0038)
              | PostfixExpr "." IDENT "(" CommaSep<Expr> ")"  ← method call
-             | PostfixExpr "(" CommaSep<Expr> ")"            ← function call
+             | PostfixExpr "(" Args ")"                      ← function call
              | PrimaryExpr
+
+Args         = CommaSep<Expr>              ← by position
+             | CommaSep<IDENT ":" Expr>    ← by name
 ```
+
+A call's arguments are all by position or all by name: `f(a, b: 1)` does
+not parse. A unit is called by name, each argument naming one of its
+parameters, the inputs it reads (programs §1, §2): `ns::greet(user: $u)`.
+A method call's arguments are by position only.
 
 A qualified name is `IDENT ("::" IDENT)+`, a primary (below), not a level
 of its own, so every postfix follows a qualified call: `i64::from_str(s)?`,

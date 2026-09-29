@@ -429,8 +429,18 @@ impl Nodes {
             } => {
                 self.push(*id, *span, None);
                 self.expr(func);
-                for arg in args {
-                    self.expr(arg);
+                match args {
+                    Args::Positional(args) => {
+                        for arg in args {
+                            self.expr(arg);
+                        }
+                    }
+                    Args::Named(args) => {
+                        for (label, arg) in args {
+                            self.push(label.id, label.span, None);
+                            self.expr(arg);
+                        }
+                    }
                 }
             }
             Expr::MethodCall {

@@ -4,7 +4,10 @@
 use acvus_ast::{AstId, ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, Namespace, QualifiedRef};
 
-use super::{Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
+use super::{
+    Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Inputs, Interface, Interfaces, Iteration, Name, RefusalKind, TryExit, Typeck, UnitCall,
+    check_script, check_template,
+};
 use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::infer::ShapeCoercion;
 use crate::ty::structural::PartKey;
@@ -16,6 +19,8 @@ use crate::ty::{
 struct Fixture {
     names: Interner,
     raw: RawDeclarations,
+    /// Each input `$x` with its type, at which a run's inputs are fixed.
+    inputs: Vec<(Astr, TyId<Poly>)>,
 }
 
 /// A checked program and the table its types are in.
@@ -60,10 +65,11 @@ impl Fixture {
                 casts: Vec::new(),
                 conversions: Vec::new(),
                 contexts: Vec::new(),
-                inputs: Vec::new(),
+                entries: Vec::new(),
                 loop_markers: LoopMarkers::default(),
                 core,
             },
+            inputs: Vec::new(),
         }
     }
 
@@ -275,22 +281,58 @@ impl Fixture {
 
     fn input(&mut self, name: &str, ty: TyId<Poly>) {
         let name = self.name(name);
-        self.raw.inputs.push((name, ty));
+        self.inputs.push((name, ty));
     }
 
     fn script(self, source: &str) -> (Checked, Script) {
+        self.script_calling(&Interfaces::new(), source)
+    }
+
+    /// `source` checked with its inputs fixed, its calls reaching the
+    /// units of `interfaces` too.
+    fn script_calling(self, interfaces: &Interfaces, source: &str) -> (Checked, Script) {
         let script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_script(&self.names, &decls, &mut types, &script);
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_script(&self.names, &decls, interfaces, Inputs::Fixed(&inputs), &mut types, &script);
         (Checked { typeck, types }, script)
+    }
+
+    /// A unit at `namespace::name` in `interfaces`, a pure function of
+    /// its `params` in order, returning `ret`.
+    fn unit(&self, interfaces: &mut Interfaces, namespace: &[&str], name: &str, params: &[(&str, TyKind<Poly>)], ret: TyKind<Poly>) -> QualifiedRef {
+        let types = interfaces.types_mut();
+        let param_tys: Box<[TyId<Poly>]> = params.iter().map(|(_, kind)| types.intern(kind.clone())).collect();
+        let ret = types.intern(ret);
+        let ty = types.intern(TyKind::Fn {
+            params: param_tys,
+            ret,
+            effect: EffectTerm::Known(crate::ty::Effect::pure()),
+            flows: FlowTerm::Known(Flows::none()),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+            values: (),
+        });
+        let scheme = Scheme {
+            ty,
+            param_names: params.iter().map(|(param, _)| self.name(param)).collect(),
+            bounds: Box::new([]),
+            impls: None,
+            requires: Box::new([]),
+            facts: DeclaredFacts::default(),
+        };
+        let unit = QualifiedRef::qualified(self.namespace(namespace), self.name(name));
+        interfaces.set(unit, Interface { scheme });
+        unit
     }
 
     fn template(self, source: &str) -> (Checked, Template) {
         let template = acvus_ast::parse_template(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_template(&self.names, &decls, &mut types, &template);
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_template(&self.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &template);
         (Checked { typeck, types }, template)
     }
 }
@@ -406,6 +448,31 @@ fn an_input_is_never_assigned() {
     let flag = fx.name("flag");
     let (checked, _) = fx.script("$flag = true; 1");
     assert_eq!(checked.refusals(), vec![&RefusalKind::InputAssigned { input: flag }]);
+}
+
+/// programs §4: an input is a parameter of the run; fixed, `$x` enters
+/// its given type, and `$x + 1` is an `i64` where `x` is.
+#[test]
+fn a_fixed_input_enters_its_given_type() {
+    let mut fx = Fixture::new();
+    let add = fx.raw.core.add;
+    fx.arithmetic(add, &[TyKind::Int(IntTy::I64)]);
+    let i64_ty = fx.int(IntTy::I64);
+    fx.input("x", i64_ty);
+    let (checked, script) = fx.script("$x + 1");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+}
+
+/// programs §4: with its inputs fixed, a `$x` not given is no input.
+#[test]
+fn an_input_not_given_is_refused() {
+    let mut fx = Fixture::new();
+    let add = fx.raw.core.add;
+    fx.arithmetic(add, &[TyKind::Int(IntTy::I64)]);
+    let x = fx.name("x");
+    let (checked, _) = fx.script("$x + 1");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::UnknownName { name: x }]);
 }
 
 /// programs §2: a script has no `fn`.
@@ -852,6 +919,112 @@ fn a_call_reaches_the_overload_its_argument_decides() {
     assert_eq!(checked.typeck.reached[&site].declaration, second);
 }
 
+/// programs §1, §2: a call by name reaches the unit at the callee's whole
+/// name, its interface instantiated there: each argument enters the
+/// parameter it names, and the call is the unit's result.
+#[test]
+fn a_call_by_name_reaches_the_unit_at_its_whole_name() {
+    let fx = Fixture::new();
+    let mut interfaces = Interfaces::new();
+    let greet = fx.unit(&mut interfaces, &["ns"], "greet", &[("user", TyKind::Int(IntTy::I64))], TyKind::String);
+    let (checked, script) = fx.script_calling(&interfaces, "ns::greet(user: 1)");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::String);
+    let Some(Expr::FuncCall { id, func, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a call");
+    };
+    assert_eq!(checked.typeck.units[id], UnitCall { unit: greet, arguments: Box::new([0]) });
+    assert_eq!(checked.typeck.names[&func.id()], Name::Unit(greet));
+}
+
+/// programs: a bare name reaches host declarations only, never a unit, so
+/// a call of one by name is of no unit.
+#[test]
+fn a_bare_name_called_by_name_reaches_no_unit() {
+    let fx = Fixture::new();
+    let mut interfaces = Interfaces::new();
+    fx.unit(&mut interfaces, &["ns"], "greet", &[("user", TyKind::Int(IntTy::I64))], TyKind::String);
+    let (checked, _) = fx.script_calling(&interfaces, "greet(user: 1)");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NamedArgumentsToNonUnit]);
+}
+
+/// programs §1, §2: a unit's parameters are passed by name, so an argument
+/// passed to one by position is refused.
+#[test]
+fn a_unit_called_by_position_is_refused() {
+    let fx = Fixture::new();
+    let mut interfaces = Interfaces::new();
+    let greet = fx.unit(&mut interfaces, &["ns"], "greet", &[("user", TyKind::Int(IntTy::I64))], TyKind::String);
+    let (checked, _) = fx.script_calling(&interfaces, "ns::greet(1)");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::UnitCalledByPosition { unit: greet }]);
+}
+
+/// programs: named arguments reach a unit only; a host declaration's
+/// parameters are passed by position.
+#[test]
+fn a_declaration_called_by_name_is_refused() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let ty = fx.pure(&[i64_ty], i64_ty);
+    let ns = fx.namespace(&["ns"]);
+    fx.declare_at(ns, "f", ty);
+    let (checked, _) = fx.script_calling(&Interfaces::new(), "ns::f(p0: 1)");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NamedArgumentsToNonUnit]);
+}
+
+/// programs §1, §2: arguments are matched to the unit's parameters by
+/// name, in any order written, and passed in the parameters' order.
+#[test]
+fn arguments_by_name_are_matched_to_the_parameters_in_any_order() {
+    let fx = Fixture::new();
+    let mut interfaces = Interfaces::new();
+    let params = [("user", TyKind::Bool), ("times", TyKind::Int(IntTy::I64))];
+    let greet = fx.unit(&mut interfaces, &["ns"], "greet", &params, TyKind::String);
+    let (checked, script) = fx.script_calling(&interfaces, "ns::greet(times: 2, user: true)");
+    checked.admitted();
+    let Some(Expr::FuncCall { id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a call");
+    };
+    assert_eq!(checked.typeck.units[id], UnitCall { unit: greet, arguments: Box::new([1, 0]) });
+}
+
+/// programs §1, §2: every parameter is given exactly once and every name
+/// is a parameter's; each mismatch is refused as what it is, naming what
+/// the program wrote or left out.
+#[test]
+fn a_missing_duplicated_or_unknown_argument_name_is_refused() {
+    let cases: [(&str, fn(QualifiedRef, &Fixture) -> RefusalKind); 3] = [
+        ("ns::greet(user: true)", |unit, fx| RefusalKind::MissingArgument { unit, name: fx.name("times") }),
+        ("ns::greet(user: true, user: false, times: 1)", |unit, fx| RefusalKind::DuplicateArgument { unit, name: fx.name("user") }),
+        ("ns::greet(user: true, times: 1, name: 2)", |unit, fx| RefusalKind::UnknownArgument { unit, name: fx.name("name") }),
+    ];
+    for (source, refused) in cases {
+        let fx = Fixture::new();
+        let mut interfaces = Interfaces::new();
+        let params = [("user", TyKind::Bool), ("times", TyKind::Int(IntTy::I64))];
+        let greet = fx.unit(&mut interfaces, &["ns"], "greet", &params, TyKind::String);
+        let refused = refused(greet, &fx);
+        let (checked, _) = fx.script_calling(&interfaces, source);
+        assert_eq!(checked.refusals(), vec![&refused], "{source}");
+    }
+}
+
+/// programs: a unit with no inputs is called with no argument, which is
+/// passed neither by position nor by name.
+#[test]
+fn a_unit_of_no_parameter_is_called_with_none() {
+    let fx = Fixture::new();
+    let mut interfaces = Interfaces::new();
+    let unit = fx.unit(&mut interfaces, &["ns"], "u", &[], TyKind::Bool);
+    let (checked, script) = fx.script_calling(&interfaces, "ns::u()");
+    checked.admitted();
+    assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
+    let Some(Expr::FuncCall { id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a call");
+    };
+    assert_eq!(checked.typeck.units[id], UnitCall { unit, arguments: Box::new([]) });
+}
+
 /// programs: a function stands at a name of any depth, and a qualified
 /// name reaches the declaration at its whole path.
 #[test]
@@ -1277,7 +1450,7 @@ fn a_mut_lambda_entering_a_slot_that_holds_nothing_is_refused() {
     let i64_ty = fx.int(IntTy::I64);
     fx.context("n", i64_ty);
     let (checked, script) = fx.script("let r = &mut @n; apply(|x| -> { *r = x; x })");
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("the tail is a call");
     };
     assert_eq!(
@@ -1319,7 +1492,7 @@ fn a_lambda_whose_effect_grows_past_a_pure_slot_is_refused() {
     fx.overload("ints", "touch", at_int);
     fx.overload("bools", "touch", at_bool);
     let (checked, script) = fx.script("apply(|x| -> touch(x))");
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("the tail is a call");
     };
     assert_eq!(
@@ -1344,7 +1517,7 @@ fn a_lambda_whose_effect_exceeds_a_pure_slot_on_entering_is_refused_as_when_it_g
     let opaque = fx.function(&[i64_ty], i64_ty, EffectTerm::Known(crate::ty::Effect::opaque()));
     fx.declare("touch", opaque, &[]);
     let (checked, script) = fx.script("apply(|x| -> touch(x))");
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("the tail is a call");
     };
     assert_eq!(
@@ -1532,7 +1705,7 @@ fn a_view_coercion_is_recorded_at_the_argument() {
     fx.context("v", vec_bool);
     let (checked, script) = fx.script("first(&@v)");
     checked.admitted();
-    let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
+    let Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. } = script.tail.as_deref().unwrap() else {
         panic!("not a call");
     };
     let steps = checked.steps(args[0].id());
@@ -1703,7 +1876,7 @@ fn an_object_narrows_to_the_fields_a_declarations_parameter_names() {
     fx.declare("f", takes, &[]);
     let (checked, script) = fx.script("f({ a: 1, b: true, })");
     checked.admitted();
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("not a call");
     };
     let super::Coercion::Structured { shape, through: None, to, parts } = &checked.typeck.coercions[&args[0].id()] else {
@@ -1750,7 +1923,7 @@ fn an_enum_widens_to_the_variants_a_declarations_parameter_names() {
             continue;
         }
         checked.admitted();
-        let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
             panic!("not a call");
         };
         let super::Coercion::Structured { shape, .. } = &checked.typeck.coercions[&args[0].id()] else {
@@ -1780,7 +1953,7 @@ fn a_tuple_part_casts_at_a_declarations_parameter_but_not_where_two_meet_in_a_bo
     let (fx, widen) = widening();
     let (checked, script) = fx.script("f((1u8, true))");
     checked.admitted();
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("not a call");
     };
     let super::Coercion::Structured { shape, parts, .. } = &checked.typeck.coercions[&args[0].id()] else {
@@ -1998,7 +2171,7 @@ fn a_view_step_names_its_impl() {
     fx.context("v", vec_bool);
     let (checked, script) = fx.script("first(&@v)");
     checked.admitted();
-    let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
+    let Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. } = script.tail.as_deref().unwrap() else {
         panic!("not a call");
     };
     let steps = checked.steps(args[0].id());
@@ -2167,7 +2340,7 @@ fn a_view_steps_requirements_are_reached() {
     fx.context("v", vec_bool);
     let (checked, script) = fx.script("first(&@v)");
     checked.admitted();
-    let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
+    let Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. } = script.tail.as_deref().unwrap() else {
         panic!("not a call");
     };
     let steps = checked.steps(args[0].id());
@@ -2476,7 +2649,8 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
     let fx = Fixture::new();
     let script = acvus_ast::parse_script(&fx.names, "let f = |g| -> g(1); 1").expect("the test's source parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
-    let mut cx = super::ctxt::Ctxt::new(&fx.names, &decls, super::scope::Run::Script);
+    let interfaces = super::Interfaces::new();
+    let mut cx = super::ctxt::Ctxt::new(&fx.names, &decls, &interfaces, super::scope::Run::Script);
     super::stmt::check_body(&mut cx, &script.stmts, script.tail.as_deref());
     super::decision::solve(&mut cx);
     assert!(cx.out.refusals.is_empty(), "refused: {:?}", cx.out.refusals);
@@ -2743,7 +2917,7 @@ fn a_reference_to_a_structure_is_coerced_through_its_target() {
     fx.declare("f", takes, &[]);
     let (checked, script) = fx.script("f(&{ a: 1, b: true, })");
     checked.admitted();
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("not a call");
     };
     let super::Coercion::Structured { through, shape, parts, .. } = &checked.typeck.coercions[&args[0].id()] else {
@@ -2805,7 +2979,7 @@ fn the_result_decides_a_reach_last() {
     };
     let (checked, script) = fixture(&|fx| fx.ty(TyKind::Bool)).script("f(default())");
     checked.admitted();
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("not a call");
     };
     let Expr::FuncCall { id, .. } = &args[0] else {
@@ -2819,7 +2993,7 @@ fn the_result_decides_a_reach_last() {
     };
     let (checked, script) = fixture(&pair).script("f(default())");
     checked.admitted();
-    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+    let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("not a call");
     };
     let Expr::FuncCall { id, .. } = &args[0] else {
@@ -3242,7 +3416,8 @@ fn two_lambdas_joined_by_if_are_either_function_value() {
     fx.input("c", bool_ty);
     let script = acvus_ast::parse_script(&fx.names, "let h = if $c { |v| -> v } else { |v| -> true }; h(false)").expect("the test's source parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
-    let mut cx = super::ctxt::Ctxt::new(&fx.names, &decls, super::scope::Run::Script);
+    let interfaces = super::Interfaces::new();
+    let mut cx = super::ctxt::Ctxt::new(&fx.names, &decls, &interfaces, super::scope::Run::Script);
     super::stmt::check_body(&mut cx, &script.stmts, script.tail.as_deref());
     super::generalize::generalize_all(&mut cx);
     super::decision::solve(&mut cx);

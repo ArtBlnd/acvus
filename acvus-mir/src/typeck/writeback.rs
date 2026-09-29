@@ -75,6 +75,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         types: frozen,
         names: std::mem::take(&mut cx.out.names),
         reached: std::mem::take(&mut cx.out.reached),
+        units: std::mem::take(&mut cx.out.units),
         callees,
         iteration: std::mem::take(&mut cx.out.iteration),
         tries,

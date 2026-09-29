@@ -48,7 +48,7 @@
 
 use acvus_utils::QualifiedRef;
 
-use crate::decl::{Declarations, Scheme};
+use crate::decl::Declarations;
 use crate::ir::cfg::{BodyId, Module};
 use crate::passes::pipeline::Level;
 
@@ -63,10 +63,7 @@ pub struct Unit {
     pub source: Source,
 }
 
-/// What another unit sees of a unit: its scheme.
-pub struct Interface {
-    pub scheme: Scheme,
-}
+pub use crate::typeck::{Interface, Interfaces};
 
 /// The graph a host compiles, kept across compiles.
 pub struct Graph {

@@ -18,8 +18,18 @@ pub enum Name {
     /// A binding, by its binder's site.
     Binding(AstId),
     Declaration(QualifiedRef),
+    /// A unit a call reaches by its whole name (programs).
+    Unit(QualifiedRef),
     Context(QualifiedRef),
     Input(Astr),
+}
+
+/// A call of a unit (programs): the unit, and for each of its parameters,
+/// in order, the index of the argument written for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitCall {
+    pub unit: QualifiedRef,
+    pub arguments: Box<[usize]>,
 }
 
 /// Which impl of a generic function a call reached.
@@ -276,8 +286,11 @@ pub(super) struct Output {
     pub types: FxHashMap<AstId, Term>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,
-    /// Each reached call's function type as its declaration was
-    /// instantiated there, at the site `reached` has it.
+    /// Each call of a unit, at the call's site.
+    pub units: FxHashMap<AstId, UnitCall>,
+    /// Each reached call's function type as its declaration or its unit's
+    /// interface was instantiated there, at the site `reached` or `units`
+    /// has it.
     pub callees: FxHashMap<AstId, Term>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Term>>,
@@ -310,8 +323,10 @@ pub struct Typeck {
     pub types: FxHashMap<AstId, Ty>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,
+    /// Each call of a unit, at the call's site.
+    pub units: FxHashMap<AstId, UnitCall>,
     /// Each reached call's function type at its site, the site `reached`
-    /// has it at.
+    /// or `units` has it at.
     pub callees: FxHashMap<AstId, Ty>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,

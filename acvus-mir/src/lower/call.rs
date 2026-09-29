@@ -10,7 +10,7 @@
 //! effectful call goes through `push_effect`, bracketed by the contexts its
 //! effect touches (context §3).
 
-use acvus_ast::{AstId, BinOp, Expr, Literal, RefKind, Slot, Span};
+use acvus_ast::{Args, AstId, BinOp, Binder, Expr, Literal, RefKind, Slot, Span};
 
 use super::context::bracket_call;
 use super::control::lower_short_circuit;
@@ -101,11 +101,35 @@ fn arguments<S: Slot>(cx: &mut Lcx<'_, '_>, args: &[&Expr<S>]) -> Vec<ValueId> {
         .collect()
 }
 
-/// `f(args)`: of a declaration typeck reached at the call; of a variant
-/// `Enum::Tag(payload)`, which the parser writes as a call; or of a value.
-pub(super) fn lower_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[Expr<S>], span: Span) -> ValueId {
-    let args: Vec<&Expr<S>> = args.iter().collect();
-    call(cx, site, func, &args, span)
+/// `f(args)`: by position, of a declaration typeck reached at the call, of
+/// a variant `Enum::Tag(payload)`, which the parser writes as a call, or of
+/// a value; by name, of a unit.
+pub(super) fn lower_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &Args<S>, span: Span) -> ValueId {
+    match args {
+        Args::Positional(args) => {
+            let args: Vec<&Expr<S>> = args.iter().collect();
+            call(cx, site, func, &args, span)
+        }
+        Args::Named(args) => unit_call(cx, site, args, span),
+    }
+}
+
+/// A call of a unit: of its instantiation at the call's types, the callee
+/// type typeck recorded (graph). The arguments are evaluated as written
+/// and passed in the order of the unit's parameters.
+fn unit_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, args: &[(Binder, Expr<S>)], span: Span) -> ValueId {
+    let call = cx
+        .decided
+        .unit_call(site)
+        .unwrap_or_else(|| panic!("typeck admits a call by name only of a unit, and records it, not at {site:?}"));
+    let written: Vec<&Expr<S>> = args.iter().map(|(_, arg)| arg).collect();
+    let values = arguments(cx, &written);
+    let passed = call.arguments.iter().map(|at| values[*at]).collect();
+    let callee_ty = cx
+        .decided
+        .callee(site)
+        .unwrap_or_else(|| panic!("typeck records the callee type at every unit call, and not at {site:?}"));
+    issue(cx, Callee::Direct(call.unit), callee_ty, passed, span)
 }
 
 /// `left | func`: `func(left)`.

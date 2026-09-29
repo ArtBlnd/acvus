@@ -219,7 +219,8 @@ pub enum RefTarget {
 /// Target of a function call.
 #[derive(Debug, Clone)]
 pub enum Callee {
-    /// A function with a body in the graph. Enables pre-fetch and inlining.
+    /// A unit's function in the graph, at its instantiation at the call's
+    /// `callee_ty` (graph). Enables pre-fetch and inlining.
     Direct(QualifiedRef),
     /// An ExternFn at the impl the checker settled on (RFC-0040), none for
     /// a function that has no impls, with what that call's requirements

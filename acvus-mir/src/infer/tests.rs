@@ -829,7 +829,7 @@ fn raw(names: &Interner, types: Types<Poly>, functions: Vec<(QualifiedRef, Schem
         casts,
         conversions: Vec::new(),
         contexts: Vec::new(),
-        inputs: Vec::new(),
+        entries: Vec::new(),
         loop_markers: LoopMarkers::default(),
         core: Core::of(names),
     }

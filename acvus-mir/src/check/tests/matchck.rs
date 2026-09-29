@@ -2,7 +2,7 @@
 //! to patterns §2-4 and types §2.
 
 use acvus_ast::Script;
-use acvus_utils::{Interner, QualifiedRef};
+use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use crate::check::{RefusalKind, check};
 use crate::decl::{Core, Declarations, DeclaredFacts, LoopMarkers, RawDeclarations, Scheme};
@@ -14,6 +14,8 @@ use crate::typeck::check_script;
 struct Fixture {
     names: Interner,
     raw: RawDeclarations,
+    /// Each input `$x` with its type, at which a run's inputs are fixed.
+    inputs: Vec<(Astr, TyId<Poly>)>,
 }
 
 impl Fixture {
@@ -30,10 +32,11 @@ impl Fixture {
                 casts: Vec::new(),
                 conversions: Vec::new(),
                 contexts: Vec::new(),
-                inputs: Vec::new(),
+                entries: Vec::new(),
                 loop_markers: LoopMarkers::default(),
                 core,
             },
+            inputs: Vec::new(),
         }
     }
 
@@ -47,7 +50,7 @@ impl Fixture {
 
     fn input(&mut self, name: &str, ty: TyId<Poly>) {
         let name = self.names.intern(name);
-        self.raw.inputs.push((name, ty));
+        self.inputs.push((name, ty));
     }
 
     /// A pure extern fn `name() -> ret`.
@@ -73,7 +76,8 @@ impl Fixture {
         let script: Script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_script(&self.names, &decls, &mut types, &script);
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_script(&self.names, &decls, &crate::typeck::Interfaces::new(), crate::typeck::Inputs::Fixed(&inputs), &mut types, &script);
         assert!(typeck.refusals.is_empty(), "typeck refused {source}: {:?}", typeck.refusals);
         let module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
