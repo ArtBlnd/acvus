@@ -316,7 +316,8 @@ fn and_is_a_short_circuit_diamond() {
     assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { .. })), 0);
 }
 
-/// A `match` over one enum's tags is one `Switch` holding its join (D57).
+/// A `match` over one enum's tags is one `Switch` holding its join (D57),
+/// its missing keys defaulting to the block no arm answers.
 #[test]
 fn a_match_over_tags_is_one_switch() {
     let mut fx = Fixture::new();
@@ -335,7 +336,10 @@ fn a_match_over_tags_is_one_switch() {
     let [(arms, default, join)] = &switches[..] else { panic!("one Switch: {}", shown(lowered.entry())) };
     let keys: Vec<SwitchKey> = arms.iter().map(|(key, _, _)| *key).collect();
     assert_eq!(keys, vec![SwitchKey::Tag(lowered.name("Some")), SwitchKey::Tag(lowered.name("None"))]);
-    assert!(default.is_none());
+    // No catch-all: a value no key names goes to the block where no arm
+    // answers, which matchck judges (patterns §3).
+    let (unmatched, _) = default.as_ref().expect("a Switch with no catch-all defaults to the block no arm answers");
+    assert!(matches!(lowered.entry().block(*unmatched).terminator(), Terminator::NoArmMatched { .. }));
     assert_eq!(lowered.entry().block(*join).params().len(), 1);
     assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::TestVariant { .. })), 0);
 }
