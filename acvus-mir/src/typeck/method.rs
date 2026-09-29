@@ -190,10 +190,13 @@ fn adjustment(cx: &Ctxt<'_>, adjust: &Adjust, head: Head) -> Adjustment {
         .chain(generic)
         .filter(|offer| decision::params_of(cx.decls.types(), offer.ty).len() == arity)
         .collect();
-    let rows: Vec<Vec<Option<Head>>> = candidates
+    let mut rows: Vec<Vec<Option<Head>>> = candidates
         .iter()
         .map(|offer| vec![decision::param_head_at(cx.decls.types(), decision::params_of(cx.decls.types(), offer.ty), &[0])])
         .collect();
+    if let Some(lifted) = super::structure::lifted_receiver(cx, &adjust.callee, arity, head) {
+        rows.push(vec![Some(lifted)]);
+    }
     let rows: Vec<Candidate<'_>> = rows.iter().map(|row| Candidate { params: row }).collect();
     let matches = |head: Head| match reach::reach(&rows, &[decision::chain_up(cx, head)]) {
         Ok(_) | Err(NoReach::Several(_)) => true,

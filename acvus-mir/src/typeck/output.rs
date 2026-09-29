@@ -175,19 +175,35 @@ pub(super) enum StructureNode {
 
 /// How a value is coerced to its slot (types §3, §7): a concrete value by
 /// the steps up the tree or its one declared conversion, in order; a
-/// transparent structured value by its shape, and each part it keeps by
-/// its own coercion, `None` where the part enters as it is.
+/// transparent structured value by its shape into the slot's type `to`,
+/// and each part it keeps by its own coercion, `None` where the part
+/// enters as it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Coercion {
     Steps(Box<[Conversion<Ty>]>),
-    Structured { shape: ShapeCoercion, parts: Box<[(PartKey, Option<Coercion>)]> },
+    Structured { shape: ShapeCoercion, to: Ty, parts: Box<[(PartKey, Option<Coercion>)]> },
 }
 
-/// A structured value's coercion while checking: its shape, and each part
-/// it keeps at a site of its own, where that part's coercion is recorded.
+impl Coercion {
+    /// The type the value is coerced to.
+    ///
+    /// # Panics
+    /// No step: writeback records a coercion of at least one step.
+    pub fn to(&self) -> Ty {
+        match self {
+            Coercion::Steps(steps) => steps.last().expect("a recorded coercion has a step").to,
+            Coercion::Structured { to, .. } => *to,
+        }
+    }
+}
+
+/// A structured value's coercion while checking: its shape, the slot it
+/// enters, and each part it keeps at a site of its own, where that part's
+/// coercion is recorded.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CoercionNode {
     pub shape: ShapeCoercion,
+    pub slot: Term,
     pub parts: Box<[(PartKey, AstId)]>,
 }
 

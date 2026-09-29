@@ -32,7 +32,7 @@ use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::{
-    CastTy, EffectTerm, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
+    CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
 };
 
 /// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
@@ -629,7 +629,7 @@ fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: T
             let via_ty = reach_step(cx, step, value.term, slot);
             cx.out.conversions.insert(site, Converted { node, via_ty, to: slot });
         }
-        Ok(Entered::Coerced(coerced)) => super::structure::fire_coerced(cx, site, span, coerced, body),
+        Ok(Entered::Coerced(coerced)) => super::structure::fire_coerced(cx, site, span, slot, coerced, body),
         Err(mismatch) => refusal::mismatch(cx, mismatch, span),
     }
 }
@@ -690,7 +690,7 @@ fn fire_iterate(
 /// `sequence` is neither: callers match its head first.
 fn element_of(cx: &Ctxt<'_>, sequence: Term) -> Term {
     match cx.infer.types().kind(cx.infer.shallow(sequence)) {
-        TyKind::Array(element, _) | TyKind::Slice(element) => *element,
+        TyKind::Array(element, _, _) | TyKind::Slice(element) => *element,
         other => panic!("element_of: a term closed as an array or a slice is one, not {other:?}"),
     }
 }
@@ -700,17 +700,17 @@ fn element_of(cx: &Ctxt<'_>, sequence: Term) -> Term {
 fn fire_try(cx: &mut Ctxt<'_>, site: AstId, span: Span, operand: Closed, value: Term, exit: Term) {
     let kind = cx.infer.types().kind(operand.term).clone();
     let tried = match kind {
-        TyKind::Option(payload) => {
+        TyKind::Option(payload, _) => {
             cx.eq(value, payload, span);
             let any = cx.fresh();
-            let leaves = cx.node(TyKind::Option(any));
+            let leaves = cx.node(TyKind::Option(any, Label::Here));
             cx.eq(exit, leaves, span);
             TryExit::Option(exit)
         }
-        TyKind::Result(payload, error) => {
+        TyKind::Result(payload, error, _) => {
             cx.eq(value, payload, span);
             let any = cx.fresh();
-            let leaves = cx.node(TyKind::Result(any, error));
+            let leaves = cx.node(TyKind::Result(any, error, Label::Here));
             cx.eq(exit, leaves, span);
             TryExit::Result(exit)
         }
@@ -798,6 +798,9 @@ fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<()
         // lifted impl does, before the generic impl (types §1).
         Err(NoReach::None) if let Some(lift) = super::structure::lift_at(cx, &decision, reading) => {
             return super::structure::reach_lifted(cx, decision, lift);
+        }
+        Err(NoReach::None) if reading == Reading::Closed && super::structure::lift_waits(cx, &decision) => {
+            return Err(decision);
         }
         Err(NoReach::None) => match choose(cx, &generic, &positions, &chains) {
             Ok(chosen) => chosen,
@@ -924,7 +927,7 @@ pub(super) fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
     Offers { concrete, generic }
 }
 
-fn core_name(cx: &Ctxt<'_>, sig: CoreSig) -> QualifiedRef {
+pub(super) fn core_name(cx: &Ctxt<'_>, sig: CoreSig) -> QualifiedRef {
     let core = cx.decls.core();
     match sig {
         CoreSig::Add => core.add,
@@ -986,7 +989,7 @@ fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: 
         path: path.clone(),
         chain: Some(chain_up(cx, closed.head)),
     });
-    let TyKind::Tuple(items) = cx.infer.types().kind(closed.term) else {
+    let TyKind::Tuple(items, _) = cx.infer.types().kind(closed.term) else {
         return true;
     };
     for (at, item) in items.clone().iter().enumerate() {
@@ -1019,7 +1022,7 @@ pub(super) fn param_head_at(types: &Types<Poly>, params: &[TyId<Poly>], path: &[
     let mut at = params[*first];
     for part in parts {
         match types.kind(at) {
-            TyKind::Tuple(items) => at = items[*part],
+            TyKind::Tuple(items, _) => at = items[*part],
             _ => return None,
         }
     }
@@ -1053,8 +1056,8 @@ fn poly_base(kind: &TyKind<Poly>) -> Option<Base> {
         TyKind::Str => Base::Str,
         TyKind::Array(..) => Base::Array,
         TyKind::Slice(_) => Base::Slice,
-        TyKind::Tuple(items) => Base::Tuple(items.len()),
-        TyKind::Option(_) => Base::Option,
+        TyKind::Tuple(items, _) => Base::Tuple(items.len()),
+        TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
         TyKind::Object(ObjectTy::Declared(id, _)) | TyKind::UserDefined { id, .. } => Base::Named(*id),
@@ -1105,8 +1108,12 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             all.push(chosen);
             parent.required = all.into();
         }
-        Callee::Part(_) => {
-            todo!("a part's impl at its own node: the pattern joins the impl's type, and it is recorded in `reached` and `callees` at the part's node (types §1)")
+        Callee::Part(part) => {
+            cx.join(part.pattern, ty, span);
+            super::effect::join_into(cx, &effect, &declared_effect, span);
+            cx.out.structures.insert(site, super::output::StructureNode::Reached);
+            cx.out.reached.insert(site, chosen);
+            cx.out.callees.insert(site, ty);
         }
         _ => {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {

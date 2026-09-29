@@ -7,13 +7,13 @@ use acvus_ast::{AstId, BinOp, Expr, Slot, Span, UnaryOp};
 use super::call::{reach_call, reach_in};
 use super::ctxt::Ctxt;
 use super::decision::{Callee, CoreSig, Decision, Domain};
-use super::output::PartNode;
+use super::output::StructureNode;
 use super::expr::check_expr;
 use super::place::{self, Demand};
 use super::refusal::{self, RefusalKind};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ty::structural::structure;
+use crate::ty::structural::{PartKey, structure};
 use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, TyKind};
 
 /// `==` and the orderings compare part by part where the operands' type is
@@ -114,10 +114,10 @@ fn compare<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, sig: CoreSig, operands: Oper
 }
 
 /// A comparison fired at `node` on its operands' type (operators §4): a
-/// structural type compares its parts, each a node of its own; a reference
-/// compares what it names, since a lang item's `&T` is never a reference to
-/// a reference (types §4); any other type reaches `core::eq` or `core::cmp`
-/// at `node`.
+/// transparent structured type compares its parts, each a node of its own;
+/// a reference compares what it names at the same node, since a lang item's
+/// `&T` is never a reference to a reference (types §4); any other type
+/// reaches `core::eq` or `core::cmp` at `node`.
 pub(super) fn fire_compare(
     cx: &mut Ctxt<'_>,
     node: AstId,
@@ -127,23 +127,27 @@ pub(super) fn fire_compare(
     body: &EffectTerm<InferPhase>,
 ) {
     let types = cx.infer.types();
-    let parts: Option<Vec<Term>> = match structure(types, operand.term) {
-        Some(structure) => Some(structure.parts().to_vec()),
+    let parts: Option<Vec<(PartKey, Term)>> = match structure(types, operand.term) {
+        Some(structure) => Some(structure.parts().iter().map(|part| (part.key, part.ty)).collect()),
         None => match types.kind(operand.term) {
-            TyKind::Ref(_, target) => Some(vec![target.ty()]),
+            TyKind::Ref(_, target) => {
+                let compare = Decision::Compare { node, span, sig, operand: target.ty(), body: body.clone() };
+                super::decision::decide(cx, compare);
+                return;
+            }
             TyKind::Never => Some(Vec::new()),
             _ => None,
         },
     };
     let Some(parts) = parts else {
-        cx.out.comparisons.insert(node, PartNode::Reached);
+        cx.out.structures.insert(node, StructureNode::Reached);
         let lent = cx.lend(operand.term, Mutability::Shared, span);
         reach_in(cx, body, node, Callee::Core(sig), vec![(node, lent), (node, lent)], span);
         return;
     };
-    let nodes: Vec<AstId> = parts.iter().map(|_| AstId::alloc()).collect();
-    cx.out.comparisons.insert(node, PartNode::Parts(nodes.clone().into()));
-    for (part, part_node) in parts.into_iter().zip(nodes) {
+    let nodes: Vec<(PartKey, AstId)> = parts.iter().map(|(key, _)| (*key, AstId::alloc())).collect();
+    cx.out.structures.insert(node, StructureNode::Parts(nodes.clone().into()));
+    for ((_, part), (_, part_node)) in parts.into_iter().zip(nodes) {
         let compare = Decision::Compare {
             node: part_node,
             span,

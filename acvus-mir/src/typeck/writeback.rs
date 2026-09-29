@@ -5,9 +5,10 @@ use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{Closure, Coercion, Conversion, Entered, StructureNode, StructureTree, Typeck};
+use super::output::{Closure, Coercion, CoercionNode, Conversion, Entered, StructureNode, StructureTree, Typeck};
 use crate::decl::{Base, DeclaredFacts, Head, Scheme, TyVarBound};
-use crate::infer::{FreezeMemo, Term, Unsettled};
+use crate::infer::{FreezeMemo, ShapeCoercion, Term, Unsettled};
+use crate::ty::structural::PartKey;
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, Infer as InferPhase,
     Mutability, Ty, TyKind, Types,
@@ -269,9 +270,45 @@ fn positions(cx: &Ctxt<'_>, term: Term) -> Option<Held> {
 
 /// Every coercion, each at the site of the value coerced (types §3, §7):
 /// a structured value's by its `CoercionNode` and each part's own, a
-/// concrete value's by `conversions`' steps.
+/// concrete value's by `conversions`' steps. A structured coercion that
+/// keeps its shape and every part as it is changes nothing, and is left
+/// out; so is one some refusal left open.
 fn coercions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, Coercion> {
-    todo!("each `CoercionNode` down to its parts' coercions, and each concrete value's steps as `Coercion::Steps`")
+    let mut steps = conversions(cx, types, memo);
+    let nodes = std::mem::take(&mut cx.out.coercions);
+    let parts: FxHashSet<AstId> = nodes.values().flat_map(|node| node.parts.iter().map(|(_, site)| *site)).collect();
+    let mut out = FxHashMap::default();
+    for root in nodes.keys().copied().filter(|site| !parts.contains(site)) {
+        if let Some(Some(coercion)) = structured(cx, types, memo, &nodes, &mut steps, root) {
+            out.insert(root, coercion);
+        }
+    }
+    out.extend(steps.into_iter().map(|(site, steps)| (site, Coercion::Steps(steps))));
+    out
+}
+
+/// The coercion of the structured value at `site`: `Some(None)` where it
+/// changes nothing, and `None` where a refusal left its slot open.
+fn structured(
+    cx: &mut Ctxt<'_>,
+    types: &mut Types<Concrete>,
+    memo: &mut FreezeMemo,
+    nodes: &FxHashMap<AstId, CoercionNode>,
+    steps: &mut FxHashMap<AstId, Box<[Conversion<Ty>]>>,
+    site: AstId,
+) -> Option<Option<Coercion>> {
+    let node = &nodes[&site];
+    let mut parts = Vec::with_capacity(node.parts.len());
+    for (key, part_site) in node.parts.iter() {
+        let part = match nodes.contains_key(part_site) {
+            true => structured(cx, types, memo, nodes, steps, *part_site)?,
+            false => steps.remove(part_site).map(Coercion::Steps),
+        };
+        parts.push((*key, part));
+    }
+    let to = freeze(cx, types, memo, node.slot)?;
+    let changes = node.shape != ShapeCoercion::Kept || parts.iter().any(|(_, part)| part.is_some());
+    Some(changes.then(|| Coercion::Structured { shape: node.shape.clone(), to, parts: parts.into() }))
 }
 
 /// Every coercion, each at its site with its steps in order: a declared
@@ -406,24 +443,26 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
     Some(steps)
 }
 
-/// Every part tree, from each root the program wrote down to the parts
-/// that reach an impl: the comparisons' (operators §4). A tree some refusal
-/// left open is left out.
+/// Every structure tree, from each root down to the parts that reach an
+/// impl: the comparisons' (operators §4), at the operator's site, and the
+/// lifted impls' (types §1), at the site of the call that reached one. A
+/// part node of a lifted impl that is itself lifted keeps no reach of its
+/// own: its tree is its parts'. A tree some refusal left open is left out.
 fn structure_trees(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, StructureTree> {
-    let comparisons = std::mem::take(&mut cx.out.comparisons);
-    let trees = Trees { nodes: &comparisons };
+    let nodes = std::mem::take(&mut cx.out.structures);
+    let trees = Trees { nodes: &nodes };
     let mut out = FxHashMap::default();
     for root in trees.roots() {
-        if let Some(tree) = trees.tree(cx, types, memo, root) {
+        if let Some(tree) = trees.tree(cx, types, memo, root, true) {
             out.insert(root, tree);
         }
     }
     out
 }
 
-/// The comparisons' part-tree nodes while checking.
+/// The structure-tree nodes while checking.
 struct Trees<'n> {
-    nodes: &'n FxHashMap<AstId, PartNode>,
+    nodes: &'n FxHashMap<AstId, StructureNode>,
 }
 
 impl Trees<'_> {
@@ -432,25 +471,32 @@ impl Trees<'_> {
             .nodes
             .values()
             .flat_map(|node| match node {
-                PartNode::Parts(parts) => parts.to_vec(),
-                PartNode::Reached => Vec::new(),
+                StructureNode::Parts(parts) => parts.iter().map(|(_, part)| *part).collect(),
+                StructureNode::Reached => Vec::new(),
             })
             .collect();
         self.nodes.keys().copied().filter(|node| !children.contains(node)).collect()
     }
 
-    /// The tree at `node`.
-    fn tree(&self, cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, node: AstId) -> Option<PartTree> {
+    /// The tree at `node`, a root where `root`.
+    fn tree(&self, cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, node: AstId, root: bool) -> Option<StructureTree> {
         match self.nodes.get(&node)? {
-            PartNode::Parts(parts) => {
-                let parts: Option<Vec<PartTree>> = parts.iter().map(|part| self.tree(cx, types, memo, *part)).collect();
-                Some(PartTree::Parts(parts?.into()))
+            StructureNode::Parts(parts) => {
+                if !root {
+                    cx.out.reached.remove(&node);
+                    cx.out.callees.remove(&node);
+                }
+                let parts: Option<Vec<(PartKey, StructureTree)>> = parts
+                    .iter()
+                    .map(|(key, part)| Some((*key, self.tree(cx, types, memo, *part, false)?)))
+                    .collect();
+                Some(StructureTree::Parts(parts?.into()))
             }
-            PartNode::Reached => {
+            StructureNode::Reached => {
                 let chosen = cx.out.reached.remove(&node);
                 let callee = cx.out.callees.remove(&node);
                 let callee = freeze(cx, types, memo, callee?)?;
-                Some(PartTree::Reached { chosen: chosen?, callee })
+                Some(StructureTree::Reached { chosen: chosen?, callee })
             }
         }
     }
