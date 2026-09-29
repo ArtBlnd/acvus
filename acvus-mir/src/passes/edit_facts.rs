@@ -27,7 +27,9 @@ use smallvec::SmallVec;
 use crate::ir::cfg::edit::{
     Asked, ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved,
 };
+use acvus_utils::QualifiedRef;
 
+use crate::decl::Declarations;
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Committed, Definition, InstId, Op, Site, Terminator};
 use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{
@@ -266,7 +268,7 @@ impl DischargeFacts for EditFacts<'_, '_> {
         let decls = self.am.decls();
         let bounds = ValueBounds { intervals: &intervals, affine: &affine, decls, body, types };
         let preds = self.predecessors.get_or_insert_with(|| body.predecessors());
-        let proven = Proven { body, types, loans: &loans, bounds, preds };
+        let proven = Proven { body, types, loans: &loans, bounds, decls, preds };
         let fact = proven.unobserved(inst.id());
         self.unobserved.insert(inst.id(), fact);
         fact
@@ -316,6 +318,7 @@ struct Proven<'f> {
     types: &'f Types<Concrete>,
     loans: &'f Loans,
     bounds: ValueBounds<'f>,
+    decls: &'f Declarations,
     preds: &'f FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
 }
 
@@ -325,16 +328,29 @@ impl Proven<'_> {
     ///   that reaches it;
     /// - a store whose storage no read reaches before a write replaces it
     ///   or the body ends, per the loans;
-    /// - a fetch into a context's slot, a store, on the same terms;
+    /// - a fetch into a context's slot, a store, on the same terms, and a
+    ///   fetch into a value that has no use: once the slot is promoted, the
+    ///   reads of what the fetch wrote are the uses of that value;
     /// - a commit from a context's slot that no write of the program's
     ///   reaches from the body's entry.
     ///
-    /// A volatile context's fetch and commit carry a value and name no
-    /// slot, and are never proven: nothing merges or removes them
-    /// (context §3). Cost: O(the relations of a slice's impl) for a check,
-    /// O(storages it writes · the body's sites and edges) for a store or a
-    /// fetch, and O(the body's sites and edges) for a commit.
+    /// A volatile context's fetch and commit are never proven, whatever
+    /// their shape: nothing merges or removes them (context §3). Nor is a
+    /// commit of a value: a promoted slot's writes leave no site, so
+    /// whether one reaches the commit from the entry is not found from the
+    /// value it commits. Cost: O(the relations of a slice's impl) for a
+    /// check, O(storages it writes · the body's sites and edges) for a
+    /// store or a fetch into a slot, O(1) for a fetch into a value, and
+    /// O(the body's sites and edges) for a commit.
+    ///
+    /// # Panics
+    /// A fetch or a commit names a context `decls` does not declare.
     fn unobserved(&self, inst: InstId) -> Option<Unobserved> {
+        let volatile = |context: QualifiedRef| {
+            self.decls
+                .context_is_volatile(context)
+                .unwrap_or_else(|| panic!("the context {context:?} a body fetches or commits is declared"))
+        };
         let record = self.body.inst(inst);
         match record.op() {
             Op::Check { op, left, right } => self.check_holds(*op, *left, *right).then_some(Unobserved::NeverFires),
@@ -343,10 +359,15 @@ impl Proven<'_> {
             | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
                 self.bounds.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
             }
-            Op::Assign { .. } | Op::Fetch { into: Some(_), .. } => {
+            Op::Assign { .. } => store_never_read(self.body, self.loans, inst).then_some(Unobserved::NeverRead),
+            Op::Fetch { context, into: Some(_) } if !volatile(*context) => {
                 store_never_read(self.body, self.loans, inst).then_some(Unobserved::NeverRead)
             }
-            Op::Commit { from: Committed::Slot(slot), .. } => {
+            Op::Fetch { context, into: None } if !volatile(*context) => {
+                let fetched = record.result().expect("a fetch into a value yields it");
+                (self.body.use_count(fetched) == 0).then_some(Unobserved::NeverRead)
+            }
+            Op::Commit { context, from: Committed::Slot(slot) } if !volatile(*context) => {
                 commit_never_written(self.body, self.loans, self.preds, inst, *slot).then_some(Unobserved::NeverWritten)
             }
             _ => None,
