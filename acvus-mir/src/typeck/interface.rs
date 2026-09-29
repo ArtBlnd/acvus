@@ -31,6 +31,17 @@ pub struct Interface {
     pub(crate) scheme: super::generalize::Exported,
 }
 
+impl Interface {
+    /// Whether `other` is this interface but for the names of its variables
+    /// and the sites and spans its requirements carry: the same parameters,
+    /// function type and requirements, variables matched by the order they
+    /// are first reached. What a caller's check admits depends on nothing
+    /// else; only a refusal reads a site (graph: early cutoff).
+    pub fn same(&self, other: &Interface) -> bool {
+        todo!("{:?}", std::ptr::from_ref(other))
+    }
+}
+
 /// The interfaces a check's calls may reach, by each unit's whole name.
 #[derive(Default)]
 pub struct Interfaces {

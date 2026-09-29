@@ -355,6 +355,17 @@ pub(super) trait MapTerms {
     fn instance(&mut self, instance: super::generalize::InstanceId) -> super::generalize::InstanceId {
         instance
     }
+
+    /// A site a decision records at; itself unless the decision is being
+    /// compared without its sites (`Interface::same`).
+    fn site(&mut self, site: AstId) -> AstId {
+        site
+    }
+
+    /// A span a decision refuses at, likewise.
+    fn span(&mut self, span: Span) -> Span {
+        span
+    }
 }
 
 impl Callee {

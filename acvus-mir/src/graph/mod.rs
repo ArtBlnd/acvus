@@ -40,11 +40,20 @@
 //!   carried into the calling module's table.
 //!
 //! Incremental:
-//! - An interface is checked again only where its source, the host's
-//!   declarations or an interface it read changed; where the result equals
-//!   the one before, no unit that read it is checked again (early cutoff).
-//! - An instantiation is compiled again only where its unit's interface
-//!   inputs changed or its types did.
+//! - Each unit has a revision, raised by `set_unit` and `remove_unit`, and
+//!   each interface a revision of its own.
+//! - A unit's interface is checked again only where its revision or the
+//!   revision of an interface it read changed since it was last checked; a
+//!   unit refused is always checked again, since its refusals name sites.
+//! - Where an interface checked again is the same as the one before
+//!   (`Interface::same`: equal but for the names of its variables and the
+//!   sites and spans its requirements carry, which only a refusal reads),
+//!   its revision stays, so no unit that read it is checked again (early
+//!   cutoff); the new interface is kept, for its sites.
+//! - A unit's module is compiled again, whole, only where its revision, the
+//!   revision of an interface it read, or the set of its instantiations the
+//!   entries reach changed; otherwise it is the one before, with the
+//!   instantiations its bodies asked of other units.
 //! - Inline is done again for a module only where it or a module it inlines
 //!   from changed.
 //!
@@ -88,12 +97,37 @@ pub use crate::typeck::{Interface, Interfaces};
 mod tests;
 
 /// The graph a host compiles, kept across compiles: the host's
-/// declarations, verified once, and the units by name.
+/// declarations, verified once, the units by name, and what the last
+/// compile made of each (the module doc's incremental).
 pub struct Graph {
     names: Interner,
     declarations: Declarations,
     units: BTreeMap<QualifiedRef, Unit>,
     compiled: BTreeMap<QualifiedRef, UnitModule>,
+    /// Each unit's revision.
+    revisions: BTreeMap<QualifiedRef, u64>,
+    /// Each unit's last interface check, by the revisions it read.
+    checked: BTreeMap<QualifiedRef, Checked>,
+    /// Each unit's last module, by what it was compiled from.
+    built: BTreeMap<QualifiedRef, Built>,
+    next_revision: u64,
+}
+
+/// A unit's last interface check: the unit's revision and each callee's
+/// interface revision it read, its outcome, and its interface's revision.
+struct Checked {
+    read: (u64, Vec<(QualifiedRef, u64)>),
+    outcome: Result<Interface, Vec<crate::typeck::Refusal>>,
+    revision: u64,
+}
+
+/// A unit's last module: the revisions it was compiled from, the
+/// instantiations it holds, and each call of another unit its bodies make,
+/// the callee's parameter types in this module's table.
+struct Built {
+    read: (u64, Vec<(QualifiedRef, u64)>),
+    module: UnitModule,
+    asks: Vec<(QualifiedRef, Box<[Ty]>)>,
 }
 
 /// One source's module: one body per instantiation of its unit, each by
@@ -137,7 +171,16 @@ pub enum Refusal {
 
 impl Graph {
     pub fn new(names: Interner, declarations: Declarations) -> Graph {
-        Graph { names, declarations, units: BTreeMap::new(), compiled: BTreeMap::new() }
+        Graph {
+            names,
+            declarations,
+            units: BTreeMap::new(),
+            compiled: BTreeMap::new(),
+            revisions: BTreeMap::new(),
+            checked: BTreeMap::new(),
+            built: BTreeMap::new(),
+            next_revision: 0,
+        }
     }
 
     /// Adds or replaces the unit at `unit.name`.
