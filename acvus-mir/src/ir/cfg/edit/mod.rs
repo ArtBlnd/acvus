@@ -714,7 +714,8 @@ where
     S::Needs<'m>: LoanFacts,
 {
     /// Promotes a slot to values (SSA construction); refused where a use
-    /// other than a whole-slot `Take` or `Assign` names it.
+    /// other than a whole-slot `Take`, `Assign`, `Fetch` or `Commit` names
+    /// it.
     ///
     /// # Panics
     /// `slot` is not a slot of the body, or such a use names it though the

@@ -199,7 +199,7 @@ impl<'m> Rewriter<'m> {
         renamed
     }
 
-    /// Replaces `slot`'s whole-slot `Take`s and `Assign`s with values. Cost:
+    /// Replaces `slot`'s whole-slot reads and writes with values. Cost:
     /// `Body::promote_slot`'s.
     ///
     /// # Panics

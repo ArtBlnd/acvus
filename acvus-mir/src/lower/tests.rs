@@ -780,6 +780,58 @@ fn a_context_only_read_keeps_its_fetch_and_one_written_keeps_its_commit_too() {
     assert_eq!(boundary("let n = len(&@c); @c = make(); n"), (1, 1), "read, then written");
 }
 
+/// context §3: the full pipeline promotes a context's slot to values. The
+/// fetch after the call becomes a fetch of the value the tail returns, and
+/// each commit a commit of the value the slot held there: the stored `2`
+/// before the call, the fetched value at the return.
+#[test]
+fn a_context_slot_is_promoted_by_the_pipeline_to_fetched_and_committed_values() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let n = fx.context("n", int, false);
+    fx.opaque_f();
+    let source = "@n = 2; f(1); @n";
+    let script: Script = acvus_ast::parse_script(&fx.names, source).expect("the test's source parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut types = Types::new();
+    let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &fx.inputs);
+    let typeck = check_script(&fx.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
+    assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+    let mut module = lower_script(&decls, &typeck, types, &script);
+    let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
+    super::required::run(&mut module, &mut am).expect("the checks admit it");
+    crate::passes::pipeline::optimize(&mut module, &mut am, crate::passes::pipeline::Level::Full);
+    let lowered = Lowered::checked(module, fx.names);
+    let body = lowered.entry();
+    assert!(body.slots().is_empty(), "the slot is promoted: {}", shown(body));
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let fetched: Vec<_> = insts
+        .iter()
+        .filter(|inst| matches!(inst.op(), Op::Fetch { context, into: None } if *context == n))
+        .map(|inst| inst.result().expect("a fetch into a value yields it"))
+        .collect();
+    let [fetched] = fetched[..] else { panic!("one fetch, after the call: {}", shown(body)) };
+    let committed: Vec<_> = insts
+        .iter()
+        .filter_map(|inst| match inst.op() {
+            Op::Commit { context, from: Committed::Value(value) } if *context == n => Some(*value),
+            _ => None,
+        })
+        .collect();
+    let [before_the_call, at_the_return] = committed[..] else { panic!("two commits of values: {}", shown(body)) };
+    assert!(
+        matches!(insts.iter().find(|inst| inst.result() == Some(before_the_call)).map(|inst| inst.op()), Some(Op::Const { .. })),
+        "the commit before the call commits the stored constant: {}",
+        shown(body)
+    );
+    assert_eq!(at_the_return, fetched, "the commit at the return commits the fetched value: {}", shown(body));
+    assert!(
+        matches!(body.block(body.entry()).terminator(), Terminator::Return { value, .. } if *value == fetched),
+        "the tail returns the fetched value: {}",
+        shown(body)
+    );
+}
+
 // -- templates and conversions ------------------------------------------------
 
 /// A template appends its text as a literal and `{{ x }}` through the

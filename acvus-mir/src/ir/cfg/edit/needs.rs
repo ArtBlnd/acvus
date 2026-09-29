@@ -72,8 +72,8 @@ pub trait LoanFacts: Facts {
     /// with it on either side, for every other instruction.
     fn names_storage(&mut self, asked: Asked<'_>, inst: InstRef) -> bool;
     /// The first use of `slot` a promotion cannot rewrite: anything but a
-    /// whole-slot `Take` or `Assign`. `None` is exactly what `promote`
-    /// requires.
+    /// whole-slot `Take`, `Assign`, `Fetch` or `Commit`. `None` is exactly
+    /// what `promote` requires.
     fn escapes(&mut self, asked: Asked<'_>, slot: ValueId) -> Option<Site>;
 }
 

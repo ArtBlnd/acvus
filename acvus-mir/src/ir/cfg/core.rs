@@ -21,7 +21,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::body::{BlockData, BlockId, Body, Def, Edge, Inst, InstId, InstList, OrderUse, Site, Terminator, UseSites, ValueDef};
-use super::op::Op;
+use super::op::{Committed, Op};
 use super::order::At;
 use crate::ir::{DebugInfo, IndexBound, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
 use crate::ty::{Concrete, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types};
@@ -697,21 +697,25 @@ impl Body {
         left
     }
 
-    /// Replaces the whole-slot `Take`s and `Assign`s of `slot` with values:
-    /// a `Take` reads what the last `Assign` above it wrote, through block
+    /// Replaces the whole-slot reads and writes of `slot` with values: a
+    /// read takes what the last write above it wrote, through block
     /// parameters at joins and loop headers, and an `Undef` at the entry
-    /// where no `Assign` came first, with the slot's span (Braun et al.
-    /// 2013). No drop is written: an `Assign` drops nothing, every drop being
-    /// an explicit `Drop` (ownership §6). The slot goes with them. It
-    /// returns the instructions taken out, in order. Cost: O(the body's
-    /// blocks and edges, and the slot's uses times their log), and the
+    /// where no write came first, with the slot's span (Braun et al.
+    /// 2013). A whole `Take` and a whole `Assign` go. A context's `Fetch`
+    /// into the slot is a write of the value it now yields, `into: None`,
+    /// and its `Commit` from the slot a read, now of that value,
+    /// `Committed::Value`; both stay, being effects (context §3). No drop is
+    /// written: an `Assign` drops nothing, every drop being an explicit
+    /// `Drop` (ownership §6). The slot goes with them. It returns the
+    /// instructions taken out, in order. Cost: O(the body's blocks and
+    /// edges, and the slot's uses times their log), and the
     /// trivial-parameter removal's.
     ///
     /// # Panics
-    /// `slot` is not a slot; something other than a whole-slot `Take` or
-    /// `Assign` names it, which a promotion does not rewrite; or a read
-    /// reaches the start of an entry block that an edge enters again, where
-    /// a parameter cannot stand.
+    /// `slot` is not a slot; something other than a whole-slot `Take`,
+    /// `Assign`, `Fetch` or `Commit` names it, which a promotion does not
+    /// rewrite; or a read reaches the start of an entry block that an edge
+    /// enters again, where a parameter cannot stand.
     pub(super) fn promote_slot(&mut self, types: &Types<Concrete>, slot: ValueId) -> Vec<InstShift> {
         let Def::Slot { .. } = self.def_of(slot) else {
             panic!("{slot:?} is not a slot")
@@ -720,7 +724,10 @@ impl Body {
         let span = self.slot_spans[&slot];
         let mut loads: Vec<SlotAccess> = Vec::new();
         let mut stores: Vec<SlotAccess> = Vec::new();
-        for site in self.users(slot) {
+        let mut fetches: Vec<InstId> = Vec::new();
+        let mut commits: Vec<SlotAccess> = Vec::new();
+        let users: Vec<Site> = self.users(slot).collect();
+        for site in users {
             let Site::Inst(id) = site else {
                 panic!("{slot:?} is named by a terminator, which a promotion does not rewrite")
             };
@@ -733,11 +740,19 @@ impl Body {
                 Op::Assign { target: RefTarget::Var(named), path, value, .. } if *named == slot && path.is_empty() => {
                     stores.push(access(*value));
                 }
+                Op::Fetch { into: Some(named), .. } if *named == slot => fetches.push(id),
+                Op::Commit { from: Committed::Slot(named), .. } if *named == slot => commits.push(access(slot)),
                 other => panic!(
-                    "a promotion rewrites only whole-slot Take and Assign of {slot:?}, and {id:?} is \
+                    "a promotion rewrites only whole-slot Take, Assign, Fetch and Commit of {slot:?}, and {id:?} is \
                      {other:?}; the facts that let it be promoted are wrong"
                 ),
             }
+        }
+        let fetched_by: FxHashSet<InstId> = fetches.iter().copied().collect();
+        for id in fetches {
+            let fetched = self.fetch_into_value(types, id, slot, ty);
+            let node = self.node(id);
+            stores.push(SlotAccess { id, block: node.block, order: node.order, value: fetched });
         }
         loads.sort_by_key(SlotAccess::position);
         stores.sort_by_key(SlotAccess::position);
@@ -763,16 +778,31 @@ impl Body {
             };
             read.insert(load.value, value);
         }
-        for load in &loads {
-            let mut value = read[&load.value];
+        let committed: Vec<(InstId, ValueId)> = commits
+            .iter()
+            .map(|commit| {
+                let value = match last_store_above(commit) {
+                    Some(value) => value,
+                    None => reader.read_start(self, types, commit.block),
+                };
+                (commit.id, value)
+            })
+            .collect();
+        let resolved = |mut value: ValueId| {
             while let Some(next) = read.get(&value) {
                 value = *next;
             }
-            self.replace_all_uses(load.value, value);
+            value
+        };
+        for load in &loads {
+            self.replace_all_uses(load.value, resolved(read[&load.value]));
+        }
+        for (commit, value) in committed {
+            self.commit_value(commit, slot, resolved(value));
         }
 
         let mut shifts = Vec::new();
-        for access in loads.iter().chain(&stores) {
+        for access in loads.iter().chain(stores.iter().filter(|store| !fetched_by.contains(&store.id))) {
             let removed = self
                 .remove_inst_at(access.id)
                 .expect("a promoted Take's uses were all replaced, and an Assign yields nothing");
@@ -792,6 +822,30 @@ impl Body {
             }
         }
         shifts
+    }
+
+    /// The `Fetch` `id` into `slot` becomes a fetch into a new value of
+    /// `ty`, which it yields; the value.
+    fn fetch_into_value(&mut self, types: &Types<Concrete>, id: InstId, slot: ValueId, ty: Ty) -> ValueId {
+        let fetched = self.make_value(types, ty, Def::Inst(id));
+        let inst = self.inst_mut(id);
+        let Op::Fetch { into, .. } = &mut inst.op else {
+            panic!("{id:?} is a Fetch into {slot:?}")
+        };
+        *into = None;
+        inst.result = Some(fetched);
+        self.use_sites_mut(slot).remove_one(Site::Inst(id));
+        fetched
+    }
+
+    /// The `Commit` `id` from `slot` becomes a commit of `value`.
+    fn commit_value(&mut self, id: InstId, slot: ValueId, value: ValueId) {
+        let Op::Commit { from, .. } = &mut self.inst_mut(id).op else {
+            panic!("{id:?} is a Commit from {slot:?}")
+        };
+        *from = Committed::Value(value);
+        self.use_sites_mut(slot).remove_one(Site::Inst(id));
+        self.use_sites_mut(value).add(Site::Inst(id), 1);
     }
 
     /// `block`'s `Switch` becomes a jump into the arm whose key is `key`, or
