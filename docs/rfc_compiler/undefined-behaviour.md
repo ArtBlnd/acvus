@@ -38,6 +38,7 @@ A run that breaks a premise the language takes as given has no meaning.
 
 - Integer arithmetic stays within its type: overflow is undefined.
 - Every declaration the program relies on is true: every declared fact of an extern fn, and every `anyorder` the program writes.
+- No value has a layout the language states. A reference to a value of a transparent structured type is its parts' references (ownership §5), so reading it as one run of storage is undefined.
 
 ## 3. Implementation limits
 
