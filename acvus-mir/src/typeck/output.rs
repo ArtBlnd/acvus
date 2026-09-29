@@ -266,6 +266,11 @@ pub(super) struct Output {
     pub site_owners: FxHashMap<AstId, AstId>,
     /// Whether a generalized binding's local fixpoint is running.
     pub settling: bool,
+    /// Every term a place's step reached through a reference, recorded by
+    /// the decision that made it as it fired: a `*`'s target, and a field,
+    /// index or pattern part past a reference or past a term here. Every
+    /// step after one on its path is reached so too (types §1).
+    pub through: rustc_hash::FxHashSet<Term>,
     pub types: FxHashMap<AstId, Term>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,

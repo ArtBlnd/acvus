@@ -3188,3 +3188,29 @@ fn two_lambdas_joined_by_if_are_either_function_value() {
     assert_eq!(lambdas.len(), 2);
     assert_eq!(cx.infer.values(values), Some(crate::ty::FnValues::Of(lambdas)));
 }
+
+/// types §1: every step after a reference on a place's path is reached
+/// through it, however far the path goes on: a store or a read down a
+/// field or an element past an auto-deref grows nothing.
+#[test]
+fn a_path_past_a_reference_does_not_grow_its_target() {
+    for source in [
+        "let a = { b: { x: 1, }, }; let r = &mut a; r.b.y = 2; 0",
+        "let a = [{ x: 1, }]; let r = &mut a; r[0].y = 2; 0",
+        "let a = { b: { x: 1, }, }; let r = &a; r.b.y",
+    ] {
+        let fx = Fixture::new();
+        let (checked, _) = fx.script(source);
+        assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque], "{source}");
+    }
+}
+
+/// types §1: the same paths by name grow the binding's type.
+#[test]
+fn a_path_by_name_grows_the_bindings_type() {
+    for source in ["let a = { b: { x: 1, }, }; a.b.y = 2; 0", "let a = [{ x: 1, }]; a[0].y = 2; 0"] {
+        let fx = Fixture::new();
+        let (checked, _) = fx.script(source);
+        checked.admitted();
+    }
+}

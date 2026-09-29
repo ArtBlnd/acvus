@@ -204,7 +204,7 @@ fn field_shape<S: Slot>(cx: &mut Ctxt<'_>, field: &ObjectPatternField<S>) -> (As
 /// other shape waits for the scrutinee's head.
 fn destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, lent: Option<Mutability>) {
     match shape.form {
-        Form::Bind { .. } | Form::Context { .. } | Form::Ignore => apply(cx, shape, scrutinee, None, lent),
+        Form::Bind { .. } | Form::Context { .. } | Form::Ignore => apply(cx, shape, (scrutinee, Reach::Named), None, lent),
         _ => super::decision::decide(
             cx,
             Decision::Destructure {
@@ -220,8 +220,8 @@ fn destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, lent: Option<Mu
 /// its target with names lent (patterns §1); on `!`, every name is `!`
 /// (patterns §4); otherwise by the shape. `head` is `None` where the
 /// pattern's use decides an open scrutinee at a stall: it is then the
-/// shape, never a reference.
-pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, head: Option<Head>, lent: Option<Mutability>) {
+/// shape, never a reference. `reach` is how the scrutinee was reached.
+pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reach): (Term, Reach), head: Option<Head>, lent: Option<Mutability>) {
     match head {
         Some(Head::Ref(mutability, _)) => {
             let through = match lent {
@@ -238,15 +238,21 @@ pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term,
                 cx.eq(term, never, shape.span);
             }
         }
-        Some(Head::Base(_)) | None => apply(cx, shape, scrutinee, head, lent),
+        Some(Head::Base(_)) | None => apply(cx, shape, (scrutinee, reach), head, lent),
     }
 }
 
-/// `shape` applied to `scrutinee`, whose head is `known` where it is known.
-fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, lent: Option<Mutability>) {
+/// `shape` applied to `scrutinee`, whose head is `known` where it is known,
+/// reached by `reach` or through a reference where the match passed one.
+/// Each part it takes apart is reached as the scrutinee was, which is
+/// recorded where that is through a reference (types §1).
+fn apply(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reach): (Term, Reach), known: Option<Head>, lent: Option<Mutability>) {
     record_matched(cx, &shape, scrutinee);
     let Shape { site, span, form } = shape;
-    let reach = reached(lent);
+    let reach = match lent {
+        Some(_) => Reach::Through,
+        None => reach,
+    };
     match form {
         Form::Bind { term } => {
             let value = bound_value(cx, scrutinee, lent, span);
@@ -259,7 +265,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
         Form::Ignore => {}
         Form::Literal { literal } => cx.join(scrutinee, literal, reach, span),
         Form::List { head, rest, tail } => {
-            let element = cx.fresh();
+            let element = reached_part(cx, reach);
             let listed = match known {
                 Some(Head::Base(Base::Slice)) => TyKind::Slice(element),
                 _ => {
@@ -276,9 +282,9 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
                 destructure(cx, part, element, lent);
             }
         }
-        Form::Object { fields } => object(cx, fields, scrutinee, lent, span),
+        Form::Object { fields } => object(cx, fields, (scrutinee, reach), lent, span),
         Form::Tuple { parts } => {
-            let terms: Vec<Term> = parts.iter().map(|_| cx.fresh()).collect();
+            let terms: Vec<Term> = parts.iter().map(|_| reached_part(cx, reach)).collect();
             let tuple = cx.held(TyKind::Tuple(terms.clone().into(), Label::Here));
             cx.join(scrutinee, tuple, reach, span);
             for (part, term) in parts.into_iter().zip(terms) {
@@ -291,17 +297,19 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
             enum_name,
             tag,
             payload,
-        } => variant(cx, enum_name, tag, payload.map(|payload| *payload), scrutinee, lent, span),
+        } => variant(cx, enum_name, tag, payload.map(|payload| *payload), (scrutinee, reach), lent, span),
     }
 }
 
-/// How a pattern reaches its scrutinee (types §1): through a reference
-/// where the match passed through one, by name otherwise.
-fn reached(lent: Option<Mutability>) -> Reach {
-    match lent {
-        Some(_) => Reach::Through,
-        None => Reach::Named,
+/// A fresh term for a part a pattern takes apart, reached by `reach`:
+/// recorded where that is through a reference, so that every step after it
+/// is too (types §1).
+fn reached_part(cx: &mut Ctxt<'_>, reach: Reach) -> Term {
+    let part = cx.fresh();
+    if reach == Reach::Through {
+        cx.out.through.insert(part);
     }
+    part
 }
 
 /// The type a pattern's site has: what it matched, except at a name,
@@ -325,7 +333,7 @@ fn bound_value(cx: &mut Ctxt<'_>, part: Term, lent: Option<Mutability>, span: Sp
 /// `{ f: p, .. }`: a declared struct must have each field; any other
 /// object grows by them where transparent (types §1-2). The scrutinee's
 /// head is known here, so whether it is declared is read off it.
-fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, lent: Option<Mutability>, span: Span) {
+fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, (scrutinee, reach): (Term, Reach), lent: Option<Mutability>, span: Span) {
     let declared = match cx.infer.types().kind(cx.infer.shallow(scrutinee)) {
         TyKind::Object(ObjectTy::Declared(_, declared)) => Some(declared.clone()),
         _ => None,
@@ -339,11 +347,11 @@ fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, lent: 
         }
         return;
     }
-    let terms: Vec<(Astr, Term)> = fields.iter().map(|(key, _)| (*key, cx.fresh())).collect();
+    let terms: Vec<(Astr, Term)> = fields.iter().map(|(key, _)| (*key, reached_part(cx, reach))).collect();
     let mut sorted = terms.clone();
     sorted.sort_by_key(|(name, _)| *name);
     let object = cx.held(TyKind::Object(ObjectTy::Structural(sorted.into(), Label::Here)));
-    cx.join(scrutinee, object, reached(lent), span);
+    cx.join(scrutinee, object, reach, span);
     for ((_, part), (_, term)) in fields.into_iter().zip(terms) {
         destructure(cx, part, term, lent);
     }
@@ -357,14 +365,14 @@ fn variant(
     enum_name: Option<Astr>,
     tag: Astr,
     payload: Option<Shape>,
-    scrutinee: Term,
+    (scrutinee, reach): (Term, Reach),
     lent: Option<Mutability>,
     span: Span,
 ) {
     let tags = cx.decls.core().tags;
     let (kind, part) = match enum_name {
         Some(name) => {
-            let part = payload.as_ref().map(|_| cx.fresh());
+            let part = payload.as_ref().map(|_| reached_part(cx, reach));
             let kind = TyKind::Enum {
                 name: QualifiedRef::root(name),
                 variants: Box::new([(tag, part)]),
@@ -373,11 +381,11 @@ fn variant(
             (kind, part)
         }
         None if tag == tags.some || tag == tags.none => {
-            let inner = cx.fresh();
+            let inner = reached_part(cx, reach);
             (TyKind::Option(inner, Label::Here), (tag == tags.some).then_some(inner))
         }
         None if tag == tags.ok || tag == tags.err => {
-            let (ok, err) = (cx.fresh(), cx.fresh());
+            let (ok, err) = (reached_part(cx, reach), reached_part(cx, reach));
             (TyKind::Result(ok, err, Label::Here), Some(if tag == tags.ok { ok } else { err }))
         }
         None => {
@@ -386,7 +394,7 @@ fn variant(
         }
     };
     let variant = cx.held(kind);
-    cx.join(scrutinee, variant, reached(lent), span);
+    cx.join(scrutinee, variant, reach, span);
     match (payload, part) {
         (Some(payload), Some(part)) => destructure(cx, payload, part, lent),
         (None, None) => {}

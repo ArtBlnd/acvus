@@ -312,7 +312,10 @@ fn lends(
                     Head::Ref(Mutability::Shared, Base::Array | Base::Slice) => {
                         refusal::push(cx, RefusalKind::StoreThroughShared, index.span);
                     }
-                    _ => super::place::fire_index(cx, index.callee_site, index.span, container, Mutability::Mut, index.element, body),
+                    _ => {
+                        let reach = decision::reach_of(cx, index.container, crate::ty::Reach::Named, reading);
+                        super::place::fire_index(cx, index.callee_site, index.span, (container, reach), Mutability::Mut, index.element, body);
+                    }
                 }
             }
         }

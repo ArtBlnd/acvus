@@ -3,7 +3,7 @@
 //! declared struct), so each is a decision fired once that head is known
 //! (types §6).
 
-use acvus_ast::{AstId, Expr, Place, PlaceBase, Root, Slot, Span, UnaryOp};
+use acvus_ast::{AstId, Expr, Place, PlaceBase, Root, Slot, Span};
 use acvus_utils::{Astr, QualifiedRef};
 
 use super::call::reach_in;
@@ -49,27 +49,12 @@ impl Demand {
 /// `a.f`: a transparent object grows to have `f`; an opaque one must
 /// (types §1-2).
 pub(super) fn check_field<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, object: &Expr<S>, field: Astr, demand: Demand, span: Span) -> Term {
-    let reach = path_reach(object);
     let object = check_expr(cx, object, demand.of_container());
-    field_of(cx, (object, reach), field, span)
+    field_of(cx, object, field, span)
 }
 
-/// How the place an expression names is reached (types §1): through a
-/// reference where its path passes a `*`, and by name otherwise. A step
-/// through a reference that its operand's head decides is reached so
-/// where it fires (`fire_field`).
-fn path_reach<S: Slot>(expr: &Expr<S>) -> Reach {
-    match expr {
-        Expr::UnaryOp { op: UnaryOp::Deref, .. } => Reach::Through,
-        Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => path_reach(object),
-        Expr::Paren { inner, .. } => path_reach(inner),
-        _ => Reach::Named,
-    }
-}
-
-/// Field `field` of a value of term `object`, reached by `reach`: a
-/// decision on its head.
-fn field_of(cx: &mut Ctxt<'_>, (object, reach): (Term, Reach), field: Astr, span: Span) -> Term {
+/// Field `field` of a value of term `object`: a decision on its head.
+fn field_of(cx: &mut Ctxt<'_>, object: Term, field: Astr, span: Span) -> Term {
     let part = cx.fresh();
     super::decision::decide(
         cx,
@@ -78,23 +63,36 @@ fn field_of(cx: &mut Ctxt<'_>, (object, reach): (Term, Reach), field: Astr, span
             object,
             field,
             part,
-            reach,
         },
     );
     part
 }
 
-/// A field read fired: through a reference to its target, reached through
-/// it, as Rust auto-derefs; of a declared struct, the field it has; of
-/// `!`, `!`; of any other object, the field it grows to have where
-/// transparent at `reach` (types §1-2). `head` is `None` where the
-/// object's use decides it at a stall, which makes it an object and never
-/// a reference.
+/// `term`, a place's step, reached through a reference where `reach` says
+/// so: recorded, so that every step after it on its path is too (types
+/// §1).
+fn record_reach(cx: &mut Ctxt<'_>, term: Term, reach: Reach) {
+    if reach == Reach::Through {
+        cx.out.through.insert(term);
+    }
+}
+
+/// A field read fired, of an object reached by `reach`: through a
+/// reference to its target, reached through it, as Rust auto-derefs; of a
+/// declared struct, the field it has; of `!`, `!`; of any other object,
+/// the field it grows to have where transparent at `reach` (types §1-2).
+/// The part is reached as its object was, or through the reference. `head`
+/// is `None` where the object's use decides it at a stall, which makes it
+/// an object and never a reference.
 pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, (object, reach): (Term, Reach), head: Option<Head>, field: Astr, part: Term) {
     match head {
         Some(Head::Ref(..)) => {
-            let target = cx.referent(object);
-            let reached = field_of(cx, (target, Reach::Through), field, span);
+            record_reach(cx, part, Reach::Through);
+            let target = cx.fresh();
+            let referent = cx.referent(object);
+            cx.eq(target, referent, span);
+            record_reach(cx, target, Reach::Through);
+            let reached = field_of(cx, target, field, span);
             cx.eq(part, reached, span);
             return;
         }
@@ -105,6 +103,7 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, (object, reach): (Term, 
         }
         Some(Head::Base(_)) | None => {}
     }
+    record_reach(cx, part, reach);
     let declared = match head {
         Some(_) => match cx.infer.types().kind(cx.infer.shallow(object)) {
             TyKind::Object(ObjectTy::Declared(_, fields)) => Some(fields.clone()),
@@ -164,16 +163,22 @@ fn element(cx: &mut Ctxt<'_>, callee_site: AstId, container: Term, mutability: M
 /// An index fired: an array's or a slice's element is the language's own,
 /// since no declaration carries an array (extern-fn §1), through a
 /// reference too; any other container's is reached through its
-/// `as_slice(_mut)` (operators §3).
+/// `as_slice(_mut)` (operators §3). The element is reached as the
+/// container was, `reach`, or through the reference.
 pub(super) fn fire_index(
     cx: &mut Ctxt<'_>,
     callee_site: AstId,
     span: Span,
-    container: Closed,
+    (container, reach): (Closed, Reach),
     mutability: Mutability,
     element: Term,
     body: &EffectTerm<InferPhase>,
 ) {
+    let reach = match container.head {
+        Head::Ref(..) => Reach::Through,
+        Head::Base(_) => reach,
+    };
+    record_reach(cx, element, reach);
     let sequence = match container.head {
         Head::Base(Base::Array) => Some(container.term),
         Head::Ref(_, Base::Array | Base::Slice) => Some(cx.referent(container.term)),
@@ -260,6 +265,7 @@ pub(super) fn fire_deref(cx: &mut Ctxt<'_>, span: Span, reference: Closed, targe
         Head::Ref(..) => {
             let referent = cx.referent(reference.term);
             cx.eq(target, referent, span);
+            record_reach(cx, target, Reach::Through);
         }
         Head::Base(Base::Never) => {
             let never = cx.never();
@@ -288,10 +294,10 @@ pub(super) fn check_store<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, place: &Plac
         {
             refuse_recursion(cx, stored, *name, span);
         }
-        let Some((slot, reach)) = place_slot(cx, place, Access::Write) else {
+        let Some(slot) = place_slot(cx, place, Access::Write) else {
             return;
         };
-        cx.enter(value.id(), stored, slot, reach, value.span());
+        cx.enter(value.id(), stored, slot, Reach::Named, value.span());
     };
     match generalized {
         Some(binder) => super::generalize::walk(cx, binder, store),
@@ -299,33 +305,30 @@ pub(super) fn check_store<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, place: &Plac
     }
 }
 
-/// The term a store into `place` enters, and how it is reached (types
-/// §1); `None` where the place is refused. A context at its root is
-/// touched by `access`: written where it is the whole place, and read and
-/// written where a part of it is stored into (context §3).
-fn place_slot<S: Slot>(cx: &mut Ctxt<'_>, place: &Place<S>, access: Access) -> Option<(Term, Reach)> {
+/// The term a store into `place` enters, `None` where the place is
+/// refused; how each step is reached is recorded as it fires. A context at
+/// its root is touched by `access`: written where it is the whole place,
+/// and read and written where a part of it is stored into (context §3).
+fn place_slot<S: Slot>(cx: &mut Ctxt<'_>, place: &Place<S>, access: Access) -> Option<Term> {
     acvus_utils::grow(|| {
-        let (slot, reach) = match place {
-            Place::Base(PlaceBase::Root { id, root, span }) => (root_slot(cx, *id, *root, access, *span)?, Reach::Named),
+        let slot = match place {
+            Place::Base(PlaceBase::Root { id, root, span }) => root_slot(cx, *id, *root, access, *span)?,
             Place::Base(PlaceBase::Element {
                 id,
                 callee_id,
                 container,
                 index,
                 span,
-            }) => {
-                let reach = path_reach(container.expr());
-                (check_index(cx, *id, *callee_id, container.expr(), index, Demand::Write, *span), reach)
-            }
+            }) => check_index(cx, *id, *callee_id, container.expr(), index, Demand::Write, *span),
             Place::Field {
                 object, field, span, ..
             } => {
                 let object = place_slot(cx, object, Access::ReadWrite)?;
-                (field_of(cx, object, *field, *span), object.1)
+                field_of(cx, object, *field, *span)
             }
         };
         cx.record(place.id(), slot);
-        Some((slot, reach))
+        Some(slot)
     })
 }
 

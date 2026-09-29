@@ -141,7 +141,7 @@ pub(super) enum Decision {
     /// `object.field`, through a reference as Rust auto-derefs; a declared
     /// struct must have the field, and any other object grows by it where
     /// transparent (types §1-2).
-    Field { span: Span, object: Term, field: Astr, part: Term, reach: crate::ty::Reach },
+    Field { span: Span, object: Term, field: Astr, part: Term },
     /// `container[i]`: the language's own for an array or a slice, and
     /// `as_slice(_mut)` at `callee_site` otherwise (operators §3).
     /// `body` is the effect of the body the index is in.
@@ -288,7 +288,7 @@ impl Decision {
             Decision::Settle { span, term } => Decision::Settle { span, term: f.ty(term) },
             Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span, term: f.ty(term) },
             Decision::Lend { span, value, mutability, result } => Decision::Lend { span, value: f.ty(value), mutability, result: f.ty(result) },
-            Decision::Field { span, object, field, part, reach } => Decision::Field { span, object: f.ty(object), field, part: f.ty(part), reach },
+            Decision::Field { span, object, field, part } => Decision::Field { span, object: f.ty(object), field, part: f.ty(part) },
             Decision::Index { callee_site, span, container, mutability, element, body } => {
                 Decision::Index { callee_site, span, container: f.ty(container), mutability, element: f.ty(element), body: f.effect(&body) }
             }
@@ -576,6 +576,33 @@ pub(super) fn fire_owned_round(cx: &mut Ctxt<'_>, owned: &dyn Fn(&Decision, Opti
     fired
 }
 
+/// How the place `term` is reached (types §1): through a reference where
+/// the decision that made it recorded so as it fired, and `made`, the
+/// reach the reading decision was made with, otherwise. Under
+/// `Reading::Closed` that decision fired first, since its pending output
+/// keeps `term` open. Under `Reading::CycleBroken` it may still be
+/// pending, and a place whose reach is not yet known is taken as reached
+/// through a reference: unknown grows nothing.
+pub(super) fn reach_of(cx: &Ctxt<'_>, term: Term, made: crate::ty::Reach, reading: Reading) -> crate::ty::Reach {
+    let pending = || cx.decisions.pending.iter().any(|decision| makes_place(decision, term));
+    match cx.out.through.contains(&term) || (reading == Reading::CycleBroken && pending()) {
+        true => crate::ty::Reach::Through,
+        false => made,
+    }
+}
+
+/// Whether `decision` is a place's step that makes `term` and records how
+/// it reached it when it fires.
+fn makes_place(decision: &Decision, term: Term) -> bool {
+    match decision {
+        Decision::Deref { .. } | Decision::Field { .. } | Decision::Index { .. } | Decision::Destructure { .. } => {
+            decision.outputs().any(|output| output == term)
+        }
+        Decision::In { decision, .. } => makes_place(decision, term),
+        _ => false,
+    }
+}
+
 pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<Closed> {
     match reading {
         Reading::Closed => cx.closed(term),
@@ -605,6 +632,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                     reach,
                 });
             };
+            let reach = reach_of(cx, slot, reach, reading);
             fire_enter(cx, site, span, closed, (slot, reach), body);
             Ok(())
         }
@@ -690,7 +718,6 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             object,
             field,
             part,
-            reach,
         } => {
             let Some(closed) = closed_for(cx, object, reading) else {
                 return Err(Decision::Field {
@@ -698,9 +725,9 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                     object,
                     field,
                     part,
-                    reach,
                 });
             };
+            let reach = reach_of(cx, object, crate::ty::Reach::Named, reading);
             super::place::fire_field(cx, span, (object, reach), Some(closed.head), field, part);
             Ok(())
         }
@@ -722,7 +749,8 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                     body,
                 });
             };
-            super::place::fire_index(cx, callee_site, span, closed, mutability, element, &body);
+            let reach = reach_of(cx, container, crate::ty::Reach::Named, reading);
+            super::place::fire_index(cx, callee_site, span, (closed, reach), mutability, element, &body);
             Ok(())
         }
         Decision::Deref {
@@ -746,7 +774,8 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             let Some(closed) = closed_for(cx, scrutinee, reading) else {
                 return Err(Decision::Destructure { shape, scrutinee, lent });
             };
-            super::pat::fire_destructure(cx, *shape, scrutinee, Some(closed.head), lent);
+            let reach = reach_of(cx, scrutinee, crate::ty::Reach::Named, reading);
+            super::pat::fire_destructure(cx, *shape, (scrutinee, reach), Some(closed.head), lent);
             Ok(())
         }
         Decision::Compare {
@@ -1736,8 +1765,14 @@ fn decide_by_use(cx: &mut Ctxt<'_>, decision: Decision) {
     match decision {
         Decision::Enter { value, slot, span, .. } => cx.eq(value, slot, span),
         Decision::Lend { span, value, mutability, result } => super::place::fire_lend(cx, span, None, mutability, result, value),
-        Decision::Field { span, object, field, part, reach } => super::place::fire_field(cx, span, (object, reach), None, field, part),
-        Decision::Destructure { shape, scrutinee, lent } => super::pat::fire_destructure(cx, *shape, scrutinee, None, lent),
+        Decision::Field { span, object, field, part } => {
+            let reach = reach_of(cx, object, crate::ty::Reach::Named, Reading::CycleBroken);
+            super::place::fire_field(cx, span, (object, reach), None, field, part);
+        }
+        Decision::Destructure { shape, scrutinee, lent } => {
+            let reach = reach_of(cx, scrutinee, crate::ty::Reach::Named, Reading::CycleBroken);
+            super::pat::fire_destructure(cx, *shape, (scrutinee, reach), None, lent);
+        }
         other => panic!("uses_decide: only the forms `decided_by_use` admits are taken, not {other:?}"),
     }
 }
