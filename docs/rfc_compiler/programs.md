@@ -2,7 +2,7 @@
 
 A program is written in one of three kinds of source.
 
-The sources of a graph are compiled together. Each template and each module stands at a name the embedding gives it, a path of any depth; a script has none. A unit reaches another only by that name, and nothing is named but by the embedding.
+The sources of a graph are compiled together. Each script and each template is one function, and each module declares functions; every one stands at a name the embedding gives it, a path of any depth. A unit reaches another only by that name, and nothing is named but by the embedding. A run starts at any function the embedding chooses, instantiated at the types the embedding declares for its inputs and result (host).
 
 ## 1. Template (`acvt`)
 
@@ -22,7 +22,7 @@ Keep to {{ name }}.
 
 ## 2. Script (`acvus`)
 
-Statements and a tail, whose value is the run's. Lambdas in full. A script is an entry: a run starts at one, and no unit calls one. A graph may hold several, and the embedding chooses which a run starts. The run's result enters the result type the embedding declares; where none is declared, it is inferred, and a caller in the graph reads it with the run's effect.
+Statements and a tail, whose value is the run's. Lambdas in full. A script is one function, as a template is (§1): its parameters are the inputs it reads, passed by name, and its result is the run's value; its types are inferred within the script alone, and a call only instantiates what the script settled. The run's result enters the result type the embedding declares; where none is declared, it is inferred, and a caller in the graph reads it with the run's effect.
 
 ```acvus
 @big = 0;
@@ -60,4 +60,4 @@ impl Point {
 
 ## 4. Inputs
 
-In a script, an input `$x` is a value the host passes into the run; in a template, it is a parameter (§1). The program never assigns it.
+An input `$x` is a parameter of the function its source is (§1, §2). The program never assigns it.
