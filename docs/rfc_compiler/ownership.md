@@ -6,7 +6,7 @@ A value copies when its type is `!`, a primitive (the integer types, `f64`, `boo
 
 ## 2. Clone and move
 
-A value that does not copy follows the move rule: a use moves it. A clone is written, except where section 3 makes it implicit.
+A value that does not copy follows the move rule: a use moves it. A clone is written, except where section 3 makes it implicit. A value that copies clones by its copy.
 
 ## 3. String
 
