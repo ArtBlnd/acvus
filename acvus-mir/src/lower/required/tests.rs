@@ -6,7 +6,7 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
 use crate::decl::{ContextDecl, Core, Declarations, LoopMarkers, RawDeclarations};
-use crate::ir::cfg::Builder;
+use crate::ir::cfg::{Builder, Committed};
 use crate::ty::{Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, TypeArg};
 
 struct Fixture {
@@ -126,8 +126,12 @@ fn take(slot: ValueId) -> Op {
     Op::Take { target: RefTarget::Var(slot), path: Vec::new(), taken_out: false }
 }
 
-fn commit(context: QualifiedRef, value: ValueId) -> Op {
-    Op::Commit { context, value, wrote: true }
+fn fetch_into(context: QualifiedRef, slot: ValueId) -> Op {
+    Op::Fetch { context, into: Some(slot) }
+}
+
+fn commit_from(context: QualifiedRef, slot: ValueId) -> Op {
+    Op::Commit { context, from: Committed::Slot(slot) }
 }
 
 fn diamond(cond: ValueId, then_to: BlockId, else_to: BlockId, join: BlockId) -> Terminator {
@@ -316,30 +320,28 @@ fn a_string_slot_read_twice_is_cloned_at_the_first_read_and_moved_by_the_last() 
 
 // -- remove_dead_context_ops -------------------------------------------------
 
-/// `page` is loaded at entry and its slot overwritten before any read: the
-/// load goes, its store with it. The slot is then written, so the commit
-/// stays.
+/// `page` is fetched into its slot at entry and the slot overwritten
+/// before any read: the fetch goes. The slot is then written, so the
+/// commit stays.
 #[test]
-fn an_entry_load_whose_slot_is_overwritten_before_any_read_is_removed() {
+fn an_entry_fetch_whose_slot_is_overwritten_before_any_read_is_removed() {
     let mut f = fixture();
     let t = f.t;
     let page = f.context("page");
     let mut builder = f.module.build_body(true, t.int);
     let entry = builder.current_block();
     let c = builder.context_slot(page, t.int, at(1));
-    let loaded = builder.push_effect(Op::Fetch { context: page }, t.int, at(1));
-    builder.push_unit(assign(c, loaded), at(1));
+    builder.push_effect_unit(fetch_into(page, c), at(1));
     let one = builder.push(constant(1), t.int, at(2));
     builder.push_unit(assign(c, one), at(2));
-    let taken = builder.push(take(c), t.int, at(3));
-    builder.push_effect_unit(commit(page, taken), at(3));
+    builder.push_effect_unit(commit_from(page, c), at(3));
     builder.terminate(ret(one), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     run(&mut f, remove_dead_context_ops);
 
     let ops = f.ops(id, entry);
-    assert!(!ops.iter().any(|op| matches!(op, Op::Fetch { .. })), "the load goes: {ops:?}");
+    assert!(!ops.iter().any(|op| matches!(op, Op::Fetch { .. })), "the fetch goes: {ops:?}");
     let stored: Vec<ValueId> = ops
         .iter()
         .filter_map(|op| match op {
@@ -347,26 +349,24 @@ fn an_entry_load_whose_slot_is_overwritten_before_any_read_is_removed() {
             _ => None,
         })
         .collect();
-    assert_eq!(stored, vec![one], "the load's store goes, the program's stays");
+    assert_eq!(stored, vec![one], "the program's store stays");
     assert!(ops.iter().any(|op| matches!(op, Op::Commit { .. })), "the written context is committed");
 }
 
-/// `page` is loaded and read, and never written: its commit goes with the
-/// `Take` that fed it, the content staying the page's, and the load, whose
-/// value is read, stays.
+/// `page` is fetched and read, and never written: its commit goes, the
+/// content staying the page's, and the fetch, whose content is read,
+/// stays.
 #[test]
-fn a_commit_of_a_context_never_written_is_removed_with_its_take() {
+fn a_commit_of_a_context_never_written_is_removed() {
     let mut f = fixture();
     let t = f.t;
     let page = f.context("page");
     let mut builder = f.module.build_body(true, t.int);
     let entry = builder.current_block();
     let c = builder.context_slot(page, t.int, at(1));
-    let loaded = builder.push_effect(Op::Fetch { context: page }, t.int, at(1));
-    builder.push_unit(assign(c, loaded), at(1));
+    builder.push_effect_unit(fetch_into(page, c), at(1));
     let read = builder.push(take(c), t.int, at(2));
-    let taken = builder.push(take(c), t.int, at(3));
-    builder.push_effect_unit(commit(page, taken), at(3));
+    builder.push_effect_unit(commit_from(page, c), at(3));
     builder.terminate(ret(read), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
@@ -374,8 +374,8 @@ fn a_commit_of_a_context_never_written_is_removed_with_its_take() {
 
     let ops = f.ops(id, entry);
     assert!(!ops.iter().any(|op| matches!(op, Op::Commit { .. })), "the commit goes: {ops:?}");
-    assert_eq!(ops.iter().filter(|op| is_take_of(op, c)).count(), 1, "the commit's Take goes with it");
-    assert!(ops.iter().any(|op| matches!(op, Op::Fetch { .. })), "the load is read and stays");
+    assert_eq!(ops.iter().filter(|op| is_take_of(op, c)).count(), 1, "the program's read stays");
+    assert!(ops.iter().any(|op| matches!(op, Op::Fetch { .. })), "the fetch is read and stays");
 }
 
 /// `clock` is volatile: a load nothing reads and a commit stay.
@@ -386,9 +386,9 @@ fn a_volatile_load_and_commit_stay() {
     let clock = f.context("clock");
     let mut builder = f.module.build_body(true, t.int);
     let entry = builder.current_block();
-    builder.push_effect(Op::Fetch { context: clock }, t.int, at(1));
+    builder.push_effect(Op::Fetch { context: clock, into: None }, t.int, at(1));
     let one = builder.push(constant(1), t.int, at(2));
-    builder.push_effect_unit(commit(clock, one), at(3));
+    builder.push_effect_unit(Op::Commit { context: clock, from: Committed::Value(one) }, at(3));
     builder.terminate(ret(one), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let before = f.ops(id, entry).len();
@@ -523,7 +523,7 @@ fn a_slot_content_overwritten_before_being_read_is_dropped_at_the_overwrite() {
     assert_eq!(drops(&ops), 1, "the second content moves into the call");
 }
 
-/// `note` is loaded, then overwritten: the loaded content becomes the
+/// `note` is fetched, then overwritten: the fetched content becomes the
 /// body's at the overwrite and is dropped just before it. The final content
 /// is committed, and nothing is dropped at the end.
 #[test]
@@ -534,12 +534,10 @@ fn a_context_written_in_the_body_has_its_old_content_dropped_at_the_overwrite() 
     let mut builder = f.module.build_body(true, t.int);
     let entry = builder.current_block();
     let c = builder.context_slot(note, t.string, at(1));
-    let loaded = builder.push_effect(Op::Fetch { context: note }, t.string, at(1));
-    builder.push_unit(assign(c, loaded), at(1));
+    builder.push_effect_unit(fetch_into(note, c), at(1));
     let written = text(t, &mut builder, at(2));
     builder.push_unit(assign(c, written), at(3));
-    let taken = builder.push(take(c), t.string, at(4));
-    builder.push_effect_unit(commit(note, taken), at(4));
+    builder.push_effect_unit(commit_from(note, c), at(4));
     let n = builder.push(constant(0), t.int, at(5));
     builder.terminate(ret(n), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -547,18 +545,18 @@ fn a_context_written_in_the_body_has_its_old_content_dropped_at_the_overwrite() 
     run(&mut f, insert_drops);
 
     let ops = f.ops(id, entry);
-    let [_, _, _, old, dropped, overwrite, _, _, _] = &ops[..] else {
+    let [_, _, old, dropped, overwrite, _, _] = &ops[..] else {
         panic!("the old content is taken out and dropped before the overwrite: {ops:?}")
     };
     assert!(is_take_of(old, c));
-    let content = f.module.body(id).block(entry).insts().nth(3).expect("the block holds that instruction").result().expect("a Take yields a value");
+    let content = f.module.body(id).block(entry).insts().nth(2).expect("the block holds that instruction").result().expect("a Take yields a value");
     assert!(is_drop_of(dropped, content));
     assert!(matches!(overwrite, Op::Assign { value, .. } if *value == written));
-    assert_eq!(f.module.body(id).block(entry).insts().nth(4).expect("the block holds that instruction").span(), at(3), "the drop takes the overwrite's span");
+    assert_eq!(f.module.body(id).block(entry).insts().nth(3).expect("the block holds that instruction").span(), at(3), "the drop takes the overwrite's span");
     assert_eq!(drops(&ops), 1);
 }
 
-/// `note` is loaded and read through a reference, never written: its
+/// `note` is fetched and read through a reference, never written: its
 /// content stays the page's, and the body drops nothing.
 #[test]
 fn a_context_never_written_gets_no_drop() {
@@ -568,8 +566,7 @@ fn a_context_never_written_gets_no_drop() {
     let mut builder = f.module.build_body(true, t.bool);
     let entry = builder.current_block();
     let c = builder.context_slot(note, t.string, at(1));
-    let loaded = builder.push_effect(Op::Fetch { context: note }, t.string, at(1));
-    builder.push_unit(assign(c, loaded), at(1));
+    builder.push_effect_unit(fetch_into(note, c), at(1));
     let lent = builder.push(Op::Ref { target: RefTarget::Var(c), path: Vec::new(), mutability: Mutability::Shared }, t.string_ref, at(2));
     let same = builder.push(Op::StringEq { a: lent, b: lent }, t.bool, at(2));
     builder.terminate(ret(same), Span::ZERO);
@@ -682,7 +679,7 @@ fn a_dead_body_parameter_is_dropped_at_the_entry_with_its_binders_span() {
     assert_eq!(f.module.body(id).block(entry).insts().nth(0).expect("the block holds that instruction").span(), at(4));
 }
 
-/// `note` is loaded; the then arm takes it out and puts a new content back,
+/// `note` is fetched; the then arm takes it out and puts a new content back,
 /// the else arm overwrites it, and the join overwrites it again. The then
 /// arm's store fills an empty slot and drops nothing; the else arm's and the
 /// join's each drop the content they replace.
@@ -694,8 +691,7 @@ fn a_context_moved_out_on_one_arm_and_reassigned_on_both_is_dropped_at_each_over
     let mut builder = f.module.build_body(true, t.int);
     let cond = builder.param(nc, t.bool, at(1));
     let c = builder.context_slot(note, t.string, at(1));
-    let loaded = builder.push_effect(Op::Fetch { context: note }, t.string, at(1));
-    builder.push_unit(assign(c, loaded), at(1));
+    builder.push_effect_unit(fetch_into(note, c), at(1));
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(cond, then_block, else_block, join), at(7));
     builder.switch_to(then_block);
@@ -711,8 +707,7 @@ fn a_context_moved_out_on_one_arm_and_reassigned_on_both_is_dropped_at_each_over
     builder.switch_to(join);
     let last = text(t, &mut builder, at(5));
     builder.push_unit(assign(c, last), at(5));
-    let taken = builder.push(take(c), t.string, at(6));
-    builder.push_effect_unit(commit(note, taken), at(6));
+    builder.push_effect_unit(commit_from(note, c), at(6));
     let n = builder.push(constant(0), t.int, at(6));
     builder.terminate(ret(n), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -726,12 +721,12 @@ fn a_context_moved_out_on_one_arm_and_reassigned_on_both_is_dropped_at_each_over
         let store = store.expect("the overwrite stays");
         store >= 2 && is_take_of(&ops[store - 2], c) && matches!(ops[store - 1], Op::Drop { .. })
     };
-    assert!(dropped_before(else_block, other), "the loaded content is dropped before the else arm's overwrite");
+    assert!(dropped_before(else_block, other), "the fetched content is dropped before the else arm's overwrite");
     assert!(dropped_before(join, last), "the arms' content is dropped before the join's overwrite");
     assert_eq!(drops(&f.all_ops(id)), 2);
 }
 
-/// `note` is loaded; the then arm takes it out, the else arm leaves it, and
+/// `note` is fetched; the then arm takes it out, the else arm leaves it, and
 /// the join overwrites it. At the overwrite the slot holds content on the
 /// else path only: that content's liveness ended on the edge from the else
 /// arm, so it is dropped there, with that arm's terminator's span.
@@ -743,8 +738,7 @@ fn a_context_held_on_one_path_only_at_an_overwrite_is_dropped_on_the_edge_where_
     let mut builder = f.module.build_body(true, t.int);
     let cond = builder.param(nc, t.bool, at(1));
     let c = builder.context_slot(note, t.string, at(1));
-    let loaded = builder.push_effect(Op::Fetch { context: note }, t.string, at(1));
-    builder.push_unit(assign(c, loaded), at(1));
+    builder.push_effect_unit(fetch_into(note, c), at(1));
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(cond, then_block, else_block, join), at(7));
     builder.switch_to(then_block);
@@ -756,8 +750,7 @@ fn a_context_held_on_one_path_only_at_an_overwrite_is_dropped_on_the_edge_where_
     builder.switch_to(join);
     let last = text(t, &mut builder, at(5));
     builder.push_unit(assign(c, last), at(5));
-    let taken = builder.push(take(c), t.string, at(6));
-    builder.push_effect_unit(commit(note, taken), at(6));
+    builder.push_effect_unit(commit_from(note, c), at(6));
     let n = builder.push(constant(0), t.int, at(6));
     builder.terminate(ret(n), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");

@@ -608,8 +608,8 @@ fn a_load_and_a_commit_are_threaded_on_the_chain() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
-    let loaded = builder.push_effect(Op::Fetch { context: page }, int, at(30));
-    builder.push_effect_unit(Op::Commit { context: page, value: loaded, wrote: true }, at(31));
+    let loaded = builder.push_effect(Op::Fetch { context: page, into: None }, int, at(30));
+    builder.push_effect_unit(Op::Commit { context: page, from: Committed::Value(loaded) }, at(31));
     builder.terminate(ret(loaded), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
@@ -629,7 +629,7 @@ fn a_load_and_a_commit_are_threaded_on_the_chain() {
 fn a_load_is_not_pushed_as_pure() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
-    build(&mut f.module, true, f.int).push(Op::Fetch { context: page }, int, at(32));
+    build(&mut f.module, true, f.int).push(Op::Fetch { context: page, into: None }, int, at(32));
 }
 
 #[test]
@@ -639,7 +639,7 @@ fn a_commit_is_not_pushed_as_pure() {
     let (name, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
-    builder.push_unit(Op::Commit { context: page, value: a, wrote: true }, at(33));
+    builder.push_unit(Op::Commit { context: page, from: Committed::Value(a) }, at(33));
 }
 
 #[test]
@@ -647,7 +647,7 @@ fn a_commit_is_not_pushed_as_pure() {
 fn a_pure_body_loads_no_context() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
-    build(&mut f.module, false, f.int).push_effect(Op::Fetch { context: page }, int, at(34));
+    build(&mut f.module, false, f.int).push_effect(Op::Fetch { context: page, into: None }, int, at(34));
 }
 
 #[test]
@@ -655,8 +655,8 @@ fn removing_a_load_rethreads_the_token_around_it() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
-    let unread = builder.push_effect(Op::Fetch { context: page }, int, at(35));
-    let read = builder.push_effect(Op::Fetch { context: page }, int, at(36));
+    let unread = builder.push_effect(Op::Fetch { context: page, into: None }, int, at(35));
+    let read = builder.push_effect(Op::Fetch { context: page, into: None }, int, at(36));
     builder.terminate(ret(read), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let o0 = f.body(id).order_param().expect("ordered");
@@ -678,7 +678,7 @@ fn a_load_is_not_inserted_as_pure() {
     let (id, ..) = straight_line(&mut f);
     let entry = f.body(id).entry();
     let first = f.body(id).first_inst(entry).expect("the entry holds instructions");
-    f.module.rewrite(id).insert(order::At::Before(first), Op::Fetch { context: page }, int, at(37));
+    f.module.rewrite(id).insert(order::At::Before(first), Op::Fetch { context: page, into: None }, int, at(37));
 }
 
 // -- Interning through the Builder ---------------------------------------

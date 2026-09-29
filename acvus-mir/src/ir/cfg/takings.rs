@@ -21,11 +21,15 @@
 //!   lends, whole or in part, unless it copies or is a `&mut` (ownership
 //!   §2, §4). The reference itself is read.
 //!
+//! - A context's slot is named as a place by its `Fetch`, which writes it
+//!   whole, and by its `Commit`, which moves its whole content into the
+//!   page, reading it where it copies (context §3).
+//!
 //! A `Take`'s `taken_out` is not read: lower makes no take-out.
 
 use smallvec::SmallVec;
 
-use crate::ir::cfg::{Body, Inst, Op, Terminator};
+use crate::ir::cfg::{Body, Committed, Inst, Op, Terminator};
 use crate::ir::parts;
 use crate::ir::{Callee, ForSource, Intrinsic, RefTarget, ValueId};
 use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
@@ -109,10 +113,12 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         Callee::Direct(_) | Callee::Extern { .. } => None,
     };
     let mut operands: SmallVec<[Operand; 4]> = SmallVec::new();
+    let slot = |slot: ValueId, taken: Taken| Operand { value: slot, taken, names_place: true, lent: None };
     match inst.op() {
-        Op::Const { .. }
+        Op::Fetch { into: Some(into), .. } => operands.push(slot(*into, Taken::Read)),
+        Op::Fetch { into: None, .. }
+        | Op::Const { .. }
         | Op::ConstStr { .. }
-        | Op::Fetch { .. }
         | Op::LoadFunction { .. }
         | Op::ArrayBegin { .. }
         | Op::Undef => {}
@@ -141,7 +147,11 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         Op::AsSlice { container: lent, .. } | Op::ArrayView { src: lent, .. } => operands.push(read(*lent)),
         Op::Index { slice, index, .. } => operands.extend([read(*slice), read(*index)]),
         Op::IndexSet { slice, index, value, .. } => operands.extend([read(*slice), read(*index), passed(*value)]),
-        Op::Commit { value, .. } => operands.push(passed(*value)),
+        Op::Commit { from: Committed::Slot(from), .. } => {
+            let taking = if copying(*from) { Taken::Read } else { Taken::Moved };
+            operands.push(slot(*from, taking));
+        }
+        Op::Commit { from: Committed::Value(value), .. } => operands.push(passed(*value)),
         Op::FieldGet { object: src, .. }
         | Op::ObjectGet { object: src, .. }
         | Op::TupleIndex { tuple: src, .. }

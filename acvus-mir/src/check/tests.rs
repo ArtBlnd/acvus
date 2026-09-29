@@ -65,10 +65,15 @@ impl Fixture {
 
     /// A pure extern fn `name` of these parameters and result.
     pub(super) fn declare(&mut self, name: &str, params: &[TyId<Poly>], ret: TyId<Poly>) -> QualifiedRef {
+        self.declare_with_effect(name, params, ret, Effect::pure())
+    }
+
+    /// An extern fn `name` of these parameters, result and effect.
+    pub(super) fn declare_with_effect(&mut self, name: &str, params: &[TyId<Poly>], ret: TyId<Poly>, effect: Effect) -> QualifiedRef {
         let ty = self.ty(TyKind::Fn {
             params: params.into(),
             ret,
-            effect: EffectTerm::Known(Effect::pure()),
+            effect: EffectTerm::Known(effect),
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,

@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{DefPoint, Dominators, def_points};
 use super::*;
-use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Stages, Terminator};
+use crate::ir::cfg::{Aspect, Builder, Committed, Inst, OrderUse, Stages, Terminator};
 use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{
@@ -1454,7 +1454,7 @@ fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = f.build(true, f.int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
-    builder.push_effect(Op::Fetch { context: page }, ty, at(1));
+    builder.push_effect(Op::Fetch { context: page, into: None }, ty, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
 }
@@ -1963,8 +1963,8 @@ fn dischargeable(f: &mut Fixture) -> BodyId {
     let s = builder.slot(int, at(0));
     builder.push_unit(check_add(a, a), at(1));
     builder.push_unit(assign(s, a), at(2));
-    builder.push_effect(Op::Fetch { context: page }, int, at(3));
-    builder.push_effect_unit(Op::Commit { context: page, value: a, wrote: true }, at(4));
+    builder.push_effect(Op::Fetch { context: page, into: None }, int, at(3));
+    builder.push_effect_unit(Op::Commit { context: page, from: Committed::Value(a) }, at(4));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
 }

@@ -126,38 +126,24 @@ pub enum Op {
         bound: IndexBound,
     },
 
-    /// Move a context's whole value out of the page into the result
-    /// (RFC-0025).
-    ///
-    /// TO BE (the commit cut, context §1, §3, agreed with the user): `Fetch`
-    /// and `Commit` are one pair, the boundary's own moves of a context's
-    /// content between the page and the run, and never a use of the
-    /// program's. A context held in a slot is fetched into its slot,
-    /// `Fetch { context, into: Some(slot) }`, which writes the slot and
-    /// yields nothing; a volatile one, held in no slot, is fetched into the
-    /// result, `into: None`. The program reads, lends, takes and assigns the
-    /// slot as any place; a take of a context that does not copy leaves the
-    /// slot empty until something is written back (context §1).
+    /// The boundary's move of a context's whole content out of the page
+    /// (context §1, §3). A context held in a slot is fetched into its slot,
+    /// `into: Some(slot)`, which writes the slot and yields nothing; a
+    /// volatile one, held in no slot, is fetched into the result,
+    /// `into: None`. The program reads, lends, takes and assigns the slot
+    /// as any place; a take of a context that does not copy leaves the slot
+    /// empty until something is written back (context §1).
     Fetch {
         context: QualifiedRef,
+        into: Option<ValueId>,
     },
-    /// Move `value` into the page as the context's whole value (RFC-0025).
-    /// `wrote` holds where the body may have written the variable since its
-    /// fetch (RFC-0025 rules 2, 4); a commit that did not write hands the
-    /// value back and stores nothing.
-    ///
-    /// TO BE (the commit cut): `Commit { context, from: Committed::Slot(slot) }`
-    /// moves the slot's whole content into the page, reading every unit of it
-    /// and leaving it empty until the next `Fetch`; a volatile context's is
-    /// `Committed::Value(value)`. There is no `Take` before a commit: whether
-    /// the context was filled again is judged where the commit reads its slot
-    /// (`check::moveck`, `NotRefilled`). A write of the slot, a move out of it
-    /// included, is what keeps a commit (`remove_dead_context_ops`). `wrote`
-    /// goes, or its reader says what it still decides.
+    /// The boundary's move of a context's whole content into the page
+    /// (context §1, §3). `Committed::Slot` reads every unit of the slot and
+    /// leaves it empty until the next `Fetch`; whether the context was
+    /// filled again is judged here (`check::moveck`, `NotRefilled`).
     Commit {
         context: QualifiedRef,
-        value: ValueId,
-        wrote: bool,
+        from: Committed,
     },
     // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
@@ -364,6 +350,14 @@ pub enum Op {
     },
 }
 
+/// What a `Commit` moves into the page: the whole content of the
+/// context's slot, or a volatile context's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Committed {
+    Slot(ValueId),
+    Value(ValueId),
+}
+
 /// Walks every operand of an `Op`, by shared or by mutable reference: one
 /// list, so the two walks cannot disagree on what an operand is.
 macro_rules! walk_operands {
@@ -376,9 +370,13 @@ macro_rules! walk_operands {
             Callee::Direct(_) | Callee::Extern { .. } => {}
         };
         match $op {
+            Op::Fetch { into, .. } => {
+                if let Some(slot) = into {
+                    $on(slot);
+                }
+            }
             Op::Const { .. }
             | Op::ConstStr { .. }
-            | Op::Fetch { .. }
             | Op::LoadFunction { .. }
             | Op::ArrayBegin { .. }
             | Op::Undef => {}
@@ -416,7 +414,7 @@ macro_rules! walk_operands {
                 $on(index);
                 $on(value);
             }
-            Op::Commit { value, .. } => $on(value),
+            Op::Commit { from: Committed::Slot(v) | Committed::Value(v), .. } => $on(v),
             Op::FieldGet { object, .. } | Op::ObjectGet { object, .. } => $on(object),
             Op::FieldSet { object, value, .. } => {
                 $on(object);
@@ -499,6 +497,7 @@ impl Op {
             | Op::Assign { .. }
             | Op::IndexSet { .. }
             | Op::Commit { .. }
+            | Op::Fetch { into: Some(_), .. }
             | Op::Check { .. }
             | Op::CheckSteps { .. }
             | Op::Drop { .. } => false,
@@ -512,7 +511,7 @@ impl Op {
             | Op::AsSlice { .. }
             | Op::ArrayView { .. }
             | Op::Index { .. }
-            | Op::Fetch { .. }
+            | Op::Fetch { into: None, .. }
             | Op::FieldGet { .. }
             | Op::FieldSet { .. }
             | Op::BinOp { .. }

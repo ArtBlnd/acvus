@@ -1,9 +1,10 @@
 //! Contexts (context §3): a context that is not volatile lives in a slot,
-//! loaded when the body is entered, committed and loaded again around a
-//! call whose effect touches it, and committed at every return; a volatile
-//! one is loaded at each read and committed at each write. Loads and
-//! commits are effects. Removing unread loads and unwritten commits is the
-//! required step's.
+//! fetched into it when the body is entered, committed from it and fetched
+//! into it again around a call whose effect touches it, and committed from
+//! it at every return; a volatile one is fetched into a value at each read
+//! and committed from a value at each write. Fetches and commits are
+//! effects. Removing unread fetches and unwritten commits is the required
+//! step's.
 //!
 //! The contexts a body names are read off its own statements, not its
 //! lambdas'. Inputs (programs §4) are read off the same walk, its lambdas'
@@ -15,7 +16,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::ctxt::{ContextHome, Home, Lcx};
 use super::place::{Operand, Place as LPlace, assign, read};
-use crate::ir::cfg::Op;
+use crate::ir::cfg::{Committed, Op};
 use crate::ir::{RefTarget, ValueId};
 use crate::ty::{Effect, Reissue, Ty};
 
@@ -266,8 +267,8 @@ impl<'t> Namer<'t> {
     }
 }
 
-/// The body's entry: each context it names gets its home, a slot loaded
-/// now where it is not volatile.
+/// The body's entry: each context it names gets its home, a slot fetched
+/// into now where it is not volatile.
 pub(super) fn enter_body(cx: &mut Lcx<'_, '_>, named: &Named) {
     for NamedContext { context, ty, span } in &named.contexts {
         let volatile = cx
@@ -278,8 +279,7 @@ pub(super) fn enter_body(cx: &mut Lcx<'_, '_>, named: &Named) {
             true => ContextHome::Volatile,
             false => {
                 let slot = cx.builder.context_slot(*context, *ty, *span);
-                let loaded = cx.builder.push_effect(Op::Fetch { context: *context }, *ty, *span);
-                assign(cx, slot_place(slot, *ty), loaded, *span);
+                fetch_into(cx, *context, slot, *span);
                 ContextHome::Slot(slot)
             }
         };
@@ -302,16 +302,29 @@ fn slot_place(slot: ValueId, ty: Ty) -> LPlace {
     LPlace { target: RefTarget::Var(slot), path: Vec::new(), ty }
 }
 
-/// A load of `context`'s whole value, an effect (context §3).
+/// A fetch of a volatile `context`'s whole content into a value, an
+/// effect (context §3).
 pub(super) fn load(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Span) -> ValueId {
-    cx.builder.push_effect(Op::Fetch { context }, ty, span)
+    cx.builder.push_effect(Op::Fetch { context, into: None }, ty, span)
 }
 
-/// A commit of `value` as `context`'s whole value, an effect (context §3).
-/// It is written as a write: whether the body wrote the context is the
-/// required step's to find (D40, D41).
+/// A commit of `value` as a volatile `context`'s whole content, an effect
+/// (context §3).
 pub(super) fn commit(cx: &mut Lcx<'_, '_>, context: QualifiedRef, value: ValueId, span: Span) {
-    cx.builder.push_effect_unit(Op::Commit { context, value, wrote: true }, span);
+    cx.builder.push_effect_unit(Op::Commit { context, from: Committed::Value(value) }, span);
+}
+
+/// A fetch of `context`'s whole content into its slot, an effect
+/// (context §3).
+fn fetch_into(cx: &mut Lcx<'_, '_>, context: QualifiedRef, slot: ValueId, span: Span) {
+    cx.builder.push_effect_unit(Op::Fetch { context, into: Some(slot) }, span);
+}
+
+/// A commit of the whole content of `context`'s slot, an effect
+/// (context §3). It is written wherever the body may have written the
+/// context: whether it did is the required step's to find (D40, D41).
+fn commit_slot(cx: &mut Lcx<'_, '_>, context: QualifiedRef, slot: ValueId, span: Span) {
+    cx.builder.push_effect_unit(Op::Commit { context, from: Committed::Slot(slot) }, span);
 }
 
 /// `@x` read: its slot's value, or a load of a volatile one.
@@ -338,7 +351,8 @@ fn touched(cx: &Lcx<'_, '_>, effect: &Effect) -> Vec<(QualifiedRef, ValueId)> {
 }
 
 /// `call` bracketed for a callee of `effect`: each context it touches is
-/// committed before and loaded again after (context §3).
+/// committed from its slot before and fetched into it again after
+/// (context §3).
 pub(super) fn bracket_call(
     cx: &mut Lcx<'_, '_>,
     effect: &Effect,
@@ -351,17 +365,9 @@ pub(super) fn bracket_call(
     }
     let result = call(cx);
     for (context, slot) in &touched {
-        let ty = cx.value_ty(*slot);
-        let loaded = load(cx, *context, ty, span);
-        assign(cx, slot_place(*slot, ty), loaded, span);
+        fetch_into(cx, *context, *slot, span);
     }
     result
-}
-
-fn commit_slot(cx: &mut Lcx<'_, '_>, context: QualifiedRef, slot: ValueId, span: Span) {
-    let ty = cx.value_ty(slot);
-    let held = read(cx, Operand::Place(slot_place(slot, ty)), span);
-    commit(cx, context, held, span);
 }
 
 /// Every context the body holds in a slot, committed: what a return does

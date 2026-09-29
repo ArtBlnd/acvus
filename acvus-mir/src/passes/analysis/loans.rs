@@ -66,6 +66,10 @@
 //!    only the places that access states, in their modes.
 //! 7. A join: a block's parameter holds what any argument into it holds.
 //!
+//! A `Fetch` into a context's slot writes it whole, and a `Commit` from it
+//! moves its whole content out, or reads it where it copies (context §3);
+//! a context's content holds no loan.
+//!
 //! Each site's accesses are recorded as `accesses`: what the takings read,
 //! write and move (`Moved`, `PartMoved`), a `Take` through a reference
 //! moving out of the places it lends as one by name does, and each loan
@@ -88,7 +92,7 @@ use crate::decl::declared::{Access as DeclaredAccess, Element, Touch};
 use crate::decl::{Declarations, segments};
 use crate::flows::segment_positions;
 use crate::ir::cfg::takings::{Taken, by_value, inst_takings};
-use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Committed, Definition, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{Path, covers, overlap};
 use crate::ir::{Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
@@ -1322,7 +1326,7 @@ impl Forward<'_> {
             Op::Const { .. }
             | Op::ConstStr { .. }
             | Op::StringConcat { .. }
-            | Op::Fetch { .. }
+            | Op::Fetch { into: None, .. }
             | Op::BinOp { .. }
             | Op::UnaryOp { .. }
             | Op::Cast { .. }
@@ -1345,7 +1349,23 @@ impl Forward<'_> {
                 return none();
             }
             Op::Check { .. } | Op::CheckSteps { .. } | Op::Drop { .. } => return None,
-            Op::Commit { value, .. } => {
+            Op::Fetch { into: Some(slot), .. } => {
+                let place = self.place(state, &RefTarget::Var(*slot), &[]);
+                record.through(site, Reach::Write, &place, LoanSet::new());
+                let ty = self.body.ty_of(*slot);
+                self.write(state, &place, Some(ty), &empty(self.width(ty)));
+                return None;
+            }
+            Op::Commit { from: Committed::Slot(slot), .. } => {
+                let place = self.place(state, &RefTarget::Var(*slot), &[]);
+                let reach = match inst_takings(self.body, self.types, inst)[0].taken {
+                    Taken::Read => Reach::Read,
+                    Taken::Moved | Taken::PartMoved => Reach::Move,
+                };
+                record.through(site, reach, &place, LoanSet::new());
+                return None;
+            }
+            Op::Commit { from: Committed::Value(value), .. } => {
                 self.passed(state, *value, site, None, record);
                 return None;
             }
@@ -1914,6 +1934,8 @@ impl Forward<'_> {
                 touched.reads.extend(named_if_reference(*b));
             }
             Op::StringClone { src } => touched.reads = named_if_reference(*src),
+            Op::Fetch { into: Some(slot), .. } => touched.writes = BTreeSet::from([Storage::Slot(*slot)]),
+            Op::Commit { from: Committed::Slot(slot), .. } => touched.reads = BTreeSet::from([Storage::Slot(*slot)]),
             Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, .. } | Op::FunctionCall { .. } | Op::Spawn { .. } => {}
             Op::Const { .. }
             | Op::ConstStr { .. }
@@ -1922,8 +1944,8 @@ impl Forward<'_> {
             | Op::AsSlice { .. }
             | Op::ArrayView { .. }
             | Op::SliceLen { .. }
-            | Op::Fetch { .. }
-            | Op::Commit { .. }
+            | Op::Fetch { into: None, .. }
+            | Op::Commit { from: Committed::Value(_), .. }
             | Op::FieldGet { .. }
             | Op::FieldSet { .. }
             | Op::BinOp { .. }

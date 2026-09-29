@@ -256,36 +256,40 @@ impl<'m> Builder<'m> {
     }
 
     /// Appends an effect with one result, typed `ty`, and returns the
-    /// result: a call whose callee's effect is not pure, or a context's load
-    /// (context §3). It consumes the current token and yields the next
+    /// result: a call whose callee's effect is not pure, or a volatile
+    /// context's fetch into a value (context §3). It consumes the current token and yields the next
     /// (effects §3); inside an `anyorder` scope it consumes the scope's
     /// entry token instead, and what it yields joins the scope's merge, a
     /// `Merge` placed with the effect's `span`. Cost: O(its operands), and
     /// O(1) for the token.
     ///
     /// # Panics
-    /// The body is not ordered; `op` is neither such a call nor a `Fetch`;
-    /// an operand is not a value of this body; the current block is
-    /// terminated.
+    /// The body is not ordered; `op` is neither such a call nor a `Fetch`
+    /// into a value; an operand is not a value of this body; the current
+    /// block is terminated.
     pub fn push_effect(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
         assert!(
-            self.effectful_call(&op) || matches!(op, Op::Fetch { .. }),
-            "push_effect takes a call whose effect is not pure or a context's load, not {op:?}"
+            self.effectful_call(&op) || matches!(op, Op::Fetch { into: None, .. }),
+            "push_effect takes a call whose effect is not pure or a context's fetch into a value, not {op:?}"
         );
         let result = self.new_result(ty);
         self.append_effect(op, Some(result), span);
         result
     }
 
-    /// Appends an effect with no result: a context's commit (context §3).
-    /// It stands on the order chain as `push_effect` states. Cost: O(its
-    /// operands), and O(1) for the token.
+    /// Appends an effect with no result: a context's commit, or its fetch
+    /// into its slot (context §3). It stands on the order chain as
+    /// `push_effect` states. Cost: O(its operands), and O(1) for the token.
     ///
     /// # Panics
-    /// The body is not ordered; `op` is not a `Commit`; an operand is not a
-    /// value of this body; the current block is terminated.
+    /// The body is not ordered; `op` is neither a `Commit` nor a `Fetch`
+    /// into a slot; an operand is not a value of this body; the current
+    /// block is terminated.
     pub fn push_effect_unit(&mut self, op: Op, span: Span) {
-        assert!(matches!(op, Op::Commit { .. }), "push_effect_unit takes a context's commit, not {op:?}");
+        assert!(
+            matches!(op, Op::Commit { .. } | Op::Fetch { into: Some(_), .. }),
+            "push_effect_unit takes a context's commit or its fetch into a slot, not {op:?}"
+        );
         self.append_effect(op, None, span);
     }
 

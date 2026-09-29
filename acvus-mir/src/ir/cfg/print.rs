@@ -33,7 +33,7 @@ use acvus_ast::{Literal, Span};
 use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use super::{Block, BlockId, Body, BodyId, Definition, InstId, Module, Op, OrderUse, Terminator};
+use super::{Block, BlockId, Body, BodyId, Committed, Definition, InstId, Module, Op, OrderUse, Terminator};
 use crate::ir::{BinOp, Callee, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Intrinsic, Overflow, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
 use crate::ty::{self, Mutability, Ty};
 
@@ -483,13 +483,16 @@ impl Printer<'_> {
                 self.value(*index),
                 self.value(*value)
             ),
-            Op::Fetch { context } => format!("Fetch @{}", self.qualified(*context)),
-            Op::Commit { context, value, wrote } => format!(
-                "Commit{} @{}, {}",
-                flag("wrote", *wrote),
-                self.qualified(*context),
-                self.value(*value)
-            ),
+            Op::Fetch { context, into: Some(slot) } => {
+                format!("Fetch @{} into {}", self.qualified(*context), self.place(&RefTarget::Var(*slot), &[]))
+            }
+            Op::Fetch { context, into: None } => format!("Fetch @{}", self.qualified(*context)),
+            Op::Commit { context, from: Committed::Slot(slot) } => {
+                format!("Commit @{} from {}", self.qualified(*context), self.place(&RefTarget::Var(*slot), &[]))
+            }
+            Op::Commit { context, from: Committed::Value(value) } => {
+                format!("Commit @{}, {}", self.qualified(*context), self.value(*value))
+            }
             Op::FieldGet { object, field, rest } => format!("FieldGet {}{}", self.value(*object), self.fields(*field, rest)),
             Op::FieldSet { object, field, rest, value } => format!(
                 "FieldSet {}{}, {}",

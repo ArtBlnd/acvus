@@ -10,7 +10,7 @@ use crate::decl::{
     ContextDecl, ConversionRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
 };
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
-use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
+use crate::ir::cfg::{Body, BodyId, Committed, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
@@ -182,6 +182,23 @@ impl Fixture {
 
     fn script(self, source: &str) -> Lowered {
         self.script_calling(&Interfaces::new(), source)
+    }
+
+    /// `source` lowered and taken through every required step, which admit
+    /// it.
+    fn required(self, source: &str) -> Lowered {
+        let script: Script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
+        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
+        let mut types = Types::new();
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_script(&self.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
+        assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+        let mut module = lower_script(&decls, &typeck, types, &script);
+        let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
+        if let Err(refusals) = super::required::run(&mut module, &mut am) {
+            panic!("the checks refused: {refusals:?}");
+        }
+        Lowered::checked(module, self.names)
     }
 
     /// `source` lowered, its calls reaching the units of `interfaces` too.
@@ -690,9 +707,9 @@ fn lowered_closures(lowered: &Lowered) {
 
 // -- contexts ----------------------------------------------------------------
 
-/// A context not volatile is loaded at entry into its slot, committed and
-/// loaded again around an opaque call, and committed at return
-/// (context §3).
+/// A context not volatile is fetched at entry into its slot, committed
+/// from it and fetched into it again around an opaque call, and committed
+/// from it at return (context §3).
 #[test]
 fn a_context_is_loaded_at_entry_bracketed_around_a_call_and_committed_at_return() {
     let mut fx = Fixture::new();
@@ -704,7 +721,7 @@ fn a_context_is_loaded_at_entry_bracketed_around_a_call_and_committed_at_return(
     let shape: Vec<&str> = ops
         .iter()
         .filter_map(|op| match op {
-            Op::Fetch { context } if *context == n => Some("load"),
+            Op::Fetch { context, .. } if *context == n => Some("load"),
             Op::Commit { context, .. } if *context == n => Some("commit"),
             Op::FunctionCall { .. } => Some("call"),
             _ => None,
@@ -712,7 +729,15 @@ fn a_context_is_loaded_at_entry_bracketed_around_a_call_and_committed_at_return(
         .collect();
     assert_eq!(shape, vec!["load", "commit", "call", "load", "commit"]);
     let slots = lowered.entry().slots();
-    assert_eq!(slots.iter().filter(|slot| lowered.entry().context_of_slot(**slot) == Some(n)).count(), 1);
+    let [slot] = slots.iter().filter(|slot| lowered.entry().context_of_slot(**slot) == Some(n)).collect::<Vec<_>>()[..] else {
+        panic!("one slot holds @n: {}", shown(lowered.entry()))
+    };
+    let through_the_slot = ops.iter().all(|op| match op {
+        Op::Fetch { context, into } if *context == n => *into == Some(*slot),
+        Op::Commit { context, from } if *context == n => *from == Committed::Slot(*slot),
+        _ => true,
+    });
+    assert!(through_the_slot, "each fetch is into the slot and each commit from it: {}", shown(lowered.entry()));
 }
 
 /// A volatile context has no slot: a read is a load and a write a commit
@@ -724,10 +749,35 @@ fn a_volatile_context_is_a_load_at_each_read_and_a_commit_at_each_write() {
     let clock = fx.context("clock", int, true);
     let lowered = fx.script("let a = @clock; let b = @clock; @clock = a; 1");
     let ops = lowered.entry_ops();
-    assert_eq!(count(&ops, |op| matches!(op, Op::Fetch { context } if *context == clock)), 2);
-    assert_eq!(count(&ops, |op| matches!(op, Op::Commit { context, .. } if *context == clock)), 1);
+    assert_eq!(count(&ops, |op| matches!(op, Op::Fetch { context, into: None } if *context == clock)), 2);
+    assert_eq!(count(&ops, |op| matches!(op, Op::Commit { context, from: Committed::Value(_) } if *context == clock)), 1);
+    assert_eq!(count(&ops, |op| matches!(op, Op::Fetch { .. } | Op::Commit { .. })), 3, "no other fetch or commit");
     let body = lowered.entry();
     assert!(body.slots().iter().all(|slot| body.context_of_slot(*slot).is_none()));
+}
+
+/// context §3: a context only read has its fetch and no commit after the
+/// required steps; one written has both.
+#[test]
+fn a_context_only_read_keeps_its_fetch_and_one_written_keeps_its_commit_too() {
+    let boundary = |source: &str| {
+        let mut fx = Fixture::new();
+        let vec = fx.vec_of_ints();
+        let (int, vec_ref) = (fx.int(), fx.reference(Mutability::Shared, vec));
+        let len = fx.function(&[vec_ref], int, Effect::pure());
+        fx.declare("len", len, 1);
+        let make = fx.function(&[], vec, Effect::pure());
+        fx.declare("make", make, 0);
+        let c = fx.context("c", vec, false);
+        let lowered = fx.required(source);
+        let ops = lowered.entry_ops();
+        let fetches = count(&ops, |op| matches!(op, Op::Fetch { context, into: Some(_) } if *context == c));
+        let commits = count(&ops, |op| matches!(op, Op::Commit { context, from: Committed::Slot(_) } if *context == c));
+        (fetches, commits)
+    };
+    assert_eq!(boundary("len(&@c)"), (1, 0), "only read");
+    assert_eq!(boundary("@c = make(); len(&@c)"), (0, 1), "written before any read: the fetch is never read");
+    assert_eq!(boundary("let n = len(&@c); @c = make(); n"), (1, 1), "read, then written");
 }
 
 // -- templates and conversions ------------------------------------------------

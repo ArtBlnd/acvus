@@ -5,8 +5,9 @@
 //! place `Loans` says it reads, directly or through a reference; a store
 //! into a whole place by name kills it. A store into part of a place, or
 //! into a place through a reference, kills nothing, so a place is live
-//! wherever those leave it in doubt. The body's end reads none of its own
-//! places.
+//! wherever those leave it in doubt. A `Fetch` into a context's slot is a
+//! store into it whole, and a `Commit` from it reads it whole (context §3).
+//! The body's end reads none of its own places.
 //!
 //! `Liveness` answers for values; this answers for what a place holds, which
 //! a place's own `ValueId` does not follow, since every access names it.
@@ -21,8 +22,9 @@
 //! covering the unit kills it. Beside it, forward, each unit's presence:
 //! a store by name into a path covering it fills it, and a `Take` that
 //! moves a covering path out of it, by name or through a reference to it
-//! alone, empties it. A slot starts empty and a by-value parameter's
-//! storage full.
+//! alone, empties it. A `Fetch` into a context's slot fills it, and a
+//! `Commit` from it empties it. A slot starts empty and a by-value
+//! parameter's storage full.
 //!
 //! Cost: `Loans`', and then a block's state only grows, at most once per
 //! place or unit, and each growth re-runs the transfer of the block, so
@@ -37,7 +39,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Committed, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Reach, Storage, solve_dense};
@@ -410,7 +412,12 @@ impl DenseAnalysis for Backward<'_> {
     }
 
     fn transfer(&self, inst: &Inst, state: &mut Live) {
-        if let Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } = inst.op() {
+        let stored = match inst.op() {
+            Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => Some((place, path.as_slice())),
+            Op::Fetch { into: Some(slot), .. } => Some((slot, &[][..])),
+            _ => None,
+        };
+        if let Some((place, path)) = stored {
             if path.is_empty() {
                 state.places.remove(place);
             }
@@ -531,6 +538,8 @@ impl DenseAnalysis for Forward<'_> {
             Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
                 self.set(*place, parts::owned_region(path), Presence::Present, state);
             }
+            Op::Fetch { into: Some(slot), .. } => self.set(*slot, &[], Presence::Present, state),
+            Op::Commit { from: Committed::Slot(slot), .. } => self.set(*slot, &[], Presence::Absent, state),
             Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
                 if self.units.contains_key(place)
                     && !copies(self.types, self.body.ty_of(inst.result().expect("a Take yields a value"))) =>

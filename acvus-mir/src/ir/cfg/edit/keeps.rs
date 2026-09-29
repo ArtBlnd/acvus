@@ -2,11 +2,12 @@
 //! in debug and test builds; `passes::pipeline` reuses them after each
 //! transform.
 
+use acvus_utils::QualifiedRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
-use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
+use crate::ir::cfg::{BlockId, Body, Committed, Inst, Op, OrderUse, Site, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::structural;
 use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
@@ -526,8 +527,18 @@ impl TypeCheck<'_> {
                 let payloads = self.payloads(self.ty(*src))?;
                 self.one_of(Self::result(inst)?, &payloads, "a payload of the variant type")
             }
-            Op::Fetch { .. } => self.outlives_the_run(Self::result(inst)?),
-            Op::Commit { value, .. } => self.outlives_the_run(*value),
+            Op::Fetch { context, into: Some(slot) } | Op::Commit { context, from: Committed::Slot(slot) } => {
+                self.holds_context(*slot, *context)?;
+                self.outlives_the_run(*slot)
+            }
+            Op::Fetch { context, into: None } => {
+                self.held_in_no_slot(*context)?;
+                self.outlives_the_run(Self::result(inst)?)
+            }
+            Op::Commit { context, from: Committed::Value(value) } => {
+                self.held_in_no_slot(*context)?;
+                self.outlives_the_run(*value)
+            }
             Op::Undef | Op::Drop { .. } => Ok(()),
         }
     }
@@ -667,6 +678,19 @@ impl TypeCheck<'_> {
             let expected: Vec<&TyKind<Concrete>> = expected.iter().map(|ty| self.kind(*ty)).collect();
             format!("{value:?} is {:?}, and {what} is one of {expected:?}", self.kind(ty))
         })
+    }
+
+    /// `slot` is the slot the body holds `context` in.
+    fn holds_context(&self, slot: ValueId, context: QualifiedRef) -> Found {
+        let held = self.body.slots().contains(&slot) && self.body.context_of_slot(slot) == Some(context);
+        found(held, || format!("{slot:?} is not the slot the body holds {context:?} in"))
+    }
+
+    /// No slot of the body holds `context`: its fetch and its commit carry
+    /// its value (context §3).
+    fn held_in_no_slot(&self, context: QualifiedRef) -> Found {
+        let slot = self.body.slots().iter().find(|slot| self.body.context_of_slot(**slot) == Some(context));
+        found(slot.is_none(), || format!("{context:?} is held in the slot {slot:?}, and its fetch and commit name it"))
     }
 
     /// A value a context holds outlives the run, so its type has no

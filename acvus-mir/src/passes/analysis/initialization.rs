@@ -17,6 +17,9 @@
 //!   `PartMoved` moves every unit its path covers, at its span (ownership
 //!   §2, §6). One it takes `Read` moves nothing: a value that copies, and a
 //!   `&mut`, which each use reborrows (ownership §1, §5).
+//! - A `Fetch` into a context's slot writes every unit of it; a `Commit`
+//!   from it reads every unit and leaves each never written, until the
+//!   next `Fetch` (context §1, §3). Neither is a move of the program's.
 //! - Storage outside the body, what each position of a parameter's or a
 //!   capture's type lends (`Loans`' `Storage::Outside`), is a place too,
 //!   its units the lent target's type cut as a slot's are, written at entry
@@ -44,7 +47,7 @@ use rustc_hash::FxHashMap;
 
 use crate::decl::Declarations;
 use crate::ir::cfg::takings::{Taken, inst_takings};
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Committed, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, is_cut_of, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Mode, Reach, Storage, solve_dense};
@@ -352,6 +355,10 @@ impl DenseAnalysis for Forward<'_> {
             }
             Op::Take { target: RefTarget::Through(_), .. } | Op::Assign { target: RefTarget::Through(_), .. } => {
                 self.transfer_through(inst, state);
+            }
+            Op::Fetch { into: Some(slot), .. } => self.set(Storage::Slot(*slot), &[], &Written::default(), state),
+            Op::Commit { from: Committed::Slot(slot), .. } => {
+                self.set(Storage::Slot(*slot), &[], &Written { never: true, ..Written::default() }, state);
             }
             _ => {}
         }

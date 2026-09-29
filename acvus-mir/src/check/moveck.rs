@@ -9,11 +9,10 @@
 //! Storage outside the body is whole whenever the body returns (ownership
 //! §4): at each `Return`, a unit of one that some path moved out refuses
 //! the return `NotRefilled`, naming the move. A context is given back to
-//! what is outside the run by its commit (context §1, §3), the whole `Take`
-//! of its slot and the `Commit` of what it took (`Body::committed_slot`):
-//! there, a unit of the slot that some path moved out refuses the commit
-//! `NotRefilled`, naming the move, and the commit's `Take` is judged as the
-//! commit and not as a use. A move through a reference is refused
+//! what is outside the run by the `Commit` from its slot, which reads every
+//! unit of the slot (context §1, §3): there, a unit that some path moved
+//! out refuses the commit `NotRefilled`, naming the move. A move through a
+//! reference is refused
 //! `MoveThroughShared` where a loan of the reference it is made through is
 //! shared (ownership §5, what a shared reference lends is never taken
 //! from), and `MoveThroughSeveral` where it reaches more than one place, or
@@ -25,7 +24,7 @@ use std::collections::BTreeSet;
 use acvus_ast::Span;
 
 use super::{Refusal, RefusalKind};
-use crate::ir::cfg::{BodyId, Module, Op, Site, Terminator};
+use crate::ir::cfg::{BodyId, Committed, Module, Op, Site, Terminator};
 use crate::passes::analysis::{AnalysisManager, Initialization, Loans, Mode, Reach, Storage};
 
 /// The judgment over `body`, its refusals pushed to `out`.
@@ -36,9 +35,10 @@ pub(super) fn check(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'
     for (id, block) in body.blocks() {
         for inst in block.insts() {
             moves_through(&loans, Site::Inst(inst.id()), inst.span(), out);
-            if let Some((slot, take)) = body.committed_slot(inst.id()) {
-                let taken = taken_before(&initialization, Site::Inst(take), [Storage::Slot(slot)].into_iter());
+            if let Op::Commit { from: Committed::Slot(slot), .. } = inst.op() {
+                let taken = taken_before(&initialization, Site::Inst(inst.id()), [Storage::Slot(*slot)].into_iter());
                 out.extend(taken.into_iter().map(|taken| Refusal { kind: RefusalKind::NotRefilled { taken }, span: inst.span() }));
+                continue;
             }
             let (Op::Take { target, path, .. } | Op::Ref { target, path, .. }) = inst.op() else {
                 continue;
@@ -46,9 +46,6 @@ pub(super) fn check(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'
             let Some(place) = Storage::by_name(target) else {
                 continue;
             };
-            if body.is_commit_take(inst.id()) {
-                continue;
-            }
             let read = initialization.before(Site::Inst(inst.id()), place, path);
             let Some(moved) = read.iter().find_map(|(_, fact)| fact.moved.first()) else {
                 continue;

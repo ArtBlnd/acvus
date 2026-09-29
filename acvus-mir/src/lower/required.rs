@@ -8,10 +8,9 @@
 //!   not its last is a clone, and its last use moves it (ownership §3),
 //!   through `clone_read` (S4) for a place's content and `insert` and
 //!   `replace_operand` (G3) for a value.
-//! - `remove_dead_context_ops`, scopes `Discharge` and `Remove`: a load
-//!   whose value is never read and a commit of a context the body never
-//!   writes, nor moves out of, do not exist (context §3), through
-//!   `discharge` (G1).
+//! - `remove_dead_context_ops`, scope `Discharge`: a fetch whose content
+//!   is never read and a commit of a context the body never writes, nor
+//!   moves out of, do not exist (context §3), through `discharge` (G1).
 //! - `insert_drops`, scope `Cfg` for an edge split and then `Drops`: what
 //!   the program holds that does not copy is dropped where its liveness
 //!   ends, and what moves to another holder is not (ownership §6), through
@@ -26,7 +25,7 @@ use smallvec::SmallVec;
 
 use crate::ir::cfg::edit::{
     CannotDischarge, CannotRemoveParam, Cfg, Clones, Discharge, Drops, Editor, InstRef, NoFacts, PartOf, Position,
-    Remove, Value,
+    Value,
 };
 use crate::ir::cfg::takings::{Named, Taken, by_value, inst_takings, terminator_takings};
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, Site, Terminator};
@@ -79,13 +78,10 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
 
 /// Every body: each commit of a context the body never writes, a move out
 /// of its slot being a write (`EditFacts`' `NeverWritten`), then each
-/// load whose stored value no read reaches, is offered to `discharge`,
-/// which removes it where `EditFacts` proves it `NeverWritten` or
-/// `NeverRead`; a volatile context's are never proven (D61). A commit is
-/// the `Take` of the context's slot and the `Commit` of what it took, so a
-/// discharged commit's `Take` goes with it, and the content stays the
-/// page's (context §3). A load is the `Fetch` and the `Assign` of its value
-/// into the context's slot, so that store is offered before the `Fetch`.
+/// fetch into a slot whose content no read reaches, is offered to
+/// `discharge`, which removes it where `EditFacts` proves it
+/// `NeverWritten` or `NeverRead`; a volatile context's are never proven
+/// (D61). A discharged commit leaves the content the page's (context §3).
 ///
 /// Cost per body: O(instructions) discharges and removals, each judged on
 /// `Loans` and `IntervalValues` as the edits before it left them.
@@ -313,94 +309,24 @@ fn clone_before_terminator(editor: &mut Editor<'_, Value>, liveness: &Liveness, 
 // -- remove_dead_context_ops -------------------------------------------------
 
 fn remove_dead_context_ops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
-    let mut taken_for_commits: Vec<ValueId> = Vec::new();
-    {
-        let mut facts = EditFacts::new(am, body);
-        let mut editor = Editor::<Discharge>::new(module, body, &mut facts);
+    let mut facts = EditFacts::new(am, body);
+    let mut editor = Editor::<Discharge>::new(module, body, &mut facts);
+    let commits_then_fetches: [fn(&Op) -> bool; 2] =
+        [|op| matches!(op, Op::Commit { .. }), |op| matches!(op, Op::Fetch { .. })];
+    for offered in commits_then_fetches {
         let mut cursor = editor.cursor();
         while let Some(inst) = cursor.next() {
             let editor = cursor.editor();
-            let Op::Commit { value, .. } = editor.body().inst(inst.id()).op() else {
+            if !offered(editor.body().inst(inst.id()).op()) {
                 continue;
-            };
-            let value = *value;
-            if offer(editor, inst) && commits_its_slot(editor.body(), editor.defining_inst(value), value) {
-                taken_for_commits.push(value);
             }
-        }
-        let changes = editor.finish();
-        am.invalidate(body, &changes);
-    }
-    {
-        let mut no_facts = NoFacts;
-        let mut editor = Editor::<Remove>::new(module, body, &mut no_facts);
-        for taken in taken_for_commits {
-            let take = editor.defining_inst(taken).expect("a commit's Take defines what it took");
-            editor.remove(take).expect("a Take whose only use was a discharged commit is unused and pure");
-        }
-        let changes = editor.finish();
-        am.invalidate(body, &changes);
-    }
-    let mut facts = EditFacts::new(am, body);
-    let mut editor = Editor::<Discharge>::new(module, body, &mut facts);
-    let mut cursor = editor.cursor();
-    while let Some(inst) = cursor.next() {
-        let editor = cursor.editor();
-        if stores_a_load(editor, inst) {
-            offer(editor, inst);
-        }
-    }
-    let mut cursor = editor.cursor();
-    while let Some(inst) = cursor.next() {
-        let editor = cursor.editor();
-        if matches!(editor.body().inst(inst.id()).op(), Op::Fetch { .. }) {
-            offer(editor, inst);
+            match editor.discharge(inst) {
+                Ok(()) | Err(CannotDischarge::NotProven | CannotDischarge::WrongFact) => {}
+            }
         }
     }
     let changes = editor.finish();
     am.invalidate(body, &changes);
-}
-
-/// Offers `inst` to `discharge`; whether it went.
-fn offer(editor: &mut Editor<'_, Discharge>, inst: InstRef) -> bool {
-    match editor.discharge(inst) {
-        Ok(()) => true,
-        Err(CannotDischarge::NotProven | CannotDischarge::WrongFact) => false,
-    }
-}
-
-/// Whether `value`, which a discharged commit passed, is a whole `Take` of a
-/// context's slot that nothing else uses: the first half of the commit.
-fn commits_its_slot(body: &Body, take: Option<InstRef>, value: ValueId) -> bool {
-    let Some(take) = take else {
-        return false;
-    };
-    let Op::Take { target: RefTarget::Var(slot), path, .. } = body.inst(take.id()).op() else {
-        return false;
-    };
-    path.is_empty() && body.context_of_slot(*slot).is_some() && body.use_count(value) == 0
-}
-
-/// Whether `inst` stores into a context's slot, whole, the value a `Fetch`
-/// of that context produced: the second half of the load (context §3).
-fn stores_a_load(editor: &Editor<'_, Discharge>, inst: InstRef) -> bool {
-    let body = editor.body();
-    let Op::Assign { target: RefTarget::Var(slot), path, value, .. } = body.inst(inst.id()).op()
-    else {
-        return false;
-    };
-    path.is_empty() && body.context_of_slot(*slot).is_some() && is_load_of(body, editor.defining_inst(*value), *slot)
-}
-
-/// Whether `loaded` is a `Fetch` of the context `slot` holds.
-fn is_load_of(body: &Body, loaded: Option<InstRef>, slot: ValueId) -> bool {
-    let Some(loaded) = loaded else {
-        return false;
-    };
-    matches!(
-        body.inst(loaded.id()).op(),
-        Op::Fetch { context } if Some(*context) == body.context_of_slot(slot)
-    )
 }
 
 // -- insert_drops ------------------------------------------------------------
@@ -802,8 +728,8 @@ impl PlanFacts<'_> {
     }
 
     /// Before each store that overwrites a context's slot, whole or in
-    /// part, other than the store of its load, each unit it replaces is the
-    /// body's where the slot holds it there, and is dropped (context §3,
+    /// part, each unit it replaces is the body's where the slot holds it
+    /// there, and is dropped (context §3,
     /// D71). Where the slot holds it on some paths only, nothing reads it
     /// between the join and the store, so its liveness ended on the edges
     /// into the join: it is dropped on each such edge where it is present
@@ -840,21 +766,14 @@ impl PlanFacts<'_> {
     }
 
     /// The context slot `inst` stores into by name, whole or in part, and
-    /// the path, other than by storing its own load.
+    /// the path.
     fn context_overwritten<'i>(&self, inst: &'i Inst) -> Option<(ValueId, &'i [PathSeg])> {
-        let Op::Assign { target: RefTarget::Var(slot), path, value, .. } = inst.op() else {
+        let Op::Assign { target: RefTarget::Var(slot), path, .. } = inst.op() else {
             return None;
         };
         let body = self.body;
         let is_context = body.context_of_slot(*slot).is_some() && !copies(self.types, body.ty_of(*slot));
-        let stores_its_load = match body.definition(*value) {
-            Definition::Inst(loaded) => matches!(
-                body.inst(loaded).op(),
-                Op::Fetch { context } if Some(*context) == body.context_of_slot(*slot)
-            ),
-            _ => false,
-        };
-        (is_context && !(path.is_empty() && stores_its_load)).then_some((*slot, path.as_slice()))
+        is_context.then_some((*slot, path.as_slice()))
     }
 
     /// Whether nothing in `block` before the instruction `upto`, or before

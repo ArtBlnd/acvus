@@ -3,7 +3,7 @@
 
 use super::{Fixture, covers, span_of};
 use crate::check::{Refusal, RefusalKind};
-use crate::ty::TyKind;
+use crate::ty::{Effect, TyKind};
 
 /// A fixture with `make`, `consume` and a context `@c: Vec<i64>`.
 fn with_context() -> Fixture {
@@ -32,6 +32,44 @@ fn a_context_taken_and_not_written_back_refuses_its_commit() {
 fn a_context_taken_and_written_back_is_admitted() {
     let refusals = with_context().refusals("consume(@c); @c = make(); 0");
     assert_eq!(refusals, []);
+}
+
+/// context §1: a context bound by `let` is taken out of its slot, which is
+/// empty at the commit the return makes unless something is written back.
+#[test]
+fn a_context_bound_by_let_and_not_written_back_refuses_its_commit() {
+    let source = "let x = @c; consume(x); 0";
+    let refusals = with_context().refusals(source);
+    let [Refusal { kind: RefusalKind::NotRefilled { taken }, span }] = refusals[..] else {
+        panic!("one NotRefilled: {refusals:?}");
+    };
+    assert_eq!(taken, span_of(source, "@c", 0), "naming the take");
+    assert!(covers(span, span_of(source, "0", 0)), "at the commit, which the return makes: {span:?}");
+}
+
+/// context §1: a context bound by `let` and written back before the return
+/// is filled at its commit.
+#[test]
+fn a_context_bound_by_let_and_written_back_is_admitted() {
+    let refusals = with_context().refusals("let x = @c; @c = make(); consume(x); 0");
+    assert_eq!(refusals, []);
+}
+
+/// context §1, §3: a call whose effect may touch `@c` is preceded by a
+/// commit of it, which finds the slot empty between the take and the write
+/// back.
+#[test]
+fn a_call_touching_a_context_between_its_take_and_its_write_back_refuses_the_commit_before_the_call() {
+    let mut fx = with_context();
+    let int = fx.int();
+    fx.declare_with_effect("touch", &[], int, Effect::opaque());
+    let source = "let x = @c; touch(); @c = x; 0";
+    let refusals = fx.refusals(source);
+    let [Refusal { kind: RefusalKind::NotRefilled { taken }, span }] = refusals[..] else {
+        panic!("one NotRefilled: {refusals:?}");
+    };
+    assert_eq!(taken, span_of(source, "@c", 0), "naming the take");
+    assert!(covers(span, span_of(source, "touch()", 0)), "at the commit before the call: {span:?}");
 }
 
 /// functions §2, ownership §5: a lambda without `move` captures `v` by a
