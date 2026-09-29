@@ -29,6 +29,7 @@ pub struct Core {
     pub display: QualifiedRef,
     pub clone: QualifiedRef,
     pub unwrap: QualifiedRef,
+    pub default: QualifiedRef,
     pub tags: Tags,
     /// The names an `as` may cast to, each with its type (operators §5).
     cast_targets: [(Astr, CastTy); CAST_TARGETS],
@@ -75,6 +76,7 @@ impl Core {
             display: name("display"),
             clone: name("clone"),
             unwrap: name("unwrap"),
+            default: name("default"),
             tags: Tags {
                 some: interner.intern("Some"),
                 none: interner.intern("None"),
@@ -120,6 +122,7 @@ impl Core {
             (self.as_slice_mut, table.view_of_slice(Mutability::Mut)),
             (self.as_str, table.view_of_str()),
             (self.unwrap, table.unwrap()),
+            (self.default, table.default()),
         ]);
         functions
     }
@@ -149,6 +152,7 @@ impl Core {
             self.display,
             self.clone,
             self.unwrap,
+            self.default,
         ]
         .contains(&function)
     }
@@ -256,6 +260,12 @@ impl Table<'_> {
         let (w, t) = (self.var(0), self.var(1));
         let names = [self.names.receiver];
         self.scheme(&[w], t, &names, 2)
+    }
+
+    /// `default<T>() -> T`.
+    fn default(&mut self) -> Scheme {
+        let t = self.var(0);
+        self.scheme(&[], t, &[], 1)
     }
 }
 
@@ -413,6 +423,15 @@ mod tests {
                     ret: TyKind::Var(1),
                     names: vec!["self"],
                     variables: 2,
+                },
+            ),
+            (
+                core.default,
+                Expected {
+                    params: vec![],
+                    ret: TyKind::Var(0),
+                    names: vec![],
+                    variables: 1,
                 },
             ),
         ]);
