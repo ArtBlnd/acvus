@@ -17,7 +17,6 @@
 
 mod call;
 mod cast;
-mod clone;
 mod closure;
 mod context;
 mod control;

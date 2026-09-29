@@ -156,10 +156,6 @@ fn name_root(cx: &Ctxt<'_>, name: Astr, of: CaptureOf, crossed: Vec<AstId>, term
 /// The adjustment fired on the receiver's head, then the call's reach. It
 /// waits where a `&mut` receiver lends an index still undecided.
 pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading) -> Result<(), Adjust> {
-    if adjust.callee == Callee::Core(CoreSig::Clone) {
-        fire_clone_adjust(cx, adjust, receiver, reading);
-        return Ok(());
-    }
     let adjustment = adjustment(cx, &adjust, receiver.head);
     if adjustment == Adjustment::Ref(Mutability::Mut) {
         let indexes = adjust.place.iter().flat_map(|place| &place.indexes);
@@ -183,20 +179,6 @@ pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, r
     let reached = reach_in(cx, &body, callee_site, callee, all, span);
     cx.eq(result, reached, span);
     Ok(())
-}
-
-/// `.clone()`'s adjustment, then the clone of what the adjusted receiver
-/// lends, decided at the callee site; the call's result is of that type.
-fn fire_clone_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading) {
-    let adjustment = super::clone::receiver_adjustment(receiver.head);
-    let Adjust { callee_site, span, receiver: term, result, body, place, .. } = adjust;
-    cx.out.adjustments.insert(callee_site, adjustment);
-    if let Some(place) = place {
-        lends(cx, &place, adjustment, term, &body, reading, span);
-    }
-    let cloned = super::clone::cloned_type(cx, receiver.head, term);
-    cx.eq(result, cloned, span);
-    super::clone::decide(cx, callee_site, span, cloned, body);
 }
 
 /// The first of as written, `&` and `&mut` whose receiver some candidate's

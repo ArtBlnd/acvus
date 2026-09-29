@@ -154,10 +154,6 @@ pub(super) fn lower_method<S: Slot>(
         }
     };
     let taken = convert(cx, receiver.id(), taken, receiver.span());
-    if cx.typeck.part_trees.contains_key(&callee_site) {
-        let ty = cx.ty(site);
-        return super::part_tree::clone(cx, callee_site, ty, taken, span);
-    }
     let rest: Vec<&Expr<S>> = args.iter().collect();
     let mut all = vec![taken];
     all.extend(arguments(cx, &rest));

@@ -147,35 +147,23 @@ pub struct Closure {
     pub calls: Calls,
 }
 
-/// How `==`, an ordering or `.clone()` treats its operand's type, node by
-/// node: part by part for a structural type in `ty::structural`'s order, an
-/// array by its one element part (operators §4, ownership §1-2); through
-/// the `core::eq`, `core::cmp` or `core::clone` impl reached; or, for a
-/// clone, copied where the node's type copies.
+/// How `==` or an ordering treats its operand's type, node by node: part by
+/// part for a structural type in `ty::structural`'s order, an array by its
+/// one element part (operators §4); through the `core::eq` or `core::cmp`
+/// impl reached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartTree {
     Parts(Box<[PartTree]>),
     /// The impl reached, and its function type as instantiated there.
     Reached { chosen: Chosen, callee: Ty },
-    /// A clone of a node whose type copies (ownership §1).
-    Copied,
 }
 
 /// A part-tree node while checking: its parts' nodes, a reach at the node
-/// itself, recorded in `reached` once it fires, or a copy.
+/// itself, recorded in `reached` once it fires.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PartNode {
     Parts(Box<[AstId]>),
     Reached,
-    Copied,
-}
-
-/// A clone's node while checking, and its type: a structural node whose
-/// type turns out to copy is copied whole.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CloneNode {
-    pub node: PartNode,
-    pub ty: Term,
 }
 
 /// A value that entered a slot and was folded there (types §3); its
@@ -227,7 +215,6 @@ pub(super) struct Output {
     /// Each method call's receiver adjustment, at the call's callee site.
     pub adjustments: FxHashMap<AstId, Adjustment>,
     pub comparisons: FxHashMap<AstId, PartNode>,
-    pub clones: FxHashMap<AstId, CloneNode>,
     pub body_effect: Option<EffectTerm<InferPhase>>,
     pub refusals: Vec<Refusal>,
 }

@@ -5,12 +5,12 @@ use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{CloneNode, Closure, Conversion, Entered, PartNode, PartTree, Typeck};
+use super::output::{Closure, Conversion, Entered, PartNode, PartTree, Typeck};
 use crate::decl::{Base, DeclaredFacts, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, Infer as InferPhase,
-    Mutability, Ty, TyKind, Types, copies,
+    Mutability, Ty, TyKind, Types,
 };
 
 /// Freezes every decision, `result` being the run's result term.
@@ -400,34 +400,23 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
 }
 
 /// Every part tree, from each root the program wrote down to the parts
-/// that reach an impl or copy: the comparisons' (operators §4) and the
-/// clones' (ownership §1-2). A tree some refusal left open is left out.
+/// that reach an impl: the comparisons' (operators §4). A tree some refusal
+/// left open is left out.
 fn part_trees(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, PartTree> {
     let comparisons = std::mem::take(&mut cx.out.comparisons);
-    let clones = std::mem::take(&mut cx.out.clones);
-    let mut clone_nodes = FxHashMap::default();
-    let mut clone_types = FxHashMap::default();
-    for (site, CloneNode { node, ty }) in clones {
-        clone_nodes.insert(site, node);
-        clone_types.insert(site, ty);
-    }
+    let trees = Trees { nodes: &comparisons };
     let mut out = FxHashMap::default();
-    for (nodes, cloned) in [(&comparisons, None), (&clone_nodes, Some(&clone_types))] {
-        let trees = Trees { nodes, cloned };
-        for root in trees.roots() {
-            if let Some(tree) = trees.tree(cx, types, memo, root) {
-                out.insert(root, tree);
-            }
+    for root in trees.roots() {
+        if let Some(tree) = trees.tree(cx, types, memo, root) {
+            out.insert(root, tree);
         }
     }
     out
 }
 
-/// One kind of part tree while checking: its nodes, and for a clone each
-/// node's type.
+/// The comparisons' part-tree nodes while checking.
 struct Trees<'n> {
     nodes: &'n FxHashMap<AstId, PartNode>,
-    cloned: Option<&'n FxHashMap<AstId, Term>>,
 }
 
 impl Trees<'_> {
@@ -437,23 +426,16 @@ impl Trees<'_> {
             .values()
             .flat_map(|node| match node {
                 PartNode::Parts(parts) => parts.to_vec(),
-                PartNode::Reached | PartNode::Copied => Vec::new(),
+                PartNode::Reached => Vec::new(),
             })
             .collect();
         self.nodes.keys().copied().filter(|node| !children.contains(node)).collect()
     }
 
-    /// The tree at `node`. A clone of a structural node whose type copies
-    /// copies it whole (ownership §1).
+    /// The tree at `node`.
     fn tree(&self, cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, node: AstId) -> Option<PartTree> {
         match self.nodes.get(&node)? {
             PartNode::Parts(parts) => {
-                if let Some(cloned) = self.cloned {
-                    let ty = freeze(cx, types, memo, cloned[&node])?;
-                    if copies(types, ty) {
-                        return Some(PartTree::Copied);
-                    }
-                }
                 let parts: Option<Vec<PartTree>> = parts.iter().map(|part| self.tree(cx, types, memo, *part)).collect();
                 Some(PartTree::Parts(parts?.into()))
             }
@@ -463,7 +445,6 @@ impl Trees<'_> {
                 let callee = freeze(cx, types, memo, callee?)?;
                 Some(PartTree::Reached { chosen: chosen?, callee })
             }
-            PartNode::Copied => Some(PartTree::Copied),
         }
     }
 }

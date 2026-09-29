@@ -1,9 +1,8 @@
-//! Equality, ordering and clone by the part tree typeck recorded
-//! (operators §4, ownership §1-2, D87). A tuple, an object, an `Option` and
-//! a `Result` are expanded part by part in `ty::structural`'s order. An
-//! array is one `For` over its elements, never unrolled: a comparison
-//! leaves it at the first element whose answer settles the whole. A leaf
-//! is a call of the impl reached, or, in a clone, a copy.
+//! Equality and ordering by the part tree typeck recorded (operators §4,
+//! D87). A tuple, an object, an `Option` and a `Result` are expanded part by
+//! part in `ty::structural`'s order. An array is one `For` over its
+//! elements, never unrolled: a comparison leaves it at the first element
+//! whose answer settles the whole. A leaf is a call of the impl reached.
 //!
 //! A node's operand is a shared reference to its value, or, where the node
 //! is itself a reference, that reference, since a reference's target is
@@ -157,7 +156,6 @@ fn compared(cx: &mut Lcx<'_, '_>, tree: &PartTree, asked: Asked, ty: Ty, a: Valu
             return issue(cx, called, *callee, vec![a, b], span);
         }
         PartTree::Parts(trees) => trees,
-        PartTree::Copied => panic!("typeck records a copy only in a clone's tree"),
     };
     match shape(cx, ty) {
         Shape::Ref(target) => compared(cx, only(trees), asked, target, a, b, span),
@@ -344,108 +342,4 @@ fn tagged(cx: &mut Lcx<'_, '_>, asked: Asked, first: Astr, payloads: Tagged<'_>,
         }
     };
     diamond(cx, same, answer_ty, span, payloads_compared, tags_differ)
-}
-
-// -- clone -------------------------------------------------------------------
-
-/// `.clone()` by the tree typeck recorded at `callee_site`, of a value of
-/// type `ty` that `receiver`, the adjusted receiver, lends.
-pub(super) fn clone(cx: &mut Lcx<'_, '_>, callee_site: AstId, ty: Ty, receiver: ValueId, span: Span) -> ValueId {
-    let tree = cx
-        .typeck
-        .part_trees
-        .get(&callee_site)
-        .unwrap_or_else(|| panic!("typeck records how every `.clone()` clones, and not at {callee_site:?}"));
-    let receiver = convert(cx, callee_site, receiver, span);
-    cloned(cx, tree, ty, receiver, span)
-}
-
-/// A new value of type `ty` with what `src`, the node's operand, holds.
-fn cloned(cx: &mut Lcx<'_, '_>, tree: &PartTree, ty: Ty, src: ValueId, span: Span) -> ValueId {
-    let trees = match tree {
-        PartTree::Reached { chosen, callee } => {
-            let called = cx.callee(chosen);
-            return issue(cx, called, *callee, vec![src], span);
-        }
-        PartTree::Copied => return copied(cx, ty, src, span),
-        PartTree::Parts(trees) => trees,
-    };
-    match shape(cx, ty) {
-        Shape::Tuple(items) => {
-            let elements = tuple_parts(&items, trees).into_iter().map(|part| part_cloned(cx, part, src, span)).collect();
-            cx.builder.push(Op::MakeTuple { elements }, ty, span)
-        }
-        Shape::Object(fields) => {
-            let names = fields.iter().map(|(name, _)| *name);
-            let values: Vec<ValueId> = field_parts(&fields, trees).into_iter().map(|part| part_cloned(cx, part, src, span)).collect();
-            let fields = names.zip(values).collect();
-            cx.builder.push(Op::MakeObject { fields }, ty, span)
-        }
-        Shape::Option(payload) => {
-            let tags = cx.decls.core().tags;
-            let payload = Part { seg: PathSeg::Payload, ty: payload, tree: only(trees) };
-            let bool_ty = cx.bool_ty();
-            let is_some = cx.builder.push(Op::TestVariant { src, tag: tags.some }, bool_ty, span);
-            diamond(
-                cx,
-                is_some,
-                ty,
-                span,
-                |cx| variant(cx, tags.some, Some(payload), ty, src, span),
-                |cx| variant(cx, tags.none, None, ty, src, span),
-            )
-        }
-        Shape::Result { ok, err } => {
-            let tags = cx.decls.core().tags;
-            let [ok_tree, err_tree] = &trees[..] else { panic!("a `Result` clones by its two payloads") };
-            let ok = Part { seg: PathSeg::Payload, ty: ok, tree: ok_tree };
-            let err = Part { seg: PathSeg::Payload, ty: err, tree: err_tree };
-            let bool_ty = cx.bool_ty();
-            let is_ok = cx.builder.push(Op::TestVariant { src, tag: tags.ok }, bool_ty, span);
-            diamond(
-                cx,
-                is_ok,
-                ty,
-                span,
-                |cx| variant(cx, tags.ok, Some(ok), ty, src, span),
-                |cx| variant(cx, tags.err, Some(err), ty, src, span),
-            )
-        }
-        Shape::Array(_) => array_cloned(),
-        Shape::Never => cx.unreached_value(ty, span),
-        Shape::Ref(_) => panic!("typeck copies a shared reference and reaches `core::clone` for any other"),
-    }
-}
-
-/// PARKED(D87): an array whose element does not copy is cloned by one `For`
-/// that builds the new array element by element, but the IR has no way to
-/// carry an array under construction through a loop: `ArrayPush` changes
-/// the array's type at each element, and `IndexSet` drops the element it
-/// overwrites, so neither can fill a new array in place. Until the IR gains
-/// that form, lowering stops here with the question.
-fn array_cloned() -> ValueId {
-    panic!(
-        "PARKED(D87): an array whose element does not copy is cloned by one For building the new array, \
-         and the IR has no operation that fills an array under construction inside a loop"
-    )
-}
-
-/// A value of type `ty` that copies, read out of the node's operand `src`.
-fn copied(cx: &mut Lcx<'_, '_>, ty: Ty, src: ValueId, span: Span) -> ValueId {
-    match cx.kind(ty) {
-        TyKind::Ref(..) => src,
-        _ => cx.builder.push(Op::Take { target: RefTarget::Through(src), path: Vec::new(), taken_out: false }, ty, span),
-    }
-}
-
-fn part_cloned(cx: &mut Lcx<'_, '_>, part: Part<'_>, src: ValueId, span: Span) -> ValueId {
-    let operand = part_operand(cx, src, part, span);
-    cloned(cx, part.tree, part.ty, operand, span)
-}
-
-/// The variant `tag` of type `ty`, its payload, where it has one, cloned
-/// out of `src`.
-fn variant(cx: &mut Lcx<'_, '_>, tag: Astr, payload: Option<Part<'_>>, ty: Ty, src: ValueId, span: Span) -> ValueId {
-    let payload = payload.map(|part| part_cloned(cx, part, src, span));
-    cx.builder.push(Op::MakeVariant { tag, payload }, ty, span)
 }
