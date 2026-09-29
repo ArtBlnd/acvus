@@ -29,6 +29,7 @@ use cells::{Cells, End as CellEnd, FlowRefused, MarkTerm};
 
 pub use cells::{Exceeds, FlowId};
 pub use closed::{Closed, OpenSources};
+pub use copy::{AtInstance, CopiedFlow, Reached, VarMarks, VarsOf};
 pub use freeze::{FreezeMemo, Unsettled};
 pub use relate::{Coerced, CoercedPart, Entered, Mismatch, ShapeCoercion};
 pub use scheme::{Instantiated, RequiredAt};

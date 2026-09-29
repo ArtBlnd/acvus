@@ -353,6 +353,44 @@ impl<T: VarTerm> Cells<T> {
         }
     }
 
+    /// How many variables of this kind were made so far.
+    pub(super) fn count(&self) -> u32 {
+        u32::try_from(self.cells.len()).expect("indices are u32 by fresh")
+    }
+
+    /// A fresh variable in the state of each of `vars`, each the end of its
+    /// chain: its value so far and whether `eq` fixed it. What flows into
+    /// or out of them is copied by `flows_touching`.
+    pub(super) fn duplicate(&mut self, vars: &[T::Var], exhausted: &'static str) -> Vec<T::Var> {
+        vars.iter()
+            .map(|var| {
+                let copy = self.fresh(exhausted);
+                self.cells[T::index(copy)] = self.cells[T::index(*var)].clone();
+                self.fixed[T::index(copy)] = self.fixed[T::index(*var)];
+                copy
+            })
+            .collect()
+    }
+
+    /// Every flow out of or into a variable `touches` admits, as `(from,
+    /// into, id)`, `from` the end its flows are kept at.
+    pub(super) fn flows_touching(&self, touches: &dyn Fn(T::Var) -> bool) -> Vec<(T::Var, T, FlowId)> {
+        let mut out = Vec::new();
+        for (index, flows) in self.flows.iter().enumerate() {
+            let from = T::var_of_index(u32::try_from(index).expect("indices are u32 by fresh"));
+            for (into, flow) in flows {
+                let into_touched = match self.end(into) {
+                    End::Var { var, .. } => touches(var),
+                    End::Known(_) => false,
+                };
+                if touches(from) || into_touched {
+                    out.push((from, into.clone(), *flow));
+                }
+            }
+        }
+        out
+    }
+
     /// Refuses `joined` where `var`, the end of its chain, is fixed at a
     /// `value` it differs from.
     fn keep_fixed(&self, var: T::Var, value: Option<&T::Value>, joined: &T::Value) -> Result<(), Exceeds<T::Value>> {
