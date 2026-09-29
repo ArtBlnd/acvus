@@ -426,6 +426,7 @@ macro_rules! walk_operands {
             Op::TupleIndex { tuple, .. } => $on(tuple),
             Op::ArrayIndex { array, .. } => $on(array),
             Op::MakeClosure { captures, .. } => captures.into_iter().for_each(|v| $on(v)),
+            Op::Specialize { closure, .. } => $on(closure),
             Op::MakeVariant { payload, .. } => {
                 if let Some(payload) = payload {
                     $on(payload);
@@ -512,6 +513,7 @@ impl Op {
             | Op::ArrayIndex { .. }
             | Op::ObjectGet { .. }
             | Op::MakeClosure { .. }
+            | Op::Specialize { .. }
             | Op::MakeVariant { .. }
             | Op::TestVariant { .. }
             | Op::SliceLen { .. }
@@ -584,6 +586,7 @@ impl Op {
             | Op::ArrayIndex { .. }
             | Op::ObjectGet { .. }
             | Op::MakeClosure { .. }
+            | Op::Specialize { .. }
             | Op::MakeVariant { .. }
             | Op::TestVariant { .. }
             | Op::SliceLen { .. }

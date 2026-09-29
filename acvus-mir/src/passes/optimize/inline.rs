@@ -104,12 +104,12 @@ impl CallGraph {
                 let body = module.body(*caller);
                 let mut callees: Vec<usize> = Vec::new();
                 for inst in body.blocks().flat_map(|(_, block)| block.insts()) {
-                    let callee = match inst.op() {
-                        Op::MakeClosure { body: made, .. } => Some(*made),
-                        Op::FunctionCall { callee: Callee::Indirect(function), .. } => closure_body(module, *caller, *function),
-                        _ => None,
+                    let made: Vec<BodyId> = match inst.op() {
+                        Op::MakeClosure { bodies, .. } => bodies.clone(),
+                        Op::FunctionCall { callee: Callee::Indirect(function), .. } => closure_body(module, *caller, *function).into_iter().collect(),
+                        _ => Vec::new(),
                     };
-                    callees.extend(callee.map(|callee| place[&callee]));
+                    callees.extend(made.iter().map(|callee| place[callee]));
                 }
                 callees.sort_unstable();
                 callees.dedup();
@@ -219,7 +219,10 @@ fn closure_body(module: &Module, caller: BodyId, function: ValueId) -> Option<Bo
         return None;
     };
     match body.inst(made).op() {
-        Op::MakeClosure { body: made, .. } => Some(*made),
+        Op::MakeClosure { bodies, .. } => match bodies[..] {
+            [one] => Some(one),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -256,7 +259,7 @@ mod tests {
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(false, int);
         let a = builder.param(na, int, acvus_ast::Span::ZERO);
-        let closure = builder.push(Op::MakeClosure { body: callee, captures: Vec::new() }, closure_ty, Span::ZERO);
+        let closure = builder.push(Op::MakeClosure { bodies: vec![callee], captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![a] };
         let r = builder.push(call, int, Span::ZERO);
         builder.terminate(ret(r), acvus_ast::Span::ZERO);
@@ -285,7 +288,7 @@ mod tests {
         let own = f.module.next_body_id();
         let mut builder = f.module.build_body(false, int);
         let x = builder.param(nx, int, acvus_ast::Span::ZERO);
-        let closure = builder.push(Op::MakeClosure { body: own, captures: Vec::new() }, closure_ty, Span::ZERO);
+        let closure = builder.push(Op::MakeClosure { bodies: vec![own], captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![x] };
         let r = builder.push(call, int, Span::ZERO);
         builder.terminate(ret(r), acvus_ast::Span::ZERO);
@@ -313,7 +316,7 @@ mod tests {
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(true, int);
         let a = builder.param(na, int, acvus_ast::Span::ZERO);
-        let closure = builder.push(Op::MakeClosure { body: callee, captures: Vec::new() }, closure_ty, Span::ZERO);
+        let closure = builder.push(Op::MakeClosure { bodies: vec![callee], captures: Vec::new() }, closure_ty, Span::ZERO);
         let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: closure_ty, args: vec![a] };
         let r = builder.push_effect(call, int, Span::ZERO);
         let h = builder.push_effect(direct_call(nh, opaque, Vec::new()), int, Span::ZERO);

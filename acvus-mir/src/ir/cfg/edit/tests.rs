@@ -2158,7 +2158,7 @@ fn inline_puts_a_straight_callee_in_the_calls_place_on_the_callers_chain() {
     let mut builder = f.build(true, int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let one = builder.push(int_const(1), int, at(3));
-    let closure = builder.push(Op::MakeClosure { body: callee, captures: vec![one] }, lambda_ty, at(4));
+    let closure = builder.push(Op::MakeClosure { bodies: vec![callee], captures: vec![one] }, lambda_ty, at(4));
     let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a] };
     let r = builder.push_effect(call, int, at(5));
     builder.push_effect(after_call, int, at(6));
@@ -2223,7 +2223,7 @@ fn inline_joins_every_return_of_the_callee_at_the_continuation() {
     let mut builder = f.build(false, int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
-    let closure = builder.push(Op::MakeClosure { body: callee, captures: Vec::new() }, lambda_ty, at(2));
+    let closure = builder.push(Op::MakeClosure { bodies: vec![callee], captures: Vec::new() }, lambda_ty, at(2));
     let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a, c] };
     let r = builder.push(call, int, at(3));
     let sum = builder.push(add(r, a), int, at(4));
@@ -2266,7 +2266,7 @@ fn inline_refuses_a_callee_without_a_body_and_the_callers_own_body() {
     let mut builder = f.build(false, int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
     builder.push(direct, int, at(1));
-    let closure = builder.push(Op::MakeClosure { body: own, captures: Vec::new() }, lambda_ty, at(2));
+    let closure = builder.push(Op::MakeClosure { bodies: vec![own], captures: Vec::new() }, lambda_ty, at(2));
     let call = Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: Vec::new() };
     builder.push(call, int, at(3));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -2502,7 +2502,7 @@ fn a_cursor_yields_each_instruction_once_through_an_inline() {
     let mut builder = f.build(false, int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let one = builder.push(int_const(1), int, at(2));
-    let closure = builder.push(Op::MakeClosure { body: callee, captures: vec![one] }, lambda_ty, at(3));
+    let closure = builder.push(Op::MakeClosure { bodies: vec![callee], captures: vec![one] }, lambda_ty, at(3));
     let r = builder.push(Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a] }, int, at(4));
     let s = builder.push(add(r, r), int, at(5));
     builder.terminate(ret(s), acvus_ast::Span::ZERO);

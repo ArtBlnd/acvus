@@ -252,6 +252,19 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
         Op::Intrinsic { intrinsic: Intrinsic::StringClone, .. } => panic!("`StringClone` is no `Op::Intrinsic`: `Intrinsic` states no arguments for it"),
         Op::MakeVariant { payload, .. } => operands.extend(payload.iter().map(|payload| passed(*payload))),
         Op::MakeClosure { captures, .. } => operands.extend(captures.iter().map(|capture| passed(*capture))),
+        // Kept at some signatures over the same environment, a closure is
+        // read where every signature may be called many times, and taken
+        // where one is called once (functions §3).
+        Op::Specialize { closure, .. } => operands.push(match types.kind(ty(*closure)) {
+            TyKind::Closures(signatures) => {
+                let once = signatures.iter().any(|signature| matches!(types.kind(*signature), TyKind::Fn { calls: Calls::Once, .. }));
+                match once {
+                    true => taken(*closure, Taken::Moved),
+                    false => read(*closure),
+                }
+            }
+            other => panic!("a specialized value is a closure of signatures, not {other:?}"),
+        }),
         Op::TestLiteral { src, .. } | Op::TestObjectKey { src, .. } | Op::TestVariant { src, .. } | Op::SliceLen { src } => {
             operands.push(read(*src))
         }

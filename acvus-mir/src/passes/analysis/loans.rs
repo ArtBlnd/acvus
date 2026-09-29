@@ -896,6 +896,9 @@ impl Forward<'_> {
             Op::MakeClosure { captures, .. } => {
                 vec![captures.iter().flat_map(|capture| fold(&self.value(state, *capture))).collect()]
             }
+            // The same environment at fewer signatures: its one position
+            // holds what the closure's does.
+            Op::Specialize { closure, .. } => vec![fold(&self.value(state, *closure))],
             Op::FunctionCall { callee, callee_ty, args } => self.call(state, callee, *callee_ty, args),
             Op::Spawn { callee, callee_ty, args } => {
                 let held: LoanSet = args
@@ -1177,6 +1180,7 @@ impl Forward<'_> {
             | Op::ArrayIndex { .. }
             | Op::ObjectGet { .. }
             | Op::MakeClosure { .. }
+            | Op::Specialize { .. }
             | Op::MakeVariant { .. }
             | Op::TestVariant { .. }
             | Op::UnwrapVariant { .. }

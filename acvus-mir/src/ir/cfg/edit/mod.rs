@@ -1247,7 +1247,12 @@ where
         let Def::Inst(made) = body.def_of(*function) else {
             return Err(CannotInline::NoBody);
         };
-        let Op::MakeClosure { body: callee_body, captures } = body.inst(made).op() else {
+        // A closure of one body is that body; one of several is chosen only
+        // through a `Specialize`, whose code this does not follow.
+        let Op::MakeClosure { bodies, captures } = body.inst(made).op() else {
+            return Err(CannotInline::NoBody);
+        };
+        let [callee_body] = &bodies[..] else {
             return Err(CannotInline::NoBody);
         };
         if *callee_body == self.body {

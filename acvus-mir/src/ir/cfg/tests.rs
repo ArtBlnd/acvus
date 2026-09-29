@@ -1001,7 +1001,7 @@ fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
         inner.terminate(ret(sum), acvus_ast::Span::ZERO);
         inner.seal().expect("the lambda's body has no open state")
     };
-    let closure = outer.push(Op::MakeClosure { body: lambda, captures: vec![k] }, lambda_ty, at(3));
+    let closure = outer.push(Op::MakeClosure { bodies: vec![lambda], captures: vec![k] }, lambda_ty, at(3));
     let called = outer.push(
         Op::FunctionCall { callee: Callee::Indirect(closure), callee_ty: lambda_ty, args: vec![a] },
         int,
@@ -1016,7 +1016,7 @@ fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
     let entry = f.body(enclosing).entry();
     assert!(matches!(
         f.body(enclosing).block(entry).insts().nth(1).expect("the block holds that instruction").op(),
-        Op::MakeClosure { body, .. } if *body == lambda
+        Op::MakeClosure { bodies, .. } if bodies[..] == [lambda]
     ));
 }
 

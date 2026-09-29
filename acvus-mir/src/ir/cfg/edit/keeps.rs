@@ -340,8 +340,32 @@ impl TypeCheck<'_> {
                 self.is(*src, |kind| CastTy::of_kind(kind).is_some(), "an integer width, f64, char or bool")?;
                 self.is(Self::result(inst)?, |kind| CastTy::of_kind(kind) == Some(*to), "the cast's target")
             }
-            Op::LoadFunction { .. } | Op::MakeClosure { .. } => {
-                self.is(Self::result(inst)?, |kind| matches!(kind, TyKind::Fn { .. }), "a function")
+            Op::LoadFunction { .. } => self.is(Self::result(inst)?, |kind| matches!(kind, TyKind::Fn { .. }), "a function"),
+            // One body at a function type, or one per signature, in order,
+            // at a `Closures` type (functions §2).
+            Op::MakeClosure { bodies, .. } => self.is(
+                Self::result(inst)?,
+                |kind| match kind {
+                    TyKind::Fn { .. } => bodies.len() == 1,
+                    TyKind::Closures(signatures) => signatures.len() == bodies.len(),
+                    _ => false,
+                },
+                "a function of one body, or a closure of one body per signature",
+            ),
+            // The closure kept at some of its signatures: a function type
+            // for one, and a closure of those, in order, otherwise.
+            Op::Specialize { closure, signatures } => {
+                let TyKind::Closures(has) = self.kind(self.ty(*closure)) else {
+                    return Err(format!("{closure:?} is no closure of signatures"));
+                };
+                found(signatures.iter().all(|signature| has.contains(signature)), || {
+                    format!("{closure:?} has no code at some of {signatures:?}")
+                })?;
+                let result = Self::result(inst)?;
+                match &signatures[..] {
+                    [one] => self.same(result, *one, "the one signature"),
+                    _ => self.is(result, |kind| matches!(kind, TyKind::Closures(kept) if kept[..] == signatures[..]), "a closure of the signatures kept"),
+                }
             }
             Op::FunctionCall { callee, callee_ty, args } | Op::Spawn { callee, callee_ty, args } => {
                 let TyKind::Fn { params, ret, .. } = self.kind(*callee_ty) else {
