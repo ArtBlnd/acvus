@@ -10,6 +10,7 @@
 mod bound;
 mod cells;
 mod closed;
+mod copy;
 mod freeze;
 mod relate;
 mod scheme;
