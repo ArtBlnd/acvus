@@ -89,7 +89,7 @@ fn known_arms(body: &Body, constants: &SparseFacts<ConstantDomain>) -> Vec<(Bloc
             | Terminator::For { .. }
             | Terminator::While { .. }
             | Terminator::Return { .. }
-            | Terminator::Diverge | Terminator::NoArmMatched { .. } => None,
+            | Terminator::Diverge => None,
         })
         .collect()
 }
