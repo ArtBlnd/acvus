@@ -1455,6 +1455,26 @@ fn a_clone_of_the_empty_array_waits_then_copies() {
     assert_eq!(checked.kind(*element), &TyKind::Never);
 }
 
+/// ownership §1, types §6, D108: whether `(&(T,), i64)` copies reads its
+/// structural parts, and not what the reference names past its head, so
+/// its clone fires and copies while `T` is open. Here nothing ever answers
+/// `T`, which is refused alone; the clone is not left undecided.
+#[test]
+fn a_clone_reads_structural_parts_and_copies_past_an_open_reference_target() {
+    let mut fx = Fixture::new();
+    let open = fx.var(0);
+    let target = fx.ty(TyKind::Tuple(Box::new([open])));
+    let reference = fx.reference(Mutability::Shared, target);
+    let make = fx.pure(&[], reference);
+    fx.declare("make", make, &[TyVarBound::Settled]);
+    let (checked, script) = fx.script("(make(), 1).clone()");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::BoundUnanswered]);
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a method call");
+    };
+    assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
+}
+
 /// ownership §1: a `[i64; 2]`'s `.clone()` copies it, with no impl.
 #[test]
 fn a_clone_of_an_array_that_copies_copies_it() {

@@ -31,6 +31,7 @@ use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
+use crate::ty::structural::structure;
 use crate::ty::{
     CastTy, EffectTerm, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
 };
@@ -191,7 +192,7 @@ pub(super) enum Decision {
 pub(super) enum Depth {
     /// The head alone.
     Head,
-    /// The type all the way down: every type within it.
+    /// The head and every structural part, recursively.
     Whole,
 }
 
@@ -412,7 +413,7 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
 }
 
 /// The terms `depth` reads of `term`: `term` itself, and for `Whole` every
-/// type within it, as far as its heads are known.
+/// structural part of it, recursively, as far as its heads are known.
 fn within(cx: &Ctxt<'_>, term: Term, depth: Depth) -> Vec<Term> {
     let mut read = vec![term];
     if depth == Depth::Head {
@@ -425,10 +426,13 @@ fn within(cx: &Ctxt<'_>, term: Term, depth: Depth) -> Vec<Term> {
         if !seen.insert(at) {
             continue;
         }
-        cx.infer.types().kind(at).for_each_child(|child| {
-            read.push(child);
-            stack.push(child);
-        });
+        let Some(structure) = structure(cx.infer.types(), at) else {
+            continue;
+        };
+        for part in structure.parts() {
+            read.push(part);
+            stack.push(part);
+        }
     }
     read
 }
