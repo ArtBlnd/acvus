@@ -2956,3 +2956,81 @@ fn a_binding_used_once_is_one_instance() {
     checked.admitted();
     assert_eq!(checked.typeck.instances.len(), 1);
 }
+
+// as_ref and as_mut (operators §2)
+
+/// operators §2: `as_ref` lends each part of a transparent structured
+/// value `&`, one level: the receiver is taken by `&`, and the result is
+/// the structure rebuilt of references, an inner structure a `&` itself.
+#[test]
+fn as_ref_lends_each_part_one_level() {
+    let cases: [(&str, &dyn Fn(&Checked, Ty) -> bool); 7] = [
+        ("let p = (1, true); let r = p.as_ref(); 0", &|checked, ty| {
+            matches!(checked.kind(ty), TyKind::Tuple(items, ()) if items.len() == 2 && items.iter().all(|item| matches!(checked.kind(*item), TyKind::Ref(Mutability::Shared, _))))
+        }),
+        ("let p = { a: 1, b: true, }; let r = p.as_ref(); 0", &|checked, ty| {
+            matches!(checked.kind(ty), TyKind::Object(ObjectTy::Structural(fields, ())) if fields.iter().all(|(_, field)| matches!(checked.kind(*field), TyKind::Ref(Mutability::Shared, _))))
+        }),
+        ("let o = Some(1); let r = o.as_ref(); 0", &|checked, ty| {
+            matches!(checked.kind(ty), TyKind::Option(payload, ()) if matches!(checked.kind(*payload), TyKind::Ref(Mutability::Shared, _)))
+        }),
+        ("let o = if true { Ok(1) } else { Err(true) }; let r = o.as_ref(); 0", &|checked, ty| {
+            matches!(checked.kind(ty), TyKind::Result(ok, err, ()) if [ok, err].iter().all(|part| matches!(checked.kind(**part), TyKind::Ref(Mutability::Shared, _))))
+        }),
+        ("let c = Color::Red(1); let r = c.as_ref(); 0", &|checked, ty| {
+            matches!(checked.kind(ty), TyKind::Enum { variants, .. } if variants.iter().all(|(_, payload)| payload.is_some_and(|payload| matches!(checked.kind(payload), TyKind::Ref(Mutability::Shared, _)))))
+        }),
+        ("let a = [1, 2]; let r = a.as_ref(); 0", &|checked, ty| {
+            matches!(checked.kind(ty), TyKind::Array(element, len, ()) if crate::ir::known_len(len) == 2 && matches!(checked.kind(*element), TyKind::Ref(Mutability::Shared, _)))
+        }),
+        ("let p = ((1, true), 2); let r = p.as_ref(); 0", &|checked, ty| {
+            let TyKind::Tuple(items, ()) = checked.kind(ty) else { return false };
+            matches!(checked.kind(items[0]), TyKind::Ref(Mutability::Shared, inner) if matches!(checked.kind(inner.ty()), TyKind::Tuple(..)))
+        }),
+    ];
+    for (source, fits) in cases {
+        let fx = Fixture::new();
+        let names = fx.names.clone();
+        let (checked, script) = fx.script(source);
+        checked.admitted();
+        assert!(fits(&checked, binding(&checked, &script, &names, "r")), "{source}: {:?}", checked.kind(binding(&checked, &script, &names, "r")));
+    }
+}
+
+/// operators §2, types §4: `as_mut` lends each part `&mut`; under
+/// `as_ref`, a `&mut` part is read shared.
+#[test]
+fn as_mut_lends_mut_and_a_mut_part_under_as_ref_reads_shared() {
+    let fx = Fixture::new();
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let p = (1, true); let r = p.as_mut(); 0");
+    checked.admitted();
+    let TyKind::Tuple(items, ()) = checked.kind(binding(&checked, &script, &names, "r")) else {
+        panic!("a tuple of references");
+    };
+    assert!(items.iter().all(|item| matches!(checked.kind(*item), TyKind::Ref(Mutability::Mut, _))));
+
+    let fx = Fixture::new();
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let a = 1; let p = (&mut a, 2); let r = p.as_ref(); 0");
+    checked.admitted();
+    let TyKind::Tuple(items, ()) = checked.kind(binding(&checked, &script, &names, "r")) else {
+        panic!("a tuple of references");
+    };
+    let TyKind::Ref(Mutability::Shared, target) = checked.kind(items[0]) else {
+        panic!("the `&mut` part is reborrowed shared: {:?}", checked.kind(items[0]));
+    };
+    assert!(is_int(&checked, target.ty(), IntTy::I64));
+}
+
+/// operators §2: `as_mut` through a `&` lends no `&mut`, and a value that
+/// is no transparent structured type has no parts to lend.
+#[test]
+fn as_mut_through_a_shared_reference_and_as_ref_of_a_primitive_are_refused() {
+    let (checked, _) = Fixture::new().script("let p = (1, 2); let q = &p; let r = q.as_mut(); 0");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::MutLendThroughShared { .. }]), "{:?}", checked.refusals());
+    for source in ["let x = 1; let y = &x; let r = y.as_ref(); 0", "let x = 1; let r = x.as_ref(); 0"] {
+        let (checked, _) = Fixture::new().script(source);
+        assert!(matches!(checked.refusals()[..], [RefusalKind::LendsNoParts { .. }]), "{source}: {:?}", checked.refusals());
+    }
+}
