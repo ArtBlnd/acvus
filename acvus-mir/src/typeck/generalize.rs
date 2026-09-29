@@ -70,6 +70,17 @@ pub(super) struct Settled {
     pub requirements: Box<[Decision]>,
 }
 
+/// A settled scheme copied into a store of its own (typeck::Interface):
+/// its function type, what it generalizes and its requirements, each a
+/// term of that store. Instantiating one copies from that store into the
+/// instantiating check's, the same instantiation as a scheme of the check's
+/// own, whose source store is the check's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Exported {
+    pub term: Term,
+    pub settled: Settled,
+}
+
 /// The generalized variables, by kind: every kind a type states
 /// (functions §2). What a function value's captures hold, how often it
 /// may be called and its flows are decided where it is written, not per

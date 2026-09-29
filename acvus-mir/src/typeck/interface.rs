@@ -4,38 +4,42 @@
 use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
-use crate::decl::Scheme;
-use crate::ty::{Poly, Types};
+use crate::infer::Infer;
 
-/// What another unit sees of a unit: its scheme, of the form of an extern
-/// fn's declaration, its parameter names the inputs' names. Its types are
-/// inferred within the unit alone, and a call only instantiates them
+/// What another unit sees of a unit: its scheme, generalized exactly as a
+/// function value bound by `let` is (functions §2), with its parameters
+/// the inputs by name. A unit is a function whose environment is empty, so
+/// it and a let-bound function value are one generalization: its function
+/// type over the variables it generalizes, and every decision its body
+/// could not make, each a requirement made again at each call. Its types
+/// are inferred within the unit alone, and a call only instantiates them
 /// (programs §1, §2; types §1).
-#[derive(Debug, Clone, PartialEq)]
+///
+/// A check's terms live in its own store, and a unit is checked apart from
+/// its callers, so the scheme is kept in a store of its own: the terms it
+/// reaches, copied out of the unit's check when it is settled. A call
+/// instantiates it by the one instantiation a let-bound scheme has, copying
+/// from that store into the caller's. Two interfaces are equal when their
+/// schemes are, variables compared by the order they are first reached.
 pub struct Interface {
-    pub scheme: Scheme,
+    /// The scheme's terms, and nothing else.
+    pub store: Infer,
+    /// The parameter names, in the order of the function type's parameters.
+    pub params: Box<[acvus_utils::Astr]>,
+    /// The scheme in `store`: its function type, what it generalizes, and
+    /// its requirements.
+    pub scheme: super::generalize::Exported,
 }
 
-/// The interfaces a check's calls may reach, by each unit's whole name,
-/// and the one table their schemes' types are in.
+/// The interfaces a check's calls may reach, by each unit's whole name.
 #[derive(Default)]
 pub struct Interfaces {
-    types: Types<Poly>,
     units: FxHashMap<QualifiedRef, Interface>,
 }
 
 impl Interfaces {
     pub fn new() -> Interfaces {
         Interfaces::default()
-    }
-
-    pub fn types(&self) -> &Types<Poly> {
-        &self.types
-    }
-
-    /// The table an interface's scheme is written in before it is set.
-    pub fn types_mut(&mut self) -> &mut Types<Poly> {
-        &mut self.types
     }
 
     /// Sets the interface of the unit at `unit`, replacing any it had.

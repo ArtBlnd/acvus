@@ -150,18 +150,14 @@ fn enter_inputs(cx: &mut Ctxt<'_>, types: &Types<Concrete>, inputs: Inputs<'_>) 
     }
 }
 
-/// The run with its inputs open, generalized into its interface.
-///
-/// # Panics
-/// Always where `open`: how the run's open decisions become its scheme is
-/// not settled, so the open check stops here.
+/// The run with its inputs open, generalized into its interface: the run
+/// is a function value whose body is here and whose environment is empty,
+/// registered as a scheme like a `let`-bound one and settled by the same
+/// `generalize_all`, then exported into a store of its own
+/// (`generalize::Exported`, `Interface`).
 fn generalize_run(open: bool) {
     if open {
-        todo!(
-            "generalizing a run into its interface: a decision still open over a generalized variable has a \
-             `decl::Requirement` form only where it is a reach of one generic function, and whether a default \
-             applies before generalizing is not settled"
-        );
+        todo!("the cut: the run is one scheme, settled as a let-bound one and exported")
     }
 }
 

@@ -5,10 +5,15 @@
 //! - A `Unit` is a script or a template (a module is to-be): one function
 //!   at a `QualifiedRef` the embedding gives. Its inputs `$name` are its
 //!   parameters, passed by name (programs §1, §2, §4).
-//! - Its `Interface` is its scheme, of the same form as an extern fn's
-//!   declaration (`decl::Scheme`, parameter names the inputs' names), which
-//!   is all another unit sees of it: its types are inferred within the unit
-//!   alone, and a call only instantiates them (transparency, types §1).
+//! - Its `Interface` is its scheme, generalized exactly as a function value
+//!   bound by `let` is (functions §2): a unit is a function whose
+//!   environment is empty, so the two are one generalization. It is all
+//!   another unit sees of it: its function type over what it generalizes,
+//!   its parameters the inputs by name, and every decision its body could
+//!   not make as a requirement made again at each call. Its types are
+//!   inferred within the unit alone, and a call only instantiates them
+//!   (transparency, types §1). It is kept in a store of its own, since a
+//!   unit is checked apart from its callers.
 //! - An `Instantiation` is a unit at types for its parameters and result:
 //!   the scheme instantiated.
 //! - An entry is a host-declared function a run may start at, with the
