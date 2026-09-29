@@ -9,7 +9,7 @@ use crate::nesting::{Level, Nested};
 use crate::parser::{
     BindLine, Declares, ForLine, Recover, binary, block_closed, build_assign, build_call,
     expr_stmt, fn_declared, holding_one, holding_two, let_bind, literal_of, match_arm,
-    object_field, paren_or_tuple, pattern_of, recovered, resumed, stated,
+    object_field, paren_or_tuple, pattern_of, qualified_name, recovered, resumed, stated,
 };
 use crate::literal::{self, IntWidth, SuffixedInt};
 
@@ -205,7 +205,7 @@ ArmPattern: Nested<Pattern<S>> = {
 };
 
 PatternRule: Nested<Pattern<S>> = {
-    <e:Expr> =>? pattern_of::<S>(errors, &e.root()),
+    <e:Expr> =>? pattern_of::<S>(interner, errors, &e.root()),
     <node:Unparsed> => Nested::leaf(Pattern::Error(node)),
 };
 
@@ -556,7 +556,7 @@ CalleeExpr<Lead>: Nested<Expr<S>> = {
         level.node(Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver, name, name_span: Span::new(nl, nr), args, span }, span)
     },
     <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>?
-        build_call(func, args, Span::new(l, r)),
+        build_call(interner, func, args, Span::new(l, r)),
     Lead,
 };
 
@@ -581,6 +581,8 @@ PlainPrimary: Nested<Expr<S>> = {
     // postfix — `?` included — follows a qualified call.
     <l:@L> <ename:"ident"> "::" <tag:"ident"> <r:@R> =>
         Nested::leaf(Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) }),
+    <l:@L> <first:"ident"> <inner:("::" <"ident">)+> "::" <name:"ident"> <r:@R> =>
+        Nested::leaf(qualified_name(interner, first, inner, name, Span::new(l, r))),
     <l:@L> <name:"ident"> <r:@R> =>
         Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::Value, span: Span::new(l, r) }),
     <l:@L> <name:"$ref"> <r:@R> =>

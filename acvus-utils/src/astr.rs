@@ -114,6 +114,45 @@ impl std::fmt::Debug for Astr {
 }
 
 // ---------------------------------------------------------------------------
+// Namespace - interned path of names (4 bytes, Copy)
+// ---------------------------------------------------------------------------
+
+/// A path of names, interned: two namespaces of one interner are equal
+/// exactly when their paths are. Ids are given in the order paths are first
+/// interned, the empty path first, so the order is the same on every run
+/// that interns the same paths in the same order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Namespace {
+    id: u32,
+}
+
+impl Namespace {
+    /// The empty path. Every interner interns it first, at this id.
+    pub const ROOT: Namespace = Namespace { id: 0 };
+
+    pub fn is_root(self) -> bool {
+        self == Self::ROOT
+    }
+}
+
+struct NamespaceTable {
+    paths: Vec<Box<[Astr]>>,
+    lookup: FxHashMap<Box<[Astr]>, u32>,
+}
+
+impl NamespaceTable {
+    fn new() -> Self {
+        let root: Box<[Astr]> = Box::new([]);
+        let mut lookup = FxHashMap::default();
+        lookup.insert(root.clone(), Namespace::ROOT.id);
+        Self {
+            paths: vec![root],
+            lookup,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shard - single partition of the interner
 // ---------------------------------------------------------------------------
 
@@ -139,6 +178,7 @@ impl Shard {
 
 struct ShardedInner {
     shards: Vec<RwLock<Shard>>,
+    namespaces: RwLock<NamespaceTable>,
 }
 
 impl ShardedInner {
@@ -147,7 +187,10 @@ impl ShardedInner {
         for _ in 0..SHARD_COUNT {
             shards.push(RwLock::new(Shard::new()));
         }
-        Self { shards }
+        Self {
+            shards,
+            namespaces: RwLock::new(NamespaceTable::new()),
+        }
     }
 
     fn shard_for(s: &str) -> usize {
@@ -257,6 +300,45 @@ impl Interner {
         unsafe { &*(s as *const str) }
     }
 
+    /// Intern a path of names, returning its namespace; the empty path is
+    /// `Namespace::ROOT`.
+    ///
+    /// # Panics
+    /// Panics if a segment was created by a different Interner.
+    pub fn namespace(&self, path: &[Astr]) -> Namespace {
+        for segment in path {
+            assert_eq!(
+                segment.interner_id, self.id,
+                "Namespace segment interner mismatch: expected {}, got {}",
+                self.id, segment.interner_id
+            );
+        }
+        if let Some(&id) = self.inner.namespaces.read().lookup.get(path) {
+            return Namespace { id };
+        }
+        let mut table = self.inner.namespaces.write();
+        if let Some(&id) = table.lookup.get(path) {
+            return Namespace { id };
+        }
+        let id = u32::try_from(table.paths.len()).expect("namespace id overflow");
+        let path: Box<[Astr]> = path.into();
+        table.paths.push(path.clone());
+        table.lookup.insert(path, id);
+        Namespace { id }
+    }
+
+    /// The path `namespace` was interned from.
+    ///
+    /// # Panics
+    /// Panics if `namespace` is no namespace this Interner interned.
+    pub fn path(&self, namespace: Namespace) -> Vec<Astr> {
+        let table = self.inner.namespaces.read();
+        let Some(path) = table.paths.get(namespace.id as usize) else {
+            panic!("Namespace {} was not interned by interner {}", namespace.id, self.id);
+        };
+        path.to_vec()
+    }
+
     /// Get the interner's unique id.
     pub fn id(&self) -> u32 {
         self.id.get()
@@ -335,6 +417,48 @@ mod tests {
         assert_eq!(i2.resolve(a), "shared");
         let b = i2.intern("new");
         assert_eq!(i1.resolve(b), "new");
+    }
+
+    #[test]
+    fn a_path_is_one_namespace_and_back() {
+        let interner = Interner::new();
+        let [a, b] = ["a", "b"].map(|name| interner.intern(name));
+        let ab = interner.namespace(&[a, b]);
+
+        assert_eq!(interner.namespace(&[a, b]), ab);
+        assert_ne!(interner.namespace(&[b, a]), ab);
+        assert_ne!(interner.namespace(&[a]), ab);
+        assert_eq!(interner.path(ab), vec![a, b]);
+    }
+
+    #[test]
+    fn the_empty_path_is_the_root() {
+        let interner = Interner::new();
+        let root = interner.namespace(&[]);
+
+        assert_eq!(root, Namespace::ROOT);
+        assert!(root.is_root());
+        assert!(!interner.namespace(&[interner.intern("a")]).is_root());
+        assert_eq!(interner.path(Namespace::ROOT), Vec::new());
+    }
+
+    #[test]
+    fn namespaces_are_ordered_by_first_interning() {
+        let interner = Interner::new();
+        let [a, b] = ["a", "b"].map(|name| interner.intern(name));
+        let first = interner.namespace(&[b]);
+        let second = interner.namespace(&[a]);
+
+        assert!(Namespace::ROOT < first);
+        assert!(first < second);
+    }
+
+    #[test]
+    #[should_panic(expected = "Namespace segment interner mismatch")]
+    fn a_segment_of_another_interner_panics() {
+        let i1 = Interner::new();
+        let i2 = Interner::new();
+        i2.namespace(&[i1.intern("a")]);
     }
 
     #[test]

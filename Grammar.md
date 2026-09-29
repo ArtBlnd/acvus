@@ -406,9 +406,9 @@ PostfixExpr  = PostfixExpr "." IDENT       ← field access
              | PrimaryExpr
 ```
 
-A qualified name is a primary (below), not a level of its own, so every
-postfix follows a qualified call: `i64::from_str(s)?`, `E::f(x).g`,
-`E::f(x)[0]`.
+A qualified name is `IDENT ("::" IDENT)+`, a primary (below), not a level
+of its own, so every postfix follows a qualified call: `i64::from_str(s)?`,
+`E::f(x).g`, `E::f(x)[0]`, `a::b::f(x)?`.
 
 `a[i]` is a place, as `a.f` is: `&a[i]`, `a[i][j]`, `a[i].f`, `a[i]` as a
 method receiver, and `a[i] = v` on the left of an assignment. The index is
@@ -433,6 +433,13 @@ PrimaryExpr  = IDENT                       ← identifier (value binding)
              | IDENT "::" IDENT            ← qualified name: `Enum::Tag`, or a
                                              call's callee — which of the two
                                              it is, the checker settles
+             | IDENT ("::" IDENT) ("::" IDENT)+
+                                           ← qualified name: `a::b::f`, the
+                                             last segment the name and the
+                                             others its namespace; an enum's
+                                             name has no namespace, so no
+                                             variant is written with more
+                                             than two segments
              | "$" IDENT                   ← extern parameter (immutable, injected)
              | "@" IDENT                   ← context reference (mutable storage)
              | INT                         ← integer literal

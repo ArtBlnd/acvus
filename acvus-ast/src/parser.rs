@@ -1309,11 +1309,30 @@ pub(crate) fn paren_or_tuple<S>(
     level.node(expr, span)
 }
 
+/// `a::b::f`, a name of three or more segments: `name` is the last, and the
+/// others are its namespace.
+pub(crate) fn qualified_name<S>(
+    interner: &Interner,
+    first: Astr,
+    inner: Vec<Astr>,
+    name: Astr,
+    span: Span,
+) -> Expr<S> {
+    let path: Vec<Astr> = std::iter::once(first).chain(inner).collect();
+    Expr::Ident {
+        id: AstId::alloc(),
+        name: QualifiedRef::qualified(interner.namespace(&path), name),
+        ref_kind: RefKind::Value,
+        span,
+    }
+}
+
 /// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
 /// The callee covers `ns::f`, where the name is written, and not the call.
 pub(crate) fn build_call<S>(
+    interner: &Interner,
     func: Nested<Expr<S>>,
     args: Vec<Nested<Expr<S>>>,
     span: Span,
@@ -1328,7 +1347,7 @@ pub(crate) fn build_call<S>(
             ..
         } => Expr::Ident {
             id: AstId::alloc(),
-            name: QualifiedRef::qualified(namespace, tag),
+            name: QualifiedRef::qualified(interner.namespace(&[namespace]), tag),
             ref_kind: RefKind::Value,
             span: name_span,
         },
@@ -1348,16 +1367,30 @@ pub(crate) fn build_call<S>(
 
 /// Convert an expression (parsed from the LHS of `=`) to a pattern.
 pub(crate) fn pattern_of<S>(
+    interner: &Interner,
     errors: &mut Vec<ParseError>,
     expr: &Expr<S>,
 ) -> Result<Nested<Pattern<S>>, GrammarError>
 where
     S: Recover,
 {
-    acvus_utils::grow(|| pattern_of_node(errors, expr))
+    acvus_utils::grow(|| pattern_of_node(interner, errors, expr))
+}
+
+/// The enum name of a call's qualified callee, where the callee is
+/// `Enum::Tag`: a namespace of one segment.
+fn enum_name_of_callee<S>(interner: &Interner, func: &Expr<S>) -> Option<Astr> {
+    let Expr::Ident { name, .. } = func else {
+        return None;
+    };
+    match interner.path(name.namespace)[..] {
+        [enum_name] => Some(enum_name),
+        _ => None,
+    }
 }
 
 fn pattern_of_node<S>(
+    interner: &Interner,
     errors: &mut Vec<ParseError>,
     expr: &Expr<S>,
 ) -> Result<Nested<Pattern<S>>, GrammarError>
@@ -1371,7 +1404,7 @@ where
             ref_kind,
             span,
             ..
-        } => Pattern::Binding {
+        } if name.namespace.is_root() => Pattern::Binding {
             id: AstId::alloc(),
             name: name.name,
             ref_kind: *ref_kind,
@@ -1395,9 +1428,9 @@ where
             ..
         } => Pattern::List {
             id: AstId::alloc(),
-            head: patterns_of(errors, &mut level, head)?,
+            head: patterns_of(interner, errors, &mut level, head)?,
             rest: *rest,
-            tail: patterns_of(errors, &mut level, tail)?,
+            tail: patterns_of(interner, errors, &mut level, tail)?,
             span: *span,
         },
         Expr::Object { fields, span, .. } => {
@@ -1406,7 +1439,7 @@ where
                 pattern_fields.push(ObjectPatternField {
                     id: AstId::alloc(),
                     key: field.key,
-                    pattern: level.take(pattern_of(errors, &field.value)?),
+                    pattern: level.take(pattern_of(interner, errors, &field.value)?),
                     span: field.span,
                 });
             }
@@ -1422,7 +1455,7 @@ where
                 elems.push(match elem {
                     TupleElem::Wildcard(s) => TuplePatternElem::Wildcard(*s),
                     TupleElem::Expr(e) => {
-                        TuplePatternElem::Pattern(level.take(pattern_of(errors, e)?))
+                        TuplePatternElem::Pattern(level.take(pattern_of(interner, errors, e)?))
                     }
                 });
             }
@@ -1436,25 +1469,17 @@ where
         // pattern it is the variant.
         Expr::FuncCall {
             func, args, span, ..
-        } if matches!(
-            func.as_ref(),
-            Expr::Ident {
-                name: QualifiedRef {
-                    namespace: Some(_),
-                    ..
-                },
-                ..
-            }
-        ) && args.len() == 1 =>
+        } if let Some(enum_name) = enum_name_of_callee(interner, func)
+            && let [payload] = &args[..] =>
         {
             let Expr::Ident { name, .. } = func.as_ref() else {
-                unreachable!("matched above")
+                unreachable!("enum_name_of_callee reads only a name")
             };
             Pattern::Variant {
                 id: AstId::alloc(),
-                enum_name: name.namespace,
+                enum_name: Some(enum_name),
                 tag: name.name,
-                payload: Some(level.boxed(pattern_of(errors, &args[0])?)),
+                payload: Some(level.boxed(pattern_of(interner, errors, payload)?)),
                 span: *span,
             }
         }
@@ -1466,7 +1491,7 @@ where
             ..
         } => {
             let pat_payload = match payload {
-                Some(inner) => Some(level.boxed(pattern_of(errors, inner)?)),
+                Some(inner) => Some(level.boxed(pattern_of(interner, errors, inner)?)),
                 None => None,
             };
             Pattern::Variant {
@@ -1495,6 +1520,7 @@ where
 }
 
 fn patterns_of<S>(
+    interner: &Interner,
     errors: &mut Vec<ParseError>,
     level: &mut Level,
     exprs: &[Expr<S>],
@@ -1504,7 +1530,7 @@ where
 {
     exprs
         .iter()
-        .map(|expr| Ok(level.take(pattern_of(errors, expr)?)))
+        .map(|expr| Ok(level.take(pattern_of(interner, errors, expr)?)))
         .collect()
 }
 #[cfg(test)]
@@ -2228,7 +2254,7 @@ mod tests {
         let Expr::Ident { name, .. } = func.as_ref() else {
             panic!("expected a qualified name as the callee");
         };
-        assert_eq!(name.namespace.map(|ns| interner.resolve(ns)), Some("i64"));
+        assert_eq!(name.namespace, interner.namespace(&[interner.intern("i64")]));
         assert_eq!(interner.resolve(name.name), "from_str");
 
         for src in [
@@ -2239,6 +2265,82 @@ mod tests {
             "let n = E::Tag; n",
         ] {
             parse_script(&interner, src).unwrap();
+        }
+    }
+
+    /// `a::b::c` is a name only: its namespace is every segment but the
+    /// last, standing alone or as a callee.
+    #[test]
+    fn three_segments_are_a_name_in_the_namespace_of_all_but_the_last() {
+        let interner = Interner::new();
+        let [a, b, c, f] = ["a", "b", "c", "f"].map(|name| interner.intern(name));
+        let a_b = interner.namespace(&[a, b]);
+
+        let Expr::Ident { name, ref_kind, .. } = parse_expr(&interner, "a::b::c").expect("a name") else {
+            panic!("expected `a::b::c` to be a name");
+        };
+        assert_eq!(name, QualifiedRef::qualified(a_b, c));
+        assert_eq!(ref_kind, RefKind::Value);
+
+        let Expr::FuncCall { func, args, .. } = parse_expr(&interner, "a::b::f(x)").expect("a call") else {
+            panic!("expected `a::b::f(x)` to be a call");
+        };
+        let Expr::Ident { name, ref_kind, .. } = func.as_ref() else {
+            panic!("expected a name as the callee, got {func:?}");
+        };
+        assert_eq!(*name, QualifiedRef::qualified(a_b, f));
+        assert_eq!(*ref_kind, RefKind::Value);
+        assert_eq!(args.len(), 1);
+
+        let four = interner.namespace(&[a, b, c]);
+        let Expr::Ident { name, .. } = parse_expr(&interner, "a::b::c::f").expect("a name") else {
+            panic!("expected `a::b::c::f` to be a name");
+        };
+        assert_eq!(name, QualifiedRef::qualified(four, f));
+    }
+
+    /// Two segments stay what they were: `E::Tag` alone is a variant, and a
+    /// callee of two segments is the name `ns::f`, the checker deciding
+    /// which it is.
+    #[test]
+    fn two_segments_are_a_variant_or_a_callee_of_one_segment_namespace() {
+        let interner = Interner::new();
+        let [e, tag, ns, f] = ["E", "Tag", "ns", "f"].map(|name| interner.intern(name));
+
+        let Expr::Variant { enum_name, tag: written, payload: None, .. } = parse_expr(&interner, "E::Tag").expect("a variant") else {
+            panic!("expected `E::Tag` to be a variant");
+        };
+        assert_eq!((enum_name, written), (Some(e), tag));
+
+        let Expr::FuncCall { func, .. } = parse_expr(&interner, "ns::f(x)").expect("a call") else {
+            panic!("expected `ns::f(x)` to be a call");
+        };
+        let Expr::Ident { name, .. } = func.as_ref() else {
+            panic!("expected a name as the callee, got {func:?}");
+        };
+        assert_eq!(*name, QualifiedRef::qualified(interner.namespace(&[ns]), f));
+    }
+
+    /// A pattern names a variant with two segments, and no variant is
+    /// written with more: `a::b::C(x)` and `a::b::C` are no patterns.
+    #[test]
+    fn a_pattern_is_a_variant_of_two_segments_only() {
+        let interner = Interner::new();
+        let script = parse_script(&interner, "match v { E::Tag(x) => 1, E::Other => 2, _ => 0 }").expect("a match");
+        let Some(Expr::Match { arms, .. }) = script.tail.as_deref() else {
+            panic!("expected a trailing match expression");
+        };
+        let e = interner.intern("E");
+        assert!(matches!(&arms[0].pattern, Pattern::Variant { enum_name: Some(name), payload: Some(_), .. } if *name == e));
+        assert!(matches!(&arms[1].pattern, Pattern::Variant { enum_name: Some(name), payload: None, .. } if *name == e));
+
+        for src in ["match v { a::b::C(x) => 1, _ => 0 }", "match v { a::b::C => 1, _ => 0 }"] {
+            let refused = parse_script(&interner, src).expect_err(src);
+            assert!(
+                refused.errors.iter().any(|error| matches!(error.kind, ParseErrorKind::InvalidPattern(_))),
+                "{src}: {:?}",
+                refused.errors
+            );
         }
     }
 
