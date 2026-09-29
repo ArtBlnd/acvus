@@ -44,7 +44,13 @@ Two object types join at the union of their fields. Two enums of one name join a
 
 ## 3. Subtyping
 
-A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it. Values of one identity keep it; values of two identities meet at their nearest common ancestor that carries no identity, and where there is none, they do not meet. No identity is made to join two others.
+A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it.
+
+An identity is a binding a value's type carries: it never changes, two identities are known to be one or not, and two different identities are never made one. A type carries at most one identity.
+
+Only the compiler makes an identity. A call whose result's type carries an identity its parameters do not give makes a fresh one, one per call site in each instantiation of its body. A declaration may give its result the identity of a parameter, to one value or to several; it never puts two identities into one type.
+
+Values of one identity keep it where they meet; values of two identities meet at their nearest common ancestor that carries no identity, and where there is none, they do not meet.
 
 Type constructors stay invariant: subtyping applies to a value entering a slot, not to a constructor's argument.
 
