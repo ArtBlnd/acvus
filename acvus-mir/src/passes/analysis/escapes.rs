@@ -42,10 +42,7 @@ impl Analysis for Escapes {
 
 fn first_escape(body: &Body, slot: ValueId) -> Option<Site> {
     let mut sites: Vec<Site> = body.users(slot).collect();
-    sites.sort_by_key(|site| match site {
-        Site::Inst(inst) => (body.block_of(*inst).index(), Some(body.index_in_block(*inst))),
-        Site::Term(block) => (block.index(), None),
-    });
+    sites.sort_by(|a, b| body.site_order(*a, *b));
     sites.into_iter().find(|site| !promotable(body, slot, *site))
 }
 

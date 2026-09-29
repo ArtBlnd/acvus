@@ -50,7 +50,8 @@ mod tests;
 ///
 /// Cost per body: `ContentLiveness`' and `Liveness`', one `clone_read` per
 /// place read, and one insertion and one `replace_operand` per value use
-/// cloned, each an edit and, in scope `Value`, a refresh of `EditFacts`.
+/// cloned, each an edit that drops the facts it made stale; a dominance
+/// check computes `Dominators` again only after an edit of the CFG's shape.
 pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
     for body in module.body_ids() {
         clone_place_reads(module, body, am);
@@ -68,8 +69,8 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
 /// page's (context §3). A load is the `Fetch` and the `Assign` of its value
 /// into the context's slot, so that store is offered before the `Fetch`.
 ///
-/// Cost per body: O(instructions) discharges and removals, each a refresh
-/// of `EditFacts` in scope `Discharge`.
+/// Cost per body: O(instructions) discharges and removals, each judged on
+/// `Loans` and `IntervalValues` as the edits before it left them.
 pub fn remove_dead_context_ops(module: &mut Module, am: &mut AnalysisManager<'_>) {
     for body in module.body_ids() {
         remove_dead_context_ops_in(module, body, am);
@@ -106,8 +107,8 @@ pub fn remove_dead_context_ops(module: &mut Module, am: &mut AnalysisManager<'_>
 /// Cost per body: `Liveness`', `ContentLiveness`', O(values · blocks) for
 /// the plan, O(units · (blocks + edges)) for each cut value's units'
 /// liveness, one `split_edge` per edge that ends something, and one
-/// `insert_drop`, `drop_content` or `drop_part` per drop, each a refresh of
-/// `EditFacts`.
+/// `insert_drop`, `drop_content` or `drop_part` per drop, each judged on
+/// `Dominators` and `ContentLiveness` as the drops before it left them.
 ///
 /// # Panics
 /// A parameter is dead where the body or its block starts, where no edge of

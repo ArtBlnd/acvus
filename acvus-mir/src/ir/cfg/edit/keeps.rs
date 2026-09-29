@@ -785,12 +785,14 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
         }
     }
     // A start's token flows on to what its taking yields.
+    let mut taken_yields: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     for (_, block) in body.blocks() {
         for inst in block.insts() {
-            if let (Op::TakeEffect { src }, Some(OrderUse::Take(after))) = (inst.op(), inst.order())
-                && let Some(before) = handles.get(src)
-            {
-                flows.entry(*before).or_default().push(Flow::Yields(after));
+            if let (Op::TakeEffect { src }, Some(OrderUse::Take(after))) = (inst.op(), inst.order()) {
+                taken_yields.entry(*src).or_insert(after);
+                if let Some(before) = handles.get(src) {
+                    flows.entry(*before).or_default().push(Flow::Yields(after));
+                }
             }
         }
     }
@@ -801,7 +803,7 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
             OrderUse::Edge(edge) => Some(edge.after),
             OrderUse::Start(_) => {
                 let handle = inst.result()?;
-                flows_after_take(body, handle)
+                taken_yields.get(&handle).copied()
             }
             OrderUse::Take(_) => None,
         }
@@ -881,14 +883,6 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
         tokens.into_iter().filter(|token| !whole.contains(token) && !merged.contains(token)).collect();
     broken.sort();
     found(broken.is_empty(), || format!("the chain from {broken:?} does not reach the body's return"))
-}
-
-/// The token the taking of the start whose handle is `handle` yields.
-fn flows_after_take(body: &Body, handle: ValueId) -> Option<ValueId> {
-    body.blocks().flat_map(|(_, block)| block.insts()).find_map(|inst| match (inst.op(), inst.order()) {
-        (Op::TakeEffect { src }, Some(OrderUse::Take(after))) if *src == handle => Some(after),
-        _ => None,
-    })
 }
 
 /// Where a token goes on.

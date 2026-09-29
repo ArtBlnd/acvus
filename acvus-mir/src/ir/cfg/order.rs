@@ -106,6 +106,16 @@ impl Body {
         a.order < b.order
     }
 
+    /// How `a` and `b` stand in block order: by their blocks, and within
+    /// one block by place, an instruction before the terminator. Cost: O(1).
+    pub fn site_order(&self, a: Site, b: Site) -> std::cmp::Ordering {
+        let key = |site: Site| match site {
+            Site::Inst(inst) => (self.block_of(inst), self.order_number(inst)),
+            Site::Term(block) => (block, u64::MAX),
+        };
+        key(a).cmp(&key(b))
+    }
+
     /// The place of `id` among its block's instructions, counted from 0.
     /// Cost: O(the instructions before it), for display and tests.
     pub fn index_in_block(&self, id: InstId) -> usize {

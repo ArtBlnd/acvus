@@ -4,8 +4,9 @@
 //!
 //! Form: F0, lowered, in; F1, SSA, out.
 //!
-//! Cost: O(blocks + edges + uses) per slot promoted, and the editor's
-//! refresh of its facts after each promotion.
+//! Cost: O(blocks + edges + uses · log uses) per slot promoted, and
+//! `Escapes` computed again for the next slot where a promotion made it
+//! stale.
 //!
 //! Meaning: a promoted slot is reached through no reference, so its loads
 //! and stores are exactly its values, and the order of effects, whether the

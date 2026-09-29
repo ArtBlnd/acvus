@@ -5,11 +5,12 @@
 //! which removes it where `EditFacts` proves it `NeverRead`: no read of the
 //! storage it writes is reached from it before a write that replaces what it
 //! stored, or before the body's end for the body's own storage (`Loans`).
-//! The facts are refreshed after each removal, so a store whose only reader
+//! A removal drops the facts it made stale, so a store whose only reader
 //! was a removed one is judged on the body as it now stands.
 //!
-//! Cost: O(stores) discharges, each the refresh of `EditFacts`, whose store
-//! proof is O(stores · storages each writes · the body's sites and edges).
+//! Cost: O(stores) discharges; each is judged alone, O(storages it writes ·
+//! the body's sites and edges), on `Loans` and `IntervalValues`, which a
+//! removal before it made stale and the judgement computes again.
 //!
 //! Meaning: a store no read reaches is unobservable, so removing it keeps
 //! the effects, whether the run ends and whether it traps (compilation §1);

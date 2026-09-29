@@ -12,9 +12,10 @@
 //! length no fact bounds stays unproven. A checked bound becomes proven and stays where it
 //! is; a check goes.
 //!
-//! Cost: O(checks) discharges, each the refresh of `EditFacts`, whose
-//! interval engine is O(uses × widened height) and whose check proof is
-//! O(checks · the relations of a slice's impl).
+//! Cost: O(checks) discharges; each is judged alone, O(the relations of a
+//! slice's impl), on `IntervalValues`, O(uses × widened height), and
+//! `Loans`, which a discharge before it made stale and the judgement
+//! computes again.
 //!
 //! Meaning: a check that never fires on any run that reaches it does not
 //! change whether a run traps (compilation §1), and it has no other

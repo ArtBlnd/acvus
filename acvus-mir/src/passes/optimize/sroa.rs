@@ -9,7 +9,8 @@
 //! so a nested structural value splits down to its leaves.
 //!
 //! Cost: O(the fields of the slots' types, nested ones included) splits,
-//! each O(fields × uses of the slot) and the refresh of `EditFacts`.
+//! each O(fields × uses of the slot), and `Escapes` computed again where a
+//! split before it made it stale.
 //!
 //! Meaning: the fields of a structural value are independent places (types
 //! §1), so a field's slot holds exactly what the field held, and every read

@@ -293,8 +293,15 @@ impl Body {
     }
 
     fn remove_block_param(&mut self, block: BlockId, index: usize) {
-        for pred in 0..self.blocks.len() {
-            let pred = BlockId::of_index(pred);
+        let preds: Vec<BlockId> = (0..self.blocks.len()).map(BlockId::of_index).collect();
+        self.remove_block_param_from(block, index, &preds);
+    }
+
+    /// Removes the parameter at `index` of `block`, with its argument on
+    /// every edge into it from `preds`, which hold every block with such an
+    /// edge. Cost: O(the edges of `preds` and the block's parameters).
+    fn remove_block_param_from(&mut self, block: BlockId, index: usize, preds: &[BlockId]) {
+        for pred in preds.iter().copied() {
             let mut dropped: SmallVec<[ValueId; 2]> = SmallVec::new();
             self.blocks[pred.index()]
                 .terminator
@@ -348,10 +355,20 @@ impl Body {
 
     /// Removes every parameter of `params` whose arguments, other than the
     /// parameter itself, are one value: its uses become that value, until
-    /// no such parameter is left (Braun et al. 2013, trivial phis). Cost:
-    /// O(|params| · (the body's edges + uses)) per round, at most |params|
-    /// rounds.
+    /// no such parameter is left (Braun et al. 2013, trivial phis). The
+    /// edges into each block are found once, since a removal changes an
+    /// edge's arguments and never its target. Cost: O(blocks + edges) for
+    /// them, and O(|params| + the edges into their blocks + the uses
+    /// replaced) per round, at most |params| rounds.
     pub(super) fn remove_trivial_params(&mut self, params: &[ValueId]) {
+        let mut preds: Vec<SmallVec<[BlockId; 2]>> = vec![SmallVec::new(); self.blocks.len()];
+        for (from, block) in self.blocks() {
+            for edge in block.terminator().edges() {
+                if !preds[edge.to.index()].contains(&from) {
+                    preds[edge.to.index()].push(from);
+                }
+            }
+        }
         loop {
             let mut removed_any = false;
             for param in params {
@@ -359,8 +376,8 @@ impl Body {
                     continue;
                 };
                 let mut incoming: SmallVec<[ValueId; 2]> = SmallVec::new();
-                for pred in &self.blocks {
-                    for edge in pred.terminator.edges().iter().filter(|edge| edge.to == block) {
+                for pred in &preds[block.index()] {
+                    for edge in self.blocks[pred.index()].terminator.edges().iter().filter(|edge| edge.to == block) {
                         let arg = edge.args[index - edge.supplied];
                         if arg != *param && !incoming.contains(&arg) {
                             incoming.push(arg);
@@ -371,8 +388,8 @@ impl Body {
                     continue;
                 };
                 self.replace_all_uses(*param, only);
-                self.remove_value(*param)
-                    .expect("a parameter whose uses were all replaced has none");
+                self.refuse_used(*param).expect("a parameter whose uses were all replaced has none");
+                self.remove_block_param_from(block, index, &preds[block.index()]);
                 removed_any = true;
             }
             if !removed_any {

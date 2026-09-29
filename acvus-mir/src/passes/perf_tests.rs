@@ -350,3 +350,53 @@ fn perf_analyses() {
     scale("intervals", ssa, analysis::<IntervalValues>);
     scale("all_facts", ssa, all_facts);
 }
+
+/// Every block's parameters, each instruction's operation, result, order
+/// and span, and its terminator, one per line: what a transform computes,
+/// without the instructions' identities.
+fn digest(module: &Module, body: BodyId) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (id, block) in module.body(body).blocks() {
+        writeln!(out, "{id:?} {:?}", block.params()).expect("a String takes every write");
+        for inst in block.insts() {
+            writeln!(out, "  {:?} = {:?} {:?} {:?}", inst.result(), inst.op(), inst.order(), inst.span()).expect("a String takes every write");
+        }
+        writeln!(out, "  {:?}", block.terminator()).expect("a String takes every write");
+    }
+    out
+}
+
+#[test]
+#[ignore = "prints each transform's output on the probe's bodies, to compare two builds"]
+fn perf_digest() {
+    let transforms: [(&str, fn(&mut Module, BodyId, &mut AnalysisManager<'_>), fn(&mut Module, BodyId, &mut AnalysisManager<'_>)); 16] = [
+        ("mem2reg", lowered, run::<Mem2Reg>),
+        ("simplify_cfg", ssa, run::<SimplifyCfg>),
+        ("sccp", ssa, run::<Sccp>),
+        ("gvn", ssa, run::<Gvn>),
+        ("reborrow", ssa, run::<Reborrow>),
+        ("dce", ssa, run::<Dce>),
+        ("sroa", ssa, run::<Sroa>),
+        ("dse", ssa, run::<Dse>),
+        ("bce", ssa, run::<Bce>),
+        ("sink", ssa, run::<Sink>),
+        ("licm", ssa, run::<Licm>),
+        ("commute", ssa, run::<Commute>),
+        ("split_calls", ssa, run::<SplitCalls>),
+        ("schedule", ssa, run::<Schedule>),
+        ("pipeline", lowered, full),
+        ("schedule_lowered", lowered, run::<Schedule>),
+    ];
+    for (name, prepare, measure) in transforms {
+        for shape in SHAPES {
+            for size in [100, 400] {
+                let Prepared { mut fixture, body } = prepared(shape, size, prepare);
+                let decls = declarations(&fixture.interner);
+                let mut am = AnalysisManager::new(&decls);
+                measure(&mut fixture.module, body, &mut am);
+                println!("digest {name} {shape:?} {size}\n{}", digest(&fixture.module, body));
+            }
+        }
+    }
+}
