@@ -256,6 +256,11 @@ pub enum Op {
     MakeObject {
         fields: Vec<(Astr, ValueId)>,
     },
+    /// An intrinsic of the language over `args`, as `Intrinsic` states.
+    Intrinsic {
+        intrinsic: crate::ir::Intrinsic,
+        args: Vec<ValueId>,
+    },
     MakeTuple {
         elements: Vec<ValueId>,
     },

@@ -397,7 +397,8 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             slot,
             body,
         } => {
-            let Some(closed) = closed_for(cx, value, reading) else {
+            let closed = closed_for(cx, value, reading).filter(|_| !meeting_waits(cx, value, slot, reading));
+            let Some(closed) = closed else {
                 return Err(Decision::Enter {
                     site,
                     span,
@@ -606,6 +607,16 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             fire_reach(cx, decision, reading).map_err(Reach::into_decision)
         }
     }
+}
+
+/// Whether a value entering the still unbound slot `slot` waits for the
+/// other values entering it (types §1, §6): the slot's type is the one a
+/// value of a structured type written elsewhere brings, where any does,
+/// and every other value is coerced to it; so the slot is bound only once
+/// every value entering it is closed, by such a value first. The outcome
+/// does not depend on which value was checked first.
+fn meeting_waits(cx: &Ctxt<'_>, value: Term, slot: Term, reading: Reading) -> bool {
+    todo!("the pending `Enter`s into `slot`'s variable: wait while one's value is open, or while `value` is not written elsewhere and another's is")
 }
 
 fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: Term, body: EffectTerm<InferPhase>) {

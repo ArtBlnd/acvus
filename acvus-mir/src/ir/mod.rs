@@ -9,11 +9,22 @@ pub(crate) mod parts;
 use acvus_utils::QualifiedRef;
 use crate::ty::{CastTy, Concrete, Flows, IntTy, Mutability, Ty, Types};
 
-/// A call that is an instruction of the language (RFC-0020): the
-/// compiler's own impl of a generic function.
+/// An operation of the language no single op states, each read by
+/// `Op::Intrinsic` over the arguments its doc lists. A backend that runs
+/// one keeps its meaning as stated here, whatever layout it chooses
+/// (undefined behaviour §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intrinsic {
     StringClone,
+    /// `[structure]`, a transparent structured value made of references to
+    /// the parts of one value, each of one mutability: the reference to
+    /// that value it is (ownership §5). Its loans are the part references'.
+    Gather,
+    /// `[array, f]`, an array of `n` elements, or a reference to one, and a
+    /// function value: the array of `n` elements, each `f` of the element at
+    /// its index, in order. The elements are coerced or lifted one by one
+    /// without unrolling the array (types §1, §3).
+    ArrayMap,
 }
 
 acvus_utils::declare_local_id!(pub ValueId);

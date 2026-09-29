@@ -18,7 +18,7 @@ use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{
-    Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, ObjectTy,
+    Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mutability, ObjectTy,
     TyKind, TyVarId, TypeArg,
 };
 
@@ -77,6 +77,10 @@ pub enum Entered {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Coerced {
     pub shape: ShapeCoercion,
+    /// `Some` where the coercion is of a reference's target, each part a
+    /// reference of this mutability into the original storage (ownership
+    /// §5); `None` where it is of the value itself.
+    pub through: Option<Mutability>,
     pub parts: Box<[CoercedPart]>,
 }
 
@@ -241,6 +245,9 @@ impl Infer {
         if written_elsewhere && structure(&self.types, value.term).is_some() {
             return self.coerce_structure(value.term, slot_node).map(Entered::Coerced);
         }
+        if let Some((value_target, slot_target, through)) = self.through_reference(value.term, slot_node) {
+            return self.coerce_structure_through(value_target, slot_target, through).map(Entered::Coerced);
+        }
         let mismatch = Mismatch::Heads {
             a: value.term,
             b: slot_node,
@@ -347,6 +354,26 @@ impl Infer {
             TyKind::Enum { name, .. } => *name,
             other => panic!("enum_name: an enum's structure is an enum's, not {other:?}"),
         }
+    }
+
+    /// Where the slot is `&m S`, `S` a transparent structured type written
+    /// elsewhere, and the value `&m' S'`, `S'` one too, with `m'` reaching
+    /// `m`: the two targets and `m`. A reference to a structured value is the
+    /// structure of references to its parts (ownership §5), so it is coerced
+    /// by its target's shape.
+    fn through_reference(&self, value: Term, slot: Term) -> Option<(Term, Term, Mutability)> {
+        todo!("both references, the slot's target structured and written elsewhere, the value's mutability reaching the slot's")
+    }
+
+    /// The target `value` of a reference coerced to the target `slot` of a
+    /// reference of mutability `through` (types §3, ownership §5): by
+    /// `slot`'s kind's shape as `coerce_structure`, each kept part paired as
+    /// a reference of `through` to the value's part and to the slot's part,
+    /// which enter in turn. Through a `&mut`, an enum does not widen: the
+    /// place of its variant is a part, a `&mut` to it, and a `&mut`'s
+    /// target is never coerced.
+    fn coerce_structure_through(&mut self, value: Term, slot: Term, through: Mutability) -> Result<Coerced, Mismatch> {
+        todo!("`coerce_structure`'s shape rule over the targets, the parts paired as references of `through`")
     }
 
     /// A value of no common ancestor with its slot converts by the one

@@ -2,9 +2,15 @@
 //! recorded (types §3): a new value of the slot's type, built part by part.
 //! An object keeps the fields its slot names and ends the others where it
 //! is narrowed (ownership §6); an enum is the same variant of the wider
-//! enum; an array is one `For` over its elements, each coerced alike; a
-//! tuple, an `Option` and a `Result` rebuild their parts in place. A part
-//! is coerced by its own coercion, `call::coerce`.
+//! enum; an array is `Intrinsic::ArrayMap` over its elements, each coerced
+//! alike; a tuple, an `Option` and a `Result` rebuild their parts in place.
+//! A part is coerced by its own coercion, `call::coerce`.
+//!
+//! Through a reference (`through`), nothing is taken out and nothing
+//! rebuilt: each kept part is a reference into the original storage
+//! (`Op::Ref` through the value), coerced by its own coercion, and the
+//! structure of those references is the reference to the result,
+//! `Intrinsic::Gather` (ownership §5).
 
 use acvus_ast::Span;
 use acvus_utils::Astr;

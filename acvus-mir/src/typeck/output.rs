@@ -181,7 +181,10 @@ pub(super) enum StructureNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Coercion {
     Steps(Box<[Conversion<Ty>]>),
-    Structured { shape: ShapeCoercion, to: Ty, parts: Box<[(PartKey, Option<Coercion>)]> },
+    /// `through` is `Some` where the value is a reference whose target is
+    /// coerced, the result a reference built of references to the kept
+    /// parts (ownership §5).
+    Structured { shape: ShapeCoercion, through: Option<Mutability>, to: Ty, parts: Box<[(PartKey, Option<Coercion>)]> },
 }
 
 impl Coercion {
@@ -203,6 +206,7 @@ impl Coercion {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CoercionNode {
     pub shape: ShapeCoercion,
+    pub through: Option<Mutability>,
     pub slot: Term,
     pub parts: Box<[(PartKey, AstId)]>,
 }
