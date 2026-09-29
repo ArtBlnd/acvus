@@ -60,6 +60,14 @@ pub use generalize::InstanceId;
 pub use output::{InstanceDecided, Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, Own, StructureTree, TryExit, Typeck};
 pub use refusal::{Exceeding, Refusal, RefusalKind, Unimplemented};
 
+/// A unit's inputs as a check takes them (graph): open, each a fresh type
+/// its uses decide, the unit generalized at the end into its interface; or
+/// fixed at an instantiation's types, each input entering its type.
+pub enum Inputs<'a> {
+    Open,
+    Fixed(&'a [(acvus_utils::Astr, crate::ty::Ty)]),
+}
+
 use ctxt::Ctxt;
 use scope::Run;
 

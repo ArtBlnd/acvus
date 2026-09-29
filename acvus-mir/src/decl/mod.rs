@@ -60,6 +60,15 @@ pub struct RawDeclarations {
     pub core: Core,
 }
 
+/// A function a run may start at, with the types the host declares for its
+/// inputs, by name, and its result, where it declares one (host, programs).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryDecl {
+    pub function: QualifiedRef,
+    pub inputs: Vec<(Astr, TyId<Poly>)>,
+    pub result: Option<TyId<Poly>>,
+}
+
 /// A context's declaration: its fixed type (context §2), and whether it is
 /// volatile, held in no slot, each read one load and each write one commit
 /// (context §3).

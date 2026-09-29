@@ -1,6 +1,7 @@
 pub mod check;
 pub mod decl;
 pub mod flows;
+pub mod graph;
 pub mod infer;
 pub mod ir;
 pub mod lower;
