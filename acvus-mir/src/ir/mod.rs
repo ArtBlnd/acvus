@@ -221,11 +221,12 @@ pub enum RefTarget {
 pub enum Callee {
     /// A function with a body in the graph. Enables pre-fetch and inlining.
     Direct(QualifiedRef),
-    /// An ExternFn at the impl the checker settled on (RFC-0040), with
-    /// what that call's requirements settled on (RFC-0070 rule 3).
+    /// An ExternFn at the impl the checker settled on (RFC-0040), none for
+    /// a function that has no impls, with what that call's requirements
+    /// settled on (RFC-0070 rule 3).
     Extern {
         id: QualifiedRef,
-        r#impl: usize,
+        r#impl: Option<usize>,
         required: Vec<Chosen>,
     },
     /// Runtime-determined callable (closure, variable holding a function).
@@ -247,12 +248,13 @@ pub struct Chosen {
     pub required: Vec<Chosen>,
 }
 
-/// An ExternFn at the impl the checker settled on (RFC-0040), for an
-/// instruction that runs one without being a `FunctionCall`.
+/// An ExternFn at the impl the checker settled on (RFC-0040), none for a
+/// function that has no impls, for an instruction that runs one without
+/// being a `FunctionCall`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExternImpl {
     pub id: QualifiedRef,
-    pub r#impl: usize,
+    pub r#impl: Option<usize>,
 }
 
 impl From<ExternImpl> for Callee {

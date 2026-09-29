@@ -247,7 +247,7 @@ mod tests {
             SymbolicEnd::DeclaredLen => {
                 let n = builder.param(interner.intern("n"), index, Span::ZERO);
                 let call = Op::FunctionCall {
-                    callee: Callee::Extern { id: make, r#impl: 0, required: Vec::new() },
+                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new() },
                     callee_ty: make_ty,
                     args: vec![n],
                 };
@@ -329,7 +329,7 @@ mod tests {
             Made::ByADeclaredCall => {
                 let n = builder.push(constant(10), index, Span::ZERO);
                 let call = Op::FunctionCall {
-                    callee: Callee::Extern { id: make, r#impl: 0, required: Vec::new() },
+                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new() },
                     callee_ty: make_ty,
                     args: vec![n],
                 };
@@ -345,7 +345,7 @@ mod tests {
                 let view = Op::AsSlice {
                     container: r,
                     mutability: Mutability::Shared,
-                    r#impl: ExternImpl { id: as_slice, r#impl: 0 },
+                    r#impl: ExternImpl { id: as_slice, r#impl: None },
                 };
                 builder.push(view, slice_ref, Span::ZERO)
             }

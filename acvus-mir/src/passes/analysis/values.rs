@@ -341,7 +341,7 @@ impl Affines<'_> {
         &self,
         inst: &Inst,
         id: acvus_utils::QualifiedRef,
-        r#impl: usize,
+        r#impl: Option<usize>,
         args: &[ValueId],
         named: &[Option<Combination<Symbol>>],
     ) -> Affine {
@@ -881,7 +881,7 @@ mod tests {
         let mut builder = module.build_body(false, int);
         let x = builder.push(constant(7), int, Span::ZERO);
         let call = Op::FunctionCall {
-            callee: Callee::Extern { id: id_f, r#impl: 0, required: Vec::new() },
+            callee: Callee::Extern { id: id_f, r#impl: Some(0), required: Vec::new() },
             callee_ty,
             args: vec![x],
         };
@@ -948,7 +948,7 @@ mod tests {
         let mut builder = module.build_body(false, int);
         let a = builder.param(interner.intern("a"), int, Span::ZERO);
         let call = Op::FunctionCall {
-            callee: Callee::Extern { id: succ, r#impl: 0, required: Vec::new() },
+            callee: Callee::Extern { id: succ, r#impl: Some(0), required: Vec::new() },
             callee_ty,
             args: vec![a],
         };

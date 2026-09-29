@@ -464,3 +464,55 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
 fn pure_reading(context: QualifiedRef) -> Effect {
     Effect::new(Reissue::Pure, true, Contexts::from([context]), Contexts::new(), SplitCost::Unavailable)
 }
+
+/// An extern call prints its impl, `#n`, where the function has impls and
+/// the call is at impl `n`; a function without impls prints its name
+/// alone. A name prints as its namespace's path joined by `::`.
+#[test]
+fn an_extern_call_prints_its_impl_where_its_function_has_impls() {
+    let mut f = fixture();
+    let (int, bool) = (f.int, f.bool);
+    let array = f.module.types.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
+    let array_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));
+    let slice = f.module.types.intern(TyKind::Slice(int));
+    let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
+    let pure = |types: &mut Types<Concrete>, params: &[Ty], ret: Ty| {
+        types.intern(TyKind::Fn {
+            params: params.into(),
+            ret,
+            effect: EffectTerm::Known(Effect::pure()),
+            flows: FlowTerm::Known(Flows::Every),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+            values: (),
+        })
+    };
+    let eq_ty = pure(&mut f.module.types, &[int, int], bool);
+    let g_ty = pure(&mut f.module.types, &[int], int);
+    let core = f.names.namespace(&[f.name("core")]);
+    let (eq, g, as_slice) =
+        (QualifiedRef::qualified(core, f.name("eq")), QualifiedRef::root(f.name("g")), QualifiedRef::qualified(core, f.name("as_slice")));
+    let (n, xs) = (f.name("n"), f.name("xs"));
+
+    let mut builder = f.module.build_body(false, int);
+    let n = builder.param(n, int, Span::ZERO);
+    let xs = builder.param(xs, array_ref, Span::ZERO);
+    let at_impl = Op::FunctionCall { callee: Callee::Extern { id: eq, r#impl: Some(1), required: Vec::new() }, callee_ty: eq_ty, args: vec![n, n] };
+    builder.push(at_impl, bool, Span::ZERO);
+    let at_none = Op::FunctionCall { callee: Callee::Extern { id: g, r#impl: None, required: Vec::new() }, callee_ty: g_ty, args: vec![n] };
+    let result = builder.push(at_none, int, Span::ZERO);
+    let view = Op::AsSlice { container: xs, mutability: Mutability::Shared, r#impl: crate::ir::ExternImpl { id: as_slice, r#impl: Some(0) } };
+    builder.push(view, slice_ref, Span::ZERO);
+    builder.terminate(Terminator::Return { value: result, order: None, span: Span::ZERO }, Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    let expected = "\
+body0 entry=b0
+b0():
+  v2: bool = Call core::eq#1(p0, p0)
+  v3: i64 = Call g(p0)
+  v4: &[i64] = AsSlice core::as_slice#0 p1
+  Return v3
+";
+    assert_eq!(body(&f.module, id, &f.names, View::CFG, &[]), expected);
+}

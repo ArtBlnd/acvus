@@ -1389,14 +1389,14 @@ fn a_lifted_clone_calls_each_parts_impl_and_rebuilds_the_tuple() {
     let lowered = fx.script("$t.clone()");
     let body = lowered.entry();
     let ops = lowered.entry_ops();
-    let calls: Vec<usize> = ops
+    let calls: Vec<Option<usize>> = ops
         .iter()
         .filter_map(|op| match op {
             Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, .. } if *id == clone => Some(*r#impl),
             _ => None,
         })
         .collect();
-    assert_eq!(calls, vec![0], "only the `String` part calls an impl: {}", shown(body));
+    assert_eq!(calls, vec![Some(0)], "only the `String` part calls an impl: {}", shown(body));
     for at in [0, 1] {
         let part = |op: &Op| matches!(op, Op::Ref { path, mutability: Mutability::Shared, .. } if path[..] == [PathSeg::Index(at)]);
         assert_eq!(count(&ops, part), 1, "part {at} is lent: {}", shown(body));

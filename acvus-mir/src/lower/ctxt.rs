@@ -190,11 +190,11 @@ impl<'a, 'm> Lcx<'a, 'm> {
 
     /// The impl `chosen` reached, numbered as the IR numbers a generic
     /// function's impls: a concrete impl by its index, the generic impl
-    /// after them. A declaration without impls is itself the callee and
-    /// is numbered 0, as `passes::analysis::values` reads it (D67 item 6).
-    pub fn impl_index(&self, chosen: &Chosen) -> usize {
-        match chosen.r#impl {
-            None => 0,
+    /// after them. A declaration without impls is itself the callee, at no
+    /// impl.
+    pub fn impl_index(&self, chosen: &Chosen) -> Option<usize> {
+        let at = match chosen.r#impl {
+            None => return None,
             Some(Impl::Concrete(at)) => at,
             Some(Impl::Generic) => {
                 let scheme = self
@@ -212,13 +212,19 @@ impl<'a, 'm> Lcx<'a, 'm> {
                 "a lifted impl {:?} is no callee: typeck refuses one as a requirement, and lower calls its parts",
                 chosen.declaration
             ),
-        }
+        };
+        Some(at)
     }
 
+    /// # Panics
+    /// A required impl is at no impl: a requirement names a generic
+    /// function, which is reached only at one of its impls.
     pub fn ir_chosen(&self, chosen: &Chosen) -> IrChosen {
         IrChosen {
             generic_function: chosen.declaration,
-            r#impl: self.impl_index(chosen),
+            r#impl: self.impl_index(chosen).unwrap_or_else(|| {
+                panic!("a requirement names a generic function reached at one of its impls, not {:?}", chosen.declaration)
+            }),
             required: chosen.required.iter().map(|required| self.ir_chosen(required)).collect(),
         }
     }

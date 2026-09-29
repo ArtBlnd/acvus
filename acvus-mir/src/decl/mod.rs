@@ -149,19 +149,22 @@ impl Declarations {
         &self.core
     }
 
-    /// The facts a call reaches (`Scheme`): a declaration without impls
-    /// states them itself, as impl 0; otherwise the impl the call chose
-    /// states them, a concrete impl by its index, the generic impl after
-    /// them.
+    /// The facts a call reaches (`Scheme`): a declaration without impls,
+    /// called at no impl, states them itself; otherwise the impl the call
+    /// chose states them, a concrete impl by its index, the generic impl
+    /// after them.
     ///
     /// # Panics
-    /// `function` is not declared, or has no impl `r#impl`: a call names
-    /// a declared function and one of its impls.
-    pub(crate) fn call_facts(&self, function: QualifiedRef, r#impl: usize) -> &DeclaredFacts {
+    /// `function` is not declared; it has impls and the call names none, or
+    /// it has none and the call names one; or it has no impl `r#impl`: a
+    /// call names a declared function and, where it has impls, one of them.
+    pub(crate) fn call_facts(&self, function: QualifiedRef, r#impl: Option<usize>) -> &DeclaredFacts {
         let scheme = self.scheme(function).unwrap_or_else(|| panic!("the call names {function:?}, which is not declared"));
-        let Some(impls) = &scheme.impls else {
-            assert_eq!(r#impl, 0, "a call of {function:?}, which has no impls, names impl 0");
-            return &scheme.facts;
+        let (impls, r#impl) = match (&scheme.impls, r#impl) {
+            (None, None) => return &scheme.facts,
+            (Some(impls), Some(r#impl)) => (impls, r#impl),
+            (None, Some(r#impl)) => panic!("a call of {function:?}, which has no impls, names impl {}", r#impl),
+            (Some(_), None) => panic!("a call of {function:?}, which has impls, names none"),
         };
         match impls.concrete.get(r#impl) {
             Some(concrete) => &concrete.facts,

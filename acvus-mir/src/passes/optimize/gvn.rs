@@ -201,7 +201,7 @@ enum Shape {
     StringConcat,
     StringEq,
     StringClone,
-    AsSlice { mutability: Mutability, id: QualifiedRef, r#impl: usize },
+    AsSlice { mutability: Mutability, id: QualifiedRef, r#impl: Option<usize> },
     ArrayView(Mutability),
     SliceLen,
     /// An `Index`: whether it yields the element itself, and whether it
@@ -235,7 +235,7 @@ enum Shape {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CalleeKey {
     Direct(QualifiedRef),
-    Extern { id: QualifiedRef, r#impl: usize, required: Vec<Chosen> },
+    Extern { id: QualifiedRef, r#impl: Option<usize>, required: Vec<Chosen> },
     Indirect,
 }
 

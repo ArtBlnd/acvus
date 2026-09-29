@@ -410,7 +410,7 @@ fn a_declaration_without_impls_states_its_own_facts() {
     let read = touches(&[Touch { place: whole(0), mode: Mode::Read }]);
     let g = f.declare("g", &[shared_int], int, read.clone());
     let decls = f.verified();
-    assert_eq!(decls.call_facts(g, 0), &read);
+    assert_eq!(decls.call_facts(g, None), &read);
 }
 
 /// `verify` checks the facts an impl states, the generic impl's at its
