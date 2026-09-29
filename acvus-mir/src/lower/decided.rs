@@ -23,7 +23,7 @@ pub(super) struct Decided<'a> {
 /// The type of each generalized binding's value in each body it may be
 /// written in, by binder and by the instance the body is at: the one
 /// signature's function type where its instances there have one, and the
-/// `Closures` type of their set otherwise (functions §2).
+/// `Closures` type of their set otherwise, none included (functions §2).
 pub(super) type ClosureTypes = FxHashMap<(AstId, Option<InstanceId>), Ty>;
 
 /// Every `ClosureTypes` entry, interned into `types`: each binder at the

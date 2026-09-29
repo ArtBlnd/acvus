@@ -64,8 +64,10 @@ pub enum TyKind<V: Phase> {
     /// backend holds such a closure is its own (undefined behaviour §2).
     /// A set of one signature is written as that function type, never as a
     /// `Closures` of one, so that one set is written one way; a `Closures`
-    /// holds at least two. Only lower writes it; no program and no
-    /// declaration does (`InternalType`).
+    /// holds none or at least two. None is the closure of a binding no use
+    /// reaches: making it is still an effect, its captures moved or lent,
+    /// and it has no code, only its environment. Only lower writes it; no
+    /// program and no declaration does (`InternalType`).
     Closures(Box<[TyId<V>]>),
     Var(V::TyVar),
 }

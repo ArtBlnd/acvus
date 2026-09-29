@@ -1687,3 +1687,25 @@ fn a_generalized_value_through_a_match_and_a_block_is_of_its_closure_type() {
     assert_eq!(body.ty_of(left), body.ty_of(right), "{}", shown(body));
     assert!(matches!(lowered.kind_of(body, left), TyKind::Closures(signatures) if signatures.len() == 2), "{}", shown(body));
 }
+
+/// functions §2: a generalized binding no use reaches is still made where
+/// it is written, since making a closure takes its captures: a closure of
+/// no signature, with no code and only its environment.
+#[test]
+fn an_unused_generalized_binding_makes_a_closure_of_no_signature() {
+    let lowered = Fixture::new().script("let n = 1; let f = |x| -> n; 0");
+    let body = lowered.entry();
+    let made: Vec<_> = body
+        .blocks()
+        .flat_map(|(_, block)| block.insts())
+        .filter_map(|inst| match inst.op() {
+            Op::MakeClosure { bodies, captures } => Some((inst.result(), bodies.len(), captures.len())),
+            _ => None,
+        })
+        .collect();
+    let [(Some(closure), 0, captures)] = made[..] else {
+        panic!("one closure of no body: {}", shown(body));
+    };
+    assert_eq!(captures, 1, "its capture is taken: {}", shown(body));
+    assert!(matches!(lowered.kind_of(body, closure), TyKind::Closures(signatures) if signatures.is_empty()), "{}", shown(body));
+}
