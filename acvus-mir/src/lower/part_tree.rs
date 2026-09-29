@@ -6,8 +6,9 @@
 //! is a call of the impl reached, or, in a clone, a copy.
 //!
 //! A node's operand is a shared reference to its value, or, where the node
-//! is itself a reference, that reference, since a reference's target is
-//! never a reference (types §4).
+//! is itself a reference, a shared reborrow of it, read as any reference
+//! part is (`ir::cfg::part_read`), since a reference's target is never a
+//! reference (types §4).
 
 use acvus_ast::{AstId, BinOp, Expr, Literal, Slot, Span};
 use acvus_utils::Astr;
@@ -94,12 +95,16 @@ fn only(trees: &[PartTree]) -> &PartTree {
     tree
 }
 
-/// The operand of `part` of the node whose operand is `base`.
+/// The operand of `part` of the node whose operand is `base`, a shared
+/// reference.
 fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span) -> ValueId {
     let target = RefTarget::Through(base);
     let path = vec![part.seg];
     match cx.kind(part.ty) {
-        TyKind::Ref(..) => cx.builder.push(Op::Take { target, path, taken_out: false }, part.ty, span),
+        TyKind::Ref(..) => {
+            let read = cx.builder.part_read_ty(part.ty, Mutability::Shared);
+            cx.builder.push(Op::Take { target, path, taken_out: false }, read, span)
+        }
         _ => {
             let ty = cx.ref_ty(Mutability::Shared, part.ty);
             cx.builder.push(Op::Ref { target, path, mutability: Mutability::Shared }, ty, span)
@@ -107,10 +112,11 @@ fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span)
     }
 }
 
-/// The operand of element `at` of the slice `elements` of `element`s.
+/// The operand of element `at` of the shared slice `elements` of
+/// `element`s.
 fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element: Ty, span: Span) -> ValueId {
     let (mode, ty) = match cx.kind(element) {
-        TyKind::Ref(..) => (IndexMode::Copy, element),
+        TyKind::Ref(..) => (IndexMode::Copy, cx.builder.part_read_ty(element, Mutability::Shared)),
         _ => (IndexMode::Ref, cx.ref_ty(Mutability::Shared, element)),
     };
     cx.builder.push(Op::Index { slice: elements, index: at, mode, bound: IndexBound::Checked }, ty, span)

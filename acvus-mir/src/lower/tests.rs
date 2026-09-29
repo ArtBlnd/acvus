@@ -1063,6 +1063,60 @@ fn array_equality_is_one_for_that_exits_at_the_first_difference() {
     assert_eq!(calls_of(&lowered, eq), 1, "one element comparison, in the loop: {}", shown(body));
 }
 
+/// The values a part read of a `&mut` part yields in `source`'s entry, each
+/// with its loans, checked to be shared reborrows of slots lent `&mut`.
+fn mut_parts_read_shared(source: &str, read: impl Fn(&Op) -> bool) -> usize {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let (lowered, loans) = lowered_with_loans(fx, source);
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let lent_mut: std::collections::BTreeSet<Storage> = insts
+        .iter()
+        .filter_map(|inst| match inst.op() {
+            Op::Ref { target: RefTarget::Var(slot), path, mutability: Mutability::Mut } if path.is_empty() => Some(Storage::Slot(*slot)),
+            _ => None,
+        })
+        .collect();
+    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    assert!(calls_of(&lowered, eq) >= 1, "the `i64`s the parts name are compared: {}", shown(body));
+    let reads: Vec<crate::ir::ValueId> = insts
+        .iter()
+        .filter(|inst| read(inst.op()))
+        .filter_map(|inst| inst.result())
+        .filter(|result| matches!(lowered.kind_of(body, *result), TyKind::Ref(..)))
+        .collect();
+    for at in &reads {
+        assert!(matches!(lowered.kind_of(body, *at), TyKind::Ref(Mutability::Shared, _)), "read shared: {}", shown(body));
+        let own = loans.of(*at, 0);
+        assert!(!own.is_empty(), "the read holds a loan on what the part names: {}", shown(body));
+        for loan in own {
+            assert_eq!(loan.mode, Mode::Shared, "a reborrow through a shared path is shared: {own:?}");
+            assert!(lent_mut.contains(&loan.storage), "the loan is on a slot lent `&mut`: {own:?}");
+        }
+    }
+    reads.len()
+}
+
+/// ownership §5, types §4, D108: a `&mut` element of an array compared is
+/// read as a shared reborrow of it, never copied out as a `&mut`, and
+/// compares what it names.
+#[test]
+fn an_array_of_mut_references_compares_by_shared_reborrow() {
+    let source = "let a = 1; let b = 2; let c = 1; let d = 2; [&mut a, &mut b] == [&mut c, &mut d]";
+    let reads = mut_parts_read_shared(source, |op| matches!(op, Op::Index { .. }));
+    assert_eq!(reads, 2, "one element read on each side, in the loop");
+}
+
+/// ownership §5, types §4, D108: a `&mut` part of a tuple compared is read
+/// through the tuple's shared reference as a shared reborrow.
+#[test]
+fn a_tuple_with_a_mut_part_compares_it_by_shared_reborrow() {
+    let source = "let a = 1; let b = 1; (&mut a, true) == (&mut b, true)";
+    let reads = mut_parts_read_shared(source, |op| matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if !path.is_empty()));
+    assert_eq!(reads, 2, "one part read on each side");
+}
+
 /// operators §2, §4, D87: an ordering on arrays is one `For` that leaves
 /// at the first `cmp` that is not `0`, and the answer is compared with `0`
 /// after it.
