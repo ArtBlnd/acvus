@@ -22,7 +22,7 @@ A declaration may name effect variables, as it names type variables. A function 
 
 A call's effect is the join of what its declaration states for the call itself and of the effect variables of the work the call runs before its result is taken: a closure argument it calls, or work a value it is given holds. Work the call does not run leaves only in its result, whose type carries its effect.
 
-Every effect variable a declaration takes from its parameters appears in the call's effect, in its result's type, or in both. A declaration where one appears in neither is refused: the work it names would run where no effect records it.
+Every effect variable a declaration takes from its parameters appears in the call's effect, in its result's type, or in both. A declaration where one appears in neither is refused: the work it names would run where no effect records it. An effect variable its parameters do not give names no work, and is pure.
 
 ## 3. Declared facts: access, action, source, relation
 
@@ -56,3 +56,7 @@ A declaration may be a cast from its parameter's type to its result's type, whic
 Every type a declaration writes, except a type parameter, is extern-defined, with all its parts, and follows the transparency rule (types §1). An extern-defined type may declare lifetimes; each is a position of its values (ownership §5).
 
 An extern-defined type may carry one effect, apart from its type arguments: `T<…> with E`. It bounds from above the effects of the work its values hold, which runs later. A type is covariant in its effect: widening an upper bound moves toward the opaque effect, which is always sound (effects).
+
+## 9. What a call is given
+
+The compiler holds its side of the declaration as the extern holds its own. A call receives each argument as a valid value of its declared type, by the passing its declaration states. What a call is lent stays alive, and is touched by nothing else, until the call's result is taken. A closure argument is callable as its function type states, any number of times, for as long as its holds allow.
