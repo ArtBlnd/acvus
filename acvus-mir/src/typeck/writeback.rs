@@ -5,7 +5,8 @@ use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{Closure, Coercion, CoercionNode, Conversion, Entered, StructureNode, StructureTree, Typeck};
+use super::generalize::InstanceId;
+use super::output::{Closure, Coercion, CoercionNode, Conversion, Entered, InstanceDecided, StructureNode, StructureTree, Typeck};
 use crate::decl::{Base, DeclaredFacts, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, ShapeCoercion, Term, Unsettled};
 use crate::ty::structural::PartKey;
@@ -49,6 +50,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         })
         .collect();
     let structure_trees = structure_trees(&mut cx, types, &mut memo);
+    let instances = instances(&mut cx, types, &mut memo);
     let result = freeze(&mut cx, types, &mut memo, result);
     let callees = std::mem::take(&mut cx.out.callees)
         .into_iter()
@@ -73,6 +75,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         closures,
         adjustments: std::mem::take(&mut cx.out.adjustments),
         structure_trees,
+        instances,
         body_effect,
         result,
         refusals: std::mem::take(&mut cx.out.refusals),
@@ -501,4 +504,64 @@ impl Trees<'_> {
             }
         }
     }
+}
+
+/// Each instance of a generalized binding (functions §2), frozen: each
+/// site of its values' walks at its type under the instance's terms, and
+/// what its requirements recorded there while they fired.
+fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<InstanceId, InstanceDecided> {
+    let mut out = FxHashMap::default();
+    for at in 0..cx.out.instances.len() {
+        let id = InstanceId(u32::try_from(at).expect("u32 instances"));
+        let (sites, terms) = super::generalize::instance_sites(cx, id);
+        let mut copies = FxHashMap::default();
+        let at_instance: Vec<(AstId, Term)> = sites
+            .into_iter()
+            .filter_map(|site| cx.out.types.get(&site).map(|term| (site, *term)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|(site, term)| (site, cx.infer.copy_at(term, &terms, &mut copies)))
+            .collect();
+        let super::generalize::Instance { use_site, within, .. } = cx.out.instances[at].clone();
+        let decided = super::generalize::in_instance(cx, id, |cx| {
+            let coercions = coercions(cx, types, memo);
+            let mut site_types = FxHashMap::default();
+            let recorded: Vec<(AstId, Term)> = cx.out.types.iter().map(|(site, term)| (*site, *term)).collect();
+            for (site, term) in at_instance.into_iter().chain(recorded) {
+                if let Some(ty) = freeze(cx, types, memo, term) {
+                    site_types.insert(site, ty);
+                }
+            }
+            let tries = std::mem::take(&mut cx.out.tries)
+                .into_iter()
+                .filter_map(|(site, exit)| {
+                    let exit = match exit {
+                        super::output::TryExit::Option(term) => super::output::TryExit::Option(freeze(cx, types, memo, term)?),
+                        super::output::TryExit::Result(term) => super::output::TryExit::Result(freeze(cx, types, memo, term)?),
+                    };
+                    Some((site, exit))
+                })
+                .collect();
+            let structure_trees = structure_trees(cx, types, memo);
+            let callees = std::mem::take(&mut cx.out.callees)
+                .into_iter()
+                .filter_map(|(site, callee)| Some((site, freeze(cx, types, memo, callee)?)))
+                .collect();
+            InstanceDecided {
+                use_site: Some(use_site),
+                within,
+                types: site_types,
+                reached: std::mem::take(&mut cx.out.reached),
+                callees,
+                iteration: std::mem::take(&mut cx.out.iteration),
+                tries,
+                coercions,
+                casts: std::mem::take(&mut cx.out.casts),
+                adjustments: std::mem::take(&mut cx.out.adjustments),
+                structure_trees,
+            }
+        });
+        out.insert(id, decided);
+    }
+    out
 }
