@@ -2783,6 +2783,46 @@ fn a_rebuild_lifts_at_a_sum_only_from_one_argument() {
     }
 }
 
+/// extern-fn §1, §6: a concrete impl's variables are instantiated at the
+/// impl's own bounds, as a scheme's are at its. `pick`'s impl `fn(U) -> U`
+/// bounds `U` to integers, so `pick(true)` reaches it at a type its bound
+/// refuses; where it bounds `U` by any type, the same call is admitted.
+#[test]
+fn a_concrete_impl_is_instantiated_at_its_own_bounds() {
+    let integer = TyVarBound::Integer { signed: true, among: Box::new([IntTy::I64]) };
+    for (bound, source, admitted) in [
+        (integer.clone(), "pick(1)", true),
+        (integer, "pick(true)", false),
+        (TyVarBound::Any, "pick(true)", true),
+    ] {
+        let mut fx = Fixture::new();
+        let t = fx.var(0);
+        let ty = fx.pure(&[t], t);
+        let id = QualifiedRef::root(fx.name("pick"));
+        let r#impl = ImplSig {
+            ty,
+            bounds: Box::new([bound]),
+            param_names: fx.param_names(1),
+            requires: Box::new([]),
+            facts: DeclaredFacts::default(),
+        };
+        let scheme = Scheme {
+            ty,
+            param_names: fx.param_names(1),
+            bounds: Box::new([TyVarBound::Any]),
+            impls: Some(Impls { concrete: Box::new([r#impl]), generic: None }),
+            requires: Box::new([]),
+            facts: DeclaredFacts::default(),
+        };
+        fx.raw.functions.push((id, scheme));
+        let (checked, _) = fx.script(source);
+        match admitted {
+            true => checked.admitted(),
+            false => assert!(!checked.refusals().is_empty(), "{source} is refused at the impl's bound"),
+        }
+    }
+}
+
 /// operators §2: `Option`'s `default` is `None`, the language's own value;
 /// a structure of `Option` parts defaults each so. `Result` and a
 /// program's enum have none, nor has a structure with a `Result` part.

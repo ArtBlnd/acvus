@@ -29,7 +29,7 @@ use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
-use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
+use crate::decl::{Base, Head, ImplSig, Scheme};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::structural::structure;
 use crate::ty::{
@@ -1739,27 +1739,21 @@ fn instantiate(cx: &mut Ctxt<'_>, offer: Offer, span: Span) -> Instantiated {
         return generic;
     };
     let sig = &scheme.impls.as_ref().expect("a concrete impl's scheme has impls").concrete[at];
-    let own = cx.infer.instantiate(cx.decls, &impl_scheme(cx.decls.types(), sig));
+    let own = cx.infer.instantiate(cx.decls, &impl_scheme(sig));
     cx.eq(generic.ty, own.ty, span);
     let mut requirements = generic.requirements;
     requirements.extend(own.requirements);
     Instantiated { ty: own.ty, requirements }
 }
 
-/// A concrete impl as a scheme of its own, each of its type variables
-/// unbounded: the generic function's bounds reach them through `eq` with
-/// the generic function's instantiation.
-///
-/// NOTE: infer instantiates only a `Scheme`; an impl's own variables have
-/// no declared bounds, so they are stated here as `Any`, one per index up
-/// to the largest the impl writes.
-fn impl_scheme(types: &Types<Poly>, sig: &ImplSig) -> Scheme {
-    let mut written = vec![sig.ty];
-    written.extend(sig.requires.iter().map(|required| required.pattern));
+/// A concrete impl as a scheme of its own, each of its type variables at
+/// the impl's own bound; the generic function's bounds reach them too,
+/// through `eq` with the generic function's instantiation.
+fn impl_scheme(sig: &ImplSig) -> Scheme {
     Scheme {
         ty: sig.ty,
         param_names: sig.param_names.clone(),
-        bounds: vec![TyVarBound::Any; variables_of(types, &written)].into(),
+        bounds: sig.bounds.clone(),
         impls: None,
         requires: sig.requires.clone(),
         facts: sig.facts.clone(),

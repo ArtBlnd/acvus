@@ -100,7 +100,7 @@ struct StatedOn<'s> {
 
 /// Each set of facts with its signature: the declaration's own and its
 /// generic impl's, both at its own type and bounds, then each concrete
-/// impl's, whose variables carry no declared bound.
+/// impl's, at the impl's own type and bounds.
 fn stated_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = StatedOn<'_>> {
     let own = Declared { function, r#impl: None };
     let at_own = move |facts| StatedOn { declared: own, ty: scheme.ty, bounds: &scheme.bounds, facts };
@@ -109,7 +109,7 @@ fn stated_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<I
         scheme.impls.iter().flat_map(|impls| impls.concrete.iter().enumerate()).map(move |(at, r#impl)| StatedOn {
             declared: Declared { function, r#impl: Some(at) },
             ty: r#impl.ty,
-            bounds: &[],
+            bounds: &r#impl.bounds,
             facts: &r#impl.facts,
         });
     std::iter::once(at_own(&scheme.facts)).chain(generic).chain(concrete)
