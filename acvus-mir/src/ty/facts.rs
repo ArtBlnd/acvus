@@ -3,8 +3,9 @@
 
 use acvus_utils::QualifiedRef;
 
-use super::kind::{Holds, Mutability, ObjectTy, TyKind};
-use super::{Concrete, Ty, Types};
+use super::kind::{Holds, Mutability, TyKind};
+use super::structural::structure;
+use super::{Concrete, Phase, Ty, Types};
 
 /// The lifetimes each extern-defined type declares (extern-fn §8). The
 /// declarations answer; a type does not carry the count.
@@ -20,26 +21,22 @@ pub fn copies(types: &Types<Concrete>, ty: Ty) -> bool {
 }
 
 fn copies_level(types: &Types<Concrete>, ty: Ty) -> bool {
-    match types.kind(ty) {
-        TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char | TyKind::Unit => true,
-        TyKind::Ref(Mutability::Shared, _) => true,
-        TyKind::Tuple(items) => items.iter().all(|item| copies(types, *item)),
-        TyKind::Array(element, _) | TyKind::Option(element) => copies(types, *element),
-        TyKind::Result(ok, err) => copies(types, *ok) && copies(types, *err),
-        TyKind::Object(ObjectTy::Structural(fields, ())) => fields.iter().all(|(_, field)| copies(types, *field)),
-        TyKind::String
-        | TyKind::Never
-        | TyKind::Order
-        | TyKind::Handle(_)
-        | TyKind::Slice(_)
-        | TyKind::Str
-        | TyKind::Object(ObjectTy::Declared(..))
-        | TyKind::Enum { .. }
-        | TyKind::Fn { .. }
-        | TyKind::UserDefined { .. }
-        | TyKind::Ref(Mutability::Mut, _) => false,
-        TyKind::Var(var) => match *var {},
+    if let Some(structure) = structure(types, ty) {
+        return structure.parts().iter().all(|part| copies(types, *part));
     }
+    copies_alone(types.kind(ty))
+}
+
+/// Whether a value of a type that is not structural copies: a primitive or
+/// a shared reference (ownership §1).
+pub fn copies_alone<V>(kind: &TyKind<V>) -> bool
+where
+    V: Phase,
+{
+    matches!(
+        kind,
+        TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char | TyKind::Unit | TyKind::Ref(Mutability::Shared, _)
+    )
 }
 
 /// What one position of a type is (ownership §5, effects §6).

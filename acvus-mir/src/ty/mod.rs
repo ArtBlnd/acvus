@@ -9,6 +9,7 @@ mod facts;
 mod flow;
 mod kind;
 mod num;
+pub mod structural;
 
 use std::convert::Infallible;
 use std::fmt;
@@ -23,7 +24,7 @@ use rustc_hash::FxBuildHasher;
 pub use arg::{EffectArg, IdentityId, IdentityTerm, LenTerm, TypeArg};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
 pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Source};
-pub use facts::{LifetimesOf, PositionKind, copies, for_each_position, position_kinds, positions};
+pub use facts::{LifetimesOf, PositionKind, copies, copies_alone, for_each_position, position_kinds, positions};
 pub use kind::{Calls, CallsTerm, Holds, HoldsTerm, Mutability, ObjectTy, TyKind};
 pub use num::{CastTy, IntTy, WordTy};
 
