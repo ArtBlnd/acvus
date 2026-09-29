@@ -16,8 +16,15 @@
 //!   `PartMoved` moves every unit its path covers, at its span (ownership
 //!   §2, §6). One it takes `Read` moves nothing: a value that copies, and a
 //!   `&mut`, which each use reborrows (ownership §1, §5).
-//! - Everything reached through a reference is not located by name, and is
-//!   not this analysis's.
+//! - Storage outside the body, what each position of a parameter's or a
+//!   capture's type lends (`Loans`' `Storage::Outside`), is a place too,
+//!   its units the lent target's type cut as a slot's are, written at entry
+//!   (ownership §4: it is whole whenever the body returns).
+//! - A `Take` or an `Assign` through a reference reaches the places `Loans`
+//!   records for its site (`Loans::accesses`, a `Move` or a `Write`). Where
+//!   it reaches one place, the move or the write is of that place's units
+//!   there, as by name. Where it reaches several, nothing is recorded:
+//!   `check::moveck` refuses such a move.
 //! - A join unions what each path may leave.
 //!
 //! Cost: a unit's fact only grows, and it holds a flag and the spans of the

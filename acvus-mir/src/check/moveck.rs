@@ -5,6 +5,14 @@
 //! path overlaps that some path moved out refuses the read `UsedAfterMove`
 //! at its span, naming the move. A read one of whose units is only never
 //! written is `initck`'s.
+//!
+//! Storage outside the body, and a context's slot, is whole whenever the
+//! body returns (ownership §4, context §1): at each `Return`, a unit of one
+//! that some path moved out refuses the return `NotRefilled`, naming the
+//! move. A move through a reference is refused `MoveThroughShared` where a
+//! loan of the reference it is made through is shared (ownership §5, what a
+//! shared reference lends is never taken from), and `MoveThroughSeveral`
+//! where it reaches more than one place (ownership §4).
 
 use super::{Refusal, RefusalKind};
 use crate::ir::RefTarget;

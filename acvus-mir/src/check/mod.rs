@@ -72,6 +72,15 @@ pub enum RefusalKind {
     /// A `match` some value reaches with no arm answering (patterns §3):
     /// where its scrutinee's variants are not all seen, it needs `_`.
     NotExhaustive,
+    /// A return with storage outside the body, or a context, a part of
+    /// which some path took out and did not write back (ownership §4,
+    /// context §1): `taken` where it was taken.
+    NotRefilled { taken: Span },
+    /// A move of what a shared reference lends (ownership §5).
+    MoveThroughShared,
+    /// A move through a reference that lends more than one place on the
+    /// paths to it (ownership §4).
+    MoveThroughSeveral,
 }
 
 impl RefusalKind {
@@ -88,6 +97,9 @@ impl RefusalKind {
             }
             RefusalKind::LoanOutlivesBody { loan } => format!("LoanOutlivesBody loan {}", at(loan)),
             RefusalKind::NotExhaustive => "NotExhaustive".to_string(),
+            RefusalKind::NotRefilled { taken } => format!("NotRefilled taken {}", at(taken)),
+            RefusalKind::MoveThroughShared => "MoveThroughShared".to_string(),
+            RefusalKind::MoveThroughSeveral => "MoveThroughSeveral".to_string(),
         }
     }
 }
