@@ -3074,3 +3074,12 @@ fn a_generalized_binding_is_lent_at_each_uses_signature() {
     checked.admitted();
     assert_eq!(checked.typeck.instances.len(), 2);
 }
+
+/// functions §2: a `&mut` to a generalized binding is refused: through it
+/// a function value would reach the binding by no `let` or assignment of
+/// its name.
+#[test]
+fn a_mut_borrow_of_a_generalized_binding_is_refused() {
+    let (checked, _) = Fixture::new().script("let f = |x| -> x; let r = &mut f; let a = f(1); 0");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::MutOfGeneralized { .. }]), "{:?}", checked.refusals());
+}

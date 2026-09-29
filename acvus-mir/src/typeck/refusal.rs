@@ -91,6 +91,11 @@ pub enum RefusalKind {
     LendsNoParts { name: Astr },
     /// `as_mut` through a `&`, which lends no `&mut` (operators §2).
     MutLendThroughShared { name: Astr },
+    /// A `&mut` to a binding whose function value is generalized, or a
+    /// write into it through a path: a function value reaching it so would
+    /// be given it by no `let` or assignment of its name, and so have no
+    /// code at its uses' signatures (functions §2).
+    MutOfGeneralized { name: Astr },
     // Unstable: a form the language admits and this compiler does not
     // build yet. No rule refuses it; each is removed once it is built.
     Unimplemented { feature: Unimplemented },

@@ -66,6 +66,9 @@ fn check_form<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Ter
             span,
         } => {
             let term = scope::check_ident(cx, *id, *name, *ref_kind, *span);
+            if matches!(demand, Demand::Lend(Mutability::Mut) | Demand::Write) {
+                scope::refuse_mut_of_generalized(cx, *name, *ref_kind, *span);
+            }
             if demand != Demand::Read {
                 note_demanded_capture(cx, *name, *ref_kind, term, demand, *span);
             }
