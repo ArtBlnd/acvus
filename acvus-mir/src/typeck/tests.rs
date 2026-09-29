@@ -632,58 +632,53 @@ fn return_is_never_and_enters_the_result() {
     assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
 }
 
-/// The type of `x` in `let x = if $c { then } else { other }; 0`, admitted.
-fn joined_constructors(then: &str, other: &str) -> (Checked, Ty) {
+/// `let x = if $c { then } else { other }; 0` refused, each refusal a
+/// relation between the two that does not hold.
+fn assert_constructors_do_not_meet(then: &str, other: &str) {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("c", bool_ty);
+    let source = format!("let x = if $c {{ {then} }} else {{ {other} }}; 0");
+    let (checked, _) = fx.script(&source);
+    let refusals = checked.refusals();
+    assert!(!refusals.is_empty() && refusals.iter().all(|kind| matches!(kind, RefusalKind::Mismatch(_))), "{source}: {refusals:?}");
+}
+
+/// types §4: every constructor is invariant, and no type is `!` by holding
+/// a part of type `!`, so a tuple with a `!` element does not meet one
+/// without.
+#[test]
+fn a_tuple_with_a_never_element_does_not_meet_its_sibling() {
+    assert_constructors_do_not_meet("(0, 1)", "(0, return 2)");
+}
+
+/// types §3-4: an array literal's elements are values entering its one
+/// element slot, where values meet; `!` is the bottom, so the slot is the
+/// other elements' type and the arrays meet.
+#[test]
+fn an_array_with_a_never_element_joins_its_sibling() {
     let mut fx = Fixture::new();
     let bool_ty = fx.ty(TyKind::Bool);
     fx.input("c", bool_ty);
     let names = fx.names.clone();
-    let source = format!("let x = if $c {{ {then} }} else {{ {other} }}; 0");
-    let (checked, script) = fx.script(&source);
+    let (checked, script) = fx.script("let x = if $c { [0, 1] } else { [0, return 2] }; 0");
     checked.admitted();
-    let x = binding(&checked, &script, &names, "x");
-    (checked, x)
+    let TyKind::Array(element, _, _) = checked.kind(binding(&checked, &script, &names, "x")) else {
+        panic!("not an array");
+    };
+    assert!(is_int(&checked, *element, IntTy::I64));
 }
 
-/// types §3: a tuple literal's elements enter parts of their own, so a
-/// `!` element does not pin its part, and the branches join.
+/// types §4: likewise an object with a `!` field.
 #[test]
-fn a_tuple_with_a_never_element_joins_its_sibling() {
-    let (checked, x) = joined_constructors("(0, 1)", "(0, return 2)");
-    let TyKind::Tuple(parts, _) = checked.kind(x) else {
-        panic!("not a tuple: {:?}", checked.kind(x));
-    };
-    assert!(parts.iter().all(|part| is_int(&checked, *part, IntTy::I64)), "{:?}", checked.kind(x));
+fn an_object_with_a_never_field_does_not_meet_its_sibling() {
+    assert_constructors_do_not_meet("{ a: 0, b: 1, }", "{ a: 0, b: return 2, }");
 }
 
-/// types §3: an array literal's elements enter its element part.
+/// types §4: likewise a `Some` with a `!` payload.
 #[test]
-fn an_array_with_a_never_element_joins_its_sibling() {
-    let (checked, x) = joined_constructors("[0, 1]", "[0, return 2]");
-    let TyKind::Array(element, _, _) = checked.kind(x) else {
-        panic!("not an array: {:?}", checked.kind(x));
-    };
-    assert!(is_int(&checked, *element, IntTy::I64), "{:?}", checked.kind(x));
-}
-
-/// types §3: an object literal's fields enter parts of their own.
-#[test]
-fn an_object_with_a_never_field_joins_its_sibling() {
-    let (checked, x) = joined_constructors("{ a: 0, b: 1, }", "{ a: 0, b: return 2, }");
-    let TyKind::Object(ObjectTy::Structural(fields, _)) = checked.kind(x) else {
-        panic!("not an object: {:?}", checked.kind(x));
-    };
-    assert!(fields.iter().all(|(_, part)| is_int(&checked, *part, IntTy::I64)), "{:?}", checked.kind(x));
-}
-
-/// types §3: a `Some`'s payload enters a part of its own.
-#[test]
-fn a_some_with_a_never_payload_joins_its_sibling() {
-    let (checked, x) = joined_constructors("Some(1)", "Some(return 2)");
-    let TyKind::Option(payload, _) = checked.kind(x) else {
-        panic!("not an option: {:?}", checked.kind(x));
-    };
-    assert!(is_int(&checked, *payload, IntTy::I64), "{:?}", checked.kind(x));
+fn a_some_with_a_never_payload_does_not_meet_its_sibling() {
+    assert_constructors_do_not_meet("Some(1)", "Some(return 2)");
 }
 
 /// control-flow: a range iterates its integers by value.
