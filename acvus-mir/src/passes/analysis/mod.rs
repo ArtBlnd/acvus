@@ -24,6 +24,7 @@ pub use initialization::{Initialization, Written};
 pub use match_facts::MatchFacts;
 pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
 pub use dominators::{Dominators, Point};
+pub use annotate::{InitAnnotations, LiveAnnotations, LoanAnnotations};
 pub use escapes::Escapes;
 pub use liveness::Liveness;
 pub use loans::{Access, ElementAt, Loan, LoanSet, Loans, Made, Mode, Place, Reach, Storage, TouchedPlace};
