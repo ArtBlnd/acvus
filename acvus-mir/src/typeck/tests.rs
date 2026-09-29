@@ -2794,3 +2794,113 @@ fn a_lift_is_reached_only_as_it_takes_its_variable() {
         checked.admitted();
     }
 }
+
+// G, let-bound function values (functions §2)
+
+/// functions §2: a function value bound by `let` is polymorphic; each use
+/// instantiates it.
+#[test]
+fn a_let_bound_lambda_is_polymorphic() {
+    let (checked, _) = Fixture::new().script("let f = |x| -> x; let a = f(1); let b = f(true); 0");
+    checked.admitted();
+    assert_eq!(checked.typeck.instances.len(), 2);
+}
+
+/// Declares `a` over `i64` and `u8`, and `b` over `i64` and `bool`, each
+/// returning an `i64`: overloads, so a call of either waits for its
+/// argument's type.
+fn methods_a_and_b(fx: &mut Fixture) {
+    let i64_ty = fx.int(IntTy::I64);
+    for (name, widths) in [("a", [TyKind::Int(IntTy::I64), TyKind::Int(IntTy::U8)]), ("b", [TyKind::Int(IntTy::I64), TyKind::Bool])] {
+        for (at, width) in widths.into_iter().enumerate() {
+            let param = fx.ty(width);
+            let ty = fx.pure(&[param], i64_ty);
+            fx.overload(&format!("n{at}"), name, ty);
+        }
+    }
+}
+
+/// functions §2: two function values joined into one slot require what
+/// either requires, so a use at a type only one answers is refused.
+#[test]
+fn a_join_of_function_values_requires_what_either_requires() {
+    let mut fx = Fixture::new();
+    methods_a_and_b(&mut fx);
+    let b = fx.name("b");
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("c", bool_ty);
+    let source = "let f = |x| -> a(x); let k = |x| -> b(x); let h = if $c { f } else { k }; let p = h(1i64); let q = h(1u8); 0";
+    let (checked, _) = fx.script(source);
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: b }]);
+}
+
+/// functions §2: a binding's scheme is settled from every value it is
+/// given, so a use written before an assignment requires what the
+/// assigned value does too.
+#[test]
+fn a_bindings_scheme_is_settled_from_every_value_it_is_given() {
+    let mut fx = Fixture::new();
+    let (i64_ty, string, bool_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::String), fx.ty(TyKind::Bool), fx.ty(TyKind::Unit));
+    for (namespace, target) in [("s", string), ("b", bool_ty)] {
+        let lent = fx.reference(Mutability::Mut, target);
+        let pushes = fx.pure(&[lent, i64_ty], unit);
+        fx.overload(namespace, "push", pushes);
+    }
+    let lent_string = fx.reference(Mutability::Mut, string);
+    let clears = fx.pure(&[lent_string], unit);
+    let clear = fx.overload("s", "clear", clears);
+    fx.context("t", string);
+    fx.context("u", bool_ty);
+    let source = "let step = |s| -> s.push(1); let x = step(&mut @u); step = |s| -> s.clear(); let y = step(&mut @t); 0";
+    let (checked, _) = fx.script(source);
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clear.name }]);
+}
+
+/// functions §2: a value whose body is elsewhere, a call's result, is not
+/// generalized: its instance was fixed where it was made.
+#[test]
+fn a_calls_result_is_not_generalized() {
+    let mut fx = Fixture::new();
+    let (i64_ty, f64_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Float));
+    let adds = fx.pure(&[i64_ty], i64_ty);
+    let makes = fx.pure(&[i64_ty], adds);
+    fx.declare("make_adder", makes, &[]);
+    let _ = f64_ty;
+    let (checked, _) = fx.script("let m = make_adder(1); let a = m(1); let b = m(true); 0");
+    assert!(!checked.refusals().is_empty());
+    assert!(checked.typeck.instances.is_empty());
+}
+
+/// functions §2, types §1: what a captured binding holds belongs to where
+/// it was written, so a lambda that stores its parameter into one is not
+/// generalized over it.
+#[test]
+fn a_captured_bindings_type_is_not_generalized() {
+    let (checked, _) = Fixture::new().script("let z; let f = |x| -> { z = x; x }; let a = f(1); let b = f(true); 0");
+    assert!(!checked.refusals().is_empty(), "`z` is one binding of one type");
+}
+
+/// functions §2: a requirement refused at a use names the site it arose
+/// at, in the lambda's body.
+#[test]
+fn a_requirement_refused_at_a_use_names_where_it_arose() {
+    let mut fx = Fixture::new();
+    methods_a_and_b(&mut fx);
+    let a = fx.name("a");
+    let source = "let f = |x| -> a(x); let p = f(1u8); let q = f(true); 0";
+    let (checked, _) = fx.script(source);
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: a }]);
+    let at = source.find("a(x)").expect("the call is written");
+    assert_eq!(checked.typeck.refusals[0].span.start, at);
+}
+
+
+/// functions §2: a use of a generalized binding inside another's value is
+/// an instance within each instance of the other.
+#[test]
+fn a_use_inside_a_generalized_value_is_an_instance_within_its_instances() {
+    let (checked, _) = Fixture::new().script("let f = |x| -> x; let g = |y| -> f(y); let a = g(1); let b = g(true); 0");
+    checked.admitted();
+    let within = checked.typeck.instances.values().filter(|instance| instance.within.is_some()).count();
+    assert_eq!(within, 2, "`f` within each of `g`'s two instances");
+}
