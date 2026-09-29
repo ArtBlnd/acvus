@@ -103,7 +103,6 @@ pub struct Graph {
     names: Interner,
     declarations: Declarations,
     units: BTreeMap<QualifiedRef, Unit>,
-    compiled: BTreeMap<QualifiedRef, UnitModule>,
     /// Each unit's revision.
     revisions: BTreeMap<QualifiedRef, u64>,
     /// Each unit's last interface check, by the revisions it read.
@@ -111,6 +110,15 @@ pub struct Graph {
     /// Each unit's last module, by what it was compiled from.
     built: BTreeMap<QualifiedRef, Built>,
     next_revision: u64,
+    work: Work,
+}
+
+/// What a compile did: the units whose interface it checked and those
+/// whose module it built, each in the order it did so.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Work {
+    pub checked: Vec<QualifiedRef>,
+    pub built: Vec<QualifiedRef>,
 }
 
 /// A unit's last interface check: the unit's revision and each callee's
@@ -121,13 +129,21 @@ struct Checked {
     revision: u64,
 }
 
-/// A unit's last module: the revisions it was compiled from, the
-/// instantiations it holds, and each call of another unit its bodies make,
-/// the callee's parameter types in this module's table.
+/// A unit's last module: the revisions it was compiled from and how far,
+/// the instantiations it holds, and each call of another unit its bodies
+/// make, the callee's parameter types in this module's table.
 struct Built {
     read: (u64, Vec<(QualifiedRef, u64)>),
+    stop: Stop,
     module: UnitModule,
     asks: Vec<(QualifiedRef, Box<[Ty]>)>,
+}
+
+/// A unit's interface this compile, kept in `Interfaces` while the compile
+/// runs: the revisions its check read, and its own revision.
+struct Held {
+    read: (u64, Vec<(QualifiedRef, u64)>),
+    revision: u64,
 }
 
 /// One source's module: one body per instantiation of its unit, each by
@@ -136,6 +152,12 @@ struct Built {
 pub struct UnitModule {
     pub module: Module,
     pub instantiations: Vec<(Box<[Ty]>, BodyId)>,
+}
+
+impl UnitModule {
+    fn empty() -> UnitModule {
+        UnitModule { module: Module::new(Types::new()), instantiations: Vec::new() }
+    }
 }
 
 /// A unit's instantiation's body in its module.
@@ -175,51 +197,67 @@ impl Graph {
             names,
             declarations,
             units: BTreeMap::new(),
-            compiled: BTreeMap::new(),
             revisions: BTreeMap::new(),
             checked: BTreeMap::new(),
             built: BTreeMap::new(),
             next_revision: 0,
+            work: Work::default(),
         }
     }
 
     /// Adds or replaces the unit at `unit.name`.
     pub fn set_unit(&mut self, unit: Unit) {
+        let revision = self.raise();
+        self.revisions.insert(unit.name, revision);
         self.units.insert(unit.name, unit);
     }
 
     pub fn remove_unit(&mut self, name: QualifiedRef) {
+        let revision = self.raise();
+        self.revisions.insert(name, revision);
         self.units.remove(&name);
+    }
+
+    /// What the last compile checked and built.
+    pub fn work(&self) -> &Work {
+        &self.work
+    }
+
+    fn raise(&mut self) -> u64 {
+        self.next_revision += 1;
+        self.next_revision
     }
 
     /// Compiles every unit up to `stop`: each interface after its
     /// callees', each instantiation the entries reach, each source's module
-    /// through the required steps, the checks and the pipeline.
+    /// through the required steps, the checks and the pipeline; each only
+    /// where what it was made from changed (the module doc's incremental).
     pub fn compile(&mut self, stop: Stop) -> Result<Compiled<'_>, Vec<Refused>> {
+        self.work = Work::default();
+        let units = &self.units;
+        self.checked.retain(|name, _| units.contains_key(name));
         let order = self.order()?;
-        let interfaces = self.interfaces(&order)?;
-        let mut instantiating = Instantiating { graph: self, interfaces: &interfaces, modules: BTreeMap::new(), refused: Vec::new() };
-        let entries = instantiating.entries();
-        let Instantiating { mut modules, mut refused, .. } = instantiating;
-        for (unit, compiled) in modules.iter_mut() {
-            if stop == Stop::Lowered {
-                break;
-            }
-            let mut am = AnalysisManager::new(&self.declarations);
-            match crate::lower::required::run(&mut compiled.module, &mut am) {
-                Ok(()) => {
-                    if let Stop::Optimized(level) = stop {
-                        crate::passes::pipeline::optimize(&mut compiled.module, &mut am, level);
-                    }
-                }
-                Err(refusals) => refused.push(Refused { unit: *unit, refusals: refusals.into_iter().map(Refusal::Check).collect() }),
-            }
-        }
+        let (interfaces, held) = self.interfaces(&order)?;
+        let last = std::mem::take(&mut self.built);
+        let mut building = Building {
+            graph: self,
+            interfaces: &interfaces,
+            stop,
+            last,
+            asked: BTreeMap::new(),
+            built: BTreeMap::new(),
+            rebuilt: Vec::new(),
+            refused: Vec::new(),
+        };
+        let entries = building.build(&order, &held);
+        let Building { built, rebuilt, refused, .. } = building;
+        self.built = built;
+        self.work.built = rebuilt;
+        self.keep(interfaces, held);
         if !refused.is_empty() {
             return Err(refused);
         }
-        self.compiled = modules;
-        Ok(Compiled { modules: self.compiled.iter().map(|(unit, compiled)| (*unit, compiled)).collect(), entries })
+        Ok(Compiled { modules: self.built.iter().map(|(unit, built)| (*unit, &built.module)).collect(), entries })
     }
 
     /// Each unit's callees among the units: the qualified names its calls
@@ -251,20 +289,70 @@ impl Graph {
     }
 
     /// Each unit's interface, in `order`, each check reaching the
-    /// interfaces before it.
-    fn interfaces(&self, order: &[QualifiedRef]) -> Result<Interfaces, Vec<Refused>> {
+    /// interfaces before it: the last one where the unit's revision and
+    /// the revisions of the interfaces it read are those it was checked at
+    /// and it was not refused, and a new check otherwise. A new interface
+    /// that is the same as the last keeps its revision (early cutoff).
+    /// Refused, every interface is kept again before the refusals return.
+    fn interfaces(&mut self, order: &[QualifiedRef]) -> Result<(Interfaces, BTreeMap<QualifiedRef, Held>), Vec<Refused>> {
         let mut interfaces = Interfaces::new();
+        let mut held: BTreeMap<QualifiedRef, Held> = BTreeMap::new();
         let mut refused = Vec::new();
         for name in order {
-            let typeck = self.check(&self.units[name], &interfaces, Inputs::Open, &mut Types::new());
-            match typeck.refusals.is_empty() {
-                true => interfaces.set(*name, typeck.interface.expect("an open check gives its interface")),
-                false => refused.push(Refused { unit: *name, refusals: typeck.refusals.into_iter().map(Refusal::Typeck).collect() }),
+            let read = self.read(*name, &held);
+            match self.checked.remove(name) {
+                Some(Checked { read: last_read, outcome: Ok(interface), revision }) if last_read == read => {
+                    interfaces.set(*name, interface);
+                    held.insert(*name, Held { read, revision });
+                }
+                last => {
+                    self.work.checked.push(*name);
+                    let typeck = self.check(&self.units[name], &interfaces, Inputs::Open, &mut Types::new());
+                    if !typeck.refusals.is_empty() {
+                        refused.push(Refused { unit: *name, refusals: typeck.refusals.iter().cloned().map(Refusal::Typeck).collect() });
+                        let revision = self.raise();
+                        self.checked.insert(*name, Checked { read, outcome: Err(typeck.refusals), revision });
+                        continue;
+                    }
+                    let interface = typeck.interface.expect("an open check gives its interface");
+                    let revision = match last {
+                        Some(Checked { outcome: Ok(before), revision, .. }) if before.same(&interface) => revision,
+                        _ => self.raise(),
+                    };
+                    interfaces.set(*name, interface);
+                    held.insert(*name, Held { read, revision });
+                }
             }
         }
-        match refused.is_empty() {
-            true => Ok(interfaces),
-            false => Err(refused),
+        if !refused.is_empty() {
+            self.keep(interfaces, held);
+            return Err(refused);
+        }
+        Ok((interfaces, held))
+    }
+
+    /// What `unit`'s check reads: its revision, and the revision of each
+    /// callee's interface, this compile's.
+    fn read(&self, unit: QualifiedRef, held: &BTreeMap<QualifiedRef, Held>) -> (u64, Vec<(QualifiedRef, u64)>) {
+        let callees = self
+            .callees(&self.units[&unit])
+            .into_iter()
+            .map(|callee| {
+                let revision = match held.get(&callee) {
+                    Some(held) => held.revision,
+                    None => self.checked[&callee].revision,
+                };
+                (callee, revision)
+            })
+            .collect();
+        (self.revisions[&unit], callees)
+    }
+
+    /// Each interface held this compile back in its unit's last check.
+    fn keep(&mut self, mut interfaces: Interfaces, held: BTreeMap<QualifiedRef, Held>) {
+        for (name, Held { read, revision }) in held {
+            let interface = interfaces.remove(name).expect("a held interface is in the compile's interfaces");
+            self.checked.insert(name, Checked { read, outcome: Ok(interface), revision });
         }
     }
 
@@ -315,23 +403,81 @@ fn visit(
     order.push(unit);
 }
 
-/// The instantiations the entries reach, each checked with its inputs
-/// fixed and lowered into its source's module.
-struct Instantiating<'g> {
+/// The modules of one compile: each unit, before the units it calls, asked
+/// for its instantiations by the entries and by the modules of its callers;
+/// its last module where what it was compiled from is unchanged, and a new
+/// one otherwise.
+struct Building<'g> {
     graph: &'g Graph,
     interfaces: &'g Interfaces,
-    modules: BTreeMap<QualifiedRef, UnitModule>,
+    stop: Stop,
+    last: BTreeMap<QualifiedRef, Built>,
+    asked: BTreeMap<QualifiedRef, Asked>,
+    built: BTreeMap<QualifiedRef, Built>,
+    rebuilt: Vec<QualifiedRef>,
     refused: Vec<Refused>,
 }
 
-impl Instantiating<'_> {
-    /// Each host-declared entry, in the order of its name: the unit's
-    /// instantiation at the declared types (programs, host).
-    fn entries(&mut self) -> Vec<(QualifiedRef, Entry)> {
+/// The instantiations asked of a unit this compile, each by its types in
+/// the table of `into`.
+struct Asked {
+    into: Into,
+    types: Vec<Box<[Ty]>>,
+}
+
+/// A host-declared entry that fits its unit, with its inputs' declared
+/// types in the order of the unit's parameters.
+struct Declared<'g> {
+    entry: &'g crate::decl::EntryDecl,
+    params: Vec<crate::ty::TyId<crate::ty::Poly>>,
+}
+
+/// Where a unit's asked types are kept: in its last module, whose
+/// instantiations they are compared with, or in a new module where it has
+/// none.
+enum Into {
+    Last(Built),
+    New(UnitModule),
+}
+
+impl Into {
+    fn types_mut(&mut self) -> &mut Types<Concrete> {
+        match self {
+            Into::Last(built) => built.module.module.types_mut(),
+            Into::New(module) => module.module.types_mut(),
+        }
+    }
+}
+
+impl<'g> Building<'g> {
+    /// Every module the entries reach, then each entry's body.
+    fn build(&mut self, order: &[QualifiedRef], held: &BTreeMap<QualifiedRef, Held>) -> Vec<(QualifiedRef, Entry)> {
+        let graph = self.graph;
+        let declared = self.declared();
+        for Declared { entry, params } in &declared {
+            let asked = self.asked(entry.function);
+            let types: Box<[Ty]> =
+                params.iter().map(|declared| crate::typeck::declared_concrete(&graph.declarations, asked.into.types_mut(), *declared)).collect();
+            if !asked.types.contains(&types) {
+                asked.types.push(types);
+            }
+        }
+        for unit in order.iter().rev() {
+            let Some(asked) = self.asked.remove(unit) else {
+                continue;
+            };
+            self.module(*unit, asked, &held[unit].read);
+        }
+        declared.iter().filter_map(|declared| self.entry(declared)).collect()
+    }
+
+    /// Each host-declared entry that fits its unit, in the order of its
+    /// name (programs, host); each that does not, refused.
+    fn declared(&mut self) -> Vec<Declared<'g>> {
         let graph = self.graph;
         let mut declared: Vec<&crate::decl::EntryDecl> = graph.declarations.entries().iter().collect();
         declared.sort_by_key(|entry| entry.function);
-        let mut entries = Vec::new();
+        let mut fits = Vec::new();
         for entry in declared {
             let unit = entry.function;
             let Some(interface) = self.interfaces.get(unit) else {
@@ -343,85 +489,134 @@ impl Instantiating<'_> {
                 self.refuse(unit, Refusal::EntryDoesNotFit { entry: unit });
                 continue;
             }
-            let module = self.module(unit);
-            let types: Box<[Ty]> = interface
+            let params = interface
                 .params
                 .iter()
-                .map(|param| {
-                    let (_, declared) = entry.inputs.iter().find(|(name, _)| name == param).expect("each parameter is declared");
-                    crate::typeck::declared_concrete(&graph.declarations, module.module.types_mut(), *declared)
-                })
+                .map(|param| entry.inputs.iter().find(|(name, _)| name == param).expect("each parameter is declared").1)
                 .collect();
-            let Some(body) = self.instantiate(unit, types) else {
-                continue;
-            };
-            if let Some(result) = entry.result {
-                let module = self.module(unit);
-                let result = crate::typeck::declared_concrete(&graph.declarations, module.module.types_mut(), result);
-                if module.module.body(body).ret() != result {
-                    self.refuse(unit, Refusal::EntryDoesNotFit { entry: unit });
-                    continue;
-                }
-            }
-            entries.push((unit, Entry { module: unit, body }));
+            fits.push(Declared { entry, params });
         }
-        entries
+        fits
     }
 
-    fn module(&mut self, unit: QualifiedRef) -> &mut UnitModule {
-        self.modules.entry(unit).or_insert_with(|| UnitModule { module: Module::new(Types::new()), instantiations: Vec::new() })
+    /// The entry's body in its unit's module, where the module was made
+    /// and the body's result is the declared one.
+    fn entry(&mut self, Declared { entry, params }: &Declared<'_>) -> Option<(QualifiedRef, Entry)> {
+        let unit = entry.function;
+        let declarations = &self.graph.declarations;
+        let module = &mut self.built.get_mut(&unit)?.module;
+        let types: Box<[Ty]> = params.iter().map(|declared| crate::typeck::declared_concrete(declarations, module.module.types_mut(), *declared)).collect();
+        let body = module.instantiations.iter().find(|(at, _)| *at == types)?.1;
+        let fits = match entry.result {
+            Some(result) => module.module.body(body).ret() == crate::typeck::declared_concrete(declarations, module.module.types_mut(), result),
+            None => true,
+        };
+        if !fits {
+            self.refuse(unit, Refusal::EntryDoesNotFit { entry: unit });
+            return None;
+        }
+        Some((unit, Entry { module: unit, body }))
+    }
+
+    /// What is asked of `unit` so far, its types kept in its last module
+    /// where it has one.
+    fn asked(&mut self, unit: QualifiedRef) -> &mut Asked {
+        let last = &mut self.last;
+        self.asked.entry(unit).or_insert_with(|| {
+            let into = match last.remove(&unit) {
+                Some(built) => Into::Last(built),
+                None => Into::New(UnitModule::empty()),
+            };
+            Asked { into, types: Vec::new() }
+        })
+    }
+
+    /// `unit` asked for its instantiation at `types`, of the table `from`.
+    fn ask(&mut self, unit: QualifiedRef, from: &Types<Concrete>, types: &[Ty]) {
+        let asked = self.asked(unit);
+        let into = asked.into.types_mut();
+        let types: Box<[Ty]> = types.iter().map(|ty| into.transplant(from, *ty)).collect();
+        if !asked.types.contains(&types) {
+            asked.types.push(types);
+        }
+    }
+
+    /// `unit`'s module: its last, where it was compiled from `read` up to
+    /// this compile's stop and holds exactly the instantiations asked; a
+    /// new one otherwise. Then what its bodies ask of other units.
+    fn module(&mut self, unit: QualifiedRef, asked: Asked, read: &(u64, Vec<(QualifiedRef, u64)>)) {
+        let refused = self.refused.len();
+        let built = match asked.into {
+            Into::Last(last) if last.read == *read && last.stop == self.stop && holds_exactly(&last.module, &asked.types) => last,
+            Into::Last(last) => {
+                let mut module = UnitModule::empty();
+                let from = last.module.module.types();
+                let types = asked.types.iter().map(|types| types.iter().map(|ty| module.module.types_mut().transplant(from, *ty)).collect()).collect();
+                self.rebuild(unit, module, types, read)
+            }
+            Into::New(module) => self.rebuild(unit, module, asked.types, read),
+        };
+        for (callee, types) in &built.asks {
+            self.ask(*callee, built.module.module.types(), types);
+        }
+        if self.refused.len() == refused {
+            self.built.insert(unit, built);
+        }
+    }
+
+    /// `unit`'s module made anew: its body at each of `asked`, checked with
+    /// its inputs fixed and lowered; then through the required steps, the
+    /// checks and the pipeline, as far as this compile's stop.
+    fn rebuild(&mut self, unit: QualifiedRef, mut module: UnitModule, asked: Vec<Box<[Ty]>>, read: &(u64, Vec<(QualifiedRef, u64)>)) -> Built {
+        let graph = self.graph;
+        let interfaces = self.interfaces;
+        self.rebuilt.push(unit);
+        let interface = interfaces.get(unit).expect("an instantiated unit has an interface");
+        let source = &graph.units[&unit];
+        let mut asks = Vec::new();
+        for types in asked {
+            let fixed: Vec<(Astr, Ty)> = interface.params.iter().copied().zip(types.iter().copied()).collect();
+            let typeck = graph.check(source, interfaces, Inputs::Fixed(&fixed), module.module.types_mut());
+            if !typeck.refusals.is_empty() {
+                let refusals = typeck.refusals.into_iter().map(Refusal::Typeck).collect();
+                self.refused.push(Refused { unit, refusals });
+                continue;
+            }
+            let body = match &source.source {
+                Source::Script(script) => crate::lower::lower_script_into(&graph.declarations, &typeck, &mut module.module, script),
+                Source::Template(template) => crate::lower::lower_template_into(&graph.declarations, &typeck, &mut module.module, template),
+            };
+            module.instantiations.push((types, body));
+            let mut calls: Vec<(acvus_ast::AstId, QualifiedRef)> = typeck.units.iter().map(|(site, call)| (*site, call.unit)).collect();
+            calls.sort_by_key(|(site, _)| *site);
+            for (site, callee) in calls {
+                let TyKind::Fn { params, .. } = module.module.types().kind(typeck.callees[&site]) else {
+                    panic!("a unit call's callee is a function type");
+                };
+                asks.push((callee, params.clone()));
+            }
+        }
+        if self.stop != Stop::Lowered {
+            let mut am = AnalysisManager::new(&graph.declarations);
+            match crate::lower::required::run(&mut module.module, &mut am) {
+                Ok(()) => {
+                    if let Stop::Optimized(level) = self.stop {
+                        crate::passes::pipeline::optimize(&mut module.module, &mut am, level);
+                    }
+                }
+                Err(refusals) => self.refused.push(Refused { unit, refusals: refusals.into_iter().map(Refusal::Check).collect() }),
+            }
+        }
+        Built { read: read.clone(), stop: self.stop, module, asks }
     }
 
     fn refuse(&mut self, unit: QualifiedRef, refusal: Refusal) {
         self.refused.push(Refused { unit, refusals: vec![refusal] });
     }
+}
 
-    /// `unit` at `types`, its parameters' types in its module's table: its
-    /// body, made once per types; then each unit it calls, at the call's
-    /// types. `None` where its check refused it.
-    fn instantiate(&mut self, unit: QualifiedRef, types: Box<[Ty]>) -> Option<BodyId> {
-        let graph = self.graph;
-        let interfaces = self.interfaces;
-        let interface = interfaces.get(unit).expect("an instantiated unit has an interface");
-        let module = self.module(unit);
-        if let Some((_, body)) = module.instantiations.iter().find(|(at, _)| *at == types) {
-            return Some(*body);
-        }
-        let fixed: Vec<(Astr, Ty)> = interface.params.iter().copied().zip(types.iter().copied()).collect();
-        let source = &graph.units[&unit];
-        let typeck = graph.check(source, interfaces, Inputs::Fixed(&fixed), module.module.types_mut());
-        if !typeck.refusals.is_empty() {
-            let refusals = typeck.refusals.into_iter().map(Refusal::Typeck).collect();
-            self.refused.push(Refused { unit, refusals });
-            return None;
-        }
-        let body = match &source.source {
-            Source::Script(script) => crate::lower::lower_script_into(&graph.declarations, &typeck, &mut module.module, script),
-            Source::Template(template) => crate::lower::lower_template_into(&graph.declarations, &typeck, &mut module.module, template),
-        };
-        module.instantiations.push((types, body));
-        let mut calls: Vec<(acvus_ast::AstId, QualifiedRef)> = typeck.units.iter().map(|(site, call)| (*site, call.unit)).collect();
-        calls.sort_by_key(|(site, _)| *site);
-        for (site, callee) in calls {
-            let callee_ty = typeck.callees[&site];
-            let at = self.called_at(unit, callee, callee_ty);
-            self.instantiate(callee, at);
-        }
-        Some(body)
-    }
-
-    /// The types a call in `caller`'s module, of function type `callee_ty`,
-    /// instantiates `callee` at: its parameters, moved into the callee's
-    /// module's table.
-    fn called_at(&mut self, caller: QualifiedRef, callee: QualifiedRef, callee_ty: Ty) -> Box<[Ty]> {
-        self.module(callee);
-        let mut into = self.modules.remove(&callee).expect("made above");
-        let from = self.modules[&caller].module.types();
-        let TyKind::Fn { params, .. } = from.kind(callee_ty) else {
-            panic!("a unit call's callee is a function type");
-        };
-        let at = params.iter().map(|param| into.module.types_mut().transplant(from, *param)).collect();
-        self.modules.insert(callee, into);
-        at
-    }
+/// Whether `module` holds an instantiation at each of `types`, distinct,
+/// and at no others.
+fn holds_exactly(module: &UnitModule, types: &[Box<[Ty]>]) -> bool {
+    module.instantiations.len() == types.len() && types.iter().all(|types| module.instantiations.iter().any(|(at, _)| at == types))
 }
