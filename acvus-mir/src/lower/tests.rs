@@ -1315,8 +1315,9 @@ fn a_narrowed_object_is_a_new_object_of_the_parameters_fields() {
     assert!(matches!(made.op(), Op::MakeObject { fields } if fields.len() == 1), "{}", shown(body));
 }
 
-/// types §1: a tuple's lifted `clone` calls each part's own impl on a
-/// reference to that part, and makes a tuple of their results.
+/// types §1, ownership §2: a tuple's lifted `clone` calls its `String`
+/// part's own impl on a reference to that part, copies its `i64` part,
+/// which copies, and makes a tuple of the two.
 #[test]
 fn a_lifted_clone_calls_each_parts_impl_and_rebuilds_the_tuple() {
     let mut fx = Fixture::new();
@@ -1342,11 +1343,13 @@ fn a_lifted_clone_calls_each_parts_impl_and_rebuilds_the_tuple() {
             _ => None,
         })
         .collect();
-    assert_eq!(calls, vec![0, 1], "{}", shown(body));
+    assert_eq!(calls, vec![0], "only the `String` part calls an impl: {}", shown(body));
     for at in [0, 1] {
         let part = |op: &Op| matches!(op, Op::Ref { path, mutability: Mutability::Shared, .. } if path[..] == [PathSeg::Index(at)]);
-        assert_eq!(count(&ops, part), 1, "part {at} is lent to its impl: {}", shown(body));
+        assert_eq!(count(&ops, part), 1, "part {at} is lent: {}", shown(body));
     }
+    let copied = |op: &Op| matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if path.is_empty());
+    assert_eq!(count(&ops, copied), 1, "the `i64` part is its copy: {}", shown(body));
     assert_eq!(count(&ops, |op| matches!(op, Op::MakeTuple { elements } if elements.len() == 2)), 1, "{}", shown(body));
 }
 
@@ -1359,7 +1362,7 @@ fn a_lifted_eq_asks_each_parts_impl_in_order() {
     let shared = fx.reference(Mutability::Shared, int);
     let at_int = fx.function(&[shared, shared], bool_ty, Effect::pure());
     let eq = fx.raw.core.eq;
-    let facts = DeclaredFacts { laws: crate::decl::Laws::Equivalence, ..Default::default() };
+    let facts = DeclaredFacts { access: Box::new([crate::decl::declared::Access::Equivalence]), ..Default::default() };
     let concrete = Box::new([ImplSig { ty: at_int, param_names: fx.param_names(2), requires: Box::new([]), facts }]);
     fx.raw.lang_impls.push((eq, Impls { concrete, generic: None }));
     let pair = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
@@ -1371,4 +1374,95 @@ fn a_lifted_eq_asks_each_parts_impl_in_order() {
     assert_eq!(calls, 2, "{}", shown(body));
     let diamonds = lowered.entry_terminators().iter().filter(|terminator| matches!(terminator, Terminator::Diamond { .. })).count();
     assert_eq!(diamonds, 1, "the second part is asked only where the first is equal: {}", shown(body));
+}
+
+/// The instructions of every body of `lowered`, the entry's first.
+fn all_ops(lowered: &Lowered) -> Vec<&Op> {
+    lowered.module.body_ids().flat_map(|id| lowered.ops(id)).collect()
+}
+
+/// types §3, ownership §5: a reference to an object entering a parameter
+/// that is a reference to a narrower one is a reference into the original
+/// storage for each field the parameter names, gathered into the
+/// reference the call receives; nothing is taken out or rebuilt.
+#[test]
+fn a_reference_coerced_through_its_target_gathers_references_to_its_parts() {
+    let mut fx = Fixture::new();
+    let a = fx.name("a");
+    let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
+    let object = fx.ty(TyKind::Object(crate::ty::ObjectTy::Structural(Box::new([(a, int)]), ())));
+    let shared = fx.reference(Mutability::Shared, object);
+    let ty = fx.function(&[shared], unit, Effect::pure());
+    fx.declare("f", ty, 1);
+    let lowered = fx.script("f(&{ a: 1, b: true, })");
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    let lent = |op: &Op| matches!(op, Op::Ref { target: RefTarget::Through(_), path, mutability: Mutability::Shared } if path[..] == [PathSeg::Field(a)]);
+    assert_eq!(count(&ops, lent), 1, "{}", shown(body));
+    let gathered = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::Gather, .. });
+    assert_eq!(count(&ops, gathered), 1, "{}", shown(body));
+    assert_eq!(count(&ops, |op| matches!(op, Op::FieldGet { .. })), 0, "nothing is taken out: {}", shown(body));
+}
+
+/// types §1, §3: an array stored into a context of another element type
+/// is mapped element by element, never unrolled.
+#[test]
+fn an_array_coerced_is_mapped_element_by_element() {
+    let mut fx = Fixture::new();
+    let (u8_ty, int) = (fx.ty(TyKind::Int(IntTy::U8)), fx.int());
+    let widening = fx.function(&[u8_ty], int, Effect::pure());
+    let widen = fx.declare("widen", widening, 1);
+    fx.raw.casts.push(crate::decl::CastRule { from: u8_ty, to: int, via: widen });
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
+    fx.context("v", array, false);
+    let lowered = fx.script("@v = [1u8, 2u8]; 0");
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, .. });
+    assert_eq!(count(&ops, mapped), 1, "{}", shown(body));
+    let widened = |op: &Op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == widen);
+    assert_eq!(count(&all_ops(&lowered), widened), 1, "the cast is made once, in the map's function: {}", shown(body));
+}
+
+/// types §1: an array's lifted `clone` maps its elements by the element's
+/// impl.
+#[test]
+fn a_lifted_clone_of_an_array_maps_its_elements() {
+    let mut fx = Fixture::new();
+    let string = fx.ty(TyKind::String);
+    let shared = fx.reference(Mutability::Shared, string);
+    let clones = fx.function(&[shared], string, Effect::pure());
+    let clone = fx.raw.core.clone;
+    fx.lang_item(clone, &[clones]);
+    let array = fx.ty(TyKind::Array(string, crate::ty::LenTerm::Known(2), ()));
+    fx.input("a", array);
+    let lowered = fx.script("$a.clone()");
+    let body = lowered.entry();
+    let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, .. });
+    assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{}", shown(body));
+    let cloned = |op: &Op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == clone);
+    assert_eq!(count(&all_ops(&lowered), cloned), 1, "{}", shown(body));
+}
+
+/// ownership §2, operators §2: a `clone` of a value that copies is its
+/// copy, and `Option`'s `default` is `None`; neither calls an impl.
+#[test]
+fn the_languages_own_answers_call_no_impl() {
+    let lowered = Fixture::new().script("let x = 1.clone(); x");
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    assert_eq!(count(&ops, |op| matches!(op, Op::FunctionCall { .. })), 0, "{}", shown(body));
+    let copied = |op: &Op| matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if path.is_empty());
+    assert_eq!(count(&ops, copied), 1, "{}", shown(body));
+
+    let mut fx = Fixture::new();
+    let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
+    let option = fx.ty(TyKind::Option(int, ()));
+    let ty = fx.function(&[option], unit, Effect::pure());
+    fx.declare("f", ty, 1);
+    let lowered = fx.script("f(default())");
+    let body = lowered.entry();
+    let none = lowered.name("None");
+    let made = |op: &Op| matches!(op, Op::MakeVariant { tag, payload: None } if *tag == none);
+    assert_eq!(count(&lowered.entry_ops(), made), 1, "{}", shown(body));
 }

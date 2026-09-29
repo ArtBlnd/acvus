@@ -198,15 +198,15 @@ impl Fixture {
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
     }
 
-    /// A lang item's concrete impls, each stating `laws`.
-    fn lang_item_stating(&mut self, item: QualifiedRef, impls: &[TyId<Poly>], laws: crate::decl::Laws) {
+    /// A lang item's concrete impls, each declaring `facts`.
+    fn lang_item_stating(&mut self, item: QualifiedRef, impls: &[TyId<Poly>], facts: DeclaredFacts) {
         let concrete = impls
             .iter()
             .map(|ty| ImplSig {
                 ty: *ty,
                 param_names: self.param_names(self.arity(*ty)),
                 requires: Box::new([]),
-                facts: DeclaredFacts { laws: laws.clone(), ..Default::default() },
+                facts: facts.clone(),
             })
             .collect();
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
@@ -1550,32 +1550,35 @@ fn a_clone_lifts_over_every_transparent_structured_type_nested() {
     };
     assert_eq!(checked.typeck.reached[callee_id].declaration, clone);
     assert_eq!(checked.typeck.reached[callee_id].r#impl, Some(Impl::Structural));
-    let mut leaves = Vec::new();
+    let (mut leaves, mut copies) = (Vec::new(), Vec::new());
     let mut open = vec![&checked.typeck.structure_trees[callee_id]];
     while let Some(tree) = open.pop() {
         match tree {
             super::StructureTree::Parts(parts) => open.extend(parts.iter().map(|(_, part)| part)),
             super::StructureTree::Reached { chosen, .. } => leaves.push((chosen.declaration, chosen.r#impl)),
+            super::StructureTree::Own(own) => copies.push(*own),
         }
     }
-    // The leaves: the array's element's `Some` payload, the `Result`'s two
-    // payloads, and `Red`'s payload.
-    assert_eq!(leaves.len(), 4);
+    // The impls: the `Result`'s `String` payload and `Red`'s. The array of
+    // `Option<i64>`, which copies, and the `Result`'s `bool` payload are
+    // their copies (ownership §2).
+    assert_eq!(leaves.len(), 2);
     assert!(leaves.iter().all(|(declaration, r#impl)| *declaration == clone && matches!(r#impl, Some(Impl::Concrete(_)))));
+    assert_eq!(copies, vec![super::Own::Copy; 2]);
 }
 
 /// types §1: a structure has a lifted `clone` only where every part has an
-/// impl; one part of none, however deep, refuses it there.
+/// impl; one part of none, however deep, refuses it there. A part that
+/// copies needs none (ownership §2).
 #[test]
 fn a_clone_of_a_structure_with_a_part_of_no_impl_is_refused() {
     let mut fx = Fixture::new();
     let clone = fx.raw.core.clone;
     let (string, bool_ty) = (fx.ty(TyKind::String), fx.ty(TyKind::Bool));
-    fx.clones(&[string]);
     let a = fx.name("a");
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, bool_ty)]), ())));
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, string)]), ())));
     let option = fx.ty(TyKind::Option(object, ()));
-    let whole = fx.ty(TyKind::Tuple(Box::new([string, option]), ()));
+    let whole = fx.ty(TyKind::Tuple(Box::new([bool_ty, option]), ()));
     fx.input("t", whole);
     let (checked, _) = fx.script("$t.clone()");
     assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
@@ -1591,11 +1594,11 @@ fn eq_lifts_only_where_every_parts_eq_is_declared_an_equivalence() {
         let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
         let shared = fx.reference(Mutability::Shared, i64_ty);
         let at_int = fx.pure(&[shared, shared], bool_ty);
-        let laws = match states_equivalence {
-            true => crate::decl::Laws::Equivalence,
-            false => crate::decl::Laws::None,
+        let access: Box<[crate::decl::declared::Access]> = match states_equivalence {
+            true => Box::new([crate::decl::declared::Access::Equivalence]),
+            false => Box::new([]),
         };
-        fx.lang_item_stating(eq, &[at_int], laws);
+        fx.lang_item_stating(eq, &[at_int], DeclaredFacts { access, ..Default::default() });
         let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, i64_ty]), ()));
         fx.input("t", pair);
         let (checked, script) = fx.script("eq(&$t, &$t)");
@@ -1629,7 +1632,7 @@ fn an_object_narrows_to_the_fields_a_declarations_parameter_names() {
     let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
         panic!("not a call");
     };
-    let super::Coercion::Structured { shape, to, parts } = &checked.typeck.coercions[&args[0].id()] else {
+    let super::Coercion::Structured { shape, through: None, to, parts } = &checked.typeck.coercions[&args[0].id()] else {
         panic!("an object is coerced by its shape");
     };
     assert_eq!(shape, &ShapeCoercion::Narrowed { left: Box::new([b]) });
@@ -2423,3 +2426,287 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
     assert!(called.iter().all(|flows| *flows == FlowTerm::Known(Flows::Every)), "{called:?}");
 }
 
+
+
+// Round two of the structure rule (types §1, §3, §6; operators §2, §4;
+// ownership §2, §5)
+
+/// A generic function `name` whose one concrete impl is `at`, both of the
+/// signature `generic`.
+fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId<Poly>, facts: DeclaredFacts) -> QualifiedRef {
+    let id = QualifiedRef::root(fx.name(name));
+    let arity = fx.arity(generic);
+    let concrete = Box::new([ImplSig { ty: at, param_names: fx.param_names(arity), requires: Box::new([]), facts }]);
+    let scheme = Scheme {
+        ty: generic,
+        param_names: fx.param_names(arity),
+        bounds: Box::new([TyVarBound::Any]),
+        impls: Some(Impls { concrete, generic: None }),
+        requires: Box::new([]),
+        facts: DeclaredFacts::default(),
+    };
+    fx.raw.functions.push((id, scheme));
+    id
+}
+
+/// types §1, §6: a value of a structured type a declaration wrote binds
+/// the slot of an `if` first, whichever branch it is in, and the other
+/// branch's value is coerced to it: the outcome does not depend on the
+/// order the branches are checked in.
+#[test]
+fn a_meeting_is_decided_by_the_value_written_elsewhere_in_either_order() {
+    let tuple_fixture = || {
+        let mut fx = Fixture::new();
+        let (u8_ty, i64_ty, bool_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+        let widening = fx.pure(&[u8_ty], i64_ty);
+        let widen = fx.declare("widen", widening, &[]);
+        fx.raw.casts.push(CastRule { from: u8_ty, to: i64_ty, via: widen });
+        let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, bool_ty]), ()));
+        let makes = fx.pure(&[], pair);
+        fx.declare("f", makes, &[]);
+        fx.input("c", bool_ty);
+        fx
+    };
+    for source in ["if $c { f() } else { (1u8, true) }", "if $c { (1u8, true) } else { f() }"] {
+        let (checked, _) = tuple_fixture().script(source);
+        checked.admitted();
+    }
+    let object_fixture = || {
+        let mut fx = Fixture::new();
+        let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+        let a = fx.name("a");
+        let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty)]), ())));
+        let makes = fx.pure(&[], object);
+        fx.declare("f", makes, &[]);
+        fx.input("c", bool_ty);
+        fx
+    };
+    for source in ["if $c { f() } else { { a: 1, b: true, } }", "if $c { { a: 1, b: true, } } else { f() }"] {
+        let (checked, _) = object_fixture().script(source);
+        checked.admitted();
+    }
+}
+
+/// types §1: at an enum, `Option` and `Result`, a rebuilt value's variant
+/// is its one argument's; a function taking the type in two parameters
+/// has no lifted impl there, and does at a tuple.
+#[test]
+fn a_rebuild_lifts_at_a_sum_only_from_one_argument() {
+    for (source, admitted) in [("pick(&(1, 2), &(3, 4))", true), ("pick(&Some(1), &Some(2))", false)] {
+        let mut fx = Fixture::new();
+        let (t, i64_ty) = (fx.var(0), fx.int(IntTy::I64));
+        let (shared_t, shared_int) = (fx.reference(Mutability::Shared, t), fx.reference(Mutability::Shared, i64_ty));
+        let generic = fx.pure(&[shared_t, shared_t], t);
+        let at_int = fx.pure(&[shared_int, shared_int], i64_ty);
+        let pick = generic_with_impl(&mut fx, "pick", generic, at_int, DeclaredFacts::default());
+        let (checked, _) = fx.script(source);
+        match admitted {
+            true => checked.admitted(),
+            false => assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: pick.name }]),
+        }
+    }
+}
+
+/// operators §2: `Option`'s `default` is `None`, the language's own value;
+/// a structure of `Option` parts defaults each so. `Result` and a
+/// program's enum have none, nor has a structure with a `Result` part.
+#[test]
+fn default_is_none_at_an_option_and_absent_at_a_result_or_an_enum() {
+    let check = |param: &dyn Fn(&mut Fixture, TyId<Poly>) -> TyId<Poly>| {
+        let mut fx = Fixture::new();
+        let i64_ty = fx.int(IntTy::I64);
+        let param = param(&mut fx, i64_ty);
+        let unit = fx.ty(TyKind::Unit);
+        let takes = fx.pure(&[param], unit);
+        fx.declare("f", takes, &[]);
+        fx.script("f(default())").0
+    };
+    let option = check(&|fx, int| fx.ty(TyKind::Option(int, ())));
+    option.admitted();
+    let pair = check(&|fx, int| {
+        let option = fx.ty(TyKind::Option(int, ()));
+        fx.ty(TyKind::Tuple(Box::new([option, option]), ()))
+    });
+    pair.admitted();
+    let refused = |checked: &Checked| matches!(checked.refusals()[..], [RefusalKind::NoDeclaration { .. }]);
+    let result = check(&|fx, int| fx.ty(TyKind::Result(int, int, ())));
+    assert!(refused(&result), "{:?}", result.refusals());
+    let with_result = check(&|fx, int| {
+        let option = fx.ty(TyKind::Option(int, ()));
+        let result = fx.ty(TyKind::Result(int, int, ()));
+        fx.ty(TyKind::Tuple(Box::new([option, result]), ()))
+    });
+    assert!(refused(&with_result), "{:?}", with_result.refusals());
+    let color = check(&|fx, _| {
+        let red = fx.name("Red");
+        fx.ty(TyKind::Enum { name: QualifiedRef::root(fx.name("Color")), variants: Box::new([(red, None)]), label: () })
+    });
+    assert!(refused(&color), "{:?}", color.refusals());
+}
+
+/// operators §4: an enum, `Option` and `Result` have equality but no
+/// order, so ordering one is refused, as a part too.
+#[test]
+fn ordering_a_sum_is_refused() {
+    for (source, parts) in [("Some(1) < Some(2)", 1), ("(Some(1), Ok(2)) >= (Some(1), Ok(2))", 2), ("let c = if true { Color::Red } else { Color::Blue }; c < c", 1)] {
+        let (checked, _) = Fixture::new().script(source);
+        assert_eq!(checked.refusals(), vec![&RefusalKind::Unordered; parts], "{source}");
+    }
+    let (checked, _) = Fixture::new().script("Some(true) == Some(false)");
+    assert!(!checked.refusals().contains(&&RefusalKind::Unordered));
+}
+
+/// ownership §2: a value that copies clones by its copy, with no `clone`
+/// impl, alone or as a part; a reference part copies.
+#[test]
+fn a_value_that_copies_clones_by_its_copy() {
+    for source in ["1.clone()", "let x = 1; let y = (&x, 1).clone(); 0"] {
+        let (checked, _) = Fixture::new().script(source);
+        checked.admitted();
+        let copied: Vec<_> = checked.typeck.reached.iter().filter(|(_, chosen)| chosen.r#impl == Some(Impl::Structural)).collect();
+        let [(site, _)] = copied[..] else {
+            panic!("one call is answered by the language: {copied:?}");
+        };
+        assert_eq!(checked.typeck.structure_trees[site], super::StructureTree::Own(super::Own::Copy), "{source}");
+    }
+}
+
+/// Unimplemented, not a rule: a requirement a lift would answer is
+/// refused, since no declared function stands for the lifted impl.
+#[test]
+fn a_requirement_a_lift_would_answer_is_refused_as_unimplemented() {
+    let mut fx = Fixture::new();
+    let (vec_id, at_vec) = fx.vec_and_its_view();
+    let (as_slice, clone) = (fx.raw.core.as_slice, fx.raw.core.clone);
+    let e = fx.var(0);
+    let shared_e = fx.reference(Mutability::Shared, e);
+    let clones_e = fx.ty(TyKind::Fn {
+        params: Box::new([shared_e]),
+        ret: e,
+        effect: EffectTerm::Known(crate::ty::Effect::pure()),
+        flows: FlowTerm::Known(Flows::Every),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+    });
+    let view = ImplSig {
+        ty: at_vec,
+        param_names: fx.param_names(1),
+        requires: Box::new([crate::decl::Requirement { generic_function: clone, pattern: clones_e, law: None }]),
+        facts: Default::default(),
+    };
+    fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
+    let string = fx.ty(TyKind::String);
+    fx.clones(&[string]);
+    let single = fx.ty(TyKind::Tuple(Box::new([string]), ()));
+    let singles = fx.ty(TyKind::Slice(single));
+    let shared_singles = fx.reference(Mutability::Shared, singles);
+    let unit = fx.ty(TyKind::Unit);
+    let takes_slice = fx.pure(&[shared_singles], unit);
+    fx.declare("first", takes_slice, &[]);
+    let vec_single = fx.vec_of(vec_id, single);
+    fx.context("v", vec_single);
+    let (checked, _) = fx.script("first(&@v)");
+    let feature = super::Unimplemented::LiftedImplAsRequirement;
+    assert_eq!(checked.refusals(), vec![&RefusalKind::Unimplemented { feature }]);
+}
+
+/// extern-fn §3, §6, types §1: `cmp` combines its parts' answers
+/// lexicographically, which keeps a total order, so a tuple has a lifted
+/// `cmp` only where every part's `cmp` is declared one.
+#[test]
+fn cmp_lifts_only_where_every_parts_cmp_is_declared_a_total_order() {
+    for states in [false, true] {
+        let mut fx = Fixture::new();
+        let cmp = fx.raw.core.cmp;
+        let i64_ty = fx.int(IntTy::I64);
+        let shared = fx.reference(Mutability::Shared, i64_ty);
+        let at_int = fx.pure(&[shared, shared], i64_ty);
+        let action: Box<[crate::decl::declared::Action]> = match states {
+            true => Box::new([crate::decl::declared::Action::TotalOrder]),
+            false => Box::new([]),
+        };
+        fx.lang_item_stating(cmp, &[at_int], DeclaredFacts { action, ..Default::default() });
+        let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, i64_ty]), ()));
+        fx.input("t", pair);
+        let (checked, _) = fx.script("cmp(&$t, &$t)");
+        match states {
+            true => checked.admitted(),
+            false => assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: cmp.name }; 2]),
+        }
+    }
+}
+
+/// D82: a law is stated by the declared fact of its kind, and no longer by
+/// the old `laws` form.
+#[test]
+fn a_law_is_stated_by_its_declared_fact() {
+    use crate::decl::NamedLaw;
+    use crate::decl::declared::{Access, Action};
+    let equivalence = DeclaredFacts { access: Box::new([Access::Equivalence]), ..Default::default() };
+    let total_order = DeclaredFacts { action: Box::new([Action::TotalOrder]), ..Default::default() };
+    let old_form = DeclaredFacts { laws: crate::decl::Laws::Equivalence, ..Default::default() };
+    assert!(NamedLaw::Equivalence.stated_by(&equivalence));
+    assert!(!NamedLaw::Equivalence.stated_by(&total_order));
+    assert!(!NamedLaw::Equivalence.stated_by(&old_form));
+    assert!(NamedLaw::TotalOrder.stated_by(&total_order));
+    assert!(!NamedLaw::TotalOrder.stated_by(&equivalence));
+}
+
+/// ownership §5, types §3: a reference to a structured value entering a
+/// parameter that is a reference to a declaration's structure is coerced
+/// through its target, each part as a reference into the original
+/// storage: an object narrows, but a part is not cast, since a reference
+/// to a `u8` is no reference to an `i64`; through a `&mut`, an enum does
+/// not widen.
+#[test]
+fn a_reference_to_a_structure_is_coerced_through_its_target() {
+    let mut fx = Fixture::new();
+    let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
+    let a = fx.name("a");
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty)]), ())));
+    let shared_object = fx.reference(Mutability::Shared, object);
+    let takes = fx.pure(&[shared_object], unit);
+    fx.declare("f", takes, &[]);
+    let (checked, script) = fx.script("f(&{ a: 1, b: true, })");
+    checked.admitted();
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("not a call");
+    };
+    let super::Coercion::Structured { through, shape, parts, .. } = &checked.typeck.coercions[&args[0].id()] else {
+        panic!("a reference to an object is coerced through its target");
+    };
+    assert_eq!(*through, Some(Mutability::Shared));
+    assert!(matches!(shape, ShapeCoercion::Narrowed { .. }), "{shape:?}");
+    assert!(matches!(parts[..], [(PartKey::Field(_), None)]), "{parts:?}");
+
+    let mut fx = Fixture::new();
+    let (u8_ty, i64_ty, bool_ty, unit) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool), fx.ty(TyKind::Unit));
+    let widening = fx.pure(&[u8_ty], i64_ty);
+    let widen = fx.declare("widen", widening, &[]);
+    fx.raw.casts.push(CastRule { from: u8_ty, to: i64_ty, via: widen });
+    let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, bool_ty]), ()));
+    let shared_pair = fx.reference(Mutability::Shared, pair);
+    let takes = fx.pure(&[shared_pair], unit);
+    fx.declare("f", takes, &[]);
+    let (checked, _) = fx.script("f(&(1u8, true))");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
+
+    for (mutability, source, admitted) in [
+        (Mutability::Shared, "let c = Color::Red; g(&c)", true),
+        (Mutability::Mut, "let c = Color::Red; g(&mut c)", false),
+    ] {
+        let mut fx = Fixture::new();
+        let (red, blue, unit) = (fx.name("Red"), fx.name("Blue"), fx.ty(TyKind::Unit));
+        let mut variants = [(blue, None), (red, None)];
+        variants.sort_by_key(|(tag, _)| *tag);
+        let color = fx.ty(TyKind::Enum { name: QualifiedRef::root(fx.name("Color")), variants: Box::new(variants), label: () });
+        let lent = fx.reference(mutability, color);
+        let takes = fx.pure(&[lent], unit);
+        fx.declare("g", takes, &[]);
+        let (checked, _) = fx.script(source);
+        match admitted {
+            true => checked.admitted(),
+            false => assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]), "{:?}", checked.refusals()),
+        }
+    }
+}
