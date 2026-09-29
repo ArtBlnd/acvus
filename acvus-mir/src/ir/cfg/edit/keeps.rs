@@ -6,7 +6,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
 use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
-use crate::ir::{BinOp, Callee, ForSource, IndexMode, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
+use crate::ir::{BinOp, Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
+use crate::ty::structural;
 use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
 /// A breach of an invariant: a compiler defect, never a refusal.
@@ -409,6 +410,7 @@ impl TypeCheck<'_> {
                 found(element_tys.len() == elements.len(), || "the tuple's arity differs".to_string())?;
                 elements.iter().zip(element_tys.iter()).try_for_each(|(element, ty)| self.same(*element, *ty, "the element"))
             }
+            Op::Intrinsic { intrinsic, args } => self.intrinsic(*intrinsic, args, Self::result(inst)?),
             Op::TupleIndex { tuple, index } => match self.kind(self.ty(*tuple)) {
                 TyKind::Tuple(elements, _) => match elements.get(*index) {
                     Some(element) => self.same(Self::result(inst)?, *element, "the element"),
@@ -456,6 +458,60 @@ impl TypeCheck<'_> {
             Op::Fetch { .. } => self.outlives_the_run(Self::result(inst)?),
             Op::Commit { value, .. } => self.outlives_the_run(*value),
             Op::Undef | Op::Drop { .. } => Ok(()),
+        }
+    }
+
+    /// `intrinsic` over `args` yielding `result`, as `Intrinsic` states.
+    fn intrinsic(&self, intrinsic: Intrinsic, args: &[ValueId], result: ValueId) -> Found {
+        match (intrinsic, args) {
+            // `&m T` from the structure of `&m` references to `T`'s parts,
+            // one reference at each part of `T`.
+            (Intrinsic::Gather, [structure]) => {
+                let TyKind::Ref(mutability, target) = self.kind(self.ty(result)) else {
+                    return Err(format!("{result:?} is not a reference"));
+                };
+                let types = self.types;
+                let (Some(gathered), Some(whole)) = (structural::structure(types, self.ty(*structure)), structural::structure(types, target.ty())) else {
+                    return Err(format!("{structure:?} and {result:?}'s target are not both transparent structured types"));
+                };
+                let (gathered, whole) = (gathered.parts(), whole.parts());
+                found(gathered.len() == whole.len(), || format!("{structure:?} does not have the parts of {result:?}'s target"))?;
+                for (part, of) in gathered.iter().zip(whole.iter()) {
+                    let lends = matches!(self.kind(part.ty), TyKind::Ref(made, lent) if made == mutability && lent.ty() == of.ty);
+                    found(part.key == of.key && lends, || format!("{structure:?}'s part {:?} is not a {mutability:?} reference to the target's", part.key))?;
+                }
+                Ok(())
+            }
+            // `[array, f]`: an array, or a reference to one, mapped by `f`,
+            // which takes each element as the array holds it, or through a
+            // reference of the reference's mutability.
+            (Intrinsic::ArrayMap, [array, f]) => {
+                let (element, len, lent) = match self.kind(self.ty(*array)) {
+                    TyKind::Array(element, len, _) => (*element, known_len(len), None),
+                    TyKind::Ref(mutability, target) => match self.kind(target.ty()) {
+                        TyKind::Array(element, len, _) => (*element, known_len(len), Some(*mutability)),
+                        other => return Err(format!("{array:?} lends {other:?}, not an array")),
+                    },
+                    other => return Err(format!("{array:?} is {other:?}, not an array or a reference to one")),
+                };
+                let TyKind::Fn { params, ret, .. } = self.kind(self.ty(*f)) else {
+                    return Err(format!("{f:?} is not a function"));
+                };
+                let [param] = params[..] else {
+                    return Err(format!("{f:?} does not take one element"));
+                };
+                let takes = match lent {
+                    None => param == element,
+                    Some(mutability) => matches!(self.kind(param), TyKind::Ref(made, taken) if *made == mutability && taken.ty() == element),
+                };
+                found(takes, || format!("{f:?} does not take the element of {array:?}"))?;
+                let ret = *ret;
+                self.is(result, |kind| matches!(kind, TyKind::Array(mapped, mapped_len, _) if *mapped == ret && known_len(mapped_len) == len), "the array of `f`'s results")
+            }
+            // `Intrinsic`'s docs state no arguments for it: a clone of a
+            // `String` is `Op::StringClone`.
+            (Intrinsic::StringClone, _) => Err("`StringClone` is no `Op::Intrinsic`: `Intrinsic` states no arguments for it".to_string()),
+            (intrinsic, args) => Err(format!("{intrinsic:?} takes other arguments than {} given", args.len())),
         }
     }
 

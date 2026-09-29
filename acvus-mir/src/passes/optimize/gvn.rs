@@ -340,6 +340,9 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         Op::ArrayPush { .. } => Shape::ArrayPush,
         Op::MakeObject { fields } => Shape::MakeObject(fields.iter().map(|(name, _)| *name).collect()),
         Op::MakeTuple { .. } => Shape::MakeTuple,
+        // `ArrayMap` calls a function value whose purity the op does not
+        // carry, and `Gather` makes a reference: numbering keys neither.
+        Op::Intrinsic { .. } => return None,
         Op::TupleIndex { index, .. } => Shape::TupleIndex(*index),
         Op::TestLiteral { value, .. } => Shape::TestLiteral(LiteralKey::of(value)),
         Op::TestObjectKey { key, .. } => Shape::TestObjectKey(*key),

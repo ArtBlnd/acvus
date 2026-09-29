@@ -628,9 +628,17 @@ impl<'m> Builder<'m> {
     }
 
     fn effectful_call(&self, op: &Op) -> bool {
-        let Op::FunctionCall { callee_ty, .. } = op else {
-            return false;
+        let callee_ty = match op {
+            Op::FunctionCall { callee_ty, .. } => *callee_ty,
+            // `ArrayMap` calls its function value `f` on each element
+            // (`Intrinsic`), so it is a call of `f`'s type.
+            Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } => {
+                let [_, f] = args[..] else { panic!("`ArrayMap` takes `[array, f]`") };
+                self.body.ty_of(f)
+            }
+            _ => return false,
         };
+        let callee_ty = &callee_ty;
         let Some(effect) = fn_effect(&self.module.types, *callee_ty) else {
             panic!("a call's callee type is a function type")
         };

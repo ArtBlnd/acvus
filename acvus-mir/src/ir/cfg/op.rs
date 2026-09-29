@@ -408,6 +408,7 @@ macro_rules! walk_operands {
             }
             Op::MakeObject { fields } => fields.into_iter().for_each(|(_, v)| $on(v)),
             Op::MakeTuple { elements } => elements.into_iter().for_each(|v| $on(v)),
+            Op::Intrinsic { args, .. } => args.into_iter().for_each(|v| $on(v)),
             Op::TupleIndex { tuple, .. } => $on(tuple),
             Op::ArrayIndex { array, .. } => $on(array),
             Op::MakeClosure { captures, .. } => captures.into_iter().for_each(|v| $on(v)),
@@ -490,6 +491,7 @@ impl Op {
             | Op::ArrayPush { .. }
             | Op::MakeObject { .. }
             | Op::MakeTuple { .. }
+            | Op::Intrinsic { .. }
             | Op::TupleIndex { .. }
             | Op::TestLiteral { .. }
             | Op::TestObjectKey { .. }
@@ -573,6 +575,10 @@ impl Op {
             | Op::SliceLen { .. }
             | Op::Undef
             | Op::Drop { .. } => false,
+            // `Gather` only assembles references; `ArrayMap` traps where
+            // its function does, which that function's type states, as a
+            // `FunctionCall`'s does.
+            Op::Intrinsic { .. } => false,
         }
     }
 

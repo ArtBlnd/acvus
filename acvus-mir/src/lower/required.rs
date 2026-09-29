@@ -29,7 +29,7 @@ use crate::ir::cfg::edit::{
 };
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
-use crate::ir::{Callee, ForSource, PathSeg, RefTarget, ValueId};
+use crate::ir::{Callee, ForSource, Intrinsic, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Storage};
 use crate::passes::edit_facts::EditFacts;
 use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
@@ -240,6 +240,16 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
         Op::ArrayPush { array, value } => operands.extend([passed(*array), passed(*value)]),
         Op::MakeObject { fields } => operands.extend(fields.iter().map(|(_, field)| passed(*field))),
         Op::MakeTuple { elements } => operands.extend(elements.iter().map(|element| passed(*element))),
+        // `Gather` moves the structure of references into the reference it
+        // is; `ArrayMap` takes its array as a call takes an argument, and
+        // calls `f` as an indirect callee is called.
+        Op::Intrinsic { intrinsic: Intrinsic::Gather, args } => operands.extend(args.iter().map(|arg| passed(*arg))),
+        Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => {
+            let [array, function] = args[..] else { panic!("`ArrayMap` takes `[array, f]`") };
+            operands.push(passed(array));
+            operands.extend(callee(&Callee::Indirect(function)));
+        }
+        Op::Intrinsic { intrinsic: Intrinsic::StringClone, .. } => panic!("`StringClone` is no `Op::Intrinsic`: `Intrinsic` states no arguments for it"),
         Op::MakeVariant { payload, .. } => operands.extend(payload.iter().map(|payload| passed(*payload))),
         Op::MakeClosure { captures, .. } => operands.extend(captures.iter().map(|capture| passed(*capture))),
         Op::TestLiteral { src, .. } | Op::TestObjectKey { src, .. } | Op::TestVariant { src, .. } | Op::SliceLen { src } => {

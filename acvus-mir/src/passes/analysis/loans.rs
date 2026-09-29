@@ -857,6 +857,16 @@ impl Forward<'_> {
                 positions
             }
             Op::MakeTuple { elements } => elements.iter().flat_map(|element| self.value(state, *element)).collect(),
+            // Conservative: `Intrinsic`'s docs state `Gather`'s loans are
+            // its part references', and an `ArrayMap`'s elements what `f`
+            // makes of the array's; which of those loans lands at which
+            // position of the result is not stated, so every position of
+            // the result holds every loan of every argument, deepened
+            // through the references it holds.
+            Op::Intrinsic { args, .. } => {
+                let held: LoanSet = args.iter().flat_map(|arg| fold(&self.deepened(state, *arg))).collect();
+                vec![held; self.width(ty())]
+            }
             Op::MakeObject { fields } => {
                 let TyKind::Object(object) = self.types.kind(ty()) else {
                     panic!("an object is made at an object type")
@@ -1111,6 +1121,20 @@ impl Forward<'_> {
                 touched.reads.extend(named_if_reference(*b));
             }
             Op::StringClone { src } => touched.reads = named_if_reference(*src),
+            // `ArrayMap` calls `f` on each element: it touches what its
+            // array and `f` hold as a call of `f` with them would.
+            Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } => {
+                for value in args.iter() {
+                    let held = self.deepened(state, *value);
+                    touched.reads.extend(held.iter().flatten().map(|loan| loan.storage));
+                    for (at, kind) in self.kinds(self.body.ty_of(*value)).into_iter().enumerate() {
+                        if matches!(kind, PositionKind::Ref(Mutability::Mut, _) | PositionKind::Captures(Holds::Mut)) {
+                            let written = held[at].iter().filter(|loan| loan.mode == Mode::Exclusive);
+                            touched.writes.extend(written.map(|loan| loan.storage));
+                        }
+                    }
+                }
+            }
             Op::FunctionCall { callee, args, .. } | Op::Spawn { callee, args, .. } => {
                 for value in args.iter().chain(indirect(callee)) {
                     let held = self.deepened(state, *value);
@@ -1146,6 +1170,7 @@ impl Forward<'_> {
             | Op::ArrayPush { .. }
             | Op::MakeObject { .. }
             | Op::MakeTuple { .. }
+            | Op::Intrinsic { .. }
             | Op::TupleIndex { .. }
             | Op::TestLiteral { .. }
             | Op::TestObjectKey { .. }
