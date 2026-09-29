@@ -44,7 +44,7 @@ Two object types join at the union of their fields. Two enums of one name join a
 
 ## 3. Subtyping
 
-A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it.
+A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form an order with no cycle: a type may have several next steps up, and no type is above itself. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it. Where two nearest common ancestors fit, the meeting is ambiguous and refused.
 
 An identity is a binding a value's type carries: it never changes, two identities are known to be one or not, and two different identities are never made one. A type carries at most one identity.
 
@@ -54,7 +54,7 @@ Values of one identity keep it where they meet; values of two identities meet at
 
 Type constructors stay invariant: subtyping applies to a value entering a slot, not to a constructor's argument.
 
-A value of a transparent structured type coerced to a slot of the same kind (§1) coerces by its kind's shape, and part by part down to the parts that are not one. Each of those parts, a concrete type, coerces as any value of its type is coerced to a slot: by the tree above and by §7. The shape coerces by its kind:
+A value of a transparent structured type coerced to a slot of the same kind (§1) coerces by its kind's shape, and part by part down to the parts that are not one. Each of those parts, a concrete type, coerces as any value of its type is coerced to a slot: by the order above and by §7. The shape coerces by its kind:
 
 - An object narrows to the fields the slot names. The value holds each of them; the others end where it is narrowed (ownership §6).
 - An enum widens to the variants the slot names. The slot names every variant the value may hold.
@@ -74,7 +74,7 @@ Defaults apply only where nothing more can be decided. A type variable nothing c
 
 What a `for` iterates, what `?` unwraps, and which declaration a name or a method call reaches are decided by a type, wherever in the program that type becomes known. A decision reads a type only once nothing can change it, and what the decision leads back into that type must fit it unchanged. The outcome does not depend on the order the program is checked in. A construct whose type never becomes known is refused.
 
-A type becomes known in two steps. Its constructor is known first: that it is an object, an enum of a name, a tuple of an arity, an array, a reference, a number of a width, and so on, once no value meeting in it can still move it up the tree of §3. Its members, the fields of an object and the variants of an enum, are known after, once no value can still meet in it anywhere in the program (§1). A decision waits only for what it reads. Which declaration a name or a method call reaches, what a `for` iterates, what `?` unwraps, and whether a value entering a slot is folded, coerced or converted read constructors, and are decided once those are known. How a value is coerced by its kind's shape (§3), a comparison part by part (operators §4), and a generic function answered at a structure's parts (§1) read members, and are decided once those are known. No decision is made on what may still change, so none is made again, and a type is decided once, the same wherever it is read (§1).
+A type becomes known in two steps. Its constructor is known first: that it is an object, an enum of a name, a tuple of an arity, an array, a reference, a number of a width, and so on, once no value meeting in it can still move it up the order of §3. Its members, the fields of an object and the variants of an enum, are known after, once no value can still meet in it anywhere in the program (§1). A decision waits only for what it reads. Which declaration a name or a method call reaches, what a `for` iterates, what `?` unwraps, and whether a value entering a slot is folded, coerced or converted read constructors, and are decided once those are known. How a value is coerced by its kind's shape (§3), a comparison part by part (operators §4), and a generic function answered at a structure's parts (§1) read members, and are decided once those are known. No decision is made on what may still change, so none is made again, and a type is decided once, the same wherever it is read (§1).
 
 A call reaches by its arguments in order, and a tuple by its parts in order: at each one, stepping up from its exact type, the declarations that match at the first step where any match are kept. Where more than one is left after them, the type the call's result is taken at decides last: those whose result matches it exactly are kept. Exactly one must be left; otherwise the call is refused.
 
@@ -86,4 +86,4 @@ Where a value's type is not the type its slot asks for and no subtyping relates 
 
 ## 8. Specialization
 
-A type argument may carry `#`, the mark that it can always be specialized; an argument without it is never specialized. `#τ` and `τ` are different types, and `#τ` is below `τ`: a type whose argument carries `#` steps up in the tree of §3 to the same type with that argument unmarked, so a value of `F<#τ>` is one of `F<τ>` by that step, and never the reverse. `#` stands only at the root of a type argument: `T<#(X, Y)>` is a type, `T<(X, #Y)>` is not.
+A type argument may carry `#`, the mark that it can always be specialized; an argument without it is never specialized. `#τ` and `τ` are different types, and `#τ` is below `τ`: a type whose argument carries `#` steps up in the order of §3 to the same type with that argument unmarked, so a value of `F<#τ>` is one of `F<τ>` by that step, and never the reverse. `#` stands only at the root of a type argument: `T<#(X, Y)>` is a type, `T<(X, #Y)>` is not.
