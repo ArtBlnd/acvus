@@ -71,6 +71,7 @@ invariant!(TypesAgree, types_agree, "Every operand's type is what its instructio
 invariant!(DefDominatesUses, def_dominates_uses, "Every value's definition dominates each of its uses.");
 invariant!(OrderChainWhole, order_chain_whole, "Every effectful instruction consumes exactly one live token, and every token but a Merge's reaches the body's return (effects §2-3); a Merge nothing consumes orders nothing and is a dead value (D65).");
 invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's stages and exit are blocks of the body (D45, D57).");
+invariant!(NeverDiverges, never_diverges, "In every block the entry reaches, an instruction yielding `!` is the block's last, and the block ends in `Diverge`: no value of type `!` exists, so no run goes past one (types §4, control-flow).");
 invariant!(SplitTakenOnce, split_taken_once, "Every start of a split call is taken exactly once on every path from it (effects §6).");
 
 /// A checker's finding: what breaks the invariant, in words.
@@ -81,6 +82,46 @@ fn found(holds: bool, detail: impl FnOnce() -> String) -> Found {
         true => Ok(()),
         false => Err(detail()),
     }
+}
+
+// -- NeverDiverges ------------------------------------------------------------
+
+fn never_diverges(body: &Body, types: &Types<Concrete>) -> Found {
+    let reached = reached_blocks(body);
+    for (id, block) in body.blocks() {
+        if !reached.contains(&id) {
+            continue;
+        }
+        let insts: Vec<&Inst> = block.insts().collect();
+        for (at, inst) in insts.iter().enumerate() {
+            let Some(result) = inst.result() else {
+                continue;
+            };
+            if !matches!(types.kind(body.ty_of(result)), TyKind::Never) {
+                continue;
+            }
+            let last = at + 1 == insts.len();
+            found(last && matches!(block.terminator(), Terminator::Diverge), || {
+                format!("{id:?} {:?} {:?} yields `!` and is followed by {:?}", inst.id(), inst.op(), match last {
+                    true => format!("{:?}", block.terminator()),
+                    false => format!("{:?}", insts[at + 1].op()),
+                })
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// The blocks some path from the entry reaches.
+fn reached_blocks(body: &Body) -> FxHashSet<BlockId> {
+    let mut reached = FxHashSet::default();
+    let mut to_visit = vec![body.entry()];
+    while let Some(block) = to_visit.pop() {
+        if reached.insert(block) {
+            to_visit.extend(body.block(block).terminator().edges().iter().map(|edge| edge.to));
+        }
+    }
+    reached
 }
 
 // -- TypesAgree --------------------------------------------------------------

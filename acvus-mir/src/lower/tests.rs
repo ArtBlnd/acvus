@@ -9,7 +9,7 @@ use super::{lower_script, lower_template};
 use crate::decl::{
     ContextDecl, ConversionRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
 };
-use crate::ir::cfg::edit::{DefDominatesUses, Invariant, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
+use crate::ir::cfg::edit::{DefDominatesUses, Invariant, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
@@ -208,7 +208,8 @@ type Checker = fn(&Body, &Types<Concrete>) -> Result<(), Violation>;
 
 impl Lowered {
     fn checked(module: Module, names: Interner) -> Lowered {
-        let checkers: [Checker; 5] = [
+        let checkers: [Checker; 6] = [
+            <NeverDiverges as Invariant>::check,
             <TypesAgree as Invariant>::check,
             <DefDominatesUses as Invariant>::check,
             <OrderChainWhole as Invariant>::check,

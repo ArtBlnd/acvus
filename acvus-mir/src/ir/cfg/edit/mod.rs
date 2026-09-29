@@ -22,7 +22,7 @@ mod tests;
 
 pub use cursor::Cursor;
 pub use keeps::{
-    DefDominatesUses, Invariant, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
+    DefDominatesUses, Invariant, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
 pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
 pub use scopes::{

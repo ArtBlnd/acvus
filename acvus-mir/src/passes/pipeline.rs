@@ -8,7 +8,7 @@
 //! step is polynomial, so the whole is (compilation §2).
 
 use crate::ir::cfg::edit::{
-    DefDominatesUses, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree,
+    DefDominatesUses, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree,
 };
 use crate::ir::cfg::{BodyId, Changes, Module, Op};
 use crate::passes::analysis::{AnalysisManager, Escapes, LoopTree};
@@ -169,7 +169,7 @@ impl Requires for Schedule {
 const CHECKED: bool = cfg!(any(debug_assertions, test));
 
 /// Every invariant an editor keeps, over the whole body.
-type Kept = ((TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept), SplitTakenOnce);
+type Kept = (((TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept), NeverDiverges), SplitTakenOnce);
 
 /// Runs `T` over `body` with its required form asserted before, and the
 /// analyses it made stale dropped and the IR's invariants checked after.

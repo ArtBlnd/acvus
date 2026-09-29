@@ -2,7 +2,7 @@
 //! defines a scope; scopes are added here by the coordinator, and none may do
 //! everything.
 
-use super::keeps::{DefDominatesUses, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree};
+use super::keeps::{DefDominatesUses, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree};
 use super::needs::{ContentFacts, DischargeFacts, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
 use crate::ir::cfg::Aspect;
 
@@ -68,7 +68,7 @@ pub struct Drops;
 pub struct Clones;
 
 /// Every scope keeps these.
-type Base = (TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept);
+type Base = ((TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept), NeverDiverges);
 
 macro_rules! scope {
     ($name:ident, [$($aspect:ident),*], $lt:lifetime => $needs:ty, $keeps:ty, [$($cap:ident),*]) => {

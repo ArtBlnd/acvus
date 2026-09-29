@@ -11,13 +11,20 @@ use super::ctxt::Lcx;
 use super::pat::lower_match;
 use super::place::{Operand, lend, lower_borrow, lower_deref, lower_index, operand, read};
 use super::stmt::lower_body;
-use crate::ir::cfg::Op;
+use crate::ir::cfg::{Op, Terminator};
 use crate::ir::ValueId;
 use crate::ty::{LenTerm, Mutability, TyKind};
 use crate::typeck::Name;
 
+/// A value of type `!` does not exist, so no run goes past the expression
+/// that yields one: the block ends there (types §4, control-flow), wherever
+/// the expression stands.
 pub(super) fn lower_expr<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {
-    acvus_utils::grow(|| lower_form(cx, expr))
+    let value = acvus_utils::grow(|| lower_form(cx, expr));
+    if cx.reachable && matches!(cx.kind(cx.value_ty(value)), TyKind::Never) {
+        cx.end_block(Terminator::Diverge, expr.span());
+    }
+    value
 }
 
 fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {

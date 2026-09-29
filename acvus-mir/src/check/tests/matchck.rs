@@ -157,7 +157,6 @@ fn a_nested_pattern_without_a_catch_all_is_refused() {
 /// patterns §4: a scrutinee of type `!` reaches no arm, and no
 /// exhaustiveness question arises.
 #[test]
-#[ignore = "open: lower continues the block past a call of type `!` and MatchFacts gives its result top, so the Switch's default runs; which of them realizes patterns §4 is undecided"]
 fn a_scrutinee_of_type_never_is_not_refused() {
     let mut fx = Fixture::new();
     let never = fx.ty(TyKind::Never);

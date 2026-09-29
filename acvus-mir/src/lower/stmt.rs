@@ -10,9 +10,7 @@ use super::ctxt::{Home, Lcx};
 use super::expr::lower_expr;
 use super::place::{Place, assign, binding_place, lower_deref_store, lower_store};
 use super::template::{lower_append, lower_text};
-use crate::ir::cfg::Terminator;
 use crate::ir::{RefTarget, ValueId};
-use crate::ty::TyKind;
 use crate::typeck::Name;
 
 /// Statements then a tail: the tail's value, or without one `()`.
@@ -34,9 +32,6 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) {
     match stmt {
         Stmt::Expr(expr) => {
             lower_expr(cx, expr);
-            if matches!(cx.kind(cx.ty(expr.id())), TyKind::Never) && cx.reachable {
-                cx.end_block(Terminator::Diverge, expr.span());
-            }
         }
         Stmt::LetBind { binder, expr, .. } => {
             let value = lower_expr(cx, expr);
