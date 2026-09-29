@@ -4,6 +4,7 @@
 use acvus_utils::QualifiedRef;
 
 use super::kind::{Holds, Mutability, TyKind};
+use super::structural::structure;
 use super::{Concrete, Phase, Ty, TyId, Types};
 
 /// The lifetimes each extern-defined type declares (extern-fn §8). The
@@ -40,7 +41,31 @@ where
     V: Phase,
     R: Resolve<V>,
 {
-    todo!("`structure` down to the parts that are not one, `copies_alone` there")
+    acvus_utils::grow(|| copies_level(reader, ty))
+}
+
+fn copies_level<V, R>(reader: &R, ty: TyId<V>) -> Option<bool>
+where
+    V: Phase,
+    R: Resolve<V>,
+{
+    let ty = reader.resolve(ty);
+    let types = reader.types();
+    let Some(structure) = structure(types, ty) else {
+        return match types.kind(ty) {
+            TyKind::Var(_) => None,
+            kind => Some(copies_alone(kind)),
+        };
+    };
+    let mut open = false;
+    for part in structure.parts() {
+        match copies_in(reader, part.ty) {
+            Some(false) => return Some(false),
+            Some(true) => {}
+            None => open = true,
+        }
+    }
+    (!open).then_some(true)
 }
 
 /// Whether a value of the concrete `ty` copies (ownership §1).
@@ -125,14 +150,14 @@ fn for_each_position_level(
             on_position(PositionKind::InFlight);
             for_each_position(types, lifetimes, *result, on_position);
         }
-        TyKind::Array(element, _) | TyKind::Slice(element) | TyKind::Option(element) => {
+        TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
             for_each_position(types, lifetimes, *element, on_position);
         }
-        TyKind::Result(ok, err) => {
+        TyKind::Result(ok, err, _) => {
             for_each_position(types, lifetimes, *ok, on_position);
             for_each_position(types, lifetimes, *err, on_position);
         }
-        TyKind::Tuple(items) => {
+        TyKind::Tuple(items, _) => {
             for item in items.iter() {
                 for_each_position(types, lifetimes, *item, on_position);
             }

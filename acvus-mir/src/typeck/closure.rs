@@ -28,7 +28,7 @@ use super::refusal::{self, Exceeding, RefusalKind};
 use super::scope::Binding;
 use crate::infer::{Exceeds, Term};
 use crate::ty::{
-    Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Holds, HoldsTerm, HoldsVarId, LifetimesOf, Mutability, ObjectTy, TyKind,
+    copies_in, Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Holds, HoldsTerm, HoldsVarId, LifetimesOf, Mutability, TyKind,
 };
 
 /// The lambda's parameters start as fresh variables, constrained by their
@@ -143,7 +143,8 @@ pub(super) fn settle_captures(cx: &mut Ctxt<'_>) {
             .map(|whole| whole.term)
             .collect();
         if !unbound_vars_in(cx, moved_terms.iter().chain(&wholes).copied()) {
-            let calls = match wholes.iter().any(|term| !copies(cx, *term)) {
+            let moves = |term: &Term| !copies_in(&cx.infer, *term).expect("a whole use's type holds no variable once settling reads it");
+            let calls = match wholes.iter().any(moves) {
                 true => Calls::Once,
                 false => Calls::Many,
             };
@@ -327,34 +328,6 @@ pub(super) fn strongest_loan(cx: &Ctxt<'_>, term: Term) -> Loan {
 pub(super) struct Loan {
     pub known: Holds,
     pub unsettled: bool,
-}
-
-/// Whether a value of a solved term copies (ownership §1).
-///
-/// # Panics
-/// `term` holds an unbound variable: the decision reads it only once none
-/// is left.
-pub(super) fn copies(cx: &Ctxt<'_>, term: Term) -> bool {
-    let mut stack = vec![term];
-    let mut seen = FxHashSet::default();
-    while let Some(at) = stack.pop() {
-        let at = cx.infer.shallow(at);
-        if !seen.insert(at) {
-            continue;
-        }
-        match cx.infer.types().kind(at) {
-            TyKind::Never | TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char | TyKind::Unit => {}
-            TyKind::Ref(Mutability::Shared, _) => {}
-            kind @ (TyKind::Tuple(_)
-            | TyKind::Array(..)
-            | TyKind::Option(_)
-            | TyKind::Result(..)
-            | TyKind::Object(ObjectTy::Structural(..))) => kind.for_each_child(|child| stack.push(child)),
-            TyKind::Var(var) => panic!("copies: {var:?} is unbound on a solved term"),
-            _ => return false,
-        }
-    }
-    true
 }
 
 /// A lambda stored into the binding it captures would call itself: only a
