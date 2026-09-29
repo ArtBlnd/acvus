@@ -17,6 +17,7 @@ use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::structural::{PartKey, Structure, structure};
+use crate::ty::{Reach, is_transparent};
 use crate::ty::{
     Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mutability, ObjectTy,
     TyKind, TyVarId, TypeArg,
@@ -203,7 +204,7 @@ impl Infer {
     /// The join of two terms (types §2): a transparent side grows by union
     /// toward the other; an opaque side never grows; afterwards the two are
     /// `eq`. Function types join their effects, flows, calls and split.
-    pub fn join(&mut self, a: Term, b: Term) -> Result<(), Mismatch> {
+    pub fn join(&mut self, a: Term, b: Term, reach: Reach) -> Result<(), Mismatch> {
         let joined = self.join_terms(a, b);
         self.propagate_effects();
         joined
@@ -227,7 +228,7 @@ impl Infer {
     /// conversion from its head to the slot's.
     /// The value is closed: a decision fires only on closed terms (types §6),
     /// and the caller checked with `closed`.
-    pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
+    pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
         let entered = self.enter_slot(decls, value, slot);
         self.propagate_effects();
         entered
@@ -941,11 +942,7 @@ impl Infer {
         (lacking, label): (Term, Label),
         opaque_lacks: impl FnOnce(Term) -> Mismatch,
     ) -> Result<(), Mismatch> {
-        match (how, label) {
-            (Relation::Eq, _) => Err(Mismatch::Heads { a, b }),
-            (Relation::Join, Label::Elsewhere) => Err(opaque_lacks(lacking)),
-            (Relation::Join, Label::Here) => Ok(()),
-        }
+        todo!("under `eq` no side grows; under `join` at `reach`, `lacking` grows only where `is_transparent(label, reach)`, and otherwise `opaque_lacks`; `Relation::Join` carries the reach")
     }
 
     fn relate_variants(

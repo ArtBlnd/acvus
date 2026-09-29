@@ -116,13 +116,16 @@ pub(super) enum Decision {
     /// What a `?` unwraps (control-flow).
     Try { site: AstId, span: Span, operand: Term, value: Term, exit: Term },
     /// A value entering a slot (types §3, §7), in the body whose effect is
-    /// `body`: a coercion's function joins it (effects §1).
+    /// `body`: a coercion's function joins it (effects §1). `reach` is how
+    /// the slot was reached: by name, or through a reference, which grows
+    /// nothing (types §1).
     Enter {
         site: AstId,
         span: Span,
         value: Term,
         slot: Term,
         body: EffectTerm<InferPhase>,
+        reach: crate::ty::Reach,
     },
     /// `as` from its source's type (operators §5).
     Cast { site: AstId, span: Span, source: Term, to: CastTy },

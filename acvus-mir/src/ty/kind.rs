@@ -45,6 +45,8 @@ pub enum TyKind<V: Phase> {
         flows: FlowTerm<V>,
         calls: V::CallsTerm,
         holds: V::HoldsTerm,
+        /// Which function values it may be (types §2).
+        values: V::ValuesTerm,
     },
     /// An extern-defined type (extern-fn §8).
     UserDefined {

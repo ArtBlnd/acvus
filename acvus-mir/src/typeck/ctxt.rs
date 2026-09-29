@@ -73,7 +73,7 @@ impl<'d> Ctxt<'d> {
         }
     }
 
-    pub fn join(&mut self, a: Term, b: Term, span: Span) {
+    pub fn join(&mut self, a: Term, b: Term, reach: crate::ty::Reach, span: Span) {
         if let Err(mismatch) = self.infer.join(a, b) {
             refusal::mismatch(self, mismatch, span);
         }
@@ -82,7 +82,7 @@ impl<'d> Ctxt<'d> {
     /// `value` enters `slot` once `value` is closed (types §3, §7), in the
     /// body being checked. A value already closed at the top of its cast
     /// tree can never change, so it enters at once.
-    pub fn enter(&mut self, site: AstId, value: Term, slot: Term, span: Span) {
+    pub fn enter(&mut self, site: AstId, value: Term, slot: Term, reach: crate::ty::Reach, span: Span) {
         let body = super::effect::body_effect(self);
         self.enter_in(body, site, value, slot, span);
     }
@@ -90,7 +90,7 @@ impl<'d> Ctxt<'d> {
     /// `value` enters `slot` in the body whose effect is `body`, which the
     /// coercion's function joins (effects §1): a decision firing after the
     /// walk names the body it was written in.
-    pub fn enter_in(&mut self, body: EffectTerm<InferPhase>, site: AstId, value: Term, slot: Term, span: Span) {
+    pub fn enter_in(&mut self, body: EffectTerm<InferPhase>, site: AstId, value: Term, slot: Term, reach: crate::ty::Reach, span: Span) {
         let enter = Decision::Enter {
             site,
             span,

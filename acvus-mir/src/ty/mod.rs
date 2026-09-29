@@ -42,6 +42,11 @@ pub trait Phase: 'static + Copy + fmt::Debug + Eq + Hash {
     type HoldsTerm: fmt::Debug + Copy + Eq + Hash;
     /// What a function type's `calls` is in this phase, as `HoldsTerm`.
     type CallsTerm: fmt::Debug + Copy + Eq + Hash;
+    /// Which function values a function type may be (types §2): while
+    /// solving, a variable every copy of the type shares, grown where the
+    /// type is transparent; nothing once solved, since no later reader
+    /// asks it.
+    type ValuesTerm: fmt::Debug + Copy + Eq + Hash;
     /// Who wrote a transparent structured type's node (types §1): fixed
     /// where the node is born, and part of its identity. Only solving asks
     /// it.
@@ -61,6 +66,7 @@ impl Phase for Concrete {
     type FlowVar = Infallible;
     type HoldsTerm = Holds;
     type CallsTerm = Calls;
+    type ValuesTerm = ();
     type Label = ();
 }
 
@@ -77,6 +83,7 @@ impl Phase for Poly {
     type FlowVar = Infallible;
     type HoldsTerm = Holds;
     type CallsTerm = Calls;
+    type ValuesTerm = ();
     type Label = ();
 }
 
@@ -93,7 +100,25 @@ impl Phase for Infer {
     type FlowVar = FlowVarId;
     type HoldsTerm = HoldsTerm;
     type CallsTerm = CallsTerm;
+    type ValuesTerm = ValuesVarId;
     type Label = crate::ty::Label;
+}
+
+/// How a relation reached the node it may grow (types §1): from a binding
+/// by name, through fields and parts named from it, or through a
+/// reference, which reaches some place of its target's type and not which
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Reach {
+    Named,
+    Through,
+}
+
+/// Whether a node of `label`, reached by `reach`, may grow (types §1): the
+/// one test of transparency every relation that grows a type asks. A node
+/// the body wrote, reached by name.
+pub fn is_transparent(label: Label, reach: Reach) -> bool {
+    label == Label::Here && reach == Reach::Named
 }
 
 /// C, the transparency rule (types §1): who wrote a transparent structured
@@ -127,6 +152,26 @@ pub struct FlowVarId(pub u32);
 pub struct HoldsVarId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CallsVarId(pub u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ValuesVarId(pub u32);
+
+/// One function value a function type may be (types §2): a lambda, by its
+/// site, or a declaration used as a value, by its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FnValue {
+    Lambda(acvus_ast::AstId),
+    Declaration(acvus_utils::QualifiedRef),
+}
+
+/// What a `ValuesVarId` holds: the function values the type may be, or
+/// `Any` for a function type a declaration or the host wrote, whose values
+/// are not the program's to name; a value entering it is coerced and its
+/// own are forgotten (types §1, §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FnValues {
+    Any,
+    Of(std::collections::BTreeSet<FnValue>),
+}
 
 static NEXT_TABLE: AtomicU32 = AtomicU32::new(1);
 
