@@ -175,6 +175,10 @@ pub enum Own {
     Copy,
     /// `Option`'s `default` is `None` (operators §2).
     OptionNone,
+    /// `as_ref` or `as_mut`: a structure's parts, each lent at this
+    /// mutability through the reference taken, one level (operators §2,
+    /// ownership §5).
+    Lend(Mutability),
 }
 
 /// A structure-tree node while checking: its parts' nodes, or a reach at

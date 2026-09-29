@@ -16,7 +16,7 @@ use super::refusal::{self, RefusalKind, Unimplemented};
 use crate::decl::{Base, Head, Lift, LiftShape, NamedLaw, Taking};
 use crate::infer::{Closed, Coerced, Instantiated, RequiredAt, Term};
 use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{Effect, EffectTerm, Infer as InferPhase, TyKind, copies_in};
+use crate::ty::{Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Flows, Holds, HoldsTerm, Infer as InferPhase, Label, Mutability, ObjectTy, TyKind, TypeArg, copies_in};
 
 /// A structured value coerced at `site` into `slot` (types §3): its node
 /// records the shape and a node per part it keeps, and each part enters
@@ -125,8 +125,14 @@ pub(super) fn lift_open(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> bo
 /// receiver's type, where a value of that type copies, which the receiver
 /// adjustment reads as any candidate's (types §6).
 pub(super) fn copied_receiver(cx: &Ctxt<'_>, callee: &Callee, arity: usize, receiver: Closed) -> Option<Head> {
-    let CalleeLift { function, lift } = lift_of_callee(cx, callee, arity)?;
     let (Head::Base(base) | Head::Ref(_, base)) = receiver.head;
+    // `as_ref` and `as_mut` take a structure by the reference they lend
+    // its parts through (operators §2).
+    if let Some((_, mutability)) = lend_of_callee(cx, callee, arity) {
+        let structured = matches!(base, Base::Tuple(_) | Base::Array | Base::Option | Base::Result | Base::Object | Base::Enum(_));
+        return structured.then_some(Head::Ref(mutability, base));
+    }
+    let CalleeLift { function, lift } = lift_of_callee(cx, callee, arity)?;
     let value = match receiver.head {
         Head::Base(_) => receiver.term,
         Head::Ref(..) => cx.referent(receiver.term),
@@ -137,6 +143,115 @@ pub(super) fn copied_receiver(cx: &Ctxt<'_>, callee: &Callee, arity: usize, rece
         Some(&Taking::Ref(mutability)) if copied => Some(Head::Ref(mutability, base)),
         Some(_) | None => None,
     }
+}
+
+/// A call of `as_ref` or `as_mut` (operators §2), once its argument is read.
+pub(super) enum LendAt {
+    /// The argument, or a part of the structure it names, is not known yet.
+    Wait,
+    Refused(RefusalKind),
+    /// The structure `structured` the argument names, its parts lent at
+    /// `mutability`.
+    Lends { function: QualifiedRef, mutability: Mutability, structured: Term },
+}
+
+/// The lang item `callee` names that lends a structure's parts, with the
+/// mutability it lends them at, for a call of one argument.
+fn lend_of_callee(cx: &Ctxt<'_>, callee: &Callee, arity: usize) -> Option<(QualifiedRef, Mutability)> {
+    let core = cx.decls.core();
+    let function = match callee {
+        Callee::Declaration(declaration) => *declaration,
+        Callee::Name(name) | Callee::Method(name) => *cx.decls.overloads(*name).iter().find(|declaration| core.lends(**declaration).is_some())?,
+        Callee::Core(_) | Callee::Required(_) | Callee::Part(_) => return None,
+    };
+    (arity == 1).then_some(())?;
+    Some((function, core.lends(function)?))
+}
+
+/// `decision` read as a call of `as_ref` or `as_mut`, where it is one: its
+/// argument a reference to a transparent structured value whose every part
+/// is closed, since each part is lent by its own type (types §4).
+pub(super) fn lend_at(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> Option<LendAt> {
+    let (function, mutability) = lend_of_callee(cx, &decision.callee, decision.args.len())?;
+    let name = function.name;
+    let Some(closed) = closed_for(cx, decision.args[0].1, reading) else {
+        return Some(LendAt::Wait);
+    };
+    let TyKind::Ref(held, target) = cx.infer.types().kind(closed.term) else {
+        // No reference: a structure needs one to be lent through, and any
+        // other value has no parts to lend.
+        let refused = match structure(cx.infer.types(), closed.term) {
+            Some(_) => RefusalKind::NoDeclaration { name },
+            None => RefusalKind::LendsNoParts { name },
+        };
+        return Some(LendAt::Refused(refused));
+    };
+    if mutability == Mutability::Mut && *held == Mutability::Shared {
+        return Some(LendAt::Refused(RefusalKind::MutLendThroughShared { name }));
+    }
+    let Some(target) = closed_for(cx, target.ty(), reading) else {
+        return Some(LendAt::Wait);
+    };
+    let Some(structured) = structure(cx.infer.types(), target.term) else {
+        return Some(LendAt::Refused(RefusalKind::LendsNoParts { name }));
+    };
+    if structured.parts().iter().any(|part| closed_for(cx, part.ty, reading).is_none()) {
+        return Some(LendAt::Wait);
+    }
+    Some(LendAt::Lends { function, mutability, structured: target.term })
+}
+
+/// `decision` answered by the language's lend (operators §2, ownership
+/// §5): its result is the structure rebuilt here, one level, each part a
+/// reference of `mutability`, or, where a part is a reference, that
+/// reference reborrowed at the weaker of the two (types §4).
+pub(super) fn reach_lend(cx: &mut Ctxt<'_>, decision: Reach, function: QualifiedRef, mutability: Mutability, structured: Term) {
+    let Reach { site, span, args, result, .. } = decision;
+    let lent = |cx: &mut Ctxt<'_>, part: Term| {
+        let part = cx.infer.shallow(part);
+        let kind = match cx.infer.types().kind(part) {
+            TyKind::Ref(held, target) => {
+                let weaker = match (*held, mutability) {
+                    (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+                    _ => Mutability::Shared,
+                };
+                TyKind::Ref(weaker, *target)
+            }
+            _ => TyKind::Ref(mutability, TypeArg::Uniform(part)),
+        };
+        cx.node(kind)
+    };
+    let kind = match cx.infer.types().kind(structured).clone() {
+        TyKind::Tuple(items, _) => TyKind::Tuple(items.iter().map(|item| lent(cx, *item)).collect(), Label::Here),
+        TyKind::Object(ObjectTy::Structural(fields, _)) => {
+            TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, lent(cx, *field))).collect(), Label::Here))
+        }
+        TyKind::Enum { name, variants, .. } => TyKind::Enum {
+            name,
+            variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| lent(cx, payload)))).collect(),
+            label: Label::Here,
+        },
+        TyKind::Array(element, len, _) => TyKind::Array(lent(cx, element), len, Label::Here),
+        TyKind::Option(payload, _) => TyKind::Option(lent(cx, payload), Label::Here),
+        TyKind::Result(ok, err, _) => {
+            let ok = lent(cx, ok);
+            TyKind::Result(ok, lent(cx, err), Label::Here)
+        }
+        other => panic!("reach_lend: a lend is answered at a transparent structured type, not {other:?}"),
+    };
+    let made = cx.node(kind);
+    cx.eq(result, made, span);
+    let callee = cx.node(TyKind::Fn {
+        params: args.iter().map(|(_, arg)| *arg).collect(),
+        ret: made,
+        effect: EffectTerm::Known(Effect::pure()),
+        flows: FlowTerm::Known(Flows::Every),
+        calls: CallsTerm::Known(Calls::Many),
+        holds: HoldsTerm::Known(Holds::Nothing),
+    });
+    cx.out.reached.insert(site, Chosen { declaration: function, r#impl: Some(Impl::Structural), required: Box::new([]) });
+    cx.out.callees.insert(site, callee);
+    cx.out.structures.insert(site, StructureNode::Own(Own::Lend(mutability)));
 }
 
 /// The generic function a reach's callee names, and its lift.

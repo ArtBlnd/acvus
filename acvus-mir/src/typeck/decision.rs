@@ -1035,6 +1035,20 @@ fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<()
     // The language's own answer comes before any impl (ownership §2,
     // operators §2). A requirement asks for a declared function to pass,
     // which an own answer is not, so there a concrete impl comes first.
+    // `as_ref` and `as_mut` are the language's alone, given no impls
+    // (operators §2).
+    match super::structure::lend_at(cx, &decision, reading) {
+        Some(super::structure::LendAt::Wait) => return Err(decision),
+        Some(super::structure::LendAt::Refused(kind)) => {
+            refusal::push(cx, kind, decision.span);
+            return Ok(());
+        }
+        Some(super::structure::LendAt::Lends { function, mutability, structured }) => {
+            super::structure::reach_lend(cx, decision, function, mutability, structured);
+            return Ok(());
+        }
+        None => {}
+    }
     let required = matches!(decision.callee, Callee::Required(_));
     if !required && let Some(own) = super::structure::own_at(cx, &decision, reading) {
         return super::structure::reach_own(cx, decision, own);

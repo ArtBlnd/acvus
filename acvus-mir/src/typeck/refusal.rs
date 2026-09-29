@@ -86,6 +86,11 @@ pub enum RefusalKind {
     /// `<`, `>`, `<=` or `>=` on an enum, an `Option` or a `Result`, which
     /// have equality but no order (operators §4).
     Unordered,
+    /// `as_ref` or `as_mut` of a value that is no tuple, object, array,
+    /// enum, `Option` or `Result`, whose parts it would lend (operators §2).
+    LendsNoParts { name: Astr },
+    /// `as_mut` through a `&`, which lends no `&mut` (operators §2).
+    MutLendThroughShared { name: Astr },
     // Unstable: a form the language admits and this compiler does not
     // build yet. No rule refuses it; each is removed once it is built.
     Unimplemented { feature: Unimplemented },
