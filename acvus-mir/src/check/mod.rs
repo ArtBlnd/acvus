@@ -23,6 +23,9 @@ mod initck;
 mod matchck;
 mod moveck;
 
+#[cfg(test)]
+mod tests;
+
 use acvus_ast::Span;
 
 use crate::ir::cfg::Module;
@@ -56,5 +59,12 @@ pub enum RefusalKind {
 /// Every judgment over every body of `module`, in the order the module doc
 /// lists; every refusal each makes.
 pub fn check(module: &Module, am: &mut AnalysisManager<'_>) -> Vec<Refusal> {
-    todo!("initck, moveck, borrowck, matchck over each body, collecting their refusals")
+    let mut refusals = Vec::new();
+    for body in module.body_ids() {
+        initck::check(module, body, am, &mut refusals);
+        moveck::check(module, body, am, &mut refusals);
+        // borrowck: its cut fills this call.
+        // matchck: its cut fills this call.
+    }
+    refusals
 }
