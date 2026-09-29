@@ -56,5 +56,12 @@ pub enum RefusalKind {
 /// Every judgment over every body of `module`, in the order the module doc
 /// lists; every refusal each makes.
 pub fn check(module: &Module, am: &mut AnalysisManager<'_>) -> Vec<Refusal> {
-    todo!("initck, moveck, borrowck, matchck over each body, collecting their refusals")
+    let mut refusals = Vec::new();
+    for body in module.body_ids() {
+        // Placeholder: `initck::check(module, body, am, &mut refusals)`, filled by initck's task.
+        // Placeholder: `moveck::check(module, body, am, &mut refusals)`, filled by moveck's task.
+        borrowck::check(module, body, am, &mut refusals);
+        // Placeholder: `matchck::check(module, body, am, &mut refusals)`, filled by matchck's task.
+    }
+    refusals
 }
