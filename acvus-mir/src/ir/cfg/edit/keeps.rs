@@ -5,9 +5,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
-use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator, part_read};
+use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, IndexMode, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
-use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
+use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types, part_read};
 
 /// A breach of an invariant: a compiler defect, never a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -525,7 +525,7 @@ impl TypeCheck<'_> {
     }
 
     /// Whether `value` is what a part read of `part` through a path of
-    /// mutability `path` yields (`part_read`).
+    /// mutability `path` yields (`ty::part_read`).
     fn reads_part(&self, value: ValueId, part: Ty, path: Mutability) -> bool {
         match part_read(self.types, part, path) {
             None => self.ty(value) == part,

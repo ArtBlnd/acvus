@@ -154,9 +154,9 @@ impl<'m> Builder<'m> {
     }
 
     /// The type a part read of `part` through a path of mutability `path`
-    /// yields (`part_read`).
+    /// yields (`ty::part_read`).
     pub fn part_read_ty(&mut self, part: Ty, path: Mutability) -> Ty {
-        match super::op::part_read(&self.module.types, part, path) {
+        match crate::ty::part_read(&self.module.types, part, path) {
             Some(reborrow) => self.intern(reborrow),
             None => part,
         }

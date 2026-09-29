@@ -138,7 +138,7 @@ pub(super) enum Decision {
     /// transparent (types §1-2).
     Field { span: Span, object: Term, field: Astr, part: Term },
     /// A read of `part`, reached through every container in `through`:
-    /// `result` is what `ir::cfg::part_read` makes of it at the path's
+    /// `result` is what `ty::part_read` makes of it at the path's
     /// mutability, the least any container caps it at (D108 rule 1).
     PartRead { span: Span, part: Term, through: Box<[Through]>, result: Term },
     /// `container[i]`: the language's own for an array or a slice, and

@@ -10,25 +10,7 @@ use crate::ir::{
     BinOp, Callee, Checked, ExternImpl, IndexBound, IndexMode, Overflow, PathSeg, RefTarget,
     UnaryOp, ValueId,
 };
-use crate::ty::{CastTy, Concrete, Mutability, Phase, Ty, TyId, TyKind, Types, copies};
-
-/// Reading a part of type `part` through a path of mutability `path`: a
-/// slice element, a tuple field, an object field or a variant payload.
-/// A part that is a reference is read as a reborrow of it, since a `&mut`
-/// does not copy and a reference's target is never a reference
-/// (ownership §5, types §4). Through a shared path the reborrow is shared;
-/// through a `&mut` path it keeps the part's own mutability, and the
-/// storage keeps the part. `None`: `part` is no reference, and is read as
-/// itself.
-pub fn part_read<V>(types: &Types<V>, part: TyId<V>, path: Mutability) -> Option<TyKind<V>>
-where
-    V: Phase,
-{
-    let TyKind::Ref(own, target) = types.kind(part) else {
-        return None;
-    };
-    Some(TyKind::Ref(own.least(path), target.clone()))
-}
+use crate::ty::{CastTy, Concrete, Mutability, Ty, Types, copies};
 
 #[derive(Debug, Clone)]
 pub enum Op {
@@ -80,7 +62,7 @@ pub enum Op {
     },
     /// Move the value out of a storage into the result; a primitive is copied
     /// and the storage keeps it. A read of a variable. It is a part read
-    /// (`part_read`) through the target: a variable's or parameter's own
+    /// (`ty::part_read`) through the target: a variable's or parameter's own
     /// storage is a `&mut` path, and a reference's storage a path of the
     /// reference's mutability.
     Take {
@@ -132,7 +114,7 @@ pub enum Op {
     },
     /// Element `index` of `slice`. The index is `u64`; the one check is
     /// `index < len`, made unless `bound` is `Proven`. A `Copy` is a part
-    /// read (`part_read`) through a path of the slice's mutability.
+    /// read (`ty::part_read`) through a path of the slice's mutability.
     Index {
         slice: ValueId,
         index: ValueId,
@@ -164,7 +146,7 @@ pub enum Op {
     },
     // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
-    /// It is a part read (`part_read`) through the value, a `&mut` path, as
+    /// It is a part read (`ty::part_read`) through the value, a `&mut` path, as
     /// are `TupleIndex`, `ArrayIndex`, `ObjectGet` and `UnwrapVariant`.
     FieldGet {
         object: ValueId,

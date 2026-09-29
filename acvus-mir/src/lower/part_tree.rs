@@ -8,7 +8,7 @@
 //!
 //! A node's operand is a shared reference to its value, or, where the node
 //! is itself a reference, a shared reborrow of it, read as any reference
-//! part is (`ir::cfg::part_read`), since a reference's target is never a
+//! part is (`ty::part_read`), since a reference's target is never a
 //! reference (types §4).
 
 use acvus_ast::{AstId, BinOp, Expr, Literal, Slot, Span};

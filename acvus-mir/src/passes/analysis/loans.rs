@@ -42,12 +42,12 @@ use rustc_hash::FxHashMap;
 use crate::decl::declared::{Access, Element, Touch};
 use crate::decl::{Declarations, segments};
 use crate::flows::segment_positions;
-use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator, part_read};
+use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::{Callee, ForSource, IndexMode, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types, copies,
+    Alignment, Concrete, FlowEnd, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types, copies, part_read,
     position_kinds, positions,
 };
 

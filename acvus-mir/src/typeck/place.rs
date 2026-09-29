@@ -17,8 +17,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::{capturing_binding, note_captures};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ir::cfg::part_read;
-use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, TyKind, TypeArg};
+use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, TyKind, TypeArg, part_read};
 
 /// What an expression is read for, passed down and never held: `a[i]`
 /// reaches `as_slice` or `as_slice_mut` by it (operators §3).
@@ -126,7 +125,7 @@ fn read_part(cx: &mut Ctxt<'_>, site: AstId, part: Term, demand: Demand, through
 }
 
 /// A part read fired at the path's mutability `path`: the part as
-/// `ir::cfg::part_read` reads it, a reborrow of a reference and the part
+/// `ty::part_read` reads it, a reborrow of a reference and the part
 /// itself otherwise.
 pub(super) fn fire_part_read(cx: &mut Ctxt<'_>, span: Span, part: Term, path: Mutability, result: Term) {
     let read = match part_read(cx.infer.types(), cx.infer.shallow(part), path) {
