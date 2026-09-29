@@ -193,6 +193,10 @@ impl Infer {
     }
 
     fn enter_slot(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
+        let never = Head::Base(Base::Never);
+        if value.head == never {
+            return Ok(Entered::Folded);
+        }
         let (holder, slot_node) = match self.end(slot) {
             End::Unbound(var, _) => {
                 self.bind(var, None, value.term)?;
@@ -204,10 +208,9 @@ impl Infer {
             a: value.term,
             b: slot_node,
         };
-        let never = Head::Base(Base::Never);
         let target = match self.head_of(slot_node) {
             None => None,
-            Some(slot_head) if value.head == never || slot_head == never => None,
+            Some(slot_head) if slot_head == never => None,
             Some(slot_head) => match self.nearest_common_ancestor(decls, value, slot_node, slot_head) {
                 Some(target) => Some((slot_head, target)),
                 None => return self.convert(decls, value, slot_head, holder, slot_node),

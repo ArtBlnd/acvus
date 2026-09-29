@@ -1251,8 +1251,8 @@ fn a_slot_no_variable_holds_does_not_move() {
     assert_eq!(fx.enter(&decls, value, i64_), Ok(Entered::Folded));
 }
 
-/// types §3, §4: `!` enters any slot and leaves it as it is; a slot of
-/// type `!` takes the value's type.
+/// types §3, §4: `!` enters any slot and leaves it as it is, an unbound
+/// one unbound; a slot of type `!` takes the value's type.
 #[test]
 fn never_enters_any_slot() {
     let mut fx = Fixture::new();
@@ -1261,6 +1261,9 @@ fn never_enters_any_slot() {
     let (value, slot) = (fx.held(never), fx.held(i8_));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
     assert_eq!(fx.infer.shallow(slot), i8_);
+    let (value, slot) = (fx.held(never), fx.infer.fresh(Bound::Any));
+    assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
+    assert!(matches!(fx.infer.types().kind(fx.infer.shallow(slot)), TyKind::Var(_)));
     let (value, slot) = (fx.held(i8_), fx.held(never));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
     assert_eq!(fx.infer.shallow(slot), i8_);
