@@ -1261,6 +1261,7 @@ mod tests {
                 bounds: Box::new([]),
                 impls: Some(Impls { concrete: Box::new([]), generic: Some(GenericImplSig { facts }) }),
                 requires: Box::new([]),
+                facts: DeclaredFacts::default(),
             };
             (id, scheme)
         };

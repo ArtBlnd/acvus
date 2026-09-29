@@ -437,13 +437,13 @@ struct Forward<'b> {
 }
 
 impl Forward<'_> {
-    /// The places a call's callee declares it touches, where its impl
-    /// declares an access.
+    /// The places a call's callee declares it touches, where the facts it
+    /// reaches declare an access.
     fn access(&self, callee: &Callee) -> Option<&[Touch]> {
         let Callee::Extern { id, r#impl, .. } = callee else {
             return None;
         };
-        let facts = self.decls.impl_facts(*id, *r#impl)?;
+        let facts = self.decls.call_facts(*id, *r#impl);
         facts.access.iter().find_map(|form| match form {
             Access::Touches(touches) => Some(&touches[..]),
             Access::Equivalence => None,

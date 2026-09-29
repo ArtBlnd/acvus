@@ -5,7 +5,7 @@ use acvus_ast::{AstId, ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
-use crate::decl::{CastRule, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
     TypeArg, Types,
@@ -112,6 +112,7 @@ impl Fixture {
             bounds: bounds.into(),
             impls: None,
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         self.raw.functions.push((id, scheme));
         id
@@ -127,6 +128,7 @@ impl Fixture {
             bounds: Box::new([]),
             impls: None,
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         self.raw.functions.push((id, scheme));
         id
@@ -628,6 +630,7 @@ fn a_call_reaches_the_overload_its_argument_decides() {
             bounds: Box::new([]),
             impls: None,
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         fx.raw.functions.push((id, scheme));
     }
@@ -653,6 +656,7 @@ fn a_call_two_declarations_answer_is_refused() {
             bounds: Box::new([]),
             impls: None,
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         fx.raw.functions.push((id, scheme));
     }

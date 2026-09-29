@@ -1261,6 +1261,7 @@ fn impl_scheme(types: &Types<Poly>, sig: &ImplSig) -> Scheme {
         bounds: vec![TyVarBound::Any; variables_of(types, &written)].into(),
         impls: None,
         requires: sig.requires.clone(),
+        facts: sig.facts.clone(),
     }
 }
 

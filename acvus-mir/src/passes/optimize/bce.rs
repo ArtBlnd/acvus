@@ -126,6 +126,7 @@ mod tests {
                 generic: Some(GenericImplSig { facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() } }),
             }),
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         let as_slice_scheme = Scheme {
             ty: declared,
@@ -133,6 +134,7 @@ mod tests {
             bounds: Box::new([]),
             impls: None,
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         let decls = Declarations::verify(RawDeclarations {
             types: poly,

@@ -808,7 +808,7 @@ impl LawTable {
 /// Each impl's declared facts, numbered as `LawTable` numbers them.
 fn declared_impls(id: QualifiedRef, scheme: &Scheme, decls: &Declarations) -> Vec<Declared> {
     let Some(impls) = &scheme.impls else {
-        return vec![Declared::default()];
+        return vec![Declared::of(id, scheme.ty, &scheme.facts, decls)];
     };
     let mut declared: Vec<Declared> = impls
         .concrete

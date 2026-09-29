@@ -83,6 +83,9 @@ pub enum Refused {
     /// A type with more than one identity parameter. Not stated in
     /// rfc_compiler; carried from the registry's rule until it is.
     TwoIdentities { id: QualifiedRef },
+    /// Facts stated on a declaration that has impls: a call reaches one of
+    /// its impls, whose facts are the call's (`Scheme`).
+    FactsBesideImpls { function: QualifiedRef },
     /// A declared fact names a parameter its signature does not have: a
     /// parameter is numbered as a call's arguments are (extern-fn §3).
     FactNamesNoParameter { declared: Declared, param: usize },
@@ -957,6 +960,7 @@ fn take_in_lifetimes(decls: &mut Declarations, declared_order: &[QualifiedRef], 
         *slot = with_flows(&mut decls.types, *slot, flows);
     }
     for scheme in decls.functions.values_mut() {
+        scheme.facts.lifetimes = None;
         let Some(impls) = &mut scheme.impls else {
             continue;
         };
@@ -982,21 +986,21 @@ struct DeclaredSignature<'s> {
     lifetimes: Option<&'s LabelledSignature>,
 }
 
-/// The scheme's own signature, whose lifetimes are its generic impl's,
-/// then each concrete impl's.
+/// The scheme's own signature, whose lifetimes are its own where it has no
+/// impls and its generic impl's where it has them, then each concrete
+/// impl's.
 fn declared_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = DeclaredSignature<'_>> {
-    let generic = scheme
-        .impls
-        .as_ref()
-        .and_then(|impls| impls.generic.as_ref())
-        .and_then(|generic| generic.facts.lifetimes.as_ref());
+    let own_lifetimes = match &scheme.impls {
+        None => scheme.facts.lifetimes.as_ref(),
+        Some(impls) => impls.generic.as_ref().and_then(|generic| generic.facts.lifetimes.as_ref()),
+    };
     let own = DeclaredSignature {
         declared: Declared {
             function,
             r#impl: None,
         },
         ty: scheme.ty,
-        lifetimes: generic,
+        lifetimes: own_lifetimes,
     };
     let concrete = scheme.impls.iter().flat_map(move |impls| {
         impls
@@ -1363,10 +1367,24 @@ mod tests {
                 bounds: vec![TyVarBound::Any; variables].into(),
                 impls: None,
                 requires: Box::new([]),
+                facts: DeclaredFacts::default(),
             }
         }
 
+        /// A scheme without impls at `ty`, stating `lifetimes`.
         fn labelled(&self, ty: TyId<Poly>, variables: usize, lifetimes: LabelledSignature) -> Scheme {
+            Scheme {
+                facts: DeclaredFacts {
+                    lifetimes: Some(lifetimes),
+                    ..DeclaredFacts::default()
+                },
+                ..self.plain(ty, variables)
+            }
+        }
+
+        /// A scheme at `ty` whose one impl, the generic one, states
+        /// `lifetimes`.
+        fn labelled_generic(&self, ty: TyId<Poly>, variables: usize, lifetimes: LabelledSignature) -> Scheme {
             Scheme {
                 impls: Some(Impls {
                     concrete: Box::new([]),
@@ -1831,6 +1849,34 @@ mod tests {
             own_flows(&decls, f),
             Flows::of([flow(FlowEnd::Result, FlowEnd::Param(0), own(f), &[&[0]])])
         );
+    }
+
+    /// extern-fn §4: a generic impl's lifetimes are its function's own
+    /// signature's, as a declaration's without impls are, and none remains
+    /// after intake.
+    #[test]
+    fn a_generic_impls_lifetimes_are_its_functions_flows() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let s = fixture.shared_str();
+        let ty = fixture.function(&[s, s], s);
+        let lifetimes = signature(
+            vec![
+                end(FlowEnd::Result, &[lt(0)]),
+                end(FlowEnd::Param(0), &[lt(0)]),
+                end(FlowEnd::Param(1), &[lt(1)]),
+            ],
+            &[],
+        );
+        fixture.declare(f, fixture.labelled_generic(ty, 0, lifetimes));
+        let decls = fixture.verify().expect("the labels fit");
+        assert_eq!(
+            own_flows(&decls, f),
+            Flows::of([flow(FlowEnd::Result, FlowEnd::Param(0), own(f), &[&[0]])])
+        );
+        let scheme = decls.scheme(f).expect("declared");
+        let generic = scheme.impls.as_ref().and_then(|impls| impls.generic.as_ref()).expect("a generic impl");
+        assert_eq!((&scheme.facts.lifetimes, &generic.facts.lifetimes), (&None, &None));
     }
 
     /// extern-fn §4: `fn f<'a: 'b, 'b: 'c, 'c>(x: &'a str, y: &'b str, z:

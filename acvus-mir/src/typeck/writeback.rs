@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
 use super::output::{CloneNode, Closure, Conversion, Entered, PartNode, PartTree, Typeck};
-use crate::decl::{Base, Head, Scheme, TyVarBound};
+use crate::decl::{Base, DeclaredFacts, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, Infer as InferPhase,
@@ -375,6 +375,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                     bounds: vec![TyVarBound::Any; super::decision::variables_of(cx.decls.types(), &[rule.to])].into(),
                     impls: None,
                     requires: Box::new([]),
+                    facts: DeclaredFacts::default(),
                 };
                 let above = cx.infer.instantiate(cx.decls, &scheme).ty;
                 if let Err(mismatch) = cx.infer.enter(cx.decls, at, above) {

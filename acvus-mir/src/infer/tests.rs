@@ -2,7 +2,7 @@ use acvus_utils::{Astr, Interner, LocalIdOps, QualifiedRef};
 
 use super::*;
 use crate::decl::{
-    CastRule, CastTree, ConversionRule, Core, Declarations, Head, LoopMarkers, RawDeclarations, Requirement, Scheme, TyVarBound,
+    CastRule, CastTree, ConversionRule, Core, Declarations, DeclaredFacts, Head, LoopMarkers, RawDeclarations, Requirement, Scheme, TyVarBound,
 };
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, IdentityId,
@@ -861,6 +861,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
             pattern: t,
             law: None,
         }]),
+        facts: DeclaredFacts::default(),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
     let scheme = decls.scheme(f).expect("declared");
@@ -917,6 +918,7 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
         bounds: Box::new([]),
         impls: None,
         requires: Box::new([]),
+        facts: DeclaredFacts::default(),
     };
     let cast = CastRule {
         from: i32_,
@@ -1045,6 +1047,7 @@ fn with_casts_and_conversions(
                 bounds: Box::new([]),
                 impls: None,
                 requires: Box::new([]),
+                facts: DeclaredFacts::default(),
             },
         ));
         via

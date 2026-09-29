@@ -241,7 +241,7 @@ impl SparseAnalysis for Intervals<'_> {
                 if inst.result().is_some_and(|result| self.operand_types.is_integer(result)) =>
             {
                 assert_eq!(args.len(), operands.len(), "an extern call's operands are its arguments");
-                let relations = self.decls.impl_facts(*id, *r#impl).map_or(&[][..], |facts| &facts.relations);
+                let relations = &self.decls.call_facts(*id, *r#impl).relations;
                 let arg_interval = |atom: &Atom| declared_atom_interval(&self.operand_types, args, operands, atom);
                 bounds_on(relations, Atom::Result)
                     .iter()
@@ -349,7 +349,7 @@ impl Affines<'_> {
         if !inst.result().is_some_and(|result| types.is_integer(result)) {
             return Affine::Top;
         }
-        let relations = self.decls.impl_facts(id, r#impl).map_or(&[][..], |facts| &facts.relations);
+        let relations = &self.decls.call_facts(id, r#impl).relations;
         let atom = |atom: &Atom| match atom {
             Atom::Arg(at) if types.is_integer(args[*at]) => named[*at].clone(),
             Atom::Len(Subject::Arg(at)) if types.is_slice(args[*at]) => Some(Combination::atom(Symbol::Len(args[*at]))),
@@ -515,8 +515,8 @@ impl ValueBounds<'_> {
     /// The limits its maker's declared Relations put on a slice's length,
     /// over its maker's arguments.
     fn declared_len_limits(&self, made_by: &MadeBy<'_>) -> Vec<Limit<Atom>> {
-        let facts = self.decls.impl_facts(made_by.r#impl.id, made_by.r#impl.r#impl);
-        bounds_on(facts.map_or(&[][..], |facts| &facts.relations), Atom::Len(Subject::Result))
+        let facts = self.decls.call_facts(made_by.r#impl.id, made_by.r#impl.r#impl);
+        bounds_on(&facts.relations, Atom::Len(Subject::Result))
     }
 
     /// The interval a slice's length lies in: a count, within what its
@@ -861,6 +861,7 @@ mod tests {
                 }),
             }),
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         let decls = declarations(&interner, vec![(id_f, scheme)], poly);
 
@@ -925,6 +926,7 @@ mod tests {
                 }),
             }),
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         };
         let decls = declarations(&interner, vec![(succ, scheme)], poly);
 

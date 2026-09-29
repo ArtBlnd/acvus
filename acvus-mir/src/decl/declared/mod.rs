@@ -41,8 +41,9 @@ pub enum Element {
 }
 
 /// Refuses every declared fact that is not well formed at the signature it
-/// is stated on. A fact is stated on an impl: the generic impl's signature
-/// is its function's own.
+/// is stated on, and facts stated on a declaration that has impls, which
+/// no call reaches (`Scheme`). The generic impl's signature is its
+/// function's own.
 pub(super) fn refuse_ill_formed(
     types: &mut Types<Poly>,
     core: &Core,
@@ -54,6 +55,9 @@ pub(super) fn refuse_ill_formed(
         let Some(scheme) = functions.get(function) else {
             continue;
         };
+        if scheme.impls.is_some() && !scheme.facts.states_nothing() {
+            refused.push(Refused::FactsBesideImpls { function: *function });
+        }
         for StatedOn { declared, ty, bounds, facts } in stated_signatures(*function, scheme) {
             let Some(stated) = Stated::of(declared, core, types, ty, bounds) else {
                 continue;
@@ -66,7 +70,7 @@ pub(super) fn refuse_ill_formed(
     }
 }
 
-/// A set of facts and the impl signature it is stated on.
+/// A set of facts and the signature it is stated on.
 struct StatedOn<'s> {
     declared: Declared,
     ty: TyId<Poly>,
@@ -74,16 +78,13 @@ struct StatedOn<'s> {
     facts: &'s DeclaredFacts,
 }
 
-/// Each impl's facts with its signature: the generic impl's at its
-/// function's own type and bounds, then each concrete impl's, whose
-/// variables carry no declared bound.
+/// Each set of facts with its signature: the declaration's own and its
+/// generic impl's, both at its own type and bounds, then each concrete
+/// impl's, whose variables carry no declared bound.
 fn stated_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = StatedOn<'_>> {
-    let generic = scheme.impls.iter().filter_map(|impls| impls.generic.as_ref()).map(move |generic| StatedOn {
-        declared: Declared { function, r#impl: None },
-        ty: scheme.ty,
-        bounds: &scheme.bounds,
-        facts: &generic.facts,
-    });
+    let own = Declared { function, r#impl: None };
+    let at_own = move |facts| StatedOn { declared: own, ty: scheme.ty, bounds: &scheme.bounds, facts };
+    let generic = scheme.impls.iter().filter_map(|impls| impls.generic.as_ref()).map(move |generic| at_own(&generic.facts));
     let concrete =
         scheme.impls.iter().flat_map(|impls| impls.concrete.iter().enumerate()).map(move |(at, r#impl)| StatedOn {
             declared: Declared { function, r#impl: Some(at) },
@@ -91,14 +92,15 @@ fn stated_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<I
             bounds: &[],
             facts: &r#impl.facts,
         });
-    generic.chain(concrete)
+    std::iter::once(at_own(&scheme.facts)).chain(generic).chain(concrete)
 }
 
-/// Every set of facts stated on an impl of `scheme`.
+/// Every set of facts stated on `scheme` or on one of its impls.
 fn stated_facts(scheme: &Scheme) -> impl Iterator<Item = &DeclaredFacts> {
     let impls = scheme.impls.iter();
     let generic = impls.clone().filter_map(|impls| impls.generic.as_ref()).map(|generic| &generic.facts);
-    generic.chain(impls.flat_map(|impls| impls.concrete.iter()).map(|r#impl| &r#impl.facts))
+    let concrete = impls.flat_map(|impls| impls.concrete.iter()).map(|r#impl| &r#impl.facts);
+    std::iter::once(&scheme.facts).chain(generic).chain(concrete)
 }
 
 /// The signature a set of facts is stated on.

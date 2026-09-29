@@ -9,7 +9,7 @@
 
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
-use super::{Scheme, TyVarBound};
+use super::{DeclaredFacts, Scheme, TyVarBound};
 use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
 
 /// The names of `core`'s generic functions: the lang items (operators §2).
@@ -188,6 +188,7 @@ impl Table<'_> {
             bounds: vec![TyVarBound::Any; variables].into(),
             impls: None,
             requires: Box::new([]),
+            facts: DeclaredFacts::default(),
         }
     }
 

@@ -7,7 +7,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{lower_script, lower_template};
 use crate::decl::{
-    ContextDecl, ConversionRule, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
+    ContextDecl, ConversionRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
 };
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
@@ -76,7 +76,7 @@ impl Fixture {
     /// A plain extern fn `name` of type `ty`, with no type variable.
     fn declare(&mut self, name: &str, ty: TyId<Poly>, arity: usize) -> QualifiedRef {
         let id = QualifiedRef::root(self.name(name));
-        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impls: None, requires: Box::new([]) };
+        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default() };
         self.raw.functions.push((id, scheme));
         id
     }

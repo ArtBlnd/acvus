@@ -9,7 +9,15 @@ use crate::ty::{Poly, TyId};
 
 /// An extern fn's declaration (extern-fn): its signature, a function type
 /// whose effect carries its split (effects §6), the bound of each type
-/// parameter by position, its impls, and what it requires.
+/// parameter by position, its impls, what it requires, and its declared
+/// facts.
+///
+/// A call's declared facts are stated in one place, on what the call
+/// reaches: the declaration itself where it has no impls, and the impl
+/// that answers where it has them. A fact set per signature, read whole,
+/// needs no rule for how two sets of one kind would combine, and the
+/// ledger states none. So a declaration with impls states its facts on
+/// them, and `verify` refuses facts on its own `facts`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: TyId<Poly>,
@@ -23,6 +31,8 @@ pub struct Scheme {
     /// `Some` for a generic function's impls (extern-fn §6).
     pub impls: Option<Impls>,
     pub requires: Box<[Requirement]>,
+    /// The facts a call of a declaration without impls reaches.
+    pub facts: DeclaredFacts,
 }
 
 /// The impls of a generic function: the concrete ones in order, then
@@ -68,6 +78,13 @@ pub struct DeclaredFacts {
     /// the declared function type's flows. `None`: the flows are every
     /// input to every output (extern-fn §4).
     pub lifetimes: Option<LabelledSignature>,
+}
+
+impl DeclaredFacts {
+    /// Whether no fact of any kind is stated.
+    pub(super) fn states_nothing(&self) -> bool {
+        *self == DeclaredFacts::default()
+    }
 }
 
 /// An impl of `generic_function` whose type joins `pattern`, written at the
