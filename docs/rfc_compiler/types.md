@@ -28,6 +28,8 @@ What a `for` iterates, what `?` unwraps, and which declaration a name or a metho
 
 A call reaches by its arguments in order, and a tuple by its parts in order: at each one, stepping up from its exact type, the declarations that match at the first step where any match are kept. Exactly one must be left; otherwise the call is refused.
 
+A method call's receiver is its first argument, adjusted as Rust adjusts it: taken as written, then as `&`, then as `&mut` where the receiver is a place that may be written. The first adjustment that reaches a declaration is taken.
+
 ## 7. Conversions
 
 Where a value's type is not the type its slot asks for and no subtyping relates them, the value converts only by a declared conversion, and exactly one must apply. Otherwise the program is refused, and the refusal names the conversions that left it undecided. A call reaches its declaration by subtyping alone (§6); a conversion applies once the slot's type decides it. A qualified name reaches one declaration, so a conversion can always be decided by writing one.
