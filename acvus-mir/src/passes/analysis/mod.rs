@@ -11,6 +11,7 @@ mod loop_tree;
 mod manager;
 mod post_dominators;
 mod sparse;
+mod tag_values;
 mod values;
 
 #[cfg(test)]
@@ -26,6 +27,7 @@ pub use loop_tree::{LoopId, LoopTree};
 pub use post_dominators::PostDominators;
 pub use manager::{Analysis, AnalysisManager};
 pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};
+pub use tag_values::TagValues;
 pub use values::{AffineValues, ConstantValues, IntervalValues};
 pub(in crate::passes) use values::ValueBounds;
 pub(in crate::passes) use values::switch_key;
