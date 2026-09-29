@@ -188,19 +188,15 @@ fn adjustment(cx: &Ctxt<'_>, adjust: &Adjust, receiver: Closed) -> Adjustment {
     let arity = adjust.args.len() + 1;
     let candidates: Vec<Offer> = concrete
         .into_iter()
+        .chain(super::structure::lifted_offer(cx, &adjust.callee, arity))
         .chain(generic)
         .filter(|offer| decision::params_of(cx.decls.types(), offer.ty).len() == arity)
         .collect();
-    let mut rows: Vec<Vec<Match>> = candidates
-        .iter()
-        .map(|offer| vec![decision::matched(decision::param_head_at(cx.decls.types(), decision::params_of(cx.decls.types(), offer.ty), &[0]))])
-        .collect();
-    // The lifted candidate, or the language's own answer, at the receiver:
-    // its first parameter at the receiver's type, as a concrete impl's
-    // would be declared, so that it is taken as written, by `&` or by
-    // `&mut` exactly as its parameter takes it.
-    if let Some(lifted) = super::structure::lifted_receiver(cx, &adjust.callee, arity, receiver) {
-        rows.push(vec![Match::Head(lifted)]);
+    let mut rows: Vec<Vec<Match>> = candidates.iter().map(|offer| vec![decision::param_match(cx, offer, &[0])]).collect();
+    // The language's own copy (ownership §2) is no candidate: a value that
+    // copies is taken as its `clone` takes it.
+    if let Some(copied) = super::structure::copied_receiver(cx, &adjust.callee, arity, receiver) {
+        rows.push(vec![Match::Head(copied)]);
     }
     let rows: Vec<Candidate<'_>> = rows.iter().map(|row| Candidate { params: row, result: Match::Any }).collect();
     let matches = |head: Head| match reach::reach(&rows, &[decision::chain_up(cx, head)], None) {

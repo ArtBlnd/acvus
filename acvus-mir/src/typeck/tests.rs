@@ -2766,3 +2766,31 @@ fn a_reach_its_result_would_decide_and_never_does_is_refused() {
     let (checked, _) = fx.script("let x = default(); 0");
     assert_eq!(checked.refusals(), vec![&RefusalKind::NeverKnown { open: default.name }]);
 }
+
+/// types §1, §6: a lift is reached only by an argument taken as the lift
+/// takes its variable: `clone`'s `&T` by a `&`, and neither by a `&mut` nor
+/// by the value; a method call's receiver is adjusted to it by `&`.
+#[test]
+fn a_lift_is_reached_only_as_it_takes_its_variable() {
+    for (source, admitted) in [("clone(&$t)", true), ("clone(&mut $t)", false), ("clone($t)", false), ("$t.clone()", true)] {
+        let mut fx = Fixture::new();
+        let clone = fx.raw.core.clone;
+        let string = fx.ty(TyKind::String);
+        fx.clones(&[string]);
+        let single = fx.ty(TyKind::Tuple(Box::new([string, string]), ()));
+        fx.input("t", single);
+        let (checked, _) = fx.script(source);
+        match admitted {
+            true => checked.admitted(),
+            false => assert!(
+                checked.refusals().contains(&&RefusalKind::NoDeclaration { name: clone.name }),
+                "{source}: {:?}",
+                checked.refusals()
+            ),
+        }
+    }
+    for source in ["(1, 2).clone()", "1.clone()"] {
+        let (checked, _) = Fixture::new().script(source);
+        checked.admitted();
+    }
+}

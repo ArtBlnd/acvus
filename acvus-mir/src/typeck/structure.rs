@@ -120,24 +120,21 @@ pub(super) fn lift_open(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> bo
     closed_for(cx, taking, reading).is_none_or(|closed| closed.head == Head::Base(Base::Never))
 }
 
-/// The head a method's receiver takes where `callee`'s lift or the
-/// language's own answer answers a call of `arity` arguments whose
-/// receiver is `receiver`: the lift's first parameter at the receiver's
-/// transparent structured type, or at a type whose value copies where the
-/// callee is `clone` (ownership §2), which the receiver adjustment reads
-/// as any candidate's (types §6).
-pub(super) fn lifted_receiver(cx: &Ctxt<'_>, callee: &Callee, arity: usize, receiver: Closed) -> Option<Head> {
+/// The head a method's receiver takes where the language's own copy
+/// answers `clone` of it (ownership §2): `clone`'s first parameter at the
+/// receiver's type, where a value of that type copies, which the receiver
+/// adjustment reads as any candidate's (types §6).
+pub(super) fn copied_receiver(cx: &Ctxt<'_>, callee: &Callee, arity: usize, receiver: Closed) -> Option<Head> {
     let CalleeLift { function, lift } = lift_of_callee(cx, callee, arity)?;
     let (Head::Base(base) | Head::Ref(_, base)) = receiver.head;
     let value = match receiver.head {
         Head::Base(_) => receiver.term,
         Head::Ref(..) => cx.referent(receiver.term),
     };
-    let structured = matches!(base, Base::Tuple(_) | Base::Array | Base::Option | Base::Result | Base::Object | Base::Enum(_));
     let copied = function == cx.decls.core().clone && copies_in(&cx.infer, value) == Some(true);
     match lift.shape().params.first() {
-        Some(Taking::Value) if structured || copied => Some(Head::Base(base)),
-        Some(&Taking::Ref(mutability)) if structured || copied => Some(Head::Ref(mutability, base)),
+        Some(Taking::Value) if copied => Some(Head::Base(base)),
+        Some(&Taking::Ref(mutability)) if copied => Some(Head::Ref(mutability, base)),
         Some(_) | None => None,
     }
 }

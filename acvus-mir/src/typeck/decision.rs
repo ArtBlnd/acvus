@@ -953,22 +953,12 @@ fn several(
 /// The one offer the closed prefix of the positions reaches, the result
 /// deciding last (types §6).
 fn choose(cx: &Ctxt<'_>, offers: &[Offer], read: &Read<'_>) -> Result<Offer, NoReach> {
-    let types = cx.decls.types();
     let rows: Vec<(Vec<Match>, Match)> = offers
         .iter()
         .map(|offer| {
-            let params = params_of(types, offer.ty);
-            // A lifted candidate's every parameter takes its variable
-            // (`decl::lift`), so each argument is `Structured`; its result
-            // is where it rebuilds.
-            let lifted = (offer.r#impl == Some(Impl::Structural))
-                .then(|| cx.decls.lift(offer.declaration).expect("a lifted offer is of a function with a lift"));
             let row = read.positions[..read.chains.len()]
                 .iter()
-                .map(|position| match (lifted, &position.path[..]) {
-                    (Some(_), [_]) => Match::Structured,
-                    _ => matched(param_head_at(types, params, &position.path)),
-                })
+                .map(|position| param_match(cx, offer, &position.path))
                 .collect();
             (row, result_match(cx, offer))
         })
@@ -977,11 +967,27 @@ fn choose(cx: &Ctxt<'_>, offers: &[Offer], read: &Read<'_>) -> Result<Offer, NoR
     reach::reach(&candidates, read.chains, read.result).map(|at| offers[at])
 }
 
+/// What `offer`'s parameter at the position `path` matches. A lifted
+/// candidate's every parameter takes its variable (`decl::lift`), so a
+/// whole argument matches `Structured`, taken as the lift takes it there.
+pub(super) fn param_match(cx: &Ctxt<'_>, offer: &Offer, path: &[usize]) -> Match {
+    let types = cx.decls.types();
+    match (offer.r#impl, path) {
+        (Some(Impl::Structural), [at]) => {
+            let lift = cx.decls.lift(offer.declaration).expect("a lifted offer is of a function with a lift");
+            Match::Structured(lift.shape().params[*at])
+        }
+        _ => matched(param_head_at(types, params_of(types, offer.ty), path)),
+    }
+}
+
 /// What `offer`'s result matches: a lifted candidate's is `Structured`
 /// where it rebuilds.
 fn result_match(cx: &Ctxt<'_>, offer: &Offer) -> Match {
     match offer.r#impl {
-        Some(Impl::Structural) if matches!(cx.decls.lift(offer.declaration), Some(crate::decl::Lift::Rebuild(_))) => Match::Structured,
+        Some(Impl::Structural) if matches!(cx.decls.lift(offer.declaration), Some(crate::decl::Lift::Rebuild(_))) => {
+            Match::Structured(crate::decl::Taking::Value)
+        }
         _ => matched(poly_head(cx.decls.types(), ret_of(cx.decls.types(), offer.ty))),
     }
 }
