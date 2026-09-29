@@ -38,9 +38,11 @@ for x in &@xs {
 
 Declarations: `fn`, `struct` and `impl`. Lambdas only inside a `fn`. No concrete type is written, and a module does not refer to any context `@x`. Seen from outside the module, its structs are opaque: by the transparency rule, the type of `Self` does not change, and nothing outside adds a field to it.
 
+An `acvum` file holds modules. Each `struct` with its `impl` blocks is one module, and each free `fn` is one.
+
 No type is declared. A `struct` states only its shape, the names of its fields. Its field types, and every `fn`'s scheme, are inferred within the module alone: nothing outside the module takes part in that inference, and a use outside only instantiates what the module settled.
 
-A module's `fn`s are polymorphic. What a body leaves unconstrained is generalized, `fn`s that call one another are generalized together, and each use instantiates the result. `Self` is not generalized: it is the module's own `struct`, one opaque type by the transparency rule.
+A module's `fn`s are polymorphic. What a body leaves unconstrained is generalized, modules whose `fn`s call one another are generalized together, and each use instantiates the result. `Self` is not generalized: it is the module's own `struct`, one opaque type by the transparency rule.
 
 `impl` blocks are Rust's. A method's receiver is written `self`, `&self` or `&mut self`, so it is `Self` or a reference to it from the start. These receivers anchor inference: a use that does not fit a method is refused where it meets that method's declared receiver.
 
