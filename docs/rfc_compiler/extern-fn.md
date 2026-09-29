@@ -16,7 +16,7 @@ A type parameter is parametric, and carries one bound: any type; an integer type
 
 ## 2. Effect
 
-A call's effect states whether reissuing it is pure, idempotent or opaque; whether it commutes with other calls; whether it may be split, and at what cost (effects §6); and which contexts it reads and writes. An opaque effect is always sound (effects).
+A call's effect states whether reissuing it is pure, idempotent or opaque, an order in which each is below the next, so a join takes the greater; whether it commutes with other calls; whether it may be split, and at what cost (effects §6); and which contexts it reads and writes. An opaque effect is always sound (effects).
 
 A declaration may name effect variables, as it names type variables. A function type it writes carries an effect, and an extern-defined type may carry an effect (§8).
 
