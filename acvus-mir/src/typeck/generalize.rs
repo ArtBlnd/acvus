@@ -270,9 +270,20 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     // Every variable the values made that nothing outside holds: those the
     // binding's type reaches, and those its still open decisions read,
     // which each use must make anew too.
+    // A decision of the value's own walk outside its lambdas is evaluated
+    // once, where the value is written (functions §2): what only it reads
+    // belongs there, and is generalized only where the binding's type
+    // reaches it.
     let owned = cx.decisions.take_owned(&|owner| nested_in(&walks, &roots, owner));
-    let types: Vec<Term> = owned.iter().flat_map(|(decision, _)| decision.terms()).chain([term]).collect();
-    let effects: Vec<_> = owned.iter().flat_map(|(decision, _)| decision.effects()).collect();
+    let lambdas_only: FxHashSet<AstId> = lambdas.iter().copied().collect();
+    let in_lambda = |owner: Option<AstId>| nested_in(&walks, &lambdas_only, owner);
+    let types: Vec<Term> = owned
+        .iter()
+        .filter(|(_, owner)| in_lambda(*owner))
+        .flat_map(|(decision, _)| decision.terms())
+        .chain([term])
+        .collect();
+    let effects: Vec<_> = owned.iter().filter(|(_, owner)| in_lambda(*owner)).flat_map(|(decision, _)| decision.effects()).collect();
     let reached = cx.infer.reached(types, effects);
     let generalized = Generalized {
         types: sorted(reached.types.iter().copied().filter(|var| cx.infer.is_unbound(*var) && own.made(|marks| marks.types, var.0) && !held.types.contains(var)), |var| var.0),
