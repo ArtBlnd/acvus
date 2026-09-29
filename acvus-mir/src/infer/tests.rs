@@ -965,21 +965,25 @@ fn a_literal_made_one_with_an_integer_bound_narrows_and_is_no_longer_a_literal()
 
 // The bottom type (types §4)
 
-/// types §4: a product with a part of type `!` is `!`.
+/// types §4: no type is `!` by holding a part of type `!`. A tuple and an
+/// object with a `!` part stay what they are, interned and frozen.
 #[test]
-fn a_product_with_a_part_of_type_never_is_never() {
+fn a_product_with_a_part_of_type_never_is_not_never() {
     let mut fx = Fixture::new();
     let (never, int) = (fx.kind(TyKind::Never), fx.int(IntTy::I64));
-    assert_eq!(fx.kind(TyKind::Tuple(Box::new([int, never]))), never);
-    assert_eq!(fx.object(&[("x", int), ("y", never)], Label::Transparent), never);
-    let option = fx.kind(TyKind::Option(never));
-    assert_ne!(option, never, "an option is a sum, not a product");
+    let tuple = fx.kind(TyKind::Tuple(Box::new([int, never])));
+    assert_eq!(fx.infer.types().kind(tuple), &TyKind::Tuple(Box::new([int, never])));
+    let object = fx.object(&[("x", int), ("y", never)], Label::Transparent);
+    assert!(matches!(fx.infer.types().kind(object), TyKind::Object(_)));
 
     let var = fx.infer.fresh(Bound::Any);
     let pair = fx.kind(TyKind::Tuple(Box::new([int, var])));
     fx.infer.eq(var, never).unwrap();
     let (types, frozen) = fx.freeze(pair);
-    assert_eq!(types.kind(frozen), &TyKind::Never);
+    let TyKind::Tuple(items) = types.kind(frozen) else {
+        panic!("a tuple with a `!` part freezes to a tuple, not {:?}", types.kind(frozen));
+    };
+    assert_eq!(types.kind(items[1]), &TyKind::Never);
 }
 
 /// types §2, §4: `!` is the bottom type: its join with `T` is `T`, and it
