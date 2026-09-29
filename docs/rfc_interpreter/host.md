@@ -4,4 +4,4 @@ The host embeds the interpreter. It declares the types of its contexts and of th
 
 ## 1. The page
 
-The host owns the page behind every context. Where a body loads and commits a context is the compiler's (compiler: context §3); what the page does with a commit, and what a load returns, is the host's.
+The host owns the page behind every context. Where a body takes, lends and commits a context is the compiler's (compiler: context §3); what the page does with them is the host's.
