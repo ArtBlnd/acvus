@@ -1,9 +1,10 @@
 //! Equality, ordering and clone by the part tree typeck recorded
 //! (operators §4, ownership §1-2, D87). A tuple, an object, an `Option` and
 //! a `Result` are expanded part by part in `ty::structural`'s order. An
-//! array is one `For` over its elements, never unrolled: a comparison
-//! leaves it at the first element whose answer settles the whole. A leaf
-//! is a call of the impl reached, or, in a clone, a copy.
+//! array compared is one `For` over its elements, never unrolled, that
+//! leaves at the first element whose answer settles the whole; an array
+//! is never taken apart for a clone. A leaf is a call of the impl reached,
+//! or, in a clone, a copy.
 //!
 //! A node's operand is a shared reference to its value, or, where the node
 //! is itself a reference, a shared reborrow of it, read as any reference
@@ -417,23 +418,10 @@ fn cloned(cx: &mut Lcx<'_, '_>, tree: &PartTree, ty: Ty, src: ValueId, span: Spa
                 |cx| variant(cx, tags.err, Some(err), ty, src, span),
             )
         }
-        Shape::Array(_) => array_cloned(),
         Shape::Never => cx.unreached_value(ty, span),
+        Shape::Array(_) => panic!("typeck copies an array that copies and reaches `core::clone` for any other"),
         Shape::Ref(_) => panic!("typeck copies a shared reference and reaches `core::clone` for any other"),
     }
-}
-
-/// PARKED(D87): an array whose element does not copy is cloned by one `For`
-/// that builds the new array element by element, but the IR has no way to
-/// carry an array under construction through a loop: `ArrayPush` changes
-/// the array's type at each element, and `IndexSet` drops the element it
-/// overwrites, so neither can fill a new array in place. Until the IR gains
-/// that form, lowering stops here with the question.
-fn array_cloned() -> ValueId {
-    panic!(
-        "PARKED(D87): an array whose element does not copy is cloned by one For building the new array, \
-         and the IR has no operation that fills an array under construction inside a loop"
-    )
 }
 
 /// A value of type `ty` that copies, read out of the node's operand `src`.

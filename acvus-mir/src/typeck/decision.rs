@@ -184,7 +184,26 @@ pub(super) enum Decision {
     },
 }
 
+/// How much of its type a decision reads before it fires (types §6: a
+/// decision reads a type only once nothing can change what it reads).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Depth {
+    /// The head alone.
+    Head,
+    /// The type all the way down: every type within it.
+    Whole,
+}
+
 impl Decision {
+    /// How much of its type this decision reads. A clone asks whether its
+    /// type copies, which is a fact of the whole type (ownership §1).
+    fn depth(&self) -> Depth {
+        match self {
+            Decision::Clone { .. } => Depth::Whole,
+            _ => Depth::Head,
+        }
+    }
+
     /// The terms this decision may still bind or enter into.
     fn outputs(&self) -> impl Iterator<Item = Term> {
         let outputs: Vec<Term> = match self {
@@ -360,10 +379,13 @@ fn read_head(decision: &Decision) -> Option<Term> {
 /// its cast tree, which no later decision can change (types §6); pending
 /// otherwise.
 pub(super) fn decide(cx: &mut Ctxt<'_>, decision: Decision) {
+    let depth = decision.depth();
     let top = read_head(&decision).is_some_and(|term| {
-        cx.infer
-            .closed(cx.decls.casts(), &NothingOpen, term)
-            .is_some_and(|closed| cx.decls.casts().step_up(closed.head).is_none())
+        within(cx, term, depth).into_iter().all(|term| {
+            cx.infer
+                .closed(cx.decls.casts(), &NothingOpen, term)
+                .is_some_and(|closed| cx.decls.casts().step_up(closed.head).is_none())
+        })
     });
     match top {
         true => fire(cx, decision, Reading::Closed).expect("a decision whose head is at the top of its tree fires"),
@@ -386,6 +408,38 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
         }
     }
     fired
+}
+
+/// `term`'s head, closed as `reading` reads it, where every term `depth`
+/// reads within it is closed too.
+fn closed_to(cx: &Ctxt<'_>, term: Term, reading: Reading, depth: Depth) -> Option<Closed> {
+    let head = closed_for(cx, term, reading)?;
+    within(cx, term, depth)
+        .into_iter()
+        .all(|inner| closed_for(cx, inner, reading).is_some())
+        .then_some(head)
+}
+
+/// The terms `depth` reads of `term`: `term` itself, and for `Whole` every
+/// type within it, as far as its heads are known.
+fn within(cx: &Ctxt<'_>, term: Term, depth: Depth) -> Vec<Term> {
+    let mut read = vec![term];
+    if depth == Depth::Head {
+        return read;
+    }
+    let mut seen = FxHashSet::default();
+    let mut stack = vec![term];
+    while let Some(at) = stack.pop() {
+        let at = cx.infer.shallow(at);
+        if !seen.insert(at) {
+            continue;
+        }
+        cx.infer.types().kind(at).for_each_child(|child| {
+            read.push(child);
+            stack.push(child);
+        });
+    }
+    read
 }
 
 pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<Closed> {
@@ -576,7 +630,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             Ok(())
         }
         Decision::Clone { node, span, operand, body } => {
-            let Some(closed) = closed_for(cx, operand, reading) else {
+            let Some(closed) = closed_to(cx, operand, reading, Depth::Whole) else {
                 return Err(Decision::Clone { node, span, operand, body });
             };
             super::clone::fire_clone(cx, node, span, closed, &body);

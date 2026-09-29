@@ -1375,6 +1375,61 @@ fn a_tuple_that_copies_is_copied_by_clone() {
     assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
 }
 
+/// P13, extern-fn §1: an array is not taken apart for a clone. A `[String;
+/// 2]`'s `.clone()` reaches `core::clone` at the array's type, as a
+/// `String`'s does at its own, and no declaration carries an array type, so
+/// the reach refuses it though `String` has an impl.
+#[test]
+fn a_clone_of_an_array_that_does_not_copy_reaches_core_clone_and_is_refused() {
+    let checked = |source: &str| {
+        let mut fx = Fixture::new();
+        let clone = fx.raw.core.clone;
+        let string = fx.ty(TyKind::String);
+        let shared_string = fx.reference(Mutability::Shared, string);
+        let clones_string = fx.pure(&[shared_string], string);
+        fx.lang_item(clone, &[clones_string]);
+        let array = fx.ty(TyKind::Array(string, crate::ty::LenTerm::Known(2)));
+        fx.input("a", array);
+        fx.input("s", string);
+        (fx.script(source).0, clone)
+    };
+    checked("$s.clone()").0.admitted();
+    let (refused, clone) = checked("$a.clone()");
+    assert_eq!(refused.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
+}
+
+/// ownership §1: a `[i64; 2]`'s `.clone()` copies it, with no impl.
+#[test]
+fn a_clone_of_an_array_that_copies_copies_it() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let array = fx.ty(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(2)));
+    fx.input("a", array);
+    let (checked, script) = fx.script("$a.clone()");
+    checked.admitted();
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a method call");
+    };
+    assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
+}
+
+/// types §6: an array literal's element is an integer whose width only its
+/// default settles, so its clone waits for it, then copies.
+#[test]
+fn a_clone_of_an_array_waits_for_its_element_then_decides() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("[1, 2].clone()");
+    checked.admitted();
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a method call");
+    };
+    assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
+    let TyKind::Array(element, _) = checked.kind(tail(&checked, &script)) else {
+        panic!("an array's clone is the array");
+    };
+    assert_eq!(checked.kind(*element), &TyKind::Int(IntTy::I64));
+}
+
 // Forms decided by their operand's head (types §6)
 
 /// types §6: a field read through a reference is decided once the object's
