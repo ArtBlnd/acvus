@@ -128,6 +128,16 @@ pub enum Op {
 
     /// Move a context's whole value out of the page into the result
     /// (RFC-0025).
+    ///
+    /// TO BE (the commit cut, context §1, §3, agreed with the user): `Fetch`
+    /// and `Commit` are one pair, the boundary's own moves of a context's
+    /// content between the page and the run, and never a use of the
+    /// program's. A context held in a slot is fetched into its slot,
+    /// `Fetch { context, into: Some(slot) }`, which writes the slot and
+    /// yields nothing; a volatile one, held in no slot, is fetched into the
+    /// result, `into: None`. The program reads, lends, takes and assigns the
+    /// slot as any place; a take of a context that does not copy leaves the
+    /// slot empty until something is written back (context §1).
     Fetch {
         context: QualifiedRef,
     },
@@ -135,6 +145,15 @@ pub enum Op {
     /// `wrote` holds where the body may have written the variable since its
     /// fetch (RFC-0025 rules 2, 4); a commit that did not write hands the
     /// value back and stores nothing.
+    ///
+    /// TO BE (the commit cut): `Commit { context, from: Committed::Slot(slot) }`
+    /// moves the slot's whole content into the page, reading every unit of it
+    /// and leaving it empty until the next `Fetch`; a volatile context's is
+    /// `Committed::Value(value)`. There is no `Take` before a commit: whether
+    /// the context was filled again is judged where the commit reads its slot
+    /// (`check::moveck`, `NotRefilled`). A write of the slot, a move out of it
+    /// included, is what keeps a commit (`remove_dead_context_ops`). `wrote`
+    /// goes, or its reader says what it still decides.
     Commit {
         context: QualifiedRef,
         value: ValueId,
