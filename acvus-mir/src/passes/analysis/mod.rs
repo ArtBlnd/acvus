@@ -1,6 +1,7 @@
 //! Analyses (passes-structure §1-2): where values flow. The two engines, and
 //! the manager that computes, keeps and invalidates facts.
 
+mod annotate;
 mod content_liveness;
 mod initialization;
 mod match_facts;

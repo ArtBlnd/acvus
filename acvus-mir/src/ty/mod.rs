@@ -9,6 +9,7 @@ mod facts;
 mod flow;
 mod kind;
 mod num;
+pub mod print;
 pub mod structural;
 
 use std::convert::Infallible;

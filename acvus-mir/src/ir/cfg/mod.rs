@@ -9,6 +9,7 @@ mod core;
 pub mod edit;
 mod op;
 mod order;
+pub mod print;
 mod rewriter;
 pub mod takings;
 
