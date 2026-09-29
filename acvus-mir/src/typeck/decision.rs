@@ -631,14 +631,6 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             let reach = reach_of(cx, slot, reach);
-            let unbound = matches!(cx.infer.types().kind(cx.infer.shallow(slot)), TyKind::Var(_));
-            if unbound && closed.head != Head::Base(Base::Never) {
-                // The slot takes the value's type as one variable with the
-                // value's, so the type they share grows as one (types §1).
-                cx.eq(value, slot, span);
-                cx.out.entered.push(super::output::Entered { site, span, value: closed.term, slot, body });
-                return Ok(());
-            }
             fire_enter(cx, site, span, closed, (slot, reach), body);
             Ok(())
         }
