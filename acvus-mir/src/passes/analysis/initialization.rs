@@ -27,7 +27,9 @@
 //!   element), the move or the write is of that place's units there, as by
 //!   name. Where it reaches several, or one that is not one place, nothing
 //!   is recorded: `check::moveck` refuses such a move, and such a write
-//!   writes no whole unit.
+//!   writes no whole unit. A move through a shared reference is not
+//!   recorded either: what a shared reference lends is never taken from
+//!   (ownership §5), and `check::moveck` refuses the move.
 //! - A join unions what each path may leave.
 //!
 //! Cost: a unit's fact only grows, and it holds a flag and the spans of the
@@ -45,7 +47,7 @@ use crate::ir::cfg::takings::{Taken, inst_takings};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, is_cut_of, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Reach, Storage, solve_dense};
+use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Mode, Reach, Storage, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{Concrete, Ty, Types, lent_types};
 
@@ -293,9 +295,17 @@ impl Forward<'_> {
 
     /// A `Take` or an `Assign` through a reference: the move or the write
     /// `Loans` records at it that reaches one place, of that place's region.
+    /// A move through a shared reference does not happen (ownership §5).
     fn transfer_through(&self, inst: &Inst, state: &mut Units) {
         let site = Site::Inst(inst.id());
-        if let Some(place) = self.loans.through_one(site, Reach::Move) {
+        let through_shared = self
+            .loans
+            .accesses(site)
+            .iter()
+            .any(|access| access.reach == Reach::Move && access.through.iter().any(|loan| loan.mode == Mode::Shared));
+        if let Some(place) = self.loans.through_one(site, Reach::Move)
+            && !through_shared
+        {
             let moved = Written { moved: BTreeSet::from([inst.span()]), ..Written::default() };
             self.set(place.storage, parts::owned_region(&place.path), &moved, state);
         }

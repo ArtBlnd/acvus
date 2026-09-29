@@ -34,23 +34,17 @@ fn a_context_taken_and_written_back_is_admitted() {
     assert_eq!(refusals, []);
 }
 
-/// functions §2, ownership §4, §5: a lambda without `move` captures `v` by
-/// a shared reference here, so the move out of it is a move through a
-/// shared reference, and its body's return finds what the capture lends
-/// taken.
+/// functions §2, ownership §5: a lambda without `move` captures `v` by a
+/// shared reference here, and what a shared reference lends is never taken
+/// from: the move out of it is refused, and nothing is taken.
 #[test]
-fn a_lambda_moving_a_capture_it_borrows_refuses_its_return() {
+fn a_lambda_moving_a_capture_it_borrows_is_refused() {
     let source = "let v = make(); let f = |x| -> consume(v); f(1)";
     let refusals = with_context().refusals(source);
-    let moved = span_of(source, "v", 1);
-    let [Refusal { kind: RefusalKind::MoveThroughShared, span: at_move }, Refusal { kind: RefusalKind::NotRefilled { taken }, span }] =
-        refusals[..]
-    else {
-        panic!("one MoveThroughShared, then one NotRefilled: {refusals:?}");
+    let [Refusal { kind: RefusalKind::MoveThroughShared, span }] = refusals[..] else {
+        panic!("one MoveThroughShared: {refusals:?}");
     };
-    assert_eq!(at_move, moved, "the move through the capture");
-    assert_eq!(taken, moved, "naming the move out of the capture");
-    assert!(covers(span, span_of(source, "|x| -> consume(v)", 0)), "at the lambda's return: {span:?}");
+    assert_eq!(span, span_of(source, "v", 1), "at the move through the capture");
 }
 
 /// functions §2: with `move`, the lambda owns `v`.
