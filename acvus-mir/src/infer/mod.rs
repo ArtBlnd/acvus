@@ -8,6 +8,7 @@
 //! `eq` (types §1, §6). Knowledge only grows.
 
 mod bound;
+mod canonical;
 mod cells;
 mod closed;
 mod copy;
@@ -29,6 +30,7 @@ use rustc_hash::FxHashSet;
 use cells::{Cells, End as CellEnd, FlowRefused, MarkTerm, ValuesTerm};
 
 pub use cells::{Exceeds, FlowId};
+pub use canonical::{Canonical, CanonicalTable, VarStates};
 pub use closed::{Closed, OpenSources};
 pub use copy::{AtInstance, CopiedFlow, Reached, VarMarks, VarsOf};
 pub use freeze::{FreezeMemo, Unsettled};

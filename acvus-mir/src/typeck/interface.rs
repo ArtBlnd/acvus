@@ -38,7 +38,10 @@ impl Interface {
     /// are first reached. What a caller's check admits depends on nothing
     /// else; only a refusal reads a site (graph: early cutoff).
     pub fn same(&self, other: &Interface) -> bool {
-        todo!("{:?}", std::ptr::from_ref(other))
+        let mut table = crate::infer::CanonicalTable::new();
+        let site = acvus_ast::AstId::alloc();
+        self.params == other.params
+            && self.scheme.canonical(&self.store, &mut table, site) == other.scheme.canonical(&other.store, &mut table, site)
     }
 }
 
@@ -60,5 +63,9 @@ impl Interfaces {
 
     pub fn get(&self, unit: QualifiedRef) -> Option<&Interface> {
         self.units.get(&unit)
+    }
+
+    pub fn remove(&mut self, unit: QualifiedRef) -> Option<Interface> {
+        self.units.remove(&unit)
     }
 }

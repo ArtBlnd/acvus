@@ -212,6 +212,158 @@ impl MapTerms for Moving<'_> {
     }
 }
 
+/// An exported scheme in canonical form (`infer::Canonical`): its
+/// function type, its requirements and the schemes and instances they
+/// name, each renumbered by the order it is first reached from the function
+/// type and then the requirements, with every site and span at one
+/// placeholder. Two are equal exactly where the schemes are one but for
+/// the names of their variables and the sites and spans they carry.
+#[derive(Debug, PartialEq)]
+pub(super) struct CanonicalScheme {
+    scheme: LetScheme,
+    schemes: Vec<LetScheme>,
+    instances: Vec<CanonicalInstance>,
+    vars: crate::infer::VarStates,
+}
+
+/// An instance a requirement names, its site and span left out.
+#[derive(Debug, PartialEq)]
+struct CanonicalInstance {
+    scheme: SchemeId,
+    within: Option<InstanceId>,
+    at: AtInstance,
+    template: bool,
+}
+
+impl Exported {
+    /// This scheme, whose terms are `store`'s, in canonical form, its
+    /// terms interned in `table` and every site at `site`.
+    pub(super) fn canonical(&self, store: &crate::infer::Infer, table: &mut crate::infer::CanonicalTable, site: AstId) -> CanonicalScheme {
+        let mut canonical = Canonicalizing {
+            terms: crate::infer::Canonical::new(store, table),
+            site,
+            schemes: Renumbering::default(),
+            instances: Renumbering::default(),
+        };
+        let scheme = canonical.copy_scheme(&self.scheme);
+        let mut schemes = Vec::new();
+        let mut instances = Vec::new();
+        while schemes.len() < canonical.schemes.order.len() || instances.len() < canonical.instances.order.len() {
+            if let Some(reached) = canonical.schemes.order.get(schemes.len()).copied() {
+                schemes.push(canonical.copy_scheme(&self.schemes[reached as usize]));
+                continue;
+            }
+            let reached = canonical.instances.order[instances.len()];
+            instances.push(canonical.copy_instance(&self.instances[reached as usize]));
+        }
+        CanonicalScheme { scheme, schemes, instances, vars: canonical.terms.finish() }
+    }
+}
+
+/// Numbers by the order first reached, of the schemes or the instances a
+/// canonical form names.
+#[derive(Default)]
+struct Renumbering {
+    numbers: FxHashMap<u32, u32>,
+    order: Vec<u32>,
+}
+
+impl Renumbering {
+    fn number(&mut self, reached: u32) -> u32 {
+        *self.numbers.entry(reached).or_insert_with(|| {
+            self.order.push(reached);
+            u32::try_from(self.order.len() - 1).expect("u32 schemes and instances")
+        })
+    }
+}
+
+/// Copying a scheme into canonical form.
+struct Canonicalizing<'c> {
+    terms: crate::infer::Canonical<'c>,
+    site: AstId,
+    schemes: Renumbering,
+    instances: Renumbering,
+}
+
+impl Canonicalizing<'_> {
+    /// Its function type first, then its requirements in order, then what
+    /// it generalizes, sorted, since that is a set.
+    fn copy_scheme(&mut self, scheme: &LetScheme) -> LetScheme {
+        let term = self.terms.term(scheme.term);
+        let settled = scheme.settled.as_ref().map(|settled| {
+            let requirements = settled.requirements.iter().map(|decision| decision.map_terms(self)).collect();
+            Settled { generalized: self.vars(&settled.generalized), requirements }
+        });
+        LetScheme {
+            binder: self.site,
+            term,
+            lambdas: scheme.lambdas.iter().map(|_| self.site).collect(),
+            settled,
+            generalizes: scheme.generalizes,
+            value: scheme.value,
+        }
+    }
+
+    fn copy_instance(&mut self, instance: &Instance) -> CanonicalInstance {
+        CanonicalInstance {
+            scheme: MapTerms::scheme(self, instance.scheme),
+            within: instance.within.map(|within| MapTerms::instance(self, within)),
+            at: self.at(&instance.at),
+            template: instance.template,
+        }
+    }
+
+    fn vars(&mut self, vars: &Generalized) -> Generalized {
+        let terms = &mut self.terms;
+        Generalized {
+            types: sorted(vars.types.iter().map(|var| terms.ty_var(*var)), |var| var.0),
+            effects: sorted(vars.effects.iter().map(|var| terms.effect_var(*var)), |var| var.0),
+            lengths: sorted(vars.lengths.iter().map(|var| terms.length_var(*var)), |var| var.0),
+            identities: sorted(vars.identities.iter().map(|var| terms.identity_var(*var)), |var| var.0),
+            marks: sorted(vars.marks.iter().map(|var| terms.mark_var(*var)), |var| var.0),
+            values: sorted(vars.values.iter().map(|var| terms.values_var(*var)), |var| var.0),
+        }
+    }
+
+    fn at(&mut self, at: &AtInstance) -> AtInstance {
+        let terms = &mut self.terms;
+        AtInstance {
+            types: at.types.iter().map(|(var, term)| (terms.ty_var(*var), terms.term(*term))).collect(),
+            effects: at.effects.iter().map(|(var, copy)| (terms.effect_var(*var), terms.effect_var(*copy))).collect(),
+            lengths: at.lengths.iter().map(|(var, copy)| (terms.length_var(*var), terms.length_var(*copy))).collect(),
+            identities: at.identities.iter().map(|(var, copy)| (terms.identity_var(*var), terms.identity_var(*copy))).collect(),
+            marks: at.marks.iter().map(|(var, copy)| (terms.mark_var(*var), terms.mark_var(*copy))).collect(),
+            values: at.values.iter().map(|(var, copy)| (terms.values_var(*var), terms.values_var(*copy))).collect(),
+        }
+    }
+}
+
+impl MapTerms for Canonicalizing<'_> {
+    fn ty(&mut self, term: Term) -> Term {
+        self.terms.term(term)
+    }
+
+    fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase> {
+        self.terms.effect(effect)
+    }
+
+    fn scheme(&mut self, scheme: SchemeId) -> SchemeId {
+        SchemeId(self.schemes.number(scheme.0))
+    }
+
+    fn instance(&mut self, instance: InstanceId) -> InstanceId {
+        InstanceId(self.instances.number(instance.0))
+    }
+
+    fn site(&mut self, _: AstId) -> AstId {
+        self.site
+    }
+
+    fn span(&mut self, _: Span) -> Span {
+        Span::ZERO
+    }
+}
+
 /// The generalized variables, by kind: every kind a type states
 /// (functions §2). What a function value's captures hold, how often it
 /// may be called and its flows are decided where it is written, not per

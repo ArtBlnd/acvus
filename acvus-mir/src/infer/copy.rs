@@ -52,7 +52,7 @@ pub struct VarsOf {
 }
 
 /// Each generalized variable's term at one instance.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AtInstance {
     pub types: FxHashMap<TyVarId, Term>,
     pub effects: FxHashMap<EffectVarId, EffectVarId>,

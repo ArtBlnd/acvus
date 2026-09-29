@@ -398,6 +398,11 @@ impl<T: VarTerm> Cells<T> {
         }
     }
 
+    /// Whether `eq` fixed `var`, the end of a chain, at its value (D94).
+    pub(super) fn is_fixed(&self, var: T::Var) -> bool {
+        self.fixed[T::index(var)]
+    }
+
     /// How many variables of this kind were made so far.
     pub(super) fn count(&self) -> u32 {
         u32::try_from(self.cells.len()).expect("indices are u32 by fresh")
