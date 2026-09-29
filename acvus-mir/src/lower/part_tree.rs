@@ -13,16 +13,16 @@ use acvus_ast::{AstId, BinOp, Expr, Literal, Slot, Span};
 use acvus_utils::Astr;
 
 use super::call::{convert, issue, lent_operand};
-use super::coerce::{Variant, by_variant};
+use super::coerce::{ArrayMap, Variant, array_map, by_variant};
 use super::control::diamond;
 use super::ctxt::Lcx;
 use super::place::view_array;
 use crate::decl::{Lift, LiftShape, Taking};
 use crate::ir::cfg::{BlockId, Op, Stages, Terminator};
-use crate::ir::{ExitTrip, ForSource, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, known_len};
+use crate::ir::{ExitTrip, ForSource, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{IntTy, Mutability, Ty, TyKind};
-use crate::typeck::StructureTree;
+use crate::ty::{Effect, IntTy, Mutability, Ty, TyKind};
+use crate::typeck::{Own, StructureTree};
 
 /// What a comparison asks of its operands (operators §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +188,7 @@ fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a:
             return issue(cx, called, *callee, vec![a, b], span);
         }
         StructureTree::Parts(trees) => trees,
+        StructureTree::Own(own) => unreachable!("the language answers only `clone` and `default` itself, no comparison ({own:?})"),
     };
     match shape(cx, ty) {
         // typeck compares a reference at its own node by what it names.
@@ -208,11 +209,9 @@ fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a:
         }
         Shape::Enum(variants) => match asked {
             Asked::Equal => enum_equal(cx, &Variant::of_enum(&variants), trees, a, b, span),
-            // NOTE: an open question, returned to the coordinator. A program's
-            // enum has no declared order of its variants: its type keeps them
-            // sorted by interned tag, which orders nothing the program wrote,
-            // so no ledger sentence says which of two variants is less.
-            Asked::Order => todo!("the order of two variants of a program's enum is not determined"),
+            // typeck refuses ordering an enum, which has no order
+            // (operators §4, `RefusalKind::Unordered`).
+            Asked::Order => unreachable!("typeck refuses ordering an enum (operators §4)"),
         },
         Shape::Never => answered(cx, asked, span),
     }
@@ -466,15 +465,28 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
             return issue(cx, called, *callee, args.to_vec(), span);
         }
         StructureTree::Parts(trees) => trees,
+        StructureTree::Own(Own::Copy) => {
+            return match lift.params.first() {
+                Some(Taking::Ref(_)) => {
+                    let op = Op::Take { target: RefTarget::Through(args[0]), path: Vec::new(), taken_out: false };
+                    cx.builder.push(op, ty, span)
+                }
+                Some(Taking::Value) => args[0],
+                None => unreachable!("`clone` takes the value it copies"),
+            };
+        }
+        StructureTree::Own(Own::OptionNone) => {
+            let none = cx.decls.core().tags.none;
+            return cx.builder.push(Op::MakeVariant { tag: none, payload: None }, ty, span);
+        }
     };
     let shape = shape(cx, ty);
     if let Some(variants) = variants(cx, &shape) {
-        // NOTE: an open question, returned to the coordinator. With one
-        // argument its variant is the variant rebuilt; with none, or with
-        // several that may hold different variants, no ledger sentence says
-        // which variant the rebuilt value is.
+        // typeck lifts a rebuild at a variant type only where the function
+        // takes it in exactly one parameter, whose variant is the result's
+        // (types §1, `structure::lifts_at`).
         let [decides] = args[..] else {
-            todo!("a variant type rebuilt from {} arguments: which variant it is is not determined", args.len())
+            unreachable!("typeck rebuilds a variant type only from one argument, not {}", args.len())
         };
         return by_variant(cx, &variants, ty, decides, span, &|cx, variant| {
             let payload = payload_part(variant, trees).map(|part| {
@@ -508,12 +520,36 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
                 .collect();
             cx.builder.push(Op::MakeObject { fields }, ty, span)
         }
-        // NOTE: an open question, returned to the coordinator, as for an
-        // array's coercion (`coerce::structured`): no IR form builds a new
-        // array in one `For`, and the rule excludes unrolling.
-        Shape::Array(_) => todo!("an array rebuilt element by element in one `For`: no IR form builds a new array in a loop"),
+        Shape::Array(ArrayOf { element, len }) => {
+            // NOTE: an open question, returned to the coordinator.
+            // `Intrinsic::ArrayMap` maps one array; a rebuild from no
+            // argument, as `default`'s, or from several has none or several
+            // to map, and the ledger does not say how such an array is made.
+            let [array] = args[..] else {
+                todo!("an array rebuilt from {} arguments: `ArrayMap` maps one array", args.len())
+            };
+            let tree = tree_at(trees, PartKey::Element);
+            let param = match lift.params[0] {
+                Taking::Value => element,
+                Taking::Ref(mutability) => cx.ref_ty(mutability, element),
+            };
+            let effect = tree_effect(cx, tree);
+            let map = ArrayMap { array, param, mapped: element, len, effect, span };
+            array_map(cx, map, &|cx, at| rebuilt(cx, tree, lift, element, &[at], span))
+        }
         Shape::Option(_) | Shape::Result { .. } | Shape::Enum(_) => unreachable!("a variant type is rebuilt by its variant above"),
         Shape::Ref(_) | Shape::Never => panic!("a lift answers only at a transparent structured type, not {ty:?}"),
+    }
+}
+
+/// The effect of the calls `tree` makes: every impl's it reaches, joined.
+fn tree_effect(cx: &Lcx<'_, '_>, tree: &StructureTree) -> Effect {
+    match tree {
+        StructureTree::Reached { callee, .. } => {
+            fn_effect(cx.builder.types(), *callee).expect("a reached impl's type has an effect").clone()
+        }
+        StructureTree::Parts(parts) => parts.iter().fold(Effect::pure(), |joined, (_, part)| joined.join(&tree_effect(cx, part))),
+        StructureTree::Own(_) => Effect::pure(),
     }
 }
 

@@ -198,8 +198,12 @@ impl<'a, 'm> Lcx<'a, 'm> {
                 let impls = scheme.impls.as_ref().expect("a declaration reached at its generic impl has impls");
                 impls.concrete.len()
             }
-            Some(Impl::Structural) => panic!(
-                "a lifted impl {:?} is no callee: its parts' impls are called, each at its own node (types §1)",
+            // A call answered structurally is lowered by its tree
+            // (`part_tree::lifted`), and a requirement so answered is refused
+            // by typeck (`Unimplemented::LiftedImplAsRequirement`), so no
+            // chosen impl numbered here is one.
+            Some(Impl::Structural) => unreachable!(
+                "a lifted impl {:?} is no callee: typeck refuses one as a requirement, and lower calls its parts",
                 chosen.declaration
             ),
         }

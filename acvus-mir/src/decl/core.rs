@@ -127,6 +127,12 @@ impl Core {
         functions
     }
 
+    /// The name a lang item gives its receiver, which a function the
+    /// compiler makes of one parameter gives its one parameter too.
+    pub fn receiver_param(&self) -> Astr {
+        self.params.receiver
+    }
+
     /// The type an `as` names by `name`, if it names one (operators §5).
     pub fn cast_target(&self, name: Astr) -> Option<CastTy> {
         self.cast_targets
