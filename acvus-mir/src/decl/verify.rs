@@ -222,7 +222,8 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
 
 /// The declared functions with every lang item's generic function, built by
 /// the compiler from operators §2's table and given the impls declared for
-/// it, in front. A function declared under a lang item's name, and impls
+/// it, in front; one given none has no impls, since `core` implements
+/// nothing (operators §2). A function declared under a lang item's name, and impls
 /// given to a name that is no lang item, are refused and left out; a lang
 /// item given impls twice keeps the first, as a function declared twice
 /// does.
@@ -247,8 +248,8 @@ fn with_lang_items(
         .generic_functions(types)
         .into_iter()
         .map(|(id, scheme)| {
-            let impls = given.remove(&id);
-            (id, Scheme { impls, ..scheme })
+            let impls = given.remove(&id).unwrap_or_else(|| Impls { concrete: Box::new([]), generic: None });
+            (id, Scheme { impls: Some(impls), ..scheme })
         })
         .collect();
     for (id, scheme) in functions {

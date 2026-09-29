@@ -34,9 +34,10 @@ pub(super) fn cloned_type(cx: &Ctxt<'_>, head: Head, receiver: Term) -> Term {
     }
 }
 
-/// The clone of a value of type `operand`, decided at `node`.
+/// The clone of a value of type `operand`, decided at `node` by the
+/// fixpoint, as an adjustment is.
 pub(super) fn decide(cx: &mut Ctxt<'_>, node: AstId, span: Span, operand: Term, body: EffectTerm<InferPhase>) {
-    super::decision::decide(cx, Decision::Clone { node, span, operand, body });
+    cx.decisions.push(Decision::Clone { node, span, operand, body });
 }
 
 /// A clone fired at `node` on its type, closed all the way down: a tuple,

@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::dominators::{DefPoint, Dominators, def_points};
 use super::*;
 use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Stages, Terminator};
-use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
+use crate::ir::{BinOp, Callee, Checked, Overflow, PathSeg, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability,
@@ -1286,6 +1286,43 @@ fn order_chain_whole_accepts_an_anyorder_fork_that_merges_and_rejects_one_that_d
 
 fn types_agree(f: &Fixture, id: BodyId) -> Result<(), Violation> {
     <TypesAgree as Invariant>::check(f.body(id), f.module.types())
+}
+
+/// ownership §5, types §4, D108: a `&mut i64` part of a tuple or an object
+/// read by `Take` through a reference is a reborrow: through `&` it is a
+/// `&i64`, through `&mut` it keeps `&mut`. Each other mutability is a
+/// mistyped read.
+#[test]
+fn types_agree_reads_a_reference_part_as_a_reborrow_capped_by_its_path() {
+    for object in [false, true] {
+        for (path, read, agrees) in [
+            (Mutability::Shared, Mutability::Shared, true),
+            (Mutability::Shared, Mutability::Mut, false),
+            (Mutability::Mut, Mutability::Mut, true),
+            (Mutability::Mut, Mutability::Shared, false),
+        ] {
+            let mut f = fixture();
+            let (np, field, int, bool) = (f.name("p"), f.name("x"), f.int, f.bool);
+            let mut_int = f.module.types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+            let (holder, seg) = match object {
+                false => (f.module.types.intern(TyKind::Tuple(Box::new([mut_int, bool]))), PathSeg::Index(0)),
+                true => {
+                    let fields = Box::new([(field, mut_int), (f.name("y"), bool)]);
+                    (f.module.types.intern(TyKind::Object(crate::ty::ObjectTy::Declared(QualifiedRef::root(f.name("Holder")), fields))), PathSeg::Field(field))
+                }
+            };
+            let lent = f.module.types.intern(TyKind::Ref(path, TypeArg::Uniform(holder)));
+            let result_ty = f.module.types.intern(TyKind::Ref(read, TypeArg::Uniform(int)));
+            let mut builder = f.build(false, result_ty);
+            let p = builder.param(np, lent, acvus_ast::Span::ZERO);
+            let take = Op::Take { target: RefTarget::Through(p), path: vec![seg], taken_out: false };
+            let e = builder.push(take, result_ty, at(1));
+            builder.terminate(ret(e), acvus_ast::Span::ZERO);
+            let id = builder.seal().expect("the body has no open state");
+            let checked = types_agree(&f, id);
+            assert_eq!(checked.is_ok(), agrees, "object {object}, through {path:?}, read {read:?}: {checked:?}");
+        }
+    }
 }
 
 #[test]

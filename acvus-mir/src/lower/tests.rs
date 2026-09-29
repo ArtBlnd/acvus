@@ -587,7 +587,13 @@ fn anyorder_calls_consume_one_token_and_merge() {
 /// `move` passes the value (functions §2). Each is a body of its own.
 #[test]
 fn a_lambda_captures_by_reference_and_by_move() {
-    let lowered = Fixture::new().script("let a = 1; let g = |x| -> a; let b = 2; let h = move |x| -> b; g(1) + 0; h(1)");
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let shared = fx.reference(Mutability::Shared, int);
+    let adds = fx.function(&[shared, shared], int, Effect::pure());
+    let add = fx.raw.core.add;
+    fx.lang_item(add, &[adds]);
+    let lowered = fx.script("let a = 1; let g = |x| -> a; let b = 2; let h = move |x| -> b; g(1) + 0; h(1)");
     lowered_closures(&lowered);
 }
 

@@ -1375,27 +1375,39 @@ fn a_tuple_that_copies_is_copied_by_clone() {
     assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
 }
 
+/// operators §2: `core` implements nothing, and where no impl answers the
+/// program is refused. With no `core::clone` impl declared anywhere, a
+/// `String`'s `.clone()` has none to reach.
+#[test]
+fn a_lang_item_given_no_impls_answers_no_reach() {
+    let mut fx = Fixture::new();
+    let clone = fx.raw.core.clone;
+    let string = fx.ty(TyKind::String);
+    fx.input("s", string);
+    let (checked, _) = fx.script("$s.clone()");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
+}
+
 /// P13, extern-fn §1: an array is not taken apart for a clone. A `[String;
-/// 2]`'s `.clone()` reaches `core::clone` at the array's type, as a
-/// `String`'s does at its own, and no declaration carries an array type, so
-/// the reach refuses it though `String` has an impl.
+/// 2]`'s `.clone()` reaches `core::clone` at the array's type, and no
+/// declaration carries an array type, so the reach refuses it, with no
+/// `core::clone` impl declared and with one for `String`.
 #[test]
 fn a_clone_of_an_array_that_does_not_copy_reaches_core_clone_and_is_refused() {
-    let checked = |source: &str| {
+    for clones_strings in [false, true] {
         let mut fx = Fixture::new();
         let clone = fx.raw.core.clone;
         let string = fx.ty(TyKind::String);
-        let shared_string = fx.reference(Mutability::Shared, string);
-        let clones_string = fx.pure(&[shared_string], string);
-        fx.lang_item(clone, &[clones_string]);
+        if clones_strings {
+            let shared_string = fx.reference(Mutability::Shared, string);
+            let clones_string = fx.pure(&[shared_string], string);
+            fx.lang_item(clone, &[clones_string]);
+        }
         let array = fx.ty(TyKind::Array(string, crate::ty::LenTerm::Known(2)));
         fx.input("a", array);
-        fx.input("s", string);
-        (fx.script(source).0, clone)
-    };
-    checked("$s.clone()").0.admitted();
-    let (refused, clone) = checked("$a.clone()");
-    assert_eq!(refused.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
+        let (checked, _) = fx.script("$a.clone()");
+        assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }], "`String` has an impl: {clones_strings}");
+    }
 }
 
 /// ownership §1: a `[i64; 2]`'s `.clone()` copies it, with no impl.
