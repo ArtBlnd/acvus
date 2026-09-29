@@ -325,6 +325,10 @@ pub struct Typeck {
     /// Each generalized binding, by its binder: the lambdas written as its
     /// values, whose code lower makes at each of its instances' signatures.
     pub generalized: FxHashMap<AstId, Box<[AstId]>>,
+    /// Each site a generalized binding's value passes through where it is
+    /// written, its binder included, with that binder: a value there holds
+    /// every signature the binding has (functions §2).
+    pub value_sites: FxHashMap<AstId, AstId>,
     pub body_effect: Effect,
     /// The run's result type: the slot every tail and `return` enters, and
     /// for a template the `String` it builds. `None` only where a refusal

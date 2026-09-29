@@ -51,6 +51,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         .collect();
     let structure_trees = structure_trees(&mut cx, types, &mut memo);
     let instances = instances(&mut cx, types, &mut memo);
+    let value_sites = value_sites(&cx);
     let generalized = cx
         .out
         .schemes
@@ -84,6 +85,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         structure_trees,
         instances,
         generalized,
+        value_sites,
         body_effect,
         result,
         refusals: std::mem::take(&mut cx.out.refusals),
@@ -578,6 +580,24 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
             }
         });
         out.insert(id, decided);
+    }
+    out
+}
+
+/// Each site a generalized binding's value passes through where it is
+/// written: recorded by one of the binding's value walks, the `let`'s or an
+/// assignment's, at a term one with the binding's own, and the binder.
+fn value_sites(cx: &Ctxt<'_>) -> FxHashMap<AstId, AstId> {
+    let mut out = FxHashMap::default();
+    for scheme in cx.out.schemes.iter().filter(|scheme| scheme.generalizes) {
+        let own = cx.infer.shallow(scheme.term);
+        out.insert(scheme.binder, scheme.binder);
+        for (site, owner) in &cx.out.site_owners {
+            let carries = *owner == scheme.binder && cx.out.types.get(site).is_some_and(|term| cx.infer.shallow(*term) == own);
+            if carries {
+                out.insert(*site, scheme.binder);
+            }
+        }
     }
     out
 }
