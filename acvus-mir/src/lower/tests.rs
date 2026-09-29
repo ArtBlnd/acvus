@@ -1530,3 +1530,18 @@ fn as_ref_lowers_to_references_into_each_part() {
     let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } if args.len() == 2);
     assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{}", shown(lowered.entry()));
 }
+
+/// types §4, ownership §5: over a reference to an array of references,
+/// `ArrayMap` passes each element reborrowed at the weaker mutability, as
+/// the IR type check holds it to.
+#[test]
+fn a_lend_of_an_array_of_references_maps_each_reborrowed() {
+    for source in [
+        "let x = 1; let y = 2; let a = [&mut x, &mut y]; let r = a.as_ref(); 0",
+        "let x = 1; let y = 2; let a = [&x, &y]; let r = a.as_mut(); 0",
+    ] {
+        let lowered = Fixture::new().script(source);
+        let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, .. });
+        assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{source}: {}", shown(lowered.entry()));
+    }
+}

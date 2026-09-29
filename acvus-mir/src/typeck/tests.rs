@@ -3034,3 +3034,26 @@ fn as_mut_through_a_shared_reference_and_as_ref_of_a_primitive_are_refused() {
         assert!(matches!(checked.refusals()[..], [RefusalKind::LendsNoParts { .. }]), "{source}: {:?}", checked.refusals());
     }
 }
+
+/// types §4, ownership §5: an array whose elements are references lends
+/// each reborrowed at the weaker mutability: `as_ref` of `[&mut T; n]` is
+/// `[&T; n]`, and `as_mut` of `[&T; n]` is `[&T; n]`.
+#[test]
+fn a_lend_of_an_array_of_references_reborrows_each_at_the_weaker_mutability() {
+    for source in [
+        "let x = 1; let y = 2; let a = [&mut x, &mut y]; let r = a.as_ref(); 0",
+        "let x = 1; let y = 2; let a = [&x, &y]; let r = a.as_mut(); 0",
+    ] {
+        let fx = Fixture::new();
+        let names = fx.names.clone();
+        let (checked, script) = fx.script(source);
+        checked.admitted();
+        let TyKind::Array(element, _, ()) = checked.kind(binding(&checked, &script, &names, "r")) else {
+            panic!("{source}: an array");
+        };
+        let TyKind::Ref(Mutability::Shared, target) = checked.kind(*element) else {
+            panic!("{source}: each element a `&`, not {:?}", checked.kind(*element));
+        };
+        assert!(is_int(&checked, target.ty(), IntTy::I64), "{source}");
+    }
+}
