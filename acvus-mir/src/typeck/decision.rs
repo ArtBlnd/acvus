@@ -176,6 +176,12 @@ pub(super) enum Decision {
         operand: Term,
         body: EffectTerm<InferPhase>,
     },
+    /// A use of a generalized binding, waiting until its scheme is settled
+    /// (functions §2): the instance's term is `result`.
+    Instantiate { scheme: super::generalize::SchemeId, site: AstId, span: Span, result: Term },
+    /// A requirement made at an instance: `decision`, whose sites are the
+    /// lambda body's, recorded at `instance` (functions §2).
+    In { instance: super::generalize::InstanceId, decision: Box<Decision> },
 }
 
 impl Decision {
@@ -234,11 +240,17 @@ impl Decision {
 #[derive(Default)]
 pub(super) struct Decisions {
     pending: Vec<Decision>,
+    /// Each pending decision's owner, by position in `pending`: the
+    /// innermost lambda it was made in, `None` for the run (S7).
+    owners: Vec<Option<AstId>>,
+    /// The owner a decision pushed now takes: the lambda whose body is
+    /// being walked, or the owner of the decision being fired.
+    pub owner: Option<AstId>,
 }
 
 impl Decisions {
     pub fn push(&mut self, decision: Decision) {
-        self.pending.push(decision);
+        todo!("push `decision` with `self.owner`, keeping `owners` in step with `pending` everywhere it changes")
     }
 }
 

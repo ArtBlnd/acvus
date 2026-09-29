@@ -248,6 +248,13 @@ pub struct AsCast {
 /// The output while checking.
 #[derive(Default)]
 pub(super) struct Output {
+    /// Each generalized binding (functions §2), by `SchemeId`.
+    pub schemes: Vec<super::generalize::LetScheme>,
+    /// Each instance of one, by `InstanceId`.
+    pub instances: Vec<super::generalize::Instance>,
+    /// The instance whose requirement is firing, where one is: what fires
+    /// records at the lambda body's sites within it.
+    pub firing_in: Option<super::generalize::InstanceId>,
     pub types: FxHashMap<AstId, Term>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,
@@ -300,10 +307,34 @@ pub struct Typeck {
     /// Each comparison's tree, at the operator's site, and each lifted
     /// impl's, at the site of the call that reached it.
     pub structure_trees: FxHashMap<AstId, StructureTree>,
+    /// Each instance of a generalized binding (functions §2): what was
+    /// decided at the lambda bodies' sites within it, which lower reads to
+    /// specialize the code to it over the one environment.
+    pub instances: FxHashMap<super::generalize::InstanceId, InstanceDecided>,
     pub body_effect: Effect,
     /// The run's result type: the slot every tail and `return` enters, and
     /// for a template the `String` it builds. `None` only where a refusal
     /// left it open.
     pub result: Option<Ty>,
     pub refusals: Vec<Refusal>,
+}
+
+/// What an instance decided at the sites of the lambda bodies it
+/// specializes: each site's type, and each decision recorded there, as
+/// `Typeck` keeps them for the rest of the run.
+#[derive(Debug, Clone, Default)]
+pub struct InstanceDecided {
+    /// The use this instance is.
+    pub use_site: Option<AstId>,
+    /// The instance of an enclosing binding it was made within.
+    pub within: Option<super::generalize::InstanceId>,
+    pub types: FxHashMap<AstId, Ty>,
+    pub reached: FxHashMap<AstId, Chosen>,
+    pub callees: FxHashMap<AstId, Ty>,
+    pub iteration: FxHashMap<AstId, Iteration>,
+    pub tries: FxHashMap<AstId, TryExit<Ty>>,
+    pub coercions: FxHashMap<AstId, Coercion>,
+    pub casts: FxHashMap<AstId, AsCast>,
+    pub adjustments: FxHashMap<AstId, Adjustment>,
+    pub structure_trees: FxHashMap<AstId, StructureTree>,
 }

@@ -14,6 +14,10 @@
 //! - S3. A decision reads only closed terms (types §6).
 //! - S4. A refusal is made only through `refusal`.
 //! - S5. Every pass states its cost; the fixpoint fires each decision once.
+//! - S7. Every decision has an owner, the innermost lambda it was made in
+//!   (or the run), and a decision made while one fires has that one's; a
+//!   generalized binding's requirements are its lambdas' decisions still
+//!   open (G, `generalize`).
 //! - S6. A transparent structured type is taken apart only by `structure`,
 //!   S's one rule (types §1, §3): a value coerced to a slot written
 //!   elsewhere, a lifted impl, and a comparison each record a node per part
@@ -28,6 +32,7 @@ mod ctxt;
 mod decision;
 mod effect;
 mod expr;
+mod generalize;
 mod method;
 mod op;
 mod output;
@@ -49,7 +54,8 @@ use acvus_ast::{Expr, Script, Slot, Template};
 use crate::decl::Declarations;
 use crate::ty::{Concrete, TyKind, Types};
 
-pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, Own, StructureTree, TryExit, Typeck};
+pub use generalize::InstanceId;
+pub use output::{InstanceDecided, Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, Own, StructureTree, TryExit, Typeck};
 pub use refusal::{Exceeding, Refusal, RefusalKind, Unimplemented};
 
 use ctxt::Ctxt;
@@ -63,6 +69,7 @@ pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, 
     let site = tail.map_or(script.id, Expr::id);
     let span = tail.map_or(script.span, Expr::span);
     let result = context::check_run_result(&mut cx, site, value, span);
+    generalize::generalize_all(&mut cx);
     decision::solve(&mut cx);
     closure::settle_captures(&mut cx);
     writeback::finish(cx, types, result)
@@ -73,6 +80,7 @@ pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, 
 pub fn check_template<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, template: &Template<S>) -> Typeck {
     let mut cx = Ctxt::new(decls, Run::Template);
     stmt::check_stmts(&mut cx, &template.body);
+    generalize::generalize_all(&mut cx);
     decision::solve(&mut cx);
     closure::settle_captures(&mut cx);
     let built = cx.node(TyKind::String);

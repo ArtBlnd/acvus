@@ -63,8 +63,11 @@ pub(super) fn check_lambda<S: Slot>(
         );
         param_terms.push(term);
     }
+    // The body's decisions are the lambda's own (S7).
+    let enclosing = cx.decisions.owner.replace(site);
     let value = check_expr(cx, body, Demand::Read);
     cx.enter(body.id(), value, result, body.span());
+    cx.decisions.owner = enclosing;
     // A body that calls nothing has no effect to order (effects §1).
     let effect = cx
         .scope

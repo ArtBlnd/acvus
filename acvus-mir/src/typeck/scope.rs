@@ -16,6 +16,9 @@ use crate::ty::{EffectTerm, Infer as InferPhase, Mutability};
 pub(super) struct Binding {
     pub binder: AstId,
     pub term: Term,
+    /// Where the binding is generalized (functions §2), its scheme: each
+    /// use instantiates it.
+    pub scheme: Option<super::generalize::SchemeId>,
 }
 
 /// What a body's `return` and `?` leave through, and what its calls do:
@@ -241,7 +244,10 @@ pub(super) fn check_ident(
     {
         cx.out.names.insert(site, Name::Binding(found.binding.binder));
         note_captures(cx, capturing_binding(name.name, &found), Demand::Read, span);
-        return found.binding.term;
+        return match found.binding.scheme {
+            Some(scheme) => super::generalize::instantiate(cx, scheme, site, span),
+            None => found.binding.term,
+        };
     }
     let declarations: Box<[QualifiedRef]> = match name.namespace {
         Some(_) => cx.decls.scheme(name).map(|_| name).into_iter().collect(),

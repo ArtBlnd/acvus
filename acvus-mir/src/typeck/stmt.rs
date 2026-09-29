@@ -81,11 +81,13 @@ pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
             let term = cx.fresh();
             cx.enter(expr.id(), value, term, expr.span());
             cx.record(binder.id, term);
+            let scheme = super::generalize::generalizes(cx, value).then(|| super::generalize::register(cx, binder.id, term));
             cx.scope.define(
                 binder.name,
                 Binding {
                     binder: binder.id,
                     term,
+                    scheme,
                 },
             );
         }
