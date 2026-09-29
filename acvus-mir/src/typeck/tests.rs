@@ -2710,3 +2710,59 @@ fn a_reference_to_a_structure_is_coerced_through_its_target() {
         }
     }
 }
+
+/// types §6: where the arguments leave more than one, the type the result
+/// is taken at decides last, exactly: `default()` where a `bool` is needed
+/// reaches the `bool` impl, and where an `(i64, bool)` is needed, the
+/// lifted impl, a candidate among the concrete ones (types §1).
+#[test]
+fn the_result_decides_a_reach_last() {
+    let fixture = |param: &dyn Fn(&mut Fixture) -> TyId<Poly>| {
+        let mut fx = Fixture::new();
+        let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+        let default = fx.raw.core.default;
+        let (at_int, at_bool) = (fx.pure(&[], i64_ty), fx.pure(&[], bool_ty));
+        fx.lang_item(default, &[at_int, at_bool]);
+        let param = param(&mut fx);
+        let unit = fx.ty(TyKind::Unit);
+        let takes = fx.pure(&[param], unit);
+        fx.declare("f", takes, &[]);
+        fx
+    };
+    let (checked, script) = fixture(&|fx| fx.ty(TyKind::Bool)).script("f(default())");
+    checked.admitted();
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("not a call");
+    };
+    let Expr::FuncCall { id, .. } = &args[0] else {
+        panic!("`default()` is a call");
+    };
+    assert_eq!(checked.typeck.reached[id].r#impl, Some(Impl::Concrete(1)));
+
+    let pair = |fx: &mut Fixture| {
+        let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+        fx.ty(TyKind::Tuple(Box::new([i64_ty, bool_ty]), ()))
+    };
+    let (checked, script) = fixture(&pair).script("f(default())");
+    checked.admitted();
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("not a call");
+    };
+    let Expr::FuncCall { id, .. } = &args[0] else {
+        panic!("`default()` is a call");
+    };
+    assert_eq!(checked.typeck.reached[id].r#impl, Some(Impl::Structural));
+}
+
+/// types §6: where the result would decide and its type never becomes
+/// known, the reach is refused as never known.
+#[test]
+fn a_reach_its_result_would_decide_and_never_does_is_refused() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let default = fx.raw.core.default;
+    let at_int = fx.pure(&[], i64_ty);
+    fx.lang_item(default, &[at_int]);
+    let (checked, _) = fx.script("let x = default(); 0");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NeverKnown { open: default.name }]);
+}

@@ -1466,3 +1466,43 @@ fn the_languages_own_answers_call_no_impl() {
     let made = |op: &Op| matches!(op, Op::MakeVariant { tag, payload: None } if *tag == none);
     assert_eq!(count(&lowered.entry_ops(), made), 1, "{}", shown(body));
 }
+
+/// types §1: an array rebuilt from no argument, as `default` makes one, is
+/// `ArrayMap` of no array, its length the array type's; from two, one map
+/// of both.
+#[test]
+fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let at_int = fx.function(&[], int, Effect::pure());
+    let default = fx.raw.core.default;
+    fx.lang_item(default, &[at_int]);
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3), ()));
+    fx.context("v", array, false);
+    let lowered = fx.script("@v = default(); 0");
+    let body = lowered.entry();
+    let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } if args.len() == 1);
+    assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{}", shown(body));
+
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let t = fx.ty(TyKind::Var(0));
+    let (shared_t, shared_int) = (fx.reference(Mutability::Shared, t), fx.reference(Mutability::Shared, int));
+    let generic = fx.function(&[shared_t, shared_t], t, Effect::pure());
+    let at_int = fx.function(&[shared_int, shared_int], int, Effect::pure());
+    let id = QualifiedRef::root(fx.name("pick"));
+    let concrete = Box::new([ImplSig { ty: at_int, param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default() }]);
+    let scheme = Scheme {
+        ty: generic,
+        param_names: fx.param_names(2),
+        bounds: Box::new([TyVarBound::Any]),
+        impls: Some(Impls { concrete, generic: None }),
+        requires: Box::new([]),
+        facts: DeclaredFacts::default(),
+    };
+    fx.raw.functions.push((id, scheme));
+    let lowered = fx.script("let a = [1, 2]; let b = [3, 4]; let c = pick(&a, &b); 0");
+    let body = lowered.entry();
+    let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } if args.len() == 3);
+    assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{}", shown(body));
+}
