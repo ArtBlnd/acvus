@@ -7,7 +7,7 @@
 //! taken at decides last, matched exactly. Exactly one must be left. Cost:
 //! (positions × tree height + 1) × candidates.
 
-use crate::decl::{Base, Head};
+use crate::decl::{Base, Head, Taking};
 
 /// What a candidate's parameter, or its result, matches at one position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,9 +16,10 @@ pub(super) enum Match {
     Any,
     /// One head.
     Head(Head),
-    /// A lifted impl's type variable (types §1): the head of any
-    /// transparent structured type, at the exact step.
-    Structured,
+    /// A lifted impl's type variable (types §1), taken as the lift takes
+    /// it: the head of any transparent structured type, or a reference of
+    /// exactly that mutability to one, at the exact step.
+    Structured(Taking),
 }
 
 /// A candidate: what its parameter matches at each position, in the order
@@ -61,18 +62,17 @@ pub(super) fn reach(candidates: &[Candidate<'_>], positions: &[Vec<Head>], resul
     }
 }
 
-/// Whether `matched` matches `head` at one step. A lifted impl's variable
-/// stands at a transparent structured type, taken as it is or through a
-/// reference, so `Structured` matches a head whose constructor is one of
-/// the six, or a reference to one (types §1).
+/// Whether `matched` matches `head` at one step: a lifted impl's variable
+/// at a transparent structured type taken as the lift takes it (types §1),
+/// with no other mutability.
 fn matches(matched: Match, head: Head) -> bool {
-    match matched {
-        Match::Any => true,
-        Match::Head(own) => own == head,
-        Match::Structured => {
-            let (Head::Base(base) | Head::Ref(_, base)) = head;
-            matches!(base, Base::Tuple(_) | Base::Array | Base::Option | Base::Result | Base::Object | Base::Enum(_))
-        }
+    let structured = |base: Base| matches!(base, Base::Tuple(_) | Base::Array | Base::Option | Base::Result | Base::Object | Base::Enum(_));
+    match (matched, head) {
+        (Match::Any, _) => true,
+        (Match::Head(own), head) => own == head,
+        (Match::Structured(Taking::Value), Head::Base(base)) => structured(base),
+        (Match::Structured(Taking::Ref(taken)), Head::Ref(held, base)) => taken == held && structured(base),
+        (Match::Structured(_), _) => false,
     }
 }
 
@@ -91,6 +91,7 @@ mod tests {
     const SLICE: Head = Head::Ref(Mutability::Shared, Base::Slice);
     const STR: Head = Head::Ref(Mutability::Shared, Base::Str);
     const STRING: Head = Head::Ref(Mutability::Shared, Base::String);
+    const VALUE: Match = Match::Structured(Taking::Value);
 
     fn candidates<'c>(rows: &'c [(Vec<Match>, Match)]) -> Vec<Candidate<'c>> {
         rows.iter().map(|(params, result)| Candidate { params, result: *result }).collect()
@@ -137,13 +138,21 @@ mod tests {
     }
 
     /// types §1: a lifted impl's variable matches a transparent structured
-    /// type, or a reference to one, at the exact step, and nothing else.
+    /// type taken as the lift takes it, at the exact step, and nothing else:
+    /// a lift taking `&T` is reached by neither a `&mut` nor a value.
     #[test]
-    fn structured_matches_only_a_structure() {
-        let rows = vec![(vec![head(I64)], Match::Any), (vec![Match::Structured], Match::Structured)];
-        assert_eq!(reach(&candidates(&rows), &[vec![PAIR]], None), Ok(1));
-        assert_eq!(reach(&candidates(&rows), &[vec![Head::Ref(Mutability::Shared, Base::Tuple(2))]], None), Ok(1));
+    fn structured_matches_only_a_structure_taken_as_the_lift_takes_it() {
+        let by_ref = Match::Structured(Taking::Ref(Mutability::Shared));
+        let rows = vec![(vec![head(I64)], Match::Any), (vec![by_ref], VALUE)];
+        let shared_pair = Head::Ref(Mutability::Shared, Base::Tuple(2));
+        let mut_pair = Head::Ref(Mutability::Mut, Base::Tuple(2));
+        assert_eq!(reach(&candidates(&rows), &[vec![shared_pair]], None), Ok(1));
+        assert_eq!(reach(&candidates(&rows), &[vec![mut_pair]], None), Err(NoReach::None));
+        assert_eq!(reach(&candidates(&rows), &[vec![PAIR]], None), Err(NoReach::None));
         assert_eq!(reach(&candidates(&rows), &[vec![I64]], None), Ok(0));
+        let rows = vec![(vec![VALUE], VALUE)];
+        assert_eq!(reach(&candidates(&rows), &[vec![PAIR]], None), Ok(0));
+        assert_eq!(reach(&candidates(&rows), &[vec![shared_pair]], None), Err(NoReach::None));
         let names = Interner::new();
         let named = Head::Base(Base::Named(QualifiedRef::root(names.intern("S"))));
         assert_eq!(reach(&candidates(&rows), &[vec![named]], None), Err(NoReach::None));
@@ -169,7 +178,7 @@ mod tests {
     /// up the tree.
     #[test]
     fn the_result_decides_last_and_exactly() {
-        let rows = vec![(vec![], head(I64)), (vec![], Match::Structured), (vec![], head(BOOL))];
+        let rows = vec![(vec![], head(I64)), (vec![], VALUE), (vec![], head(BOOL))];
         let rows = candidates(&rows);
         assert_eq!(reach(&rows, &[], Some(PAIR)), Ok(1));
         assert_eq!(reach(&rows, &[], Some(I64)), Ok(0));
