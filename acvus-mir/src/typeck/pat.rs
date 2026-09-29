@@ -59,6 +59,29 @@ impl Shape {
         out
     }
 
+    /// This shape with each term replaced by `f` of it (G).
+    pub(super) fn map_terms(&self, f: &mut dyn FnMut(Term) -> Term) -> Shape {
+        let form = match &self.form {
+            Form::Bind { term } => Form::Bind { term: f(*term) },
+            Form::Context { context, body } => Form::Context { context: f(*context), body: body.clone() },
+            Form::Ignore => Form::Ignore,
+            Form::Literal { literal } => Form::Literal { literal: f(*literal) },
+            Form::List { head, rest, tail } => Form::List {
+                head: head.iter().map(|part| part.map_terms(f)).collect(),
+                rest: *rest,
+                tail: tail.iter().map(|part| part.map_terms(f)).collect(),
+            },
+            Form::Object { fields } => Form::Object { fields: fields.iter().map(|(name, part)| (*name, part.map_terms(f))).collect() },
+            Form::Tuple { parts } => Form::Tuple { parts: parts.iter().map(|part| part.as_ref().map(|part| part.map_terms(f))).collect() },
+            Form::Variant { enum_name, tag, payload } => Form::Variant {
+                enum_name: *enum_name,
+                tag: *tag,
+                payload: payload.as_ref().map(|payload| Box::new(payload.map_terms(f))),
+            },
+        };
+        Shape { site: self.site, span: self.span, form }
+    }
+
     fn each_binding(&self, on: &mut dyn FnMut(Term)) {
         match &self.form {
             Form::Bind { term } => on(*term),
@@ -101,7 +124,7 @@ fn shape_level<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>) -> Shape {
             RefKind::Value => {
                 let term = cx.fresh();
                 cx.record(*id, term);
-                cx.scope.define(*name, Binding { binder: *id, term });
+                cx.scope.define(*name, Binding { binder: *id, term, scheme: None });
                 Form::Bind { term }
             }
         },

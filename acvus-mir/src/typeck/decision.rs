@@ -199,6 +199,8 @@ impl Decision {
             Decision::BlockEnd { block, .. } => vec![*block],
             Decision::Adjust(adjust) => vec![adjust.result],
             Decision::Destructure { shape, .. } => shape.bindings(),
+            Decision::Instantiate { result, .. } => vec![*result],
+            Decision::In { decision, .. } => decision.outputs().collect(),
             Decision::Compare { .. }
             | Decision::Operand { .. }
             | Decision::Cast { .. }
@@ -209,7 +211,7 @@ impl Decision {
     }
 
     /// Every term this decision reads or writes.
-    fn terms(&self) -> Vec<Term> {
+    pub(super) fn terms(&self) -> Vec<Term> {
         match self {
             Decision::Reach { args, result, .. } => args.iter().map(|(_, arg)| *arg).chain([*result]).collect(),
             Decision::Iterate { head, item, .. } => vec![*head, *item],
@@ -232,6 +234,58 @@ impl Decision {
             }
             Decision::Settle { term, .. }
             | Decision::HoldsNoLoans { term, .. } => vec![*term],
+            Decision::Instantiate { result, .. } => vec![*result],
+            Decision::In { decision, .. } => decision.terms(),
+        }
+    }
+
+    /// This decision with each term replaced by `f` of it: a requirement
+    /// made at an instance (functions §2). Effects are not generalized, so
+    /// they are kept.
+    pub(super) fn map_terms(&self, f: &mut dyn FnMut(Term) -> Term) -> Decision {
+        match self.clone() {
+            Decision::Reach { site, span, callee, args, result, effect } => Decision::Reach {
+                site,
+                span,
+                callee: callee.map_terms(f),
+                args: args.iter().map(|(at, arg)| (*at, f(*arg))).collect(),
+                result: f(result),
+                effect,
+            },
+            Decision::Iterate { site, callee_site, span, head, item, body } => {
+                Decision::Iterate { site, callee_site, span, head: f(head), item: f(item), body }
+            }
+            Decision::Try { site, span, operand, value, exit } => Decision::Try { site, span, operand: f(operand), value: f(value), exit: f(exit) },
+            Decision::Enter { site, span, value, slot, body } => Decision::Enter { site, span, value: f(value), slot: f(slot), body },
+            Decision::Cast { site, span, source, to } => Decision::Cast { site, span, source: f(source), to },
+            Decision::Settle { span, term } => Decision::Settle { span, term: f(term) },
+            Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span, term: f(term) },
+            Decision::Lend { span, value, mutability, result } => Decision::Lend { span, value: f(value), mutability, result: f(result) },
+            Decision::Field { span, object, field, part } => Decision::Field { span, object: f(object), field, part: f(part) },
+            Decision::Index { callee_site, span, container, mutability, element, body } => {
+                Decision::Index { callee_site, span, container: f(container), mutability, element: f(element), body }
+            }
+            Decision::Deref { span, reference, target, store } => Decision::Deref { span, reference: f(reference), target: f(target), store },
+            Decision::Destructure { shape, scrutinee, lent } => {
+                Decision::Destructure { shape: Box::new(shape.map_terms(f)), scrutinee: f(scrutinee), lent }
+            }
+            Decision::Adjust(adjust) => Decision::Adjust(Box::new(adjust.map_terms(f))),
+            Decision::BlockEnd { span, last, block } => Decision::BlockEnd { span, last: f(last), block: f(block) },
+            Decision::Operand { span, operand, domain } => Decision::Operand { span, operand: f(operand), domain },
+            Decision::Compare { node, span, sig, operand, body } => Decision::Compare { node, span, sig, operand: f(operand), body },
+            Decision::Instantiate { scheme, site, span, result } => Decision::Instantiate { scheme, site, span, result: f(result) },
+            Decision::In { instance, decision } => Decision::In { instance, decision: Box::new(decision.map_terms(f)) },
+        }
+    }
+}
+
+impl Callee {
+    fn map_terms(self, f: &mut dyn FnMut(Term) -> Term) -> Callee {
+        let at = |required: RequiredAt, f: &mut dyn FnMut(Term) -> Term| RequiredAt { pattern: f(required.pattern), ..required };
+        match self {
+            Callee::Required(required) => Callee::Required(at(required, f)),
+            Callee::Part(required) => Callee::Part(at(required, f)),
+            other => other,
         }
     }
 }
@@ -246,11 +300,60 @@ pub(super) struct Decisions {
     /// The owner a decision pushed now takes: the lambda whose body is
     /// being walked, or the owner of the decision being fired.
     pub owner: Option<AstId>,
+    /// The instance whose requirement is firing, where one is: a decision
+    /// pushed now is made at it too (`Decision::In`).
+    pub within: Option<super::generalize::InstanceId>,
 }
 
 impl Decisions {
+    /// `decision` pending, owned by `self.owner`; made while a requirement
+    /// fires at an instance, it is that instance's too (S7, G).
     pub fn push(&mut self, decision: Decision) {
-        todo!("push `decision` with `self.owner`, keeping `owners` in step with `pending` everywhere it changes")
+        let decision = match self.within {
+            Some(instance) if !matches!(decision, Decision::In { .. }) => Decision::In { instance, decision: Box::new(decision) },
+            _ => decision,
+        };
+        self.pending.push(decision);
+        self.owners.push(self.owner);
+    }
+
+    fn remove(&mut self, at: usize) -> (Decision, Option<AstId>) {
+        (self.pending.remove(at), self.owners.remove(at))
+    }
+
+    fn insert(&mut self, at: usize, decision: Decision, owner: Option<AstId>) {
+        self.pending.insert(at, decision);
+        self.owners.insert(at, owner);
+    }
+
+    fn take_all(&mut self) -> Vec<Decision> {
+        self.owners.clear();
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Every pending decision owned by one of `owned`, taken out with its
+    /// owner, in order.
+    pub(super) fn take_owned(&mut self, owned: &dyn Fn(Option<AstId>) -> bool) -> Vec<(Decision, Option<AstId>)> {
+        let mut taken = Vec::new();
+        let mut at = 0;
+        while at < self.pending.len() {
+            match owned(self.owners[at]) {
+                true => taken.push(self.remove(at)),
+                false => at += 1,
+            }
+        }
+        taken
+    }
+
+    /// `decision`, owned by `owner`, pending again.
+    pub(super) fn restore(&mut self, decision: Decision, owner: Option<AstId>) {
+        self.pending.push(decision);
+        self.owners.push(owner);
+    }
+
+    /// Each pending decision with its owner.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&Decision, Option<AstId>)> {
+        self.pending.iter().zip(self.owners.iter().copied())
     }
 }
 
@@ -310,7 +413,7 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
         break;
     }
     super::effect::refuse_effects_exceeded(cx);
-    for decision in std::mem::take(&mut cx.decisions.pending) {
+    for decision in cx.decisions.take_all() {
         refuse_left_open(cx, decision);
     }
 }
@@ -355,7 +458,9 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Iterate { head, .. } => Some(*head),
         Decision::Try { operand, .. } => Some(*operand),
         Decision::Cast { source, .. } => Some(*source),
+        Decision::In { decision, .. } => read_head(decision),
         Decision::Reach { .. }
+        | Decision::Instantiate { .. }
         | Decision::Settle { .. }
         | Decision::HoldsNoLoans { .. } => None,
     }
@@ -396,11 +501,41 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
     let mut fired = false;
     let mut at = 0;
     while at < cx.decisions.pending.len() {
-        let decision = cx.decisions.pending.remove(at);
-        match fire(cx, decision, reading) {
+        let (decision, owner) = cx.decisions.remove(at);
+        match fire_owned(cx, decision, owner, reading) {
             Ok(()) => fired = true,
             Err(waiting) => {
-                cx.decisions.pending.insert(at, waiting);
+                cx.decisions.insert(at, waiting, owner);
+                at += 1;
+            }
+        }
+    }
+    fired
+}
+
+/// Fires `decision` as `owner`'s: what it pushes is `owner`'s too (S7).
+pub(super) fn fire_owned(cx: &mut Ctxt<'_>, decision: Decision, owner: Option<AstId>, reading: Reading) -> Result<(), Decision> {
+    let enclosing = std::mem::replace(&mut cx.decisions.owner, owner);
+    let fired = fire(cx, decision, reading);
+    cx.decisions.owner = enclosing;
+    fired
+}
+
+/// Fires every decision `owned` admits and `reading` admits; whether any
+/// fired. A generalized binding's local fixpoint reads only its own.
+pub(super) fn fire_owned_round(cx: &mut Ctxt<'_>, owned: &dyn Fn(&Decision, Option<AstId>) -> bool, reading: Reading) -> bool {
+    let mut fired = false;
+    let mut at = 0;
+    while at < cx.decisions.pending.len() {
+        if !owned(&cx.decisions.pending[at], cx.decisions.owners[at]) {
+            at += 1;
+            continue;
+        }
+        let (decision, owner) = cx.decisions.remove(at);
+        match fire_owned(cx, decision, owner, reading) {
+            Ok(()) => fired = true,
+            Err(waiting) => {
+                cx.decisions.insert(at, waiting, owner);
                 at += 1;
             }
         }
@@ -616,6 +751,11 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             super::op::fire_operand(cx, span, closed, domain);
             Ok(())
         }
+        Decision::Instantiate { scheme, site, span, result } => {
+            super::generalize::fire_instantiate(cx, scheme, site, span, result).map_err(|()| Decision::Instantiate { scheme, site, span, result })
+        }
+        Decision::In { instance, decision } => super::generalize::in_instance(cx, instance, |cx| fire(cx, *decision, reading))
+            .map_err(|decision| Decision::In { instance, decision: Box::new(decision) }),
         Decision::Reach {
             site,
             span,
@@ -1502,44 +1642,51 @@ fn unbound_vars(cx: &Ctxt<'_>, terms: impl IntoIterator<Item = Term>) -> FxHashS
 /// them the ownership §4 example (`let a; a.x = 0;`) would leave `a` open
 /// and default it to `!`.
 fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
+    uses_decide_owned(cx, &|_, _| true)
+}
+
+/// `uses_decide` over the decisions `owned` admits.
+fn uses_decide_owned(cx: &mut Ctxt<'_>, owned: &dyn Fn(&Decision, Option<AstId>) -> bool) -> bool {
     let mut decided = false;
     let mut at = 0;
     while at < cx.decisions.pending.len() {
-        let open = |cx: &Ctxt<'_>, term: Term| cx.infer.closed(cx.decls.casts(), &NothingOpen, term).is_none();
-        let decides = match &cx.decisions.pending[at] {
-            Decision::Enter { value, slot, .. } | Decision::Lend { value, result: slot, .. } => {
-                open(cx, *value) && !open(cx, *slot)
-            }
-            Decision::Field { object, .. } => open(cx, *object),
-            Decision::Destructure { scrutinee, .. } => open(cx, *scrutinee),
-            _ => false,
-        };
+        let decides = owned(&cx.decisions.pending[at], cx.decisions.owners[at]) && decided_by_use(cx, &cx.decisions.pending[at]);
         if !decides {
             at += 1;
             continue;
         }
-        match cx.decisions.pending.remove(at) {
-            Decision::Enter { value, slot, span, .. } => cx.eq(value, slot, span),
-            Decision::Lend {
-                span,
-                value,
-                mutability,
-                result,
-            } => super::place::fire_lend(cx, span, None, mutability, result, value),
-            Decision::Field {
-                span,
-                object,
-                field,
-                part,
-            } => super::place::fire_field(cx, span, object, None, field, part),
-            Decision::Destructure { shape, scrutinee, lent } => {
-                super::pat::fire_destructure(cx, *shape, scrutinee, None, lent)
-            }
-            other => panic!("uses_decide: only the forms matched above are taken, not {other:?}"),
+        let (decision, owner) = cx.decisions.remove(at);
+        let enclosing = std::mem::replace(&mut cx.decisions.owner, owner);
+        match decision {
+            Decision::In { instance, decision } => super::generalize::in_instance(cx, instance, |cx| decide_by_use(cx, *decision)),
+            decision => decide_by_use(cx, decision),
         }
+        cx.decisions.owner = enclosing;
         decided = true;
     }
     decided
+}
+
+/// Whether `decision` is one its own use decides at a stall.
+fn decided_by_use(cx: &Ctxt<'_>, decision: &Decision) -> bool {
+    let open = |term: Term| cx.infer.closed(cx.decls.casts(), &NothingOpen, term).is_none();
+    match decision {
+        Decision::Enter { value, slot, .. } | Decision::Lend { value, result: slot, .. } => open(*value) && !open(*slot),
+        Decision::Field { object, .. } => open(*object),
+        Decision::Destructure { scrutinee, .. } => open(*scrutinee),
+        Decision::In { decision, .. } => decided_by_use(cx, decision),
+        _ => false,
+    }
+}
+
+fn decide_by_use(cx: &mut Ctxt<'_>, decision: Decision) {
+    match decision {
+        Decision::Enter { value, slot, span, .. } => cx.eq(value, slot, span),
+        Decision::Lend { span, value, mutability, result } => super::place::fire_lend(cx, span, None, mutability, result, value),
+        Decision::Field { span, object, field, part } => super::place::fire_field(cx, span, object, None, field, part),
+        Decision::Destructure { shape, scrutinee, lent } => super::pat::fire_destructure(cx, *shape, scrutinee, None, lent),
+        other => panic!("uses_decide: only the forms `decided_by_use` admits are taken, not {other:?}"),
+    }
 }
 
 /// types §5 and D16: an integer literal no use decided is `i64` where its
@@ -1624,5 +1771,7 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::BlockEnd { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
         Decision::Adjust(adjust) => refusal::push(cx, RefusalKind::Undecided, adjust.span),
         Decision::Destructure { shape, .. } => refusal::push(cx, RefusalKind::Undecided, shape.span()),
+        Decision::Instantiate { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
+        Decision::In { decision, .. } => refuse_left_open(cx, *decision),
     }
 }

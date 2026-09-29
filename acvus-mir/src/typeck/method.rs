@@ -80,6 +80,35 @@ pub(super) struct Adjust {
 }
 
 impl Adjust {
+    /// This adjustment with each term replaced by `f` of it (G).
+    pub(super) fn map_terms(&self, f: &mut dyn FnMut(Term) -> Term) -> Adjust {
+        let place = self.place.as_ref().map(|place| ReceiverPlace {
+            root: match &place.root {
+                Root::Name { name, of, crossed, moving, term } => {
+                    Root::Name { name: *name, of: *of, crossed: crossed.clone(), moving: moving.clone(), term: f(*term) }
+                }
+                Root::Context(context) => Root::Context(*context),
+            },
+            writable: place.writable,
+            indexes: place
+                .indexes
+                .iter()
+                .map(|index| IndexOnTheWay { callee_site: index.callee_site, span: index.span, container: f(index.container), element: f(index.element) })
+                .collect(),
+        });
+        Adjust {
+            callee_site: self.callee_site,
+            span: self.span,
+            callee: self.callee.clone(),
+            receiver: f(self.receiver),
+            receiver_site: self.receiver_site,
+            args: self.args.iter().map(|(at, arg)| (*at, f(*arg))).collect(),
+            result: f(self.result),
+            body: self.body.clone(),
+            place,
+        }
+    }
+
     pub fn terms(&self) -> Vec<Term> {
         let mut terms = vec![self.receiver, self.result];
         terms.extend(self.args.iter().map(|(_, term)| *term));
