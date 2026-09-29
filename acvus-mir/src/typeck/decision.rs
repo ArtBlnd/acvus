@@ -213,6 +213,24 @@ impl Decision {
         outputs.into_iter()
     }
 
+    /// The terms this decision may still rebind when it fires: its
+    /// outputs, and an `Enter`'s value where the slot is not a structure
+    /// written elsewhere, since a fold links the value to the slot.
+    fn grows(&self, infer: &Infer) -> Vec<Term> {
+        match self {
+            Decision::Enter { value, slot, .. } => {
+                let written_elsewhere =
+                    structure(infer.types(), infer.shallow(*slot)).is_some_and(|slot| slot.label() == Label::Elsewhere);
+                match written_elsewhere {
+                    true => vec![*slot],
+                    false => vec![*value, *slot],
+                }
+            }
+            Decision::In { decision, .. } => decision.grows(infer),
+            other => other.outputs().collect(),
+        }
+    }
+
     /// Every term this decision reads or writes.
     pub(super) fn terms(&self) -> Vec<Term> {
         match self {
@@ -411,6 +429,20 @@ impl OpenSources for Pending<'_> {
             .filter_map(|output| self.infer.last_variable(output))
             .any(|var| reads.contains(&var))
     }
+
+    /// Whether a pending decision may still rebind a variable `term`'s
+    /// members hang on: its outputs, and the value of an `Enter` that may
+    /// fold, which links the value to its slot (`Infer::enter`). An `Enter`
+    /// into a structure written elsewhere coerces, and changes no value.
+    fn may_grow(&self, term: Term) -> bool {
+        let reads: FxHashSet<TyVarId> = self.infer.head_variables(term).collect();
+        self.decisions
+            .pending
+            .iter()
+            .flat_map(|decision| decision.grows(self.infer))
+            .filter_map(|grown| self.infer.last_variable(grown))
+            .any(|var| reads.contains(&var))
+    }
 }
 
 /// No pending decision changes anything: what a decision in a cycle
@@ -419,6 +451,10 @@ struct NothingOpen;
 
 impl OpenSources for NothingOpen {
     fn may_change(&self, _term: Term) -> bool {
+        false
+    }
+
+    fn may_grow(&self, _term: Term) -> bool {
         false
     }
 }
@@ -620,7 +656,16 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             reach,
         } => {
             let closed = closed_for(cx, value, reading).filter(|_| !meeting_waits(cx, value, slot, reading));
-            let Some(closed) = closed else {
+            // Under `Reading::Closed` an entry waits for how its slot is
+            // reached (types §1), and one coerced by shape waits until the
+            // members of both sides are fixed (types §3, §6).
+            let waits = |cx: &Ctxt<'_>, closed: &Closed| {
+                reading == Reading::Closed
+                    && (cx.decisions.pending.iter().any(|decision| makes_place(decision, slot))
+                        || (cx.infer.coerces(closed.term, slot, reach_of(cx, slot, reach))
+                            && !(cx.fixed(value) && cx.fixed(slot))))
+            };
+            let Some(closed) = closed.filter(|closed| !waits(cx, closed)) else {
                 return Err(Decision::Enter {
                     site,
                     span,
@@ -631,7 +676,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             let reach = reach_of(cx, slot, reach);
-            fire_enter(cx, site, span, closed, (slot, reach), body);
+            fire_enter(cx, site, span, (value, closed), (slot, reach), body);
             Ok(())
         }
         Decision::Iterate {
@@ -783,7 +828,10 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             operand,
             body,
         } => {
-            let Some(closed) = closed_for(cx, operand, reading) else {
+            // A comparison is decided part by part (operators §4), so it
+            // waits until the operand's members are fixed (types §6).
+            let fixed = reading == Reading::CycleBroken || cx.fixed(operand);
+            let Some(closed) = closed_for(cx, operand, reading).filter(|_| fixed) else {
                 return Err(Decision::Compare {
                     node,
                     span,
@@ -879,8 +927,8 @@ fn meeting_waits(cx: &Ctxt<'_>, value: Term, slot: Term, reading: Reading) -> bo
     waits
 }
 
-fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, (slot, reach): (Term, crate::ty::Reach), body: EffectTerm<InferPhase>) {
-    match cx.infer.enter(cx.decls, value, slot, reach) {
+fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, (of, value): (Term, Closed), (slot, reach): (Term, crate::ty::Reach), body: EffectTerm<InferPhase>) {
+    match cx.infer.enter(cx.decls, of, value, slot, reach) {
         Ok(Entered::Folded) => cx.out.entered.push(super::output::Entered {
             site,
             span,

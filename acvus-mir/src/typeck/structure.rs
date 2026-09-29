@@ -327,7 +327,7 @@ pub(super) fn reach_lifted(cx: &mut Ctxt<'_>, decision: Reach, at: LiftAt, readi
     let parts = structure(cx.infer.types(), structured)
         .expect("a lift answers only at a transparent structured type")
         .parts();
-    if reading == Reading::Closed && parts.iter().any(|part| cx.closed(part.ty).is_none()) {
+    if reading == Reading::Closed && (!cx.fixed(structured) || parts.iter().any(|part| cx.closed(part.ty).is_none())) {
         return Err(decision);
     }
     let Some(Structural { node, effect }) = reach_structural(cx, decision, function, lift.shape(), structured) else {

@@ -11,6 +11,12 @@ pub trait OpenSources {
     /// Whether some pending decision outside the cycles through `term` may
     /// still enter a value into it or bind it.
     fn may_change(&self, term: Term) -> bool;
+
+    /// Whether some pending decision may still rebind a variable `term`'s
+    /// members hang on: one that binds or enters into it, or a value
+    /// entering a slot that may take it in, which links the value to the
+    /// slot (types §1).
+    fn may_grow(&self, term: Term) -> bool;
 }
 
 /// A closed term's head.
@@ -29,6 +35,14 @@ impl Infer {
         };
         let head = self.head_of(node)?;
         (casts.step_up(head).is_none() || !open.may_change(term)).then_some(Closed { head, term: node })
+    }
+
+    /// Whether `term`'s members can no longer change: its chain ends at a
+    /// node and no pending decision may still rebind a variable on it
+    /// (types §1, §6). Closedness is of the head alone: a head at the top
+    /// of its cast tree still gains fields or variants.
+    pub fn fixed(&self, open: &impl OpenSources, term: Term) -> bool {
+        matches!(self.end(term), End::Node { .. }) && !open.may_grow(term)
     }
 
     /// The variable a relation rebinds to change `term`'s head: the last

@@ -105,6 +105,10 @@ impl OpenSources for Open {
     fn may_change(&self, _term: Term) -> bool {
         self.0
     }
+
+    fn may_grow(&self, _term: Term) -> bool {
+        self.0
+    }
 }
 
 fn effect(reissue: Reissue, reads: &[QualifiedRef], split: SplitCost) -> Effect {
@@ -1124,15 +1128,16 @@ impl Fixture {
     }
 
     fn enter(&mut self, decls: &Declarations, value: Term, slot: Term) -> Result<Entered, Mismatch> {
-        let value = self.closed_of(decls, value);
-        self.infer.enter(decls, value, slot, Reach::Named)
+        let closed = self.closed_of(decls, value);
+        self.infer.enter(decls, value, closed, slot, Reach::Named)
     }
 }
 
-/// types §3: an unbound slot takes the value's type as its own term; the
-/// value keeps its type, so what the slot learns later the value does not.
+/// types §1: an unbound slot takes the value's type by being linked to the
+/// value: the two are one type, so what the slot learns later the value
+/// learns too.
 #[test]
-fn an_unbound_slot_takes_the_values_type_as_its_own() {
+fn an_unbound_slot_is_linked_to_the_value_it_takes() {
     let mut fx = Fixture::new();
     let decls = widening(&fx.names);
     let int = fx.int(IntTy::I64);
@@ -1144,13 +1149,14 @@ fn an_unbound_slot_takes_the_values_type_as_its_own() {
     let y = fx.object(&[("y", int)], Label::Here);
     let more = fx.held(y);
     fx.infer.join(slot, more, Reach::Named).unwrap();
-    assert_eq!(fx.fields_of(value), (vec![fx.name("x")], Label::Here));
+    assert_eq!(fx.fields_of(value), (vec![fx.name("x"), fx.name("y")], Label::Here));
 }
 
-/// types §2, §3: a value and a slot of one head but two shapes meet at
-/// their join, which the slot takes; the value keeps its own type.
+/// types §1-2: a value and a transparent slot of one head but two shapes
+/// meet at their join, and the value is linked to the slot: both are the
+/// join, one type.
 #[test]
-fn a_value_of_the_slots_head_joins_into_it() {
+fn a_value_of_the_slots_head_joins_into_it_as_one_type() {
     let mut fx = Fixture::new();
     let decls = widening(&fx.names);
     let int = fx.int(IntTy::I64);
@@ -1161,7 +1167,7 @@ fn a_value_of_the_slots_head_joins_into_it() {
     let (value, slot) = (fx.held(y), fx.held(x));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
     assert_eq!(fx.fields_of(slot), (vec![fx.name("x"), fx.name("y")], Label::Here));
-    assert_eq!(fx.fields_of(value), (vec![fx.name("y")], Label::Here));
+    assert_eq!(fx.fields_of(value), (vec![fx.name("x"), fx.name("y")], Label::Here));
 }
 
 /// types §3: a slot folds its values by ⊔, the nearest common ancestor,

@@ -260,20 +260,44 @@ impl Infer {
     /// The slot's type grows to hold the value where it is transparent at
     /// `reach`, how the slot was reached, and the value is coerced to it
     /// otherwise (types §1).
-    pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
-        let entered = self.enter_slot(decls, value, slot, reach);
+    ///
+    /// `of` is the value's own term, `value` its closed head and node: the
+    /// decision reads the head, and the value is related through `of`, so
+    /// that a value folded into a slot is linked to it and the two are one
+    /// type from then on, whatever either learns later (types §1).
+    pub fn enter(&mut self, decls: &Declarations, of: Term, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
+        let entered = self.enter_slot(decls, of, value, slot, reach);
         self.propagate_effects();
         entered
     }
 
-    fn enter_slot(&mut self, decls: &Declarations, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
+    /// Whether `value`, a node, entering `slot` at `reach` is coerced by
+    /// its kind's shape (types §3) rather than folded: the slot is a
+    /// structured type not transparent there, or a reference to one
+    /// written elsewhere. The decision reads the members of both, so it
+    /// waits until neither can change (`fixed`).
+    pub fn coerces(&self, value: Term, slot: Term, reach: Reach) -> bool {
+        let End::Node { node: slot_node, .. } = self.end(slot) else {
+            return false;
+        };
+        let opaque = structure(&self.types, slot_node).is_some_and(|slot| !is_transparent(slot.label(), reach));
+        (opaque && structure(&self.types, value).is_some()) || self.through_reference(value, slot_node).is_some()
+    }
+
+    fn enter_slot(&mut self, decls: &Declarations, of: Term, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
         let (holder, slot_node) = match self.end(slot) {
             // `!` is the bottom type (types §4): a slot holds it whatever
             // it becomes, so it decides nothing, and the slot is left to
             // what else enters it or to its default (types §5).
             End::Unbound(..) if value.head == Head::Base(Base::Never) => return Ok(Entered::Folded),
+            // The slot takes the value's type by being linked to the
+            // value's last variable where it has one (types §1).
             End::Unbound(var, _) => {
-                self.bind(var, None, value.term)?;
+                let value_holder = match self.end(of) {
+                    End::Node { holder, .. } => holder,
+                    End::Unbound(..) => None,
+                };
+                self.bind(var, value_holder, value.term)?;
                 return Ok(Entered::Folded);
             }
             End::Node { holder, node } => (holder, node),
@@ -298,6 +322,11 @@ impl Infer {
                 None => return self.convert(decls, value, (slot_head, reach), holder, slot_node),
             },
         };
+        // Folded at one head, neither side climbing, the value is of the
+        // slot's type: it is linked to the slot. Where either climbs, the
+        // two are of two types, and the steps between are read at
+        // writeback.
+        let one_head = matches!(target, Some((slot_head, at)) if at == slot_head && at == value.head);
         let (value_at, slot_at) = match target {
             None => (value.term, slot_node),
             Some((slot_head, target)) => (
@@ -306,7 +335,26 @@ impl Infer {
             ),
         };
         self.settle_slot(holder, slot_node, slot_at, value_at, reach, mismatch)?;
+        if one_head {
+            self.link_to_slot(of, slot)?;
+        }
         Ok(Entered::Folded)
+    }
+
+    /// Links the last variable on `of`'s chain to `slot`'s, so that the
+    /// value and the slot are one type from then on (types §1). A value no
+    /// variable holds is a node written once, which nothing grows.
+    fn link_to_slot(&mut self, of: Term, slot: Term) -> Result<(), Mismatch> {
+        let End::Node { holder: Some((value_var, _)), .. } = self.end(of) else {
+            return Ok(());
+        };
+        let to = match self.end(slot) {
+            End::Node { holder: Some((slot_var, slot_term)), .. } if slot_var != value_var => slot_term,
+            End::Node { holder: Some(_), .. } => return Ok(()),
+            End::Node { holder: None, node } => node,
+            End::Unbound(..) => panic!("link_to_slot: the slot was settled to a node"),
+        };
+        self.rebind(value_var, to)
     }
 
     /// A structured value entering a slot of a transparent structured type

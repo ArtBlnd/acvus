@@ -126,6 +126,15 @@ impl<'d> Ctxt<'d> {
         self.infer.closed(self.decls.casts(), &pending, term)
     }
 
+    /// B's fixed-members query, against the decisions still pending.
+    pub fn fixed(&self, term: Term) -> bool {
+        let pending = Pending {
+            decisions: &self.decisions,
+            infer: &self.infer,
+        };
+        self.infer.fixed(&pending, term)
+    }
+
     /// A declared type that is not a function's (a context's, an input's)
     /// at this body: every node `Opaque` (types §1).
     pub fn declared(&mut self, ty: TyId<Poly>) -> Term {
