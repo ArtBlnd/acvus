@@ -26,7 +26,7 @@ use rustc_hash::FxHashSet;
 
 use super::ctxt::Ctxt;
 use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
-use super::reach::{self, Candidate, NoReach};
+use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
@@ -824,8 +824,8 @@ impl Reach {
 /// generic function.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Offer {
-    declaration: QualifiedRef,
-    r#impl: Option<Impl>,
+    pub declaration: QualifiedRef,
+    pub r#impl: Option<Impl>,
     pub ty: TyId<Poly>,
 }
 
@@ -841,11 +841,16 @@ fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<()
     let Offers { concrete, generic } = offers(cx, &decision.callee);
     let arity = decision.args.len();
     let fits_arity = |offer: &&Offer| params_of(cx.decls.types(), offer.ty).len() == arity;
-    let offers: Vec<Offer> = concrete.iter().filter(fits_arity).copied().collect();
+    let mut offers: Vec<Offer> = concrete.iter().filter(fits_arity).copied().collect();
+    // A transparent structured type has an impl by its generic function's
+    // lift (types §1): one candidate among the concrete ones.
+    offers.extend(super::structure::lifted_offer(cx, &decision.callee, arity));
     let generic: Vec<Offer> = generic.iter().filter(fits_arity).copied().collect();
     let positions = positions(cx, &decision.args, reading);
     let complete = positions.iter().all(|position| position.chain.is_some());
     let chains: Vec<Vec<Head>> = positions.iter().map_while(|position| position.chain.clone()).collect();
+    let result = result_head(cx, decision.result, reading);
+    let read = Read { positions: &positions, chains: &chains, complete, result };
 
     // The language's own answer comes before any impl (ownership §2,
     // operators §2). A requirement asks for a declared function to pass,
@@ -854,20 +859,31 @@ fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<()
     if !required && let Some(own) = super::structure::own_at(cx, &decision, reading) {
         return super::structure::reach_own(cx, decision, own);
     }
-    let chosen = match choose(cx, &offers, &positions, &chains) {
-        Ok(chosen) => chosen,
-        // Where no concrete impl answers, a transparent structured type's
-        // lifted impl does, before the generic impl (types §1).
-        Err(NoReach::None) if required && let Some(own) = super::structure::own_at(cx, &decision, reading) => {
+    let chosen = match choose(cx, &offers, &read) {
+        Ok(chosen) if chosen.r#impl == Some(Impl::Structural) => {
+            if let Some(lift) = super::structure::lift_at(cx, &decision, reading) {
+                return super::structure::reach_lifted(cx, decision, lift, reading);
+            }
+            match super::structure::lift_open(cx, &decision, reading) {
+                // The type the lift stands at is not known yet.
+                true if reading == Reading::Closed => return Err(decision),
+                true => return never_known(cx, decision),
+                // No lifted impl at the type it stands at (types §1).
+                false => None,
+            }
+        }
+        Ok(chosen) => Some(chosen),
+        Err(NoReach::None) => None,
+        Err(NoReach::Several(left)) => return several(cx, decision, &offers, &left, &read, reading),
+    };
+    let chosen = match chosen {
+        Some(chosen) => chosen,
+        None if required && let Some(own) = super::structure::own_at(cx, &decision, reading) => {
             return super::structure::reach_own(cx, decision, own);
         }
-        Err(NoReach::None) if let Some(lift) = super::structure::lift_at(cx, &decision, reading) => {
-            return super::structure::reach_lifted(cx, decision, lift, reading);
-        }
-        Err(NoReach::None) if reading == Reading::Closed && super::structure::lift_waits(cx, &decision) => {
-            return Err(decision);
-        }
-        Err(NoReach::None) => match choose(cx, &generic, &positions, &chains) {
+        // The generic impl comes only where no concrete or lifted one is
+        // left (D62).
+        None => match choose(cx, &generic, &read) {
             Ok(chosen) => chosen,
             Err(NoReach::None) => {
                 let name = callee_name(cx, &decision.callee);
@@ -875,27 +891,58 @@ fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<()
                 return Ok(());
             }
             Err(NoReach::Several(left)) => {
-                return several(cx, decision, &generic, &left, complete, reading);
+                return several(cx, decision, &generic, &left, &read, reading);
             }
         },
-        Err(NoReach::Several(left)) => return several(cx, decision, &offers, &left, complete, reading),
     };
     reached(cx, decision, chosen);
     Ok(())
 }
 
-/// Several offers left: a call whose arguments are all read is refused;
-/// one with a position still open waits for it.
+/// What a reach read: the closed prefix of its positions, whether every
+/// position is closed, and the head its result is taken at, where known.
+struct Read<'p> {
+    positions: &'p [Position],
+    chains: &'p [Vec<Head>],
+    complete: bool,
+    result: Option<Head>,
+}
+
+/// The head a call's result is taken at, once closed (types §6). A `!`
+/// that no use gave it, only the default of a variable nothing constrains
+/// (types §5), is no type the result is taken at.
+fn result_head(cx: &Ctxt<'_>, result: Term, reading: Reading) -> Option<Head> {
+    closed_for(cx, result, reading).map(|closed| closed.head).filter(|head| *head != Head::Base(Base::Never))
+}
+
+/// A reach whose type never became known (types §6).
+fn never_known(cx: &mut Ctxt<'_>, decision: Reach) -> Result<(), Reach> {
+    let open = callee_name(cx, &decision.callee);
+    refusal::push(cx, RefusalKind::NeverKnown { open }, decision.span);
+    Ok(())
+}
+
+/// Several offers left: a call whose arguments and result are all read is
+/// refused; one with a position or its result still open waits for it,
+/// and, where a cycle is broken, one whose result would have decided and
+/// is never known is refused as such (types §6).
 fn several(
     cx: &mut Ctxt<'_>,
     decision: Reach,
     offers: &[Offer],
     left: &[usize],
-    complete: bool,
+    read: &Read<'_>,
     reading: Reading,
 ) -> Result<(), Reach> {
-    if !complete && reading == Reading::Closed {
+    let known = read.complete && read.result.is_some();
+    if !known && reading == Reading::Closed {
         return Err(decision);
+    }
+    // Where the ones left differ in their results, the result's type would
+    // have decided, and it never became known.
+    let results: Vec<Match> = left.iter().map(|at| result_match(cx, &offers[*at])).collect();
+    if read.complete && read.result.is_none() && results.iter().any(|result| *result != results[0]) {
+        return never_known(cx, decision);
     }
     let name = callee_name(cx, &decision.callee);
     let left = left.iter().map(|at| offers[*at].declaration).collect();
@@ -903,20 +950,56 @@ fn several(
     Ok(())
 }
 
-/// The one offer the closed prefix of `positions` reaches.
-fn choose(cx: &Ctxt<'_>, offers: &[Offer], positions: &[Position], chains: &[Vec<Head>]) -> Result<Offer, NoReach> {
-    let rows: Vec<Vec<Option<Head>>> = offers
+/// The one offer the closed prefix of the positions reaches, the result
+/// deciding last (types §6).
+fn choose(cx: &Ctxt<'_>, offers: &[Offer], read: &Read<'_>) -> Result<Offer, NoReach> {
+    let types = cx.decls.types();
+    let rows: Vec<(Vec<Match>, Match)> = offers
         .iter()
         .map(|offer| {
-            let params = params_of(cx.decls.types(), offer.ty);
-            positions[..chains.len()]
+            let params = params_of(types, offer.ty);
+            // A lifted candidate's every parameter takes its variable
+            // (`decl::lift`), so each argument is `Structured`; its result
+            // is where it rebuilds.
+            let lifted = (offer.r#impl == Some(Impl::Structural))
+                .then(|| cx.decls.lift(offer.declaration).expect("a lifted offer is of a function with a lift"));
+            let row = read.positions[..read.chains.len()]
                 .iter()
-                .map(|position| param_head_at(cx.decls.types(), params, &position.path))
-                .collect()
+                .map(|position| match (lifted, &position.path[..]) {
+                    (Some(_), [_]) => Match::Structured,
+                    _ => matched(param_head_at(types, params, &position.path)),
+                })
+                .collect();
+            (row, result_match(cx, offer))
         })
         .collect();
-    let candidates: Vec<Candidate<'_>> = rows.iter().map(|row| Candidate { params: row }).collect();
-    reach::reach(&candidates, chains).map(|at| offers[at])
+    let candidates: Vec<Candidate<'_>> = rows.iter().map(|(params, result)| Candidate { params, result: *result }).collect();
+    reach::reach(&candidates, read.chains, read.result).map(|at| offers[at])
+}
+
+/// What `offer`'s result matches: a lifted candidate's is `Structured`
+/// where it rebuilds.
+fn result_match(cx: &Ctxt<'_>, offer: &Offer) -> Match {
+    match offer.r#impl {
+        Some(Impl::Structural) if matches!(cx.decls.lift(offer.declaration), Some(crate::decl::Lift::Rebuild(_))) => Match::Structured,
+        _ => matched(poly_head(cx.decls.types(), ret_of(cx.decls.types(), offer.ty))),
+    }
+}
+
+/// A declared head as a candidate matches it: `None`, a type variable or a
+/// reference to one, matches any.
+pub(super) fn matched(head: Option<Head>) -> Match {
+    head.map_or(Match::Any, Match::Head)
+}
+
+/// # Panics
+/// `ty` is not a function type: verify refuses a signature or impl that is
+/// not one (`NotAFunction`).
+fn ret_of(types: &Types<Poly>, ty: TyId<Poly>) -> TyId<Poly> {
+    match types.kind(ty) {
+        TyKind::Fn { ret, .. } => *ret,
+        _ => panic!("a verified signature is a function type (NotAFunction)"),
+    }
 }
 
 /// Every offer a callee may reach: the concrete impls and the declarations

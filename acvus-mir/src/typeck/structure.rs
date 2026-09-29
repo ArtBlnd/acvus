@@ -10,7 +10,7 @@ use acvus_ast::{AstId, Span};
 use acvus_utils::QualifiedRef;
 
 use super::ctxt::Ctxt;
-use super::decision::{Callee, Decision, Reach, Reading, closed_for, core_name, push_required, settle_bounded};
+use super::decision::{Callee, Decision, Offer, Reach, Reading, closed_for, core_name, push_required, settle_bounded};
 use super::output::{Chosen, CoercionNode, Impl, Own, StructureNode};
 use super::refusal::{self, RefusalKind, Unimplemented};
 use crate::decl::{Base, Head, Lift, LiftShape, NamedLaw, Taking};
@@ -97,10 +97,19 @@ pub(super) fn reach_own(cx: &mut Ctxt<'_>, decision: Reach, at: OwnAt) -> Result
     Ok(())
 }
 
-/// Whether `decision` waits for the argument at its callee's lift's type
-/// variable before a generic impl may answer it (types §6): its callee has
-/// a lift that could answer, and that argument is not closed yet.
-pub(super) fn lift_waits(cx: &Ctxt<'_>, decision: &Reach) -> bool {
+/// The lifted candidate of `callee`'s generic function for a call of
+/// `arity` arguments, where it has a lift (types §1): one candidate among
+/// the concrete impls, at the generic function's own signature.
+pub(super) fn lifted_offer(cx: &Ctxt<'_>, callee: &Callee, arity: usize) -> Option<Offer> {
+    let CalleeLift { function, .. } = lift_of_callee(cx, callee, arity)?;
+    let scheme = cx.decls.scheme(function).expect("a lifted function is declared");
+    Some(Offer { declaration: function, r#impl: Some(Impl::Structural), ty: scheme.ty })
+}
+
+/// Whether the type `decision`'s callee's lift stands at is not known yet:
+/// the argument that takes its variable, or the result where none does, is
+/// open, or is a `!` only a default gave it (types §5).
+pub(super) fn lift_open(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> bool {
     let Some(CalleeLift { lift, .. }) = lift_of_callee(cx, &decision.callee, decision.args.len()) else {
         return false;
     };
@@ -108,7 +117,7 @@ pub(super) fn lift_waits(cx: &Ctxt<'_>, decision: &Reach) -> bool {
         true => decision.result,
         false => decision.args[0].1,
     };
-    cx.closed(taking).is_none()
+    closed_for(cx, taking, reading).is_none_or(|closed| closed.head == Head::Base(Base::Never))
 }
 
 /// The head a method's receiver takes where `callee`'s lift or the

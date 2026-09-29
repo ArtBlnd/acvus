@@ -20,7 +20,7 @@ use super::decision::{self, Callee, CoreSig, Decision, Offer, Offers, Reading};
 use super::expr::{check_expr, check_receiver};
 use super::output::{Adjustment, CaptureOf, CaptureUse, WholeUse};
 use super::place::Demand;
-use super::reach::{self, Candidate, NoReach};
+use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
@@ -191,15 +191,19 @@ fn adjustment(cx: &Ctxt<'_>, adjust: &Adjust, receiver: Closed) -> Adjustment {
         .chain(generic)
         .filter(|offer| decision::params_of(cx.decls.types(), offer.ty).len() == arity)
         .collect();
-    let mut rows: Vec<Vec<Option<Head>>> = candidates
+    let mut rows: Vec<Vec<Match>> = candidates
         .iter()
-        .map(|offer| vec![decision::param_head_at(cx.decls.types(), decision::params_of(cx.decls.types(), offer.ty), &[0])])
+        .map(|offer| vec![decision::matched(decision::param_head_at(cx.decls.types(), decision::params_of(cx.decls.types(), offer.ty), &[0]))])
         .collect();
+    // The lifted candidate, or the language's own answer, at the receiver:
+    // its first parameter at the receiver's type, as a concrete impl's
+    // would be declared, so that it is taken as written, by `&` or by
+    // `&mut` exactly as its parameter takes it.
     if let Some(lifted) = super::structure::lifted_receiver(cx, &adjust.callee, arity, receiver) {
-        rows.push(vec![Some(lifted)]);
+        rows.push(vec![Match::Head(lifted)]);
     }
-    let rows: Vec<Candidate<'_>> = rows.iter().map(|row| Candidate { params: row }).collect();
-    let matches = |head: Head| match reach::reach(&rows, &[decision::chain_up(cx, head)]) {
+    let rows: Vec<Candidate<'_>> = rows.iter().map(|row| Candidate { params: row, result: Match::Any }).collect();
+    let matches = |head: Head| match reach::reach(&rows, &[decision::chain_up(cx, head)], None) {
         Ok(_) | Err(NoReach::Several(_)) => true,
         Err(NoReach::None) => false,
     };
