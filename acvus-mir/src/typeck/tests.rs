@@ -1050,21 +1050,47 @@ fn a_lambda_whose_effect_grows_past_a_pure_slot_is_refused() {
     assert_eq!(checked.typeck.refusals[0].span, args[0].span(), "refused at the lambda");
 }
 
-/// D94, effects: a lambda whose effect is known to exceed the slot when it
-/// enters is refused by the relation itself, as two unequal effects.
+/// D96, types §6: a lambda whose effect already exceeds the pure slot when
+/// it enters is refused with the same kind, at the same place, as one
+/// whose effect grows past the slot later: the outcome does not depend on
+/// the order of checking.
 #[test]
-fn a_lambda_whose_effect_exceeds_a_pure_slot_on_entering_is_a_mismatch() {
+fn a_lambda_whose_effect_exceeds_a_pure_slot_on_entering_is_refused_as_when_it_grows_past() {
     let mut fx = Fixture::new();
     declare_apply(&mut fx);
     let i64_ty = fx.int(IntTy::I64);
     let opaque = fx.function(&[i64_ty], i64_ty, EffectTerm::Known(crate::ty::Effect::opaque()));
     fx.declare("touch", opaque, &[]);
-    let (checked, _) = fx.script("apply(|x| -> touch(x))");
-    assert!(
-        matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]),
-        "{:?}",
-        checked.refusals()
+    let (checked, script) = fx.script("apply(|x| -> touch(x))");
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a call");
+    };
+    assert_eq!(
+        checked.refusals(),
+        vec![&RefusalKind::ClosureExceedsSlot(Exceeding::Effect {
+            needs: crate::ty::Effect::opaque(),
+            slot: crate::ty::Effect::pure()
+        })]
     );
+    assert_eq!(checked.typeck.refusals[0].span, args[0].span(), "refused at the lambda");
+}
+
+/// D96: a function value that is no lambda, whose effect does not fit the
+/// function type it enters, is a mismatch naming the two effects.
+#[test]
+fn a_declared_function_whose_effect_does_not_fit_is_a_mismatch_of_effects() {
+    let mut fx = Fixture::new();
+    declare_apply(&mut fx);
+    let i64_ty = fx.int(IntTy::I64);
+    let opaque = fx.function(&[i64_ty], i64_ty, EffectTerm::Known(crate::ty::Effect::opaque()));
+    fx.declare("touch", opaque, &[]);
+    let (checked, _) = fx.script("apply(touch)");
+    let [RefusalKind::Mismatch(crate::infer::Mismatch::Effects { a_is, b_is, .. })] = checked.refusals()[..] else {
+        panic!("one mismatch of effects: {:?}", checked.refusals());
+    };
+    let mut effects = [a_is.clone(), b_is.clone()];
+    effects.sort_by_key(|effect| effect.reissue());
+    assert_eq!(effects, [crate::ty::Effect::pure(), crate::ty::Effect::opaque()]);
 }
 
 /// `apply`, a pure `core::add` at `i64`, and `touch(i64) -> i64`, opaque.

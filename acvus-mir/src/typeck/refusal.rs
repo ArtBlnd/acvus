@@ -7,7 +7,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::ctxt::Ctxt;
 use crate::infer::Mismatch;
-use crate::ty::{Calls, CastTy, Effect, Holds};
+use crate::ty::{Calls, CastTy, Effect, EffectTerm, Holds, Infer as InferPhase};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Refusal {
@@ -101,8 +101,30 @@ pub(super) fn push(cx: &mut Ctxt<'_>, kind: RefusalKind, span: Span) {
 
 /// B's refusal in the dimension that refuses: growth into an opaque term is
 /// C's (types §1), no conversion at all is its own, and every other is B's
-/// relation failing.
+/// relation failing. A lambda's effect that does not fit a function type it
+/// meets is refused at the lambda as `ClosureExceedsSlot`, as it is when
+/// its effect grows past that type later (D96, types §6: the kind does
+/// not depend on which came first).
 pub(super) fn mismatch(cx: &mut Ctxt<'_>, mismatch: Mismatch, span: Span) {
+    if let Mismatch::Effects { a, b, a_is, b_is } = &mismatch {
+        let lambda = |effect: &EffectTerm<InferPhase>| {
+            cx.out
+                .lambdas
+                .iter()
+                .find(|lambda| cx.infer.one_effect_variable(&lambda.effect, effect))
+                .map(|lambda| lambda.span)
+        };
+        let exceeding = match (lambda(a), lambda(b)) {
+            (Some(at), _) => Some((at, a_is, b_is)),
+            (None, Some(at)) => Some((at, b_is, a_is)),
+            (None, None) => None,
+        };
+        if let Some((at, own, slot)) = exceeding {
+            let exceeding = Exceeding::Effect { needs: own.join(slot), slot: slot.clone() };
+            push(cx, RefusalKind::ClosureExceedsSlot(exceeding), at);
+            return;
+        }
+    }
     let kind = match mismatch {
         Mismatch::OpaqueLacksField { .. } | Mismatch::OpaqueLacksVariant { .. } => RefusalKind::GrowsOpaque,
         Mismatch::Conversions { candidates } if candidates.is_empty() => RefusalKind::NoConversion,

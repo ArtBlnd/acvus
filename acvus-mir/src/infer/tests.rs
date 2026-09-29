@@ -585,7 +585,7 @@ fn an_effect_variable_is_the_join_of_what_was_joined_into_it() {
 fn eq_of_two_effect_variables_binds() {
     let mut fx = Fixture::new();
     let (v, w) = (EffectTerm::Var(fx.infer.fresh_effect()), EffectTerm::Var(fx.infer.fresh_effect()));
-    let f = fx.function(v, Flows::none(), Calls::Many, Holds::Nothing);
+    let f = fx.function(v.clone(), Flows::none(), Calls::Many, Holds::Nothing);
     let g = fx.function(w.clone(), Flows::none(), Calls::Many, Holds::Nothing);
     fx.infer.eq(f, g).unwrap();
     fx.infer.join_effects(&w, &EffectTerm::Known(Effect::opaque())).expect("an unbound variable grows");
@@ -600,7 +600,15 @@ fn eq_of_two_effect_variables_binds() {
     assert_eq!(settled, &Effect::opaque());
 
     let pure = fx.function(EffectTerm::Known(Effect::pure()), Flows::none(), Calls::Many, Holds::Nothing);
-    assert_eq!(fx.infer.eq(f, pure), Err(Mismatch::Heads { a: f, b: pure }));
+    assert_eq!(
+        fx.infer.eq(f, pure),
+        Err(Mismatch::Effects {
+            a: v,
+            b: EffectTerm::Known(Effect::pure()),
+            a_is: Effect::opaque(),
+            b_is: Effect::pure()
+        })
+    );
 }
 
 /// types §4, D93: `eq` makes two function types' `holds` and `calls`

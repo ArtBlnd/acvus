@@ -44,6 +44,15 @@ pub enum Mismatch {
     ReferenceToReference { target: Term },
     /// `#` on one side only (types §8).
     Mark { a: Term, b: Term },
+    /// Two function types whose effects differ, or whose effect one side
+    /// fixed and the other would grow past (types §2, D94): the two effect
+    /// terms, and what each is.
+    Effects {
+        a: EffectTerm<InferPhase>,
+        b: EffectTerm<InferPhase>,
+        a_is: Effect,
+        b_is: Effect,
+    },
 }
 
 /// What an `enter` did (types §3, §7).
@@ -261,7 +270,10 @@ impl Infer {
         let made = self.relate(slot_at, value_at, Relation::Join)?;
         match holder {
             Some((var, _)) => self.rebind(var, made),
-            None => self.relate(slot_node, made, Relation::Eq).map(drop).map_err(|_| mismatch),
+            None => self.relate(slot_node, made, Relation::Eq).map(drop).map_err(|failed| match failed {
+                effects @ Mismatch::Effects { .. } => effects,
+                _ => mismatch,
+            }),
         }
     }
 
@@ -568,13 +580,17 @@ impl Infer {
                 let ret = self.relate(ret_a, ret_b, Relation::Eq)?;
                 let (effect, flows, calls, holds) = match how {
                     Relation::Eq => (
-                        self.effect_vars.unify(&effect_a, &effect_b).map_err(|Unequal| heads.clone())?,
+                        self.effect_vars
+                            .unify(&effect_a, &effect_b)
+                            .map_err(|Unequal| self.effects_mismatch(&effect_a, &effect_b))?,
                         self.flow_vars.unify(&flows_a, &flows_b).map_err(|Unequal| heads.clone())?,
                         self.calls_vars.unify(&calls_a, &calls_b).map_err(|Unequal| heads.clone())?,
                         self.holds_vars.unify(&holds_a, &holds_b).map_err(|Unequal| heads)?,
                     ),
                     Relation::Join => (
-                        self.join_effects(&effect_a, &effect_b).map_err(|_| heads.clone())?,
+                        self.effect_vars
+                            .join(&effect_a, &effect_b, Effect::join)
+                            .map_err(|_| self.effects_mismatch(&effect_a, &effect_b))?,
                         self.flow_vars.join(&flows_a, &flows_b, Flows::join).map_err(|_| heads.clone())?,
                         self.calls_vars.join(&calls_a, &calls_b, |a, b| a.join(*b)).map_err(|_| heads.clone())?,
                         self.holds_vars.join(&holds_a, &holds_b, |a, b| a.join(*b)).map_err(|_| heads)?,
@@ -644,6 +660,24 @@ impl Infer {
             _ => return Err(heads),
         };
         Ok(self.intern(kind))
+    }
+
+    /// Two effects that did not relate, each with what it is.
+    ///
+    /// # Panics
+    /// Either is unknown: two effects fail to relate only where both are
+    /// known, as two unequal values or a fixed value the other would grow.
+    fn effects_mismatch(&self, a: &EffectTerm<InferPhase>, b: &EffectTerm<InferPhase>) -> Mismatch {
+        let is = |term: &EffectTerm<InferPhase>| match self.effect_vars.end(term) {
+            CellEnd::Known(value) | CellEnd::Var { value: Some(value), .. } => value,
+            CellEnd::Var { value: None, .. } => panic!("two effects fail to relate only where both are known"),
+        };
+        Mismatch::Effects {
+            a: a.clone(),
+            b: b.clone(),
+            a_is: is(a),
+            b_is: is(b),
+        }
     }
 
     fn relate_objects(
