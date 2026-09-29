@@ -5,12 +5,13 @@
 mod borrowck;
 mod initialization;
 mod matchck;
+mod refill;
 
 use acvus_ast::{Script, Span};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use crate::check::{Refusal, check};
-use crate::decl::{Core, Declarations, DeclaredFacts, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::decl::{ContextDecl, Core, Declarations, DeclaredFacts, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::lower::{lower_script, required};
 use crate::passes::analysis::AnalysisManager;
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
@@ -80,6 +81,12 @@ impl Fixture {
         id
     }
 
+    /// A context `@name` of this type, not volatile.
+    pub(super) fn context(&mut self, name: &str, ty: TyId<Poly>) {
+        let id = QualifiedRef::root(self.name(name));
+        self.raw.contexts.push((id, ContextDecl { ty, volatile: false }));
+    }
+
     pub(super) fn input(&mut self, name: &str, ty: TyId<Poly>) {
         let name = self.name(name);
         self.inputs.push((name, ty));
@@ -139,4 +146,5 @@ pub(super) fn span_of(source: &str, text: &str, nth: usize) -> Span {
 pub(super) fn covers(outer: Span, inner: Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
+
 

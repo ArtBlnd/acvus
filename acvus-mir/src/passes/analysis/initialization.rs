@@ -6,9 +6,10 @@
 //! - A place is a slot or a by-value parameter's own storage, whatever its
 //!   type: a binding is built field by field whether its fields copy or
 //!   not (ownership §4).
-//! - A place's units are its type cut at every path the body names in it
-//!   by name, a store's, a read's or a move's, by `ir::parts::units`, so they
-//!   cover the whole type.
+//! - A place's units are its type cut at every path the body names in it,
+//!   by name or through a reference, a store's, a read's or a move's, by
+//!   `ir::parts::units`, so they cover the whole type. What a function
+//!   value's or a lifetime's position lends has no type, and is one unit.
 //! - Entry: a slot's units are never written; a by-value parameter's are
 //!   written.
 //! - An `Assign` into a path by name writes every unit that path covers.
@@ -37,13 +38,14 @@ use std::collections::BTreeSet;
 use acvus_ast::Span;
 use rustc_hash::FxHashMap;
 
-use crate::ir::cfg::{BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Terminator};
-use crate::ir::parts::{self, Path, covers, overlap};
-use crate::ir::{PathSeg, RefTarget, ValueId};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, solve_dense};
-use crate::passes::domain::{JoinSemiLattice, Widen};
+use crate::decl::Declarations;
 use crate::ir::cfg::takings::{Taken, inst_takings};
-use crate::ty::{Concrete, Types};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::parts::{self, Path, covers, is_cut_of, overlap};
+use crate::ir::{PathSeg, RefTarget, ValueId};
+use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Reach, Storage, solve_dense};
+use crate::passes::domain::{JoinSemiLattice, Widen};
+use crate::ty::{Concrete, Ty, Types, lent_types};
 
 /// What the paths reaching a point may leave in one unit: never written, or
 /// moved out at these spans. Neither is what a path that wrote the unit
@@ -80,31 +82,35 @@ impl Widen for Written {
 }
 
 /// The facts: each place's units, and each unit's `Written` just before
-/// every instruction.
+/// every instruction and every terminator.
 pub struct Initialization {
-    units: FxHashMap<ValueId, Vec<Path>>,
-    before: FxHashMap<InstId, FxHashMap<(ValueId, usize), Written>>,
+    units: FxHashMap<Storage, Vec<Path>>,
+    before: FxHashMap<Site, FxHashMap<(Storage, usize), Written>>,
 }
 
 /// A unit no path reaches, or one every path wrote.
 static UNREACHED: Written = Written { never: false, moved: BTreeSet::new() };
 
 impl Initialization {
-    /// The units of `place`, in one order; `None` for a value that is not a
-    /// place of the body.
-    pub fn units(&self, place: ValueId) -> Option<&[Path]> {
+    /// Every place of the body, in no stated order.
+    pub fn places(&self) -> impl Iterator<Item = Storage> + '_ {
+        self.units.keys().copied()
+    }
+
+    /// The units of `place`, in one order; `None` for a storage that is not
+    /// a place of the body.
+    pub fn units(&self, place: Storage) -> Option<&[Path]> {
         self.units.get(&place).map(Vec::as_slice)
     }
 
     /// What each unit of `place` overlapping `path` holds just before
-    /// `inst`, with the unit. Cost: O(units of `place`).
+    /// `site`, with the unit. Cost: O(units of `place`).
     ///
     /// # Panics
-    /// `place` is not a place of the body, or `inst` is not an instruction
-    /// of it.
-    pub fn before(&self, inst: InstId, place: ValueId, path: &[PathSeg]) -> Vec<(&Path, &Written)> {
+    /// `place` is not a place of the body, or `site` is not a site of it.
+    pub fn before(&self, site: Site, place: Storage, path: &[PathSeg]) -> Vec<(&Path, &Written)> {
         let units = self.units.get(&place).unwrap_or_else(|| panic!("{place:?} is not a place of the body"));
-        let state = self.before.get(&inst).unwrap_or_else(|| panic!("{inst:?} is not an instruction of the body"));
+        let state = self.before.get(&site).unwrap_or_else(|| panic!("{site:?} is not a site of the body"));
         units
             .iter()
             .enumerate()
@@ -117,24 +123,22 @@ impl Initialization {
 impl Analysis for Initialization {
     type Facts = Initialization;
 
-    const READS: &'static [crate::ir::cfg::Aspect] = &[
-        crate::ir::cfg::Aspect::Instructions,
-        crate::ir::cfg::Aspect::CfgShape,
-        crate::ir::cfg::Aspect::Types,
-    ];
+    const READS: &'static [Aspect] = &[Aspect::Instructions, Aspect::CfgShape, Aspect::Storage, Aspect::Types];
 
-    fn compute(_: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
+        let loans = am.get::<Loans>(module, body);
         let body = module.body(body);
-        let units = units_of(body, module.types());
-        let forward = Forward { units: &units, types: module.types(), body };
+        let units = units_of(body, module.types(), am.decls(), &loans);
+        let forward = Forward { units: &units, types: module.types(), body, loans: &loans };
         let facts = solve_dense(&forward, body);
         let mut before = FxHashMap::default();
         for (id, block) in body.blocks() {
             let mut state = facts.at(id).clone();
             for inst in block.insts() {
-                before.insert(inst.id(), state.0.clone());
+                before.insert(Site::Inst(inst.id()), state.0.clone());
                 forward.transfer(inst, &mut state);
             }
+            before.insert(Site::Term(id), state.0);
         }
         Initialization { units, before }
     }
@@ -142,42 +146,100 @@ impl Analysis for Initialization {
 
 /// The place a `Take`, `Ref` or `Assign` names by name, and the region its
 /// path reaches in it.
-fn named_place(op: &Op) -> Option<(ValueId, &[PathSeg])> {
+fn named_place(op: &Op) -> Option<(Storage, &[PathSeg])> {
     match op {
-        Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
-        | Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
-        | Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
-            Some((*place, parts::owned_region(path)))
+        Op::Take { target, path, .. } | Op::Ref { target, path, .. } | Op::Assign { target, path, .. } => {
+            Storage::by_name(target).map(|place| (place, parts::owned_region(path)))
         }
         _ => None,
     }
 }
 
-/// Every slot and every parameter the body names as a storage, each with
-/// its units, cut at every region a path by name reaches in it.
-fn units_of(body: &Body, types: &Types<Concrete>) -> FxHashMap<ValueId, Vec<Path>> {
-    let mut cuts: FxHashMap<ValueId, Vec<Path>> = body.slots().iter().map(|slot| (*slot, Vec::new())).collect();
+/// Whether `op` is a `Take`, a `Ref` or an `Assign` through a reference.
+fn is_through(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Take { target: RefTarget::Through(_), .. }
+            | Op::Ref { target: RefTarget::Through(_), .. }
+            | Op::Assign { target: RefTarget::Through(_), .. }
+    )
+}
+
+/// A place's type, where it has one, and the regions the body cuts it at.
+/// What a function value's or a lifetime's position lends has no type.
+struct Holder {
+    ty: Option<Ty>,
+    cuts: Vec<Path>,
+}
+
+impl Holder {
+    fn typed(ty: Ty) -> Holder {
+        Holder { ty: Some(ty), cuts: Vec::new() }
+    }
+
+    fn cut(&mut self, region: &[PathSeg]) {
+        if !region.is_empty() && !self.cuts.iter().any(|known| known.as_slice() == region) {
+            self.cuts.push(region.to_vec());
+        }
+    }
+}
+
+/// Every slot, every parameter the body names as a storage, and every
+/// storage outside the body; each with its units, cut at every region a
+/// path by name or through a reference reaches in it.
+fn units_of(body: &Body, types: &Types<Concrete>, decls: &Declarations, loans: &Loans) -> FxHashMap<Storage, Vec<Path>> {
+    let mut holders: FxHashMap<Storage, Holder> =
+        body.slots().iter().map(|slot| (Storage::Slot(*slot), Holder::typed(body.ty_of(*slot)))).collect();
+    let outside = body.params().iter().chain(body.captures()).map(|(_, value)| *value).filter(|value| !body.is_token(*value));
+    for of in outside {
+        for (position, lent) in lent_types(types, decls, body.ty_of(of)).into_iter().enumerate() {
+            holders.insert(Storage::Outside { of, position }, Holder { ty: lent, cuts: Vec::new() });
+        }
+    }
     for (_, block) in body.blocks() {
         for inst in block.insts() {
-            let Some((place, path)) = named_place(inst.op()) else {
+            if let Some((place, region)) = named_place(inst.op()) {
+                let named = match place {
+                    Storage::Slot(value) | Storage::Param(value) => value,
+                    Storage::Outside { .. } => unreachable!("a place by name is a slot or a parameter"),
+                };
+                holders.entry(place).or_insert_with(|| Holder::typed(body.ty_of(named))).cut(region);
                 continue;
-            };
-            let place_cuts = cuts.entry(place).or_default();
-            if !path.is_empty() && !place_cuts.iter().any(|known| known.as_slice() == path) {
-                place_cuts.push(path.to_vec());
+            }
+            if !is_through(inst.op()) {
+                continue;
+            }
+            for place in loans.accesses(Site::Inst(inst.id())).iter().flat_map(|access| &access.places) {
+                let holder = holders.entry(place.storage).or_insert_with(|| match place.storage {
+                    Storage::Slot(value) | Storage::Param(value) => Holder::typed(body.ty_of(value)),
+                    Storage::Outside { .. } => panic!("{:?} is an outside storage of a parameter or a capture", place.storage),
+                });
+                let region = parts::owned_region(&place.path);
+                if holder.ty.is_some_and(|ty| is_cut_of(types, ty, region)) {
+                    holder.cut(region);
+                }
             }
         }
     }
-    cuts.into_iter().map(|(place, cuts)| (place, parts::units(types, body.ty_of(place), &cuts))).collect()
+    holders
+        .into_iter()
+        .map(|(place, Holder { ty, cuts })| {
+            let units = match ty {
+                Some(ty) => parts::units(types, ty, &cuts),
+                None => vec![Vec::new()],
+            };
+            (place, units)
+        })
+        .collect()
 }
 
 /// Each unit's fact; a unit not in the map holds none, as where no path
 /// reaches.
 #[derive(Debug, Clone, PartialEq, Default)]
-struct Units(FxHashMap<(ValueId, usize), Written>);
+struct Units(FxHashMap<(Storage, usize), Written>);
 
 impl Units {
-    fn of(&self, unit: (ValueId, usize)) -> &Written {
+    fn of(&self, unit: (Storage, usize)) -> &Written {
         self.0.get(&unit).unwrap_or(&UNREACHED)
     }
 }
@@ -209,19 +271,37 @@ impl Widen for Units {
 
 /// Forward over the units, by the module doc's transfer.
 struct Forward<'f> {
-    units: &'f FxHashMap<ValueId, Vec<Path>>,
+    units: &'f FxHashMap<Storage, Vec<Path>>,
     types: &'f Types<Concrete>,
     body: &'f Body,
+    loans: &'f Loans,
 }
 
 impl Forward<'_> {
     /// Every unit of `place` that `region` covers now holds `fact` alone.
-    fn set(&self, place: ValueId, region: &[PathSeg], fact: &Written, state: &mut Units) {
-        let units = self.units.get(&place).unwrap_or_else(|| panic!("{place:?}, named by name, is a place of the body"));
+    fn set(&self, place: Storage, region: &[PathSeg], fact: &Written, state: &mut Units) {
+        let units = self.units.get(&place).unwrap_or_else(|| panic!("{place:?}, reached by the body, is a place of it"));
         for (index, unit) in units.iter().enumerate() {
             if covers(region, unit) {
                 state.0.insert((place, index), fact.clone());
             }
+        }
+    }
+
+    /// A `Take` or an `Assign` through a reference: each move and each write
+    /// `Loans` records at it that reaches one place, of that place's region.
+    fn transfer_through(&self, inst: &Inst, state: &mut Units) {
+        for access in self.loans.accesses(Site::Inst(inst.id())) {
+            let fact = match access.reach {
+                Reach::Write => Written::default(),
+                Reach::Move => Written { moved: BTreeSet::from([inst.span()]), ..Written::default() },
+                Reach::Read | Reach::Lend => continue,
+            };
+            let mut places = access.places.iter();
+            let (Some(place), None) = (places.next(), places.next()) else {
+                continue;
+            };
+            self.set(place.storage, parts::owned_region(&place.path), &fact, state);
         }
     }
 }
@@ -231,12 +311,12 @@ impl DenseAnalysis for Forward<'_> {
 
     const DIRECTION: Direction = Direction::Forward;
 
-    fn entry(&self, body: &Body) -> Units {
+    fn entry(&self, _: &Body) -> Units {
         let mut state = Units::default();
         for (place, units) in self.units {
-            let start = match body.definition(*place) {
-                Definition::Param(_) => Written::default(),
-                _ => Written { never: true, ..Written::default() },
+            let start = match place {
+                Storage::Slot(_) => Written { never: true, ..Written::default() },
+                Storage::Param(_) | Storage::Outside { .. } => Written::default(),
             };
             state.0.extend((0..units.len()).map(|index| ((*place, index), start.clone())));
         }
@@ -249,17 +329,20 @@ impl DenseAnalysis for Forward<'_> {
                 let (place, region) = named_place(inst.op()).expect("matched as a store by name");
                 self.set(place, region, &Written::default(), state);
             }
-            Op::Take { target: RefTarget::Var(_) | RefTarget::Param(_), .. } => {
+            Op::Take { target: RefTarget::Var(named) | RefTarget::Param(named), .. } => {
                 let (place, region) = named_place(inst.op()).expect("matched as a take by name");
                 let taken = inst_takings(self.body, self.types, inst)
                     .into_iter()
-                    .find(|operand| operand.names_place && operand.value == place)
+                    .find(|operand| operand.names_place && operand.value == *named)
                     .expect("a Take by name names its place among its operands")
                     .taken;
                 if matches!(taken, Taken::Moved | Taken::PartMoved) {
                     let moved = Written { moved: BTreeSet::from([inst.span()]), ..Written::default() };
                     self.set(place, region, &moved, state);
                 }
+            }
+            Op::Take { target: RefTarget::Through(_), .. } | Op::Assign { target: RefTarget::Through(_), .. } => {
+                self.transfer_through(inst, state);
             }
             _ => {}
         }

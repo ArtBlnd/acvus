@@ -3,7 +3,8 @@
 //! - `LiveAnnotations`, key `live`: the values `Liveness` holds live at a
 //!   block's start, `{v1, v2}`.
 //! - `InitAnnotations`, key `init`: before each instruction, each unit of
-//!   each place `Initialization` tracks, `slot0.a=W` written on every path
+//!   each place `Initialization` tracks, a storage outside the body as
+//!   `*p0#n` (`LoanAnnotations`'), `slot0.a=W` written on every path
 //!   that reaches, `N` left unwritten by some path, `M@start..end` moved out
 //!   at that span by some path, several joined by `|`.
 //! - `LoanAnnotations`, key `loans`: each value defined by the instruction
@@ -51,29 +52,38 @@ impl Annotate for LiveAnnotations<'_> {
 
 /// `init`: what each unit of each place holds before an instruction.
 pub struct InitAnnotations<'a> {
-    body: &'a Body,
     interner: &'a Interner,
     initialization: &'a Initialization,
 }
 
 impl<'a> InitAnnotations<'a> {
-    pub fn new(body: &'a Body, interner: &'a Interner, initialization: &'a Initialization) -> Self {
-        InitAnnotations { body, interner, initialization }
+    pub fn new(interner: &'a Interner, initialization: &'a Initialization) -> Self {
+        InitAnnotations { interner, initialization }
     }
 
-    /// Every place the analysis tracks, in the order their names print.
-    fn places(&self, names: &Names<'_>) -> Vec<ValueId> {
-        let mut places: Vec<ValueId> = self
-            .body
-            .params()
-            .iter()
-            .chain(self.body.captures())
-            .map(|(_, value)| *value)
-            .chain(self.body.slots().iter().copied())
-            .filter(|place| self.initialization.units(*place).is_some())
-            .collect();
-        names.sort_values(&mut places);
+    /// Every place the analysis tracks, in the order their names print,
+    /// each outside storage after its parameter's or capture's own.
+    fn places(&self, names: &Names<'_>) -> Vec<Storage> {
+        let mut places: Vec<Storage> = self.initialization.places().collect();
+        let mut roots: Vec<ValueId> = places.iter().map(|place| root(*place)).collect();
+        names.sort_values(&mut roots);
+        let order = |place: &Storage| roots.iter().position(|value| *value == root(*place));
+        places.sort_by_key(|place| (order(place), matches!(place, Storage::Outside { .. }), outside_position(*place)));
         places
+    }
+}
+
+/// The value a place is the storage of, or lent by.
+fn root(place: Storage) -> ValueId {
+    match place {
+        Storage::Slot(value) | Storage::Param(value) | Storage::Outside { of: value, .. } => value,
+    }
+}
+
+fn outside_position(place: Storage) -> usize {
+    match place {
+        Storage::Outside { position, .. } => position,
+        Storage::Slot(_) | Storage::Param(_) => 0,
     }
 }
 
@@ -95,10 +105,10 @@ impl Annotate for InitAnnotations<'_> {
     fn before(&self, names: &Names<'_>, inst: InstId) -> Vec<(&'static str, String)> {
         let mut units: Vec<String> = Vec::new();
         for place in self.places(names) {
-            let root = names.value(place);
+            let root = storage(names, place);
             let mut held: Vec<String> = self
                 .initialization
-                .before(inst, place, &[])
+                .before(Site::Inst(inst), place, &[])
                 .into_iter()
                 .map(|(unit, holds)| format!("{root}{}={}", print::path(self.interner, unit), written(holds)))
                 .collect();

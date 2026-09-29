@@ -109,8 +109,10 @@ pub enum PositionKind {
 /// a reference's own before its target's; a function value's one; a
 /// started call's one before its result's; an extern-defined type's
 /// lifetimes before its arguments'; a structural type's parts in order,
-/// `Result`'s `Ok` before its `Err`; one element's for a sequence. This is
-/// the only walk of positions: `positions` and `position_kinds` read it.
+/// `Result`'s `Ok` before its `Err`; one element's for a sequence. Each
+/// position is given with the type it is the position of. This is the only
+/// walk of positions: `positions`, `position_kinds` and `lent_types` read
+/// it.
 ///
 /// The callback is a trait object: the walk recurses, and a generic one would
 /// be instantiated anew at every depth.
@@ -118,7 +120,7 @@ pub fn for_each_position(
     types: &Types<Concrete>,
     lifetimes: &dyn LifetimesOf,
     ty: Ty,
-    on_position: &mut dyn FnMut(PositionKind),
+    on_position: &mut dyn FnMut(PositionKind, Ty),
 ) {
     acvus_utils::grow(|| for_each_position_level(types, lifetimes, ty, on_position))
 }
@@ -127,7 +129,7 @@ fn for_each_position_level(
     types: &Types<Concrete>,
     lifetimes: &dyn LifetimesOf,
     ty: Ty,
-    on_position: &mut dyn FnMut(PositionKind),
+    on_position: &mut dyn FnMut(PositionKind, Ty),
 ) {
     match types.kind(ty) {
         TyKind::Int(_)
@@ -141,11 +143,11 @@ fn for_each_position_level(
         | TyKind::Str => {}
         TyKind::Ref(mutability, target) => {
             let mut width = 0;
-            for_each_position(types, lifetimes, target.ty(), &mut |_| width += 1);
-            on_position(PositionKind::Ref(*mutability, width));
+            for_each_position(types, lifetimes, target.ty(), &mut |_, _| width += 1);
+            on_position(PositionKind::Ref(*mutability, width), ty);
             for_each_position(types, lifetimes, target.ty(), on_position);
         }
-        TyKind::Fn { holds, .. } => on_position(PositionKind::Captures(*holds)),
+        TyKind::Fn { holds, .. } => on_position(PositionKind::Captures(*holds), ty),
         // One environment, whichever signature it is called at: what its
         // captures hold, as a function value's (functions §2).
         TyKind::Closures(signatures) => {
@@ -156,10 +158,10 @@ fn for_each_position_level(
                     _ => None,
                 })
                 .fold(Holds::Nothing, Holds::join);
-            on_position(PositionKind::Captures(holds));
+            on_position(PositionKind::Captures(holds), ty);
         }
         TyKind::Handle(result) => {
-            on_position(PositionKind::InFlight);
+            on_position(PositionKind::InFlight, ty);
             for_each_position(types, lifetimes, *result, on_position);
         }
         TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
@@ -186,7 +188,7 @@ fn for_each_position_level(
         }
         TyKind::UserDefined { id, type_args, .. } => {
             for _ in 0..lifetimes.lifetimes_of(*id) {
-                on_position(PositionKind::Lifetime);
+                on_position(PositionKind::Lifetime, ty);
             }
             for arg in type_args.iter() {
                 for_each_position(types, lifetimes, arg.ty(), on_position);
@@ -199,13 +201,26 @@ fn for_each_position_level(
 /// The kind of every position of `ty`, in order.
 pub fn position_kinds(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty) -> Vec<PositionKind> {
     let mut kinds = Vec::new();
-    for_each_position(types, lifetimes, ty, &mut |kind| kinds.push(kind));
+    for_each_position(types, lifetimes, ty, &mut |kind, _| kinds.push(kind));
     kinds
 }
 
 /// How many positions a value of `ty` holds loans at.
 pub fn positions(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty) -> usize {
     let mut count = 0;
-    for_each_position(types, lifetimes, ty, &mut |_| count += 1);
+    for_each_position(types, lifetimes, ty, &mut |_, _| count += 1);
     count
+}
+
+/// What each position of a value of `ty` lends, in order: a reference's
+/// target at its own position, and no typed target at any other.
+pub fn lent_types(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty) -> Vec<Option<Ty>> {
+    let mut lent = Vec::new();
+    for_each_position(types, lifetimes, ty, &mut |_, of| {
+        lent.push(match types.kind(of) {
+            TyKind::Ref(_, target) => Some(target.ty()),
+            _ => None,
+        })
+    });
+    lent
 }

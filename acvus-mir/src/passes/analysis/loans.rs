@@ -107,6 +107,17 @@ pub enum Storage {
     Outside { of: ValueId, position: usize },
 }
 
+impl Storage {
+    /// The storage `target` names by name; `None` through a reference.
+    pub fn by_name(target: &RefTarget) -> Option<Storage> {
+        match target {
+            RefTarget::Var(slot) => Some(Storage::Slot(*slot)),
+            RefTarget::Param(param) => Some(Storage::Param(*param)),
+            RefTarget::Through(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Mode {
     Shared,

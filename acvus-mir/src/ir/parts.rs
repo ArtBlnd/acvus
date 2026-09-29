@@ -64,12 +64,34 @@ fn field_ty(object: &ObjectTy<Concrete>, field: acvus_utils::Astr) -> Ty {
 /// # Panics
 /// `ty` has no parts a path names: a cut steps only into a product.
 fn children(types: &Types<Concrete>, ty: Ty) -> Vec<PathSeg> {
+    product_parts(types, ty).unwrap_or_else(|| panic!("a cut steps only into a tuple, an array or an object, not {:?}", types.kind(ty)))
+}
+
+/// The steps from a `ty` to each of its immediate parts, where it is a
+/// product.
+fn product_parts(types: &Types<Concrete>, ty: Ty) -> Option<Vec<PathSeg>> {
     match types.kind(ty) {
-        TyKind::Tuple(items, _) => (0..items.len()).map(PathSeg::Index).collect(),
-        TyKind::Array(_, len, _) => (0..known_len(len)).map(PathSeg::Index).collect(),
-        TyKind::Object(object) => object.fields().iter().map(|(name, _)| PathSeg::Field(*name)).collect(),
-        kind => panic!("a cut steps only into a tuple, an array or an object, not {kind:?}"),
+        TyKind::Tuple(items, _) => Some((0..items.len()).map(PathSeg::Index).collect()),
+        TyKind::Array(_, len, _) => Some((0..known_len(len)).map(PathSeg::Index).collect()),
+        TyKind::Object(object) => Some(object.fields().iter().map(|(name, _)| PathSeg::Field(*name)).collect()),
+        _ => None,
     }
+}
+
+/// Whether `units` can cut a holder of type `ty` at `path`: every step of
+/// it is into a part of a product.
+pub(crate) fn is_cut_of(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> bool {
+    let mut at = ty;
+    for seg in path {
+        let Some(parts) = product_parts(types, at) else {
+            return false;
+        };
+        if !parts.contains(seg) {
+            return false;
+        }
+        at = part_ty(types, at, std::slice::from_ref(seg));
+    }
+    true
 }
 
 /// The units of a holder of type `ty` that the body cuts at `cuts`.

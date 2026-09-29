@@ -279,7 +279,7 @@ fn init_annotations_state_each_unit_before_each_instruction() {
     let mut f = fixture();
     let id = f.build(false);
     let initialization = f.facts::<Initialization>(id);
-    let init = InitAnnotations::new(f.module.body(id), &f.names, &initialization);
+    let init = InitAnnotations::new(&f.names, &initialization);
     let expected = "\
 body0 entry=b0
 b0():
