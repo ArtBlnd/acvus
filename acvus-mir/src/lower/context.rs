@@ -241,8 +241,8 @@ impl<'t> Namer<'t> {
     fn pattern<S: Slot>(&mut self, pattern: &Pattern<S>) {
         match pattern {
             Pattern::ContextBind { id, name, span } => {
-                let ty = match self.typeck.conversions.get(id).and_then(|steps| steps.last()) {
-                    Some(step) => step.to,
+                let ty = match self.typeck.coercions.get(id) {
+                    Some(coercion) => coercion.to(),
                     None => self.ty(*id),
                 };
                 self.context(*name, ty, *span);

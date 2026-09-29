@@ -13,14 +13,16 @@ use acvus_ast::{AstId, BinOp, Expr, Literal, Slot, Span};
 use acvus_utils::Astr;
 
 use super::call::{convert, issue, lent_operand};
+use super::coerce::{Variant, by_variant};
 use super::control::diamond;
 use super::ctxt::Lcx;
 use super::place::view_array;
+use crate::decl::{Lift, LiftShape, Taking};
 use crate::ir::cfg::{BlockId, Op, Stages, Terminator};
 use crate::ir::{ExitTrip, ForSource, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, known_len};
-use crate::ty::structural::{Structure, structure};
+use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{IntTy, Mutability, Ty, TyKind};
-use crate::typeck::PartTree;
+use crate::typeck::StructureTree;
 
 /// What a comparison asks of its operands (operators §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,14 +33,15 @@ enum Asked {
     Order,
 }
 
-/// A node's type as its tree takes it apart: a structural type by
-/// `ty::structural`, a reference by what it names, `!` by no part.
+/// A node's type as its tree takes it apart: a transparent structured type
+/// by `ty::structural`, a reference by what it names, `!` by no part.
 enum Shape {
     Tuple(Vec<Ty>),
     Object(Vec<(Astr, Ty)>),
     Array(ArrayOf),
     Option(Ty),
     Result { ok: Ty, err: Ty },
+    Enum(Vec<(Astr, Option<Ty>)>),
     Ref(Ty),
     Never,
 }
@@ -51,20 +54,31 @@ struct ArrayOf {
 }
 
 /// # Panics
-/// `ty` is neither structural, a reference nor `!`: typeck records parts
-/// only at those.
+/// `ty` is neither a transparent structured type, a reference nor `!`:
+/// typeck records parts only at those.
 fn shape(cx: &Lcx<'_, '_>, ty: Ty) -> Shape {
     match structure(cx.builder.types(), ty) {
-        Some(Structure::Tuple(items)) => Shape::Tuple(items.to_vec()),
-        Some(Structure::Object(fields)) => Shape::Object(fields.to_vec()),
-        Some(Structure::Array { element, len }) => Shape::Array(ArrayOf { element, len: known_len(&len) }),
-        Some(Structure::Option(payload)) => Shape::Option(payload),
-        Some(Structure::Result { ok, err }) => Shape::Result { ok, err },
+        Some(Structure::Tuple(items, _)) => Shape::Tuple(items.to_vec()),
+        Some(Structure::Object(fields, _)) => Shape::Object(fields.to_vec()),
+        Some(Structure::Enum(variants, _)) => Shape::Enum(variants.to_vec()),
+        Some(Structure::Array { element, len, .. }) => Shape::Array(ArrayOf { element, len: known_len(&len) }),
+        Some(Structure::Option(payload, _)) => Shape::Option(payload),
+        Some(Structure::Result { ok, err, .. }) => Shape::Result { ok, err },
         None => match cx.kind(ty) {
             TyKind::Ref(_, target) => Shape::Ref(target.ty()),
             TyKind::Never => Shape::Never,
-            other => panic!("typeck records parts only at a structural type, a reference or `!`, not {other:?}"),
+            other => panic!("typeck records parts only at a structured type, a reference or `!`, not {other:?}"),
         },
+    }
+}
+
+/// The variants of a node of `shape`, where it is a variant type.
+fn variants(cx: &Lcx<'_, '_>, shape: &Shape) -> Option<Vec<Variant>> {
+    match shape {
+        Shape::Option(payload) => Some(Variant::of_option(cx, *payload).into()),
+        Shape::Result { ok, err } => Some(Variant::of_result(cx, *ok, *err).into()),
+        Shape::Enum(variants) => Some(Variant::of_enum(variants)),
+        Shape::Tuple(_) | Shape::Object(_) | Shape::Array(_) | Shape::Ref(_) | Shape::Never => None,
     }
 }
 
@@ -73,25 +87,42 @@ fn shape(cx: &Lcx<'_, '_>, ty: Ty) -> Shape {
 struct Part<'t> {
     seg: PathSeg,
     ty: Ty,
-    tree: &'t PartTree,
+    tree: &'t StructureTree,
+}
+
+/// The tree of the part at `key` among a node's `trees`.
+///
+/// # Panics
+/// typeck recorded no part at `key`: it records one per part of the
+/// node's type.
+fn tree_at(trees: &[(PartKey, StructureTree)], key: PartKey) -> &StructureTree {
+    trees
+        .iter()
+        .find(|(at, _)| *at == key)
+        .map(|(_, tree)| tree)
+        .unwrap_or_else(|| panic!("typeck records a tree at every part of a node, and not at {key:?}"))
 }
 
 /// A tuple's parts, each with its tree.
-fn tuple_parts<'t>(items: &[Ty], trees: &'t [PartTree]) -> Vec<Part<'t>> {
-    items.iter().zip(trees).enumerate().map(|(at, (ty, tree))| Part { seg: PathSeg::Index(at), ty: *ty, tree }).collect()
+fn tuple_parts<'t>(items: &[Ty], trees: &'t [(PartKey, StructureTree)]) -> Vec<Part<'t>> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(at, ty)| Part { seg: PathSeg::Index(at), ty: *ty, tree: tree_at(trees, PartKey::Index(at)) })
+        .collect()
 }
 
 /// An object's parts, each with its tree.
-fn field_parts<'t>(fields: &[(Astr, Ty)], trees: &'t [PartTree]) -> Vec<Part<'t>> {
-    fields.iter().zip(trees).map(|((name, ty), tree)| Part { seg: PathSeg::Field(*name), ty: *ty, tree }).collect()
+fn field_parts<'t>(fields: &[(Astr, Ty)], trees: &'t [(PartKey, StructureTree)]) -> Vec<Part<'t>> {
+    fields
+        .iter()
+        .map(|(name, ty)| Part { seg: PathSeg::Field(*name), ty: *ty, tree: tree_at(trees, PartKey::Field(*name)) })
+        .collect()
 }
 
-/// The only part tree of a node of one part.
-fn only(trees: &[PartTree]) -> &PartTree {
-    let [tree] = trees else {
-        panic!("typeck records one part at a node of one part type, not {}", trees.len())
-    };
-    tree
+/// The payload part of `variant`, where it has one.
+fn payload_part<'t>(variant: &Variant, trees: &'t [(PartKey, StructureTree)]) -> Option<Part<'t>> {
+    variant.payload.map(|(key, ty)| Part { seg: PathSeg::Payload, ty, tree: tree_at(trees, key) })
 }
 
 /// The operand of `part` of the node whose operand is `base`.
@@ -123,7 +154,7 @@ fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element
 pub(super) fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, left: &Expr<S>, right: &Expr<S>, span: Span) -> ValueId {
     let tree = cx
         .typeck
-        .part_trees
+        .structure_trees
         .get(&site)
         .unwrap_or_else(|| panic!("typeck records how every comparison compares, and not at {site:?}"));
     let asked = match op {
@@ -150,33 +181,65 @@ pub(super) fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, lef
 }
 
 /// `a` against `b`, the operands of a node of type `ty`.
-fn compared(cx: &mut Lcx<'_, '_>, tree: &PartTree, asked: Asked, ty: Ty, a: ValueId, b: ValueId, span: Span) -> ValueId {
+fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a: ValueId, b: ValueId, span: Span) -> ValueId {
     let trees = match tree {
-        PartTree::Reached { chosen, callee } => {
+        StructureTree::Reached { chosen, callee } => {
             let called = cx.callee(chosen);
             return issue(cx, called, *callee, vec![a, b], span);
         }
-        PartTree::Parts(trees) => trees,
+        StructureTree::Parts(trees) => trees,
     };
     match shape(cx, ty) {
-        Shape::Ref(target) => compared(cx, only(trees), asked, target, a, b, span),
+        // typeck compares a reference at its own node by what it names.
+        Shape::Ref(target) => compared(cx, tree, asked, target, a, b, span),
         Shape::Tuple(items) => in_order(cx, asked, &tuple_parts(&items, trees), a, b, span),
         Shape::Object(fields) => in_order(cx, asked, &field_parts(&fields, trees), a, b, span),
-        Shape::Array(array) => array_compared(cx, asked, array, only(trees), a, b, span),
+        Shape::Array(array) => array_compared(cx, asked, array, tree_at(trees, PartKey::Element), a, b, span),
         Shape::Option(payload) => {
             let tags = cx.decls.core().tags;
-            let payload = Part { seg: PathSeg::Payload, ty: payload, tree: only(trees) };
+            let payload = Part { seg: PathSeg::Payload, ty: payload, tree: tree_at(trees, PartKey::Some) };
             tagged(cx, asked, tags.some, Tagged::Option(payload), a, b, span)
         }
         Shape::Result { ok, err } => {
             let tags = cx.decls.core().tags;
-            let [ok_tree, err_tree] = &trees[..] else { panic!("a `Result` compares by its two payloads") };
-            let ok = Part { seg: PathSeg::Payload, ty: ok, tree: ok_tree };
-            let err = Part { seg: PathSeg::Payload, ty: err, tree: err_tree };
+            let ok = Part { seg: PathSeg::Payload, ty: ok, tree: tree_at(trees, PartKey::Ok) };
+            let err = Part { seg: PathSeg::Payload, ty: err, tree: tree_at(trees, PartKey::Err) };
             tagged(cx, asked, tags.ok, Tagged::Result { ok, err }, a, b, span)
         }
+        Shape::Enum(variants) => match asked {
+            Asked::Equal => enum_equal(cx, &Variant::of_enum(&variants), trees, a, b, span),
+            // NOTE: an open question, returned to the coordinator. A program's
+            // enum has no declared order of its variants: its type keeps them
+            // sorted by interned tag, which orders nothing the program wrote,
+            // so no ledger sentence says which of two variants is less.
+            Asked::Order => todo!("the order of two variants of a program's enum is not determined"),
+        },
         Shape::Never => answered(cx, asked, span),
     }
+}
+
+/// Two values of an enum equal: of one variant, and of equal payloads
+/// where it has one.
+fn enum_equal(
+    cx: &mut Lcx<'_, '_>,
+    variants: &[Variant],
+    trees: &[(PartKey, StructureTree)],
+    a: ValueId,
+    b: ValueId,
+    span: Span,
+) -> ValueId {
+    let bool_ty = cx.bool_ty();
+    if variants.is_empty() {
+        return answered(cx, Asked::Equal, span);
+    }
+    by_variant(cx, variants, bool_ty, a, span, &|cx, variant| {
+        let same = cx.builder.push(Op::TestVariant { src: b, tag: variant.tag }, bool_ty, span);
+        let payloads = |cx: &mut Lcx<'_, '_>| match payload_part(variant, trees) {
+            Some(payload) => part_compared(cx, Asked::Equal, payload, a, b, span),
+            None => answered(cx, Asked::Equal, span),
+        };
+        diamond(cx, same, bool_ty, span, payloads, |cx| cx.bool_const(false, span))
+    })
 }
 
 /// A variant type's payloads: `Option`'s one, or `Result`'s two.
@@ -249,7 +312,7 @@ fn in_order(cx: &mut Lcx<'_, '_>, asked: Asked, parts: &[Part<'_>], a: ValueId, 
 /// indices, as Rust compares arrays: the loop leaves at the first element
 /// whose answer is not equal, with that answer, and answers equal where it
 /// runs to its end.
-fn array_compared(cx: &mut Lcx<'_, '_>, asked: Asked, array: ArrayOf, tree: &PartTree, a: ValueId, b: ValueId, span: Span) -> ValueId {
+fn array_compared(cx: &mut Lcx<'_, '_>, asked: Asked, array: ArrayOf, tree: &StructureTree, a: ValueId, b: ValueId, span: Span) -> ValueId {
     let ArrayOf { element, len } = array;
     let a_elements = view_array(cx, a, Mutability::Shared, element, span);
     let b_elements = view_array(cx, b, Mutability::Shared, element, span);
@@ -354,5 +417,126 @@ fn tagged(cx: &mut Lcx<'_, '_>, asked: Asked, first: Astr, payloads: Tagged<'_>,
 /// combined as the lift's law defines (`Lift::Combine`). An array's parts
 /// are one `For` over its elements, never unrolled.
 pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span: Span) -> ValueId {
-    todo!("the structure tree at `site`, expanded by the reached generic function's lift")
+    let tree = cx
+        .typeck
+        .structure_trees
+        .get(&site)
+        .unwrap_or_else(|| panic!("typeck records the tree of every lifted impl it reached, and not at {site:?}"));
+    let declaration = cx.reached(site).declaration;
+    let lift = cx
+        .decls
+        .lift(declaration)
+        .unwrap_or_else(|| panic!("a call reached at a lifted impl names a function with a lift, not {declaration:?}"))
+        .clone();
+    let callee_ty = *cx
+        .typeck
+        .callees
+        .get(&site)
+        .unwrap_or_else(|| panic!("typeck records the callee type at every reached call site, and not at {site:?}"));
+    let TyKind::Fn { params, ret, .. } = cx.kind(callee_ty).clone() else {
+        panic!("a callee's type is a function type");
+    };
+    let structured = match lift.shape().params.first() {
+        None => ret,
+        Some(Taking::Value) => params[0],
+        Some(Taking::Ref(_)) => match cx.kind(params[0]) {
+            TyKind::Ref(_, target) => target.ty(),
+            other => panic!("a parameter that takes the lift's variable by reference is a reference, not {other:?}"),
+        },
+    };
+    match &lift {
+        // `lift_of` makes a `Combine` only of `(&T, &T)`, whose answer is
+        // the parts' equality taken together (types §1).
+        Lift::Combine { .. } => {
+            let [a, b] = args[..] else {
+                panic!("a combined impl takes its two operands")
+            };
+            compared(cx, tree, Asked::Equal, structured, a, b, span)
+        }
+        Lift::Rebuild(shape) => rebuilt(cx, tree, shape, structured, &args, span),
+    }
+}
+
+/// The value of `ty` a `Lift::Rebuild` impl answers at a node of tree
+/// `tree`, taking `args` as `lift` takes them.
+fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty, args: &[ValueId], span: Span) -> ValueId {
+    let trees = match tree {
+        StructureTree::Reached { chosen, callee } => {
+            let called = cx.callee(chosen);
+            return issue(cx, called, *callee, args.to_vec(), span);
+        }
+        StructureTree::Parts(trees) => trees,
+    };
+    let shape = shape(cx, ty);
+    if let Some(variants) = variants(cx, &shape) {
+        // NOTE: an open question, returned to the coordinator. With one
+        // argument its variant is the variant rebuilt; with none, or with
+        // several that may hold different variants, no ledger sentence says
+        // which variant the rebuilt value is.
+        let [decides] = args[..] else {
+            todo!("a variant type rebuilt from {} arguments: which variant it is is not determined", args.len())
+        };
+        return by_variant(cx, &variants, ty, decides, span, &|cx, variant| {
+            let payload = payload_part(variant, trees).map(|part| {
+                let part_args = part_args(cx, args, lift, part, span);
+                rebuilt(cx, part.tree, lift, part.ty, &part_args, span)
+            });
+            cx.builder.push(Op::MakeVariant { tag: variant.tag, payload }, ty, span)
+        });
+    }
+    match shape {
+        Shape::Tuple(items) => {
+            let elements = tuple_parts(&items, trees)
+                .into_iter()
+                .map(|part| {
+                    let part_args = part_args(cx, args, lift, part, span);
+                    rebuilt(cx, part.tree, lift, part.ty, &part_args, span)
+                })
+                .collect();
+            cx.builder.push(Op::MakeTuple { elements }, ty, span)
+        }
+        Shape::Object(fields) => {
+            let fields = field_parts(&fields, trees)
+                .into_iter()
+                .map(|part| {
+                    let PathSeg::Field(name) = part.seg else {
+                        unreachable!("an object's part is a field")
+                    };
+                    let part_args = part_args(cx, args, lift, part, span);
+                    (name, rebuilt(cx, part.tree, lift, part.ty, &part_args, span))
+                })
+                .collect();
+            cx.builder.push(Op::MakeObject { fields }, ty, span)
+        }
+        // NOTE: an open question, returned to the coordinator, as for an
+        // array's coercion (`coerce::structured`): no IR form builds a new
+        // array in one `For`, and the rule excludes unrolling.
+        Shape::Array(_) => todo!("an array rebuilt element by element in one `For`: no IR form builds a new array in a loop"),
+        Shape::Option(_) | Shape::Result { .. } | Shape::Enum(_) => unreachable!("a variant type is rebuilt by its variant above"),
+        Shape::Ref(_) | Shape::Never => panic!("a lift answers only at a transparent structured type, not {ty:?}"),
+    }
+}
+
+/// `part`'s arguments, from the node's `args` as `lift` takes each: a
+/// reference to the part through a reference, or the part moved out of a
+/// value.
+fn part_args(cx: &mut Lcx<'_, '_>, args: &[ValueId], lift: &LiftShape, part: Part<'_>, span: Span) -> Vec<ValueId> {
+    args.iter()
+        .zip(lift.params.iter())
+        .map(|(arg, taking)| match taking {
+            Taking::Ref(mutability) => {
+                let ty = cx.ref_ty(*mutability, part.ty);
+                let op = Op::Ref { target: RefTarget::Through(*arg), path: vec![part.seg], mutability: *mutability };
+                cx.builder.push(op, ty, span)
+            }
+            Taking::Value => {
+                let op = match part.seg {
+                    PathSeg::Index(index) => Op::TupleIndex { tuple: *arg, index },
+                    PathSeg::Field(field) => Op::FieldGet { object: *arg, field, rest: Vec::new() },
+                    PathSeg::Payload => Op::UnwrapVariant { src: *arg },
+                };
+                cx.builder.push(op, part.ty, span)
+            }
+        })
+        .collect()
 }

@@ -198,6 +198,10 @@ impl<'a, 'm> Lcx<'a, 'm> {
                 let impls = scheme.impls.as_ref().expect("a declaration reached at its generic impl has impls");
                 impls.concrete.len()
             }
+            Some(Impl::Structural) => panic!(
+                "a lifted impl {:?} is no callee: its parts' impls are called, each at its own node (types §1)",
+                chosen.declaration
+            ),
         }
     }
 

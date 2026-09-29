@@ -35,7 +35,7 @@ pub(super) fn convert(cx: &mut Lcx<'_, '_>, site: AstId, value: ValueId, span: S
 pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, span: Span) -> ValueId {
     let steps = match coercion {
         Coercion::Steps(steps) => steps,
-        Coercion::Structured { shape, parts } => return super::coerce::structured(cx, shape, parts, value, span),
+        Coercion::Structured { to, parts, .. } => return super::coerce::structured(cx, *to, parts, value, span),
     };
     let core = cx.decls.core();
     let views = [core.as_slice, core.as_slice_mut, core.as_str];
