@@ -63,10 +63,10 @@ impl SparseFacts<IntervalDomain> {
     /// relation of its impl bounds the result's length by a term of known
     /// interval. Cost: O(the impl's relations and their terms).
     pub fn declared_len(&self, decls: &Declarations, body: &Body, slice: ValueId) -> Option<Interval> {
-        let Definition::Inst(block, index) = body.definition(slice) else {
+        let Definition::Inst(made) = body.definition(slice) else {
             return None;
         };
-        let (made_by, args) = match body.block(block).insts()[index].op() {
+        let (made_by, args) = match body.inst(made).op() {
             Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } => {
                 (ExternImpl { id: *id, r#impl: *r#impl }, args.as_slice())
             }

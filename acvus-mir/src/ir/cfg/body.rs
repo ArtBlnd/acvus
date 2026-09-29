@@ -59,7 +59,7 @@ pub(super) enum Def {
     /// A parameter the Builder adds to a block for the order token, whose
     /// position is fixed at `seal`, after the caller's parameters.
     UnplacedParam(BlockId),
-    Inst(BlockId, usize),
+    Inst(InstId),
 }
 
 /// Where a value of a whole body is defined, as `Body::definition` gives it.
@@ -71,14 +71,14 @@ pub enum Definition {
     Slot(usize),
     BlockParam(BlockId, usize),
     /// An instruction's result, or the order token it yields.
-    Inst(BlockId, usize),
+    Inst(InstId),
 }
 
-/// Where a use stands: an instruction, by block and position, or a block's
+/// Where a use stands: an instruction, by its identity, or a block's
 /// terminator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Site {
-    Inst(BlockId, usize),
+    Inst(InstId),
     Term(BlockId),
 }
 
@@ -118,13 +118,17 @@ impl UseSites {
         self.counts.into_iter()
     }
 
-    /// Renames the block of every site through `rename`. Cost: O(sites).
+    /// Renames the block of every terminator site through `rename`. Cost:
+    /// O(sites).
     pub(super) fn rename_blocks(&mut self, rename: impl Fn(BlockId) -> BlockId) {
+        if !self.counts.keys().any(|site| matches!(site, Site::Term(_))) {
+            return;
+        }
         self.counts = std::mem::take(&mut self.counts)
             .into_iter()
             .map(|(site, count)| {
                 let site = match site {
-                    Site::Inst(block, index) => Site::Inst(rename(block), index),
+                    Site::Inst(inst) => Site::Inst(inst),
                     Site::Term(block) => Site::Term(rename(block)),
                 };
                 (site, count)
@@ -135,7 +139,9 @@ impl UseSites {
 
 pub struct Body {
     pub(super) ret: Ty,
-    pub(super) blocks: Vec<Block>,
+    pub(super) blocks: Vec<BlockData>,
+    /// Every instruction of the body, by its identity; none for one removed.
+    pub(super) insts: Vec<Option<InstNode>>,
     pub(super) entry: BlockId,
     pub(super) params: Vec<(Astr, ValueId)>,
     pub(super) captures: Vec<(Astr, ValueId)>,
@@ -154,9 +160,11 @@ pub struct Body {
     pub(super) debug: DebugInfo,
 }
 
-pub struct Block {
+/// A block as the body stores it: its parameters, the ends of its list of
+/// instructions, and its terminator.
+pub(super) struct BlockData {
     pub(super) params: Vec<ValueId>,
-    pub(super) insts: Vec<Inst>,
+    pub(super) list: InstList,
     pub(super) terminator: Terminator,
     /// The span of the construct that made the terminator; a `Return`'s
     /// is its own.
@@ -164,10 +172,36 @@ pub struct Block {
 }
 
 /// An instruction's identity within its body, given when the instruction
-/// is made and kept while it moves between positions and blocks, so a
-/// cursor yields each instruction at most once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct InstId(u32);
+/// is made and kept while it moves between positions and blocks, and
+/// never given again. It names the instruction in a `Site` and a
+/// definition; where it stands is the body's to tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InstId(pub(super) u32);
+
+impl InstId {
+    pub(super) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// The ends of a block's list of instructions and how many it holds.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct InstList {
+    pub(super) head: Option<InstId>,
+    pub(super) tail: Option<InstId>,
+    pub(super) len: usize,
+}
+
+/// An instruction where it stands: its block, its neighbours in the block,
+/// and its order number, which rises along the block.
+#[derive(Debug, Clone)]
+pub(super) struct InstNode {
+    pub(super) inst: Inst,
+    pub(super) block: BlockId,
+    pub(super) prev: Option<InstId>,
+    pub(super) next: Option<InstId>,
+    pub(super) order: u64,
+}
 
 /// An instruction: its operation, the value it yields, its place on the
 /// order chain, and its span. The core makes the result and the tokens; no
@@ -216,6 +250,12 @@ impl Body {
         Inst { id: self.fresh_inst_id(), op, result, order, span }
     }
 
+    /// The identity the next instruction made in this body takes, for the
+    /// values it will define, made before it. Cost: O(1).
+    pub(super) fn peek_inst_id(&self) -> InstId {
+        InstId(self.next_inst)
+    }
+
     pub(super) fn fresh_inst_id(&mut self) -> InstId {
         let id = InstId(self.next_inst);
         self.next_inst = self.next_inst.checked_add(1).expect("a body makes at most u32::MAX instructions");
@@ -224,7 +264,8 @@ impl Body {
 }
 
 impl Inst {
-    pub(super) fn id(&self) -> InstId {
+    /// The instruction's identity. Cost: O(1).
+    pub fn id(&self) -> InstId {
         self.id
     }
 
@@ -627,11 +668,11 @@ impl Body {
     pub fn entry(&self) -> BlockId {
         self.entry
     }
-    pub fn block(&self, id: BlockId) -> &Block {
-        &self.blocks[id.index()]
+    pub fn block(&self, id: BlockId) -> Block<'_> {
+        Block { body: self, data: &self.blocks[id.index()] }
     }
-    pub fn blocks(&self) -> impl Iterator<Item = (BlockId, &Block)> {
-        self.blocks.iter().enumerate().map(|(i, b)| (BlockId::of_index(i), b))
+    pub fn blocks(&self) -> impl Iterator<Item = (BlockId, Block<'_>)> {
+        self.blocks.iter().enumerate().map(|(i, data)| (BlockId::of_index(i), Block { body: self, data }))
     }
     /// How many blocks the body has. Cost: O(1).
     pub(crate) fn block_count(&self) -> usize {
@@ -702,7 +743,7 @@ impl Body {
             Def::OrderParam => Definition::OrderParam,
             Def::Slot { index, .. } => Definition::Slot(index),
             Def::BlockParam(block, index) => Definition::BlockParam(block, index),
-            Def::Inst(block, index) => Definition::Inst(block, index),
+            Def::Inst(inst) => Definition::Inst(inst),
             Def::UnplacedParam(block) => {
                 panic!("a sealed body has no unplaced parameter, and {block:?} has one for {value:?}")
             }
@@ -746,7 +787,7 @@ impl Body {
         let mut preds: FxHashMap<BlockId, SmallVec<[BlockId; 2]>> =
             self.blocks().map(|(id, _)| (id, SmallVec::new())).collect();
         for (from, block) in self.blocks() {
-            for edge in block.terminator.edges() {
+            for edge in block.terminator().edges() {
                 let into = preds.get_mut(&edge.to).expect("an edge names a block of its body");
                 if !into.contains(&from) {
                     into.push(from);
@@ -809,19 +850,87 @@ impl Body {
     }
 }
 
-impl Block {
-    pub fn params(&self) -> &[ValueId] {
-        &self.params
+/// A block of a body, as the body reads it.
+#[derive(Clone, Copy)]
+pub struct Block<'b> {
+    body: &'b Body,
+    data: &'b BlockData,
+}
+
+impl<'b> Block<'b> {
+    pub fn params(&self) -> &'b [ValueId] {
+        &self.data.params
     }
-    pub fn insts(&self) -> &[Inst] {
-        &self.insts
+    /// The block's instructions in order. Cost: O(1), and O(1) per step.
+    pub fn insts(&self) -> Insts<'b> {
+        Insts { body: self.body, front: self.data.list.head, back: self.data.list.tail, remaining: self.data.list.len }
     }
-    pub fn terminator(&self) -> &Terminator {
-        &self.terminator
+    pub fn terminator(&self) -> &'b Terminator {
+        &self.data.terminator
     }
     /// The span of the construct that made the terminator: where control
     /// leaves the block. Cost: O(1).
     pub fn terminator_span(&self) -> Span {
-        self.terminator_span
+        self.data.terminator_span
     }
 }
+
+/// A block's instructions, in order, from either end.
+#[derive(Clone)]
+pub struct Insts<'b> {
+    body: &'b Body,
+    front: Option<InstId>,
+    back: Option<InstId>,
+    remaining: usize,
+}
+
+impl<'b> Insts<'b> {
+    /// Whether none is left. Cost: O(1).
+    pub fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+
+    /// The first one left. Cost: O(1).
+    pub fn first(&self) -> Option<&'b Inst> {
+        self.front.filter(|_| self.remaining > 0).map(|id| self.body.inst(id))
+    }
+
+    /// The last one left. Cost: O(1).
+    pub fn last(&self) -> Option<&'b Inst> {
+        self.back.filter(|_| self.remaining > 0).map(|id| self.body.inst(id))
+    }
+}
+
+impl<'b> Iterator for Insts<'b> {
+    type Item = &'b Inst;
+
+    fn next(&mut self) -> Option<&'b Inst> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let id = self.front.expect("a list with instructions left has a front");
+        let node = self.body.node(id);
+        self.front = node.next;
+        self.remaining -= 1;
+        Some(&node.inst)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl DoubleEndedIterator for Insts<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let id = self.back.expect("a list with instructions left has a back");
+        let node = self.body.node(id);
+        self.back = node.prev;
+        self.remaining -= 1;
+        Some(&node.inst)
+    }
+}
+
+impl ExactSizeIterator for Insts<'_> {}

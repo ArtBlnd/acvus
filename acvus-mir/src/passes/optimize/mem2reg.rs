@@ -26,7 +26,7 @@ impl BodyTransform for Mem2Reg {
 
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
         let slots: Vec<ValueId> = module.body(body).slots().to_vec();
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Storage>::new(module, body, &mut facts);
         for slot in slots {
             match editor.promote(slot) {
@@ -111,7 +111,7 @@ mod tests {
         let [carried] = body.block(header).params() else {
             panic!("the loop header takes the slot's value around the loop: {:?}", body.block(header).params())
         };
-        let added = body.block(loop_body).insts().iter().find(|inst| matches!(inst.op(), Op::BinOp { .. }));
+        let added = body.block(loop_body).insts().find(|inst| matches!(inst.op(), Op::BinOp { .. }));
         let Some(added) = added else { panic!("the loop body keeps its addition") };
         assert!(matches!(added.op(), Op::BinOp { left, .. } if left == carried));
         assert_eq!(passed(loop_body), vec![added.result().expect("an addition yields a value")]);

@@ -13,20 +13,35 @@
 //! that graph's critical path is strictly shorter. Every path the swap
 //! changes passes one of the two calls, so a shorter critical path of the
 //! block is a shorter one through the chain. A swap that would put a call
-//! after a value it reads leaves a cycle in the graph, has no measure, and
-//! is not offered.
+//! after a value it reads is not offered: `swap` refuses it
+//! (`CannotSwap::DependsOn`).
 //!
 //! Each block is walked in rounds, offering each adjacent pair in block
 //! order, until a round swaps nothing. Every swap made strictly lowers the
 //! measure, a natural number no larger than the block's instructions plus
 //! one, so a block takes at most that many swaps and one round more.
 //!
+//! A round starts from each node's earliest time (ASAP: the longest path
+//! ending at it) and latest time (ALAP: the longest path starting at it).
+//! A pair is judged from them alone. The later call reads nothing defined
+//! from the earlier one on, so after the swap no path through a neighbour
+//! of the two passes either of them, and the times of those neighbours
+//! stand: the longest path through the swapped pair is their new times'
+//! sum, from the neighbours' times. Every other path is unchanged, and the
+//! critical path shortens exactly when the new paths through the pair are
+//! shorter and no critical path avoids both calls. That holds where one of
+//! them is critical and the only critical node of its time, since every
+//! critical path has one node of each time, and fails where neither is
+//! critical. In the remaining case, both calls' times held by other
+//! critical nodes too, the pair's graph is measured whole.
+//!
 //! Form: F2, loops canonical, in and out; it changes no block.
 //!
-//! Cost: per block of n instructions and e operands, O(n + e) per pair
-//! measured, O(n) pairs per round, and O(n) rounds: O(n² · (n + e)). The
-//! block's graph and its present critical path are built once per round and
-//! again only after a swap, so a pair costs one measure, not three.
+//! Cost: per block of n instructions and e operands, O(n + e) per round for
+//! the times and O(the pair's operands) per pair judged, plus O(n + e) for
+//! a pair whose times other critical nodes share; a swap made strictly
+//! lowers the measure, so every node's slack changes, and the times are
+//! taken again, O(n + e), at most once per swap, which the measure bounds.
 //!
 //! Meaning: two calls whose declared effects commute take effect in either
 //! order (effects §1), and `swap` rethreads their tokens so that every
@@ -37,7 +52,7 @@ use rustc_hash::FxHashMap;
 
 use crate::ir::ValueId;
 use crate::ir::cfg::edit::{CannotSwap, Editor, Effect};
-use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Module, OrderUse, Site};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, InstId, Module, OrderUse, Site};
 use crate::ir::OrderEdge;
 use crate::passes::analysis::AnalysisManager;
 use crate::passes::edit_facts::EditFacts;
@@ -50,7 +65,7 @@ impl BodyTransform for Commute {
 
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
         let blocks: Vec<BlockId> = module.body(body).blocks().map(|(block, _)| block).collect();
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Effect>::new(module, body, &mut facts);
         for block in blocks {
             while commute_round(&mut editor, block) {}
@@ -60,26 +75,28 @@ impl BodyTransform for Commute {
 }
 
 /// Offers every adjacent pair of `block`, in block order, whose swap
-/// shortens the block's critical path; whether any swap was made.
+/// shortens the block's critical path; whether any swap was made. After a
+/// swap the walk looks again at the earlier call, which the later one now
+/// stands before.
 fn commute_round(editor: &mut Editor<'_, Effect>, block: BlockId) -> bool {
     let mut swapped = false;
-    let mut index = 0;
-    let mut measured: Option<Measured> = None;
-    while let Some(earlier) = editor.inst_at(block, index) {
-        index += 1;
-        let Some(pair) = ChainedPair::at(editor.body(), block, earlier.index()) else {
+    let mut times: Option<Times> = None;
+    let mut next = editor.first_inst(block);
+    while let Some(earlier) = next {
+        next = editor.next_inst(earlier);
+        let Some(pair) = ChainedPair::at(editor.body(), block, earlier.id()) else {
             continue;
         };
-        let Measured { graph, now } = measured.get_or_insert_with(|| Measured::of(editor.body(), block));
-        let shorter = graph.critical_path(Some(&pair)).is_some_and(|after| after < *now);
-        if !shorter {
+        let times = times.get_or_insert_with(|| Times::of(editor.body(), block));
+        if !times.shortened_by(editor.body(), block, &pair) {
             continue;
         }
-        let later = editor.inst_at(block, pair.later).expect("the later call stands in the block");
+        let later = editor.inst_ref(pair.later);
         match editor.swap(earlier, later) {
             Ok(()) => {
                 swapped = true;
-                measured = None;
+                *times = Times::of(editor.body(), block);
+                next = Some(earlier);
             }
             Err(CannotSwap::NotAdjacent | CannotSwap::Ordered | CannotSwap::DependsOn(_)) => {}
         }
@@ -87,49 +104,33 @@ fn commute_round(editor: &mut Editor<'_, Effect>, block: BlockId) -> bool {
     swapped
 }
 
-/// A block's graph and its critical path, as the block stands until the
-/// next swap in it.
-struct Measured {
-    graph: BlockGraph,
-    now: usize,
-}
-
-impl Measured {
-    /// Cost: O(instructions + operands).
-    fn of(body: &Body, block: BlockId) -> Measured {
-        let graph = BlockGraph::of(body, block);
-        let now = graph.critical_path(None).expect("a body defines every value before its uses, so its graph has no cycle");
-        Measured { graph, now }
-    }
-}
-
-/// Two calls of one block adjacent on a token chain, by index: `later`
-/// consumes the token `earlier` yields, and nothing else does.
+/// Two calls of one block adjacent on a token chain: `later` consumes the
+/// token `earlier` yields, and nothing else does.
 struct ChainedPair {
-    earlier: usize,
-    later: usize,
+    earlier: InstId,
+    later: InstId,
     earlier_edge: OrderEdge,
     later_edge: OrderEdge,
 }
 
 impl ChainedPair {
-    /// The pair whose earlier call stands at `index` of `block`, where one
-    /// is. Cost: O(1).
-    fn at(body: &Body, block: BlockId, index: usize) -> Option<ChainedPair> {
-        let Some(OrderUse::Edge(earlier_edge)) = body.block(block).insts()[index].order() else {
+    /// The pair whose earlier call is `earlier` of `block`, where one is.
+    /// Cost: O(1).
+    fn at(body: &Body, block: BlockId, earlier: InstId) -> Option<ChainedPair> {
+        let Some(OrderUse::Edge(earlier_edge)) = body.inst(earlier).order() else {
             return None;
         };
         let mut users = body.users(earlier_edge.after);
-        let (Some(Site::Inst(at, later)), None) = (users.next(), users.next()) else {
+        let (Some(Site::Inst(later)), None) = (users.next(), users.next()) else {
             return None;
         };
-        if at != block {
+        if body.block_of(later) != block {
             return None;
         }
-        let Some(OrderUse::Edge(later_edge)) = body.block(block).insts()[later].order() else {
+        let Some(OrderUse::Edge(later_edge)) = body.inst(later).order() else {
             return None;
         };
-        (later_edge.before == earlier_edge.after).then_some(ChainedPair { earlier: index, later, earlier_edge, later_edge })
+        (later_edge.before == earlier_edge.after).then_some(ChainedPair { earlier, later, earlier_edge, later_edge })
     }
 
     /// The operand `value` of the instruction or terminator `node` stands
@@ -147,54 +148,61 @@ impl ChainedPair {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Node {
-    Inst(usize),
+    Inst(InstId),
     Terminator,
 }
 
 /// A block's instructions and terminator with the values each reads, and
-/// the instruction of the block that defines each value it defines.
+/// the node of the block that defines each value it defines. The
+/// terminator is the last node.
 struct BlockGraph {
+    nodes: Vec<Node>,
     operands: Vec<Vec<ValueId>>,
     defined_at: FxHashMap<ValueId, usize>,
+    index_of: FxHashMap<InstId, usize>,
 }
 
 impl BlockGraph {
-    /// The terminator is the last node. Cost: O(instructions + operands).
+    /// Cost: O(instructions + operands).
     fn of(body: &Body, block: BlockId) -> BlockGraph {
         let record = body.block(block);
         let mut defined_at = FxHashMap::default();
+        let mut index_of = FxHashMap::default();
+        let mut nodes = Vec::with_capacity(record.insts().len() + 1);
         let mut operands = Vec::with_capacity(record.insts().len() + 1);
-        for (index, inst) in record.insts().iter().enumerate() {
+        for (index, inst) in record.insts().enumerate() {
             let defined = inst.result().into_iter().chain(inst.order().and_then(OrderUse::yielded));
             defined_at.extend(defined.map(|value| (value, index)));
+            index_of.insert(inst.id(), index);
+            nodes.push(Node::Inst(inst.id()));
             operands.push(inst.operands().into_vec());
         }
+        nodes.push(Node::Terminator);
         operands.push(record.terminator().operands().into_vec());
-        BlockGraph { operands, defined_at }
+        BlockGraph { nodes, operands, defined_at, index_of }
     }
 
-    fn node(&self, index: usize) -> Node {
-        match index + 1 == self.operands.len() {
-            true => Node::Terminator,
-            false => Node::Inst(index),
-        }
+    /// The nodes that define what node `at` reads, with `swapped` traded
+    /// where given.
+    fn definers<'g>(&'g self, at: usize, swapped: Option<&'g ChainedPair>) -> impl Iterator<Item = usize> + 'g {
+        let node = self.nodes[at];
+        self.operands[at].iter().filter_map(move |operand| {
+            let value = swapped.map_or(*operand, |pair| pair.after_swap(node, *operand));
+            self.defined_at.get(&value).copied()
+        })
     }
 
     /// The longest def-use path, each node counting one, with `swapped`
     /// traded where given; none where the graph then has a cycle. Kahn's
     /// order over the nodes. Cost: O(nodes + operands).
     fn critical_path(&self, swapped: Option<&ChainedPair>) -> Option<usize> {
-        let count = self.operands.len();
+        let count = self.nodes.len();
         let mut definers: Vec<Vec<usize>> = vec![Vec::new(); count];
         let mut users: Vec<Vec<usize>> = vec![Vec::new(); count];
-        for (at, operands) in self.operands.iter().enumerate() {
-            let node = self.node(at);
-            for operand in operands {
-                let value = swapped.map_or(*operand, |pair| pair.after_swap(node, *operand));
-                if let Some(definer) = self.defined_at.get(&value) {
-                    definers[at].push(*definer);
-                    users[*definer].push(at);
-                }
+        for at in 0..count {
+            for definer in self.definers(at, swapped) {
+                definers[at].push(definer);
+                users[definer].push(at);
             }
         }
         let mut waiting: Vec<usize> = definers.iter().map(Vec::len).collect();
@@ -212,6 +220,116 @@ impl BlockGraph {
             }
         }
         (done == count).then(|| depth.into_iter().fold(0, usize::max))
+    }
+}
+
+/// A block's graph with each node's earliest and latest times: the longest
+/// path ending at it and the longest starting at it, each node counting
+/// one; the critical path; and how many critical nodes each earliest time
+/// has.
+struct Times {
+    graph: BlockGraph,
+    earliest: Vec<usize>,
+    latest: Vec<usize>,
+    critical_path: usize,
+    critical_at: Vec<usize>,
+}
+
+impl Times {
+    /// A node's definers stand before it in the block, so one pass in block
+    /// order and one against it take the times. Cost: O(instructions +
+    /// operands).
+    fn of(body: &Body, block: BlockId) -> Times {
+        let graph = BlockGraph::of(body, block);
+        let count = graph.nodes.len();
+        let mut earliest = vec![0; count];
+        let mut users: Vec<Vec<usize>> = vec![Vec::new(); count];
+        for at in 0..count {
+            let mut longest = 0;
+            for definer in graph.definers(at, None) {
+                longest = longest.max(earliest[definer]);
+                users[definer].push(at);
+            }
+            earliest[at] = 1 + longest;
+        }
+        let mut latest = vec![0; count];
+        for at in (0..count).rev() {
+            latest[at] = 1 + users[at].iter().map(|user| latest[*user]).fold(0, usize::max);
+        }
+        let critical_path = earliest.iter().copied().fold(0, usize::max);
+        let mut critical_at = vec![0; critical_path + 1];
+        for at in 0..count {
+            if earliest[at] + latest[at] - 1 == critical_path {
+                critical_at[earliest[at]] += 1;
+            }
+        }
+        Times { graph, earliest, latest, critical_path, critical_at }
+    }
+
+    fn critical(&self, at: usize) -> bool {
+        self.earliest[at] + self.latest[at] - 1 == self.critical_path
+    }
+
+    /// Whether every critical path passes the node at `at`: it is
+    /// critical, and no other critical node has its earliest time.
+    fn on_every_critical_path(&self, at: usize) -> bool {
+        self.critical(at) && self.critical_at[self.earliest[at]] == 1
+    }
+
+    /// Whether trading `pair`'s places would strictly shorten the block's
+    /// critical path. Cost: O(the pair's operands and users), and O(nodes +
+    /// operands) where the times do not decide it.
+    fn shortened_by(&self, body: &Body, block: BlockId, pair: &ChainedPair) -> bool {
+        let graph = &self.graph;
+        let (earlier, later) = (graph.index_of[&pair.earlier], graph.index_of[&pair.later]);
+        let reads_since_earlier = graph.operands[later]
+            .iter()
+            .filter(|operand| **operand != pair.later_edge.before)
+            .filter_map(|operand| graph.defined_at.get(operand))
+            .any(|definer| *definer >= earlier);
+        if reads_since_earlier || later < earlier {
+            return false;
+        }
+        if !self.critical(earlier) && !self.critical(later) {
+            return false;
+        }
+        let through_pair = self.through_swapped(body, block, pair, earlier, later);
+        if through_pair >= self.critical_path {
+            return false;
+        }
+        if self.on_every_critical_path(earlier) || self.on_every_critical_path(later) {
+            return true;
+        }
+        graph.critical_path(Some(pair)).is_some_and(|after| after < self.critical_path)
+    }
+
+    /// The longest path through either call once the two have traded
+    /// places, from their neighbours' times, which the trade leaves as
+    /// they are. A value defined outside the block, or read only outside
+    /// it, adds no node to a path of the block.
+    fn through_swapped(&self, body: &Body, block: BlockId, pair: &ChainedPair, earlier: usize, later: usize) -> usize {
+        let graph = &self.graph;
+        let longest_before = |values: &mut dyn Iterator<Item = ValueId>| -> usize {
+            values.filter_map(|value| graph.defined_at.get(&value)).map(|definer| self.earliest[*definer]).fold(0, usize::max)
+        };
+        let data = |at: usize, token: ValueId| graph.operands[at].iter().copied().filter(move |operand| *operand != token);
+        let later_earliest = 1 + longest_before(
+            &mut data(later, pair.later_edge.before).chain(std::iter::once(pair.earlier_edge.before)),
+        );
+        let earlier_earliest = 1 + longest_before(&mut data(earlier, pair.earlier_edge.before)).max(later_earliest);
+        let longest_after = |value: ValueId| -> usize {
+            body.users(value)
+                .filter_map(|site| match site {
+                    Site::Inst(user) => graph.index_of.get(&user).copied(),
+                    Site::Term(term) => (term == block).then_some(graph.nodes.len() - 1),
+                })
+                .map(|user| self.latest[user])
+                .fold(0, usize::max)
+        };
+        let result_after = |inst: InstId| body.inst(inst).result().into_iter().map(longest_after).fold(0, usize::max);
+        let earlier_latest = 1 + result_after(pair.earlier).max(longest_after(pair.later_edge.after));
+        let later_latest = 1 + result_after(pair.later).max(earlier_latest);
+        (later_earliest + later_latest - 1).max(earlier_earliest + earlier_latest - 1)
     }
 }
 
@@ -273,7 +391,7 @@ mod tests {
         let changes = f.run::<Commute>(id);
 
         let body = f.module.body(id);
-        let insts = body.block(entry).insts();
+        let insts: Vec<_> = body.block(entry).insts().collect();
         assert_eq!((insts[4].result(), insts[5].result()), (Some(q), Some(p)), "B now comes first");
         let (first, second) = (edge(&insts[4]), edge(&insts[5]));
         assert_eq!(first.before, o0);

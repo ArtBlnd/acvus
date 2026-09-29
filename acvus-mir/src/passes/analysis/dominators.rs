@@ -5,27 +5,46 @@
 //! Cost: O(blocks + edges) per iteration, and at most d + 3 iterations, d
 //! being the loop connectedness of the CFG, which is its loop nesting depth
 //! when it is reducible. A query is O(1): the tree's depth-first intervals
-//! answer it.
+//! answer it, and the body's order numbers order two points of one block.
 //!
 //! passes-analyses.md.
 
 use smallvec::SmallVec;
 
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Module};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, InstId, Module};
 use crate::passes::analysis::{Analysis, AnalysisManager};
 
 /// A place in a block: before one of its instructions, or at its end, after
 /// every instruction and before the terminator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Point {
-    Before(BlockId, usize),
+    Before(InstId),
     End(BlockId),
 }
 
 impl Point {
-    pub fn block(self) -> BlockId {
+    /// The first point of `block`: before its first instruction, or its end
+    /// where it has none. Cost: O(1).
+    pub fn start(body: &Body, block: BlockId) -> Point {
+        match body.first_inst(block) {
+            Some(first) => Point::Before(first),
+            None => Point::End(block),
+        }
+    }
+
+    /// The point just after `inst`. Cost: O(1).
+    pub fn after(body: &Body, inst: InstId) -> Point {
+        match body.next_in_block(inst) {
+            Some(next) => Point::Before(next),
+            None => Point::End(body.block_of(inst)),
+        }
+    }
+
+    /// The block the point is in. Cost: O(1).
+    pub fn block(self, body: &Body) -> BlockId {
         match self {
-            Point::Before(block, _) | Point::End(block) => block,
+            Point::Before(inst) => body.block_of(inst),
+            Point::End(block) => block,
         }
     }
 
@@ -33,12 +52,12 @@ impl Point {
     ///
     /// # Panics
     /// The two are in different blocks.
-    pub(super) fn no_later_than(self, other: Point) -> bool {
-        assert_eq!(self.block(), other.block(), "points are ordered within one block");
+    pub(super) fn no_later_than(self, body: &Body, other: Point) -> bool {
+        assert_eq!(self.block(body), other.block(body), "points are ordered within one block");
         match (self, other) {
-            (Point::Before(_, a), Point::Before(_, b)) => a <= b,
-            (Point::Before(..) | Point::End(_), Point::End(_)) => true,
-            (Point::End(_), Point::Before(..)) => false,
+            (Point::Before(a), Point::Before(b)) => a == b || body.comes_before(a, b),
+            (Point::Before(_) | Point::End(_), Point::End(_)) => true,
+            (Point::End(_), Point::Before(_)) => false,
         }
     }
 }
@@ -71,15 +90,18 @@ impl Dominators {
     }
 
     /// Whether every path from the entry to `below` passes `above`, which
-    /// within one block means `above` is no later. Cost: O(1).
-    pub fn point_dominates(&self, above: Point, below: Point) -> bool {
-        if !self.reachable(below.block()) {
+    /// within one block means `above` is no later; both are points of
+    /// `body`, the body the facts were computed for, whose shape has not
+    /// changed since. Cost: O(1).
+    pub fn point_dominates(&self, body: &Body, above: Point, below: Point) -> bool {
+        let (above_block, below_block) = (above.block(body), below.block(body));
+        if !self.reachable(below_block) {
             return true;
         }
-        if above.block() == below.block() {
-            return above.no_later_than(below);
+        if above_block == below_block {
+            return above.no_later_than(body, below);
         }
-        self.dominates(above.block(), below.block())
+        self.dominates(above_block, below_block)
     }
 }
 

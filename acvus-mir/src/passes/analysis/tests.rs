@@ -1034,6 +1034,24 @@ fn invalidation_drops_exactly_the_analyses_whose_reads_changed() {
 // -- Dominators, post-dominators, loops --------------------------------------
 
 /// The facts of `A` for `body`, through a manager over no declarations.
+/// The site of the instruction at place `index` of `block`.
+fn site_at(module: &Module, body: BodyId, block: BlockId, index: usize) -> Site {
+    Site::Inst(module.body(body).inst_at(block, index).expect("the block holds that instruction"))
+}
+
+/// The point before the instruction at place `index` of `block`, or its
+/// end where `index` is its length.
+fn point_at(module: &Module, body: BodyId, block: BlockId, index: usize) -> Point {
+    let body = module.body(body);
+    match body.inst_at(block, index) {
+        Some(inst) => Point::Before(inst),
+        None => {
+            assert_eq!(index, body.inst_count(block), "{block:?} has no place {index}");
+            Point::End(block)
+        }
+    }
+}
+
 fn facts_of<A>(f: &Fixture, body: BodyId) -> Rc<A::Facts>
 where
     A: Analysis,
@@ -1090,11 +1108,11 @@ fn dominators_of_a_diamond() {
     assert!(!dom.dominates(d.then_block, d.join), "the join is reached through the else arm too");
     assert!(dom.dominates(d.join, d.join), "a block dominates itself");
 
-    assert!(dom.point_dominates(Point::Before(d.entry, 0), Point::End(d.entry)));
-    assert!(!dom.point_dominates(Point::End(d.entry), Point::Before(d.entry, 0)));
-    assert!(dom.point_dominates(Point::Before(d.entry, 1), Point::Before(d.entry, 1)), "a point dominates itself");
-    assert!(dom.point_dominates(Point::End(d.entry), Point::Before(d.join, 0)));
-    assert!(!dom.point_dominates(Point::End(d.then_block), Point::Before(d.join, 0)));
+    assert!(dom.point_dominates(f.module.body(d.id), point_at(&f.module, d.id, d.entry, 0), Point::End(d.entry)));
+    assert!(!dom.point_dominates(f.module.body(d.id), Point::End(d.entry), point_at(&f.module, d.id, d.entry, 0)));
+    assert!(dom.point_dominates(f.module.body(d.id), point_at(&f.module, d.id, d.entry, 1), point_at(&f.module, d.id, d.entry, 1)), "a point dominates itself");
+    assert!(dom.point_dominates(f.module.body(d.id), Point::End(d.entry), point_at(&f.module, d.id, d.join, 0)));
+    assert!(!dom.point_dominates(f.module.body(d.id), Point::End(d.then_block), point_at(&f.module, d.id, d.join, 0)));
 }
 
 #[test]
@@ -1111,10 +1129,10 @@ fn post_dominators_of_a_diamond() {
     assert!(!post.post_dominates(d.then_block, d.entry), "the else arm avoids the then arm");
     assert!(!post.post_dominates(d.entry, d.join));
 
-    assert!(post.point_post_dominates(Point::End(d.entry), Point::Before(d.entry, 0)));
-    assert!(!post.point_post_dominates(Point::Before(d.entry, 0), Point::End(d.entry)));
-    assert!(post.point_post_dominates(Point::Before(d.join, 0), Point::End(d.entry)));
-    assert!(!post.point_post_dominates(Point::Before(d.then_block, 0), Point::End(d.entry)));
+    assert!(post.point_post_dominates(f.module.body(d.id), Point::End(d.entry), point_at(&f.module, d.id, d.entry, 0)));
+    assert!(!post.point_post_dominates(f.module.body(d.id), point_at(&f.module, d.id, d.entry, 0), Point::End(d.entry)));
+    assert!(post.point_post_dominates(f.module.body(d.id), point_at(&f.module, d.id, d.join, 0), Point::End(d.entry)));
+    assert!(!post.point_post_dominates(f.module.body(d.id), point_at(&f.module, d.id, d.then_block, 0), Point::End(d.entry)));
 }
 
 struct WhileBody {
@@ -1406,7 +1424,7 @@ fn content_liveness_ends_at_a_whole_store_and_follows_a_read_through_a_reference
     let id = builder.seal().expect("the body has no open state");
 
     let content = f.facts::<ContentLiveness>(id);
-    let live_after = |index: usize| content.live_after(Site::Inst(entry, index)).contains(&s);
+    let live_after = |index: usize| content.live_after(site_at(&f.module, id, entry, index)).contains(&s);
     assert!(!live_after(1), "the first content is replaced before any read");
     assert!(live_after(3), "the second content is read through r");
     assert!(live_after(4));
@@ -1532,8 +1550,8 @@ fn a_ref_names_its_slot_and_a_reborrow_names_what_its_source_names() {
     assert_eq!(loans_of(&loans, s, 0), [loan(Storage::Slot(x), Mode::Shared)], "a shared reborrow of the &mut");
     assert_eq!(loans.positions_of(one), 0);
     let entry = f.module.body(id).entry();
-    assert_eq!(*loans.writes(Site::Inst(entry, 1)), BTreeSet::from([Storage::Slot(x)]));
-    assert!(loans.reads(Site::Inst(entry, 2)).is_empty(), "a Ref names its place and reads nothing");
+    assert_eq!(*loans.writes(site_at(&f.module, id, entry, 1)), BTreeSet::from([Storage::Slot(x)]));
+    assert!(loans.reads(site_at(&f.module, id, entry, 2)).is_empty(), "a Ref names its place and reads nothing");
 }
 
 /// ```text
@@ -1567,9 +1585,9 @@ fn a_reference_stored_into_a_slot_is_taken_back_out_as_stored_last() {
     let loans = f.facts::<Loans>(id);
     assert_eq!(loans_of(&loans, t1, 0), [loan(Storage::Slot(a), Mode::Shared)]);
     assert_eq!(loans_of(&loans, t2, 0), [loan(Storage::Slot(b), Mode::Shared)]);
-    let before_t2 = loans.content_before(Site::Inst(entry, 8), Storage::Slot(y));
+    let before_t2 = loans.content_before(site_at(&f.module, id, entry, 8), Storage::Slot(y));
     assert_eq!(before_t2, [BTreeSet::from([loan(Storage::Slot(b), Mode::Shared)])]);
-    assert_eq!(*loans.reads(Site::Inst(entry, 8)), BTreeSet::from([Storage::Slot(y)]));
+    assert_eq!(*loans.reads(site_at(&f.module, id, entry, 8)), BTreeSet::from([Storage::Slot(y)]));
 }
 
 /// `x = 1; r = &x; p = through(r); q = nothing(r); return 0`.
@@ -1655,7 +1673,7 @@ fn an_option_of_a_reference_parameter_names_its_outside_storage() {
     let outside = Storage::Outside { of: o, position: 0 };
     assert_eq!(loans_of(&loans, o, 0), [loan(outside, Mode::Shared)]);
     assert_eq!(loans_of(&loans, u, 0), [loan(outside, Mode::Shared)]);
-    assert_eq!(*loans.reads(Site::Inst(entry, 1)), BTreeSet::from([outside]));
+    assert_eq!(*loans.reads(site_at(&f.module, id, entry, 1)), BTreeSet::from([outside]));
 }
 
 /// `x = 1; t = x; return t`: only whole-slot uses.
@@ -1689,7 +1707,7 @@ fn a_ref_of_a_slot_is_where_it_escapes() {
     builder.terminate(ret(t), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
-    assert_eq!(f.facts::<Escapes>(id).escape(x), Some(Site::Inst(entry, 3)));
+    assert_eq!(f.facts::<Escapes>(id).escape(x), Some(site_at(&f.module, id, entry, 3)));
 }
 
 /// `x = 1; return x`: the terminator names the slot.
@@ -1723,5 +1741,5 @@ fn a_slot_passed_to_a_call_escapes_at_the_call() {
     builder.terminate(ret(t), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
-    assert_eq!(f.facts::<Escapes>(id).escape(x), Some(Site::Inst(entry, 2)));
+    assert_eq!(f.facts::<Escapes>(id).escape(x), Some(site_at(&f.module, id, entry, 2)));
 }

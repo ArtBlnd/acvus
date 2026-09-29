@@ -271,7 +271,6 @@ impl Measure {
             measure.size += 1 + block.insts().len();
             let used_non_const = block
                 .insts()
-                .iter()
                 .filter(|inst| !matches!(inst.op(), Op::Const { .. }))
                 .filter(|inst| inst.result().is_some_and(|result| body.use_count(result) > 0))
                 .count();

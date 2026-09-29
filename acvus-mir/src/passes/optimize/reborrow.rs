@@ -25,13 +25,13 @@ impl BodyTransform for Reborrow {
     const NAME: &'static str = "reborrow";
 
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Value>::new(module, body, &mut facts);
         let mut cursor = editor.cursor();
         while let Some(inst) = cursor.next() {
             let editor = cursor.editor();
             let body = editor.body();
-            let record = &body.block(inst.block()).insts()[inst.index()];
+            let record = body.inst(inst.id());
             let Op::Ref { target: RefTarget::Through(reference), path, .. } = record.op() else {
                 continue;
             };

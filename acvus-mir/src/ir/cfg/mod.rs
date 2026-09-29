@@ -8,10 +8,11 @@ mod builder;
 mod core;
 pub mod edit;
 mod op;
+mod order;
 mod rewriter;
 
 pub use aspect::{Aspect, Changes};
-pub use body::{Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, OrderUse, Site, Stages, Terminator};
+pub use body::{Block, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Insts, Module, OrderUse, Site, Stages, Terminator};
 pub use builder::{Builder, Unsealed};
 pub use op::Op;
 pub use core::StillUsed;

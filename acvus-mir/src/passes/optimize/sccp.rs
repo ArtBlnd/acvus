@@ -49,7 +49,7 @@ impl BodyTransform for Sccp {
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
         let constants = am.get::<ConstantValues>(module, body);
         let known_arms = known_arms(module.body(body), &constants);
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<SccpScope>::new(module, body, &mut facts);
         for (block, arm) in known_arms {
             match arm {
@@ -100,7 +100,7 @@ fn fold_constants(editor: &mut Editor<'_, SccpScope>, constants: &SparseFacts<Co
     let mut cursor = editor.cursor();
     while let Some(inst) = cursor.next() {
         let editor = cursor.editor();
-        let record = &editor.body().block(inst.block()).insts()[inst.index()];
+        let record = editor.body().inst(inst.id());
         let (span, result) = (record.span(), record.result());
         match (record.op(), result) {
             (Op::Const { .. }, _) | (_, None) => {}
@@ -158,7 +158,7 @@ mod tests {
         let Terminator::Return { value, .. } = body.block(entry).terminator() else {
             panic!("the entry returns")
         };
-        let returned = body.block(entry).insts().iter().find(|inst| inst.result() == Some(*value));
+        let returned = body.block(entry).insts().find(|inst| inst.result() == Some(*value));
         assert!(
             matches!(returned.map(|inst| inst.op()), Some(Op::Const { value: Literal::Int(9) })),
             "the return reads the constant 9: {}",

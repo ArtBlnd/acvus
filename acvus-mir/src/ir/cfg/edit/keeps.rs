@@ -4,6 +4,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{Dominators, def_points};
+use crate::ir::cfg::body::InstId;
 use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, IndexMode, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
@@ -93,10 +94,10 @@ fn found(holds: bool, detail: impl FnOnce() -> String) -> Found {
 fn types_agree(body: &Body, types: &Types<Concrete>) -> Found {
     let check = TypeCheck { body, types };
     for (id, block) in body.blocks() {
-        for (index, inst) in block.insts().iter().enumerate() {
+        for inst in block.insts() {
             check
                 .inst(inst)
-                .map_err(|detail| format!("{id:?}[{index}] {:?}: {detail}", inst.op()))?;
+                .map_err(|detail| format!("{id:?} {:?} {:?}: {detail}", inst.id(), inst.op()))?;
         }
         check.terminator(id, block.terminator())?;
     }
@@ -685,13 +686,13 @@ fn def_dominates_uses(body: &Body, _: &Types<Concrete>) -> Found {
         let Some(point) = points.get(&value) else {
             return Err(format!("{site:?} reads {value:?}, which nothing in the body defines"));
         };
-        found(dominators.dominates_site(*point, site), || {
+        found(dominators.dominates_site(body, *point, site), || {
             format!("{value:?}, defined at {point:?}, does not dominate its use at {site:?}")
         })
     };
     for (id, block) in body.blocks() {
-        for (index, inst) in block.insts().iter().enumerate() {
-            inst.operands().into_iter().try_for_each(|value| check(value, Site::Inst(id, index)))?;
+        for inst in block.insts() {
+            inst.operands().into_iter().try_for_each(|value| check(value, Site::Inst(inst.id())))?;
         }
         block.terminator().operands().into_iter().try_for_each(|value| check(value, Site::Term(id)))?;
     }
@@ -710,7 +711,7 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
     let ordered = body.order_param().is_some();
     let mut defined_in: FxHashMap<ValueId, BlockId> = FxHashMap::default();
     let mut flows: FxHashMap<ValueId, Vec<Flow>> = FxHashMap::default();
-    let mut consumers: FxHashMap<ValueId, Vec<(BlockId, usize)>> = FxHashMap::default();
+    let mut consumers: FxHashMap<ValueId, Vec<InstId>> = FxHashMap::default();
     let mut handles: FxHashMap<ValueId, ValueId> = FxHashMap::default();
     let mut merged: FxHashSet<ValueId> = FxHashSet::default();
     if let Some(order_param) = body.order_param() {
@@ -720,8 +721,8 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
         for param in block.params().iter().filter(|param| body.is_token(**param)) {
             defined_in.insert(*param, id);
         }
-        for (index, inst) in block.insts().iter().enumerate() {
-            let place = || format!("{id:?}[{index}] {:?}", inst.op());
+        for inst in block.insts() {
+            let place = || format!("{id:?} {:?} {:?}", inst.id(), inst.op());
             if let Some(order) = inst.order() {
                 found(ordered, || format!("{} stands on the order chain of an unordered body", place()))?;
                 for token in order.consumed().into_iter().chain(order.yielded()) {
@@ -732,11 +733,11 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
                 }
                 match order {
                     OrderUse::Edge(edge) => {
-                        consumers.entry(edge.before).or_default().push((id, index));
+                        consumers.entry(edge.before).or_default().push(inst.id());
                         flows.entry(edge.before).or_default().push(Flow::Yields(edge.after));
                     }
                     OrderUse::Start(before) => {
-                        consumers.entry(before).or_default().push((id, index));
+                        consumers.entry(before).or_default().push(inst.id());
                         let handle = inst.result().expect("a start yields its handle");
                         handles.insert(handle, before);
                     }
@@ -794,8 +795,8 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
         }
     }
 
-    let yield_of = |(block, index): (BlockId, usize)| -> Option<ValueId> {
-        let inst = &body.block(block).insts()[index];
+    let yield_of = |id: InstId| -> Option<ValueId> {
+        let inst = body.inst(id);
         match inst.order()? {
             OrderUse::Edge(edge) => Some(edge.after),
             OrderUse::Start(_) => {
@@ -826,7 +827,7 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
         }
         reached
     };
-    let mut forks: Vec<(&ValueId, &Vec<(BlockId, usize)>)> = consumers.iter().filter(|(_, by)| by.len() > 1).collect();
+    let mut forks: Vec<(&ValueId, &Vec<InstId>)> = consumers.iter().filter(|(_, by)| by.len() > 1).collect();
     forks.sort();
     for (token, by) in forks {
         let mut joined: Option<FxHashSet<ValueId>> = None;
@@ -924,7 +925,7 @@ fn blocks_reaching_return(body: &Body) -> FxHashSet<BlockId> {
 // -- StructureKept -----------------------------------------------------------
 
 fn structure_kept(body: &Body, _: &Types<Concrete>) -> Found {
-    let count = body.blocks().count();
+    let count = body.block_count();
     let is_block = |block: BlockId| block.index() < count;
     for (id, block) in body.blocks() {
         match block.terminator() {
@@ -952,40 +953,48 @@ fn structure_kept(body: &Body, _: &Types<Concrete>) -> Found {
 /// that dies owes nothing (effects §5), and a path that comes back to the
 /// start meets a new call.
 fn split_taken_once(body: &Body, _: &Types<Concrete>) -> Found {
-    for (id, block) in body.blocks() {
-        for (index, inst) in block.insts().iter().enumerate() {
+    for (_, block) in body.blocks() {
+        for inst in block.insts() {
             let Op::Spawn { .. } = inst.op() else { continue };
             let handle = inst.result().expect("a start yields its handle");
             for site in body.users(handle) {
                 let takes = match site {
-                    Site::Inst(block, index) => matches!(body.block(block).insts()[index].op(), Op::TakeEffect { .. }),
+                    Site::Inst(user) => matches!(body.inst(user).op(), Op::TakeEffect { .. }),
                     Site::Term(_) => false,
                 };
-                found(takes, || format!("the handle {handle:?} of {id:?}[{index}] is read at {site:?}, not taken"))?;
+                found(takes, || format!("the handle {handle:?} of {:?} is read at {site:?}, not taken", inst.id()))?;
             }
-            walk_from_start(body, (id, index), handle)?;
+            walk_from_start(body, inst.id(), handle)?;
         }
     }
     Ok(())
 }
 
-fn walk_from_start(body: &Body, start: (BlockId, usize), handle: ValueId) -> Found {
-    let (start_block, start_index) = start;
-    let mut visited: FxHashSet<(BlockId, usize, bool)> = FxHashSet::default();
-    let mut pending = vec![(start_block, start_index + 1, false)];
+/// A walk's place: in `block`, before the instruction `next` or at the
+/// block's end where that is none, and whether the call was taken on the
+/// way there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct WalkState {
+    block: BlockId,
+    next: Option<InstId>,
+    taken: bool,
+}
+
+fn walk_from_start(body: &Body, start: InstId, handle: ValueId) -> Found {
+    let mut visited: FxHashSet<WalkState> = FxHashSet::default();
+    let mut pending = vec![WalkState { block: body.block_of(start), next: body.next_in_block(start), taken: false }];
     while let Some(state) = pending.pop() {
         if !visited.insert(state) {
             continue;
         }
-        let (block, index, taken) = state;
-        let insts = body.block(block).insts();
-        if let Some(inst) = insts.get(index) {
-            if (block, index) == start {
+        let WalkState { block, next, taken } = state;
+        if let Some(at) = next {
+            if at == start {
                 continue;
             }
-            let takes = matches!(inst.op(), Op::TakeEffect { src } if *src == handle);
-            found(!(takes && taken), || format!("{start:?}'s call is taken again at {block:?}[{index}]"))?;
-            pending.push((block, index + 1, taken || takes));
+            let takes = matches!(body.inst(at).op(), Op::TakeEffect { src } if *src == handle);
+            found(!(takes && taken), || format!("{start:?}'s call is taken again at {at:?}"))?;
+            pending.push(WalkState { block, next: body.next_in_block(at), taken: taken || takes });
             continue;
         }
         match body.block(block).terminator() {
@@ -993,7 +1002,9 @@ fn walk_from_start(body: &Body, start: (BlockId, usize), handle: ValueId) -> Fou
                 found(taken, || format!("{start:?}'s call is not taken on a path that returns from {block:?}"))?
             }
             Terminator::Diverge => {}
-            terminator => pending.extend(terminator.edges().iter().map(|edge| (edge.to, 0, taken))),
+            terminator => pending.extend(
+                terminator.edges().iter().map(|edge| WalkState { block: edge.to, next: body.first_inst(edge.to), taken }),
+            ),
         }
     }
     Ok(())

@@ -53,7 +53,7 @@ impl BodyTransform for Licm {
         let loops = am.get::<LoopTree>(module, body);
         let dominators = am.get::<Dominators>(module, body);
         let order = dominator_preorder(module.body(body), &dominators);
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Motion>::new(module, body, &mut facts);
         for of in inner_first(&loops) {
             let Some(preheader) = loops.preheader(of) else {
@@ -105,17 +105,17 @@ fn inner_first(loops: &LoopTree) -> Vec<LoopId> {
 }
 
 /// Offers every invariant instruction of `block` a move to the end of
-/// `preheader`. A moved instruction leaves the block, so the walk stays at
-/// its index, where the next one now stands.
+/// `preheader`, in the block's order. A move only takes an instruction out
+/// of `block`, so the instructions it held when the walk began are the ones
+/// to offer.
 fn hoist_from(editor: &mut Editor<'_, Motion>, loops: &LoopTree, of: LoopId, block: BlockId, preheader: BlockId) {
-    let mut index = 0;
-    while let Some(inst) = editor.inst_at(block, index) {
-        let record = &editor.body().block(block).insts()[index];
+    for inst in editor.insts_of(block) {
+        let record = editor.inst_of(inst);
         let invariant = record.operands().into_iter().all(|operand| defined_outside(editor.body(), loops, of, operand));
         if invariant {
             match editor.move_to(inst, Position::End(preheader)) {
-                Ok(()) => continue,
-                Err(
+                Ok(())
+                | Err(
                     CannotMove::OperandNotDominating(_)
                     | CannotMove::UseNotDominated(_)
                     | CannotMove::ChangesWhereItRuns
@@ -123,7 +123,6 @@ fn hoist_from(editor: &mut Editor<'_, Motion>, loops: &LoopTree, of: LoopId, blo
                 ) => {}
             }
         }
-        index += 1;
     }
 }
 
@@ -131,7 +130,8 @@ fn hoist_from(editor: &mut Editor<'_, Motion>, loops: &LoopTree, of: LoopId, blo
 /// outside it, or before the body's entry runs.
 fn defined_outside(body: &Body, loops: &LoopTree, of: LoopId, value: ValueId) -> bool {
     match body.definition(value) {
-        Definition::Inst(block, _) | Definition::BlockParam(block, _) => !loops.contains(of, block),
+        Definition::Inst(inst) => !loops.contains(of, body.block_of(inst)),
+        Definition::BlockParam(block, _) => !loops.contains(of, block),
         Definition::Param(_) | Definition::Capture(_) | Definition::OrderParam | Definition::Slot(_) => true,
     }
 }
@@ -240,7 +240,7 @@ mod tests {
         let preheader = preheader_of(&f, id, loop_body);
         assert_ne!(preheader, entry, "a new block stands on the edge into the loop");
         assert!(f.ops(id, loop_body).is_empty(), "the loop's body is left empty");
-        let hoisted = f.module.body(id).block(preheader).insts();
+        let hoisted: Vec<_> = f.module.body(id).block(preheader).insts().collect();
         assert_eq!(hoisted.len(), 1);
         assert_eq!(hoisted[0].result(), Some(sum));
         assert!(changes.touched(crate::ir::cfg::Aspect::CfgShape));
@@ -262,7 +262,7 @@ mod tests {
 
         let preheader = preheader_of(&f, id, loop_body);
         assert!(f.ops(id, preheader).is_empty(), "nothing is hoisted");
-        let stayed = f.module.body(id).block(loop_body).insts();
+        let stayed: Vec<_> = f.module.body(id).block(loop_body).insts().collect();
         assert_eq!(stayed.iter().map(|inst| inst.result()).collect::<Vec<_>>(), [Some(sum)]);
         assert_whole(&f.module, id);
     }
@@ -284,7 +284,7 @@ mod tests {
         f.run::<Licm>(id);
 
         let preheader = preheader_of(&f, id, loop_body);
-        let hoisted = f.module.body(id).block(preheader).insts();
+        let hoisted: Vec<_> = f.module.body(id).block(preheader).insts().collect();
         assert_eq!(hoisted.iter().map(|inst| inst.result()).collect::<Vec<_>>(), [Some(loaded)]);
         assert!(f.ops(id, loop_body).is_empty());
         assert_whole(&f.module, id);
@@ -331,7 +331,7 @@ mod tests {
 
         let preheader = preheader_of(&f, id, loop_body);
         assert!(f.ops(id, preheader).is_empty(), "nothing is hoisted");
-        let stayed = f.module.body(id).block(loop_body).insts();
+        let stayed: Vec<_> = f.module.body(id).block(loop_body).insts().collect();
         assert_eq!(stayed.iter().map(|inst| inst.result()).collect::<Vec<_>>(), [Some(taken)]);
         assert_whole(&f.module, id);
     }
@@ -382,7 +382,7 @@ mod tests {
         for from in [left, right] {
             assert!(matches!(body.block(from).terminator(), Terminator::Jump { to, .. } if *to == preheader));
         }
-        let hoisted = body.block(preheader).insts();
+        let hoisted: Vec<_> = body.block(preheader).insts().collect();
         assert_eq!(hoisted.iter().map(|inst| inst.result()).collect::<Vec<_>>(), [Some(sum)]);
         assert!(f.ops(id, loop_body).is_empty());
         assert!(changes.touched(crate::ir::cfg::Aspect::CfgShape));
@@ -413,7 +413,7 @@ mod tests {
 
         let preheader = preheader_of(&f, id, loop_body);
         assert!(f.ops(id, preheader).is_empty(), "nothing is hoisted");
-        let stayed = f.module.body(id).block(loop_body).insts();
+        let stayed: Vec<_> = f.module.body(id).block(loop_body).insts().collect();
         assert_eq!(stayed.len(), 3);
         assert_eq!(stayed[0].result(), Some(loaded));
         assert_whole(&f.module, id);

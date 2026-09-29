@@ -1,12 +1,21 @@
 //! The editor's facts over the analysis manager (passes-analyses.md): one
-//! adapter serves every scope. `refresh` invalidates the manager for what the
-//! last edit changed and recomputes what the adapter serves; every query
-//! reads only facts kept since the last refresh, never the module.
+//! adapter serves every scope. `refresh` only drops what the last edit made
+//! stale, in the manager and in the adapter's own tables. A query reads the
+//! body it is lent, and computes a fact on its first request after the
+//! fact was dropped: an analysis through the manager, and an entry of the
+//! adapter's own tables for the one instruction or pair asked about (D47).
+//!
+//! Each own table is kept while the aspects it is made from are unchanged:
+//! - `named`, per instruction, from `Loans` and the instruction;
+//! - `loop_between`, per pair of blocks, from `LoopTree`;
+//! - `predecessors`, from the CFG's shape;
+//! - `commuting`, per instruction, from its operation and its callee type;
+//! - `unobserved`, per instruction, from `Loans`, `IntervalValues`, the
+//!   instruction and the uses of its result.
 //!
 //! A `Position::End(block)` is the point after every instruction of the
 //! block and before its terminator.
 
-use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
@@ -14,269 +23,294 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use smallvec::SmallVec;
 
-use crate::ir::cfg::edit::{ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved};
+use crate::ir::cfg::edit::{
+    Asked, ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved,
+};
 use acvus_utils::QualifiedRef;
 
 use crate::decl::Declarations;
-use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module, Op, Site, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Definition, InstId, Op, Site, Terminator};
 use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect, known_len};
 use crate::passes::analysis::{
-    AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans, Point, PostDominators, SparseFacts, Storage,
+    Analysis, AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans, Point,
+    PostDominators, SparseFacts, Storage,
 };
 use crate::passes::domain::{Bound, Interval, IntervalDomain, JoinSemiLattice};
-use crate::ty::{CastTy, Concrete, Ty, TyKind, Types};
+use crate::ty::{CastTy, Concrete, Ty, TyKind, Types, positions};
 
 pub struct EditFacts<'a, 'd> {
     am: &'a mut AnalysisManager<'d>,
-    dominators: Rc<Dominators>,
-    post_dominators: Rc<PostDominators>,
-    loop_tree: Rc<LoopTree>,
-    /// `loop_tree.loop_between` by its two blocks, as asked so far of the
-    /// loop tree held now.
-    loop_between: RefCell<FxHashMap<(BlockId, BlockId), bool>>,
-    loans: Rc<Loans>,
-    escapes: Rc<Escapes>,
-    content: Rc<ContentLiveness>,
-    defined: FxHashMap<ValueId, Defined>,
+    body: BodyId,
     /// The storages each instruction's operands and result name, and those
-    /// it reads and writes, by block and index.
-    named: FxHashMap<Site, BTreeSet<Storage>>,
-    /// The instructions, by block and index, that are calls, or a call's
-    /// start or taking, whose callee's declared effect commutes.
-    commuting: FxHashSet<(BlockId, usize)>,
-    /// The fact that makes each instruction unobservable, by block and
-    /// index, where one is proven.
-    unobserved: FxHashMap<(BlockId, usize), Unobserved>,
-}
-
-/// Where a value becomes defined.
-#[derive(Debug, Clone, Copy)]
-enum Defined {
-    /// A parameter, a capture, the order parameter or a slot: before the
-    /// entry runs.
-    BeforeEntry,
-    At(Point),
+    /// it reads and writes.
+    named: FxHashMap<InstId, BTreeSet<Storage>>,
+    /// `LoopTree::loop_between` by its two blocks.
+    loop_between: FxHashMap<(BlockId, BlockId), bool>,
+    predecessors: Option<FxHashMap<BlockId, SmallVec<[BlockId; 2]>>>,
+    /// Whether each instruction is a call, or a call's start or taking,
+    /// whose callee's declared effect commutes.
+    commuting: FxHashMap<InstId, bool>,
+    /// The fact that makes each instruction unobservable, where one is
+    /// proven.
+    unobserved: FxHashMap<InstId, Option<Unobserved>>,
 }
 
 impl<'a, 'd> EditFacts<'a, 'd> {
-    /// Facts for editing `body`, computed now. Cost: the analyses it serves,
-    /// and O(values + instructions) for its own tables.
-    pub fn new(am: &'a mut AnalysisManager<'d>, module: &Module, body: BodyId) -> Self {
-        let of = module.body(body);
-        let loans = am.get::<Loans>(module, body);
-        let intervals = am.get::<IntervalValues>(module, body);
-        let proven = Proven { body: of, types: module.types(), loans: &loans, intervals: &intervals, decls: am.decls() };
+    /// Facts for editing `body`; none is computed before a query asks for
+    /// it. Cost: O(1).
+    pub fn new(am: &'a mut AnalysisManager<'d>, body: BodyId) -> Self {
         EditFacts {
-            dominators: am.get::<Dominators>(module, body),
-            post_dominators: am.get::<PostDominators>(module, body),
-            loop_tree: am.get::<LoopTree>(module, body),
-            loop_between: RefCell::new(FxHashMap::default()),
-            escapes: am.get::<Escapes>(module, body),
-            content: am.get::<ContentLiveness>(module, body),
-            defined: definitions(of),
-            named: named_storages(of, &loans),
-            commuting: commuting_calls(of, module.types()),
-            unobserved: proven.unobserved_insts(),
-            loans,
             am,
+            body,
+            named: FxHashMap::default(),
+            loop_between: FxHashMap::default(),
+            predecessors: None,
+            commuting: FxHashMap::default(),
+            unobserved: FxHashMap::default(),
         }
     }
 
-    fn loop_between(&self, from: BlockId, to: BlockId) -> bool {
-        *self.loop_between.borrow_mut().entry((from, to)).or_insert_with(|| self.loop_tree.loop_between(from, to))
+    /// `A`'s facts for the body asked about, from the manager, which keeps
+    /// them until an edit changes an aspect `A` reads. Cost: O(1) when
+    /// kept, else `A`'s own.
+    ///
+    /// # Panics
+    /// `asked` is about another body than these facts'.
+    fn get<A>(&mut self, asked: Asked<'_>) -> Rc<A::Facts>
+    where
+        A: Analysis,
+    {
+        assert_eq!(asked.body_id(), self.body, "the facts answer for {:?}, not {:?}", self.body, asked.body_id());
+        self.am.get::<A>(asked.module(), self.body)
     }
 
-    fn defined(&self, value: ValueId) -> Defined {
-        *self
-            .defined
-            .get(&value)
-            .unwrap_or_else(|| panic!("{value:?} is not a value of the body the facts were refreshed for"))
+    fn loop_between(&mut self, asked: Asked<'_>, from: BlockId, to: BlockId) -> bool {
+        if let Some(between) = self.loop_between.get(&(from, to)) {
+            return *between;
+        }
+        let between = self.get::<LoopTree>(asked).loop_between(from, to);
+        self.loop_between.insert((from, to), between);
+        between
+    }
+
+    fn named(&mut self, asked: Asked<'_>, inst: InstRef) -> &BTreeSet<Storage> {
+        if !self.named.contains_key(&inst.id()) {
+            let loans = self.get::<Loans>(asked);
+            let storages = named_storages(asked.body(), &loans, inst.id());
+            self.named.insert(inst.id(), storages);
+        }
+        &self.named[&inst.id()]
     }
 }
 
+/// Whether `aspects` holds an aspect `changes` touched.
+fn stale(aspects: &[Aspect], changes: &Changes) -> bool {
+    aspects.iter().any(|aspect| changes.touched(*aspect))
+}
+
 impl Facts for EditFacts<'_, '_> {
-    /// Cost: the analyses `changes` made stale, and O(values +
-    /// instructions) for the adapter's own tables.
-    fn refresh(&mut self, module: &Module, body: BodyId, changes: &Changes) {
+    /// Cost: O(kept analyses · aspects), and O(1) per own table.
+    ///
+    /// # Panics
+    /// `body` is not the body these facts answer for.
+    fn refresh(&mut self, body: BodyId, changes: &Changes) {
+        assert_eq!(body, self.body, "the facts answer for {:?}, not {body:?}", self.body);
         self.am.invalidate(body, changes);
-        self.dominators = self.am.get::<Dominators>(module, body);
-        self.post_dominators = self.am.get::<PostDominators>(module, body);
-        let loop_tree = self.am.get::<LoopTree>(module, body);
-        if !Rc::ptr_eq(&loop_tree, &self.loop_tree) {
-            self.loop_tree = loop_tree;
-            self.loop_between.get_mut().clear();
+        if stale(Loans::READS, changes) {
+            self.named.clear();
         }
-        self.loans = self.am.get::<Loans>(module, body);
-        self.escapes = self.am.get::<Escapes>(module, body);
-        self.content = self.am.get::<ContentLiveness>(module, body);
-        let intervals = self.am.get::<IntervalValues>(module, body);
-        let of = module.body(body);
-        self.defined = definitions(of);
-        self.named = named_storages(of, &self.loans);
-        self.commuting = commuting_calls(of, module.types());
-        let proven =
-            Proven { body: of, types: module.types(), loans: &self.loans, intervals: &intervals, decls: self.am.decls() };
-        self.unobserved = proven.unobserved_insts();
+        if stale(LoopTree::READS, changes) {
+            self.loop_between.clear();
+        }
+        if changes.touched(Aspect::CfgShape) {
+            self.predecessors = None;
+        }
+        if changes.touched(Aspect::Instructions) || changes.touched(Aspect::Types) {
+            self.commuting.clear();
+        }
+        if stale(Loans::READS, changes) || stale(IntervalValues::READS, changes) {
+            self.unobserved.clear();
+        }
     }
 }
 
 impl DominanceFacts for EditFacts<'_, '_> {
-    /// Cost: O(1).
-    fn dominates(&self, value: ValueId, at: Position) -> bool {
-        match self.defined(value) {
-            Defined::BeforeEntry => true,
-            Defined::At(defined) => self.dominators.point_dominates(defined, point(at)),
-        }
+    /// Cost: O(1), and `Dominators`' own when an edit of the CFG's shape
+    /// dropped it.
+    fn dominates(&mut self, asked: Asked<'_>, value: ValueId, at: Position) -> bool {
+        let body = asked.body();
+        let defined = match body.definition(value) {
+            Definition::Param(_) | Definition::Capture(_) | Definition::OrderParam | Definition::Slot(_) => return true,
+            Definition::BlockParam(block, _) => Point::start(body, block),
+            Definition::Inst(inst) => Point::after(body, inst),
+        };
+        self.get::<Dominators>(asked).point_dominates(body, defined, point(at))
     }
 
-    /// Cost: O(1).
-    fn position_dominates(&self, at: Position, site: Site) -> bool {
+    /// Cost: as `dominates`.
+    fn position_dominates(&mut self, asked: Asked<'_>, at: Position, site: Site) -> bool {
         let read = match site {
-            Site::Inst(block, index) => Point::Before(block, index),
+            Site::Inst(inst) => Point::Before(inst),
             Site::Term(block) => Point::End(block),
         };
-        self.dominators.point_dominates(point(at), read)
+        self.get::<Dominators>(asked).point_dominates(asked.body(), point(at), read)
     }
 
     /// Cost: O(1) for a pair of blocks asked before under the same loop
-    /// tree, and otherwise O(blocks + edges), for the loops between the two.
-    fn control_equivalent(&self, a: Position, b: Position) -> bool {
+    /// tree, and otherwise O(blocks + edges), for the loops between the
+    /// two; and the analyses' own when an edit of the CFG's shape dropped
+    /// them.
+    fn control_equivalent(&mut self, asked: Asked<'_>, a: Position, b: Position) -> bool {
+        let body = asked.body();
         let (a, b) = (point(a), point(b));
-        let (dominators, post_dominators) = (&self.dominators, &self.post_dominators);
-        let in_order = |earlier: Point, later: Point| {
-            dominators.point_dominates(earlier, later)
-                && post_dominators.point_post_dominates(later, earlier)
-                && !self.loop_between(earlier.block(), later.block())
+        let dominators = self.get::<Dominators>(asked);
+        let post_dominators = self.get::<PostDominators>(asked);
+        let mut in_order = |earlier: Point, later: Point| {
+            dominators.point_dominates(body, earlier, later)
+                && post_dominators.point_post_dominates(body, later, earlier)
+                && !self.loop_between(asked, earlier.block(body), later.block(body))
         };
         in_order(a, b) || in_order(b, a)
     }
 }
 
 impl LoanFacts for EditFacts<'_, '_> {
-    /// Cost: O(storages the two touch · log).
-    fn conflicts(&self, inst: InstRef, write: InstRef) -> bool {
-        let written = self.loans.writes(site(write));
-        let named = self
-            .named
-            .get(&site(inst))
-            .unwrap_or_else(|| panic!("{inst:?} is an instruction of the body the facts were refreshed for"));
+    /// Cost: O(storages the two touch · log), once `Loans` is current.
+    fn conflicts(&mut self, asked: Asked<'_>, inst: InstRef, write: InstRef) -> bool {
+        let loans = self.get::<Loans>(asked);
+        let written = loans.writes(Site::Inst(write.id()));
+        if written.is_empty() {
+            return false;
+        }
+        let named = self.named(asked, inst);
         written.iter().any(|storage| named.contains(storage))
     }
 
-    /// Cost: O(1).
-    fn escapes(&self, slot: ValueId) -> Option<Site> {
-        self.escapes.escape(slot)
+    /// An instruction that names no place, and whose operands and result
+    /// are no slot and hold no position (ownership §5), names no storage:
+    /// `Loans` gives every such value no loan and such an instruction no
+    /// read or write. Only another instruction needs `Loans`. Cost: O(its
+    /// operands · their types' size), and `Loans`' own when an edit dropped
+    /// it and the instruction is of the other kind.
+    fn names_storage(&mut self, asked: Asked<'_>, inst: InstRef) -> bool {
+        let body = asked.body();
+        let record = body.inst(inst.id());
+        let names_a_place = matches!(record.op(), Op::Take { .. } | Op::Assign { .. } | Op::Ref { .. });
+        let types = asked.module().types();
+        let decls = self.am.decls();
+        let holds_nothing = |value: ValueId| {
+            !matches!(body.definition(value), Definition::Slot(_)) && positions(types, decls, body.ty_of(value)) == 0
+        };
+        if !names_a_place && record.operands().into_iter().chain(record.result()).all(holds_nothing) {
+            return false;
+        }
+        !self.named(asked, inst).is_empty()
+    }
+
+    /// Cost: O(1), and `Escapes`' own when an edit dropped it.
+    fn escapes(&mut self, asked: Asked<'_>, slot: ValueId) -> Option<Site> {
+        self.get::<Escapes>(asked).escape(slot)
     }
 }
 
 impl ContentFacts for EditFacts<'_, '_> {
-    /// Read from the content liveness the last refresh kept. Cost: O(1).
-    fn content_read_after(&self, place: ValueId, at: Position) -> bool {
+    /// Read from the content liveness. Cost: O(1), and its own when an edit
+    /// dropped it.
+    fn content_read_after(&mut self, asked: Asked<'_>, place: ValueId, at: Position) -> bool {
+        let content = self.get::<ContentLiveness>(asked);
         let live = match at {
-            Position::Before(inst) => self.content.live_before(inst.block(), inst.index()),
-            Position::End(block) => self.content.live_before_terminator(block),
+            Position::Before(inst) => content.live_before(inst.id()),
+            Position::End(block) => content.live_before_terminator(block),
         };
         live.contains(&place)
     }
 
-    /// Read from the content liveness the last refresh kept. Cost: O(the
-    /// place's units).
-    fn part_read_after(&self, place: ValueId, path: &[PathSeg], at: Position) -> bool {
+    /// Read from the content liveness. Cost: O(the place's units), and its
+    /// own when an edit dropped it.
+    fn part_read_after(&mut self, asked: Asked<'_>, place: ValueId, path: &[PathSeg], at: Position) -> bool {
+        let content = self.get::<ContentLiveness>(asked);
         match at {
-            Position::Before(inst) => self.content.part_live_before(inst.block(), inst.index(), place, path),
-            Position::End(block) => self.content.part_live_before_terminator(block, place, path),
+            Position::Before(inst) => content.part_live_before(inst.id(), place, path),
+            Position::End(block) => content.part_live_before_terminator(block, place, path),
         }
     }
 }
 
 impl OrderFacts for EditFacts<'_, '_> {
     /// Both are calls, or a call's start or taking (effects §6), whose
-    /// callee's declared effect commutes (effects §1), read from the table
-    /// the last refresh made from the callee types. Cost: O(1).
-    fn may_reorder(&self, a: InstRef, b: InstRef) -> bool {
-        let commutes = |inst: InstRef| self.commuting.contains(&(inst.block(), inst.index()));
+    /// callee's declared effect commutes (effects §1). Cost: O(1).
+    fn may_reorder(&mut self, asked: Asked<'_>, a: InstRef, b: InstRef) -> bool {
+        let mut commutes = |inst: InstRef| {
+            *self.commuting.entry(inst.id()).or_insert_with(|| commutes(asked.body(), asked.module().types(), inst.id()))
+        };
         commutes(a) && commutes(b)
     }
 }
 
 impl DischargeFacts for EditFacts<'_, '_> {
-    /// Read from the table the last refresh made: a check that never fires,
-    /// a store or a load never read, and a commit of a context never
-    /// written. Cost: O(1).
-    fn discharged(&self, inst: InstRef) -> Option<Unobserved> {
-        self.unobserved.get(&(inst.block(), inst.index())).copied()
+    /// A check that never fires, a store or a load never read, and a commit
+    /// of a context never written, proven for `inst` alone. Cost: O(1) when
+    /// kept; else `Proven::unobserved`'s, and the analyses' own when an
+    /// edit dropped them.
+    fn discharged(&mut self, asked: Asked<'_>, inst: InstRef) -> Option<Unobserved> {
+        if let Some(proven) = self.unobserved.get(&inst.id()) {
+            return *proven;
+        }
+        let loans = self.get::<Loans>(asked);
+        let intervals = self.get::<IntervalValues>(asked);
+        let body = asked.body();
+        let preds = self.predecessors.get_or_insert_with(|| body.predecessors());
+        let proven =
+            Proven { body, types: asked.module().types(), loans: &loans, intervals: &intervals, decls: self.am.decls(), preds };
+        let fact = proven.unobserved(inst.id());
+        self.unobserved.insert(inst.id(), fact);
+        fact
     }
 }
 
-fn site(inst: InstRef) -> Site {
-    Site::Inst(inst.block(), inst.index())
-}
-
-/// The storages each instruction of `body` names: through the loans of its
-/// operands and result, a slot it names directly, and what it reads and
-/// writes. Cost: O(operands · positions · loans).
-fn named_storages(body: &Body, loans: &Loans) -> FxHashMap<Site, BTreeSet<Storage>> {
-    let mut named = FxHashMap::default();
-    for (block, record) in body.blocks() {
-        for (index, inst) in record.insts().iter().enumerate() {
-            let at = Site::Inst(block, index);
-            let mut storages: BTreeSet<Storage> = loans.reads(at).iter().chain(loans.writes(at)).copied().collect();
-            for value in inst.operands().into_iter().chain(inst.result()) {
-                match body.definition(value) {
-                    Definition::Slot(_) => {
-                        storages.insert(Storage::Slot(value));
-                    }
-                    Definition::Param(_)
-                    | Definition::Capture(_)
-                    | Definition::OrderParam
-                    | Definition::BlockParam(..)
-                    | Definition::Inst(..) => {
-                        storages.extend(loans.all_of(value).into_iter().map(|loan| loan.storage));
-                    }
-                }
+/// The storages the instruction `inst` of `body` names: through the loans
+/// of its operands and result, a slot it names directly, and what it reads
+/// and writes. Cost: O(operands · positions · loans).
+fn named_storages(body: &Body, loans: &Loans, inst: InstId) -> BTreeSet<Storage> {
+    let at = Site::Inst(inst);
+    let record = body.inst(inst);
+    let mut storages: BTreeSet<Storage> = loans.reads(at).iter().chain(loans.writes(at)).copied().collect();
+    for value in record.operands().into_iter().chain(record.result()) {
+        match body.definition(value) {
+            Definition::Slot(_) => {
+                storages.insert(Storage::Slot(value));
             }
-            named.insert(at, storages);
+            Definition::Param(_)
+            | Definition::Capture(_)
+            | Definition::OrderParam
+            | Definition::BlockParam(..)
+            | Definition::Inst(..) => {
+                storages.extend(loans.all_of(value).into_iter().map(|loan| loan.storage));
+            }
         }
     }
-    named
+    storages
 }
 
 fn point(at: Position) -> Point {
     match at {
-        Position::Before(inst) => Point::Before(inst.block(), inst.index()),
+        Position::Before(inst) => Point::Before(inst.id()),
         Position::End(block) => Point::End(block),
     }
 }
 
-/// Where each value of `body` becomes defined: a block parameter at its
-/// block's start, an instruction's result and yielded token just after it.
-/// Cost: O(values).
-fn definitions(body: &Body) -> FxHashMap<ValueId, Defined> {
-    body.values()
-        .map(|value| {
-            let defined = match body.definition(value) {
-                Definition::Param(_) | Definition::Capture(_) | Definition::OrderParam | Definition::Slot(_) => {
-                    Defined::BeforeEntry
-                }
-                Definition::BlockParam(block, _) => Defined::At(Point::Before(block, 0)),
-                Definition::Inst(block, index) => Defined::At(Point::Before(block, index + 1)),
-            };
-            (value, defined)
-        })
-        .collect()
-}
-
-/// What a refresh proves the instructions of `body` from.
+/// What the facts prove an instruction of `body` unobservable from.
 struct Proven<'f> {
     body: &'f Body,
     types: &'f Types<Concrete>,
     loans: &'f Loans,
     intervals: &'f SparseFacts<IntervalDomain>,
     decls: &'f Declarations,
+    preds: &'f FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
 }
 
 impl Proven<'_> {
-    /// The instructions of `body` a fact proves unobservable (D55, G1):
+    /// Whether a fact proves `inst` unobservable (D55, G1):
     /// - a check whose condition the intervals show holds on every run
     ///   that reaches it;
     /// - a store whose storage no read reaches before a write replaces it
@@ -286,51 +320,37 @@ impl Proven<'_> {
     ///   entry.
     ///
     /// A load or a commit of a volatile context is never proven: nothing
-    /// merges or removes them (context §3). Cost: O(checks · the relations
-    /// of a slice's impl), O(stores · storages each writes · the body's
-    /// sites and edges), and O(commits · the body's sites and edges).
+    /// merges or removes them (context §3). Cost: O(the relations of a
+    /// slice's impl) for a check, O(storages it writes · the body's sites
+    /// and edges) for a store, and O(the body's sites and edges) for a
+    /// commit.
     ///
     /// # Panics
     /// A load or a commit names a context `decls` does not declare.
-    fn unobserved_insts(&self) -> FxHashMap<(BlockId, usize), Unobserved> {
-        let body = self.body;
-        let preds = body.predecessors();
+    fn unobserved(&self, inst: InstId) -> Option<Unobserved> {
         let volatile = |context: QualifiedRef| {
             self.decls
                 .context_is_volatile(context)
                 .unwrap_or_else(|| panic!("the context {context:?} a body loads or commits is declared"))
         };
-        let mut unobserved = FxHashMap::default();
-        for (block, record) in body.blocks() {
-            for (index, inst) in record.insts().iter().enumerate() {
-                let proven = match inst.op() {
-                    Op::Check { op, left, right } => self.check_holds(*op, *left, *right).then_some(Unobserved::NeverFires),
-                    Op::CheckSteps { from, step, count } => {
-                        self.steps_hold(*from, *step, *count).then_some(Unobserved::NeverFires)
-                    }
-                    Op::Index { slice, index, bound: IndexBound::Checked, .. }
-                    | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
-                        self.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
-                    }
-                    Op::Assign { .. } => {
-                        store_never_read(body, self.loans, block, index).then_some(Unobserved::NeverRead)
-                    }
-                    Op::Fetch { context } if !volatile(*context) => {
-                        let result = inst.result().expect("a load yields a value");
-                        (body.use_count(result) == 0).then_some(Unobserved::NeverRead)
-                    }
-                    Op::Commit { context, .. } if !volatile(*context) => {
-                        commit_never_written(body, self.loans, &preds, block, index, *context)
-                            .then_some(Unobserved::NeverWritten)
-                    }
-                    _ => None,
-                };
-                if let Some(fact) = proven {
-                    unobserved.insert((block, index), fact);
-                }
+        let record = self.body.inst(inst);
+        match record.op() {
+            Op::Check { op, left, right } => self.check_holds(*op, *left, *right).then_some(Unobserved::NeverFires),
+            Op::CheckSteps { from, step, count } => self.steps_hold(*from, *step, *count).then_some(Unobserved::NeverFires),
+            Op::Index { slice, index, bound: IndexBound::Checked, .. }
+            | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
+                self.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
             }
+            Op::Assign { .. } => store_never_read(self.body, self.loans, inst).then_some(Unobserved::NeverRead),
+            Op::Fetch { context } if !volatile(*context) => {
+                let result = record.result().expect("a load yields a value");
+                (self.body.use_count(result) == 0).then_some(Unobserved::NeverRead)
+            }
+            Op::Commit { context, .. } if !volatile(*context) => {
+                commit_never_written(self.body, self.loans, self.preds, inst, *context).then_some(Unobserved::NeverWritten)
+            }
+            _ => None,
         }
-        unobserved
     }
 
     /// Whether `left op right`, over the integers, fits the width the two
@@ -375,10 +395,10 @@ impl Proven<'_> {
     /// `Array<T, N>` has `N` elements. A relation of a later call and the
     /// length of another container are not read (D66).
     fn carried_len(&self, slice: ValueId) -> Option<Interval> {
-        let Definition::Inst(block, index) = self.body.definition(slice) else {
+        let Definition::Inst(made) = self.body.definition(slice) else {
             return None;
         };
-        let Op::AsSlice { container, .. } = self.body.block(block).insts()[index].op() else {
+        let Op::AsSlice { container, .. } = self.body.inst(made).op() else {
             return None;
         };
         let TyKind::Ref(_, lent) = self.types.kind(self.body.ty_of(*container)) else {
@@ -418,17 +438,16 @@ fn direct_place(op: &Op) -> Option<(Storage, &[PathSeg])> {
     }
 }
 
-/// Whether no read of any storage the store at `index` of `block` writes is
-/// reached from just after it, before a write that replaces what it stored
-/// or the body's end. A write replaces it where it assigns a place that
-/// holds the stored one: a prefix of its path in the same storage, or the
-/// whole storage where the store went through a reference. The body's end
-/// ends its own slots and parameters' storage, and not an outside storage,
-/// which the caller reads after the return; a run that dies owes nothing
-/// (effects §5).
-fn store_never_read(body: &Body, loans: &Loans, block: BlockId, index: usize) -> bool {
-    let store = &body.block(block).insts()[index];
-    let stored_path = direct_place(store.op()).map(|(_, path)| path);
+/// Whether no read of any storage the store `store` writes is reached from
+/// just after it, before a write that replaces what it stored or the body's
+/// end. A write replaces it where it assigns a place that holds the stored
+/// one: a prefix of its path in the same storage, or the whole storage
+/// where the store went through a reference. The body's end ends its own
+/// slots and parameters' storage, and not an outside storage, which the
+/// caller reads after the return; a run that dies owes nothing (effects
+/// §5).
+fn store_never_read(body: &Body, loans: &Loans, store: InstId) -> bool {
+    let stored_path = direct_place(body.inst(store).op()).map(|(_, path)| path);
     let replaces = |site_op: &Op, storage: Storage| {
         let Some((written, path)) = direct_place(site_op) else {
             return false;
@@ -439,20 +458,21 @@ fn store_never_read(body: &Body, loans: &Loans, block: BlockId, index: usize) ->
         };
         written == storage && covers
     };
-    loans.writes(Site::Inst(block, index)).iter().all(|storage| {
+    loans.writes(Site::Inst(store)).iter().all(|storage| {
         let mut visited: FxHashSet<BlockId> = FxHashSet::default();
-        let mut pending: Vec<(BlockId, usize)> = vec![(block, index + 1)];
+        let mut pending: Vec<(BlockId, Option<InstId>)> = vec![(body.block_of(store), body.next_in_block(store))];
         while let Some((at, from)) = pending.pop() {
-            let record = body.block(at);
             let mut replaced = false;
-            for (offset, inst) in record.insts().iter().enumerate().skip(from) {
-                if loans.reads(Site::Inst(at, offset)).contains(storage) {
+            let mut next = from;
+            while let Some(inst) = next {
+                if loans.reads(Site::Inst(inst)).contains(storage) {
                     return false;
                 }
-                if replaces(inst.op(), *storage) {
+                if replaces(body.inst(inst).op(), *storage) {
                     replaced = true;
                     break;
                 }
+                next = body.next_in_block(inst);
             }
             if replaced {
                 continue;
@@ -460,12 +480,12 @@ fn store_never_read(body: &Body, loans: &Loans, block: BlockId, index: usize) ->
             if loans.reads(Site::Term(at)).contains(storage) {
                 return false;
             }
-            match record.terminator() {
+            match body.block(at).terminator() {
                 Terminator::Return { .. } if matches!(storage, Storage::Outside { .. }) => return false,
                 terminator => {
                     for edge in terminator.edges() {
                         if visited.insert(edge.to) {
-                            pending.push((edge.to, 0));
+                            pending.push((edge.to, body.first_inst(edge.to)));
                         }
                     }
                 }
@@ -476,17 +496,16 @@ fn store_never_read(body: &Body, loans: &Loans, block: BlockId, index: usize) ->
 }
 
 /// Whether no write to the slot `context` lives in stands on a path from the
-/// body's entry to the commit at `index` of `block`. Storing into the slot
-/// the value a `Fetch` of `context` produced, with no commit of `context`
-/// between the two, writes back what was loaded and is not a write (context
-/// §3). A body with no slot marked for `context` has nothing to read this
-/// from, and the commit is not proven.
+/// body's entry to the commit `commit`. Storing into the slot the value a
+/// `Fetch` of `context` produced, with no commit of `context` between the
+/// two, writes back what was loaded and is not a write (context §3). A body
+/// with no slot marked for `context` has nothing to read this from, and the
+/// commit is not proven.
 fn commit_never_written(
     body: &Body,
     loans: &Loans,
     preds: &FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
-    block: BlockId,
-    index: usize,
+    commit: InstId,
     context: QualifiedRef,
 ) -> bool {
     let Some(slot) = body.slots().iter().copied().find(|slot| body.context_of_slot(*slot) == Some(context)) else {
@@ -494,7 +513,9 @@ fn commit_never_written(
     };
     let storage = Storage::Slot(slot);
     let writes = |site: Site| loans.writes(site).contains(&storage) && !writes_back_a_load(body, site, slot, context);
-    if (0..index).any(|earlier| writes(Site::Inst(block, earlier))) {
+    let block = body.block_of(commit);
+    let earlier = std::iter::successors(body.first_inst(block), |at| body.next_in_block(*at)).take_while(|at| *at != commit);
+    if earlier.map(Site::Inst).any(writes) {
         return false;
     }
     let mut visited: FxHashSet<BlockId> = FxHashSet::default();
@@ -503,7 +524,7 @@ fn commit_never_written(
         if !visited.insert(at) {
             continue;
         }
-        let sites = (0..body.block(at).insts().len()).map(|offset| Site::Inst(at, offset));
+        let sites = body.block(at).insts().map(|inst| Site::Inst(inst.id()));
         if sites.chain([Site::Term(at)]).any(writes) {
             return false;
         }
@@ -516,53 +537,41 @@ fn commit_never_written(
 /// `context` produced earlier in the same block, with no commit of
 /// `context` between the load and the store.
 fn writes_back_a_load(body: &Body, site: Site, slot: ValueId, context: QualifiedRef) -> bool {
-    let Site::Inst(block, index) = site else {
+    let Site::Inst(store) = site else {
         return false;
     };
-    let insts = body.block(block).insts();
-    let Op::Assign { target: RefTarget::Var(target), path, value, .. } = insts[index].op() else {
+    let Op::Assign { target: RefTarget::Var(target), path, value, .. } = body.inst(store).op() else {
         return false;
     };
     if *target != slot || !path.is_empty() {
         return false;
     }
-    let Definition::Inst(loaded_in, loaded_at) = body.definition(*value) else {
+    let Definition::Inst(loaded) = body.definition(*value) else {
         return false;
     };
-    if loaded_in != block || loaded_at >= index {
+    if body.block_of(loaded) != body.block_of(store) || !body.comes_before(loaded, store) {
         return false;
     }
-    let loads = matches!(insts[loaded_at].op(), Op::Fetch { context: loaded } if *loaded == context);
-    let committed_between = insts[loaded_at + 1..index]
-        .iter()
-        .any(|inst| matches!(inst.op(), Op::Commit { context: committed, .. } if *committed == context));
+    let loads = matches!(body.inst(loaded).op(), Op::Fetch { context: loaded } if *loaded == context);
+    let committed_between = std::iter::successors(body.next_in_block(loaded), |at| body.next_in_block(*at))
+        .take_while(|at| *at != store)
+        .any(|at| matches!(body.inst(at).op(), Op::Commit { context: committed, .. } if *committed == context));
     loads && !committed_between
 }
 
-/// The calls, starts and takings of `body` whose callee's declared effect
-/// commutes (effects §1, §6). A taking's callee is its start's. Cost:
-/// O(instructions).
-fn commuting_calls(body: &Body, types: &Types<Concrete>) -> FxHashSet<(BlockId, usize)> {
-    let commutes = |callee_ty: Ty| {
-        let Some(effect) = fn_effect(types, callee_ty) else {
-            panic!("a call's callee type is a function type")
-        };
-        effect.commutes()
+/// Whether `inst` is a call, a start or a taking whose callee's declared
+/// effect commutes (effects §1, §6). A taking's callee is its start's.
+/// Cost: O(1).
+fn commutes(body: &Body, types: &Types<Concrete>, inst: InstId) -> bool {
+    let callee_ty = match body.inst(inst).op() {
+        Op::FunctionCall { callee_ty, .. } | Op::Spawn { callee_ty, .. } => *callee_ty,
+        Op::TakeEffect { src } => started_callee(body, *src),
+        _ => return false,
     };
-    let mut commuting = FxHashSet::default();
-    for (block, record) in body.blocks() {
-        for (index, inst) in record.insts().iter().enumerate() {
-            let callee_ty = match inst.op() {
-                Op::FunctionCall { callee_ty, .. } | Op::Spawn { callee_ty, .. } => *callee_ty,
-                Op::TakeEffect { src } => started_callee(body, *src),
-                _ => continue,
-            };
-            if commutes(callee_ty) {
-                commuting.insert((block, index));
-            }
-        }
-    }
-    commuting
+    let Some(effect) = fn_effect(types, callee_ty) else {
+        panic!("a call's callee type is a function type")
+    };
+    effect.commutes()
 }
 
 /// The callee type of the start whose handle is `handle`.
@@ -571,10 +580,10 @@ fn commuting_calls(body: &Body, types: &Types<Concrete>) -> FxHashSet<(BlockId, 
 /// `handle` is not a `Spawn`'s result: a taking takes a start's handle
 /// (effects §6).
 fn started_callee(body: &Body, handle: ValueId) -> Ty {
-    let Definition::Inst(block, index) = body.definition(handle) else {
+    let Definition::Inst(start) = body.definition(handle) else {
         panic!("a taking's handle {handle:?} is a start's result (effects §6)")
     };
-    match body.block(block).insts()[index].op() {
+    match body.inst(start).op() {
         Op::Spawn { callee_ty, .. } => *callee_ty,
         other => panic!("a taking's handle is a start's result (effects §6), not {other:?}'s"),
     }
@@ -587,8 +596,8 @@ mod tests {
 
     use super::*;
     use crate::decl::{ContextDecl, Core, Declarations, LoopMarkers, RawDeclarations};
-    use crate::ir::cfg::edit::{CannotDischarge, CannotMove, Discharge, Editor, Motion, NoFacts, Remove, Value};
-    use crate::ir::cfg::{Inst, Terminator};
+    use crate::ir::cfg::edit::{Asked, CannotDischarge, CannotMove, Discharge, Editor, Motion, NoFacts, Remove, Value};
+    use crate::ir::cfg::{Inst, Module, Terminator};
     use crate::ir::{BinOp, Callee, Overflow, RefTarget};
     use crate::ty::{
         Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost,
@@ -739,18 +748,18 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, d.id);
+        let mut facts = EditFacts::new(&mut am, d.id);
 
-        assert!(facts.dominates(d.c, Position::Before(x_at)), "a parameter is defined before the entry runs");
-        assert!(!facts.dominates(d.x, Position::Before(x_at)), "a result is not defined before its instruction");
-        assert!(facts.dominates(d.x, Position::End(d.entry)));
-        assert!(facts.dominates(d.x, Position::Before(t_at)));
-        assert!(facts.dominates(d.x, Position::End(d.join)));
-        assert!(facts.dominates(d.t, Position::End(d.then_block)));
-        assert!(!facts.dominates(d.t, Position::End(d.join)), "the else arm reaches the join without t");
-        assert!(!facts.dominates(d.t, Position::End(d.else_block)));
-        assert!(facts.dominates(d.p, Position::End(d.join)), "a block parameter is defined at its block's start");
-        assert!(!facts.dominates(d.p, Position::End(d.then_block)));
+        assert!(facts.dominates(Asked::new(&f.module, d.id), d.c, Position::Before(x_at)), "a parameter is defined before the entry runs");
+        assert!(!facts.dominates(Asked::new(&f.module, d.id), d.x, Position::Before(x_at)), "a result is not defined before its instruction");
+        assert!(facts.dominates(Asked::new(&f.module, d.id), d.x, Position::End(d.entry)));
+        assert!(facts.dominates(Asked::new(&f.module, d.id), d.x, Position::Before(t_at)));
+        assert!(facts.dominates(Asked::new(&f.module, d.id), d.x, Position::End(d.join)));
+        assert!(facts.dominates(Asked::new(&f.module, d.id), d.t, Position::End(d.then_block)));
+        assert!(!facts.dominates(Asked::new(&f.module, d.id), d.t, Position::End(d.join)), "the else arm reaches the join without t");
+        assert!(!facts.dominates(Asked::new(&f.module, d.id), d.t, Position::End(d.else_block)));
+        assert!(facts.dominates(Asked::new(&f.module, d.id), d.p, Position::End(d.join)), "a block parameter is defined at its block's start");
+        assert!(!facts.dominates(Asked::new(&f.module, d.id), d.p, Position::End(d.then_block)));
     }
 
     #[test]
@@ -762,15 +771,15 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, d.id);
+        let mut facts = EditFacts::new(&mut am, d.id);
 
-        let t_site = Site::Inst(t_at.block(), t_at.index());
-        assert!(facts.position_dominates(Position::Before(t_at), t_site), "standing just before the site");
-        assert!(!facts.position_dominates(Position::End(d.then_block), t_site));
-        assert!(facts.position_dominates(Position::End(d.then_block), Site::Term(d.then_block)));
-        assert!(facts.position_dominates(Position::Before(x_at), Site::Term(d.join)));
-        assert!(facts.position_dominates(Position::End(d.entry), t_site));
-        assert!(!facts.position_dominates(Position::End(d.then_block), Site::Term(d.join)));
+        let t_site = Site::Inst(t_at.id());
+        assert!(facts.position_dominates(Asked::new(&f.module, d.id), Position::Before(t_at), t_site), "standing just before the site");
+        assert!(!facts.position_dominates(Asked::new(&f.module, d.id), Position::End(d.then_block), t_site));
+        assert!(facts.position_dominates(Asked::new(&f.module, d.id), Position::End(d.then_block), Site::Term(d.then_block)));
+        assert!(facts.position_dominates(Asked::new(&f.module, d.id), Position::Before(x_at), Site::Term(d.join)));
+        assert!(facts.position_dominates(Asked::new(&f.module, d.id), Position::End(d.entry), t_site));
+        assert!(!facts.position_dominates(Asked::new(&f.module, d.id), Position::End(d.then_block), Site::Term(d.join)));
     }
 
     #[test]
@@ -782,13 +791,13 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, d.id);
+        let mut facts = EditFacts::new(&mut am, d.id);
 
-        assert!(facts.control_equivalent(Position::Before(x_at), Position::End(d.join)));
-        assert!(facts.control_equivalent(Position::End(d.join), Position::Before(x_at)), "symmetric");
-        assert!(facts.control_equivalent(Position::Before(t_at), Position::End(d.then_block)));
-        assert!(!facts.control_equivalent(Position::Before(x_at), Position::Before(t_at)), "t runs on one arm");
-        assert!(!facts.control_equivalent(Position::End(d.then_block), Position::End(d.else_block)));
+        assert!(facts.control_equivalent(Asked::new(&f.module, d.id), Position::Before(x_at), Position::End(d.join)));
+        assert!(facts.control_equivalent(Asked::new(&f.module, d.id), Position::End(d.join), Position::Before(x_at)), "symmetric");
+        assert!(facts.control_equivalent(Asked::new(&f.module, d.id), Position::Before(t_at), Position::End(d.then_block)));
+        assert!(!facts.control_equivalent(Asked::new(&f.module, d.id), Position::Before(x_at), Position::Before(t_at)), "t runs on one arm");
+        assert!(!facts.control_equivalent(Asked::new(&f.module, d.id), Position::End(d.then_block), Position::End(d.else_block)));
     }
 
     /// `a = commuting(); b = commuting(); c = opaque(); d = a + b; return d`,
@@ -810,13 +819,13 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
 
-        assert!(facts.may_reorder(a_at, b_at));
-        assert!(facts.may_reorder(b_at, a_at));
-        assert!(!facts.may_reorder(a_at, c_at), "the opaque call does not commute");
-        assert!(!facts.may_reorder(c_at, b_at));
-        assert!(!facts.may_reorder(a_at, d_at), "an addition is not a call");
+        assert!(facts.may_reorder(Asked::new(&f.module, id), a_at, b_at));
+        assert!(facts.may_reorder(Asked::new(&f.module, id), b_at, a_at));
+        assert!(!facts.may_reorder(Asked::new(&f.module, id), a_at, c_at), "the opaque call does not commute");
+        assert!(!facts.may_reorder(Asked::new(&f.module, id), c_at, b_at));
+        assert!(!facts.may_reorder(Asked::new(&f.module, id), a_at, d_at), "an addition is not a call");
     }
 
     /// An instruction inserted through `Editor<Value>` is known to the next
@@ -832,7 +841,7 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let mut facts = EditFacts::new(&mut am, &f.module, d.id);
+        let mut facts = EditFacts::new(&mut am, d.id);
 
         let one = {
             let mut editor = Editor::<Value>::new(&mut f.module, d.id, &mut facts);
@@ -841,14 +850,15 @@ mod tests {
             editor.finish();
             one
         };
-        assert!(facts.dominates(one, Position::End(d.then_block)));
-        assert!(!facts.dominates(one, Position::End(d.join)));
+        assert!(facts.dominates(Asked::new(&f.module, d.id), one, Position::End(d.then_block)));
+        assert!(!facts.dominates(Asked::new(&f.module, d.id), one, Position::End(d.join)));
         let [_, one_at, t_now] = inst_refs(&mut f.module, d.id)[..] else {
             panic!("the body has three instructions")
         };
-        assert_eq!((one_at.block(), one_at.index()), (d.then_block, 0));
-        assert!(!facts.dominates(d.t, Position::Before(t_now)), "t moved down by one");
-        assert!(facts.dominates(one, Position::Before(t_now)));
+        let body = f.module.body(d.id);
+        assert_eq!((body.block_of(one_at.id()), body.index_in_block(one_at.id())), (d.then_block, 0));
+        assert!(!facts.dominates(Asked::new(&f.module, d.id), d.t, Position::Before(t_now)), "t moved down by one");
+        assert!(facts.dominates(Asked::new(&f.module, d.id), one, Position::Before(t_now)));
     }
 
     /// A split through `Editor<Effect>`: the start and the taking of a
@@ -869,7 +879,7 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let mut facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
 
         {
             let mut editor = Editor::<crate::ir::cfg::edit::Effect>::new(&mut f.module, id, &mut facts);
@@ -884,9 +894,9 @@ mod tests {
         let (Some((start, _)), Some((take, _)), Some((other, _))) = (start, take, other) else {
             panic!("the split left a start, a taking and the other call")
         };
-        assert!(facts.may_reorder(*start, *other));
-        assert!(facts.may_reorder(*take, *other));
-        assert!(facts.may_reorder(*start, *take));
+        assert!(facts.may_reorder(Asked::new(&f.module, id), *start, *other));
+        assert!(facts.may_reorder(Asked::new(&f.module, id), *take, *other));
+        assert!(facts.may_reorder(Asked::new(&f.module, id), *start, *take));
     }
 
     fn assign(slot: ValueId, value: ValueId) -> Op {
@@ -933,14 +943,14 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
 
-        assert!(facts.dominates(x, Position::Before(y_at)));
-        assert!(!facts.control_equivalent(Position::End(entry), Position::Before(y_at)), "a loop lies between");
-        assert!(!facts.control_equivalent(Position::Before(y_at), Position::Before(x_at)));
-        assert!(!facts.control_equivalent(Position::End(header), Position::End(loop_body)));
-        assert!(facts.control_equivalent(Position::Before(x_at), Position::End(entry)), "one block, no loop");
-        assert!(facts.control_equivalent(Position::Before(y_at), Position::End(exit)));
+        assert!(facts.dominates(Asked::new(&f.module, id), x, Position::Before(y_at)));
+        assert!(!facts.control_equivalent(Asked::new(&f.module, id), Position::End(entry), Position::Before(y_at)), "a loop lies between");
+        assert!(!facts.control_equivalent(Asked::new(&f.module, id), Position::Before(y_at), Position::Before(x_at)));
+        assert!(!facts.control_equivalent(Asked::new(&f.module, id), Position::End(header), Position::End(loop_body)));
+        assert!(facts.control_equivalent(Asked::new(&f.module, id), Position::Before(x_at), Position::End(entry)), "one block, no loop");
+        assert!(facts.control_equivalent(Asked::new(&f.module, id), Position::Before(y_at), Position::End(exit)));
     }
 
     struct StorageBody {
@@ -981,14 +991,14 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, s.id);
+        let mut facts = EditFacts::new(&mut am, s.id);
 
-        assert!(facts.conflicts(read_through, assign_x), "the read through r reads x");
-        assert!(facts.conflicts(make_ref, assign_x), "r names x");
-        assert!(!facts.conflicts(read_through, assign_y));
-        assert!(facts.conflicts(take_y, assign_y));
-        assert!(!facts.conflicts(take_y, assign_x));
-        assert!(!facts.conflicts(assign_x, read_through), "a read writes nothing");
+        assert!(facts.conflicts(Asked::new(&f.module, s.id), read_through, assign_x), "the read through r reads x");
+        assert!(facts.conflicts(Asked::new(&f.module, s.id), make_ref, assign_x), "r names x");
+        assert!(!facts.conflicts(Asked::new(&f.module, s.id), read_through, assign_y));
+        assert!(facts.conflicts(Asked::new(&f.module, s.id), take_y, assign_y));
+        assert!(!facts.conflicts(Asked::new(&f.module, s.id), take_y, assign_x));
+        assert!(!facts.conflicts(Asked::new(&f.module, s.id), assign_x, read_through), "a read writes nothing");
     }
 
     #[test]
@@ -1000,10 +1010,10 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, s.id);
+        let mut facts = EditFacts::new(&mut am, s.id);
 
-        assert_eq!(facts.escapes(s.x), Some(Site::Inst(make_ref.block(), make_ref.index())));
-        assert_eq!(facts.escapes(s.y), None);
+        assert_eq!(facts.escapes(Asked::new(&f.module, s.id), s.x), Some(Site::Inst(make_ref.id())));
+        assert_eq!(facts.escapes(Asked::new(&f.module, s.id), s.y), None);
     }
 
     /// A move through `Editor<Motion>` above the store to `y` is refused,
@@ -1018,7 +1028,7 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let mut facts = EditFacts::new(&mut am, &f.module, s.id);
+        let mut facts = EditFacts::new(&mut am, s.id);
 
         {
             let mut editor = Editor::<Motion>::new(&mut f.module, s.id, &mut facts);
@@ -1032,10 +1042,10 @@ mod tests {
         let [_, _, assign_y, moved, make_ref, _] = inst_refs(&mut f.module, s.id)[..] else {
             panic!("the body has six instructions")
         };
-        assert!(matches!(f.module.body(s.id).block(moved.block()).insts()[moved.index()].op(), Op::Take { .. }));
-        assert!(facts.dominates(s.u, Position::Before(make_ref)), "the load now stands before the Ref");
-        assert!(!facts.dominates(s.u, Position::Before(moved)));
-        assert!(facts.conflicts(moved, assign_y), "the load's storage is known at its new place");
+        assert!(matches!(f.module.body(s.id).inst(moved.id()).op(), Op::Take { .. }));
+        assert!(facts.dominates(Asked::new(&f.module, s.id), s.u, Position::Before(make_ref)), "the load now stands before the Ref");
+        assert!(!facts.dominates(Asked::new(&f.module, s.id), s.u, Position::Before(moved)));
+        assert!(facts.conflicts(Asked::new(&f.module, s.id), moved, assign_y), "the load's storage is known at its new place");
     }
 
     fn commit(context: QualifiedRef, value: ValueId) -> Op {
@@ -1065,11 +1075,11 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
 
-        assert_eq!(facts.discharged(first), Some(Unobserved::NeverRead));
-        assert_eq!(facts.discharged(second), None, "the load of s reads it");
-        assert_eq!(facts.discharged(check), Some(Unobserved::NeverFires), "1 + 1 fits an i64");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), first), Some(Unobserved::NeverRead));
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), second), None, "the load of s reads it");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), check), Some(Unobserved::NeverFires), "1 + 1 fits an i64");
     }
 
     /// `s = 1; if c { t = s } else {}; return 0`: the store is read on one
@@ -1106,10 +1116,10 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
 
-        assert_eq!(facts.discharged(read_store), None);
-        assert_eq!(facts.discharged(unread_store), Some(Unobserved::NeverRead));
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), read_store), None);
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), unread_store), Some(Unobserved::NeverRead));
     }
 
     /// ```text
@@ -1147,18 +1157,18 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
 
-        assert_eq!(facts.discharged(read), None);
-        assert_eq!(facts.discharged(unread), Some(Unobserved::NeverRead));
-        assert_eq!(facts.discharged(volatile_load), None, "a volatile load is never removed");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), read), None);
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), unread), Some(Unobserved::NeverRead));
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), volatile_load), None, "a volatile load is never removed");
         assert_eq!(
-            facts.discharged(after_the_load),
+            facts.discharged(Asked::new(&f.module, id), after_the_load),
             Some(Unobserved::NeverWritten),
             "storing what the load produced writes nothing"
         );
-        assert_eq!(facts.discharged(after_an_assign), None, "c is assigned before this commit");
-        assert_eq!(facts.discharged(volatile_commit), None, "a volatile commit is never removed");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), after_an_assign), None, "c is assigned before this commit");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), volatile_commit), None, "a volatile commit is never removed");
     }
 
     /// A volatile load nothing uses stays: `discharge` refuses it.
@@ -1177,7 +1187,7 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let mut facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
         let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
         assert_eq!(editor.discharge(load), Err(CannotDischarge::NotProven));
         editor.finish();
@@ -1208,7 +1218,7 @@ mod tests {
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
-        let mut facts = EditFacts::new(&mut am, &f.module, id);
+        let mut facts = EditFacts::new(&mut am, id);
 
         {
             let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);

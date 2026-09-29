@@ -12,7 +12,7 @@
 
 use smallvec::SmallVec;
 
-use crate::ir::cfg::{Aspect, BlockId, BodyId, Module, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Module, Terminator};
 use crate::passes::analysis::dominators::{DomTree, Graph};
 use crate::passes::analysis::{Analysis, AnalysisManager, Point};
 
@@ -53,11 +53,12 @@ impl PostDominators {
 
     /// Whether every path from `before` to an exit passes `after`, which
     /// within one block means `after` is no earlier. Cost: O(1).
-    pub fn point_post_dominates(&self, after: Point, before: Point) -> bool {
-        if after.block() == before.block() {
-            return before.no_later_than(after);
+    pub fn point_post_dominates(&self, body: &Body, after: Point, before: Point) -> bool {
+        let (after_block, before_block) = (after.block(body), before.block(body));
+        if after_block == before_block {
+            return before.no_later_than(body, after);
         }
-        self.post_dominates(after.block(), before.block())
+        self.post_dominates(after_block, before_block)
     }
 }
 

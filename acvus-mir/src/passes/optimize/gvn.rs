@@ -47,7 +47,7 @@ use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::ir::cfg::edit::{DoesNotDominate, Editor, Value};
+use crate::ir::cfg::edit::{DoesNotDominate, Editor, InstRef, Value};
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Inst, Module, Op};
 use crate::ir::{BinOp, Callee, Chosen, IndexBound, IndexMode, UnaryOp, ValueId, fn_effect};
 use crate::passes::analysis::{AnalysisManager, Dominators};
@@ -64,7 +64,7 @@ impl BodyTransform for Gvn {
         let dominators = am.get::<Dominators>(module, body);
         let children = dominator_children(module.body(body), &dominators);
         let entry = module.body(body).entry();
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Value>::new(module, body, &mut facts);
         let mut numbering = Numbering::default();
         let mut visits = vec![Visit::Enter(entry)];
@@ -73,9 +73,8 @@ impl BodyTransform for Gvn {
                 Visit::Enter(block) => {
                     visits.push(Visit::Leave(numbering.entered.len()));
                     visits.extend(children[block.index()].iter().rev().map(|child| Visit::Enter(*child)));
-                    let count = editor.body().block(block).insts().len();
-                    for index in 0..count {
-                        numbering.number(&mut editor, block, index);
+                    for inst in editor.insts_of(block) {
+                        numbering.number(&mut editor, inst);
                     }
                 }
                 Visit::Leave(kept) => numbering.leave(kept),
@@ -115,8 +114,8 @@ struct Numbering {
 }
 
 impl Numbering {
-    fn number(&mut self, editor: &mut Editor<'_, Value>, block: BlockId, index: usize) {
-        let inst = &editor.body().block(block).insts()[index];
+    fn number(&mut self, editor: &mut Editor<'_, Value>, inst: InstRef) {
+        let inst = editor.inst_of(inst);
         let Some(result) = inst.result() else {
             return;
         };

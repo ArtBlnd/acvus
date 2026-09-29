@@ -35,7 +35,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Storage, solve_dense};
@@ -43,6 +43,10 @@ use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{Concrete, Types, copies};
 
 pub struct ContentLiveness {
+    /// Each instruction's block and place in it, as the body stood when the
+    /// facts were computed; the facts are dropped when an instruction
+    /// changes, so the places stay true while they are kept.
+    position: FxHashMap<InstId, (BlockId, usize)>,
     /// Per block, the places live before each instruction, and last the
     /// places live before its terminator.
     before: FxHashMap<BlockId, Vec<FxHashSet<ValueId>>>,
@@ -90,9 +94,18 @@ impl ContentLiveness {
     /// `site` is not a site of the body.
     pub fn live_after(&self, site: Site) -> &FxHashSet<ValueId> {
         match site {
-            Site::Inst(block, index) => self.points(block).get(index + 1).unwrap_or_else(|| panic!("{site:?} is a site of the body")),
+            Site::Inst(inst) => {
+                let (block, index) = self.position_of(inst);
+                &self.points(block)[index + 1]
+            }
             Site::Term(block) => self.live_at_end(block),
         }
+    }
+
+    /// # Panics
+    /// `inst` is not an instruction of the body the facts cover.
+    fn position_of(&self, inst: InstId) -> (BlockId, usize) {
+        *self.position.get(&inst).unwrap_or_else(|| panic!("{inst:?} is an instruction of the body the facts cover"))
     }
 
     /// The places whose content may be read from `block`'s start. Cost: O(1).
@@ -103,14 +116,14 @@ impl ContentLiveness {
         &self.points(block)[0]
     }
 
-    /// The places whose content may be read from just before the
-    /// instruction at `index` of `block`, or before its terminator where
-    /// `index` is the block's length. Cost: O(1).
+    /// The places whose content may be read from just before `inst`. Cost:
+    /// O(1).
     ///
     /// # Panics
-    /// `block` is not a block of the body, or `index` is past its length.
-    pub fn live_before(&self, block: BlockId, index: usize) -> &FxHashSet<ValueId> {
-        self.points(block).get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"))
+    /// `inst` is not an instruction of the body.
+    pub fn live_before(&self, inst: InstId) -> &FxHashSet<ValueId> {
+        let (block, index) = self.position_of(inst);
+        &self.points(block)[index]
     }
 
     /// The places whose content may be read from just before `block`'s
@@ -143,14 +156,17 @@ impl ContentLiveness {
     }
 
     /// Whether a unit of `place` overlapping `path` may be read from just
-    /// before the instruction at `index` of `block`, or before its
-    /// terminator where `index` is the block's length, before a store
-    /// replaces it or the body ends. Cost: O(units of `place`).
+    /// before `inst`, before a store replaces it or the body ends. Cost:
+    /// O(units of `place`).
     ///
     /// # Panics
-    /// `place` has no units, `block` is not a block of the body, or `index`
-    /// is past its length.
-    pub fn part_live_before(&self, block: BlockId, index: usize, place: ValueId, path: &[PathSeg]) -> bool {
+    /// `place` has no units, or `inst` is not an instruction of the body.
+    pub fn part_live_before(&self, inst: InstId, place: ValueId, path: &[PathSeg]) -> bool {
+        let (block, index) = self.position_of(inst);
+        self.part_live_at(block, index, place, path)
+    }
+
+    fn part_live_at(&self, block: BlockId, index: usize, place: ValueId, path: &[PathSeg]) -> bool {
         let points = self.parts_before.get(&block).expect("content liveness covers every block of its body");
         let live = points.get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"));
         self.overlapping(place, path).any(|unit| live.contains(&unit))
@@ -160,7 +176,10 @@ impl ContentLiveness {
     /// at `site`. Cost: O(units of `place`).
     pub fn part_live_after(&self, site: Site, place: ValueId, path: &[PathSeg]) -> bool {
         match site {
-            Site::Inst(block, index) => self.part_live_before(block, index + 1, place, path),
+            Site::Inst(inst) => {
+                let (block, index) = self.position_of(inst);
+                self.part_live_at(block, index + 1, place, path)
+            }
             Site::Term(block) => self.part_live_at_end(block, place, path),
         }
     }
@@ -175,7 +194,7 @@ impl ContentLiveness {
 
     /// As `part_live_before`, from `block`'s start. Cost: O(units of `place`).
     pub fn part_live_at_start(&self, block: BlockId, place: ValueId, path: &[PathSeg]) -> bool {
-        self.part_live_before(block, 0, place, path)
+        self.part_live_at(block, 0, place, path)
     }
 
     /// As `part_live_before`, after `block`'s terminator, on its way into a
@@ -185,14 +204,14 @@ impl ContentLiveness {
         self.overlapping(place, path).any(|unit| live.contains(&unit))
     }
 
-    /// The presence of the unit `unit` of `place` just before the
-    /// instruction at `index` of `block`, or before its terminator where
-    /// `index` is the block's length. Cost: O(units of `place`).
+    /// The presence of the unit `unit` of `place` just before `inst`. Cost:
+    /// O(units of `place`).
     ///
     /// # Panics
-    /// `unit` is not one of `place`'s units, or the position is not one of
-    /// the body's.
-    pub fn presence_before(&self, block: BlockId, index: usize, place: ValueId, unit: &[PathSeg]) -> Presence {
+    /// `unit` is not one of `place`'s units, or `inst` is not an
+    /// instruction of the body.
+    pub fn presence_before(&self, inst: InstId, place: ValueId, unit: &[PathSeg]) -> Presence {
+        let (block, index) = self.position_of(inst);
         let points = self.presence_before.get(&block).expect("content presence covers every block of its body");
         let state = points.get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"));
         state.of((place, self.unit_index(place, unit)))
@@ -232,6 +251,10 @@ impl Analysis for ContentLiveness {
         let units = units_of(body, module.types());
         let backward = Backward::new(body, &loans, &units);
         let facts = solve_dense(&backward, body);
+        let mut position = FxHashMap::default();
+        for (id, block) in body.blocks() {
+            position.extend(block.insts().enumerate().map(|(index, inst)| (inst.id(), (id, index))));
+        }
         let mut before = FxHashMap::default();
         let mut at_end = FxHashMap::default();
         let mut parts_before = FxHashMap::default();
@@ -241,7 +264,7 @@ impl Analysis for ContentLiveness {
             let mut state = end.clone();
             backward.transfer_terminator(block.terminator(), &mut state);
             let mut points = vec![state.clone()];
-            for inst in block.insts().iter().rev() {
+            for inst in block.insts().rev() {
                 backward.transfer(inst, &mut state);
                 points.push(state.clone());
             }
@@ -264,7 +287,7 @@ impl Analysis for ContentLiveness {
             }
             presence_before.insert(id, points);
         }
-        ContentLiveness { before, at_end, units, parts_before, parts_at_end, presence_before }
+        ContentLiveness { position, before, at_end, units, parts_before, parts_at_end, presence_before }
     }
 }
 
@@ -337,28 +360,21 @@ impl Widen for Live {
     }
 }
 
-/// The engine hands a transfer the instruction or terminator alone; the
-/// site `Loans` keys its reads by is found by the record's address in the
-/// body, which the engine borrows unchanged for the whole solve.
+/// The engine hands a transfer the instruction or terminator alone; an
+/// instruction names its own site, and a terminator's site, which `Loans`
+/// keys its reads by, is found by the record's address in the body, which
+/// the engine borrows unchanged for the whole solve.
 struct Backward<'f> {
     loans: &'f Loans,
     units: &'f FxHashMap<ValueId, Vec<Path>>,
-    inst_sites: FxHashMap<*const Inst, Site>,
     term_sites: FxHashMap<*const Terminator, Site>,
 }
 
 impl<'f> Backward<'f> {
-    /// Cost: O(the body's instructions).
+    /// Cost: O(the body's blocks).
     fn new(body: &'f Body, loans: &'f Loans, units: &'f FxHashMap<ValueId, Vec<Path>>) -> Self {
-        let mut inst_sites = FxHashMap::default();
-        let mut term_sites = FxHashMap::default();
-        for (block, record) in body.blocks() {
-            for (index, inst) in record.insts().iter().enumerate() {
-                inst_sites.insert(std::ptr::from_ref(inst), Site::Inst(block, index));
-            }
-            term_sites.insert(std::ptr::from_ref(record.terminator()), Site::Term(block));
-        }
-        Backward { loans, units, inst_sites, term_sites }
+        let term_sites = body.blocks().map(|(block, record)| (std::ptr::from_ref(record.terminator()), Site::Term(block))).collect();
+        Backward { loans, units, term_sites }
     }
 
     /// What `site` reads: the places `Loans` names, and of each, the units
@@ -409,8 +425,7 @@ impl DenseAnalysis for Backward<'_> {
             Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => Some((*place, path.as_slice())),
             _ => None,
         };
-        let site = self.inst_sites.get(&std::ptr::from_ref(inst)).expect("the instruction transferred is one of the body's");
-        self.gen_reads(*site, by_name, state);
+        self.gen_reads(Site::Inst(inst.id()), by_name, state);
     }
 
     fn transfer_terminator(&self, terminator: &Terminator, state: &mut Live) {

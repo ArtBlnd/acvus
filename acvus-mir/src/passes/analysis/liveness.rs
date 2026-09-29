@@ -60,7 +60,7 @@ impl Analysis for Liveness {
             let end = facts.at(id).clone();
             let mut start = end.clone();
             Backward.transfer_terminator(block.terminator(), &mut start);
-            for inst in block.insts().iter().rev() {
+            for inst in block.insts().rev() {
                 Backward.transfer(inst, &mut start);
             }
             at_start.insert(id, start.0);

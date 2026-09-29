@@ -113,8 +113,8 @@ impl Fixture {
         self.module.types.intern(kind)
     }
 
-    fn insts(&self, body: BodyId, block: BlockId) -> &[Inst] {
-        self.body(body).block(block).insts()
+    fn insts(&self, body: BodyId, block: BlockId) -> Vec<&Inst> {
+        self.body(body).block(block).insts().collect()
     }
 }
 
@@ -150,8 +150,15 @@ fn int_const(value: i128) -> Op {
     Op::Const { value: Literal::Int(value) }
 }
 
-fn inst_ref(block: BlockId, index: usize) -> InstRef {
-    InstRef { block, index }
+/// The site of the instruction at place `index` of `block` of `body`, as it
+/// stands now.
+fn site_at(body: &Body, block: BlockId, index: usize) -> Site {
+    Site::Inst(body.inst_at(block, index).expect("the block holds that instruction"))
+}
+
+/// The instruction at place `index` of `block` of `body`, as it stands now.
+fn inst_ref(body: &Body, block: BlockId, index: usize) -> InstRef {
+    InstRef { id: body.inst_at(block, index).expect("the block holds that instruction") }
 }
 
 fn entry_of(f: &Fixture, body: BodyId) -> BlockId {
@@ -255,35 +262,50 @@ impl Dominance {
     }
 }
 
+impl TestFacts {
+    fn dominance(&mut self, asked: Asked<'_>) -> &Dominance {
+        if self.dominance.is_none() {
+            self.compute(asked.module(), asked.body_id());
+        }
+        self.dominance.as_ref().expect("the facts are computed before they are read")
+    }
+}
+
 impl Facts for TestFacts {
-    fn refresh(&mut self, module: &Module, body: BodyId, changes: &Changes) {
-        self.compute(module, body);
+    fn refresh(&mut self, _: BodyId, changes: &Changes) {
+        self.dominance = None;
         self.refreshed.push(changes.aspects().collect());
     }
 }
 
 impl DominanceFacts for TestFacts {
-    fn dominates(&self, value: ValueId, at: Position) -> bool {
-        let dominance = self.dominance.as_ref().expect("the facts are computed before they are read");
-        dominance.dominators.dominates_site(dominance.points[&value], position_site(at))
+    fn dominates(&mut self, asked: Asked<'_>, value: ValueId, at: Position) -> bool {
+        let body = asked.body();
+        let dominance = self.dominance(asked);
+        dominance.dominators.dominates_site(body, dominance.points[&value], position_site(at))
     }
 
-    fn position_dominates(&self, at: Position, site: Site) -> bool {
-        let dominators = &self.dominance.as_ref().expect("the facts are computed before they are read").dominators;
-        let (block, index) = match at {
-            Position::Before(inst) => (inst.block, Some(inst.index)),
+    fn position_dominates(&mut self, asked: Asked<'_>, at: Position, site: Site) -> bool {
+        let body = asked.body();
+        let dominators = &self.dominance(asked).dominators;
+        let (block, before) = match at {
+            Position::Before(inst) => (body.block_of(inst.id), Some(inst.id)),
             Position::End(block) => (block, None),
         };
         match site {
-            Site::Inst(at, at_index) if at == block => index.is_some_and(|index| index <= at_index),
+            Site::Inst(at) if body.block_of(at) == block => {
+                before.is_some_and(|before| before == at || body.comes_before(before, at))
+            }
             Site::Term(at) if at == block => true,
-            Site::Inst(at, _) | Site::Term(at) => dominators.dominates_block(block, at),
+            Site::Inst(at) => dominators.dominates_block(block, body.block_of(at)),
+            Site::Term(at) => dominators.dominates_block(block, at),
         }
     }
 
-    fn control_equivalent(&self, a: Position, b: Position) -> bool {
-        let dominance = self.dominance.as_ref().expect("the facts are computed before they are read");
-        let (a, b) = (position_block(a), position_block(b));
+    fn control_equivalent(&mut self, asked: Asked<'_>, a: Position, b: Position) -> bool {
+        let body = asked.body();
+        let (a, b) = (position_block(body, a), position_block(body, b));
+        let dominance = self.dominance(asked);
         let dominates = |above, below| dominance.dominators.dominates_block(above, below);
         let post_dominates = |below: BlockId, above: BlockId| !dominance.exits_avoiding(above, below);
         a == b || (dominates(a, b) && post_dominates(b, a)) || (dominates(b, a) && post_dominates(a, b))
@@ -292,46 +314,52 @@ impl DominanceFacts for TestFacts {
 
 fn position_site(at: Position) -> Site {
     match at {
-        Position::Before(inst) => Site::Inst(inst.block, inst.index),
+        Position::Before(inst) => Site::Inst(inst.id),
         Position::End(block) => Site::Term(block),
     }
 }
 
-fn position_block(at: Position) -> BlockId {
+fn position_block(body: &Body, at: Position) -> BlockId {
     match at {
-        Position::Before(inst) => inst.block,
+        Position::Before(inst) => body.block_of(inst.id),
         Position::End(block) => block,
     }
 }
 
 impl OrderFacts for TestFacts {
-    fn may_reorder(&self, a: InstRef, b: InstRef) -> bool {
+    fn may_reorder(&mut self, _: Asked<'_>, a: InstRef, b: InstRef) -> bool {
         !self.kept_in_order.contains(&(a, b))
     }
 }
 
 impl LoanFacts for TestFacts {
-    fn conflicts(&self, inst: InstRef, write: InstRef) -> bool {
+    fn conflicts(&mut self, _: Asked<'_>, inst: InstRef, write: InstRef) -> bool {
         self.conflicting.contains(&(inst, write))
     }
 
-    fn escapes(&self, slot: ValueId) -> Option<Site> {
+    /// Every instruction may name storage here: the table says which pairs
+    /// conflict.
+    fn names_storage(&mut self, _: Asked<'_>, _: InstRef) -> bool {
+        true
+    }
+
+    fn escapes(&mut self, _: Asked<'_>, slot: ValueId) -> Option<Site> {
         self.escaping.get(&slot).copied()
     }
 }
 
 impl ContentFacts for TestFacts {
-    fn content_read_after(&self, place: ValueId, _: Position) -> bool {
+    fn content_read_after(&mut self, _: Asked<'_>, place: ValueId, _: Position) -> bool {
         self.content_read.contains(&place)
     }
 
-    fn part_read_after(&self, place: ValueId, _: &[crate::ir::PathSeg], _: Position) -> bool {
+    fn part_read_after(&mut self, _: Asked<'_>, place: ValueId, _: &[crate::ir::PathSeg], _: Position) -> bool {
         self.content_read.contains(&place)
     }
 }
 
 impl DischargeFacts for TestFacts {
-    fn discharged(&self, inst: InstRef) -> Option<Unobserved> {
+    fn discharged(&mut self, _: Asked<'_>, inst: InstRef) -> Option<Unobserved> {
         self.unobserved.get(&inst).copied()
     }
 }
@@ -394,7 +422,7 @@ fn replace_uses_refuses_a_value_that_does_not_dominate_a_use_and_leaves_the_body
     let refused = editor.replace_uses(x, z);
     editor.finish();
 
-    assert_eq!(refused, Err(DoesNotDominate { use_at: Site::Inst(entry, 1) }));
+    assert_eq!(refused, Err(DoesNotDominate { use_at: site_at(f.body(id), entry, 1) }));
     assert_eq!(snapshot(f.body(id)), before);
     assert!(facts.refreshed.is_empty(), "a refused edit changes nothing to refresh");
 }
@@ -423,7 +451,7 @@ fn insert_puts_a_pure_instruction_at_its_position() {
     let (entry, int) = (entry_of(&f, id), f.int);
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Value>::new(&mut f.module, id, &mut facts);
-    let doubled = editor.insert(Position::Before(inst_ref(entry, 1)), add(x, x), int, at(9));
+    let doubled = editor.insert(Position::Before(inst_ref(editor.body(), entry, 1)), add(x, x), int, at(9));
     let at_end = editor.insert(Position::End(entry), neg(a), int, at(10));
     editor.finish();
 
@@ -472,8 +500,8 @@ fn remove_takes_out_an_unused_pure_instruction_and_a_pure_call() {
 
     let mut facts = NoFacts;
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.remove(inst_ref(entry, 1)), Ok(()));
-    assert_eq!(editor.remove(inst_ref(entry, 0)), Ok(()));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 1)), Ok(()));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 0)), Ok(()));
     editor.finish();
     assert!(f.insts(id, entry).is_empty());
 }
@@ -486,7 +514,7 @@ fn remove_refuses_an_instruction_whose_result_is_used() {
     let before = snapshot(f.body(id));
     let mut facts = NoFacts;
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.remove(inst_ref(entry, 0)), Err(Unremovable::StillUsed));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 0)), Err(Unremovable::StillUsed));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -499,7 +527,7 @@ fn remove_refuses_an_opaque_call_and_a_call_that_writes() {
     let before = snapshot(f.body(id));
     let mut facts = NoFacts;
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.remove(inst_ref(entry, 0)), Err(Unremovable::Effect));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 0)), Err(Unremovable::Effect));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 
@@ -511,7 +539,7 @@ fn remove_refuses_an_opaque_call_and_a_call_that_writes() {
     let id = builder.seal().expect("the body has no open state");
     let entry = entry_of(&f, id);
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.remove(inst_ref(entry, 0)), Err(Unremovable::Effect));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 0)), Err(Unremovable::Effect));
 }
 
 #[test]
@@ -531,9 +559,9 @@ fn remove_refuses_a_check_a_store_and_an_idempotent_call() {
 
     let mut facts = NoFacts;
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.remove(inst_ref(entry, 0)), Err(Unremovable::Traps));
-    assert_eq!(editor.remove(inst_ref(entry, 1)), Err(Unremovable::Writes));
-    assert_eq!(editor.remove(inst_ref(entry, 2)), Err(Unremovable::Effect));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 0)), Err(Unremovable::Traps));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 1)), Err(Unremovable::Writes));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 2)), Err(Unremovable::Effect));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -551,7 +579,7 @@ fn remove_takes_out_an_unused_field_set_which_writes_no_storage() {
     let entry = entry_of(&f, id);
     let mut facts = NoFacts;
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.remove(inst_ref(entry, 0)), Ok(()));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 0)), Ok(()));
     editor.finish();
     assert!(f.insts(id, entry).is_empty());
 }
@@ -569,13 +597,13 @@ fn removing_a_taking_removes_its_start() {
 
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.split_call(inst_ref(entry, 0)), Ok(()));
+    assert_eq!(editor.split_call(inst_ref(editor.body(), entry, 0)), Ok(()));
     editor.finish();
     assert_eq!(f.insts(id, entry).len(), 2);
 
     let mut none = NoFacts;
     let mut editor = Editor::<Remove>::new(&mut f.module, id, &mut none);
-    assert_eq!(editor.remove(inst_ref(entry, 1)), Ok(()));
+    assert_eq!(editor.remove(inst_ref(editor.body(), entry, 1)), Ok(()));
     editor.finish();
     assert!(f.insts(id, entry).is_empty());
 }
@@ -652,7 +680,7 @@ fn retarget_refuses_the_entry_disagreeing_parameters_and_a_parameter_read_beyond
     let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
     assert_eq!(editor.retarget(entry, passes), Err(CannotRetarget::Entry));
     assert_eq!(editor.retarget(passes, takes_bool), Err(CannotRetarget::ParamsDisagree));
-    assert_eq!(editor.retarget(reads, target), Err(CannotRetarget::ParamsUsedBeyond(Site::Inst(reads, 0))));
+    assert_eq!(editor.retarget(reads, target), Err(CannotRetarget::ParamsUsedBeyond(site_at(editor.body(), reads, 0))));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -669,7 +697,7 @@ fn take_arm_makes_a_diamond_a_jump_and_its_join_stays_a_block() {
     let body = f.body(id);
     assert!(matches!(body.block(entry).terminator(), Terminator::Jump { .. }));
     assert!(body.block(join).params().is_empty());
-    assert_eq!(body.users(result_of(&body.block(then_block).insts()[0])).count(), 0);
+    assert_eq!(body.users(result_of(body.block(then_block).insts().nth(0).expect("the block holds that instruction"))).count(), 0);
 }
 
 #[test]
@@ -751,7 +779,7 @@ fn move_to_moves_an_instruction_whose_operands_dominate_its_new_place() {
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.move_to(inst_ref(entry, 2), Position::Before(inst_ref(entry, 0))), Ok(()));
+    assert_eq!(editor.move_to(inst_ref(editor.body(), entry, 2), Position::Before(inst_ref(editor.body(), entry, 0))), Ok(()));
     editor.finish();
     assert!(matches!(f.insts(id, entry)[0].op(), Op::Check { left, .. } if *left == a));
 }
@@ -770,7 +798,7 @@ fn move_to_refuses_a_place_an_operand_does_not_dominate() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    let refused = editor.move_to(inst_ref(entry, 1), Position::Before(inst_ref(entry, 0)));
+    let refused = editor.move_to(inst_ref(editor.body(), entry, 1), Position::Before(inst_ref(editor.body(), entry, 0)));
     editor.finish();
     assert_eq!(refused, Err(CannotMove::OperandNotDominating(x)));
     assert_eq!(snapshot(f.body(id)), before);
@@ -782,11 +810,11 @@ fn move_to_refuses_crossing_a_conflicting_write() {
     let (id, _) = { let callee = f.opaque; two_calls(&mut f, callee) };
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
-    facts.conflicting.insert((inst_ref(entry, 1), inst_ref(entry, 2)));
+    facts.conflicting.insert((inst_ref(f.body(id), entry, 1), inst_ref(f.body(id), entry, 2)));
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    let refused = editor.move_to(inst_ref(entry, 2), Position::Before(inst_ref(entry, 0)));
+    let refused = editor.move_to(inst_ref(editor.body(), entry, 2), Position::Before(inst_ref(editor.body(), entry, 0)));
     editor.finish();
-    assert_eq!(refused, Err(CannotMove::CrossesConflictingWrite(inst_ref(entry, 1))));
+    assert_eq!(refused, Err(CannotMove::CrossesConflictingWrite(inst_ref(f.body(id), entry, 1))));
 }
 
 #[test]
@@ -798,7 +826,7 @@ fn moving_an_effect_across_another_on_its_chain_is_refused_by_dominance() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    let refused = editor.move_to(inst_ref(entry, 1), Position::Before(inst_ref(entry, 0)));
+    let refused = editor.move_to(inst_ref(editor.body(), entry, 1), Position::Before(inst_ref(editor.body(), entry, 0)));
     editor.finish();
     assert_eq!(refused, Err(CannotMove::OperandNotDominating(first_yield)));
     assert_eq!(snapshot(f.body(id)), before);
@@ -825,7 +853,7 @@ fn moving_an_effect_away_from_what_its_token_reaches_is_refused() {
 
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    let refused = editor.move_to(inst_ref(entry, 0), Position::End(then_block));
+    let refused = editor.move_to(inst_ref(editor.body(), entry, 0), Position::End(then_block));
     editor.finish();
     assert_eq!(refused, Err(CannotMove::UseNotDominated(Site::Term(join))));
     assert_eq!(snapshot(f.body(id)), before);
@@ -862,9 +890,9 @@ fn hoisting_a_pure_value_that_never_traps_out_of_a_loop_succeeds() {
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.move_to(inst_ref(loop_body, 0), Position::End(entry)), Ok(()));
+    assert_eq!(editor.move_to(inst_ref(editor.body(), loop_body, 0), Position::End(entry)), Ok(()));
     editor.finish();
-    assert!(matches!(f.insts(id, entry), [hoisted] if matches!(hoisted.op(), Op::BinOp { op: BinOp::Min, .. })));
+    assert!(matches!(f.insts(id, entry)[..], [hoisted] if matches!(hoisted.op(), Op::BinOp { op: BinOp::Min, .. })));
     assert_eq!(f.insts(id, loop_body).len(), 1);
 }
 
@@ -876,7 +904,7 @@ fn hoisting_a_trapping_value_out_of_a_loop_is_refused() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    let refused = editor.move_to(inst_ref(loop_body, 0), Position::End(entry));
+    let refused = editor.move_to(inst_ref(editor.body(), loop_body, 0), Position::End(entry));
     editor.finish();
     assert_eq!(refused, Err(CannotMove::ChangesWhereItRuns));
     assert_eq!(snapshot(f.body(id)), before);
@@ -896,14 +924,14 @@ fn a_split_calls_start_and_taking_move_while_their_tokens_still_dominate() {
 
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.split_call(inst_ref(entry, 0)), Ok(()));
+    assert_eq!(editor.split_call(inst_ref(editor.body(), entry, 0)), Ok(()));
     editor.finish();
 
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.move_to(inst_ref(entry, 1), Position::End(entry)), Ok(()));
-    assert_eq!(editor.move_to(inst_ref(entry, 0), Position::Before(inst_ref(entry, 2))), Ok(()));
+    assert_eq!(editor.move_to(inst_ref(editor.body(), entry, 1), Position::End(entry)), Ok(()));
+    assert_eq!(editor.move_to(inst_ref(editor.body(), entry, 0), Position::Before(inst_ref(editor.body(), entry, 2))), Ok(()));
     editor.finish();
-    let ops: Vec<&Op> = f.insts(id, entry).iter().map(Inst::op).collect();
+    let ops: Vec<&Op> = f.insts(id, entry).into_iter().map(Inst::op).collect();
     assert!(matches!(ops[..], [Op::Check { .. }, Op::Spawn { .. }, Op::TakeEffect { .. }]), "{ops:?}");
 }
 
@@ -916,7 +944,7 @@ fn split_call_makes_a_start_and_its_taking() {
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.split_call(inst_ref(entry, 1)), Ok(()));
+    assert_eq!(editor.split_call(inst_ref(editor.body(), entry, 1)), Ok(()));
     editor.finish();
     let insts = f.insts(id, entry);
     assert!(matches!(insts[1].op(), Op::Spawn { .. }));
@@ -932,7 +960,7 @@ fn split_call_refuses_a_callee_that_does_not_let_it_split() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.split_call(inst_ref(entry, 0)), Err(CannotSplit::NotSplittable));
+    assert_eq!(editor.split_call(inst_ref(editor.body(), entry, 0)), Err(CannotSplit::NotSplittable));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -1001,8 +1029,8 @@ fn promote_builds_values_across_a_diamond_and_a_loop() {
         .filter(|inst| matches!(inst.op(), Op::Take { .. } | Op::Assign { .. } | Op::Undef))
         .count();
     assert_eq!(storage_ops, 0, "every Take and Assign of the slot is gone, and no Undef is needed");
-    let one = result_of(&body.block(entry).insts()[0]);
-    let two = result_of(&body.block(then_block).insts()[0]);
+    let one = result_of(body.block(entry).insts().nth(0).expect("the block holds that instruction"));
+    let two = result_of(body.block(then_block).insts().nth(0).expect("the block holds that instruction"));
     let [joined] = body.block(join).params() else {
         panic!("the join takes the slot's value from its arms: {:?}", body.block(join).params())
     };
@@ -1015,7 +1043,7 @@ fn promote_builds_values_across_a_diamond_and_a_loop() {
         panic!("the loop header takes the slot's value around the loop: {:?}", body.block(header).params())
     };
     assert_eq!(passed(join), vec![*joined]);
-    let body_insts = body.block(loop_body).insts();
+    let body_insts: Vec<_> = body.block(loop_body).insts().collect();
     assert!(matches!(body_insts[1].op(), Op::BinOp { left, .. } if left == carried));
     assert_eq!(passed(loop_body), vec![result_of(&body_insts[1])]);
     assert!(matches!(body.block(exit).terminator(), Terminator::Return { value, .. } if value == carried));
@@ -1036,7 +1064,7 @@ fn promote_reads_undef_where_no_store_comes_first() {
     assert_eq!(editor.promote(x), Ok(()));
     editor.finish();
     let insts = f.insts(id, entry);
-    assert!(matches!(insts, [undef] if matches!(undef.op(), Op::Undef) && undef.span() == at(30)));
+    assert!(matches!(insts[..], [undef] if matches!(undef.op(), Op::Undef) && undef.span() == at(30)));
     assert!(matches!(f.body(id).block(entry).terminator(), Terminator::Return { value, .. } if *value == result_of(&insts[0])));
 }
 
@@ -1046,9 +1074,9 @@ fn promote_refuses_a_slot_whose_reference_escapes() {
     let (id, x, [.., loop_body, _]) = slot_across_a_diamond_and_a_loop(&mut f);
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
-    facts.escaping.insert(x, Site::Inst(loop_body, 0));
+    facts.escaping.insert(x, site_at(f.body(id), loop_body, 0));
     let mut editor = Editor::<Storage>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.promote(x), Err(CannotPromote::Escapes(Site::Inst(loop_body, 0))));
+    assert_eq!(editor.promote(x), Err(CannotPromote::Escapes(site_at(editor.body(), loop_body, 0))));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -1101,13 +1129,13 @@ fn a_cursor_skips_what_is_inserted_before_it_and_yields_what_is_inserted_after()
         seen.push(span);
         if span == at(1) {
             cursor.editor().insert(Position::Before(inst), neg(a), int, at(20));
-            let after = InstRef { block: inst.block, index: inst.index + 2 };
+            let after = cursor.editor().next_inst(inst).expect("an instruction follows the one at at(1)");
             cursor.editor().insert(Position::Before(after), neg(a), int, at(21));
         }
     }
     editor.finish();
     assert_eq!(seen, vec![at(1), at(21), at(2), at(3), at(4)]);
-    let spans: Vec<Span> = f.insts(id, entry).iter().map(Inst::span).collect();
+    let spans: Vec<Span> = f.insts(id, entry).into_iter().map(Inst::span).collect();
     assert_eq!(spans, vec![at(20), at(1), at(21), at(2), at(3), at(4)]);
 }
 
@@ -1153,13 +1181,20 @@ fn body_mut(f: &mut Fixture, id: BodyId) -> &mut Body {
     &mut f.module.bodies[id.0 as usize]
 }
 
+/// The instruction at place `index` of `block`, to rewrite in place.
+fn inst_mut(f: &mut Fixture, id: BodyId, block: BlockId, index: usize) -> &mut Inst {
+    let body = body_mut(f, id);
+    let at = body.inst_at(block, index).expect("the block holds that instruction");
+    body.inst_mut(at)
+}
+
 #[test]
 fn types_agree_holds_on_a_built_body_and_catches_a_mistyped_result() {
     let mut f = fixture();
     let (id, [a, ..]) = straight_line(&mut f);
     assert_eq!(<TypesAgree as Invariant>::check(f.body(id), f.module.types()), Ok(()));
     let entry = entry_of(&f, id);
-    body_mut(&mut f, id).blocks[entry.index()].insts[0].op = Op::BinOp { op: BinOp::Lt, left: a, right: a };
+    inst_mut(&mut f, id, entry, 0).op = Op::BinOp { op: BinOp::Lt, left: a, right: a };
     let refused = <TypesAgree as Invariant>::check(f.body(id), f.module.types());
     assert!(matches!(refused, Err(Violation { invariant: "TypesAgree", .. })), "{refused:?}");
 }
@@ -1170,7 +1205,7 @@ fn def_dominates_uses_holds_on_a_built_body_and_catches_a_use_before_its_definit
     let (id, [a, _, y, _]) = straight_line(&mut f);
     assert_eq!(<DefDominatesUses as Invariant>::check(f.body(id), f.module.types()), Ok(()));
     let entry = entry_of(&f, id);
-    body_mut(&mut f, id).blocks[entry.index()].insts[0].op = add(a, y);
+    inst_mut(&mut f, id, entry, 0).op = add(a, y);
     let refused = <DefDominatesUses as Invariant>::check(f.body(id), f.module.types());
     assert!(matches!(refused, Err(Violation { invariant: "DefDominatesUses", .. })), "{refused:?}");
 }
@@ -1211,12 +1246,12 @@ fn split_taken_once_holds_after_a_split_and_catches_a_start_never_taken() {
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.split_call(inst_ref(entry, 0)), Ok(()));
+    assert_eq!(editor.split_call(inst_ref(editor.body(), entry, 0)), Ok(()));
     editor.finish();
     assert_eq!(<SplitTakenOnce as Invariant>::check(f.body(id), f.module.types()), Ok(()));
 
     let handle = result_of(&f.insts(id, entry)[0]);
-    body_mut(&mut f, id).blocks[entry.index()].insts[1].op = Op::Drop { src: handle };
+    inst_mut(&mut f, id, entry, 1).op = Op::Drop { src: handle };
     let refused = <SplitTakenOnce as Invariant>::check(f.body(id), f.module.types());
     assert!(matches!(refused, Err(Violation { invariant: "SplitTakenOnce", .. })), "{refused:?}");
 }
@@ -1238,7 +1273,7 @@ fn order_chain_whole_accepts_an_anyorder_fork_that_merges_and_rejects_one_that_d
     let (id, _) = { let callee = f.opaque; two_calls(&mut f, callee) };
     let entry = entry_of(&f, id);
     let o0 = f.body(id).order_param().expect("the body is ordered");
-    let Some(OrderUse::Edge(edge)) = &mut body_mut(&mut f, id).blocks[entry.index()].insts[1].order else {
+    let Some(OrderUse::Edge(edge)) = &mut inst_mut(&mut f, id, entry, 1).order else {
         panic!("the second call is on the chain")
     };
     edge.before = o0;
@@ -1736,7 +1771,7 @@ fn merge_into_predecessor_joins_a_block_its_sole_predecessor_jumps_to() {
     editor.finish();
     let body = f.body(id);
     assert_eq!(body.blocks().count(), 1);
-    let insts = body.block(entry).insts();
+    let insts: Vec<_> = body.block(entry).insts().collect();
     assert_eq!(insts.len(), 2);
     assert!(matches!(insts[1].op(), Op::UnaryOp { operand, .. } if *operand == x), "the parameter became its argument");
     assert_eq!(result_of(&insts[1]), y);
@@ -1809,12 +1844,12 @@ fn replace_use_changes_one_site_only() {
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Value>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.replace_use(Site::Inst(entry, 3), x, z), Ok(()));
+    assert_eq!(editor.replace_use(site_at(editor.body(), entry, 3), x, z), Ok(()));
     editor.finish();
     let body = f.body(id);
     assert_eq!((body.use_count(x), body.use_count(z)), (1, 2));
-    assert!(matches!(body.block(entry).insts()[1].op(), Op::UnaryOp { operand, .. } if *operand == x));
-    assert!(matches!(body.block(entry).insts()[3].op(), Op::BinOp { left, right, .. } if (*left, *right) == (z, z)));
+    assert!(matches!(body.block(entry).insts().nth(1).expect("the block holds that instruction").op(), Op::UnaryOp { operand, .. } if *operand == x));
+    assert!(matches!(body.block(entry).insts().nth(3).expect("the block holds that instruction").op(), Op::BinOp { left, right, .. } if (*left, *right) == (z, z)));
 }
 
 #[test]
@@ -1825,7 +1860,7 @@ fn replace_use_refuses_a_value_that_does_not_dominate_the_site() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Value>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.replace_use(Site::Inst(entry, 1), x, z), Err(DoesNotDominate { use_at: Site::Inst(entry, 1) }));
+    assert_eq!(editor.replace_use(site_at(editor.body(), entry, 1), x, z), Err(DoesNotDominate { use_at: site_at(editor.body(), entry, 1) }));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -1855,7 +1890,7 @@ fn swap_trades_two_commuting_calls_and_the_chain_stays_whole() {
     let [r1, r2] = [0, 1].map(|index| result_of(&f.insts(id, entry)[index]));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.swap(inst_ref(entry, 0), inst_ref(entry, 1)), Ok(()));
+    assert_eq!(editor.swap(inst_ref(editor.body(), entry, 0), inst_ref(editor.body(), entry, 1)), Ok(()));
     editor.finish();
 
     let insts = f.insts(id, entry);
@@ -1877,11 +1912,11 @@ fn swap_refuses_calls_not_adjacent_on_the_chain_and_calls_kept_in_order() {
     let entry = entry_of(&f, id);
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
-    facts.kept_in_order.insert((inst_ref(entry, 1), inst_ref(entry, 2)));
+    facts.kept_in_order.insert((inst_ref(f.body(id), entry, 1), inst_ref(f.body(id), entry, 2)));
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.swap(inst_ref(entry, 0), inst_ref(entry, 2)), Err(CannotSwap::NotAdjacent));
-    assert_eq!(editor.swap(inst_ref(entry, 1), inst_ref(entry, 0)), Err(CannotSwap::NotAdjacent));
-    assert_eq!(editor.swap(inst_ref(entry, 1), inst_ref(entry, 2)), Err(CannotSwap::Ordered));
+    assert_eq!(editor.swap(inst_ref(editor.body(), entry, 0), inst_ref(editor.body(), entry, 2)), Err(CannotSwap::NotAdjacent));
+    assert_eq!(editor.swap(inst_ref(editor.body(), entry, 1), inst_ref(editor.body(), entry, 0)), Err(CannotSwap::NotAdjacent));
+    assert_eq!(editor.swap(inst_ref(editor.body(), entry, 1), inst_ref(editor.body(), entry, 2)), Err(CannotSwap::Ordered));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -1910,7 +1945,7 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Effect>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.swap(inst_ref(entry, 0), inst_ref(entry, 1)), Err(CannotSwap::DependsOn(r)));
+    assert_eq!(editor.swap(inst_ref(editor.body(), entry, 0), inst_ref(editor.body(), entry, 1)), Err(CannotSwap::DependsOn(r)));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -1940,11 +1975,11 @@ fn discharge_removes_a_check_a_dead_store_an_unread_load_and_an_unwritten_commit
     let mut facts = TestFacts::of(&f.module, id);
     let facts_of = [Unobserved::NeverFires, Unobserved::NeverRead, Unobserved::NeverRead, Unobserved::NeverWritten];
     for (index, fact) in facts_of.into_iter().enumerate() {
-        facts.unobserved.insert(inst_ref(entry, index), fact);
+        facts.unobserved.insert(inst_ref(f.body(id), entry, index), fact);
     }
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
     for index in (0..4).rev() {
-        assert_eq!(editor.discharge(inst_ref(entry, index)), Ok(()), "instruction {index}");
+        assert_eq!(editor.discharge(inst_ref(editor.body(), entry, index)), Ok(()), "instruction {index}");
     }
     let changes = editor.finish();
     assert!(f.insts(id, entry).is_empty());
@@ -1961,14 +1996,14 @@ fn discharge_refuses_without_a_fact_and_with_the_wrong_fact() {
     let entry = entry_of(&f, id);
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
-    facts.unobserved.insert(inst_ref(entry, 0), Unobserved::NeverRead);
-    facts.unobserved.insert(inst_ref(entry, 1), Unobserved::NeverWritten);
-    facts.unobserved.insert(inst_ref(entry, 3), Unobserved::NeverRead);
+    facts.unobserved.insert(inst_ref(f.body(id), entry, 0), Unobserved::NeverRead);
+    facts.unobserved.insert(inst_ref(f.body(id), entry, 1), Unobserved::NeverWritten);
+    facts.unobserved.insert(inst_ref(f.body(id), entry, 3), Unobserved::NeverRead);
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.discharge(inst_ref(entry, 0)), Err(CannotDischarge::WrongFact), "a check needs NeverFires");
-    assert_eq!(editor.discharge(inst_ref(entry, 1)), Err(CannotDischarge::WrongFact), "a store needs NeverRead");
-    assert_eq!(editor.discharge(inst_ref(entry, 2)), Err(CannotDischarge::NotProven));
-    assert_eq!(editor.discharge(inst_ref(entry, 3)), Err(CannotDischarge::WrongFact), "a commit needs NeverWritten");
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 0)), Err(CannotDischarge::WrongFact), "a check needs NeverFires");
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 1)), Err(CannotDischarge::WrongFact), "a store needs NeverRead");
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 2)), Err(CannotDischarge::NotProven));
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 3)), Err(CannotDischarge::WrongFact), "a commit needs NeverWritten");
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
     assert!(facts.refreshed.is_empty());
@@ -1982,7 +2017,7 @@ fn discharging_another_kind_is_a_callers_defect() {
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    let _ = editor.discharge(inst_ref(entry, 0));
+    let _ = editor.discharge(inst_ref(editor.body(), entry, 0));
 }
 
 // -- S1: split_slot ------------------------------------------------------------
@@ -2016,7 +2051,7 @@ fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
     let body = f.body(id);
     assert_eq!(body.slots(), [first, second]);
     assert_eq!((body.ty_of(first), body.ty_of(second)), (int, int));
-    let place = |index: usize| body.block(entry).insts()[index].op().place().map(|(target, path)| (*target, path.to_vec()));
+    let place = |index: usize| body.block(entry).insts().nth(index).expect("the block holds that instruction").op().place().map(|(target, path)| (*target, path.to_vec()));
     assert_eq!(place(0), Some((RefTarget::Var(first), Vec::new())));
     assert_eq!(place(1), Some((RefTarget::Var(second), Vec::new())));
     assert_eq!(place(2), Some((RefTarget::Var(second), Vec::new())));
@@ -2048,7 +2083,7 @@ fn split_slot_refuses_a_type_that_is_not_structural_and_a_use_of_the_whole() {
     let mut editor = Editor::<Storage>::new(&mut f.module, id, &mut facts);
     assert_eq!(editor.split_slot(scalar), Err(CannotSplitSlot::NotStructural));
     assert_eq!(editor.split_slot(declared), Err(CannotSplitSlot::NotStructural), "an extern-defined type is never split");
-    assert_eq!(editor.split_slot(whole), Err(CannotSplitSlot::Escapes(Site::Inst(entry, 1))));
+    assert_eq!(editor.split_slot(whole), Err(CannotSplitSlot::Escapes(site_at(editor.body(), entry, 1))));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -2098,7 +2133,7 @@ fn inline_puts_a_straight_callee_in_the_calls_place_on_the_callers_chain() {
 
     let mut facts = NoFacts;
     let mut editor = Editor::<Inline>::new(&mut f.module, caller, &mut facts);
-    assert_eq!(editor.inline(inst_ref(entry, 2)), Ok(()));
+    assert_eq!(editor.inline(inst_ref(editor.body(), entry, 2)), Ok(()));
     editor.finish();
 
     let body = f.body(caller);
@@ -2107,7 +2142,7 @@ fn inline_puts_a_straight_callee_in_the_calls_place_on_the_callers_chain() {
         panic!("the caller's block enters the copy")
     };
     assert!(args.is_empty());
-    let copied = body.block(*copy).insts();
+    let copied: Vec<_> = body.block(*copy).insts().collect();
     assert_eq!(edge_of(&copied[0]).before, o0, "the callee's chain continues the caller's");
     assert!(matches!(copied[1].op(), Op::BinOp { left, right, .. } if (*left, *right) == (a, one)));
     let Terminator::Jump { to: continuation, args } = body.block(*copy).terminator() else {
@@ -2117,7 +2152,7 @@ fn inline_puts_a_straight_callee_in_the_calls_place_on_the_callers_chain() {
     let [result, token] = body.block(*continuation).params() else {
         panic!("the continuation takes the result and the token")
     };
-    let rest = body.block(*continuation).insts();
+    let rest: Vec<_> = body.block(*continuation).insts().collect();
     assert_eq!(edge_of(&rest[0]).before, *token);
     assert!(matches!(rest[1].op(), Op::BinOp { left, right, .. } if (*left, *right) == (*result, *result)));
     for invariant in [
@@ -2161,7 +2196,7 @@ fn inline_joins_every_return_of_the_callee_at_the_continuation() {
 
     let mut facts = NoFacts;
     let mut editor = Editor::<Inline>::new(&mut f.module, caller, &mut facts);
-    assert_eq!(editor.inline(inst_ref(entry, 1)), Ok(()));
+    assert_eq!(editor.inline(inst_ref(editor.body(), entry, 1)), Ok(()));
     editor.finish();
 
     let body = f.body(caller);
@@ -2169,7 +2204,7 @@ fn inline_joins_every_return_of_the_callee_at_the_continuation() {
     let [result] = body.block(continuation).params() else {
         panic!("the continuation takes the result alone, as the call is on no chain")
     };
-    assert!(matches!(body.block(continuation).insts()[0].op(), Op::BinOp { left, .. } if left == result));
+    assert!(matches!(body.block(continuation).insts().nth(0).expect("the block holds that instruction").op(), Op::BinOp { left, .. } if left == result));
     let preds = body.predecessors();
     assert_eq!(preds[&continuation].len(), 2, "both returns jump to the continuation");
     let passed: Vec<ValueId> = preds[&continuation]
@@ -2205,8 +2240,8 @@ fn inline_refuses_a_callee_without_a_body_and_the_callers_own_body() {
 
     let mut facts = NoFacts;
     let mut editor = Editor::<Inline>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.inline(inst_ref(entry, 0)), Err(CannotInline::NoBody));
-    assert_eq!(editor.inline(inst_ref(entry, 2)), Err(CannotInline::Recursive));
+    assert_eq!(editor.inline(inst_ref(editor.body(), entry, 0)), Err(CannotInline::NoBody));
+    assert_eq!(editor.inline(inst_ref(editor.body(), entry, 2)), Err(CannotInline::Recursive));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 }
@@ -2222,8 +2257,8 @@ fn insert_drop_stands_after_the_last_use_and_is_refused_before_a_use() {
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Drops>::new(&mut f.module, id, &mut facts);
     assert_eq!(
-        editor.insert_drop(x, Position::Before(inst_ref(entry, 2)), at(9)),
-        Err(CannotDrop::UsedAfter(Site::Inst(entry, 3)))
+        editor.insert_drop(x, Position::Before(inst_ref(editor.body(), entry, 2)), at(9)),
+        Err(CannotDrop::UsedAfter(site_at(editor.body(), entry, 3)))
     );
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
@@ -2259,8 +2294,8 @@ fn insert_drop_is_refused_inside_a_loop_before_a_use_the_back_edge_reaches() {
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Drops>::new(&mut f.module, id, &mut facts);
     assert_eq!(
-        editor.insert_drop(x, Position::Before(inst_ref(loop_body, 1)), at(9)),
-        Err(CannotDrop::UsedAfter(Site::Inst(loop_body, 0)))
+        editor.insert_drop(x, Position::Before(inst_ref(editor.body(), loop_body, 1)), at(9)),
+        Err(CannotDrop::UsedAfter(site_at(editor.body(), loop_body, 0)))
     );
     assert_eq!(editor.insert_drop(x, Position::End(exit), at(9)), Ok(()));
     editor.finish();
@@ -2314,13 +2349,13 @@ fn drop_content_takes_the_content_out_and_drops_it_unless_it_is_read_after() {
     let mut facts = TestFacts::of(&f.module, id);
     facts.content_read.insert(s);
     let mut editor = Editor::<Drops>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.drop_content(s, Position::Before(inst_ref(entry, 3)), at(9)), Err(CannotDrop::ContentReadAfter));
+    assert_eq!(editor.drop_content(s, Position::Before(inst_ref(editor.body(), entry, 3)), at(9)), Err(CannotDrop::ContentReadAfter));
     editor.finish();
     assert_eq!(f.insts(id, entry).len(), 4);
 
     facts.content_read.clear();
     let mut editor = Editor::<Drops>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.drop_content(s, Position::Before(inst_ref(entry, 3)), at(9)), Ok(()));
+    assert_eq!(editor.drop_content(s, Position::Before(inst_ref(editor.body(), entry, 3)), at(9)), Ok(()));
     editor.finish();
     let insts = f.insts(id, entry);
     let taken = insts[3].result().expect("a Take yields a value");
@@ -2351,8 +2386,8 @@ fn clone_read_turns_a_string_take_into_a_clone_of_a_shared_ref() {
 
     let mut no_facts = NoFacts;
     let mut editor = Editor::<Clones>::new(&mut f.module, id, &mut no_facts);
-    assert_eq!(editor.clone_read(inst_ref(entry, 2)), Err(CannotCloneRead::NotAString));
-    assert_eq!(editor.clone_read(inst_ref(entry, 3)), Ok(()));
+    assert_eq!(editor.clone_read(inst_ref(editor.body(), entry, 2)), Err(CannotCloneRead::NotAString));
+    assert_eq!(editor.clone_read(inst_ref(editor.body(), entry, 3)), Ok(()));
     let changes = editor.finish();
     assert!(changes.touched(Aspect::Types));
     let insts = f.insts(id, entry);
@@ -2377,7 +2412,7 @@ fn replace_operand_changes_the_one_operand_it_names() {
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Value>::new(&mut f.module, id, &mut facts);
     let twice = editor.insert(Position::End(entry), add(x, x), f.int, at(9));
-    let site = Site::Inst(entry, 4);
+    let site = site_at(editor.body(), entry, 4);
     assert_eq!(editor.replace_operand(site, 0, x, y), Ok(()));
     editor.finish();
     assert!(matches!(f.insts(id, entry)[4].op(), Op::BinOp { left, right, .. } if *left == y && *right == x));
@@ -2473,7 +2508,8 @@ fn a_cursor_yields_each_instruction_once_through_a_merge() {
     let mut editor = Editor::<Cfg>::new(&mut f.module, id, &mut facts);
     let yielded = walk_with(&mut editor, |editor, at| {
         if editor.inst(at).result() == Some(t) {
-            assert_eq!(editor.merge_into_predecessor(at.block), Ok(()));
+            let block = editor.block_of(at);
+            assert_eq!(editor.merge_into_predecessor(block), Ok(()));
         }
     });
     editor.finish();
@@ -2504,18 +2540,18 @@ fn discharge_of_a_checked_index_proves_its_bound_and_keeps_the_index() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.discharge(inst_ref(entry, 0)), Err(CannotDischarge::NotProven));
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 0)), Err(CannotDischarge::NotProven));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
 
-    facts.unobserved.insert(inst_ref(entry, 0), Unobserved::NeverRead);
+    facts.unobserved.insert(inst_ref(f.body(id), entry, 0), Unobserved::NeverRead);
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.discharge(inst_ref(entry, 0)), Err(CannotDischarge::WrongFact), "a checked bound needs NeverFires");
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 0)), Err(CannotDischarge::WrongFact), "a checked bound needs NeverFires");
     editor.finish();
 
-    facts.unobserved.insert(inst_ref(entry, 0), Unobserved::NeverFires);
+    facts.unobserved.insert(inst_ref(f.body(id), entry, 0), Unobserved::NeverFires);
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.discharge(inst_ref(entry, 0)), Ok(()));
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 0)), Ok(()));
     editor.finish();
     let insts = f.insts(id, entry);
     assert_eq!(insts.len(), 1, "the index stays");

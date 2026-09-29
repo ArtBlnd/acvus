@@ -118,7 +118,7 @@ where
             }
             Direction::Backward => {
                 analysis.transfer_terminator(record.terminator(), &mut state);
-                for inst in record.insts().iter().rev() {
+                for inst in record.insts().rev() {
                     analysis.transfer(inst, &mut state);
                 }
                 for pred in preds.get(&block).expect("every block has a predecessor entry") {

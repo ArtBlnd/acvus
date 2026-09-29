@@ -152,7 +152,7 @@ impl Fixture {
 
     /// The ops of `block`, in order.
     pub fn ops(&self, body: BodyId, block: BlockId) -> Vec<&Op> {
-        self.module.body(body).block(block).insts().iter().map(|inst| inst.op()).collect()
+        self.module.body(body).block(block).insts().map(|inst| inst.op()).collect()
     }
 }
 

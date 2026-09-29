@@ -28,7 +28,7 @@ impl BodyTransform for Dse {
     const NAME: &'static str = "dse";
 
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Discharge>::new(module, body, &mut facts);
         let mut cursor = editor.cursor();
         while let Some(inst) = cursor.next() {
@@ -45,7 +45,7 @@ impl BodyTransform for Dse {
 }
 
 fn is_store(body: &Body, inst: InstRef) -> bool {
-    matches!(body.block(inst.block()).insts()[inst.index()].op(), Op::Assign { .. })
+    matches!(body.inst(inst.id()).op(), Op::Assign { .. })
 }
 
 #[cfg(test)]

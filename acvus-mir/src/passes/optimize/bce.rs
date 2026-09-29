@@ -33,7 +33,7 @@ impl BodyTransform for Bce {
     const NAME: &'static str = "bce";
 
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Discharge>::new(module, body, &mut facts);
         let mut cursor = editor.cursor();
         while let Some(inst) = cursor.next() {
@@ -51,7 +51,7 @@ impl BodyTransform for Bce {
 
 fn is_check(body: &Body, inst: InstRef) -> bool {
     matches!(
-        body.block(inst.block()).insts()[inst.index()].op(),
+        body.inst(inst.id()).op(),
         Op::Check { .. }
             | Op::CheckSteps { .. }
             | Op::Index { bound: IndexBound::Checked, .. }

@@ -321,8 +321,16 @@ where
     am.get::<A>(module, body);
 }
 
-fn edit_facts(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
-    crate::passes::edit_facts::EditFacts::new(am, module, body);
+/// Every analysis `EditFacts` serves, computed once.
+fn all_facts(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
+    use crate::passes::analysis::{ContentLiveness, Dominators, Escapes, IntervalValues, Loans, LoopTree, PostDominators};
+    am.get::<Dominators>(module, body);
+    am.get::<PostDominators>(module, body);
+    am.get::<LoopTree>(module, body);
+    am.get::<Loans>(module, body);
+    am.get::<Escapes>(module, body);
+    am.get::<ContentLiveness>(module, body);
+    am.get::<IntervalValues>(module, body);
 }
 
 #[test]
@@ -340,5 +348,5 @@ fn perf_analyses() {
     scale("content_live", ssa, analysis::<ContentLiveness>);
     scale("constants", ssa, analysis::<ConstantValues>);
     scale("intervals", ssa, analysis::<IntervalValues>);
-    scale("edit_facts", ssa, edit_facts);
+    scale("all_facts", ssa, all_facts);
 }

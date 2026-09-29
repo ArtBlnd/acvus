@@ -7,12 +7,15 @@
 //! The editor lives in `ir::cfg` so that the Rewriter is visible to it alone.
 //! The facts it reads are traits of this module (`needs`), implemented by
 //! `passes` over its analysis manager, so imports run from `passes` to `ir`
-//! only.
+//! only. Each check lends the facts the body as it stands, and each edit
+//! tells them what it changed, so a fact is recomputed on the first check
+//! that reads it after an edit made it stale (D47).
 
 mod cursor;
 mod dominators;
 mod keeps;
 mod needs;
+mod reach;
 mod scopes;
 #[cfg(test)]
 mod tests;
@@ -21,7 +24,7 @@ pub use cursor::Cursor;
 pub use keeps::{
     DefDominatesUses, Invariant, Invariants, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
-pub use needs::{ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
 pub use scopes::{
     MotionFacts, Cfg, EditsCfg, EditsLoops, EditsOrder, Effect, Loop, Motion, MovesInsts, PromotesStorage, Remove, RemovesInsts,
     ReplacesValues, Sccp, Scope, Storage, Value, Discharge, Discharges, Drops, Inline, Inlines, InsertsDrops, Clones,
@@ -34,24 +37,23 @@ use rustc_hash::FxHashSet;
 
 use super::body::{Def, InstId};
 use super::core::{InstShift, structural_fields};
+use super::order::At;
 use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
 use crate::ir::parts;
 use crate::ir::{Callee, IndexBound, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
 use crate::ty::{Concrete, Mutability, Reissue, SplitCost, Ty, TyKind, TypeArg, Types};
+use reach::{BlockPoint, Direction, PointKey, Reached};
 
-/// An instruction of the body being edited.
+/// An instruction of the body being edited, by its identity, which no edit
+/// changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InstRef {
-    block: BlockId,
-    index: usize,
+    id: InstId,
 }
 
 impl InstRef {
-    pub fn block(self) -> BlockId {
-        self.block
-    }
-    pub fn index(self) -> usize {
-        self.index
+    pub fn id(self) -> InstId {
+        self.id
     }
 }
 
@@ -60,6 +62,15 @@ impl InstRef {
 pub enum Position {
     Before(InstRef),
     End(BlockId),
+}
+
+impl Position {
+    fn at(self) -> At {
+        match self {
+            Position::Before(inst) => At::Before(inst.id),
+            Position::End(block) => At::End(block),
+        }
+    }
 }
 
 /// A replacement whose value does not dominate a use it would take over.
@@ -112,8 +123,8 @@ pub enum CannotPromote {
 }
 
 /// The editor over one body, of scope `S`. `needs` answers its legality
-/// checks and is refreshed from the change record after every edit, so no
-/// check reads a stale fact.
+/// checks; every edit tells it what changed, and it recomputes a fact on
+/// the first check after that reads it, so no check reads a stale fact.
 pub struct Editor<'m, S>
 where
     S: Scope,
@@ -145,56 +156,55 @@ impl ShapeIndex {
     }
 }
 
-/// Where a cursor stands: the next instruction it yields is at `next` of
-/// `block`, or in a later block when `next` is past `block`'s end. A
+/// Where a cursor stands: in `block`, just after the instruction `after`,
+/// or at the block's start where `after` is none. The next instruction it
+/// yields is the one that follows there, or one of a later block. A
 /// `block` past the body's last block is the end of the walk.
 #[derive(Debug, Clone, Copy)]
 struct Walk {
     block: BlockId,
-    next: usize,
+    after: Option<InstId>,
 }
 
 impl Walk {
     fn start() -> Walk {
-        Walk { block: BlockId::of_index(0), next: 0 }
+        Walk { block: BlockId::of_index(0), after: None }
     }
 
-    /// Keeps the walk on the same instructions across an edit that put one
-    /// in or took one out.
-    fn shift(&mut self, shift: InstShift) {
-        match shift {
-            InstShift::Inserted { block, index } if block == self.block && index < self.next => self.next += 1,
-            InstShift::Removed { block, index } if block == self.block && index < self.next => self.next -= 1,
-            InstShift::Inserted { .. } | InstShift::Removed { .. } => {}
+    /// Keeps the walk in place across an edit that took `left.id` out of
+    /// its place: a walk just after it stands just after what stood before
+    /// it.
+    fn left(&mut self, left: InstShift) {
+        if self.after == Some(left.id) {
+            self.after = left.prev;
         }
     }
 
-    /// Keeps the walk on the same instructions across a merge of `block`,
-    /// whose instructions now follow the `base` instructions of `pred`:
-    /// a walk inside `block` goes on at the same instruction in `pred` where
-    /// `pred` comes first, and otherwise at the block after `block`, which
-    /// the removal of `block` gives it, reaching `pred` in its turn; a walk
-    /// past the end of `pred`, where `block` came before it and so was
-    /// walked already, goes on past what `block` brought.
-    fn merge(&mut self, block: BlockId, pred: BlockId, base: usize, moved: usize) {
-        if self.block == block && pred.index() < block.index() {
-            *self = Walk { block: pred, next: base + self.next };
-        } else if self.block == pred && self.next >= base && block.index() < pred.index() {
-            self.next = base + moved;
+    /// Keeps the walk with the instruction it stands after, wherever an
+    /// edit took that instruction's block.
+    fn settle(&mut self, body: &Body) {
+        if let Some(after) = self.after {
+            self.block = body.block_of(after);
         }
     }
 
-    /// Keeps the walk on the same instructions across an edit that moved
-    /// the instructions of `block` from `at` on to the start of `tail`.
-    fn split(&mut self, block: BlockId, at: usize, tail: BlockId) {
-        if self.block == block && self.next > at {
-            *self = Walk { block: tail, next: self.next - at };
+    /// Keeps the walk on the same instructions across a merge of `block`
+    /// into `pred`, whose last instruction before the merge was
+    /// `pred_tail`: a walk at `block`'s start goes on after `pred_tail`
+    /// where `pred` comes first, and otherwise at the block after `block`,
+    /// which the removal of `block` gives it, reaching `pred` in its turn.
+    fn merge(&mut self, block: BlockId, pred: BlockId, pred_tail: Option<InstId>) {
+        if self.block != block || self.after.is_some() {
+            return;
+        }
+        if pred.index() < block.index() {
+            *self = Walk { block: pred, after: pred_tail };
         }
     }
 
     /// The walk past the last of `blocks` blocks.
     fn end(blocks: usize) -> Walk {
-        Walk { block: BlockId::of_index(blocks), next: 0 }
+        Walk { block: BlockId::of_index(blocks), after: None }
     }
 
     /// Keeps the walk across a removal of blocks: a walk in a removed block
@@ -207,7 +217,7 @@ impl Walk {
         }
         let kept_after = renamed.get(self.block.index()..).into_iter().flatten().flatten().next();
         *self = match kept_after {
-            Some(block) => Walk { block: *block, next: 0 },
+            Some(block) => Walk { block: *block, after: None },
             None => Walk::end(renamed.iter().flatten().count()),
         };
     }
@@ -263,23 +273,49 @@ where
     /// `value` is not a value of the body.
     pub fn defining_inst(&self, value: ValueId) -> Option<InstRef> {
         match self.body_ref().def_of(value) {
-            super::body::Def::Inst(block, index) => Some(InstRef { block, index }),
-            super::body::Def::Param(_)
-            | super::body::Def::Capture(_)
-            | super::body::Def::OrderParam
-            | super::body::Def::Slot { .. }
-            | super::body::Def::BlockParam(..)
-            | super::body::Def::UnplacedParam(_) => None,
+            Def::Inst(id) => Some(InstRef { id }),
+            Def::Param(_)
+            | Def::Capture(_)
+            | Def::OrderParam
+            | Def::Slot { .. }
+            | Def::BlockParam(..)
+            | Def::UnplacedParam(_) => None,
         }
     }
 
-    /// The instruction at `index` of `block` as the last edit left it;
-    /// none past the block's end. Cost: O(1).
+    /// The instruction `id` names, as the editor names it. Cost: O(1).
     ///
     /// # Panics
-    /// `block` is not a block of the body.
-    pub fn inst_at(&self, block: BlockId, index: usize) -> Option<InstRef> {
-        (index < self.body_ref().block(block).insts().len()).then_some(InstRef { block, index })
+    /// `id` names no instruction of the body now.
+    pub fn inst_ref(&self, id: InstId) -> InstRef {
+        assert!(self.body_ref().contains_inst(id), "{id:?} names no instruction of the body");
+        InstRef { id }
+    }
+
+    /// The first instruction of `block`. Cost: O(1).
+    pub fn first_inst(&self, block: BlockId) -> Option<InstRef> {
+        self.body_ref().first_inst(block).map(|id| InstRef { id })
+    }
+
+    /// The instruction after `inst` in its block. Cost: O(1).
+    pub fn next_inst(&self, inst: InstRef) -> Option<InstRef> {
+        self.body_ref().next_in_block(inst.id).map(|id| InstRef { id })
+    }
+
+    /// The block `inst` stands in. Cost: O(1).
+    pub fn block_of(&self, inst: InstRef) -> BlockId {
+        self.body_ref().block_of(inst.id)
+    }
+
+    /// The instruction `inst` names. Cost: O(1).
+    pub fn inst_of(&self, inst: InstRef) -> &Inst {
+        self.inst(inst)
+    }
+
+    /// Every instruction of `block`, in order, as the body stands now.
+    /// Cost: O(its instructions).
+    pub fn insts_of(&self, block: BlockId) -> Vec<InstRef> {
+        self.body_ref().block(block).insts().map(|inst| InstRef { id: inst.id() }).collect()
     }
 
     fn body_ref(&self) -> &Body {
@@ -296,28 +332,11 @@ where
     /// # Panics
     /// `inst` names no instruction of the body.
     fn inst(&self, inst: InstRef) -> &Inst {
-        let insts = self.body_ref().block(inst.block).insts();
-        insts
-            .get(inst.index)
-            .unwrap_or_else(|| panic!("{inst:?} names no instruction; {:?} holds {}", inst.block, insts.len()))
-    }
-
-    /// The block and index a position names; a block's end is its length.
-    ///
-    /// # Panics
-    /// `at` names no instruction of the body.
-    fn place(&self, at: Position) -> (BlockId, usize) {
-        match at {
-            Position::Before(inst) => {
-                self.inst(inst);
-                (inst.block, inst.index)
-            }
-            Position::End(block) => (block, self.body_ref().block(block).insts().len()),
-        }
+        self.body_ref().inst(inst.id)
     }
 
     /// Makes one edit through the Rewriter, then checks it (debug and test
-    /// builds) and refreshes the needs from what it changed.
+    /// builds) and tells the needs what it changed.
     fn edit<R>(&mut self, edit: impl FnOnce(&mut Rewriter<'_>) -> R) -> R {
         let mut rewriter = self.module.rewrite(self.body);
         let made = edit(&mut rewriter);
@@ -332,7 +351,7 @@ where
         if changes.touched(super::Aspect::CfgShape) {
             self.shape = None;
         }
-        self.needs.refresh(self.module, self.body, &changes);
+        self.needs.refresh(self.body, &changes);
         for aspect in changes.aspects() {
             self.changes.record(aspect);
         }
@@ -353,9 +372,20 @@ where
         }
     }
 
+    /// Keeps the cursor's place across instructions an edit took out.
     fn shifted(&mut self, shifts: impl IntoIterator<Item = InstShift>) {
         for shift in shifts {
-            self.walk.shift(shift);
+            self.walk.left(shift);
+        }
+        let body = self.module.body(self.body);
+        self.walk.settle(body);
+    }
+
+    /// The point `at` names.
+    fn point(&self, at: Position) -> BlockPoint {
+        match at {
+            Position::Before(inst) => BlockPoint { block: self.body_ref().block_of(inst.id), before: Some(inst.id) },
+            Position::End(block) => BlockPoint { block, before: None },
         }
     }
 }
@@ -371,16 +401,17 @@ where
     /// # Panics
     /// `of` and `with` differ in type.
     pub fn replace_uses(&mut self, of: ValueId, with: ValueId) -> Result<(), DoesNotDominate> {
-        let body = self.body_ref();
+        let body = self.module.body(self.body);
         let (of_ty, with_ty) = (body.ty_of(of), body.ty_of(with));
         assert!(of_ty == with_ty, "{of:?} of {of_ty:?} is replaced only by a value of its type, not {with:?} of {with_ty:?}");
         let mut sites: Vec<Site> = body.users(of).collect();
         if of == with || sites.is_empty() {
             return Ok(());
         }
-        sites.sort_by_key(|site| site_order(*site));
+        sites.sort_by_key(|site| site_order(body, *site));
+        let asked = Asked::new(self.module, self.body);
         for site in sites {
-            if self.needs.dominates(with, site_position(site)) {
+            if self.needs.dominates(asked, with, site_position(site)) {
                 continue;
             }
             return Err(DoesNotDominate { use_at: site });
@@ -396,10 +427,7 @@ where
     /// the core makes; it yields no value; or `at` names no position of the
     /// body.
     pub fn insert(&mut self, at: Position, op: Op, ty: Ty, span: Span) -> ValueId {
-        let (block, index) = self.place(at);
-        let result = self.edit(|rewriter| rewriter.insert(block, index, op, ty, span));
-        self.shifted([InstShift::Inserted { block, index }]);
-        result
+        self.edit(|rewriter| rewriter.insert(at.at(), op, ty, span))
     }
 }
 
@@ -425,7 +453,7 @@ where
             return Err(Unremovable::Effect);
         }
         let shifts = self
-            .edit(|rewriter| rewriter.remove_inst(inst.block, inst.index))
+            .edit(|rewriter| rewriter.remove_inst(inst.id))
             .expect("an instruction whose result nothing uses is removed");
         self.shifted(shifts);
         Ok(())
@@ -448,10 +476,10 @@ where
         let callee_ty = match inst.op() {
             Op::FunctionCall { callee_ty, .. } | Op::Spawn { callee_ty, .. } => *callee_ty,
             Op::TakeEffect { src } => {
-                let Site::Inst(block, index) = self.defining_site(*src) else {
+                let Def::Inst(start) = self.body_ref().def_of(*src) else {
                     panic!("a taking's handle is a start's result (effects §6)")
                 };
-                match self.body_ref().block(block).insts()[index].op() {
+                match self.body_ref().inst(start).op() {
                     Op::Spawn { callee_ty, .. } => *callee_ty,
                     other => panic!("a taking's handle is a start's result (effects §6), not {other:?}'s"),
                 }
@@ -462,13 +490,6 @@ where
             panic!("a call's callee type is a function type")
         };
         effect.reissue() != Reissue::Pure || !effect.writes().is_empty()
-    }
-
-    fn defining_site(&self, value: ValueId) -> Site {
-        match self.body_ref().def_of(value) {
-            super::body::Def::Inst(block, index) => Site::Inst(block, index),
-            def => panic!("{value:?} is defined at {def:?}, not by an instruction"),
-        }
     }
 }
 
@@ -500,7 +521,7 @@ where
             .flat_map(|param| body.users(*param))
             .filter(|site| *site != Site::Term(from))
             .collect();
-        beyond.sort_by_key(|site| site_order(*site));
+        beyond.sort_by_key(|site| site_order(body, *site));
         if let Some(site) = beyond.first() {
             return Err(CannotRetarget::ParamsUsedBeyond(*site));
         }
@@ -552,12 +573,13 @@ fn kept_blocks(body: &Body) -> Vec<bool> {
     keep[body.entry().index()] = true;
     let mut pending = vec![body.entry()];
     while let Some(block) = pending.pop() {
-        let block: &Block = body.block(block);
+        let block: Block<'_> = body.block(block);
         let mut named: Vec<BlockId> = Vec::new();
         block.terminator().for_each_block(|to| named.push(to));
-        let operands = block.insts().iter().flat_map(Inst::operands).chain(block.terminator().operands());
+        let operands = block.insts().flat_map(Inst::operands).chain(block.terminator().operands());
         named.extend(operands.filter_map(|value| match body.def_of(value) {
-            super::body::Def::Inst(defined, _) | super::body::Def::BlockParam(defined, _) => Some(defined),
+            Def::Inst(defined) => Some(body.block_of(defined)),
+            Def::BlockParam(defined, _) => Some(defined),
             _ => None,
         }));
         for block in named {
@@ -588,38 +610,68 @@ where
     /// # Panics
     /// `inst` or `at` names no position of the body.
     pub fn move_to(&mut self, inst: InstRef, at: Position) -> Result<(), CannotMove> {
-        let (to_block, to_index) = self.place(at);
-        let moved = self.inst(inst);
-        if to_block == inst.block && (to_index == inst.index || to_index == inst.index + 1) {
+        if self.stays(inst, at) {
             return Ok(());
         }
+        self.can_move(inst, at)?;
+        let shift = self.edit(|rewriter| rewriter.move_inst(inst.id, at.at()));
+        self.shifted([shift]);
+        Ok(())
+    }
+
+    /// The check `move_to` makes, without the move: `Ok` exactly where
+    /// `move_to(inst, at)` would move `inst`, or leave it where it stands.
+    /// Cost: the facts' queries, and where `inst` names storage, the walk
+    /// between its place and `at`, O(blocks + edges + the instructions it
+    /// passes).
+    ///
+    /// # Panics
+    /// `inst` or `at` names no position of the body.
+    pub fn can_move(&mut self, inst: InstRef, at: Position) -> Result<(), CannotMove> {
+        if self.stays(inst, at) {
+            return Ok(());
+        }
+        let module: &Module = &*self.module;
+        let asked = Asked::new(module, self.body);
+        let body = module.body(self.body);
+        let moved = body.inst(inst.id);
         for operand in moved.operands() {
-            if !self.needs.dominates(operand, at) {
+            if !self.needs.dominates(asked, operand, at) {
                 return Err(CannotMove::OperandNotDominating(operand));
             }
         }
-        let body = self.body_ref();
         let mut uses: Vec<Site> = moved.defs().into_iter().flat_map(|value| body.users(value)).collect();
-        uses.sort_by_key(|site| site_order(*site));
-        if let Some(site) = uses.into_iter().find(|site| !self.needs.position_dominates(at, *site)) {
-            return Err(CannotMove::UseNotDominated(site));
+        uses.sort_by_key(|site| site_order(body, *site));
+        for site in uses {
+            if !self.needs.position_dominates(asked, at, site) {
+                return Err(CannotMove::UseNotDominated(site));
+            }
         }
         let result_ty = moved.result().map(|result| body.ty_of(result));
-        let pinned = moved.op().bound_to_its_paths(result_ty, self.module.types()) || self.has_effect(moved);
-        if pinned && !self.needs.control_equivalent(Position::Before(inst), at) {
+        let pinned = moved.op().bound_to_its_paths(result_ty, module.types()) || self.has_effect(moved);
+        if pinned && !self.needs.control_equivalent(asked, Position::Before(inst), at) {
             return Err(CannotMove::ChangesWhereItRuns);
         }
-        let crossed = crossed_insts(body, inst, to_block, to_index);
-        let conflicting = crossed
-            .into_iter()
-            .find(|crossed| self.needs.conflicts(inst, *crossed) || self.needs.conflicts(*crossed, inst));
-        if let Some(crossed) = conflicting {
-            return Err(CannotMove::CrossesConflictingWrite(crossed));
+        if !self.needs.names_storage(asked, inst) {
+            return Ok(());
         }
-
-        let shifts = self.edit(|rewriter| rewriter.move_inst(inst.block, inst.index, to_block, to_index));
-        self.shifted(shifts);
+        for crossed in crossed_insts(body, inst.id, at.at()) {
+            let crossed = InstRef { id: crossed };
+            if self.needs.conflicts(asked, inst, crossed) || self.needs.conflicts(asked, crossed, inst) {
+                return Err(CannotMove::CrossesConflictingWrite(crossed));
+            }
+        }
         Ok(())
+    }
+
+    /// Whether `at` is where `inst` stands already: just before it, or just
+    /// after it.
+    fn stays(&self, inst: InstRef, at: Position) -> bool {
+        let body = self.body_ref();
+        match at {
+            Position::Before(before) => before.id == inst.id || body.next_in_block(inst.id) == Some(before.id),
+            Position::End(block) => body.last_inst(block) == Some(inst.id),
+        }
     }
 }
 
@@ -646,7 +698,12 @@ where
             SplitCost::WithCost(_) => {}
         }
         self.edit(|rewriter| rewriter.split_call(result));
-        self.shifted([InstShift::Inserted { block: call.block, index: call.index }]);
+        if self.walk.after == Some(call.id) {
+            let Def::Inst(taking) = self.body_ref().def_of(result) else {
+                panic!("a split call's result is its taking's")
+            };
+            self.walk.after = Some(taking);
+        }
         Ok(())
     }
 }
@@ -663,7 +720,8 @@ where
     /// `slot` is not a slot of the body, or such a use names it though the
     /// facts say none does.
     pub fn promote(&mut self, slot: ValueId) -> Result<(), CannotPromote> {
-        if let Some(at) = self.needs.escapes(slot) {
+        let asked = Asked::new(self.module, self.body);
+        if let Some(at) = self.needs.escapes(asked, slot) {
             return Err(CannotPromote::Escapes(at));
         }
         let shifts = self.edit(|rewriter| rewriter.promote(slot));
@@ -689,10 +747,10 @@ where
 }
 
 /// Uses in block order, a block's instructions before its terminator.
-fn site_order(site: Site) -> (BlockId, usize) {
+fn site_order(body: &Body, site: Site) -> (BlockId, PointKey) {
     match site {
-        Site::Inst(block, index) => (block, index),
-        Site::Term(block) => (block, usize::MAX),
+        Site::Inst(inst) => (body.block_of(inst), PointKey::before(body, inst)),
+        Site::Term(block) => (block, PointKey::END),
     }
 }
 
@@ -700,209 +758,63 @@ fn site_order(site: Site) -> (BlockId, usize) {
 /// instruction, or at its block's end for its terminator.
 fn site_position(site: Site) -> Position {
     match site {
-        Site::Inst(block, index) => Position::Before(InstRef { block, index }),
+        Site::Inst(id) => Position::Before(InstRef { id }),
         Site::Term(block) => Position::End(block),
     }
 }
 
-/// The instructions a move from `from` to position `to_index` of `to`
-/// passes over, for its loans: those on a way between the two places. The way runs from the
-/// new place to the old one for a move up a block, from the old place to the
-/// new one for a move down it, and both ways between blocks; it may pass the
-/// old place, and it meets the new place only at its end. Around a loop the
+/// The instructions a move of `from` to `to` passes over, for its loans:
+/// those on a way between the two places. The way runs from the new place
+/// to the old one for a move up a block, from the old place to the new one
+/// for a move down it, and both ways between blocks; it may pass the old
+/// place, and it meets the new place only at its end. Around a loop the
 /// way takes in every instruction of the loop, which is what a move into or
 /// out of the loop passes.
 ///
-/// The walks run block by block, each block's reached points being at most
-/// two runs of indices, so the cost is O(blocks + edges) for the walks and
-/// O(the instructions passed over) for the answer, in block order.
-fn crossed_insts(body: &Body, from: InstRef, to: BlockId, to_index: usize) -> Vec<InstRef> {
-    let new_place = BlockPoint { block: to, index: to_index };
-    let old_place = BlockPoint { block: from.block, index: from.index };
-    let after_old = BlockPoint { block: from.block, index: from.index + 1 };
-    let same_block = from.block == to;
-    let mut ways: Vec<(RunsReached, RunsReached)> = Vec::new();
-    if !same_block || to_index <= from.index {
-        ways.push((
-            RunsReached::walk(body, new_place, None, Direction::Forward),
-            RunsReached::walk(body, old_place, Some(new_place), Direction::Backward),
-        ));
+/// Each walk runs block by block over runs of points, so the cost is
+/// O(blocks + edges) for the walks and O(the instructions passed over, and
+/// those skipped at the start of a run) for the answer, in block order.
+fn crossed_insts(body: &Body, from: InstId, to: At) -> Vec<InstId> {
+    let from_block = body.block_of(from);
+    let new_place = match to {
+        At::Before(inst) => BlockPoint { block: body.block_of(inst), before: Some(inst) },
+        At::End(block) => BlockPoint { block, before: None },
+    };
+    let old_place = BlockPoint { block: from_block, before: Some(from) };
+    let after_old = BlockPoint::after(body, from);
+    let same_block = from_block == new_place.block;
+    let (new_key, old_key, after_old_key) = (new_place.key(body), old_place.key(body), after_old.key(body));
+    let mut ways: Vec<Way> = Vec::new();
+    if !same_block || new_key <= old_key {
+        ways.push(Way {
+            forward: Reached::walk(body, new_place, None, Direction::Forward),
+            backward: Reached::walk(body, old_place, Some(new_place), Direction::Backward),
+        });
     }
-    if !same_block || to_index > from.index + 1 {
-        ways.push((
-            RunsReached::walk(body, after_old, Some(new_place), Direction::Forward),
-            RunsReached::walk(body, new_place, None, Direction::Backward),
-        ));
+    if !same_block || new_key > after_old_key {
+        ways.push(Way {
+            forward: Reached::walk(body, after_old, Some(new_place), Direction::Forward),
+            backward: Reached::walk(body, new_place, None, Direction::Backward),
+        });
     }
     let mut crossed = Vec::new();
-    for (block, record) in body.blocks() {
-        let mut passed: Vec<Run> = Vec::new();
-        for (forward, backward) in &ways {
-            for ahead in forward.runs(block) {
-                for behind in backward.runs(block) {
-                    // An instruction at `index` is passed when the point before it
-                    // is reached forward and the point after it backward.
-                    let lo = ahead.lo.max(behind.lo.saturating_sub(1));
-                    let hi = ahead.hi.min(behind.hi.saturating_sub(1)).min(record.insts().len().saturating_sub(1));
-                    if behind.hi >= 1 && !record.insts().is_empty() && lo <= hi {
-                        passed.push(Run { lo, hi });
-                    }
-                }
-            }
+    for (block, _) in body.blocks() {
+        let mut passed: Vec<InstId> = Vec::new();
+        for way in &ways {
+            passed.extend(reach::passed(body, block, &way.forward, &way.backward));
         }
-        let mut indices: Vec<usize> = passed.iter().flat_map(|run| run.lo..=run.hi).collect();
-        indices.sort_unstable();
-        indices.dedup();
-        let is_moved = |index: &usize| block == from.block && *index == from.index;
-        crossed.extend(indices.into_iter().filter(|index| !is_moved(index)).map(|index| InstRef { block, index }));
+        passed.sort_by_key(|inst| PointKey::before(body, *inst));
+        passed.dedup();
+        crossed.extend(passed.into_iter().filter(|inst| *inst != from));
     }
     crossed
 }
 
-/// A point of a block: before its instruction `index`, or its end where
-/// `index` is the block's length.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BlockPoint {
-    block: BlockId,
-    index: usize,
-}
-
-/// The points `lo..=hi` of one block.
-#[derive(Debug, Clone, Copy)]
-struct Run {
-    lo: usize,
-    hi: usize,
-}
-
-/// The points one walk reached, as runs per block: a walk that starts in a
-/// block reaches one run of it from its start, and one that enters a block
-/// from an edge reaches one run of it from that end, so a block holds at most
-/// two.
-struct RunsReached {
-    runs: Vec<smallvec::SmallVec<[Run; 2]>>,
-}
-
-impl RunsReached {
-    fn runs(&self, block: BlockId) -> &[Run] {
-        &self.runs[block.index()]
-    }
-
-    /// The points reachable from `start` in `direction` without stepping
-    /// onto `avoided`; `start` itself is reached. Cost: O(blocks + edges).
-    fn walk(body: &Body, start: BlockPoint, avoided: Option<BlockPoint>, direction: Direction) -> RunsReached {
-        let count = body.block_count();
-        let mut runs: Vec<smallvec::SmallVec<[Run; 2]>> = vec![smallvec::SmallVec::new(); count];
-        let mut entered = vec![false; count];
-        let preds = match direction {
-            Direction::Forward => None,
-            Direction::Backward => Some(body.predecessors()),
-        };
-        let len = |block: BlockId| body.block(block).insts().len();
-        let avoided_in = |block: BlockId| avoided.filter(|point| point.block == block).map(|point| point.index);
-        let mut pending: Vec<BlockId> = Vec::new();
-        // The run from `start` until the block's far end, or until just
-        // short of the avoided point where it lies ahead in the block.
-        let (run, leaves) = match direction {
-            Direction::Forward => match avoided_in(start.block).filter(|at| *at > start.index) {
-                Some(at) => (Run { lo: start.index, hi: at - 1 }, false),
-                None => (Run { lo: start.index, hi: len(start.block) }, true),
-            },
-            Direction::Backward => match avoided_in(start.block).filter(|at| *at < start.index) {
-                Some(at) => (Run { lo: at + 1, hi: start.index }, false),
-                None => (Run { lo: 0, hi: start.index }, true),
-            },
-        };
-        runs[start.block.index()].push(run);
-        if leaves {
-            pending.push(start.block);
-        }
-        while let Some(block) = pending.pop() {
-            let next: smallvec::SmallVec<[BlockId; 2]> = match &preds {
-                None => body.block(block).terminator().edges().iter().map(|edge| edge.to).collect(),
-                Some(preds) => preds[&block].iter().copied().collect(),
-            };
-            for into in next {
-                if entered[into.index()] {
-                    continue;
-                }
-                entered[into.index()] = true;
-                let (run, leaves) = match (direction, avoided_in(into)) {
-                    (Direction::Forward, Some(0)) => continue,
-                    (Direction::Forward, Some(at)) => (Run { lo: 0, hi: at - 1 }, false),
-                    (Direction::Forward, None) => (Run { lo: 0, hi: len(into) }, true),
-                    (Direction::Backward, Some(at)) if at == len(into) => continue,
-                    (Direction::Backward, Some(at)) => (Run { lo: at + 1, hi: len(into) }, false),
-                    (Direction::Backward, None) => (Run { lo: 0, hi: len(into) }, true),
-                };
-                runs[into.index()].push(run);
-                if leaves {
-                    pending.push(into);
-                }
-            }
-        }
-        RunsReached { runs }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Direction {
-    Forward,
-    Backward,
-}
-
-/// The program points of a body: before each instruction of each block, and
-/// at its end, numbered block after block.
-struct Points {
-    offsets: Vec<usize>,
-    count: usize,
-}
-
-impl Points {
-    fn of(body: &Body) -> Points {
-        let mut offsets = Vec::new();
-        let mut count = 0;
-        for (_, block) in body.blocks() {
-            offsets.push(count);
-            count += block.insts().len() + 1;
-        }
-        Points { offsets, count }
-    }
-
-    fn id(&self, block: BlockId, index: usize) -> usize {
-        self.offsets[block.index()] + index
-    }
-
-    /// The points reachable from `start` in `direction` without stepping
-    /// onto `avoided`.
-    fn reach(&self, body: &Body, start: usize, avoided: Option<usize>, direction: Direction) -> Vec<bool> {
-        let preds = body.predecessors();
-        let mut reached = vec![false; self.count];
-        reached[start] = true;
-        let mut pending = vec![start];
-        while let Some(point) = pending.pop() {
-            let block = BlockId::of_index(self.offsets.partition_point(|offset| *offset <= point) - 1);
-            let index = point - self.offsets[block.index()];
-            let len = body.block(block).insts().len();
-            let mut next: Vec<usize> = Vec::new();
-            match direction {
-                Direction::Forward if index < len => next.push(point + 1),
-                Direction::Forward => {
-                    next.extend(body.block(block).terminator().edges().iter().map(|edge| self.id(edge.to, 0)))
-                }
-                Direction::Backward if index > 0 => next.push(point - 1),
-                Direction::Backward => next.extend(preds[&block].iter().map(|pred| {
-                    self.id(*pred, body.block(*pred).insts().len())
-                })),
-            }
-            for point in next {
-                if Some(point) != avoided && !reached[point] {
-                    reached[point] = true;
-                    pending.push(point);
-                }
-            }
-        }
-        reached
-    }
+/// One way between two places: the points reached going forward from its
+/// start, and those reached going backward from its end.
+struct Way {
+    forward: Reached,
+    backward: Reached,
 }
 
 // ---- D55: the general capabilities G1-G4 and the narrow operations S1-S3 ----
@@ -1022,7 +934,8 @@ where
         if of == with {
             return Ok(());
         }
-        if !self.needs.dominates(with, site_position(site)) {
+        let asked = Asked::new(self.module, self.body);
+        if !self.needs.dominates(asked, with, site_position(site)) {
             return Err(DoesNotDominate { use_at: site });
         }
         self.edit(|rewriter| rewriter.replace_operand_at(site, index, of, with));
@@ -1042,7 +955,8 @@ where
         if of == with {
             return Ok(());
         }
-        if !self.needs.dominates(with, site_position(site)) {
+        let asked = Asked::new(self.module, self.body);
+        if !self.needs.dominates(asked, with, site_position(site)) {
             return Err(DoesNotDominate { use_at: site });
         }
         self.edit(|rewriter| rewriter.replace_uses_at(site, of, with));
@@ -1149,10 +1063,12 @@ where
         if !jumps || pred == block || block == body.entry() {
             return Err(CannotMerge::NotStraight);
         }
-        let (base, moved) = (body.block(pred).insts().len(), body.block(block).insts().len());
+        let pred_tail = body.last_inst(pred);
         let renamed = self.edit(|rewriter| rewriter.merge_into_predecessor(block, pred));
-        self.walk.merge(block, pred, base, moved);
+        self.walk.merge(block, pred, pred_tail);
         self.walk.rename(&renamed);
+        let body = self.module.body(self.body);
+        self.walk.settle(body);
         Ok(())
     }
 }
@@ -1160,7 +1076,7 @@ where
 /// Every operand of the instruction or terminator at `site`.
 fn site_operands(body: &Body, site: Site) -> smallvec::SmallVec<[ValueId; 4]> {
     match site {
-        Site::Inst(block, index) => body.block(block).insts()[index].operands(),
+        Site::Inst(inst) => body.inst(inst).operands(),
         Site::Term(block) => body.block(block).terminator().operands(),
     }
 }
@@ -1189,16 +1105,21 @@ where
         };
         let body = self.body_ref();
         let chained = consumed.before == yielded.after && body.use_count(yielded.after) == 1;
-        if !chained || a.block != b.block || a.index >= b.index {
+        let block = body.block_of(a.id);
+        if !chained || block != body.block_of(b.id) || !body.comes_before(a.id, b.id) {
             return Err(CannotSwap::NotAdjacent);
         }
-        if !self.needs.may_reorder(a, b) {
+        let asked = Asked::new(self.module, self.body);
+        if !self.needs.may_reorder(asked, a, b) {
             return Err(CannotSwap::Ordered);
         }
+        let body = self.body_ref();
         let mut read_between = None;
-        second.op().for_each_operand(|value| {
-            let between =
-                matches!(body.def_of(value), Def::Inst(block, index) if block == a.block && (a.index..b.index).contains(&index));
+        body.inst(b.id).op().for_each_operand(|value| {
+            let between = match body.def_of(value) {
+                Def::Inst(at) => body.block_of(at) == block && !body.comes_before(at, a.id) && body.comes_before(at, b.id),
+                _ => false,
+            };
             if between && read_between.is_none() {
                 read_between = Some(value);
             }
@@ -1206,8 +1127,8 @@ where
         if let Some(value) = read_between {
             return Err(CannotSwap::DependsOn(value));
         }
-        let shifts = self.edit(|rewriter| rewriter.swap_effects(a.block, a.index, b.index));
-        self.shifted(shifts);
+        let shift = self.edit(|rewriter| rewriter.swap_effects(a.id, b.id));
+        self.shifted([shift]);
         Ok(())
     }
 }
@@ -1240,16 +1161,17 @@ where
             Op::Commit { .. } => Unobserved::NeverWritten,
             other => panic!("discharge removes a check, a store, a load or a commit, not {other:?}"),
         };
-        match self.needs.discharged(inst) {
+        let asked = Asked::new(self.module, self.body);
+        match self.needs.discharged(asked, inst) {
             None => Err(CannotDischarge::NotProven),
             Some(fact) if fact != needed => Err(CannotDischarge::WrongFact),
             Some(_) if checked_bound => {
-                self.edit(|rewriter| rewriter.prove_bound(inst.block, inst.index));
+                self.edit(|rewriter| rewriter.prove_bound(inst.id));
                 Ok(())
             }
             Some(_) => {
                 let shifts = self
-                    .edit(|rewriter| rewriter.remove_inst(inst.block, inst.index))
+                    .edit(|rewriter| rewriter.remove_inst(inst.id))
                     .expect("a load the facts call never read has no use");
                 self.shifted(shifts);
                 Ok(())
@@ -1279,12 +1201,12 @@ where
             return Err(CannotSplitSlot::NotStructural);
         };
         let mut sites: Vec<Site> = body.users(slot).collect();
-        sites.sort_by_key(|site| site_order(*site));
+        sites.sort_by_key(|site| site_order(body, *site));
         let names_a_field = |site: Site| {
-            let Site::Inst(block, index) = site else {
+            let Site::Inst(id) = site else {
                 return false;
             };
-            let inst = &body.block(block).insts()[index];
+            let inst = body.inst(id);
             let once = inst.operands().iter().filter(|value| **value == slot).count() == 1;
             let field = inst.op().place().is_some_and(|(target, path)| {
                 *target == RefTarget::Var(slot) && path.first().is_some_and(|seg| fields.iter().any(|(named, _)| named == seg))
@@ -1322,19 +1244,19 @@ where
             return Err(CannotInline::NoBody);
         };
         let body = self.body_ref();
-        let Def::Inst(block, index) = body.def_of(*function) else {
+        let Def::Inst(made) = body.def_of(*function) else {
             return Err(CannotInline::NoBody);
         };
-        let Op::MakeClosure { body: callee_body, captures } = body.block(block).insts()[index].op() else {
+        let Op::MakeClosure { body: callee_body, captures } = body.inst(made).op() else {
             return Err(CannotInline::NoBody);
         };
         if *callee_body == self.body {
             return Err(CannotInline::Recursive);
         }
         let (callee_body, captures) = (*callee_body, captures.clone());
-        let continuation = self.edit(|rewriter| rewriter.inline_call(call.block, call.index, callee_body, &captures));
-        self.walk.split(call.block, call.index + 1, continuation);
-        self.shifted([InstShift::Removed { block: call.block, index: call.index }]);
+        let left = InstShift { id: call.id, prev: body.prev_in_block(call.id) };
+        self.edit(|rewriter| rewriter.inline_call(call.id, callee_body, &captures));
+        self.shifted([left]);
         Ok(())
     }
 }
@@ -1355,27 +1277,12 @@ where
     /// `value` is not defined at `at`, or is an order token, which no drop
     /// ends; or `at` names no position of the body.
     pub fn insert_drop(&mut self, value: ValueId, at: Position, span: Span) -> Result<(), CannotDrop> {
-        let (block, index) = self.place(at);
-        assert!(self.needs.dominates(value, at), "a drop of {value:?} stands where {value:?} is defined");
-        let body = self.body_ref();
-        let points = Points::of(body);
-        let redefined = match body.def_of(value) {
-            Def::Inst(defined, at) => Some(points.id(defined, at + 1)),
-            Def::BlockParam(defined, _) => Some(points.id(defined, 0)),
-            Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::Slot { .. } | Def::UnplacedParam(_) => None,
-        };
-        let reached = points.reach(body, points.id(block, index), redefined, Direction::Forward);
-        let follows = |site: Site| match site {
-            Site::Inst(block, index) => reached[points.id(block, index)],
-            Site::Term(block) => reached[points.id(block, body.block(block).insts().len())],
-        };
-        let mut uses: Vec<Site> = body.users(value).collect();
-        uses.sort_by_key(|site| site_order(*site));
-        if let Some(site) = uses.into_iter().find(|site| follows(*site)) {
+        let asked = Asked::new(self.module, self.body);
+        assert!(self.needs.dominates(asked, value, at), "a drop of {value:?} stands where {value:?} is defined");
+        if let Some(site) = self.first_use_after(value, at, |_| true) {
             return Err(CannotDrop::UsedAfter(site));
         }
-        self.edit(|rewriter| rewriter.insert_drop(block, index, value, span));
-        self.shifted([InstShift::Inserted { block, index }]);
+        self.edit(|rewriter| rewriter.insert_drop(at.at(), value, span));
         Ok(())
     }
 
@@ -1388,22 +1295,21 @@ where
     /// `place` is neither a slot nor a parameter of the body, or `at` names
     /// no position of the body.
     pub fn drop_content(&mut self, place: ValueId, at: Position, span: Span) -> Result<(), CannotDrop> {
-        let (block, index) = self.place(at);
         let target = match self.body_ref().def_of(place) {
             Def::Slot { .. } => RefTarget::Var(place),
             Def::Param(_) => RefTarget::Param(place),
             def => panic!("{place:?} is defined at {def:?}, and only a slot or a parameter has its own storage"),
         };
-        if self.needs.content_read_after(place, at) {
+        let asked = Asked::new(self.module, self.body);
+        if self.needs.content_read_after(asked, place, at) {
             return Err(CannotDrop::ContentReadAfter);
         }
         let ty = self.body_ref().ty_of(place);
         self.edit(|rewriter| {
             let taken = Op::Take { target, path: Vec::new(), taken_out: false };
-            let content = rewriter.insert(block, index, taken, ty, span);
-            rewriter.insert_drop(block, index + 1, content, span);
+            let content = rewriter.insert(at.at(), taken, ty, span);
+            rewriter.insert_drop(at.at(), content, span);
         });
-        self.shifted([InstShift::Inserted { block, index }, InstShift::Inserted { block, index: index + 1 }]);
         Ok(())
     }
 
@@ -1421,7 +1327,7 @@ where
     /// at `at`, or its path neither all fields nor one index; `path` naming
     /// no part of its holder; or `at` naming no position of the body.
     pub fn drop_part(&mut self, of: PartOf, path: &[PathSeg], at: Position, span: Span) -> Result<(), CannotDrop> {
-        let (block, index) = self.place(at);
+        let asked = Asked::new(self.module, self.body);
         let taken = match of {
             PartOf::Place(place) => {
                 let target = match self.body_ref().def_of(place) {
@@ -1429,14 +1335,21 @@ where
                     Def::Param(_) => RefTarget::Param(place),
                     def => panic!("{place:?} is defined at {def:?}, and only a slot or a parameter has its own storage"),
                 };
-                if self.needs.part_read_after(place, path, at) {
+                if self.needs.part_read_after(asked, place, path, at) {
                     return Err(CannotDrop::ContentReadAfter);
                 }
                 (place, Op::Take { target, path: path.to_vec(), taken_out: false })
             }
             PartOf::Value(value) => {
-                assert!(self.needs.dominates(value, at), "a drop of part of {value:?} stands where {value:?} is defined");
-                if let Some(site) = self.first_touch_after(value, path, block, index) {
+                assert!(
+                    self.needs.dominates(asked, value, at),
+                    "a drop of part of {value:?} stands where {value:?} is defined"
+                );
+                let body = self.body_ref();
+                if let Some(site) = self.first_use_after(value, at, |site| match site {
+                    Site::Inst(id) => touches_part(body.inst(id).op(), value, path),
+                    Site::Term(_) => true,
+                }) {
                     return Err(CannotDrop::UsedAfter(site));
                 }
                 (value, extraction(self.module.types(), self.body_ref().ty_of(value), value, path))
@@ -1445,36 +1358,30 @@ where
         let (holder, op) = taken;
         let ty = parts::part_ty(self.module.types(), self.body_ref().ty_of(holder), path);
         self.edit(|rewriter| {
-            let part = rewriter.insert(block, index, op, ty, span);
-            rewriter.insert_drop(block, index + 1, part, span);
+            let part = rewriter.insert(at.at(), op, ty, span);
+            rewriter.insert_drop(at.at(), part, span);
         });
-        self.shifted([InstShift::Inserted { block, index }, InstShift::Inserted { block, index: index + 1 }]);
         Ok(())
     }
 
-    /// The first use of `value`, in block order, that touches its part at
-    /// `path` and that a path from `index` of `block` reaches without
-    /// passing `value`'s definition again.
-    fn first_touch_after(&self, value: ValueId, path: &[PathSeg], block: BlockId, index: usize) -> Option<Site> {
+    /// The first use of `value`, in block order, that `counts` and that a
+    /// path from `at` reaches without passing `value`'s definition again.
+    /// Cost: O(blocks + edges) for the walk, and O(uses · log uses).
+    fn first_use_after(&self, value: ValueId, at: Position, counts: impl Fn(Site) -> bool) -> Option<Site> {
         let body = self.body_ref();
-        let points = Points::of(body);
         let redefined = match body.def_of(value) {
-            Def::Inst(defined, at) => Some(points.id(defined, at + 1)),
-            Def::BlockParam(defined, _) => Some(points.id(defined, 0)),
+            Def::Inst(defined) => Some(BlockPoint::after(body, defined)),
+            Def::BlockParam(defined, _) => Some(BlockPoint::first_of(body, defined)),
             Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::Slot { .. } | Def::UnplacedParam(_) => None,
         };
-        let reached = points.reach(body, points.id(block, index), redefined, Direction::Forward);
-        let follows = |site: Site| match site {
-            Site::Inst(block, index) => reached[points.id(block, index)],
-            Site::Term(block) => reached[points.id(block, body.block(block).insts().len())],
-        };
-        let touches = |site: Site| match site {
-            Site::Inst(block, index) => touches_part(body.block(block).insts()[index].op(), value, path),
-            Site::Term(_) => true,
+        let reached = Reached::walk(body, self.point(at), redefined, Direction::Forward);
+        let follows = |site: Site| {
+            let (block, key) = site_order(body, site);
+            reached.holds(block, key)
         };
         let mut uses: Vec<Site> = body.users(value).collect();
-        uses.sort_by_key(|site| site_order(*site));
-        uses.into_iter().find(|site| follows(*site) && touches(*site))
+        uses.sort_by_key(|site| site_order(body, *site));
+        uses.into_iter().find(|site| follows(*site) && counts(*site))
     }
 }
 
@@ -1519,6 +1426,7 @@ fn extraction(types: &Types<Concrete>, ty: Ty, value: ValueId, path: &[PathSeg])
     }
 }
 
+
 impl<S> Editor<'_, S>
 where
     S: ClonesReads,
@@ -1543,15 +1451,14 @@ where
         if !matches!(self.module.types().kind(string), TyKind::String) {
             return Err(CannotCloneRead::NotAString);
         }
-        let (block, index) = (take.block, take.index);
+        let at = At::Before(take.id);
         let shifts = self.edit(|rewriter| {
             let lent = rewriter.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string)));
-            let reference = rewriter.insert(block, index, Op::Ref { target, path, mutability: Mutability::Shared }, lent, span);
-            let clone = rewriter.insert(block, index + 1, Op::StringClone { src: reference }, string, span);
+            let reference = rewriter.insert(at, Op::Ref { target, path, mutability: Mutability::Shared }, lent, span);
+            let clone = rewriter.insert(at, Op::StringClone { src: reference }, string, span);
             rewriter.replace_all_uses(read, clone);
-            rewriter.remove_inst(block, index + 2).expect("a Take whose uses went to its clone has none")
+            rewriter.remove_inst(take.id).expect("a Take whose uses went to its clone has none")
         });
-        self.shifted([InstShift::Inserted { block, index }, InstShift::Inserted { block, index: index + 1 }]);
         self.shifted(shifts);
         Ok(())
     }

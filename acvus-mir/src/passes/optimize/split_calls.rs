@@ -40,8 +40,8 @@
 
 use crate::ir::ValueId;
 use crate::ir::cfg::edit::{CannotMove, CannotSplit, Editor, Effect, InstRef, Motion, Position};
-use crate::ir::cfg::{BlockId, BodyId, Changes, Definition, Inst, Module, Op, OrderUse, Site};
-use crate::passes::analysis::{AnalysisManager, Dominators};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, OrderUse, Site};
+use crate::passes::analysis::{AnalysisManager, Dominators, Point};
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::{BodyTransform, nearest_common_dominator, union_of};
 
@@ -54,7 +54,7 @@ impl BodyTransform for SplitCalls {
         let split = split_every_call(module, body, am);
 
         let dominators = am.get::<Dominators>(module, body);
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Motion>::new(module, body, &mut facts);
         let mut cursor = editor.cursor();
         while let Some(inst) = cursor.next() {
@@ -74,7 +74,7 @@ impl BodyTransform for SplitCalls {
 
 /// Offers every call to `split_call`.
 fn split_every_call(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
-    let mut facts = EditFacts::new(am, module, body);
+    let mut facts = EditFacts::new(am, body);
     let mut editor = Editor::<Effect>::new(module, body, &mut facts);
     let mut cursor = editor.cursor();
     while let Some(inst) = cursor.next() {
@@ -93,7 +93,7 @@ fn op_of<'e, S>(editor: &'e Editor<'_, S>, inst: InstRef) -> &'e Op
 where
     S: crate::ir::cfg::edit::Scope,
 {
-    editor.body().block(inst.block()).insts()[inst.index()].op()
+    editor.body().inst(inst.id()).op()
 }
 
 /// Offers `start` the points from the earliest its operands allow down to
@@ -101,38 +101,49 @@ where
 /// the body, and so `start`, as it was. A start in a block the entry does
 /// not reach has no dominator above it and stays.
 fn hoist_start(editor: &mut Editor<'_, Motion>, dominators: &Dominators, start: InstRef) {
-    if !dominators.reachable(start.block()) {
+    let start_block = editor.block_of(start);
+    if !dominators.reachable(start_block) {
         return;
     }
     let body = editor.body();
-    let operands = body.block(start.block()).insts()[start.index()].operands();
+    let operands = body.inst(start.id()).operands();
     // The blocks from the start's own up to the entry, on the dominator tree.
-    let above: Vec<BlockId> = std::iter::successors(Some(start.block()), |block| dominators.idom(*block)).collect();
+    let above: Vec<BlockId> = std::iter::successors(Some(start_block), |block| dominators.idom(*block)).collect();
     let depth_of = |block: BlockId| {
         above.iter().position(|on| *on == block).unwrap_or_else(|| {
             panic!("an operand of {start:?} is defined in {block:?}, which dominates the start's block")
         })
     };
     // The deepest block that defines an operand, as its distance up from the
-    // start's block, and the first index there after every operand it defines.
-    let mut deepest = (above.len() - 1, 0);
+    // start's block, and the last instruction there that defines one, none
+    // where only the block's start does.
+    let mut deepest: (usize, Option<InstId>) = (above.len() - 1, None);
     for operand in operands {
         let defined = match body.definition(operand) {
-            Definition::Inst(block, index) => (depth_of(block), index + 1),
-            Definition::BlockParam(block, _) => (depth_of(block), 0),
+            Definition::Inst(inst) => (depth_of(body.block_of(inst)), Some(inst)),
+            Definition::BlockParam(block, _) => (depth_of(block), None),
             Definition::Param(_) | Definition::Capture(_) | Definition::OrderParam | Definition::Slot(_) => {
-                (above.len() - 1, 0)
+                (above.len() - 1, None)
             }
         };
-        if defined.0 < deepest.0 || (defined.0 == deepest.0 && defined.1 > deepest.1) {
+        let later = match (defined.1, deepest.1) {
+            (Some(inst), Some(known)) => body.comes_before(known, inst),
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        if defined.0 < deepest.0 || (defined.0 == deepest.0 && later) {
             deepest = defined;
         }
     }
-    let (distance, after_defs) = deepest;
-    let points: Vec<(BlockId, usize)> =
-        std::iter::once((above[distance], after_defs)).chain(above[..distance].iter().rev().map(|block| (*block, 0))).collect();
-    for (block, index) in points {
-        let at = point(editor, block, index);
+    let (distance, last_def) = deepest;
+    let first_point = match last_def {
+        Some(inst) => after(body, inst),
+        None => start_of(body, above[distance]),
+    };
+    let points: Vec<Point> =
+        std::iter::once(first_point).chain(above[..distance].iter().rev().map(|block| start_of(body, *block))).collect();
+    for at in points {
+        let at = editor_position(editor, at);
         match editor.move_to(start, at) {
             Ok(()) => return,
             Err(
@@ -150,8 +161,10 @@ fn hoist_start(editor: &mut Editor<'_, Motion>, dominators: &Dominators, start: 
 /// and so `taking`, as it was.
 fn sink_taking(editor: &mut Editor<'_, Motion>, dominators: &Dominators, taking: InstRef) {
     let body = editor.body();
-    let defs = defined_by(&body.block(taking.block()).insts()[taking.index()]);
-    let use_blocks: Vec<BlockId> = defs.iter().flat_map(|value| body.users(*value)).map(site_block).collect();
+    let taking_block = body.block_of(taking.id());
+    let defs = defined_by(body.inst(taking.id()));
+    let uses: Vec<Site> = defs.iter().flat_map(|value| body.users(*value)).collect();
+    let use_blocks: Vec<BlockId> = uses.iter().map(|site| site_block(body, *site)).collect();
     let Some((first, rest)) = use_blocks.split_first() else {
         return;
     };
@@ -162,23 +175,27 @@ fn sink_taking(editor: &mut Editor<'_, Motion>, dominators: &Dominators, taking:
     let mut down: Vec<BlockId> = Vec::new();
     for block in std::iter::successors(Some(meet), |block| dominators.idom(*block)) {
         down.push(block);
-        if block == taking.block() {
+        if block == taking_block {
             break;
         }
     }
-    if down.last() != Some(&taking.block()) {
+    if down.last() != Some(&taking_block) {
         panic!("the uses of {taking:?} meet in {meet:?}, which its own block dominates")
     }
-    let first_use = body.block(meet).insts().iter().position(|user| user.operands().iter().any(|operand| defs.contains(operand)));
-    let meet_index = match first_use {
-        Some(user) => user,
-        None => body.block(meet).insts().len(),
+    let first_use = uses
+        .iter()
+        .filter_map(|site| match site {
+            Site::Inst(user) if body.block_of(*user) == meet => Some(*user),
+            Site::Inst(_) | Site::Term(_) => None,
+        })
+        .reduce(|first, other| if body.comes_before(other, first) { other } else { first });
+    let meet_point = match first_use {
+        Some(user) => Point::Before(user),
+        None => Point::End(meet),
     };
-    let points: Vec<(BlockId, usize)> = std::iter::once((meet, meet_index))
-        .chain(down[1..].iter().map(|block| (*block, body.block(*block).insts().len())))
-        .collect();
-    for (block, index) in points {
-        let at = point(editor, block, index);
+    let points: Vec<Point> = std::iter::once(meet_point).chain(down[1..].iter().map(|block| Point::End(*block))).collect();
+    for at in points {
+        let at = editor_position(editor, at);
         match editor.move_to(taking, at) {
             Ok(()) => return,
             Err(
@@ -191,12 +208,21 @@ fn sink_taking(editor: &mut Editor<'_, Motion>, dominators: &Dominators, taking:
     }
 }
 
-/// The position before the instruction at `index` of `block`, or the
-/// block's end where `index` is its length.
-fn point(editor: &Editor<'_, Motion>, block: BlockId, index: usize) -> Position {
-    match editor.inst_at(block, index) {
-        Some(inst) => Position::Before(inst),
-        None => Position::End(block),
+/// The first point of `block`.
+fn start_of(body: &Body, block: BlockId) -> Point {
+    Point::start(body, block)
+}
+
+/// The point just after `inst`.
+fn after(body: &Body, inst: InstId) -> Point {
+    Point::after(body, inst)
+}
+
+/// The editor's position at `at`.
+fn editor_position(editor: &Editor<'_, Motion>, at: Point) -> Position {
+    match at {
+        Point::Before(inst) => Position::Before(editor.inst_ref(inst)),
+        Point::End(block) => Position::End(block),
     }
 }
 
@@ -205,9 +231,10 @@ fn defined_by(inst: &Inst) -> Vec<ValueId> {
     inst.result().into_iter().chain(inst.order().and_then(OrderUse::yielded)).collect()
 }
 
-fn site_block(site: Site) -> BlockId {
+fn site_block(body: &Body, site: Site) -> BlockId {
     match site {
-        Site::Inst(block, _) | Site::Term(block) => block,
+        Site::Inst(inst) => body.block_of(inst),
+        Site::Term(block) => block,
     }
 }
 
@@ -241,12 +268,12 @@ mod tests {
 
         let changes = f.run::<SplitCalls>(id);
 
-        let insts = f.module.body(id).block(entry).insts();
-        let ops: Vec<&Op> = insts.iter().map(Inst::op).collect();
+        let insts: Vec<_> = f.module.body(id).block(entry).insts().collect();
+        let ops: Vec<&Op> = insts.iter().map(|inst| inst.op()).collect();
         assert!(matches!(ops[0], Op::Spawn { .. }), "the start rises above independent work: {ops:?}");
         assert_eq!(insts[0].order(), Some(OrderUse::Start(o0)));
         let handle = insts[0].result().expect("a start yields its handle");
-        let results: Vec<_> = insts[1..].iter().map(Inst::result).collect();
+        let results: Vec<_> = insts[1..].iter().map(|inst| inst.result()).collect();
         assert_eq!(results, [a, b, c, d, r, s, t].map(Some), "the taking stands just before its first use");
         assert!(matches!(ops[5], Op::TakeEffect { src } if *src == handle));
         assert!(changes.touched(crate::ir::cfg::Aspect::Instructions));

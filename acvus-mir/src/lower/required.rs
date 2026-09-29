@@ -27,7 +27,7 @@ use crate::ir::cfg::edit::{
     CannotDischarge, CannotRemoveParam, Cfg, Clones, Discharge, Drops, Editor, InstRef, NoFacts, PartOf, Position,
     Remove, Value,
 };
-use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Storage};
@@ -315,10 +315,11 @@ fn is_string(types: &Types<Concrete>, ty: Ty) -> bool {
     matches!(types.kind(ty), TyKind::String)
 }
 
-/// Whether `site` stands in `block` after the instruction at `index`.
-fn later_in_block(site: Site, block: BlockId, index: usize) -> bool {
+/// Whether `site` stands after the instruction `inst`, in its block.
+fn later_in_block(body: &Body, site: Site, inst: InstId) -> bool {
+    let block = body.block_of(inst);
     match site {
-        Site::Inst(at, later) => at == block && later > index,
+        Site::Inst(later) => body.block_of(later) == block && body.comes_before(inst, later),
         Site::Term(at) => at == block,
     }
 }
@@ -340,8 +341,8 @@ fn clone_place_reads(module: &mut Module, body: BodyId, am: &mut AnalysisManager
     let content = am.get::<ContentLiveness>(module, body);
     let (of, types) = (module.body(body), module.types());
     let mut read_again: Vec<ValueId> = Vec::new();
-    for (block, record) in of.blocks() {
-        for (index, inst) in record.insts().iter().enumerate() {
+    for (_, record) in of.blocks() {
+        for inst in record.insts() {
             let Op::Take { target, path, .. } = inst.op() else {
                 continue;
             };
@@ -349,7 +350,7 @@ fn clone_place_reads(module: &mut Module, body: BodyId, am: &mut AnalysisManager
             let Some(place) = named_place(target) else {
                 continue;
             };
-            if is_string(types, of.ty_of(result)) && content.part_live_after(Site::Inst(block, index), place, path) {
+            if is_string(types, of.ty_of(result)) && content.part_live_after(Site::Inst(inst.id()), place, path) {
                 read_again.push(result);
             }
         }
@@ -366,7 +367,7 @@ fn clone_place_reads(module: &mut Module, body: BodyId, am: &mut AnalysisManager
 
 fn clone_value_uses(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
     let liveness = am.get::<Liveness>(module, body);
-    let mut facts = EditFacts::new(am, module, body);
+    let mut facts = EditFacts::new(am, body);
     let mut editor = Editor::<Value>::new(module, body, &mut facts);
     let mut cursor = editor.cursor();
     while let Some(inst) = cursor.next() {
@@ -389,8 +390,8 @@ struct MovedString {
 /// Clones each `String` value the instruction at `inst` moves through an
 /// operand that is not its last use, and gives that operand the clone.
 fn clone_before_inst(editor: &mut Editor<'_, Value>, liveness: &Liveness, inst: InstRef) {
-    let (block, mut index) = (inst.block(), inst.index());
-    let record = &editor.body().block(block).insts()[index];
+    let block = editor.block_of(inst);
+    let record = editor.inst_of(inst);
     let span = record.span();
     let mut moved: Vec<MovedString> = Vec::new();
     for (position, operand) in inst_operands(editor.body(), editor.types(), record).into_iter().enumerate() {
@@ -405,14 +406,13 @@ fn clone_before_inst(editor: &mut Editor<'_, Value>, liveness: &Liveness, inst: 
     }
     for MovedString { value, ty, operands } in moved {
         let body = editor.body();
-        let read_after = body.users(value).any(|site| later_in_block(site, block, index))
+        let read_after = body.users(value).any(|site| later_in_block(body, site, inst.id()))
             || liveness.live_at_end(block).contains(&value);
         let cloned = if read_after { &operands[..] } else { &operands[..operands.len() - 1] };
         for position in cloned {
             let clone = editor.insert(Position::Before(inst), Op::StringClone { src: value }, ty, span);
-            index += 1;
             editor
-                .replace_operand(Site::Inst(block, index), *position, value, clone)
+                .replace_operand(Site::Inst(inst.id()), *position, value, clone)
                 .expect("a clone inserted just before its use dominates it");
         }
     }
@@ -460,12 +460,12 @@ fn clone_before_terminator(editor: &mut Editor<'_, Value>, liveness: &Liveness, 
 fn remove_dead_context_ops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     let mut taken_for_commits: Vec<ValueId> = Vec::new();
     {
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Discharge>::new(module, body, &mut facts);
         let mut cursor = editor.cursor();
         while let Some(inst) = cursor.next() {
             let editor = cursor.editor();
-            let Op::Commit { value, .. } = editor.body().block(inst.block()).insts()[inst.index()].op() else {
+            let Op::Commit { value, .. } = editor.body().inst(inst.id()).op() else {
                 continue;
             };
             let value = *value;
@@ -486,7 +486,7 @@ fn remove_dead_context_ops_in(module: &mut Module, body: BodyId, am: &mut Analys
         let changes = editor.finish();
         am.invalidate(body, &changes);
     }
-    let mut facts = EditFacts::new(am, module, body);
+    let mut facts = EditFacts::new(am, body);
     let mut editor = Editor::<Discharge>::new(module, body, &mut facts);
     let mut cursor = editor.cursor();
     while let Some(inst) = cursor.next() {
@@ -498,7 +498,7 @@ fn remove_dead_context_ops_in(module: &mut Module, body: BodyId, am: &mut Analys
     let mut cursor = editor.cursor();
     while let Some(inst) = cursor.next() {
         let editor = cursor.editor();
-        if matches!(editor.body().block(inst.block()).insts()[inst.index()].op(), Op::Fetch { .. }) {
+        if matches!(editor.body().inst(inst.id()).op(), Op::Fetch { .. }) {
             offer(editor, inst);
         }
     }
@@ -520,7 +520,7 @@ fn commits_its_slot(body: &Body, take: Option<InstRef>, value: ValueId) -> bool 
     let Some(take) = take else {
         return false;
     };
-    let Op::Take { target: RefTarget::Var(slot), path, .. } = body.block(take.block()).insts()[take.index()].op() else {
+    let Op::Take { target: RefTarget::Var(slot), path, .. } = body.inst(take.id()).op() else {
         return false;
     };
     path.is_empty() && body.context_of_slot(*slot).is_some() && body.use_count(value) == 0
@@ -530,7 +530,7 @@ fn commits_its_slot(body: &Body, take: Option<InstRef>, value: ValueId) -> bool 
 /// of that context produced: the second half of the load (context §3).
 fn stores_a_load(editor: &Editor<'_, Discharge>, inst: InstRef) -> bool {
     let body = editor.body();
-    let Op::Assign { target: RefTarget::Var(slot), path, value, .. } = body.block(inst.block()).insts()[inst.index()].op()
+    let Op::Assign { target: RefTarget::Var(slot), path, value, .. } = body.inst(inst.id()).op()
     else {
         return false;
     };
@@ -543,7 +543,7 @@ fn is_load_of(body: &Body, loaded: Option<InstRef>, slot: ValueId) -> bool {
         return false;
     };
     matches!(
-        body.block(loaded.block()).insts()[loaded.index()].op(),
+        body.inst(loaded.id()).op(),
         Op::Fetch { context } if Some(*context) == body.context_of_slot(slot)
     )
 }
@@ -566,16 +566,6 @@ struct PlannedDrop {
     span: Span,
 }
 
-impl PlannedDrop {
-    /// How many instructions the drop puts in.
-    fn width(&self) -> usize {
-        match self.ended {
-            Ended::Value(_) => 1,
-            Ended::Content(_) | Ended::Part { .. } => 2,
-        }
-    }
-}
-
 /// The drops on one edge, which is split so they stand at the start of the
 /// new block.
 struct EdgeDrops {
@@ -584,8 +574,9 @@ struct EdgeDrops {
     drops: Vec<PlannedDrop>,
 }
 
-/// Where every drop of a body stands, by the positions of the body before
-/// the step: just before or just after an instruction, or on an edge.
+/// Where every drop of a body stands: just before or just after an
+/// instruction, named by its identity, which the drops put in do not
+/// change, or on an edge.
 #[derive(Default)]
 struct DropPlan {
     /// At a block's start: the entry's, for a parameter dead there.
@@ -595,14 +586,6 @@ struct DropPlan {
     on_edges: Vec<EdgeDrops>,
 }
 
-/// The block a cursor walks, and how many instructions drops put in it
-/// before the instruction it stands at, so that instruction's index before
-/// the step is known.
-#[derive(Debug, Clone, Copy)]
-struct Walked {
-    block: BlockId,
-    inserted: usize,
-}
 
 fn insert_drops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     remove_dead_block_params(module, body, am);
@@ -628,33 +611,28 @@ fn insert_drops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'
     let changes = editor.finish();
     am.invalidate(body, &changes);
 
-    let mut facts = EditFacts::new(am, module, body);
+    let mut facts = EditFacts::new(am, body);
     let mut editor = Editor::<Drops>::new(module, body, &mut facts);
     let mut owed: Vec<PlannedDrop> = Vec::new();
-    let mut walking: Option<Walked> = None;
+    let mut walking: Option<BlockId> = None;
     let mut cursor = editor.cursor();
     while let Some(inst) = cursor.next() {
         let editor = cursor.editor();
-        let block = inst.block();
-        let inserted = match walking {
-            Some(walked) if walked.block == block => walked.inserted,
-            _ => {
-                if let Some(walked) = walking {
-                    drop_all(editor, owed.drain(..), Position::End(walked.block));
-                }
-                owed.extend(at_start.remove(&block).into_iter().flatten());
-                0
+        let block = editor.block_of(inst);
+        if walking != Some(block) {
+            if let Some(walked) = walking {
+                drop_all(editor, owed.drain(..), Position::End(walked));
             }
-        };
-        let original = Site::Inst(block, inst.index() - inserted);
+            owed.extend(at_start.remove(&block).into_iter().flatten());
+        }
+        let original = Site::Inst(inst.id());
         owed.extend(before.remove(&original).into_iter().flatten());
-        let placed: usize = owed.iter().map(|drop| drop.width()).sum();
         drop_all(editor, owed.drain(..), Position::Before(inst));
         owed.extend(after.remove(&original).into_iter().flatten());
-        walking = Some(Walked { block, inserted: inserted + placed });
+        walking = Some(block);
     }
     if let Some(walked) = walking {
-        drop_all(&mut editor, owed.drain(..), Position::End(walked.block));
+        drop_all(&mut editor, owed.drain(..), Position::End(walked));
     }
     for EdgeDrops { to: middle, drops, .. } in split {
         drop_all(&mut editor, drops.into_iter(), Position::End(middle));
@@ -758,8 +736,8 @@ impl PlanFacts<'_> {
     /// Whether the body names `param` as a storage.
     fn names_storage(&self, param: ValueId) -> bool {
         self.body.users(param).any(|site| match site {
-            Site::Inst(block, index) => {
-                matches!(place_of(self.body.block(block).insts()[index].op()), Some((RefTarget::Param(named), _)) if *named == param)
+            Site::Inst(inst) => {
+                matches!(place_of(self.body.inst(inst).op()), Some((RefTarget::Param(named), _)) if *named == param)
             }
             Site::Term(_) => false,
         })
@@ -777,8 +755,8 @@ impl PlanFacts<'_> {
         }
         for param in &storages {
             let as_value = body.users(*param).any(|site| match site {
-                Site::Inst(block, index) => {
-                    let inst = &body.block(block).insts()[index];
+                Site::Inst(inst) => {
+                    let inst = body.inst(inst);
                     inst_operands(body, self.types, inst).iter().any(|operand| operand.value == *param && !operand.names_place)
                 }
                 Site::Term(_) => true,
@@ -832,23 +810,23 @@ impl PlanFacts<'_> {
             let last_use = body
                 .users(value)
                 .filter_map(|site| match site {
-                    Site::Inst(at, index) if at == block => Some(index),
-                    Site::Inst(..) | Site::Term(_) => None,
+                    Site::Inst(at) if body.block_of(at) == block => Some(at),
+                    Site::Inst(_) | Site::Term(_) => None,
                 })
-                .max();
+                .reduce(|last, other| if body.comes_before(last, other) { other } else { last });
             let (site, span) = match last_use {
-                Some(index) => {
-                    let inst = &record.insts()[index];
+                Some(at) => {
+                    let inst = body.inst(at);
                     let moved = inst_operands(body, self.types, inst)
                         .iter()
                         .any(|operand| operand.value == value && operand.taken == Taken::Moved);
                     if moved {
                         continue;
                     }
-                    (Site::Inst(block, index), inst.span())
+                    (Site::Inst(at), inst.span())
                 }
                 None => match body.definition(value) {
-                    Definition::Inst(at, index) => (Site::Inst(at, index), body.block(at).insts()[index].span()),
+                    Definition::Inst(at) => (Site::Inst(at), body.inst(at).span()),
                     Definition::Param(_) => {
                         let drop = PlannedDrop { ended: Ended::Value(value), span: body.binder_span(value) };
                         plan.at_start.entry(block).or_default().push(drop);
@@ -904,8 +882,8 @@ impl PlanFacts<'_> {
     /// not read after it, unless that site takes the whole content out.
     fn places_in_block(&self, cuts: &Cuts, block: BlockId, plan: &mut DropPlan) {
         let (body, record) = (self.body, self.body.block(block));
-        for (index, inst) in record.insts().iter().enumerate() {
-            let site = Site::Inst(block, index);
+        for inst in record.insts() {
+            let site = Site::Inst(inst.id());
             let ended: BTreeSet<ValueId> = self
                 .content_events(site, inst)
                 .into_iter()
@@ -977,24 +955,25 @@ impl PlanFacts<'_> {
     fn context_overwrites(&self, plan: &mut DropPlan, walked: &mut FxHashSet<WalkedEdge>) {
         let body = self.body;
         for (block, record) in body.blocks() {
-            for (index, inst) in record.insts().iter().enumerate() {
+            for inst in record.insts() {
                 let Some((slot, path)) = self.context_overwritten(inst) else {
                     continue;
                 };
                 let units = self.content.units(slot).expect("a context slot that does not copy has units");
                 for unit in units.iter().filter(|unit| covers(path, unit) && !self.part_copies(slot, unit)) {
-                    match self.content.presence_before(block, index, slot, unit) {
+                    match self.content.presence_before(inst.id(), slot, unit) {
                         Presence::Present => {
                             let drop = PlannedDrop { ended: self.place_part(slot, unit), span: inst.span() };
-                            plan.before.entry(Site::Inst(block, index)).or_default().push(drop);
+                            plan.before.entry(Site::Inst(inst.id())).or_default().push(drop);
                         }
                         Presence::Absent | Presence::Unreached => {}
                         Presence::Maybe => {
                             assert!(
-                                self.untouched(slot, unit, block, index),
+                                self.untouched(slot, unit, block, Some(inst.id())),
                                 "the context slot {slot:?}'s part {unit:?} is read or taken on some paths only before \
-                                 {block:?}[{index}] overwrites it; check refuses a read of content moved out on some \
-                                 path, and insert_drops runs after check"
+                                 {:?} of {block:?} overwrites it; check refuses a read of content moved out on some \
+                                 path, and insert_drops runs after check",
+                                inst.id()
                             );
                             self.drop_where_present(slot, unit, block, true, plan, walked);
                         }
@@ -1013,8 +992,8 @@ impl PlanFacts<'_> {
         let body = self.body;
         let is_context = body.context_of_slot(*slot).is_some() && !copies(self.types, body.ty_of(*slot));
         let stores_its_load = match body.definition(*value) {
-            Definition::Inst(block, index) => matches!(
-                body.block(block).insts()[index].op(),
+            Definition::Inst(loaded) => matches!(
+                body.inst(loaded).op(),
                 Op::Fetch { context } if Some(*context) == body.context_of_slot(*slot)
             ),
             _ => false,
@@ -1022,11 +1001,12 @@ impl PlanFacts<'_> {
         (is_context && !(path.is_empty() && stores_its_load)).then_some((*slot, path.as_slice()))
     }
 
-    /// Whether nothing in `block` before `upto` reads, takes, lends or
-    /// stores `unit` of `place`.
-    fn untouched(&self, place: ValueId, unit: &[PathSeg], block: BlockId, upto: usize) -> bool {
-        self.body.block(block).insts()[..upto].iter().enumerate().all(|(at, inst)| {
-            let site = Site::Inst(block, at);
+    /// Whether nothing in `block` before the instruction `upto`, or before
+    /// the block's end where that is none, reads, takes, lends or stores
+    /// `unit` of `place`.
+    fn untouched(&self, place: ValueId, unit: &[PathSeg], block: BlockId, upto: Option<InstId>) -> bool {
+        self.body.block(block).insts().take_while(|inst| Some(inst.id()) != upto).all(|inst| {
+            let site = Site::Inst(inst.id());
             match place_of(inst.op()) {
                 Some((RefTarget::Var(named) | RefTarget::Param(named), path)) if *named == place => !overlap(path, unit),
                 _ => !self.loans.reads(site).iter().any(|storage| storage_place(*storage) == Some(place)),
@@ -1064,9 +1044,8 @@ impl PlanFacts<'_> {
                     }
                     Presence::Absent | Presence::Unreached => {}
                     Presence::Maybe => {
-                        let len = body.block(*pred).insts().len();
                         assert!(
-                            !assert_untouched || self.untouched(place, unit, *pred, len),
+                            !assert_untouched || self.untouched(place, unit, *pred, None),
                             "the context slot {place:?}'s part {unit:?} is read or taken on some paths only in \
                              {pred:?}, before an overwrite; check refuses such a read, and insert_drops runs after check"
                         );
@@ -1215,11 +1194,11 @@ impl PlanFacts<'_> {
         let mut pending: Vec<BlockId> = Vec::new();
         for site in body.users(value) {
             let block = match site {
-                Site::Inst(block, index) => {
-                    if self.unit_use(&body.block(block).insts()[index], value, &unit.path).is_none() {
+                Site::Inst(inst) => {
+                    if self.unit_use(body.inst(inst), value, &unit.path).is_none() {
                         continue;
                     }
-                    block
+                    body.block_of(inst)
                 }
                 Site::Term(block) => {
                     if body.block(block).terminator().edges().iter().any(|edge| edge.args.contains(&value)) {
@@ -1250,7 +1229,8 @@ impl PlanFacts<'_> {
     /// parameter.
     fn defining_block(&self, value: ValueId) -> BlockId {
         match self.body.definition(value) {
-            Definition::Inst(block, _) | Definition::BlockParam(block, _) => block,
+            Definition::Inst(inst) => self.body.block_of(inst),
+            Definition::BlockParam(block, _) => block,
             Definition::Param(_) => self.body.entry(),
             definition => panic!("{value:?}, defined at {definition:?}, is not a value the body holds"),
         }
@@ -1304,22 +1284,16 @@ impl PlanFacts<'_> {
             return;
         }
         let ended = Ended::Part { of: PartOf::Value(value), unit: unit.path.clone() };
-        let last = record
-            .insts()
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, inst)| self.unit_use(inst, value, &unit.path).map(|used| (index, used)));
+        let last = record.insts().rev().find_map(|inst| self.unit_use(inst, value, &unit.path).map(|used| (inst, used)));
         match last {
             Some((_, UnitUse::Moved)) => {}
-            Some((index, UnitUse::Read)) => {
-                let span = record.insts()[index].span();
-                plan.after.entry(Site::Inst(block, index)).or_default().push(PlannedDrop { ended, span });
+            Some((inst, UnitUse::Read)) => {
+                plan.after.entry(Site::Inst(inst.id())).or_default().push(PlannedDrop { ended, span: inst.span() });
             }
             None => match body.definition(value) {
-                Definition::Inst(at, index) => {
-                    let span = body.block(at).insts()[index].span();
-                    plan.after.entry(Site::Inst(at, index)).or_default().push(PlannedDrop { ended, span });
+                Definition::Inst(at) => {
+                    let span = body.inst(at).span();
+                    plan.after.entry(Site::Inst(at)).or_default().push(PlannedDrop { ended, span });
                 }
                 Definition::Param(_) => {
                     let drop = PlannedDrop { ended, span: body.binder_span(value) };
@@ -1375,8 +1349,8 @@ impl PlanFacts<'_> {
     ) {
         let (body, record) = (self.body, self.body.block(block));
         let ended = || Ended::Part { of: PartOf::Place(place), unit: unit.to_vec() };
-        for (index, inst) in record.insts().iter().enumerate() {
-            let site = Site::Inst(block, index);
+        for inst in record.insts() {
+            let site = Site::Inst(inst.id());
             let event = match place_of(inst.op()) {
                 Some((RefTarget::Var(named) | RefTarget::Param(named), path)) if *named == place => match inst.op() {
                     Op::Take { .. } if covers(parts::owned_region(path), unit) && !self.takes_a_copy(inst) => {
@@ -1397,7 +1371,7 @@ impl PlanFacts<'_> {
             let presence = match event {
                 PlaceEvent::Moved => continue,
                 PlaceEvent::Stored => Presence::Present,
-                PlaceEvent::Read => self.content.presence_before(block, index, place, unit),
+                PlaceEvent::Read => self.content.presence_before(inst.id(), place, unit),
             };
             match presence {
                 Presence::Present => plan.after.entry(site).or_default().push(PlannedDrop { ended: ended(), span: inst.span() }),

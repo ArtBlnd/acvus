@@ -26,8 +26,8 @@
 //! nothing that path observes. No type changes.
 
 use crate::ir::ValueId;
-use crate::ir::cfg::edit::{CannotMove, Editor, Motion, Position};
-use crate::ir::cfg::{BlockId, BodyId, Changes, Inst, Module, OrderUse, Site};
+use crate::ir::cfg::edit::{CannotMove, Editor, InstRef, Motion, Position};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Inst, Module, OrderUse, Site};
 use crate::passes::analysis::{AnalysisManager, Dominators, LoopTree};
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::{BodyTransform, dominator_preorder, nearest_common_dominator};
@@ -41,28 +41,26 @@ impl BodyTransform for Sink {
         let dominators = am.get::<Dominators>(module, body);
         let loops = am.get::<LoopTree>(module, body);
         let order = dominator_preorder(module.body(body), &dominators);
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Motion>::new(module, body, &mut facts);
         for block in order.into_iter().rev() {
-            for index in (0..editor.body().block(block).insts().len()).rev() {
-                sink_one(&mut editor, &dominators, &loops, block, index);
+            for inst in editor.insts_of(block).into_iter().rev() {
+                sink_one(&mut editor, &dominators, &loops, block, inst);
             }
         }
         editor.finish()
     }
 }
 
-/// Offers the instruction at `index` of `block` a move to where its uses
-/// meet, when that is strictly later and in no loop that does not hold
-/// `block`. A move out of `block` leaves the instructions before it where
-/// they stand.
-fn sink_one(editor: &mut Editor<'_, Motion>, dominators: &Dominators, loops: &LoopTree, block: BlockId, index: usize) {
-    let Some(inst) = editor.inst_at(block, index) else {
-        panic!("{block:?}[{index}] is walked from the block's end, below its length")
-    };
-    let defs = defined_by(&editor.body().block(block).insts()[index]);
+/// Offers `inst`, of `block`, a move to where its uses meet, when that is
+/// strictly later and in no loop that does not hold `block`. A move out of
+/// `block` leaves the instructions before it where they stand, so the
+/// block's instructions as the walk of it began are the ones to offer.
+fn sink_one(editor: &mut Editor<'_, Motion>, dominators: &Dominators, loops: &LoopTree, block: BlockId, inst: InstRef) {
+    let defs = defined_by(editor.inst_of(inst));
     let body = editor.body();
-    let use_blocks: Vec<BlockId> = defs.iter().flat_map(|value| body.users(*value)).map(site_block).collect();
+    let uses: Vec<Site> = defs.iter().flat_map(|value| body.users(*value)).collect();
+    let use_blocks: Vec<BlockId> = uses.iter().map(|site| site_block(body, *site)).collect();
     let Some((first, rest)) = use_blocks.split_first() else {
         return;
     };
@@ -76,9 +74,15 @@ fn sink_one(editor: &mut Editor<'_, Motion>, dominators: &Dominators, loops: &Lo
     if loops.innermost(target).is_some_and(|of| !loops.contains(of, block)) {
         return;
     }
-    let first_use = body.block(target).insts().iter().position(|user| user.operands().iter().any(|operand| defs.contains(operand)));
+    let first_use = uses
+        .iter()
+        .filter_map(|site| match site {
+            Site::Inst(user) if body.block_of(*user) == target => Some(*user),
+            Site::Inst(_) | Site::Term(_) => None,
+        })
+        .reduce(|first, other| if body.comes_before(other, first) { other } else { first });
     let at = match first_use {
-        Some(user) => Position::Before(editor.inst_at(target, user).expect("a use found in the block stands in it")),
+        Some(user) => Position::Before(editor.inst_ref(user)),
         None => Position::End(target),
     };
     match editor.move_to(inst, at) {
@@ -97,9 +101,10 @@ fn defined_by(inst: &Inst) -> Vec<ValueId> {
     inst.result().into_iter().chain(inst.order().and_then(OrderUse::yielded)).collect()
 }
 
-fn site_block(site: Site) -> BlockId {
+fn site_block(body: &Body, site: Site) -> BlockId {
     match site {
-        Site::Inst(block, _) | Site::Term(block) => block,
+        Site::Inst(inst) => body.block_of(inst),
+        Site::Term(block) => block,
     }
 }
 
@@ -149,7 +154,7 @@ mod tests {
         let changes = f.run::<Sink>(id);
 
         let body = f.module.body(id);
-        let results = |block: BlockId| body.block(block).insts().iter().map(|inst| inst.result()).collect::<Vec<_>>();
+        let results = |block: BlockId| body.block(block).insts().map(|inst| inst.result()).collect::<Vec<_>>();
         assert_eq!(results(entry), [Some(a)], "only the value both arms read stays");
         assert_eq!(results(then_block), [Some(b), Some(u)], "the value sinks to just before its use");
         assert!(results(else_block).is_empty());

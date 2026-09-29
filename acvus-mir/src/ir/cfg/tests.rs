@@ -205,7 +205,7 @@ fn a_replaced_value_is_removed_and_its_operands_lose_their_uses() {
     assert_eq!(rewriter.remove(x), Ok(()));
     let body = rewriter.body();
     assert_eq!(body.use_count(a), 1);
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     assert_eq!(insts.len(), 1);
     assert_eq!(insts[0].result(), Some(y));
     assert!(matches!(insts[0].op(), Op::UnaryOp { operand, .. } if *operand == a));
@@ -233,7 +233,7 @@ fn a_removal_moves_the_definitions_after_it() {
     rewriter.replace_all_uses(y, a);
     assert_eq!(rewriter.remove(y), Ok(()));
     let body = rewriter.body();
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     assert_eq!(insts[0].result(), Some(z));
     assert!(matches!(insts[0].op(), Op::UnaryOp { operand, .. } if *operand == a));
 }
@@ -355,7 +355,7 @@ fn push_effect_threads_the_token_and_return_carries_the_current_one() {
     let body = f.body(id);
     let o0 = body.order_param().expect("an ordered body takes an order token");
     assert_eq!(body.ty_of(o0), f.order);
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     assert_eq!(result_of(&insts[0]), first);
     let first_edge = edge_of(&insts[0]);
     assert_eq!(first_edge.before, o0);
@@ -363,7 +363,7 @@ fn push_effect_threads_the_token_and_return_carries_the_current_one() {
     let second_edge = edge_of(&insts[2]);
     assert_eq!(second_edge.before, first_edge.after);
     assert_eq!(returned_order(body, body.entry()), Some(second_edge.after));
-    let spans: Vec<Span> = insts.iter().map(Inst::span).collect();
+    let spans: Vec<Span> = insts.iter().map(|inst| inst.span()).collect();
     assert_eq!(spans, vec![at(8), at(9), at(10)]);
 }
 
@@ -378,7 +378,7 @@ fn every_record_keeps_the_span_it_was_pushed_with() {
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let body = f.body(id);
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     assert_eq!((insts[0].span(), insts[1].span()), (at(100), at(101)));
     assert_eq!(insts[1].result(), None);
 }
@@ -420,7 +420,7 @@ fn the_token_crosses_a_diamond_join() {
 
     let body = f.body(id);
     let o0 = body.order_param().expect("an ordered body takes an order token");
-    let then_after = edge_of(&body.block(then_block).insts()[0]).after;
+    let then_after = edge_of(body.block(then_block).insts().nth(0).expect("the block holds that instruction")).after;
     let [token] = body.block(join).params() else {
         panic!("the join takes the token its arms pass: {:?}", body.block(join).params())
     };
@@ -430,7 +430,7 @@ fn the_token_crosses_a_diamond_join() {
     };
     assert_eq!(passed(then_block), vec![then_after]);
     assert_eq!(passed(else_block), vec![o0]);
-    let join_edge = edge_of(&body.block(join).insts()[0]);
+    let join_edge = edge_of(body.block(join).insts().nth(0).expect("the block holds that instruction"));
     assert_eq!(join_edge.before, *token);
     assert_eq!(returned_order(body, join), Some(join_edge.after));
 }
@@ -455,7 +455,7 @@ fn a_join_no_arm_advances_takes_no_token_parameter() {
 
     let body = f.body(id);
     assert!(body.block(join).params().is_empty());
-    assert_eq!(edge_of(&body.block(join).insts()[0]).before, body.order_param().expect("ordered"));
+    assert_eq!(edge_of(body.block(join).insts().nth(0).expect("the block holds that instruction")).before, body.order_param().expect("ordered"));
 }
 
 #[test]
@@ -486,7 +486,7 @@ fn the_token_crosses_a_loop_back_edge() {
     let [token] = body.block(header).params() else {
         panic!("the header takes the token around the loop: {:?}", body.block(header).params())
     };
-    let body_edge = edge_of(&body.block(loop_body).insts()[0]);
+    let body_edge = edge_of(body.block(loop_body).insts().nth(0).expect("the block holds that instruction"));
     assert_eq!(body_edge.before, *token);
     assert!(matches!(body.block(body.entry()).terminator(), Terminator::Jump { args, .. } if *args == [o0]));
     assert!(matches!(body.block(loop_body).terminator(), Terminator::Jump { args, .. } if *args == [body_edge.after]));
@@ -514,7 +514,7 @@ fn anyorder_gives_its_entry_token_inside_and_merges_on_close() {
 
     let body = f.body(id);
     let o0 = body.order_param().expect("an ordered body takes an order token");
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     let (a1, a2) = (edge_of(&insts[0]), edge_of(&insts[2]));
     assert_eq!((a1.before, a2.before), (o0, o0));
     let merged = |inst: &Inst| match inst.op() {
@@ -551,10 +551,10 @@ fn anyorder_merges_on_an_edge_that_leaves_it() {
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     let merge = result_of(&insts[1]);
     assert!(matches!(insts[1].op(), Op::Merge { .. }));
-    assert_eq!(edge_of(&body.block(out).insts()[0]).before, merge);
+    assert_eq!(edge_of(body.block(out).insts().nth(0).expect("the block holds that instruction")).before, merge);
 }
 
 #[test]
@@ -573,7 +573,7 @@ fn a_return_inside_anyorder_carries_the_merge() {
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
-    let merge = result_of(&body.block(body.entry()).insts()[1]);
+    let merge = result_of(body.block(body.entry()).insts().nth(1).expect("the block holds that instruction"));
     assert_eq!(returned_order(body, body.entry()), Some(merge));
 }
 
@@ -592,7 +592,7 @@ fn removing_an_effectful_call_rethreads_the_token_around_it() {
     let mut rewriter = f.module.rewrite(id);
     assert_eq!(rewriter.remove(first), Ok(()));
     let body = rewriter.body();
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     assert_eq!(insts.len(), 1);
     assert_eq!(result_of(&insts[0]), second);
     assert_eq!(edge_of(&insts[0]).before, o0);
@@ -614,7 +614,7 @@ fn a_load_and_a_commit_are_threaded_on_the_chain() {
 
     let body = f.body(id);
     let o0 = body.order_param().expect("an ordered body takes an order token");
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     let load = edge_of(&insts[0]);
     let commit = edge_of(&insts[1]);
     assert_eq!(load.before, o0);
@@ -663,7 +663,7 @@ fn removing_a_load_rethreads_the_token_around_it() {
     let mut rewriter = f.module.rewrite(id);
     assert_eq!(rewriter.remove(unread), Ok(()));
     let body = rewriter.body();
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     assert_eq!(insts.len(), 1);
     assert_eq!(edge_of(&insts[0]).before, o0);
     assert!(rewriter.finish().touched(Aspect::OrderTokens));
@@ -676,7 +676,8 @@ fn a_load_is_not_inserted_as_pure() {
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let (id, ..) = straight_line(&mut f);
     let entry = f.body(id).entry();
-    f.module.rewrite(id).insert(entry, 0, Op::Fetch { context: page }, int, at(37));
+    let first = f.body(id).first_inst(entry).expect("the entry holds instructions");
+    f.module.rewrite(id).insert(order::At::Before(first), Op::Fetch { context: page }, int, at(37));
 }
 
 // -- Interning through the Builder ---------------------------------------
@@ -715,12 +716,12 @@ fn split_call_makes_a_start_and_its_taking() {
     builder.terminate(ret(user), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let entry = f.body(id).entry();
-    let call_edge = edge_of(&f.body(id).block(entry).insts()[0]);
+    let call_edge = edge_of(f.body(id).block(entry).insts().nth(0).expect("the block holds that instruction"));
 
     let mut rewriter = f.module.rewrite(id);
     rewriter.split_call(call);
     let body = rewriter.body();
-    let insts = body.block(entry).insts();
+    let insts: Vec<_> = body.block(entry).insts().collect();
     let handle = result_of(&insts[0]);
     assert!(matches!(insts[0].op(), Op::Spawn { .. }));
     assert_eq!(insts[0].order(), Some(OrderUse::Start(call_edge.before)));
@@ -755,7 +756,7 @@ fn removing_a_taking_removes_its_start_and_rethreads_the_token() {
     assert_eq!(rewriter.remove(user), Ok(()));
     assert_eq!(rewriter.remove(call), Ok(()));
     let body = rewriter.body();
-    let insts = body.block(body.entry()).insts();
+    let insts: Vec<_> = body.block(body.entry()).insts().collect();
     assert_eq!(insts.len(), 1);
     assert_eq!(result_of(&insts[0]), later);
     assert_eq!(edge_of(&insts[0]).before, o0);
@@ -870,8 +871,9 @@ fn a_split_keeps_the_block_named_and_moves_the_diamond_with_the_tail() {
     builder.terminate(ret(y), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
+    let second = f.body(id).inst_at(entry, 1);
     let mut rewriter = f.module.rewrite(id);
-    let tail = rewriter.split_block(entry, 1);
+    let tail = rewriter.split_block(entry, second);
     let body = rewriter.body();
     assert!(matches!(body.block(entry).terminator(), Terminator::Jump { to, args } if *to == tail && args.is_empty()));
     assert!(matches!(body.block(tail).terminator(), Terminator::Diamond { join: j, .. } if *j == join));
@@ -879,7 +881,7 @@ fn a_split_keeps_the_block_named_and_moves_the_diamond_with_the_tail() {
     // The moved instruction's definition and uses moved with it.
     rewriter.replace_all_uses(x, a);
     assert_eq!(rewriter.remove(x), Ok(()));
-    let moved = &rewriter.body().block(tail).insts()[0];
+    let moved = rewriter.body().block(tail).insts().nth(0).expect("the block holds that instruction");
     assert_eq!(moved.result(), Some(y));
     assert!(matches!(moved.op(), Op::UnaryOp { operand, .. } if *operand == a));
     // The Diamond's use of `c` moved with it to the tail's terminator.
@@ -946,9 +948,10 @@ fn a_retarget_updates_a_switchs_join() {
 fn a_split_keeps_a_switchs_join_named_and_moves_the_switch_with_the_tail() {
     let mut f = fixture();
     let s = switch_body(&mut f);
+    let (join_first, entry_first) = (f.body(s.id).first_inst(s.join), f.body(s.id).first_inst(s.entry));
     let mut rewriter = f.module.rewrite(s.id);
-    let join_tail = rewriter.split_block(s.join, 0);
-    let entry_tail = rewriter.split_block(s.entry, 0);
+    let join_tail = rewriter.split_block(s.join, join_first);
+    let entry_tail = rewriter.split_block(s.entry, entry_first);
     let body = rewriter.body();
     assert_eq!(switch_join(body, entry_tail), s.join, "the join keeps its id, and the Switch still names it");
     assert!(matches!(body.block(s.join).terminator(), Terminator::Jump { to, .. } if *to == join_tail));
@@ -1012,7 +1015,7 @@ fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
     assert_eq!(f.body(lambda).captures().len(), 1);
     let entry = f.body(enclosing).entry();
     assert!(matches!(
-        f.body(enclosing).block(entry).insts()[1].op(),
+        f.body(enclosing).block(entry).insts().nth(1).expect("the block holds that instruction").op(),
         Op::MakeClosure { body, .. } if *body == lambda
     ));
 }
@@ -1104,11 +1107,11 @@ fn the_core_records_every_token_it_makes() {
 
     let body = f.body(id);
     let order_param = body.order_param().expect("an ordered body takes an order token");
-    let yielded = edge_of(&body.block(loop_body).insts()[0]).after;
+    let yielded = edge_of(body.block(loop_body).insts().nth(0).expect("the block holds that instruction")).after;
     let [placed] = body.block(header).params() else {
         panic!("the header takes the token around the loop: {:?}", body.block(header).params())
     };
-    let merge = body.block(exit).insts().iter().find(|inst| matches!(inst.op(), Op::Merge { .. }));
+    let merge = body.block(exit).insts().find(|inst| matches!(inst.op(), Op::Merge { .. }));
     let merged = result_of(merge.expect("the anyorder scope merges what its call yielded"));
     for token in [order_param, yielded, *placed, merged] {
         assert!(body.is_token(token), "{token:?} is a token the core made");

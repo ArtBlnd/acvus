@@ -72,7 +72,7 @@ fn inline_into(module: &mut Module, body: BodyId) -> Changes {
     let mut cursor = editor.cursor();
     while let Some(inst) = cursor.next() {
         let editor = cursor.editor();
-        let record = &editor.body().block(inst.block()).insts()[inst.index()];
+        let record = editor.body().inst(inst.id());
         let Op::FunctionCall { .. } = record.op() else {
             continue;
         };
@@ -215,10 +215,10 @@ impl Tarjan {
 /// The body of the closure `function` is, where `caller` makes it.
 fn closure_body(module: &Module, caller: BodyId, function: ValueId) -> Option<BodyId> {
     let body = module.body(caller);
-    let Definition::Inst(block, index) = body.definition(function) else {
+    let Definition::Inst(made) = body.definition(function) else {
         return None;
     };
-    match body.block(block).insts()[index].op() {
+    match body.inst(made).op() {
         Op::MakeClosure { body: made, .. } => Some(*made),
         _ => None,
     }
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(edge(copied_g).before, o0, "the inlined body consumes the caller's token");
         let (continuation, _) = body
             .blocks()
-            .find(|(_, block)| block.insts().iter().any(|inst| inst.result() == Some(h)))
+            .find(|(_, block)| block.insts().any(|inst| inst.result() == Some(h)))
             .expect("the later call stands in the continuation");
         let [_, token] = body.block(continuation).params() else {
             panic!("the continuation takes the call's result and its token")

@@ -310,7 +310,7 @@ fn and_is_a_short_circuit_diamond() {
             _ => None,
         })
         .expect("a Diamond");
-    let else_ops = lowered.entry().block(diamond).insts();
+    let else_ops: Vec<_> = lowered.entry().block(diamond).insts().collect();
     assert!(matches!(else_ops[0].op(), Op::Const { value: acvus_ast::Literal::Bool(false) }));
     assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { .. })), 0);
 }
@@ -436,7 +436,7 @@ fn while_let_is_a_while_on_the_patterns_test() {
         })
         .expect("a While");
     assert!(matches!(lowered.kind_of(body, cond), TyKind::Bool));
-    let bound = body.block(stage).insts();
+    let bound: Vec<_> = body.block(stage).insts().collect();
     assert!(
         matches!(bound[0].op(), Op::Take { path, .. } if *path == [PathSeg::Payload]),
         "the body binds x first, taking the payload out of the scrutinee's slot (D89): {}",

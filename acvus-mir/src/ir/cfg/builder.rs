@@ -14,7 +14,8 @@ use acvus_ast::Span;
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use super::body::{Block, BlockId, Body, BodyId, Def, Inst, Module, OrderUse, Terminator};
+use super::body::{BlockData, BlockId, Body, BodyId, Def, Inst, InstList, Module, OrderUse, Terminator};
+use super::order::At;
 use super::op::Op;
 use crate::ir::{OrderEdge, ValueId, fn_effect};
 use crate::ty::{Concrete, Reissue, Ty, TyKind, Types};
@@ -546,10 +547,13 @@ impl<'m> Builder<'m> {
             let Some((terminator, terminator_span)) = terminator else {
                 return Err(Unsealed::BlockWithoutTerminator(block));
             };
-            made.push(Block { params, insts, terminator, terminator_span });
+            made.push((BlockData { params, list: InstList::default(), terminator, terminator_span }, insts));
         }
-        for block in made {
-            self.body.new_block(block);
+        for (block, insts) in made {
+            let id = self.body.new_block(block);
+            for inst in insts {
+                self.body.place(At::End(id), inst);
+            }
         }
         if self.order.is_some() {
             self.complete_order_params();
@@ -645,22 +649,23 @@ impl<'m> Builder<'m> {
         );
     }
 
+    /// A result of the next instruction made, which is appended next.
     fn new_result(&mut self, ty: Ty) -> ValueId {
-        let index = self.current().insts.len();
-        self.body.make_value(&self.module.types, ty, Def::Inst(self.at, index))
+        self.current();
+        self.body.make_value(&self.module.types, ty, Def::Inst(self.body.peek_inst_id()))
     }
 
     /// A token the next instruction appended yields or, for a `Merge`,
     /// results in.
     fn new_token_result(&mut self, order_ty: Ty) -> ValueId {
-        let index = self.current().insts.len();
-        self.body.make_token(&self.module.types, order_ty, Def::Inst(self.at, index))
+        self.current();
+        self.body.make_token(&self.module.types, order_ty, Def::Inst(self.body.peek_inst_id()))
     }
 
     fn append(&mut self, inst: Inst) {
         let at = self.at;
-        let index = self.current().insts.len();
-        self.body.record_inst(at, index, &inst);
+        self.current();
+        self.body.record_inst(&inst);
         let Building::Made(current) = &mut self.blocks[at.index()] else {
             panic!("the current block {at:?} is made")
         };

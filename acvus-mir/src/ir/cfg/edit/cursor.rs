@@ -32,16 +32,19 @@ where
             if walk.block.index() >= body.block_count() {
                 return None;
             }
-            if let Some(inst) = body.block(walk.block).insts().get(walk.next) {
-                let id = inst.id();
-                self.editor.walk.next += 1;
-                if self.editor.yielded.insert(id) {
-                    return Some(InstRef { block: walk.block, index: walk.next });
-                }
+            let next = match walk.after {
+                Some(after) => body.next_in_block(after),
+                None => body.first_inst(walk.block),
+            };
+            let Some(id) = next else {
+                self.editor.walk.block = BlockId::of_index(walk.block.index() + 1);
+                self.editor.walk.after = None;
                 continue;
+            };
+            self.editor.walk.after = Some(id);
+            if self.editor.yielded.insert(id) {
+                return Some(InstRef { id });
             }
-            self.editor.walk.block = BlockId::of_index(walk.block.index() + 1);
-            self.editor.walk.next = 0;
         }
     }
 

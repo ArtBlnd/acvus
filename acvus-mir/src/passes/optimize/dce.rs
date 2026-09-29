@@ -43,7 +43,7 @@ impl BodyTransform for Dce {
             let Some(inst) = editor.defining_inst(value) else {
                 continue;
             };
-            let defined = &editor.body().block(inst.block()).insts()[inst.index()];
+            let defined = editor.body().inst(inst.id());
             if defined.result() != Some(value) {
                 continue;
             }

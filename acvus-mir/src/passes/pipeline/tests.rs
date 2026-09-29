@@ -67,10 +67,10 @@ fn optimized(f: &mut Fixture, level: Level) {
 }
 
 fn defining_op(body: &Body, value: ValueId) -> &Op {
-    let Definition::Inst(block, index) = body.definition(value) else {
+    let Definition::Inst(inst) = body.definition(value) else {
         panic!("{value:?} is an instruction's result: {:?}", body.definition(value))
     };
-    body.block(block).insts()[index].op()
+    body.inst(inst).op()
 }
 
 fn is_const_int(body: &Body, value: ValueId, expected: i128) -> bool {
@@ -118,7 +118,7 @@ fn the_full_level_reaches_the_expected_form() {
     let [acc] = body.block(header).params() else {
         panic!("the header carries acc:\n{}", f.snapshot(id))
     };
-    let ops = |block: BlockId| -> Vec<&Op> { body.block(block).insts().iter().map(|inst| inst.op()).collect() };
+    let ops = |block: BlockId| -> Vec<&Op> { body.block(block).insts().map(|inst| inst.op()).collect() };
 
     let [Op::BinOp { op: BinOp::Add(Overflow::Wrap), left, right: u }] = ops(cond_stage)[..] else {
         panic!("the loop body is one addition:\n{}", f.snapshot(id))
@@ -130,8 +130,8 @@ fn the_full_level_reaches_the_expected_form() {
     assert_eq!(t1, t1_again, "t2 is t1:\n{}", f.snapshot(id));
     assert!(matches!(defining_op(body, *t1), Op::BinOp { left, right, .. } if *left == n && *right == n));
     for hoisted in [*u, *t1] {
-        let Definition::Inst(block, _) = body.definition(hoisted) else { panic!("{hoisted:?} is an instruction's") };
-        assert_eq!(block, body.entry(), "{hoisted:?} is hoisted into the preheader:\n{}", f.snapshot(id));
+        let Definition::Inst(inst) = body.definition(hoisted) else { panic!("{hoisted:?} is an instruction's") };
+        assert_eq!(body.block_of(inst), body.entry(), "{hoisted:?} is hoisted into the preheader:\n{}", f.snapshot(id));
     }
 
     let [Op::Const { .. }, Op::BinOp { op: BinOp::Add(Overflow::Wrap), left, right: three }] = ops(exit)[..] else {
@@ -208,7 +208,7 @@ impl BodyTransform for AddsAnUnreadSum {
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
         let (_, n) = module.body(body).params()[0];
         let (entry, ty) = (module.body(body).entry(), module.body(body).ty_of(n));
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Value>::new(module, body, &mut facts);
         editor.insert(Position::End(entry), wrapping_add(n, n), ty, Span::ZERO);
         editor.finish()

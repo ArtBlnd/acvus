@@ -70,7 +70,7 @@ impl Fixture {
     }
 
     fn ops(&self, body: BodyId, block: BlockId) -> Vec<Op> {
-        self.module.body(body).block(block).insts().iter().map(|inst| inst.op().clone()).collect()
+        self.module.body(body).block(block).insts().map(|inst| inst.op().clone()).collect()
     }
 
     fn all_ops(&self, body: BodyId) -> Vec<Op> {
@@ -189,7 +189,7 @@ fn a_string_moved_twice_is_cloned_at_the_first_use_and_moved_by_the_last() {
         panic!("one clone is added before the first call: {ops:?}")
     };
     assert!(is_clone_of(clone, s));
-    let insts = f.module.body(id).block(entry).insts();
+    let insts: Vec<_> = f.module.body(id).block(entry).insts().collect();
     assert_eq!(insts[1].span(), at(2), "the clone takes the span of the use it serves");
     assert_eq!(arguments(first), [insts[1].result().expect("a clone yields a value")]);
     assert_eq!(arguments(second), [s], "the last use moves the value itself");
@@ -215,7 +215,7 @@ fn a_string_moved_twice_by_one_call_is_cloned_for_the_first_operand() {
         panic!("one clone is added before the call: {ops:?}")
     };
     assert!(is_clone_of(clone, s));
-    let cloned = f.module.body(id).block(entry).insts()[1].result().expect("a clone yields a value");
+    let cloned = f.module.body(id).block(entry).insts().nth(1).expect("the block holds that instruction").result().expect("a clone yields a value");
     assert_eq!(arguments(call), [cloned, s]);
 }
 
@@ -302,7 +302,7 @@ fn a_string_slot_read_twice_is_cloned_at_the_first_read_and_moved_by_the_last() 
     let [_, _, reference, clone, first_call, moved, last_call] = &ops[..] else {
         panic!("the first read becomes a Ref and a clone: {ops:?}")
     };
-    let insts = f.module.body(id).block(entry).insts();
+    let insts: Vec<_> = f.module.body(id).block(entry).insts().collect();
     let (lent, cloned) = (insts[2].result(), insts[3].result());
     assert!(matches!(reference, Op::Ref { target: RefTarget::Var(named), mutability: Mutability::Shared, .. } if *named == slot));
     assert_eq!(f.module.body(id).ty_of(lent.expect("a Ref yields a value")), t.string_ref);
@@ -424,7 +424,7 @@ fn a_value_that_does_not_copy_is_dropped_after_its_last_use() {
     };
     assert!(matches!(test, Op::TestLiteral { .. }));
     assert!(is_drop_of(dropped, s));
-    assert_eq!(f.module.body(id).block(entry).insts()[2].span(), at(2));
+    assert_eq!(f.module.body(id).block(entry).insts().nth(2).expect("the block holds that instruction").span(), at(2));
 }
 
 /// `f(s)` moves `s` to the callee, which drops it; the program does not.
@@ -484,7 +484,7 @@ fn a_value_live_into_one_arm_only_is_dropped_at_the_other_arm_through_a_split_ed
         panic!("the split block holds the drop: {split:?}")
     };
     assert!(is_drop_of(dropped, s));
-    assert_eq!(body.block(*else_to).insts()[0].span(), at(7), "an edge drop takes its source terminator's span");
+    assert_eq!(body.block(*else_to).insts().nth(0).expect("the block holds that instruction").span(), at(7), "an edge drop takes its source terminator's span");
     assert!(matches!(body.block(*else_to).terminator(), Terminator::Jump { to, .. } if *to == else_block));
     assert_eq!(drops(&f.all_ops(id)), 1, "s is dropped once, on the one path that does not move it");
 }
@@ -515,10 +515,10 @@ fn a_slot_content_overwritten_before_being_read_is_dropped_at_the_overwrite() {
         panic!("the first content is taken out and dropped before the overwrite: {ops:?}")
     };
     assert!(is_take_of(taken, slot));
-    let content = f.module.body(id).block(entry).insts()[3].result().expect("a Take yields a value");
+    let content = f.module.body(id).block(entry).insts().nth(3).expect("the block holds that instruction").result().expect("a Take yields a value");
     assert!(is_drop_of(dropped, content));
     assert!(matches!(overwrite, Op::Assign { value, .. } if *value == second));
-    assert_eq!(f.module.body(id).block(entry).insts()[4].span(), at(3), "the drop takes the ending store's span");
+    assert_eq!(f.module.body(id).block(entry).insts().nth(4).expect("the block holds that instruction").span(), at(3), "the drop takes the ending store's span");
     assert_eq!(drops(&ops), 1, "the second content moves into the call");
 }
 
@@ -550,10 +550,10 @@ fn a_context_written_in_the_body_has_its_old_content_dropped_at_the_overwrite() 
         panic!("the old content is taken out and dropped before the overwrite: {ops:?}")
     };
     assert!(is_take_of(old, c));
-    let content = f.module.body(id).block(entry).insts()[3].result().expect("a Take yields a value");
+    let content = f.module.body(id).block(entry).insts().nth(3).expect("the block holds that instruction").result().expect("a Take yields a value");
     assert!(is_drop_of(dropped, content));
     assert!(matches!(overwrite, Op::Assign { value, .. } if *value == written));
-    assert_eq!(f.module.body(id).block(entry).insts()[4].span(), at(3), "the drop takes the overwrite's span");
+    assert_eq!(f.module.body(id).block(entry).insts().nth(4).expect("the block holds that instruction").span(), at(3), "the drop takes the overwrite's span");
     assert_eq!(drops(&ops), 1);
 }
 
@@ -653,7 +653,7 @@ fn a_dead_block_parameter_is_removed_and_its_argument_dropped_on_the_edge() {
         panic!("the split edge holds the drop of s: {split:?}")
     };
     assert!(is_drop_of(dropped, s));
-    assert_eq!(body.block(*else_to).insts()[0].span(), at(7), "the drop takes the source terminator's span");
+    assert_eq!(body.block(*else_to).insts().nth(0).expect("the block holds that instruction").span(), at(7), "the drop takes the source terminator's span");
     assert!(f.ops(id, then_block).iter().any(|op| is_drop_of(op, u)), "u, now unread, ends where it is made");
 }
 
@@ -678,7 +678,7 @@ fn a_dead_body_parameter_is_dropped_at_the_entry_with_its_binders_span() {
         panic!("the parameter is dropped first: {ops:?}")
     };
     assert!(is_drop_of(dropped, s));
-    assert_eq!(f.module.body(id).block(entry).insts()[0].span(), at(4));
+    assert_eq!(f.module.body(id).block(entry).insts().nth(0).expect("the block holds that instruction").span(), at(4));
 }
 
 /// `note` is loaded; the then arm takes it out and puts a new content back,
@@ -775,7 +775,7 @@ fn a_context_held_on_one_path_only_at_an_overwrite_is_dropped_on_the_edge_where_
     };
     assert!(is_take_of(taken_out, c));
     assert!(matches!(dropped, Op::Drop { .. }));
-    assert_eq!(body.block(*middle).insts()[1].span(), at(9), "the drop takes the else arm's terminator's span");
+    assert_eq!(body.block(*middle).insts().nth(1).expect("the block holds that instruction").span(), at(9), "the drop takes the else arm's terminator's span");
     assert_eq!(drops(&f.all_ops(id)), 1);
 }
 
@@ -860,7 +860,7 @@ fn a_record_with_one_string_field_moved_drops_the_other_at_its_last_read() {
         matches!(taken, Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Field(b)]),
         "{taken:?} takes out `s.b`"
     );
-    let insts = f.module.body(id).block(entry).insts();
+    let insts: Vec<_> = f.module.body(id).block(entry).insts().collect();
     let part = insts[ops.len() - 2].result().expect("a Take yields a value");
     assert!(is_drop_of(dropped, part));
     assert_eq!(insts[ops.len() - 1].span(), at(4), "the drop takes its last read's span");
@@ -893,9 +893,9 @@ fn a_tuple_with_one_part_moved_drops_the_other_where_its_liveness_ends() {
     };
     assert!(matches!(made, Op::MakeTuple { .. }));
     assert!(matches!(taken, Op::TupleIndex { tuple: whole, index: 1 } if *whole == tuple));
-    let part = f.module.body(id).block(entry).insts()[3].result().expect("an extraction yields a value");
+    let part = f.module.body(id).block(entry).insts().nth(3).expect("the block holds that instruction").result().expect("an extraction yields a value");
     assert!(is_drop_of(dropped, part));
-    assert_eq!(f.module.body(id).block(entry).insts()[4].span(), at(2), "the drop takes the definition's span");
+    assert_eq!(f.module.body(id).block(entry).insts().nth(4).expect("the block holds that instruction").span(), at(2), "the drop takes the definition's span");
     assert!(matches!(first_part, Op::TupleIndex { index: 0, .. }));
     assert_eq!(arguments(call), [moved]);
     assert_eq!(drops(&ops), 1, "`t.0` moved to the callee and `t` is never dropped whole");

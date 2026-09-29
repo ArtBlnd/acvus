@@ -18,10 +18,19 @@
 //!
 //! Form: F2, loops canonical, in and out; it changes no block.
 //!
+//! A refused candidate is not offered again until what refused it can have
+//! changed: one whose move would change where it runs (compilation §1)
+//! waits until it stands at the position, where it is placed without a
+//! move, since whether two positions of one block run on the same runs
+//! does not depend on which position; one whose move would cross a
+//! conflicting write waits until that write is placed, since until then
+//! the write stands between the position and it. Any other refusal puts
+//! the candidate back for the next position, as before.
+//!
 //! Cost: O(n + operands) per block of n instructions for its graph and
-//! priorities, O(n log n) for the order when every move is accepted, and at
-//! most O(n² log n) when refusals put candidates back; each offer is a
-//! `move_to` at the editor's cost.
+//! priorities, and O(n log n) for the order: each candidate is offered once
+//! per position it is placed at or refused for a reason that can have
+//! changed, and each offer is a `move_to` at the editor's cost.
 //!
 //! Meaning: a move is made only where `move_to` allows it: every operand
 //! and use, order tokens included, stays dominated, so the order of effects
@@ -32,8 +41,10 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use crate::ir::cfg::edit::{CannotMove, Editor, Motion, Position};
-use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module};
+use rustc_hash::FxHashMap;
+
+use crate::ir::cfg::edit::{CannotMove, Editor, InstRef, Motion, Position};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, InstId, Module};
 use crate::passes::analysis::AnalysisManager;
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::BodyTransform;
@@ -45,7 +56,7 @@ impl BodyTransform for Schedule {
 
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
         let blocks: Vec<BlockId> = module.body(body).blocks().map(|(block, _)| block).collect();
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Motion>::new(module, body, &mut facts);
         for block in blocks {
             schedule_block(&mut editor, block);
@@ -57,28 +68,31 @@ impl BodyTransform for Schedule {
 /// The def-use graph of one block's instructions, each named by its index
 /// in the block before scheduling.
 struct BlockGraph {
+    insts: Vec<InstId>,
     /// For each instruction, how many distinct instructions of the block
     /// define its operands.
     defined_by: Vec<usize>,
     /// For each instruction, the distinct instructions of the block that
     /// use what it defines.
     used_by: Vec<Vec<usize>>,
+    index_of: FxHashMap<InstId, usize>,
 }
 
 impl BlockGraph {
     /// Cost: O(instructions + operands).
     fn of(body: &Body, block: BlockId) -> BlockGraph {
-        let insts = body.block(block).insts();
+        let insts: Vec<InstId> = body.block(block).insts().map(|inst| inst.id()).collect();
+        let index_of: FxHashMap<InstId, usize> = insts.iter().enumerate().map(|(index, inst)| (*inst, index)).collect();
         let mut defined_by = vec![0; insts.len()];
         let mut used_by = vec![Vec::new(); insts.len()];
         for (user, inst) in insts.iter().enumerate() {
-            let mut definers: Vec<usize> = inst
+            let mut definers: Vec<usize> = body
+                .inst(*inst)
                 .operands()
                 .into_iter()
                 .filter_map(|operand| match body.definition(operand) {
-                    Definition::Inst(at, index) if at == block => Some(index),
-                    Definition::Inst(..)
-                    | Definition::BlockParam(..)
+                    Definition::Inst(definer) => index_of.get(&definer).copied(),
+                    Definition::BlockParam(..)
                     | Definition::Param(_)
                     | Definition::Capture(_)
                     | Definition::OrderParam
@@ -92,7 +106,7 @@ impl BlockGraph {
                 used_by[definer].push(user);
             }
         }
-        BlockGraph { defined_by, used_by }
+        BlockGraph { insts, defined_by, used_by, index_of }
     }
 
     /// The longest def-use path from each instruction to the block's end,
@@ -122,6 +136,15 @@ impl Ready {
     }
 }
 
+/// Why a ready instruction is out of the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// Its move would change where it runs; it is placed where it stands.
+    UntilStanding,
+    /// Its move would cross the write at this index; it waits for it.
+    UntilPlaced(usize),
+}
+
 /// Fills the block's positions from its start, each with the ready
 /// instruction of highest priority whose move there the editor allows.
 fn schedule_block(editor: &mut Editor<'_, Motion>, block: BlockId) {
@@ -131,38 +154,50 @@ fn schedule_block(editor: &mut Editor<'_, Motion>, block: BlockId) {
     let ready_of = |inst: usize| Ready { height: heights[inst], earlier: Reverse(inst) };
     let mut waiting = graph.defined_by.clone();
     let mut ready: BinaryHeap<Ready> = (0..count).filter(|inst| waiting[*inst] == 0).map(ready_of).collect();
-    // Which instruction stands at each index of the block, and the index of each.
-    let mut standing: Vec<usize> = (0..count).collect();
-    let mut index_of: Vec<usize> = (0..count).collect();
+    let mut held: FxHashMap<usize, Held> = FxHashMap::default();
+    let mut waiters: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+    let mut last_placed: Option<InstRef> = None;
     for place in 0..count {
+        let standing = match last_placed {
+            Some(last) => editor.next_inst(last),
+            None => editor.first_inst(block),
+        };
+        let Some(standing) = standing else {
+            panic!("{block:?} holds an instruction at place {place}, one not placed yet")
+        };
+        let standing_index = graph.index_of[&standing.id()];
+        if held.get(&standing_index) == Some(&Held::UntilStanding) {
+            held.remove(&standing_index);
+            ready.push(ready_of(standing_index));
+        }
         let mut refused = Vec::new();
         let placed = loop {
             let Some(candidate) = ready.pop() else {
                 panic!("the instruction standing at {block:?}[{place}] is ready, since every earlier one is placed")
             };
-            let from = index_of[candidate.inst()];
-            if from == place {
+            if candidate.inst() == standing_index {
                 break candidate.inst();
             }
-            let inst = editor.inst_at(block, from).expect("an unplaced instruction stands in its block");
-            let at = editor.inst_at(block, place).expect("a position before an unplaced instruction is in the block");
-            match editor.move_to(inst, Position::Before(at)) {
-                Ok(()) => {
-                    standing[place..=from].rotate_right(1);
-                    for index in place..=from {
-                        index_of[standing[index]] = index;
-                    }
-                    break candidate.inst();
+            let inst = editor.inst_ref(graph.insts[candidate.inst()]);
+            match editor.move_to(inst, Position::Before(standing)) {
+                Ok(()) => break candidate.inst(),
+                Err(CannotMove::ChangesWhereItRuns) => {
+                    held.insert(candidate.inst(), Held::UntilStanding);
                 }
-                Err(
-                    CannotMove::OperandNotDominating(_)
-                    | CannotMove::UseNotDominated(_)
-                    | CannotMove::ChangesWhereItRuns
-                    | CannotMove::CrossesConflictingWrite(_),
-                ) => refused.push(candidate),
+                Err(CannotMove::CrossesConflictingWrite(write)) => {
+                    let write = graph.index_of[&write.id()];
+                    held.insert(candidate.inst(), Held::UntilPlaced(write));
+                    waiters.entry(write).or_default().push(candidate.inst());
+                }
+                Err(CannotMove::OperandNotDominating(_) | CannotMove::UseNotDominated(_)) => refused.push(candidate),
             }
         };
+        last_placed = Some(editor.inst_ref(graph.insts[placed]));
         ready.extend(refused);
+        for waiter in waiters.remove(&placed).into_iter().flatten() {
+            held.remove(&waiter);
+            ready.push(ready_of(waiter));
+        }
         for user in &graph.used_by[placed] {
             waiting[*user] -= 1;
             if waiting[*user] == 0 {
@@ -207,8 +242,8 @@ mod tests {
 
         let changes = f.run::<Schedule>(id);
 
-        let insts = f.module.body(id).block(entry).insts();
-        let results: Vec<_> = insts.iter().map(Inst::result).collect();
+        let insts: Vec<_> = f.module.body(id).block(entry).insts().collect();
+        let results: Vec<_> = insts.iter().map(|inst| inst.result()).collect();
         assert_eq!(results, [b, c, a, d, x, e, y, g, h].map(Some));
         let edge = |inst: &Inst| match inst.order() {
             Some(OrderUse::Edge(edge)) => edge,

@@ -6,6 +6,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::ir::ValueId;
+use crate::ir::cfg::body::InstId;
 use crate::ir::cfg::{BlockId, Body, Site};
 
 pub(super) struct Dominators {
@@ -24,8 +25,8 @@ pub(super) enum DefPoint {
     Entry,
     /// A block parameter.
     BlockStart(BlockId),
-    /// An instruction's result or yielded token.
-    Inst(BlockId, usize),
+    /// An instruction's result or yielded token, and the block it stands in.
+    Inst(BlockId, InstId),
 }
 
 impl Dominators {
@@ -85,16 +86,16 @@ impl Dominators {
     }
 
     /// Whether a value defined at `def` is defined wherever `site` reads it.
-    pub(super) fn dominates_site(&self, def: DefPoint, site: Site) -> bool {
-        let (block, index) = match site {
-            Site::Inst(block, index) => (block, Some(index)),
+    pub(super) fn dominates_site(&self, body: &Body, def: DefPoint, site: Site) -> bool {
+        let (block, used_at) = match site {
+            Site::Inst(inst) => (body.block_of(inst), Some(inst)),
             Site::Term(block) => (block, None),
         };
         match def {
             DefPoint::Entry => true,
             DefPoint::BlockStart(defined) => self.dominates_block(defined, block),
-            DefPoint::Inst(defined, def_index) if defined == block => {
-                !self.reachable(block) || index.is_none_or(|index| def_index < index)
+            DefPoint::Inst(defined, def_inst) if defined == block => {
+                !self.reachable(block) || used_at.is_none_or(|used_at| body.comes_before(def_inst, used_at))
             }
             DefPoint::Inst(defined, _) => self.dominates_block(defined, block),
         }
@@ -113,9 +114,9 @@ pub(super) fn def_points(body: &Body) -> FxHashMap<ValueId, DefPoint> {
         for param in block.params() {
             points.insert(*param, DefPoint::BlockStart(id));
         }
-        for (index, inst) in block.insts().iter().enumerate() {
+        for inst in block.insts() {
             for value in inst.defs() {
-                points.insert(value, DefPoint::Inst(id, index));
+                points.insert(value, DefPoint::Inst(id, inst.id()));
             }
         }
     }

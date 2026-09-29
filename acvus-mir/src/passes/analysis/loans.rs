@@ -173,8 +173,8 @@ impl Analysis for Loans {
                 continue;
             }
             let mut state = facts.at(id).clone();
-            for (index, inst) in block.insts().iter().enumerate() {
-                let site = Site::Inst(id, index);
+            for inst in block.insts() {
+                let site = Site::Inst(inst.id());
                 loans.before.insert(site, state.storages.clone());
                 loans.touched.insert(site, forward.touched(inst, &state));
                 forward.transfer(inst, &mut state);
@@ -350,9 +350,9 @@ impl Forward<'_> {
 
     /// The values `block` defines: its parameters, and each instruction's
     /// result and the token it yields.
-    fn defined_in<'b>(&self, block: &'b Block) -> impl Iterator<Item = ValueId> + 'b {
+    fn defined_in<'b>(&self, block: Block<'b>) -> impl Iterator<Item = ValueId> + 'b {
         let defined_by_insts =
-            block.insts().iter().flat_map(|inst| inst.result().into_iter().chain(inst.order().and_then(|order| order.yielded())));
+            block.insts().flat_map(|inst| inst.result().into_iter().chain(inst.order().and_then(|order| order.yielded())));
         block.params().iter().copied().chain(defined_by_insts)
     }
 
@@ -414,12 +414,12 @@ impl Forward<'_> {
     }
 
     /// Values no run defines hold no loan.
-    fn unreached(&self, id: BlockId, block: &Block, loans: &mut Loans) {
+    fn unreached(&self, id: BlockId, block: Block<'_>, loans: &mut Loans) {
         for value in self.defined_in(block) {
             loans.values.insert(value, empty(self.width(self.body.ty_of(value))));
         }
-        for index in 0..block.insts().len() {
-            loans.touched.insert(Site::Inst(id, index), Touched::default());
+        for inst in block.insts() {
+            loans.touched.insert(Site::Inst(inst.id()), Touched::default());
         }
         loans.touched.insert(Site::Term(id), Touched::default());
     }

@@ -20,8 +20,9 @@ use acvus_utils::LocalFactory;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use super::body::{Block, BlockId, Body, Def, Edge, Inst, OrderUse, Site, Terminator, UseSites, ValueDef};
+use super::body::{BlockData, BlockId, Body, Def, Edge, Inst, InstId, InstList, OrderUse, Site, Terminator, UseSites, ValueDef};
 use super::op::Op;
+use super::order::At;
 use crate::ir::{DebugInfo, IndexBound, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
 use crate::ty::{Concrete, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types};
 
@@ -38,6 +39,7 @@ impl Body {
         Body {
             ret,
             blocks: Vec::new(),
+            insts: Vec::new(),
             entry: BlockId::of_index(0),
             params: Vec::new(),
             captures: Vec::new(),
@@ -104,13 +106,13 @@ impl Body {
         *self.values.get(&value).unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
     }
 
-    fn value_def_mut(&mut self, value: ValueId) -> &mut ValueDef {
+    pub(super) fn value_def_mut(&mut self, value: ValueId) -> &mut ValueDef {
         self.values
             .get_mut(&value)
             .unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
     }
 
-    fn use_sites_mut(&mut self, value: ValueId) -> &mut UseSites {
+    pub(super) fn use_sites_mut(&mut self, value: ValueId) -> &mut UseSites {
         self.uses
             .get_mut(&value)
             .unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
@@ -125,23 +127,6 @@ impl Body {
             .def
     }
 
-    /// Records `inst` as the instruction at `index` of `block`: it defines
-    /// its result and the token it yields there, and uses its operands
-    /// there. Cost: O(its operands).
-    ///
-    /// # Panics
-    /// A value it defines or reads is not a value of this body.
-    pub(super) fn record_inst(&mut self, block: BlockId, index: usize, inst: &Inst) {
-        for value in inst.defs() {
-            self.value_def_mut(value).def = Def::Inst(block, index);
-        }
-        let site = Site::Inst(block, index);
-        for value in inst.operands() {
-            self.use_sites_mut(value).add(site, 1);
-        }
-    }
-
-
     /// Records the uses of `block`'s terminator. Cost: O(its operands).
     ///
     /// # Panics
@@ -149,55 +134,6 @@ impl Body {
     pub(super) fn record_terminator(&mut self, block: BlockId, terminator: &Terminator) {
         let site = Site::Term(block);
         terminator.for_each_operand(|value| self.use_sites_mut(value).add(site, 1));
-    }
-
-    /// Moves the record of every instruction of `block` from `from` on by
-    /// one position, up or down, ahead of the insertion or removal that
-    /// moves the instructions themselves. Cost: O(operands and results of
-    /// those instructions).
-    fn shift_insts(&mut self, block: BlockId, from: usize, shift: Shift) {
-        let count = self.blocks[block.index()].insts.len();
-        let indices: Vec<usize> = match shift {
-            Shift::Up => (from..count).rev().collect(),
-            Shift::Down => (from..count).collect(),
-        };
-        for index in indices {
-            let to = match shift {
-                Shift::Up => index + 1,
-                Shift::Down => index - 1,
-            };
-            let inst = &self.blocks[block.index()].insts[index];
-            let (defs, operands) = (inst.defs(), inst.operands());
-            for value in defs {
-                self.value_def_mut(value).def = Def::Inst(block, to);
-            }
-            for value in operands {
-                self.use_sites_mut(value)
-                    .move_site(Site::Inst(block, index), Site::Inst(block, to));
-            }
-        }
-    }
-
-    /// Inserts `inst` at `index` of `block`; the instructions from `index`
-    /// on move down by one. Every value it defines is already a value of
-    /// this body and is defined here from now on. Cost: O(operands of the
-    /// instructions from `index` on).
-    pub(super) fn insert_inst(&mut self, block: BlockId, index: usize, inst: Inst) {
-        self.shift_insts(block, index, Shift::Up);
-        self.record_inst(block, index, &inst);
-        self.blocks[block.index()].insts.insert(index, inst);
-    }
-
-    /// Takes the instruction at `index` of `block` out, with its uses; the
-    /// instructions after it move up by one. The values it defined keep a
-    /// stale definition: the caller defines them again or drops them.
-    /// Cost: O(operands and results of the instructions from `index` on).
-    fn take_inst(&mut self, block: BlockId, index: usize) -> Inst {
-        for value in self.blocks[block.index()].insts[index].operands() {
-            self.use_sites_mut(value).remove_one(Site::Inst(block, index));
-        }
-        self.shift_insts(block, index + 1, Shift::Down);
-        self.blocks[block.index()].insts.remove(index)
     }
 
     fn drop_value(&mut self, value: ValueId) {
@@ -229,7 +165,7 @@ impl Body {
                 }
             };
             match site {
-                Site::Inst(block, index) => self.blocks[block.index()].insts[index].for_each_operand_mut(swap),
+                Site::Inst(inst) => self.inst_mut(inst).for_each_operand_mut(swap),
                 Site::Term(block) => self.blocks[block.index()].terminator.for_each_operand_mut(swap),
             }
             self.use_sites_mut(with).add(site, count);
@@ -253,7 +189,7 @@ impl Body {
     /// block parameter a loop's terminator supplies.
     pub(super) fn remove_value(&mut self, value: ValueId) -> Result<(), StillUsed> {
         match self.def_of(value) {
-            Def::Inst(block, index) => self.remove_inst(block, index, value),
+            Def::Inst(inst) => self.remove_inst(inst, value),
             Def::BlockParam(block, index) => {
                 self.refuse_used(value)?;
                 self.remove_block_param(block, index);
@@ -289,35 +225,35 @@ impl Body {
         }
     }
 
-    fn remove_inst(&mut self, block: BlockId, index: usize, named: ValueId) -> Result<(), StillUsed> {
+    fn remove_inst(&mut self, inst: InstId, named: ValueId) -> Result<(), StillUsed> {
         self.refuse_used(named)?;
-        self.remove_inst_at(block, index).map(drop)
+        self.remove_inst_at(inst).map(drop)
     }
 
-    /// Removes the instruction at `index` of `block`, refused while its
-    /// result has uses, as `remove_value` removes a value an instruction
-    /// defines; an instruction without a result is removed the same way.
-    /// It returns the positions taken out, in the order they were taken,
-    /// each in the coordinates left by the ones before it. Cost:
-    /// `remove_value`'s for an instruction.
+    /// Removes the instruction `id`, refused while its result has uses, as
+    /// `remove_value` removes a value an instruction defines; an
+    /// instruction without a result is removed the same way. It returns the
+    /// instructions taken out, in the order they were taken, each with the
+    /// one that stood before it then. Cost: O(its operands), and the uses
+    /// of the token it yields where it stands on the chain.
     ///
     /// # Panics
     /// The instruction is a split call's start, which goes only with its
     /// taking.
-    pub(super) fn remove_inst_at(&mut self, block: BlockId, index: usize) -> Result<SmallVec<[InstShift; 2]>, StillUsed> {
-        let inst = &self.blocks[block.index()].insts[index];
+    pub(super) fn remove_inst_at(&mut self, id: InstId) -> Result<SmallVec<[InstShift; 2]>, StillUsed> {
+        let inst = self.inst(id);
         if let Some(result) = inst.result {
             self.refuse_used(result)?;
         }
         let mut shifts = SmallVec::new();
-        shifts.push(InstShift::Removed { block, index });
+        shifts.push(InstShift { id, prev: self.prev_in_block(id) });
         match (&inst.op, inst.order) {
             (Op::TakeEffect { src }, order) => {
                 let (src, yielded) = (*src, order.and_then(OrderUse::yielded));
-                let Def::Inst(start_block, start_index) = self.def_of(src) else {
+                let Def::Inst(start_id) = self.def_of(src) else {
                     panic!("a taking's handle is a start's result (effects §6)")
                 };
-                let start = &self.blocks[start_block.index()].insts[start_index];
+                let start = self.inst(start_id);
                 assert!(
                     matches!(start.op, Op::Spawn { .. }),
                     "a taking's handle is a start's result (effects §6)"
@@ -329,18 +265,16 @@ impl Body {
                         panic!("a split call's start and taking are ordered together (effects §6)")
                     }
                 }
-                let taking = self.take_inst(block, index);
-                let start_index =
-                    if start_block == block && start_index > index { start_index - 1 } else { start_index };
-                let start = self.take_inst(start_block, start_index);
-                shifts.push(InstShift::Removed { block: start_block, index: start_index });
+                let taking = self.unlink(id);
+                shifts.push(InstShift { id: start_id, prev: self.prev_in_block(start_id) });
+                let start = self.unlink(start_id);
                 for defined in start.defs().into_iter().chain(taking.defs()) {
                     self.drop_value(defined);
                 }
             }
             (_, Some(OrderUse::Edge(edge))) => {
                 self.replace_all_uses(edge.after, edge.before);
-                let removed = self.take_inst(block, index);
+                let removed = self.unlink(id);
                 for defined in removed.defs() {
                     self.drop_value(defined);
                 }
@@ -349,7 +283,7 @@ impl Body {
                 panic!("a split call's start goes only with its taking (effects §6)")
             }
             (_, None) => {
-                let removed = self.take_inst(block, index);
+                let removed = self.unlink(id);
                 for defined in removed.defs() {
                     self.drop_value(defined);
                 }
@@ -448,7 +382,7 @@ impl Body {
     }
 
     /// Appends `block` to the body. Cost: O(1).
-    pub(super) fn new_block(&mut self, block: Block) -> BlockId {
+    pub(super) fn new_block(&mut self, block: BlockData) -> BlockId {
         let id = BlockId::of_index(self.blocks.len());
         self.blocks.push(block);
         id
@@ -480,36 +414,34 @@ impl Body {
         }
     }
 
-    /// The instructions of `block` from `at` on, and its terminator, move
-    /// to a new block with no parameters, and `block` jumps to it. `block`
-    /// keeps its id, so every edge into it, a `Diamond`'s join and a loop's
-    /// stages and exit that name it still do. Cost: O(operands and results
-    /// of what moves).
+    /// The instructions of `block` from `first` on, none where `first` is
+    /// `None`, and its terminator, move to a new block with no parameters,
+    /// and `block` jumps to it. `block` keeps its id, so every edge into
+    /// it, a `Diamond`'s join and a loop's stages and exit that name it
+    /// still do. Cost: O(the instructions that move and the terminator's
+    /// operands).
     ///
     /// # Panics
-    /// `at` is past the block's end.
-    pub(super) fn split_block(&mut self, block: BlockId, at: usize) -> BlockId {
+    /// `first` stands in another block.
+    pub(super) fn split_block(&mut self, block: BlockId, first: Option<InstId>) -> BlockId {
         let tail_id = BlockId::of_index(self.blocks.len());
         let head = &mut self.blocks[block.index()];
-        assert!(at <= head.insts.len(), "{block:?} has no position {at}");
-        let insts = head.insts.split_off(at);
         let terminator = std::mem::replace(&mut head.terminator, Terminator::Jump { to: tail_id, args: Vec::new() });
         let terminator_span = head.terminator_span;
-        for (offset, inst) in insts.iter().enumerate() {
-            for value in inst.defs() {
-                self.value_def_mut(value).def = Def::Inst(tail_id, offset);
-            }
-            for value in inst.operands() {
-                self.use_sites_mut(value)
-                    .move_site(Site::Inst(block, at + offset), Site::Inst(tail_id, offset));
-            }
-        }
         let mut operands: SmallVec<[ValueId; 4]> = SmallVec::new();
         terminator.for_each_operand(|value| operands.push(value));
         for value in operands {
             self.use_sites_mut(value).move_site(Site::Term(block), Site::Term(tail_id));
         }
-        self.new_block(Block { params: Vec::new(), insts, terminator, terminator_span })
+        self.new_block(BlockData { params: Vec::new(), list: InstList::default(), terminator, terminator_span });
+        if let Some(first) = first {
+            assert_eq!(self.block_of(first), block, "{first:?} stands in {block:?}");
+            let moved: Vec<InstId> = std::iter::successors(Some(first), |at| self.next_in_block(*at)).collect();
+            for id in moved {
+                self.relink(id, At::End(tail_id));
+            }
+        }
+        tail_id
     }
 
     /// Every edge into `from`, every `Diamond` join and loop stage and exit
@@ -552,10 +484,10 @@ impl Body {
     /// `call` is not the result of a `FunctionCall`, or the callee's type
     /// does not state that the call may be split.
     pub(super) fn split_call(&mut self, types: &mut Types<Concrete>, call: ValueId) {
-        let Def::Inst(block, index) = self.def_of(call) else {
+        let Def::Inst(call_id) = self.def_of(call) else {
             panic!("{call:?} is not the result of a call")
         };
-        let Op::FunctionCall { callee_ty, .. } = &self.blocks[block.index()].insts[index].op else {
+        let Op::FunctionCall { callee_ty, .. } = &self.inst(call_id).op else {
             panic!("{call:?} is not the result of a call")
         };
         let TyKind::Fn { ret, .. } = types.kind(*callee_ty) else {
@@ -568,7 +500,11 @@ impl Body {
             "{call:?}'s callee does not state that it may be split (effects §6)"
         );
         let handle_ty = types.intern(TyKind::Handle(ret));
-        let Inst { op, order, span, .. } = self.take_inst(block, index);
+        let at = match self.next_in_block(call_id) {
+            Some(next) => At::Before(next),
+            None => At::End(self.block_of(call_id)),
+        };
+        let Inst { op, order, span, .. } = self.unlink(call_id);
         let Op::FunctionCall { callee, callee_ty, args } = op else {
             panic!("the instruction read above is a call")
         };
@@ -576,7 +512,8 @@ impl Body {
             OrderUse::Edge(edge) => edge,
             OrderUse::Start(_) | OrderUse::Take(_) => panic!("a call's order is an edge"),
         });
-        let handle = self.make_value(types, handle_ty, Def::Inst(block, index));
+        let start_id = self.peek_inst_id();
+        let handle = self.make_value(types, handle_ty, Def::Inst(start_id));
         let start = self.make_inst(
             Op::Spawn { callee, callee_ty, args },
             Some(handle),
@@ -589,24 +526,23 @@ impl Body {
             edge.map(|OrderEdge { after, .. }| OrderUse::Take(after)),
             span,
         );
-        self.insert_inst(block, index, start);
-        self.insert_inst(block, index + 1, taking);
+        self.link(at, start);
+        self.link(at, taking);
     }
 
-    /// Inserts an instruction of `op` at `index` of `block` and returns its
-    /// result, a new value of `ty`. The instruction takes no order token.
-    /// Cost: O(operands of the instructions from `index` on).
+    /// Inserts an instruction of `op` at `at` and returns its result, a new
+    /// value of `ty`. The instruction takes no order token. Cost: O(its
+    /// operands), and amortized O(1) for its place.
     ///
     /// # Panics
     /// `op` yields no value; it is a `Spawn`, a `TakeEffect` or a `Merge`,
     /// which only the core writes; it is a call whose effect is not pure or
-    /// a context's load, which take an order token (effects §3, context §3); `index` is past the block's
-    /// end; or `ty` is refused by `make_value`.
+    /// a context's load, which take an order token (effects §3, context §3); or
+    /// `ty` is refused by `make_value`.
     pub(super) fn insert_pure(
         &mut self,
         types: &Types<Concrete>,
-        block: BlockId,
-        index: usize,
+        at: At,
         op: Op,
         ty: Ty,
         span: Span,
@@ -629,10 +565,9 @@ impl Body {
                 "a call whose effect is not pure takes an order token (effects §3); it is not inserted as pure"
             );
         }
-        assert!(index <= self.blocks[block.index()].insts.len(), "{block:?} has no position {index}");
-        let result = self.make_value(types, ty, Def::Inst(block, index));
+        let result = self.make_value(types, ty, Def::Inst(self.peek_inst_id()));
         let inst = self.make_inst(op, Some(result), None, span);
-        self.insert_inst(block, index, inst);
+        self.link(at, inst);
         result
     }
 
@@ -667,7 +602,8 @@ impl Body {
     /// Removes every block `keep` does not keep, with its instructions, its
     /// terminator and every value it defines; the kept blocks are renumbered
     /// in their order, and the result names each old block's new id. Cost:
-    /// O(the body's instructions, values and uses).
+    /// O(the body's instructions and values, and the uses of values a
+    /// terminator reads).
     ///
     /// # Panics
     /// `keep` is not one flag per block; the entry is removed; a kept block
@@ -687,14 +623,17 @@ impl Body {
             .collect();
         let mut released: Vec<(Site, ValueId)> = Vec::new();
         let mut defined: Vec<ValueId> = Vec::new();
+        let mut removed_insts: Vec<InstId> = Vec::new();
         for (index, block) in self.blocks.iter().enumerate().filter(|(index, _)| !keep[*index]) {
             let id = BlockId::of_index(index);
             defined.extend(block.params.iter().copied());
-            for (at, inst) in block.insts.iter().enumerate() {
-                defined.extend(inst.defs());
-                released.extend(inst.operands().into_iter().map(|value| (Site::Inst(id, at), value)));
-            }
+            removed_insts.extend(self.inst_ids(id));
             block.terminator.for_each_operand(|value| released.push((Site::Term(id), value)));
+        }
+        for inst in removed_insts {
+            let taken = self.insts[inst.index()].take().expect("an instruction of a block is in the arena");
+            defined.extend(taken.inst.defs());
+            released.extend(taken.inst.operands().into_iter().map(|value| (Site::Inst(inst), value)));
         }
         for (site, value) in released {
             self.use_sites_mut(value).remove_one(site);
@@ -712,9 +651,10 @@ impl Body {
             block.terminator.for_each_block_mut(|named| *named = rename(*named));
         }
         self.entry = rename(self.entry);
+        self.rename_inst_blocks(rename);
         for value_def in self.values.values_mut() {
             value_def.def = match value_def.def {
-                Def::Inst(block, index) => Def::Inst(rename(block), index),
+                def @ Def::Inst(_) => def,
                 Def::BlockParam(block, index) => Def::BlockParam(rename(block), index),
                 Def::UnplacedParam(block) => panic!("a sealed body has no unplaced parameter, and {block:?} has one"),
                 def @ (Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::Slot { .. }) => def,
@@ -726,23 +666,18 @@ impl Body {
         renamed
     }
 
-    /// Moves the instruction at `from_index` of `from` to stand before
-    /// position `to_index` of `to`, counted before the move, the block's
-    /// length naming its end. It keeps every operand and every value it
-    /// defines, order tokens included: the order chain is their def-use, so
-    /// a move the editor admits, where each still dominates its uses, leaves
-    /// the chain whole. It returns the position it left and the one it took,
-    /// each in the coordinates left by the one before. Cost: O(operands and
-    /// results of the instructions of both blocks from the positions on).
+    /// Moves the instruction `id` to stand at `at`. It keeps every operand
+    /// and every value it defines, order tokens included: the order chain
+    /// is their def-use, so a move the editor admits, where each still
+    /// dominates its uses, leaves the chain whole. It returns the place it
+    /// left. Cost: amortized O(1).
     ///
     /// # Panics
-    /// A position is past its block's end.
-    pub(super) fn move_inst(&mut self, from: BlockId, from_index: usize, to: BlockId, to_index: usize) -> [InstShift; 2] {
-        assert!(to_index <= self.blocks[to.index()].insts.len(), "{to:?} has no position {to_index}");
-        let inst = self.take_inst(from, from_index);
-        let to_index = if to == from && to_index > from_index { to_index - 1 } else { to_index };
-        self.insert_inst(to, to_index, inst);
-        [InstShift::Removed { block: from, index: from_index }, InstShift::Inserted { block: to, index: to_index }]
+    /// `at` is before `id` itself.
+    pub(super) fn move_inst(&mut self, id: InstId, at: At) -> InstShift {
+        let left = InstShift { id, prev: self.prev_in_block(id) };
+        self.relink(id, at);
+        left
     }
 
     /// Replaces the whole-slot `Take`s and `Assign`s of `slot` with values:
@@ -750,10 +685,10 @@ impl Body {
     /// parameters at joins and loop headers, and an `Undef` at the entry
     /// where no `Assign` came first, with the slot's span (Braun et al.
     /// 2013). No drop is written: an `Assign` drops nothing, every drop being
-    /// an explicit `Drop` (ownership §6). The slot goes with
-    /// them. It returns the positions taken out and put in, in order, each
-    /// in the coordinates left by the ones before. Cost: O(the body's
-    /// blocks, edges and the slot's uses), and the trivial-parameter removal's.
+    /// an explicit `Drop` (ownership §6). The slot goes with them. It
+    /// returns the instructions taken out, in order. Cost: O(the body's
+    /// blocks and edges, and the slot's uses times their log), and the
+    /// trivial-parameter removal's.
     ///
     /// # Panics
     /// `slot` is not a slot; something other than a whole-slot `Take` or
@@ -769,20 +704,20 @@ impl Body {
         let mut loads: Vec<SlotAccess> = Vec::new();
         let mut stores: Vec<SlotAccess> = Vec::new();
         for site in self.users(slot) {
-            let Site::Inst(block, index) = site else {
+            let Site::Inst(id) = site else {
                 panic!("{slot:?} is named by a terminator, which a promotion does not rewrite")
             };
-            let inst = &self.blocks[block.index()].insts[index];
-            match &inst.op {
+            let node = self.node(id);
+            let access = |value: ValueId| SlotAccess { id, block: node.block, order: node.order, value };
+            match &node.inst.op {
                 Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && path.is_empty() => {
-                    let loaded = inst.result.expect("a Take yields a value");
-                    loads.push(SlotAccess { block, index, value: loaded });
+                    loads.push(access(node.inst.result.expect("a Take yields a value")));
                 }
                 Op::Assign { target: RefTarget::Var(named), path, value, .. } if *named == slot && path.is_empty() => {
-                    stores.push(SlotAccess { block, index, value: *value });
+                    stores.push(access(*value));
                 }
                 other => panic!(
-                    "a promotion rewrites only whole-slot Take and Assign of {slot:?}, and {block:?}[{index}] is \
+                    "a promotion rewrites only whole-slot Take and Assign of {slot:?}, and {id:?} is \
                      {other:?}; the facts that let it be promoted are wrong"
                 ),
             }
@@ -790,22 +725,22 @@ impl Body {
         loads.sort_by_key(SlotAccess::position);
         stores.sort_by_key(SlotAccess::position);
 
-        let undef = self.make_value(types, ty, Def::Inst(self.entry, 0));
+        let undef_id = self.fresh_inst_id();
+        let undef = self.make_value(types, ty, Def::Inst(undef_id));
         let mut reader = Reconstruct::new(self, ty, undef);
         reader.seed_entry(self, undef);
         for store in &stores {
             reader.at_end.insert(store.block, store.value);
         }
-        let last_store_above = |block: BlockId, index: usize| {
-            stores
-                .iter()
-                .filter(|store| store.block == block && store.index < index)
-                .last()
-                .map(|store| store.value)
+        // The stores sorted by block and then by place, so the last store
+        // above a load in its block is found by a binary search.
+        let last_store_above = |load: &SlotAccess| {
+            let before = stores.partition_point(|store| store.position() < load.position());
+            before.checked_sub(1).map(|at| &stores[at]).filter(|store| store.block == load.block).map(|store| store.value)
         };
         let mut read: FxHashMap<ValueId, ValueId> = FxHashMap::default();
         for load in &loads {
-            let value = match last_store_above(load.block, load.index) {
+            let value = match last_store_above(load) {
                 Some(value) => value,
                 None => reader.read_start(self, types, load.block),
             };
@@ -820,11 +755,9 @@ impl Body {
         }
 
         let mut shifts = Vec::new();
-        let mut taken: Vec<(BlockId, usize)> = loads.iter().chain(&stores).map(SlotAccess::position).collect();
-        taken.sort_by(|a, b| b.cmp(a));
-        for (block, index) in taken {
+        for access in loads.iter().chain(&stores) {
             let removed = self
-                .remove_inst_at(block, index)
+                .remove_inst_at(access.id)
                 .expect("a promoted Take's uses were all replaced, and an Assign yields nothing");
             shifts.extend(removed);
         }
@@ -833,10 +766,12 @@ impl Body {
         match self.use_count(undef) {
             0 => self.drop_value(undef),
             _ => {
-                let entry = self.entry;
-                let inst = self.make_inst(Op::Undef, Some(undef), None, span);
-                self.insert_inst(entry, 0, inst);
-                shifts.push(InstShift::Inserted { block: entry, index: 0 });
+                let at = match self.first_inst(self.entry) {
+                    Some(first) => At::Before(first),
+                    None => At::End(self.entry),
+                };
+                let inst = Inst { id: undef_id, op: Op::Undef, result: Some(undef), order: None, span };
+                self.link(at, inst);
             }
         }
         shifts
@@ -918,7 +853,7 @@ impl Body {
         let (first, _) = edges[0];
         let terminator_span = self.blocks[first.index()].terminator_span;
         self.record_terminator(middle, &terminator);
-        self.new_block(Block { params, insts: Vec::new(), terminator, terminator_span });
+        self.new_block(BlockData { params, list: InstList::default(), terminator, terminator_span });
         for (from, position) in edges {
             *self.blocks[from.index()].terminator.edge_target_mut(*position) = middle;
         }
@@ -956,23 +891,13 @@ impl Body {
         for param in params {
             self.drop_value(param);
         }
-        let base = self.blocks[pred.index()].insts.len();
-        let insts = std::mem::take(&mut self.blocks[block.index()].insts);
-        for (offset, inst) in insts.iter().enumerate() {
-            for value in inst.defs() {
-                self.value_def_mut(value).def = Def::Inst(pred, base + offset);
-            }
-            for value in inst.operands() {
-                self.use_sites_mut(value).move_site(Site::Inst(block, offset), Site::Inst(pred, base + offset));
-            }
-        }
+        self.append_all(block, pred);
         let terminator = std::mem::replace(&mut self.blocks[block.index()].terminator, Terminator::Diverge);
         let terminator_span = self.blocks[block.index()].terminator_span;
         for value in terminator.operands() {
             self.use_sites_mut(value).move_site(Site::Term(block), Site::Term(pred));
         }
         let merged = &mut self.blocks[pred.index()];
-        merged.insts.extend(insts);
         merged.terminator = terminator;
         merged.terminator_span = terminator_span;
         let keep: Vec<bool> = (0..self.blocks.len()).map(|index| index != block.index()).collect();
@@ -1002,7 +927,7 @@ impl Body {
             position += 1;
         };
         match site {
-            Site::Inst(block, at) => self.blocks[block.index()].insts[at].for_each_operand_mut(swap),
+            Site::Inst(inst) => self.inst_mut(inst).for_each_operand_mut(swap),
             Site::Term(block) => self.blocks[block.index()].terminator.for_each_operand_mut(swap),
         }
         assert_eq!(found, Some(of), "operand {index} of {site:?} is {of:?}");
@@ -1032,7 +957,7 @@ impl Body {
             }
         };
         match site {
-            Site::Inst(block, index) => self.blocks[block.index()].insts[index].for_each_operand_mut(swap),
+            Site::Inst(inst) => self.inst_mut(inst).for_each_operand_mut(swap),
             Site::Term(block) => self.blocks[block.index()].terminator.for_each_operand_mut(swap),
         }
         assert!(count > 0, "{site:?} does not read {of:?}");
@@ -1042,43 +967,48 @@ impl Body {
         self.use_sites_mut(with).add(site, count);
     }
 
-    /// The effectful calls at `first` and `second` of `block`, where
+    /// The effectful calls `first` and `second` of one block, where
     /// `second` consumes what `first` yields and nothing else does, trade
     /// places on the chain (effects §3): `second` consumes what `first`
     /// consumed, `first` consumes what `second` yields, and what used
     /// `second`'s yield uses `first`'s. `second` moves to stand just before
     /// `first`, so every token is defined before its uses. It returns the
-    /// position `second` left and the one it took. Cost: O(the uses of
-    /// `second`'s yield and the block's instructions from `first` on).
+    /// place `second` left. Cost: O(the uses of `second`'s yield and its
+    /// operands).
     ///
     /// # Panics
-    /// `first` does not come before `second`; either is not an effectful
-    /// call; `second` does not consume `first`'s yield, or another site
-    /// also does; or `second` reads a value defined from `first` up to it.
-    pub(super) fn swap_effects(&mut self, block: BlockId, first: usize, second: usize) -> [InstShift; 2] {
-        assert!(first < second, "{block:?}[{first}] comes before {block:?}[{second}] on the chain");
-        let edge_at = |body: &Body, index: usize| match body.blocks[block.index()].insts[index].order {
+    /// The two stand in different blocks or `first` does not come before
+    /// `second`; either is not an effectful call; `second` does not consume
+    /// `first`'s yield, or another site also does; or `second` reads a
+    /// value defined from `first` up to it.
+    pub(super) fn swap_effects(&mut self, first: InstId, second: InstId) -> InstShift {
+        assert!(self.comes_before(first, second), "{first:?} comes before {second:?} on the chain");
+        let edge_at = |body: &Body, id: InstId| match body.inst(id).order {
             Some(OrderUse::Edge(edge)) => edge,
-            other => panic!("{block:?}[{index}] is not an effectful call on one chain: {other:?}"),
+            other => panic!("{id:?} is not an effectful call on one chain: {other:?}"),
         };
         let (a, b) = (edge_at(self, first), edge_at(self, second));
-        assert_eq!(b.before, a.after, "{block:?}[{second}] consumes what {block:?}[{first}] yields");
-        assert_eq!(self.use_count(a.after), 1, "only {block:?}[{second}] consumes {:?}", a.after);
-        let defined_between = |body: &Body, value: ValueId| {
-            matches!(body.def_of(value), Def::Inst(at, index) if at == block && (first..second).contains(&index))
+        assert_eq!(b.before, a.after, "{second:?} consumes what {first:?} yields");
+        assert_eq!(self.use_count(a.after), 1, "only {second:?} consumes {:?}", a.after);
+        let block = self.block_of(first);
+        let defined_between = |body: &Body, value: ValueId| match body.def_of(value) {
+            Def::Inst(at) => {
+                body.block_of(at) == block && !body.comes_before(at, first) && body.comes_before(at, second)
+            }
+            _ => false,
         };
         let mut reads_between = None;
-        self.blocks[block.index()].insts[second].op.for_each_operand(|value| {
+        self.inst(second).op.for_each_operand(|value| {
             if reads_between.is_none() && defined_between(self, value) {
                 reads_between = Some(value);
             }
         });
-        assert!(reads_between.is_none(), "{block:?}[{second}] reads {reads_between:?}, defined since {block:?}[{first}]");
+        assert!(reads_between.is_none(), "{second:?} reads {reads_between:?}, defined since {first:?}");
 
         self.replace_all_uses(b.after, a.after);
-        self.replace_uses_at(Site::Inst(block, second), a.after, a.before);
-        self.replace_uses_at(Site::Inst(block, first), a.before, b.after);
-        self.move_inst(block, second, block, first)
+        self.replace_uses_at(Site::Inst(second), a.after, a.before);
+        self.replace_uses_at(Site::Inst(first), a.before, b.after);
+        self.move_inst(second, At::Before(first))
     }
 
     /// `slot`, of a tuple or a structural object, becomes one slot per
@@ -1109,18 +1039,18 @@ impl Body {
             .collect();
         let sites: Vec<Site> = self.users(slot).collect();
         for site in sites {
-            let Site::Inst(block, index) = site else {
+            let Site::Inst(id) = site else {
                 panic!("{slot:?} is named whole by {site:?}; a split rewrites only paths into its fields")
             };
-            let inst = &mut self.blocks[block.index()].insts[index];
+            let inst = self.inst_mut(id);
             let Some((target, path)) = inst.op.place_mut() else {
-                panic!("{slot:?} is named whole by {block:?}[{index}] {:?}", inst.op)
+                panic!("{slot:?} is named whole by {id:?} {:?}", inst.op)
             };
             let field = path
                 .first()
                 .and_then(|seg| fields.iter().position(|(named, _)| named == seg))
-                .unwrap_or_else(|| panic!("{block:?}[{index}] names {slot:?} whole, through {path:?}"));
-            assert_eq!(*target, RefTarget::Var(slot), "{block:?}[{index}] names {slot:?} as its place");
+                .unwrap_or_else(|| panic!("{id:?} names {slot:?} whole, through {path:?}"));
+            assert_eq!(*target, RefTarget::Var(slot), "{id:?} names {slot:?} as its place");
             *target = RefTarget::Var(parts[field]);
             path.remove(0);
             self.use_sites_mut(slot).remove_one(site);
@@ -1130,34 +1060,31 @@ impl Body {
         parts
     }
 
-    /// The `Index` or `IndexSet` at `index` of `block`, whose bound is
-    /// checked, takes its bound as proven: its check is gone and the
-    /// instruction stays. Cost: O(1).
+    /// The `Index` or `IndexSet` `id`, whose bound is checked, takes its
+    /// bound as proven: its check is gone and the instruction stays. Cost:
+    /// O(1).
     ///
     /// # Panics
     /// The instruction is not an `Index` or `IndexSet` whose bound is
     /// checked.
-    pub(super) fn prove_bound(&mut self, block: BlockId, index: usize) {
-        let op = &mut self.blocks[block.index()].insts[index].op;
+    pub(super) fn prove_bound(&mut self, id: InstId) {
+        let op = &mut self.inst_mut(id).op;
         match op {
             Op::Index { bound, .. } | Op::IndexSet { bound, .. } if *bound == IndexBound::Checked => {
                 *bound = IndexBound::Proven;
             }
-            other => panic!("{block:?}[{index}] is {other:?}, not an index whose bound is checked"),
+            other => panic!("{id:?} is {other:?}, not an index whose bound is checked"),
         }
     }
 
-    /// Inserts a `Drop` of `value` at `index` of `block`. Cost: O(operands
-    /// of the instructions from `index` on).
+    /// Inserts a `Drop` of `value` at `at`. Cost: O(1) amortized.
     ///
     /// # Panics
-    /// `index` is past the block's end, or `value` is an order token, which
-    /// no drop ends.
-    pub(super) fn insert_drop(&mut self, block: BlockId, index: usize, value: ValueId, span: Span) {
-        assert!(index <= self.blocks[block.index()].insts.len(), "{block:?} has no position {index}");
+    /// `value` is an order token, which no drop ends.
+    pub(super) fn insert_drop(&mut self, at: At, value: ValueId, span: Span) {
         assert!(!self.is_token(value), "{value:?} is an order token, which no drop ends");
         let inst = self.make_inst(Op::Drop { src: value }, None, None, span);
-        self.insert_inst(block, index, inst);
+        self.link(at, inst);
     }
 
     /// The call at `index` of `block` becomes a copy of `callee`: `block`
@@ -1178,10 +1105,11 @@ impl Body {
     /// edge; the arguments or `captures` do not match the callee's
     /// parameters or captures in count; the callee is ordered and the call
     /// is not on the chain; or the callee's entry has parameters.
-    pub(super) fn inline_call(&mut self, block: BlockId, index: usize, callee: &Body, captures: &[ValueId]) -> BlockId {
-        let call = &self.blocks[block.index()].insts[index];
+    pub(super) fn inline_call(&mut self, call_id: InstId, callee: &Body, captures: &[ValueId]) -> BlockId {
+        let block = self.block_of(call_id);
+        let call = self.inst(call_id);
         let Op::FunctionCall { args, .. } = &call.op else {
-            panic!("{block:?}[{index}] is {:?}, not a call", call.op)
+            panic!("{call_id:?} is {:?}, not a call", call.op)
         };
         let args = args.clone();
         let result = call.result.expect("a call yields a value");
@@ -1196,9 +1124,10 @@ impl Body {
             callee.order_param.is_none() || edge.is_some(),
             "an ordered callee body is called on the order chain (effects §3)"
         );
-        assert!(callee.block(callee.entry).params.is_empty(), "a body's entry takes no parameters");
+        assert!(callee.block(callee.entry).params().is_empty(), "a body's entry takes no parameters");
 
-        let continuation = self.split_block(block, index + 1);
+        let after_call = self.next_in_block(call_id);
+        let continuation = self.split_block(block, after_call);
         let result_param = self.make_like(self.value_def(result), Def::BlockParam(continuation, 0));
         self.blocks[continuation.index()].params.push(result_param);
         self.replace_all_uses(result, result_param);
@@ -1207,7 +1136,7 @@ impl Body {
             self.blocks[continuation.index()].params.push(token_param);
             self.replace_all_uses(edge.after, token_param);
         }
-        let removed = self.take_inst(block, index);
+        let removed = self.unlink(call_id);
         for defined in removed.defs() {
             self.drop_value(defined);
         }
@@ -1229,13 +1158,16 @@ impl Body {
         }
         let base = self.blocks.len();
         let moved = |block: BlockId| BlockId::of_index(base + block.index());
+        let mut copied_insts: FxHashMap<InstId, InstId> = FxHashMap::default();
         for (id, callee_block) in callee.blocks() {
-            for (at, param) in callee_block.params.iter().enumerate() {
+            for (at, param) in callee_block.params().iter().enumerate() {
                 copied.insert(*param, self.make_like(callee.value_def(*param), Def::BlockParam(moved(id), at)));
             }
-            for (at, inst) in callee_block.insts.iter().enumerate() {
+            for inst in callee_block.insts() {
+                let copy = self.fresh_inst_id();
+                copied_insts.insert(inst.id, copy);
                 for value in inst.defs() {
-                    copied.insert(value, self.make_like(callee.value_def(value), Def::Inst(moved(id), at)));
+                    copied.insert(value, self.make_like(callee.value_def(value), Def::Inst(copy)));
                 }
             }
         }
@@ -1244,10 +1176,10 @@ impl Body {
         };
         for (_, callee_block) in callee.blocks() {
             let insts: Vec<Inst> = callee_block
-                .insts
-                .iter()
+                .insts()
                 .map(|inst| {
                     let mut inst = inst.clone();
+                    inst.id = copied_insts[&inst.id];
                     inst.for_each_operand_mut(copy_of);
                     inst.result.iter_mut().for_each(copy_of);
                     match &mut inst.order {
@@ -1257,7 +1189,7 @@ impl Body {
                     inst
                 })
                 .collect();
-            let terminator = match &callee_block.terminator {
+            let terminator = match callee_block.terminator() {
                 Terminator::Return { value, order, .. } => {
                     let mut args = vec![*value];
                     args.iter_mut().for_each(copy_of);
@@ -1280,14 +1212,11 @@ impl Body {
                     terminator
                 }
             };
-            let params: Vec<ValueId> = callee_block.params.iter().map(|param| copied[param]).collect();
-            let insts = insts.into_iter().map(|inst| Inst { id: self.fresh_inst_id(), ..inst }).collect();
-            self.new_block(Block { params, insts, terminator, terminator_span: callee_block.terminator_span });
-        }
-        for id in (base..self.blocks.len()).map(BlockId::of_index) {
-            for at in 0..self.blocks[id.index()].insts.len() {
-                let inst = self.blocks[id.index()].insts[at].clone();
-                self.record_inst(id, at, &inst);
+            let params: Vec<ValueId> = callee_block.params().iter().map(|param| copied[param]).collect();
+            let terminator_span = callee_block.terminator_span();
+            let id = self.new_block(BlockData { params, list: InstList::default(), terminator, terminator_span });
+            for inst in insts {
+                self.link(At::End(id), inst);
             }
             let terminator = self.blocks[id.index()].terminator.clone();
             self.record_terminator(id, &terminator);
@@ -1316,25 +1245,27 @@ pub(super) fn structural_fields(types: &Types<Concrete>, ty: Ty) -> Option<Vec<(
     }
 }
 
-/// Where an edit took an instruction out or put one in, for a cursor
-/// walking the body.
+/// An instruction an edit took out of its place, removed or moved, with
+/// the instruction that stood just before it then, for a cursor walking the
+/// body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum InstShift {
-    Inserted { block: BlockId, index: usize },
-    Removed { block: BlockId, index: usize },
+pub(super) struct InstShift {
+    pub(super) id: InstId,
+    pub(super) prev: Option<InstId>,
 }
 
 /// A whole-slot `Take`, with the value it yields, or `Assign`, with the
-/// value it stores.
+/// value it stores, and where it stands.
 struct SlotAccess {
+    id: InstId,
     block: BlockId,
-    index: usize,
+    order: u64,
     value: ValueId,
 }
 
 impl SlotAccess {
-    fn position(&self) -> (BlockId, usize) {
-        (self.block, self.index)
+    fn position(&self) -> (BlockId, u64) {
+        (self.block, self.order)
     }
 }
 
@@ -1430,8 +1361,3 @@ impl Reconstruct {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Shift {
-    Up,
-    Down,
-}

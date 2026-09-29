@@ -21,7 +21,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use crate::ir::cfg::{BlockId, Body, Inst, Site, Terminator};
+use crate::ir::cfg::{BlockId, Body, Inst, InstId, Site, Terminator};
 use crate::ir::ValueId;
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 
@@ -184,8 +184,9 @@ where
 
     fn visit_block(&mut self, block: BlockId) {
         self.eval_params(block);
-        for index in 0..self.body.block(block).insts().len() {
-            self.eval_inst(block, index);
+        let body = self.body;
+        for inst in body.block(block).insts() {
+            self.eval_inst(inst.id());
         }
         self.eval_terminator(block);
     }
@@ -193,7 +194,7 @@ where
     /// A site in a block not reached yet is evaluated when the block is.
     fn revisit(&mut self, site: Site) {
         match site {
-            Site::Inst(block, index) if self.reached.contains(&block) => self.eval_inst(block, index),
+            Site::Inst(inst) if self.reached.contains(&self.body.block_of(inst)) => self.eval_inst(inst),
             Site::Term(block) if self.reached.contains(&block) => self.eval_terminator(block),
             Site::Inst(..) | Site::Term(_) => {}
         }
@@ -267,9 +268,9 @@ where
 
     /// A result that is an order token, such as a `Merge`'s, is not
     /// evaluated, and the token an instruction yields has no fact.
-    fn eval_inst(&mut self, block: BlockId, index: usize) {
+    fn eval_inst(&mut self, id: InstId) {
         let body = self.body;
-        let inst = &body.block(block).insts()[index];
+        let inst = body.inst(id);
         let Some(result) = inst.result().filter(|result| !self.is_token(*result)) else {
             return;
         };

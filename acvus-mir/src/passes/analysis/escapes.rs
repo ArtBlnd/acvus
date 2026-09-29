@@ -43,8 +43,8 @@ impl Analysis for Escapes {
 fn first_escape(body: &Body, slot: ValueId) -> Option<Site> {
     let mut sites: Vec<Site> = body.users(slot).collect();
     sites.sort_by_key(|site| match site {
-        Site::Inst(block, index) => (block.index(), *index),
-        Site::Term(block) => (block.index(), usize::MAX),
+        Site::Inst(inst) => (body.block_of(*inst).index(), Some(body.index_in_block(*inst))),
+        Site::Term(block) => (block.index(), None),
     });
     sites.into_iter().find(|site| !promotable(body, slot, *site))
 }
@@ -52,10 +52,10 @@ fn first_escape(body: &Body, slot: ValueId) -> Option<Site> {
 /// Whether the use at `site` is a whole-slot `Take` or `Assign` of `slot`
 /// that names it nowhere else.
 fn promotable(body: &Body, slot: ValueId, site: Site) -> bool {
-    let Site::Inst(block, index) = site else {
+    let Site::Inst(inst) = site else {
         return false;
     };
-    match body.block(block).insts()[index].op() {
+    match body.inst(inst).op() {
         Op::Take { target: RefTarget::Var(named), path, .. } => *named == slot && path.is_empty(),
         Op::Assign { target: RefTarget::Var(named), path, value, .. } => {
             *named == slot && path.is_empty() && *value != slot

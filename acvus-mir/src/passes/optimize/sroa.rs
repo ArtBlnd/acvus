@@ -30,7 +30,7 @@ impl BodyTransform for Sroa {
     const NAME: &'static str = "sroa";
 
     fn run(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
-        let mut facts = EditFacts::new(am, module, body);
+        let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Storage>::new(module, body, &mut facts);
         let mut pending: Vec<ValueId> = editor.body().slots().to_vec();
         while let Some(slot) = pending.pop() {
