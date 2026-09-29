@@ -3227,3 +3227,20 @@ fn a_branch_that_returns_leaves_the_if_to_its_other_branch_in_either_order() {
         assert!(is_int(&checked, binding(&checked, &script, &names, "y"), IntTy::U8), "{source}");
     }
 }
+
+/// types §1, functions §2: a generalized lambda storing through a reference
+/// it is given reaches the caller's place through it at each use, so it
+/// does not grow the caller's object, as the same store written directly
+/// does not; by name, into its own local, it grows.
+#[test]
+fn a_generalized_lambda_stores_through_a_reference_as_written_directly() {
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let set = |r| -> { r.y = 2; 0 }; let a = { x: 1, }; set(&mut a)");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque]);
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let set = |v| -> { let s = { a: v, }; let p = &mut s; p.a.y = 2; 0 }; set({ x: 1, })");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque], "a step made where the lambda is written, read at the use");
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let set = |v| -> { let o = { x: v, }; o.y = 2; o }; let a = set(1); a.y");
+    checked.admitted();
+}

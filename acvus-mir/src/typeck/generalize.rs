@@ -369,7 +369,7 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
             }
             decision => (instance, decision),
         };
-        let decision = decision.map_terms(&mut Copying { infer: &mut cx.infer, at: &at, memo: &mut memo });
+        let decision = decision.map_terms(&mut Copying { infer: &mut cx.infer, through: &mut cx.out.through, at: &at, memo: &mut memo });
         cx.decisions.push(Decision::In { instance: at_instance, decision: Box::new(decision) });
     }
     Ok(())
@@ -385,16 +385,23 @@ fn copied_flows(cx: &mut Ctxt<'_>, flows: &[CopiedFlow]) {
     }
 }
 
-/// A decision's terms and effects copied at an instance.
+/// A decision's terms and effects copied at an instance. A term a place's
+/// step reached through a reference is reached so at the instance too: its
+/// copy is recorded with it (types §1).
 struct Copying<'c> {
     infer: &'c mut crate::infer::Infer,
+    through: &'c mut FxHashSet<Term>,
     at: &'c AtInstance,
     memo: &'c mut FxHashMap<Term, Term>,
 }
 
 impl MapTerms for Copying<'_> {
     fn ty(&mut self, term: Term) -> Term {
-        self.infer.copy_at(term, self.at, self.memo)
+        let copy = self.infer.copy_at(term, self.at, self.memo);
+        if self.through.contains(&term) {
+            self.through.insert(copy);
+        }
+        copy
     }
 
     fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase> {
