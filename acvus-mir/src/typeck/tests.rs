@@ -2904,3 +2904,55 @@ fn a_use_inside_a_generalized_value_is_an_instance_within_its_instances() {
     let within = checked.typeck.instances.values().filter(|instance| instance.within.is_some()).count();
     assert_eq!(within, 2, "`f` within each of `g`'s two instances");
 }
+
+/// functions §2: a length the type leaves unconstrained is generalized as
+/// a type is, so one lambda takes arrays of two lengths.
+#[test]
+fn a_length_is_generalized() {
+    for source in [
+        "let f = |a| -> a; let p = f([1, 2]); let q = f([1, 2, 3]); 0",
+        "let f = |a| -> match a { [x, ..] => x, }; let p = f([1, 2]); let q = f([1, 2, 3]); 0",
+    ] {
+        let (checked, _) = Fixture::new().script(source);
+        checked.admitted();
+        assert_eq!(checked.typeck.instances.len(), 2, "{source}");
+    }
+}
+
+/// functions §2, effects §1: an effect the type leaves unconstrained is
+/// generalized, its flows copied, so each instance's effect is what its
+/// own calls do: effectful at one, pure at the other.
+#[test]
+fn each_instance_has_its_own_effect() {
+    let mut fx = Fixture::new();
+    let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    let quiet = fx.pure(&[i64_ty], i64_ty);
+    let loud = fx.function(&[bool_ty], i64_ty, EffectTerm::Known(crate::ty::Effect::opaque()));
+    fx.overload("q", "h", quiet);
+    fx.overload("l", "h", loud);
+    let (checked, script) = fx.script("let g = |x| -> h(x); let p = g(1); let q = g(true); 0");
+    checked.admitted();
+    let Stmt::LetBind { expr, .. } = &script.stmts[0] else {
+        panic!("not a let");
+    };
+    let mut reissues: Vec<crate::ty::Reissue> = checked
+        .typeck
+        .instances
+        .values()
+        .map(|instance| match checked.kind(instance.types[&expr.id()]) {
+            TyKind::Fn { effect: EffectTerm::Known(effect), .. } => effect.reissue(),
+            other => panic!("the lambda is a function at each instance, not {other:?}"),
+        })
+        .collect();
+    reissues.sort_by_key(|reissue| *reissue as u8);
+    assert_eq!(reissues, vec![crate::ty::Reissue::Pure, crate::ty::Reissue::Opaque]);
+}
+
+/// functions §2: one rule for every use, so a binding used once is one
+/// instance.
+#[test]
+fn a_binding_used_once_is_one_instance() {
+    let (checked, _) = Fixture::new().script("let f = |x| -> x; f(1)");
+    checked.admitted();
+    assert_eq!(checked.typeck.instances.len(), 1);
+}
