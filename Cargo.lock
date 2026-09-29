@@ -188,8 +188,6 @@ name = "acvus-mir-test"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
- "acvus-ext",
- "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "insta",
