@@ -16,4 +16,4 @@ A closure whose body moves a captured value out can be called once; every other 
 
 ## 4. Recursion
 
-Only a `fn` may recurse. A lambda may not.
+Only a `fn` may recurse, and only a module declares one (programs §3). The calls among a graph's units, and within them, are seen whole: a cycle of calls through anything but `fn`s is refused, a lambda's or a template's included.
