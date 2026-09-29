@@ -31,12 +31,12 @@ struct Passed {
 }
 
 pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &[Binder], body: &Expr<S>, span: Span) -> ValueId {
-    // G: a lambda of a generalized binding used at more than one instance
-    // has code per instance, which lower does not make yet.
+    // G: a lambda of a generalized binding has code per instance, which
+    // lower does not make yet.
     // TODO(G, lower): specialize the body to each of `Typeck::instances`
     // over the one environment (functions §2).
     if cx.typeck.instances.values().any(|instance| instance.types.contains_key(&body.id())) {
-        panic!("the lambda at {site:?} is generalized and used at several instances; specializing its code is the lowerer's next round (functions §2)");
+        panic!("the lambda at {site:?} is generalized; specializing its code to its instances is the lowerer's next round (functions §2)");
     }
     let fn_ty = cx.ty(site);
     let TyKind::Fn { params: param_tys, ret, effect, .. } = cx.kind(fn_ty).clone() else {

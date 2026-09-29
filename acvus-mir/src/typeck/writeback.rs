@@ -513,14 +513,14 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
     let mut out = FxHashMap::default();
     for at in 0..cx.out.instances.len() {
         let id = InstanceId(u32::try_from(at).expect("u32 instances"));
-        let (sites, terms) = super::generalize::instance_sites(cx, id);
+        let (sites, at_instance_vars) = super::generalize::instance_sites(cx, id);
         let mut copies = FxHashMap::default();
         let at_instance: Vec<(AstId, Term)> = sites
             .into_iter()
             .filter_map(|site| cx.out.types.get(&site).map(|term| (site, *term)))
             .collect::<Vec<_>>()
             .into_iter()
-            .map(|(site, term)| (site, cx.infer.copy_at(term, &terms, &mut copies)))
+            .map(|(site, term)| (site, cx.infer.copy_at(term, &at_instance_vars, &mut copies)))
             .collect();
         let super::generalize::Instance { use_site, within, .. } = cx.out.instances[at].clone();
         let decided = super::generalize::in_instance(cx, id, |cx| {

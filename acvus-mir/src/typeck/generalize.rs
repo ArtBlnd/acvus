@@ -23,16 +23,14 @@
 //! and `decision::solve`, innermost binding first.
 
 
-use std::ops::Range;
-
 use acvus_ast::{AstId, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::decision::{Decision, Reading, fire_owned_round};
+use super::decision::{Decision, MapTerms, Reading, fire_owned_round};
 use super::output::{Adjustment, AsCast, Chosen, CoercionNode, Converted, Entered, Iteration, StructureNode, TryExit};
-use crate::infer::Term;
-use crate::ty::TyVarId;
+use crate::infer::{AtInstance, CopiedFlow, Term, VarMarks, VarsOf};
+use crate::ty::{EffectTerm, Infer as InferPhase, TyVarId};
 
 /// A binding whose values are generalized, by its binder's site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,14 +67,11 @@ pub(super) struct Settled {
     pub requirements: Box<[Decision]>,
 }
 
-/// The generalized variables, by kind.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub(super) struct Generalized {
-    pub types: Box<[TyVarId]>,
-    // Effects, lengths, identities, marks, flows, holds and calls follow
-    // the same rule; each kind is listed here as it is generalized.
-}
-
+/// The generalized variables, by kind: every kind a type states
+/// (functions §2). What a function value's captures hold, how often it
+/// may be called and its flows are decided where it is written, not per
+/// instance.
+pub(super) type Generalized = VarsOf;
 
 /// One instance of a scheme at a use.
 #[derive(Debug, Clone)]
@@ -87,9 +82,8 @@ pub(super) struct Instance {
     /// The instance of the binding this use was checked inside, where the
     /// use is in a generalized binding's own value.
     pub within: Option<InstanceId>,
-    /// Each generalized variable's fresh term at this instance, by position
-    /// in `Settled::generalized`.
-    pub terms: Vec<Term>,
+    /// Each generalized variable's copy at this instance, of every kind.
+    pub at: AtInstance,
     /// What its requirements recorded at the lambda bodies' sites while
     /// they fired, swapped in for `Output`'s own tables (`in_instance`).
     pub recorded: Recorded,
@@ -114,22 +108,31 @@ pub(super) struct Recorded {
 
 /// A walk whose decisions and variables are one owner's (S7): a lambda's
 /// body, or a value given a binding by its `let` or an assignment, by the
-/// lambda's or the binder's site. `vars` are the type variables each walk
-/// made.
+/// lambda's or the binder's site. `vars` are the variables of every kind
+/// each walk made, from its first mark to its last.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Walk {
     pub parent: Option<AstId>,
-    pub vars: Vec<Range<u32>>,
+    pub vars: Vec<(VarMarks, VarMarks)>,
+}
+
+/// Which variables, of every kind, a binding's own walks made.
+struct Own(Vec<(VarMarks, VarMarks)>);
+
+impl Own {
+    fn made(&self, kind: impl Fn(&VarMarks) -> u32, index: u32) -> bool {
+        self.0.iter().any(|(start, end)| (kind(start)..kind(end)).contains(&index))
+    }
 }
 
 /// `walk` run as `owner`'s: the decisions it makes and the variables it
 /// makes are `owner`'s, nested in the owner enclosing it.
 pub(super) fn walk<R>(cx: &mut Ctxt<'_>, owner: AstId, walk: impl FnOnce(&mut Ctxt<'_>) -> R) -> R {
     let parent = cx.decisions.owner.replace(owner);
-    let start = cx.infer.ty_var_mark();
+    let start = cx.infer.var_marks();
     let walked = walk(cx);
-    let end = cx.infer.ty_var_mark();
-    cx.out.walks.entry(owner).or_insert_with(|| Walk { parent, vars: Vec::new() }).vars.push(start..end);
+    let end = cx.infer.var_marks();
+    cx.out.walks.entry(owner).or_insert_with(|| Walk { parent, vars: Vec::new() }).vars.push((start, end));
     cx.decisions.owner = parent;
     walked
 }
@@ -217,7 +220,7 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     }
     let roots: FxHashSet<AstId> = lambdas.iter().copied().chain([binder]).collect();
     let walks = cx.out.walks.clone();
-    let own = |decision: &Decision, owner: Option<AstId>| {
+    let own_decision = |decision: &Decision, owner: Option<AstId>| {
         nested_in(&walks, &roots, owner) || matches!(decision, Decision::Enter { slot, .. } if *slot == term)
     };
 
@@ -225,75 +228,70 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     // stall does: no default, no form decided by its own use, and no cycle
     // broken, since a use of the binding may still decide what they read
     // (types §5).
-    let start = cx.infer.ty_var_mark();
-    while fire_owned_round(cx, &own, Reading::Closed) {}
-    let end = cx.infer.ty_var_mark();
+    let start = cx.infer.var_marks();
+    while fire_owned_round(cx, &own_decision, Reading::Closed) {}
+    let end = cx.infer.var_marks();
 
-    let mut ranges: Vec<Range<u32>> = roots.iter().filter_map(|root| walks.get(root)).flat_map(|walk| walk.vars.clone()).collect();
-    ranges.push(start..end);
-    let is_own = |var: TyVarId| ranges.iter().any(|range| range.contains(&var.0));
-    let others: Vec<TyVarId> = (0..cx.infer.ty_var_mark()).map(TyVarId).filter(|var| !is_own(*var)).collect();
-    let environment: Vec<Term> = others.into_iter().map(|var| cx.infer.var_term(var)).collect();
-    let held = cx.infer.vars_reachable(environment);
+    let mut spans: Vec<(VarMarks, VarMarks)> = roots.iter().filter_map(|root| walks.get(root)).flat_map(|walk| walk.vars.clone()).collect();
+    spans.push((start, end));
+    let own = Own(spans);
+
+    // What outside holds: every variable made elsewhere, and every one its
+    // types reach.
+    let marks = cx.infer.var_marks();
+    let elsewhere: Vec<Term> = (0..marks.types)
+        .filter(|index| !own.made(|marks| marks.types, *index))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|index| cx.infer.var_term(TyVarId(index)))
+        .collect();
+    // A body's effect is where its calls' effects flow (effects §1): the
+    // run's, and each lambda's outside the binding's own, stay one, whichever
+    // walk first asked for them.
+    let bodies: Vec<EffectTerm<InferPhase>> = cx
+        .out
+        .body_effect
+        .iter()
+        .cloned()
+        .chain(cx.out.lambdas.iter().filter(|lambda| !nested_in(&walks, &roots, Some(lambda.site))).map(|lambda| lambda.effect.clone()))
+        .collect();
+    let held = cx.infer.reached(elsewhere, bodies);
+
     // Every variable the values made that nothing outside holds: those the
     // binding's type reaches, and those its still open decisions read,
     // which each use must make anew too.
     let owned = cx.decisions.take_owned(&|owner| nested_in(&walks, &roots, owner));
-    let read = owned.iter().flat_map(|(decision, _)| decision.terms()).chain([term]);
-    let mut generalized: Vec<TyVarId> = cx
-        .infer
-        .vars_reachable(read.collect::<Vec<_>>())
-        .into_iter()
-        .filter(|var| cx.infer.is_unbound(*var) && is_own(*var) && !held.contains(var))
-        .collect();
-    generalized.sort_by_key(|var| var.0);
-    let generalized_set: FxHashSet<TyVarId> = generalized.iter().copied().collect();
+    let types: Vec<Term> = owned.iter().flat_map(|(decision, _)| decision.terms()).chain([term]).collect();
+    let effects: Vec<_> = owned.iter().flat_map(|(decision, _)| decision.effects()).collect();
+    let reached = cx.infer.reached(types, effects);
+    let generalized = Generalized {
+        types: sorted(reached.types.iter().copied().filter(|var| cx.infer.is_unbound(*var) && own.made(|marks| marks.types, var.0) && !held.types.contains(var)), |var| var.0),
+        effects: sorted(reached.effects.iter().copied().filter(|var| own.made(|marks| marks.effects, var.0) && !held.effects.contains(var)), |var| var.0),
+        lengths: sorted(reached.lengths.iter().copied().filter(|var| cx.infer.is_open_length(*var) && own.made(|marks| marks.lengths, var.0) && !held.lengths.contains(var)), |var| var.0),
+        identities: sorted(reached.identities.iter().copied().filter(|var| cx.infer.is_open_identity(*var) && own.made(|marks| marks.identities, var.0) && !held.identities.contains(var)), |var| var.0),
+        marks: sorted(reached.marks.iter().copied().filter(|var| cx.infer.is_open_mark(*var) && own.made(|marks| marks.marks, var.0) && !held.marks.contains(var)), |var| var.0),
+    };
 
     let mut requirements = Vec::new();
     for (decision, owner) in owned {
-        let reads = cx.infer.vars_reachable(decision.terms());
-        match reads.iter().any(|var| generalized_set.contains(var)) {
-            true => requirements.push((decision, owner)),
+        let reads = cx.infer.reached(decision.terms(), decision.effects());
+        let generalizes = reads.types.iter().any(|var| generalized.types.contains(var))
+            || reads.effects.iter().any(|var| generalized.effects.contains(var))
+            || reads.lengths.iter().any(|var| generalized.lengths.contains(var))
+            || reads.identities.iter().any(|var| generalized.identities.contains(var))
+            || reads.marks.iter().any(|var| generalized.marks.contains(var));
+        match generalizes {
+            true => requirements.push(decision),
             false => cx.decisions.restore(decision, owner),
         }
     }
+    cx.out.schemes[id.0 as usize].settled = Some(Settled { generalized, requirements: requirements.into() });
+}
 
-    // NOTE: a binding used at most once, and then in no lambda and in no
-    // generalized binding's value, has one instance, its value itself: its requirements are decided
-    // where they arose, as before G, so no code of it needs specializing.
-    // This keeps lower, which does not specialize yet, working for it.
-    // A use inside a lambda, or inside another generalized binding's value,
-    // is instantiated with it, perhaps many times.
-    let in_lambda = |owner: Option<AstId>| {
-        let mut at = owner;
-        while let Some(site) = at {
-            let generalized_binding = cx.out.schemes.iter().any(|scheme| scheme.binder == site);
-            if generalized_binding || cx.out.lambdas.iter().any(|lambda| lambda.site == site) {
-                return true;
-            }
-            at = walks.get(&site).and_then(|walk| walk.parent);
-        }
-        false
-    };
-    let uses: Vec<bool> = cx
-        .decisions
-        .iter()
-        .filter(|(decision, _)| matches!(decision, Decision::Instantiate { scheme, .. } if *scheme == id))
-        .map(|(_, owner)| in_lambda(owner))
-        .collect();
-    let settled = match uses[..] {
-        [] | [false] => {
-            for (decision, owner) in requirements {
-                cx.decisions.restore(decision, owner);
-            }
-            Settled { generalized: Generalized::default(), requirements: Box::new([]) }
-        }
-        _ => Settled {
-            generalized: Generalized { types: generalized.into() },
-            requirements: requirements.into_iter().map(|(decision, _)| decision).collect(),
-        },
-    };
-    cx.out.schemes[id.0 as usize].settled = Some(settled);
+fn sorted<T>(vars: impl Iterator<Item = T>, key: impl Fn(&T) -> u32) -> Box<[T]> {
+    let mut vars: Vec<T> = vars.collect();
+    vars.sort_by_key(key);
+    vars.into()
 }
 
 /// A use of the generalized binding `scheme` at `use_site`: a term of the
@@ -312,14 +310,10 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
     let Some(Settled { generalized, requirements }) = settled else {
         return Err(());
     };
-    if generalized.types.is_empty() && requirements.is_empty() {
-        cx.eq(result, term, span);
-        return Ok(());
-    }
-    let terms: Vec<Term> = generalized.types.iter().map(|var| cx.infer.fresh_as(*var)).collect();
-    let at: FxHashMap<TyVarId, Term> = generalized.types.iter().copied().zip(terms.iter().copied()).collect();
+    let (at, flows) = cx.infer.instance_at(&generalized);
+    copied_flows(cx, &flows);
     let within = cx.out.firing_in;
-    let instance = new_instance(cx, Instance { scheme, use_site, span, within, terms, recorded: Recorded::default() });
+    let instance = new_instance(cx, Instance { scheme, use_site, span, within, at: at.clone(), recorded: Recorded::default() });
     let mut memo = FxHashMap::default();
     let copied = cx.infer.copy_at(term, &at, &mut memo);
     cx.eq(result, copied, span);
@@ -327,15 +321,21 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
     for requirement in requirements.iter() {
         let (at_instance, decision) = match requirement {
             // A use inside the value is an instance of its own binding
-            // within this one: made anew here, its terms at this
+            // within this one: made anew here, its variables at this
             // instance's (functions §2).
             Decision::In { instance: inner, decision } => {
                 let child = match children.get(inner) {
                     Some(child) => *child,
                     None => {
                         let of = cx.out.instances[inner.0 as usize].clone();
-                        let terms = of.terms.iter().map(|term| cx.infer.copy_at(*term, &at, &mut memo)).collect();
-                        let child = new_instance(cx, Instance { within: Some(instance), terms, recorded: Recorded::default(), ..of });
+                        let child_at = AtInstance {
+                            types: of.at.types.iter().map(|(var, term)| (*var, cx.infer.copy_at(*term, &at, &mut memo))).collect(),
+                            effects: of.at.effects.iter().map(|(var, copy)| (*var, at.effects.get(copy).copied().unwrap_or(*copy))).collect(),
+                            lengths: of.at.lengths.iter().map(|(var, copy)| (*var, at.lengths.get(copy).copied().unwrap_or(*copy))).collect(),
+                            identities: of.at.identities.iter().map(|(var, copy)| (*var, at.identities.get(copy).copied().unwrap_or(*copy))).collect(),
+                            marks: of.at.marks.iter().map(|(var, copy)| (*var, at.marks.get(copy).copied().unwrap_or(*copy))).collect(),
+                        };
+                        let child = new_instance(cx, Instance { within: Some(instance), at: child_at, recorded: Recorded::default(), ..of });
                         children.insert(*inner, child);
                         child
                     }
@@ -344,10 +344,37 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
             }
             decision => (instance, decision),
         };
-        let decision = decision.map_terms(&mut |term| cx.infer.copy_at(term, &at, &mut memo));
+        let decision = decision.map_terms(&mut Copying { infer: &mut cx.infer, at: &at, memo: &mut memo });
         cx.decisions.push(Decision::In { instance: at_instance, decision: Box::new(decision) });
     }
     Ok(())
+}
+
+/// Each copied effect flow refused, where it is, at its original's span:
+/// the flow is the same constraint at the instance (effects §1).
+fn copied_flows(cx: &mut Ctxt<'_>, flows: &[CopiedFlow]) {
+    for flow in flows {
+        if let Some(span) = cx.out.effect_flows.get(&flow.of).copied() {
+            cx.out.effect_flows.insert(flow.copy, span);
+        }
+    }
+}
+
+/// A decision's terms and effects copied at an instance.
+struct Copying<'c> {
+    infer: &'c mut crate::infer::Infer,
+    at: &'c AtInstance,
+    memo: &'c mut FxHashMap<Term, Term>,
+}
+
+impl MapTerms for Copying<'_> {
+    fn ty(&mut self, term: Term) -> Term {
+        self.infer.copy_at(term, self.at, self.memo)
+    }
+
+    fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase> {
+        self.infer.copy_effect(effect, self.at)
+    }
 }
 
 fn new_instance(cx: &mut Ctxt<'_>, instance: Instance) -> InstanceId {
@@ -388,12 +415,11 @@ fn swap_recorded(cx: &mut Ctxt<'_>, instance: InstanceId) {
     std::mem::swap(&mut out.structures, &mut recorded.structures);
 }
 
-/// The sites the walks of `scheme`'s values recorded, those of the walks
-/// nested in them included, and each generalized variable with its term
-/// at `instance`.
-pub(super) fn instance_sites(cx: &Ctxt<'_>, instance: InstanceId) -> (Vec<AstId>, FxHashMap<TyVarId, Term>) {
-    let Instance { scheme, terms, .. } = &cx.out.instances[instance.0 as usize];
-    let LetScheme { binder, lambdas, settled, .. } = &cx.out.schemes[scheme.0 as usize];
+/// The sites the walks of an instance's binding's values recorded, those
+/// of the walks nested in them included, and its variables' copies there.
+pub(super) fn instance_sites(cx: &Ctxt<'_>, instance: InstanceId) -> (Vec<AstId>, AtInstance) {
+    let Instance { scheme, at, .. } = &cx.out.instances[instance.0 as usize];
+    let LetScheme { binder, lambdas, .. } = &cx.out.schemes[scheme.0 as usize];
     let roots: FxHashSet<AstId> = lambdas.iter().copied().chain([*binder]).collect();
     let sites = cx
         .out
@@ -402,6 +428,5 @@ pub(super) fn instance_sites(cx: &Ctxt<'_>, instance: InstanceId) -> (Vec<AstId>
         .filter(|(_, owner)| nested_in(&cx.out.walks, &roots, Some(**owner)))
         .map(|(site, _)| *site)
         .collect();
-    let generalized = settled.as_ref().map_or(&[][..], |settled| &settled.generalized.types[..]);
-    (sites, generalized.iter().copied().zip(terms.iter().copied()).collect())
+    (sites, at.clone())
 }

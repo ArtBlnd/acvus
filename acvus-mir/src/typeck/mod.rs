@@ -14,10 +14,11 @@
 //! - S3. A decision reads only closed terms (types §6).
 //! - S4. A refusal is made only through `refusal`.
 //! - S5. Every pass states its cost; the fixpoint fires each decision once.
-//! - S7. Every decision has an owner, the innermost lambda it was made in
-//!   (or the run), and a decision made while one fires has that one's; a
-//!   generalized binding's requirements are its lambdas' decisions still
-//!   open (G, `generalize`).
+//! - S7. Every decision has an owner, the innermost walk it was made in: a
+//!   lambda's body, a value a `let` or an assignment gives a binding, or
+//!   the run; a decision made while one fires has that one's. A generalized
+//!   binding's requirements are the decisions of its values' walks still
+//!   open over what it generalizes (G, `generalize`).
 //! - S6. A transparent structured type is taken apart only by `structure`,
 //!   S's one rule (types §1, §3): a value coerced to a slot written
 //!   elsewhere, a lifted impl, and a comparison each record a node per part
