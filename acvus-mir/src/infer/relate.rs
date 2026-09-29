@@ -268,6 +268,10 @@ impl Infer {
 
     fn enter_slot(&mut self, decls: &Declarations, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
         let (holder, slot_node) = match self.end(slot) {
+            // `!` is the bottom type (types §4): a slot holds it whatever
+            // it becomes, so it decides nothing, and the slot is left to
+            // what else enters it or to its default (types §5).
+            End::Unbound(..) if value.head == Head::Base(Base::Never) => return Ok(Entered::Folded),
             End::Unbound(var, _) => {
                 self.bind(var, None, value.term)?;
                 return Ok(Entered::Folded);
