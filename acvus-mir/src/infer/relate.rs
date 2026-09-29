@@ -16,6 +16,7 @@ use super::{End, Infer, Mark, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
+use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
     Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, ObjectTy,
     TyKind, TyVarId, TypeArg,
@@ -55,13 +56,49 @@ pub enum Mismatch {
     },
 }
 
-/// What an `enter` did (types §3, §7).
+/// What an `enter` did (types §1, §3, §7).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entered {
     /// The slot took the value's type, or folded it up the tree.
     Folded,
     /// The value converts to the slot through one declared conversion.
     Converted(VerifiedConversion),
+    /// The slot is a transparent structured type written elsewhere, and
+    /// the value one of the same kind: the value is coerced by its kind's
+    /// shape, and each part it keeps enters the slot's part in turn
+    /// (types §1, §3). The parts are entered by whoever fires them, once
+    /// each part's head is closed.
+    Coerced(Coerced),
+}
+
+/// A structured value coerced to a slot of its kind written elsewhere
+/// (types §3): what its shape did, and each part it keeps with the slot's
+/// part that part enters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Coerced {
+    pub shape: ShapeCoercion,
+    pub parts: Box<[CoercedPart]>,
+}
+
+/// What a coercion did to a structure's shape (types §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShapeCoercion {
+    /// A tuple, an array, `Option` and `Result`, or an object or an enum
+    /// already of the slot's members.
+    Kept,
+    /// An object left the fields the slot does not name.
+    Narrowed { left: Box<[Astr]> },
+    /// An enum took the variants the slot names and the value does not.
+    Widened { taken: Box<[Astr]> },
+}
+
+/// One part a coercion keeps: its key, the value's part, and the slot's
+/// part it enters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoercedPart {
+    pub key: PartKey,
+    pub value: Term,
+    pub slot: Term,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +237,10 @@ impl Infer {
             }
             End::Node { holder, node } => (holder, node),
         };
+        let written_elsewhere = structure(&self.types, slot_node).is_some_and(|slot| slot.label() == Label::Elsewhere);
+        if written_elsewhere && structure(&self.types, value.term).is_some() {
+            return self.coerce_structure(value.term, slot_node).map(Entered::Coerced);
+        }
         let mismatch = Mismatch::Heads {
             a: value.term,
             b: slot_node,
@@ -222,6 +263,18 @@ impl Infer {
         };
         self.settle_slot(holder, slot_node, slot_at, value_at, mismatch)?;
         Ok(Entered::Folded)
+    }
+
+    /// A structured value entering a slot of a transparent structured type
+    /// written elsewhere (types §1): coerced by the slot's kind's shape
+    /// (types §3). An object narrows to the fields the slot names, which
+    /// the value holds each of; an enum widens to the variants the slot
+    /// names, which name each of the value's; a tuple keeps its arity, an
+    /// array its length, and `Option` and `Result` their variants. Two
+    /// kinds that differ, or a shape the rule does not take to the slot's,
+    /// are refused as two heads.
+    fn coerce_structure(&mut self, value: Term, slot: Term) -> Result<Coerced, Mismatch> {
+        todo!("types §3's shape rule for each kind, pairing the parts by key")
     }
 
     /// A value of no common ancestor with its slot converts by the one

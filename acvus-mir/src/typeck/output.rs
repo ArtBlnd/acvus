@@ -8,6 +8,8 @@ use rustc_hash::FxHashMap;
 
 use super::refusal::Refusal;
 use crate::infer::{FlowId, Term};
+use crate::infer::ShapeCoercion;
+use crate::ty::structural::PartKey;
 use crate::ty::{CallsVarId, CastTy, Calls, Effect, EffectTerm, HoldsVarId, Infer as InferPhase, Mutability, Ty};
 
 /// What a name at a site is (types §6).
@@ -25,6 +27,10 @@ pub enum Name {
 pub enum Impl {
     Concrete(usize),
     Generic,
+    /// The impl a transparent structured type has by its generic
+    /// function's lift (types §1): each part's impl is reached at a node of
+    /// its own, recorded in `structures` at the call's site.
+    Structural,
 }
 
 /// A reached declaration at the impl chosen, with what its
@@ -147,23 +153,42 @@ pub struct Closure {
     pub calls: Calls,
 }
 
-/// How `==` or an ordering treats its operand's type, node by node: part by
-/// part for a structural type in `ty::structural`'s order, an array by its
-/// one element part (operators §4); through the `core::eq` or `core::cmp`
-/// impl reached.
+/// A transparent structured type taken apart down to the impls its parts
+/// reach, node by node, in `ty::structural`'s order: how `==` or an
+/// ordering compares (operators §4), and how a lifted impl answers
+/// (types §1, `Impl::Structural`). A reference compares what it names, and
+/// `!` has no part.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PartTree {
-    Parts(Box<[PartTree]>),
+pub enum StructureTree {
+    Parts(Box<[(PartKey, StructureTree)]>),
     /// The impl reached, and its function type as instantiated there.
     Reached { chosen: Chosen, callee: Ty },
 }
 
-/// A part-tree node while checking: its parts' nodes, a reach at the node
-/// itself, recorded in `reached` once it fires.
+/// A structure-tree node while checking: its parts' nodes, or a reach at
+/// the node itself, recorded in `reached` once it fires.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PartNode {
-    Parts(Box<[AstId]>),
+pub(super) enum StructureNode {
+    Parts(Box<[(PartKey, AstId)]>),
     Reached,
+}
+
+/// How a value is coerced to its slot (types §3, §7): a concrete value by
+/// the steps up the tree or its one declared conversion, in order; a
+/// transparent structured value by its shape, and each part it keeps by
+/// its own coercion, `None` where the part enters as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Coercion {
+    Steps(Box<[Conversion<Ty>]>),
+    Structured { shape: ShapeCoercion, parts: Box<[(PartKey, Option<Coercion>)]> },
+}
+
+/// A structured value's coercion while checking: its shape, and each part
+/// it keeps at a site of its own, where that part's coercion is recorded.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CoercionNode {
+    pub shape: ShapeCoercion,
+    pub parts: Box<[(PartKey, AstId)]>,
 }
 
 /// A value that entered a slot and was folded there (types §3); its
@@ -201,6 +226,8 @@ pub(super) struct Output {
     /// Each value converted by a declared conversion (types §7), at its
     /// site.
     pub conversions: FxHashMap<AstId, Converted>,
+    /// Each structured value's coercion (types §3), at its site.
+    pub coercions: FxHashMap<AstId, CoercionNode>,
     /// Each value folded into a slot, in the order it entered.
     pub entered: Vec<Entered>,
     pub casts: FxHashMap<AstId, AsCast>,
@@ -214,7 +241,8 @@ pub(super) struct Output {
     pub whole_uses: Vec<WholeUse>,
     /// Each method call's receiver adjustment, at the call's callee site.
     pub adjustments: FxHashMap<AstId, Adjustment>,
-    pub comparisons: FxHashMap<AstId, PartNode>,
+    /// Each comparison's and each lifted impl's structure node.
+    pub structures: FxHashMap<AstId, StructureNode>,
     pub body_effect: Option<EffectTerm<InferPhase>>,
     pub refusals: Vec<Refusal>,
 }
@@ -229,16 +257,16 @@ pub struct Typeck {
     pub callees: FxHashMap<AstId, Ty>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,
-    /// Each coercion at a site, its steps in order.
-    pub conversions: FxHashMap<AstId, Box<[Conversion<Ty>]>>,
+    /// Each coercion, at the site of the value coerced.
+    pub coercions: FxHashMap<AstId, Coercion>,
     pub casts: FxHashMap<AstId, AsCast>,
     pub closures: FxHashMap<AstId, Closure>,
     /// Each method call's receiver adjustment, at the call's callee site,
     /// where `reached` has the call (types §6).
     pub adjustments: FxHashMap<AstId, Adjustment>,
-    /// Each comparison's tree, at the operator's site, and each
-    /// `.clone()`'s, at its callee site.
-    pub part_trees: FxHashMap<AstId, PartTree>,
+    /// Each comparison's tree, at the operator's site, and each lifted
+    /// impl's, at the site of the call that reached it.
+    pub structure_trees: FxHashMap<AstId, StructureTree>,
     pub body_effect: Effect,
     /// The run's result type: the slot every tail and `return` enters, and
     /// for a template the `String` it builds. `None` only where a refusal

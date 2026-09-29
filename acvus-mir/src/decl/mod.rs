@@ -15,6 +15,7 @@ pub mod declared;
 mod facts;
 mod impl_fit;
 mod labels;
+mod lift;
 mod loop_markers;
 mod scheme;
 mod segments;
@@ -35,6 +36,7 @@ pub use facts::{
     Relation, Returns, Subject,
 };
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
+pub use lift::{Lift, LiftShape, Taking};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use segments::{Segment, segments};
 pub use scheme::{DeclaredFacts, GenericImplSig, ImplSig, Impls, Requirement, Scheme};
@@ -82,6 +84,9 @@ pub struct Declarations {
     casts: CastTree,
     /// Each head's declared conversions, in declaration order.
     conversions: FxHashMap<Head, Box<[VerifiedConversion]>>,
+    /// Each generic function's impl at a transparent structured type, where
+    /// it has one (types §1).
+    lifts: FxHashMap<QualifiedRef, Lift>,
     contexts: FxHashMap<QualifiedRef, ContextDecl>,
     inputs: FxHashMap<Astr, TyId<Poly>>,
     loop_markers: LoopMarkers,
@@ -118,6 +123,12 @@ impl Declarations {
     /// The declared conversions from a value of `head`; empty when none.
     pub fn conversions_from(&self, head: Head) -> &[VerifiedConversion] {
         self.conversions.get(&head).map_or(&[], |all| all)
+    }
+
+    /// How `function` has an impl at a transparent structured type, where
+    /// it has one (types §1).
+    pub fn lift(&self, function: QualifiedRef) -> Option<&Lift> {
+        self.lifts.get(&function)
     }
 
     pub fn context(&self, context: QualifiedRef) -> Option<TyId<Poly>> {

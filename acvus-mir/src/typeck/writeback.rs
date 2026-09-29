@@ -5,7 +5,7 @@ use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::output::{Closure, Conversion, Entered, PartNode, PartTree, Typeck};
+use super::output::{Closure, Coercion, Conversion, Entered, StructureNode, StructureTree, Typeck};
 use crate::decl::{Base, DeclaredFacts, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
@@ -29,7 +29,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
     // Coercions first: each step's function is reached as a call is, and
     // its effect joins its body's, before any type holding that effect is
     // frozen (effects §1).
-    let conversions = conversions(&mut cx, types, &mut memo);
+    let coercions = coercions(&mut cx, types, &mut memo);
     let sites: Vec<_> = cx.out.types.iter().map(|(site, term)| (*site, *term)).collect();
     let mut frozen = FxHashMap::default();
     for (site, term) in sites {
@@ -47,7 +47,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
             Some((site, exit))
         })
         .collect();
-    let part_trees = part_trees(&mut cx, types, &mut memo);
+    let structure_trees = structure_trees(&mut cx, types, &mut memo);
     let result = freeze(&mut cx, types, &mut memo, result);
     let callees = std::mem::take(&mut cx.out.callees)
         .into_iter()
@@ -67,11 +67,11 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         callees,
         iteration: std::mem::take(&mut cx.out.iteration),
         tries,
-        conversions,
+        coercions,
         casts: std::mem::take(&mut cx.out.casts),
         closures,
         adjustments: std::mem::take(&mut cx.out.adjustments),
-        part_trees,
+        structure_trees,
         body_effect,
         result,
         refusals: std::mem::take(&mut cx.out.refusals),
@@ -267,6 +267,13 @@ fn positions(cx: &Ctxt<'_>, term: Term) -> Option<Held> {
     Some(held)
 }
 
+/// Every coercion, each at the site of the value coerced (types §3, §7):
+/// a structured value's by its `CoercionNode` and each part's own, a
+/// concrete value's by `conversions`' steps.
+fn coercions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, Coercion> {
+    todo!("each `CoercionNode` down to its parts' coercions, and each concrete value's steps as `Coercion::Steps`")
+}
+
 /// Every coercion, each at its site with its steps in order: a declared
 /// conversion (types §7) as it was applied, and a value folded into a slot
 /// as the steps up the cast tree from the value's final type to the slot's
@@ -402,7 +409,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
 /// Every part tree, from each root the program wrote down to the parts
 /// that reach an impl: the comparisons' (operators §4). A tree some refusal
 /// left open is left out.
-fn part_trees(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, PartTree> {
+fn structure_trees(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, StructureTree> {
     let comparisons = std::mem::take(&mut cx.out.comparisons);
     let trees = Trees { nodes: &comparisons };
     let mut out = FxHashMap::default();

@@ -77,6 +77,10 @@ pub(super) enum Callee {
     Core(CoreSig),
     /// An impl a reached declaration requires.
     Required(RequiredAt),
+    /// A part's impl a lifted impl answers by (types §1), reached at the
+    /// part's own node: `generic_function` at the part's type, stating
+    /// `law` where the lift combines.
+    Part(RequiredAt),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -625,6 +629,7 @@ fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: T
             let via_ty = reach_step(cx, step, value.term, slot);
             cx.out.conversions.insert(site, Converted { node, via_ty, to: slot });
         }
+        Ok(Entered::Coerced(coerced)) => super::structure::fire_coerced(cx, site, span, coerced, body),
         Err(mismatch) => refusal::mismatch(cx, mismatch, span),
     }
 }
@@ -738,13 +743,13 @@ fn fire_cast(cx: &mut Ctxt<'_>, site: AstId, span: Span, source: Closed, to: Cas
 }
 
 /// A reach decision's parts, moved out of the `Decision` while it fires.
-struct Reach {
-    site: AstId,
-    span: Span,
-    callee: Callee,
-    args: Box<[(AstId, Term)]>,
-    result: Term,
-    effect: EffectTerm<InferPhase>,
+pub(super) struct Reach {
+    pub site: AstId,
+    pub span: Span,
+    pub callee: Callee,
+    pub args: Box<[(AstId, Term)]>,
+    pub result: Term,
+    pub effect: EffectTerm<InferPhase>,
 }
 
 impl Reach {
@@ -789,6 +794,11 @@ fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<()
 
     let chosen = match choose(cx, &offers, &positions, &chains) {
         Ok(chosen) => chosen,
+        // Where no concrete impl answers, a transparent structured type's
+        // lifted impl does, before the generic impl (types §1).
+        Err(NoReach::None) if let Some(lift) = super::structure::lift_at(cx, &decision, reading) => {
+            return super::structure::reach_lifted(cx, decision, lift);
+        }
         Err(NoReach::None) => match choose(cx, &generic, &positions, &chains) {
             Ok(chosen) => chosen,
             Err(NoReach::None) => {
@@ -903,7 +913,7 @@ pub(super) fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
                 offer_of(declaration, &any);
             }
         }
-        Callee::Required(required) => {
+        Callee::Required(required) | Callee::Part(required) => {
             let law = required.law;
             let states = move |facts: &crate::decl::DeclaredFacts| law.is_none_or(|law| law.stated_by(&facts.laws));
             if cx.decls.scheme(required.generic_function).is_some() {
@@ -939,7 +949,7 @@ pub(super) fn callee_name(cx: &Ctxt<'_>, callee: &Callee) -> Astr {
         Callee::Name(name) | Callee::Method(name) => *name,
         Callee::Declaration(declaration) => declaration.name,
         Callee::Core(sig) => core_name(cx, *sig).name,
-        Callee::Required(required) => required.generic_function.name,
+        Callee::Required(required) | Callee::Part(required) => required.generic_function.name,
     }
 }
 
@@ -1094,6 +1104,9 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             let mut all = parent.required.to_vec();
             all.push(chosen);
             parent.required = all.into();
+        }
+        Callee::Part(_) => {
+            todo!("a part's impl at its own node: the pattern joins the impl's type, and it is recorded in `reached` and `callees` at the part's node (types §1)")
         }
         _ => {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {

@@ -24,7 +24,7 @@ use rustc_hash::FxBuildHasher;
 pub use arg::{EffectArg, IdentityId, IdentityTerm, LenTerm, TypeArg};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
 pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Source};
-pub use facts::{LifetimesOf, PositionKind, copies, copies_alone, for_each_position, position_kinds, positions};
+pub use facts::{LifetimesOf, PositionKind, Resolve, copies, copies_alone, copies_in, for_each_position, position_kinds, positions};
 pub use kind::{Calls, CallsTerm, Holds, HoldsTerm, Mutability, ObjectTy, TyKind};
 pub use num::{CastTy, IntTy, WordTy};
 
@@ -42,8 +42,9 @@ pub trait Phase: 'static + Copy + fmt::Debug + Eq + Hash {
     type HoldsTerm: fmt::Debug + Copy + Eq + Hash;
     /// What a function type's `calls` is in this phase, as `HoldsTerm`.
     type CallsTerm: fmt::Debug + Copy + Eq + Hash;
-    /// Whether a structural object or enum may grow (types §1): fixed where
-    /// the node is born, and part of its identity. Only solving asks it.
+    /// Who wrote a transparent structured type's node (types §1): fixed
+    /// where the node is born, and part of its identity. Only solving asks
+    /// it.
     type Label: fmt::Debug + Copy + Eq + Hash;
 }
 
@@ -95,12 +96,19 @@ impl Phase for Infer {
     type Label = crate::ty::Label;
 }
 
-/// C, the transparency rule (types §1): a node the program wrote may grow;
-/// a node a declaration or the host gave never does.
+/// C, the transparency rule (types §1): who wrote a transparent structured
+/// type's node, the body being checked or anything else. A value entering a
+/// slot grows the slot's type where the body wrote it, and is coerced to it
+/// otherwise (types §1, §3). Every one of the six kinds carries it: the
+/// tuple, the array, `Option` and `Result` never grow, but a value entering
+/// one written elsewhere is coerced part by part, and one written here is
+/// not (types §3, §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Label {
-    Transparent,
-    Opaque,
+    /// The body being checked wrote it.
+    Here,
+    /// A declaration, the host, or another body's scheme wrote it.
+    Elsewhere,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

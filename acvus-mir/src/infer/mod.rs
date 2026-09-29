@@ -29,7 +29,7 @@ use cells::{Cells, End as CellEnd, FlowRefused, MarkTerm};
 pub use cells::{Exceeds, FlowId};
 pub use closed::{Closed, OpenSources};
 pub use freeze::{FreezeMemo, Unsettled};
-pub use relate::{Entered, Mismatch};
+pub use relate::{Coerced, CoercedPart, Entered, Mismatch, ShapeCoercion};
 pub use scheme::{Instantiated, RequiredAt};
 
 pub type Term = TyId<InferPhase>;

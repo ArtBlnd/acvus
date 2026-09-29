@@ -4,8 +4,7 @@
 use acvus_utils::QualifiedRef;
 
 use super::kind::{Holds, Mutability, TyKind};
-use super::structural::structure;
-use super::{Concrete, Phase, Ty, Types};
+use super::{Concrete, Phase, Ty, TyId, Types};
 
 /// The lifetimes each extern-defined type declares (extern-fn §8). The
 /// declarations answer; a type does not carry the count.
@@ -13,18 +12,40 @@ pub trait LifetimesOf {
     fn lifetimes_of(&self, id: QualifiedRef) -> usize;
 }
 
-/// Whether a value of `ty` copies: `!`, a primitive, a shared reference,
-/// or a structural tuple, array, object, `Option` or `Result` whose every
-/// part copies (ownership §1).
-pub fn copies(types: &Types<Concrete>, ty: Ty) -> bool {
-    acvus_utils::grow(|| copies_level(types, ty))
+/// A reader of one phase's types that follows a variable to what it is
+/// bound to: a concrete table has none to follow, and solving follows its
+/// own.
+pub trait Resolve<V: Phase> {
+    fn types(&self) -> &Types<V>;
+    /// `ty` with every bound variable at its root followed.
+    fn resolve(&self, ty: TyId<V>) -> TyId<V>;
 }
 
-fn copies_level(types: &Types<Concrete>, ty: Ty) -> bool {
-    if let Some(structure) = structure(types, ty) {
-        return structure.parts().iter().all(|part| copies(types, *part));
+impl Resolve<Concrete> for Types<Concrete> {
+    fn types(&self) -> &Types<Concrete> {
+        self
     }
-    copies_alone(types.kind(ty))
+
+    fn resolve(&self, ty: Ty) -> Ty {
+        ty
+    }
+}
+
+/// Whether a value of `ty` copies: `!`, a primitive, a shared reference,
+/// or a transparent structured type whose every part copies (ownership §1).
+/// `None` where an unbound variable stands where the answer is read. The
+/// one copy rule, for every phase.
+pub fn copies_in<V, R>(reader: &R, ty: TyId<V>) -> Option<bool>
+where
+    V: Phase,
+    R: Resolve<V>,
+{
+    todo!("`structure` down to the parts that are not one, `copies_alone` there")
+}
+
+/// Whether a value of the concrete `ty` copies (ownership §1).
+pub fn copies(types: &Types<Concrete>, ty: Ty) -> bool {
+    copies_in(types, ty).expect("a concrete type holds no variable")
 }
 
 /// Whether a value of a type that is not structural copies: `!`, a

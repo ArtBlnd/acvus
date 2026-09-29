@@ -21,16 +21,16 @@ pub enum TyKind<V: Phase> {
     Order,
     /// A started call, taken exactly once (effects §6). No program writes it.
     Handle(TyId<V>),
-    Array(TyId<V>, LenTerm<V>),
+    Array(TyId<V>, LenTerm<V>, V::Label),
     /// The run of elements a container lends; only under a `Ref`.
     Slice(TyId<V>),
     /// The run of bytes a `String` lends; only under a shared `Ref`.
     Str,
-    Tuple(Box<[TyId<V>]>),
+    Tuple(Box<[TyId<V>]>, V::Label),
     /// A primitive, closed like an extern enum (types §2).
-    Option(TyId<V>),
+    Option(TyId<V>, V::Label),
     /// A primitive, closed like an extern enum (types §2).
-    Result(TyId<V>, TyId<V>),
+    Result(TyId<V>, TyId<V>, V::Label),
     Object(ObjectTy<V>),
     /// An enum the program names; its variants sorted by tag (types §2).
     Enum {
@@ -60,7 +60,7 @@ pub enum TyKind<V: Phase> {
 /// An object's fields, sorted by name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ObjectTy<V: Phase> {
-    /// A structural object; its label says whether it may grow.
+    /// A structural object; its label says who wrote it (`Label`).
     Structural(Box<[(Astr, TyId<V>)]>, V::Label),
     /// A struct a declaration names: extern-defined, opaque (types §1).
     Declared(QualifiedRef, Box<[(Astr, TyId<V>)]>),

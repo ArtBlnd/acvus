@@ -12,6 +12,7 @@
 
 mod call;
 mod closure;
+mod coerce;
 mod context;
 mod control;
 mod ctxt;

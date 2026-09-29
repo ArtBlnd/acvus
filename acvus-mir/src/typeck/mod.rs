@@ -14,6 +14,10 @@
 //! - S3. A decision reads only closed terms (types §6).
 //! - S4. A refusal is made only through `refusal`.
 //! - S5. Every pass states its cost; the fixpoint fires each decision once.
+//! - S6. A transparent structured type is taken apart only by `structure`,
+//!   S's one rule (types §1, §3): a value coerced to a slot written
+//!   elsewhere, a lifted impl, and a comparison each record a node per part
+//!   and decide each part at a node of its own.
 
 mod call;
 mod cast;
@@ -33,6 +37,7 @@ mod reach;
 mod refusal;
 mod scope;
 mod stmt;
+mod structure;
 mod template;
 #[cfg(test)]
 mod tests;
@@ -44,7 +49,7 @@ use acvus_ast::{Expr, Script, Slot, Template};
 use crate::decl::Declarations;
 use crate::ty::{Concrete, TyKind, Types};
 
-pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Conversion, Impl, Iteration, Name, PartTree, TryExit, Typeck};
+pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, StructureTree, TryExit, Typeck};
 pub use refusal::{Exceeding, Refusal, RefusalKind};
 
 use ctxt::Ctxt;

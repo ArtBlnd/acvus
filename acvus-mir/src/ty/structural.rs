@@ -1,11 +1,11 @@
-//! The parts of a structural type (types §1, ownership §1): a tuple, an
-//! object the program shapes, an array of a fixed length, an `Option` and a
-//! `Result`. Each kind's parts are in the order the type table stores them,
-//! so no interner is read. This is the one place a structural type is taken
-//! apart; typeck, lower and every later reader ask it.
+//! The parts of a transparent structured type (types §1): an object, an
+//! enum, a tuple, an array, an `Option` and a `Result`, and no other. Each
+//! kind's parts are in the order the type table stores them, so no interner
+//! is read. This is the one place such a type is taken apart; typeck, lower
+//! and every later reader ask it.
 //!
-//! A struct a declaration names is not structural: it is defined outside
-//! the program and equals only itself (types §1).
+//! A struct a declaration names is not one: it is defined outside the
+//! program and equals only itself (types §1).
 
 use acvus_utils::Astr;
 use smallvec::SmallVec;
@@ -14,30 +14,57 @@ use super::arg::LenTerm;
 use super::kind::{ObjectTy, TyKind};
 use super::{Phase, TyId, Types};
 
-/// A structural type, by kind, with its parts.
+/// A transparent structured type, by kind, with its parts and who wrote
+/// it (`Label`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Structure<'t, V: Phase> {
-    Tuple(&'t [TyId<V>]),
+    Tuple(&'t [TyId<V>], V::Label),
     /// The fields in the order the object's type stores them.
-    Object(&'t [(Astr, TyId<V>)]),
+    Object(&'t [(Astr, TyId<V>)], V::Label),
+    /// The variants sorted by tag, each with its payload if it has one.
+    Enum(&'t [(Astr, Option<TyId<V>>)], V::Label),
     /// Every element is of `element`; there are `len` of them.
-    Array { element: TyId<V>, len: LenTerm<V> },
+    Array { element: TyId<V>, len: LenTerm<V>, label: V::Label },
     /// The `Some` payload.
-    Option(TyId<V>),
-    Result { ok: TyId<V>, err: TyId<V> },
+    Option(TyId<V>, V::Label),
+    Result { ok: TyId<V>, err: TyId<V>, label: V::Label },
 }
 
-/// `ty`'s structure, where `ty` is structural.
+/// Which part of a structure a part is: what a coercion, a lifted impl and
+/// a comparison match two structures' parts by (types §1, §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PartKey {
+    /// A tuple's element at its position.
+    Index(usize),
+    Field(Astr),
+    /// An enum variant's payload.
+    Variant(Astr),
+    /// An array's elements, which share one part.
+    Element,
+    Some,
+    Ok,
+    Err,
+}
+
+/// One part of a structure: which it is, and its type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Part<V: Phase> {
+    pub key: PartKey,
+    pub ty: TyId<V>,
+}
+
+/// `ty`'s structure, where `ty` is a transparent structured type.
 pub fn structure<V>(types: &Types<V>, ty: TyId<V>) -> Option<Structure<'_, V>>
 where
     V: Phase,
 {
     match types.kind(ty) {
-        TyKind::Tuple(items) => Some(Structure::Tuple(items)),
-        TyKind::Object(ObjectTy::Structural(fields, _)) => Some(Structure::Object(fields)),
-        TyKind::Array(element, len) => Some(Structure::Array { element: *element, len: *len }),
-        TyKind::Option(payload) => Some(Structure::Option(*payload)),
-        TyKind::Result(ok, err) => Some(Structure::Result { ok: *ok, err: *err }),
+        TyKind::Tuple(items, label) => Some(Structure::Tuple(items, *label)),
+        TyKind::Object(ObjectTy::Structural(fields, label)) => Some(Structure::Object(fields, *label)),
+        TyKind::Enum { variants, label, .. } => Some(Structure::Enum(variants, *label)),
+        TyKind::Array(element, len, label) => Some(Structure::Array { element: *element, len: *len, label: *label }),
+        TyKind::Option(payload, label) => Some(Structure::Option(*payload, *label)),
+        TyKind::Result(ok, err, label) => Some(Structure::Result { ok: *ok, err: *err, label: *label }),
         TyKind::Int(_)
         | TyKind::Float
         | TyKind::Char
@@ -50,7 +77,6 @@ where
         | TyKind::Slice(_)
         | TyKind::Str
         | TyKind::Object(ObjectTy::Declared(..))
-        | TyKind::Enum { .. }
         | TyKind::Fn { .. }
         | TyKind::UserDefined { .. }
         | TyKind::Ref(..)
@@ -59,16 +85,34 @@ where
 }
 
 impl<V: Phase> Structure<'_, V> {
-    /// Each part's type, in order: a tuple's elements, an object's fields,
-    /// an `Option`'s payload, a `Result`'s `Ok` payload then its `Err`
-    /// payload. An array has one part, its element type, which every one of
-    /// its elements has.
-    pub fn parts(&self) -> SmallVec<[TyId<V>; 4]> {
+    /// Who wrote it (`Label`).
+    pub fn label(&self) -> V::Label {
         match *self {
-            Structure::Tuple(items) => items.iter().copied().collect(),
-            Structure::Object(fields) => fields.iter().map(|(_, field)| *field).collect(),
-            Structure::Array { element, .. } | Structure::Option(element) => smallvec::smallvec![element],
-            Structure::Result { ok, err } => smallvec::smallvec![ok, err],
+            Structure::Tuple(_, label)
+            | Structure::Object(_, label)
+            | Structure::Enum(_, label)
+            | Structure::Array { label, .. }
+            | Structure::Option(_, label)
+            | Structure::Result { label, .. } => label,
+        }
+    }
+
+    /// Each part, keyed, in order: a tuple's elements, an object's fields,
+    /// an enum's variant payloads, an `Option`'s `Some` payload, a
+    /// `Result`'s `Ok` payload then its `Err` payload. An array has one part,
+    /// `Element`, which every one of its elements has.
+    pub fn parts(&self) -> SmallVec<[Part<V>; 4]> {
+        let part = |key, ty| Part { key, ty };
+        match *self {
+            Structure::Tuple(items, _) => items.iter().enumerate().map(|(at, ty)| part(PartKey::Index(at), *ty)).collect(),
+            Structure::Object(fields, _) => fields.iter().map(|(name, ty)| part(PartKey::Field(*name), *ty)).collect(),
+            Structure::Enum(variants, _) => variants
+                .iter()
+                .filter_map(|(tag, payload)| payload.map(|ty| part(PartKey::Variant(*tag), ty)))
+                .collect(),
+            Structure::Array { element, .. } => smallvec::smallvec![part(PartKey::Element, element)],
+            Structure::Option(payload, _) => smallvec::smallvec![part(PartKey::Some, payload)],
+            Structure::Result { ok, err, .. } => smallvec::smallvec![part(PartKey::Ok, ok), part(PartKey::Err, err)],
         }
     }
 }

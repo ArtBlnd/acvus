@@ -20,12 +20,22 @@ use super::place::{lend, operand};
 use crate::ir::cfg::Op;
 use crate::ir::{Callee, UnaryOp, ValueId, fn_effect};
 use crate::ty::{Mutability, Reissue, Ty, TyKind};
-use crate::typeck::Adjustment;
+use crate::typeck::{Adjustment, Coercion, Impl};
 
-/// `value`, written at `site`, coerced by each step typeck recorded there.
+/// `value`, written at `site`, coerced as typeck recorded there.
 pub(super) fn convert(cx: &mut Lcx<'_, '_>, site: AstId, value: ValueId, span: Span) -> ValueId {
-    let Some(steps) = cx.typeck.conversions.get(&site) else {
-        return value;
+    match cx.typeck.coercions.get(&site) {
+        None => value,
+        Some(coercion) => coerce(cx, coercion, value, span),
+    }
+}
+
+/// `value` coerced by `coercion`: a concrete value by each step in order;
+/// a structured one by `coerce::structured` (types §3).
+pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, span: Span) -> ValueId {
+    let steps = match coercion {
+        Coercion::Steps(steps) => steps,
+        Coercion::Structured { shape, parts } => return super::coerce::structured(cx, shape, parts, value, span),
     };
     let core = cx.decls.core();
     let views = [core.as_slice, core.as_slice_mut, core.as_str];
@@ -70,6 +80,9 @@ pub(super) fn issue(cx: &mut Lcx<'_, '_>, callee: Callee, callee_ty: Ty, args: V
 /// A call of the declaration typeck reached at `site`, at the callee type
 /// it recorded there.
 pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span: Span) -> ValueId {
+    if cx.reached(site).r#impl == Some(Impl::Structural) {
+        return super::part_tree::lifted(cx, site, args, span);
+    }
     let callee = cx.callee(cx.reached(site));
     let callee_ty = *cx
         .typeck

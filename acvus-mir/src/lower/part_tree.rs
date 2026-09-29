@@ -1,4 +1,5 @@
-//! Equality and ordering by the part tree typeck recorded (operators §4,
+//! Equality and ordering, and the impls a transparent structured type has
+//! by a lift, by the structure tree typeck recorded (operators §4, types §1,
 //! D87). A tuple, an object, an `Option` and a `Result` are expanded part by
 //! part in `ty::structural`'s order. An array is one `For` over its
 //! elements, never unrolled: a comparison leaves it at the first element
@@ -342,4 +343,16 @@ fn tagged(cx: &mut Lcx<'_, '_>, asked: Asked, first: Astr, payloads: Tagged<'_>,
         }
     };
     diamond(cx, same, answer_ty, span, payloads_compared, tags_differ)
+}
+
+// -- lifted impl -------------------------------------------------------------
+
+/// A call typeck answered by a lifted impl at `site` (types §1,
+/// `Impl::Structural`), of `args`: by the lift's shape, each part's
+/// arguments are the arguments' parts, each part's impl is called at its
+/// node, and the results rebuild the structure (`Lift::Rebuild`) or are
+/// combined as the lift's law defines (`Lift::Combine`). An array's parts
+/// are one `For` over its elements, never unrolled.
+pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span: Span) -> ValueId {
+    todo!("the structure tree at `site`, expanded by the reached generic function's lift")
 }

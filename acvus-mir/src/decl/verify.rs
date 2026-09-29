@@ -195,6 +195,11 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     refuse_vias_not_their_functions(&types, &functions, &casts, &conversions, &mut refused);
     let casts = cast_tree(&types, &casts, &functions, &misfits, &core, &mut refused);
     let conversions = conversions_by_head(&types, conversions, &mut refused);
+    let lifts = functions
+        .iter()
+        .filter(|(_, scheme)| scheme.impls.is_some())
+        .filter_map(|(id, scheme)| super::lift::lift_of(&types, scheme).map(|lift| (*id, lift)))
+        .collect();
 
     let mut decls = Declarations {
         types,
@@ -203,6 +208,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         user_types,
         casts,
         conversions,
+        lifts,
         contexts,
         inputs,
         loop_markers,
