@@ -15,6 +15,7 @@ Each operator is a call of a lang item: `+` of `core::add`, `-` of `core::sub`, 
 The lang items are Rust's, but for two:
 
 - `clone<T>(&T) -> T`, `eq<T>(&T, &T) -> bool`.
+- `default<T>() -> T`: the value a type starts from, as Rust's `Default`.
 - `cmp<T>(&T, &T) -> i64`, answering `-1`, `0` or `1`.
 - `add`, `sub`, `mul`, `div`, `rem`: `<T, O>(&T, &T) -> O`, and `neg<T, O>(&T) -> O`; the impl chooses `O`.
 - `display<T>(&T, out: &mut String)`, appending to `out`.
