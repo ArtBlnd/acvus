@@ -16,7 +16,7 @@ use super::{End, Infer, Mark, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
-use crate::ty::structural::{PartKey, structure};
+use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{
     Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, ObjectTy,
     TyKind, TyVarId, TypeArg,
@@ -171,11 +171,11 @@ fn carries_identity(decls: &Declarations, head: Head) -> bool {
     }
 }
 
-/// Two shapes made one are opaque where either is (types §1).
-fn either_opaque(a: Label, b: Label) -> Label {
+/// Two shapes made one were written elsewhere where either was (types §1).
+fn either_elsewhere(a: Label, b: Label) -> Label {
     match (a, b) {
-        (Label::Transparent, Label::Transparent) => Label::Transparent,
-        (Label::Opaque, _) | (_, Label::Opaque) => Label::Opaque,
+        (Label::Here, Label::Here) => Label::Here,
+        (Label::Elsewhere, _) | (_, Label::Elsewhere) => Label::Elsewhere,
     }
 }
 
@@ -274,7 +274,79 @@ impl Infer {
     /// kinds that differ, or a shape the rule does not take to the slot's,
     /// are refused as two heads.
     fn coerce_structure(&mut self, value: Term, slot: Term) -> Result<Coerced, Mismatch> {
-        todo!("types §3's shape rule for each kind, pairing the parts by key")
+        let heads = Mismatch::Heads { a: value, b: slot };
+        let kept = |pairs: Vec<(PartKey, Term, Term)>| Coerced {
+            shape: ShapeCoercion::Kept,
+            parts: pairs.into_iter().map(|(key, value, slot)| CoercedPart { key, value, slot }).collect(),
+        };
+        let (Some(of_value), Some(of_slot)) = (structure(&self.types, value), structure(&self.types, slot)) else {
+            panic!("coerce_structure: `enter` routes only a structured value into a structured slot here");
+        };
+        match (of_value, of_slot) {
+            (Structure::Tuple(xs, _), Structure::Tuple(ys, _)) => {
+                if xs.len() != ys.len() {
+                    return Err(heads);
+                }
+                let pairs = xs.iter().zip(ys.iter()).enumerate().map(|(at, (x, y))| (PartKey::Index(at), *x, *y)).collect();
+                Ok(kept(pairs))
+            }
+            (Structure::Array { element: x, len: len_x, .. }, Structure::Array { element: y, len: len_y, .. }) => {
+                self.len_vars.unify(&len_x, &len_y).map_err(|Unequal| heads)?;
+                Ok(kept(vec![(PartKey::Element, x, y)]))
+            }
+            (Structure::Option(x, _), Structure::Option(y, _)) => Ok(kept(vec![(PartKey::Some, x, y)])),
+            (Structure::Result { ok: ok_x, err: err_x, .. }, Structure::Result { ok: ok_y, err: err_y, .. }) => {
+                Ok(kept(vec![(PartKey::Ok, ok_x, ok_y), (PartKey::Err, err_x, err_y)]))
+            }
+            (Structure::Object(fields_x, _), Structure::Object(fields_y, _)) => {
+                let mut parts = Vec::new();
+                let mut left = Vec::new();
+                for member in members(fields_x, fields_y) {
+                    match member {
+                        Member::Both(name, x, y) => parts.push(CoercedPart { key: PartKey::Field(name), value: x, slot: y }),
+                        Member::OnlyA(name, _) => left.push(name),
+                        Member::OnlyB(..) => return Err(heads),
+                    }
+                }
+                let shape = match left.is_empty() {
+                    true => ShapeCoercion::Kept,
+                    false => ShapeCoercion::Narrowed { left: left.into() },
+                };
+                Ok(Coerced { shape, parts: parts.into() })
+            }
+            (Structure::Enum(variants_x, _), Structure::Enum(variants_y, _)) => {
+                if self.enum_name(value) != self.enum_name(slot) {
+                    return Err(heads);
+                }
+                let mut parts = Vec::new();
+                let mut taken = Vec::new();
+                for member in members(variants_x, variants_y) {
+                    match member {
+                        Member::Both(tag, Some(x), Some(y)) => parts.push(CoercedPart { key: PartKey::Variant(tag), value: x, slot: y }),
+                        Member::Both(_, None, None) => {}
+                        Member::OnlyB(tag, _) => taken.push(tag),
+                        Member::Both(..) | Member::OnlyA(..) => return Err(heads),
+                    }
+                }
+                let shape = match taken.is_empty() {
+                    true => ShapeCoercion::Kept,
+                    false => ShapeCoercion::Widened { taken: taken.into() },
+                };
+                Ok(Coerced { shape, parts: parts.into() })
+            }
+            _ => Err(heads),
+        }
+    }
+
+    /// The name of the enum `node` is.
+    ///
+    /// # Panics
+    /// `node` is no enum: callers take it from an enum's structure.
+    fn enum_name(&self, node: Term) -> QualifiedRef {
+        match self.types.kind(node) {
+            TyKind::Enum { name, .. } => *name,
+            other => panic!("enum_name: an enum's structure is an enum's, not {other:?}"),
+        }
     }
 
     /// A value of no common ancestor with its slot converts by the one
@@ -560,17 +632,21 @@ impl Infer {
         let heads = Mismatch::Heads { a, b };
         let kind = match (self.types.kind(a).clone(), self.types.kind(b).clone()) {
             (TyKind::Handle(x), TyKind::Handle(y)) => TyKind::Handle(self.relate(x, y, Relation::Eq)?),
-            (TyKind::Array(x, len_x), TyKind::Array(y, len_y)) => {
+            (TyKind::Array(x, len_x, label_x), TyKind::Array(y, len_y, label_y)) => {
                 let element = self.relate(x, y, Relation::Eq)?;
                 let len = self.len_vars.unify(&len_x, &len_y).map_err(|Unequal| heads)?;
-                TyKind::Array(element, len)
+                TyKind::Array(element, len, either_elsewhere(label_x, label_y))
             }
             (TyKind::Slice(x), TyKind::Slice(y)) => TyKind::Slice(self.relate(x, y, Relation::Eq)?),
-            (TyKind::Option(x), TyKind::Option(y)) => TyKind::Option(self.relate(x, y, Relation::Eq)?),
-            (TyKind::Result(ok_x, err_x), TyKind::Result(ok_y, err_y)) => {
-                TyKind::Result(self.relate(ok_x, ok_y, Relation::Eq)?, self.relate(err_x, err_y, Relation::Eq)?)
+            (TyKind::Option(x, label_x), TyKind::Option(y, label_y)) => {
+                TyKind::Option(self.relate(x, y, Relation::Eq)?, either_elsewhere(label_x, label_y))
             }
-            (TyKind::Tuple(xs), TyKind::Tuple(ys)) => {
+            (TyKind::Result(ok_x, err_x, label_x), TyKind::Result(ok_y, err_y, label_y)) => TyKind::Result(
+                self.relate(ok_x, ok_y, Relation::Eq)?,
+                self.relate(err_x, err_y, Relation::Eq)?,
+                either_elsewhere(label_x, label_y),
+            ),
+            (TyKind::Tuple(xs, label_x), TyKind::Tuple(ys, label_y)) => {
                 if xs.len() != ys.len() {
                     return Err(heads);
                 }
@@ -579,7 +655,7 @@ impl Infer {
                     .zip(ys.iter())
                     .map(|(x, y)| self.relate(*x, *y, Relation::Eq))
                     .collect::<Result<_, _>>()?;
-                TyKind::Tuple(items)
+                TyKind::Tuple(items, either_elsewhere(label_x, label_y))
             }
             (TyKind::Object(x), TyKind::Object(y)) => TyKind::Object(self.relate_objects(a, b, x, y, how)?),
             (
@@ -601,7 +677,7 @@ impl Infer {
                 TyKind::Enum {
                     name: name_a,
                     variants,
-                    label: either_opaque(label_a, label_b),
+                    label: either_elsewhere(label_a, label_b),
                 }
             }
             (
@@ -764,7 +840,7 @@ impl Infer {
                     };
                     fields.push(field);
                 }
-                Ok(ObjectTy::Structural(fields.into(), either_opaque(label_a, label_b)))
+                Ok(ObjectTy::Structural(fields.into(), either_elsewhere(label_a, label_b)))
             }
             (ObjectTy::Declared(id_a, fields_a), ObjectTy::Declared(id_b, fields_b)) => {
                 if id_a != id_b
@@ -797,8 +873,8 @@ impl Infer {
     ) -> Result<(), Mismatch> {
         match (how, label) {
             (Relation::Eq, _) => Err(Mismatch::Heads { a, b }),
-            (Relation::Join, Label::Opaque) => Err(opaque_lacks(lacking)),
-            (Relation::Join, Label::Transparent) => Ok(()),
+            (Relation::Join, Label::Elsewhere) => Err(opaque_lacks(lacking)),
+            (Relation::Join, Label::Here) => Ok(()),
         }
     }
 

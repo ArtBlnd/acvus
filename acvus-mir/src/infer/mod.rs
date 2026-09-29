@@ -117,8 +117,8 @@ impl Infer {
     }
 
     /// A term of a written shape. A structural object or enum the program
-    /// writes carries `Label::Transparent`; one instantiated from a
-    /// declaration carries `Label::Opaque` (`scheme`). No type is `!` by
+    /// writes carries `Label::Here`; one instantiated from a
+    /// declaration carries `Label::Elsewhere` (`scheme`). No type is `!` by
     /// holding a part of type `!` (types §4). A reference's target is never
     /// a reference (types §4): a variable it targets is marked so, and is
     /// never bound to one.
@@ -328,6 +328,16 @@ impl Infer {
             )),
             VarState::Bound(_) => None,
         })
+    }
+}
+
+impl crate::ty::Resolve<InferPhase> for Infer {
+    fn types(&self) -> &Types<InferPhase> {
+        &self.types
+    }
+
+    fn resolve(&self, ty: Term) -> Term {
+        self.shallow(ty)
     }
 }
 
