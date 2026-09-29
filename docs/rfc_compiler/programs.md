@@ -22,7 +22,7 @@ Keep to {{ name }}.
 
 ## 2. Script (`acvus`)
 
-Statements and a tail, whose value is the run's. Lambdas in full. A script is one function, as a template is (§1): its parameters are the inputs it reads, passed by name, and its result is the run's value; its types are inferred within the script alone, and a call only instantiates what the script settled. The run's result enters the result type the embedding declares; where none is declared, it is inferred, and a caller in the graph reads it with the run's effect.
+Statements and a tail. Lambdas in full. A script is one function, as a template is (§1): its parameters are the inputs it reads, passed by name, and its result is its tail's value; its types are inferred within the script alone, and a call only instantiates what the script settled. A caller reads its result with its effect.
 
 ```acvus
 @big = 0;
