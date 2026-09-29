@@ -684,7 +684,7 @@ impl TypeCheck<'_> {
                     self.is_u64(trip).map_err(at)?;
                 }
             }
-            Terminator::Jump { .. } | Terminator::Diverge => {}
+            Terminator::Jump { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
         for edge in terminator.edges() {
             let params = self.body.block(edge.to).params();
@@ -1030,7 +1030,7 @@ fn structure_kept(body: &Body, _: &Types<Concrete>) -> Found {
                     found(is_block(stage), || format!("{id:?}'s loop names {stage:?}, which is not a block"))?;
                 }
             }
-            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => {}
+            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
     }
     Ok(())
@@ -1091,7 +1091,7 @@ fn walk_from_start(body: &Body, start: InstId, handle: ValueId) -> Found {
             Terminator::Return { .. } => {
                 found(taken, || format!("{start:?}'s call is not taken on a path that returns from {block:?}"))?
             }
-            Terminator::Diverge => {}
+            Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
             terminator => pending.extend(
                 terminator.edges().iter().map(|edge| WalkState { block: edge.to, next: body.first_inst(edge.to), taken }),
             ),

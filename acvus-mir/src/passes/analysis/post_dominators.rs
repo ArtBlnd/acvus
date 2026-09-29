@@ -74,7 +74,7 @@ impl Analysis for PostDominators {
         let exits: SmallVec<[usize; 2]> = body
             .blocks()
             .filter(|(_, block)| match block.terminator() {
-                Terminator::Return { .. } | Terminator::Diverge => true,
+                Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => true,
                 Terminator::Jump { .. }
                 | Terminator::JumpIf { .. }
                 | Terminator::Diamond { .. }

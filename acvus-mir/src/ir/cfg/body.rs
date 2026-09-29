@@ -377,7 +377,7 @@ impl Terminator {
                 on_label(*exit);
                 stages.entries().for_each(&mut on_label);
             }
-            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => {}
+            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
     }
 
@@ -405,7 +405,7 @@ impl Terminator {
             Terminator::While { stages, exit, exit_args, .. } => {
                 smallvec::smallvec![plain(stages.body(), &[]), plain(*exit, exit_args)]
             }
-            Terminator::Return { .. } | Terminator::Diverge => SmallVec::new(),
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
         }
     }
 
@@ -439,7 +439,7 @@ impl Terminator {
                 on_edge(stages.body(), 0, None);
                 on_edge(*exit, 0, Some(exit_args));
             }
-            Terminator::Return { .. } | Terminator::Diverge => {}
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
     }
 
@@ -462,7 +462,7 @@ impl Terminator {
             Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
                 if position == 0 { &mut stages.body } else { exit }
             }
-            Terminator::Return { .. } | Terminator::Diverge => {
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {
                 panic!("a terminator without edges has no edge at position {position}")
             }
         }
@@ -496,7 +496,7 @@ impl Terminator {
                 stages.entries_mut().for_each(&mut on_block);
                 on_block(exit);
             }
-            Terminator::Return { .. } | Terminator::Diverge => {}
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
     }
 
@@ -509,7 +509,7 @@ impl Terminator {
             Terminator::Jump { .. }
             | Terminator::JumpIf { .. }
             | Terminator::Return { .. }
-            | Terminator::Diverge => {}
+            | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
         for edge in self.edges() {
             on_block(edge.to);
@@ -553,7 +553,7 @@ impl Terminator {
                 on_use(*value);
                 order.iter().copied().for_each(on_use);
             }
-            Terminator::Diverge => {}
+            Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
     }
 
@@ -586,7 +586,7 @@ impl Terminator {
                 on_use(value);
                 order.iter_mut().for_each(on_use);
             }
-            Terminator::Diverge => {}
+            Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
     }
 }
