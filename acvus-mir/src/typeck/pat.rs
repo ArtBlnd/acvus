@@ -79,7 +79,7 @@ impl Shape {
                 payload: payload.as_ref().map(|payload| Box::new(payload.map_terms(f))),
             },
         };
-        Shape { site: self.site, span: self.span, form }
+        Shape { site: f.site(self.site), span: f.span(self.span), form }
     }
 
     /// The effects this shape's `@x` parts join a coercion into.
