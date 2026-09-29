@@ -24,7 +24,9 @@
 //! Form: F2, loops canonical, in and out; it changes no block.
 //!
 //! Cost: per block of n instructions and e operands, O(n + e) per pair
-//! measured, O(n) pairs per round, and O(n) rounds: O(n² · (n + e)).
+//! measured, O(n) pairs per round, and O(n) rounds: O(n² · (n + e)). The
+//! block's graph and its present critical path are built once per round and
+//! again only after a swap, so a pair costs one measure, not three.
 //!
 //! Meaning: two calls whose declared effects commute take effect in either
 //! order (effects §1), and `swap` rethreads their tokens so that every
@@ -62,24 +64,43 @@ impl BodyTransform for Commute {
 fn commute_round(editor: &mut Editor<'_, Effect>, block: BlockId) -> bool {
     let mut swapped = false;
     let mut index = 0;
+    let mut measured: Option<Measured> = None;
     while let Some(earlier) = editor.inst_at(block, index) {
         index += 1;
         let Some(pair) = ChainedPair::at(editor.body(), block, earlier.index()) else {
             continue;
         };
-        let graph = BlockGraph::of(editor.body(), block);
-        let now = graph.critical_path(None).expect("a body defines every value before its uses, so its graph has no cycle");
-        let shorter = graph.critical_path(Some(&pair)).is_some_and(|after| after < now);
+        let Measured { graph, now } = measured.get_or_insert_with(|| Measured::of(editor.body(), block));
+        let shorter = graph.critical_path(Some(&pair)).is_some_and(|after| after < *now);
         if !shorter {
             continue;
         }
         let later = editor.inst_at(block, pair.later).expect("the later call stands in the block");
         match editor.swap(earlier, later) {
-            Ok(()) => swapped = true,
+            Ok(()) => {
+                swapped = true;
+                measured = None;
+            }
             Err(CannotSwap::NotAdjacent | CannotSwap::Ordered | CannotSwap::DependsOn(_)) => {}
         }
     }
     swapped
+}
+
+/// A block's graph and its critical path, as the block stands until the
+/// next swap in it.
+struct Measured {
+    graph: BlockGraph,
+    now: usize,
+}
+
+impl Measured {
+    /// Cost: O(instructions + operands).
+    fn of(body: &Body, block: BlockId) -> Measured {
+        let graph = BlockGraph::of(body, block);
+        let now = graph.critical_path(None).expect("a body defines every value before its uses, so its graph has no cycle");
+        Measured { graph, now }
+    }
 }
 
 /// Two calls of one block adjacent on a token chain, by index: `later`
