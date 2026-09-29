@@ -7,7 +7,7 @@
 use acvus_ast::AstId;
 
 use crate::ty::Ty;
-use crate::typeck::{Adjustment, AsCast, Chosen, Coercion, InstanceId, Iteration, StructureTree, TryExit, Typeck};
+use crate::typeck::{Adjustment, AsCast, Chosen, Coercion, InstanceDecided, InstanceId, Iteration, StructureTree, TryExit, Typeck};
 
 /// A view of `Typeck` at one instance, or at none.
 #[derive(Clone, Copy)]
@@ -17,45 +17,69 @@ pub(super) struct Decided<'a> {
 }
 
 impl<'a> Decided<'a> {
+    /// The run's own view.
+    pub fn run(typeck: &'a Typeck) -> Decided<'a> {
+        Decided { typeck, instance: None }
+    }
+
+    /// `get` of the view's instance, then of each instance it was made
+    /// within, outward, then `run` of the run's tables.
+    fn read<T>(&self, get: impl Fn(&'a InstanceDecided) -> Option<T>, run: impl FnOnce(&'a Typeck) -> Option<T>) -> Option<T> {
+        let mut at = self.instance;
+        while let Some(instance) = at {
+            let decided = self
+                .typeck
+                .instances
+                .get(&instance)
+                .unwrap_or_else(|| panic!("typeck records every instance lower is at, and not {instance:?}"));
+            if let Some(found) = get(decided) {
+                return Some(found);
+            }
+            at = decided.within;
+        }
+        run(self.typeck)
+    }
+
     /// The type at `site`.
     ///
     /// # Panics
     /// No table the view reads types `site`: every site of an admitted
     /// program is typed at every instance it is lowered at.
     pub fn ty(&self, site: AstId) -> Ty {
-        todo!("the instance's table, then each within, then the run's")
+        self.read(|at| at.types.get(&site).copied(), |run| run.types.get(&site).copied())
+            .unwrap_or_else(|| panic!("typeck types every site of an admitted program, and not {site:?}"))
     }
 
     pub fn reached(&self, site: AstId) -> Option<&'a Chosen> {
-        todo!("as `ty`")
+        self.read(|at| at.reached.get(&site), |run| run.reached.get(&site))
     }
 
     pub fn callee(&self, site: AstId) -> Option<Ty> {
-        todo!("as `ty`")
+        self.read(|at| at.callees.get(&site).copied(), |run| run.callees.get(&site).copied())
     }
 
     pub fn coercion(&self, site: AstId) -> Option<&'a Coercion> {
-        todo!("as `ty`")
+        self.read(|at| at.coercions.get(&site), |run| run.coercions.get(&site))
     }
 
     pub fn structure_tree(&self, site: AstId) -> Option<&'a StructureTree> {
-        todo!("as `ty`")
+        self.read(|at| at.structure_trees.get(&site), |run| run.structure_trees.get(&site))
     }
 
     pub fn adjustment(&self, site: AstId) -> Option<Adjustment> {
-        todo!("as `ty`")
+        self.read(|at| at.adjustments.get(&site).copied(), |run| run.adjustments.get(&site).copied())
     }
 
     pub fn iteration(&self, site: AstId) -> Option<Iteration> {
-        todo!("as `ty`")
+        self.read(|at| at.iteration.get(&site).copied(), |run| run.iteration.get(&site).copied())
     }
 
     pub fn try_exit(&self, site: AstId) -> Option<TryExit<Ty>> {
-        todo!("as `ty`")
+        self.read(|at| at.tries.get(&site).copied(), |run| run.tries.get(&site).copied())
     }
 
     pub fn cast(&self, site: AstId) -> Option<AsCast> {
-        todo!("as `ty`")
+        self.read(|at| at.casts.get(&site).copied(), |run| run.casts.get(&site).copied())
     }
 
     /// The same view at `instance`, a lambda body's instance within this

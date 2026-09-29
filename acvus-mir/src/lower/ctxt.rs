@@ -48,6 +48,13 @@ pub(super) struct Lcx<'a, 'm> {
     /// What this body reads at each of its sites: the run's, or the
     /// instance's it is lowered at (functions §2).
     pub decided: super::decided::Decided<'a>,
+    /// The type a generalized binding's value has at this body, at its
+    /// binder and at each site its value passes through outside a lambda
+    /// (functions §2): its signatures' closure. Inherited by nested bodies.
+    pub layouts: FxHashMap<AstId, Ty>,
+    /// Each generalized lambda's body at each signature, made once for the
+    /// module (functions §2: a signature determines its code).
+    pub bodies: std::rc::Rc<std::cell::RefCell<FxHashMap<(AstId, Ty), crate::ir::cfg::BodyId>>>,
     pub builder: Builder<'m>,
     pub bindings: FxHashMap<AstId, Home>,
     /// The span of each binder, where its binding was made.
@@ -74,6 +81,9 @@ impl<'a, 'm> Lcx<'a, 'm> {
         Lcx {
             decls,
             typeck,
+            decided: super::decided::Decided::run(typeck),
+            layouts: FxHashMap::default(),
+            bodies: std::rc::Rc::default(),
             builder,
             bindings: FxHashMap::default(),
             binder_spans: FxHashMap::default(),
@@ -91,11 +101,10 @@ impl<'a, 'm> Lcx<'a, 'm> {
     /// # Panics
     /// typeck recorded none: every site of an admitted program is typed.
     pub fn ty(&self, site: AstId) -> Ty {
-        *self
-            .typeck
-            .types
-            .get(&site)
-            .unwrap_or_else(|| panic!("typeck types every site of an admitted program, and not {site:?}"))
+        match self.layouts.get(&site) {
+            Some(layout) => *layout,
+            None => self.decided.ty(site),
+        }
     }
 
     pub fn kind(&self, ty: Ty) -> &TyKind<crate::ty::Concrete> {
@@ -240,9 +249,8 @@ impl<'a, 'm> Lcx<'a, 'm> {
     /// None was reached there: a form that calls is admitted only once its
     /// call reaches.
     pub fn reached(&self, site: AstId) -> &'a Chosen {
-        self.typeck
-            .reached
-            .get(&site)
+        self.decided
+            .reached(site)
             .unwrap_or_else(|| panic!("typeck reaches a declaration at every call site of an admitted program, and not at {site:?}"))
     }
 }

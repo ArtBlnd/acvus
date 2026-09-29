@@ -24,7 +24,7 @@ use crate::typeck::{Adjustment, Coercion, Impl};
 
 /// `value`, written at `site`, coerced as typeck recorded there.
 pub(super) fn convert(cx: &mut Lcx<'_, '_>, site: AstId, value: ValueId, span: Span) -> ValueId {
-    match cx.typeck.coercions.get(&site) {
+    match cx.decided.coercion(site) {
         None => value,
         Some(coercion) => coerce(cx, coercion, value, span),
     }
@@ -84,10 +84,9 @@ pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>
         return super::part_tree::lifted(cx, site, args, span);
     }
     let callee = cx.callee(cx.reached(site));
-    let callee_ty = *cx
-        .typeck
-        .callees
-        .get(&site)
+    let callee_ty = cx
+        .decided
+        .callee(site)
         .unwrap_or_else(|| panic!("typeck records the callee type at every reached call site, and not at {site:?}"));
     issue(cx, callee, callee_ty, args, span)
 }
@@ -115,7 +114,7 @@ pub(super) fn lower_pipe<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, left: &Expr
 }
 
 fn call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[&Expr<S>], span: Span) -> ValueId {
-    if cx.typeck.reached.contains_key(&site) {
+    if cx.decided.reached(site).is_some() {
         let args = arguments(cx, args);
         return call_reached(cx, site, args, span);
     }
@@ -154,10 +153,9 @@ pub(super) fn lower_method<S: Slot>(
     args: &[Expr<S>],
     span: Span,
 ) -> ValueId {
-    let adjustment = *cx
-        .typeck
-        .adjustments
-        .get(&callee_site)
+    let adjustment = cx
+        .decided
+        .adjustment(callee_site)
         .unwrap_or_else(|| panic!("typeck records the receiver adjustment of every reached method call, and not {callee_site:?}"));
     let taken = match adjustment {
         Adjustment::AsWritten => lower_expr(cx, receiver),

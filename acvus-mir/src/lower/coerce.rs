@@ -255,7 +255,11 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
     let (decls, typeck, anyorder) = (cx.decls, cx.typeck, cx.anyorder);
     let name = decls.core().receiver_param();
     let nested = cx.builder.build_nested(super::ctxt::ordered(&effect), mapped);
+    let (decided, layouts, bodies) = (cx.decided, cx.layouts.clone(), cx.bodies.clone());
     let mut inner = Lcx::new(decls, typeck, nested, anyorder);
+    inner.decided = decided;
+    inner.layouts = layouts;
+    inner.bodies = bodies;
     if anyorder > 0 {
         inner.builder.open_anyorder();
     }
@@ -267,7 +271,7 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
     }
     inner.builder.terminate(Terminator::Diverge, span);
     let body = inner.builder.seal().unwrap_or_else(|open| panic!("an array map's function is sealed whole: {open:?}"));
-    let f = cx.builder.push(Op::MakeClosure { body, captures: Vec::new() }, fn_ty, span);
+    let f = cx.builder.push(Op::MakeClosure { bodies: vec![body], captures: Vec::new() }, fn_ty, span);
     let mut args = arrays;
     args.push(f);
     let op = Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args };

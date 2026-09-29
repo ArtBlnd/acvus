@@ -602,7 +602,7 @@ fn lowered_closures(lowered: &Lowered) {
         .entry_ops()
         .into_iter()
         .filter_map(|op| match op {
-            Op::MakeClosure { body, captures } => Some((*body, captures.clone())),
+            Op::MakeClosure { bodies, captures } => Some((bodies[0], captures.clone())),
             _ => None,
         })
         .collect();
@@ -846,7 +846,7 @@ fn an_input_read_in_a_lambda_is_captured() {
         .entry_ops()
         .into_iter()
         .find_map(|op| match op {
-            Op::MakeClosure { body, captures } => Some((*body, captures.len())),
+            Op::MakeClosure { bodies, captures } => Some((bodies[0], captures.len())),
             _ => None,
         })
         .expect("a closure");
@@ -1544,4 +1544,99 @@ fn a_lend_of_an_array_of_references_maps_each_reborrowed() {
         let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, .. });
         assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{source}: {}", shown(lowered.entry()));
     }
+}
+
+// G, a generalized binding's code per signature (functions §2)
+
+/// Each `MakeClosure` of the entry body, with its bodies and captures.
+fn made_closures(lowered: &Lowered) -> Vec<(Vec<BodyId>, usize)> {
+    lowered
+        .entry_ops()
+        .into_iter()
+        .filter_map(|op| match op {
+            Op::MakeClosure { bodies, captures } => Some((bodies.clone(), captures.len())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// functions §2: a generalized binding used at two signatures is one
+/// closure over its environment, taken once, with a body at each
+/// signature, and each use keeps it at its own.
+#[test]
+fn a_generalized_lambda_has_a_body_per_signature_over_one_environment() {
+    let lowered = Fixture::new().script("let k = 2; let f = |x| -> (x, k); let a = f(1); let b = f(true); 0");
+    let body = lowered.entry();
+    let closures = made_closures(&lowered);
+    let [(bodies, captures)] = &closures[..] else {
+        panic!("one closure: {}", shown(body));
+    };
+    assert_eq!(bodies.len(), 2, "{}", shown(body));
+    assert_eq!(*captures, 1, "the environment is taken once: {}", shown(body));
+    let specialized = count(&lowered.entry_ops(), |op| matches!(op, Op::Specialize { signatures, .. } if signatures.len() == 1));
+    assert_eq!(specialized, 2, "{}", shown(body));
+}
+
+/// functions §2: two uses at one signature share one body, and a closure
+/// of one signature is that function type, used as it is.
+#[test]
+fn uses_at_one_signature_share_one_body() {
+    let lowered = Fixture::new().script("let f = |x| -> x; let a = f(1); let b = f(2); 0");
+    let body = lowered.entry();
+    let closures = made_closures(&lowered);
+    let [(bodies, _)] = &closures[..] else {
+        panic!("one closure: {}", shown(body));
+    };
+    assert_eq!(bodies.len(), 1, "{}", shown(body));
+    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::Specialize { .. })), 0, "{}", shown(body));
+}
+
+/// functions §2: the lambdas joined into one generalized binding share its
+/// layout, one closure type of its signatures, so either stands where the
+/// other would.
+#[test]
+fn a_join_of_lambdas_holds_either_at_one_layout() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("c", bool_ty);
+    let lowered = fx.script("let x = if $c { |v| -> (v, v) } else { |v| -> (v, v) }; let p = x(10); let q = x(true); 0");
+    let body = lowered.entry();
+    let made: Vec<crate::ir::ValueId> = body
+        .blocks()
+        .flat_map(|(_, block)| block.insts())
+        .filter(|inst| matches!(inst.op(), Op::MakeClosure { .. }))
+        .filter_map(|inst| inst.result())
+        .collect();
+    let [left, right] = made[..] else {
+        panic!("two closures: {}", shown(body));
+    };
+    assert_eq!(body.ty_of(left), body.ty_of(right), "one layout: {}", shown(body));
+    let TyKind::Closures(signatures) = lowered.kind_of(body, left) else {
+        panic!("a closure of signatures: {}", shown(body));
+    };
+    assert_eq!(signatures.len(), 2, "{}", shown(body));
+}
+
+/// functions §2: a generalized binding passed where one function type is
+/// taken is kept at that one signature.
+#[test]
+fn a_generalized_binding_passed_as_a_value_is_specialized_to_its_parameter() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let taken = fx.function(&[int], int, Effect::pure());
+    let ty = fx.function(&[taken], int, Effect::pure());
+    fx.declare("apply", ty, 1);
+    let lowered = fx.script("let f = |x| -> x; let a = apply(f); let b = f(true); 0");
+    let body = lowered.entry();
+    let specialized: Vec<&Op> = lowered.entry_ops().into_iter().filter(|op| matches!(op, Op::Specialize { .. })).collect();
+    assert_eq!(specialized.len(), 2, "{}", shown(body));
+    let apply_arg = body
+        .blocks()
+        .flat_map(|(_, block)| block.insts())
+        .find_map(|inst| match inst.op() {
+            Op::FunctionCall { callee: Callee::Extern { .. }, args, .. } => Some(args[0]),
+            _ => None,
+        })
+        .expect("the call of `apply`");
+    assert!(matches!(lowered.kind_of(body, apply_arg), TyKind::Fn { params, .. } if params.len() == 1), "{}", shown(body));
 }

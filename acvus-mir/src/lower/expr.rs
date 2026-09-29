@@ -67,7 +67,7 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {
         Expr::Cast { id, expr: source, span, .. } => {
             let value = lower_expr(cx, source);
             let ty = cx.ty(*id);
-            match cx.typeck.casts.get(id) {
+            match cx.decided.cast(*id).as_ref() {
                 Some(cast) => cx.builder.push(Op::Cast { src: value, to: cast.to }, ty, *span),
                 None => {
                     assert!(
@@ -106,6 +106,13 @@ fn lower_ident<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span:
     match cx.typeck.names.get(&site).copied() {
         Some(Name::Declaration(declaration)) => cx.builder.push(Op::LoadFunction { id: declaration }, ty, span),
         Some(Name::Context(context)) => lower_context_read(cx, context, ty, span),
+        Some(Name::Binding(binder)) if super::closure::is_generalized(cx, binder) => {
+            // A use of a generalized binding: its closure at this use's
+            // signatures (functions §2).
+            let place = operand(cx, expr, Mutability::Shared);
+            let closure = read(cx, place, span);
+            super::closure::specialize(cx, closure, site, span)
+        }
         Some(Name::Binding(_) | Name::Input(_)) => {
             let place = operand(cx, expr, Mutability::Shared);
             read(cx, place, span)

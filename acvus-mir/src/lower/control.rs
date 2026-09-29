@@ -259,7 +259,7 @@ fn traversal<S: Slot>(
     span: Span,
 ) -> Option<Traversal> {
     let counter = cx.u64_ty();
-    let iteration = cx.typeck.iteration.get(&site).copied();
+    let iteration = cx.decided.iteration(site);
     match (head, iteration) {
         (ForHead::Range { lo, hi }, _) => {
             let at = lower_expr(cx, lo);
@@ -347,7 +347,7 @@ pub(super) fn lower_return<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, value: &E
 pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr<S>, span: Span) -> ValueId {
     let tried = lower_expr(cx, inner);
     let value_ty = cx.ty(site);
-    let Some(exit) = cx.typeck.tries.get(&site).copied() else {
+    let Some(exit) = cx.decided.try_exit(site) else {
         return cx.unreached_value(value_ty, span);
     };
     let tags = cx.decls.core().tags;

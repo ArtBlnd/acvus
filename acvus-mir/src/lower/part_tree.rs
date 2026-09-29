@@ -153,9 +153,8 @@ fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element
 /// §4); an ordering is `cmp`'s answer compared with `0` (operators §2).
 pub(super) fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, left: &Expr<S>, right: &Expr<S>, span: Span) -> ValueId {
     let tree = cx
-        .typeck
-        .structure_trees
-        .get(&site)
+        .decided
+        .structure_tree(site)
         .unwrap_or_else(|| panic!("typeck records how every comparison compares, and not at {site:?}"));
     let asked = match op {
         BinOp::Eq | BinOp::Neq => Asked::Equal,
@@ -417,15 +416,14 @@ fn tagged(cx: &mut Lcx<'_, '_>, asked: Asked, first: Astr, payloads: Tagged<'_>,
 /// are one `For` over its elements, never unrolled.
 pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span: Span) -> ValueId {
     let tree = cx
-        .typeck
-        .structure_trees
-        .get(&site)
+        .decided
+        .structure_tree(site)
         .unwrap_or_else(|| panic!("typeck records the tree of every lifted impl it reached, and not at {site:?}"));
     if let StructureTree::Own(Own::Lend(mutability)) = tree {
         let [lent] = args[..] else {
             panic!("`as_ref` and `as_mut` take one reference");
         };
-        let made = match cx.typeck.callees.get(&site).map(|callee| cx.kind(*callee)) {
+        let made = match cx.decided.callee(site).map(|callee| cx.kind(callee)) {
             Some(TyKind::Fn { ret, .. }) => *ret,
             other => panic!("typeck records a lend's function type at its site, not {other:?}"),
         };
@@ -437,10 +435,9 @@ pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span
         .lift(declaration)
         .unwrap_or_else(|| panic!("a call reached at a lifted impl names a function with a lift, not {declaration:?}"))
         .clone();
-    let callee_ty = *cx
-        .typeck
-        .callees
-        .get(&site)
+    let callee_ty = cx
+        .decided
+        .callee(site)
         .unwrap_or_else(|| panic!("typeck records the callee type at every reached call site, and not at {site:?}"));
     let TyKind::Fn { params, ret, .. } = cx.kind(callee_ty).clone() else {
         panic!("a callee's type is a function type");
