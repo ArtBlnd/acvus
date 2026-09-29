@@ -6,6 +6,8 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
 use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::infer::ShapeCoercion;
+use crate::ty::structural::PartKey;
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
     TypeArg, Types,
@@ -29,6 +31,14 @@ impl Checked {
 
     fn refusals(&self) -> Vec<&RefusalKind> {
         self.typeck.refusals.iter().map(|refusal| &refusal.kind).collect()
+    }
+
+    /// The steps of the concrete coercion typeck recorded at `site`.
+    fn steps(&self, site: AstId) -> &[super::Conversion<Ty>] {
+        match &self.typeck.coercions[&site] {
+            super::Coercion::Steps(steps) => steps,
+            other => panic!("a concrete value is coerced by steps, not {other:?}"),
+        }
     }
 
     fn admitted(&self) {
@@ -188,6 +198,33 @@ impl Fixture {
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
     }
 
+    /// A lang item's concrete impls, each stating `laws`.
+    fn lang_item_stating(&mut self, item: QualifiedRef, impls: &[TyId<Poly>], laws: crate::decl::Laws) {
+        let concrete = impls
+            .iter()
+            .map(|ty| ImplSig {
+                ty: *ty,
+                param_names: self.param_names(self.arity(*ty)),
+                requires: Box::new([]),
+                facts: DeclaredFacts { laws: laws.clone(), ..Default::default() },
+            })
+            .collect();
+        self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
+    }
+
+    /// Impls of `clone<T>(&T) -> T` at each of `types`.
+    fn clones(&mut self, types: &[TyId<Poly>]) {
+        let impls: Vec<TyId<Poly>> = types
+            .iter()
+            .map(|ty| {
+                let shared = self.reference(Mutability::Shared, *ty);
+                self.pure(&[shared], *ty)
+            })
+            .collect();
+        let item = self.raw.core.clone;
+        self.lang_item(item, &impls);
+    }
+
     /// Impls of `add<T, O>(&T, &T) -> O`, or of one of its binary
     /// siblings, at the widths given, each `(&w, &w) -> w`.
     fn arithmetic(&mut self, item: QualifiedRef, widths: &[TyKind<Poly>]) {
@@ -307,7 +344,7 @@ fn a_suffixed_literal_has_its_width() {
 fn an_empty_list_is_an_array_of_never() {
     let (checked, script) = Fixture::new().script("[]");
     checked.admitted();
-    let TyKind::Array(element, LenTerm::Known(0)) = checked.kind(tail(&checked, &script)) else {
+    let TyKind::Array(element, LenTerm::Known(0), _) = checked.kind(tail(&checked, &script)) else {
         panic!("not an empty array");
     };
     assert_eq!(checked.kind(*element), &TyKind::Never);
@@ -612,7 +649,7 @@ fn joined_constructors(then: &str, other: &str) -> (Checked, Ty) {
 #[test]
 fn a_tuple_with_a_never_element_joins_its_sibling() {
     let (checked, x) = joined_constructors("(0, 1)", "(0, return 2)");
-    let TyKind::Tuple(parts) = checked.kind(x) else {
+    let TyKind::Tuple(parts, _) = checked.kind(x) else {
         panic!("not a tuple: {:?}", checked.kind(x));
     };
     assert!(parts.iter().all(|part| is_int(&checked, *part, IntTy::I64)), "{:?}", checked.kind(x));
@@ -622,7 +659,7 @@ fn a_tuple_with_a_never_element_joins_its_sibling() {
 #[test]
 fn an_array_with_a_never_element_joins_its_sibling() {
     let (checked, x) = joined_constructors("[0, 1]", "[0, return 2]");
-    let TyKind::Array(element, _) = checked.kind(x) else {
+    let TyKind::Array(element, _, _) = checked.kind(x) else {
         panic!("not an array: {:?}", checked.kind(x));
     };
     assert!(is_int(&checked, *element, IntTy::I64), "{:?}", checked.kind(x));
@@ -642,7 +679,7 @@ fn an_object_with_a_never_field_joins_its_sibling() {
 #[test]
 fn a_some_with_a_never_payload_joins_its_sibling() {
     let (checked, x) = joined_constructors("Some(1)", "Some(return 2)");
-    let TyKind::Option(payload) = checked.kind(x) else {
+    let TyKind::Option(payload, _) = checked.kind(x) else {
         panic!("not an option: {:?}", checked.kind(x));
     };
     assert!(is_int(&checked, *payload, IntTy::I64), "{:?}", checked.kind(x));
@@ -667,7 +704,7 @@ fn a_range_iterates_by_value() {
 fn an_array_iterates_by_reference_through_a_reference_and_by_value_itself() {
     let mut fx = Fixture::new();
     let i64_ty = fx.int(IntTy::I64);
-    let array = fx.ty(TyKind::Array(i64_ty, LenTerm::Known(3)));
+    let array = fx.ty(TyKind::Array(i64_ty, LenTerm::Known(3), ()));
     fx.context("xs", array);
     let (checked, script) = fx.script("for x in &@xs { x; } for y in @xs { y; } 1");
     checked.admitted();
@@ -699,11 +736,11 @@ fn an_integer_is_not_iterated() {
 fn try_on_an_option_is_its_payload() {
     let mut fx = Fixture::new();
     let i64_ty = fx.int(IntTy::I64);
-    let option = fx.ty(TyKind::Option(i64_ty));
+    let option = fx.ty(TyKind::Option(i64_ty, ()));
     fx.context("o", option);
     let (checked, script) = fx.script("let x = @o?; Some(x)");
     checked.admitted();
-    let TyKind::Option(payload) = checked.kind(tail(&checked, &script)) else {
+    let TyKind::Option(payload, _) = checked.kind(tail(&checked, &script)) else {
         panic!("not an option");
     };
     assert!(is_int(&checked, *payload, IntTy::I64));
@@ -772,7 +809,7 @@ fn an_object_pattern_binds_fields() {
 fn some_is_an_option() {
     let (checked, script) = Fixture::new().script("Some(true)");
     checked.admitted();
-    let TyKind::Option(payload) = checked.kind(tail(&checked, &script)) else {
+    let TyKind::Option(payload, _) = checked.kind(tail(&checked, &script)) else {
         panic!("not an option");
     };
     assert_eq!(checked.kind(*payload), &TyKind::Bool);
@@ -850,11 +887,11 @@ fn unwrap_reaches_the_lang_item() {
     let mut fx = Fixture::new();
     let unwrap = fx.raw.core.unwrap;
     let t = fx.var(0);
-    let option_t = fx.ty(TyKind::Option(t));
+    let option_t = fx.ty(TyKind::Option(t, ()));
     let at_option = fx.function(&[option_t], t, EffectTerm::Known(crate::ty::Effect::pure()));
     fx.lang_item(unwrap, &[at_option]);
     let bool_ty = fx.ty(TyKind::Bool);
-    let option = fx.ty(TyKind::Option(bool_ty));
+    let option = fx.ty(TyKind::Option(bool_ty, ()));
     fx.context("o", option);
     let (checked, script) = fx.script("@o.unwrap()");
     checked.admitted();
@@ -920,7 +957,7 @@ fn a_deref_reads_the_referent() {
 fn an_arrays_element_is_indexed() {
     let mut fx = Fixture::new();
     let bool_ty = fx.ty(TyKind::Bool);
-    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2), ()));
     fx.context("xs", array);
     let (checked, script) = fx.script("@xs[0]");
     checked.admitted();
@@ -1424,7 +1461,7 @@ fn a_view_coercion_is_recorded_at_the_argument() {
     let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
         panic!("not a call");
     };
-    let steps = &checked.typeck.conversions[&args[0].id()];
+    let steps = checked.steps(args[0].id());
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].via.declaration, as_slice);
     let TyKind::Ref(Mutability::Shared, viewed) = checked.kind(steps[0].to) else {
@@ -1448,39 +1485,239 @@ fn a_lang_item_given_no_impls_answers_no_reach() {
     assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
 }
 
-/// P13, extern-fn §1: an array is not taken apart for a clone. A `[String;
-/// 2]`'s `.clone()` reaches `core::clone` at the array's type, and no
-/// declaration carries an array type, so the reach refuses it, with no
-/// `core::clone` impl declared and with one for `String`.
+/// types §1: an array's `clone` is lifted from its element's, so a
+/// `[String; 2]`'s `.clone()` answers where `String` has a `clone` impl, and
+/// is refused at the element where it has none.
 #[test]
-fn a_clone_of_an_array_that_does_not_copy_reaches_core_clone_and_is_refused() {
+fn a_clone_of_an_array_lifts_from_its_elements_clone() {
     for clones_strings in [false, true] {
         let mut fx = Fixture::new();
         let clone = fx.raw.core.clone;
         let string = fx.ty(TyKind::String);
         if clones_strings {
-            let shared_string = fx.reference(Mutability::Shared, string);
-            let clones_string = fx.pure(&[shared_string], string);
-            fx.lang_item(clone, &[clones_string]);
+            fx.clones(&[string]);
         }
-        let array = fx.ty(TyKind::Array(string, crate::ty::LenTerm::Known(2)));
+        let array = fx.ty(TyKind::Array(string, crate::ty::LenTerm::Known(2), ()));
         fx.input("a", array);
         let (checked, _) = fx.script("$a.clone()");
-        assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }], "`String` has an impl: {clones_strings}");
+        match clones_strings {
+            true => checked.admitted(),
+            false => assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]),
+        }
     }
 }
 
-/// operators §7: a tuple clones part by part, and its `String` part reaches
-/// `core::clone`, which no impl answers here.
+/// types §1: a tuple's `clone` is lifted from its parts', so its `String`
+/// part, which no impl answers here, is refused, and its `i64` part, which
+/// one does, is not.
 #[test]
 fn a_tuple_clone_with_a_part_no_impl_clones_is_refused_at_the_part() {
     let mut fx = Fixture::new();
     let clone = fx.raw.core.clone;
     let (string, i64_ty) = (fx.ty(TyKind::String), fx.int(IntTy::I64));
-    let pair = fx.ty(TyKind::Tuple(Box::new([string, i64_ty])));
+    fx.clones(&[i64_ty]);
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, i64_ty]), ()));
     fx.input("t", pair);
     let (checked, _) = fx.script("$t.clone()");
     assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
+}
+
+/// types §1: `clone` maps one to one onto a structure's parts, so a value
+/// of each of the six transparent structured types, nested in one another,
+/// clones by a lifted impl whose every leaf is its part's own impl.
+#[test]
+fn a_clone_lifts_over_every_transparent_structured_type_nested() {
+    let mut fx = Fixture::new();
+    let clone = fx.raw.core.clone;
+    let (string, i64_ty, bool_ty) = (fx.ty(TyKind::String), fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    fx.clones(&[string, i64_ty, bool_ty]);
+    let (a, b, red, blue) = (fx.name("a"), fx.name("b"), fx.name("Red"), fx.name("Blue"));
+    let color = fx.ty(TyKind::Enum {
+        name: QualifiedRef::root(fx.name("Color")),
+        variants: Box::new([(blue, None), (red, Some(string))]),
+        label: (),
+    });
+    let option = fx.ty(TyKind::Option(i64_ty, ()));
+    let result = fx.ty(TyKind::Result(string, bool_ty, ()));
+    let array = fx.ty(TyKind::Array(option, LenTerm::Known(2), ()));
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, array), (b, result)]), ())));
+    let whole = fx.ty(TyKind::Tuple(Box::new([object, color]), ()));
+    fx.input("t", whole);
+    let (checked, script) = fx.script("$t.clone()");
+    checked.admitted();
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("not a method call");
+    };
+    assert_eq!(checked.typeck.reached[callee_id].declaration, clone);
+    assert_eq!(checked.typeck.reached[callee_id].r#impl, Some(Impl::Structural));
+    let mut leaves = Vec::new();
+    let mut open = vec![&checked.typeck.structure_trees[callee_id]];
+    while let Some(tree) = open.pop() {
+        match tree {
+            super::StructureTree::Parts(parts) => open.extend(parts.iter().map(|(_, part)| part)),
+            super::StructureTree::Reached { chosen, .. } => leaves.push((chosen.declaration, chosen.r#impl)),
+        }
+    }
+    // The leaves: the array's element's `Some` payload, the `Result`'s two
+    // payloads, and `Red`'s payload.
+    assert_eq!(leaves.len(), 4);
+    assert!(leaves.iter().all(|(declaration, r#impl)| *declaration == clone && matches!(r#impl, Some(Impl::Concrete(_)))));
+}
+
+/// types §1: a structure has a lifted `clone` only where every part has an
+/// impl; one part of none, however deep, refuses it there.
+#[test]
+fn a_clone_of_a_structure_with_a_part_of_no_impl_is_refused() {
+    let mut fx = Fixture::new();
+    let clone = fx.raw.core.clone;
+    let (string, bool_ty) = (fx.ty(TyKind::String), fx.ty(TyKind::Bool));
+    fx.clones(&[string]);
+    let a = fx.name("a");
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, bool_ty)]), ())));
+    let option = fx.ty(TyKind::Option(object, ()));
+    let whole = fx.ty(TyKind::Tuple(Box::new([string, option]), ()));
+    fx.input("t", whole);
+    let (checked, _) = fx.script("$t.clone()");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
+}
+
+/// types §1: `eq` combines its parts' answers, so a tuple has a lifted `eq`
+/// only where every part's `eq` is declared an equivalence.
+#[test]
+fn eq_lifts_only_where_every_parts_eq_is_declared_an_equivalence() {
+    for states_equivalence in [false, true] {
+        let mut fx = Fixture::new();
+        let eq = fx.raw.core.eq;
+        let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+        let shared = fx.reference(Mutability::Shared, i64_ty);
+        let at_int = fx.pure(&[shared, shared], bool_ty);
+        let laws = match states_equivalence {
+            true => crate::decl::Laws::Equivalence,
+            false => crate::decl::Laws::None,
+        };
+        fx.lang_item_stating(eq, &[at_int], laws);
+        let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, i64_ty]), ()));
+        fx.input("t", pair);
+        let (checked, script) = fx.script("eq(&$t, &$t)");
+        match states_equivalence {
+            true => {
+                checked.admitted();
+                let Some(Expr::FuncCall { id, .. }) = script.tail.as_deref() else {
+                    panic!("not a call");
+                };
+                assert_eq!(checked.typeck.reached[id].r#impl, Some(Impl::Structural));
+            }
+            false => assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: eq.name }; 2]),
+        }
+    }
+}
+
+// Structured coercion (types §1, §3)
+
+/// types §1, §3: an object entering a declaration's parameter narrows to
+/// the fields the parameter names; the others end where it is narrowed.
+#[test]
+fn an_object_narrows_to_the_fields_a_declarations_parameter_names() {
+    let mut fx = Fixture::new();
+    let (a, b) = (fx.name("a"), fx.name("b"));
+    let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty)]), ())));
+    let takes = fx.pure(&[object], unit);
+    fx.declare("f", takes, &[]);
+    let (checked, script) = fx.script("f({ a: 1, b: true, })");
+    checked.admitted();
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("not a call");
+    };
+    let super::Coercion::Structured { shape, to, parts } = &checked.typeck.coercions[&args[0].id()] else {
+        panic!("an object is coerced by its shape");
+    };
+    assert_eq!(shape, &ShapeCoercion::Narrowed { left: Box::new([b]) });
+    let TyKind::Object(ObjectTy::Structural(fields, ())) = checked.kind(*to) else {
+        panic!("coerced to the parameter's object");
+    };
+    assert_eq!(fields.iter().map(|(name, _)| *name).collect::<Vec<_>>(), vec![a]);
+    assert_eq!(parts.iter().map(|(key, _)| *key).collect::<Vec<_>>(), vec![PartKey::Field(a)]);
+}
+
+/// types §3: an object narrows only to fields it holds.
+#[test]
+fn an_object_lacking_a_field_its_parameter_names_is_refused() {
+    let mut fx = Fixture::new();
+    let (a, b) = (fx.name("a"), fx.name("b"));
+    let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty), (b, i64_ty)]), ())));
+    let takes = fx.pure(&[object], unit);
+    fx.declare("f", takes, &[]);
+    let (checked, _) = fx.script("f({ a: 1, })");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]), "{:?}", checked.refusals());
+}
+
+/// types §3: an enum entering a declaration's parameter widens to the
+/// variants the parameter names, and one holding a variant it does not
+/// name is refused.
+#[test]
+fn an_enum_widens_to_the_variants_a_declarations_parameter_names() {
+    for (source, admitted) in [("f(Color::Red)", true), ("f(if true { Color::Red } else { Color::Green })", false)] {
+        let mut fx = Fixture::new();
+        let (red, blue) = (fx.name("Red"), fx.name("Blue"));
+        let unit = fx.ty(TyKind::Unit);
+        let mut variants = [(blue, None), (red, None)];
+        variants.sort_by_key(|(tag, _)| *tag);
+        let color = fx.ty(TyKind::Enum { name: QualifiedRef::root(fx.name("Color")), variants: Box::new(variants), label: () });
+        let takes = fx.pure(&[color], unit);
+        fx.declare("f", takes, &[]);
+        let (checked, script) = fx.script(source);
+        if !admitted {
+            assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]), "{:?}", checked.refusals());
+            continue;
+        }
+        checked.admitted();
+        let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+            panic!("not a call");
+        };
+        let super::Coercion::Structured { shape, .. } = &checked.typeck.coercions[&args[0].id()] else {
+            panic!("an enum is coerced by its shape");
+        };
+        assert_eq!(shape, &ShapeCoercion::Widened { taken: Box::new([blue]) });
+    }
+}
+
+/// types §3: a tuple entering a declaration's parameter keeps its arity,
+/// and each part is coerced up the cast tree as any value entering a slot.
+/// The same two tuples meeting in one body's slot are not coerced part by
+/// part: a constructor is invariant (types §4), so they are refused.
+#[test]
+fn a_tuple_part_casts_at_a_declarations_parameter_but_not_where_two_meet_in_a_body() {
+    let widening = || {
+        let mut fx = Fixture::new();
+        let (u8_ty, i64_ty, bool_ty, unit) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool), fx.ty(TyKind::Unit));
+        let widening = fx.pure(&[u8_ty], i64_ty);
+        let widen = fx.declare("widen", widening, &[]);
+        fx.raw.casts.push(CastRule { from: u8_ty, to: i64_ty, via: widen });
+        let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, bool_ty]), ()));
+        let takes = fx.pure(&[pair], unit);
+        fx.declare("f", takes, &[]);
+        (fx, widen)
+    };
+    let (fx, widen) = widening();
+    let (checked, script) = fx.script("f((1u8, true))");
+    checked.admitted();
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("not a call");
+    };
+    let super::Coercion::Structured { shape, parts, .. } = &checked.typeck.coercions[&args[0].id()] else {
+        panic!("a tuple is coerced by its shape");
+    };
+    assert_eq!(shape, &ShapeCoercion::Kept);
+    let [(PartKey::Index(0), Some(super::Coercion::Steps(steps))), (PartKey::Index(1), None)] = &parts[..] else {
+        panic!("the first part is coerced by steps, the second enters as it is: {parts:?}");
+    };
+    assert_eq!(steps[0].via.declaration, widen);
+
+    let (fx, _) = widening();
+    let (checked, _) = fx.script("if true { (1u8, true) } else { (2i64, false) }");
+    assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(_)]), "{:?}", checked.refusals());
 }
 
 // Forms decided by their operand's head (types §6)
@@ -1519,7 +1756,7 @@ fn a_pattern_through_a_reference_binds_references() {
 fn an_index_waits_for_its_containers_type() {
     let mut fx = Fixture::new();
     let bool_ty = fx.ty(TyKind::Bool);
-    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2), ()));
     fx.context("xs", array);
     let (checked, script) = fx.script("let g = |xs| -> xs[0]; g(@xs)");
     checked.admitted();
@@ -1636,7 +1873,7 @@ fn a_return_and_the_tail_each_enter_the_runs_result() {
     let Stmt::Expr(Expr::Return { value, .. }) = &then_body[0] else {
         panic!("not a return");
     };
-    let steps = &checked.typeck.conversions[&value.id()];
+    let steps = checked.steps(value.id());
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].via.declaration, widen);
     assert!(is_int(&checked, steps[0].to, IntTy::I64));
@@ -1646,7 +1883,7 @@ fn a_return_and_the_tail_each_enter_the_runs_result() {
     assert!(is_int(&checked, params[0], IntTy::U8));
     assert!(is_int(&checked, *ret, IntTy::I64));
     let tail_site = script.tail.as_ref().unwrap().id();
-    assert!(!checked.typeck.conversions.contains_key(&tail_site));
+    assert!(!checked.typeck.coercions.contains_key(&tail_site));
 }
 
 /// operators §5: a view step names the impl of the view it is; here the
@@ -1687,7 +1924,7 @@ fn a_view_step_names_its_impl() {
     let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
         panic!("not a call");
     };
-    let steps = &checked.typeck.conversions[&args[0].id()];
+    let steps = checked.steps(args[0].id());
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].via.declaration, as_slice);
     assert_eq!(steps[0].via.r#impl, Some(Impl::Concrete(1)));
@@ -1775,7 +2012,7 @@ fn a_binder_through_a_reference_has_the_bindings_type() {
 fn an_index_is_a_u64() {
     let mut fx = Fixture::new();
     let bool_ty = fx.ty(TyKind::Bool);
-    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2), ()));
     fx.context("xs", array);
     let (checked, script) = fx.script("@xs[0]");
     checked.admitted();
@@ -1785,7 +2022,7 @@ fn an_index_is_a_u64() {
     assert!(is_int(&checked, checked.typeck.types[&index.id()], IntTy::U64));
     let mut fx = Fixture::new();
     let bool_ty = fx.ty(TyKind::Bool);
-    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2)));
+    let array = fx.ty(TyKind::Array(bool_ty, LenTerm::Known(2), ()));
     fx.context("xs", array);
     let (checked, _) = fx.script("@xs[0u8]");
     assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
@@ -1855,7 +2092,7 @@ fn a_view_steps_requirements_are_reached() {
     let Expr::FuncCall { args, .. } = script.tail.as_deref().unwrap() else {
         panic!("not a call");
     };
-    let steps = &checked.typeck.conversions[&args[0].id()];
+    let steps = checked.steps(args[0].id());
     assert_eq!(steps[0].via.r#impl, Some(Impl::Concrete(0)));
     let required: Vec<(QualifiedRef, Option<Impl>)> =
         steps[0].via.required.iter().map(|chosen| (chosen.declaration, chosen.r#impl)).collect();
@@ -1933,11 +2170,11 @@ fn a_comparison_part_names_its_callee_type() {
     let (checked, script) = fx.script("(1, 2) == (3, 4)");
     checked.admitted();
     let site = script.tail.as_ref().unwrap().id();
-    let super::PartTree::Parts(parts) = &checked.typeck.part_trees[&site] else {
+    let super::StructureTree::Parts(parts) = &checked.typeck.structure_trees[&site] else {
         panic!("a tuple compares its parts");
     };
-    for part in parts.iter() {
-        let super::PartTree::Reached { callee, .. } = part else {
+    for (_, part) in parts.iter() {
+        let super::StructureTree::Reached { callee, .. } = part else {
             panic!("an integer reaches an impl");
         };
         let TyKind::Fn { params, ret, .. } = checked.kind(*callee) else {
@@ -2146,7 +2383,7 @@ fn a_return_in_a_template_is_refused() {
 fn a_try_leaving_a_template_is_refused() {
     let mut fx = Fixture::new();
     let i64_ty = fx.int(IntTy::I64);
-    let option = fx.ty(TyKind::Option(i64_ty));
+    let option = fx.ty(TyKind::Option(i64_ty, ()));
     fx.context("o", option);
     let (checked, _) = fx.template("% let x = @o?\n");
     assert_eq!(checked.refusals(), vec![&RefusalKind::ReturnInTemplate]);

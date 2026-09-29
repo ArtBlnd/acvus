@@ -320,7 +320,7 @@ fn and_is_a_short_circuit_diamond() {
 fn a_match_over_tags_is_one_switch() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int));
+    let option = fx.ty(TyKind::Option(int, ()));
     fx.input("o", option);
     let lowered = fx.script("match $o { Some(x) => x, None => 0, }");
     let switches: Vec<_> = lowered
@@ -345,8 +345,8 @@ fn a_match_over_tags_is_one_switch() {
 fn a_nested_pattern_is_tested_arm_by_arm() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int));
-    let pair = fx.ty(TyKind::Tuple(Box::new([option, int])));
+    let option = fx.ty(TyKind::Option(int, ()));
+    let pair = fx.ty(TyKind::Tuple(Box::new([option, int]), ()));
     fx.input("p", pair);
     let lowered = fx.script("match $p { (Some(x), 1) => x, _ => 0, }");
     let terminators = lowered.entry_terminators();
@@ -423,7 +423,7 @@ fn a_for_over_a_range_is_a_for_of_its_bounds() {
 fn while_let_is_a_while_on_the_patterns_test() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int));
+    let option = fx.ty(TyKind::Option(int, ()));
     fx.input("o", option);
     let lowered = fx.script("let o = $o; while let Some(x) = o { o = None; } 1");
     let body = lowered.entry();
@@ -452,8 +452,8 @@ fn while_let_is_a_while_on_the_patterns_test() {
 fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
     let mut fx = Fixture::new();
     let string = fx.ty(TyKind::String);
-    let option = fx.ty(TyKind::Option(string));
-    let pair = fx.ty(TyKind::Tuple(Box::new([option, string])));
+    let option = fx.ty(TyKind::Option(string, ()));
+    let pair = fx.ty(TyKind::Tuple(Box::new([option, string]), ()));
     let pair_fn = fx.function(&[], pair, Effect::pure());
     fx.declare("pair", pair_fn, 0);
     let script: Script = acvus_ast::parse_script(&fx.names, "if let (Some(a), b) = pair() { 1 } else { 2 }").expect("parses");
@@ -471,7 +471,7 @@ fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
         .iter()
         .find_map(|op| match op {
             Op::Assign { target: RefTarget::Var(slot), path, .. }
-                if path.is_empty() && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items) if items.len() == 2) =>
+                if path.is_empty() && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items, _) if items.len() == 2) =>
             {
                 Some(*slot)
             }
@@ -528,7 +528,7 @@ fn break_and_continue_go_to_the_loops_exit_and_header() {
 fn try_returns_none_early() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int));
+    let option = fx.ty(TyKind::Option(int, ()));
     fx.input("o", option);
     let lowered = fx.script("let x = $o?; Some(x)");
     let ops = lowered.entry_ops();
@@ -825,7 +825,7 @@ fn option_equality_tests_tags_before_payloads() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int));
+    let option = fx.ty(TyKind::Option(int, ()));
     fx.input("o", option);
     fx.input("p", option);
     let lowered = fx.script("$o == $p");
@@ -983,7 +983,7 @@ fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
         .find_map(|inst| match inst.op() {
             Op::Assign { target: RefTarget::Var(slot), path, .. }
                 if path.is_empty()
-                    && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items)
+                    && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items, _)
                         if matches!(lowered.module.types().kind(items[0]), TyKind::Ref(Mutability::Mut, _))) =>
             {
                 Some(*slot)
@@ -1052,7 +1052,7 @@ fn array_equality_is_one_for_that_exits_at_the_first_difference() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let int = fx.int();
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3), ()));
     fx.input("a", array);
     fx.input("b", array);
     let lowered = fx.script("$a == $b");
@@ -1239,7 +1239,7 @@ fn array_ordering_is_one_for_that_exits_at_the_first_nonzero_cmp() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let int = fx.int();
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(4)));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(4), ()));
     fx.input("a", array);
     fx.input("b", array);
     let lowered = fx.script("$a < $b");
@@ -1263,8 +1263,8 @@ fn part_trees_survive_the_required_steps_and_the_pipeline() {
     clones_strings(&mut fx);
     let string = fx.ty(TyKind::String);
     let int = fx.int();
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
-    let pair = fx.ty(TyKind::Tuple(Box::new([string, int])));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3), ()));
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, int]), ()));
     fx.input("a", array);
     fx.input("b", array);
     fx.input("t", pair);
@@ -1280,4 +1280,95 @@ fn part_trees_survive_the_required_steps_and_the_pipeline() {
     super::required::insert_drops(&mut module, &mut am);
     crate::passes::pipeline::optimize(&mut module, &mut am, crate::passes::pipeline::Level::Full);
     Lowered::checked(module, fx.names);
+}
+
+// Structured coercion and lifted impls (types §1, §3)
+
+/// types §3: an object entering a declaration's parameter is narrowed
+/// there: a new object of the parameter's fields, each taken from the
+/// value, is what the call receives.
+#[test]
+fn a_narrowed_object_is_a_new_object_of_the_parameters_fields() {
+    let mut fx = Fixture::new();
+    let a = fx.name("a");
+    let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
+    let object = fx.ty(TyKind::Object(crate::ty::ObjectTy::Structural(Box::new([(a, int)]), ())));
+    let ty = fx.function(&[object], unit, Effect::pure());
+    let f = fx.declare("f", ty, 1);
+    let lowered = fx.script("f({ a: 1, b: true, })");
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    assert_eq!(count(&ops, |op| matches!(op, Op::FieldGet { field, .. } if *field == a)), 1, "{}", shown(body));
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let call = insts
+        .iter()
+        .find(|inst| matches!(inst.op(), Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == f))
+        .expect("the call of `f`");
+    let Op::FunctionCall { args, .. } = call.op() else {
+        unreachable!("found as a call");
+    };
+    let TyKind::Object(narrowed) = lowered.kind_of(body, args[0]) else {
+        panic!("`f` receives an object: {}", shown(body));
+    };
+    assert_eq!(narrowed.fields().iter().map(|(name, _)| *name).collect::<Vec<_>>(), vec![a], "{}", shown(body));
+    let made = insts.iter().find(|inst| inst.result() == Some(args[0])).expect("the argument is made in the body");
+    assert!(matches!(made.op(), Op::MakeObject { fields } if fields.len() == 1), "{}", shown(body));
+}
+
+/// types §1: a tuple's lifted `clone` calls each part's own impl on a
+/// reference to that part, and makes a tuple of their results.
+#[test]
+fn a_lifted_clone_calls_each_parts_impl_and_rebuilds_the_tuple() {
+    let mut fx = Fixture::new();
+    let (int, string) = (fx.int(), fx.ty(TyKind::String));
+    let impls: Vec<TyId<Poly>> = [string, int]
+        .into_iter()
+        .map(|ty| {
+            let shared = fx.reference(Mutability::Shared, ty);
+            fx.function(&[shared], ty, Effect::pure())
+        })
+        .collect();
+    let clone = fx.raw.core.clone;
+    fx.lang_item(clone, &impls);
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, int]), ()));
+    fx.input("t", pair);
+    let lowered = fx.script("$t.clone()");
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    let calls: Vec<usize> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, .. } if *id == clone => Some(*r#impl),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls, vec![0, 1], "{}", shown(body));
+    for at in [0, 1] {
+        let part = |op: &Op| matches!(op, Op::Ref { path, mutability: Mutability::Shared, .. } if path[..] == [PathSeg::Index(at)]);
+        assert_eq!(count(&ops, part), 1, "part {at} is lent to its impl: {}", shown(body));
+    }
+    assert_eq!(count(&ops, |op| matches!(op, Op::MakeTuple { elements } if elements.len() == 2)), 1, "{}", shown(body));
+}
+
+/// types §1: a tuple's lifted `eq` asks each part's own impl, the second
+/// only where the first answered equal.
+#[test]
+fn a_lifted_eq_asks_each_parts_impl_in_order() {
+    let mut fx = Fixture::new();
+    let (int, bool_ty) = (fx.int(), fx.ty(TyKind::Bool));
+    let shared = fx.reference(Mutability::Shared, int);
+    let at_int = fx.function(&[shared, shared], bool_ty, Effect::pure());
+    let eq = fx.raw.core.eq;
+    let facts = DeclaredFacts { laws: crate::decl::Laws::Equivalence, ..Default::default() };
+    let concrete = Box::new([ImplSig { ty: at_int, param_names: fx.param_names(2), requires: Box::new([]), facts }]);
+    fx.raw.lang_impls.push((eq, Impls { concrete, generic: None }));
+    let pair = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
+    fx.input("t", pair);
+    let lowered = fx.script("eq(&$t, &$t)");
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    let calls = count(&ops, |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == eq));
+    assert_eq!(calls, 2, "{}", shown(body));
+    let diamonds = lowered.entry_terminators().iter().filter(|terminator| matches!(terminator, Terminator::Diamond { .. })).count();
+    assert_eq!(diamonds, 1, "the second part is asked only where the first is equal: {}", shown(body));
 }
