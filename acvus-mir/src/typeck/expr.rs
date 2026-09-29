@@ -115,8 +115,8 @@ fn check_form<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Demand) -> Ter
             captures_by_move,
             params,
             body,
-            ..
-        } => closure::check_lambda(cx, *id, *captures_by_move, params, body),
+            span,
+        } => closure::check_lambda(cx, *id, *captures_by_move, params, body, *span),
         Expr::Paren { inner, .. } => check_expr(cx, inner, demand),
         Expr::Borrow {
             id,

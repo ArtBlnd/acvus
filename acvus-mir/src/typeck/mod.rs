@@ -45,7 +45,7 @@ use crate::decl::Declarations;
 use crate::ty::{Concrete, TyKind, Types};
 
 pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Comparison, Conversion, Impl, Iteration, Name, TryExit, Typeck};
-pub use refusal::{Refusal, RefusalKind};
+pub use refusal::{Exceeding, Refusal, RefusalKind};
 
 use ctxt::Ctxt;
 use scope::Run;

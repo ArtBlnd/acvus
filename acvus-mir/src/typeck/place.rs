@@ -318,7 +318,7 @@ fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, access: Access, span: S
             let term = super::context::context_term(cx, site, context, span)?;
             super::context::refuse_held_loans(cx, term, span);
             cx.out.names.insert(site, Name::Context(context));
-            super::context::note_access(cx, context, access);
+            super::context::note_access(cx, context, access, span);
             Some(term)
         }
     }

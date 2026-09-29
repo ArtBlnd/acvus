@@ -540,14 +540,17 @@ fn the_effect_join_is_a_lattice_join() {
         EffectTerm::Known(effect(Reissue::Idempotent, &[r], SplitCost::Unavailable)),
         EffectTerm::Known(Effect::opaque()),
     ];
+    let mut join = |a: &EffectTerm<crate::ty::Infer>, b: &EffectTerm<crate::ty::Infer>| {
+        fx.infer.join_effects(a, b).expect("two known effects join")
+    };
     for a in &terms {
-        assert_eq!(&fx.infer.join_effects(a, a), a);
+        assert_eq!(&join(a, a), a);
         for b in &terms {
-            assert_eq!(fx.infer.join_effects(a, b), fx.infer.join_effects(b, a));
+            assert_eq!(join(a, b), join(b, a));
             for c in &terms {
-                let left = fx.infer.join_effects(a, b);
-                let right = fx.infer.join_effects(b, c);
-                assert_eq!(fx.infer.join_effects(&left, c), fx.infer.join_effects(a, &right));
+                let left = join(a, b);
+                let right = join(b, c);
+                assert_eq!(join(&left, c), join(a, &right));
             }
         }
     }
@@ -562,8 +565,8 @@ fn an_effect_variable_is_the_join_of_what_was_joined_into_it() {
     let var = EffectTerm::Var(fx.infer.fresh_effect());
     let reads = EffectTerm::Known(effect(Reissue::Pure, &[r], SplitCost::Unavailable));
     let idempotent = EffectTerm::Known(effect(Reissue::Idempotent, &[], SplitCost::Unavailable));
-    assert_eq!(fx.infer.join_effects(&var, &reads), var);
-    assert_eq!(fx.infer.join_effects(&idempotent, &var), var);
+    assert_eq!(fx.infer.join_effects(&var, &reads), Ok(var.clone()));
+    assert_eq!(fx.infer.join_effects(&idempotent, &var), Ok(var.clone()));
     let f = fx.function(var, Flows::none(), Calls::Many, Holds::Nothing);
     let (types, frozen) = fx.freeze(f);
     let TyKind::Fn {
@@ -585,7 +588,7 @@ fn eq_of_two_effect_variables_binds() {
     let f = fx.function(v, Flows::none(), Calls::Many, Holds::Nothing);
     let g = fx.function(w.clone(), Flows::none(), Calls::Many, Holds::Nothing);
     fx.infer.eq(f, g).unwrap();
-    fx.infer.join_effects(&w, &EffectTerm::Known(Effect::opaque()));
+    fx.infer.join_effects(&w, &EffectTerm::Known(Effect::opaque())).expect("an unbound variable grows");
     let (types, frozen) = fx.freeze(f);
     let TyKind::Fn {
         effect: EffectTerm::Known(settled),
@@ -612,8 +615,8 @@ fn eq_links_holds_and_calls_variables() {
     let g = fx.function_of(pure(), Flows::none(), CallsTerm::Var(other_calls), HoldsTerm::Var(other_holds));
     let (a, b) = (fx.held(f), fx.held(g));
     fx.infer.eq(a, b).unwrap();
-    fx.infer.join_holds(holds, Holds::Mut);
-    fx.infer.join_calls(calls, Calls::Once);
+    fx.infer.join_holds(holds, Holds::Mut).expect("linked, not fixed");
+    fx.infer.join_calls(calls, Calls::Once).expect("linked, not fixed");
     let (types, frozen) = fx.freeze(b);
     let TyKind::Fn { calls, holds, .. } = types.kind(frozen) else {
         panic!("a function type")
@@ -635,8 +638,8 @@ fn join_joins_holds_and_calls_and_a_variable_keeps_learning() {
     fx.infer.join(b, a).unwrap();
     assert_eq!(fx.infer.holds(HoldsTerm::Var(holds)), Some(Holds::Shared));
     assert_eq!(fx.infer.calls(CallsTerm::Var(calls)), Some(Calls::Many));
-    fx.infer.join_holds(holds, Holds::Nothing);
-    fx.infer.join_calls(calls, Calls::Once);
+    fx.infer.join_holds(holds, Holds::Nothing).expect("joined, not fixed");
+    fx.infer.join_calls(calls, Calls::Once).expect("joined, not fixed");
     for side in [a, b] {
         let (types, frozen) = fx.freeze(side);
         let TyKind::Fn { calls, holds, .. } = types.kind(frozen) else {

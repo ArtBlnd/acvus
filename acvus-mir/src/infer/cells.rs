@@ -55,13 +55,28 @@ impl<T: VarTerm> End<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Unequal;
 
+/// A join that would grow a variable past the value `eq` made it equal
+/// (D94): equality is equality, so the variable stays `fixed`, and what
+/// asked for `needs` is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Exceeds<V> {
+    pub fixed: V,
+    pub needs: V,
+}
+
+/// Each variable's term, and at the end of each chain whether `eq` made
+/// its value equal to a known one, which no join may then grow.
 pub(super) struct Cells<T: VarTerm> {
     cells: Vec<Option<T>>,
+    fixed: Vec<bool>,
 }
 
 impl<T: VarTerm> Cells<T> {
     pub(super) fn new() -> Self {
-        Self { cells: Vec::new() }
+        Self {
+            cells: Vec::new(),
+            fixed: Vec::new(),
+        }
     }
 
     /// # Panics
@@ -69,6 +84,7 @@ impl<T: VarTerm> Cells<T> {
     pub(super) fn fresh(&mut self, exhausted: &'static str) -> T::Var {
         let var = T::var_of_index(u32::try_from(self.cells.len()).expect(exhausted));
         self.cells.push(None);
+        self.fixed.push(false);
         var
     }
 
@@ -127,7 +143,8 @@ impl<T: VarTerm> Cells<T> {
     }
 
     /// Makes `a` and `b` one (types §4): an unbound variable is bound, two
-    /// variables are linked, two known values must be equal.
+    /// variables are linked, two known values must be equal. A variable
+    /// made one with a known value is fixed at it (D94).
     pub(super) fn unify(&mut self, a: &T, b: &T) -> Result<T, Unequal> {
         match (self.end(a), self.end(b)) {
             (End::Known(x), End::Known(y)) => (x == y).then(|| T::of_value(x)).ok_or(Unequal),
@@ -139,10 +156,17 @@ impl<T: VarTerm> Cells<T> {
                 }
                 let term = other.term();
                 self.cells[T::index(var)] = Some(term.clone());
+                if let End::Known(_) = other {
+                    self.fixed[T::index(var)] = true;
+                }
                 Ok(term)
             }
             (End::Var { var, value: Some(x) }, End::Known(y)) | (End::Known(y), End::Var { var, value: Some(x) }) => {
-                (x == y).then(|| T::of_var(var)).ok_or(Unequal)
+                if x != y {
+                    return Err(Unequal);
+                }
+                self.fixed[T::index(var)] = true;
+                Ok(T::of_var(var))
             }
             (End::Var { var: v, value: Some(x) }, End::Var { var: w, value: Some(y) }) => {
                 if v == w {
@@ -152,37 +176,63 @@ impl<T: VarTerm> Cells<T> {
                     return Err(Unequal);
                 }
                 self.cells[T::index(w)] = Some(T::of_var(v));
+                self.fixed[T::index(v)] |= self.fixed[T::index(w)];
                 Ok(T::of_var(v))
             }
         }
     }
 
     /// The join of `a` and `b` (types §2): a variable's value becomes the
-    /// join of what was joined into it, and two variables are linked.
-    pub(super) fn join(&mut self, a: &T, b: &T, join: impl Fn(&T::Value, &T::Value) -> T::Value) -> T {
+    /// join of what was joined into it, and two variables are linked. A
+    /// fixed variable's value does not grow (D94): a join that would grow
+    /// it is `Exceeds`, and changes nothing.
+    pub(super) fn join(
+        &mut self,
+        a: &T,
+        b: &T,
+        join: impl Fn(&T::Value, &T::Value) -> T::Value,
+    ) -> Result<T, Exceeds<T::Value>> {
         match (self.end(a), self.end(b)) {
-            (End::Known(x), End::Known(y)) => T::of_value(join(&x, &y)),
+            (End::Known(x), End::Known(y)) => Ok(T::of_value(join(&x, &y))),
             (End::Var { var, value }, End::Known(y)) | (End::Known(y), End::Var { var, value }) => {
-                let joined = match value {
-                    Some(x) => join(&x, &y),
+                let joined = match &value {
+                    Some(x) => join(x, &y),
                     None => y,
                 };
+                self.keep_fixed(var, value.as_ref(), &joined)?;
                 self.cells[T::index(var)] = Some(T::of_value(joined));
-                T::of_var(var)
+                Ok(T::of_var(var))
             }
             (End::Var { var: v, value: x }, End::Var { var: w, value: y }) => {
                 if v == w {
-                    return T::of_var(v);
+                    return Ok(T::of_var(v));
                 }
-                let joined = match (x, y) {
-                    (Some(x), Some(y)) => Some(join(&x, &y)),
-                    (Some(one), None) | (None, Some(one)) => Some(one),
+                let joined = match (&x, &y) {
+                    (Some(x), Some(y)) => Some(join(x, y)),
+                    (Some(one), None) | (None, Some(one)) => Some(one.clone()),
                     (None, None) => None,
                 };
+                if let Some(joined) = &joined {
+                    self.keep_fixed(v, x.as_ref(), joined)?;
+                    self.keep_fixed(w, y.as_ref(), joined)?;
+                }
                 self.cells[T::index(v)] = joined.map(T::of_value);
                 self.cells[T::index(w)] = Some(T::of_var(v));
-                T::of_var(v)
+                self.fixed[T::index(v)] |= self.fixed[T::index(w)];
+                Ok(T::of_var(v))
             }
+        }
+    }
+
+    /// Refuses `joined` where `var`, the end of its chain, is fixed at a
+    /// `value` it differs from.
+    fn keep_fixed(&self, var: T::Var, value: Option<&T::Value>, joined: &T::Value) -> Result<(), Exceeds<T::Value>> {
+        match value {
+            Some(fixed) if self.fixed[T::index(var)] && fixed != joined => Err(Exceeds {
+                fixed: fixed.clone(),
+                needs: joined.clone(),
+            }),
+            _ => Ok(()),
         }
     }
 }

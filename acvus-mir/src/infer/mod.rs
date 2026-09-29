@@ -26,6 +26,7 @@ use rustc_hash::FxHashSet;
 
 use cells::{Cells, End as CellEnd, MarkTerm};
 
+pub use cells::Exceeds;
 pub use closed::{Closed, OpenSources};
 pub use freeze::{FreezeMemo, Unsettled};
 pub use relate::{Entered, Mismatch};
@@ -184,15 +185,26 @@ impl Infer {
 
     /// Joins `value` into the variable `holds` (types §2): what settling a
     /// lambda's captures found they hold, seen by every copy of its type.
-    pub fn join_holds(&mut self, holds: HoldsVarId, value: Holds) {
+    /// A `holds` `eq` fixed does not grow (D94).
+    pub fn join_holds(&mut self, holds: HoldsVarId, value: Holds) -> Result<(), Exceeds<Holds>> {
         self.holds_vars
-            .join(&HoldsTerm::Var(holds), &HoldsTerm::Known(value), |a, b| a.join(*b));
+            .join(&HoldsTerm::Var(holds), &HoldsTerm::Known(value), |a, b| a.join(*b))
+            .map(drop)
     }
 
     /// Joins `value` into the variable `calls` (types §2), as `join_holds`.
-    pub fn join_calls(&mut self, calls: CallsVarId, value: Calls) {
+    pub fn join_calls(&mut self, calls: CallsVarId, value: Calls) -> Result<(), Exceeds<Calls>> {
         self.calls_vars
-            .join(&CallsTerm::Var(calls), &CallsTerm::Known(value), |a, b| a.join(*b));
+            .join(&CallsTerm::Var(calls), &CallsTerm::Known(value), |a, b| a.join(*b))
+            .map(drop)
+    }
+
+    /// Whether `a` and `b` are one effect variable, linked.
+    pub fn one_effect_variable(&self, a: &EffectTerm<InferPhase>, b: &EffectTerm<InferPhase>) -> bool {
+        match (self.effect_vars.end(a), self.effect_vars.end(b)) {
+            (CellEnd::Var { var: x, .. }, CellEnd::Var { var: y, .. }) => x == y,
+            _ => false,
+        }
     }
 
     /// `ty` with every bound variable at its root followed; a term whose

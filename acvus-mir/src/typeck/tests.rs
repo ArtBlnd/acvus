@@ -4,7 +4,7 @@
 use acvus_ast::{AstId, ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
-use super::{Adjustment, Capture, CaptureOf, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
+use super::{Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
 use crate::decl::{CastRule, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
@@ -976,6 +976,107 @@ fn a_move_lambda_holds_what_a_later_lambda_sharing_its_captures_type_holds() {
     }
 }
 
+/// `apply(f: fn(i64) -> i64) -> i64`, whose closure parameter is pure,
+/// holds nothing and is called many times, as declared.
+fn declare_apply(fx: &mut Fixture) {
+    let i64_ty = fx.int(IntTy::I64);
+    let closure = fx.pure(&[i64_ty], i64_ty);
+    let apply = fx.pure(&[closure], i64_ty);
+    fx.declare("apply", apply, &[]);
+}
+
+/// D94, ownership §5: a slot declared `holds: Nothing` is made equal to
+/// the lambda entering it, so a lambda that settles to holding `r`
+/// exclusively is refused at the lambda, naming both.
+#[test]
+fn a_mut_lambda_entering_a_slot_that_holds_nothing_is_refused() {
+    let mut fx = Fixture::new();
+    declare_apply(&mut fx);
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let (checked, script) = fx.script("let r = &mut @n; apply(|x| -> { *r = x; x })");
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a call");
+    };
+    assert_eq!(
+        checked.refusals(),
+        vec![&RefusalKind::ClosureExceedsSlot(Exceeding::Holds { needs: Holds::Mut, slot: Holds::Nothing })]
+    );
+    assert_eq!(checked.typeck.refusals[0].span, args[0].span(), "refused at the lambda");
+}
+
+/// D94, functions §3: an extern fn's closure parameter is always many, so
+/// a lambda that moves its capture out, called once, is refused there.
+#[test]
+fn a_once_lambda_passed_to_an_externs_closure_parameter_is_refused() {
+    let mut fx = Fixture::new();
+    declare_apply(&mut fx);
+    let string = fx.ty(TyKind::String);
+    fx.context("s", string);
+    let (checked, _) = fx.script("let s = @s; apply(move |x| -> { let t = s; x })");
+    assert_eq!(
+        checked.refusals(),
+        vec![&RefusalKind::ClosureExceedsSlot(Exceeding::Calls { needs: Calls::Once, slot: Calls::Many })]
+    );
+}
+
+/// D94, effects: the closure parameter is declared pure. A lambda whose
+/// body's effect is opaque already when it enters is a mismatch of the two
+/// effects there. One whose effect grows only after it entered, since its
+/// call's declaration waits on `x`'s type, which the slot decides, is
+/// refused at the lambda rather than joined past the slot.
+#[test]
+fn a_lambda_whose_effect_grows_past_a_pure_slot_is_refused() {
+    let mut fx = Fixture::new();
+    declare_apply(&mut fx);
+    let i64_ty = fx.int(IntTy::I64);
+    let bool_ty = fx.ty(TyKind::Bool);
+    let opaque = |fx: &mut Fixture, param| fx.function(&[param], param, EffectTerm::Known(crate::ty::Effect::opaque()));
+    let at_int = opaque(&mut fx, i64_ty);
+    let at_bool = opaque(&mut fx, bool_ty);
+    fx.overload("ints", "touch", at_int);
+    fx.overload("bools", "touch", at_bool);
+    let (checked, script) = fx.script("apply(|x| -> touch(x))");
+    let Some(Expr::FuncCall { args, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a call");
+    };
+    assert_eq!(
+        checked.refusals(),
+        vec![&RefusalKind::ClosureExceedsSlot(Exceeding::Effect {
+            needs: crate::ty::Effect::opaque(),
+            slot: crate::ty::Effect::pure()
+        })]
+    );
+    assert_eq!(checked.typeck.refusals[0].span, args[0].span(), "refused at the lambda");
+}
+
+/// D94, effects: a lambda whose effect is known to exceed the slot when it
+/// enters is refused by the relation itself, as two unequal effects.
+#[test]
+fn a_lambda_whose_effect_exceeds_a_pure_slot_on_entering_is_a_mismatch() {
+    let mut fx = Fixture::new();
+    declare_apply(&mut fx);
+    let i64_ty = fx.int(IntTy::I64);
+    let opaque = fx.function(&[i64_ty], i64_ty, EffectTerm::Known(crate::ty::Effect::opaque()));
+    fx.declare("touch", opaque, &[]);
+    let (checked, _) = fx.script("apply(|x| -> touch(x))");
+    assert!(
+        matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]),
+        "{:?}",
+        checked.refusals()
+    );
+}
+
+/// D94: a lambda within what its slot states is admitted: a pure lambda
+/// that captures nothing and copies what it reads.
+#[test]
+fn a_lambda_within_its_slot_is_admitted() {
+    let mut fx = Fixture::new();
+    declare_apply(&mut fx);
+    let (checked, _) = fx.script("apply(|x| -> x + 1)");
+    checked.admitted();
+}
+
 /// types §5, D93: a function type no lambda claims and nothing decides
 /// holds no loan and may be called many times: here, the parameter a
 /// lambda only calls.
@@ -1815,3 +1916,4 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
     assert!(!called.is_empty(), "`g` is a function value");
     assert!(called.iter().all(|flows| *flows == FlowTerm::Known(Flows::Every)), "{called:?}");
 }
+

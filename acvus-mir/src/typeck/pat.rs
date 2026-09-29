@@ -109,7 +109,7 @@ fn shape_level<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>) -> Shape {
             Some(context) => {
                 super::context::refuse_held_loans(cx, context, *span);
                 cx.out.names.insert(*id, Name::Context(*name));
-                super::context::note_access(cx, *name, super::context::Access::Write);
+                super::context::note_access(cx, *name, super::context::Access::Write, *span);
                 let body = super::effect::body_effect(cx);
                 Form::Context { context, body }
             }

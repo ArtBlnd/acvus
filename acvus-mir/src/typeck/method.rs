@@ -167,7 +167,7 @@ pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, r
         Adjustment::Ref(mutability) => cx.lend(term, mutability, span),
     };
     if let Some(place) = place {
-        lends(cx, &place, adjustment, term, &body, reading);
+        lends(cx, &place, adjustment, term, &body, reading, span);
     }
     let mut all = vec![(receiver_site, lent)];
     all.extend(args);
@@ -232,7 +232,15 @@ fn mut_lent_head(head: Head) -> Option<Head> {
 /// What the adjustment makes of the receiver's place: as written, a whole
 /// use; lent `&mut`, a capture by `&mut`, a context read and written, and
 /// every index on the way through `as_slice_mut`.
-fn lends(cx: &mut Ctxt<'_>, place: &ReceiverPlace, adjustment: Adjustment, term: Term, body: &EffectTerm<InferPhase>, reading: Reading) {
+fn lends(
+    cx: &mut Ctxt<'_>,
+    place: &ReceiverPlace,
+    adjustment: Adjustment,
+    term: Term,
+    body: &EffectTerm<InferPhase>,
+    reading: Reading,
+    span: Span,
+) {
     match adjustment {
         Adjustment::AsWritten => {
             if let Root::Name { moving, .. } = &place.root
@@ -253,7 +261,7 @@ fn lends(cx: &mut Ctxt<'_>, place: &ReceiverPlace, adjustment: Adjustment, term:
                 Root::Context(context) => {
                     let touched = Contexts::from([*context]);
                     let effect = Effect::new(Reissue::Opaque, false, touched.clone(), touched, SplitCost::Unavailable);
-                    cx.infer.join_effects(body, &EffectTerm::Known(effect));
+                    super::effect::join_into(cx, body, &EffectTerm::Known(effect), span);
                 }
             }
             for index in &place.indexes {

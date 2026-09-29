@@ -24,9 +24,9 @@ use super::ctxt::Ctxt;
 use super::expr::check_expr;
 use super::output::{Capture, Captured, Closure, Lambda, WholeUse};
 use super::place::Demand;
-use super::refusal::{self, RefusalKind};
+use super::refusal::{self, Exceeding, RefusalKind};
 use super::scope::Binding;
-use crate::infer::Term;
+use crate::infer::{Exceeds, Term};
 use crate::ty::{
     Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Holds, HoldsTerm, HoldsVarId, LifetimesOf, Mutability, ObjectTy, TyKind,
 };
@@ -39,6 +39,7 @@ pub(super) fn check_lambda<S: Slot>(
     captures_by_move: bool,
     params: &[Binder],
     body: &Expr<S>,
+    span: Span,
 ) -> Term {
     cx.out.closures.insert(
         site,
@@ -73,9 +74,11 @@ pub(super) fn check_lambda<S: Slot>(
     let calls = cx.infer.fresh_calls();
     cx.out.lambdas.push(Lambda {
         site,
+        span,
         by_move: captures_by_move,
         holds,
         calls,
+        effect: effect.clone(),
     });
     let flows = FlowTerm::Var(cx.infer.fresh_flow());
     cx.held(TyKind::Fn {
@@ -94,7 +97,8 @@ pub(super) fn check_lambda<S: Slot>(
 /// or lends it `&mut`, and by `&` else. What the captures hold, and whether
 /// the lambda moves a captured value out and is called once, join the
 /// lambda's own `holds` and `calls` variables, which every copy of its
-/// type shares.
+/// type shares. Where a slot the lambda entered made one of them equal to
+/// a stated value, a join past it is refused at the lambda (D94).
 ///
 /// A `move` lambda holds what the values it moved in hold, and one of those
 /// may be a function value whose own lambda settles later, as when a
@@ -143,7 +147,10 @@ pub(super) fn settle_captures(cx: &mut Ctxt<'_>) {
                 true => Calls::Once,
                 false => Calls::Many,
             };
-            cx.infer.join_calls(lambda.calls, calls);
+            if let Err(Exceeds { fixed, needs }) = cx.infer.join_calls(lambda.calls, calls) {
+                let exceeding = Exceeding::Calls { needs, slot: fixed };
+                refusal::push(cx, RefusalKind::ClosureExceedsSlot(exceeding), lambda.span);
+            }
             let by_reference = captures
                 .iter()
                 .map(|captured| match captured.capture {
@@ -154,6 +161,8 @@ pub(super) fn settle_captures(cx: &mut Ctxt<'_>) {
                 .fold(Holds::Nothing, Holds::join);
             holding.push(Holding {
                 holds: lambda.holds,
+                span: lambda.span,
+                refused: false,
                 by_reference,
                 moved_terms,
             });
@@ -172,7 +181,7 @@ pub(super) fn settle_captures(cx: &mut Ctxt<'_>) {
     loop {
         let mut changed = false;
         let mut read_unsettled = false;
-        for lambda in &holding {
+        for lambda in holding.iter_mut().filter(|lambda| !lambda.refused) {
             let mut holds = lambda.by_reference;
             for term in &lambda.moved_terms {
                 let loan = strongest_loan(cx, *term);
@@ -180,7 +189,12 @@ pub(super) fn settle_captures(cx: &mut Ctxt<'_>) {
                 holds = holds.join(loan.known);
             }
             let before = cx.infer.holds(HoldsTerm::Var(lambda.holds));
-            cx.infer.join_holds(lambda.holds, holds);
+            if let Err(Exceeds { fixed, needs }) = cx.infer.join_holds(lambda.holds, holds) {
+                let exceeding = Exceeding::Holds { needs, slot: fixed };
+                refusal::push(cx, RefusalKind::ClosureExceedsSlot(exceeding), lambda.span);
+                lambda.refused = true;
+                continue;
+            }
             changed |= cx.infer.holds(HoldsTerm::Var(lambda.holds)) != before;
         }
         if !changed {
@@ -194,9 +208,12 @@ pub(super) fn settle_captures(cx: &mut Ctxt<'_>) {
 }
 
 /// A lambda whose captures are known, and what they hold but for the loans
-/// of the values it moved in.
+/// of the values it moved in; `refused` once its `holds` would grow past
+/// what a slot fixed (D94), which is refused once.
 struct Holding {
     holds: HoldsVarId,
+    span: Span,
+    refused: bool,
     by_reference: Holds,
     moved_terms: Vec<Term>,
 }

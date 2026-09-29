@@ -1097,7 +1097,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
                 cx.enter_in(effect.clone(), *arg_site, *arg, *param, span);
             }
             cx.eq(result, ret, span);
-            cx.infer.join_effects(&effect, &declared_effect);
+            super::effect::join_into(cx, &effect, &declared_effect, span);
             cx.out.reached.insert(site, chosen);
             cx.out.callees.insert(site, ty);
         }
@@ -1164,7 +1164,7 @@ pub(super) fn reach_step(cx: &mut Ctxt<'_>, step: Step<'_>, from: Term, to: Term
     };
     cx.eq(*param, from, span);
     cx.eq(ret, to, span);
-    cx.infer.join_effects(body, &effect);
+    super::effect::join_into(cx, body, &effect, span);
     cx.out.reached.insert(
         node,
         Chosen {

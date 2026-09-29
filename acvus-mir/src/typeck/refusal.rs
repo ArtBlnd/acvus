@@ -7,7 +7,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::ctxt::Ctxt;
 use crate::infer::Mismatch;
-use crate::ty::CastTy;
+use crate::ty::{Calls, CastTy, Effect, Holds};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Refusal {
@@ -45,6 +45,11 @@ pub enum RefusalKind {
     UnknownCastTarget { name: Astr },
     // B: two types that do not relate.
     Mismatch(Mismatch),
+    /// A lambda needs more of its function type than a type it was made
+    /// equal to states (D94): it holds a stronger loan (ownership §5), is
+    /// called once where many calls are stated (functions §3), or has a
+    /// larger effect (effects).
+    ClosureExceedsSlot(Exceeding),
     NoConversion,
     /// `for` over a value that is no reference to a container, array or
     /// range (control-flow).
@@ -80,6 +85,15 @@ pub enum RefusalKind {
     Undecided,
     /// A bounded variable no use answered (types §5).
     BoundUnanswered,
+}
+
+/// What a lambda needs of its function type, and what the slot it was made
+/// equal to states.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Exceeding {
+    Holds { needs: Holds, slot: Holds },
+    Calls { needs: Calls, slot: Calls },
+    Effect { needs: Effect, slot: Effect },
 }
 
 /// The one way a refusal is made (S4).

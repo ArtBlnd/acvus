@@ -127,15 +127,18 @@ pub(super) struct WholeUse {
     pub term: Term,
 }
 
-/// A lambda checked: whether it is written `move`, and the variables its
+/// A lambda checked: whether it is written `move`, the variables its
 /// function type's `holds` and `calls` are, which settling its captures
-/// binds (functions §2-3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// binds (functions §2-3), and its effect, where a refusal of what it
+/// needs is made at its span (D94).
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct Lambda {
     pub site: AstId,
+    pub span: Span,
     pub by_move: bool,
     pub holds: HoldsVarId,
     pub calls: CallsVarId,
+    pub effect: EffectTerm<InferPhase>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

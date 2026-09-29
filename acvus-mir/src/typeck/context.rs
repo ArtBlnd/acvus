@@ -37,7 +37,7 @@ pub(super) fn check_context_ref(cx: &mut Ctxt<'_>, site: AstId, context: Qualifi
     match context_term(cx, site, context, span) {
         Some(term) => {
             cx.out.names.insert(site, Name::Context(context));
-            note_access(cx, context, Access::of(demand));
+            note_access(cx, context, Access::of(demand), span);
             term
         }
         None => cx.fresh(),
@@ -50,7 +50,7 @@ pub(super) fn check_context_ref(cx: &mut Ctxt<'_>, site: AstId, context: Qualifi
 /// commit does beyond the program is unknown to the language, as a
 /// syscall's is (context §3), so it is opaque, which is always sound
 /// (extern-fn §2).
-pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Access) {
+pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Access, span: Span) {
     let touched = Contexts::from([context]);
     let (reads, writes) = match access {
         Access::Read => (touched, Contexts::new()),
@@ -58,7 +58,7 @@ pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Acce
         Access::ReadWrite => (touched.clone(), touched),
     };
     let effect = Effect::new(Reissue::Opaque, false, reads, writes, SplitCost::Unavailable);
-    super::effect::note_call_effect(cx, &EffectTerm::Known(effect));
+    super::effect::note_call_effect(cx, &EffectTerm::Known(effect), span);
 }
 
 /// A context's declared type at this body, every node `Opaque`, so it never

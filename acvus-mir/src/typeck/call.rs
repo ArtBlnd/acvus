@@ -101,7 +101,7 @@ fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> 
     for ((arg, (site, value)), param) in args.iter().zip(values).zip(params) {
         cx.enter(site, value, param, arg.span());
     }
-    note_call_effect(cx, &effect);
+    note_call_effect(cx, &effect, func.span());
     ret
 }
 
@@ -112,7 +112,7 @@ fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> 
 pub(super) fn reach_call(cx: &mut Ctxt<'_>, site: AstId, callee: Callee, args: Vec<(AstId, Term)>, span: Span) -> Term {
     let result = cx.fresh();
     let effect = EffectTerm::Var(cx.infer.fresh_effect());
-    note_call_effect(cx, &effect);
+    note_call_effect(cx, &effect, span);
     cx.decisions.push(Decision::Reach {
         site,
         span,
@@ -137,7 +137,7 @@ pub(super) fn reach_in(
 ) -> Term {
     let result = cx.fresh();
     let effect = EffectTerm::Var(cx.infer.fresh_effect());
-    cx.infer.join_effects(body, &effect);
+    super::effect::join_into(cx, body, &effect, span);
     cx.decisions.push(Decision::Reach {
         site,
         span,

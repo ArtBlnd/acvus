@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::cells::{End as CellEnd, MarkTerm, Unequal};
+use super::cells::{End as CellEnd, Exceeds, MarkTerm, Unequal};
 use super::{End, Infer, Mark, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
@@ -308,12 +308,13 @@ impl Infer {
         Ok(at)
     }
 
-    /// The join of two effects (types §2).
+    /// The join of two effects (types §2). An effect `eq` fixed does not
+    /// grow (D94).
     pub fn join_effects(
         &mut self,
         a: &EffectTerm<InferPhase>,
         b: &EffectTerm<InferPhase>,
-    ) -> EffectTerm<InferPhase> {
+    ) -> Result<EffectTerm<InferPhase>, Exceeds<Effect>> {
         self.effect_vars.join(a, b, Effect::join)
     }
 
@@ -557,10 +558,10 @@ impl Infer {
                         self.holds_vars.unify(&holds_a, &holds_b).map_err(|Unequal| heads)?,
                     ),
                     Relation::Join => (
-                        self.join_effects(&effect_a, &effect_b),
-                        self.flow_vars.join(&flows_a, &flows_b, Flows::join),
-                        self.calls_vars.join(&calls_a, &calls_b, |a, b| a.join(*b)),
-                        self.holds_vars.join(&holds_a, &holds_b, |a, b| a.join(*b)),
+                        self.join_effects(&effect_a, &effect_b).map_err(|_| heads.clone())?,
+                        self.flow_vars.join(&flows_a, &flows_b, Flows::join).map_err(|_| heads.clone())?,
+                        self.calls_vars.join(&calls_a, &calls_b, |a, b| a.join(*b)).map_err(|_| heads.clone())?,
+                        self.holds_vars.join(&holds_a, &holds_b, |a, b| a.join(*b)).map_err(|_| heads)?,
                     ),
                 };
                 TyKind::Fn {
