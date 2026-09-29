@@ -48,16 +48,21 @@ pub enum Laws {
 /// impl stating it resolves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NamedLaw {
-    /// `law::Equivalence`: a `core::eq` impl stating `law(equivalence)`
-    /// (RFC-0082 rule 11).
+    /// `law::Equivalence`: a `core::eq` impl declared an equivalence
+    /// (`Access::Equivalence`).
     Equivalence,
+    /// `law::TotalOrder`: a `core::cmp` impl declared a total order
+    /// (`Action::TotalOrder`).
+    TotalOrder,
 }
 
 impl NamedLaw {
-    /// Whether an impl declaring `laws` states this law.
-    pub fn stated_by(self, laws: &Laws) -> bool {
+    /// Whether an impl declaring `facts` states this law, by the declared
+    /// fact of its kind (D82; extern-fn §3).
+    pub fn stated_by(self, facts: &crate::decl::DeclaredFacts) -> bool {
         match self {
-            NamedLaw::Equivalence => matches!(laws, Laws::Equivalence),
+            NamedLaw::Equivalence => facts.access.iter().any(|access| matches!(access, crate::decl::declared::Access::Equivalence)),
+            NamedLaw::TotalOrder => facts.action.iter().any(|action| matches!(action, crate::decl::declared::Action::TotalOrder)),
         }
     }
 
@@ -65,6 +70,7 @@ impl NamedLaw {
     pub fn written(self) -> &'static str {
         match self {
             NamedLaw::Equivalence => "law::Equivalence",
+            NamedLaw::TotalOrder => "law::TotalOrder",
         }
     }
 }

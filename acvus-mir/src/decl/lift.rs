@@ -5,7 +5,7 @@
 
 use super::facts::NamedLaw;
 use super::scheme::Scheme;
-use crate::ty::{Mutability, Poly, TyId, TyKind, Types};
+use crate::ty::{IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// A generic function's impl at a transparent structured type, where one
 /// follows from the impls at its parts.
@@ -64,6 +64,10 @@ pub(super) fn lift_of(types: &Types<Poly>, scheme: &Scheme) -> Option<Lift> {
         TyKind::Var(var) if *var == VAR => Some(Lift::Rebuild(shape)),
         TyKind::Bool if *shape.params == [Taking::Ref(Mutability::Shared); 2] => {
             Some(Lift::Combine { shape, law: NamedLaw::Equivalence })
+        }
+        // The lexicographic combination of total orders is a total order.
+        TyKind::Int(IntTy::I64) if *shape.params == [Taking::Ref(Mutability::Shared); 2] => {
+            Some(Lift::Combine { shape, law: NamedLaw::TotalOrder })
         }
         _ => None,
     }
