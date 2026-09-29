@@ -17,13 +17,14 @@ mod scheme;
 mod tests;
 
 use crate::ty::{
-    EffectTerm, EffectVarId, FlowTerm, FlowVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm,
-    LenVarId, ReprVarId, TyId, TyKind, TyVarId, Types,
+    Calls, CallsTerm, CallsVarId, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Holds, HoldsTerm, HoldsVarId,
+    IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, ReprVarId, TyId, TyKind, TyVarId,
+    Types,
 };
 
 use rustc_hash::FxHashSet;
 
-use cells::{Cells, MarkTerm};
+use cells::{Cells, End as CellEnd, MarkTerm};
 
 pub use closed::{Closed, OpenSources};
 pub use freeze::{FreezeMemo, Unsettled};
@@ -70,6 +71,8 @@ pub struct Infer {
     identity_vars: Cells<IdentityTerm<InferPhase>>,
     repr_vars: Cells<MarkTerm>,
     flow_vars: Cells<FlowTerm<InferPhase>>,
+    holds_vars: Cells<HoldsTerm>,
+    calls_vars: Cells<CallsTerm>,
 }
 
 /// Where a term's chain of bound variables ends: at an unbound variable,
@@ -91,6 +94,8 @@ impl Infer {
             identity_vars: Cells::new(),
             repr_vars: Cells::new(),
             flow_vars: Cells::new(),
+            holds_vars: Cells::new(),
+            calls_vars: Cells::new(),
         }
     }
 
@@ -151,6 +156,45 @@ impl Infer {
         self.flow_vars.fresh("Infer::fresh_flow: u32::MAX variables")
     }
 
+    pub fn fresh_holds(&mut self) -> HoldsVarId {
+        self.holds_vars.fresh("Infer::fresh_holds: u32::MAX variables")
+    }
+
+    pub fn fresh_calls(&mut self) -> CallsVarId {
+        self.calls_vars.fresh("Infer::fresh_calls: u32::MAX variables")
+    }
+
+    /// What `holds` is known to be so far; `None` while nothing has
+    /// decided it.
+    pub fn holds(&self, holds: HoldsTerm) -> Option<Holds> {
+        match self.holds_vars.end(&holds) {
+            CellEnd::Known(value) | CellEnd::Var { value: Some(value), .. } => Some(value),
+            CellEnd::Var { value: None, .. } => None,
+        }
+    }
+
+    /// What `calls` is known to be so far; `None` while nothing has
+    /// decided it.
+    pub fn calls(&self, calls: CallsTerm) -> Option<Calls> {
+        match self.calls_vars.end(&calls) {
+            CellEnd::Known(value) | CellEnd::Var { value: Some(value), .. } => Some(value),
+            CellEnd::Var { value: None, .. } => None,
+        }
+    }
+
+    /// Joins `value` into the variable `holds` (types §2): what settling a
+    /// lambda's captures found they hold, seen by every copy of its type.
+    pub fn join_holds(&mut self, holds: HoldsVarId, value: Holds) {
+        self.holds_vars
+            .join(&HoldsTerm::Var(holds), &HoldsTerm::Known(value), |a, b| a.join(*b));
+    }
+
+    /// Joins `value` into the variable `calls` (types §2), as `join_holds`.
+    pub fn join_calls(&mut self, calls: CallsVarId, value: Calls) {
+        self.calls_vars
+            .join(&CallsTerm::Var(calls), &CallsTerm::Known(value), |a, b| a.join(*b));
+    }
+
     /// `ty` with every bound variable at its root followed; a term whose
     /// root is an unbound variable is that variable.
     pub fn shallow(&self, ty: Term) -> Term {
@@ -195,6 +239,25 @@ impl Infer {
     pub(crate) fn default_unclaimed_flows(&mut self, claimed: &[FlowTerm<InferPhase>]) -> bool {
         let kept: Vec<FlowVarId> = claimed.iter().filter_map(|flows| self.flow_vars.unbound_end(flows)).collect();
         self.flow_vars.default_unbound_but(&crate::ty::Flows::Every, &kept)
+    }
+
+    /// types §5: a function value's loans nothing decides are none, and how
+    /// often it may be called is many. Every such variable still open takes
+    /// it, but those of `lambdas`, which settling a lambda's captures binds
+    /// (functions §2-3); whether any did. Solving calls this only at a
+    /// stall.
+    pub(crate) fn default_unsettled_holds_and_calls(&mut self, lambdas: &[(HoldsVarId, CallsVarId)]) -> bool {
+        let kept_holds: Vec<HoldsVarId> = lambdas
+            .iter()
+            .filter_map(|(holds, _)| self.holds_vars.unbound_end(&HoldsTerm::Var(*holds)))
+            .collect();
+        let kept_calls: Vec<CallsVarId> = lambdas
+            .iter()
+            .filter_map(|(_, calls)| self.calls_vars.unbound_end(&CallsTerm::Var(*calls)))
+            .collect();
+        let holds = self.holds_vars.default_unbound_but(&Holds::Nothing, &kept_holds);
+        let calls = self.calls_vars.default_unbound_but(&Calls::Many, &kept_calls);
+        holds || calls
     }
 
     /// The unbound variables, with their bounds: what defaults read at a

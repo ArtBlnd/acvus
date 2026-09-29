@@ -24,7 +24,7 @@ pub use arg::{EffectArg, IdentityId, IdentityTerm, LenTerm, TypeArg};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
 pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Source};
 pub use facts::{LifetimesOf, PositionKind, copies, for_each_position, position_kinds, positions};
-pub use kind::{Calls, Holds, Mutability, ObjectTy, TyKind};
+pub use kind::{Calls, CallsTerm, Holds, HoldsTerm, Mutability, ObjectTy, TyKind};
 pub use num::{CastTy, IntTy, WordTy};
 
 /// Which variables a type of a phase may hold.
@@ -36,6 +36,11 @@ pub trait Phase: 'static + Copy + fmt::Debug + Eq + Hash {
     /// The open `#` of an argument whose mark is not decided yet (types §8).
     type ReprVar: fmt::Debug + Copy + Eq + Hash;
     type FlowVar: fmt::Debug + Copy + Eq + Hash;
+    /// What a function type's `holds` is in this phase: a fixed `Holds`,
+    /// or, while solving, a term that copies of one type share.
+    type HoldsTerm: fmt::Debug + Copy + Eq + Hash;
+    /// What a function type's `calls` is in this phase, as `HoldsTerm`.
+    type CallsTerm: fmt::Debug + Copy + Eq + Hash;
     /// Whether a structural object or enum may grow (types §1): fixed where
     /// the node is born, and part of its identity. Only solving asks it.
     type Label: fmt::Debug + Copy + Eq + Hash;
@@ -52,6 +57,8 @@ impl Phase for Concrete {
     type IdentityVar = Infallible;
     type ReprVar = Infallible;
     type FlowVar = Infallible;
+    type HoldsTerm = Holds;
+    type CallsTerm = Calls;
     type Label = ();
 }
 
@@ -66,6 +73,8 @@ impl Phase for Poly {
     type IdentityVar = u32;
     type ReprVar = u32;
     type FlowVar = Infallible;
+    type HoldsTerm = Holds;
+    type CallsTerm = Calls;
     type Label = ();
 }
 
@@ -80,6 +89,8 @@ impl Phase for Infer {
     type IdentityVar = IdentityVarId;
     type ReprVar = ReprVarId;
     type FlowVar = FlowVarId;
+    type HoldsTerm = HoldsTerm;
+    type CallsTerm = CallsTerm;
     type Label = crate::ty::Label;
 }
 
@@ -103,6 +114,10 @@ pub struct IdentityVarId(pub u32);
 pub struct ReprVarId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FlowVarId(pub u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HoldsVarId(pub u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CallsVarId(pub u32);
 
 static NEXT_TABLE: AtomicU32 = AtomicU32::new(1);
 

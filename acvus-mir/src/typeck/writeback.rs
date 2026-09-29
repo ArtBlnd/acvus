@@ -9,7 +9,7 @@ use super::output::{Closure, Comparing, Comparison, Conversion, Entered, Typeck}
 use crate::decl::{Base, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, Term, Unsettled};
 use crate::ty::{
-    Alignment, Calls, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, Infer as InferPhase,
+    Alignment, Calls, CallsTerm, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, Infer as InferPhase,
     Mutability, Ty, TyKind, Types,
 };
 
@@ -83,8 +83,9 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
 ///
 /// # Panics
 /// A variable is open and no refusal was made: solving binds every type
-/// variable and, at its last stall, every effect, mark and flow set no
-/// lambda claims (types §5); each lambda's claim sets its own; and every
+/// variable and, at its last stall, every effect, mark, flow set, holds
+/// and calls no lambda claims (types §5); each lambda's claim sets its own
+/// flows, and settling its captures its own holds and calls; and every
 /// length and identity is fixed by the term that made it.
 fn freeze(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, term: Term) -> Option<Ty> {
     match cx.infer.freeze(types, memo, term) {
@@ -129,8 +130,8 @@ fn probe(cx: &mut Ctxt<'_>, effect: EffectTerm<InferPhase>, flows: FlowTerm<Infe
         ret,
         effect,
         flows,
-        calls: Calls::Many,
-        holds: Holds::Nothing,
+        calls: CallsTerm::Known(Calls::Many),
+        holds: HoldsTerm::Known(Holds::Nothing),
     })
 }
 
@@ -199,6 +200,13 @@ fn claim_flows(cx: &mut Ctxt<'_>, lambda: Term) {
     if result.any {
         outputs.push(FlowEnd::Result);
     }
+    let Some(holds) = cx.infer.holds(holds) else {
+        assert!(
+            !cx.out.refusals.is_empty(),
+            "settling binds every lambda's holds, unless a refusal left its captures' types open"
+        );
+        return;
+    };
     if holds != Holds::Nothing {
         inputs.push(FlowEnd::Captures);
     }
@@ -225,7 +233,7 @@ struct Held {
 }
 
 /// `None` where the term holds a variable still open, which a refusal
-/// left.
+/// left: a type variable, or a function type's `holds` no settling bound.
 fn positions(cx: &Ctxt<'_>, term: Term) -> Option<Held> {
     let mut held = Held {
         any: false,
@@ -247,7 +255,7 @@ fn positions(cx: &Ctxt<'_>, term: Term) -> Option<Held> {
             }
             TyKind::Fn { holds, .. } => {
                 held.any = true;
-                held.exclusive |= *holds == Holds::Mut;
+                held.exclusive |= cx.infer.holds(*holds)? == Holds::Mut;
             }
             TyKind::UserDefined { id, type_args, .. } => {
                 held.any |= crate::ty::LifetimesOf::lifetimes_of(cx.decls, *id) > 0;

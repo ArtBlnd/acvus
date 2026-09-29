@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use super::{Bound, Infer, Term};
 use crate::decl::{Declarations, NamedLaw, Scheme, TyVarBound};
 use crate::ty::{
-    EffectArg, EffectTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
+    CallsTerm, EffectArg, EffectTerm, HoldsTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
     LenVarId, ObjectTy, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
 };
 
@@ -183,8 +183,8 @@ impl Infer {
                 ret: self.instantiate_ty(at, *ret),
                 effect: self.effect_at(at, effect),
                 flows: FlowTerm::Known(flows.get().clone()),
-                calls: *calls,
-                holds: *holds,
+                calls: CallsTerm::Known(*calls),
+                holds: HoldsTerm::Known(*holds),
             },
             TyKind::UserDefined {
                 id,

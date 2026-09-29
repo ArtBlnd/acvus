@@ -17,7 +17,7 @@ use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::{
-    Calls, Effect, EffectArg, EffectTerm, Flows, Holds, IdentityTerm, Infer as InferPhase, Label, ObjectTy,
+    Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, ObjectTy,
     TyKind, TyVarId, TypeArg,
 };
 
@@ -553,14 +553,14 @@ impl Infer {
                     Relation::Eq => (
                         self.effect_vars.unify(&effect_a, &effect_b).map_err(|Unequal| heads.clone())?,
                         self.flow_vars.unify(&flows_a, &flows_b).map_err(|Unequal| heads.clone())?,
-                        Self::same(calls_a, calls_b).ok_or(heads.clone())?,
-                        Self::same(holds_a, holds_b).ok_or(heads)?,
+                        self.calls_vars.unify(&calls_a, &calls_b).map_err(|Unequal| heads.clone())?,
+                        self.holds_vars.unify(&holds_a, &holds_b).map_err(|Unequal| heads)?,
                     ),
                     Relation::Join => (
                         self.join_effects(&effect_a, &effect_b),
                         self.flow_vars.join(&flows_a, &flows_b, Flows::join),
-                        Calls::join(calls_a, calls_b),
-                        Holds::join(holds_a, holds_b),
+                        self.calls_vars.join(&calls_a, &calls_b, |a, b| a.join(*b)),
+                        self.holds_vars.join(&holds_a, &holds_b, |a, b| a.join(*b)),
                     ),
                 };
                 TyKind::Fn {
@@ -627,10 +627,6 @@ impl Infer {
             _ => return Err(heads),
         };
         Ok(self.intern(kind))
-    }
-
-    fn same<T: PartialEq>(a: T, b: T) -> Option<T> {
-        (a == b).then_some(a)
     }
 
     fn relate_objects(

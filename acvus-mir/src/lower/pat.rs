@@ -27,12 +27,12 @@ use crate::ir::{BinOp, IndexBound, IndexMode, Overflow, PathSeg, RefTarget, Swit
 use crate::ty::{Mutability, Ty, TyKind};
 
 /// What a pattern is matched against: a reference value; a place the match
-/// holds, its scrutinee's slot or a part of it; or, past a reference, a
-/// place under it, lent at `lent`.
+/// holds, its scrutinee's slot or a part of it, with the slot's type; or,
+/// past a reference, a place under it, lent at `lent`.
 #[derive(Debug, Clone)]
 pub(super) enum Matched {
     Value { value: ValueId, ty: Ty },
-    Held { place: Place },
+    Held { place: Place, slot_ty: Ty },
     Place { place: Place, lent: Mutability },
 }
 
@@ -68,13 +68,13 @@ impl Matched {
         let slot = cx.builder.slot(ty, span);
         let place = Place { target: RefTarget::Var(slot), path: Vec::new(), ty };
         assign(cx, place.clone(), value, span);
-        Matched::Held { place }
+        Matched::Held { place, slot_ty: ty }
     }
 
     fn ty(&self) -> Ty {
         match self {
             Matched::Value { ty, .. } => *ty,
-            Matched::Held { place } | Matched::Place { place, .. } => place.ty,
+            Matched::Held { place, .. } | Matched::Place { place, .. } => place.ty,
         }
     }
 }
@@ -89,7 +89,7 @@ fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Matched {
     let (held, target) = (*held, target.ty());
     let (reference, lent) = match matched {
         Matched::Value { value, .. } => (*value, held),
-        Matched::Held { place } => (read(cx, Operand::Place(place.clone()), span), held),
+        Matched::Held { place, slot_ty } => (held_reference(cx, place, *slot_ty, held, span), held),
         Matched::Place { place, lent } => {
             let reference = read(cx, Operand::Place(place.clone()), span);
             let lent = match (lent, held) {
@@ -100,6 +100,22 @@ fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Matched {
         }
     };
     Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty: target }, lent }
+}
+
+/// The reference a held part is, read without moving it out of the slot. A
+/// `&` copies, so it is read as it is. A `&mut` does not copy, and each use
+/// reborrows it (ownership §5): it is read through a `&mut` to the slot, so
+/// the slot keeps it and the drop plan sees no part of the slot move.
+fn held_reference(cx: &mut Lcx<'_, '_>, place: &Place, slot_ty: Ty, held: Mutability, span: Span) -> ValueId {
+    match held {
+        Mutability::Shared => read(cx, Operand::Place(place.clone()), span),
+        Mutability::Mut => {
+            let slot = Place { target: place.target, path: Vec::new(), ty: slot_ty };
+            let lent = lend(cx, Operand::Place(slot), Mutability::Mut, span);
+            let op = Op::Take { target: RefTarget::Through(lent), path: place.path.clone(), taken_out: false };
+            cx.builder.push(op, place.ty, span)
+        }
+    }
 }
 
 fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Matched {
@@ -114,7 +130,7 @@ fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Matc
             };
             Matched::Value { value: cx.builder.push(op, ty, span), ty }
         }
-        Matched::Held { place } => Matched::Held { place: place.with(segment(part), ty) },
+        Matched::Held { place, slot_ty } => Matched::Held { place: place.with(segment(part), ty), slot_ty: *slot_ty },
         Matched::Place { place, lent } => Matched::Place { place: place.with(segment(part), ty), lent: *lent },
     }
 }
@@ -351,7 +367,7 @@ fn list_elements<'p, S: Slot>(
 pub(super) fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> ValueId {
     match matched {
         Matched::Value { value, .. } => *value,
-        Matched::Held { place } | Matched::Place { place, .. } => {
+        Matched::Held { place, .. } | Matched::Place { place, .. } => {
             let ty = cx.ref_ty(Mutability::Shared, place.ty);
             let op = Op::Ref { target: place.target, path: place.path.clone(), mutability: Mutability::Shared };
             cx.builder.push(op, ty, span)
@@ -377,7 +393,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::ContextBind { id, name, .. } => {
             let value = match matched {
                 Matched::Value { value, .. } => *value,
-                Matched::Held { place } => read(cx, Operand::Place(place.clone()), span),
+                Matched::Held { place, .. } => read(cx, Operand::Place(place.clone()), span),
                 Matched::Place { .. } => {
                     panic!("a name bound past a reference is a reference, which typeck refuses to store into a context")
                 }
@@ -428,7 +444,7 @@ fn bound(cx: &mut Lcx<'_, '_>, matched: &Matched, ty: Ty, span: Span) -> ValueId
             assert_eq!(*held, ty, "a name bound to a value has the value's type");
             *value
         }
-        Matched::Held { place } => {
+        Matched::Held { place, .. } => {
             assert_eq!(place.ty, ty, "a name bound to a held part has the part's type");
             read(cx, Operand::Place(place.clone()), span)
         }

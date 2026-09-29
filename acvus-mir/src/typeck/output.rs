@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use super::refusal::Refusal;
 use crate::infer::Term;
-use crate::ty::{CastTy, Calls, Effect, EffectTerm, Infer as InferPhase, Mutability, Ty};
+use crate::ty::{CallsVarId, CastTy, Calls, Effect, EffectTerm, HoldsVarId, Infer as InferPhase, Mutability, Ty};
 
 /// What a name at a site is (types §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +127,17 @@ pub(super) struct WholeUse {
     pub term: Term,
 }
 
+/// A lambda checked: whether it is written `move`, and the variables its
+/// function type's `holds` and `calls` are, which settling its captures
+/// binds (functions §2-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Lambda {
+    pub site: AstId,
+    pub by_move: bool,
+    pub holds: HoldsVarId,
+    pub calls: CallsVarId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
     pub captures: Box<[Captured]>,
@@ -190,9 +201,8 @@ pub(super) struct Output {
     pub entered: Vec<Entered>,
     pub casts: FxHashMap<AstId, AsCast>,
     pub closures: FxHashMap<AstId, Closure>,
-    /// Each lambda, in the order its body's check ended, with whether it is
-    /// written `move` and its body's span.
-    pub lambdas: Vec<(AstId, bool, Span)>,
+    /// Each lambda, in the order its body's check ended.
+    pub lambdas: Vec<Lambda>,
     pub capture_uses: Vec<CaptureUse>,
     pub whole_uses: Vec<WholeUse>,
     /// Each method call's receiver adjustment, at the call's callee site.

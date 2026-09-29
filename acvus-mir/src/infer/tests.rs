@@ -5,7 +5,7 @@ use crate::decl::{
     CastRule, CastTree, ConversionRule, Core, Declarations, Head, LoopMarkers, RawDeclarations, Requirement, Scheme, TyVarBound,
 };
 use crate::ty::{
-    Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
+    Alignment, Calls, CallsTerm, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, IdentityId,
     IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reissue, SplitCost, TyKind, TypeArg, Types,
 };
 
@@ -52,6 +52,16 @@ impl Fixture {
     }
 
     fn function(&mut self, effect: EffectTerm<crate::ty::Infer>, flows: Flows, calls: Calls, holds: Holds) -> Term {
+        self.function_of(effect, flows, CallsTerm::Known(calls), HoldsTerm::Known(holds))
+    }
+
+    fn function_of(
+        &mut self,
+        effect: EffectTerm<crate::ty::Infer>,
+        flows: Flows,
+        calls: CallsTerm,
+        holds: HoldsTerm,
+    ) -> Term {
         let ret = self.kind(TyKind::Unit);
         self.kind(TyKind::Fn {
             params: Box::new([]),
@@ -588,6 +598,78 @@ fn eq_of_two_effect_variables_binds() {
 
     let pure = fx.function(EffectTerm::Known(Effect::pure()), Flows::none(), Calls::Many, Holds::Nothing);
     assert_eq!(fx.infer.eq(f, pure), Err(Mismatch::Heads { a: f, b: pure }));
+}
+
+/// types §4, D93: `eq` makes two function types' `holds` and `calls`
+/// variables one, so what one learns later the other learns too.
+#[test]
+fn eq_links_holds_and_calls_variables() {
+    let mut fx = Fixture::new();
+    let (holds, calls) = (fx.infer.fresh_holds(), fx.infer.fresh_calls());
+    let (other_holds, other_calls) = (fx.infer.fresh_holds(), fx.infer.fresh_calls());
+    let pure = || EffectTerm::Known(Effect::pure());
+    let f = fx.function_of(pure(), Flows::none(), CallsTerm::Var(calls), HoldsTerm::Var(holds));
+    let g = fx.function_of(pure(), Flows::none(), CallsTerm::Var(other_calls), HoldsTerm::Var(other_holds));
+    let (a, b) = (fx.held(f), fx.held(g));
+    fx.infer.eq(a, b).unwrap();
+    fx.infer.join_holds(holds, Holds::Mut);
+    fx.infer.join_calls(calls, Calls::Once);
+    let (types, frozen) = fx.freeze(b);
+    let TyKind::Fn { calls, holds, .. } = types.kind(frozen) else {
+        panic!("a function type")
+    };
+    assert_eq!((*calls, *holds), (Calls::Once, Holds::Mut));
+}
+
+/// types §2, D93: `join` joins `holds` (none, shared, mut) and `calls`
+/// (once where either is); a variable joined with a known value keeps
+/// joining what is learned later.
+#[test]
+fn join_joins_holds_and_calls_and_a_variable_keeps_learning() {
+    let mut fx = Fixture::new();
+    let (holds, calls) = (fx.infer.fresh_holds(), fx.infer.fresh_calls());
+    let pure = || EffectTerm::Known(Effect::pure());
+    let lambda = fx.function_of(pure(), Flows::none(), CallsTerm::Var(calls), HoldsTerm::Var(holds));
+    let slot = fx.function(pure(), Flows::none(), Calls::Many, Holds::Shared);
+    let (a, b) = (fx.held(lambda), fx.held(slot));
+    fx.infer.join(b, a).unwrap();
+    assert_eq!(fx.infer.holds(HoldsTerm::Var(holds)), Some(Holds::Shared));
+    assert_eq!(fx.infer.calls(CallsTerm::Var(calls)), Some(Calls::Many));
+    fx.infer.join_holds(holds, Holds::Nothing);
+    fx.infer.join_calls(calls, Calls::Once);
+    for side in [a, b] {
+        let (types, frozen) = fx.freeze(side);
+        let TyKind::Fn { calls, holds, .. } = types.kind(frozen) else {
+            panic!("a function type")
+        };
+        assert_eq!((*calls, *holds), (Calls::Once, Holds::Shared));
+    }
+    let mutable = fx.function(pure(), Flows::none(), Calls::Many, Holds::Mut);
+    let mutable = fx.held(mutable);
+    fx.infer.join(a, mutable).unwrap();
+    assert_eq!(fx.infer.holds(HoldsTerm::Var(holds)), Some(Holds::Mut));
+}
+
+/// types §5, D93: at a stall, a `holds` nothing decides is none and a
+/// `calls` many; a lambda's own variables are left to settling.
+#[test]
+fn unsettled_holds_and_calls_take_the_defaults_but_a_lambdas() {
+    let mut fx = Fixture::new();
+    let (holds, calls) = (fx.infer.fresh_holds(), fx.infer.fresh_calls());
+    let (lambda_holds, lambda_calls) = (fx.infer.fresh_holds(), fx.infer.fresh_calls());
+    let pure = || EffectTerm::Known(Effect::pure());
+    let unclaimed = fx.function_of(pure(), Flows::none(), CallsTerm::Var(calls), HoldsTerm::Var(holds));
+    let lambda = fx.function_of(pure(), Flows::none(), CallsTerm::Var(lambda_calls), HoldsTerm::Var(lambda_holds));
+    assert!(fx.infer.default_unsettled_holds_and_calls(&[(lambda_holds, lambda_calls)]));
+    let (types, frozen) = fx.freeze(unclaimed);
+    let TyKind::Fn { calls, holds, .. } = types.kind(frozen) else {
+        panic!("a function type")
+    };
+    assert_eq!((*calls, *holds), (Calls::Many, Holds::Nothing));
+    assert_eq!(fx.infer.holds(HoldsTerm::Var(lambda_holds)), None);
+    assert_eq!(fx.infer.calls(CallsTerm::Var(lambda_calls)), None);
+    assert!(fx.infer.freeze(&mut Types::new(), &mut FreezeMemo::default(), lambda).is_err());
+    assert!(!fx.infer.default_unsettled_holds_and_calls(&[(lambda_holds, lambda_calls)]));
 }
 
 // closed (types §6)

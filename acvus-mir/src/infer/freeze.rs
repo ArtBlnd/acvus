@@ -25,6 +25,8 @@ pub enum Unsettled {
     Identity(crate::ty::IdentityVarId),
     Mark(crate::ty::ReprVarId),
     Flow(crate::ty::FlowVarId),
+    Holds(crate::ty::HoldsVarId),
+    Calls(crate::ty::CallsVarId),
 }
 
 impl Infer {
@@ -114,8 +116,8 @@ impl Infer {
                 ret: freeze(*ret)?,
                 effect: EffectTerm::Known(self.settled(&self.effect_vars, effect)?),
                 flows: FlowTerm::Known(self.settled(&self.flow_vars, flows)?),
-                calls: *calls,
-                holds: *holds,
+                calls: self.settled(&self.calls_vars, calls)?,
+                holds: self.settled(&self.holds_vars, holds)?,
             },
             TyKind::UserDefined {
                 id,

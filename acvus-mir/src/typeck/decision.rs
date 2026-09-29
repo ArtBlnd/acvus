@@ -284,7 +284,7 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
             || default_literals(cx)
             || default_unconstrained(cx, true)
             || default_unconstrained(cx, false)
-            || default_effects_marks_and_flows(cx)
+            || default_non_type_terms(cx)
             || fire_round(cx, Reading::CycleBroken)
         {
             continue;
@@ -296,14 +296,19 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
     }
 }
 
-/// The stall step of types §5 for what is not a type: effects, marks and
-/// flow sets; whether any took its default. A lambda's flow set is its
-/// claim's (`writeback::claim_flows`), made once its type is solved.
-fn default_effects_marks_and_flows(cx: &mut Ctxt<'_>) -> bool {
+/// The stall step of types §5 for what is not a type: effects, marks, flow
+/// sets, and function types' holds and calls; whether any took its
+/// default. A lambda's flow set is its claim's (`writeback::claim_flows`),
+/// made once its type is solved, and its holds and calls are what settling
+/// its captures finds (`closure::settle_captures`), after the fixpoint; no
+/// default takes them (D84).
+fn default_non_type_terms(cx: &mut Ctxt<'_>) -> bool {
     let effects_and_marks = cx.infer.default_effects_and_marks();
     let claimed = super::writeback::lambda_flows(cx);
     let flows = cx.infer.default_unclaimed_flows(&claimed);
-    effects_and_marks || flows
+    let settled_later: Vec<_> = cx.out.lambdas.iter().map(|lambda| (lambda.holds, lambda.calls)).collect();
+    let holds_and_calls = cx.infer.default_unsettled_holds_and_calls(&settled_later);
+    effects_and_marks || flows || holds_and_calls
 }
 
 /// Whether an index at `callee_site` is still to be decided.

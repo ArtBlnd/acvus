@@ -15,7 +15,7 @@ use super::place::Demand;
 use super::refusal::{self, RefusalKind};
 use super::variant::check_variant;
 use crate::infer::Term;
-use crate::ty::{Calls, EffectTerm, FlowTerm, Holds, TyKind};
+use crate::ty::{CallsTerm, EffectTerm, FlowTerm, HoldsTerm, TyKind};
 
 /// `f(args)`.
 pub(super) fn check_call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[Expr<S>], span: Span) -> Term {
@@ -87,13 +87,15 @@ fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> 
     let ret = cx.fresh();
     let effect = EffectTerm::Var(cx.infer.fresh_effect());
     let flows = FlowTerm::Var(cx.infer.fresh_flow());
+    let calls = CallsTerm::Var(cx.infer.fresh_calls());
+    let holds = HoldsTerm::Var(cx.infer.fresh_holds());
     let form = cx.held(TyKind::Fn {
         params: params.clone().into(),
         ret,
         effect: effect.clone(),
         flows,
-        calls: Calls::Many,
-        holds: Holds::Nothing,
+        calls,
+        holds,
     });
     cx.join(callee, form, func.span());
     for ((arg, (site, value)), param) in args.iter().zip(values).zip(params) {

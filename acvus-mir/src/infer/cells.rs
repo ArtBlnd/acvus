@@ -1,11 +1,12 @@
 //! The variables whose value is a term of their own kind: an effect, a
-//! length, an identity, a mark, a set of flows. Each is unbound, known, or
+//! length, an identity, a mark, a set of flows, what a function value's
+//! captures hold, and how often it may be called. Each is unbound, known, or
 //! made one with another variable of its kind, so that two variables made
 //! one stay one whatever either learns later.
 
 use crate::ty::{
-    Effect, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Flows, IdentityId, IdentityTerm, IdentityVarId,
-    Infer as InferPhase, LenTerm, LenVarId, ReprVarId,
+    Calls, CallsTerm, CallsVarId, Effect, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Flows, Holds, HoldsTerm,
+    HoldsVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, LenTerm, LenVarId, ReprVarId,
 };
 
 use super::{Mark, Unsettled};
@@ -317,6 +318,60 @@ impl VarTerm for MarkTerm {
         match self {
             MarkTerm::Known(value) => Read::Known(value),
             MarkTerm::Var(var) => Read::Var(*var),
+        }
+    }
+}
+
+impl VarTerm for HoldsTerm {
+    type Var = HoldsVarId;
+    type Value = Holds;
+
+    fn var_of_index(index: u32) -> HoldsVarId {
+        HoldsVarId(index)
+    }
+    fn index(var: HoldsVarId) -> usize {
+        var.0 as usize
+    }
+    fn unsettled(var: HoldsVarId) -> Unsettled {
+        Unsettled::Holds(var)
+    }
+    fn of_var(var: HoldsVarId) -> Self {
+        HoldsTerm::Var(var)
+    }
+    fn of_value(value: Holds) -> Self {
+        HoldsTerm::Known(value)
+    }
+    fn read(&self) -> Read<'_, Self> {
+        match self {
+            HoldsTerm::Known(value) => Read::Known(value),
+            HoldsTerm::Var(var) => Read::Var(*var),
+        }
+    }
+}
+
+impl VarTerm for CallsTerm {
+    type Var = CallsVarId;
+    type Value = Calls;
+
+    fn var_of_index(index: u32) -> CallsVarId {
+        CallsVarId(index)
+    }
+    fn index(var: CallsVarId) -> usize {
+        var.0 as usize
+    }
+    fn unsettled(var: CallsVarId) -> Unsettled {
+        Unsettled::Calls(var)
+    }
+    fn of_var(var: CallsVarId) -> Self {
+        CallsTerm::Var(var)
+    }
+    fn of_value(value: Calls) -> Self {
+        CallsTerm::Known(value)
+    }
+    fn read(&self) -> Read<'_, Self> {
+        match self {
+            CallsTerm::Known(value) => Read::Known(value),
+            CallsTerm::Var(var) => Read::Var(*var),
         }
     }
 }

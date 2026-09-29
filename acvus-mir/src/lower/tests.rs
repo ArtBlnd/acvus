@@ -12,6 +12,7 @@ use crate::decl::{
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
+use crate::passes::analysis::{Loan, Mode, Storage};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
 use crate::typeck::{check_script, check_template};
 
@@ -863,4 +864,155 @@ fn a_mut_reference_captured_shared_is_a_shared_reborrow_inside() {
         })
         .expect("a closure");
     assert!(matches!(lowered.kind_of(entry, captures[0]), TyKind::Ref(Mutability::Shared, _)));
+}
+
+// -- D93: a function type's holds and calls; gap 7 ----------------------------
+
+/// Parsed, checked, lowered, and its entry's loans solved.
+fn lowered_with_loans(fx: Fixture, source: &str) -> (Lowered, std::rc::Rc<crate::passes::analysis::Loans>) {
+    let script: Script = acvus_ast::parse_script(&fx.names, source).expect("the test's source parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut types = Types::new();
+    let typeck = check_script(&decls, &mut types, &script);
+    assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+    let module = lower_script(&decls, &typeck, types, &script);
+    let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
+    let loans = am.get::<crate::passes::analysis::Loans>(&module, module.entry());
+    (Lowered::checked(module, fx.names), loans)
+}
+
+/// ownership §5, functions §2, D93: `|x| -> v.push(x)` lends `v` `&mut`, so
+/// the lambda holds `Mut`, a fact settled after the fixpoint. The slot `f`
+/// lives in has the closure's own type, and the closure and the callee
+/// read out of `f` both hold the exclusive loan on `v`'s slot that the
+/// borrow check reads.
+#[test]
+fn a_lambda_pushing_to_a_captured_vec_holds_it_mut_in_its_slot_and_its_closure() {
+    let mut fx = Fixture::new();
+    let vec_ty = fx.vec_of_ints();
+    let int = fx.int();
+    let unit = fx.ty(TyKind::Unit);
+    let vec_fn = fx.function(&[], vec_ty, Effect::pure());
+    fx.declare("vec", vec_fn, 0);
+    let lent_vec = fx.reference(Mutability::Mut, vec_ty);
+    let push_fn = fx.function(&[lent_vec, int], unit, Effect::pure());
+    fx.declare("push", push_fn, 2);
+    let (lowered, loans) = lowered_with_loans(fx, "let v = vec(); let f = |x| -> v.push(x); f(1)");
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let (closure, captures) = insts
+        .iter()
+        .find_map(|inst| match inst.op() {
+            Op::MakeClosure { captures, .. } => Some((inst.result().expect("a closure is a value"), captures.clone())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("a closure: {}", shown(body)));
+    let TyKind::Fn { calls, holds, .. } = lowered.kind_of(body, closure) else {
+        panic!("a closure is a function value")
+    };
+    assert_eq!((*calls, *holds), (Calls::Many, Holds::Mut));
+    let slot = insts
+        .iter()
+        .find_map(|inst| match inst.op() {
+            Op::Assign { target: RefTarget::Var(slot), path, value, .. } if path.is_empty() && *value == closure => Some(*slot),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the closure is put in `f`'s slot: {}", shown(body)));
+    assert_eq!(body.ty_of(slot), body.ty_of(closure), "`f`'s slot has the closure's type");
+
+    let [capture] = captures[..] else { panic!("the closure captures `v` alone: {}", shown(body)) };
+    let v = insts
+        .iter()
+        .find_map(|inst| match inst.op() {
+            Op::Ref { target: RefTarget::Var(v), path, mutability: Mutability::Mut } if path.is_empty() && inst.result() == Some(capture) => {
+                Some(*v)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`v` is captured by `&mut`: {}", shown(body)));
+    let on_v = Loan { storage: Storage::Slot(v), mode: Mode::Exclusive };
+    assert!(loans.of(closure, 0).contains(&on_v), "the closure holds `v` exclusively: {:?}", loans.of(closure, 0));
+    let callee = insts
+        .iter()
+        .find_map(|inst| match inst.op() {
+            Op::FunctionCall { callee: Callee::Indirect(callee), .. } => Some(*callee),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`f(1)` calls a function value: {}", shown(body)));
+    assert_eq!(body.ty_of(callee), body.ty_of(closure), "the callee read out of `f` has the closure's type");
+    assert!(loans.of(callee, 0).contains(&on_v), "the callee holds `v` exclusively: {:?}", loans.of(callee, 0));
+}
+
+/// ownership §5, gap 7: a `&mut` part of a held scrutinee does not copy,
+/// and each use reborrows it. Every test and bind that goes through it
+/// reads it through a `&mut` to the scrutinee's slot, so no part of the
+/// slot is taken for it. After drop insertion, each arm takes the string
+/// part once, for its bind, and ends the `&mut` part once, where the arm
+/// no longer reads it; the pair is never taken or dropped whole.
+#[test]
+fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let string = fx.ty(TyKind::String);
+    let name_fn = fx.function(&[], string, Effect::pure());
+    fx.declare("name", name_fn, 0);
+    let script: Script = acvus_ast::parse_script(
+        &fx.names,
+        "let p = (1, 2); match (&mut p, name()) { ((0, b), t) => { *b = 5; t }, ((a, _), t) => { *a = 3; t }, }",
+    )
+    .expect("parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut types = Types::new();
+    let typeck = check_script(&decls, &mut types, &script);
+    assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+    let mut module = lower_script(&decls, &typeck, types, &script);
+    let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
+    let before: Vec<Op> = module.body(module.entry()).blocks().flat_map(|(_, block)| block.insts()).map(|inst| inst.op().clone()).collect();
+    super::required::insert_drops(&mut module, &mut am);
+    let lowered = Lowered::checked(module, fx.names);
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let slot = insts
+        .iter()
+        .find_map(|inst| match inst.op() {
+            Op::Assign { target: RefTarget::Var(slot), path, .. }
+                if path.is_empty()
+                    && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items)
+                        if matches!(lowered.module.types().kind(items[0]), TyKind::Ref(Mutability::Mut, _))) =>
+            {
+                Some(*slot)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the pair is put in a slot: {}", shown(body)));
+    let takes = |ops: &[&Op], wanted: &[PathSeg]| {
+        count(ops, |op| matches!(op, Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && path == wanted))
+    };
+    let before: Vec<&Op> = before.iter().collect();
+    assert_eq!(takes(&before, &[PathSeg::Index(0)]), 0, "lowering takes the `&mut` part nowhere: {}", shown(body));
+
+    let lent_slot: Vec<_> = insts
+        .iter()
+        .filter(|inst| matches!(inst.op(), Op::Ref { target: RefTarget::Var(named), path, mutability: Mutability::Mut } if *named == slot && path.is_empty()))
+        .filter_map(|inst| inst.result())
+        .collect();
+    let reborrowed = count(&lowered.entry_ops(), |op| {
+        matches!(op, Op::Take { target: RefTarget::Through(lent), path, .. } if lent_slot.contains(lent) && *path == [PathSeg::Index(0)])
+    });
+    assert_eq!(reborrowed, 3, "the test and each arm's bind read the `&mut` part through a `&mut` to the slot: {}", shown(body));
+
+    for (arm, block) in body.blocks().filter(|(_, block)| block.insts().iter().any(|inst| matches!(inst.op(), Op::Const { value: acvus_ast::Literal::Int(5 | 3) }))) {
+        let ops: Vec<&Op> = block.insts().iter().map(|inst| inst.op()).collect();
+        assert_eq!(takes(&ops, &[]), 0, "arm {arm:?} never takes the pair whole: {}", shown(body));
+        assert_eq!(takes(&ops, &[PathSeg::Index(1)]), 1, "arm {arm:?} takes the string once, for `t`: {}", shown(body));
+        let ended: Vec<_> = block
+            .insts()
+            .iter()
+            .filter(|inst| matches!(inst.op(), Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Index(0)]))
+            .filter_map(|inst| inst.result())
+            .collect();
+        let [ended] = ended[..] else { panic!("arm {arm:?} ends the `&mut` part once: {}", shown(body)) };
+        assert_eq!(count(&ops, |op| matches!(op, Op::Drop { src } if *src == ended)), 1, "and drops what it took: {}", shown(body));
+    }
+    assert!(!lowered.entry_ops().iter().any(|op| matches!(op, Op::Drop { src } if *src == slot)), "the pair is never dropped whole: {}", shown(body));
 }

@@ -4,7 +4,7 @@ use super::arg::{EffectArg, IdentityTerm, LenTerm, TypeArg};
 use super::effect::EffectTerm;
 use super::flow::FlowTerm;
 use super::num::IntTy;
-use super::{Phase, TyId};
+use super::{CallsVarId, HoldsVarId, Phase, TyId};
 
 /// One shape of a type. Its parts are ids of the same table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,8 +43,8 @@ pub enum TyKind<V: Phase> {
         ret: TyId<V>,
         effect: EffectTerm<V>,
         flows: FlowTerm<V>,
-        calls: Calls,
-        holds: Holds,
+        calls: V::CallsTerm,
+        holds: V::HoldsTerm,
     },
     /// An extern-defined type (extern-fn §8).
     UserDefined {
@@ -89,6 +89,15 @@ impl Holds {
     }
 }
 
+/// A function type's `holds` while solving: known, or a variable that
+/// every copy of the type shares and that joins where two function types
+/// join (types §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HoldsTerm {
+    Known(Holds),
+    Var(HoldsVarId),
+}
+
 /// Whether a function value may be called more than once (functions §3).
 /// Two meet at `Once` where either is (types §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -104,6 +113,13 @@ impl Calls {
             (Calls::Once, _) | (_, Calls::Once) => Calls::Once,
         }
     }
+}
+
+/// A function type's `calls` while solving, as `HoldsTerm`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallsTerm {
+    Known(Calls),
+    Var(CallsVarId),
 }
 
 /// Whether a reference may write through to its storage (ownership §5).

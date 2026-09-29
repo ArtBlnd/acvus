@@ -893,6 +893,110 @@ fn a_closure_holds_the_loans_of_its_captures() {
     assert_eq!(holds(2), Holds::Shared);
 }
 
+/// functions §3, D93: a `move` lambda that moves its capture out is called
+/// once, and every copy of its type says so: the lambda's own, the binding
+/// it enters, a binding that value is copied into, and the callee at a call
+/// through that binding. Settling the captures after the fixpoint binds the
+/// lambda's `calls` variable, which the copies share by link (D14 had each
+/// slot keep a stale copy).
+#[test]
+fn a_move_lambda_that_moves_its_capture_out_is_once_in_every_copy() {
+    let mut fx = Fixture::new();
+    let string = fx.ty(TyKind::String);
+    fx.context("s", string);
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let s = @s; let f = move |x| -> s; let g = f; g(1)");
+    checked.admitted();
+    let Stmt::LetBind { expr: lambda, .. } = &script.stmts[1] else {
+        panic!("not a let");
+    };
+    let Some(Expr::FuncCall { func: callee, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a call");
+    };
+    let copies = [
+        ("the lambda", checked.typeck.types[&lambda.id()]),
+        ("f", binding(&checked, &script, &names, "f")),
+        ("g", binding(&checked, &script, &names, "g")),
+        ("the callee", checked.typeck.types[&callee.id()]),
+    ];
+    for (copy, ty) in copies {
+        let TyKind::Fn { calls, holds, .. } = checked.kind(ty) else {
+            panic!("{copy} is a function");
+        };
+        assert_eq!((*calls, *holds), (Calls::Once, Holds::Nothing), "{copy}");
+    }
+    let closure = checked.typeck.closures.values().next().expect("one lambda");
+    assert_eq!(closure.calls, Calls::Once);
+}
+
+/// types §2, D93: two lambdas meeting in one slot join there, so the slot
+/// and both lambdas are once where one is, and hold the stronger loan.
+#[test]
+fn lambdas_joined_in_one_slot_share_their_holds_and_calls() {
+    let mut fx = Fixture::new();
+    let string = fx.ty(TyKind::String);
+    let bool_ty = fx.ty(TyKind::Bool);
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("s", string);
+    fx.context("n", i64_ty);
+    fx.input("c", bool_ty);
+    let names = fx.names.clone();
+    let (checked, script) =
+        fx.script("let s = @s; let r = &mut @n; let f = if $c { move |x| -> { let t = s; x } } else { |x| -> { *r = x; x } }; 1");
+    checked.admitted();
+    let f = binding(&checked, &script, &names, "f");
+    let lambdas: Vec<Ty> = checked.typeck.closures.keys().map(|lambda| checked.typeck.types[lambda]).collect();
+    assert_eq!(lambdas.len(), 2);
+    for ty in lambdas.into_iter().chain([f]) {
+        let TyKind::Fn { calls, holds, .. } = checked.kind(ty) else {
+            panic!("a function");
+        };
+        assert_eq!((*calls, *holds), (Calls::Once, Holds::Mut));
+    }
+}
+
+/// ownership §5, D93: a `move` lambda holds what the values it moved in
+/// hold. `f` moves `h` in before `h` is assigned a later lambda that holds
+/// `r` exclusively; the two lambdas share `h`'s type, so `f` holds `Mut`
+/// too, though the later lambda settles after `f`.
+#[test]
+fn a_move_lambda_holds_what_a_later_lambda_sharing_its_captures_type_holds() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    fx.context("n", i64_ty);
+    let names = fx.names.clone();
+    let (checked, script) =
+        fx.script("let r = &mut @n; let h = |x| -> x; let f = move |x| -> h(x); h = |x| -> { *r = x; x }; f(1)");
+    checked.admitted();
+    for name in ["h", "f"] {
+        let TyKind::Fn { holds, .. } = checked.kind(binding(&checked, &script, &names, name)) else {
+            panic!("`{name}` is a function");
+        };
+        assert_eq!(*holds, Holds::Mut, "`{name}`");
+    }
+}
+
+/// types §5, D93: a function type no lambda claims and nothing decides
+/// holds no loan and may be called many times: here, the parameter a
+/// lambda only calls.
+#[test]
+fn an_unclaimed_function_types_holds_and_calls_take_the_defaults() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("let h = |g| -> g(1); 1");
+    checked.admitted();
+    let Stmt::LetBind {
+        expr: Expr::Lambda { params, .. },
+        ..
+    } = &script.stmts[0]
+    else {
+        panic!("a lambda bound by `let`");
+    };
+    let TyKind::Fn { calls, holds, .. } = checked.kind(checked.typeck.types[&params[0].id]) else {
+        panic!("`g` is called, so it is a function");
+    };
+    assert_eq!((*calls, *holds), (Calls::Many, Holds::Nothing));
+}
+
 /// control-flow: `break` and `continue` leave a loop; one outside every
 /// loop, or inside a lambda inside one, is refused.
 #[test]
