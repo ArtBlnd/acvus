@@ -520,22 +520,21 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
                 .collect();
             cx.builder.push(Op::MakeObject { fields }, ty, span)
         }
+        // Each argument's elements are mapped together, one index at a
+        // time; with no argument the length is the array type's.
         Shape::Array(ArrayOf { element, len }) => {
-            // NOTE: an open question, returned to the coordinator.
-            // `Intrinsic::ArrayMap` maps one array; a rebuild from no
-            // argument, as `default`'s, or from several has none or several
-            // to map, and the ledger does not say how such an array is made.
-            let [array] = args[..] else {
-                todo!("an array rebuilt from {} arguments: `ArrayMap` maps one array", args.len())
-            };
             let tree = tree_at(trees, PartKey::Element);
-            let param = match lift.params[0] {
-                Taking::Value => element,
-                Taking::Ref(mutability) => cx.ref_ty(mutability, element),
-            };
+            let params = lift
+                .params
+                .iter()
+                .map(|taking| match taking {
+                    Taking::Value => element,
+                    Taking::Ref(mutability) => cx.ref_ty(*mutability, element),
+                })
+                .collect();
             let effect = tree_effect(cx, tree);
-            let map = ArrayMap { array, param, mapped: element, len, effect, span };
-            array_map(cx, map, &|cx, at| rebuilt(cx, tree, lift, element, &[at], span))
+            let map = ArrayMap { arrays: args.to_vec(), params, mapped: element, len, effect, span };
+            array_map(cx, map, &|cx, at| rebuilt(cx, tree, lift, element, at, span))
         }
         Shape::Option(_) | Shape::Result { .. } | Shape::Enum(_) => unreachable!("a variant type is rebuilt by its variant above"),
         Shape::Ref(_) | Shape::Never => panic!("a lift answers only at a transparent structured type, not {ty:?}"),

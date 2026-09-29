@@ -482,31 +482,40 @@ impl TypeCheck<'_> {
                 }
                 Ok(())
             }
-            // `[array, f]`: an array, or a reference to one, mapped by `f`,
-            // which takes each element as the array holds it, or through a
-            // reference of the reference's mutability.
-            (Intrinsic::ArrayMap, [array, f]) => {
-                let (element, len, lent) = match self.kind(self.ty(*array)) {
-                    TyKind::Array(element, len, _) => (*element, known_len(len), None),
-                    TyKind::Ref(mutability, target) => match self.kind(target.ty()) {
-                        TyKind::Array(element, len, _) => (*element, known_len(len), Some(*mutability)),
-                        other => return Err(format!("{array:?} lends {other:?}, not an array")),
-                    },
-                    other => return Err(format!("{array:?} is {other:?}, not an array or a reference to one")),
-                };
+            // `[a_1, …, a_k, f]`: `k` arrays of one length, or references
+            // to them, mapped by `f` of `k` parameters, each taking its
+            // array's element as the array holds it, or through a
+            // reference of the reference's mutability; for `k` = 0 the
+            // length is the result's.
+            (Intrinsic::ArrayMap, [arrays @ .., f]) => {
                 let TyKind::Fn { params, ret, .. } = self.kind(self.ty(*f)) else {
                     return Err(format!("{f:?} is not a function"));
                 };
-                let [param] = params[..] else {
-                    return Err(format!("{f:?} does not take one element"));
-                };
-                let takes = match lent {
-                    None => param == element,
-                    Some(mutability) => matches!(self.kind(param), TyKind::Ref(made, taken) if *made == mutability && taken.ty() == element),
-                };
-                found(takes, || format!("{f:?} does not take the element of {array:?}"))?;
+                found(params.len() == arrays.len(), || format!("{f:?} does not take one element of each of {} arrays", arrays.len()))?;
                 let ret = *ret;
-                self.is(result, |kind| matches!(kind, TyKind::Array(mapped, mapped_len, _) if *mapped == ret && known_len(mapped_len) == len), "the array of `f`'s results")
+                let mut len = None;
+                for (array, param) in arrays.iter().zip(params.iter()) {
+                    let (element, array_len, lent) = match self.kind(self.ty(*array)) {
+                        TyKind::Array(element, len, _) => (*element, known_len(len), None),
+                        TyKind::Ref(mutability, target) => match self.kind(target.ty()) {
+                            TyKind::Array(element, len, _) => (*element, known_len(len), Some(*mutability)),
+                            other => return Err(format!("{array:?} lends {other:?}, not an array")),
+                        },
+                        other => return Err(format!("{array:?} is {other:?}, not an array or a reference to one")),
+                    };
+                    found(len.is_none_or(|len| len == array_len), || format!("{array:?} is not of the others' length"))?;
+                    len = Some(array_len);
+                    let takes = match lent {
+                        None => *param == element,
+                        Some(mutability) => matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == mutability && taken.ty() == element),
+                    };
+                    found(takes, || format!("{f:?} does not take the element of {array:?}"))?;
+                }
+                self.is(
+                    result,
+                    |kind| matches!(kind, TyKind::Array(mapped, mapped_len, _) if *mapped == ret && len.is_none_or(|len| known_len(mapped_len) == len)),
+                    "the array of `f`'s results",
+                )
             }
             // `Intrinsic`'s docs state no arguments for it: a clone of a
             // `String` is `Op::StringClone`.

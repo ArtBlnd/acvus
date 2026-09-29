@@ -99,9 +99,8 @@ pub(super) fn structured(
                 other => panic!("an array is coerced to an array, not {other:?}"),
             };
             let effect = coerced.effect(cx, PartKey::Element);
-            array_map(cx, ArrayMap { array: value, param, mapped, len, effect, span }, &|cx, element| {
-                coerced.part(cx, PartKey::Element, element)
-            })
+            let map = ArrayMap { arrays: vec![value], params: vec![param], mapped, len, effect, span };
+            array_map(cx, map, &|cx, element| coerced.part(cx, PartKey::Element, element[0]))
         }
         _ => panic!("typeck coerces a structured value only to a slot of its own kind, not {from:?} to {target:?}"),
     };
@@ -198,12 +197,13 @@ impl Access {
     }
 }
 
-/// An `Intrinsic::ArrayMap` to be made: `array`, an array of `len`
-/// elements or a reference to one, mapped by a function of one parameter of
-/// type `param` to `mapped`, whose effect is `effect`.
+/// An `Intrinsic::ArrayMap` to be made: `arrays`, `k` arrays of `len`
+/// elements or references to them, mapped by a function of `k` parameters
+/// of the types `params` to `mapped`, whose effect is `effect`. For `k` =
+/// 0, `len` is what makes the result's length.
 pub(super) struct ArrayMap {
-    pub array: ValueId,
-    pub param: Ty,
+    pub arrays: Vec<ValueId>,
+    pub params: Vec<Ty>,
     pub mapped: Ty,
     pub len: usize,
     pub effect: Effect,
@@ -211,12 +211,12 @@ pub(super) struct ArrayMap {
 }
 
 /// The array `map` makes, its function a body of its own that `element`
-/// lowers from its one parameter; it stands on the order chain where that
+/// lowers from its parameters; it stands on the order chain where that
 /// function's effect is not pure, as a call of it does.
-pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&mut Lcx<'_, '_>, ValueId) -> ValueId) -> ValueId {
-    let ArrayMap { array, param, mapped, len, effect, span } = map;
+pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&mut Lcx<'_, '_>, &[ValueId]) -> ValueId) -> ValueId {
+    let ArrayMap { arrays, params, mapped, len, effect, span } = map;
     let fn_ty = cx.builder.intern(TyKind::Fn {
-        params: Box::new([param]),
+        params: params.clone().into(),
         ret: mapped,
         effect: EffectTerm::Known(effect.clone()),
         flows: FlowTerm::Known(Flows::Every),
@@ -231,8 +231,8 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
     if anyorder > 0 {
         inner.builder.open_anyorder();
     }
-    let at = inner.builder.param(name, param, span);
-    let value = element(&mut inner, at);
+    let at: Vec<ValueId> = params.iter().map(|param| inner.builder.param(name, *param, span)).collect();
+    let value = element(&mut inner, &at);
     return_value(&mut inner, value, span);
     if anyorder > 0 {
         inner.builder.close_anyorder();
@@ -240,7 +240,9 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
     inner.builder.terminate(Terminator::Diverge, span);
     let body = inner.builder.seal().unwrap_or_else(|open| panic!("an array map's function is sealed whole: {open:?}"));
     let f = cx.builder.push(Op::MakeClosure { body, captures: Vec::new() }, fn_ty, span);
-    let op = Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args: vec![array, f] };
+    let mut args = arrays;
+    args.push(f);
+    let op = Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args };
     match effect.reissue() {
         Reissue::Pure => cx.builder.push(op, result_ty, span),
         Reissue::Idempotent | Reissue::Opaque => bracket_call(cx, &effect, span, |cx| cx.builder.push_effect(op, result_ty, span)),

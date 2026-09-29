@@ -245,9 +245,9 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
         // calls `f` as an indirect callee is called.
         Op::Intrinsic { intrinsic: Intrinsic::Gather, args } => operands.extend(args.iter().map(|arg| passed(*arg))),
         Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => {
-            let [array, function] = args[..] else { panic!("`ArrayMap` takes `[array, f]`") };
-            operands.push(passed(array));
-            operands.extend(callee(&Callee::Indirect(function)));
+            let [arrays @ .., function] = &args[..] else { panic!("`ArrayMap` takes `[a_1, …, a_k, f]`") };
+            operands.extend(arrays.iter().map(|array| passed(*array)));
+            operands.extend(callee(&Callee::Indirect(*function)));
         }
         Op::Intrinsic { intrinsic: Intrinsic::StringClone, .. } => panic!("`StringClone` is no `Op::Intrinsic`: `Intrinsic` states no arguments for it"),
         Op::MakeVariant { payload, .. } => operands.extend(payload.iter().map(|payload| passed(*payload))),

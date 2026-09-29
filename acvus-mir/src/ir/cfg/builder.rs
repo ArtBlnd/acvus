@@ -633,7 +633,7 @@ impl<'m> Builder<'m> {
             // `ArrayMap` calls its function value `f` on each element
             // (`Intrinsic`), so it is a call of `f`'s type.
             Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } => {
-                let [_, f] = args[..] else { panic!("`ArrayMap` takes `[array, f]`") };
+                let [.., f] = args[..] else { panic!("`ArrayMap` takes `[a_1, …, a_k, f]`") };
                 self.body.ty_of(f)
             }
             _ => return false,

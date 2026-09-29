@@ -1121,8 +1121,8 @@ impl Forward<'_> {
                 touched.reads.extend(named_if_reference(*b));
             }
             Op::StringClone { src } => touched.reads = named_if_reference(*src),
-            // `ArrayMap` calls `f` on each element: it touches what its
-            // array and `f` hold as a call of `f` with them would.
+            // `ArrayMap` calls `f` on the elements at each index: it touches
+            // what its arrays and `f` hold as a call of `f` with them would.
             Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } => {
                 for value in args.iter() {
                     let held = self.deepened(state, *value);
