@@ -589,17 +589,17 @@ impl Forward<'_> {
                         let at = object.fields().iter().position(|(name, _)| name == field);
                         next.extend(at.map(|at| fields.into_iter().nth(at).expect("one part per field")));
                     }
-                    (PathSeg::Index(index), TyKind::Tuple(items)) => {
+                    (PathSeg::Index(index), TyKind::Tuple(items, _)) => {
                         next.extend(laid(&mut items.iter().copied()).into_iter().nth(*index));
                     }
-                    (PathSeg::Index(_), TyKind::Array(element, _)) => {
+                    (PathSeg::Index(_), TyKind::Array(element, _, _)) => {
                         exact = false;
                         next.push(Part { range: part.range.clone(), ty: *element });
                     }
-                    (PathSeg::Payload, TyKind::Option(payload)) => {
+                    (PathSeg::Payload, TyKind::Option(payload, _)) => {
                         next.push(Part { range: part.range.clone(), ty: *payload });
                     }
-                    (PathSeg::Payload, TyKind::Result(ok, err)) => {
+                    (PathSeg::Payload, TyKind::Result(ok, err, _)) => {
                         exact = false;
                         next.extend(laid(&mut [*ok, *err].into_iter()));
                     }
@@ -931,7 +931,7 @@ impl Forward<'_> {
     /// an `Option`'s one, a `Result`'s of that type, an enum's by its tag.
     fn variant_ranges(&self, ty: Ty, tag: acvus_utils::Astr, payload: Ty) -> Vec<Range<usize>> {
         match self.types.kind(ty) {
-            TyKind::Option(_) | TyKind::Result(..) => self.parts_of(&self.reach(ty, &[PathSeg::Payload]), payload),
+            TyKind::Option(.., _) | TyKind::Result(..) => self.parts_of(&self.reach(ty, &[PathSeg::Payload]), payload),
             TyKind::Enum { variants, .. } => {
                 let mut at = 0;
                 for (name, declared) in variants.iter() {

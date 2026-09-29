@@ -392,8 +392,8 @@ fn commutes(op: BinOp, operand: &TyKind<Concrete>) -> bool {
         | TyKind::Array(..)
         | TyKind::Slice(_)
         | TyKind::Str
-        | TyKind::Tuple(_)
-        | TyKind::Option(_)
+        | TyKind::Tuple(.., _)
+        | TyKind::Option(.., _)
         | TyKind::Result(..)
         | TyKind::Object(_)
         | TyKind::Enum { .. }

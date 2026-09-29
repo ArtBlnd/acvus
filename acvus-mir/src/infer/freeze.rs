@@ -70,14 +70,15 @@ impl Infer {
             TyKind::Order => TyKind::Order,
             TyKind::Str => TyKind::Str,
             TyKind::Handle(result) => TyKind::Handle(freeze(*result)?),
-            TyKind::Array(element, len) => TyKind::Array(
+            TyKind::Array(element, len, _) => TyKind::Array(
                 freeze(*element)?,
                 LenTerm::Known(self.settled(&self.len_vars, len)?),
+                (),
             ),
             TyKind::Slice(element) => TyKind::Slice(freeze(*element)?),
-            TyKind::Option(inner) => TyKind::Option(freeze(*inner)?),
-            TyKind::Result(ok, err) => TyKind::Result(freeze(*ok)?, freeze(*err)?),
-            TyKind::Tuple(items) => TyKind::Tuple(items.iter().map(|item| freeze(*item)).collect::<Result<_, _>>()?),
+            TyKind::Option(inner, _) => TyKind::Option(freeze(*inner)?, ()),
+            TyKind::Result(ok, err, _) => TyKind::Result(freeze(*ok)?, freeze(*err)?, ()),
+            TyKind::Tuple(items, _) => TyKind::Tuple(items.iter().map(|item| freeze(*item)).collect::<Result<_, _>>()?, ()),
             TyKind::Object(ObjectTy::Structural(fields, _)) => TyKind::Object(ObjectTy::Structural(
                 fields
                     .iter()

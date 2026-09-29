@@ -83,9 +83,9 @@ impl Fixture {
         let commuting = call_ty(&[], commuting_effect.clone());
         let commuting_unary = call_ty(&[int], commuting_effect);
         let splittable = call_ty(&[], splittable_effect);
-        let pair = types.intern(TyKind::Tuple(Box::new([int, int])));
-        let triple = types.intern(TyKind::Tuple(Box::new([int, int, int])));
-        let quad = types.intern(TyKind::Tuple(Box::new([int, int, int, int])));
+        let pair = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
+        let triple = types.intern(TyKind::Tuple(Box::new([int, int, int]), ()));
+        let quad = types.intern(TyKind::Tuple(Box::new([int, int, int, int]), ()));
         Fixture {
             module: Module::new(types),
             interner: Interner::new(),

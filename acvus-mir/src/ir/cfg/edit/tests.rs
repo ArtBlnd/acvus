@@ -72,7 +72,7 @@ fn fixture() -> Fixture {
         call_ty(CallEffect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
     let str_ty = types.intern(TyKind::Str);
     let str_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)));
-    let result = types.intern(TyKind::Result(int, bool));
+    let result = types.intern(TyKind::Result(int, bool, ()));
     let point = QualifiedRef::root(interner.intern("Point"));
     let object = types.intern(TyKind::Object(ObjectTy::Declared(point, Box::new([(interner.intern("x"), int)]))));
     Fixture {
@@ -1305,7 +1305,7 @@ fn types_agree_reads_a_reference_part_as_a_reborrow_capped_by_its_path() {
             let (np, field, int, bool) = (f.name("p"), f.name("x"), f.int, f.bool);
             let mut_int = f.module.types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
             let (holder, seg) = match object {
-                false => (f.module.types.intern(TyKind::Tuple(Box::new([mut_int, bool]))), PathSeg::Index(0)),
+                false => (f.module.types.intern(TyKind::Tuple(Box::new([mut_int, bool]), ())), PathSeg::Index(0)),
                 true => {
                     let fields = Box::new([(field, mut_int), (f.name("y"), bool)]);
                     (f.module.types.intern(TyKind::Object(crate::ty::ObjectTy::Declared(QualifiedRef::root(f.name("Holder")), fields))), PathSeg::Field(field))
@@ -1405,7 +1405,7 @@ fn types_agree_checks_a_loops_source_against_what_it_hands_its_body() {
 fn viewing(f: &mut Fixture, mutability: Mutability, viewed: Ty) -> BodyId {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let array = builder.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2)));
+    let array = builder.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
     let lent = builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));
     let a = builder.param(na, lent, acvus_ast::Span::ZERO);
     builder.push(Op::ArrayView { src: a, mutability }, viewed, at(1));
@@ -2063,7 +2063,7 @@ fn discharging_another_kind_is_a_callers_defect() {
 fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
-    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int])));
+    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int]), ()));
     let int_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
     let mut builder = f.build(false, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
@@ -2100,7 +2100,7 @@ fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
 fn split_slot_refuses_a_type_that_is_not_structural_and_a_use_of_the_whole() {
     let mut f = fixture();
     let (name, int, object) = (f.name("a"), f.int, f.object);
-    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int])));
+    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int]), ()));
     let mut builder = f.build(false, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let scalar = builder.slot(int, at(0));

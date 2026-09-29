@@ -132,15 +132,15 @@ impl SegmentWalk<'_> {
                 }
             }
             (
-                TyKind::Array(decl_element, _) | TyKind::Slice(decl_element),
-                TyKind::Array(element, _) | TyKind::Slice(element),
+                TyKind::Array(decl_element, _, _) | TyKind::Slice(decl_element),
+                TyKind::Array(element, _, _) | TyKind::Slice(element),
             )
-            | (TyKind::Option(decl_element), TyKind::Option(element)) => self.lay(*decl_element, *element),
-            (TyKind::Result(decl_ok, decl_err), TyKind::Result(ok, err)) => {
+            | (TyKind::Option(decl_element, _), TyKind::Option(element, _)) => self.lay(*decl_element, *element),
+            (TyKind::Result(decl_ok, decl_err, _), TyKind::Result(ok, err, _)) => {
                 self.lay(*decl_ok, *ok);
                 self.lay(*decl_err, *err);
             }
-            (TyKind::Tuple(decl_items), TyKind::Tuple(items)) => {
+            (TyKind::Tuple(decl_items, _), TyKind::Tuple(items, _)) => {
                 assert_eq!(decl_items.len(), items.len(), "{DISAGREE}");
                 for (decl_item, item) in decl_items.iter().zip(items.iter()) {
                     self.lay(*decl_item, *item);

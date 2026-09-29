@@ -1006,7 +1006,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let mut val_types = string_slot(&mut types);
         let shared_ref = val_types[1].1;
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, shared_ref])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, shared_ref]), ()));
         val_types.push((v(5), shared_ref));
         val_types.push((v(6), tuple_ty));
         let m = body(
@@ -1077,7 +1077,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let mut val_types = string_slot(&mut types);
         let (shared_ref, string_ty) = (val_types[1].1, val_types[0].1);
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, string_ty])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, string_ty]), ()));
         val_types.push((v(7), string_ty));
         val_types.push((v(6), tuple_ty));
         let m = body(
@@ -1100,7 +1100,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let mut val_types = string_slot(&mut types);
         let shared_ref = val_types[1].1;
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref]), ()));
         val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
@@ -1122,7 +1122,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let mut val_types = string_slot(&mut types);
         let (shared_ref, mut_ref) = (val_types[1].1, val_types[2].1);
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, mut_ref])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, mut_ref]), ()));
         val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
@@ -1144,7 +1144,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let mut val_types = string_slot(&mut types);
         let (shared_ref, mut_ref) = (val_types[1].1, val_types[2].1);
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, mut_ref])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([shared_ref, mut_ref]), ()));
         val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
@@ -1169,7 +1169,7 @@ mod tests {
         let mut_ref = val_types[2].1;
         val_types[0] = (slot(), i64_ty);
         val_types.push((v(7), i64_ty));
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([mut_ref, i64_ty])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([mut_ref, i64_ty]), ()));
         val_types.push((v(6), tuple_ty));
         let m = body(
             vec![
@@ -1195,7 +1195,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let mut val_types = string_slot(&mut types);
         let (mut_ref, string_ty) = (val_types[2].1, val_types[0].1);
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([mut_ref, string_ty])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([mut_ref, string_ty]), ()));
         val_types.push((v(7), string_ty));
         val_types.push((v(6), tuple_ty));
         // ref &mut; jump L1; L1: take; use ref

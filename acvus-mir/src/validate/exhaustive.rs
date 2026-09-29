@@ -174,7 +174,7 @@ pub fn known_variants(types: &Types<Concrete>, body: &MirBody, value: ValueId) -
         return Known::Open;
     };
     match ty {
-        TyKind::Option(_) => Known::ClosedBuiltin(OPTION),
+        TyKind::Option(.., _) => Known::ClosedBuiltin(OPTION),
         TyKind::Result(..) => Known::ClosedBuiltin(RESULT),
         TyKind::Enum { variants, .. } => Known::Closed(variants.iter().map(|(tag, _)| *tag).collect()),
         _ => Known::Open,

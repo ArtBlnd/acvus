@@ -151,14 +151,14 @@ impl<V: Phase> TyKind<V> {
             | TyKind::Order
             | TyKind::Str
             | TyKind::Var(_) => {}
-            TyKind::Handle(inner) | TyKind::Array(inner, _) | TyKind::Slice(inner) | TyKind::Option(inner) => {
+            TyKind::Handle(inner) | TyKind::Array(inner, _, _) | TyKind::Slice(inner) | TyKind::Option(inner, _) => {
                 on_child(*inner)
             }
-            TyKind::Result(ok, err) => {
+            TyKind::Result(ok, err, _) => {
                 on_child(*ok);
                 on_child(*err);
             }
-            TyKind::Tuple(items) => items.iter().copied().for_each(on_child),
+            TyKind::Tuple(items, _) => items.iter().copied().for_each(on_child),
             TyKind::Object(object) => object.fields().iter().for_each(|(_, ty)| on_child(*ty)),
             TyKind::Enum { variants, .. } => variants
                 .iter()

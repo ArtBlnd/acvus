@@ -142,11 +142,11 @@ impl<'s> Import<'s> {
             | TyKind::Order
             | TyKind::Str) => kind,
             TyKind::Handle(inner) => TyKind::Handle(self.ty(inner, to)),
-            TyKind::Array(inner, len) => TyKind::Array(self.ty(inner, to), len),
+            TyKind::Array(inner, len, _) => TyKind::Array(self.ty(inner, to), len, ()),
             TyKind::Slice(inner) => TyKind::Slice(self.ty(inner, to)),
-            TyKind::Option(inner) => TyKind::Option(self.ty(inner, to)),
-            TyKind::Result(ok, err) => TyKind::Result(self.ty(ok, to), self.ty(err, to)),
-            TyKind::Tuple(items) => TyKind::Tuple(items.iter().map(|item| self.ty(*item, to)).collect()),
+            TyKind::Option(inner, _) => TyKind::Option(self.ty(inner, to), ()),
+            TyKind::Result(ok, err, _) => TyKind::Result(self.ty(ok, to), self.ty(err, to), ()),
+            TyKind::Tuple(items, _) => TyKind::Tuple(items.iter().map(|item| self.ty(*item, to)).collect(), ()),
             TyKind::Object(object) => {
                 let fields = object
                     .fields()

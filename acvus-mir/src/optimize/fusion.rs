@@ -507,7 +507,7 @@ impl<'p> Fusion<'p> {
             path: Vec::new(),
             mutability: Mutability::Mut,
         });
-        let option_ty = self.types.intern(TyKind::Option(next.element));
+        let option_ty = self.types.intern(TyKind::Option(next.element, ()));
         let pulled_option = self.value(option_ty);
         self.push(InstKind::FunctionCall {
             dst: pulled_option,
@@ -717,7 +717,7 @@ impl<'p> Fusion<'p> {
         if known_effect(effect).reissue() != Reissue::Pure {
             return Err(Declined::Effectful);
         }
-        let TyKind::Option(element) = self.types.kind(*ret) else {
+        let TyKind::Option(element, _) = self.types.kind(*ret) else {
             return Err(unfit);
         };
         Ok(NextCall {
@@ -1236,7 +1236,7 @@ impl<'p> Fusion<'p> {
             Term::Some(payload) => {
                 let wanted = self.option_payload(expected);
                 let payload = self.term(payload, wanted, scope)?;
-                let ty = self.types.intern(TyKind::Option(payload.ty));
+                let ty = self.types.intern(TyKind::Option(payload.ty, ()));
                 let dst = self.value(ty);
                 self.push(InstKind::MakeVariant {
                     dst,
@@ -1369,7 +1369,7 @@ impl<'p> Fusion<'p> {
             Term::Some(payload) => {
                 let wanted = self.option_payload(expected);
                 let payload = self.type_of(payload, wanted, scope)?;
-                self.types.intern(TyKind::Option(payload))
+                self.types.intern(TyKind::Option(payload, ()))
             }
             Term::None => expected
                 .filter(|ty| self.option_payload(Some(*ty)).is_some())
@@ -1394,7 +1394,7 @@ impl<'p> Fusion<'p> {
                     Ok(scrutinee_ty) => match self.option_payload(Some(scrutinee_ty)) {
                         Some(payload) => Some(payload),
                         None => {
-                            let wanted = self.types.intern(TyKind::Option(scrutinee_ty));
+                            let wanted = self.types.intern(TyKind::Option(scrutinee_ty, ()));
                             return Err(Declined::Mismatch {
                                 wanted,
                                 found: scrutinee_ty,
@@ -1428,7 +1428,7 @@ impl<'p> Fusion<'p> {
     /// The payload of `ty`, where it is an `Option`.
     fn option_payload(&self, ty: Option<Ty>) -> Option<Ty> {
         match self.types.kind(ty?) {
-            TyKind::Option(payload) => Some(*payload),
+            TyKind::Option(payload, _) => Some(*payload),
             _ => None,
         }
     }
@@ -1531,7 +1531,7 @@ impl<'p> Fusion<'p> {
             }
         };
         let Some(payload_ty) = self.option_payload(Some(holder.ty)) else {
-            let wanted = self.types.intern(TyKind::Option(holder.ty));
+            let wanted = self.types.intern(TyKind::Option(holder.ty, ()));
             return Err(Declined::Mismatch {
                 wanted,
                 found: holder.ty,

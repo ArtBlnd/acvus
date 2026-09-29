@@ -144,13 +144,13 @@ impl<'a> Layout<'a> {
         };
         match (self.types.kind(ty), seg) {
             (TyKind::Object(_) | TyKind::Enum { .. }, PathSeg::Field(name)) => named(*name),
-            (TyKind::Tuple(items), PathSeg::Index(index)) => {
+            (TyKind::Tuple(items, _), PathSeg::Index(index)) => {
                 let at = items.iter().take(*index).map(|item| self.positions(*item)).sum();
                 items.get(*index).map(|item| Part { at, ty: *item }).into_iter().collect()
             }
-            (TyKind::Array(inner, _) | TyKind::Slice(inner), PathSeg::Index(_))
-            | (TyKind::Option(inner), PathSeg::Payload) => vec![Part { at: 0, ty: *inner }],
-            (TyKind::Result(ok, err), PathSeg::Payload) => vec![
+            (TyKind::Array(inner, _, _) | TyKind::Slice(inner), PathSeg::Index(_))
+            | (TyKind::Option(inner, _), PathSeg::Payload) => vec![Part { at: 0, ty: *inner }],
+            (TyKind::Result(ok, err, _), PathSeg::Payload) => vec![
                 Part { at: 0, ty: *ok },
                 Part {
                     at: self.positions(*ok),

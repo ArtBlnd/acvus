@@ -67,7 +67,7 @@ impl<'a> AtUse<'a> {
 
 impl Infer {
     /// `scheme` at fresh variables, each with its declared bound. Every
-    /// structural node it builds is `Label::Opaque`; a type parameter's
+    /// structural node it builds is `Label::Elsewhere`; a type parameter's
     /// place takes the program's term as it is (types §1).
     pub fn instantiate(&mut self, decls: &Declarations, scheme: &Scheme) -> Instantiated {
         let mut at = AtUse::new(decls.types(), Placeholders::Declared);
@@ -88,7 +88,7 @@ impl Infer {
 
     /// A declared type that is not a function's, such as a context's or an
     /// input's, at this use: every structural node it builds is
-    /// `Label::Opaque` (types §1).
+    /// `Label::Elsewhere` (types §1).
     ///
     /// # Panics
     /// `ty` holds a type variable: `verify` refuses a context or an input
@@ -132,7 +132,7 @@ impl Infer {
             TyKind::Order => TyKind::Order,
             TyKind::Str => TyKind::Str,
             TyKind::Handle(result) => TyKind::Handle(self.instantiate_ty(at, *result)),
-            TyKind::Array(element, len) => {
+            TyKind::Array(element, len, _) => {
                 let element = self.instantiate_ty(at, *element);
                 let len = match len {
                     LenTerm::Known(len) => LenTerm::Known(*len),
@@ -140,18 +140,18 @@ impl Infer {
                         LenTerm::Var(*at.len_vars.entry(*index).or_insert_with(|| self.fresh_len()))
                     }
                 };
-                TyKind::Array(element, len)
+                TyKind::Array(element, len, Label::Elsewhere)
             }
             TyKind::Slice(element) => TyKind::Slice(self.instantiate_ty(at, *element)),
-            TyKind::Option(inner) => TyKind::Option(self.instantiate_ty(at, *inner)),
-            TyKind::Result(ok, err) => TyKind::Result(self.instantiate_ty(at, *ok), self.instantiate_ty(at, *err)),
-            TyKind::Tuple(items) => TyKind::Tuple(items.iter().map(|item| self.instantiate_ty(at, *item)).collect()),
+            TyKind::Option(inner, _) => TyKind::Option(self.instantiate_ty(at, *inner), Label::Elsewhere),
+            TyKind::Result(ok, err, _) => TyKind::Result(self.instantiate_ty(at, *ok), self.instantiate_ty(at, *err), Label::Elsewhere),
+            TyKind::Tuple(items, _) => TyKind::Tuple(items.iter().map(|item| self.instantiate_ty(at, *item)).collect(), Label::Elsewhere),
             TyKind::Object(ObjectTy::Structural(fields, ())) => TyKind::Object(ObjectTy::Structural(
                 fields
                     .iter()
                     .map(|(name, field)| (*name, self.instantiate_ty(at, *field)))
                     .collect(),
-                Label::Opaque,
+                Label::Elsewhere,
             )),
             TyKind::Object(ObjectTy::Declared(id, fields)) => TyKind::Object(ObjectTy::Declared(
                 *id,
@@ -166,7 +166,7 @@ impl Infer {
                     .iter()
                     .map(|(tag, payload)| (*tag, payload.map(|payload| self.instantiate_ty(at, payload))))
                     .collect(),
-                label: Label::Opaque,
+                label: Label::Elsewhere,
             },
             TyKind::Fn {
                 params,

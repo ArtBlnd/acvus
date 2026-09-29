@@ -104,7 +104,7 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, object: Term, head: Opti
     }
     let shape = cx.held(TyKind::Object(ObjectTy::Structural(
         Box::new([(field, part)]),
-        Label::Transparent,
+        Label::Here,
     )));
     cx.join(object, shape, span);
 }
@@ -169,7 +169,7 @@ pub(super) fn fire_index(
     };
     if let Some(sequence) = sequence {
         let part = match cx.infer.types().kind(cx.infer.shallow(sequence)) {
-            TyKind::Array(part, _) | TyKind::Slice(part) => *part,
+            TyKind::Array(part, _, _) | TyKind::Slice(part) => *part,
             other => panic!("a term closed as an array or a slice is one, not {other:?}"),
         };
         cx.eq(element, part, span);

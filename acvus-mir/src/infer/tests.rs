@@ -133,7 +133,7 @@ fn eq_binds_an_unbound_variable() {
 fn eq_refuses_a_variable_that_would_contain_itself() {
     let mut fx = Fixture::new();
     let var = fx.infer.fresh(Bound::Any);
-    let option = fx.kind(TyKind::Option(var));
+    let option = fx.kind(TyKind::Option(var, Label::Here));
     let TyKind::Var(id) = *fx.infer.types().kind(var) else { unreachable!() };
     assert_eq!(fx.infer.eq(var, option), Err(Mismatch::Occurs { var: id, in_term: option }));
 }
@@ -175,9 +175,9 @@ fn a_variable_linked_to_a_references_target_is_not_bound_to_a_reference() {
 fn every_constructor_is_invariant() {
     let mut fx = Fixture::new();
     let (i64_, i32_) = (fx.int(IntTy::I64), fx.int(IntTy::I32));
-    let (a, b) = (fx.kind(TyKind::Option(i64_)), fx.kind(TyKind::Option(i32_)));
+    let (a, b) = (fx.kind(TyKind::Option(i64_, Label::Here)), fx.kind(TyKind::Option(i32_, Label::Here)));
     assert_eq!(fx.infer.eq(a, b), Err(Mismatch::Heads { a: i64_, b: i32_ }));
-    let result = fx.kind(TyKind::Result(i64_, i64_));
+    let result = fx.kind(TyKind::Result(i64_, i64_, Label::Here));
     assert_eq!(fx.infer.eq(a, result), Err(Mismatch::Heads { a, b: result }));
 }
 
@@ -213,8 +213,8 @@ fn eq_binds_an_open_mark() {
 fn labels_never_make_two_equal_shapes_unequal() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let transparent = fx.object(&[("x", int)], Label::Transparent);
-    let opaque = fx.object(&[("x", int)], Label::Opaque);
+    let transparent = fx.object(&[("x", int)], Label::Here);
+    let opaque = fx.object(&[("x", int)], Label::Elsewhere);
     assert_eq!(fx.infer.eq(transparent, opaque), Ok(()));
 }
 
@@ -224,11 +224,11 @@ fn labels_never_make_two_equal_shapes_unequal() {
 fn a_shape_made_one_with_an_opaque_one_becomes_opaque() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let transparent = fx.object(&[("x", int)], Label::Transparent);
+    let transparent = fx.object(&[("x", int)], Label::Here);
     let program = fx.held(transparent);
-    let opaque = fx.object(&[("x", int)], Label::Opaque);
+    let opaque = fx.object(&[("x", int)], Label::Elsewhere);
     fx.infer.eq(program, opaque).unwrap();
-    let wider = fx.object(&[("x", int), ("y", int)], Label::Transparent);
+    let wider = fx.object(&[("x", int), ("y", int)], Label::Here);
     let wider = fx.held(wider);
     let y = fx.name("y");
     assert_eq!(
@@ -243,13 +243,13 @@ fn a_shape_made_one_with_an_opaque_one_becomes_opaque() {
 fn two_variables_made_one_stay_one_as_either_grows() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let x = fx.object(&[("x", int)], Label::Transparent);
+    let x = fx.object(&[("x", int)], Label::Here);
     let (a, b) = (fx.held(x), fx.held(x));
     fx.infer.eq(a, b).unwrap();
-    let y = fx.object(&[("y", int)], Label::Transparent);
+    let y = fx.object(&[("y", int)], Label::Here);
     let c = fx.held(y);
     fx.infer.join(a, c).unwrap();
-    assert_eq!(fx.fields_of(b), (vec![fx.name("x"), fx.name("y")], Label::Transparent));
+    assert_eq!(fx.fields_of(b), (vec![fx.name("x"), fx.name("y")], Label::Here));
 }
 
 // Bounds (extern-fn §1, types §5)
@@ -352,11 +352,11 @@ fn two_bounded_variables_made_one_admit_what_both_admit() {
 fn objects_join_at_the_union_of_their_fields() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let x = fx.object(&[("x", int)], Label::Transparent);
-    let y = fx.object(&[("y", int)], Label::Transparent);
+    let x = fx.object(&[("x", int)], Label::Here);
+    let y = fx.object(&[("y", int)], Label::Here);
     let (a, b) = (fx.held(x), fx.held(y));
     fx.infer.join(a, b).unwrap();
-    let union = (vec![fx.name("x"), fx.name("y")], Label::Transparent);
+    let union = (vec![fx.name("x"), fx.name("y")], Label::Here);
     assert_eq!(fx.fields_of(a), union);
     assert_eq!(fx.fields_of(b), union);
     assert_eq!(fx.infer.eq(a, b), Ok(()));
@@ -368,8 +368,8 @@ fn objects_join_at_the_union_of_their_fields() {
 fn an_opaque_side_never_grows() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let wide = fx.object(&[("x", int), ("y", int)], Label::Transparent);
-    let narrow = fx.object(&[("x", int)], Label::Opaque);
+    let wide = fx.object(&[("x", int), ("y", int)], Label::Here);
+    let narrow = fx.object(&[("x", int)], Label::Elsewhere);
     let (a, b) = (fx.held(wide), fx.held(narrow));
     let y = fx.name("y");
     assert_eq!(
@@ -384,8 +384,8 @@ fn an_opaque_side_never_grows() {
 fn a_transparent_side_grows_to_an_opaque_one() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let narrow = fx.object(&[("x", int)], Label::Transparent);
-    let wide = fx.object(&[("x", int), ("y", int)], Label::Opaque);
+    let narrow = fx.object(&[("x", int)], Label::Here);
+    let wide = fx.object(&[("x", int), ("y", int)], Label::Elsewhere);
     let (a, b) = (fx.held(narrow), fx.held(wide));
     fx.infer.join(a, b).unwrap();
     assert_eq!(fx.infer.shallow(a), wide);
@@ -397,18 +397,18 @@ fn a_transparent_side_grows_to_an_opaque_one() {
 fn join_relates_a_constructors_arguments_by_eq() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let x = fx.object(&[("x", int)], Label::Transparent);
-    let y = fx.object(&[("y", int)], Label::Transparent);
-    let (some_x, some_y) = (fx.kind(TyKind::Option(x)), fx.kind(TyKind::Option(y)));
+    let x = fx.object(&[("x", int)], Label::Here);
+    let y = fx.object(&[("y", int)], Label::Here);
+    let (some_x, some_y) = (fx.kind(TyKind::Option(x, Label::Here)), fx.kind(TyKind::Option(y, Label::Here)));
     let (a, b) = (fx.held(some_x), fx.held(some_y));
     assert_eq!(fx.infer.join(a, b), Err(Mismatch::Heads { a: x, b: y }));
 
     let (inner_x, inner_y) = (fx.held(x), fx.held(y));
-    let (some_x, some_y) = (fx.kind(TyKind::Option(inner_x)), fx.kind(TyKind::Option(inner_y)));
+    let (some_x, some_y) = (fx.kind(TyKind::Option(inner_x, Label::Here)), fx.kind(TyKind::Option(inner_y, Label::Here)));
     fx.infer.join(inner_x, inner_y).unwrap();
     let (a, b) = (fx.held(some_x), fx.held(some_y));
     fx.infer.join(a, b).unwrap();
-    assert_eq!(fx.fields_of(inner_y), (vec![fx.name("x"), fx.name("y")], Label::Transparent));
+    assert_eq!(fx.fields_of(inner_y), (vec![fx.name("x"), fx.name("y")], Label::Here));
 }
 
 /// types §2, §4: an object's fields are its members, and their types are
@@ -417,9 +417,9 @@ fn join_relates_a_constructors_arguments_by_eq() {
 fn a_shared_fields_types_are_related_by_eq() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let x = fx.object(&[("x", int)], Label::Transparent);
-    let y = fx.object(&[("y", int)], Label::Transparent);
-    let (px, py) = (fx.object(&[("p", x)], Label::Transparent), fx.object(&[("p", y)], Label::Transparent));
+    let x = fx.object(&[("x", int)], Label::Here);
+    let y = fx.object(&[("y", int)], Label::Here);
+    let (px, py) = (fx.object(&[("p", x)], Label::Here), fx.object(&[("p", y)], Label::Here));
     let (a, b) = (fx.held(px), fx.held(py));
     assert_eq!(fx.infer.join(a, b), Err(Mismatch::Heads { a: x, b: y }));
 }
@@ -428,9 +428,9 @@ fn a_shared_fields_types_are_related_by_eq() {
 #[test]
 fn enums_of_one_name_join_at_the_union_of_their_variants() {
     let mut fx = Fixture::new();
-    let a = fx.r#enum("E", &["A"], Label::Transparent);
-    let b = fx.r#enum("E", &["B"], Label::Transparent);
-    let union = fx.r#enum("E", &["A", "B"], Label::Transparent);
+    let a = fx.r#enum("E", &["A"], Label::Here);
+    let b = fx.r#enum("E", &["B"], Label::Here);
+    let union = fx.r#enum("E", &["A", "B"], Label::Here);
     let (a, b) = (fx.held(a), fx.held(b));
     fx.infer.join(a, b).unwrap();
     assert_eq!(fx.infer.shallow(a), union);
@@ -441,8 +441,8 @@ fn enums_of_one_name_join_at_the_union_of_their_variants() {
 #[test]
 fn enums_of_two_names_do_not_join() {
     let mut fx = Fixture::new();
-    let a = fx.r#enum("E", &["A"], Label::Transparent);
-    let b = fx.r#enum("F", &["A"], Label::Transparent);
+    let a = fx.r#enum("E", &["A"], Label::Here);
+    let b = fx.r#enum("F", &["A"], Label::Here);
     let (a, b) = (fx.held(a), fx.held(b));
     let (e, f) = (QualifiedRef::root(fx.name("E")), QualifiedRef::root(fx.name("F")));
     assert_eq!(fx.infer.join(a, b), Err(Mismatch::TwoEnums { a: e, b: f }));
@@ -452,8 +452,8 @@ fn enums_of_two_names_do_not_join() {
 #[test]
 fn a_closed_enum_does_not_grow_by_a_variant() {
     let mut fx = Fixture::new();
-    let open = fx.r#enum("E", &["A", "B"], Label::Transparent);
-    let closed = fx.r#enum("E", &["A"], Label::Opaque);
+    let open = fx.r#enum("E", &["A", "B"], Label::Here);
+    let closed = fx.r#enum("E", &["A"], Label::Elsewhere);
     let (a, b) = (fx.held(open), fx.held(closed));
     let tag = fx.name("B");
     assert_eq!(
@@ -759,7 +759,7 @@ fn an_unbound_variable_at_freeze_is_unsettled() {
     let mut fx = Fixture::new();
     let var = fx.infer.fresh(literal());
     let TyKind::Var(id) = *fx.infer.types().kind(var) else { unreachable!() };
-    let option = fx.kind(TyKind::Option(var));
+    let option = fx.kind(TyKind::Option(var, Label::Here));
     let mut into = Types::new();
     assert_eq!(
         fx.infer.freeze(&mut into, &mut FreezeMemo::default(), option),
@@ -779,13 +779,13 @@ fn an_unbound_variable_at_freeze_is_unsettled() {
 fn freeze_follows_variables_and_answers_a_frozen_term_from_the_memo() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let object = fx.object(&[("x", int)], Label::Opaque);
+    let object = fx.object(&[("x", int)], Label::Elsewhere);
     let held = fx.held(object);
-    let pair = fx.kind(TyKind::Tuple(Box::new([held, object])));
+    let pair = fx.kind(TyKind::Tuple(Box::new([held, object]), Label::Here));
     let mut into = Types::new();
     let mut memo = FreezeMemo::default();
     let frozen = fx.infer.freeze(&mut into, &mut memo, pair).unwrap();
-    let TyKind::Tuple(items) = into.kind(frozen).clone() else {
+    let TyKind::Tuple(items, _) = into.kind(frozen).clone() else {
         panic!("a tuple")
     };
     assert_eq!(items[0], items[1]);
@@ -845,7 +845,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     let mut types = Types::<Poly>::new();
     let t = types.intern(TyKind::Var(0));
     let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(x, t)]), ())));
-    let option = types.intern(TyKind::Option(t));
+    let option = types.intern(TyKind::Option(t, ()));
     let signature = pure_fn(&mut types, vec![object, t], option);
     let integer = TyVarBound::Integer {
         signed: true,
@@ -877,9 +877,9 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     };
     assert_eq!(
         fx.infer.types().kind(params[0]),
-        &TyKind::Object(ObjectTy::Structural(Box::new([(x, var)]), Label::Opaque))
+        &TyKind::Object(ObjectTy::Structural(Box::new([(x, var)]), Label::Elsewhere))
     );
-    assert_eq!(fx.infer.types().kind(ret), &TyKind::Option(var));
+    assert_eq!(fx.infer.types().kind(ret), &TyKind::Option(var, Label::Elsewhere));
     assert_eq!(
         fx.infer.unbound().collect::<Vec<_>>(),
         vec![(
@@ -971,16 +971,16 @@ fn a_literal_made_one_with_an_integer_bound_narrows_and_is_no_longer_a_literal()
 fn a_product_with_a_part_of_type_never_is_not_never() {
     let mut fx = Fixture::new();
     let (never, int) = (fx.kind(TyKind::Never), fx.int(IntTy::I64));
-    let tuple = fx.kind(TyKind::Tuple(Box::new([int, never])));
-    assert_eq!(fx.infer.types().kind(tuple), &TyKind::Tuple(Box::new([int, never])));
-    let object = fx.object(&[("x", int), ("y", never)], Label::Transparent);
+    let tuple = fx.kind(TyKind::Tuple(Box::new([int, never]), Label::Here));
+    assert_eq!(fx.infer.types().kind(tuple), &TyKind::Tuple(Box::new([int, never]), Label::Here));
+    let object = fx.object(&[("x", int), ("y", never)], Label::Here);
     assert!(matches!(fx.infer.types().kind(object), TyKind::Object(_)));
 
     let var = fx.infer.fresh(Bound::Any);
-    let pair = fx.kind(TyKind::Tuple(Box::new([int, var])));
+    let pair = fx.kind(TyKind::Tuple(Box::new([int, var]), Label::Here));
     fx.infer.eq(var, never).unwrap();
     let (types, frozen) = fx.freeze(pair);
-    let TyKind::Tuple(items) = types.kind(frozen) else {
+    let TyKind::Tuple(items, _) = types.kind(frozen) else {
         panic!("a tuple with a `!` part freezes to a tuple, not {:?}", types.kind(frozen));
     };
     assert_eq!(types.kind(items[1]), &TyKind::Never);
@@ -1109,15 +1109,15 @@ fn an_unbound_slot_takes_the_values_type_as_its_own() {
     let mut fx = Fixture::new();
     let decls = widening(&fx.names);
     let int = fx.int(IntTy::I64);
-    let x = fx.object(&[("x", int)], Label::Transparent);
+    let x = fx.object(&[("x", int)], Label::Here);
     let value = fx.held(x);
     let slot = fx.infer.fresh(Bound::Any);
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
     assert_eq!(fx.infer.shallow(slot), x);
-    let y = fx.object(&[("y", int)], Label::Transparent);
+    let y = fx.object(&[("y", int)], Label::Here);
     let more = fx.held(y);
     fx.infer.join(slot, more).unwrap();
-    assert_eq!(fx.fields_of(value), (vec![fx.name("x")], Label::Transparent));
+    assert_eq!(fx.fields_of(value), (vec![fx.name("x")], Label::Here));
 }
 
 /// types §2, §3: a value and a slot of one head but two shapes meet at
@@ -1128,13 +1128,13 @@ fn a_value_of_the_slots_head_joins_into_it() {
     let decls = widening(&fx.names);
     let int = fx.int(IntTy::I64);
     let (x, y) = (
-        fx.object(&[("x", int)], Label::Transparent),
-        fx.object(&[("y", int)], Label::Transparent),
+        fx.object(&[("x", int)], Label::Here),
+        fx.object(&[("y", int)], Label::Here),
     );
     let (value, slot) = (fx.held(y), fx.held(x));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
-    assert_eq!(fx.fields_of(slot), (vec![fx.name("x"), fx.name("y")], Label::Transparent));
-    assert_eq!(fx.fields_of(value), (vec![fx.name("y")], Label::Transparent));
+    assert_eq!(fx.fields_of(slot), (vec![fx.name("x"), fx.name("y")], Label::Here));
+    assert_eq!(fx.fields_of(value), (vec![fx.name("y")], Label::Here));
 }
 
 /// types §3: a slot folds its values by ⊔, the nearest common ancestor,
@@ -1366,7 +1366,7 @@ fn a_declared_type_is_instantiated_opaque() {
     let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(field, int)]), ())));
     let decls = Declarations::verify(raw(&fx.names, types, Vec::new(), Vec::new())).expect("verified");
     let term = fx.infer.instantiate_type(&decls, object);
-    assert_eq!(fx.fields_of(term), (vec![field], Label::Opaque));
+    assert_eq!(fx.fields_of(term), (vec![field], Label::Elsewhere));
 }
 
 /// types §5: an effect nothing constrains is opaque, and an argument whose

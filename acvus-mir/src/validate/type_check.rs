@@ -342,7 +342,7 @@ fn literal_ty(types: &mut Types<Concrete>, lit: &Literal) -> Option<Ty> {
         Literal::Char(_) => TyKind::Char,
         Literal::Bytes(bytes) => {
             let byte = types.intern(TyKind::Int(IntTy::U8));
-            TyKind::Array(byte, crate::ty::LenTerm::Known(bytes.len()))
+            TyKind::Array(byte, crate::ty::LenTerm::Known(bytes.len()), ())
         }
         Literal::Bool(_) => TyKind::Bool,
         Literal::List(_) => return None,
@@ -358,14 +358,14 @@ fn literal_ty(types: &mut Types<Concrete>, lit: &Literal) -> Option<Ty> {
 /// false positives.
 fn unwrap_element_ty(types: &Types<Concrete>, ty: Ty) -> Ty {
     match types.kind(ty) {
-        TyKind::Array(inner, _) => *inner,
+        TyKind::Array(inner, _, _) => *inner,
         _ => ty,
     }
 }
 
 fn as_array_inner(types: &Types<Concrete>, ty: Ty) -> Option<Ty> {
     match types.kind(ty) {
-        TyKind::Array(inner, _) => Some(*inner),
+        TyKind::Array(inner, _, _) => Some(*inner),
         _ => None,
     }
 }
@@ -693,9 +693,9 @@ impl<'t> CheckCtx<'t> {
                     .iter()
                     .find(|(name, _)| name == field)
                     .map(|(_, ty)| *ty),
-                (PathSeg::Index(_), TyKind::Array(elem, _)) => Some(*elem),
-                (PathSeg::Index(i), TyKind::Tuple(elems)) => elems.get(*i).copied(),
-                (PathSeg::Payload, TyKind::Option(payload)) => Some(*payload),
+                (PathSeg::Index(_), TyKind::Array(elem, _, _)) => Some(*elem),
+                (PathSeg::Index(i), TyKind::Tuple(elems, _)) => elems.get(*i).copied(),
+                (PathSeg::Payload, TyKind::Option(payload, _)) => Some(*payload),
                 (PathSeg::Payload, TyKind::Result(..) | TyKind::Enum { .. }) => return Some(recorded),
                 _ => None,
             };
@@ -1138,7 +1138,7 @@ impl<'t> CheckCtx<'t> {
             InstKind::ArrayBegin { dst, .. } => {
                 let dst_ty = ty!(*dst);
                 match self.kind(dst_ty) {
-                    TyKind::Array(_, len) if known_len(len) == 0 => {}
+                    TyKind::Array(_, len, _) if known_len(len) == 0 => {}
                     _ => self.invalid(pc, span, "ArrayBegin", "Array of length 0", dst_ty, errors),
                 }
             }
@@ -1147,7 +1147,7 @@ impl<'t> CheckCtx<'t> {
                 let array_ty = ty!(*array);
                 let value_ty = ty!(*value);
                 match (self.kind(dst_ty), self.kind(array_ty)) {
-                    (TyKind::Array(inner, len), TyKind::Array(held, held_len))
+                    (TyKind::Array(inner, len, _), TyKind::Array(held, held_len, _))
                         if known_len(len) == known_len(held_len) + 1 =>
                     {
                         let (inner, held) = (*inner, *held);
@@ -1178,7 +1178,7 @@ impl<'t> CheckCtx<'t> {
 
             InstKind::MakeTuple { dst, elements } => {
                 let dst_ty = ty!(*dst);
-                let TyKind::Tuple(elem_tys) = self.kind(dst_ty) else {
+                let TyKind::Tuple(elem_tys, _) = self.kind(dst_ty) else {
                     self.invalid(pc, span, "MakeTuple", "Tuple", dst_ty, errors);
                     return;
                 };
@@ -1247,7 +1247,7 @@ impl<'t> CheckCtx<'t> {
                             }),
                         }
                     }
-                    TyKind::Option(inner) => {
+                    TyKind::Option(inner, _) => {
                         let inner = *inner;
                         if let Some(val) = payload {
                             let val_ty = ty!(*val);
@@ -1485,7 +1485,7 @@ impl<'t> CheckCtx<'t> {
 
             InstKind::TupleIndex { dst, tuple, index } => {
                 let tup_ty = ty!(*tuple);
-                let TyKind::Tuple(elems) = self.kind(tup_ty) else {
+                let TyKind::Tuple(elems, _) = self.kind(tup_ty) else {
                     self.invalid(pc, span, "TupleIndex", "Tuple", tup_ty, errors);
                     return;
                 };
@@ -1553,7 +1553,7 @@ impl<'t> CheckCtx<'t> {
                 };
                 if !matches!(
                     self.kind(src_ty),
-                    TyKind::Enum { .. } | TyKind::Option(_) | TyKind::Result(..)
+                    TyKind::Enum { .. } | TyKind::Option(.., _) | TyKind::Result(..)
                 ) {
                     self.invalid(pc, span, "TestVariant", "Enum/Option", src_ty, errors);
                 }
@@ -1564,7 +1564,7 @@ impl<'t> CheckCtx<'t> {
             InstKind::UnwrapVariant { dst, src } => {
                 let src_ty = ty!(*src);
                 match self.kind(src_ty) {
-                    TyKind::Option(inner) => {
+                    TyKind::Option(inner, _) => {
                         let inner = *inner;
                         let dst_ty = ty!(*dst);
                         self.assert_match(pc, span, "UnwrapVariant", "dst", inner, dst_ty, errors);
@@ -1699,7 +1699,7 @@ impl<'t> CheckCtx<'t> {
                     }
                     ForSource::Array(array) => {
                         let array_ty = ty!(*array);
-                        let TyKind::Array(element, _) = *self.kind(array_ty) else {
+                        let TyKind::Array(element, _, _) = *self.kind(array_ty) else {
                             self.invalid(pc, span, "For", "Array", array_ty, errors);
                             return;
                         };
@@ -2166,7 +2166,7 @@ mod tests {
 
     fn array_of_i64(types: &mut Types<Concrete>) -> Ty {
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        types.intern(TyKind::Array(i64_ty, LenTerm::Known(3)))
+        types.intern(TyKind::Array(i64_ty, LenTerm::Known(3), ()))
     }
 
     /// `&str`: a shared reference to the run of bytes a `String` lends.
@@ -2444,7 +2444,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let string_ty = types.intern(TyKind::String);
-        let tuple_ty = types.intern(TyKind::Tuple(Box::new([i64_ty, string_ty])));
+        let tuple_ty = types.intern(TyKind::Tuple(Box::new([i64_ty, string_ty]), ()));
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
         let v1 = vf.next();

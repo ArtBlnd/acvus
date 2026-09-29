@@ -41,8 +41,8 @@ pub(crate) fn part_ty(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> Ty {
     let mut at = ty;
     for seg in path {
         at = match (types.kind(at), seg) {
-            (TyKind::Tuple(items), PathSeg::Index(index)) => items[*index],
-            (TyKind::Array(element, _), PathSeg::Index(_)) => *element,
+            (TyKind::Tuple(items, _), PathSeg::Index(index)) => items[*index],
+            (TyKind::Array(element, _, _), PathSeg::Index(_)) => *element,
             (TyKind::Object(object), PathSeg::Field(field)) => field_ty(object, *field),
             (kind, seg) => panic!("{seg:?} names no part of {kind:?}; a path names only parts its type has"),
         };
@@ -65,8 +65,8 @@ fn field_ty(object: &ObjectTy<Concrete>, field: acvus_utils::Astr) -> Ty {
 /// `ty` has no parts a path names: a cut steps only into a product.
 fn children(types: &Types<Concrete>, ty: Ty) -> Vec<PathSeg> {
     match types.kind(ty) {
-        TyKind::Tuple(items) => (0..items.len()).map(PathSeg::Index).collect(),
-        TyKind::Array(_, len) => (0..known_len(len)).map(PathSeg::Index).collect(),
+        TyKind::Tuple(items, _) => (0..items.len()).map(PathSeg::Index).collect(),
+        TyKind::Array(_, len, _) => (0..known_len(len)).map(PathSeg::Index).collect(),
         TyKind::Object(object) => object.fields().iter().map(|(name, _)| PathSeg::Field(*name)).collect(),
         kind => panic!("a cut steps only into a tuple, an array or an object, not {kind:?}"),
     }

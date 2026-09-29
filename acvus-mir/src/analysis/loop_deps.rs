@@ -322,7 +322,7 @@ fn pull_shape(
             .all(|loan| loan.storage.slot() == Some(slot))
     });
     let pulls = args[..] == [*lent]
-        && matches!(types.kind(cfg.ty_of(*option)), TyKind::Option(_))
+        && matches!(types.kind(cfg.ty_of(*option)), TyKind::Option(.., _))
         && src == option
         && dst == cond;
     if !lends_one_storage || !pulls {
@@ -2482,7 +2482,7 @@ fn is_term(cfg: &CfgBody, types: &Types<Concrete>, value: ValueId, term: &MeansT
     let Some(kind) = def_of(cfg, value) else {
         return false;
     };
-    let is_option = |dst: &ValueId| matches!(types.kind(cfg.ty_of(*dst)), TyKind::Option(_));
+    let is_option = |dst: &ValueId| matches!(types.kind(cfg.ty_of(*dst)), TyKind::Option(.., _));
     match (term, kind) {
         (
             MeansTerm::Call { name, args },
@@ -6470,7 +6470,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                 payload: Some(payload),
                 ..
             } if self.payload_view.is_some()
-                && matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(_)) =>
+                && matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(.., _)) =>
             {
                 self.form(*payload)
             }
@@ -6629,7 +6629,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
                     dst,
                     payload: Some(payload),
                     ..
-                } if matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(_)) => *payload,
+                } if matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(.., _)) => *payload,
                 _ => value,
             },
             _ => value,
@@ -7364,7 +7364,7 @@ impl<'a, 's, 'cfg> LawReading<'a, 's, 'cfg> {
         };
         match self.inst(*at) {
             InstKind::MakeVariant { dst, tag, payload }
-                if matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(_)) =>
+                if matches!(self.types.kind(self.cfg.ty_of(*dst)), TyKind::Option(.., _)) =>
             {
                 Some(MadeOption {
                     tag: *tag,

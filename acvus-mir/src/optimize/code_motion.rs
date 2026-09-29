@@ -1763,7 +1763,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let string_ty = types.intern(TyKind::String);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(0)));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(0), ()));
         assert!(matches!(
             classified(
                 vec![InstKind::Const {

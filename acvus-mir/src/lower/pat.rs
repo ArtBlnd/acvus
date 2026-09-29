@@ -189,16 +189,16 @@ fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) 
 fn part_ty(cx: &Lcx<'_, '_>, whole: Ty, part: Part) -> Ty {
     let tags = cx.decls.core().tags;
     let found = match (cx.kind(whole), part) {
-        (TyKind::Tuple(items), Part::Tuple(index)) => items.get(index).copied(),
+        (TyKind::Tuple(items, _), Part::Tuple(index)) => items.get(index).copied(),
         (TyKind::Object(object), Part::Field(field)) => {
             object.fields().iter().find(|(name, _)| *name == field).map(|(_, ty)| *ty)
         }
-        (TyKind::Option(payload), Part::Payload(_)) => Some(*payload),
-        (TyKind::Result(ok, err), Part::Payload(tag)) => Some(if tag == tags.ok { *ok } else { *err }),
+        (TyKind::Option(payload, _), Part::Payload(_)) => Some(*payload),
+        (TyKind::Result(ok, err, _), Part::Payload(tag)) => Some(if tag == tags.ok { *ok } else { *err }),
         (TyKind::Enum { variants, .. }, Part::Payload(tag)) => {
             variants.iter().find(|(name, _)| *name == tag).and_then(|(_, payload)| *payload)
         }
-        (TyKind::Array(element, _), Part::Element(_)) => Some(*element),
+        (TyKind::Array(element, _, _), Part::Element(_)) => Some(*element),
         _ => None,
     };
     found.unwrap_or_else(|| panic!("typeck admits {part:?} only of a type that has it, not {:?}", cx.kind(whole)))
@@ -348,7 +348,7 @@ fn list_elements<'p, S: Slot>(
 ) -> Vec<(ListAt, &'p Pattern<S>)> {
     let heads = head.iter().enumerate();
     match cx.kind(matched.ty()) {
-        TyKind::Array(_, len) => {
+        TyKind::Array(_, len, _) => {
             let from_end = known_len(len) - tail.len();
             let tails = tail.iter().enumerate().map(|(at, part)| (ListAt::Array(from_end + at), part));
             heads.map(|(at, part)| (ListAt::Array(at), part)).chain(tails).collect()
@@ -472,7 +472,7 @@ fn switch_plan<S: Slot>(cx: &Lcx<'_, '_>, scrutinee: Ty, arms: &[MatchExprArm<S>
         TyKind::Ref(_, target) => target.ty(),
         _ => scrutinee,
     };
-    let tagged = matches!(cx.kind(tested), TyKind::Option(_) | TyKind::Result(..) | TyKind::Enum { .. });
+    let tagged = matches!(cx.kind(tested), TyKind::Option(.., _) | TyKind::Result(..) | TyKind::Enum { .. });
     let mut keyed: Vec<(SwitchKey, usize)> = Vec::new();
     let mut default = None;
     for (at, arm) in arms.iter().enumerate() {

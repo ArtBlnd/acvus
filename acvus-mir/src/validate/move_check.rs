@@ -692,7 +692,7 @@ pub(crate) fn emptied_by(
 fn under_options(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> Option<Ty> {
     let mut at = ty;
     for seg in path {
-        let (PathSeg::Payload, TyKind::Option(payload)) = (seg, types.kind(at)) else {
+        let (PathSeg::Payload, TyKind::Option(payload, _)) = (seg, types.kind(at)) else {
             return None;
         };
         at = *payload;
@@ -1220,12 +1220,12 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let float_ty = types.intern(TyKind::Float);
         let string_ty = types.intern(TyKind::String);
-        let option_float = types.intern(TyKind::Option(float_ty));
-        let option_string = types.intern(TyKind::Option(string_ty));
-        let option_option_float = types.intern(TyKind::Option(option_float));
+        let option_float = types.intern(TyKind::Option(float_ty, ()));
+        let option_string = types.intern(TyKind::Option(string_ty, ()));
+        let option_option_float = types.intern(TyKind::Option(option_float, ()));
         let user = test_user_defined(&i, &mut types);
-        let option_user = types.intern(TyKind::Option(user));
-        let option_option_user = types.intern(TyKind::Option(option_user));
+        let option_user = types.intern(TyKind::Option(user, ()));
+        let option_option_user = types.intern(TyKind::Option(option_user, ()));
         assert_eq!(is_move_only(&types, option_float), false);
         assert_eq!(is_move_only(&types, option_string), true);
         assert_eq!(is_move_only(&types, option_option_float), false);
@@ -1239,7 +1239,7 @@ mod tests {
         let bool_ty = types.intern(TyKind::Bool);
         let string_ty = types.intern(TyKind::String);
         let shared_string_ref = types.intern(TyKind::Ref(crate::ty::Mutability::Shared, TypeArg::Uniform(string_ty)));
-        let array_of_i64 = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let array_of_i64 = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3), ()));
         assert_eq!(is_move_only(&types, i64_ty), false);
         assert_eq!(is_move_only(&types, bool_ty), false);
         assert_eq!(is_move_only(&types, shared_string_ref), false);
@@ -1274,7 +1274,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let user = test_user_defined(&i, &mut types);
-        let ty = types.intern(TyKind::Tuple(Box::new([i64_ty, user])));
+        let ty = types.intern(TyKind::Tuple(Box::new([i64_ty, user]), ()));
         assert_eq!(is_move_only(&types, ty), true);
     }
 
@@ -1301,7 +1301,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let user_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3), ()));
         let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
@@ -1349,7 +1349,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let user_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3), ()));
         let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
@@ -1381,7 +1381,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let move_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3), ()));
         let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();
@@ -1465,7 +1465,7 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let move_ty = test_user_defined(&i, &mut types);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3), ()));
         let dummy = dummy_ty(&mut types);
         let mut vf = LocalFactory::<ValueId>::new();
         let v0 = vf.next();

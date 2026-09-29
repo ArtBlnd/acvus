@@ -381,7 +381,7 @@ impl Numbering {
         let container = self.operand(container)?.number;
         let held_by_value = match (&part, ty_of(cfg, types, container)) {
             (Part::Field { .. } | Part::Key(_), TyKind::Object(_)) => true,
-            (Part::TupleElement(_), TyKind::Tuple(_)) => true,
+            (Part::TupleElement(_), TyKind::Tuple(.., _)) => true,
             (Part::ArrayElement(_), TyKind::Array(..)) => true,
             _ => false,
         };

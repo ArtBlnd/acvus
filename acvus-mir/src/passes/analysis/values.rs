@@ -577,7 +577,7 @@ impl ValueBounds<'_> {
             panic!("an AsSlice's container {container:?} is a reference")
         };
         match self.types.kind(lent.ty()) {
-            TyKind::Array(_, len) => Some(i128::try_from(known_len(len)).expect("an array's length fits an i128")),
+            TyKind::Array(_, len, _) => Some(i128::try_from(known_len(len)).expect("an array's length fits an i128")),
             _ => None,
         }
     }

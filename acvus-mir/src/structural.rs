@@ -37,18 +37,18 @@ where
             .iter()
             .map(|(name, field)| (Component::Field(*name), *field))
             .collect(),
-        TyKind::Tuple(elements) => elements
+        TyKind::Tuple(elements, _) => elements
             .iter()
             .enumerate()
             .map(|(at, element)| (Component::TupleElement(at), *element))
             .collect(),
-        TyKind::Array(element, _) => vec![(Component::ArrayElement, *element)],
+        TyKind::Array(element, _, _) => vec![(Component::ArrayElement, *element)],
         TyKind::Enum { variants, .. } => variants
             .iter()
             .filter_map(|(tag, payload)| payload.map(|payload| (Component::VariantPayload(*tag), payload)))
             .collect(),
-        TyKind::Option(payload) => vec![(Component::Some, *payload)],
-        TyKind::Result(ok, err) => vec![(Component::Ok, *ok), (Component::Err, *err)],
+        TyKind::Option(payload, _) => vec![(Component::Some, *payload)],
+        TyKind::Result(ok, err, _) => vec![(Component::Ok, *ok), (Component::Err, *err)],
         TyKind::Never => Vec::new(),
         _ => return None,
     };

@@ -138,17 +138,17 @@ pub(super) fn lower_literal(cx: &mut Lcx<'_, '_>, site: AstId, literal: &Literal
 /// each entering the element type at its own site.
 fn lower_list<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, head: &[Expr<S>], tail: &[Expr<S>], span: Span) -> ValueId {
     let ty = cx.ty(site);
-    let TyKind::Array(element, _) = cx.kind(ty) else {
+    let TyKind::Array(element, _, _) = cx.kind(ty) else {
         panic!("a list is an array")
     };
     let element = *element;
     let items: Vec<&Expr<S>> = head.iter().chain(tail).collect();
-    let empty = cx.builder.intern(TyKind::Array(element, LenTerm::Known(0)));
+    let empty = cx.builder.intern(TyKind::Array(element, LenTerm::Known(0), ()));
     let mut array = cx.builder.push(Op::ArrayBegin { capacity: items.len() }, empty, span);
     for (at, item) in items.iter().enumerate() {
         let value = lower_expr(cx, item);
         let value = convert(cx, item.id(), value, item.span());
-        let longer = cx.builder.intern(TyKind::Array(element, LenTerm::Known(at + 1)));
+        let longer = cx.builder.intern(TyKind::Array(element, LenTerm::Known(at + 1), ()));
         array = cx.builder.push(Op::ArrayPush { array, value }, longer, item.span());
     }
     array

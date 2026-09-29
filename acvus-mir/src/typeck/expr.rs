@@ -212,7 +212,7 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
         // Rust's `b"…"`: a reference to an array of its bytes.
         Literal::Bytes(bytes) => {
             let byte = cx.node(TyKind::Int(IntTy::U8));
-            let array = cx.node(TyKind::Array(byte, LenTerm::Known(bytes.len())));
+            let array = cx.node(TyKind::Array(byte, LenTerm::Known(bytes.len()), Label::Here));
             cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)))
         }
         Literal::List(items) => {
@@ -221,7 +221,7 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
                 let term = check_literal(cx, item, span);
                 cx.eq(term, element, span);
             }
-            cx.held(TyKind::Array(element, LenTerm::Known(items.len())))
+            cx.held(TyKind::Array(element, LenTerm::Known(items.len()), Label::Here))
         }
     }
 }
@@ -244,7 +244,7 @@ fn check_list<S: Slot>(cx: &mut Ctxt<'_>, head: &[Expr<S>], rest: bool, tail: &[
         refusal::push(cx, RefusalKind::PatternInValue, span);
     }
     let len = LenTerm::Known(head.len() + tail.len());
-    cx.held(TyKind::Array(element, len))
+    cx.held(TyKind::Array(element, len, Label::Here))
 }
 
 /// `{ a: e, .. }`: a transparent object the program writes (types §1).
@@ -254,7 +254,7 @@ fn check_object<S: Slot>(cx: &mut Ctxt<'_>, fields: &[ObjectExprField<S>]) -> Te
         .map(|field| (field.key, check_expr(cx, &field.value, Demand::Read)))
         .collect();
     typed.sort_by_key(|(name, _)| *name);
-    cx.held(TyKind::Object(ObjectTy::Structural(typed.into(), Label::Transparent)))
+    cx.held(TyKind::Object(ObjectTy::Structural(typed.into(), Label::Here)))
 }
 
 /// `(a, b)`: a tuple of its parts' own types, and `()` is the unit. `_`
@@ -273,5 +273,5 @@ fn check_tuple<S: Slot>(cx: &mut Ctxt<'_>, elements: &[TupleElem<S>]) -> Term {
             }
         }
     }
-    cx.held(TyKind::Tuple(parts.into()))
+    cx.held(TyKind::Tuple(parts.into(), Label::Here))
 }

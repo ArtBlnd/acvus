@@ -1254,7 +1254,7 @@ impl Body {
 /// them (compilation §3).
 pub(super) fn structural_fields(types: &Types<Concrete>, ty: Ty) -> Option<Vec<(PathSeg, Ty)>> {
     match types.kind(ty) {
-        TyKind::Tuple(elements) => Some(elements.iter().enumerate().map(|(index, ty)| (PathSeg::Index(index), *ty)).collect()),
+        TyKind::Tuple(elements, _) => Some(elements.iter().enumerate().map(|(index, ty)| (PathSeg::Index(index), *ty)).collect()),
         TyKind::Object(ObjectTy::Structural(fields, _)) => {
             Some(fields.iter().map(|(name, ty)| (PathSeg::Field(*name), *ty)).collect())
         }

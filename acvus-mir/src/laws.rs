@@ -213,7 +213,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             }
         }
         Laws::Inverse(restore) => {
-            let ([state], TyKind::Option(payload)) = (&params[..], poly.kind(ret)) else {
+            let ([state], TyKind::Option(payload, _)) = (&params[..], poly.kind(ret)) else {
                 return Err(Unresolved::UnfitDeclaration);
             };
             let TyKind::Ref(Mutability::Mut, state) = poly.kind(*state) else {
@@ -229,7 +229,7 @@ pub fn resolve(laws: &Laws, declaring: TyId<Poly>, decls: &Declarations) -> Resu
             )?))
         }
         Laws::Payload => match &params[..] {
-            [option] if poly.kind(*option) == &TyKind::Option(ret) => Ok(ResolvedLaws::Payload),
+            [option] if poly.kind(*option) == &TyKind::Option(ret, ()) => Ok(ResolvedLaws::Payload),
             _ => Err(Unresolved::UnfitDeclaration),
         },
         Laws::Equivalence => match compares_two_shared(poly, params) && poly.kind(ret) == &TyKind::Bool {
@@ -308,7 +308,7 @@ fn extension_of(poly: &Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> O
     let [a, b] = params else {
         return None;
     };
-    let TyKind::Option(payload) = poly.kind(ret) else {
+    let TyKind::Option(payload, _) = poly.kind(ret) else {
         return None;
     };
     (a == b && a == payload).then_some(*a)
@@ -450,17 +450,17 @@ impl<'a> PatternMatch<'a> {
             | (TyKind::Unit, TyKind::Unit)
             | (TyKind::Never, TyKind::Never)
             | (TyKind::Order, TyKind::Order) => true,
-            (TyKind::Array(element, len), TyKind::Array(p_element, p_len)) => {
+            (TyKind::Array(element, len, _), TyKind::Array(p_element, p_len, _)) => {
                 len_matches(len, p_len) && self.matches(*element, *p_element)
             }
-            (TyKind::Option(inner), TyKind::Option(p_inner))
+            (TyKind::Option(inner, _), TyKind::Option(p_inner, _))
             | (TyKind::Handle(inner), TyKind::Handle(p_inner))
             | (TyKind::Slice(inner), TyKind::Slice(p_inner)) => self.matches(*inner, *p_inner),
-            (TyKind::Result(ok, err), TyKind::Result(p_ok, p_err)) => {
+            (TyKind::Result(ok, err, _), TyKind::Result(p_ok, p_err, _)) => {
                 self.matches(*ok, *p_ok) && self.matches(*err, *p_err)
             }
             (TyKind::Ref(m, target), TyKind::Ref(p_m, p_target)) => m == p_m && self.arg_matches(target, p_target),
-            (TyKind::Tuple(items), TyKind::Tuple(p_items)) => {
+            (TyKind::Tuple(items, _), TyKind::Tuple(p_items, _)) => {
                 items.len() == p_items.len() && self.all(items.iter().copied().zip(p_items.iter().copied()))
             }
             (TyKind::Object(object), TyKind::Object(p_object)) => {

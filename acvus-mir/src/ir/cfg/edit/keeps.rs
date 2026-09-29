@@ -188,7 +188,7 @@ impl TypeCheck<'_> {
                     acvus_ast::Literal::Unit => matches!(kind, TyKind::Unit),
                     acvus_ast::Literal::Bytes(bytes) => matches!(
                         kind,
-                        TyKind::Array(byte, len)
+                        TyKind::Array(byte, len, _)
                             if matches!(self.kind(*byte), TyKind::Int(IntTy::U8)) && known_len(len) == bytes.len()
                     ),
                     acvus_ast::Literal::List(_) => matches!(kind, TyKind::Array(..)),
@@ -259,7 +259,7 @@ impl TypeCheck<'_> {
                     return Err(format!("{src:?} is not a reference"));
                 };
                 found(held == mutability, || format!("{src:?} is not a {mutability:?} reference"))?;
-                let TyKind::Array(element, _) = self.kind(lent.ty()) else {
+                let TyKind::Array(element, _, _) = self.kind(lent.ty()) else {
                     return Err(format!("{src:?} lends {:?}, not an array", self.kind(lent.ty())));
                 };
                 let (made, viewed) = self.slice(Self::result(inst)?)?;
@@ -375,12 +375,12 @@ impl TypeCheck<'_> {
             }
             Op::ArrayBegin { .. } => self.is(
                 Self::result(inst)?,
-                |kind| matches!(kind, TyKind::Array(_, len) if known_len(len) == 0),
+                |kind| matches!(kind, TyKind::Array(_, len, _) if known_len(len) == 0),
                 "an array of no elements",
             ),
             Op::ArrayPush { array, value } => {
                 let result = Self::result(inst)?;
-                let (TyKind::Array(element, len), TyKind::Array(held, held_len)) =
+                let (TyKind::Array(element, len, _), TyKind::Array(held, held_len, _)) =
                     (self.kind(self.ty(result)), self.kind(self.ty(*array)))
                 else {
                     return Err(format!("{result:?} and {array:?} are not both arrays"));
@@ -403,21 +403,21 @@ impl TypeCheck<'_> {
                 Ok(())
             }
             Op::MakeTuple { elements } => {
-                let TyKind::Tuple(element_tys) = self.kind(self.ty(Self::result(inst)?)) else {
+                let TyKind::Tuple(element_tys, _) = self.kind(self.ty(Self::result(inst)?)) else {
                     return Err("the result is not a tuple".to_string());
                 };
                 found(element_tys.len() == elements.len(), || "the tuple's arity differs".to_string())?;
                 elements.iter().zip(element_tys.iter()).try_for_each(|(element, ty)| self.same(*element, *ty, "the element"))
             }
             Op::TupleIndex { tuple, index } => match self.kind(self.ty(*tuple)) {
-                TyKind::Tuple(elements) => match elements.get(*index) {
+                TyKind::Tuple(elements, _) => match elements.get(*index) {
                     Some(element) => self.same(Self::result(inst)?, *element, "the element"),
                     None => Err(format!("{tuple:?} has no element {index}")),
                 },
                 other => Err(format!("{tuple:?} is {other:?}, not a tuple")),
             },
             Op::ArrayIndex { array, .. } => match self.kind(self.ty(*array)) {
-                TyKind::Array(element, _) => self.same(Self::result(inst)?, *element, "the element"),
+                TyKind::Array(element, _, _) => self.same(Self::result(inst)?, *element, "the element"),
                 other => Err(format!("{array:?} is {other:?}, not an array")),
             },
             Op::ObjectGet { object, key } => {
@@ -430,7 +430,7 @@ impl TypeCheck<'_> {
             Op::MakeVariant { tag, payload } => {
                 let result = Self::result(inst)?;
                 match (self.kind(self.ty(result)), payload) {
-                    (TyKind::Option(held), Some(payload)) => self.same(*payload, *held, "the Option's payload"),
+                    (TyKind::Option(held, _), Some(payload)) => self.same(*payload, *held, "the Option's payload"),
                     (TyKind::Enum { variants, .. }, payload) => {
                         let Some((_, declared)) = variants.iter().find(|(name, _)| name == tag) else {
                             return Err(format!("the enum has no variant {tag:?}"));
@@ -443,8 +443,8 @@ impl TypeCheck<'_> {
                             }
                         }
                     }
-                    (TyKind::Option(_), None) => Ok(()),
-                    (TyKind::Result(ok, err), Some(payload)) => self.one_of(*payload, &[*ok, *err], "a Result's payload"),
+                    (TyKind::Option(.., _), None) => Ok(()),
+                    (TyKind::Result(ok, err, _), Some(payload)) => self.one_of(*payload, &[*ok, *err], "a Result's payload"),
                     (TyKind::Result(..), None) => Err("a Result's variant always carries a payload".to_string()),
                     (other, _) => Err(format!("the result is {other:?}, not a variant type")),
                 }
@@ -488,9 +488,9 @@ impl TypeCheck<'_> {
                     (PathSeg::Field(field), TyKind::Object(object)) => {
                         next.extend(object.fields().iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty))
                     }
-                    (PathSeg::Index(_), TyKind::Array(element, _)) => next.push(*element),
-                    (PathSeg::Index(index), TyKind::Tuple(elements)) => next.extend(elements.get(*index).copied()),
-                    (PathSeg::Payload, TyKind::Option(_) | TyKind::Result(..) | TyKind::Enum { .. }) => {
+                    (PathSeg::Index(_), TyKind::Array(element, _, _)) => next.push(*element),
+                    (PathSeg::Index(index), TyKind::Tuple(elements, _)) => next.extend(elements.get(*index).copied()),
+                    (PathSeg::Payload, TyKind::Option(.., _) | TyKind::Result(..) | TyKind::Enum { .. }) => {
                         next.extend(self.payloads(at)?)
                     }
                     _ => {}
@@ -507,8 +507,8 @@ impl TypeCheck<'_> {
     /// The payload types a variant of `ty` may carry.
     fn payloads(&self, ty: Ty) -> Result<Vec<Ty>, String> {
         match self.kind(ty) {
-            TyKind::Option(payload) => Ok(vec![*payload]),
-            TyKind::Result(ok, err) => Ok(vec![*ok, *err]),
+            TyKind::Option(payload, _) => Ok(vec![*payload]),
+            TyKind::Result(ok, err, _) => Ok(vec![*ok, *err]),
             TyKind::Enum { variants, .. } => Ok(variants.iter().filter_map(|(_, payload)| *payload).collect()),
             other => Err(format!("{other:?} is not a variant type")),
         }
@@ -605,7 +605,7 @@ impl TypeCheck<'_> {
     fn key_fits(&self, key: &SwitchKey, scrutinee: Ty) -> Found {
         let fits = match (key, self.kind(scrutinee)) {
             (SwitchKey::Tag(tag), TyKind::Enum { variants, .. }) => variants.iter().any(|(name, _)| name == tag),
-            (SwitchKey::Tag(_), TyKind::Option(_) | TyKind::Result(..)) => true,
+            (SwitchKey::Tag(_), TyKind::Option(.., _) | TyKind::Result(..)) => true,
             (SwitchKey::Int(_), TyKind::Int(_)) | (SwitchKey::Bool(_), TyKind::Bool) | (SwitchKey::Char(_), TyKind::Char) => {
                 true
             }
@@ -630,7 +630,7 @@ impl TypeCheck<'_> {
                 (Element::Lent(wanted, element), true)
             }
             ForSource::Array(array) => match self.kind(self.ty(*array)) {
-                TyKind::Array(element, _) => (Element::Held(*element), true),
+                TyKind::Array(element, _, _) => (Element::Held(*element), true),
                 other => return Err(format!("{array:?} is {other:?}, not an array")),
             },
             ForSource::Range { at, hi } => {

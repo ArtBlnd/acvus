@@ -1329,7 +1329,7 @@ impl std::fmt::Debug for MirModule {
 /// option a box would have to move this arm with it.
 pub fn is_word(types: &Types<Concrete>, ty: Ty) -> bool {
     acvus_utils::grow(|| match types.kind(ty) {
-        crate::ty::TyKind::Option(payload) => is_word(types, *payload),
+        crate::ty::TyKind::Option(payload, _) => is_word(types, *payload),
         kind => is_scalar(kind) || matches!(kind, crate::ty::TyKind::Ref(..)),
     })
 }
@@ -1344,8 +1344,8 @@ pub fn is_scalar(kind: &crate::ty::TyKind<Concrete>) -> bool {
         TyKind::String
         | TyKind::Array(..)
         | TyKind::Object(_)
-        | TyKind::Tuple(_)
-        | TyKind::Option(_)
+        | TyKind::Tuple(.., _)
+        | TyKind::Option(.., _)
         | TyKind::Result(..)
         | TyKind::Fn { .. }
         | TyKind::UserDefined { .. }

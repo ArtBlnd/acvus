@@ -1957,7 +1957,7 @@ impl TyDisplay<'_> {
                 }
                 write!(f, "}}")
             }
-            TyKind::Tuple(elems) => {
+            TyKind::Tuple(elems, _) => {
                 write!(f, "(")?;
                 for (i, e) in elems.iter().enumerate() {
                     if i > 0 {
@@ -1988,10 +1988,10 @@ impl TyDisplay<'_> {
                 write!(f, ") -> {}", self.nested(*ret))?;
                 write_effect(known_effect(effect), interner, f)
             }
-            TyKind::Array(inner, len) => write!(f, "Array<{}, {}>", self.nested(*inner), known_len(len)),
+            TyKind::Array(inner, len, _) => write!(f, "Array<{}, {}>", self.nested(*inner), known_len(len)),
             TyKind::Handle(inner) => write!(f, "Handle<{}>", self.nested(*inner)),
-            TyKind::Option(inner) => write!(f, "Option<{}>", self.nested(*inner)),
-            TyKind::Result(ok, err) => write!(f, "Result<{}, {}>", self.nested(*ok), self.nested(*err)),
+            TyKind::Option(inner, _) => write!(f, "Option<{}>", self.nested(*inner)),
+            TyKind::Result(ok, err, _) => write!(f, "Result<{}, {}>", self.nested(*ok), self.nested(*err)),
             // Identity arguments are not printed. An identity is a source,
             // and its number names that source to nobody: a reader told
             // `Iterator<i64, Pure, #1>` learns only that there is a `#1`.

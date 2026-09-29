@@ -1460,7 +1460,7 @@ fn loan_fixture() -> LoanFixture {
     let bool = types.intern(TyKind::Bool);
     let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
     let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
-    let option_ref = types.intern(TyKind::Option(ref_int));
+    let option_ref = types.intern(TyKind::Option(ref_int, ()));
     let mut function = |params: &[Ty], ret: Ty, flows: Flows| {
         types.intern(TyKind::Fn {
             params: params.into(),

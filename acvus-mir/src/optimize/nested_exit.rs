@@ -57,7 +57,7 @@ impl Verdict {
             [] => Verdict::BoolLeaves,
             [one] => Verdict::SomeCarries { payload: *one },
             many => Verdict::SomeCarries {
-                payload: types.intern(TyKind::Tuple(many.into())),
+                payload: types.intern(TyKind::Tuple(many.into(), ())),
             },
         }
     }
@@ -65,7 +65,7 @@ impl Verdict {
     fn ty(&self, types: &mut Types<Concrete>) -> Ty {
         match self {
             Verdict::BoolLeaves => types.intern(TyKind::Bool),
-            Verdict::SomeCarries { payload } => types.intern(TyKind::Option(*payload)),
+            Verdict::SomeCarries { payload } => types.intern(TyKind::Option(*payload, ())),
         }
     }
 }

@@ -1420,7 +1420,7 @@ fn extraction(types: &Types<Concrete>, ty: Ty, value: ValueId, path: &[PathSeg])
         .collect();
     match (fields.as_deref(), path, types.kind(ty)) {
         (Some([field, rest @ ..]), _, _) => Op::FieldGet { object: value, field: *field, rest: rest.to_vec() },
-        (_, [PathSeg::Index(index)], TyKind::Tuple(_)) => Op::TupleIndex { tuple: value, index: *index },
+        (_, [PathSeg::Index(index)], TyKind::Tuple(.., _)) => Op::TupleIndex { tuple: value, index: *index },
         (_, [PathSeg::Index(index)], TyKind::Array(..)) => Op::ArrayIndex { array: value, index: *index },
         (_, path, kind) => panic!("a value's part is named by fields or by one index of a tuple or an array, not {path:?} of {kind:?}"),
     }

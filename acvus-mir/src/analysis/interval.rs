@@ -529,7 +529,7 @@ fn array_len(types: &Types<Concrete>, container: Ty) -> Option<u64> {
         _ => container,
     };
     match types.kind(array) {
-        TyKind::Array(_, len) => u64::try_from(known_len(len)).ok(),
+        TyKind::Array(_, len, _) => u64::try_from(known_len(len)).ok(),
         _ => None,
     }
 }

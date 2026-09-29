@@ -373,7 +373,7 @@ impl Count {
                 Some(Count::Range { at, hi, ty })
             }
             ForSource::Array(array) => {
-                let TyKind::Array(_, len) = types.kind(cfg.val_types[&array]) else {
+                let TyKind::Array(_, len, _) = types.kind(cfg.val_types[&array]) else {
                     panic!("an array source {array:?} is an `Array`")
                 };
                 let len = known_len(len);

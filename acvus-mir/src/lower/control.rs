@@ -369,7 +369,7 @@ pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr
         TryExit::Option(_) => cx.builder.push(Op::MakeVariant { tag: tags.none, payload: None }, exit_ty, span),
         TryExit::Result(_) => {
             let error_ty = match cx.kind(cx.value_ty(tried)) {
-                TyKind::Result(_, error) => *error,
+                TyKind::Result(_, error, _) => *error,
                 other => panic!("a `?` that leaves by `Err` tries a `Result`, not {other:?}"),
             };
             let error = cx.builder.push(Op::UnwrapVariant { src: tried }, error_ty, span);

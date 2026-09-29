@@ -244,7 +244,7 @@ impl KnownValues {
     ) -> Option<SwitchKey> {
         match (kind, self.values.get(&tag)?) {
             (SwitchKey::Tag(_), Known::Variant { tag, .. }) => match scrutinee(types, tag_ty) {
-                TyKind::Option(_) | TyKind::Result(..) | TyKind::Enum { .. } => Some(SwitchKey::Tag(*tag)),
+                TyKind::Option(.., _) | TyKind::Result(..) | TyKind::Enum { .. } => Some(SwitchKey::Tag(*tag)),
                 _ => None,
             },
             (SwitchKey::Int(_), Known::Word(Word::Int(n))) => match types.kind(tag_ty) {
@@ -323,7 +323,7 @@ impl KnownValues {
                 // an `Option` from whether a payload is present and
                 // `prepare::lay_variant` from the tag, so only a value on
                 // which the two agree is known, and a test may read either.
-                if let TyKind::Option(_) = ty(dst) {
+                if let TyKind::Option(.., _) = ty(dst) {
                     let some = *tag == tags.some && payload.is_some();
                     let none = *tag == tags.none && payload.is_none();
                     if !(some || none) {
@@ -371,10 +371,10 @@ impl KnownValues {
                     // is a `Some` with whether the tested tag is `Some`. The
                     // lowering tests an `Option` for `Some` or `None` only,
                     // and any other tag is left unfolded.
-                    TyKind::Option(_) if *tag == tags.some || *tag == tags.none => {
+                    TyKind::Option(.., _) if *tag == tags.some || *tag == tags.none => {
                         payload.is_some() == (*tag == tags.some)
                     }
-                    TyKind::Option(_) => return None,
+                    TyKind::Option(.., _) => return None,
                     TyKind::Result(..) | TyKind::Enum { .. } => held == tag,
                     _ => return None,
                 };

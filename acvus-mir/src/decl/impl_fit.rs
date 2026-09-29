@@ -131,10 +131,10 @@ impl Choice<'_> {
             ) => types.kind(generic) == other,
             (TyKind::Handle(a), TyKind::Handle(b))
             | (TyKind::Slice(a), TyKind::Slice(b))
-            | (TyKind::Option(a), TyKind::Option(b)) => self.ty(*a, *b),
-            (TyKind::Array(a, a_len), TyKind::Array(b, b_len)) => self.len(a_len, b_len) && self.ty(*a, *b),
-            (TyKind::Tuple(a), TyKind::Tuple(b)) => all_pairs(a, b, |a, b| self.ty(*a, *b)),
-            (TyKind::Result(a_ok, a_err), TyKind::Result(b_ok, b_err)) => {
+            | (TyKind::Option(a, _), TyKind::Option(b, _)) => self.ty(*a, *b),
+            (TyKind::Array(a, a_len, _), TyKind::Array(b, b_len, _)) => self.len(a_len, b_len) && self.ty(*a, *b),
+            (TyKind::Tuple(a, _), TyKind::Tuple(b, _)) => all_pairs(a, b, |a, b| self.ty(*a, *b)),
+            (TyKind::Result(a_ok, a_err, _), TyKind::Result(b_ok, b_err, _)) => {
                 self.ty(*a_ok, *b_ok) && self.ty(*a_err, *b_err)
             }
             (TyKind::Object(a), TyKind::Object(b)) => {
@@ -223,8 +223,8 @@ impl Choice<'_> {
                 TyKind::Handle(_)
                 | TyKind::Array(..)
                 | TyKind::Slice(_)
-                | TyKind::Tuple(_)
-                | TyKind::Option(_)
+                | TyKind::Tuple(.., _)
+                | TyKind::Option(.., _)
                 | TyKind::Result(..)
                 | TyKind::Object(_)
                 | TyKind::Enum { .. }

@@ -221,7 +221,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
                         true => LenTerm::Var(cx.infer.fresh_len()),
                         false => LenTerm::Known(head.len() + tail.len()),
                     };
-                    TyKind::Array(element, len)
+                    TyKind::Array(element, len, Label::Here)
                 }
             };
             let listed = cx.held(listed);
@@ -233,7 +233,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
         Form::Object { fields } => object(cx, fields, scrutinee, lent, span),
         Form::Tuple { parts } => {
             let terms: Vec<Term> = parts.iter().map(|_| cx.fresh()).collect();
-            let tuple = cx.held(TyKind::Tuple(terms.clone().into()));
+            let tuple = cx.held(TyKind::Tuple(terms.clone().into(), Label::Here));
             cx.join(scrutinee, tuple, span);
             for (part, term) in parts.into_iter().zip(terms) {
                 if let Some(part) = part {
@@ -287,7 +287,7 @@ fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, lent: 
     let terms: Vec<(Astr, Term)> = fields.iter().map(|(key, _)| (*key, cx.fresh())).collect();
     let mut sorted = terms.clone();
     sorted.sort_by_key(|(name, _)| *name);
-    let object = cx.held(TyKind::Object(ObjectTy::Structural(sorted.into(), Label::Transparent)));
+    let object = cx.held(TyKind::Object(ObjectTy::Structural(sorted.into(), Label::Here)));
     cx.join(scrutinee, object, span);
     for ((_, part), (_, term)) in fields.into_iter().zip(terms) {
         destructure(cx, part, term, lent);
@@ -313,17 +313,17 @@ fn variant(
             let kind = TyKind::Enum {
                 name: QualifiedRef::root(name),
                 variants: Box::new([(tag, part)]),
-                label: Label::Transparent,
+                label: Label::Here,
             };
             (kind, part)
         }
         None if tag == tags.some || tag == tags.none => {
             let inner = cx.fresh();
-            (TyKind::Option(inner), (tag == tags.some).then_some(inner))
+            (TyKind::Option(inner, Label::Here), (tag == tags.some).then_some(inner))
         }
         None if tag == tags.ok || tag == tags.err => {
             let (ok, err) = (cx.fresh(), cx.fresh());
-            (TyKind::Result(ok, err), Some(if tag == tags.ok { ok } else { err }))
+            (TyKind::Result(ok, err, Label::Here), Some(if tag == tags.ok { ok } else { err }))
         }
         None => {
             refusal::push(cx, RefusalKind::UnnamedVariant { tag }, span);

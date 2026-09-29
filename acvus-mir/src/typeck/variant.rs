@@ -27,19 +27,19 @@ pub(super) fn check_variant<S: Slot>(
             let shape = TyKind::Enum {
                 name: QualifiedRef::root(name),
                 variants: Box::new([(tag, payload)]),
-                label: Label::Transparent,
+                label: Label::Here,
             };
             (shape, payload.is_some())
         }
-        None if tag == tags.some => (TyKind::Option(payload_or_fresh(cx, payload)), true),
-        None if tag == tags.none => (TyKind::Option(cx.fresh()), false),
+        None if tag == tags.some => (TyKind::Option(payload_or_fresh(cx, payload), Label::Here), true),
+        None if tag == tags.none => (TyKind::Option(cx.fresh(), Label::Here), false),
         None if tag == tags.ok => {
             let err = cx.fresh();
-            (TyKind::Result(payload_or_fresh(cx, payload), err), true)
+            (TyKind::Result(payload_or_fresh(cx, payload), err, Label::Here), true)
         }
         None if tag == tags.err => {
             let ok = cx.fresh();
-            (TyKind::Result(ok, payload_or_fresh(cx, payload)), true)
+            (TyKind::Result(ok, payload_or_fresh(cx, payload), Label::Here), true)
         }
         None => {
             refusal::push(cx, RefusalKind::UnnamedVariant { tag }, span);

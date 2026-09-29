@@ -121,7 +121,7 @@ mod tests {
         let string_ty = types.intern(TyKind::String);
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let elem_ty = obj_ty(&mut types, vec![(name, string_ty), (age, i64_ty)]);
-        let users_ty = types.intern(TyKind::Array(elem_ty, LenTerm::Known(3)));
+        let users_ty = types.intern(TyKind::Array(elem_ty, LenTerm::Known(3), ()));
         compile_template(
             &i,
             "% if let [{ name, }, ..] = &@users\n{{ name }}\n% end\n",
@@ -542,7 +542,7 @@ mod tests {
             calls: Calls::Many,
             holds: Holds::Nothing,
         });
-        let list_fn_ty = types.intern(TyKind::Array(fn_ty, LenTerm::Known(3)));
+        let list_fn_ty = types.intern(TyKind::Array(fn_ty, LenTerm::Known(3), ()));
         assert!(compile_script(&i, "@x = @x; @x", &[("x", list_fn_ty)]).is_err());
     }
 

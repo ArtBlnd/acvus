@@ -68,16 +68,16 @@ impl Bindings {
             | (TyKind::Never, TyKind::Never)
             | (TyKind::Order, TyKind::Order)
             | (TyKind::Str, TyKind::Str) => true,
-            (TyKind::Array(p, p_len), TyKind::Array(t, t_len)) => {
+            (TyKind::Array(p, p_len, _), TyKind::Array(t, t_len, _)) => {
                 self.bind_len(p_len, t_len) && self.bind(poly, *p, types, *t)
             }
-            (TyKind::Tuple(ps), TyKind::Tuple(ts)) => {
+            (TyKind::Tuple(ps, _), TyKind::Tuple(ts, _)) => {
                 ps.len() == ts.len() && self.bind_all(poly, types, ps.iter().copied().zip(ts.iter().copied()))
             }
-            (TyKind::Option(p), TyKind::Option(t))
+            (TyKind::Option(p, _), TyKind::Option(t, _))
             | (TyKind::Slice(p), TyKind::Slice(t))
             | (TyKind::Handle(p), TyKind::Handle(t)) => self.bind(poly, *p, types, *t),
-            (TyKind::Result(p_ok, p_err), TyKind::Result(t_ok, t_err)) => {
+            (TyKind::Result(p_ok, p_err, _), TyKind::Result(t_ok, t_err, _)) => {
                 self.bind(poly, *p_ok, types, *t_ok) && self.bind(poly, *p_err, types, *t_err)
             }
             (
@@ -286,19 +286,17 @@ impl Bindings {
             TyKind::Str => TyKind::Str,
             TyKind::Handle(inner) => TyKind::Handle(self.apply(poly, *inner, types, built)?),
             TyKind::Slice(inner) => TyKind::Slice(self.apply(poly, *inner, types, built)?),
-            TyKind::Option(inner) => TyKind::Option(self.apply(poly, *inner, types, built)?),
-            TyKind::Array(inner, len) => {
-                TyKind::Array(self.apply(poly, *inner, types, built)?, self.apply_len(len)?)
+            TyKind::Option(inner, _) => TyKind::Option(self.apply(poly, *inner, types, built)?, ()),
+            TyKind::Array(inner, len, _) => {
+                TyKind::Array(self.apply(poly, *inner, types, built)?, self.apply_len(len)?, ())
             }
-            TyKind::Result(ok, err) => {
-                TyKind::Result(self.apply(poly, *ok, types, built)?, self.apply(poly, *err, types, built)?)
+            TyKind::Result(ok, err, _) => {
+                TyKind::Result(self.apply(poly, *ok, types, built)?, self.apply(poly, *err, types, built)?, ())
             }
-            TyKind::Tuple(items) => TyKind::Tuple(
-                items
+            TyKind::Tuple(items, _) => TyKind::Tuple(items
                     .iter()
                     .map(|item| self.apply(poly, *item, types, built))
-                    .collect::<Option<_>>()?,
-            ),
+                    .collect::<Option<_>>()?, ()),
             TyKind::Object(object) => {
                 let fields = object
                     .fields()

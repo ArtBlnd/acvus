@@ -875,7 +875,7 @@ fn a_tuple_with_one_part_moved_drops_the_other_where_its_liveness_ends() {
     let mut f = fixture();
     let t = f.t;
     let mut builder = f.module.build_body(false, t.int);
-    let pair = builder.intern(TyKind::Tuple(Box::new([t.string, t.string])));
+    let pair = builder.intern(TyKind::Tuple(Box::new([t.string, t.string]), ()));
     let entry = builder.current_block();
     let first = text(t, &mut builder, at(1));
     let second = text(t, &mut builder, at(1));

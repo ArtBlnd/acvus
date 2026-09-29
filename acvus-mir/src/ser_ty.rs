@@ -349,7 +349,7 @@ fn to_ser_level(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> SerTy {
         TyKind::Bool => SerTy::Bool,
         TyKind::Unit => SerTy::Unit,
         TyKind::Never => SerTy::Never,
-        TyKind::Array(elem, len) => SerTy::Array {
+        TyKind::Array(elem, len, _) => SerTy::Array {
             len: known_len(len),
             elem: part(*elem),
         },
@@ -367,7 +367,7 @@ fn to_ser_level(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> SerTy {
                 .map(|(k, v)| (interner.resolve(*k).to_string(), to_ser(types, *v, interner)))
                 .collect(),
         },
-        TyKind::Tuple(elems) => SerTy::Tuple {
+        TyKind::Tuple(elems, _) => SerTy::Tuple {
             elems: elems.iter().map(|e| to_ser(types, *e, interner)).collect(),
         },
         TyKind::Fn {
@@ -418,8 +418,8 @@ fn to_ser_level(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> SerTy {
                 })
                 .collect(),
         },
-        TyKind::Option(inner) => SerTy::Option { inner: part(*inner) },
-        TyKind::Result(ok, err) => SerTy::Result {
+        TyKind::Option(inner, _) => SerTy::Option { inner: part(*inner) },
+        TyKind::Result(ok, err, _) => SerTy::Result {
             ok: part(*ok),
             err: part(*err),
         },
@@ -456,7 +456,7 @@ impl SerTy {
             SerTy::Bool => TyKind::Bool,
             SerTy::Unit => TyKind::Unit,
             SerTy::Never => TyKind::Never,
-            SerTy::Array { len, elem } => TyKind::Array(elem.to_ty(types, interner), LenTerm::Known(*len)),
+            SerTy::Array { len, elem } => TyKind::Array(elem.to_ty(types, interner), LenTerm::Known(*len), ()),
             SerTy::Object { object, fields } => {
                 let mut fields: Vec<_> = fields
                     .iter()
@@ -476,7 +476,7 @@ impl SerTy {
                     SerObjectKind::Structural => ObjectTy::Structural(fields, ()),
                 })
             }
-            SerTy::Tuple { elems } => TyKind::Tuple(elems.iter().map(|e| e.to_ty(types, interner)).collect()),
+            SerTy::Tuple { elems } => TyKind::Tuple(elems.iter().map(|e| e.to_ty(types, interner)).collect(), ()),
             SerTy::Fn {
                 params,
                 ret,
@@ -513,8 +513,8 @@ impl SerTy {
                 effect_args: effect_args.iter().map(|e| ser_to_effect_arg(e, interner)).collect(),
                 identity_args: identity_args.iter().map(|i| IdentityTerm::Known(i.id())).collect(),
             },
-            SerTy::Option { inner } => TyKind::Option(inner.to_ty(types, interner)),
-            SerTy::Result { ok, err } => TyKind::Result(ok.to_ty(types, interner), err.to_ty(types, interner)),
+            SerTy::Option { inner } => TyKind::Option(inner.to_ty(types, interner), ()),
+            SerTy::Result { ok, err } => TyKind::Result(ok.to_ty(types, interner), err.to_ty(types, interner), ()),
             SerTy::Enum {
                 namespace,
                 name,

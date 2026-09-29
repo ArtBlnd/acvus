@@ -67,14 +67,14 @@ fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>,
                 push_segments(poly, decls, arg.ty(), out);
             }
         }
-        TyKind::Array(element, _) | TyKind::Slice(element) | TyKind::Option(element) => {
+        TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
             push_segments(poly, decls, *element, out)
         }
-        TyKind::Result(ok, err) => {
+        TyKind::Result(ok, err, _) => {
             push_segments(poly, decls, *ok, out);
             push_segments(poly, decls, *err, out);
         }
-        TyKind::Tuple(items) => {
+        TyKind::Tuple(items, _) => {
             for item in items {
                 push_segments(poly, decls, *item, out);
             }

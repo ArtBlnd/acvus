@@ -1426,7 +1426,7 @@ mod tests {
         let interner = Interner::new();
         let mut types = Types::<Concrete>::new();
         let elem_ty = user_defined_ty(&mut types, &interner);
-        let array_ty = types.intern(TyKind::Array(elem_ty, crate::ty::LenTerm::Known(3)));
+        let array_ty = types.intern(TyKind::Array(elem_ty, crate::ty::LenTerm::Known(3), ()));
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
@@ -1461,7 +1461,7 @@ mod tests {
         let interner = Interner::new();
         let mut types = Types::<Concrete>::new();
         let i64_ty = types.intern(TyKind::Int(IntTy::I64));
-        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3)));
+        let array_ty = types.intern(TyKind::Array(i64_ty, crate::ty::LenTerm::Known(3), ()));
         let (mut cfg, val_types) = make_cfg_with_types(
             vec![
                 InstKind::Const {

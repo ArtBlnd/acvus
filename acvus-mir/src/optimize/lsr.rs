@@ -505,7 +505,7 @@ impl Scope<'_> {
                 .zip(int(&Invariant::Outside(hi)))
                 .map(|(at, hi)| (at, hi - 1)),
             (Counted::Index, ForSource::Array(array)) => match self.types.kind(self.cfg.val_types[&array]) {
-                TyKind::Array(_, len) => i128::try_from(known_len(len)).ok().map(|len| (0, len - 1)),
+                TyKind::Array(_, len, _) => i128::try_from(known_len(len)).ok().map(|len| (0, len - 1)),
                 _ => None,
             },
 

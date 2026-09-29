@@ -342,7 +342,7 @@ impl Iv {
         let trip = match shape.source {
             ForSource::Range { at, hi } => int(at).zip(int(hi)).map(|(at, hi)| (hi - at).max(0)),
             ForSource::Array(array) => match types.kind(cfg.val_types[&array]) {
-                TyKind::Array(_, len) => i128::try_from(known_len(len)).ok(),
+                TyKind::Array(_, len, _) => i128::try_from(known_len(len)).ok(),
                 _ => None,
             },
             ForSource::Slice(_) | ForSource::SliceMut(_) => None,
