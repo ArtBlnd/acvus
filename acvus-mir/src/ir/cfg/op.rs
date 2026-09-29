@@ -76,6 +76,8 @@ pub enum Op {
     },
     /// Move the value out of a storage into the result; a primitive is copied
     /// and the storage keeps it. A read of a variable.
+    /// A `Take` of a `&mut` is a reborrow, not a move (ownership §5): a `&mut`
+    /// does not copy, and each use reborrows it, so the storage keeps it.
     Take {
         target: RefTarget,
         path: Vec<PathSeg>,
