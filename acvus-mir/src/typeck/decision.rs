@@ -137,7 +137,7 @@ pub(super) enum Decision {
     HoldsNoLoans { span: Span, term: Term },
     /// `&value` or `&mut value`: a reborrow where `value` is a reference,
     /// since a reference's target is never one (types §4).
-    Lend { span: Span, value: Term, mutability: Mutability, result: Term },
+    Lend { span: Span, value: Term, lent: Lent, result: Term },
     /// `object.field`, through a reference as Rust auto-derefs; a declared
     /// struct must have the field, and any other object grows by it where
     /// transparent (types §1-2).
@@ -185,6 +185,22 @@ pub(super) enum Decision {
     /// A requirement made at an instance: `decision`, whose sites are the
     /// lambda body's, recorded at `instance` (functions §2).
     In { instance: super::generalize::InstanceId, decision: Box<Decision> },
+}
+
+/// How a place's value is taken as a reference (ownership §5, patterns §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Lent {
+    /// `&` or `&mut`, written: a reference is reborrowed, and a `&mut` of a
+    /// `&` is refused.
+    Borrow(Mutability),
+    /// A name a pattern binds past references of this least mutability: a
+    /// reference part is reborrowed at the least of its own and this, and
+    /// any other part lent at this.
+    Bind(Mutability),
+    /// A place read for its value: a reference part reached through
+    /// references is reborrowed at the least of its own and its path's,
+    /// and any other part is itself.
+    Read,
 }
 
 impl Decision {
@@ -305,7 +321,7 @@ impl Decision {
             Decision::Cast { site, span, source, to } => Decision::Cast { site, span, source: f.ty(source), to },
             Decision::Settle { span, term } => Decision::Settle { span, term: f.ty(term) },
             Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span, term: f.ty(term) },
-            Decision::Lend { span, value, mutability, result } => Decision::Lend { span, value: f.ty(value), mutability, result: f.ty(result) },
+            Decision::Lend { span, value, lent, result } => Decision::Lend { span, value: f.ty(value), lent, result: f.ty(result) },
             Decision::Field { span, object, field, part } => Decision::Field { span, object: f.ty(object), field, part: f.ty(part) },
             Decision::Index { callee_site, span, container, mutability, element, body } => {
                 Decision::Index { callee_site, span, container: f.ty(container), mutability, element: f.ty(element), body: f.effect(&body) }
@@ -619,7 +635,7 @@ pub(super) fn fire_owned_round(cx: &mut Ctxt<'_>, owned: &dyn Fn(&Decision, Opti
 /// decision was made with, otherwise.
 pub(super) fn reach_of(cx: &Ctxt<'_>, term: Term, made: crate::ty::Reach) -> crate::ty::Reach {
     let pending = cx.decisions.pending.iter().any(|decision| makes_place(decision, term));
-    match cx.out.through.contains(&term) || pending {
+    match cx.out.through.contains_key(&term) || pending {
         true => crate::ty::Reach::Through,
         false => made,
     }
@@ -742,18 +758,18 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
         Decision::Lend {
             span,
             value,
-            mutability,
+            lent,
             result,
         } => {
             let Some(closed) = closed_for(cx, value, reading) else {
                 return Err(Decision::Lend {
                     span,
                     value,
-                    mutability,
+                    lent,
                     result,
                 });
             };
-            super::place::fire_lend(cx, span, Some(closed), mutability, result, value);
+            super::place::fire_lend(cx, span, Some(closed), lent, result, value);
             Ok(())
         }
         Decision::Field {
@@ -793,7 +809,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             let reach = reach_of(cx, container, crate::ty::Reach::Named);
-            super::place::fire_index(cx, callee_site, span, (closed, reach), mutability, element, &body);
+            super::place::fire_index(cx, callee_site, span, (closed, container, reach), mutability, element, &body);
             Ok(())
         }
         Decision::Deref {
@@ -810,7 +826,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                     store,
                 });
             };
-            super::place::fire_deref(cx, span, closed, target, store);
+            super::place::fire_deref(cx, span, (closed, reference), target, store);
             Ok(())
         }
         Decision::Destructure { shape, scrutinee, lent } => {
@@ -1810,7 +1826,7 @@ fn decided_by_use(cx: &Ctxt<'_>, decision: &Decision) -> bool {
 fn decide_by_use(cx: &mut Ctxt<'_>, decision: Decision) {
     match decision {
         Decision::Enter { value, slot, span, .. } => cx.eq(value, slot, span),
-        Decision::Lend { span, value, mutability, result } => super::place::fire_lend(cx, span, None, mutability, result, value),
+        Decision::Lend { span, value, lent, result } => super::place::fire_lend(cx, span, None, lent, result, value),
         Decision::Field { span, object, field, part } => {
             let reach = reach_of(cx, object, crate::ty::Reach::Named);
             super::place::fire_field(cx, span, (object, reach), None, field, part);

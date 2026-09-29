@@ -390,7 +390,7 @@ fn copied_flows(cx: &mut Ctxt<'_>, flows: &[CopiedFlow]) {
 /// copy is recorded with it (types §1).
 struct Copying<'c> {
     infer: &'c mut crate::infer::Infer,
-    through: &'c mut FxHashSet<Term>,
+    through: &'c mut FxHashMap<Term, crate::ty::Mutability>,
     at: &'c AtInstance,
     memo: &'c mut FxHashMap<Term, Term>,
 }
@@ -398,8 +398,8 @@ struct Copying<'c> {
 impl MapTerms for Copying<'_> {
     fn ty(&mut self, term: Term) -> Term {
         let copy = self.infer.copy_at(term, self.at, self.memo);
-        if self.through.contains(&term) {
-            self.through.insert(copy);
+        if let Some(least) = self.through.get(&term).copied() {
+            self.through.insert(copy, least);
         }
         copy
     }

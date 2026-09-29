@@ -145,11 +145,17 @@ impl<'d> Ctxt<'d> {
     /// is known: a value already a reference is reborrowed, since a
     /// reference's target is never a reference (types §4).
     pub fn lend(&mut self, target: Term, mutability: Mutability, span: Span) -> Term {
+        self.lend_as(target, super::decision::Lent::Borrow(mutability), span)
+    }
+
+    /// `target` borrowed, bound or read as `lent` says, decided once its
+    /// head is known.
+    pub fn lend_as(&mut self, target: Term, lent: super::decision::Lent, span: Span) -> Term {
         let result = self.fresh();
         let lend = Decision::Lend {
             span,
             value: target,
-            mutability,
+            lent,
             result,
         };
         super::decision::decide(self, lend);

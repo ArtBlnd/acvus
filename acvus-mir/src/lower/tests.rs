@@ -1092,10 +1092,8 @@ fn mut_parts_read_shared(source: &str, read: impl Fn(&Op) -> bool) -> usize {
         .collect();
     let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
     assert!(calls_of(&lowered, eq) >= 1, "the `i64`s the parts name are compared: {}", shown(body));
-    let reads: Vec<crate::ir::ValueId> = insts
-        .iter()
-        .filter(|inst| read(inst.op()))
-        .filter_map(|inst| inst.result())
+    let reads: Vec<crate::ir::ValueId> = read_values(body, &read)
+        .into_iter()
         .filter(|result| matches!(lowered.kind_of(body, *result), TyKind::Ref(..)))
         .collect();
     for at in &reads {
@@ -1143,12 +1141,29 @@ fn part_reads(source: &str, slice: Option<Mutability>, read: impl Fn(&Op) -> boo
     }
     let lowered = fx.script(source);
     let body = lowered.entry();
-    body.blocks()
-        .flat_map(|(_, block)| block.insts())
+    read_values(body, &read)
+        .into_iter()
+        .map(|value| lowered.kind_of(body, value).clone())
+        .filter(|kind| matches!(kind, TyKind::Ref(..)))
+        .collect()
+}
+
+/// The value each read `read` picks yields: the reference it takes out of
+/// its place, or, where that is taken as a weaker reborrow past its path,
+/// the reborrow made through it (ownership §5).
+fn read_values(body: &Body, read: &impl Fn(&Op) -> bool) -> Vec<crate::ir::ValueId> {
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let reborrow_of = |taken: crate::ir::ValueId| {
+        insts.iter().find_map(|inst| match inst.op() {
+            Op::Ref { target: RefTarget::Through(through), path, .. } if *through == taken && path.is_empty() => inst.result(),
+            _ => None,
+        })
+    };
+    insts
+        .iter()
         .filter(|inst| read(inst.op()))
         .filter_map(|inst| inst.result())
-        .map(|result| lowered.kind_of(body, result).clone())
-        .filter(|kind| matches!(kind, TyKind::Ref(..)))
+        .map(|taken| reborrow_of(taken).unwrap_or(taken))
         .collect()
 }
 

@@ -92,11 +92,8 @@ fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Matched {
         Matched::Held { place, slot_ty } => (held_reference(cx, place, *slot_ty, held, span), held),
         Matched::Place { place, lent } => {
             let reference = read(cx, Operand::Place(place.clone()), span);
-            let lent = match (lent, held) {
-                (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
-                _ => Mutability::Shared,
-            };
-            (reference, lent)
+            let lent = lent.least(held);
+            (super::place::reborrow(cx, reference, held, target, lent, span), lent)
         }
     };
     Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty: target }, lent }

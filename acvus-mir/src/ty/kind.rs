@@ -150,6 +150,15 @@ impl Mutability {
     pub fn reaches(self, wanted: Mutability) -> bool {
         self == wanted || wanted == Mutability::Shared
     }
+
+    /// The weaker of the two: what a path through both reaches, exclusive
+    /// only where every reference on it is (ownership §5).
+    pub fn least(self, other: Mutability) -> Mutability {
+        match (self, other) {
+            (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+            _ => Mutability::Shared,
+        }
+    }
 }
 
 impl<V: Phase> TyKind<V> {

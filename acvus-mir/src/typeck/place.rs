@@ -10,7 +10,7 @@ use super::call::reach_in;
 use super::closure::refuse_recursion;
 use super::context::Access;
 use super::ctxt::Ctxt;
-use super::decision::{Callee, CoreSig, Decision};
+use super::decision::{Callee, CoreSig, Decision, Lent};
 use super::expr::check_expr;
 use super::output::Name;
 use super::refusal::{self, RefusalKind};
@@ -50,7 +50,18 @@ impl Demand {
 /// (types §1-2).
 pub(super) fn check_field<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, object: &Expr<S>, field: Astr, demand: Demand, span: Span) -> Term {
     let object = check_expr(cx, object, demand.of_container());
-    field_of(cx, object, field, span)
+    let part = field_of(cx, object, field, span);
+    read_for(cx, part, demand, span)
+}
+
+/// A place read for its value is a value of its own, which a reference
+/// part reached through references makes a reborrow (ownership §5); a
+/// place stored into or lent is the place itself.
+fn read_for(cx: &mut Ctxt<'_>, place: Term, demand: Demand, span: Span) -> Term {
+    match demand {
+        Demand::Read => cx.lend_as(place, Lent::Read, span),
+        Demand::Lend(_) | Demand::Write => place,
+    }
 }
 
 /// Field `field` of a value of term `object`: a decision on its head.
@@ -68,13 +79,29 @@ fn field_of(cx: &mut Ctxt<'_>, object: Term, field: Astr, span: Span) -> Term {
     part
 }
 
-/// `term`, a place's step, reached through a reference where `reach` says
-/// so: recorded, so that every step after it on its path is too (types
-/// §1).
-fn record_reach(cx: &mut Ctxt<'_>, term: Term, reach: Reach) {
-    if reach == Reach::Through {
-        cx.out.through.insert(term);
+/// `term`, a place's step, reached through references at `least` where it
+/// is: recorded, so that every step after it on its path is too (types §1),
+/// with the least mutability on the path (ownership §5).
+fn record_reach(cx: &mut Ctxt<'_>, term: Term, least: Option<Mutability>) {
+    if let Some(least) = least {
+        cx.out.through.insert(term, least);
     }
+}
+
+/// The least mutability on the path to `term`, where references are on
+/// it: its record, or, where `reach` is through a step still pending,
+/// shared, the least there is.
+pub(super) fn path_of(cx: &Ctxt<'_>, term: Term, reach: Reach) -> Option<Mutability> {
+    match cx.out.through.get(&term) {
+        Some(least) => Some(*least),
+        None => (reach == Reach::Through).then_some(Mutability::Shared),
+    }
+}
+
+/// The path to a step past a reference of `mutability` from `from`,
+/// reached by `reach`.
+fn past(cx: &Ctxt<'_>, from: Term, reach: Reach, mutability: Mutability) -> Mutability {
+    path_of(cx, from, reach).map_or(mutability, |least| least.least(mutability))
 }
 
 /// A field read fired, of an object reached by `reach`: through a
@@ -86,12 +113,13 @@ fn record_reach(cx: &mut Ctxt<'_>, term: Term, reach: Reach) {
 /// an object and never a reference.
 pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, (object, reach): (Term, Reach), head: Option<Head>, field: Astr, part: Term) {
     match head {
-        Some(Head::Ref(..)) => {
-            record_reach(cx, part, Reach::Through);
+        Some(Head::Ref(mutability, _)) => {
+            let least = past(cx, object, reach, mutability);
+            record_reach(cx, part, Some(least));
             let target = cx.fresh();
             let referent = cx.referent(object);
             cx.eq(target, referent, span);
-            record_reach(cx, target, Reach::Through);
+            record_reach(cx, target, Some(least));
             let reached = field_of(cx, target, field, span);
             cx.eq(part, reached, span);
             return;
@@ -103,7 +131,7 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, (object, reach): (Term, 
         }
         Some(Head::Base(_)) | None => {}
     }
-    record_reach(cx, part, reach);
+    record_reach(cx, part, path_of(cx, object, reach));
     let declared = match head {
         Some(_) => match cx.infer.types().kind(cx.infer.shallow(object)) {
             TyKind::Object(ObjectTy::Declared(_, fields)) => Some(fields.clone()),
@@ -142,7 +170,8 @@ pub(super) fn check_index<S: Slot>(
     let at = check_expr(cx, index, Demand::Read);
     let usize_ty = cx.node(TyKind::Int(IntTy::U64));
     cx.enter(index.id(), at, usize_ty, Reach::Named, index.span());
-    element(cx, callee_site, container, demand.mutability(), span)
+    let element = element(cx, callee_site, container, demand.mutability(), span);
+    read_for(cx, element, demand, span)
 }
 
 fn element(cx: &mut Ctxt<'_>, callee_site: AstId, container: Term, mutability: Mutability, span: Span) -> Term {
@@ -169,16 +198,16 @@ pub(super) fn fire_index(
     cx: &mut Ctxt<'_>,
     callee_site: AstId,
     span: Span,
-    (container, reach): (Closed, Reach),
+    (container, of, reach): (Closed, Term, Reach),
     mutability: Mutability,
     element: Term,
     body: &EffectTerm<InferPhase>,
 ) {
-    let reach = match container.head {
-        Head::Ref(..) => Reach::Through,
-        Head::Base(_) => reach,
+    let least = match container.head {
+        Head::Ref(mutability, _) => Some(past(cx, of, reach, mutability)),
+        Head::Base(_) => path_of(cx, of, reach),
     };
-    record_reach(cx, element, reach);
+    record_reach(cx, element, least);
     let sequence = match container.head {
         Head::Base(Base::Array) => Some(container.term),
         Head::Ref(_, Base::Array | Base::Slice) => Some(cx.referent(container.term)),
@@ -205,28 +234,48 @@ pub(super) fn fire_index(
     cx.eq(reached, lent_slice, span);
 }
 
-/// A lend fired. A reference is reborrowed: a `&mut` of a `&` is refused,
-/// and a `&` of a `&mut` is a `&` of its target. Any other value, and one
-/// whose use decides it at a stall (`head` `None`), is lent as it is.
-pub(super) fn fire_lend(cx: &mut Ctxt<'_>, span: Span, value: Option<Closed>, mutability: Mutability, result: Term, target: Term) {
-    let lent = match value.map(|closed| closed.head) {
-        Some(Head::Ref(held, _)) => {
+/// A lend fired, as `lent` says. A reference borrowed is reborrowed: a
+/// `&mut` of a `&` is refused, and a `&` of a `&mut` is a `&` of its target;
+/// any other value is lent as it is. A reference bound or read past
+/// references is reborrowed at the least on its path, never refused
+/// (ownership §5); any other value bound is lent, and read is itself. One
+/// whose use decides it at a stall (`value` `None`) is no reference.
+pub(super) fn fire_lend(cx: &mut Ctxt<'_>, span: Span, value: Option<Closed>, lent: Lent, result: Term, target: Term) {
+    let held = match value.map(|closed| closed.head) {
+        Some(Head::Ref(held, _)) => Some(held),
+        Some(Head::Base(_)) | None => None,
+    };
+    let taken = match (lent, held) {
+        (Lent::Borrow(mutability), Some(held)) => {
             if !held.reaches(mutability) {
                 let wanted = cx.fresh();
                 let wanted = cx.node(TyKind::Ref(mutability, TypeArg::Uniform(wanted)));
                 cx.eq(target, wanted, span);
             }
-            match held == mutability {
-                true => target,
-                false => {
-                    let inner = cx.referent(target);
-                    cx.node(TyKind::Ref(mutability, TypeArg::Uniform(inner)))
-                }
-            }
+            reborrow(cx, target, held, mutability)
         }
-        Some(Head::Base(_)) | None => cx.node(TyKind::Ref(mutability, TypeArg::Uniform(target))),
+        (Lent::Borrow(mutability) | Lent::Bind(mutability), None) => cx.node(TyKind::Ref(mutability, TypeArg::Uniform(target))),
+        (Lent::Bind(least), Some(held)) => reborrow(cx, target, held, held.least(least)),
+        (Lent::Read, Some(held)) => match cx.out.through.get(&target).copied() {
+            Some(least) => reborrow(cx, target, held, held.least(least)),
+            None => target,
+        },
+        (Lent::Read, None) => target,
     };
-    cx.eq(result, lent, span);
+    cx.eq(result, taken, span);
+}
+
+/// `reference`, a reference of `held`, taken at `mutability`: itself where
+/// the two are one, and a reference of `mutability` to its target where
+/// they are not.
+fn reborrow(cx: &mut Ctxt<'_>, reference: Term, held: Mutability, mutability: Mutability) -> Term {
+    match held == mutability {
+        true => reference,
+        false => {
+            let inner = cx.referent(reference);
+            cx.node(TyKind::Ref(mutability, TypeArg::Uniform(inner)))
+        }
+    }
 }
 
 /// `&p`, `&mut p`.
@@ -259,13 +308,14 @@ fn deref(cx: &mut Ctxt<'_>, reference: Term, store: bool, span: Span) -> Term {
 
 /// A deref fired: a reference's target, which a store reaches only through
 /// a `&mut` (operators §6); `!` of `!`; anything else is refused.
-pub(super) fn fire_deref(cx: &mut Ctxt<'_>, span: Span, reference: Closed, target: Term, store: bool) {
+pub(super) fn fire_deref(cx: &mut Ctxt<'_>, span: Span, (reference, of): (Closed, Term), target: Term, store: bool) {
     match reference.head {
         Head::Ref(Mutability::Shared, _) if store => refusal::push(cx, RefusalKind::StoreThroughShared, span),
-        Head::Ref(..) => {
+        Head::Ref(mutability, _) => {
             let referent = cx.referent(reference.term);
             cx.eq(target, referent, span);
-            record_reach(cx, target, Reach::Through);
+            let least = past(cx, of, Reach::Named, mutability);
+            record_reach(cx, target, Some(least));
         }
         Head::Base(Base::Never) => {
             let never = cx.never();

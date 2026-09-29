@@ -125,12 +125,18 @@ fn payload_part<'t>(variant: &Variant, trees: &'t [(PartKey, StructureTree)]) ->
     variant.payload.map(|(key, ty)| Part { seg: PathSeg::Payload, ty, tree: tree_at(trees, key) })
 }
 
-/// The operand of `part` of the node whose operand is `base`.
+/// The operand of `part` of the node whose operand is `base`, a shared
+/// reference (operators §4): a reference part is read through it as a
+/// shared reborrow, the least on its path (ownership §5).
 fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span) -> ValueId {
     let target = RefTarget::Through(base);
     let path = vec![part.seg];
     match cx.kind(part.ty) {
-        TyKind::Ref(..) => cx.builder.push(Op::Take { target, path, taken_out: false }, part.ty, span),
+        TyKind::Ref(made, referent) => {
+            let (made, referent) = (*made, referent.ty());
+            let taken = cx.builder.push(Op::Take { target, path, taken_out: false }, part.ty, span);
+            super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span)
+        }
         _ => {
             let ty = cx.ref_ty(Mutability::Shared, part.ty);
             cx.builder.push(Op::Ref { target, path, mutability: Mutability::Shared }, ty, span)
@@ -138,13 +144,22 @@ fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span)
     }
 }
 
-/// The operand of element `at` of the slice `elements` of `element`s.
+/// The operand of element `at` of the shared slice `elements` of
+/// `element`s: a reference element is read as a shared reborrow, the least
+/// on its path (ownership §5).
 fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element: Ty, span: Span) -> ValueId {
-    let (mode, ty) = match cx.kind(element) {
-        TyKind::Ref(..) => (IndexMode::Copy, element),
-        _ => (IndexMode::Ref, cx.ref_ty(Mutability::Shared, element)),
-    };
-    cx.builder.push(Op::Index { slice: elements, index: at, mode, bound: IndexBound::Checked }, ty, span)
+    match cx.kind(element) {
+        TyKind::Ref(made, referent) => {
+            let (made, referent) = (*made, referent.ty());
+            let op = Op::Index { slice: elements, index: at, mode: IndexMode::Copy, bound: IndexBound::Checked };
+            let taken = cx.builder.push(op, element, span);
+            super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span)
+        }
+        _ => {
+            let ty = cx.ref_ty(Mutability::Shared, element);
+            cx.builder.push(Op::Index { slice: elements, index: at, mode: IndexMode::Ref, bound: IndexBound::Checked }, ty, span)
+        }
+    }
 }
 
 // -- comparison --------------------------------------------------------------

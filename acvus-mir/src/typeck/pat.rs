@@ -249,6 +249,7 @@ pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reac
 fn apply(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reach): (Term, Reach), known: Option<Head>, lent: Option<Mutability>) {
     record_matched(cx, &shape, scrutinee);
     let Shape { site, span, form } = shape;
+    let least = lent.or_else(|| super::place::path_of(cx, scrutinee, reach));
     let reach = match lent {
         Some(_) => Reach::Through,
         None => reach,
@@ -265,7 +266,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reach): (Term, Reach), kno
         Form::Ignore => {}
         Form::Literal { literal } => cx.join(scrutinee, literal, reach, span),
         Form::List { head, rest, tail } => {
-            let element = reached_part(cx, reach);
+            let element = reached_part(cx, least);
             let listed = match known {
                 Some(Head::Base(Base::Slice)) => TyKind::Slice(element),
                 _ => {
@@ -284,7 +285,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reach): (Term, Reach), kno
         }
         Form::Object { fields } => object(cx, fields, (scrutinee, reach), lent, span),
         Form::Tuple { parts } => {
-            let terms: Vec<Term> = parts.iter().map(|_| reached_part(cx, reach)).collect();
+            let terms: Vec<Term> = parts.iter().map(|_| reached_part(cx, least)).collect();
             let tuple = cx.held(TyKind::Tuple(terms.clone().into(), Label::Here));
             cx.join(scrutinee, tuple, reach, span);
             for (part, term) in parts.into_iter().zip(terms) {
@@ -304,10 +305,10 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reach): (Term, Reach), kno
 /// A fresh term for a part a pattern takes apart, reached by `reach`:
 /// recorded where that is through a reference, so that every step after it
 /// is too (types §1).
-fn reached_part(cx: &mut Ctxt<'_>, reach: Reach) -> Term {
+fn reached_part(cx: &mut Ctxt<'_>, least: Option<Mutability>) -> Term {
     let part = cx.fresh();
-    if reach == Reach::Through {
-        cx.out.through.insert(part);
+    if let Some(least) = least {
+        cx.out.through.insert(part, least);
     }
     part
 }
@@ -325,7 +326,7 @@ fn record_matched(cx: &mut Ctxt<'_>, shape: &Shape, scrutinee: Term) {
 /// a reference, a reference to it.
 fn bound_value(cx: &mut Ctxt<'_>, part: Term, lent: Option<Mutability>, span: Span) -> Term {
     match lent {
-        Some(mutability) => cx.lend(part, mutability, span),
+        Some(mutability) => cx.lend_as(part, super::decision::Lent::Bind(mutability), span),
         None => part,
     }
 }
@@ -347,7 +348,8 @@ fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, (scrutinee, reach): (Te
         }
         return;
     }
-    let terms: Vec<(Astr, Term)> = fields.iter().map(|(key, _)| (*key, reached_part(cx, reach))).collect();
+    let least = lent.or_else(|| super::place::path_of(cx, scrutinee, reach));
+    let terms: Vec<(Astr, Term)> = fields.iter().map(|(key, _)| (*key, reached_part(cx, least))).collect();
     let mut sorted = terms.clone();
     sorted.sort_by_key(|(name, _)| *name);
     let object = cx.held(TyKind::Object(ObjectTy::Structural(sorted.into(), Label::Here)));
@@ -370,9 +372,10 @@ fn variant(
     span: Span,
 ) {
     let tags = cx.decls.core().tags;
+    let least = lent.or_else(|| super::place::path_of(cx, scrutinee, reach));
     let (kind, part) = match enum_name {
         Some(name) => {
-            let part = payload.as_ref().map(|_| reached_part(cx, reach));
+            let part = payload.as_ref().map(|_| reached_part(cx, least));
             let kind = TyKind::Enum {
                 name: QualifiedRef::root(name),
                 variants: Box::new([(tag, part)]),
@@ -381,11 +384,11 @@ fn variant(
             (kind, part)
         }
         None if tag == tags.some || tag == tags.none => {
-            let inner = reached_part(cx, reach);
+            let inner = reached_part(cx, least);
             (TyKind::Option(inner, Label::Here), (tag == tags.some).then_some(inner))
         }
         None if tag == tags.ok || tag == tags.err => {
-            let (ok, err) = (reached_part(cx, reach), reached_part(cx, reach));
+            let (ok, err) = (reached_part(cx, least), reached_part(cx, least));
             (TyKind::Result(ok, err, Label::Here), Some(if tag == tags.ok { ok } else { err }))
         }
         None => {

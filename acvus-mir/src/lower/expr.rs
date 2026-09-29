@@ -9,7 +9,7 @@ use super::context::lower_context_read;
 use super::control::{lower_if, lower_if_let, lower_return, lower_try};
 use super::ctxt::Lcx;
 use super::pat::lower_match;
-use super::place::{Operand, lend, lower_borrow, lower_deref, lower_index, operand, read};
+use super::place::{Operand, lend, lower_borrow, lower_deref, lower_index, operand, read, read_as};
 use super::stmt::lower_body;
 use crate::ir::cfg::{Op, Terminator};
 use crate::ir::ValueId;
@@ -35,9 +35,10 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {
         Expr::UnaryOp { id, op: UnaryOp::Deref, operand, span } => lower_deref(cx, *id, operand, *span),
         Expr::UnaryOp { id, op: UnaryOp::Neg, operand, span } => lower_neg(cx, *id, operand, *span),
         Expr::UnaryOp { id, op: UnaryOp::Not, operand, span } => lower_not(cx, *id, operand, *span),
-        Expr::FieldAccess { span, .. } => {
+        Expr::FieldAccess { id, span, .. } => {
             let field = operand(cx, expr, Mutability::Shared);
-            read(cx, field, *span)
+            let value = read(cx, field, *span);
+            read_as(cx, value, cx.ty(*id), *span)
         }
         Expr::Index { id, callee_id, object, index, span } => lower_index(cx, *id, *callee_id, object, index, *span),
         Expr::FuncCall { id, func, args, span } => lower_call(cx, *id, func, args, *span),

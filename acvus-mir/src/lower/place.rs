@@ -15,7 +15,7 @@ use super::ctxt::{ContextHome, Home, Lcx};
 use super::expr::lower_expr;
 use crate::ir::cfg::Op;
 use crate::ir::{IndexBound, IndexMode, PathSeg, RefTarget, ValueId, is_word};
-use crate::ty::{Mutability, Ty, TyKind};
+use crate::ty::{Mutability, ObjectTy, Ty, TyKind};
 use crate::typeck::Name;
 
 /// A storage and a path under it, holding a `ty`.
@@ -64,13 +64,13 @@ pub(super) fn operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>, mutability:
             Operand::Place(input_place(cx, name.name, cx.ty(*id)))
         }
         Expr::ContextRef { id, name, span } => context_operand(cx, *name, cx.ty(*id), *span),
-        Expr::FieldAccess { id, object, field, span } => {
-            let ty = cx.ty(*id);
+        Expr::FieldAccess { object, field, span, .. } => {
             let object = operand(cx, object, mutability);
-            field_of(cx, object, *field, ty, *span)
+            let ty = part_ty(cx, &object, *field);
+            field_of(cx, object, *field, ty, mutability, *span)
         }
-        Expr::Index { id, callee_id, object, index, span } => {
-            let element = cx.ty(*id);
+        Expr::Index { callee_id, object, index, span, .. } => {
+            let element = element_of(cx, object, *callee_id);
             let reference = element_ref(cx, object, *callee_id, index, mutability, element, *span);
             Operand::Place(Place { target: RefTarget::Through(reference), path: Vec::new(), ty: element })
         }
@@ -119,10 +119,16 @@ fn context_operand(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Sp
 }
 
 /// Field `field` of `object`, through a reference as Rust auto-derefs.
-fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty: Ty, span: Span) -> Operand {
+/// Field `field` of `object`, a place of type `ty`, lent for `mutability`:
+/// a reference on the way is read at the least of its own and that, what
+/// the path reaches (ownership §5).
+fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty: Ty, mutability: Mutability, span: Span) -> Operand {
     match object {
         Operand::Place(place) if is_ref(cx, place.ty) => {
+            let TyKind::Ref(made, target) = cx.kind(place.ty) else { unreachable!("matched as a reference") };
+            let (made, target) = (*made, target.ty());
             let reference = read(cx, Operand::Place(place), span);
+            let reference = reborrow(cx, reference, made, target, made.least(mutability), span);
             Operand::Place(Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(field)], ty })
         }
         Operand::Place(place) => Operand::Place(place.with(PathSeg::Field(field), ty)),
@@ -132,6 +138,71 @@ fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty:
         Operand::Value(value) => {
             Operand::Value(cx.builder.push(Op::FieldGet { object: value, field, rest: Vec::new() }, ty, span))
         }
+    }
+}
+
+/// The type of field `field` of `object`, past a reference to it: the
+/// place's own, which a read may take as a weaker reborrow (`read_as`).
+fn part_ty(cx: &Lcx<'_, '_>, object: &Operand, field: acvus_utils::Astr) -> Ty {
+    let held = match object {
+        Operand::Place(place) => place.ty,
+        Operand::Value(value) => cx.value_ty(*value),
+    };
+    let held = match cx.kind(held) {
+        TyKind::Ref(_, target) => target.ty(),
+        _ => held,
+    };
+    let fields = match cx.kind(held) {
+        TyKind::Object(ObjectTy::Structural(fields, _) | ObjectTy::Declared(_, fields)) => fields,
+        other => panic!("a field is read of an object, not {other:?}"),
+    };
+    fields
+        .iter()
+        .find(|(name, _)| *name == field)
+        .map(|(_, ty)| *ty)
+        .unwrap_or_else(|| panic!("typeck admits a field read only of an object that has the field"))
+}
+
+/// The type of `container`'s elements as its sequence holds them: an
+/// array's or a slice's own, any other container's by the `as_slice(_mut)`
+/// reached at `callee_site` (operators §3).
+pub(super) fn element_of<S: Slot>(cx: &Lcx<'_, '_>, container: &Expr<S>, callee_site: AstId) -> Ty {
+    let held = cx.ty(container.id());
+    let sequence = match sequence(cx, held) {
+        Sequence::Array => held,
+        Sequence::ArrayReference | Sequence::Slice => match cx.kind(held) {
+            TyKind::Ref(_, target) => target.ty(),
+            other => panic!("a reference to a sequence is a reference, not {other:?}"),
+        },
+        Sequence::Container => {
+            let callee = cx.decided.callee(callee_site).expect("typeck records the `as_slice` it reached for an index");
+            let TyKind::Fn { ret, .. } = cx.kind(callee) else { panic!("a reached callee is a function") };
+            match cx.kind(*ret) {
+                TyKind::Ref(_, slice) => slice.ty(),
+                other => panic!("`as_slice` gives a reference to a slice, not {other:?}"),
+            }
+        }
+    };
+    match cx.kind(sequence) {
+        TyKind::Array(element, ..) | TyKind::Slice(element) => *element,
+        other => panic!("a sequence is an array or a slice, not {other:?}"),
+    }
+}
+
+/// `value`, read out of a place, as the read's type `ty`: itself, or where
+/// the place is a reference reached past a weaker one, its reborrow at the
+/// path's mutability (ownership §5).
+pub(super) fn read_as(cx: &mut Lcx<'_, '_>, value: ValueId, ty: Ty, span: Span) -> ValueId {
+    let held = cx.value_ty(value);
+    if held == ty {
+        return value;
+    }
+    match (cx.kind(held), cx.kind(ty)) {
+        (TyKind::Ref(made, target), TyKind::Ref(wanted, _)) => {
+            let (made, target, wanted) = (*made, target.ty(), *wanted);
+            reborrow(cx, value, made, target, wanted, span)
+        }
+        _ => panic!("a read differs from its place only as a weaker reborrow of a reference"),
     }
 }
 
@@ -231,16 +302,18 @@ pub(super) fn lower_index<S: Slot>(
     index: &Expr<S>,
     span: Span,
 ) -> ValueId {
-    let element = cx.ty(site);
+    let element = element_of(cx, object, callee_site);
     if !is_word(cx.builder.types(), element) {
         let reference = element_ref(cx, object, callee_site, index, Mutability::Shared, element, span);
         let place = Place { target: RefTarget::Through(reference), path: Vec::new(), ty: element };
-        return read(cx, Operand::Place(place), span);
+        let value = read(cx, Operand::Place(place), span);
+        return read_as(cx, value, cx.ty(site), span);
     }
     let slice = slice_of(cx, object, callee_site, Mutability::Shared, element, span);
     let at = lower_expr(cx, index);
     let op = Op::Index { slice, index: at, mode: IndexMode::Copy, bound: IndexBound::Checked };
-    cx.builder.push(op, element, span)
+    let value = cx.builder.push(op, element, span);
+    read_as(cx, value, cx.ty(site), span)
 }
 
 /// A reference to element `index` of `object`, lent for `mutability` where
