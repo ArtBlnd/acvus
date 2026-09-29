@@ -80,4 +80,4 @@ Where a value's type is not the type its slot asks for and no subtyping relates 
 
 ## 8. Specialization
 
-A type argument may carry `#`, the mark that it can always be specialized; an argument without it is never specialized. `#τ` and `τ` are different types. `#` stands only at the root of a type argument: `T<#(X, Y)>` is a type, `T<(X, #Y)>` is not.
+A type argument may carry `#`, the mark that it can always be specialized; an argument without it is never specialized. `#τ` and `τ` are different types, and `#τ` is below `τ`: a type whose argument carries `#` steps up in the tree of §3 to the same type with that argument unmarked, so a value of `F<#τ>` is one of `F<τ>` by that step, and never the reverse. `#` stands only at the root of a type argument: `T<#(X, Y)>` is a type, `T<(X, #Y)>` is not.
