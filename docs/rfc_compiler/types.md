@@ -4,9 +4,9 @@
 
 Every type is written somewhere: in a body of the program, in a declaration, or by the host. Every value is held by one side at a time, and that side sees every use of the value while it holds it: the value is transparent there.
 
-A type is widened, joined or unioned only where it is written, and only where the program writes it, since only there is every value of it made and every use of it seen. A type a declaration or the host writes never grows: it equals only itself and crosses exactly as declared. A type parameter of an extern fn is parametric, so a program's type passes through it transparently. Where values of one type the program writes meet in one slot, the type grows to hold each of them, and a path on which a value lacks what the grown type holds is refused where that value is used whole (ownership §4).
+A type is widened, joined or unioned only where it is transparent: in the body that writes it, and there only at a use reached by name, a binding or a field or part reached from one by name, since only there is every value of it made and every use of it seen. A use reached through a reference reaches some place of the reference's target type, not which one, so it does not grow that type. A type a declaration or the host writes never grows: it equals only itself and crosses exactly as declared. A module's `Self` is transparent in its module, which sees every use of it; outside the module its fields are not seen at all (programs §3). A type parameter of an extern fn is parametric, so a program's type passes through it transparently. Where values of one type the program writes meet in one slot, the type grows to hold each of them, and a path on which a value lacks what the grown type holds is refused where that value is used whole (ownership §4).
 
-A value entering a slot is decided by who wrote the slot's type. Where the body the value is in wrote it, the type grows to hold the value, as above. Where anything else wrote it, the value is coerced to it (§3) by that body, which holds the value and sees every use of it. So no side grows a type another wrote:
+A value entering a slot is decided by whether the slot's type is transparent there. Where it is, the type grows to hold the value, as above. Where it is not, the value is coerced to it (§3) by the body the value is in, which holds the value and sees every use of it. So no side grows a type another wrote, and nothing grows a type through a reference:
 
 | A value | enters a type written by | and so |
 |---|---|---|
@@ -17,6 +17,7 @@ A value entering a slot is decided by who wrote the slot's type. Where the body 
 | an extern fn's result, where its caller takes it | the declaration | is taken as declared |
 | a value stored into a context | the host | is coerced by the body |
 | a context's or an input's value, where a body reads it | the host | is taken as it is |
+| a value stored through a reference | whoever wrote the storage's type | is coerced by the body: the reference does not name the storage |
 
 For example, a module's `fn` reads two fields of its parameter, and a script passes it an object of three:
 
@@ -37,7 +38,7 @@ The side that holds such a value sees all of it, and its shape is the language's
 
 ## 2. Join
 
-Two object types join at the union of their fields. Two enums of one name join at the union of their variants; enums of two names do not join. `Option` and `Result` are primitive types, closed like an extern enum; a variant is written with its enum's name, except their `Some`, `None`, `Ok` and `Err`. Two function types join at the join of their effects and of their flows, which form lattices, are once where either is (functions §3), and may be split only where both sides may, at one cost (effects §6), so a joined function is never assumed to do less than either side; declared facts (extern fn §3) do not join, and a joined function carries none.
+Two object types join at the union of their fields. Two enums of one name join at the union of their variants; enums of two names do not join. `Option` and `Result` are primitive types, closed like an extern enum; a variant is written with its enum's name, except their `Some`, `None`, `Ok` and `Err`. Two function types join at the join of their effects and of their flows, which form lattices, are once where either is (functions §3), and may be split only where both sides may, at one cost (effects §6), so a joined function is never assumed to do less than either side. A function type also states which function values it may be: each lambda is of its own, and a join is of either side's; declared facts (extern fn §3) do not join, and a joined function carries none.
 
 ## 3. Subtyping
 
