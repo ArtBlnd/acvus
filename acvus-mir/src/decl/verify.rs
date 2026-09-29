@@ -78,10 +78,10 @@ pub enum Refused {
     /// A generic function declared under a lang item's name: the compiler
     /// builds every lang item's generic function itself (operators §2).
     CoreGenericFunction { id: QualifiedRef },
-    /// Impls given to a name that is no lang item, or to a lang item whose
-    /// meaning is the language's own, `as_ref` and `as_mut`, which take none
+    /// Impls given to a name that takes none: one that is no lang item, or a
+    /// lang item whose meaning is the language's own, `as_ref` and `as_mut`
     /// (operators §2).
-    NotALangItem { id: QualifiedRef },
+    TakesNoImpls { id: QualifiedRef },
     /// A type with more than one identity parameter. Not stated in
     /// rfc_compiler; carried from the registry's rule until it is.
     TwoIdentities { id: QualifiedRef },
@@ -244,7 +244,7 @@ fn with_lang_items(
     let mut given: FxHashMap<QualifiedRef, Impls> = FxHashMap::default();
     for (id, impls) in lang_impls {
         if !core.names(id) || core.takes_no_impls(id) {
-            refused.push(Refused::NotALangItem { id });
+            refused.push(Refused::TakesNoImpls { id });
         } else if given.contains_key(&id) {
             refused.push(Refused::DuplicateFunction { id });
         } else {
@@ -2863,7 +2863,7 @@ mod tests {
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let ty = fixture.function(&[int], int);
         fixture.give(id, &[ty]);
-        assert_eq!(refusals(fixture), vec![Refused::NotALangItem { id }]);
+        assert_eq!(refusals(fixture), vec![Refused::TakesNoImpls { id }]);
     }
 
     /// operators §2: `as_ref` and `as_mut` mean what the language says, and
@@ -2877,7 +2877,7 @@ mod tests {
         let shared = fixture.ty(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
         let ty = fixture.function(&[shared], shared);
         fixture.give(core.as_ref, &[ty]);
-        assert_eq!(refusals(fixture), vec![Refused::NotALangItem { id: core.as_ref }]);
+        assert_eq!(refusals(fixture), vec![Refused::TakesNoImpls { id: core.as_ref }]);
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
         let t = fixture.ty(TyKind::Var(0));
