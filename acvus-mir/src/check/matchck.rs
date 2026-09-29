@@ -8,11 +8,19 @@
 //! It is sound whatever the facts know, since a fact only over-approximates;
 //! what it proves grows with the domains `MatchFacts` runs.
 
-use super::Refusal;
-use crate::ir::cfg::{BodyId, Module};
-use crate::passes::analysis::AnalysisManager;
+use super::{Refusal, RefusalKind};
+use crate::ir::cfg::{BodyId, Module, Terminator};
+use crate::passes::analysis::{AnalysisManager, MatchFacts};
 
 /// The judgment over `body`, its refusals pushed to `out`.
 pub(super) fn check(module: &Module, body: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
-    todo!("each NoArmMatched block of the body with an executable incoming edge under MatchFacts")
+    let facts = am.get::<MatchFacts>(module, body);
+    let reached = MatchFacts::reached(&facts, module, am.decls(), body);
+    for (block, record) in module.body(body).blocks() {
+        if let Terminator::NoArmMatched { span } = record.terminator()
+            && reached.contains(&block)
+        {
+            out.push(Refusal { kind: RefusalKind::NotExhaustive, span: *span });
+        }
+    }
 }
