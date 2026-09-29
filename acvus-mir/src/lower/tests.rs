@@ -1506,3 +1506,27 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
     let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } if args.len() == 3);
     assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{}", shown(body));
 }
+
+/// operators §2, ownership §5: `as_ref` lowers to a reference into each
+/// part of the original storage, rebuilt into the structure: nothing is
+/// taken out of it or copied, and an array is one map, not unrolled.
+#[test]
+fn as_ref_lowers_to_references_into_each_part() {
+    let lowered = Fixture::new().script("let p = (1, true); let r = p.as_ref(); 0");
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    let into_part = |op: &Op| matches!(op, Op::Ref { target: RefTarget::Through(_), path, mutability: Mutability::Shared } if path.len() == 1);
+    assert_eq!(count(&ops, into_part), 2, "{}", shown(body));
+    let taken_whole = |op: &Op| matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if path.is_empty());
+    assert_eq!(count(&ops, taken_whole), 0, "{}", shown(body));
+    assert_eq!(count(&ops, |op| matches!(op, Op::MakeTuple { elements } if elements.len() == 2)), 2, "{}", shown(body));
+
+    let lowered = Fixture::new().script("let o = Some(1); let r = o.as_ref(); 0");
+    let ops = lowered.entry_ops();
+    let payload = |op: &Op| matches!(op, Op::Ref { path, .. } if path[..] == [PathSeg::Payload]);
+    assert_eq!(count(&ops, payload), 1, "{}", shown(lowered.entry()));
+
+    let lowered = Fixture::new().script("let a = [1, 2]; let r = a.as_ref(); 0");
+    let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } if args.len() == 2);
+    assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{}", shown(lowered.entry()));
+}

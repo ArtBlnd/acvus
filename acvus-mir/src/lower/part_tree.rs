@@ -421,6 +421,16 @@ pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span
         .structure_trees
         .get(&site)
         .unwrap_or_else(|| panic!("typeck records the tree of every lifted impl it reached, and not at {site:?}"));
+    if let StructureTree::Own(Own::Lend(mutability)) = tree {
+        let [lent] = args[..] else {
+            panic!("`as_ref` and `as_mut` take one reference");
+        };
+        let made = match cx.typeck.callees.get(&site).map(|callee| cx.kind(*callee)) {
+            Some(TyKind::Fn { ret, .. }) => *ret,
+            other => panic!("typeck records a lend's function type at its site, not {other:?}"),
+        };
+        return super::coerce::lend(cx, *mutability, lent, made, span);
+    }
     let declaration = cx.reached(site).declaration;
     let lift = cx
         .decls
@@ -475,6 +485,7 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
                 None => unreachable!("`clone` takes the value it copies"),
             };
         }
+        StructureTree::Own(Own::Lend(_)) => unreachable!("typeck answers a lend only at its own call, never at a part"),
         StructureTree::Own(Own::OptionNone) => {
             let none = cx.decls.core().tags.none;
             return cx.builder.push(Op::MakeVariant { tag: none, payload: None }, ty, span);

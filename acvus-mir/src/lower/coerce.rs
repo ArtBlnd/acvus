@@ -37,7 +37,6 @@ pub(super) fn structured(
     value: ValueId,
     span: Span,
 ) -> ValueId {
-    let coerced = Coerced { parts, span };
     let (from, target) = match through {
         None => (cx.value_ty(value), to),
         Some(_) => (referent(cx, cx.value_ty(value)), referent(cx, to)),
@@ -46,9 +45,42 @@ pub(super) fn structured(
         None => to,
         Some(mutability) => gathered(cx, mutability, target),
     };
+    let assembled = assemble(cx, Assembly { through, from, target, made, parts, value, span });
+    match through {
+        None => assembled,
+        Some(_) => cx.builder.push(Op::Intrinsic { intrinsic: Intrinsic::Gather, args: vec![assembled] }, to, span),
+    }
+}
+
+/// `as_ref` or `as_mut` of `value`, a reference of `mutability` to a
+/// transparent structured value (operators §2): the structure of `made`,
+/// each part a reference into the original storage, one level. Nothing is
+/// taken out or copied.
+pub(super) fn lend(cx: &mut Lcx<'_, '_>, mutability: Mutability, value: ValueId, made: Ty, span: Span) -> ValueId {
+    let target = referent(cx, cx.value_ty(value));
+    assemble(cx, Assembly { through: Some(mutability), from: target, target, made, parts: &[], value, span })
+}
+
+/// A structure assembled from `value`'s parts: `value` itself, or, where
+/// `through` is `Some`, a reference of that mutability to it, of type
+/// `from`, into the shape of `target`, the result of type `made`, each
+/// part by its own coercion among `parts`.
+struct Assembly<'p> {
+    through: Option<Mutability>,
+    from: Ty,
+    target: Ty,
+    made: Ty,
+    parts: &'p [(PartKey, Option<Coercion>)],
+    value: ValueId,
+    span: Span,
+}
+
+fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> ValueId {
+    let Assembly { through, from, target, made, parts, value, span } = assembly;
+    let coerced = Coerced { parts, span };
     let access = Access { value, through, span };
     let types = cx.builder.types();
-    let assembled = match (structure(types, from), structure(types, target)) {
+    match (structure(types, from), structure(types, target)) {
         (Some(Structure::Tuple(items, _)), Some(Structure::Tuple(..))) => {
             let items = items.to_vec();
             let elements = items
@@ -103,10 +135,6 @@ pub(super) fn structured(
             array_map(cx, map, &|cx, element| coerced.part(cx, PartKey::Element, element[0]))
         }
         _ => panic!("typeck coerces a structured value only to a slot of its own kind, not {from:?} to {target:?}"),
-    };
-    match through {
-        None => assembled,
-        Some(_) => cx.builder.push(Op::Intrinsic { intrinsic: Intrinsic::Gather, args: vec![assembled] }, to, span),
     }
 }
 
