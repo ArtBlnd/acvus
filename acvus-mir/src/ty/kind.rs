@@ -162,6 +162,65 @@ impl Mutability {
 }
 
 impl<V: Phase> TyKind<V> {
+    /// This shape with each type id it holds directly replaced by `map`'s,
+    /// everything else as it is.
+    pub fn with_children(&self, map: &mut impl FnMut(TyId<V>) -> TyId<V>) -> TyKind<V> {
+        let arg = |arg: &TypeArg<V>, map: &mut dyn FnMut(TyId<V>) -> TyId<V>| match arg {
+            TypeArg::Uniform(ty) => TypeArg::Uniform(map(*ty)),
+            TypeArg::Specialized(ty) => TypeArg::Specialized(map(*ty)),
+            TypeArg::Open(mark, ty) => TypeArg::Open(*mark, map(*ty)),
+        };
+        match self {
+            TyKind::Handle(inner) => TyKind::Handle(map(*inner)),
+            TyKind::Array(element, len, label) => TyKind::Array(map(*element), *len, *label),
+            TyKind::Slice(element) => TyKind::Slice(map(*element)),
+            TyKind::Option(payload, label) => TyKind::Option(map(*payload), *label),
+            TyKind::Result(ok, err, label) => {
+                let ok = map(*ok);
+                TyKind::Result(ok, map(*err), *label)
+            }
+            TyKind::Tuple(items, label) => TyKind::Tuple(items.iter().map(|item| map(*item)).collect(), *label),
+            TyKind::Object(ObjectTy::Structural(fields, label)) => {
+                TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, map(*field))).collect(), *label))
+            }
+            TyKind::Object(ObjectTy::Declared(id, fields)) => {
+                TyKind::Object(ObjectTy::Declared(*id, fields.iter().map(|(name, field)| (*name, map(*field))).collect()))
+            }
+            TyKind::Enum { name, variants, label } => TyKind::Enum {
+                name: *name,
+                variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| map(payload)))).collect(),
+                label: *label,
+            },
+            TyKind::Fn { params, ret, effect, flows, calls, holds, values } => TyKind::Fn {
+                params: params.iter().map(|param| map(*param)).collect(),
+                ret: map(*ret),
+                effect: effect.clone(),
+                flows: flows.clone(),
+                calls: *calls,
+                holds: *holds,
+                values: values.clone(),
+            },
+            TyKind::UserDefined { id, type_args, effect_args, identity_args } => TyKind::UserDefined {
+                id: *id,
+                type_args: type_args.iter().map(|type_arg| arg(type_arg, map)).collect(),
+                effect_args: effect_args.clone(),
+                identity_args: identity_args.clone(),
+            },
+            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, arg(target, map)),
+            TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| map(*signature)).collect()),
+            leaf @ (TyKind::Int(_)
+            | TyKind::Float
+            | TyKind::Char
+            | TyKind::String
+            | TyKind::Bool
+            | TyKind::Unit
+            | TyKind::Never
+            | TyKind::Order
+            | TyKind::Str
+            | TyKind::Var(_)) => leaf.clone(),
+        }
+    }
+
     /// Every type id this shape holds directly.
     pub fn for_each_child(&self, mut on_child: impl FnMut(TyId<V>)) {
         match self {

@@ -655,6 +655,12 @@ impl Module {
         &self.types
     }
 
+    /// The table a check writes back into and a lowering interns into,
+    /// where one module holds several bodies checked apart (graph).
+    pub fn types_mut(&mut self) -> &mut Types<Concrete> {
+        &mut self.types
+    }
+
     pub(super) fn assert_body(&self, body: BodyId) {
         assert!(
             (body.0 as usize) < self.bodies.len(),

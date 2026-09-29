@@ -126,16 +126,17 @@ pub fn check_template<S: Slot>(
 /// it is in `types`: what the tests fix a run's inputs at.
 #[cfg(test)]
 pub(crate) fn fixed_inputs(decls: &Declarations, types: &mut Types<Concrete>, declared: &[(Astr, crate::ty::TyId<crate::ty::Poly>)]) -> Vec<(Astr, Ty)> {
+    declared.iter().map(|(name, ty)| (*name, declared_concrete(decls, types, *ty))).collect()
+}
+
+/// A type the host declared, with no variable (`decl::verify` refuses an
+/// entry's type holding one), at the concrete type it is in `types`.
+pub(crate) fn declared_concrete(decls: &Declarations, types: &mut Types<Concrete>, declared: crate::ty::TyId<crate::ty::Poly>) -> Ty {
     let mut infer = crate::infer::Infer::new();
-    let mut memo = crate::infer::FreezeMemo::default();
-    declared
-        .iter()
-        .map(|(name, ty)| {
-            let term = infer.instantiate_type(decls, *ty);
-            let concrete = infer.freeze(types, &mut memo, term).expect("an input's declared type holds no variable");
-            (*name, concrete)
-        })
-        .collect()
+    let term = infer.instantiate_type(decls, declared);
+    infer
+        .freeze(types, &mut crate::infer::FreezeMemo::default(), term)
+        .expect("a declared type holds no variable")
 }
 
 /// Whether the run's inputs are open (programs §4): each `$name` read is a

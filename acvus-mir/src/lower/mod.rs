@@ -31,7 +31,7 @@ pub mod required;
 use acvus_ast::{Script, Slot, Template};
 
 use crate::decl::Declarations;
-use crate::ir::cfg::{Module, Terminator};
+use crate::ir::cfg::{BodyId, Module, Terminator};
 use crate::ty::{Concrete, Ty, Types};
 use crate::typeck::Typeck;
 
@@ -46,6 +46,16 @@ use ctxt::{Lcx, ordered};
 /// # Panics
 /// `typeck` holds a refusal: that is the entry's defect.
 pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, types: Types<Concrete>, script: &Script<S>) -> Module {
+    let mut module = Module::new(types);
+    let entry = lower_script_into(decls, typeck, &mut module, script);
+    module.set_entry(entry);
+    module
+}
+
+/// `lower_script`'s body, added to `module`, whose type table `typeck` wrote
+/// back into: one body of a module holding several, one per instantiation
+/// of its source (graph).
+pub fn lower_script_into<S: Slot>(decls: &Declarations, typeck: &Typeck, module: &mut Module, script: &Script<S>) -> BodyId {
     assert_admitted(typeck);
     let named = {
         let mut namer = Namer::new(typeck);
@@ -56,9 +66,7 @@ pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, types: Types
         namer.finish()
     };
     let ret = run_result(typeck);
-    let mut types = types;
-    let closures = decided::closure_types(typeck, &mut types);
-    let mut module = Module::new(types);
+    let closures = decided::closure_types(typeck, module.types_mut());
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
     let mut cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
     enter_body(&mut cx, &named);
@@ -70,9 +78,7 @@ pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, types: Types
     };
     return_value(&mut cx, value, script.span);
     cx.builder.terminate(Terminator::Diverge, script.span);
-    let entry = cx.builder.seal().unwrap_or_else(|open| panic!("a lowered script's body is sealed whole: {open:?}"));
-    module.set_entry(entry);
-    module
+    cx.builder.seal().unwrap_or_else(|open| panic!("a lowered script's body is sealed whole: {open:?}"))
 }
 
 /// Lowers an admitted template: one body returning the `String` it builds,
@@ -86,6 +92,14 @@ pub fn lower_template<S: Slot>(
     types: Types<Concrete>,
     template: &Template<S>,
 ) -> Module {
+    let mut module = Module::new(types);
+    let entry = lower_template_into(decls, typeck, &mut module, template);
+    module.set_entry(entry);
+    module
+}
+
+/// `lower_template`'s body, added to `module`, as `lower_script_into`.
+pub fn lower_template_into<S: Slot>(decls: &Declarations, typeck: &Typeck, module: &mut Module, template: &Template<S>) -> BodyId {
     assert_admitted(typeck);
     let named = {
         let mut namer = Namer::new(typeck);
@@ -93,9 +107,7 @@ pub fn lower_template<S: Slot>(
         namer.finish()
     };
     let ret = run_result(typeck);
-    let mut types = types;
-    let closures = decided::closure_types(typeck, &mut types);
-    let mut module = Module::new(types);
+    let closures = decided::closure_types(typeck, module.types_mut());
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
     let mut cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
     enter_body(&mut cx, &named);
@@ -105,9 +117,7 @@ pub fn lower_template<S: Slot>(
     let value = template::take_output(&mut cx, template.span);
     return_value(&mut cx, value, template.span);
     cx.builder.terminate(Terminator::Diverge, template.span);
-    let entry = cx.builder.seal().unwrap_or_else(|open| panic!("a lowered template's body is sealed whole: {open:?}"));
-    module.set_entry(entry);
-    module
+    cx.builder.seal().unwrap_or_else(|open| panic!("a lowered template's body is sealed whole: {open:?}"))
 }
 
 fn assert_admitted(typeck: &Typeck) {

@@ -281,6 +281,14 @@ impl<V: Phase> Types<V> {
         &self.kinds[ty.index as usize]
     }
 
+    /// `ty` of the table `from`, interned in this one: the same type, its
+    /// parts moved with it (graph: a type crosses from one module's table
+    /// to another's).
+    pub fn transplant(&mut self, from: &Types<V>, ty: TyId<V>) -> TyId<V> {
+        let kind = from.kind(ty).with_children(&mut |child| self.transplant(from, child));
+        self.intern(kind)
+    }
+
     /// Every id of this table, in the order its kinds were interned, so
     /// that each kind's parts come before it.
     pub fn ids(&self) -> impl Iterator<Item = TyId<V>> + '_ {
