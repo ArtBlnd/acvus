@@ -80,9 +80,9 @@ impl SparseFacts<ConstantDomain> {
 }
 
 /// The type a value operation computes at, read from the body's values.
-struct OperandTypes<'m> {
-    types: &'m Types<Concrete>,
-    body: &'m Body,
+pub(super) struct OperandTypes<'m> {
+    pub(super) types: &'m Types<Concrete>,
+    pub(super) body: &'m Body,
 }
 
 impl OperandTypes<'_> {
@@ -106,7 +106,7 @@ impl OperandTypes<'_> {
 
     /// The domain's value of a value operation, or `None` where `inst` is
     /// none or its operands have no scalar type (D60).
-    fn value_operation<D>(&self, domain: &D, inst: &Inst, operands: &[&D::Value]) -> Option<D::Value>
+    pub(super) fn value_operation<D>(&self, domain: &D, inst: &Inst, operands: &[&D::Value]) -> Option<D::Value>
     where
         D: ValueDomain,
     {

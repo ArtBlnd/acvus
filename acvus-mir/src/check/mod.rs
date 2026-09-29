@@ -12,7 +12,7 @@
 //!   only where every reference on it is (ownership §5), over `Loans` and
 //!   `Liveness`.
 //! - `matchck`: the block lower marks where no arm of a `match` answers is
-//!   reached by no run (patterns §3), over `TagValues`, within the one body.
+//!   reached by no run (patterns §3), over `MatchFacts`, within the one body.
 //!
 //! They run after `required::remove_dead_context_ops` and before
 //! `required::insert_drops`, which places drops where the moves they admit
@@ -22,6 +22,9 @@ mod borrowck;
 mod initck;
 mod matchck;
 mod moveck;
+
+#[cfg(test)]
+mod tests;
 
 use acvus_ast::Span;
 
@@ -56,5 +59,12 @@ pub enum RefusalKind {
 /// Every judgment over every body of `module`, in the order the module doc
 /// lists; every refusal each makes.
 pub fn check(module: &Module, am: &mut AnalysisManager<'_>) -> Vec<Refusal> {
-    todo!("initck, moveck, borrowck, matchck over each body, collecting their refusals")
+    let mut refusals = Vec::new();
+    for body in module.body_ids() {
+        // initck: its call is this line's, made where initck is filled.
+        // moveck: its call is this line's, made where moveck is filled.
+        // borrowck: its call is this line's, made where borrowck is filled.
+        matchck::check(module, body, am, &mut refusals);
+    }
+    refusals
 }
