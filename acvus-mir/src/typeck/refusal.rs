@@ -24,8 +24,6 @@ pub enum RefusalKind {
     UnnamedVariant { tag: Astr },
     UnknownName { name: Astr },
     UnknownContext { context: QualifiedRef },
-    /// A once function where many calls are asked (functions §3).
-    CalledOnceWhereMany,
     /// A context's or a run's value whose type holds a loan (ownership §5).
     HoldsLoans,
     /// `*r = v` through a shared reference (operators §6).

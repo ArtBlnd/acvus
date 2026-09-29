@@ -137,7 +137,7 @@ pub(super) fn reach_in(
 ) -> Term {
     let result = cx.fresh();
     let effect = EffectTerm::Var(cx.infer.fresh_effect());
-    super::effect::join_into(cx, body, &effect, span);
+    super::effect::flows_into(cx, &effect, body, span);
     cx.decisions.push(Decision::Reach {
         site,
         span,

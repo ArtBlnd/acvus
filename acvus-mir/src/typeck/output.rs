@@ -7,7 +7,7 @@ use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
 use super::refusal::Refusal;
-use crate::infer::Term;
+use crate::infer::{FlowId, Term};
 use crate::ty::{CallsVarId, CastTy, Calls, Effect, EffectTerm, HoldsVarId, Infer as InferPhase, Mutability, Ty};
 
 /// What a name at a site is (types §6).
@@ -206,6 +206,9 @@ pub(super) struct Output {
     pub closures: FxHashMap<AstId, Closure>,
     /// Each lambda, in the order its body's check ended.
     pub lambdas: Vec<Lambda>,
+    /// Each flow of a call's effect into its body's (effects §1), at the
+    /// call's span, where a refusal of it is made.
+    pub effect_flows: FxHashMap<FlowId, Span>,
     pub capture_uses: Vec<CaptureUse>,
     pub whole_uses: Vec<WholeUse>,
     /// Each method call's receiver adjustment, at the call's callee site.

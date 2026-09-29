@@ -5,50 +5,55 @@ use acvus_ast::Span;
 
 use super::ctxt::Ctxt;
 use super::refusal::{self, Exceeding, RefusalKind};
-use crate::infer::Exceeds;
+use crate::infer::{EffectRefused, Exceeds};
 use crate::ty::{Effect, EffectTerm, Infer};
 
-/// Joins a call's effect into the innermost body's: a lambda's, or the
-/// run's.
-///
-/// B joins two effect variables by linking them, so a lambda called
-/// in a body shares that body's effect variable from then on: the
-/// lambda's type carries the body's other calls' effects too. That is
-/// sound, since a larger effect only keeps more order (effects), but it is
-/// coarser than the lambda's own.
+/// A call's effect flows into the innermost body's: a lambda's, or the
+/// run's (effects §1). The flow is one way: what the call's effect is, or
+/// later rises to, raises the body's, and the body's never reaches the
+/// callee. A lambda called in a body so keeps its own effect.
 pub(super) fn note_call_effect(cx: &mut Ctxt<'_>, effect: &EffectTerm<Infer>, span: Span) {
-    let body = match cx.scope.lambda_effect() {
-        Some(lambda) => lambda.clone(),
-        None => cx.out.body_effect.clone(),
-    };
-    let joined = match body {
-        Some(body) => join_into(cx, &body, effect, span),
-        None => effect.clone(),
-    };
-    match cx.scope.lambda_effect() {
-        Some(lambda) => *lambda = Some(joined),
-        None => cx.out.body_effect = Some(joined),
+    let body = body_effect(cx);
+    flows_into(cx, effect, &body, span);
+}
+
+/// `into ⊒ from` (effects §1), its refusal, if any, made at `span` or at
+/// the lambda whose effect `into` is (`refuse_effects_exceeded`).
+pub(super) fn flows_into(cx: &mut Ctxt<'_>, from: &EffectTerm<Infer>, into: &EffectTerm<Infer>, span: Span) {
+    let flow = cx.infer.flows_into(from, into);
+    cx.out.effect_flows.insert(flow, span);
+}
+
+/// Every effect flow B refused since the last call, refused here (D94):
+/// at the lambda whose effect would grow past what a slot fixed, or, where
+/// no lambda's would, at the call whose effect flows.
+pub(super) fn refuse_effects_exceeded(cx: &mut Ctxt<'_>) {
+    for EffectRefused { flow, into, exceeds } in cx.infer.take_effects_refused() {
+        let call = *cx.out.effect_flows.get(&flow).expect("every effect flow is recorded with its span");
+        refuse_exceeds(cx, &into, exceeds, call);
     }
 }
 
-/// Joins `effect` into `body` (types §2). Where `body` is an effect `eq`
-/// fixed and would grow past it, it keeps what it was and the growth is
-/// refused (D94): at the lambda whose effect it is, or, where no lambda's
-/// is, at the call at `span` that grows it.
-pub(super) fn join_into(cx: &mut Ctxt<'_>, body: &EffectTerm<Infer>, effect: &EffectTerm<Infer>, span: Span) -> EffectTerm<Infer> {
-    match cx.infer.join_effects(body, effect) {
+/// `effect` joined into the call effect `call` (types §2), refused where
+/// `call` is fixed and would grow (D94).
+pub(super) fn join_into(cx: &mut Ctxt<'_>, call: &EffectTerm<Infer>, effect: &EffectTerm<Infer>, span: Span) -> EffectTerm<Infer> {
+    match cx.infer.join_effects(call, effect) {
         Ok(joined) => joined,
-        Err(Exceeds { fixed, needs }) => {
-            let at = cx
-                .out
-                .lambdas
-                .iter()
-                .find(|lambda| cx.infer.one_effect_variable(&lambda.effect, body))
-                .map_or(span, |lambda| lambda.span);
-            refusal::push(cx, RefusalKind::ClosureExceedsSlot(Exceeding::Effect { needs, slot: fixed }), at);
-            body.clone()
+        Err(exceeds) => {
+            refuse_exceeds(cx, call, exceeds, span);
+            call.clone()
         }
     }
+}
+
+fn refuse_exceeds(cx: &mut Ctxt<'_>, grown: &EffectTerm<Infer>, Exceeds { fixed, needs }: Exceeds<Effect>, span: Span) {
+    let at = cx
+        .out
+        .lambdas
+        .iter()
+        .find(|lambda| cx.infer.one_effect_variable(&lambda.effect, grown))
+        .map_or(span, |lambda| lambda.span);
+    refusal::push(cx, RefusalKind::ClosureExceedsSlot(Exceeding::Effect { needs, slot: fixed }), at);
 }
 
 /// The innermost body's effect as a term a later call can join into: a

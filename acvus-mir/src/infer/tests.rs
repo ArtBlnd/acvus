@@ -675,6 +675,47 @@ fn unsettled_holds_and_calls_take_the_defaults_but_a_lambdas() {
     assert!(!fx.infer.default_unsettled_holds_and_calls(&[(lambda_holds, lambda_calls)]));
 }
 
+/// effects §1, D95: `flows_into` is one way. What flows into a variable
+/// raises it, then and whenever the source rises later; nothing flows back.
+/// A variable `eq` fixed that a flow would grow is refused, and keeps its
+/// value.
+#[test]
+fn an_effect_flows_into_another_one_way() {
+    let mut fx = Fixture::new();
+    let (callee, body) = (EffectTerm::Var(fx.infer.fresh_effect()), EffectTerm::Var(fx.infer.fresh_effect()));
+    fx.infer.join_effects(&body, &EffectTerm::Known(Effect::pure())).unwrap();
+    fx.infer.flows_into(&callee, &body);
+    fx.infer.join_effects(&callee, &EffectTerm::Known(Effect::opaque())).unwrap();
+    let settled = |fx: &mut Fixture, effect: EffectTerm<crate::ty::Infer>| {
+        let f = fx.function(effect, Flows::none(), Calls::Many, Holds::Nothing);
+        let (types, frozen) = fx.freeze(f);
+        match types.kind(frozen) {
+            TyKind::Fn { effect: EffectTerm::Known(effect), .. } => effect.clone(),
+            other => panic!("a function type, not {other:?}"),
+        }
+    };
+    assert_eq!(settled(&mut fx, body.clone()), Effect::opaque(), "the body rose with its callee");
+
+    let (pure_callee, other) = (EffectTerm::Var(fx.infer.fresh_effect()), EffectTerm::Var(fx.infer.fresh_effect()));
+    fx.infer.join_effects(&pure_callee, &EffectTerm::Known(Effect::pure())).unwrap();
+    fx.infer.flows_into(&pure_callee, &other);
+    fx.infer.join_effects(&other, &EffectTerm::Known(Effect::opaque())).unwrap();
+    assert_eq!(settled(&mut fx, pure_callee), Effect::pure(), "nothing flows back into the callee");
+
+    let (source, fixed) = (EffectTerm::Var(fx.infer.fresh_effect()), EffectTerm::Var(fx.infer.fresh_effect()));
+    let slot = fx.function(EffectTerm::Known(Effect::pure()), Flows::none(), Calls::Many, Holds::Nothing);
+    let lambda = fx.function(fixed.clone(), Flows::none(), Calls::Many, Holds::Nothing);
+    fx.infer.eq(slot, lambda).unwrap();
+    let flow = fx.infer.flows_into(&source, &fixed);
+    assert!(fx.infer.take_effects_refused().is_empty());
+    fx.infer.join_effects(&source, &EffectTerm::Known(Effect::opaque())).unwrap();
+    assert_eq!(
+        fx.infer.take_effects_refused(),
+        vec![EffectRefused { flow, into: fixed.clone(), exceeds: Exceeds { fixed: Effect::pure(), needs: Effect::opaque() } }]
+    );
+    assert_eq!(settled(&mut fx, fixed), Effect::pure(), "a fixed effect keeps its value");
+}
+
 // closed (types §6)
 
 /// types §6: an unbound variable's head is not known, so it is not closed.

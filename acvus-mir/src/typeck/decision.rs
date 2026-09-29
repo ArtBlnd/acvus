@@ -291,6 +291,7 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
         }
         break;
     }
+    super::effect::refuse_effects_exceeded(cx);
     for decision in std::mem::take(&mut cx.decisions.pending) {
         refuse_left_open(cx, decision);
     }
@@ -1164,7 +1165,7 @@ pub(super) fn reach_step(cx: &mut Ctxt<'_>, step: Step<'_>, from: Term, to: Term
     };
     cx.eq(*param, from, span);
     cx.eq(ret, to, span);
-    super::effect::join_into(cx, body, &effect, span);
+    super::effect::flows_into(cx, &effect, body, span);
     cx.out.reached.insert(
         node,
         Chosen {

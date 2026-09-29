@@ -1067,14 +1067,71 @@ fn a_lambda_whose_effect_exceeds_a_pure_slot_on_entering_is_a_mismatch() {
     );
 }
 
+/// `apply`, a pure `core::add` at `i64`, and `touch(i64) -> i64`, opaque.
+fn pure_add_and_opaque_touch(fx: &mut Fixture) {
+    declare_apply(fx);
+    let add = fx.raw.core.add;
+    fx.arithmetic(add, &[TyKind::Int(IntTy::I64)]);
+    let i64_ty = fx.int(IntTy::I64);
+    let opaque = fx.function(&[i64_ty], i64_ty, EffectTerm::Known(crate::ty::Effect::opaque()));
+    fx.declare("touch", opaque, &[]);
+}
+
+/// The effect of the lambda at `let` statement `at`.
+fn lambda_effect(checked: &Checked, script: &Script, at: usize) -> crate::ty::Effect {
+    let Stmt::LetBind { expr, .. } = &script.stmts[at] else {
+        panic!("statement {at} is not a `let`");
+    };
+    let TyKind::Fn { effect, .. } = checked.kind(checked.typeck.types[&expr.id()]) else {
+        panic!("statement {at} binds a lambda");
+    };
+    match effect {
+        EffectTerm::Known(effect) => effect.clone(),
+        EffectTerm::Var(var) => match *var {},
+    }
+}
+
 /// D94: a lambda within what its slot states is admitted: a pure lambda
-/// that captures nothing and copies what it reads.
+/// that captures nothing and copies what it reads. Its `+` reaches a pure
+/// impl; the generic `core::add` alone would leave its effect to the
+/// default, opaque (types §5).
 #[test]
 fn a_lambda_within_its_slot_is_admitted() {
     let mut fx = Fixture::new();
-    declare_apply(&mut fx);
+    pure_add_and_opaque_touch(&mut fx);
     let (checked, _) = fx.script("apply(|x| -> x + 1)");
     checked.admitted();
+}
+
+/// D95, effects §1: a body's effect is the join of its calls', one way. A
+/// pure lambda passed into a pure slot and also called in an opaque body
+/// stays pure: the body's effect never flows back into the callee.
+#[test]
+fn a_pure_lambda_called_in_an_opaque_body_stays_pure() {
+    let mut fx = Fixture::new();
+    pure_add_and_opaque_touch(&mut fx);
+    let (checked, script) = fx.script("let f = |x| -> x + 1; let a = apply(f); let b = f(1); touch(b)");
+    checked.admitted();
+    assert_eq!(lambda_effect(&checked, &script, 0), crate::ty::Effect::pure());
+    assert_eq!(checked.typeck.body_effect, crate::ty::Effect::opaque());
+}
+
+/// D95, effects §1: effects flow one way along a chain of calls. `g`
+/// calls `f`, which is opaque, and `p`, which is pure; the body calls `g`.
+/// `f`'s effect reaches `g` and the body; nothing reaches `p` or `f`
+/// back.
+#[test]
+fn effects_flow_one_way_along_a_chain_of_calls() {
+    let mut fx = Fixture::new();
+    pure_add_and_opaque_touch(&mut fx);
+    let (checked, script) =
+        fx.script("let f = |x| -> touch(x); let p = |x| -> x + 1; let g = |x| -> p(f(x)); g(1)");
+    checked.admitted();
+    let opaque = crate::ty::Effect::opaque();
+    assert_eq!(lambda_effect(&checked, &script, 0), opaque, "f");
+    assert_eq!(lambda_effect(&checked, &script, 1), crate::ty::Effect::pure(), "p");
+    assert_eq!(lambda_effect(&checked, &script, 2), opaque, "g");
+    assert_eq!(checked.typeck.body_effect, opaque, "the body");
 }
 
 /// types §5, D93: a function type no lambda claims and nothing decides

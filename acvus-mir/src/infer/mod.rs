@@ -17,16 +17,16 @@ mod scheme;
 mod tests;
 
 use crate::ty::{
-    Calls, CallsTerm, CallsVarId, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Holds, HoldsTerm, HoldsVarId,
+    Calls, CallsTerm, Effect, CallsVarId, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Holds, HoldsTerm, HoldsVarId,
     IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, ReprVarId, TyId, TyKind, TyVarId,
     Types,
 };
 
 use rustc_hash::FxHashSet;
 
-use cells::{Cells, End as CellEnd, MarkTerm};
+use cells::{Cells, End as CellEnd, FlowRefused, MarkTerm};
 
-pub use cells::Exceeds;
+pub use cells::{Exceeds, FlowId};
 pub use closed::{Closed, OpenSources};
 pub use freeze::{FreezeMemo, Unsettled};
 pub use relate::{Entered, Mismatch};
@@ -74,6 +74,17 @@ pub struct Infer {
     flow_vars: Cells<FlowTerm<InferPhase>>,
     holds_vars: Cells<HoldsTerm>,
     calls_vars: Cells<CallsTerm>,
+    /// Each flow of effects refused since typeck last took them.
+    effects_refused: Vec<EffectRefused>,
+}
+
+/// A flow `into ⊒ from` of effects that would grow `into`, fixed by `eq`,
+/// past its value (D94, D95).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectRefused {
+    pub flow: FlowId,
+    pub into: EffectTerm<InferPhase>,
+    pub exceeds: Exceeds<Effect>,
 }
 
 /// Where a term's chain of bound variables ends: at an unbound variable,
@@ -97,6 +108,7 @@ impl Infer {
             flow_vars: Cells::new(),
             holds_vars: Cells::new(),
             calls_vars: Cells::new(),
+            effects_refused: Vec::new(),
         }
     }
 
@@ -199,6 +211,40 @@ impl Infer {
             .map(drop)
     }
 
+    /// effects §1: `into ⊒ from`, one way. A body's effect is the join of
+    /// its calls' effects: what a call's effect is, or later rises to,
+    /// flows into the body's, and nothing flows back.
+    ///
+    /// Propagation ends: an effect only rises, and its lattice's height is
+    /// 4 + 2c for c the contexts the program and its declarations name
+    /// (reissue twice, commuting once, splitting once, each context read
+    /// and written once), so each variable is followed at most that many
+    /// times plus once per link or flow added.
+    pub fn flows_into(&mut self, from: &EffectTerm<InferPhase>, into: &EffectTerm<InferPhase>) -> FlowId {
+        let (flow, refused) = self.effect_vars.flows_into(from, into, &Effect::join);
+        self.record_effects_refused(refused);
+        flow
+    }
+
+    /// Every flow of effects refused since the last call.
+    pub fn take_effects_refused(&mut self) -> Vec<EffectRefused> {
+        std::mem::take(&mut self.effects_refused)
+    }
+
+    /// Follows every effect flow from a variable that rose.
+    pub(super) fn propagate_effects(&mut self) {
+        let refused = self.effect_vars.propagate(&Effect::join);
+        self.record_effects_refused(refused);
+    }
+
+    fn record_effects_refused(&mut self, refused: Vec<FlowRefused<EffectTerm<InferPhase>>>) {
+        self.effects_refused.extend(refused.into_iter().map(|FlowRefused { flow, into, exceeds }| EffectRefused {
+            flow,
+            into,
+            exceeds,
+        }));
+    }
+
     /// Whether `a` and `b` are one effect variable, linked.
     pub fn one_effect_variable(&self, a: &EffectTerm<InferPhase>, b: &EffectTerm<InferPhase>) -> bool {
         match (self.effect_vars.end(a), self.effect_vars.end(b)) {
@@ -240,6 +286,7 @@ impl Infer {
     /// only at a stall.
     pub fn default_effects_and_marks(&mut self) -> bool {
         let effects = self.effect_vars.default_unbound(&crate::ty::Effect::opaque());
+        self.propagate_effects();
         let marks = self.repr_vars.default_unbound(&Mark::Uniform);
         effects || marks
     }

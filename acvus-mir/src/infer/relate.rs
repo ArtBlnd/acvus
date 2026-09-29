@@ -145,13 +145,21 @@ impl Infer {
     /// Unification with the occurs check; every constructor invariant
     /// (types §4).
     pub fn eq(&mut self, a: Term, b: Term) -> Result<(), Mismatch> {
-        self.relate(a, b, Relation::Eq).map(drop)
+        let related = self.relate(a, b, Relation::Eq).map(drop);
+        self.propagate_effects();
+        related
     }
 
     /// The join of two terms (types §2): a transparent side grows by union
     /// toward the other; an opaque side never grows; afterwards the two are
     /// `eq`. Function types join their effects, flows, calls and split.
     pub fn join(&mut self, a: Term, b: Term) -> Result<(), Mismatch> {
+        let joined = self.join_terms(a, b);
+        self.propagate_effects();
+        joined
+    }
+
+    fn join_terms(&mut self, a: Term, b: Term) -> Result<(), Mismatch> {
         let joined = self.relate(a, b, Relation::Join)?;
         for side in [a, b] {
             if let End::Node { holder: None, node } = self.end(side)
@@ -170,6 +178,12 @@ impl Infer {
     /// The value is closed: a decision fires only on closed terms (types §6),
     /// and the caller checked with `closed`.
     pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
+        let entered = self.enter_slot(decls, value, slot);
+        self.propagate_effects();
+        entered
+    }
+
+    fn enter_slot(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
         let (holder, slot_node) = match self.end(slot) {
             End::Unbound(var, _) => {
                 self.bind(var, None, value.term)?;
@@ -315,7 +329,9 @@ impl Infer {
         a: &EffectTerm<InferPhase>,
         b: &EffectTerm<InferPhase>,
     ) -> Result<EffectTerm<InferPhase>, Exceeds<Effect>> {
-        self.effect_vars.join(a, b, Effect::join)
+        let joined = self.effect_vars.join(a, b, Effect::join);
+        self.propagate_effects();
+        joined
     }
 
     fn relate(&mut self, a: Term, b: Term, how: Relation) -> Result<Term, Mismatch> {

@@ -64,11 +64,28 @@ pub struct Exceeds<V> {
     pub needs: V,
 }
 
-/// Each variable's term, and at the end of each chain whether `eq` made
-/// its value equal to a known one, which no join may then grow.
+/// A one-way constraint `into ⊒ from`, by the number `flows_into` gave it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FlowId(pub u32);
+
+/// A flow that would grow a fixed `into` past its value (D94).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct FlowRefused<T: VarTerm> {
+    pub flow: FlowId,
+    pub into: T,
+    pub exceeds: Exceeds<T::Value>,
+}
+
+/// Each variable's term; at the end of each chain, whether `eq` made its
+/// value equal to a known one, which no join may then grow; and the terms
+/// each variable flows into, one way (`flows_into`). A variable whose
+/// value rose since its flows were last followed is `rose`.
 pub(super) struct Cells<T: VarTerm> {
     cells: Vec<Option<T>>,
     fixed: Vec<bool>,
+    flows: Vec<Vec<(T, FlowId)>>,
+    rose: Vec<T::Var>,
+    next_flow: u32,
 }
 
 impl<T: VarTerm> Cells<T> {
@@ -76,6 +93,9 @@ impl<T: VarTerm> Cells<T> {
         Self {
             cells: Vec::new(),
             fixed: Vec::new(),
+            flows: Vec::new(),
+            rose: Vec::new(),
+            next_flow: 0,
         }
     }
 
@@ -85,7 +105,111 @@ impl<T: VarTerm> Cells<T> {
         let var = T::var_of_index(u32::try_from(self.cells.len()).expect(exhausted));
         self.cells.push(None);
         self.fixed.push(false);
+        self.flows.push(Vec::new());
         var
+    }
+
+    /// Links `from`, the end of a chain, to `to`: the variable `to` ends at
+    /// takes `from`'s flows, and follows them again.
+    fn link(&mut self, from: T::Var, to: T::Var) {
+        self.cells[T::index(from)] = Some(T::of_var(to));
+        self.fixed[T::index(to)] |= self.fixed[T::index(from)];
+        let moved = std::mem::take(&mut self.flows[T::index(from)]);
+        self.flows[T::index(to)].extend(moved);
+        self.mark_rose(to);
+    }
+
+    /// Queues `var`, the end of a chain, for `propagate`, where it flows
+    /// anywhere.
+    fn mark_rose(&mut self, var: T::Var) {
+        if !self.flows[T::index(var)].is_empty() {
+            self.rose.push(var);
+        }
+    }
+
+    /// Sets the value of `var`, the end of a chain.
+    fn set(&mut self, var: T::Var, value: T::Value) {
+        self.cells[T::index(var)] = Some(T::of_value(value));
+        self.mark_rose(var);
+    }
+
+    /// Records `into ⊒ from` (the lattice's subtyping constraint) and
+    /// raises `into` to what `from` is so far; `from` rising later raises
+    /// it again (`propagate`). Nothing flows back into `from`.
+    pub(super) fn flows_into(
+        &mut self,
+        from: &T,
+        into: &T,
+        join: &impl Fn(&T::Value, &T::Value) -> T::Value,
+    ) -> (FlowId, Vec<FlowRefused<T>>) {
+        let flow = FlowId(self.next_flow);
+        self.next_flow = self.next_flow.checked_add(1).expect("Cells::flows_into: u32::MAX flows");
+        match self.end(from) {
+            End::Known(value) => {
+                let refused = match self.raise(into, &value, join) {
+                    Ok(()) => Vec::new(),
+                    Err(exceeds) => vec![FlowRefused { flow, into: into.clone(), exceeds }],
+                };
+                (flow, refused)
+            }
+            End::Var { var, .. } => {
+                self.flows[T::index(var)].push((into.clone(), flow));
+                self.rose.push(var);
+                (flow, self.propagate(join))
+            }
+        }
+    }
+
+    /// Follows the flows of every variable that rose, until none rises:
+    /// each flow raises its `into` to its source's value. A variable rises
+    /// only up its lattice, so each is queued at most once per rise plus
+    /// once per link or flow added: with h the lattice's height, O((v · h
+    /// + links + flows) · the flows out of each).
+    pub(super) fn propagate(&mut self, join: &impl Fn(&T::Value, &T::Value) -> T::Value) -> Vec<FlowRefused<T>> {
+        let mut refused = Vec::new();
+        while let Some(var) = self.rose.pop() {
+            let End::Var { var: root, value: Some(value) } = self.end(&T::of_var(var)) else {
+                continue;
+            };
+            let flows = self.flows[T::index(root)].clone();
+            for (into, flow) in flows {
+                if let Err(exceeds) = self.raise(&into, &value, join) {
+                    refused.push(FlowRefused { flow, into, exceeds });
+                }
+            }
+        }
+        refused
+    }
+
+    /// Raises `into` to at least `value`: a variable joins it in, a fixed
+    /// one only where that does not grow it, and a known value must be it
+    /// already.
+    fn raise(
+        &mut self,
+        into: &T,
+        value: &T::Value,
+        join: &impl Fn(&T::Value, &T::Value) -> T::Value,
+    ) -> Result<(), Exceeds<T::Value>> {
+        match self.end(into) {
+            End::Known(fixed) => {
+                let needs = join(&fixed, value);
+                match needs == fixed {
+                    true => Ok(()),
+                    false => Err(Exceeds { fixed, needs }),
+                }
+            }
+            End::Var { var, value: had } => {
+                let joined = match &had {
+                    Some(had) => join(had, value),
+                    None => value.clone(),
+                };
+                self.keep_fixed(var, had.as_ref(), &joined)?;
+                if had.as_ref() != Some(&joined) {
+                    self.set(var, joined);
+                }
+                Ok(())
+            }
+        }
     }
 
     pub(super) fn end(&self, term: &T) -> End<T> {
@@ -113,9 +237,11 @@ impl<T: VarTerm> Cells<T> {
     /// variable made one with another is bound through it and is left.
     pub(super) fn default_unbound(&mut self, value: &T::Value) -> bool {
         let mut any = false;
-        for cell in self.cells.iter_mut().filter(|cell| cell.is_none()) {
-            *cell = Some(T::of_value(value.clone()));
-            any = true;
+        for index in 0..self.cells.len() {
+            if self.cells[index].is_none() {
+                self.set(T::var_of_index(u32::try_from(index).expect("indices are u32 by fresh")), value.clone());
+                any = true;
+            }
         }
         any
     }
@@ -124,9 +250,9 @@ impl<T: VarTerm> Cells<T> {
     /// whether any did. A kept variable is one some other rule decides.
     pub(super) fn default_unbound_but(&mut self, value: &T::Value, kept: &[T::Var]) -> bool {
         let mut any = false;
-        for (index, cell) in self.cells.iter_mut().enumerate() {
-            if cell.is_none() && !kept.iter().any(|var| T::index(*var) == index) {
-                *cell = Some(T::of_value(value.clone()));
+        for index in 0..self.cells.len() {
+            if self.cells[index].is_none() && !kept.iter().any(|var| T::index(*var) == index) {
+                self.set(T::var_of_index(u32::try_from(index).expect("indices are u32 by fresh")), value.clone());
                 any = true;
             }
         }
@@ -155,9 +281,12 @@ impl<T: VarTerm> Cells<T> {
                     return Ok(T::of_var(var));
                 }
                 let term = other.term();
-                self.cells[T::index(var)] = Some(term.clone());
-                if let End::Known(_) = other {
-                    self.fixed[T::index(var)] = true;
+                match &other {
+                    End::Known(value) => {
+                        self.set(var, value.clone());
+                        self.fixed[T::index(var)] = true;
+                    }
+                    End::Var { var: to, .. } => self.link(var, *to),
                 }
                 Ok(term)
             }
@@ -175,8 +304,7 @@ impl<T: VarTerm> Cells<T> {
                 if x != y {
                     return Err(Unequal);
                 }
-                self.cells[T::index(w)] = Some(T::of_var(v));
-                self.fixed[T::index(v)] |= self.fixed[T::index(w)];
+                self.link(w, v);
                 Ok(T::of_var(v))
             }
         }
@@ -200,7 +328,7 @@ impl<T: VarTerm> Cells<T> {
                     None => y,
                 };
                 self.keep_fixed(var, value.as_ref(), &joined)?;
-                self.cells[T::index(var)] = Some(T::of_value(joined));
+                self.set(var, joined);
                 Ok(T::of_var(var))
             }
             (End::Var { var: v, value: x }, End::Var { var: w, value: y }) => {
@@ -216,9 +344,10 @@ impl<T: VarTerm> Cells<T> {
                     self.keep_fixed(v, x.as_ref(), joined)?;
                     self.keep_fixed(w, y.as_ref(), joined)?;
                 }
-                self.cells[T::index(v)] = joined.map(T::of_value);
-                self.cells[T::index(w)] = Some(T::of_var(v));
-                self.fixed[T::index(v)] |= self.fixed[T::index(w)];
+                if let Some(joined) = joined {
+                    self.set(v, joined);
+                }
+                self.link(w, v);
                 Ok(T::of_var(v))
             }
         }

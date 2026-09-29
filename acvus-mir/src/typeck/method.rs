@@ -261,7 +261,7 @@ fn lends(
                 Root::Context(context) => {
                     let touched = Contexts::from([*context]);
                     let effect = Effect::new(Reissue::Opaque, false, touched.clone(), touched, SplitCost::Unavailable);
-                    super::effect::join_into(cx, body, &EffectTerm::Known(effect), span);
+                    super::effect::flows_into(cx, &EffectTerm::Known(effect), body, span);
                 }
             }
             for index in &place.indexes {
