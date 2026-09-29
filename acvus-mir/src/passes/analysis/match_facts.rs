@@ -38,7 +38,7 @@ use crate::ty::CastTy;
 /// pairs them, reducing nothing between them.
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MatchValue {
+pub struct MatchValue {
     pub tags: Tags,
     pub constant: Constant,
     pub interval: Interval,
@@ -66,7 +66,7 @@ impl Widen for MatchValue {
 }
 
 /// Each value operation is each component domain's.
-pub(crate) struct MatchDomain {
+pub struct MatchDomain {
     pub tags: TagsDomain,
     pub constant: ConstantDomain,
     pub interval: IntervalDomain,
