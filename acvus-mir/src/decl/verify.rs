@@ -1314,7 +1314,7 @@ mod tests {
         }
 
         fn name(&self, namespace: &str, name: &str) -> QualifiedRef {
-            QualifiedRef::qualified(self.interner.intern(namespace), self.interner.intern(name))
+            QualifiedRef::qualified(self.interner.namespace(&[self.interner.intern(namespace)]), self.interner.intern(name))
         }
 
         fn ty(&mut self, kind: TyKind<Poly>) -> TyId<Poly> {

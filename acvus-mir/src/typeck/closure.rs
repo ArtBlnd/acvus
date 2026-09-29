@@ -275,7 +275,7 @@ fn place_root<S: Slot>(expr: &Expr<S>) -> Option<Root> {
             name,
             ref_kind: RefKind::Value,
             ..
-        } if name.namespace.is_none() => Some(Root::Binding(name.name)),
+        } if name.namespace.is_root() => Some(Root::Binding(name.name)),
         Expr::Ident {
             ref_kind: RefKind::ExternParam,
             ..

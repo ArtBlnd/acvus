@@ -2,7 +2,7 @@
 //! parsed with `acvus-ast`; declarations go through `verify`.
 
 use acvus_ast::{AstId, ElseBranch, Expr, Script, Stmt, Template};
-use acvus_utils::{Astr, Interner, QualifiedRef};
+use acvus_utils::{Astr, Interner, Namespace, QualifiedRef};
 
 use super::{Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
 use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
@@ -71,6 +71,11 @@ impl Fixture {
         self.names.intern(name)
     }
 
+    fn namespace(&self, path: &[&str]) -> Namespace {
+        let path: Vec<Astr> = path.iter().map(|segment| self.names.intern(segment)).collect();
+        self.names.namespace(&path)
+    }
+
     fn ty(&mut self, kind: TyKind<Poly>) -> TyId<Poly> {
         self.raw.types.intern(kind)
     }
@@ -132,7 +137,13 @@ impl Fixture {
     /// A plain extern fn `name` in `namespace`, one of the declarations a
     /// bare `name` may reach.
     fn overload(&mut self, namespace: &str, name: &str, ty: TyId<Poly>) -> QualifiedRef {
-        let id = QualifiedRef::qualified(self.name(namespace), self.name(name));
+        let namespace = self.namespace(&[namespace]);
+        self.declare_at(namespace, name, ty)
+    }
+
+    /// A plain extern fn `name` at `namespace`, a path of any depth.
+    fn declare_at(&mut self, namespace: Namespace, name: &str, ty: TyId<Poly>) -> QualifiedRef {
+        let id = QualifiedRef::qualified(namespace, self.name(name));
         let scheme = Scheme {
             ty,
             param_names: self.param_names(self.arity(ty)),
@@ -271,7 +282,7 @@ impl Fixture {
         let script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_script(&decls, &mut types, &script);
+        let typeck = check_script(&self.names, &decls, &mut types, &script);
         (Checked { typeck, types }, script)
     }
 
@@ -279,7 +290,7 @@ impl Fixture {
         let template = acvus_ast::parse_template(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_template(&decls, &mut types, &template);
+        let typeck = check_template(&self.names, &decls, &mut types, &template);
         (Checked { typeck, types }, template)
     }
 }
@@ -821,8 +832,8 @@ fn a_call_reaches_the_overload_its_argument_decides() {
     let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
     let of_int = fx.pure(&[i64_ty], bool_ty);
     let of_bool = fx.pure(&[bool_ty], i64_ty);
-    let first = QualifiedRef::qualified(fx.name("a"), fx.name("f"));
-    let second = QualifiedRef::qualified(fx.name("b"), fx.name("f"));
+    let first = QualifiedRef::qualified(fx.namespace(&["a"]), fx.name("f"));
+    let second = QualifiedRef::qualified(fx.namespace(&["b"]), fx.name("f"));
     for (id, ty) in [(first, of_int), (second, of_bool)] {
         let scheme = Scheme {
             ty,
@@ -841,6 +852,73 @@ fn a_call_reaches_the_overload_its_argument_decides() {
     assert_eq!(checked.typeck.reached[&site].declaration, second);
 }
 
+/// programs: a function stands at a name of any depth, and a qualified
+/// name reaches the declaration at its whole path.
+#[test]
+fn a_three_segment_callee_reaches_the_declaration_at_its_whole_path() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let ty = fx.pure(&[i64_ty], i64_ty);
+    let a_b = fx.namespace(&["a", "b"]);
+    let f = fx.declare_at(a_b, "f", ty);
+    let (checked, script) = fx.script("a::b::f(1)");
+    checked.admitted();
+    let site = script.tail.as_ref().unwrap().id();
+    assert_eq!(checked.typeck.reached[&site].declaration, f);
+}
+
+/// Two segments are a callee's namespace of one segment where a function
+/// is declared there, and otherwise the variant `E::Tag`.
+#[test]
+fn a_two_segment_callee_reaches_a_declaration_or_is_a_variant() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let ty = fx.pure(&[i64_ty], i64_ty);
+    let f = fx.overload("ns", "f", ty);
+    let enum_name = QualifiedRef::root(fx.name("E"));
+    let tag = fx.name("Tag");
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let v = E::Tag(1); ns::f(2)");
+    checked.admitted();
+    let site = script.tail.as_ref().unwrap().id();
+    assert_eq!(checked.typeck.reached[&site].declaration, f);
+    let TyKind::Enum { name, variants, .. } = checked.kind(binding(&checked, &script, &names, "v")) else {
+        panic!("`E::Tag(1)` is a variant of the enum `E`");
+    };
+    assert_eq!(*name, enum_name);
+    assert!(variants.iter().any(|(written, payload)| *written == tag && payload.is_some()));
+}
+
+/// A qualified name compares its whole path: `a::b::f` reaches neither
+/// `b::f` nor `a::f`, and a name deeper than two segments is no variant, so
+/// it is unknown.
+#[test]
+fn a_three_segment_callee_reaches_no_declaration_at_part_of_its_path() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let ty = fx.pure(&[i64_ty], i64_ty);
+    fx.overload("b", "f", ty);
+    fx.overload("a", "f", ty);
+    let f = fx.name("f");
+    let (checked, _) = fx.script("a::b::f(1)");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::UnknownName { name: f }]);
+}
+
+/// types §6: a bare name reaches every declaration of that name, whatever
+/// its namespace, however deep.
+#[test]
+fn a_bare_name_reaches_a_declaration_at_a_deep_namespace() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let ty = fx.pure(&[i64_ty], i64_ty);
+    let a_b = fx.namespace(&["a", "b"]);
+    let f = fx.declare_at(a_b, "f", ty);
+    let (checked, script) = fx.script("f(1)");
+    checked.admitted();
+    let site = script.tail.as_ref().unwrap().id();
+    assert_eq!(checked.typeck.reached[&site].declaration, f);
+}
+
 /// types §6: several declarations left is a refusal.
 #[test]
 fn a_call_two_declarations_answer_is_refused() {
@@ -849,7 +927,7 @@ fn a_call_two_declarations_answer_is_refused() {
     let ty = fx.pure(&[i64_ty], i64_ty);
     let f = fx.name("f");
     for namespace in ["a", "b"] {
-        let id = QualifiedRef::qualified(fx.name(namespace), f);
+        let id = QualifiedRef::qualified(fx.namespace(&[namespace]), f);
         let scheme = Scheme {
             ty,
             param_names: fx.param_names(1),
@@ -2398,7 +2476,7 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
     let fx = Fixture::new();
     let script = acvus_ast::parse_script(&fx.names, "let f = |g| -> g(1); 1").expect("the test's source parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
-    let mut cx = super::ctxt::Ctxt::new(&decls, super::scope::Run::Script);
+    let mut cx = super::ctxt::Ctxt::new(&fx.names, &decls, super::scope::Run::Script);
     super::stmt::check_body(&mut cx, &script.stmts, script.tail.as_deref());
     super::decision::solve(&mut cx);
     assert!(cx.out.refusals.is_empty(), "refused: {:?}", cx.out.refusals);
@@ -3164,7 +3242,7 @@ fn two_lambdas_joined_by_if_are_either_function_value() {
     fx.input("c", bool_ty);
     let script = acvus_ast::parse_script(&fx.names, "let h = if $c { |v| -> v } else { |v| -> true }; h(false)").expect("the test's source parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
-    let mut cx = super::ctxt::Ctxt::new(&decls, super::scope::Run::Script);
+    let mut cx = super::ctxt::Ctxt::new(&fx.names, &decls, super::scope::Run::Script);
     super::stmt::check_body(&mut cx, &script.stmts, script.tail.as_deref());
     super::generalize::generalize_all(&mut cx);
     super::decision::solve(&mut cx);

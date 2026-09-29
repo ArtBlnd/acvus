@@ -73,7 +73,7 @@ impl Fixture {
         let script: Script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_script(&decls, &mut types, &script);
+        let typeck = check_script(&self.names, &decls, &mut types, &script);
         assert!(typeck.refusals.is_empty(), "typeck refused {source}: {:?}", typeck.refusals);
         let module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);

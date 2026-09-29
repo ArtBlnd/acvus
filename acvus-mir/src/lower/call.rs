@@ -119,7 +119,7 @@ fn call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[&Exp
         return call_reached(cx, site, args, span);
     }
     if let Expr::Ident { name, ref_kind: RefKind::Value, .. } = func
-        && name.namespace.is_some()
+        && !name.namespace.is_root()
         && cx.decls.scheme(*name).is_none()
     {
         return variant_call(cx, site, name.name, args, span);

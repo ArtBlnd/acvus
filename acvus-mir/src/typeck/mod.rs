@@ -51,6 +51,7 @@ mod variant;
 mod writeback;
 
 use acvus_ast::{Expr, Script, Slot, Template};
+use acvus_utils::Interner;
 
 use crate::decl::Declarations;
 use crate::ty::{Concrete, TyKind, Types};
@@ -63,8 +64,8 @@ use ctxt::Ctxt;
 use scope::Run;
 
 /// A script (programs §2): statements and a tail.
-pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, script: &Script<S>) -> Typeck {
-    let mut cx = Ctxt::new(decls, Run::Script);
+pub fn check_script<S: Slot>(interner: &Interner, decls: &Declarations, types: &mut Types<Concrete>, script: &Script<S>) -> Typeck {
+    let mut cx = Ctxt::new(interner, decls, Run::Script);
     let tail = script.tail.as_deref();
     let value = stmt::check_body(&mut cx, &script.stmts, tail);
     let site = tail.map_or(script.id, Expr::id);
@@ -78,8 +79,8 @@ pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, 
 
 /// A template (programs §1): text and `{{ }}`, each a call of
 /// `core::display`.
-pub fn check_template<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, template: &Template<S>) -> Typeck {
-    let mut cx = Ctxt::new(decls, Run::Template);
+pub fn check_template<S: Slot>(interner: &Interner, decls: &Declarations, types: &mut Types<Concrete>, template: &Template<S>) -> Typeck {
+    let mut cx = Ctxt::new(interner, decls, Run::Template);
     stmt::check_stmts(&mut cx, &template.body);
     generalize::generalize_all(&mut cx);
     decision::solve(&mut cx);

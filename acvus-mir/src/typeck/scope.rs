@@ -239,7 +239,7 @@ pub(super) fn check_ident(
     if ref_kind == RefKind::ExternParam {
         return check_input(cx, site, name.name, span);
     }
-    if name.namespace.is_none()
+    if name.namespace.is_root()
         && let Some(found) = cx.scope.lookup(name.name)
     {
         cx.out.names.insert(site, Name::Binding(found.binding.binder));
@@ -249,9 +249,10 @@ pub(super) fn check_ident(
             None => found.binding.term,
         };
     }
-    let declarations: Box<[QualifiedRef]> = match name.namespace {
-        Some(_) => cx.decls.scheme(name).map(|_| name).into_iter().collect(),
-        None => cx.decls.overloads(name.name).into(),
+    let declarations: Box<[QualifiedRef]> = if name.namespace.is_root() {
+        cx.decls.overloads(name.name).into()
+    } else {
+        cx.decls.scheme(name).map(|_| name).into_iter().collect()
     };
     match &declarations[..] {
         [declaration] => super::call::declaration_value(cx, site, *declaration, span),

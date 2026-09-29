@@ -1,4 +1,5 @@
 use acvus_ast::{AstId, Span};
+use acvus_utils::Interner;
 
 use super::decision::{Decision, Decisions, Pending};
 use super::output::Output;
@@ -11,6 +12,7 @@ use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Mutability, Poly, TyId, 
 /// The shared state of one checked body (S1): the declarations it reads,
 /// and four things it builds. No rule holds state of its own.
 pub(super) struct Ctxt<'d> {
+    pub interner: &'d Interner,
     pub decls: &'d Declarations,
     pub infer: Infer,
     pub scope: Scope,
@@ -19,8 +21,9 @@ pub(super) struct Ctxt<'d> {
 }
 
 impl<'d> Ctxt<'d> {
-    pub fn new(decls: &'d Declarations, run: Run) -> Self {
+    pub fn new(interner: &'d Interner, decls: &'d Declarations, run: Run) -> Self {
         Self {
+            interner,
             decls,
             infer: Infer::new(),
             scope: Scope::new(run),

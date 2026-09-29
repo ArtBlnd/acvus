@@ -63,7 +63,7 @@ pub struct Tags {
 
 impl Core {
     pub fn of(interner: &Interner) -> Core {
-        let namespace = interner.intern("core");
+        let namespace = interner.namespace(&[interner.intern("core")]);
         let name = |name: &str| QualifiedRef::qualified(namespace, interner.intern(name));
         Core {
             add: name("add"),

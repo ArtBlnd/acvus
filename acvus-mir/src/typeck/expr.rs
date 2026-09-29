@@ -48,7 +48,7 @@ fn note_demanded_capture(cx: &mut Ctxt<'_>, name: QualifiedRef, ref_kind: RefKin
             note_captures(cx, capturing, demand, span);
         }
         RefKind::Value => {
-            if name.namespace.is_none()
+            if name.namespace.is_root()
                 && let Some(found) = cx.scope.lookup(name.name)
             {
                 note_captures(cx, capturing_binding(name.name, &found), demand, span);

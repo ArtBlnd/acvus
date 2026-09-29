@@ -3,7 +3,7 @@
 //! body held to the editor's invariants.
 
 use acvus_ast::Script;
-use acvus_utils::{Astr, Interner, QualifiedRef};
+use acvus_utils::{Astr, Interner, Namespace, QualifiedRef};
 
 use super::{lower_script, lower_template};
 use crate::decl::{
@@ -181,7 +181,7 @@ impl Fixture {
         let script: Script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_script(&decls, &mut types, &script);
+        let typeck = check_script(&self.names, &decls, &mut types, &script);
         assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
         let module = lower_script(&decls, &typeck, types, &script);
         Lowered::checked(module, self.names)
@@ -191,7 +191,7 @@ impl Fixture {
         let template = acvus_ast::parse_template(&self.names, source).expect("the test's source parses");
         let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
         let mut types = Types::new();
-        let typeck = check_template(&decls, &mut types, &template);
+        let typeck = check_template(&self.names, &decls, &mut types, &template);
         assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
         let module = lower_template(&decls, &typeck, types, &template);
         Lowered::checked(module, self.names)
@@ -232,6 +232,11 @@ impl Lowered {
 
     fn name(&self, name: &str) -> Astr {
         self.names.intern(name)
+    }
+
+    fn namespace(&self, path: &[&str]) -> Namespace {
+        let path: Vec<Astr> = path.iter().map(|segment| self.names.intern(segment)).collect();
+        self.names.namespace(&path)
     }
 
     fn ops(&self, body: BodyId) -> Vec<&Op> {
@@ -465,7 +470,7 @@ fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
     let script: Script = acvus_ast::parse_script(&fx.names, "if let (Some(a), b) = pair() { 1 } else { 2 }").expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&decls, &mut types, &script);
+    let typeck = check_script(&fx.names, &decls, &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -678,7 +683,7 @@ fn a_template_appends_text_and_displays_values_onto_its_output() {
     let ops = lowered.entry_ops();
     assert_eq!(count(&ops, |op| matches!(op, Op::ConstStr { text } if text == "hello ")), 1);
     assert_eq!(count(&ops, |op| matches!(op, Op::StringAppend { .. })), 1);
-    let display = QualifiedRef::qualified(lowered.name("core"), lowered.name("display"));
+    let display = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("display"));
     assert_eq!(
         count(&ops, |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == display)),
         1
@@ -806,7 +811,7 @@ fn tuple_equality_compares_part_by_part() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let lowered = fx.script("(1, true) == (2, false)");
-    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
     assert_eq!(calls_of(&lowered, eq), 2);
     assert!(lowered.entry_terminators().iter().any(|terminator| matches!(terminator, Terminator::Diamond { .. })));
 }
@@ -818,7 +823,7 @@ fn tuple_ordering_is_the_first_unequal_parts_cmp() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let lowered = fx.script("(1, 2) < (1, 3)");
-    let cmp = QualifiedRef::qualified(lowered.name("core"), lowered.name("cmp"));
+    let cmp = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("cmp"));
     assert_eq!(calls_of(&lowered, cmp), 2);
     let lt = count(&lowered.entry_ops(), |op| matches!(op, Op::BinOp { op: crate::ir::BinOp::Lt, .. }));
     assert_eq!(lt, 1);
@@ -837,7 +842,7 @@ fn option_equality_tests_tags_before_payloads() {
     let lowered = fx.script("$o == $p");
     let ops = lowered.entry_ops();
     assert_eq!(count(&ops, |op| matches!(op, Op::TestVariant { .. })), 2);
-    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
     assert_eq!(calls_of(&lowered, eq), 1);
 }
 
@@ -885,7 +890,7 @@ fn lowered_with_loans(fx: Fixture, source: &str) -> (Lowered, std::rc::Rc<crate:
     let script: Script = acvus_ast::parse_script(&fx.names, source).expect("the test's source parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&decls, &mut types, &script);
+    let typeck = check_script(&fx.names, &decls, &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -975,7 +980,7 @@ fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
     .expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&decls, &mut types, &script);
+    let typeck = check_script(&fx.names, &decls, &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -1071,7 +1076,7 @@ fn array_equality_is_one_for_that_exits_at_the_first_difference() {
         matches!(terminator, Terminator::JumpIf { else_to, else_args, .. } if *else_to == exit && else_args.len() == 1)
     });
     assert!(exits_early, "{}", shown(body));
-    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
     assert_eq!(calls_of(&lowered, eq), 1, "one element comparison, in the loop: {}", shown(body));
 }
 
@@ -1090,7 +1095,7 @@ fn mut_parts_read_shared(source: &str, read: impl Fn(&Op) -> bool) -> usize {
             _ => None,
         })
         .collect();
-    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
     assert!(calls_of(&lowered, eq) >= 1, "the `i64`s the parts name are compared: {}", shown(body));
     let reads: Vec<crate::ir::ValueId> = read_values(body, &read)
         .into_iter()
@@ -1268,7 +1273,7 @@ fn array_ordering_is_one_for_that_exits_at_the_first_nonzero_cmp() {
     let [(_, _, exit)] = fors(&lowered)[..] else { panic!("one For: {}", shown(body)) };
     let [answer] = body.block(exit).params() else { panic!("the exit takes the answer: {}", shown(body)) };
     assert_eq!(lowered.kind_of(body, *answer), &TyKind::Int(IntTy::I64));
-    let cmp = QualifiedRef::qualified(lowered.name("core"), lowered.name("cmp"));
+    let cmp = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("cmp"));
     assert_eq!(calls_of(&lowered, cmp), 1, "{}", shown(body));
     let lt = count(&lowered.entry_ops(), |op| matches!(op, Op::BinOp { op: crate::ir::BinOp::Lt, left, .. } if left == answer));
     assert_eq!(lt, 1, "{}", shown(body));
@@ -1292,7 +1297,7 @@ fn part_trees_survive_the_required_steps_and_the_pipeline() {
     let script: Script = acvus_ast::parse_script(&fx.names, "let c = $t.clone(); $a < $b").expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&decls, &mut types, &script);
+    let typeck = check_script(&fx.names, &decls, &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
@@ -1307,7 +1312,7 @@ fn through_the_pipeline(fx: Fixture, source: &str) -> Result<(), Vec<crate::chec
     let script: Script = acvus_ast::parse_script(&fx.names, source).expect("parses");
     let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
     let mut types = Types::new();
-    let typeck = check_script(&decls, &mut types, &script);
+    let typeck = check_script(&fx.names, &decls, &mut types, &script);
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);

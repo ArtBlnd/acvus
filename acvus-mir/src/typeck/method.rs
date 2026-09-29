@@ -165,7 +165,7 @@ fn receiver_place<S: Slot>(cx: &mut Ctxt<'_>, receiver: &Expr<S>) -> Option<Rece
             });
             Some(place)
         }
-        Expr::Ident { name, ref_kind: RefKind::Value, .. } if name.namespace.is_none() => {
+        Expr::Ident { name, ref_kind: RefKind::Value, .. } if name.namespace.is_root() => {
             let found = cx.scope.lookup(name.name)?;
             let root = name_root(cx, name.name, CaptureOf::Binding(found.binding.binder), found.crossed, found.binding.term);
             Some(ReceiverPlace { root, writable: true, indexes: Vec::new() })

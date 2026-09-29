@@ -29,10 +29,8 @@ pub(super) fn check_pipe<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<S>
 }
 
 /// A call of `func` with `args`. A bare name bound in scope is a value; a
-/// qualified name is its declaration where one is declared, and otherwise
-/// `Enum::Tag(payload)`, the variant the parser leaves as a call (the
-/// parser's `build_call`); a bare name not in scope reaches among its
-/// declarations.
+/// bare name not in scope reaches among its declarations; a qualified name
+/// is `qualified_call`'s.
 fn call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[&Expr<S>], span: Span) -> Term {
     let Expr::Ident {
         id,
@@ -43,31 +41,52 @@ fn call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[&Expr<S
     else {
         return value_call(cx, func, args);
     };
-    match name.namespace {
-        None if cx.scope.lookup(name.name).is_some() => value_call(cx, func, args),
-        None if !cx.decls.overloads(name.name).is_empty() => {
-            let args = check_args(cx, args);
-            reach_call(cx, site, Callee::Name(name.name), args, span)
-        }
-        None => {
+    if !name.namespace.is_root() {
+        return qualified_call(cx, site, *id, *name, *name_span, args, span);
+    }
+    if cx.scope.lookup(name.name).is_some() {
+        return value_call(cx, func, args);
+    }
+    if cx.decls.overloads(name.name).is_empty() {
+        check_args(cx, args);
+        refusal::push(cx, RefusalKind::UnknownName { name: name.name }, *name_span);
+        return cx.fresh();
+    }
+    let args = check_args(cx, args);
+    reach_call(cx, site, Callee::Name(name.name), args, span)
+}
+
+/// A call of a qualified name: its declaration where one is declared at the
+/// whole name, and otherwise `Enum::Tag(payload)`, the variant the parser
+/// leaves as a call (the parser's `build_call`). A variant is written with
+/// two segments only, so a deeper name with no declaration is unknown.
+fn qualified_call<S: Slot>(
+    cx: &mut Ctxt<'_>,
+    site: AstId,
+    name_site: AstId,
+    name: QualifiedRef,
+    name_span: Span,
+    args: &[&Expr<S>],
+    span: Span,
+) -> Term {
+    if cx.decls.scheme(name).is_some() {
+        cx.out.names.insert(name_site, Name::Declaration(name));
+        let args = check_args(cx, args);
+        return reach_call(cx, site, Callee::Declaration(name), args, span);
+    }
+    let [enum_name] = cx.interner.path(name.namespace)[..] else {
+        check_args(cx, args);
+        refusal::push(cx, RefusalKind::UnknownName { name: name.name }, name_span);
+        return cx.fresh();
+    };
+    match args {
+        [] => check_variant::<S>(cx, site, Some(enum_name), name.name, None, span),
+        [payload] => check_variant(cx, site, Some(enum_name), name.name, Some(payload), span),
+        _ => {
             check_args(cx, args);
-            refusal::push(cx, RefusalKind::UnknownName { name: name.name }, *name_span);
+            refusal::push(cx, RefusalKind::VariantArity { tag: name.name }, span);
             cx.fresh()
         }
-        Some(_) if cx.decls.scheme(*name).is_some() => {
-            cx.out.names.insert(*id, Name::Declaration(*name));
-            let args = check_args(cx, args);
-            reach_call(cx, site, Callee::Declaration(*name), args, span)
-        }
-        Some(enum_name) => match args {
-            [] => check_variant::<S>(cx, site, Some(enum_name), name.name, None, span),
-            [payload] => check_variant(cx, site, Some(enum_name), name.name, Some(payload), span),
-            _ => {
-                check_args(cx, args);
-                refusal::push(cx, RefusalKind::VariantArity { tag: name.name }, span);
-                cx.fresh()
-            }
-        },
     }
 }
 
