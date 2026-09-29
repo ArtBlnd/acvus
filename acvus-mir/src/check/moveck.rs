@@ -6,11 +6,26 @@
 //! at its span, naming the move. A read one of whose units is only never
 //! written is `initck`'s.
 
-use super::Refusal;
-use crate::ir::cfg::{BodyId, Module};
-use crate::passes::analysis::AnalysisManager;
+use super::{Refusal, RefusalKind};
+use crate::ir::RefTarget;
+use crate::ir::cfg::{BodyId, Module, Op};
+use crate::passes::analysis::{AnalysisManager, Initialization};
 
 /// The judgment over `body`, its refusals pushed to `out`.
 pub(super) fn check(module: &Module, body: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
-    todo!("each Take or Ref by name of the body, by the rule above")
+    let initialization = am.get::<Initialization>(module, body);
+    for (_, block) in module.body(body).blocks() {
+        for inst in block.insts() {
+            let (Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
+            | Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }) = inst.op()
+            else {
+                continue;
+            };
+            let read = initialization.before(inst.id(), *place, path);
+            let Some(moved) = read.iter().find_map(|(_, fact)| fact.moved.first()) else {
+                continue;
+            };
+            out.push(Refusal { kind: RefusalKind::UsedAfterMove { moved: *moved }, span: inst.span() });
+        }
+    }
 }

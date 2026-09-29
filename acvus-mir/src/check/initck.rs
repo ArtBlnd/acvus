@@ -8,11 +8,27 @@
 //! moved out is `moveck`'s. What a read through a reference reaches is not
 //! located by name, and is not this check's.
 
-use super::Refusal;
-use crate::ir::cfg::{BodyId, Module};
-use crate::passes::analysis::AnalysisManager;
+use super::{Refusal, RefusalKind};
+use crate::ir::RefTarget;
+use crate::ir::cfg::{BodyId, Module, Op};
+use crate::passes::analysis::{AnalysisManager, Initialization};
 
 /// The judgment over `body`, its refusals pushed to `out`.
 pub(super) fn check(module: &Module, body: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
-    todo!("each Take or Ref by name of the body, by the rule above")
+    let initialization = am.get::<Initialization>(module, body);
+    for (_, block) in module.body(body).blocks() {
+        for inst in block.insts() {
+            let (Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
+            | Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }) = inst.op()
+            else {
+                continue;
+            };
+            let read = initialization.before(inst.id(), *place, path);
+            let unwritten = read.iter().any(|(_, fact)| !fact.is_written());
+            let moved = read.iter().any(|(_, fact)| !fact.moved.is_empty());
+            if unwritten && !moved {
+                out.push(Refusal { kind: RefusalKind::NotWritten, span: inst.span() });
+            }
+        }
+    }
 }

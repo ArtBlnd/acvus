@@ -4,9 +4,10 @@
 //! analyses the manager keeps and edits nothing.
 //!
 //! - `initck`: a place is read, and a value used whole, only where every
-//!   path has written what the read needs (ownership §4), over `Presence`.
+//!   path has written what the read needs (ownership §4), over
+//!   `Initialization`.
 //! - `moveck`: a value that does not copy is not used after a move out of
-//!   it, whole or in part (ownership §2, §6), over `Presence`.
+//!   it, whole or in part (ownership §2, §6), over `Initialization`.
 //! - `borrowck`: while a loan lives, its storage is reached only as its
 //!   mutability allows, a path of references held by its first and exclusive
 //!   only where every reference on it is (ownership §5), over `Loans` and
@@ -61,9 +62,9 @@ pub enum RefusalKind {
 pub fn check(module: &Module, am: &mut AnalysisManager<'_>) -> Vec<Refusal> {
     let mut refusals = Vec::new();
     for body in module.body_ids() {
-        // initck: its call is this line's, made where initck is filled.
-        // moveck: its call is this line's, made where moveck is filled.
-        // borrowck: its call is this line's, made where borrowck is filled.
+        initck::check(module, body, am, &mut refusals);
+        moveck::check(module, body, am, &mut refusals);
+        // borrowck: its cut fills this call.
         matchck::check(module, body, am, &mut refusals);
     }
     refusals
