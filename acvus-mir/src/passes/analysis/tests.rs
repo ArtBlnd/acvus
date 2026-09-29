@@ -1523,11 +1523,11 @@ fn take(slot: ValueId) -> Op {
 }
 
 fn loan(storage: Storage, mode: Mode) -> Loan {
-    Loan { storage, mode }
+    Loan { storage, path: Vec::new(), mode }
 }
 
 fn loans_of(loans: &Loans, value: ValueId, position: usize) -> Vec<Loan> {
-    loans.of(value, position).iter().copied().collect()
+    loans.of(value, position).iter().cloned().collect()
 }
 
 /// `x = 1; r = &x; m = &mut x; s = &*r; return 0`.

@@ -192,7 +192,7 @@ impl Loans {
     /// Every loan any position of `value` may hold. Cost: O(its positions ·
     /// loans).
     pub fn all_of(&self, value: ValueId) -> LoanSet {
-        (0..self.positions_of(value)).flat_map(|position| self.of(value, position).iter().copied()).collect()
+        (0..self.positions_of(value)).flat_map(|position| self.of(value, position).iter().cloned()).collect()
     }
 
     /// How many positions `value`'s type has. Cost: O(1).
@@ -381,7 +381,7 @@ fn join_positions(kept: &mut [LoanSet], other: &[LoanSet]) -> bool {
     let mut grew = false;
     for (mine, theirs) in kept.iter_mut().zip(other) {
         let before = mine.len();
-        mine.extend(theirs.iter().copied());
+        mine.extend(theirs.iter().cloned());
         grew |= mine.len() != before;
     }
     grew
@@ -392,7 +392,7 @@ fn empty(width: usize) -> Vec<LoanSet> {
 }
 
 fn fold(positions: &[LoanSet]) -> LoanSet {
-    positions.iter().flatten().copied().collect()
+    positions.iter().flatten().cloned().collect()
 }
 
 fn mode(mutability: Mutability) -> Mode {
@@ -560,7 +560,7 @@ impl Forward<'_> {
                     PositionKind::Lifetime => Mode::Exclusive,
                     PositionKind::InFlight => panic!("a parameter or capture of a body holds no started call"),
                 };
-                LoanSet::from([Loan { storage: Storage::Outside { of, position }, mode }])
+                LoanSet::from([Loan { storage: Storage::Outside { of, position }, path: Vec::new(), mode }])
             })
             .collect()
     }
@@ -676,7 +676,7 @@ impl Forward<'_> {
             } else {
                 let all = fold(content);
                 for position in &mut out {
-                    position.extend(all.iter().copied());
+                    position.extend(all.iter().cloned());
                 }
             }
         }
@@ -717,7 +717,7 @@ impl Forward<'_> {
                 }
             } else {
                 for position in content.iter_mut() {
-                    position.extend(all.iter().copied());
+                    position.extend(all.iter().cloned());
                 }
             }
         }
@@ -739,7 +739,7 @@ impl Forward<'_> {
                             join_positions(pointee, content);
                         } else {
                             let all = fold(content);
-                            pointee.iter_mut().for_each(|position| position.extend(all.iter().copied()));
+                            pointee.iter_mut().for_each(|position| position.extend(all.iter().cloned()));
                         }
                     }
                 }
@@ -757,7 +757,7 @@ impl Forward<'_> {
     fn reborrow(&self, state: &State, reference: ValueId, mode: Mode) -> Vec<LoanSet> {
         let ty = self.body.ty_of(reference);
         let place = Place { storages: self.named(state, reference), root: self.lent(ty), path: &[] };
-        let own: LoanSet = place.storages.iter().map(|storage| Loan { storage: *storage, mode }).collect();
+        let own: LoanSet = place.storages.iter().map(|storage| Loan { storage: *storage, path: Vec::new(), mode }).collect();
         let mut positions = vec![own];
         positions.extend(self.read(state, &place, self.lent(ty)));
         join_positions(&mut positions[1..], &self.value(state, reference)[1..]);
@@ -807,7 +807,7 @@ impl Forward<'_> {
             Op::Ref { target, path, mutability } => {
                 let place = self.place(state, target, path);
                 let own: LoanSet =
-                    place.storages.iter().map(|storage| Loan { storage: *storage, mode: mode(*mutability) }).collect();
+                    place.storages.iter().map(|storage| Loan { storage: *storage, path: Vec::new(), mode: mode(*mutability) }).collect();
                 let mut positions = vec![own];
                 positions.extend(self.read(state, &place, self.lent(ty())));
                 positions
@@ -936,7 +936,7 @@ impl Forward<'_> {
             if content.len() == element_width {
                 join_positions(content, written);
             } else {
-                content.iter_mut().for_each(|position| position.extend(all.iter().copied()));
+                content.iter_mut().for_each(|position| position.extend(all.iter().cloned()));
             }
         }
     }
@@ -1005,7 +1005,7 @@ impl Forward<'_> {
                 }
                 Alignment::Any => {
                     let all = fold(&taken);
-                    result.iter_mut().for_each(|position| position.extend(all.iter().copied()));
+                    result.iter_mut().for_each(|position| position.extend(all.iter().cloned()));
                 }
                 Alignment::Labelled(labelled) => {
                     let FlowEnd::Param(index) = from else {
@@ -1064,10 +1064,10 @@ impl Forward<'_> {
             };
             for loan in held[at].iter().filter(|loan| loan.mode == Mode::Exclusive) {
                 let content = state.storages.get_mut(&loan.storage).expect("a named storage is present");
-                content.iter_mut().for_each(|position| position.extend(region.iter().copied()));
+                content.iter_mut().for_each(|position| position.extend(region.iter().cloned()));
             }
             if let Some(width) = pointee {
-                own[at + 1..at + 1 + width].iter_mut().for_each(|position| position.extend(region.iter().copied()));
+                own[at + 1..at + 1 + width].iter_mut().for_each(|position| position.extend(region.iter().cloned()));
             }
         }
         self.define(state, value, own);
@@ -1104,7 +1104,7 @@ impl Forward<'_> {
                     join_positions(&mut out[to.clone()], values);
                 } else {
                     let all = fold(values);
-                    out[to.clone()].iter_mut().for_each(|position| position.extend(all.iter().copied()));
+                    out[to.clone()].iter_mut().for_each(|position| position.extend(all.iter().cloned()));
                 }
             }
         }

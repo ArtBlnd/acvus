@@ -937,7 +937,7 @@ fn a_lambda_pushing_to_a_captured_vec_holds_it_mut_in_its_slot_and_its_closure()
             _ => None,
         })
         .unwrap_or_else(|| panic!("`v` is captured by `&mut`: {}", shown(body)));
-    let on_v = Loan { storage: Storage::Slot(v), mode: Mode::Exclusive };
+    let on_v = Loan { storage: Storage::Slot(v), path: Vec::new(), mode: Mode::Exclusive };
     assert!(loans.of(closure, 0).contains(&on_v), "the closure holds `v` exclusively: {:?}", loans.of(closure, 0));
     let callee = insts
         .iter()
