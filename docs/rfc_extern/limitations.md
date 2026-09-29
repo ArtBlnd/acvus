@@ -10,7 +10,7 @@ An extern fn cannot make a runtime value from a Rust value. No such path exists 
 
 - No declaration carries an array type, or an array length. A sequence enters as a slice and leaves as a `Vec`. Registration refuses a declaration with an array type, whoever built it.
 - An extern-defined type is opaque to the program: it equals only itself, is never widened, and crosses exactly as declared, containers included. A program's value meets it only through a declared conversion.
-- An extern enum does not grow. A pattern naming a variant it lacks is refused.
+- An enum a declaration writes does not grow. A pattern naming a variant it lacks is refused.
 - An extern's type parameter is parametric: the extern cannot inspect the type that passes through it.
 
 ## 2. Calls
