@@ -1,13 +1,13 @@
 //! A variant expression (types §2): with its enum's name, that enum, grown
 //! where transparent; without, only `Some`, `None`, `Ok` and `Err`, of the
 //! primitive `Option` and `Result`; any other tag without a name is refused.
+//! A payload is a part its value enters (types §3).
 
 use acvus_ast::{AstId, Expr, Slot, Span};
 use acvus_utils::{Astr, QualifiedRef};
 
 use super::ctxt::Ctxt;
-use super::expr::check_expr;
-use super::place::Demand;
+use super::expr::part_of;
 use super::refusal::{self, RefusalKind};
 use crate::infer::Term;
 use crate::ty::{Label, TyKind};
@@ -20,7 +20,7 @@ pub(super) fn check_variant<S: Slot>(
     payload: Option<&Expr<S>>,
     span: Span,
 ) -> Term {
-    let payload = payload.map(|payload| check_expr(cx, payload, Demand::Read));
+    let payload = payload.map(|payload| part_of(cx, payload));
     let tags = cx.decls.core().tags;
     let (shape, carries) = match enum_name {
         Some(name) => {

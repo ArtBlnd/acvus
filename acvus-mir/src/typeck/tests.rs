@@ -539,6 +539,60 @@ fn return_is_never_and_enters_the_result() {
     assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
 }
 
+/// The type of `x` in `let x = if $c { then } else { other }; 0`, admitted.
+fn joined_constructors(then: &str, other: &str) -> (Checked, Ty) {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("c", bool_ty);
+    let names = fx.names.clone();
+    let source = format!("let x = if $c {{ {then} }} else {{ {other} }}; 0");
+    let (checked, script) = fx.script(&source);
+    checked.admitted();
+    let x = binding(&checked, &script, &names, "x");
+    (checked, x)
+}
+
+/// types §3: a tuple literal's elements enter parts of their own, so a
+/// `!` element does not pin its part, and the branches join.
+#[test]
+fn a_tuple_with_a_never_element_joins_its_sibling() {
+    let (checked, x) = joined_constructors("(0, 1)", "(0, return 2)");
+    let TyKind::Tuple(parts) = checked.kind(x) else {
+        panic!("not a tuple: {:?}", checked.kind(x));
+    };
+    assert!(parts.iter().all(|part| is_int(&checked, *part, IntTy::I64)), "{:?}", checked.kind(x));
+}
+
+/// types §3: an array literal's elements enter its element part.
+#[test]
+fn an_array_with_a_never_element_joins_its_sibling() {
+    let (checked, x) = joined_constructors("[0, 1]", "[0, return 2]");
+    let TyKind::Array(element, _) = checked.kind(x) else {
+        panic!("not an array: {:?}", checked.kind(x));
+    };
+    assert!(is_int(&checked, *element, IntTy::I64), "{:?}", checked.kind(x));
+}
+
+/// types §3: an object literal's fields enter parts of their own.
+#[test]
+fn an_object_with_a_never_field_joins_its_sibling() {
+    let (checked, x) = joined_constructors("{ a: 0, b: 1, }", "{ a: 0, b: return 2, }");
+    let TyKind::Object(ObjectTy::Structural(fields, _)) = checked.kind(x) else {
+        panic!("not an object: {:?}", checked.kind(x));
+    };
+    assert!(fields.iter().all(|(_, part)| is_int(&checked, *part, IntTy::I64)), "{:?}", checked.kind(x));
+}
+
+/// types §3: a `Some`'s payload enters a part of its own.
+#[test]
+fn a_some_with_a_never_payload_joins_its_sibling() {
+    let (checked, x) = joined_constructors("Some(1)", "Some(return 2)");
+    let TyKind::Option(payload) = checked.kind(x) else {
+        panic!("not an option: {:?}", checked.kind(x));
+    };
+    assert!(is_int(&checked, *payload, IntTy::I64), "{:?}", checked.kind(x));
+}
+
 /// control-flow: a range iterates its integers by value.
 #[test]
 fn a_range_iterates_by_value() {

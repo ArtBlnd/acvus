@@ -46,10 +46,7 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {
         Expr::Object { id, fields, span } => {
             let fields = fields
                 .iter()
-                .map(|field| {
-                    let value = lower_expr(cx, &field.value);
-                    (field.key, value)
-                })
+                .map(|field| (field.key, lower_part(cx, &field.value)))
                 .collect();
             let ty = cx.ty(*id);
             cx.builder.push(Op::MakeObject { fields }, ty, *span)
@@ -61,7 +58,7 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {
             lower_context_read(cx, *name, ty, *span)
         }
         Expr::Variant { id, tag, payload, span, .. } => {
-            let payload = payload.as_deref().map(|payload| lower_expr(cx, payload));
+            let payload = payload.as_deref().map(|payload| lower_part(cx, payload));
             let ty = cx.ty(*id);
             cx.builder.push(Op::MakeVariant { tag: *tag, payload }, ty, *span)
         }
@@ -135,6 +132,13 @@ pub(super) fn lower_literal(cx: &mut Lcx<'_, '_>, site: AstId, literal: &Literal
     }
 }
 
+/// A constructor literal's part: `value`, coerced where it enters the
+/// part (types §3).
+fn lower_part<S: Slot>(cx: &mut Lcx<'_, '_>, value: &Expr<S>) -> ValueId {
+    let lowered = lower_expr(cx, value);
+    convert(cx, value.id(), lowered, value.span())
+}
+
 /// `[a, b]`: an empty array, each element pushed onto its end in order,
 /// each entering the element type at its own site.
 fn lower_list<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, head: &[Expr<S>], tail: &[Expr<S>], span: Span) -> ValueId {
@@ -147,8 +151,7 @@ fn lower_list<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, head: &[Expr<S>], tail
     let empty = cx.builder.intern(TyKind::Array(element, LenTerm::Known(0)));
     let mut array = cx.builder.push(Op::ArrayBegin { capacity: items.len() }, empty, span);
     for (at, item) in items.iter().enumerate() {
-        let value = lower_expr(cx, item);
-        let value = convert(cx, item.id(), value, item.span());
+        let value = lower_part(cx, item);
         let longer = cx.builder.intern(TyKind::Array(element, LenTerm::Known(at + 1)));
         array = cx.builder.push(Op::ArrayPush { array, value }, longer, item.span());
     }
@@ -164,7 +167,7 @@ fn lower_tuple<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, elements: &[TupleElem
     let elements = elements
         .iter()
         .map(|element| match element {
-            TupleElem::Expr(expr) => lower_expr(cx, expr),
+            TupleElem::Expr(expr) => lower_part(cx, expr),
             TupleElem::Wildcard(_) => panic!("`_` standing as a value is refused (PatternInValue), and never lowered"),
         })
         .collect();
