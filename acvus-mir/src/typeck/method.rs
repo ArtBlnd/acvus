@@ -164,7 +164,7 @@ pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, r
     if adjustment == Adjustment::Ref(Mutability::Mut) {
         let indexes = adjust.place.iter().flat_map(|place| &place.indexes);
         let waiting = indexes.clone().any(|index| decision::index_pending(cx, index.callee_site))
-            || indexes.clone().any(|index| decision::closed_for(cx, index.container, reading).is_none());
+            || indexes.clone().any(|index| decision::closed_for(cx, index.container, reading, decision::Depth::Head).is_none());
         if waiting {
             return Err(adjust);
         }
@@ -288,7 +288,7 @@ fn lends(
                 }
             }
             for index in &place.indexes {
-                let container = decision::closed_for(cx, index.container, reading)
+                let container = decision::closed_for(cx, index.container, reading, decision::Depth::Head)
                     .expect("a `&mut` receiver's adjustment waits for every index container on its way");
                 match container.head {
                     Head::Ref(Mutability::Shared, Base::Array | Base::Slice) => {

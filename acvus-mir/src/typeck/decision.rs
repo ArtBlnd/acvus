@@ -184,8 +184,9 @@ pub(super) enum Decision {
     },
 }
 
-/// How much of its type a decision reads before it fires (types §6: a
-/// decision reads a type only once nothing can change what it reads).
+/// How much of its type a decision reads. types §6: a decision reads what
+/// it reads only once nothing can change it, so it waits in `closed_for`
+/// until all of that is closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Depth {
     /// The head alone.
@@ -410,16 +411,6 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
     fired
 }
 
-/// `term`'s head, closed as `reading` reads it, where every term `depth`
-/// reads within it is closed too.
-fn closed_to(cx: &Ctxt<'_>, term: Term, reading: Reading, depth: Depth) -> Option<Closed> {
-    let head = closed_for(cx, term, reading)?;
-    within(cx, term, depth)
-        .into_iter()
-        .all(|inner| closed_for(cx, inner, reading).is_some())
-        .then_some(head)
-}
-
 /// The terms `depth` reads of `term`: `term` itself, and for `Whole` every
 /// type within it, as far as its heads are known.
 fn within(cx: &Ctxt<'_>, term: Term, depth: Depth) -> Vec<Term> {
@@ -442,11 +433,16 @@ fn within(cx: &Ctxt<'_>, term: Term, depth: Depth) -> Vec<Term> {
     read
 }
 
-pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<Closed> {
-    match reading {
+/// `term`'s head where every term `depth` reads of it is closed as
+/// `reading` reads a head: `Head` reads the head alone, `Whole` every type
+/// within it too, each by the same reading.
+pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading, depth: Depth) -> Option<Closed> {
+    let closed_head = |term| match reading {
         Reading::Closed => cx.closed(term),
         Reading::CycleBroken => cx.infer.closed(cx.decls.casts(), &NothingOpen, term),
-    }
+    };
+    let head = closed_head(term)?;
+    within(cx, term, depth).into_iter().all(|inner| closed_head(inner).is_some()).then_some(head)
 }
 
 /// Fires `decision` if its inputs are closed; hands it back otherwise.
@@ -459,7 +455,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             slot,
             body,
         } => {
-            let Some(closed) = closed_for(cx, value, reading) else {
+            let Some(closed) = closed_for(cx, value, reading, Depth::Head) else {
                 return Err(Decision::Enter {
                     site,
                     span,
@@ -479,7 +475,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             item,
             body,
         } => {
-            let Some(closed) = closed_for(cx, head, reading) else {
+            let Some(closed) = closed_for(cx, head, reading, Depth::Head) else {
                 return Err(Decision::Iterate {
                     site,
                     callee_site,
@@ -499,7 +495,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             value,
             exit,
         } => {
-            let Some(closed) = closed_for(cx, operand, reading) else {
+            let Some(closed) = closed_for(cx, operand, reading, Depth::Head) else {
                 return Err(Decision::Try {
                     site,
                     span,
@@ -512,7 +508,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             Ok(())
         }
         Decision::Cast { site, span, source, to } => {
-            let Some(closed) = closed_for(cx, source, reading) else {
+            let Some(closed) = closed_for(cx, source, reading, Depth::Head) else {
                 return Err(Decision::Cast { site, span, source, to });
             };
             fire_cast(cx, site, span, closed, to);
@@ -537,7 +533,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             mutability,
             result,
         } => {
-            let Some(closed) = closed_for(cx, value, reading) else {
+            let Some(closed) = closed_for(cx, value, reading, Depth::Head) else {
                 return Err(Decision::Lend {
                     span,
                     value,
@@ -554,7 +550,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             field,
             part,
         } => {
-            let Some(closed) = closed_for(cx, object, reading) else {
+            let Some(closed) = closed_for(cx, object, reading, Depth::Head) else {
                 return Err(Decision::Field {
                     span,
                     object,
@@ -573,7 +569,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             element,
             body,
         } => {
-            let Some(closed) = closed_for(cx, container, reading) else {
+            let Some(closed) = closed_for(cx, container, reading, Depth::Head) else {
                 return Err(Decision::Index {
                     callee_site,
                     span,
@@ -592,7 +588,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             target,
             store,
         } => {
-            let Some(closed) = closed_for(cx, reference, reading) else {
+            let Some(closed) = closed_for(cx, reference, reading, Depth::Head) else {
                 return Err(Decision::Deref {
                     span,
                     reference,
@@ -604,7 +600,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             Ok(())
         }
         Decision::Destructure { shape, scrutinee, lent } => {
-            let Some(closed) = closed_for(cx, scrutinee, reading) else {
+            let Some(closed) = closed_for(cx, scrutinee, reading, Depth::Head) else {
                 return Err(Decision::Destructure { shape, scrutinee, lent });
             };
             super::pat::fire_destructure(cx, *shape, scrutinee, Some(closed.head), lent);
@@ -617,7 +613,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             operand,
             body,
         } => {
-            let Some(closed) = closed_for(cx, operand, reading) else {
+            let Some(closed) = closed_for(cx, operand, reading, Depth::Head) else {
                 return Err(Decision::Compare {
                     node,
                     span,
@@ -630,27 +626,27 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             Ok(())
         }
         Decision::Clone { node, span, operand, body } => {
-            let Some(closed) = closed_to(cx, operand, reading, Depth::Whole) else {
+            let Some(closed) = closed_for(cx, operand, reading, Depth::Whole) else {
                 return Err(Decision::Clone { node, span, operand, body });
             };
             super::clone::fire_clone(cx, node, span, closed, &body);
             Ok(())
         }
         Decision::Adjust(adjust) => {
-            let Some(closed) = closed_for(cx, adjust.receiver, reading) else {
+            let Some(closed) = closed_for(cx, adjust.receiver, reading, Depth::Head) else {
                 return Err(Decision::Adjust(adjust));
             };
             super::method::fire_adjust(cx, *adjust, closed, reading).map_err(|adjust| Decision::Adjust(Box::new(adjust)))
         }
         Decision::BlockEnd { span, last, block } => {
-            let Some(closed) = closed_for(cx, last, reading) else {
+            let Some(closed) = closed_for(cx, last, reading, Depth::Head) else {
                 return Err(Decision::BlockEnd { span, last, block });
             };
             super::stmt::fire_block_end(cx, span, closed, block);
             Ok(())
         }
         Decision::Operand { span, operand, domain } => {
-            let Some(closed) = closed_for(cx, operand, reading) else {
+            let Some(closed) = closed_for(cx, operand, reading, Depth::Head) else {
                 return Err(Decision::Operand { span, operand, domain });
             };
             super::op::fire_operand(cx, span, closed, domain);
@@ -1042,7 +1038,7 @@ fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading) -> Vec<Pos
 /// Pushes `term`'s position and, for a tuple, its parts'; whether every
 /// one was closed.
 fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: &mut Vec<Position>) -> bool {
-    let Some(closed) = closed_for(cx, term, reading) else {
+    let Some(closed) = closed_for(cx, term, reading, Depth::Head) else {
         out.push(Position { path, chain: None });
         return false;
     };
