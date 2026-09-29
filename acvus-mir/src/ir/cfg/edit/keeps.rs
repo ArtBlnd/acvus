@@ -505,9 +505,20 @@ impl TypeCheck<'_> {
                     };
                     found(len.is_none_or(|len| len == array_len), || format!("{array:?} is not of the others' length"))?;
                     len = Some(array_len);
-                    let takes = match lent {
-                        None => *param == element,
-                        Some(mutability) => matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == mutability && taken.ty() == element),
+                    let takes = match (lent, self.kind(element)) {
+                        (None, _) => *param == element,
+                        // A reference element, reborrowed at the weaker of
+                        // the two mutabilities.
+                        (Some(mutability), TyKind::Ref(held, target)) => {
+                            let weaker = match (mutability, *held) {
+                                (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+                                _ => Mutability::Shared,
+                            };
+                            matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == weaker && taken.ty() == target.ty())
+                        }
+                        (Some(mutability), _) => {
+                            matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == mutability && taken.ty() == element)
+                        }
                     };
                     found(takes, || format!("{f:?} does not take the element of {array:?}"))?;
                 }

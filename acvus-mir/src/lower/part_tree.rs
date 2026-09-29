@@ -540,7 +540,7 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
                 .iter()
                 .map(|taking| match taking {
                     Taking::Value => element,
-                    Taking::Ref(mutability) => cx.ref_ty(*mutability, element),
+                    Taking::Ref(mutability) => super::coerce::part_reference(cx, *mutability, element),
                 })
                 .collect();
             let effect = tree_effect(cx, tree);

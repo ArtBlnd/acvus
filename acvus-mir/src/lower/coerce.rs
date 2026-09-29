@@ -150,7 +150,7 @@ fn referent(cx: &Lcx<'_, '_>, ty: Ty) -> Ty {
 /// that is a reference is reborrowed at the weaker of the two
 /// mutabilities, since a reference's target is never a reference (types
 /// §4), as typeck pairs the parts.
-fn part_reference(cx: &mut Lcx<'_, '_>, through: Mutability, part: Ty) -> Ty {
+pub(super) fn part_reference(cx: &mut Lcx<'_, '_>, through: Mutability, part: Ty) -> Ty {
     match cx.kind(part).clone() {
         TyKind::Ref(Mutability::Mut, target) if through == Mutability::Mut => cx.builder.intern(TyKind::Ref(Mutability::Mut, target)),
         TyKind::Ref(_, target) => cx.builder.intern(TyKind::Ref(Mutability::Shared, target)),

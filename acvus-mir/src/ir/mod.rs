@@ -25,7 +25,11 @@ pub enum Intrinsic {
     /// elements, each `f` of the `k` elements at its index, in order. Where
     /// `k` is `0`, `n` is the length the result's type states. The elements
     /// are coerced or lifted one by one without unrolling the array
-    /// (types §1, §3).
+    /// (types §1, §3). An array is passed its element as it holds it; a
+    /// reference to one, its element lent at the reference's mutability,
+    /// or, where the element is itself a reference, that reference
+    /// reborrowed at the weaker of the two, since a reference's target is
+    /// never a reference (types §4, ownership §5).
     ArrayMap,
 }
 
