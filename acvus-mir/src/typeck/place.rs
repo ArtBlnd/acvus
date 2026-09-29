@@ -313,9 +313,6 @@ fn root_slot(cx: &mut Ctxt<'_>, site: AstId, root: Root, access: Access, span: S
     match root {
         Root::Local(name) => match cx.scope.lookup(name) {
             Some(found) => {
-                if access != Access::Write && found.binding.scheme.is_some() {
-                    refusal::push(cx, RefusalKind::MutOfGeneralized { name }, span);
-                }
                 cx.out.names.insert(site, Name::Binding(found.binding.binder));
                 note_captures(cx, capturing_binding(name, &found), Demand::Write, span);
                 Some(found.binding.term)

@@ -292,11 +292,6 @@ fn lends(
         }
         Adjustment::Ref(Mutability::Shared) => {}
         Adjustment::Ref(Mutability::Mut) => {
-            if let Root::Name { name, of: CaptureOf::Binding(binder), .. } = &place.root
-                && cx.out.schemes.iter().any(|scheme| scheme.binder == *binder)
-            {
-                refusal::push(cx, RefusalKind::MutOfGeneralized { name: *name }, span);
-            }
             match &place.root {
                 Root::Name { name, of, crossed, term, .. } => {
                     if !crossed.is_empty() {

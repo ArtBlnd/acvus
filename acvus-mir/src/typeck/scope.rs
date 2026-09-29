@@ -228,17 +228,6 @@ impl Scope {
     }
 }
 
-/// A `&mut` to, or a write into, the binding `name` where it is generalized
-/// (functions §2), refused.
-pub(super) fn refuse_mut_of_generalized(cx: &mut Ctxt<'_>, name: QualifiedRef, ref_kind: RefKind, span: Span) {
-    let generalized = ref_kind == RefKind::Value
-        && name.namespace.is_none()
-        && cx.scope.lookup(name.name).is_some_and(|found| found.binding.scheme.is_some());
-    if generalized {
-        refusal::push(cx, RefusalKind::MutOfGeneralized { name: name.name }, span);
-    }
-}
-
 /// `name`, `$name`: a binding, a declaration or an input.
 pub(super) fn check_ident(
     cx: &mut Ctxt<'_>,
