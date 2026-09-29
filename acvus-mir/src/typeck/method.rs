@@ -80,12 +80,17 @@ pub(super) struct Adjust {
 }
 
 impl Adjust {
-    /// This adjustment with each term replaced by `f` of it (G).
-    pub(super) fn map_terms(&self, f: &mut dyn FnMut(Term) -> Term) -> Adjust {
+    /// The effect of the body the call is written in.
+    pub(super) fn effects(&self) -> Vec<EffectTerm<InferPhase>> {
+        vec![self.body.clone()]
+    }
+
+    /// This adjustment with each term and effect at an instance (G).
+    pub(super) fn map_terms(&self, f: &mut dyn decision::MapTerms) -> Adjust {
         let place = self.place.as_ref().map(|place| ReceiverPlace {
             root: match &place.root {
                 Root::Name { name, of, crossed, moving, term } => {
-                    Root::Name { name: *name, of: *of, crossed: crossed.clone(), moving: moving.clone(), term: f(*term) }
+                    Root::Name { name: *name, of: *of, crossed: crossed.clone(), moving: moving.clone(), term: f.ty(*term) }
                 }
                 Root::Context(context) => Root::Context(*context),
             },
@@ -93,18 +98,18 @@ impl Adjust {
             indexes: place
                 .indexes
                 .iter()
-                .map(|index| IndexOnTheWay { callee_site: index.callee_site, span: index.span, container: f(index.container), element: f(index.element) })
+                .map(|index| IndexOnTheWay { callee_site: index.callee_site, span: index.span, container: f.ty(index.container), element: f.ty(index.element) })
                 .collect(),
         });
         Adjust {
             callee_site: self.callee_site,
             span: self.span,
             callee: self.callee.clone(),
-            receiver: f(self.receiver),
+            receiver: f.ty(self.receiver),
             receiver_site: self.receiver_site,
-            args: self.args.iter().map(|(at, arg)| (*at, f(*arg))).collect(),
-            result: f(self.result),
-            body: self.body.clone(),
+            args: self.args.iter().map(|(at, arg)| (*at, f.ty(*arg))).collect(),
+            result: f.ty(self.result),
+            body: f.effect(&self.body),
             place,
         }
     }

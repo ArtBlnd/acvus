@@ -239,49 +239,77 @@ impl Decision {
         }
     }
 
-    /// This decision with each term replaced by `f` of it: a requirement
-    /// made at an instance (functions §2). Effects are not generalized, so
-    /// they are kept.
-    pub(super) fn map_terms(&self, f: &mut dyn FnMut(Term) -> Term) -> Decision {
+    /// Every effect this decision joins or flows a call's effect into.
+    pub(super) fn effects(&self) -> Vec<EffectTerm<InferPhase>> {
+        match self {
+            Decision::Reach { effect, .. } => vec![effect.clone()],
+            Decision::Iterate { body, .. } | Decision::Enter { body, .. } | Decision::Index { body, .. } | Decision::Compare { body, .. } => {
+                vec![body.clone()]
+            }
+            Decision::Adjust(adjust) => adjust.effects(),
+            Decision::Destructure { shape, .. } => shape.effects(),
+            Decision::In { decision, .. } => decision.effects(),
+            Decision::Try { .. }
+            | Decision::Cast { .. }
+            | Decision::Settle { .. }
+            | Decision::HoldsNoLoans { .. }
+            | Decision::Lend { .. }
+            | Decision::Field { .. }
+            | Decision::Deref { .. }
+            | Decision::BlockEnd { .. }
+            | Decision::Operand { .. }
+            | Decision::Instantiate { .. } => Vec::new(),
+        }
+    }
+
+    /// This decision with each term and each effect at an instance: a
+    /// requirement made there (functions §2).
+    pub(super) fn map_terms(&self, f: &mut dyn MapTerms) -> Decision {
         match self.clone() {
             Decision::Reach { site, span, callee, args, result, effect } => Decision::Reach {
                 site,
                 span,
                 callee: callee.map_terms(f),
-                args: args.iter().map(|(at, arg)| (*at, f(*arg))).collect(),
-                result: f(result),
-                effect,
+                args: args.iter().map(|(at, arg)| (*at, f.ty(*arg))).collect(),
+                result: f.ty(result),
+                effect: f.effect(&effect),
             },
             Decision::Iterate { site, callee_site, span, head, item, body } => {
-                Decision::Iterate { site, callee_site, span, head: f(head), item: f(item), body }
+                Decision::Iterate { site, callee_site, span, head: f.ty(head), item: f.ty(item), body: f.effect(&body) }
             }
-            Decision::Try { site, span, operand, value, exit } => Decision::Try { site, span, operand: f(operand), value: f(value), exit: f(exit) },
-            Decision::Enter { site, span, value, slot, body } => Decision::Enter { site, span, value: f(value), slot: f(slot), body },
-            Decision::Cast { site, span, source, to } => Decision::Cast { site, span, source: f(source), to },
-            Decision::Settle { span, term } => Decision::Settle { span, term: f(term) },
-            Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span, term: f(term) },
-            Decision::Lend { span, value, mutability, result } => Decision::Lend { span, value: f(value), mutability, result: f(result) },
-            Decision::Field { span, object, field, part } => Decision::Field { span, object: f(object), field, part: f(part) },
+            Decision::Try { site, span, operand, value, exit } => Decision::Try { site, span, operand: f.ty(operand), value: f.ty(value), exit: f.ty(exit) },
+            Decision::Enter { site, span, value, slot, body } => Decision::Enter { site, span, value: f.ty(value), slot: f.ty(slot), body: f.effect(&body) },
+            Decision::Cast { site, span, source, to } => Decision::Cast { site, span, source: f.ty(source), to },
+            Decision::Settle { span, term } => Decision::Settle { span, term: f.ty(term) },
+            Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span, term: f.ty(term) },
+            Decision::Lend { span, value, mutability, result } => Decision::Lend { span, value: f.ty(value), mutability, result: f.ty(result) },
+            Decision::Field { span, object, field, part } => Decision::Field { span, object: f.ty(object), field, part: f.ty(part) },
             Decision::Index { callee_site, span, container, mutability, element, body } => {
-                Decision::Index { callee_site, span, container: f(container), mutability, element: f(element), body }
+                Decision::Index { callee_site, span, container: f.ty(container), mutability, element: f.ty(element), body: f.effect(&body) }
             }
-            Decision::Deref { span, reference, target, store } => Decision::Deref { span, reference: f(reference), target: f(target), store },
+            Decision::Deref { span, reference, target, store } => Decision::Deref { span, reference: f.ty(reference), target: f.ty(target), store },
             Decision::Destructure { shape, scrutinee, lent } => {
-                Decision::Destructure { shape: Box::new(shape.map_terms(f)), scrutinee: f(scrutinee), lent }
+                Decision::Destructure { shape: Box::new(shape.map_terms(f)), scrutinee: f.ty(scrutinee), lent }
             }
             Decision::Adjust(adjust) => Decision::Adjust(Box::new(adjust.map_terms(f))),
-            Decision::BlockEnd { span, last, block } => Decision::BlockEnd { span, last: f(last), block: f(block) },
-            Decision::Operand { span, operand, domain } => Decision::Operand { span, operand: f(operand), domain },
-            Decision::Compare { node, span, sig, operand, body } => Decision::Compare { node, span, sig, operand: f(operand), body },
-            Decision::Instantiate { scheme, site, span, result } => Decision::Instantiate { scheme, site, span, result: f(result) },
+            Decision::BlockEnd { span, last, block } => Decision::BlockEnd { span, last: f.ty(last), block: f.ty(block) },
+            Decision::Operand { span, operand, domain } => Decision::Operand { span, operand: f.ty(operand), domain },
+            Decision::Compare { node, span, sig, operand, body } => Decision::Compare { node, span, sig, operand: f.ty(operand), body: f.effect(&body) },
+            Decision::Instantiate { scheme, site, span, result } => Decision::Instantiate { scheme, site, span, result: f.ty(result) },
             Decision::In { instance, decision } => Decision::In { instance, decision: Box::new(decision.map_terms(f)) },
         }
     }
 }
 
+/// What a decision's terms and effects become at an instance.
+pub(super) trait MapTerms {
+    fn ty(&mut self, term: Term) -> Term;
+    fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase>;
+}
+
 impl Callee {
-    fn map_terms(self, f: &mut dyn FnMut(Term) -> Term) -> Callee {
-        let at = |required: RequiredAt, f: &mut dyn FnMut(Term) -> Term| RequiredAt { pattern: f(required.pattern), ..required };
+    fn map_terms(self, f: &mut dyn MapTerms) -> Callee {
+        let at = |required: RequiredAt, f: &mut dyn MapTerms| RequiredAt { pattern: f.ty(required.pattern), ..required };
         match self {
             Callee::Required(required) => Callee::Required(at(required, f)),
             Callee::Part(required) => Callee::Part(at(required, f)),

@@ -59,13 +59,13 @@ impl Shape {
         out
     }
 
-    /// This shape with each term replaced by `f` of it (G).
-    pub(super) fn map_terms(&self, f: &mut dyn FnMut(Term) -> Term) -> Shape {
+    /// This shape with each term and effect at an instance (G).
+    pub(super) fn map_terms(&self, f: &mut dyn super::decision::MapTerms) -> Shape {
         let form = match &self.form {
-            Form::Bind { term } => Form::Bind { term: f(*term) },
-            Form::Context { context, body } => Form::Context { context: f(*context), body: body.clone() },
+            Form::Bind { term } => Form::Bind { term: f.ty(*term) },
+            Form::Context { context, body } => Form::Context { context: f.ty(*context), body: f.effect(body) },
             Form::Ignore => Form::Ignore,
-            Form::Literal { literal } => Form::Literal { literal: f(*literal) },
+            Form::Literal { literal } => Form::Literal { literal: f.ty(*literal) },
             Form::List { head, rest, tail } => Form::List {
                 head: head.iter().map(|part| part.map_terms(f)).collect(),
                 rest: *rest,
@@ -80,6 +80,28 @@ impl Shape {
             },
         };
         Shape { site: self.site, span: self.span, form }
+    }
+
+    /// The effects this shape's `@x` parts join a coercion into.
+    pub(super) fn effects(&self) -> Vec<EffectTerm<InferPhase>> {
+        let mut out = Vec::new();
+        self.each_effect(&mut |effect| out.push(effect.clone()));
+        out
+    }
+
+    fn each_effect(&self, on: &mut dyn FnMut(&EffectTerm<InferPhase>)) {
+        match &self.form {
+            Form::Context { body, .. } => on(body),
+            Form::Bind { .. } | Form::Ignore | Form::Literal { .. } => {}
+            Form::List { head, tail, .. } => head.iter().chain(tail).for_each(|part| part.each_effect(on)),
+            Form::Object { fields } => fields.iter().for_each(|(_, part)| part.each_effect(on)),
+            Form::Tuple { parts } => parts.iter().flatten().for_each(|part| part.each_effect(on)),
+            Form::Variant { payload, .. } => {
+                if let Some(payload) = payload {
+                    payload.each_effect(on);
+                }
+            }
+        }
     }
 
     fn each_binding(&self, on: &mut dyn FnMut(Term)) {
