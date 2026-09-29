@@ -255,6 +255,11 @@ pub(super) struct Output {
     /// The instance whose requirement is firing, where one is: what fires
     /// records at the lambda body's sites within it.
     pub firing_in: Option<super::generalize::InstanceId>,
+    /// Each owner's walks (S7): a lambda's body, or the values given a
+    /// binding, by the lambda's or the binder's site.
+    pub walks: FxHashMap<AstId, super::generalize::Walk>,
+    /// Each site recorded while an owner's walk ran, with that owner.
+    pub site_owners: FxHashMap<AstId, AstId>,
     pub types: FxHashMap<AstId, Term>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,

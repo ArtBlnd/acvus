@@ -62,6 +62,9 @@ impl<'d> Ctxt<'d> {
 
     pub fn record(&mut self, site: AstId, term: Term) {
         self.out.types.insert(site, term);
+        if let Some(owner) = self.decisions.owner {
+            self.out.site_owners.insert(site, owner);
+        }
     }
 
     pub fn eq(&mut self, a: Term, b: Term, span: Span) {

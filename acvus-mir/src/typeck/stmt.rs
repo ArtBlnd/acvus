@@ -77,9 +77,14 @@ pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
             check_expr(cx, expr, Demand::Read);
         }
         Stmt::LetBind { binder, expr, .. } => {
-            let value = check_expr(cx, expr, Demand::Read);
-            let term = cx.fresh();
-            cx.enter(expr.id(), value, term, expr.span());
+            // The value, and its entering the binding, are the binding's own
+            // walk (S7), which a generalized binding's scheme reads (G).
+            let (value, term) = super::generalize::walk(cx, binder.id, |cx| {
+                let value = check_expr(cx, expr, Demand::Read);
+                let term = cx.fresh();
+                cx.enter(expr.id(), value, term, expr.span());
+                (value, term)
+            });
             cx.record(binder.id, term);
             let scheme = super::generalize::generalizes(cx, value).then(|| super::generalize::register(cx, binder.id, term));
             cx.scope.define(
@@ -99,6 +104,7 @@ pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
                 Binding {
                     binder: binder.id,
                     term,
+                    scheme: None,
                 },
             );
         }
@@ -109,8 +115,17 @@ pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
             expr,
             ..
         } => {
-            let value = check_expr(cx, expr, Demand::Read);
-            scope::check_assign(cx, *id, *name, value, *name_span);
+            // A value given a generalized binding is its binding's walk, as
+            // the `let`'s is (G): its scheme is settled from every value it
+            // is given.
+            let assign = |cx: &mut Ctxt<'_>| {
+                let value = check_expr(cx, expr, Demand::Read);
+                scope::check_assign(cx, *id, *name, value, *name_span);
+            };
+            match cx.scope.lookup(*name).filter(|found| found.binding.scheme.is_some()) {
+                Some(found) => super::generalize::walk(cx, found.binding.binder, assign),
+                None => assign(cx),
+            }
         }
         Stmt::While { cond, body, .. } => control::check_while(cx, cond, body),
         Stmt::WhileLet {

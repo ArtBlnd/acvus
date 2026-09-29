@@ -255,17 +255,31 @@ pub(super) fn fire_deref(cx: &mut Ctxt<'_>, span: Span, reference: Closed, targe
 /// `p = v` into a place; a store into a binding's field joins its object
 /// type (ownership §4, types §2).
 pub(super) fn check_store<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, place: &Place<S>, value: &Expr<S>, span: Span) {
-    let stored = check_expr(cx, value, Demand::Read);
-    if let Place::Base(PlaceBase::Root {
-        root: Root::Local(name), ..
-    }) = place
-    {
-        refuse_recursion(cx, stored, *name, span);
-    }
-    let Some(slot) = place_slot(cx, place, Access::Write) else {
-        return;
+    // A value given a generalized binding is its binding's walk, as the
+    // `let`'s is (G): its scheme is settled from every value it is given.
+    let generalized = match place {
+        Place::Base(PlaceBase::Root { root: Root::Local(name), .. }) => {
+            cx.scope.lookup(*name).filter(|found| found.binding.scheme.is_some()).map(|found| found.binding.binder)
+        }
+        _ => None,
     };
-    cx.enter(value.id(), stored, slot, value.span());
+    let store = |cx: &mut Ctxt<'_>| {
+        let stored = check_expr(cx, value, Demand::Read);
+        if let Place::Base(PlaceBase::Root {
+            root: Root::Local(name), ..
+        }) = place
+        {
+            refuse_recursion(cx, stored, *name, span);
+        }
+        let Some(slot) = place_slot(cx, place, Access::Write) else {
+            return;
+        };
+        cx.enter(value.id(), stored, slot, value.span());
+    };
+    match generalized {
+        Some(binder) => super::generalize::walk(cx, binder, store),
+        None => store(cx),
+    }
 }
 
 /// The term a store into `place` enters, `None` where the place is refused.

@@ -123,6 +123,7 @@ pub(super) fn check_for<S: Slot>(
         Binding {
             binder: binder.id,
             term: item,
+            scheme: None,
         },
     );
     check_stmts(cx, body);

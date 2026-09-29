@@ -48,26 +48,28 @@ pub(super) fn check_lambda<S: Slot>(
             calls: Calls::Many,
         },
     );
-    let result = cx.fresh();
-    cx.scope.push_lambda(site, captures_by_move, result);
-    let mut param_terms = Vec::with_capacity(params.len());
-    for param in params {
-        let term = cx.fresh();
-        cx.record(param.id, term);
-        cx.scope.define(
-            param.name,
-            Binding {
-                binder: param.id,
-                term,
-            },
-        );
-        param_terms.push(term);
-    }
-    // The body's decisions are the lambda's own (S7).
-    let enclosing = cx.decisions.owner.replace(site);
-    let value = check_expr(cx, body, Demand::Read);
-    cx.enter(body.id(), value, result, body.span());
-    cx.decisions.owner = enclosing;
+    // The lambda's parameters, result and body are its own walk (S7).
+    let (result, param_terms) = super::generalize::walk(cx, site, |cx| {
+        let result = cx.fresh();
+        cx.scope.push_lambda(site, captures_by_move, result);
+        let mut param_terms = Vec::with_capacity(params.len());
+        for param in params {
+            let term = cx.fresh();
+            cx.record(param.id, term);
+            cx.scope.define(
+                param.name,
+                Binding {
+                    binder: param.id,
+                    term,
+                    scheme: None,
+                },
+            );
+            param_terms.push(term);
+        }
+        let value = check_expr(cx, body, Demand::Read);
+        cx.enter(body.id(), value, result, body.span());
+        (result, param_terms)
+    });
     // A body that calls nothing has no effect to order (effects §1).
     let effect = cx
         .scope
