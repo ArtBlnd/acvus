@@ -313,7 +313,7 @@ fn lends(
                         refusal::push(cx, RefusalKind::StoreThroughShared, index.span);
                     }
                     _ => {
-                        let reach = decision::reach_of(cx, index.container, crate::ty::Reach::Named, reading);
+                        let reach = decision::reach_of(cx, index.container, crate::ty::Reach::Named);
                         super::place::fire_index(cx, index.callee_site, index.span, (container, reach), Mutability::Mut, index.element, body);
                     }
                 }
