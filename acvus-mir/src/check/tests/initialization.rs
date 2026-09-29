@@ -9,7 +9,7 @@ use crate::check::{Refusal, RefusalKind, check};
 use crate::decl::{Core, Declarations, DeclaredFacts, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::lower::{lower_script, required};
 use crate::passes::analysis::AnalysisManager;
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
 use crate::typeck::check_script;
 
 struct Fixture {
@@ -236,5 +236,28 @@ fn a_string_used_twice_is_cloned_before_its_last_use() {
     let string = fx.ty(TyKind::String);
     fx.declare("name", &[], string);
     let refusals = fx.refusals("let s = name(); (s, s)");
+    assert_eq!(refusals, []);
+}
+
+/// ownership §5: a `&mut` does not copy, and each use reborrows it, so its
+/// holder keeps it and a second use is no use after a move.
+#[test]
+fn a_mut_reference_used_twice_is_reborrowed_not_moved() {
+    let mut fx = Fixture::new();
+    let (vec, int) = (fx.vecs(), fx.int());
+    let lent = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(vec)));
+    fx.declare("touch", &[lent], int);
+    let refusals = fx.refusals("let v = make(); let r = &mut v; touch(r); touch(r)");
+    assert_eq!(refusals, []);
+}
+
+/// ownership §4: a read no path reaches has every path to it writing what
+/// it reads, so it is admitted.
+#[test]
+fn a_read_no_path_reaches_is_admitted() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("c", bool_ty);
+    let refusals = fx.refusals("let x; if $c { return 2; x } else { 1 }");
     assert_eq!(refusals, []);
 }

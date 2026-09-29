@@ -12,16 +12,17 @@
 //! - Entry: a slot's units are never written; a by-value parameter's are
 //!   written.
 //! - An `Assign` into a path by name writes every unit that path covers.
-//! - A `Take` by name whose value does not copy moves every unit its path
-//!   covers, at its span (ownership §2, §6). A `Take` of a value that copies
-//!   moves nothing.
+//! - A `Take` by name that `ir::cfg::takings` takes its place `Moved` or
+//!   `PartMoved` moves every unit its path covers, at its span (ownership
+//!   §2, §6). One it takes `Read` moves nothing: a value that copies, and a
+//!   `&mut`, which each use reborrows (ownership §1, §5).
 //! - Everything reached through a reference is not located by name, and is
 //!   not this analysis's.
 //! - A join unions what each path may leave.
 //!
-//! Cost: a unit's fact only grows, and it holds two flags and the spans of
-//! the body's moves, so each unit rises at most O(moves + 2) times; the
-//! engine runs O(units · (moves + 2) · (blocks + edges)) block transfers,
+//! Cost: a unit's fact only grows, and it holds a flag and the spans of the
+//! body's moves, so each unit rises at most O(moves + 1) times; the engine
+//! runs O(units · (moves + 1) · (blocks + edges)) block transfers,
 //! each O(its instructions · the units they cover).
 
 use std::collections::BTreeSet;
@@ -34,24 +35,17 @@ use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
-use crate::ty::{Concrete, Types, copies};
+use crate::ir::cfg::takings::{Taken, inst_takings};
+use crate::ty::{Concrete, Types};
 
-/// What the paths reaching a point may leave in one unit: written, never
-/// written, or moved out at these spans. A point no path reaches holds none
-/// of them; a unit is written there only where it is written and nothing
-/// else.
+/// What the paths reaching a point may leave in one unit: never written, or
+/// moved out at these spans. Neither is what a path that wrote the unit
+/// leaves, and what a point no path reaches holds: a read there has every
+/// path to it writing what it reads (ownership §4).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Written {
-    pub written: bool,
     pub never: bool,
     pub moved: BTreeSet<Span>,
-}
-
-impl Written {
-    /// Whether the unit holds its content on every path that reaches.
-    pub fn is_written(&self) -> bool {
-        self.written && !self.never && self.moved.is_empty()
-    }
 }
 
 impl JoinSemiLattice for Written {
@@ -61,18 +55,17 @@ impl JoinSemiLattice for Written {
 
     fn join(&mut self, other: &Self) -> bool {
         let before = self.clone();
-        self.written |= other.written;
         self.never |= other.never;
         self.moved.extend(other.moved.iter().copied());
         *self != before
     }
 
     fn le(&self, other: &Self) -> bool {
-        (!self.written || other.written) && (!self.never || other.never) && self.moved.is_subset(&other.moved)
+        (!self.never || other.never) && self.moved.is_subset(&other.moved)
     }
 }
 
-/// Finite: two flags and the body's move spans. The widening is the join.
+/// Finite: a flag and the body's move spans. The widening is the join.
 impl Widen for Written {
     fn widen(&mut self, next: &Self) -> bool {
         self.join(next)
@@ -86,8 +79,8 @@ pub struct Initialization {
     before: FxHashMap<InstId, FxHashMap<(ValueId, usize), Written>>,
 }
 
-/// A unit no path reaches.
-static UNREACHED: Written = Written { written: false, never: false, moved: BTreeSet::new() };
+/// A unit no path reaches, or one every path wrote.
+static UNREACHED: Written = Written { never: false, moved: BTreeSet::new() };
 
 impl Initialization {
     /// The units of `place`, in one order; `None` for a value that is not a
@@ -235,7 +228,7 @@ impl DenseAnalysis for Forward<'_> {
         let mut state = Units::default();
         for (place, units) in self.units {
             let start = match body.definition(*place) {
-                Definition::Param(_) => Written { written: true, ..Written::default() },
+                Definition::Param(_) => Written::default(),
                 _ => Written { never: true, ..Written::default() },
             };
             state.0.extend((0..units.len()).map(|index| ((*place, index), start.clone())));
@@ -247,12 +240,16 @@ impl DenseAnalysis for Forward<'_> {
         match inst.op() {
             Op::Assign { .. } => {
                 let (place, region) = named_place(inst.op()).expect("matched as a store by name");
-                self.set(place, region, &Written { written: true, ..Written::default() }, state);
+                self.set(place, region, &Written::default(), state);
             }
             Op::Take { .. } => {
                 let (place, region) = named_place(inst.op()).expect("matched as a take by name");
-                let taken = inst.result().expect("a Take yields a value");
-                if !copies(self.types, self.body.ty_of(taken)) {
+                let taken = inst_takings(self.body, self.types, inst)
+                    .into_iter()
+                    .find(|operand| operand.names_place && operand.value == place)
+                    .expect("a Take by name names its place among its operands")
+                    .taken;
+                if matches!(taken, Taken::Moved | Taken::PartMoved) {
                     let moved = Written { moved: BTreeSet::from([inst.span()]), ..Written::default() };
                     self.set(place, region, &moved, state);
                 }
