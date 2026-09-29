@@ -1296,11 +1296,38 @@ fn part_trees_survive_the_required_steps_and_the_pipeline() {
     assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
     let mut module = lower_script(&decls, &typeck, types, &script);
     let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
-    super::required::clone_strings(&mut module, &mut am);
-    super::required::remove_dead_context_ops(&mut module, &mut am);
-    super::required::insert_drops(&mut module, &mut am);
+    super::required::run(&mut module, &mut am).expect("the checks admit it");
     crate::passes::pipeline::optimize(&mut module, &mut am, crate::passes::pipeline::Level::Full);
     Lowered::checked(module, fx.names);
+}
+
+/// `source` through typeck, lower, the required steps with the checks, and
+/// the full pipeline: the checks' refusals, and none past them.
+fn through_the_pipeline(fx: Fixture, source: &str) -> Result<(), Vec<crate::check::Refusal>> {
+    let script: Script = acvus_ast::parse_script(&fx.names, source).expect("parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut types = Types::new();
+    let typeck = check_script(&decls, &mut types, &script);
+    assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+    let mut module = lower_script(&decls, &typeck, types, &script);
+    let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
+    super::required::run(&mut module, &mut am)?;
+    crate::passes::pipeline::optimize(&mut module, &mut am, crate::passes::pipeline::Level::Full);
+    Lowered::checked(module, fx.names);
+    Ok(())
+}
+
+/// A program the checks admit goes on through the drops and the pipeline;
+/// one they refuse stops at them with its refusals (refusals).
+#[test]
+fn the_required_steps_run_the_checks_before_the_drops() {
+    let admitted = "let o = { a: 1, b: 2, }; let r = &mut o.a; *r = 3; o.b = 4; o";
+    assert_eq!(through_the_pipeline(Fixture::new(), admitted), Ok(()));
+    let refused = "let a; let b = a; a = 1; b";
+    let Err(refusals) = through_the_pipeline(Fixture::new(), refused) else {
+        panic!("a read before any store is refused");
+    };
+    assert!(matches!(refusals[..], [crate::check::Refusal { kind: crate::check::RefusalKind::NotWritten, .. }]), "{refusals:?}");
 }
 
 // Structured coercion and lifted impls (types §1, §3)

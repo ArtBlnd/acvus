@@ -38,6 +38,21 @@ use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
 #[cfg(test)]
 mod tests;
 
+/// Every required step over `module`, in the module doc's order, the checks
+/// among them: the refusals where the checks refuse the program, which
+/// then takes no step after them (refusals: the checker is the only place
+/// a program is refused).
+pub fn run(module: &mut Module, am: &mut AnalysisManager<'_>) -> Result<(), Vec<crate::check::Refusal>> {
+    clone_strings(module, am);
+    remove_dead_context_ops(module, am);
+    let refusals = crate::check::check(module, am);
+    if !refusals.is_empty() {
+        return Err(refusals);
+    }
+    insert_drops(module, am);
+    Ok(())
+}
+
 /// Every body: a `String` a use moves while the same content is read again
 /// on some path after it is cloned just before that use, with the use's
 /// span, and the use takes the clone (ownership §3). A `String` part of a
