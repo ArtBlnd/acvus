@@ -1,38 +1,47 @@
-//! Loans (ownership §5): which storage each value may name at each position
+//! Loans (ownership §5): which place each value may name at each position
 //! of its type, and what each storage's content holds, at every point of a
-//! body: the dense engine, forward. The borrow check runs before promotion,
-//! when every binding is a slot, so the content of a slot is tracked per
-//! point: an `Assign` of a whole place replaces what the place held.
+//! body: the dense engine, forward, before promotion, when every binding is
+//! a slot. A storage's content changes along the paths through the body,
+//! so it is tracked per point; a value's loans are fixed where it is
+//! defined, and joined at a block's parameters.
 //!
-//! - A storage is a slot, a by-value parameter's own storage (what
-//!   `RefTarget::Param` names), or one outside storage per position of each
-//!   parameter's and capture's type. An outside storage is distinct from
-//!   every other storage, since its callers were checked.
-//! - A `Ref` names its place's storage, with its mutability; a reborrow
-//!   names what its source names. `Assign` and `Take` move loans between a
-//!   value and a storage's content. A call's result and written arguments
-//!   take loans only as its function type's flows state (extern-fn §4). An
-//!   edge joins its arguments into its target's parameters.
-//! - A call whose callee's impl declares its access (extern-fn §3) touches
-//!   only the places that access states, in their modes: it reads and
-//!   writes those alone, and writes loans into no other. A call without one
-//!   touches all its arguments reach, and writes as its flows state.
-//! - A reference whose pointee has as many positions as the storage it names
-//!   covers that storage whole, and reads and writes through it keep
-//!   positions aligned. One with fewer names a part the loan does not
-//!   locate, so a read through it takes every loan of the storage's content
-//!   at each position, and a write joins into every position.
+//! Its dimensions:
+//! - where: a loan names a place, a storage and a path in it (`ir::parts`),
+//!   so two loans on parts that do not overlap never meet (ownership §5: a
+//!   reference to a transparent structured value is the structure of
+//!   references to its parts, a sum's including its variant's place);
+//! - mode: shared or exclusive;
+//! - who holds it: a position of a value, or of a storage's content;
+//! - when: while its holder is live, which `check::borrowck` reads from
+//!   `Liveness` and `ContentLiveness`; this analysis does not decide it.
 //!
-//! Cost: a block's state only grows, and the lattice is finite: a set of
-//! loans per position of each value and each storage, with loans over the
-//! body's storages. So the engine runs O(h · (blocks + edges)) block
-//! transfers, h being the number of positions times the number of loans; a
-//! transfer costs O(its instructions' operands · positions · loans). The
-//! widening is the join. A block's state holds only the values whose type
-//! has a position, so its clones and joins cost those values' positions and
-//! the storages', not the body's values.
+//! A storage is a slot, a by-value parameter's own storage (what
+//! `RefTarget::Param` names), or one outside storage per position of each
+//! parameter's and capture's type, distinct from every other since its
+//! callers were checked.
 //!
-//! passes-analyses.md.
+//! How loans are made and move, each by the IR form that does it:
+//! 1. Lend, `Ref` of a place by name: one loan on that place, the storage and
+//!    the path, at the reference's mode.
+//! 2. Reborrow, `Ref` through `r`: no loan is made. The result holds `r`'s
+//!    loans at the target's position, their paths extended by the `Ref`'s
+//!    path, each at the weaker of its mode and the `Ref`'s: what a path of
+//!    references reaches is held by the first reference on it, and is
+//!    exclusive only where every reference on it is (ownership §5).
+//! 3. Move between a value and a storage: a `Take` gives its value what the
+//!    content held at the positions its path reaches; an `Assign` gives the
+//!    content at its path's positions what the value holds.
+//! 4. A part: reading a part of a value, a field, an element or a payload,
+//!    gives what that part's positions hold.
+//! 5. Gather: `Intrinsic::Gather`, what `as_ref` and `as_mut` build, and a
+//!    coercion through a reference hold at each part's positions what that
+//!    part's reference holds; no loan is made.
+//! 6. A call: its result and its written arguments take loans only as its
+//!    function type's flows state (extern-fn §4). A call with a declared
+//!    access touches only the places that access states, in their modes.
+//! 7. A join: a block's parameter holds what any argument into it holds.
+//!
+//! //! passes-analyses.md.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -68,9 +77,13 @@ pub enum Mode {
     Exclusive,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A loan: the place it names, a storage and a path in it (`ir::parts`),
+/// and its mode (ownership §5). Two loans meet only where their places
+/// overlap.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Loan {
     pub storage: Storage,
+    pub path: crate::ir::parts::Path,
     pub mode: Mode,
 }
 
