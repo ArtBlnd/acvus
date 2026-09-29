@@ -279,22 +279,24 @@ fn units_of(body: &Body, types: &Types<Concrete>) -> FxHashMap<ValueId, Vec<Path
     }
     for (_, block) in body.blocks() {
         for inst in block.insts() {
-            let (place, path, cut) = match inst.op() {
+            let (place, path, moves) = match inst.op() {
                 Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
-                    (*place, path, !path.is_empty() && !copies(types, parts::part_ty(types, body.ty_of(*place), path)))
+                    let taken = inst.result().expect("a Take yields a value");
+                    (*place, parts::owned_region(path), !copies(types, body.ty_of(taken)))
                 }
                 Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, value, .. } => {
-                    (*place, path, !path.is_empty() && !copies(types, body.ty_of(*value)))
+                    (*place, parts::owned_region(path), !copies(types, body.ty_of(*value)))
                 }
-                Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => (*place, path, false),
+                Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => (*place, path.as_slice(), false),
                 _ => continue,
             };
+            let cut = moves && !path.is_empty();
             if copies(types, body.ty_of(place)) {
                 continue;
             }
             let place_cuts = cuts.entry(place).or_default();
-            if cut && !place_cuts.contains(path) {
-                place_cuts.push(path.clone());
+            if cut && !place_cuts.iter().any(|known| known.as_slice() == path) {
+                place_cuts.push(path.to_vec());
             }
         }
     }
@@ -397,7 +399,7 @@ impl DenseAnalysis for Backward<'_> {
             }
             if let Some(units) = self.units.get(place) {
                 for (index, unit) in units.iter().enumerate() {
-                    if covers(path, unit) {
+                    if covers(parts::owned_region(path), unit) {
                         state.parts.remove(&(*place, index));
                     }
                 }
@@ -500,13 +502,13 @@ impl DenseAnalysis for Forward<'_> {
     fn transfer(&self, inst: &Inst, state: &mut PresenceOf) {
         match inst.op() {
             Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
-                self.set(*place, path, Presence::Present, state);
+                self.set(*place, parts::owned_region(path), Presence::Present, state);
             }
             Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
                 if self.units.contains_key(place)
-                    && !copies(self.types, parts::part_ty(self.types, self.body.ty_of(*place), path)) =>
+                    && !copies(self.types, self.body.ty_of(inst.result().expect("a Take yields a value"))) =>
             {
-                self.set(*place, path, Presence::Absent, state);
+                self.set(*place, parts::owned_region(path), Presence::Absent, state);
             }
             _ => {}
         }

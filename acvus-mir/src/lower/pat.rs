@@ -4,11 +4,13 @@
 //! its arms one at a time, in order, within the same region and to the same
 //! join (D57). Exhaustiveness is `check`'s.
 //!
-//! A pattern is tested, then bound. The test is a `bool` built so that a
-//! part is taken only where the tests before it hold; binding takes the
-//! parts again where the whole test held. Through a reference, as Rust's
-//! default binding modes do, the parts are places under it and a name binds
-//! a reference to its part (patterns §1).
+//! A pattern is tested, then bound. A value scrutinee that is not a
+//! reference is put in a slot first, as Rust's MIR matches on a place
+//! (D89): the test reads its parts through references and moves nothing,
+//! built so that a part is read only where the tests before it hold, and
+//! binding takes each bound part once, where the whole test held. Through a
+//! reference, as Rust's default binding modes do, the parts are places
+//! under it and a name binds a reference to its part (patterns §1).
 
 use acvus_ast::{AstId, Expr, Literal, MatchExprArm, Pattern, Slot, Span, TuplePatternElem};
 use acvus_utils::Astr;
@@ -24,11 +26,13 @@ use crate::ir::cfg::{BlockId, Op, Terminator};
 use crate::ir::{BinOp, IndexBound, IndexMode, Overflow, PathSeg, RefTarget, SwitchKey, ValueId, known_len};
 use crate::ty::{Mutability, Ty, TyKind};
 
-/// What a pattern is matched against: a value, or, past a reference, a
+/// What a pattern is matched against: a reference value; a place the match
+/// holds, its scrutinee's slot or a part of it; or, past a reference, a
 /// place under it, lent at `lent`.
 #[derive(Debug, Clone)]
 pub(super) enum Matched {
     Value { value: ValueId, ty: Ty },
+    Held { place: Place },
     Place { place: Place, lent: Mutability },
 }
 
@@ -53,14 +57,24 @@ enum ListAt {
 }
 
 impl Matched {
-    pub fn value(cx: &Lcx<'_, '_>, value: ValueId) -> Matched {
-        Matched::Value { value, ty: cx.value_ty(value) }
+    /// The scrutinee `value`: a reference as it is, since tests read
+    /// through it and never move it; any other value in a slot of its own,
+    /// assigned at `span`, so that no test moves a part of it (D89).
+    pub fn scrutinee(cx: &mut Lcx<'_, '_>, value: ValueId, span: Span) -> Matched {
+        let ty = cx.value_ty(value);
+        if matches!(cx.kind(ty), TyKind::Ref(..)) {
+            return Matched::Value { value, ty };
+        }
+        let slot = cx.builder.slot(ty, span);
+        let place = Place { target: RefTarget::Var(slot), path: Vec::new(), ty };
+        assign(cx, place.clone(), value, span);
+        Matched::Held { place }
     }
 
     fn ty(&self) -> Ty {
         match self {
             Matched::Value { ty, .. } => *ty,
-            Matched::Place { place, .. } => place.ty,
+            Matched::Held { place } | Matched::Place { place, .. } => place.ty,
         }
     }
 }
@@ -75,6 +89,7 @@ fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Matched {
     let (held, target) = (*held, target.ty());
     let (reference, lent) = match matched {
         Matched::Value { value, .. } => (*value, held),
+        Matched::Held { place } => (read(cx, Operand::Place(place.clone()), span), held),
         Matched::Place { place, lent } => {
             let reference = read(cx, Operand::Place(place.clone()), span);
             let lent = match (lent, held) {
@@ -99,14 +114,16 @@ fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Matc
             };
             Matched::Value { value: cx.builder.push(op, ty, span), ty }
         }
-        Matched::Place { place, lent } => {
-            let seg = match part {
-                Part::Tuple(index) | Part::Element(index) => PathSeg::Index(index),
-                Part::Field(field) => PathSeg::Field(field),
-                Part::Payload(_) => PathSeg::Payload,
-            };
-            Matched::Place { place: place.with(seg, ty), lent: *lent }
-        }
+        Matched::Held { place } => Matched::Held { place: place.with(segment(part), ty) },
+        Matched::Place { place, lent } => Matched::Place { place: place.with(segment(part), ty), lent: *lent },
+    }
+}
+
+fn segment(part: Part) -> PathSeg {
+    match part {
+        Part::Tuple(index) | Part::Element(index) => PathSeg::Index(index),
+        Part::Field(field) => PathSeg::Field(field),
+        Part::Payload(_) => PathSeg::Payload,
     }
 }
 
@@ -116,7 +133,7 @@ fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> M
     let (place, lent) = match (at, matched) {
         (ListAt::Array(index), _) => return part(cx, matched, Part::Element(index), span),
         (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Place { place, lent }) => (place, *lent),
-        (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Value { .. }) => {
+        (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Value { .. } | Matched::Held { .. }) => {
             panic!("a slice is matched only past the reference that lends it")
         }
     };
@@ -221,10 +238,7 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::ContextBind { .. } => None,
         Pattern::Literal { value, .. } => {
             let matched = through(cx, matched, span);
-            let src = match matched {
-                Matched::Value { value, .. } => value,
-                Matched::Place { place, .. } => read(cx, Operand::Place(place), span),
-            };
+            let src = tag_source(cx, &matched, span);
             let bool_ty = cx.bool_ty();
             Some(cx.builder.push(Op::TestLiteral { src, value: value.clone() }, bool_ty, span))
         }
@@ -331,12 +345,13 @@ fn list_elements<'p, S: Slot>(
     }
 }
 
-/// What a tag test reads: the value, or a shared reference to the place,
-/// read through as a `Switch` reads its tag through one.
-fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> ValueId {
+/// What a test reads: the value, or a shared reference to the place, read
+/// through as a `Switch` reads its tag through one; a test takes nothing
+/// out (D89).
+pub(super) fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> ValueId {
     match matched {
         Matched::Value { value, .. } => *value,
-        Matched::Place { place, .. } => {
+        Matched::Held { place } | Matched::Place { place, .. } => {
             let ty = cx.ref_ty(Mutability::Shared, place.ty);
             let op = Op::Ref { target: place.target, path: place.path.clone(), mutability: Mutability::Shared };
             cx.builder.push(op, ty, span)
@@ -362,6 +377,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::ContextBind { id, name, .. } => {
             let value = match matched {
                 Matched::Value { value, .. } => *value,
+                Matched::Held { place } => read(cx, Operand::Place(place.clone()), span),
                 Matched::Place { .. } => {
                     panic!("a name bound past a reference is a reference, which typeck refuses to store into a context")
                 }
@@ -411,6 +427,10 @@ fn bound(cx: &mut Lcx<'_, '_>, matched: &Matched, ty: Ty, span: Span) -> ValueId
         Matched::Value { value, ty: held } => {
             assert_eq!(*held, ty, "a name bound to a value has the value's type");
             *value
+        }
+        Matched::Held { place } => {
+            assert_eq!(place.ty, ty, "a name bound to a held part has the part's type");
+            read(cx, Operand::Place(place.clone()), span)
         }
         Matched::Place { place, .. } => {
             let TyKind::Ref(mutability, _) = cx.kind(ty) else {
@@ -485,7 +505,7 @@ pub(super) fn lower_match<S: Slot>(
     span: Span,
 ) -> ValueId {
     let value = lower_expr(cx, scrutinee);
-    let matched = Matched::value(cx, value);
+    let matched = Matched::scrutinee(cx, value, scrutinee.span());
     let ty = cx.ty(site);
     let live = cx.reachable;
     let join = cx.builder.new_block(&[ty]);
@@ -495,8 +515,9 @@ pub(super) fn lower_match<S: Slot>(
             let keyed: Vec<(SwitchKey, BlockId, usize)> =
                 plan.keyed.iter().map(|(key, at)| (*key, cx.builder.new_block(&[]), *at)).collect();
             let default = plan.default.map(|at| (cx.builder.new_block(&[]), at));
+            let tag = tag_source(cx, &matched, span);
             let terminator = Terminator::Switch {
-                tag: value,
+                tag,
                 arms: keyed.iter().map(|(key, block, _)| (*key, *block, Vec::new())).collect(),
                 default: default.map(|(block, _)| (block, Vec::new())),
                 join,

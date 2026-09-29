@@ -39,9 +39,11 @@ mod tests;
 
 /// Every body: a `String` a use moves while the same content is read again
 /// on some path after it is cloned just before that use, with the use's
-/// span, and the use takes the clone (ownership §3). A place's content read
-/// by a `Take`, a field of it included, becomes a clone of a shared `Ref`
-/// of the place; a value's use takes a `StringClone` of the value. Of the
+/// span, and the use takes the clone (ownership §3). A `String` part of a
+/// place read by a `Take`, the whole included, becomes a clone of a shared
+/// `Ref` of it where that same part is read again, per part as
+/// `ContentLiveness` keeps it (D89); a value's use takes a `StringClone` of
+/// the value. Of the
 /// operands of one site that move one value, all but the last are clones,
 /// and the last is one too where the value is read after the site. A clone
 /// before a terminator takes the terminator's span.
@@ -196,7 +198,7 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
                 RefTarget::Var(named) | RefTarget::Param(named) => copying(*named),
                 RefTarget::Through(_) => true,
             };
-            let taking = match (path.is_empty(), whole || result_copies()) {
+            let taking = match (parts::owned_region(path).is_empty(), whole || result_copies()) {
                 (_, true) => Taken::Read,
                 (true, false) => Taken::Moved,
                 (false, false) => Taken::PartMoved,
@@ -204,7 +206,7 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
             operands.push(place(target, taking));
         }
         Op::Assign { target, path, value, .. } => {
-            let replaces_a_part = !path.is_empty() && !copying(*value);
+            let replaces_a_part = !parts::owned_region(path).is_empty() && !copying(*value);
             let taking = if replaces_a_part { Taken::PartMoved } else { Taken::Read };
             operands.extend([place(target, taking), passed(*value)]);
         }
@@ -332,22 +334,22 @@ fn named_place(target: &RefTarget) -> Option<ValueId> {
 
 // -- clone_strings -----------------------------------------------------------
 
-/// Each `Take` of a `String`, whole or a field, out of a place whose content
-/// is read again after it becomes a clone of the place (S4).
+/// Each `Take` of a `String`, whole or a field, whose part of the place is
+/// read again after it becomes a clone of that part (S4).
 fn clone_place_reads(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     let content = am.get::<ContentLiveness>(module, body);
     let (of, types) = (module.body(body), module.types());
     let mut read_again: Vec<ValueId> = Vec::new();
     for (block, record) in of.blocks() {
         for (index, inst) in record.insts().iter().enumerate() {
-            let Op::Take { target, .. } = inst.op() else {
+            let Op::Take { target, path, .. } = inst.op() else {
                 continue;
             };
             let result = inst.result().expect("a Take yields a value");
             let Some(place) = named_place(target) else {
                 continue;
             };
-            if is_string(types, of.ty_of(result)) && content.live_after(Site::Inst(block, index)).contains(&place) {
+            if is_string(types, of.ty_of(result)) && content.part_live_after(Site::Inst(block, index), place, path) {
                 read_again.push(result);
             }
         }
@@ -1086,6 +1088,10 @@ impl PlanFacts<'_> {
         }
     }
 
+    fn takes_a_copy(&self, inst: &Inst) -> bool {
+        inst.result().is_some_and(|taken| copies(self.types, self.body.ty_of(taken)))
+    }
+
     fn part_copies(&self, holder: ValueId, unit: &[PathSeg]) -> bool {
         copies(self.types, parts::part_ty(self.types, self.body.ty_of(holder), unit))
     }
@@ -1373,9 +1379,11 @@ impl PlanFacts<'_> {
             let site = Site::Inst(block, index);
             let event = match place_of(inst.op()) {
                 Some((RefTarget::Var(named) | RefTarget::Param(named), path)) if *named == place => match inst.op() {
-                    Op::Take { .. } if covers(path, unit) => Some(PlaceEvent::Moved),
+                    Op::Take { .. } if covers(parts::owned_region(path), unit) && !self.takes_a_copy(inst) => {
+                        Some(PlaceEvent::Moved)
+                    }
                     Op::Take { .. } if overlap(path, unit) => Some(PlaceEvent::Read),
-                    Op::Assign { .. } if covers(path, unit) => Some(PlaceEvent::Stored),
+                    Op::Assign { .. } if covers(parts::owned_region(path), unit) => Some(PlaceEvent::Stored),
                     _ => None,
                 },
                 _ => self.loans.reads(site).iter().any(|storage| storage_place(*storage) == Some(place)).then_some(PlaceEvent::Read),

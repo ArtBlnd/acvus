@@ -5,10 +5,10 @@
 //! the body moves out of it or stores into it is a union of units. A holder
 //! nothing cuts has the one unit `[]`, itself whole.
 //!
-//! A path never names a variant's payload here. A pattern reaches a payload
-//! only past a reference (`lower::pat`), so no direct place path names one,
-//! and moving a value's payload moves everything the value owns, since its
-//! tag copies and a variant has one payload.
+//! A unit never names a variant's payload: moving a variant's payload out
+//! moves everything the variant owns, since its tag copies and a variant
+//! has one payload, so a path through a payload moves the region up to that
+//! variant (`owned_region`).
 
 use super::{PathSeg, known_len};
 use crate::ty::{Concrete, ObjectTy, Ty, TyKind, Types};
@@ -25,12 +25,18 @@ pub(crate) fn overlap(a: &[PathSeg], b: &[PathSeg]) -> bool {
     covers(a, b) || covers(b, a)
 }
 
+/// The region a move of `path` empties: `path` up to the first payload it
+/// steps into, since that variant then owns nothing more.
+pub(crate) fn owned_region(path: &[PathSeg]) -> &[PathSeg] {
+    let end = path.iter().position(|seg| *seg == PathSeg::Payload).unwrap_or(path.len());
+    &path[..end]
+}
+
 /// The type of the part of a `ty` at `path`.
 ///
 /// # Panics
-/// `path` steps into a type without that part, or names a payload (module
-/// doc): the IR's paths are the lowering's, which names only parts a type
-/// has.
+/// `path` steps into a type without that part, or into a payload, whose
+/// type the path alone does not name: callers pass `owned_region`s.
 pub(crate) fn part_ty(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> Ty {
     let mut at = ty;
     for seg in path {

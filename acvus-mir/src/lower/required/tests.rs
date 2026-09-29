@@ -943,3 +943,38 @@ fn a_part_replaced_before_any_read_is_dropped_where_it_was_stored() {
     assert!(takes_part(&ops[n - 2], b) && matches!(ops[n - 1], Op::Drop { .. }), "`b` ends after its last read: {ops:?}");
     assert_eq!(drops(&ops), 2);
 }
+
+/// D89, ownership §3: `f(s.a); f(s.b)`: `s.a` is not read again, so its
+/// `Take` moves it though `s` is read after, and `s.b`'s last read moves
+/// it; no read is a clone. Before D89 the first was a clone, since the
+/// place as a whole was read again.
+#[test]
+fn a_string_part_is_cloned_only_where_that_part_is_read_again() {
+    let mut f = fixture();
+    let t = f.t;
+    let mut builder = f.module.build_body(false, t.int);
+    let (record, _, a, b) = two_strings(&f.interner, t, &mut builder);
+    let slot = builder.slot(record, at(1));
+    let first = text(t, &mut builder, at(1));
+    let second = text(t, &mut builder, at(1));
+    let object = builder.push(Op::MakeObject { fields: vec![(a, first), (b, second)] }, record, at(1));
+    builder.push_unit(assign(slot, object), at(1));
+    let moved = builder.push(part_take(slot, a), t.string, at(2));
+    builder.push(t.call(t.takes_string, vec![moved]), t.int, at(2));
+    let again = builder.push(part_take(slot, b), t.string, at(3));
+    let last = builder.push(t.call(t.takes_string, vec![again]), t.int, at(3));
+    builder.terminate(ret(last), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, clone_strings);
+
+    let ops = f.all_ops(id);
+    let takes = |field| {
+        ops.iter()
+            .filter(|op| matches!(op, Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Field(field)]))
+            .count()
+    };
+    assert_eq!(takes(a), 1, "`s.a` is not read again, so it moves: {ops:?}");
+    assert_eq!(takes(b), 1, "`s.b`'s last read moves it: {ops:?}");
+    assert!(!ops.iter().any(|op| matches!(op, Op::StringClone { .. })), "no part is read again after its move: {ops:?}");
+}

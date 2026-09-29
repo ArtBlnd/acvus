@@ -11,7 +11,7 @@ use crate::decl::{
 };
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
-use crate::ir::{Callee, ForSource, SwitchKey};
+use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
 use crate::typeck::{check_script, check_template};
 
@@ -436,7 +436,58 @@ fn while_let_is_a_while_on_the_patterns_test() {
         .expect("a While");
     assert!(matches!(lowered.kind_of(body, cond), TyKind::Bool));
     let bound = body.block(stage).insts();
-    assert!(matches!(bound[0].op(), Op::UnwrapVariant { .. }), "the body binds x first: {}", shown(body));
+    assert!(
+        matches!(bound[0].op(), Op::Take { path, .. } if *path == [PathSeg::Payload]),
+        "the body binds x first, taking the payload out of the scrutinee's slot (D89): {}",
+        shown(body)
+    );
+}
+
+/// D89: `if let (Some(a), b) = pair()` puts the pair in a slot; the test
+/// reads its first part through a reference and takes nothing, the bind
+/// takes each part once, and where the test fails both parts are dropped
+/// as parts. The pair is never taken or dropped whole.
+#[test]
+fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
+    let mut fx = Fixture::new();
+    let string = fx.ty(TyKind::String);
+    let option = fx.ty(TyKind::Option(string));
+    let pair = fx.ty(TyKind::Tuple(Box::new([option, string])));
+    let pair_fn = fx.function(&[], pair, Effect::pure());
+    fx.declare("pair", pair_fn, 0);
+    let script: Script = acvus_ast::parse_script(&fx.names, "if let (Some(a), b) = pair() { 1 } else { 2 }").expect("parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut types = Types::new();
+    let typeck = check_script(&decls, &mut types, &script);
+    assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+    let mut module = lower_script(&decls, &typeck, types, &script);
+    let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
+    super::required::insert_drops(&mut module, &mut am);
+    let lowered = Lowered::checked(module, fx.names);
+    let body = lowered.entry();
+    let ops = lowered.entry_ops();
+    let slot = ops
+        .iter()
+        .find_map(|op| match op {
+            Op::Assign { target: RefTarget::Var(slot), path, .. }
+                if path.is_empty() && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items) if items.len() == 2) =>
+            {
+                Some(*slot)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the pair is put in a slot: {}", shown(body)));
+    let takes = |wanted: &[PathSeg]| {
+        count(&ops, |op| matches!(op, Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && path == wanted))
+    };
+    assert_eq!(takes(&[]), 0, "the pair is never taken whole: {}", shown(body));
+    assert_eq!(takes(&[PathSeg::Index(0), PathSeg::Payload]), 1, "`a` is bound once: {}", shown(body));
+    assert_eq!(takes(&[PathSeg::Index(1)]), 2, "`b` is bound once, and dropped once where the test fails: {}", shown(body));
+    assert_eq!(takes(&[PathSeg::Index(0)]), 1, "the option is dropped once where the test fails: {}", shown(body));
+    let tested = count(&ops, |op| matches!(op, Op::Ref { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Index(0)]));
+    assert_eq!(tested, 1, "the test reads the option through a reference: {}", shown(body));
+    assert!(ops.iter().any(|op| matches!(op, Op::TestVariant { .. })));
+    assert!(!ops.iter().any(|op| matches!(op, Op::TupleIndex { .. } | Op::UnwrapVariant { .. })), "tests extract nothing: {}", shown(body));
 }
 
 /// `break` goes to the innermost loop's exit and `continue` to its header.

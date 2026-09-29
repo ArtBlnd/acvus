@@ -277,6 +277,9 @@ pub enum Op {
     },
 
     // Pattern matching (decision tree)
+    /// Whether `src` is `value`. `src` is the value itself, or a reference
+    /// to it, read through as `TestVariant` reads a tag: a test on a place
+    /// takes nothing out of it (D89).
     TestLiteral {
         src: ValueId,
         value: Literal,

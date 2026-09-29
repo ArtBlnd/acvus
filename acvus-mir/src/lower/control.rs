@@ -83,7 +83,7 @@ pub(super) fn lower_if_let<S: Slot>(
     span: Span,
 ) -> ValueId {
     let scrutinee = lower_expr(cx, source);
-    let matched = Matched::value(cx, scrutinee);
+    let matched = Matched::scrutinee(cx, scrutinee, source.span());
     let cond = match test(cx, pattern, &matched) {
         Some(cond) => cond,
         None => cx.bool_const(true, span),
@@ -186,7 +186,7 @@ pub(super) fn lower_while_let<S: Slot>(
     cx.builder.switch_to(header);
     cx.reachable = live;
     let scrutinee = lower_expr(cx, source);
-    let matched = Matched::value(cx, scrutinee);
+    let matched = Matched::scrutinee(cx, scrutinee, source.span());
     let cond = match test(cx, pattern, &matched) {
         Some(cond) => cond,
         None => cx.bool_const(true, span),
