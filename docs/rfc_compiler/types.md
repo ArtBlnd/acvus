@@ -65,7 +65,7 @@ Defaults apply only where nothing more can be decided. A type variable nothing c
 
 What a `for` iterates, what `?` unwraps, and which declaration a name or a method call reaches are decided by a type, wherever in the program that type becomes known. A decision reads a type only once nothing can change it, and what the decision leads back into that type must fit it unchanged. The outcome does not depend on the order the program is checked in. A construct whose type never becomes known is refused.
 
-A call reaches by its arguments in order, and a tuple by its parts in order: at each one, stepping up from its exact type, the declarations that match at the first step where any match are kept. Exactly one must be left; otherwise the call is refused.
+A call reaches by its arguments in order, and a tuple by its parts in order: at each one, stepping up from its exact type, the declarations that match at the first step where any match are kept. Where more than one is left after them, the type the call's result is taken at decides last: those whose result matches it exactly are kept. Exactly one must be left; otherwise the call is refused.
 
 A method call's receiver is its first argument, adjusted as Rust adjusts it: taken as written, then as `&`, then as `&mut` where the receiver is a place that may be written. The first adjustment that reaches a declaration is taken.
 
