@@ -36,7 +36,7 @@ pub use lift::{Lift, LiftShape, Taking};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use segments::{Segment, segments};
 pub use scheme::{DeclaredFacts, GenericImplSig, ImplSig, Impls, Requirement, Scheme};
-pub use user_type::UserTypeDecl;
+pub use user_type::{UserTypeDecl, UserTypeKind};
 pub use verify::{Refused, Written};
 
 /// What the embedder and the extern registries hand the compiler, before

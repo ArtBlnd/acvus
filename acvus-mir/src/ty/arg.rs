@@ -22,20 +22,6 @@ impl<V: Phase> TypeArg<V> {
     }
 }
 
-/// An effect argument, with or without `#` (types §8).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum EffectArg<V: Phase> {
-    Uniform(EffectTerm<V>),
-    Specialized(EffectTerm<V>),
-}
-
-impl<V: Phase> EffectArg<V> {
-    pub fn effect(&self) -> &EffectTerm<V> {
-        match self {
-            EffectArg::Uniform(effect) | EffectArg::Specialized(effect) => effect,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LenTerm<V: Phase> {

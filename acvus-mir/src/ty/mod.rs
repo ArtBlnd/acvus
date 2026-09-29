@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use indexmap::IndexSet;
 use rustc_hash::FxBuildHasher;
 
-pub use arg::{EffectArg, IdentityId, IdentityTerm, LenTerm, TypeArg};
+pub use arg::{IdentityId, IdentityTerm, LenTerm, TypeArg};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
 pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Source};
 pub use facts::{LifetimesOf, PositionKind, Resolve, copies, copies_alone, copies_in, for_each_position, lent_types, position_kinds, positions};

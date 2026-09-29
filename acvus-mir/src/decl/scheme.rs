@@ -44,6 +44,9 @@ pub struct Impls {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplSig {
     pub ty: TyId<Poly>,
+    /// Exactly one bound per type variable of `ty` the impl leaves open,
+    /// by position, as `Scheme::bounds`.
+    pub bounds: Box<[TyVarBound]>,
     /// One name per parameter of `ty`, in order, as `Scheme::param_names`.
     pub param_names: Box<[Astr]>,
     pub requires: Box<[Requirement]>,
