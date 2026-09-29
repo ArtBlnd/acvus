@@ -1,6 +1,7 @@
 use acvus_utils::{Astr, QualifiedRef};
 
 use super::TyVarBound;
+use super::declared::{Access, Action, Relation, Source};
 use super::labels::LabelledSignature;
 use super::facts::{Laws, NamedLaw, Postcondition, Reaches, Returns};
 use crate::means::Means;
@@ -48,9 +49,16 @@ pub struct GenericImplSig {
 }
 
 /// What a declaration states beyond its signature, trusted absolutely
-/// (extern-fn §3-4).
+/// (extern-fn §3-4): the declared facts in their four kinds, and its
+/// lifetimes. `laws`, `ensures`, `reaches`, `returns` and `means` are the
+/// forms the four kinds replace (D82); they stay only while their old
+/// readers do.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DeclaredFacts {
+    pub access: Box<[Access]>,
+    pub action: Box<[Action]>,
+    pub source: Box<[Source]>,
+    pub relations: Box<[Relation]>,
     pub laws: Laws,
     pub ensures: Box<[Postcondition]>,
     pub reaches: Reaches,

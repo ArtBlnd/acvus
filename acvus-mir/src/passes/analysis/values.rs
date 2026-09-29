@@ -1,17 +1,23 @@
-//! The value analyses: the sparse engine over the constant and the interval
-//! domains (passes-contracts: `sccp` reads `ConstantValues`, `bce` reads
-//! `IntervalValues`). A value operation is its domain's; every other
+//! The value analyses: the sparse engine over the constant, the interval
+//! and the affine domains (passes-contracts: `sccp` reads `ConstantValues`,
+//! `bce` reads `IntervalValues` and `AffineValues` as their reduced
+//! product, `ValueBounds`). A value operation is its domain's; every other
 //! instruction is `top`, but that a call's result lies where its callee's
-//! declared relations put it (extern-fn §3).
+//! declared Relations put it (extern-fn §3), as the affine domain reads
+//! them.
 
 use acvus_ast::Literal;
 
-use crate::decl::{Declarations, DeclaredFacts, PostTerm, Postcondition, Relation, Subject};
+use crate::decl::Declarations;
+use crate::decl::declared::{Atom, Before, Subject};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Inst, Module, Op, Terminator};
-use crate::ir::{Callee, ExternImpl, ForSource, SwitchKey, ValueId};
+use crate::ir::{Callee, ExternImpl, ForSource, SwitchKey, ValueId, known_len};
 use crate::passes::analysis::{Analysis, AnalysisManager, Executable, SparseAnalysis, SparseFacts, solve_sparse};
-use crate::passes::domain::{Constant, ConstantDomain, Interval, IntervalDomain, ValueDomain};
-use crate::ty::{CastTy, Concrete, Types};
+use crate::passes::domain::{
+    Affine, AffineDomain, Bound, Combination, Constant, ConstantDomain, Interval, IntervalDomain, Limit, Symbol, ValueDomain,
+    bounds_on,
+};
+use crate::ty::{CastTy, Concrete, TyKind, Types};
 
 /// Every value's constant, conditional on the arms a known condition takes
 /// (Wegman and Zadeck). Cost: the sparse engine's, with height 3.
@@ -21,6 +27,12 @@ pub struct ConstantValues;
 /// engine's, a parameter of a loop header rising at most three times under
 /// widening.
 pub struct IntervalValues;
+
+/// Every integer value's affine combination of symbols, every arm taken:
+/// a slice's length is its `Len`, a `For`'s counter is its end less one
+/// less its `Remaining` steps, and a call's result is what its declared
+/// Relations make it equal. Cost: the sparse engine's, with height 3.
+pub struct AffineValues;
 
 impl Analysis for ConstantValues {
     type Facts = SparseFacts<ConstantDomain>;
@@ -45,6 +57,18 @@ impl Analysis for IntervalValues {
     }
 }
 
+impl Analysis for AffineValues {
+    type Facts = SparseFacts<AffineDomain>;
+
+    const READS: &'static [Aspect] = &[Aspect::Instructions, Aspect::CfgShape, Aspect::Types];
+
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
+        let body = module.body(body);
+        let affines = Affines { operand_types: OperandTypes { types: module.types(), body }, decls: am.decls() };
+        solve_sparse(&affines, body)
+    }
+}
+
 impl SparseFacts<ConstantDomain> {
     /// `value`'s one value, where it is known.
     pub fn constant(&self, value: ValueId) -> Option<&Literal> {
@@ -52,33 +76,6 @@ impl SparseFacts<ConstantDomain> {
             Constant::Known(literal) => Some(literal),
             Constant::Bottom | Constant::Top => None,
         }
-    }
-}
-
-impl SparseFacts<IntervalDomain> {
-    /// The interval the length of `slice` lies in, as the declared
-    /// Relations (extern-fn §3) of the extern impl whose result it is put
-    /// it: a call's, or an `AsSlice`'s, whose one argument is its
-    /// container. `None` where `slice` is no such result, or where no
-    /// relation of its impl bounds the result's length by a term of known
-    /// interval. Cost: O(the impl's relations and their terms).
-    pub fn declared_len(&self, decls: &Declarations, body: &Body, slice: ValueId) -> Option<Interval> {
-        let Definition::Inst(made) = body.definition(slice) else {
-            return None;
-        };
-        let (made_by, args) = match body.inst(made).op() {
-            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } => {
-                (ExternImpl { id: *id, r#impl: *r#impl }, args.as_slice())
-            }
-            Op::AsSlice { container, r#impl, .. } => (*r#impl, std::slice::from_ref(container)),
-            _ => return None,
-        };
-        let relations = &declared_facts(decls, made_by.id, made_by.r#impl)?.ensures;
-        let args: Vec<&Interval> = args.iter().map(|arg| self.of(*arg)).collect();
-        let counts = Interval::exactly(0).at_least_lo();
-        related(relations, &args, &PostTerm::Len(Subject::Ret))
-            .reduce(|len, range| len.meet(&range))
-            .map(|len| len.meet(&counts))
     }
 }
 
@@ -92,6 +89,19 @@ impl OperandTypes<'_> {
     /// `value`'s type, where it is one a value operation computes at.
     fn of(&self, value: ValueId) -> Option<CastTy> {
         CastTy::of_kind(self.types.kind(self.body.ty_of(value)))
+    }
+
+    fn is_integer(&self, value: ValueId) -> bool {
+        matches!(self.of(value), Some(CastTy::Int(_)))
+    }
+
+    /// Whether `value` is a reference to a slice, whose element count no
+    /// run changes while it exists.
+    fn is_slice(&self, value: ValueId) -> bool {
+        match self.types.kind(self.body.ty_of(value)) {
+            TyKind::Ref(_, lent) => matches!(self.types.kind(lent.ty()), TyKind::Slice(_)),
+            _ => false,
+        }
     }
 
     /// The domain's value of a value operation, or `None` where `inst` is
@@ -227,10 +237,16 @@ impl SparseAnalysis for Intervals<'_> {
             return value;
         }
         match inst.op() {
-            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, .. } => {
-                let facts = declared_facts(self.decls, *id, *r#impl);
-                let relations = facts.map_or(&[][..], |facts| &facts.ensures);
-                related(relations, operands, &PostTerm::Ret).fold(Interval::full(), |result, range| result.meet(&range))
+            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. }
+                if inst.result().is_some_and(|result| self.operand_types.is_integer(result)) =>
+            {
+                assert_eq!(args.len(), operands.len(), "an extern call's operands are its arguments");
+                let relations = self.decls.impl_facts(*id, *r#impl).map_or(&[][..], |facts| &facts.relations);
+                let arg_interval = |atom: &Atom| declared_atom_interval(&self.operand_types, args, operands, atom);
+                bounds_on(relations, Atom::Result)
+                    .iter()
+                    .filter_map(|limit| limit_interval(limit, arg_interval))
+                    .fold(Interval::full(), |result, range| result.meet(&range))
             }
             _ => Interval::full(),
         }
@@ -264,66 +280,307 @@ impl SparseAnalysis for Intervals<'_> {
     }
 }
 
-/// The facts the impl a call chose declares: a concrete impl by its index,
-/// the generic impl after them. A declaration without impls states none.
-///
-/// # Panics
-/// The call names a function or an impl the declarations do not have.
-fn declared_facts(decls: &Declarations, id: acvus_utils::QualifiedRef, r#impl: usize) -> Option<&DeclaredFacts> {
-    let scheme = decls.scheme(id).unwrap_or_else(|| panic!("the call names {id:?}, which is not declared"));
-    let impls = scheme.impls.as_ref()?;
-    Some(match impls.concrete.get(r#impl) {
-        Some(concrete) => &concrete.facts,
-        None if r#impl == impls.concrete.len() => {
-            &impls.generic.as_ref().unwrap_or_else(|| panic!("{id:?} has no impl {impl}", impl = r#impl)).facts
-        }
-        None => panic!("{id:?} has no impl {impl}", impl = r#impl),
+/// The interval a declared Relation's atom lies in, over one call's
+/// arguments: an integer argument's own, and a count for a length; `None`
+/// for an atom the call's arguments do not bound, such as the result or
+/// what a reference lends.
+fn declared_atom_interval(types: &OperandTypes<'_>, args: &[ValueId], intervals: &[&Interval], atom: &Atom) -> Option<Interval> {
+    match atom {
+        Atom::Arg(at) if types.is_integer(args[*at]) => Some(intervals[*at].clone()),
+        Atom::Len(Subject::Arg(_)) | Atom::Old(Before::Len(_)) => Some(Interval::exactly(0).at_least_lo()),
+        Atom::Arg(_) | Atom::Result | Atom::Len(Subject::Result) | Atom::Old(Before::Lent(_)) => None,
+    }
+}
+
+/// The interval a combination lies in where each atom lies in the interval
+/// `atom` gives it; `None` where `atom` gives none for one of them.
+fn combination_interval<A, F>(combination: &Combination<A>, mut atom: F) -> Option<Interval>
+where
+    A: Ord + Clone,
+    F: FnMut(&A) -> Option<Interval>,
+{
+    let mut out = Interval::exactly(combination.constant_term());
+    for (at, coefficient) in combination.terms() {
+        out = out.sum(&Interval::exactly(coefficient).product(&atom(at)?));
+    }
+    Some(out)
+}
+
+/// The interval a declared limit puts its atom in.
+fn limit_interval<A, F>(limit: &Limit<A>, atom: F) -> Option<Interval>
+where
+    A: Ord + Clone,
+    F: FnMut(&A) -> Option<Interval>,
+{
+    Some(match limit {
+        Limit::Exactly(at) => combination_interval(at, atom)?,
+        Limit::AtMost(at) => combination_interval(at, atom)?.at_most_hi(),
+        Limit::AtLeast(at) => combination_interval(at, atom)?.at_least_lo(),
     })
 }
 
-/// The range each relation puts `subject` in, where one side is `subject`
-/// alone and the other a term of known interval over the call's arguments.
-fn related<'r>(
-    relations: &'r [Postcondition],
-    args: &'r [&Interval],
-    subject: &'r PostTerm,
-) -> impl Iterator<Item = Interval> + 'r {
-    relations.iter().filter_map(move |Postcondition { left, relation, right }| {
-        let (term, subject_on_left) = match (left == subject, right == subject) {
-            (true, false) => (right, true),
-            (false, true) => (left, false),
-            (true, true) | (false, false) => return None,
+/// A value's combination, and where none is known, the value itself, which
+/// every value equals; `None` where no run defines it.
+fn named(value: ValueId, fact: &Affine) -> Option<Combination<Symbol>> {
+    match fact {
+        Affine::Top => Some(Combination::atom(Symbol::Value(value))),
+        Affine::Exactly(combination) => Some(combination.clone()),
+        Affine::Bottom => None,
+    }
+}
+
+struct Affines<'m> {
+    operand_types: OperandTypes<'m>,
+    decls: &'m Declarations,
+}
+
+impl Affines<'_> {
+    /// The combination a call's declared Relations make its integer result
+    /// equal, over its arguments' combinations; `top` where none does.
+    fn declared_result(
+        &self,
+        inst: &Inst,
+        id: acvus_utils::QualifiedRef,
+        r#impl: usize,
+        args: &[ValueId],
+        named: &[Option<Combination<Symbol>>],
+    ) -> Affine {
+        let types = &self.operand_types;
+        if !inst.result().is_some_and(|result| types.is_integer(result)) {
+            return Affine::Top;
+        }
+        let relations = self.decls.impl_facts(id, r#impl).map_or(&[][..], |facts| &facts.relations);
+        let atom = |atom: &Atom| match atom {
+            Atom::Arg(at) if types.is_integer(args[*at]) => named[*at].clone(),
+            Atom::Len(Subject::Arg(at)) if types.is_slice(args[*at]) => Some(Combination::atom(Symbol::Len(args[*at]))),
+            Atom::Arg(_) | Atom::Len(_) | Atom::Result | Atom::Old(_) => None,
         };
-        let term = term_interval(term, args)?;
-        let one = Interval::exactly(1);
-        Some(match (relation, subject_on_left) {
-            (Relation::Eq, _) => term,
-            (Relation::Le, true) => term.at_most_hi(),
-            (Relation::Lt, true) => term.difference(&one).at_most_hi(),
-            (Relation::Le, false) => term.at_least_lo(),
-            (Relation::Lt, false) => term.sum(&one).at_least_lo(),
-        })
-    })
+        bounds_on(relations, Atom::Result)
+            .iter()
+            .find_map(|limit| match limit.substitute(atom)? {
+                Limit::Exactly(combination) => Some(Affine::Exactly(combination)),
+                Limit::AtMost(_) | Limit::AtLeast(_) => None,
+            })
+            .unwrap_or(Affine::Top)
+    }
 }
 
-/// A term's interval over the call's arguments, where every leaf of it has
-/// one: a length is a count, and `old(t)` of an argument is the argument,
-/// which a call does not change. A term that reads the result has none.
-fn term_interval(term: &PostTerm, args: &[&Interval]) -> Option<Interval> {
-    Some(match term {
-        PostTerm::Const(n) => Interval::exactly(*n),
-        PostTerm::Param(at) => {
-            (*args.get(*at).unwrap_or_else(|| panic!("a relation names parameter {at} of {} arguments", args.len())))
-                .clone()
+impl SparseAnalysis for Affines<'_> {
+    type Domain = AffineDomain;
+
+    fn domain(&self) -> &AffineDomain {
+        &AffineDomain
+    }
+
+    /// An operand of no known combination is read as itself.
+    fn transfer(&self, inst: &Inst, operands: &[&Affine]) -> Affine {
+        let body = self.operand_types.body;
+        let ids: Vec<ValueId> = inst.operands().into_iter().filter(|value| !body.is_token(*value)).collect();
+        assert_eq!(ids.len(), operands.len(), "one fact per operand that is not an order token");
+        let named: Vec<Option<Combination<Symbol>>> = ids.iter().zip(operands).map(|(id, fact)| named(*id, fact)).collect();
+        let named_facts: Vec<Affine> = named.iter().map(|named| named.clone().map_or(Affine::Bottom, Affine::Exactly)).collect();
+        let named_facts: Vec<&Affine> = named_facts.iter().collect();
+        if let Some(value) = self.operand_types.value_operation(&AffineDomain, inst, &named_facts) {
+            return value;
         }
-        PostTerm::Len(Subject::Param(_)) => Interval::exactly(0).at_least_lo(),
-        PostTerm::Ret | PostTerm::Len(Subject::Ret) => return None,
-        PostTerm::Add(a, b) => term_interval(a, args)?.sum(&term_interval(b, args)?),
-        PostTerm::Sub(a, b) => term_interval(a, args)?.difference(&term_interval(b, args)?),
-        PostTerm::Mul(a, b) => term_interval(a, args)?.product(&term_interval(b, args)?),
-        PostTerm::Max(a, b) => term_interval(a, args)?.greatest(&term_interval(b, args)?),
-        PostTerm::Old(inner) => term_interval(inner, args)?,
-    })
+        match inst.op() {
+            Op::SliceLen { src } => Affine::Exactly(Combination::atom(Symbol::Len(*src))),
+            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } => {
+                self.declared_result(inst, *id, *r#impl, args, &named)
+            }
+            _ => Affine::Top,
+        }
+    }
+
+    fn executable(&self, _terminator: &Terminator, _operands: &[&Affine]) -> Executable {
+        Executable::All
+    }
+
+    /// A counter entering a `For`'s body is its end less one less the steps
+    /// left, a range's end its `hi` and a slice's its length. An array's
+    /// counter, an element and a trip count are `top`.
+    fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Affine]) -> Affine {
+        let Terminator::For { source, stages, .. } = terminator else {
+            panic!("only a For supplies parameters, not {terminator:?}")
+        };
+        if to != stages.body() || index != source.counter_param() {
+            return Affine::Top;
+        }
+        let end = match (source, operands) {
+            (ForSource::Range { hi, .. }, [_, hi_fact, ..]) => match named(*hi, hi_fact) {
+                Some(end) => end,
+                None => return Affine::Bottom,
+            },
+            (ForSource::Range { .. }, _) => panic!("a range For reads its two ends"),
+            (ForSource::Slice(slice) | ForSource::SliceMut(slice), _) => Combination::atom(Symbol::Len(*slice)),
+            (ForSource::Array(_), _) => return Affine::Top,
+        };
+        let counter = self.operand_types.body.block(to).params()[index];
+        let steps_after = Combination::constant(1).checked_add(&Combination::atom(Symbol::Remaining(counter)));
+        match steps_after.and_then(|steps_after| end.checked_sub(&steps_after)) {
+            Some(counter) => Affine::Exactly(counter),
+            None => Affine::Top,
+        }
+    }
+}
+
+/// The reduced product of one body's interval and affine facts (D83): a
+/// value lies in its interval and in the interval its combination lies in,
+/// each symbol in its own; a slice's length is what its maker's declared
+/// Relations or its array's type make it. This is how `i < len(s)` is
+/// proven for a length no interval bounds.
+pub(in crate::passes) struct ValueBounds<'f> {
+    pub intervals: &'f SparseFacts<IntervalDomain>,
+    pub affine: &'f SparseFacts<AffineDomain>,
+    pub decls: &'f Declarations,
+    pub body: &'f Body,
+    pub types: &'f Types<Concrete>,
+}
+
+/// The extern impl that made a slice, and its arguments: a call's, or an
+/// `AsSlice`'s, whose one argument is its container.
+struct MadeBy<'b> {
+    r#impl: ExternImpl,
+    args: &'b [ValueId],
+}
+
+impl ValueBounds<'_> {
+    /// `value`'s combination; `None` where no run defines it.
+    fn combination(&self, value: ValueId) -> Option<Combination<Symbol>> {
+        named(value, self.affine.of(value))
+    }
+
+    fn symbol_interval(&self, symbol: &Symbol) -> Interval {
+        match symbol {
+            Symbol::Value(value) => self.intervals.of(*value).clone(),
+            Symbol::Len(slice) => self.len_interval(*slice),
+            Symbol::Remaining(_) => Interval::exactly(0).at_least_lo(),
+        }
+    }
+
+    fn interval_of(&self, combination: &Combination<Symbol>) -> Interval {
+        combination_interval(combination, |symbol| Some(self.symbol_interval(symbol)))
+            .expect("every symbol lies in an interval")
+    }
+
+    /// The integers `value` may be on a run that defines it. Cost: O(the
+    /// symbols of its combination · the relations of a slice's impl).
+    pub fn value_interval(&self, value: ValueId) -> Interval {
+        match self.combination(value) {
+            Some(combination) => self.intervals.of(value).meet(&self.interval_of(&combination)),
+            None => Interval::Empty,
+        }
+    }
+
+    /// Whether `0 ≤ index < len(slice)` on every run that reaches an index
+    /// of `slice` at `index`: the index's interval lies below the least
+    /// length, or the length less the index less one, as a combination,
+    /// is never negative. A slice whose relations admit no length is made
+    /// by no run. Cost: as `value_interval`, for both.
+    pub fn index_in_bounds(&self, slice: ValueId, index: ValueId) -> bool {
+        let (at, len) = (self.value_interval(index), self.len_interval(slice));
+        let (Interval::Range { lo, hi }, Interval::Range { lo: shortest, .. }) = (&at, &len) else {
+            return true;
+        };
+        if *lo < Bound::Finite(0) {
+            return false;
+        }
+        if hi < shortest {
+            return true;
+        }
+        let Some(index) = self.combination(index) else {
+            return true;
+        };
+        let one = Combination::constant(1);
+        let slack = self.len_combination(slice).checked_sub(&index).and_then(|slack| slack.checked_sub(&one));
+        slack.is_some_and(|slack| match self.interval_of(&slack) {
+            Interval::Empty => true,
+            Interval::Range { lo, .. } => lo >= Bound::Finite(0),
+        })
+    }
+
+    fn made_by(&self, slice: ValueId) -> Option<MadeBy<'_>> {
+        let Definition::Inst(made) = self.body.definition(slice) else {
+            return None;
+        };
+        match self.body.inst(made).op() {
+            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } => {
+                Some(MadeBy { r#impl: ExternImpl { id: *id, r#impl: *r#impl }, args })
+            }
+            Op::AsSlice { container, r#impl, .. } => Some(MadeBy { r#impl: *r#impl, args: std::slice::from_ref(container) }),
+            _ => None,
+        }
+    }
+
+    /// The limits its maker's declared Relations put on a slice's length,
+    /// over its maker's arguments.
+    fn declared_len_limits(&self, made_by: &MadeBy<'_>) -> Vec<Limit<Atom>> {
+        let facts = self.decls.impl_facts(made_by.r#impl.id, made_by.r#impl.r#impl);
+        bounds_on(facts.map_or(&[][..], |facts| &facts.relations), Atom::Len(Subject::Result))
+    }
+
+    /// The interval a slice's length lies in: a count, within what its
+    /// maker's declared Relations put it in over its maker's arguments'
+    /// intervals, and exactly the length its array's type carries.
+    fn len_interval(&self, slice: ValueId) -> Interval {
+        let mut len = Interval::exactly(0).at_least_lo();
+        if let Some(made_by) = self.made_by(slice) {
+            let operand_types = OperandTypes { types: self.types, body: self.body };
+            let intervals: Vec<&Interval> = made_by.args.iter().map(|arg| self.intervals.of(*arg)).collect();
+            let arg_interval = |atom: &Atom| declared_atom_interval(&operand_types, made_by.args, &intervals, atom);
+            for limit in self.declared_len_limits(&made_by) {
+                if let Some(range) = limit_interval(&limit, arg_interval) {
+                    len = len.meet(&range);
+                }
+            }
+        }
+        if let Some(carried) = self.carried_len(slice) {
+            len = len.meet(&Interval::exactly(carried));
+        }
+        len
+    }
+
+    /// A slice's length as a combination: what its maker's declared
+    /// Relations make it equal over its maker's arguments' combinations,
+    /// the length its array's type carries, or its own `Len`.
+    fn len_combination(&self, slice: ValueId) -> Combination<Symbol> {
+        let operand_types = OperandTypes { types: self.types, body: self.body };
+        let declared = self.made_by(slice).and_then(|made_by| {
+            let atom = |atom: &Atom| match atom {
+                Atom::Arg(at) if operand_types.is_integer(made_by.args[*at]) => self.combination(made_by.args[*at]),
+                Atom::Len(Subject::Arg(at)) if operand_types.is_slice(made_by.args[*at]) => {
+                    Some(Combination::atom(Symbol::Len(made_by.args[*at])))
+                }
+                Atom::Arg(_) | Atom::Len(_) | Atom::Result | Atom::Old(_) => None,
+            };
+            self.declared_len_limits(&made_by).iter().find_map(|limit| match limit.substitute(atom)? {
+                Limit::Exactly(len) => Some(len),
+                Limit::AtMost(_) | Limit::AtLeast(_) => None,
+            })
+        });
+        declared
+            .or_else(|| self.carried_len(slice).map(Combination::constant))
+            .unwrap_or_else(|| Combination::atom(Symbol::Len(slice)))
+    }
+
+    /// The length a slice's type carries: an `AsSlice` of a reference to an
+    /// `Array<T, N>` has `N` elements. The length of another container is
+    /// not read (D66).
+    fn carried_len(&self, slice: ValueId) -> Option<i128> {
+        let Definition::Inst(made) = self.body.definition(slice) else {
+            return None;
+        };
+        let Op::AsSlice { container, .. } = self.body.inst(made).op() else {
+            return None;
+        };
+        let TyKind::Ref(_, lent) = self.types.kind(self.body.ty_of(*container)) else {
+            panic!("an AsSlice's container {container:?} is a reference")
+        };
+        match self.types.kind(lent.ty()) {
+            TyKind::Array(_, len) => Some(i128::try_from(known_len(len)).expect("an array's length fits an i128")),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -332,7 +589,8 @@ mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
     use super::*;
-    use crate::decl::{Core, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
+    use crate::decl::declared::{Comparison, Relation, Term};
+    use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
     use crate::ir::cfg::Stages;
     use crate::ir::{BinOp, ExitTrip, Overflow};
     use crate::passes::domain::Bound;
@@ -560,10 +818,19 @@ mod tests {
         assert_eq!(*constants.of(counter), Constant::Top);
         assert_eq!(constants.constant(trip), Some(&Literal::Int(10)));
         assert_eq!(*constants.of(s), Constant::Top);
+
+        let affine = facts::<AffineValues>(&f.module, &decls, id);
+        let remaining = Combination::atom(Symbol::Remaining(counter));
+        assert_eq!(
+            *affine.of(counter),
+            Affine::Exactly(Combination::constant(9).checked_sub(&remaining).unwrap()),
+            "the counter is hi - 1 less the steps left"
+        );
     }
 
     /// `f(p0: i64) -> i64` declares `0 ≤ ret` and `ret < p0`; a call
-    /// `f(x)` with `x = 7` lies in `[0, 6]`, and is no constant.
+    /// `f(x)` with `x = 7` lies in `[0, 6]`, and is no constant. Its
+    /// combination is itself, since no relation makes it equal to one.
     #[test]
     fn a_calls_declared_relations_bound_its_result() {
         let interner = Interner::new();
@@ -579,9 +846,9 @@ mod tests {
             calls: Calls::Many,
             holds: Holds::Nothing,
         });
-        let ensures = vec![
-            Postcondition { left: PostTerm::Const(0), relation: Relation::Le, right: PostTerm::Ret },
-            Postcondition { left: PostTerm::Ret, relation: Relation::Lt, right: PostTerm::Param(0) },
+        let relations = vec![
+            Relation { left: Term::Const(0), comparison: Comparison::Le, right: Term::Atom(Atom::Result) },
+            Relation { left: Term::Atom(Atom::Result), comparison: Comparison::Lt, right: Term::Atom(Atom::Arg(0)) },
         ];
         let scheme = Scheme {
             ty: declared,
@@ -590,7 +857,7 @@ mod tests {
             impls: Some(Impls {
                 concrete: Box::new([]),
                 generic: Some(GenericImplSig {
-                    facts: DeclaredFacts { ensures: ensures.into(), ..DeclaredFacts::default() },
+                    facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
                 }),
             }),
             requires: Box::new([]),
@@ -623,5 +890,72 @@ mod tests {
         assert_eq!(*intervals.of(r), finite(0, 6));
         let constants = facts::<ConstantValues>(&module, &decls, id);
         assert_eq!(*constants.of(r), Constant::Top);
+        let affine = facts::<AffineValues>(&module, &decls, id);
+        assert_eq!(*affine.of(r), Affine::Top);
+    }
+
+    /// `succ(p0: i64) -> i64` declares `ret = p0 + 1`; for a parameter
+    /// `a`, `r = succ(a)` is `a + 1`, so `d = r - a` is the constant 1,
+    /// which no interval of `a` shows.
+    #[test]
+    fn a_calls_declared_equality_makes_its_result_a_combination_of_its_arguments() {
+        let interner = Interner::new();
+        let succ = QualifiedRef::root(interner.intern("succ"));
+
+        let mut poly = Types::<Poly>::new();
+        let poly_int: TyId<Poly> = poly.intern(TyKind::Int(IntTy::I64));
+        let declared = poly.intern(TyKind::Fn {
+            params: Box::new([poly_int]),
+            ret: poly_int,
+            effect: EffectTerm::Known(Effect::pure()),
+            flows: FlowTerm::Known(Flows::none()),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        let plus_one = Term::Add(Box::new(Term::Atom(Atom::Arg(0))), Box::new(Term::Const(1)));
+        let relations = vec![Relation { left: Term::Atom(Atom::Result), comparison: Comparison::Eq, right: plus_one }];
+        let scheme = Scheme {
+            ty: declared,
+            param_names: Box::new([interner.intern("p0")]),
+            bounds: Box::new([]),
+            impls: Some(Impls {
+                concrete: Box::new([]),
+                generic: Some(GenericImplSig {
+                    facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
+                }),
+            }),
+            requires: Box::new([]),
+        };
+        let decls = declarations(&interner, vec![(succ, scheme)], poly);
+
+        let mut types = Types::new();
+        let int = types.intern(TyKind::Int(IntTy::I64));
+        let callee_ty = types.intern(TyKind::Fn {
+            params: Box::new([int]),
+            ret: int,
+            effect: EffectTerm::Known(Effect::pure()),
+            flows: FlowTerm::Known(Flows::none()),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+        });
+        let mut module = Module::new(types);
+        let mut builder = module.build_body(false, int);
+        let a = builder.param(interner.intern("a"), int, Span::ZERO);
+        let call = Op::FunctionCall {
+            callee: Callee::Extern { id: succ, r#impl: 0, required: Vec::new() },
+            callee_ty,
+            args: vec![a],
+        };
+        let r = builder.push(call, int, Span::ZERO);
+        let d = builder.push(binary(BinOp::Sub(Overflow::Trap), r, a), int, Span::ZERO);
+        builder.terminate(ret(d), Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+
+        let affine = facts::<AffineValues>(&module, &decls, id);
+        let a_plus_one = Combination::atom(Symbol::Value(a)).checked_add(&Combination::constant(1)).unwrap();
+        assert_eq!(*affine.of(r), Affine::Exactly(a_plus_one));
+        assert_eq!(*affine.of(d), Affine::Exactly(Combination::constant(1)));
+        let intervals = facts::<IntervalValues>(&module, &decls, id);
+        assert_eq!(*intervals.of(d), finite(i128::from(i64::MIN), i128::from(i64::MAX)));
     }
 }

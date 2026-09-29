@@ -1,0 +1,216 @@
+//! The facts a declaration states beyond its signature, in their four kinds
+//! (extern-fn §3): Access, Action, Source and Relation. Each kind's forms
+//! are exactly the ledger's, and a form is added only there. `verify`
+//! refuses a form that is not well formed at the signature it is stated
+//! on; what a form means is read in one place per kind (D82): Access by
+//! `passes::analysis::Loans`, Relation by `passes::domain::affine`.
+
+mod access;
+mod action;
+mod relation;
+mod source;
+
+#[cfg(test)]
+mod tests;
+
+use acvus_utils::QualifiedRef;
+use rustc_hash::FxHashMap;
+
+pub use access::{Access, Mode, Stored, Touch};
+pub use action::{Action, Update};
+pub use relation::{Atom, Before, Comparison, Relation, Subject, Term};
+pub use source::Source;
+
+use super::{Core, DeclaredFacts, Refused, Scheme, TyVarBound};
+use crate::ty::{Declared, IntTy, Mutability, Poly, TyId, TyKind, Types};
+
+/// A parameter's storage whole, or one element of it. A parameter is
+/// numbered as a call's arguments are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    pub param: usize,
+    pub element: Option<Element>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Element {
+    /// The entry at the key parameter this numbers.
+    Key(usize),
+    /// The element at the `u64` parameter this numbers.
+    Index(usize),
+}
+
+/// Refuses every declared fact that is not well formed at the signature it
+/// is stated on. A fact is stated on an impl: the generic impl's signature
+/// is its function's own.
+pub(super) fn refuse_ill_formed(
+    types: &mut Types<Poly>,
+    core: &Core,
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    declared_order: &[QualifiedRef],
+    refused: &mut Vec<Refused>,
+) {
+    for function in declared_order {
+        let Some(scheme) = functions.get(function) else {
+            continue;
+        };
+        for StatedOn { declared, ty, bounds, facts } in stated_signatures(*function, scheme) {
+            let Some(stated) = Stated::of(declared, core, types, ty, bounds) else {
+                continue;
+            };
+            access::refuse_ill_formed(&stated, types, &facts.access, refused);
+            action::refuse_ill_formed(&stated, &facts.action, functions, types, refused);
+            source::refuse_ill_formed(&stated, types, &facts.source, refused);
+            relation::refuse_ill_formed(&stated, types, &facts.relations, refused);
+        }
+    }
+}
+
+/// A set of facts and the impl signature it is stated on.
+struct StatedOn<'s> {
+    declared: Declared,
+    ty: TyId<Poly>,
+    bounds: &'s [TyVarBound],
+    facts: &'s DeclaredFacts,
+}
+
+/// Each impl's facts with its signature: the generic impl's at its
+/// function's own type and bounds, then each concrete impl's, whose
+/// variables carry no declared bound.
+fn stated_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = StatedOn<'_>> {
+    let generic = scheme.impls.iter().filter_map(|impls| impls.generic.as_ref()).map(move |generic| StatedOn {
+        declared: Declared { function, r#impl: None },
+        ty: scheme.ty,
+        bounds: &scheme.bounds,
+        facts: &generic.facts,
+    });
+    let concrete =
+        scheme.impls.iter().flat_map(|impls| impls.concrete.iter().enumerate()).map(move |(at, r#impl)| StatedOn {
+            declared: Declared { function, r#impl: Some(at) },
+            ty: r#impl.ty,
+            bounds: &[],
+            facts: &r#impl.facts,
+        });
+    generic.chain(concrete)
+}
+
+/// Every set of facts stated on an impl of `scheme`.
+fn stated_facts(scheme: &Scheme) -> impl Iterator<Item = &DeclaredFacts> {
+    let impls = scheme.impls.iter();
+    let generic = impls.clone().filter_map(|impls| impls.generic.as_ref()).map(|generic| &generic.facts);
+    generic.chain(impls.flat_map(|impls| impls.concrete.iter()).map(|r#impl| &r#impl.facts))
+}
+
+/// The signature a set of facts is stated on.
+struct Stated<'a> {
+    declared: Declared,
+    core: &'a Core,
+    params: Box<[TyId<Poly>]>,
+    ret: TyId<Poly>,
+    bounds: &'a [TyVarBound],
+}
+
+impl<'a> Stated<'a> {
+    /// `None` where `ty` is no function type, which `verify` refuses on its
+    /// own.
+    fn of(declared: Declared, core: &'a Core, types: &Types<Poly>, ty: TyId<Poly>, bounds: &'a [TyVarBound]) -> Option<Self> {
+        let TyKind::Fn { params, ret, .. } = types.kind(ty) else {
+            return None;
+        };
+        Some(Stated { declared, core, params: params.clone(), ret: *ret, bounds })
+    }
+
+    /// The type of parameter `at`; where the signature has none, refused.
+    fn param(&self, at: usize, refused: &mut Vec<Refused>) -> Option<TyId<Poly>> {
+        let ty = self.params.get(at).copied();
+        if ty.is_none() {
+            refused.push(Refused::FactNamesNoParameter { declared: self.declared, param: at });
+        }
+        ty
+    }
+
+    /// How `ty` lends and what, where it is a reference.
+    fn lent(&self, types: &Types<Poly>, ty: TyId<Poly>) -> Option<(Mutability, TyId<Poly>)> {
+        match types.kind(ty) {
+            TyKind::Ref(mutability, lent) => Some((*mutability, lent.ty())),
+            _ => None,
+        }
+    }
+
+    /// An integer type, or a type variable bounded to integers.
+    fn is_integer(&self, types: &Types<Poly>, ty: TyId<Poly>) -> bool {
+        match types.kind(ty) {
+            TyKind::Int(_) => true,
+            TyKind::Var(at) => matches!(self.bounds.get(*at as usize), Some(TyVarBound::Integer { .. })),
+            _ => false,
+        }
+    }
+
+    /// Whether a value of `ty`, or what it lends, has an element count: a
+    /// slice, a `str`, an array, a `String`, or an extern-defined type,
+    /// whose count is its declarer's.
+    fn has_length(&self, types: &Types<Poly>, ty: TyId<Poly>) -> bool {
+        let held = self.lent(types, ty).map_or(ty, |(_, lent)| lent);
+        matches!(
+            types.kind(held),
+            TyKind::Slice(_) | TyKind::Str | TyKind::Array(..) | TyKind::String | TyKind::UserDefined { .. }
+        )
+    }
+
+    /// Whether `place` is well formed, refusing what is not: its parameter
+    /// is a reference, `&mut` where the call may write it, and an index
+    /// that names its element is a `u64` (operators §3).
+    fn place_well_formed(&self, types: &Types<Poly>, place: &Place, writes: bool, refused: &mut Vec<Refused>) -> bool {
+        let declared = self.declared;
+        let Some(ty) = self.param(place.param, refused) else {
+            return false;
+        };
+        let Some((mutability, _)) = self.lent(types, ty) else {
+            refused.push(Refused::PlaceNotLent { declared, param: place.param });
+            return false;
+        };
+        if writes && mutability == Mutability::Shared {
+            refused.push(Refused::PlaceNotLentMutably { declared, param: place.param });
+            return false;
+        }
+        match place.element {
+            None => true,
+            Some(Element::Key(key)) => self.param(key, refused).is_some(),
+            Some(Element::Index(index)) => match self.param(index, refused) {
+                None => false,
+                Some(ty) if matches!(types.kind(ty), TyKind::Int(IntTy::U64)) => true,
+                Some(_) => {
+                    refused.push(Refused::IndexNotAnIndex { declared, param: index });
+                    false
+                }
+            },
+        }
+    }
+
+    /// The type `place` holds, where the signature says it: the whole of
+    /// what its parameter lends, or an element of a slice or an array. An
+    /// entry's type is its container's declarer's.
+    ///
+    /// # Panics
+    /// `place` is not well formed.
+    fn held_at(&self, types: &Types<Poly>, place: &Place) -> Option<TyId<Poly>> {
+        let (_, lent) = self.lent(types, self.params[place.param]).expect("a well-formed place is lent");
+        match (place.element, types.kind(lent)) {
+            (None, _) => Some(lent),
+            (Some(Element::Index(_)), TyKind::Slice(element) | TyKind::Array(element, _)) => Some(*element),
+            (Some(Element::Index(_) | Element::Key(_)), _) => None,
+        }
+    }
+
+    /// `fn(&T, &T) -> int`, both `T` one type.
+    fn is_total_order_shape(&self, types: &Types<Poly>) -> bool {
+        let [a, b] = self.params[..] else {
+            return false;
+        };
+        let shared = |ty| match types.kind(ty) {
+            TyKind::Ref(Mutability::Shared, lent) => Some(lent.ty()),
+            _ => None,
+        };
+        matches!((shared(a), shared(b)), (Some(a), Some(b)) if a == b) && self.is_integer(types, self.ret)
+    }
+}

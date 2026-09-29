@@ -8,6 +8,7 @@ use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::impl_fit::is_impl_of;
 use super::{CastRule, ContextDecl, Core, Declarations, Impls, RawDeclarations, Requirement, Scheme, UserTypeDecl};
+use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
 use crate::ty::{
     Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LifetimesOf, Mutability, ObjectTy,
@@ -82,6 +83,58 @@ pub enum Refused {
     /// A type with more than one identity parameter. Not stated in
     /// rfc_compiler; carried from the registry's rule until it is.
     TwoIdentities { id: QualifiedRef },
+    /// A declared fact names a parameter its signature does not have: a
+    /// parameter is numbered as a call's arguments are (extern-fn §3).
+    FactNamesNoParameter { declared: Declared, param: usize },
+    /// A place whose parameter is no reference: a place is storage a
+    /// reference argument lends (extern-fn §3).
+    PlaceNotLent { declared: Declared, param: usize },
+    /// A place a call may write, by a `&mut` view, an open, a store or an
+    /// update, lent by a shared reference, through which nothing is
+    /// written (ownership §5).
+    PlaceNotLentMutably { declared: Declared, param: usize },
+    /// An element named by a parameter that is no `u64`: an index is a
+    /// `u64` (operators §3).
+    IndexNotAnIndex { declared: Declared, param: usize },
+    /// An open of a place no key names: an open makes an absent entry a
+    /// stated default, and an entry is the element a key names
+    /// (extern-fn §3).
+    OpenOfNoEntry { declared: Declared, param: usize },
+    /// Two statements of the places a call touches: an access states the
+    /// places a call touches, and it touches no other (extern-fn §3).
+    TwoAccesses { declared: Declared },
+    /// An equivalence stated on a declaration that is not an impl of
+    /// `eq`: keys name one place as the key type's `eq` impl, declared an
+    /// equivalence, calls them equal (extern-fn §3).
+    EquivalenceNotOnEq { declared: Declared },
+    /// A total order stated on a declaration not of type `fn(&T, &T) ->
+    /// int`, whose sign compares its two arguments (extern-fn §3).
+    TotalOrderDoesNotFit { declared: Declared },
+    /// A combine that is no declared `fn(&mut S, S)`, `S` the type the
+    /// updated place holds: an update is the action of a combine on the
+    /// place (extern-fn §3).
+    CombineDoesNotFit { declared: Declared, combine: QualifiedRef },
+    /// An identity that is no declared `fn() -> S` at the combine's state
+    /// (extern-fn §3).
+    IdentityDoesNotFit { declared: Declared, identity: QualifiedRef },
+    /// An update declared the inverse of a function that states no update
+    /// of the same place (extern-fn §3).
+    InverseNotAnUpdateAtThePlace { declared: Declared, inverse: QualifiedRef },
+    /// A stream declared both splittable and step by step, which are the
+    /// two ways a stream yields (extern-fn §3).
+    SplittableAndStepwise { declared: Declared },
+    /// A closure argument that is no function of one element, or a
+    /// predicate whose answer is no `bool` (extern-fn §3).
+    ClosureDoesNotFit { declared: Declared, param: usize },
+    /// A relation over an atom that is no integer: a relation's terms are
+    /// integers (extern-fn §3).
+    RelationOverNonInteger { declared: Declared, atom: Atom },
+    /// The length of a value whose type has no element count.
+    LengthOfNoSequence { declared: Declared, subject: Subject },
+    /// An atom as it stood when the call began, read through a parameter
+    /// that is no `&mut`: only a `&mut` argument's value changes during a
+    /// call (extern-fn §3).
+    OldOfNoMutableReference { declared: Declared, param: usize },
 }
 
 /// Where a declaration writes a type.
@@ -135,6 +188,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let contexts = first_stands(contexts, &mut refused, |id| Refused::DuplicateContext { id });
     let inputs = first_stands(inputs, &mut refused, |name| Refused::DuplicateInput { name });
     let misfits = refuse_misfit_impls(&types, &declared_order, &functions, &mut refused);
+    declared::refuse_ill_formed(&mut types, &core, &functions, &declared_order, &mut refused);
     refuse_vias_not_their_functions(&types, &functions, &casts, &conversions, &mut refused);
     let casts = cast_tree(&types, &casts, &functions, &misfits, &core, &mut refused);
     let conversions = conversions_by_head(&types, conversions, &mut refused);

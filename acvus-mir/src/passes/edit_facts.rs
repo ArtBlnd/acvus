@@ -6,12 +6,13 @@
 //! adapter's own tables for the one instruction or pair asked about (D47).
 //!
 //! Each own table is kept while the aspects it is made from are unchanged:
-//! - `named`, per instruction, from `Loans` and the instruction;
+//! - `named`, per instruction, the places it names, from `Loans` and the
+//!   instruction;
 //! - `loop_between`, per pair of blocks, from `LoopTree`;
 //! - `predecessors`, from the CFG's shape;
 //! - `commuting`, per instruction, from its operation and its callee type;
-//! - `unobserved`, per instruction, from `Loans`, `IntervalValues`, the
-//!   instruction and the uses of its result.
+//! - `unobserved`, per instruction, from `Loans`, `IntervalValues`,
+//!   `AffineValues`, the instruction and the uses of its result.
 //!
 //! A `Position::End(block)` is the point after every instruction of the
 //! block and before its terminator.
@@ -30,20 +31,20 @@ use acvus_utils::QualifiedRef;
 
 use crate::decl::Declarations;
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Definition, InstId, Op, Site, Terminator};
-use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect, known_len};
+use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{
-    Analysis, AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans, Point,
-    PostDominators, SparseFacts, Storage,
+    AffineValues, Analysis, AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans,
+    Point, PostDominators, Storage, TouchedPlace, ValueBounds,
 };
-use crate::passes::domain::{Bound, Interval, IntervalDomain, JoinSemiLattice};
-use crate::ty::{CastTy, Concrete, Ty, TyKind, Types, positions};
+use crate::passes::domain::{Bound, Interval, JoinSemiLattice};
+use crate::ty::{CastTy, Concrete, Ty, Types, positions};
 
 pub struct EditFacts<'a, 'd> {
     am: &'a mut AnalysisManager<'d>,
     body: BodyId,
-    /// The storages each instruction's operands and result name, and those
+    /// The places each instruction's operands and result name, and those
     /// it reads and writes.
-    named: FxHashMap<InstId, BTreeSet<Storage>>,
+    named: FxHashMap<InstId, BTreeSet<TouchedPlace>>,
     /// `LoopTree::loop_between` by its two blocks.
     loop_between: FxHashMap<(BlockId, BlockId), bool>,
     predecessors: Option<FxHashMap<BlockId, SmallVec<[BlockId; 2]>>>,
@@ -93,11 +94,11 @@ impl<'a, 'd> EditFacts<'a, 'd> {
         between
     }
 
-    fn named(&mut self, asked: Asked<'_>, inst: InstRef) -> &BTreeSet<Storage> {
+    fn named(&mut self, asked: Asked<'_>, inst: InstRef) -> &BTreeSet<TouchedPlace> {
         if !self.named.contains_key(&inst.id()) {
             let loans = self.get::<Loans>(asked);
-            let storages = named_storages(asked.body(), &loans, inst.id());
-            self.named.insert(inst.id(), storages);
+            let places = named_places(asked.body(), &loans, inst.id());
+            self.named.insert(inst.id(), places);
         }
         &self.named[&inst.id()]
     }
@@ -128,7 +129,7 @@ impl Facts for EditFacts<'_, '_> {
         if changes.touched(Aspect::Instructions) || changes.touched(Aspect::Types) {
             self.commuting.clear();
         }
-        if stale(Loans::READS, changes) || stale(IntervalValues::READS, changes) {
+        if stale(Loans::READS, changes) || stale(IntervalValues::READS, changes) || stale(AffineValues::READS, changes) {
             self.unobserved.clear();
         }
     }
@@ -175,15 +176,18 @@ impl DominanceFacts for EditFacts<'_, '_> {
 }
 
 impl LoanFacts for EditFacts<'_, '_> {
-    /// Cost: O(storages the two touch · log), once `Loans` is current.
+    /// Two places conflict where they may overlap: a call's declared
+    /// access names the elements it touches. Cost: O(places the two touch,
+    /// squared), once `Loans` is current.
     fn conflicts(&mut self, asked: Asked<'_>, inst: InstRef, write: InstRef) -> bool {
         let loans = self.get::<Loans>(asked);
-        let written = loans.writes(Site::Inst(write.id()));
+        let written = loans.written_places(Site::Inst(write.id()));
         if written.is_empty() {
             return false;
         }
+        let body = asked.body();
         let named = self.named(asked, inst);
-        written.iter().any(|storage| named.contains(storage))
+        written.iter().any(|written| named.iter().any(|place| written.may_overlap(place, body)))
     }
 
     /// An instruction that names no place, and whose operands and result
@@ -258,38 +262,47 @@ impl DischargeFacts for EditFacts<'_, '_> {
         }
         let loans = self.get::<Loans>(asked);
         let intervals = self.get::<IntervalValues>(asked);
+        let affine = self.get::<AffineValues>(asked);
         let body = asked.body();
+        let types = asked.module().types();
+        let decls = self.am.decls();
+        let bounds = ValueBounds { intervals: &intervals, affine: &affine, decls, body, types };
         let preds = self.predecessors.get_or_insert_with(|| body.predecessors());
-        let proven =
-            Proven { body, types: asked.module().types(), loans: &loans, intervals: &intervals, decls: self.am.decls(), preds };
+        let proven = Proven { body, types, loans: &loans, bounds, decls, preds };
         let fact = proven.unobserved(inst.id());
         self.unobserved.insert(inst.id(), fact);
         fact
     }
 }
 
-/// The storages the instruction `inst` of `body` names: through the loans
-/// of its operands and result, a slot it names directly, and what it reads
-/// and writes. Cost: O(operands · positions · loans).
-fn named_storages(body: &Body, loans: &Loans, inst: InstId) -> BTreeSet<Storage> {
+/// The places the instruction `inst` of `body` names: what it reads and
+/// writes, the storages its result's loans name, and, unless its callee's
+/// declared access states every place it touches, the storages its
+/// operands' loans name and a slot it names directly. Cost: O(operands ·
+/// positions · loans).
+fn named_places(body: &Body, loans: &Loans, inst: InstId) -> BTreeSet<TouchedPlace> {
     let at = Site::Inst(inst);
     let record = body.inst(inst);
-    let mut storages: BTreeSet<Storage> = loans.reads(at).iter().chain(loans.writes(at)).copied().collect();
-    for value in record.operands().into_iter().chain(record.result()) {
+    let mut places: BTreeSet<TouchedPlace> = loans.read_places(at).iter().chain(loans.written_places(at)).copied().collect();
+    let operands = match loans.by_access(at) {
+        true => SmallVec::new(),
+        false => record.operands(),
+    };
+    for value in operands.into_iter().chain(record.result()) {
         match body.definition(value) {
             Definition::Slot(_) => {
-                storages.insert(Storage::Slot(value));
+                places.insert(TouchedPlace::whole(Storage::Slot(value)));
             }
             Definition::Param(_)
             | Definition::Capture(_)
             | Definition::OrderParam
             | Definition::BlockParam(..)
             | Definition::Inst(..) => {
-                storages.extend(loans.all_of(value).into_iter().map(|loan| loan.storage));
+                places.extend(loans.all_of(value).into_iter().map(|loan| TouchedPlace::whole(loan.storage)));
             }
         }
     }
-    storages
+    places
 }
 
 fn point(at: Position) -> Point {
@@ -304,7 +317,7 @@ struct Proven<'f> {
     body: &'f Body,
     types: &'f Types<Concrete>,
     loans: &'f Loans,
-    intervals: &'f SparseFacts<IntervalDomain>,
+    bounds: ValueBounds<'f>,
     decls: &'f Declarations,
     preds: &'f FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
 }
@@ -339,7 +352,7 @@ impl Proven<'_> {
             Op::CheckSteps { from, step, count } => self.steps_hold(*from, *step, *count).then_some(Unobserved::NeverFires),
             Op::Index { slice, index, bound: IndexBound::Checked, .. }
             | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
-                self.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
+                self.bounds.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
             }
             Op::Assign { .. } => store_never_read(self.body, self.loans, inst).then_some(Unobserved::NeverRead),
             Op::Fetch { context } if !volatile(*context) => {
@@ -356,11 +369,11 @@ impl Proven<'_> {
     /// Whether `left op right`, over the integers, fits the width the two
     /// share on every run that reaches the check.
     fn check_holds(&self, op: Checked, left: ValueId, right: ValueId) -> bool {
-        let (left_at, right_at) = (self.intervals.of(left), self.intervals.of(right));
+        let (left_at, right_at) = (self.bounds.value_interval(left), self.bounds.value_interval(right));
         let exact = match op {
-            Checked::Add => left_at.sum(right_at),
-            Checked::Sub => left_at.difference(right_at),
-            Checked::Mul => left_at.product(right_at),
+            Checked::Add => left_at.sum(&right_at),
+            Checked::Sub => left_at.difference(&right_at),
+            Checked::Mul => left_at.product(&right_at),
         };
         exact.le(&self.width_of(left))
     }
@@ -369,48 +382,8 @@ impl Proven<'_> {
     /// and `step` share on every run that reaches the check; the value is
     /// monotone in the steps, so every step fits where the last one does.
     fn steps_hold(&self, from: ValueId, step: ValueId, count: ValueId) -> bool {
-        let (from_at, step_at, count_at) = (self.intervals.of(from), self.intervals.of(step), self.intervals.of(count));
-        from_at.sum(&count_at.product(step_at)).le(&self.width_of(from))
-    }
-
-    /// Whether `0 ≤ index < len` on every run that reaches the index, with
-    /// `len` where the declared relations of the slice's impl and the length
-    /// its container's type carries put it. A slice whose relations admit
-    /// no length is made by no run.
-    fn index_in_bounds(&self, slice: ValueId, index: ValueId) -> bool {
-        let declared = self.intervals.declared_len(self.decls, self.body, slice);
-        let carried = self.carried_len(slice);
-        let Some(len) = declared.into_iter().chain(carried).reduce(|len, other| len.meet(&other)) else {
-            return false;
-        };
-        match (self.intervals.of(index), len) {
-            (Interval::Empty, _) | (_, Interval::Empty) => true,
-            (Interval::Range { lo, hi }, Interval::Range { lo: shortest, .. }) => {
-                *lo >= Bound::Finite(0) && *hi < shortest
-            }
-        }
-    }
-
-    /// The length a slice's type carries: an `AsSlice` of a reference to an
-    /// `Array<T, N>` has `N` elements. A relation of a later call and the
-    /// length of another container are not read (D66).
-    fn carried_len(&self, slice: ValueId) -> Option<Interval> {
-        let Definition::Inst(made) = self.body.definition(slice) else {
-            return None;
-        };
-        let Op::AsSlice { container, .. } = self.body.inst(made).op() else {
-            return None;
-        };
-        let TyKind::Ref(_, lent) = self.types.kind(self.body.ty_of(*container)) else {
-            panic!("an AsSlice's container {container:?} is a reference")
-        };
-        match self.types.kind(lent.ty()) {
-            TyKind::Array(_, len) => {
-                let len = i128::try_from(known_len(len)).expect("an array's length fits an i128");
-                Some(Interval::exactly(len))
-            }
-            _ => None,
-        }
+        let [from_at, step_at, count_at] = [from, step, count].map(|value| self.bounds.value_interval(value));
+        from_at.sum(&count_at.product(&step_at)).le(&self.width_of(from))
     }
 
     /// Every integer of `value`'s width.
@@ -1232,5 +1205,181 @@ mod tests {
         assert_eq!(ops.len(), 4);
         assert!(!ops.iter().any(|op| matches!(op, Op::Fetch { .. } | Op::Commit { .. })));
         assert_eq!(ops.iter().filter(|op| matches!(op, Op::Assign { .. })).count(), 1);
+    }
+
+    /// Declarations of five externs, the first four stating their access:
+    /// `put(m: &mut Map, key: i64, v: i64)` stores `v` into `m[key]`,
+    /// `lookup(m: &mut Map, key: i64) -> i64` reads `m[key]`,
+    /// `set(s: &mut [i64], other: &mut i64, i: u64, v: i64)` stores `v`
+    /// into `s[i]` and touches nothing of `other`,
+    /// `peek(s: &mut [i64], i: u64) -> i64` reads `s[i]`, and
+    /// `opaque(s: &mut [i64], other: &mut i64, i: u64)` states none.
+    struct AccessDecls {
+        decls: Declarations,
+        map: QualifiedRef,
+        put: QualifiedRef,
+        lookup: QualifiedRef,
+        set: QualifiedRef,
+        peek: QualifiedRef,
+        opaque: QualifiedRef,
+    }
+
+    fn access_declarations(interner: &Interner) -> AccessDecls {
+        use crate::decl::declared::{Access, Element, Mode, Place, Stored, Touch};
+        use crate::decl::{DeclaredFacts, GenericImplSig, Impls, Scheme, UserTypeDecl};
+
+        let name = |name: &str| QualifiedRef::root(interner.intern(name));
+        let map = name("Map");
+        let mut types = Types::<crate::ty::Poly>::new();
+        let int = types.intern(TyKind::Int(IntTy::I64));
+        let index = types.intern(TyKind::Int(IntTy::U64));
+        let unit = types.intern(TyKind::Unit);
+        let map_ty = types.intern(TyKind::UserDefined {
+            id: map,
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([]),
+        });
+        let mut_map = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(map_ty)));
+        let slice = types.intern(TyKind::Slice(int));
+        let mut_slice = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(slice)));
+        let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+        let mut declare = |id: QualifiedRef, params: &[crate::ty::TyId<crate::ty::Poly>], ret, touches: Option<Vec<Touch>>| {
+            let ty = types.intern(TyKind::Fn {
+                params: params.into(),
+                ret,
+                effect: EffectTerm::Known(Effect::pure()),
+                flows: FlowTerm::Known(Flows::Every),
+                calls: Calls::Many,
+                holds: Holds::Nothing,
+            });
+            let access = touches.map(|touches| Access::Touches(touches.into())).into_iter().collect();
+            let facts = DeclaredFacts { access, ..DeclaredFacts::default() };
+            let scheme = Scheme {
+                ty,
+                param_names: (0..params.len()).map(|at| interner.intern(&format!("p{at}"))).collect(),
+                bounds: Box::new([]),
+                impls: Some(Impls { concrete: Box::new([]), generic: Some(GenericImplSig { facts }) }),
+                requires: Box::new([]),
+            };
+            (id, scheme)
+        };
+        let at = |element: Element| Place { param: 0, element: Some(element) };
+        let (put, lookup, set, peek, opaque) = (name("put"), name("lookup"), name("set"), name("peek"), name("opaque"));
+        let functions = vec![
+            declare(put, &[mut_map, int, int], unit, Some(vec![Touch { place: at(Element::Key(1)), mode: Mode::Store(Stored::Value(2)) }])),
+            declare(lookup, &[mut_map, int], int, Some(vec![Touch { place: at(Element::Key(1)), mode: Mode::Read }])),
+            declare(set, &[mut_slice, mut_int, index, int], unit, Some(vec![Touch { place: at(Element::Index(2)), mode: Mode::Store(Stored::Value(3)) }])),
+            declare(peek, &[mut_slice, index], int, Some(vec![Touch { place: at(Element::Index(1)), mode: Mode::Read }])),
+            declare(opaque, &[mut_slice, mut_int, index], unit, None),
+        ];
+        let decls = Declarations::verify(RawDeclarations {
+            types,
+            functions,
+            lang_impls: Vec::new(),
+            user_types: vec![UserTypeDecl {
+                id: map,
+                type_params: Box::new([]),
+                specializes: Box::new([]),
+                effect_params: 0,
+                identity_params: 0,
+                lifetimes: 0,
+            }],
+            casts: Vec::new(),
+            conversions: Vec::new(),
+            contexts: Vec::new(),
+            inputs: Vec::new(),
+            loop_markers: LoopMarkers::default(),
+            core: Core::of(interner),
+        })
+        .expect("the five externs verify");
+        AccessDecls { decls, map, put, lookup, set, peek, opaque }
+    }
+
+    /// ```text
+    /// entry(m: &mut Map, s: &mut [i64], other: &mut i64, j: u64):
+    ///   zero = 0u64; one = 1u64; v = 5; k1 = 1; k2 = 2
+    ///   put(m, k1, v); lookup(m, k1); lookup(m, k2)
+    ///   set(s, other, zero, v); peek(s, one); peek(s, zero); peek(s, j)
+    ///   opaque(s, other, zero); t = *other; return t
+    /// ```
+    /// A call with an access conflicts only where the places it touches
+    /// may overlap: the same key, the same index or an index not known to
+    /// differ; a call without one touches all its arguments reach.
+    #[test]
+    fn a_call_touching_one_element_conflicts_only_where_its_element_may_be_touched() {
+        let interner = Interner::new();
+        let a = access_declarations(&interner);
+        let mut types = Types::<Concrete>::new();
+        let int = types.intern(TyKind::Int(IntTy::I64));
+        let index = types.intern(TyKind::Int(IntTy::U64));
+        let unit = types.intern(TyKind::Unit);
+        let map_ty = types.intern(TyKind::UserDefined {
+            id: a.map,
+            type_args: Box::new([]),
+            effect_args: Box::new([]),
+            identity_args: Box::new([]),
+        });
+        let mut_map = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(map_ty)));
+        let slice = types.intern(TyKind::Slice(int));
+        let mut_slice = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(slice)));
+        let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+        let mut callee_ty = |params: &[Ty], ret| {
+            types.intern(TyKind::Fn {
+                params: params.into(),
+                ret,
+                effect: EffectTerm::Known(Effect::pure()),
+                flows: FlowTerm::Known(Flows::Every),
+                calls: Calls::Many,
+                holds: Holds::Nothing,
+            })
+        };
+        let put_ty = callee_ty(&[mut_map, int, int], unit);
+        let lookup_ty = callee_ty(&[mut_map, int], int);
+        let set_ty = callee_ty(&[mut_slice, mut_int, index, int], unit);
+        let peek_ty = callee_ty(&[mut_slice, index], int);
+        let opaque_ty = callee_ty(&[mut_slice, mut_int, index], unit);
+        let mut module = Module::new(types);
+        let mut builder = module.build_body(false, int);
+        let param = |builder: &mut crate::ir::cfg::Builder<'_>, name: &str, ty| builder.param(interner.intern(name), ty, Span::ZERO);
+        let m = param(&mut builder, "m", mut_map);
+        let s = param(&mut builder, "s", mut_slice);
+        let other = param(&mut builder, "other", mut_int);
+        let j = param(&mut builder, "j", index);
+        let zero = builder.push(constant(0), index, Span::ZERO);
+        let one = builder.push(constant(1), index, Span::ZERO);
+        let v = builder.push(constant(5), int, Span::ZERO);
+        let k1 = builder.push(constant(1), int, Span::ZERO);
+        let k2 = builder.push(constant(2), int, Span::ZERO);
+        let call = |id, callee_ty, args| Op::FunctionCall { callee: Callee::Extern { id, r#impl: 0, required: Vec::new() }, callee_ty, args };
+        builder.push(call(a.put, put_ty, vec![m, k1, v]), unit, Span::ZERO);
+        builder.push(call(a.lookup, lookup_ty, vec![m, k1]), int, Span::ZERO);
+        builder.push(call(a.lookup, lookup_ty, vec![m, k2]), int, Span::ZERO);
+        builder.push(call(a.set, set_ty, vec![s, other, zero, v]), unit, Span::ZERO);
+        builder.push(call(a.peek, peek_ty, vec![s, one]), int, Span::ZERO);
+        builder.push(call(a.peek, peek_ty, vec![s, zero]), int, Span::ZERO);
+        builder.push(call(a.peek, peek_ty, vec![s, j]), int, Span::ZERO);
+        builder.push(call(a.opaque, opaque_ty, vec![s, other, zero]), unit, Span::ZERO);
+        let t = builder.push(Op::Take { target: RefTarget::Through(other), path: Vec::new(), taken_out: false }, int, Span::ZERO);
+        builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO }, Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+        let [.., put, same_key, other_key, set, peek_one, peek_zero, peek_j, opaque, read_other] =
+            inst_refs(&mut module, id)[..]
+        else {
+            panic!("the body has fourteen instructions")
+        };
+        let mut am = AnalysisManager::new(&a.decls);
+        let mut facts = EditFacts::new(&mut am, id);
+        let mut conflicts = |inst, write| facts.conflicts(Asked::new(&module, id), inst, write);
+
+        assert!(conflicts(same_key, put), "lookup(m, k1) reads the entry put(m, k1, v) stores");
+        assert!(conflicts(other_key, put), "k2 may name k1's entry: Loans does not evaluate eq");
+        assert!(!conflicts(read_other, put), "put touches only m[k1]");
+        assert!(conflicts(peek_zero, set), "s[zero] is the element set stores");
+        assert!(!conflicts(peek_one, set), "s[1] and s[0] are two elements");
+        assert!(conflicts(peek_j, set), "j may be 0");
+        assert!(!conflicts(read_other, set), "set is given other, and touches only s[zero]");
+        assert!(conflicts(read_other, opaque), "without an access, a call writes through every &mut it is given");
+        assert!(conflicts(peek_one, opaque));
     }
 }

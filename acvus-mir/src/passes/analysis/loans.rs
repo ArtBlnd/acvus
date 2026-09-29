@@ -13,6 +13,10 @@
 //!   value and a storage's content. A call's result and written arguments
 //!   take loans only as its function type's flows state (extern-fn §4). An
 //!   edge joins its arguments into its target's parameters.
+//! - A call whose callee's impl declares its access (extern-fn §3) touches
+//!   only the places that access states, in their modes: it reads and
+//!   writes those alone, and writes loans into no other. A call without one
+//!   touches all its arguments reach, and writes as its flows state.
 //! - A reference whose pointee has as many positions as the storage it names
 //!   covers that storage whole, and reads and writes through it keep
 //!   positions aligned. One with fewer names a part the loan does not
@@ -35,9 +39,10 @@ use std::ops::Range;
 
 use rustc_hash::FxHashMap;
 
+use crate::decl::declared::{Access, Element, Touch};
 use crate::decl::{Declarations, segments};
 use crate::flows::segment_positions;
-use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::{Callee, ForSource, IndexMode, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
@@ -72,17 +77,86 @@ pub struct Loan {
 /// The loans one position may hold.
 pub type LoanSet = BTreeSet<Loan>;
 
+/// A storage whole, or one element of it named by a value, which a call
+/// with a declared access touches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TouchedPlace {
+    pub storage: Storage,
+    pub element: Option<ElementAt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ElementAt {
+    /// The entry at this key.
+    Key(ValueId),
+    /// The element at this `u64` index.
+    Index(ValueId),
+}
+
+impl TouchedPlace {
+    pub fn whole(storage: Storage) -> TouchedPlace {
+        TouchedPlace { storage, element: None }
+    }
+
+    /// Whether the two may be one place, or one hold the other, on some
+    /// run of `body`. Two entries may be one place whatever their keys:
+    /// whether two keys name one place is what the key type's `eq` says
+    /// (extern-fn §3), and nothing here evaluates it. Two elements are
+    /// distinct where their indices are two different integer constants.
+    pub fn may_overlap(&self, other: &TouchedPlace, body: &Body) -> bool {
+        if self.storage != other.storage {
+            return false;
+        }
+        match (self.element, other.element) {
+            (Some(ElementAt::Index(a)), Some(ElementAt::Index(b))) => {
+                a == b || !matches!((constant_index(body, a), constant_index(body, b)), (Some(a), Some(b)) if a != b)
+            }
+            (None, _) | (_, None) | (Some(ElementAt::Key(_)), _) | (_, Some(ElementAt::Key(_))) => true,
+        }
+    }
+}
+
+/// The integer constant that defines `value`, where one does.
+fn constant_index(body: &Body, value: ValueId) -> Option<i128> {
+    let Definition::Inst(made) = body.definition(value) else {
+        return None;
+    };
+    match body.inst(made).op() {
+        Op::Const { value } => match value.desugared() {
+            acvus_ast::Literal::Int(n) => Some(n),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub struct Loans {
     values: FxHashMap<ValueId, Vec<LoanSet>>,
     touched: FxHashMap<Site, Touched>,
     before: FxHashMap<Site, BTreeMap<Storage, Vec<LoanSet>>>,
 }
 
-/// The storages one site reads and writes.
+/// The storages one site reads and writes, and the places within them.
+/// A site without a declared access touches its storages whole.
 #[derive(Debug, Clone, Default)]
 struct Touched {
     reads: BTreeSet<Storage>,
     writes: BTreeSet<Storage>,
+    read_places: BTreeSet<TouchedPlace>,
+    written_places: BTreeSet<TouchedPlace>,
+    by_access: bool,
+}
+
+impl Touched {
+    fn whole(reads: BTreeSet<Storage>, writes: BTreeSet<Storage>) -> Touched {
+        Touched {
+            read_places: reads.iter().copied().map(TouchedPlace::whole).collect(),
+            written_places: writes.iter().copied().map(TouchedPlace::whole).collect(),
+            reads,
+            writes,
+            by_access: false,
+        }
+    }
 }
 
 impl Loans {
@@ -132,6 +206,34 @@ impl Loans {
     /// `site` is not a site of the body.
     pub fn writes(&self, site: Site) -> &BTreeSet<Storage> {
         &self.touched(site).writes
+    }
+
+    /// The places the instruction or terminator at `site` reads: those its
+    /// callee's declared access states, else its storages whole. Cost:
+    /// O(1).
+    ///
+    /// # Panics
+    /// `site` is not a site of the body.
+    pub fn read_places(&self, site: Site) -> &BTreeSet<TouchedPlace> {
+        &self.touched(site).read_places
+    }
+
+    /// The places the instruction or terminator at `site` writes, as
+    /// `read_places`. Cost: O(1).
+    ///
+    /// # Panics
+    /// `site` is not a site of the body.
+    pub fn written_places(&self, site: Site) -> &BTreeSet<TouchedPlace> {
+        &self.touched(site).written_places
+    }
+
+    /// Whether what `site` touches is its callee's declared access, so that
+    /// it touches no other place through its arguments. Cost: O(1).
+    ///
+    /// # Panics
+    /// `site` is not a site of the body.
+    pub fn by_access(&self, site: Site) -> bool {
+        self.touched(site).by_access
     }
 
     /// What `storage`'s content may hold, at each position of its type, just
@@ -335,6 +437,43 @@ struct Forward<'b> {
 }
 
 impl Forward<'_> {
+    /// The places a call's callee declares it touches, where its impl
+    /// declares an access.
+    fn access(&self, callee: &Callee) -> Option<&[Touch]> {
+        let Callee::Extern { id, r#impl, .. } = callee else {
+            return None;
+        };
+        let facts = self.decls.impl_facts(*id, *r#impl)?;
+        facts.access.iter().find_map(|form| match form {
+            Access::Touches(touches) => Some(&touches[..]),
+            Access::Equivalence => None,
+        })
+    }
+
+    /// The places of `access` over a call's arguments, those it reads and
+    /// those it writes.
+    fn touched_by_access(&self, state: &State, access: &[Touch], args: &[ValueId]) -> Touched {
+        let mut touched = Touched { by_access: true, ..Touched::default() };
+        for Touch { place, mode } in access {
+            let element = place.element.map(|element| match element {
+                Element::Key(key) => ElementAt::Key(args[key]),
+                Element::Index(index) => ElementAt::Index(args[index]),
+            });
+            for storage in self.named(state, args[place.param]) {
+                let at = TouchedPlace { storage, element };
+                if mode.reads() {
+                    touched.reads.insert(storage);
+                    touched.read_places.insert(at);
+                }
+                if mode.writes() {
+                    touched.writes.insert(storage);
+                    touched.written_places.insert(at);
+                }
+            }
+        }
+        touched
+    }
+
     fn width(&self, ty: Ty) -> usize {
         positions(self.types, self.decls, ty)
     }
@@ -853,8 +992,17 @@ impl Forward<'_> {
             }
         }
 
+        let access = self.access(callee);
+        let written_by_access = |to: &FlowEnd| match (access, to) {
+            (None, _) => true,
+            (Some(touches), FlowEnd::Param(index)) => {
+                touches.iter().any(|touch| touch.place.param == *index && touch.mode.writes())
+            }
+            (Some(_), FlowEnd::Captures | FlowEnd::Result) => false,
+        };
         let outputs = (0..arity).map(FlowEnd::Param).chain(indirect(callee).map(|_| FlowEnd::Captures));
         let written: Vec<Written> = outputs
+            .filter(written_by_access)
             .filter_map(|to| {
                 let sources = flows.into_end(to, arity);
                 if sources.is_empty() {
@@ -941,6 +1089,11 @@ impl Forward<'_> {
     /// The storages an instruction reads and writes, in `state`, just
     /// before it runs.
     fn touched(&self, inst: &Inst, state: &State) -> Touched {
+        if let Op::FunctionCall { callee, args, .. } | Op::Spawn { callee, args, .. } = inst.op()
+            && let Some(access) = self.access(callee)
+        {
+            return self.touched_by_access(state, access, args);
+        }
         let mut touched = Touched::default();
         let named_if_reference = |value: ValueId| match self.types.kind(self.body.ty_of(value)) {
             TyKind::Ref(..) => self.named(state, value),
@@ -1007,17 +1160,19 @@ impl Forward<'_> {
             | Op::Undef
             | Op::Drop { .. } => {}
         }
-        touched
+        Touched::whole(touched.reads, touched.writes)
     }
 
     /// A `For` over a slice reads its source's storage; no other terminator
     /// touches storage.
     fn touched_by_terminator(&self, terminator: &Terminator, state: &State) -> Touched {
-        let mut touched = Touched::default();
-        if let Terminator::For { source: ForSource::Slice(slice) | ForSource::SliceMut(slice), .. } = terminator {
-            touched.reads = self.named(state, *slice);
-        }
-        touched
+        let reads = match terminator {
+            Terminator::For { source: ForSource::Slice(slice) | ForSource::SliceMut(slice), .. } => {
+                self.named(state, *slice)
+            }
+            _ => BTreeSet::new(),
+        };
+        Touched::whole(reads, BTreeSet::new())
     }
 }
 

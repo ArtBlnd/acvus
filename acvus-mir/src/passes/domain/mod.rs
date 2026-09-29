@@ -1,9 +1,11 @@
 //! Value domains (passes-structure §1). A domain knows values and the
 //! language's value operations, and nothing of CFG, storage or calls.
 
+mod affine;
 mod constant;
 mod interval;
 
+pub use affine::{Affine, AffineDomain, Combination, Limit, Symbol, bounds_on};
 pub use constant::{Constant, ConstantDomain};
 pub use interval::{Bound, Interval, IntervalDomain};
 

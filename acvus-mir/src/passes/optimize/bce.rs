@@ -3,17 +3,19 @@
 //!
 //! Algorithm: every check, in block order, is offered to `discharge` (G1):
 //! the bound of a checked `Index` or `IndexSet`, a `Check` and a
-//! `CheckSteps`. `EditFacts` proves one `NeverFires` from `IntervalValues`,
-//! whose calls read the declared Relations of their impls (extern-fn §3): a
-//! bound where the index lies in `[0, len)` for every length the slice's
-//! impl declares and the length an array's type carries through its
-//! `AsSlice`, and a check where the exact result of its operation fits the
-//! operands' width. Intervals relate no two values, so `i < len(s)` for a
-//! length no fact bounds stays unproven. A checked bound becomes proven and stays where it
+//! `CheckSteps`. `EditFacts` proves one `NeverFires` from `ValueBounds`, the
+//! reduced product of `IntervalValues` and `AffineValues`, whose calls read
+//! the declared Relations of their impls (extern-fn §3): a bound where the
+//! index is never negative and lies below the slice's length, by their
+//! intervals or by the length less the index as a combination, and a check
+//! where the exact result of its operation fits the operands' width. So
+//! `i < len(s)` holds for a `For` counter below `len(s)` whatever the
+//! length is (D66, D83). A checked bound becomes proven and stays where it
 //! is; a check goes.
 //!
-//! Cost: O(checks) discharges; each is judged alone, O(the relations of a
-//! slice's impl), on `IntervalValues`, O(uses × widened height), and
+//! Cost: O(checks) discharges; each is judged alone, O(the symbols of the
+//! index's combination · the relations of a slice's impl), on
+//! `IntervalValues` and `AffineValues`, O(uses × widened height), and
 //! `Loans`, which a discharge before it made stale and the judgement
 //! computes again.
 //!
@@ -66,10 +68,8 @@ mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
     use super::*;
-    use crate::decl::{
-        Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, PostTerm, Postcondition, RawDeclarations, Relation,
-        Scheme, Subject,
-    };
+    use crate::decl::declared::{Atom, Comparison, Relation, Subject, Term};
+    use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
     use crate::decl::Declarations;
     use crate::ir::cfg::{BlockId, Inst, Stages, Terminator};
     use crate::ir::{Callee, Checked, ExitTrip, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
@@ -112,15 +112,18 @@ mod tests {
             calls: Calls::Many,
             holds: Holds::Nothing,
         });
-        let ensures =
-            vec![Postcondition { left: PostTerm::Len(Subject::Ret), relation: Relation::Eq, right: PostTerm::Param(0) }];
+        let relations = vec![Relation {
+            left: Term::Atom(Atom::Len(Subject::Result)),
+            comparison: Comparison::Eq,
+            right: Term::Atom(Atom::Arg(0)),
+        }];
         let scheme = Scheme {
             ty: declared,
             param_names: Box::new([interner.intern("n")]),
             bounds: Box::new([]),
             impls: Some(Impls {
                 concrete: Box::new([]),
-                generic: Some(GenericImplSig { facts: DeclaredFacts { ensures: ensures.into(), ..DeclaredFacts::default() } }),
+                generic: Some(GenericImplSig { facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() } }),
             }),
             requires: Box::new([]),
         };
@@ -201,6 +204,110 @@ mod tests {
         ByADeclaredCall,
         /// `a` a slot of `Array<i64, 4>`; `r = &a; s = as_slice(r)`.
         FromAnArray,
+    }
+
+    /// The loop's end over a slice `s` whose length no fact bounds.
+    enum SymbolicEnd {
+        /// `for i in 0..len(s)`, `s` a parameter.
+        Len,
+        /// `for i in 0..len(s) + 1`, `s` a parameter.
+        LenPlusOne,
+        /// `for i in 0..n`, `n` a parameter and `s = make(n)`, with
+        /// `len(s) = n` declared.
+        DeclaredLen,
+    }
+
+    /// ```text
+    /// entry(..):  s = <slice>; at = 0; hi = <end>; jump header
+    /// header:     for i in at..hi { body } else exit
+    /// body(i):    e = s[i]; jump header
+    /// exit:       z = 0; return z
+    /// ```
+    /// with `at`, `hi` and `i` of `u64`.
+    fn range_loop_to_a_symbolic_end(f: &mut Fixture, end: SymbolicEnd) -> BodyId {
+        let (int, index, slice_ref, make, make_ty) = (f.int, f.index, f.slice_ref, f.make, f.make_ty);
+        let interner = Interner::new();
+        let mut builder = f.module.build_body(false, int);
+        let (s, hi) = match end {
+            SymbolicEnd::Len => {
+                let s = builder.param(interner.intern("s"), slice_ref, Span::ZERO);
+                (s, builder.push(Op::SliceLen { src: s }, index, Span::ZERO))
+            }
+            SymbolicEnd::LenPlusOne => {
+                let s = builder.param(interner.intern("s"), slice_ref, Span::ZERO);
+                let len = builder.push(Op::SliceLen { src: s }, index, Span::ZERO);
+                let one = builder.push(constant(1), index, Span::ZERO);
+                let add = Op::BinOp { op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap), left: len, right: one };
+                (s, builder.push(add, index, Span::ZERO))
+            }
+            SymbolicEnd::DeclaredLen => {
+                let n = builder.param(interner.intern("n"), index, Span::ZERO);
+                let call = Op::FunctionCall {
+                    callee: Callee::Extern { id: make, r#impl: 0, required: Vec::new() },
+                    callee_ty: make_ty,
+                    args: vec![n],
+                };
+                (builder.push(call, slice_ref, Span::ZERO), n)
+            }
+        };
+        let at = builder.push(constant(0), index, Span::ZERO);
+        let header = builder.new_block(&[]);
+        let loop_body = builder.new_block(&[index]);
+        let exit = builder.new_block(&[]);
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() }, Span::ZERO);
+        builder.switch_to(header);
+        builder.terminate(
+            Terminator::For {
+                source: ForSource::Range { at, hi },
+                stages: Stages::lowered(loop_body),
+                exit,
+                exit_trip: ExitTrip::Absent,
+                exit_args: Vec::new(),
+            },
+            Span::ZERO,
+        );
+        builder.switch_to(loop_body);
+        let i = builder.block_params(loop_body)[0];
+        builder.push(Op::Index { slice: s, index: i, mode: IndexMode::Copy, bound: IndexBound::Checked }, int, Span::ZERO);
+        builder.terminate(Terminator::Jump { to: header, args: Vec::new() }, Span::ZERO);
+        builder.switch_to(exit);
+        let z = builder.push(constant(0), int, Span::ZERO);
+        builder.terminate(ret(z), Span::ZERO);
+        builder.seal().expect("the body has no open state")
+    }
+
+    /// D66's limit, lifted: `i` is `len(s) - 1` less the steps left, so
+    /// `len(s) - i - 1` is the steps left, never negative, whatever the
+    /// length is.
+    #[test]
+    fn a_range_loop_to_a_symbolic_length_loses_its_check() {
+        let mut f = fixture();
+        let id = range_loop_to_a_symbolic_end(&mut f, SymbolicEnd::Len);
+
+        let changes = run(&mut f, id);
+
+        assert_eq!(index_bound(f.module.body(id)), IndexBound::Proven, "i < len(s) for i in 0..len(s)");
+        assert!(changes.touched(crate::ir::cfg::Aspect::Instructions));
+    }
+
+    #[test]
+    fn a_range_loop_one_past_a_symbolic_length_keeps_its_check() {
+        let mut f = fixture();
+        let id = range_loop_to_a_symbolic_end(&mut f, SymbolicEnd::LenPlusOne);
+
+        run(&mut f, id);
+
+        assert_eq!(index_bound(f.module.body(id)), IndexBound::Checked, "i may be len(s)");
+    }
+
+    #[test]
+    fn a_range_loop_to_a_declared_symbolic_length_loses_its_check() {
+        let mut f = fixture();
+        let id = range_loop_to_a_symbolic_end(&mut f, SymbolicEnd::DeclaredLen);
+
+        run(&mut f, id);
+
+        assert_eq!(index_bound(f.module.body(id)), IndexBound::Proven, "len(make(n)) = n and i in 0..n");
     }
 
     /// ```text
