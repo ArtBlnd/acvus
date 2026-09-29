@@ -40,6 +40,17 @@ pub struct Refusal {
     pub span: Span,
 }
 
+/// A loan conflict's whole trace, each loan named by where it was made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictTrace {
+    /// The loan that lived first: where it was made, then each loan it was made through, innermost first.
+    pub earlier: Vec<Span>,
+    /// The conflicting side's loan chain, where the access made or used a loan (a lend or reborrow), innermost first; empty for an access by name.
+    pub later: Vec<Span>,
+    /// Every other access that met the same pair while both lived.
+    pub uses: Vec<Span>,
+}
+
 /// Grouped by the judgment that refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefusalKind {
@@ -51,10 +62,9 @@ pub enum RefusalKind {
     UsedAfterMove { moved: Span },
     /// Two loans that exclude each other while both live, or a place reached
     /// by name while a loan forbids it (ownership §5), one refusal each
-    /// (refusals): the span is where the later loan was made, or the reach
-    /// by name; `first` where the earlier loan was made; `later_uses` every
-    /// other access that met the two while both lived.
-    LoanConflict { first: Span, later_uses: Vec<Span> },
+    /// (refusals): the span is the access that conflicted, and `trace` all
+    /// of the conflict, what a message shows of it left to the message.
+    LoanConflict { trace: ConflictTrace },
     /// A loan on the body's own storage that its result or a storage
     /// outside it holds when it returns (ownership §5): `loan` where the
     /// loan was made.

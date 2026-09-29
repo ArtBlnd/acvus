@@ -6,24 +6,41 @@
 use acvus_ast::Span;
 
 use super::{Fixture, covers, span_of};
-use crate::check::{Refusal, RefusalKind};
+use crate::check::{ConflictTrace, Refusal, RefusalKind};
 use crate::ty::{Mutability, TyKind, TypeArg};
 
-fn conflict(first: Span, later_uses: Vec<Span>, span: Span) -> Refusal {
-    Refusal { kind: RefusalKind::LoanConflict { first, later_uses }, span }
+fn conflict(span: Span, earlier: Vec<Span>, later: Vec<Span>, uses: Vec<Span>) -> Refusal {
+    Refusal { kind: RefusalKind::LoanConflict { trace: ConflictTrace { earlier, later, uses } }, span }
 }
 
-/// Two `&mut *r`, each a loan of its own within `r`'s: one fact. The second
-/// is made while the first lives, since `a` is used after it, and `*a = 2`
-/// reaches `x` through the first while the second lives: one refusal where
-/// the second was made, naming the first, `*a = 2;` a later use.
+/// The span of the name `let name` binds in `source`, where the store of
+/// its value stands.
+fn binder(source: &str, name: &str) -> Span {
+    let start = span_of(source, &format!("let {name} "), 0).start + "let ".len();
+    Span { start, end: start + name.len() }
+}
+
+/// The trace of the one `LoanConflict` of `refusals`, and its span.
+fn one_conflict(refusals: &[Refusal]) -> (Span, &ConflictTrace) {
+    let [Refusal { kind: RefusalKind::LoanConflict { trace }, span }] = refusals else {
+        panic!("one LoanConflict: {refusals:?}");
+    };
+    (*span, trace)
+}
+
+/// Two `&mut *r`, each a loan of its own within `r`'s store's, within
+/// `&mut x`: one fact. The second is made while the first, held by `a`'s
+/// store, lives, and `*a = 2` reaches `x` through the first while the
+/// second lives: one refusal at the second, `*a = 2;` a use.
 #[test]
-fn two_live_reborrows_of_one_mut_reference_are_refused_naming_the_first() {
+fn two_live_reborrows_of_one_mut_reference_are_refused_as_one() {
     let fx = Fixture::new();
     let source = "let x = 1; let r = &mut x; let a = &mut *r; let b = &mut *r; *a = 2; *b = 3; x";
     let refusals = fx.refusals(source);
-    let (first, second) = (span_of(source, "&mut *r", 0), span_of(source, "&mut *r", 1));
-    assert_eq!(refusals, [conflict(first, vec![span_of(source, "*a = 2;", 0)], second)]);
+    let (first, second, on_x) = (span_of(source, "&mut *r", 0), span_of(source, "&mut *r", 1), span_of(source, "&mut x", 0));
+    let (a, r) = (binder(source, "a"), binder(source, "r"));
+    let uses = vec![span_of(source, "*a = 2;", 0)];
+    assert_eq!(refusals, [conflict(second, vec![a, first, r, on_x], vec![second, r, on_x], uses)]);
 }
 
 /// A loan on `r.a` and a write of `r.b` name places that do not overlap.
@@ -40,9 +57,10 @@ fn a_write_of_a_field_a_live_loan_lends_is_refused() {
     let fx = Fixture::new();
     let source = "let r = { a: 1, b: 2, }; let a = &mut r.a; r.a = 4; *a = 3; r";
     let refusals = fx.refusals(source);
-    let [refusal] = &refusals[..] else { panic!("one LoanConflict: {refusals:?}") };
-    assert_eq!(refusal.kind, RefusalKind::LoanConflict { first: span_of(source, "&mut r.a", 0), later_uses: Vec::new() });
-    assert!(covers(span_of(source, "r.a = 4;", 0), refusal.span), "at the write: {refusal:?}");
+    let (span, trace) = one_conflict(&refusals);
+    let earlier = vec![binder(source, "a"), span_of(source, "&mut r.a", 0)];
+    assert_eq!(*trace, ConflictTrace { earlier, later: Vec::new(), uses: Vec::new() });
+    assert!(covers(span_of(source, "r.a = 4;", 0), span), "at the write: {span:?}");
 }
 
 /// Each argument `r` is reborrowed where the call starts: two exclusive
@@ -55,10 +73,10 @@ fn one_mut_reference_passed_twice_to_one_call_is_refused() {
     fx.declare("f", &[mut_int, mut_int], int);
     let source = "let x = 1; let r = &mut x; f(r, r)";
     let refusals = fx.refusals(source);
-    let [refusal] = &refusals[..] else { panic!("one LoanConflict: {refusals:?}") };
-    let RefusalKind::LoanConflict { first, later_uses } = &refusal.kind else { panic!("a LoanConflict: {refusal:?}") };
-    assert_eq!((*first, later_uses.as_slice()), (refusal.span, &[][..]), "both loans are made at the call: {refusal:?}");
-    assert!(covers(refusal.span, span_of(source, "f(r, r)", 0)), "at the call: {refusal:?}");
+    let (span, trace) = one_conflict(&refusals);
+    assert!(covers(span, span_of(source, "f(r, r)", 0)), "at the call: {span:?}");
+    let chain = vec![span, binder(source, "r"), span_of(source, "&mut x", 0)];
+    assert_eq!(*trace, ConflictTrace { earlier: chain.clone(), later: chain, uses: Vec::new() }, "both made at the call within `r`'s");
 }
 
 /// The receiver's `&mut v` is made where `push` starts, after `v.len()`
@@ -112,9 +130,10 @@ fn a_move_of_a_whole_a_live_loan_lends_a_part_of_is_refused() {
     fx.declare("g", &[object], int);
     let source = "let m = { a: make(), b: 1, }; let s = &mut m.b; g(m); *s = 1; 0";
     let refusals = fx.refusals(source);
-    let [refusal] = &refusals[..] else { panic!("one LoanConflict: {refusals:?}") };
-    assert_eq!(refusal.kind, RefusalKind::LoanConflict { first: span_of(source, "&mut m.b", 0), later_uses: Vec::new() });
-    assert!(covers(span_of(source, "g(m)", 0), refusal.span), "at the move of `m`: {refusal:?}");
+    let (span, trace) = one_conflict(&refusals);
+    let earlier = vec![binder(source, "s"), span_of(source, "&mut m.b", 0)];
+    assert_eq!(*trace, ConflictTrace { earlier, later: Vec::new(), uses: Vec::new() });
+    assert!(covers(span_of(source, "g(m)", 0), span), "at the move of `m`: {span:?}");
 }
 
 /// All elements of a sequence are one part (ownership §5): `a` and `b`,
@@ -125,29 +144,36 @@ fn two_mut_loans_on_two_elements_of_one_array_are_refused() {
     let fx = Fixture::new();
     let source = "let v = [1, 2]; match &mut v { [a, b] => { *a = 3; *b = 4; 0 }, }";
     let refusals = fx.refusals(source);
-    let [Refusal { kind: RefusalKind::LoanConflict { first, later_uses }, span }] = &refusals[..] else {
-        panic!("one LoanConflict: {refusals:?}");
-    };
-    let pattern = span_of(source, "[a, b]", 0);
-    assert!(covers(pattern, *first) && covers(pattern, *span) && first.start < span.start, "`b` meets `a`: {refusals:?}");
-    assert_eq!(*later_uses, [span_of(source, "*a = 3;", 0)]);
+    let (span, trace) = one_conflict(&refusals);
+    let (pattern, on_v) = (span_of(source, "[a, b]", 0), span_of(source, "&mut v", 0));
+    assert!(covers(pattern, trace.earlier[0]) && covers(pattern, span) && trace.earlier[0].start < span.start, "`b` meets `a`: {refusals:?}");
+    assert_eq!((trace.earlier.last(), trace.later.last()), (Some(&on_v), Some(&on_v)), "both within the scrutinee's `&mut v`: {trace:?}");
+    assert_eq!(trace.uses, [span_of(source, "*a = 3;", 0)]);
 }
 
 /// What a path of references reaches is held by the first reference on it
-/// (ownership §5): `x`, read through `r`, keeps `&mut o` alive while it
-/// lives, so reading `o.b` by name meets it. `y`, the `&mut v` stored in
-/// `o.b` reborrowed, is made while `x`, within `&mut o`, lives, and `*x = 2`
-/// reaches `v` while `y` lives: one fact, named at `&mut o`.
+/// (ownership §5): `x`, read through `r`, keeps `r`'s store's loan, within
+/// `&mut o`, alive while it lives, so reading `o.b` by name meets it. `y`,
+/// the `&mut v` stored in `o.b` reborrowed at its store, is made while `x`
+/// lives, and `*x = 2` reaches `v` while `y` lives: one fact, at `y`'s
+/// store. `r.b` lowers to a `Take` of `b` through a shared `Ref` of `r`, so
+/// `x`'s chain runs through that `Take`'s reborrow, within both the
+/// reference stored in `o.b`, made by the object within `&mut v`, and the
+/// shared `Ref`, within `r`'s store; `y`'s through the stored one.
 #[test]
 fn a_reference_read_through_another_keeps_the_first_reference_s_loan_alive() {
     let fx = Fixture::new();
     let source = "let v = 1; let o = { b: &mut v, }; let r = &mut o; let x = r.b; let y = o.b; *x = 2; *y = 3; 0";
     let refusals = fx.refusals(source);
-    let on_o = span_of(source, "&mut o", 0);
-    let binding = span_of(source, "let y = o.b;", 0);
+    let (on_o, on_v, object) = (span_of(source, "&mut o", 0), span_of(source, "&mut v", 0), span_of(source, "{ b: &mut v, }", 0));
+    let (r, x, y) = (binder(source, "r"), binder(source, "x"), binder(source, "y"));
     let [read, reborrowed] = &refusals[..] else { panic!("two LoanConflicts: {refusals:?}") };
-    assert_eq!(read.kind, RefusalKind::LoanConflict { first: on_o, later_uses: Vec::new() });
-    assert!(covers(binding, read.span), "at the read of `o.b`: {read:?}");
-    assert_eq!(reborrowed.kind, RefusalKind::LoanConflict { first: on_o, later_uses: vec![span_of(source, "*x = 2;", 0)] });
-    assert!(covers(binding, reborrowed.span), "where `y`'s loan is made: {reborrowed:?}");
+    assert!(covers(span_of(source, "let y = o.b;", 0), read.span), "at the read of `o.b`: {read:?}");
+    let RefusalKind::LoanConflict { trace } = &read.kind else { panic!("a LoanConflict: {read:?}") };
+    assert_eq!(*trace, ConflictTrace { earlier: vec![r, on_o], later: Vec::new(), uses: Vec::new() });
+    let read_through = span_of(source, "r.b", 0);
+    let uses = vec![span_of(source, "*x = 2;", 0)];
+    let earlier = vec![x, read_through, read_through, object, r, on_v, on_o];
+    assert_eq!(*reborrowed, conflict(y, earlier, vec![y, object, on_v], uses));
 }
+

@@ -18,10 +18,11 @@
 //! Loans made at one site meet each other where their places overlap and
 //! one is exclusive. Each pair of loans that meet, each loan taken up to the
 //! outermost of the loans it is made through that the other is not, is one
-//! `LoanConflict` (refusals: one fact, one path): at where the later loan was
-//! made, naming where the earlier one was, a parameter's or capture's at its
-//! binder, and every other access that met the two while both lived. An
-//! access by name that meets a loan is one of its own, at the access.
+//! `LoanConflict` (refusals: one fact, one path), and so is each loan, taken
+//! up to its outermost, that accesses by name meet. It stands at the access
+//! that conflicted and carries its whole trace, `ConflictTrace`: where each
+//! loan was made, a parameter's or capture's at its binder, with every loan
+//! it is made through, and every other access that met the same.
 //!
 //! At every `Return`, a loan on the body's own storage, a slot or a
 //! by-value parameter's, that the result or an outside storage's content
@@ -33,7 +34,7 @@
 use acvus_ast::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{Refusal, RefusalKind};
+use super::{ConflictTrace, Refusal, RefusalKind};
 use crate::ir::ValueId;
 use crate::ir::cfg::{BlockId, Body, BodyId, Inst, InstId, Module, Op, Site, Terminator};
 use crate::passes::analysis::{
@@ -44,8 +45,10 @@ use crate::ty::{FlowEnd, Ty, TyKind};
 /// The judgment over `body`, its refusals pushed to `out`.
 pub(super) fn check(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
     let body = module.body(body_id);
-    let conflicts = conflicts(body, &met(module, body_id, am)).into_iter().map(|Conflict { at, first, later_uses }| Refusal {
-        kind: RefusalKind::LoanConflict { first, later_uses },
+    let met = met(module, body_id, am);
+    let loans = am.get::<Loans>(module, body_id);
+    let conflicts = conflicts(body, &loans, &met).into_iter().map(|Conflict { at, trace }| Refusal {
+        kind: RefusalKind::LoanConflict { trace },
         span: at,
     });
     let outliving = outlived(module, body_id, am).into_iter().map(|Outlived { at, loan }| Refusal {
@@ -150,49 +153,53 @@ fn span_of(body: &Body, site: Site) -> Span {
 }
 
 /// A live loan an access meets: the access's span; the loan the access
-/// makes or is made through, none where it is by name; whether the access
-/// makes it; and the met loan. Each of the two stands for the pair as
-/// `side` takes it, and the met loan of an access by name for its outermost.
+/// makes or is made through, none where it is by name, and whether the
+/// access makes it; and the met loan. `by` and `loan` are the two as the
+/// pair they are one of takes them, `side` lifting each, and the met loan
+/// of an access by name its outermost; `access_loan` and `met_loan` are the
+/// loans themselves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Met {
     access: Span,
     by: Option<Loan>,
     makes: bool,
     loan: Loan,
+    access_loan: Option<Loan>,
+    met_loan: Loan,
 }
 
-/// One refusal of conflicting loans: where the later loan was made, where
-/// the earlier one was, and every other access that met the two while both
-/// lived.
+/// One refusal of conflicting loans: the access that conflicted, and the
+/// trace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Conflict {
     at: Span,
-    first: Span,
-    later_uses: Vec<Span>,
+    trace: ConflictTrace,
 }
 
-/// What a conflict is one of: a pair of loans, or an access by name and
-/// the loan it met, which is no pair.
+/// What a conflict is one of: a pair of loans, or a loan met by accesses by
+/// name, which have no loan of their own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Fact {
     Pair(Loan, Loan),
-    ByName(Span, Loan),
+    ByName(Loan),
 }
 
 impl Fact {
     fn of(met: &Met) -> Fact {
         match &met.by {
             Some(by) => Fact::Pair(by.clone().min(met.loan.clone()), by.clone().max(met.loan.clone())),
-            None => Fact::ByName(met.access, met.loan.clone()),
+            None => Fact::ByName(met.loan.clone()),
         }
     }
 }
 
 /// Each fact `met` holds, refused once, in the order the body first meets
-/// it (refusals: one fact, one path). A pair stands where its later loan
-/// was made, the one an access made while the other lived; where no access
-/// made either while the other lived, at the first access that met them.
-fn conflicts(body: &Body, met: &[Met]) -> Vec<Conflict> {
+/// it (refusals: one fact, one path), with its whole trace. A pair stands
+/// at the first access that made one of its loans while the other lived,
+/// else at the first access that met them; its other accesses are its
+/// uses, save those that made the same loan. A loan met by name stands at
+/// the first access that met it, the others its uses.
+fn conflicts(body: &Body, loans: &Loans, met: &[Met]) -> Vec<Conflict> {
     let mut facts: Vec<(Fact, Vec<&Met>)> = Vec::new();
     for each in met {
         let fact = Fact::of(each);
@@ -203,22 +210,36 @@ fn conflicts(body: &Body, met: &[Met]) -> Vec<Conflict> {
     }
     let mut conflicts = Vec::new();
     for (_, events) in facts {
-        let maker = events.iter().find(|event| event.makes);
-        let (at, earlier, later) = match maker {
-            Some(Met { by: Some(later), loan, .. }) => (made_at(body, later), loan, Some(later)),
-            Some(Met { by: None, .. }) => panic!("an access that makes a loan is made with it"),
-            None => (events[0].access, &events[0].loan, None),
-        };
-        let mut later_uses: Vec<Span> = Vec::new();
+        let stands = *events.iter().find(|event| event.makes).unwrap_or(&events[0]);
+        let making = |event: &Met| stands.makes && event.makes && event.by == stands.by;
+        let mut uses: Vec<Span> = Vec::new();
         for event in &events {
-            let making = event.makes && later.is_some() && event.by.as_ref() == later;
-            if !making && event.access != at && !later_uses.contains(&event.access) {
-                later_uses.push(event.access);
+            if !making(event) && event.access != stands.access && !uses.contains(&event.access) {
+                uses.push(event.access);
             }
         }
-        conflicts.push(Conflict { at, first: made_at(body, earlier), later_uses });
+        let at_stand: Vec<&Met> = events.iter().copied().filter(|event| event.access == stands.access).collect();
+        let met_loan = innermost(loans, at_stand.iter().map(|event| &event.met_loan));
+        let access_loan = innermost(loans, at_stand.iter().filter_map(|event| event.access_loan.as_ref()));
+        let chain_spans = |loan: Option<&Loan>| loan.map(|loan| chain(loans, loan).iter().map(|loan| made_at(body, loan)).collect()).unwrap_or_default();
+        let trace = ConflictTrace { earlier: chain_spans(met_loan), later: chain_spans(access_loan), uses };
+        conflicts.push(Conflict { at: stands.access, trace });
     }
     conflicts
+}
+
+/// The loan of `candidates` made through the most others: the innermost.
+fn innermost<'l>(loans: &Loans, candidates: impl Iterator<Item = &'l Loan>) -> Option<&'l Loan> {
+    candidates.max_by_key(|loan| (loans.ancestors(&LoanSet::from([(*loan).clone()])).len(), std::cmp::Reverse(*loan)))
+}
+
+/// `loan`, then every loan it is made through, innermost first: each after
+/// the loans made through it, those made through as many in `Loan` order.
+fn chain(loans: &Loans, loan: &Loan) -> Vec<Loan> {
+    let depth = |loan: &Loan| loans.ancestors(&LoanSet::from([loan.clone()])).len();
+    let mut ancestors: Vec<Loan> = loans.ancestors(&LoanSet::from([loan.clone()])).into_iter().filter(|ancestor| ancestor != loan).collect();
+    ancestors.sort_by_key(|ancestor| (std::cmp::Reverse(depth(ancestor)), ancestor.clone()));
+    std::iter::once(loan.clone()).chain(ancestors).collect()
 }
 
 /// A loan on the body's own storage that outlives it: the `Return`'s span,
@@ -307,13 +328,21 @@ fn met_at(loans: &Loans, site: Site, span: Span, live: &LoanSet, met: &mut Vec<M
         for loan in &meeting {
             if made_by.is_empty() {
                 for outer in outermost(loans, &with_ancestors(loans, loan)) {
-                    push_once(met, Met { access: span, by: None, makes, loan: outer });
+                    push_once(met, Met { access: span, by: None, makes, loan: outer, access_loan: None, met_loan: loan.clone() });
                 }
             }
-            for by in made_by {
-                let (ours, theirs) = (side(loans, by, loan), side(loans, loan, by));
-                for (by, loan) in ours.iter().flat_map(|ours| theirs.iter().map(move |theirs| (ours, theirs))) {
-                    push_once(met, Met { access: span, by: Some(by.clone()), makes, loan: loan.clone() });
+            for access_loan in made_by {
+                let (ours, theirs) = (side(loans, access_loan, loan), side(loans, loan, access_loan));
+                for (by, lifted) in ours.iter().flat_map(|ours| theirs.iter().map(move |theirs| (ours, theirs))) {
+                    let pair = Met {
+                        access: span,
+                        by: Some(by.clone()),
+                        makes,
+                        loan: lifted.clone(),
+                        access_loan: Some(access_loan.clone()),
+                        met_loan: loan.clone(),
+                    };
+                    push_once(met, pair);
                 }
             }
         }
@@ -335,7 +364,15 @@ fn met_at(loans: &Loans, site: Site, span: Span, live: &LoanSet, met: &mut Vec<M
                         && !related(loans, made, other)
                 };
                 for other in second.made.iter().filter(meets_made) {
-                    push_once(met, Met { access: span, by: Some(other.clone()), makes: true, loan: made.clone() });
+                    let pair = Met {
+                        access: span,
+                        by: Some(other.clone()),
+                        makes: true,
+                        loan: made.clone(),
+                        access_loan: Some(other.clone()),
+                        met_loan: made.clone(),
+                    };
+                    push_once(met, pair);
                 }
             }
         }

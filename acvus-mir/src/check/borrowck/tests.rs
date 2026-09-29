@@ -6,11 +6,12 @@ use acvus_ast::{Script, Span};
 use acvus_utils::Interner;
 
 use super::{Conflict, conflicts, met};
+use crate::check::ConflictTrace;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::{Module, Op, Terminator};
 use crate::lower::lower_script;
 use crate::lower::required::{clone_strings, remove_dead_context_ops};
-use crate::passes::analysis::AnalysisManager;
+use crate::passes::analysis::{AnalysisManager, Loans};
 use crate::ty::{
     Alignment, Calls, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, TypeArg, Types,
 };
@@ -48,7 +49,10 @@ impl Found {
         remove_dead_context_ops(&mut module, &mut am);
         let conflicts = module
             .body_ids()
-            .flat_map(|body| conflicts(module.body(body), &met(&module, body, &mut am)))
+            .flat_map(|body| {
+                let met = met(&module, body, &mut am);
+                conflicts(module.body(body), &am.get::<Loans>(&module, body), &met)
+            })
             .collect();
         Found { source: source.to_owned(), conflicts }
     }
@@ -57,14 +61,12 @@ impl Found {
         &self.source[span.start..span.end]
     }
 
-    /// Each conflict's text: where it stands, where the earlier loan was
-    /// made, and its later uses.
-    fn texts(&self) -> Vec<(&str, &str, Vec<&str>)> {
+    /// Each conflict's text: where it stands, and its trace.
+    fn texts(&self) -> Vec<(&str, Vec<&str>, Vec<&str>, Vec<&str>)> {
+        let texts = |spans: &[Span]| spans.iter().map(|span| self.text(*span)).collect::<Vec<&str>>();
         self.conflicts
             .iter()
-            .map(|Conflict { at, first, later_uses }| {
-                (self.text(*at), self.text(*first), later_uses.iter().map(|used| self.text(*used)).collect())
-            })
+            .map(|Conflict { at, trace }| (self.text(*at), texts(&trace.earlier), texts(&trace.later), texts(&trace.uses)))
             .collect()
     }
 
@@ -79,23 +81,25 @@ impl Found {
     }
 }
 
+/// An access by name meets `&x`, which `r` holds.
 #[test]
 fn a_write_while_a_shared_loan_lives_is_refused() {
     let found = Found::of("let x = 1; let r = &x; x = 2; *r");
-    assert_eq!(found.texts(), [("x = 2;", "&x", Vec::new())], "{:?}", found.conflicts);
+    let none: Vec<&str> = Vec::new();
+    assert_eq!(found.texts(), [("x = 2;", vec!["&x"], none.clone(), none)], "{:?}", found.conflicts);
 }
 
-/// A read by name of `x` while `m`'s loan lives: one refusal, at the read,
-/// naming `&mut x`, the outermost of the loans `m`'s slot holds.
+/// A read by name of `x` meets the loan `m`'s store made within `&mut x`.
 #[test]
 fn a_read_while_a_mut_loan_lives_is_refused() {
     let found = Found::of("let x = 1; let m = &mut x; let y = x; *m = 3; y");
-    let [Conflict { at, first, later_uses }] = &found.conflicts[..] else {
+    let [Conflict { at, trace }] = &found.conflicts[..] else {
         panic!("one conflict: {:?}", found.texts());
     };
-    assert_eq!(found.text(*first), "&mut x");
-    assert!(found.span_of("let y = x;", 0).start <= at.start && at.end <= found.span_of("let y = x;", 0).end, "at the read: {at:?}");
-    assert_eq!(*later_uses, []);
+    let binding = found.span_of("let y = x;", 0);
+    assert!(binding.start <= at.start && at.end <= binding.end, "at the read: {at:?}");
+    let [(_, earlier, later, uses)] = &found.texts()[..] else { unreachable!() };
+    assert_eq!((earlier.as_slice(), later.as_slice(), uses.as_slice()), (&["m", "&mut x"][..], &[][..], &[][..]), "{trace:?}");
 }
 
 #[test]
@@ -104,17 +108,20 @@ fn two_mut_loans_on_disjoint_fields_of_one_binding_are_admitted() {
     assert!(found.admitted(), "{:?}", found.texts());
 }
 
-/// One fact: the second `&mut p.a` made while the first lives. It stands
-/// where the second was made and names the first; `*a = 3;` reaches `p.a`
-/// through the first while the second lives, a later use of the same pair.
-/// Storing the second into `b` reborrows it, which is making it, not a use.
+/// One fact: the second `&mut p.a` made while the first lives, held by
+/// `a`'s store. `*a = 3;` reaches `p.a` through the first while the second
+/// lives, a use of the same pair; storing the second into `b` reborrows it,
+/// which is making it, not a use.
 #[test]
 fn two_mut_loans_on_one_field_are_refused() {
     let found = Found::of("let p = { a: 1, b: 2, }; let a = &mut p.a; let b = &mut p.a; *a = 3; *b = 4; p");
     let expected = Conflict {
         at: found.span_of("&mut p.a", 1),
-        first: found.span_of("&mut p.a", 0),
-        later_uses: vec![found.span_of("*a = 3;", 0)],
+        trace: ConflictTrace {
+            earlier: vec![found.span_of("a", 1), found.span_of("&mut p.a", 0)],
+            later: vec![found.span_of("&mut p.a", 1)],
+            uses: vec![found.span_of("*a = 3;", 0)],
+        },
     };
     assert_eq!(found.conflicts, [expected], "{:?}", found.texts());
 }
@@ -127,14 +134,17 @@ fn as_mut_on_a_tuple_with_both_parts_written_is_admitted() {
 
 /// A shared reborrow of a `&mut` is a loan of its own, shared: a second
 /// one beside it is admitted, and a write through the `&mut` while one
-/// lives is one refusal, at the write, naming the reborrow.
+/// lives is one refusal, at the write: the shared reborrow `a` holds, which
+/// its store does not reborrow again, made through `m`'s store's, met by
+/// the write through `m`'s store's.
 #[test]
 fn a_mut_loan_reached_through_a_shared_reborrow_reads_shared() {
     let found = Found::of("let x = 1; let m = &mut x; let a = &*m; let b = &*m; (*a, *b)");
     assert!(found.admitted(), "{:?}", found.texts());
 
     let found = Found::of("let x = 1; let m = &mut x; let a = &*m; *m = 2; *a");
-    assert_eq!(found.texts(), [("*m = 2;", "&*m", Vec::new())], "{:?}", found.conflicts);
+    let expected = ("*m = 2;", vec!["&*m", "m", "&mut x"], vec!["m", "&mut x"], Vec::new());
+    assert_eq!(found.texts(), [expected], "{:?}", found.conflicts);
 }
 
 #[test]
