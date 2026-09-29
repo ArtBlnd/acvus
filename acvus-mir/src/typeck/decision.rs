@@ -1370,7 +1370,7 @@ pub(super) fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
             }
         }
         Callee::Required(required) | Callee::Part(required) => {
-            let law = required.law;
+            let law = required.fact;
             let states = move |facts: &crate::decl::DeclaredFacts| law.is_none_or(|law| law.stated_by(facts));
             if cx.decls.scheme(required.generic_function).is_some() {
                 offer_of(required.generic_function, &states);

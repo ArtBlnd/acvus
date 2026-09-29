@@ -2071,7 +2071,7 @@ fn a_view_steps_requirements_are_reached() {
         requires: Box::new([crate::decl::Requirement {
             generic_function: clone,
             pattern: clones_e,
-            law: None,
+            fact: None,
         }]),
         facts: Default::default(),
     };
@@ -2589,7 +2589,7 @@ fn a_requirement_a_lift_would_answer_is_refused_as_unimplemented() {
     let view = ImplSig {
         ty: at_vec,
         param_names: fx.param_names(1),
-        requires: Box::new([crate::decl::Requirement { generic_function: clone, pattern: clones_e, law: None }]),
+        requires: Box::new([crate::decl::Requirement { generic_function: clone, pattern: clones_e, fact: None }]),
         facts: Default::default(),
     };
     fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
@@ -2638,16 +2638,14 @@ fn cmp_lifts_only_where_every_parts_cmp_is_declared_a_total_order() {
 /// the old `laws` form.
 #[test]
 fn a_law_is_stated_by_its_declared_fact() {
-    use crate::decl::NamedLaw;
+    use crate::decl::NamedFact;
     use crate::decl::declared::{Access, Action};
     let equivalence = DeclaredFacts { access: Box::new([Access::Equivalence]), ..Default::default() };
     let total_order = DeclaredFacts { action: Box::new([Action::TotalOrder]), ..Default::default() };
-    let old_form = DeclaredFacts { laws: crate::decl::Laws::Equivalence, ..Default::default() };
-    assert!(NamedLaw::Equivalence.stated_by(&equivalence));
-    assert!(!NamedLaw::Equivalence.stated_by(&total_order));
-    assert!(!NamedLaw::Equivalence.stated_by(&old_form));
-    assert!(NamedLaw::TotalOrder.stated_by(&total_order));
-    assert!(!NamedLaw::TotalOrder.stated_by(&equivalence));
+    assert!(NamedFact::Equivalence.stated_by(&equivalence));
+    assert!(!NamedFact::Equivalence.stated_by(&total_order));
+    assert!(NamedFact::TotalOrder.stated_by(&total_order));
+    assert!(!NamedFact::TotalOrder.stated_by(&equivalence));
 }
 
 /// ownership §5, types §3: a reference to a structured value entering a

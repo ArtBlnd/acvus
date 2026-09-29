@@ -1759,7 +1759,7 @@ mod tests {
         Box::new([Requirement {
             generic_function,
             pattern,
-            law: None,
+            fact: None,
         }])
     }
 

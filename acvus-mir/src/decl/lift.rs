@@ -3,7 +3,7 @@
 //! declaration alone, by `verify`: the lang items' generic functions and
 //! an extern's alike.
 
-use super::facts::NamedLaw;
+use super::declared::NamedFact;
 use super::scheme::Scheme;
 use crate::ty::{IntTy, Mutability, Poly, TyId, TyKind, Types};
 
@@ -19,7 +19,7 @@ pub enum Lift {
     /// language defines for `law`: an impl exists only where every part's
     /// impl states `law`, and it states `law` in turn (`eq`, where `law` is
     /// an equivalence).
-    Combine { shape: LiftShape, law: NamedLaw },
+    Combine { shape: LiftShape, law: NamedFact },
 }
 
 impl Lift {
@@ -52,7 +52,7 @@ pub enum Taking {
 /// of a law its impls may state combines (`Lift::Combine`).
 pub(super) fn lift_of(types: &Types<Poly>, scheme: &Scheme) -> Option<Lift> {
     const VAR: u32 = 0;
-    if scheme.bounds.len() != 1 || scheme.requires.iter().any(|required| required.law.is_some()) {
+    if scheme.bounds.len() != 1 || scheme.requires.iter().any(|required| required.fact.is_some()) {
         return None;
     }
     let TyKind::Fn { params, ret, .. } = types.kind(scheme.ty) else {
@@ -63,11 +63,11 @@ pub(super) fn lift_of(types: &Types<Poly>, scheme: &Scheme) -> Option<Lift> {
     match types.kind(*ret) {
         TyKind::Var(var) if *var == VAR => Some(Lift::Rebuild(shape)),
         TyKind::Bool if *shape.params == [Taking::Ref(Mutability::Shared); 2] => {
-            Some(Lift::Combine { shape, law: NamedLaw::Equivalence })
+            Some(Lift::Combine { shape, law: NamedFact::Equivalence })
         }
         // The lexicographic combination of total orders is a total order.
         TyKind::Int(IntTy::I64) if *shape.params == [Taking::Ref(Mutability::Shared); 2] => {
-            Some(Lift::Combine { shape, law: NamedLaw::TotalOrder })
+            Some(Lift::Combine { shape, law: NamedFact::TotalOrder })
         }
         _ => None,
     }

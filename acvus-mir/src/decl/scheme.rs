@@ -1,10 +1,8 @@
 use acvus_utils::{Astr, QualifiedRef};
 
 use super::TyVarBound;
-use super::declared::{Access, Action, Relation, Source};
+use super::declared::{Access, Action, NamedFact, Relation, Source};
 use super::labels::LabelledSignature;
-use super::facts::{Laws, NamedLaw, Postcondition, Reaches, Returns};
-use crate::means::Means;
 use crate::ty::{Poly, TyId};
 
 /// An extern fn's declaration (extern-fn): its signature, a function type
@@ -60,20 +58,13 @@ pub struct GenericImplSig {
 
 /// What a declaration states beyond its signature, trusted absolutely
 /// (extern-fn §3-4): the declared facts in their four kinds, and its
-/// lifetimes. `laws`, `ensures`, `reaches`, `returns` and `means` are the
-/// forms the four kinds replace (D82); they stay only while their old
-/// readers do.
+/// lifetimes.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DeclaredFacts {
     pub access: Box<[Access]>,
     pub action: Box<[Action]>,
     pub source: Box<[Source]>,
     pub relations: Box<[Relation]>,
-    pub laws: Laws,
-    pub ensures: Box<[Postcondition]>,
-    pub reaches: Reaches,
-    pub returns: Returns,
-    pub means: Option<Means>,
     /// The lifetimes the Rust signature names, which `verify` turns into
     /// the declared function type's flows. `None`: the flows are every
     /// input to every output (extern-fn §4).
@@ -88,12 +79,12 @@ impl DeclaredFacts {
 }
 
 /// An impl of `generic_function` whose type joins `pattern`, written at the
-/// declaration's own variables, stating `law` where one is named
+/// declaration's own variables, stating `fact` where one is named
 /// (extern-fn §6). Its impls are the generic function's, read from the
 /// declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Requirement {
     pub generic_function: QualifiedRef,
     pub pattern: TyId<Poly>,
-    pub law: Option<NamedLaw>,
+    pub fact: Option<NamedFact>,
 }

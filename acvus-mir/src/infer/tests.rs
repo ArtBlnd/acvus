@@ -866,7 +866,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
         requires: Box::new([Requirement {
             generic_function: shared,
             pattern: t,
-            law: None,
+            fact: None,
         }]),
         facts: DeclaredFacts::default(),
     };
@@ -903,7 +903,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
         vec![RequiredAt {
             generic_function: shared,
             pattern: var,
-            law: None
+            fact: None
         }]
     );
     let again = fx.infer.instantiate(&decls, scheme);

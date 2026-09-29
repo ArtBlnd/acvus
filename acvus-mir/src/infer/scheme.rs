@@ -4,19 +4,19 @@ use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
 use super::{Bound, Infer, Term};
-use crate::decl::{Declarations, NamedLaw, Scheme, TyVarBound};
+use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound};
 use crate::ty::{
     CallsTerm, EffectArg, FnValues, EffectTerm, HoldsTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
     LenVarId, ObjectTy, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
 };
 
 /// A requirement at the use's own terms: an impl of `generic_function` whose
-/// type joins `pattern`, stating `law` where named.
+/// type joins `pattern`, stating `fact` where named.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequiredAt {
     pub generic_function: QualifiedRef,
     pub pattern: Term,
-    pub law: Option<NamedLaw>,
+    pub fact: Option<NamedFact>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,7 +81,7 @@ impl Infer {
             .map(|required| RequiredAt {
                 generic_function: required.generic_function,
                 pattern: self.instantiate_ty(&mut at, required.pattern),
-                law: required.law,
+                fact: required.fact,
             })
             .collect();
         Instantiated { ty, requirements }

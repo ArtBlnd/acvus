@@ -4,8 +4,6 @@ pub mod flows;
 pub mod infer;
 pub mod ir;
 pub mod lower;
-pub mod means;
-pub mod step;
 pub mod passes;
 pub mod ty;
 pub mod typeck;

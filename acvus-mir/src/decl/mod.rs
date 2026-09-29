@@ -12,7 +12,6 @@ mod casts;
 mod conversions;
 mod core;
 pub mod declared;
-mod facts;
 mod impl_fit;
 mod labels;
 mod lift;
@@ -31,10 +30,7 @@ pub use bound::TyVarBound;
 pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
 pub use conversions::{ConversionRule, VerifiedConversion};
 pub use core::{Core, Tags};
-pub use facts::{
-    BinaryLaws, FoldLaw, Identity, Laws, NamedLaw, PostTerm, Postcondition, Reaches, ReachedElement, ReachedPlace,
-    Relation, Returns, Subject,
-};
+pub use declared::NamedFact;
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
 pub use lift::{Lift, LiftShape, Taking};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};

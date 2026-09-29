@@ -13,7 +13,7 @@ use super::ctxt::Ctxt;
 use super::decision::{Callee, Decision, Offer, Reach, Reading, closed_for, core_name, push_required, settle_bounded};
 use super::output::{Chosen, CoercionNode, Impl, Own, StructureNode};
 use super::refusal::{self, RefusalKind, Unimplemented};
-use crate::decl::{Base, Head, Lift, LiftShape, NamedLaw, Taking};
+use crate::decl::{Base, Head, Lift, LiftShape, NamedFact, Taking};
 use crate::infer::{Closed, Coerced, Instantiated, RequiredAt, Term};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, Infer as InferPhase, Label, Mutability, ObjectTy, TyKind, TypeArg, copies_in};
@@ -58,8 +58,8 @@ fn lifts_at(lift: &Lift, structured: &Structure<'_, InferPhase>) -> bool {
     let sum = matches!(structured, Structure::Enum(..) | Structure::Option(..) | Structure::Result { .. });
     match lift {
         Lift::Rebuild(shape) => !sum || shape.params.len() == 1,
-        Lift::Combine { law: NamedLaw::TotalOrder, .. } => !sum,
-        Lift::Combine { law: NamedLaw::Equivalence, .. } => true,
+        Lift::Combine { law: NamedFact::TotalOrder, .. } => !sum,
+        Lift::Combine { law: NamedFact::Equivalence, .. } => true,
     }
 }
 
@@ -270,7 +270,7 @@ fn lift_of_callee<'d>(cx: &Ctxt<'d>, callee: &Callee, arity: usize) -> Option<Ca
     let (function, named_law) = match callee {
         Callee::Core(sig) => (core_name(cx, *sig), None),
         Callee::Declaration(declaration) => (*declaration, None),
-        Callee::Required(required) | Callee::Part(required) => (required.generic_function, required.law),
+        Callee::Required(required) | Callee::Part(required) => (required.generic_function, required.fact),
         Callee::Name(name) | Callee::Method(name) => {
             let lifted: Vec<QualifiedRef> =
                 cx.decls.overloads(*name).iter().copied().filter(|declaration| cx.decls.lift(*declaration).is_some()).collect();
@@ -397,7 +397,7 @@ struct PartReach<'l> {
     span: Span,
     function: QualifiedRef,
     shape: &'l LiftShape,
-    law: Option<NamedLaw>,
+    law: Option<NamedFact>,
     part: Term,
     effect: &'l EffectTerm<InferPhase>,
 }
@@ -418,7 +418,7 @@ fn reach_part(cx: &mut Ctxt<'_>, reach: PartReach<'_>) {
     // The part's answer is the pattern's: where no parameter takes the
     // part, as `default`'s, the result is where its type is read.
     let result = ret;
-    let required = RequiredAt { generic_function: function, pattern, law };
+    let required = RequiredAt { generic_function: function, pattern, fact: law };
     cx.decisions.push(Decision::Reach { site: node, span, callee: Callee::Part(required), args, result, effect: effect.clone() });
 }
 

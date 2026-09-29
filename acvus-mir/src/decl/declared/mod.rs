@@ -21,6 +21,26 @@ pub use action::{Action, Update};
 pub use relation::{Atom, Before, Comparison, Relation, Subject, Term};
 pub use source::Source;
 
+/// A declared fact a requirement names at its type (extern-fn §6), which
+/// only an impl stating it resolves: one form of §3's kinds, by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NamedFact {
+    /// A `core::eq` impl declared an equivalence (`Access::Equivalence`).
+    Equivalence,
+    /// A `core::cmp` impl declared a total order (`Action::TotalOrder`).
+    TotalOrder,
+}
+
+impl NamedFact {
+    /// Whether an impl declaring `facts` states this fact.
+    pub fn stated_by(self, facts: &DeclaredFacts) -> bool {
+        match self {
+            NamedFact::Equivalence => facts.access.iter().any(|access| matches!(access, Access::Equivalence)),
+            NamedFact::TotalOrder => facts.action.iter().any(|action| matches!(action, Action::TotalOrder)),
+        }
+    }
+}
+
 use super::{Core, DeclaredFacts, Refused, Scheme, TyVarBound};
 use crate::ty::{Declared, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
