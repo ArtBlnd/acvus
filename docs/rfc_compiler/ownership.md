@@ -34,4 +34,4 @@ A call moves loans only as its function type's flows state (extern-fn §4); a la
 
 ## 6. Where a value ends
 
-A value ends at exactly one place. Unlike Rust, which drops at the end of a scope, a value the program holds is dropped as soon as its liveness ends. A value taken by another holder is dropped by that holder, not by the program.
+A value ends at exactly one place. Unlike Rust, which drops at the end of a scope, a value the program holds is dropped as soon as its liveness ends. A value taken by another holder is dropped by that holder, not by the program. A part moved out of a value is ended by its holder; the value's other parts each end where their own liveness ends, and the value is not used whole again.
