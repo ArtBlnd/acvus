@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod check;
 pub mod cfg;
 pub mod decl;
 pub mod error;

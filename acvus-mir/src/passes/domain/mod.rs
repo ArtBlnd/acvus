@@ -4,6 +4,7 @@
 mod affine;
 mod constant;
 mod interval;
+pub mod tags;
 
 pub use affine::{Affine, AffineDomain, Combination, Limit, Symbol, bounds_on};
 pub use constant::{Constant, ConstantDomain};

@@ -352,6 +352,9 @@ pub enum Terminator {
     While { cond: ValueId, stages: Stages, exit: BlockId, exit_args: Vec<ValueId> },
     Return { value: ValueId, order: Option<ValueId>, span: Span },
     Diverge,
+    /// Where no arm of a `match` answers: no run reaches it, which
+    /// `check::matchck` proves (patterns §3); otherwise as `Diverge`.
+    NoArmMatched { span: Span },
 }
 
 /// One edge out of a terminator: the target's leading `supplied`

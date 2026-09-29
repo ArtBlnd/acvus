@@ -576,7 +576,7 @@ pub(super) fn lower_match<S: Slot>(
                 }
             }
             if !caught {
-                cx.builder.terminate(Terminator::Diverge, span);
+                cx.builder.terminate(Terminator::NoArmMatched { span }, span);
             }
         }
     }
