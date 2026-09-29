@@ -172,7 +172,7 @@ pub(super) fn read_view(cx: &Lcx<'_, '_>, ty: Ty) -> Mutability {
 /// `place` read where typeck recorded no read of it, as a reference on
 /// the way to a part or one reborrowed: taken as `ty::part_read`
 /// reads it through the storage `place` is in.
-fn read_part(cx: &mut Lcx<'_, '_>, place: Place, span: Span) -> ValueId {
+pub(super) fn read_part(cx: &mut Lcx<'_, '_>, place: Place, span: Span) -> ValueId {
     let ty = cx.builder.part_read_ty(place.ty, storage_mutability(cx, place.target));
     read(cx, Operand::Place(Place { ty, ..place }), span)
 }

@@ -475,6 +475,61 @@ fn a_mut_field_read_past_a_shared_reference_reads_shared() {
     assert!(is_ref_to_i64(&checked, x, Mutability::Shared), "{:?}", checked.kind(x));
 }
 
+/// The type the name `b`, bound by the first arm of the script's tail
+/// `match`, the first field of an object pattern, has.
+fn first_field_binding(checked: &Checked, script: &Script) -> Ty {
+    let Some(Expr::Match { arms, .. }) = script.tail.as_deref() else {
+        panic!("the test's script ends in a match");
+    };
+    let acvus_ast::Pattern::Object { fields, .. } = &arms[0].pattern else {
+        panic!("the first arm is an object pattern");
+    };
+    let acvus_ast::Pattern::Binding { id, .. } = &fields[0].pattern else {
+        panic!("the first field binds a name");
+    };
+    checked.typeck.types[id]
+}
+
+/// `source`, admitted, and what `first_field_binding` finds.
+fn bound_by_match(source: &str) -> (Checked, Ty) {
+    let (checked, script) = Fixture::new().script(source);
+    checked.admitted();
+    let b = first_field_binding(&checked, &script);
+    (checked, b)
+}
+
+/// D108 rule 1, patterns §1: a name binding a `&mut` part past a `&` is a
+/// shared reborrow.
+#[test]
+fn a_mut_part_bound_past_a_shared_reference_binds_shared() {
+    let (checked, b) = bound_by_match("let v = 1; let o = { b: &mut v, }; match &o { { b, } => *b, }");
+    assert!(is_ref_to_i64(&checked, b, Mutability::Shared), "{:?}", checked.kind(b));
+}
+
+/// D108 rule 1, patterns §1: past a `&mut` the part keeps its own
+/// mutability.
+#[test]
+fn a_mut_part_bound_past_a_mut_reference_binds_mut() {
+    let (checked, b) = bound_by_match("let v = 1; let o = { b: &mut v, }; match &mut o { { b, } => *b, }");
+    assert!(is_ref_to_i64(&checked, b, Mutability::Mut), "{:?}", checked.kind(b));
+}
+
+/// D108 rule 1, patterns §1: a `&` part bound past a `&mut` is the `&`
+/// itself, the least along the path, not a `&mut` of it.
+#[test]
+fn a_shared_part_bound_past_a_mut_reference_binds_shared() {
+    let (checked, b) = bound_by_match("let v = 1; let o = { b: &v, }; match &mut o { { b, } => *b, }");
+    assert!(is_ref_to_i64(&checked, b, Mutability::Shared), "{:?}", checked.kind(b));
+}
+
+/// patterns §1: a part that is no reference, bound past a `&mut`, is lent
+/// at the path's mutability.
+#[test]
+fn a_value_part_bound_past_a_mut_reference_is_lent_mut() {
+    let (checked, b) = bound_by_match("let o = { b: 1, }; match &mut o { { b, } => *b, }");
+    assert!(is_ref_to_i64(&checked, b, Mutability::Mut), "{:?}", checked.kind(b));
+}
+
 /// D108 rule 1: a store target is the part itself, not a read of it.
 #[test]
 fn a_store_into_a_mut_field_through_a_mut_reference_keeps_its_type() {

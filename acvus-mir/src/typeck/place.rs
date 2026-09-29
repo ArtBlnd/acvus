@@ -118,19 +118,29 @@ fn read_part(cx: &mut Ctxt<'_>, site: AstId, part: Term, demand: Demand, through
             span,
             part,
             through,
+            mode: BindingMode::Move,
             result,
         },
     );
     result
 }
 
-/// A part read fired at the path's mutability `path`: the part as
-/// `ty::part_read` reads it, a reborrow of a reference and the part
-/// itself otherwise.
-pub(super) fn fire_part_read(cx: &mut Ctxt<'_>, span: Span, part: Term, path: Mutability, result: Term) {
-    let read = match part_read(cx.infer.types(), cx.infer.shallow(part), path) {
-        Some(reborrow) => cx.node(reborrow),
-        None => part,
+/// How a read binds a part that is no reference (patterns §1): as itself,
+/// or, past a reference in Rust's default binding modes, as a reference
+/// to it at the path's mutability.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum BindingMode {
+    Move,
+    Ref,
+}
+
+/// A part read fired at the path's mutability `path`: a reference part as
+/// `ty::part_read` reads it, a reborrow, and any other as `mode` binds it.
+pub(super) fn fire_part_read(cx: &mut Ctxt<'_>, span: Span, part: Term, path: Mutability, mode: BindingMode, result: Term) {
+    let read = match (part_read(cx.infer.types(), cx.infer.shallow(part), path), mode) {
+        (Some(reborrow), _) => cx.node(reborrow),
+        (None, BindingMode::Move) => part,
+        (None, BindingMode::Ref) => cx.node(TyKind::Ref(path, TypeArg::Uniform(part))),
     };
     cx.eq(result, read, span);
 }

@@ -1182,6 +1182,44 @@ fn a_mut_reference_on_the_way_past_a_shared_one_lowers_to_shared_reads() {
     assert!(matches!(&reads[..], [on_the_way, read] if [on_the_way, read].iter().all(|kind| is_reference(kind, Mutability::Shared))), "{reads:?}");
 }
 
+/// The kinds of the references a pattern binding in `source` reads out
+/// of a place under a reference, each body held to `TypesAgree`.
+fn bound_part_reads(source: &str) -> Vec<TyKind<Concrete>> {
+    part_reads(source, None, |op| matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if !path.is_empty()))
+}
+
+/// D108 rule 1, patterns §1: a `&mut` part bound past a `&` is read as a
+/// shared reborrow.
+#[test]
+fn a_mut_part_bound_past_a_shared_reference_lowers_to_a_shared_read() {
+    let reads = bound_part_reads("let v = 1; let o = { b: &mut v, }; match &o { { b, } => *b, }");
+    assert!(matches!(&reads[..], [read] if is_reference(read, Mutability::Shared)), "{reads:?}");
+}
+
+/// D108 rule 1, patterns §1: past a `&mut` the part is read as a `&mut`.
+#[test]
+fn a_mut_part_bound_past_a_mut_reference_lowers_to_a_mut_read() {
+    let reads = bound_part_reads("let v = 1; let o = { b: &mut v, }; match &mut o { { b, } => *b, }");
+    assert!(matches!(&reads[..], [read] if is_reference(read, Mutability::Mut)), "{reads:?}");
+}
+
+/// D108 rule 1, patterns §1: a `&` part bound past a `&mut` is read as
+/// the `&` it is.
+#[test]
+fn a_shared_part_bound_past_a_mut_reference_lowers_to_a_shared_read() {
+    let reads = bound_part_reads("let v = 1; let o = { b: &v, }; match &mut o { { b, } => *b, }");
+    assert!(matches!(&reads[..], [read] if is_reference(read, Mutability::Shared)), "{reads:?}");
+}
+
+/// D108 rule 1, patterns §1: a `&mut` a match passes on the way past a `&`
+/// is read shared, and so is the `&mut` part bound past it.
+#[test]
+fn a_mut_reference_a_match_passes_past_a_shared_one_lowers_to_shared_reads() {
+    let source = "let v = 1; let w = { b: &mut v, }; let o = { a: &mut w, }; match &o { { a: { b, }, } => *b, }";
+    let reads = bound_part_reads(source);
+    assert!(matches!(&reads[..], [on_the_way, read] if [on_the_way, read].iter().all(|kind| is_reference(kind, Mutability::Shared))), "{reads:?}");
+}
+
 /// D108 rule 1: a store into a `&mut` field through a `&mut` writes the
 /// field at its own type.
 #[test]
