@@ -21,9 +21,13 @@
 
 use smallvec::SmallVec;
 
-use crate::ir::ValueId;
-use crate::ir::cfg::{Body, Inst, Terminator};
-use crate::ty::{Concrete, Ty, Types};
+use crate::ir::cfg::{Body, Inst, Op, Terminator};
+use crate::ir::parts;
+use crate::ir::{Callee, ForSource, Intrinsic, RefTarget, ValueId};
+use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
+
+#[cfg(test)]
+mod tests;
 
 /// How one value is taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +64,14 @@ pub struct Named {
 /// How a by-value position takes a value of `ty`: an argument, an edge's
 /// argument, a returned value, a value stored or built into another.
 pub fn by_value(types: &Types<Concrete>, ty: Ty) -> Taken {
-    todo!("a `&mut` is read, any other value moved")
+    match is_mut_ref(types, ty) {
+        true => Taken::Read,
+        false => Taken::Moved,
+    }
+}
+
+fn is_mut_ref(types: &Types<Concrete>, ty: Ty) -> bool {
+    matches!(types.kind(ty), TyKind::Ref(Mutability::Mut, _))
 }
 
 /// Every operand of `inst` but the order token, in the order
@@ -68,7 +79,126 @@ pub fn by_value(types: &Types<Concrete>, ty: Ty) -> Taken {
 /// by name reads where what it takes copies or is a `&mut`. Cost: O(its
 /// operands).
 pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<[Operand; 4]> {
-    todo!("each operand by the module doc's rules, in operand order")
+    let ty = |value: ValueId| body.ty_of(value);
+    let copying = |value: ValueId| copies(types, ty(value));
+    let taken = |value: ValueId, taken: Taken| Operand { value, taken, names_place: false };
+    let passed = |value: ValueId| taken(value, by_value(types, ty(value)));
+    let read = |value: ValueId| taken(value, Taken::Read);
+    let result_copies = || inst.result().is_some_and(copying);
+    let extracted = |src: ValueId| match copying(src) || result_copies() {
+        true => read(src),
+        false => taken(src, Taken::PartMoved),
+    };
+    let place = |target: &RefTarget, taken: Taken| match target {
+        RefTarget::Var(named) | RefTarget::Param(named) => Operand { value: *named, taken, names_place: true },
+        RefTarget::Through(reference) => read(*reference),
+    };
+    let callee = |callee: &Callee| match callee {
+        Callee::Indirect(function) => match types.kind(ty(*function)) {
+            TyKind::Fn { calls: Calls::Once, .. } => Some(taken(*function, Taken::Moved)),
+            TyKind::Fn { calls: Calls::Many, .. } => Some(read(*function)),
+            other => panic!("an indirect callee {function:?} is a function value, not {other:?}"),
+        },
+        Callee::Direct(_) | Callee::Extern { .. } => None,
+    };
+    let mut operands: SmallVec<[Operand; 4]> = SmallVec::new();
+    match inst.op() {
+        Op::Const { .. }
+        | Op::ConstStr { .. }
+        | Op::Fetch { .. }
+        | Op::LoadFunction { .. }
+        | Op::ArrayBegin { .. }
+        | Op::Undef => {}
+        Op::StringConcat { parts } => operands.extend(parts.iter().map(|part| passed(*part))),
+        Op::StringAppend { target, part } => operands.extend([read(*target), passed(*part)]),
+        Op::StringEq { a, b } => operands.extend([read(*a), read(*b)]),
+        Op::StringClone { src } => operands.push(read(*src)),
+        Op::Ref { target, .. } => operands.push(place(target, Taken::Read)),
+        Op::Take { target, path, .. } => {
+            let what_it_takes = inst.result().expect("a `Take` yields what it takes");
+            let holder_keeps = match target {
+                RefTarget::Var(_) | RefTarget::Param(_) => copying(what_it_takes) || is_mut_ref(types, ty(what_it_takes)),
+                RefTarget::Through(_) => true,
+            };
+            let taking = if holder_keeps {
+                Taken::Read
+            } else if parts::owned_region(path).is_empty() {
+                Taken::Moved
+            } else {
+                Taken::PartMoved
+            };
+            operands.push(place(target, taking));
+        }
+        Op::Assign { target, path, value, .. } => {
+            let replaces_a_part = !parts::owned_region(path).is_empty() && !copying(*value);
+            let taking = if replaces_a_part { Taken::PartMoved } else { Taken::Read };
+            operands.extend([place(target, taking), passed(*value)]);
+        }
+        Op::AsSlice { container: lent, .. } | Op::ArrayView { src: lent, .. } => operands.push(read(*lent)),
+        Op::Index { slice, index, .. } => operands.extend([read(*slice), read(*index)]),
+        Op::IndexSet { slice, index, value, .. } => operands.extend([read(*slice), read(*index), passed(*value)]),
+        Op::Commit { value, .. } => operands.push(passed(*value)),
+        Op::FieldGet { object: src, .. }
+        | Op::ObjectGet { object: src, .. }
+        | Op::TupleIndex { tuple: src, .. }
+        | Op::ArrayIndex { array: src, .. } => operands.push(extracted(*src)),
+        Op::UnwrapVariant { src } => operands.push(match copying(*src) || result_copies() {
+            true => read(*src),
+            false => taken(*src, Taken::Moved),
+        }),
+        Op::FieldSet { object, value, .. } => {
+            let object = if copying(*object) { read(*object) } else { taken(*object, Taken::PartMoved) };
+            operands.extend([object, passed(*value)]);
+        }
+        Op::BinOp { left, right, .. } | Op::Check { left, right, .. } => operands.extend([read(*left), read(*right)]),
+        Op::UnaryOp { operand, .. } => operands.push(read(*operand)),
+        Op::Cast { src, .. } => operands.push(read(*src)),
+        Op::CheckSteps { from, step, count } => operands.extend([read(*from), read(*step), read(*count)]),
+        Op::FunctionCall { callee: called, args, .. } | Op::Spawn { callee: called, args, .. } => {
+            operands.extend(callee(called));
+            operands.extend(args.iter().map(|arg| passed(*arg)));
+        }
+        Op::TakeEffect { src } => operands.push(taken(*src, Taken::Moved)),
+        Op::Merge { orders } => operands.extend(orders.iter().map(|order| read(*order))),
+        Op::ArrayPush { array, value } => operands.extend([passed(*array), passed(*value)]),
+        Op::MakeObject { fields } => operands.extend(fields.iter().map(|(_, field)| passed(*field))),
+        Op::MakeTuple { elements } => operands.extend(elements.iter().map(|element| passed(*element))),
+        // `Gather` moves the structure of references into the reference it
+        // is; `ArrayMap` takes its array as a call takes an argument, and
+        // calls `f` as an indirect callee is called.
+        Op::Intrinsic { intrinsic: Intrinsic::Gather, args } => operands.extend(args.iter().map(|arg| passed(*arg))),
+        Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => {
+            let [arrays @ .., function] = &args[..] else { panic!("`ArrayMap` takes `[a_1, …, a_k, f]`") };
+            operands.extend(arrays.iter().map(|array| passed(*array)));
+            operands.extend(callee(&Callee::Indirect(*function)));
+        }
+        Op::Intrinsic { intrinsic: Intrinsic::StringClone, .. } => panic!("`StringClone` is no `Op::Intrinsic`: `Intrinsic` states no arguments for it"),
+        Op::MakeVariant { payload, .. } => operands.extend(payload.iter().map(|payload| passed(*payload))),
+        Op::MakeClosure { captures, .. } => operands.extend(captures.iter().map(|capture| passed(*capture))),
+        // Kept at some signatures over the same environment, a closure is
+        // read where every signature may be called many times, and taken
+        // where one is called once (functions §3).
+        Op::Specialize { closure, .. } => operands.push(match types.kind(ty(*closure)) {
+            TyKind::Closures(signatures) => {
+                let once = signatures.iter().any(|signature| matches!(types.kind(*signature), TyKind::Fn { calls: Calls::Once, .. }));
+                match once {
+                    true => taken(*closure, Taken::Moved),
+                    false => read(*closure),
+                }
+            }
+            other => panic!("a specialized value is a closure of signatures, not {other:?}"),
+        }),
+        Op::TestLiteral { src, .. } | Op::TestObjectKey { src, .. } | Op::TestVariant { src, .. } | Op::SliceLen { src } => {
+            operands.push(read(*src))
+        }
+        Op::Drop { src } => operands.push(taken(*src, Taken::Moved)),
+    }
+    assert!(
+        operands.iter().map(|operand| operand.value).eq(inst.operands().into_iter().take(operands.len())),
+        "the takings of {:?} follow its operands in order",
+        inst.op()
+    );
+    operands
 }
 
 /// What `terminator` does with the values it names apart from its edges'
@@ -76,5 +206,20 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
 /// traverses and reads any other source, and a `Return` passes its value
 /// out by value. An edge's argument is taken `by_value`.
 pub fn terminator_takings(body: &Body, types: &Types<Concrete>, terminator: &Terminator) -> SmallVec<[Named; 2]> {
-    todo!("each named value by the rules above")
+    let read = |value: ValueId| Named { value, taken: Taken::Read };
+    match terminator {
+        Terminator::Jump { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
+        Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } | Terminator::While { cond, .. } => {
+            smallvec::smallvec![read(*cond)]
+        }
+        Terminator::Switch { tag, .. } => smallvec::smallvec![read(*tag)],
+        Terminator::For { source, .. } => match source {
+            ForSource::Array(array) => smallvec::smallvec![Named { value: *array, taken: Taken::Moved }],
+            ForSource::Slice(slice) | ForSource::SliceMut(slice) => smallvec::smallvec![read(*slice)],
+            ForSource::Range { at, hi } => smallvec::smallvec![read(*at), read(*hi)],
+        },
+        Terminator::Return { value, .. } => {
+            smallvec::smallvec![Named { value: *value, taken: by_value(types, body.ty_of(*value)) }]
+        }
+    }
 }
