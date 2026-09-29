@@ -3,7 +3,7 @@
 use rustc_hash::FxHashMap;
 
 use super::cells::{Cells, End as CellEnd, MarkTerm, VarTerm};
-use super::{Infer, Mark, Term, VarState, product_parts};
+use super::{Infer, Mark, Term, VarState};
 use crate::ty::{
     Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, Ty,
     TyKind, TyVarId, TypeArg, Types,
@@ -45,8 +45,7 @@ impl Infer {
             },
             kind => {
                 let kind = self.freeze_kind(into, memo, kind)?;
-                let bottom = product_parts(&kind).any(|part| matches!(into.kind(part), TyKind::Never));
-                into.intern(if bottom { TyKind::Never } else { kind })
+                into.intern(kind)
             }
         };
         memo.done.insert(term, frozen);

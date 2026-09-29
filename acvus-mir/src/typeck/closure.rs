@@ -343,7 +343,7 @@ pub(super) fn copies(cx: &Ctxt<'_>, term: Term) -> bool {
             continue;
         }
         match cx.infer.types().kind(at) {
-            TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char | TyKind::Unit => {}
+            TyKind::Never | TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char | TyKind::Unit => {}
             TyKind::Ref(Mutability::Shared, _) => {}
             kind @ (TyKind::Tuple(_)
             | TyKind::Array(..)

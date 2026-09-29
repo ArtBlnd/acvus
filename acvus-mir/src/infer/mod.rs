@@ -118,9 +118,9 @@ impl Infer {
 
     /// A term of a written shape. A structural object or enum the program
     /// writes carries `Label::Transparent`; one instantiated from a
-    /// declaration carries `Label::Opaque` (`scheme`). A product with a
-    /// part of type `!` is `!` (types §4). A reference's target is never a
-    /// reference (types §4): a variable it targets is marked so, and is
+    /// declaration carries `Label::Opaque` (`scheme`). No type is `!` by
+    /// holding a part of type `!` (types §4). A reference's target is never
+    /// a reference (types §4): a variable it targets is marked so, and is
     /// never bound to one.
     ///
     /// # Panics
@@ -139,8 +139,7 @@ impl Infer {
                 ),
             }
         }
-        let bottom = product_parts(&kind).any(|part| matches!(self.types.kind(part), TyKind::Never));
-        self.types.intern(if bottom { TyKind::Never } else { kind })
+        self.types.intern(kind)
     }
 
     pub fn fresh(&mut self, bound: Bound) -> Term {
@@ -330,20 +329,6 @@ impl Infer {
             VarState::Bound(_) => None,
         })
     }
-}
-
-/// The parts of a product: a tuple's items, an object's fields. An array is
-/// not among them, since one of length zero holds no part.
-pub(super) fn product_parts<V: crate::ty::Phase>(kind: &TyKind<V>) -> impl Iterator<Item = TyId<V>> + '_ {
-    let parts: &[TyId<V>] = match kind {
-        TyKind::Tuple(items) => items,
-        _ => &[],
-    };
-    let fields = match kind {
-        TyKind::Object(object) => object.fields(),
-        _ => &[],
-    };
-    parts.iter().copied().chain(fields.iter().map(|(_, field)| *field))
 }
 
 impl Default for Infer {
