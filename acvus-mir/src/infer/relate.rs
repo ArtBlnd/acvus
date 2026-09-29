@@ -284,6 +284,7 @@ impl Infer {
         let heads = Mismatch::Heads { a: value, b: slot };
         let kept = |pairs: Vec<(PartKey, Term, Term)>| Coerced {
             shape: ShapeCoercion::Kept,
+            through: None,
             parts: pairs.into_iter().map(|(key, value, slot)| CoercedPart { key, value, slot }).collect(),
         };
         let (Some(of_value), Some(of_slot)) = (structure(&self.types, value), structure(&self.types, slot)) else {
@@ -319,7 +320,7 @@ impl Infer {
                     true => ShapeCoercion::Kept,
                     false => ShapeCoercion::Narrowed { left: left.into() },
                 };
-                Ok(Coerced { shape, parts: parts.into() })
+                Ok(Coerced { shape, through: None, parts: parts.into() })
             }
             (Structure::Enum(variants_x, _), Structure::Enum(variants_y, _)) => {
                 if self.enum_name(value) != self.enum_name(slot) {
@@ -339,7 +340,7 @@ impl Infer {
                     true => ShapeCoercion::Kept,
                     false => ShapeCoercion::Widened { taken: taken.into() },
                 };
-                Ok(Coerced { shape, parts: parts.into() })
+                Ok(Coerced { shape, through: None, parts: parts.into() })
             }
             _ => Err(heads),
         }
@@ -362,7 +363,18 @@ impl Infer {
     /// structure of references to its parts (ownership §5), so it is coerced
     /// by its target's shape.
     fn through_reference(&self, value: Term, slot: Term) -> Option<(Term, Term, Mutability)> {
-        todo!("both references, the slot's target structured and written elsewhere, the value's mutability reaching the slot's")
+        let (TyKind::Ref(held, value_target), TyKind::Ref(through, slot_target)) = (self.types.kind(value), self.types.kind(slot)) else {
+            return None;
+        };
+        let reaches = *held == Mutability::Mut || *through == Mutability::Shared;
+        let (End::Node { node: value_target, .. }, End::Node { node: slot_target, .. }) =
+            (self.end(value_target.ty()), self.end(slot_target.ty()))
+        else {
+            return None;
+        };
+        let slot_elsewhere = structure(&self.types, slot_target).is_some_and(|target| target.label() == Label::Elsewhere);
+        let value_structured = structure(&self.types, value_target).is_some();
+        (reaches && slot_elsewhere && value_structured).then_some((value_target, slot_target, *through))
     }
 
     /// The target `value` of a reference coerced to the target `slot` of a
@@ -373,7 +385,38 @@ impl Infer {
     /// place of its variant is a part, a `&mut` to it, and a `&mut`'s
     /// target is never coerced.
     fn coerce_structure_through(&mut self, value: Term, slot: Term, through: Mutability) -> Result<Coerced, Mismatch> {
-        todo!("`coerce_structure`'s shape rule over the targets, the parts paired as references of `through`")
+        let Coerced { shape, parts, .. } = self.coerce_structure(value, slot)?;
+        if through == Mutability::Mut && matches!(shape, ShapeCoercion::Widened { .. }) {
+            return Err(Mismatch::Heads { a: value, b: slot });
+        }
+        let parts = parts
+            .iter()
+            .map(|part| CoercedPart {
+                key: part.key,
+                value: self.part_reference(through, part.value),
+                slot: self.part_reference(through, part.slot),
+            })
+            .collect();
+        Ok(Coerced { shape, through: Some(through), parts })
+    }
+
+    /// A reference of `through` to a part of type `part`. A part that is a
+    /// reference is reborrowed at the weaker of the two mutabilities, since
+    /// a reference's target is never a reference (types §4).
+    fn part_reference(&mut self, through: Mutability, part: Term) -> Term {
+        let reborrowed = match self.end(part) {
+            End::Node { node, .. } => match self.types.kind(node) {
+                TyKind::Ref(held, target) => Some((*held, *target)),
+                _ => None,
+            },
+            End::Unbound(..) => None,
+        };
+        let kind = match reborrowed {
+            Some((Mutability::Mut, target)) if through == Mutability::Mut => TyKind::Ref(Mutability::Mut, target),
+            Some((_, target)) => TyKind::Ref(Mutability::Shared, target),
+            None => TyKind::Ref(through, TypeArg::Uniform(part)),
+        };
+        self.intern(kind)
     }
 
     /// A value of no common ancestor with its slot converts by the one

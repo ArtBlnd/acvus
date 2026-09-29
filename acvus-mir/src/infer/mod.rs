@@ -264,6 +264,19 @@ impl Infer {
         at
     }
 
+    /// Whether `term` may still become a transparent structured type: it
+    /// is one, or it is an unbound variable whose bound admits one, as an
+    /// integer literal's does not.
+    pub fn may_be_structured(&self, term: Term) -> bool {
+        match self.end(term) {
+            End::Unbound(var, _) => match &self.ty_vars[var.0 as usize] {
+                VarState::Unbound(bound) => !matches!(bound, Bound::Integer { .. }),
+                VarState::Bound(_) => unreachable!("an end is an unbound variable"),
+            },
+            End::Node { node, .. } => crate::ty::structural::structure(&self.types, node).is_some(),
+        }
+    }
+
     fn end(&self, term: Term) -> End {
         let mut at = term;
         let mut holder = None;
