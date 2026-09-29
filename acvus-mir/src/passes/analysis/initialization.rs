@@ -238,11 +238,11 @@ impl DenseAnalysis for Forward<'_> {
 
     fn transfer(&self, inst: &Inst, state: &mut Units) {
         match inst.op() {
-            Op::Assign { .. } => {
+            Op::Assign { target: RefTarget::Var(_) | RefTarget::Param(_), .. } => {
                 let (place, region) = named_place(inst.op()).expect("matched as a store by name");
                 self.set(place, region, &Written::default(), state);
             }
-            Op::Take { .. } => {
+            Op::Take { target: RefTarget::Var(_) | RefTarget::Param(_), .. } => {
                 let (place, region) = named_place(inst.op()).expect("matched as a take by name");
                 let taken = inst_takings(self.body, self.types, inst)
                     .into_iter()
