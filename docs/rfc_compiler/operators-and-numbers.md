@@ -4,6 +4,8 @@
 
 The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integer literal defaults as types §5 states. Integer overflow is undefined. `f64` follows IEEE: division by zero gives an infinity, not a trap.
 
+A string literal is a `&str`, as in Rust.
+
 ## 2. Operators are lang items
 
 `core` is declared inside the compiler and implements nothing. Its generic functions are the lang items, the ones the language's syntax lowers to; they mean something only through the extern fns that impl them.
