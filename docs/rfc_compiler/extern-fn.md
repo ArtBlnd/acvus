@@ -18,9 +18,9 @@ A type parameter is parametric, and carries one bound: any type; an integer type
 
 A call's effect states whether reissuing it is pure, idempotent or opaque; whether it commutes with other calls; whether it may be split, and at what cost (effects §6); and which contexts it reads and writes. An opaque effect is always sound (effects).
 
-A declaration may name effect variables, as it names type variables. A function type it writes carries an effect, and an extern-defined type may take effects as arguments (§8).
+A declaration may name effect variables, as it names type variables. A function type it writes carries an effect, and an extern-defined type may carry an effect (§8).
 
-A call's effect is the join of what its declaration states for the call itself and of the effect variables of the work the call runs before its result is taken: a closure argument it calls, or work a value it is given holds. Work the call does not run leaves only in its result, whose type carries its effect as an argument.
+A call's effect is the join of what its declaration states for the call itself and of the effect variables of the work the call runs before its result is taken: a closure argument it calls, or work a value it is given holds. Work the call does not run leaves only in its result, whose type carries its effect.
 
 Every effect variable a declaration takes from its parameters appears in the call's effect, in its result's type, or in both. A declaration where one appears in neither is refused: the work it names would run where no effect records it.
 
@@ -55,4 +55,4 @@ A declaration may be a cast from its parameter's type to its result's type, whic
 
 Every type a declaration writes, except a type parameter, is extern-defined, with all its parts, and follows the transparency rule (types §1). An extern-defined type may declare lifetimes; each is a position of its values (ownership §5).
 
-An extern-defined type may declare effect parameters. Each bounds from above the effects of the work its values hold, which runs later. A type is covariant in its effect parameters: widening an upper bound moves toward the opaque effect, which is always sound (effects).
+An extern-defined type may carry one effect, apart from its type arguments: `T<…> with E`. It bounds from above the effects of the work its values hold, which runs later. A type is covariant in its effect: widening an upper bound moves toward the opaque effect, which is always sound (effects).
