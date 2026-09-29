@@ -293,7 +293,7 @@ struct Named {
 fn terminator_operands(body: &Body, types: &Types<Concrete>, terminator: &Terminator) -> SmallVec<[Named; 2]> {
     let read = |value: ValueId| Named { value, taken: Taken::Read };
     match terminator {
-        Terminator::Jump { .. } | Terminator::Diverge => SmallVec::new(),
+        Terminator::Jump { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
         Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } | Terminator::While { cond, .. } => {
             smallvec::smallvec![read(*cond)]
         }
@@ -331,7 +331,7 @@ fn edge_arg_offsets(terminator: &Terminator) -> SmallVec<[usize; 2]> {
             smallvec::smallvec![exit, exit]
         }
         Terminator::While { .. } => smallvec::smallvec![1, 1],
-        Terminator::Return { .. } | Terminator::Diverge => SmallVec::new(),
+        Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
     }
 }
 

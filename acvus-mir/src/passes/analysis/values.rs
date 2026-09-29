@@ -169,7 +169,7 @@ impl SparseAnalysis for Constants<'_> {
                     .or(default.as_ref().map(|(to, _)| *to));
                 Executable::Only(chosen.into_iter().collect())
             }
-            Terminator::Jump { .. } | Terminator::For { .. } | Terminator::Return { .. } | Terminator::Diverge => {
+            Terminator::Jump { .. } | Terminator::For { .. } | Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {
                 Executable::All
             }
         }
