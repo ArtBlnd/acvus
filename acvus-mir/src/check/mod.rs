@@ -42,8 +42,9 @@ pub enum RefusalKind {
     /// A read of a place, or a whole use, some path to which did not write
     /// what it needs (ownership §4).
     NotWritten,
-    /// A use of a value, or of a part of it, after it moved (ownership §2).
-    UsedAfterMove,
+    /// A use of a value, or of a part of it, after it moved (ownership §2):
+    /// `moved` where the move was.
+    UsedAfterMove { moved: Span },
     /// A storage reached while a loan on it forbids it (ownership §5): the
     /// span is the reach, and `loan` where the loan was made.
     LoanConflict { loan: Span },

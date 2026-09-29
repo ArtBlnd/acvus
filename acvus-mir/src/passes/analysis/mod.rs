@@ -2,6 +2,7 @@
 //! the manager that computes, keeps and invalidates facts.
 
 mod content_liveness;
+mod initialization;
 mod match_facts;
 mod dense;
 mod dominators;
@@ -18,6 +19,7 @@ mod values;
 mod tests;
 
 pub use content_liveness::{ContentLiveness, Presence};
+pub use initialization::{Initialization, Written};
 pub use match_facts::MatchFacts;
 pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
 pub use dominators::{Dominators, Point};
