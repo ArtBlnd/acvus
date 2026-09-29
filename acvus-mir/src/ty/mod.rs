@@ -166,6 +166,15 @@ impl<V: Phase> Hash for TyId<V> {
     }
 }
 
+impl<V: Phase> TyId<V> {
+    /// Where the type is interned in its table: a key for a canonical
+    /// order of types, so that one set of them is written one way. It
+    /// means nothing else.
+    pub fn canonical_key(&self) -> u32 {
+        self.index
+    }
+}
+
 impl<V: Phase> fmt::Debug for TyId<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Ty({}:{})", self.table, self.index)

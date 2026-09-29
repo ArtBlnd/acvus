@@ -1591,11 +1591,11 @@ fn uses_at_one_signature_share_one_body() {
     assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::Specialize { .. })), 0, "{}", shown(body));
 }
 
-/// functions §2: the lambdas joined into one generalized binding share its
-/// layout, one closure type of its signatures, so either stands where the
-/// other would.
+/// functions §2: the lambdas joined into one generalized binding have one
+/// type, the closure type of its set of signatures, so either stands where
+/// the other would.
 #[test]
-fn a_join_of_lambdas_holds_either_at_one_layout() {
+fn a_join_of_lambdas_is_of_one_closure_type() {
     let mut fx = Fixture::new();
     let bool_ty = fx.ty(TyKind::Bool);
     fx.input("c", bool_ty);
@@ -1610,7 +1610,7 @@ fn a_join_of_lambdas_holds_either_at_one_layout() {
     let [left, right] = made[..] else {
         panic!("two closures: {}", shown(body));
     };
-    assert_eq!(body.ty_of(left), body.ty_of(right), "one layout: {}", shown(body));
+    assert_eq!(body.ty_of(left), body.ty_of(right), "one type: {}", shown(body));
     let TyKind::Closures(signatures) = lowered.kind_of(body, left) else {
         panic!("a closure of signatures: {}", shown(body));
     };

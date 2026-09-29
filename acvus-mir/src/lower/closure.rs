@@ -78,11 +78,11 @@ fn lower_body<S: Slot>(cx: &mut Lcx<'_, '_>, lambda: Lambda<'_, '_, S>, passed: 
     let decls = cx.decls;
     let typeck = cx.typeck;
     let anyorder = cx.anyorder;
-    let (layouts, bodies) = (cx.layouts.clone(), cx.bodies.clone());
+    let (value_types, bodies) = (cx.value_types.clone(), cx.bodies.clone());
     let nested = cx.builder.build_nested(ordered, ret);
     let mut inner = Lcx::new(decls, typeck, nested, anyorder);
     inner.decided = decided;
-    inner.layouts = layouts;
+    inner.value_types = value_types;
     inner.bodies = bodies;
     if anyorder > 0 {
         inner.builder.open_anyorder();
@@ -163,9 +163,10 @@ struct Signature {
     instance: InstanceId,
 }
 
-/// Every signature `binder` has at this body, in one order the binding
-/// fixes: its instances made within this body's instance, or all of them
-/// in the run, each signature at its first instance.
+/// Every signature `binder` has at this body, a set, written in its
+/// canonical order (`TyKind::Closures`): its instances made within this
+/// body's instance, or all of them in the run, each signature at its first
+/// instance.
 fn signatures(cx: &Lcx<'_, '_>, binder: AstId) -> Vec<Signature> {
     let mut instances: Vec<(InstanceId, &InstanceDecided)> = cx
         .typeck
@@ -182,7 +183,19 @@ fn signatures(cx: &Lcx<'_, '_>, binder: AstId) -> Vec<Signature> {
             out.push(Signature { ty, instance: id });
         }
     }
+    out.sort_by_key(|signature| signature.ty.canonical_key());
     out
+}
+
+/// The type of a closure at the set of signatures `signatures`: the one's
+/// function type, or the set's closure type.
+fn at_signatures(cx: &mut Lcx<'_, '_>, mut signatures: Vec<Ty>) -> Ty {
+    signatures.sort_by_key(|signature| signature.canonical_key());
+    signatures.dedup();
+    match signatures[..] {
+        [one] => one,
+        _ => cx.builder.intern(TyKind::Closures(signatures.into())),
+    }
 }
 
 /// Whether `instance` is one this body's code is lowered for: made within
@@ -202,22 +215,19 @@ fn within_view(cx: &Lcx<'_, '_>, instance: &InstanceDecided) -> bool {
 }
 
 /// The type a value of `binder` has at this body (functions §2): the one
-/// signature's function type where it has one, and the closure of its
-/// signatures otherwise.
-pub(super) fn layout(cx: &mut Lcx<'_, '_>, binder: AstId) -> Ty {
-    let signatures: Vec<Ty> = signatures(cx, binder).iter().map(|signature| signature.ty).collect();
-    match signatures[..] {
-        [one] => one,
-        _ => cx.builder.intern(TyKind::Closures(signatures.into())),
-    }
+/// signature's function type where it has one, and the closure type of its
+/// set of signatures otherwise.
+pub(super) fn value_type(cx: &mut Lcx<'_, '_>, binder: AstId) -> Ty {
+    let signatures = signatures(cx, binder).iter().map(|signature| signature.ty).collect();
+    at_signatures(cx, signatures)
 }
 
 /// A lambda of the generalized binding `binder` (functions §2): its
 /// environment captured once, here, as any lambda's, and its body lowered
 /// once at each distinct signature the binding's instances have, each over
-/// the view of an instance of that signature (`Decided::at`). The closure
-/// is of a `Closures` type of those signatures, in one order the binding
-/// fixes, the same for every lambda written as its value; of one
+/// the view of an instance of that signature (`Decided::at`), each body
+/// paired with its signature. The closure is of the `Closures` type of
+/// that set, which every lambda written as the binding's value has; of one
 /// signature, it is that function type.
 fn lower_generalized_lambda<S: Slot>(
     cx: &mut Lcx<'_, '_>,
@@ -243,7 +253,7 @@ fn lower_generalized_lambda<S: Slot>(
         };
         bodies.push(made);
     }
-    let ty = layout(cx, binder);
+    let ty = value_type(cx, binder);
     let captures = passed.iter().map(|passed| passed.value).collect();
     cx.builder.push(Op::MakeClosure { bodies, captures }, ty, span)
 }
@@ -289,12 +299,13 @@ pub(super) fn specialize(cx: &mut Lcx<'_, '_>, closure: ValueId, use_site: AstId
                 .collect()
         }
     };
-    let ty = match wanted[..] {
-        [one] => one,
-        _ => cx.builder.intern(TyKind::Closures(wanted.clone().into())),
+    let ty = at_signatures(cx, wanted.clone());
+    let signatures = match cx.kind(ty) {
+        TyKind::Closures(signatures) => signatures.to_vec(),
+        _ => vec![ty],
     };
     if cx.value_ty(closure) == ty {
         return closure;
     }
-    cx.builder.push(Op::Specialize { closure, signatures: wanted }, ty, span)
+    cx.builder.push(Op::Specialize { closure, signatures }, ty, span)
 }

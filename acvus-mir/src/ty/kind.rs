@@ -54,10 +54,14 @@ pub enum TyKind<V: Phase> {
         identity_args: Box<[IdentityTerm<V>]>,
     },
     Ref(Mutability, TypeArg<V>),
-    /// A closure with code at each of these function types over one
+    /// A closure with code at each of a set of function types over one
     /// environment: what a generalized binding holds once lowered, each a
-    /// signature one of its instances has (functions §2). Only lower writes
-    /// it; no program and no declaration does (`InternalType`).
+    /// signature one of its instances has (functions §2). The set is
+    /// written in one canonical order, by `TyId::canonical_key`, only so
+    /// that one set interns to one type; the order is no layout, and how a
+    /// backend holds such a closure is its own (undefined behaviour §2).
+    /// Only lower writes it; no program and no declaration does
+    /// (`InternalType`).
     Closures(Box<[TyId<V>]>),
     Var(V::TyVar),
 }

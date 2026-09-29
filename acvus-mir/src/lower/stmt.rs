@@ -88,17 +88,17 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) {
     }
 }
 
-/// The layout of the generalized binding `binder` at this body, at its
-/// binder and at every site `value`'s value passes through outside a
+/// The type of the generalized binding `binder`'s value at this body, at
+/// its binder and at every site `value`'s value passes through outside a
 /// lambda (functions §2): where it is written, the value holds every
 /// signature the binding has.
 fn generalized_value<S: Slot>(cx: &mut Lcx<'_, '_>, binder: AstId, value: &Expr<S>) {
-    let layout = super::closure::layout(cx, binder);
-    cx.layouts.insert(binder, layout);
+    let ty = super::closure::value_type(cx, binder);
+    cx.value_types.insert(binder, ty);
     let mut sites = Vec::new();
     value_path(value, &mut sites);
     for site in sites {
-        cx.layouts.insert(site, layout);
+        cx.value_types.insert(site, ty);
     }
 }
 
