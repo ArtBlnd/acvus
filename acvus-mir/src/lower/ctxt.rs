@@ -42,7 +42,12 @@ pub(super) enum ContextHome {
 
 pub(super) struct Lcx<'a, 'm> {
     pub decls: &'a Declarations,
+    /// The run's typeck, for what is decided once where a lambda is
+    /// written (its captures) and for the run as a whole.
     pub typeck: &'a Typeck,
+    /// What this body reads at each of its sites: the run's, or the
+    /// instance's it is lowered at (functions §2).
+    pub decided: super::decided::Decided<'a>,
     pub builder: Builder<'m>,
     pub bindings: FxHashMap<AstId, Home>,
     /// The span of each binder, where its binding was made.

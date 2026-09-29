@@ -291,9 +291,23 @@ pub enum Op {
     },
 
     // Closures
+    /// A closure over the environment `captures`, taken once where the
+    /// lambda is written (functions §2), with code at each signature its
+    /// result's type states: one body for a `Fn` type, one per element, in
+    /// order, for a `Closures` type.
     MakeClosure {
-        body: BodyId,
+        bodies: Vec<BodyId>,
         captures: Vec<ValueId>,
+    },
+    /// `closure`, of a `Closures` type, kept at the signatures `signatures`
+    /// of those it has, over the same environment: a use of a generalized
+    /// binding at its instance, one signature, or where the value enters
+    /// another generalized binding, that binding's signatures (functions
+    /// §2). The result is a `Fn` type for one signature, and a `Closures`
+    /// type otherwise.
+    Specialize {
+        closure: ValueId,
+        signatures: Vec<Ty>,
     },
 
     // Variant (tagged union)

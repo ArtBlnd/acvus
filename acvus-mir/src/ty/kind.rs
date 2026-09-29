@@ -54,6 +54,11 @@ pub enum TyKind<V: Phase> {
         identity_args: Box<[IdentityTerm<V>]>,
     },
     Ref(Mutability, TypeArg<V>),
+    /// A closure with code at each of these function types over one
+    /// environment: what a generalized binding holds once lowered, each a
+    /// signature one of its instances has (functions §2). Only lower writes
+    /// it; no program and no declaration does (`InternalType`).
+    Closures(Box<[TyId<V>]>),
     Var(V::TyVar),
 }
 

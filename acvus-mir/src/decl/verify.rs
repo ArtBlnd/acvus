@@ -634,7 +634,7 @@ impl TypeTerms {
             let kind = types.kind(ty);
             match kind {
                 TyKind::UserDefined { id, .. } if !self.named.contains(id) => self.named.push(*id),
-                TyKind::Order | TyKind::Handle(_) => self.internal = true,
+                TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => self.internal = true,
                 TyKind::Ref(_, target) if matches!(types.kind(target.ty()), TyKind::Ref(..)) => {
                     self.reference_to_reference = true
                 }

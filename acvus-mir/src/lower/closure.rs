@@ -31,12 +31,8 @@ struct Passed {
 }
 
 pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &[Binder], body: &Expr<S>, span: Span) -> ValueId {
-    // G: a lambda of a generalized binding has code per instance, which
-    // lower does not make yet.
-    // TODO(G, lower): specialize the body to each of `Typeck::instances`
-    // over the one environment (functions §2).
-    if cx.typeck.instances.values().any(|instance| instance.types.contains_key(&body.id())) {
-        panic!("the lambda at {site:?} is generalized; specializing its code to its instances is the lowerer's next round (functions §2)");
+    if let Some(binder) = generalized_binder(cx, site) {
+        return lower_generalized_lambda(cx, site, binder, params, body, span);
     }
     let fn_ty = cx.ty(site);
     let TyKind::Fn { params: param_tys, ret, effect, .. } = cx.kind(fn_ty).clone() else {
@@ -119,4 +115,35 @@ fn pass(cx: &mut Lcx<'_, '_>, captured: Captured, span: Span) -> Passed {
         Capture::Ref(mutability) => lend(cx, Operand::Place(place), mutability, span),
     };
     Passed { captured, value, ty: cx.value_ty(value), binding_ty, span: binder_span }
+}
+
+/// The binder of the generalized binding the lambda at `site` is written as
+/// a value of, where it is one (`Typeck::generalized`).
+fn generalized_binder(cx: &Lcx<'_, '_>, site: AstId) -> Option<AstId> {
+    todo!("the binder whose `Typeck::generalized` lambdas hold `site`")
+}
+
+/// A lambda of the generalized binding `binder` (functions §2): its
+/// environment captured once, here, as any lambda's, and its body lowered
+/// once at each distinct signature the binding's instances have, each over
+/// the view of an instance of that signature (`Decided::at`). The closure
+/// is of a `Closures` type of those signatures, in one order the binding
+/// fixes, the same for every lambda written as its value.
+fn lower_generalized_lambda<S: Slot>(
+    cx: &mut Lcx<'_, '_>,
+    site: AstId,
+    binder: AstId,
+    params: &[Binder],
+    body: &Expr<S>,
+    span: Span,
+) -> ValueId {
+    todo!("`pass` each capture once; a nested body per signature at its instance's view; one `MakeClosure` of them all")
+}
+
+/// A use of the generalized binding at `use_site`, whose value is
+/// `closure`: `Specialize` to its instance's signature, or, where the use
+/// is a value entering another generalized binding, to that binding's
+/// signatures (functions §2).
+pub(super) fn specialize(cx: &mut Lcx<'_, '_>, closure: ValueId, use_site: AstId, span: Span) -> ValueId {
+    todo!("the signatures the use's instance, or the binding it enters, has")
 }

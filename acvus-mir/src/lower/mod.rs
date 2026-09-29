@@ -16,6 +16,7 @@ mod coerce;
 mod context;
 mod control;
 mod ctxt;
+mod decided;
 mod expr;
 mod part_tree;
 mod pat;

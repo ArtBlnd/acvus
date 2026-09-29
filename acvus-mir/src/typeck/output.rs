@@ -320,6 +320,9 @@ pub struct Typeck {
     /// decided at the lambda bodies' sites within it, which lower reads to
     /// specialize the code to it over the one environment.
     pub instances: FxHashMap<super::generalize::InstanceId, InstanceDecided>,
+    /// Each generalized binding, by its binder: the lambdas written as its
+    /// values, whose code lower makes at each of its instances' signatures.
+    pub generalized: FxHashMap<AstId, Box<[AstId]>>,
     pub body_effect: Effect,
     /// The run's result type: the slot every tail and `return` enters, and
     /// for a template the `String` it builds. `None` only where a refusal
@@ -333,6 +336,8 @@ pub struct Typeck {
 /// `Typeck` keeps them for the rest of the run.
 #[derive(Debug, Clone, Default)]
 pub struct InstanceDecided {
+    /// The binder of the generalized binding this is an instance of.
+    pub binder: Option<AstId>,
     /// The use this instance is.
     pub use_site: Option<AstId>,
     /// The instance of an enclosing binding it was made within.
