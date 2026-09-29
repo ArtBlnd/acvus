@@ -14,7 +14,7 @@ use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
-use crate::typeck::{Inputs, Interface, Interfaces, check_script, check_template};
+use crate::typeck::{Inputs, Interfaces, check_script, check_template};
 
 struct Fixture {
     names: Interner,
@@ -194,6 +194,31 @@ impl Fixture {
         assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
         let module = lower_script(&decls, &typeck, types, &script);
         Lowered::checked(module, self.names)
+    }
+
+    /// `source` lowered, its calls reaching `units`, each a script at
+    /// `namespace::name` checked with its inputs open against the same
+    /// declarations first.
+    fn script_with_units(self, units: &[(&[&str], &str, &str)], source: &str) -> (Lowered, Vec<QualifiedRef>) {
+        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
+        let mut interfaces = Interfaces::new();
+        let mut names = Vec::new();
+        for (namespace, name, unit_source) in units {
+            let unit_script: Script = acvus_ast::parse_script(&self.names, unit_source).expect("the unit's source parses");
+            let checked = check_script(&self.names, &decls, &interfaces, Inputs::Open, &mut Types::new(), &unit_script);
+            assert!(checked.refusals.is_empty(), "the unit {name} is refused: {:?}", checked.refusals);
+            let path: Vec<Astr> = namespace.iter().map(|segment| self.names.intern(segment)).collect();
+            let unit = QualifiedRef::qualified(self.names.namespace(&path), self.names.intern(name));
+            interfaces.set(unit, checked.interface.expect("an open check gives its interface"));
+            names.push(unit);
+        }
+        let script: Script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
+        let mut types = Types::new();
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_script(&self.names, &decls, &interfaces, Inputs::Fixed(&inputs), &mut types, &script);
+        assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+        let module = lower_script(&decls, &typeck, types, &script);
+        (Lowered::checked(module, self.names), names)
     }
 
     fn template(self, source: &str) -> Lowered {
@@ -593,33 +618,16 @@ fn effectful_calls_are_chained_in_order() {
 
 /// programs §1, §2, graph: a call of a unit is a call of its instantiation
 /// at the call's types, the unit named directly; its arguments are passed
-/// in the order of its parameters, whatever order they are written in.
+/// in the order of its parameters, its inputs' names' order (`times` before
+/// `user`), whatever order they are written in.
 #[test]
 fn a_unit_call_passes_its_arguments_in_the_parameters_order() {
-    let fx = Fixture::new();
-    let mut interfaces = Interfaces::new();
-    let types = interfaces.types_mut();
-    let (bool_ty, i64_ty, string) = (types.intern(TyKind::Bool), types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
-    let ty = types.intern(TyKind::Fn {
-        params: Box::new([bool_ty, i64_ty]),
-        ret: string,
-        effect: EffectTerm::Known(Effect::pure()),
-        flows: FlowTerm::Known(Flows::none()),
-        calls: Calls::Many,
-        holds: Holds::Nothing,
-        values: (),
-    });
-    let scheme = Scheme {
-        ty,
-        param_names: Box::new([fx.name("user"), fx.name("times")]),
-        bounds: Box::new([]),
-        impls: None,
-        requires: Box::new([]),
-        facts: DeclaredFacts::default(),
-    };
-    let greet = QualifiedRef::qualified(fx.names.namespace(&[fx.name("ns")]), fx.name("greet"));
-    interfaces.set(greet, Interface { scheme });
-    let lowered = fx.script_calling(&interfaces, "ns::greet(times: 2, user: true)");
+    let mut fx = Fixture::new();
+    let (bool_ty, int, string) = (fx.ty(TyKind::Bool), fx.int(), fx.ty(TyKind::String));
+    let both = fx.function(&[bool_ty, int], string, Effect::pure());
+    fx.declare("both", both, 2);
+    let (lowered, units) = fx.script_with_units(&[(&["ns"], "greet", "both($user, $times)")], "ns::greet(user: true, times: 2)");
+    let greet = units[0];
     let body = lowered.entry();
     let passed = lowered
         .entry_ops()
@@ -630,7 +638,7 @@ fn a_unit_call_passes_its_arguments_in_the_parameters_order() {
         })
         .expect("the unit is called directly");
     let kinds: Vec<&TyKind<Concrete>> = passed.iter().map(|arg| lowered.kind_of(body, *arg)).collect();
-    assert_eq!(kinds, vec![&TyKind::Bool, &TyKind::Int(IntTy::I64)]);
+    assert_eq!(kinds, vec![&TyKind::Int(IntTy::I64), &TyKind::Bool]);
 }
 
 /// Inside `anyorder`, every call consumes the entry token, and what they

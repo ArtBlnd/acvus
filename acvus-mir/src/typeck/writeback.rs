@@ -56,8 +56,13 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         .out
         .schemes
         .iter()
-        .filter(|scheme| scheme.generalizes)
-        .map(|scheme| (scheme.binder, scheme.lambdas.clone().into()))
+        .enumerate()
+        .filter(|(at, scheme)| {
+            scheme.generalizes
+                && scheme.value == super::generalize::SchemeValue::Entering
+                && !cx.out.foreign.contains(&super::generalize::SchemeId(u32::try_from(*at).expect("u32 schemes")))
+        })
+        .map(|(_, scheme)| (scheme.binder, scheme.lambdas.clone().into()))
         .collect();
     let result = freeze(&mut cx, types, &mut memo, result);
     let callees = std::mem::take(&mut cx.out.callees)
@@ -88,6 +93,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         generalized,
         value_sites,
         body_effect,
+        interface: cx.out.interface.take(),
         result,
         refusals: std::mem::take(&mut cx.out.refusals),
     }

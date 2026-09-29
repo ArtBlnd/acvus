@@ -12,6 +12,7 @@ mod cells;
 mod closed;
 mod copy;
 mod freeze;
+mod import;
 mod relate;
 mod scheme;
 #[cfg(test)]
@@ -31,6 +32,7 @@ pub use cells::{Exceeds, FlowId};
 pub use closed::{Closed, OpenSources};
 pub use copy::{AtInstance, CopiedFlow, Reached, VarMarks, VarsOf};
 pub use freeze::{FreezeMemo, Unsettled};
+pub use import::Imported;
 pub use relate::{Coerced, CoercedPart, Entered, Mismatch, ShapeCoercion};
 pub use scheme::{Instantiated, RequiredAt};
 

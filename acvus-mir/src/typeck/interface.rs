@@ -22,13 +22,13 @@ use crate::infer::Infer;
 /// from that store into the caller's. Two interfaces are equal when their
 /// schemes are, variables compared by the order they are first reached.
 pub struct Interface {
-    /// The scheme's terms, and nothing else.
-    pub store: Infer,
+    /// The terms of the check the scheme was settled in.
+    pub(crate) store: Infer,
     /// The parameter names, in the order of the function type's parameters.
     pub params: Box<[acvus_utils::Astr]>,
     /// The scheme in `store`: its function type, what it generalizes, and
     /// its requirements.
-    pub scheme: super::generalize::Exported,
+    pub(crate) scheme: super::generalize::Exported,
 }
 
 /// The interfaces a check's calls may reach, by each unit's whole name.

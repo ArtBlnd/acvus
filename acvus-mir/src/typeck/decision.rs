@@ -334,8 +334,8 @@ impl Decision {
             Decision::BlockEnd { span, last, block } => Decision::BlockEnd { span, last: f.ty(last), block: f.ty(block) },
             Decision::Operand { span, operand, domain } => Decision::Operand { span, operand: f.ty(operand), domain },
             Decision::Compare { node, span, sig, operand, body } => Decision::Compare { node, span, sig, operand: f.ty(operand), body: f.effect(&body) },
-            Decision::Instantiate { scheme, site, span, result } => Decision::Instantiate { scheme, site, span, result: f.ty(result) },
-            Decision::In { instance, decision } => Decision::In { instance, decision: Box::new(decision.map_terms(f)) },
+            Decision::Instantiate { scheme, site, span, result } => Decision::Instantiate { scheme: f.scheme(scheme), site, span, result: f.ty(result) },
+            Decision::In { instance, decision } => Decision::In { instance: f.instance(instance), decision: Box::new(decision.map_terms(f)) },
         }
     }
 }
@@ -344,6 +344,17 @@ impl Decision {
 pub(super) trait MapTerms {
     fn ty(&mut self, term: Term) -> Term;
     fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase>;
+
+    /// A scheme a decision names, where the decision moves to another
+    /// check's tables; itself otherwise.
+    fn scheme(&mut self, scheme: super::generalize::SchemeId) -> super::generalize::SchemeId {
+        scheme
+    }
+
+    /// An instance a decision is made at, likewise.
+    fn instance(&mut self, instance: super::generalize::InstanceId) -> super::generalize::InstanceId {
+        instance
+    }
 }
 
 impl Callee {

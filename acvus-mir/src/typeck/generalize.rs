@@ -56,6 +56,17 @@ pub(super) struct LetScheme {
     /// Whether every value entering it had its body here, so that it is
     /// generalized; known once settled.
     pub generalizes: bool,
+    /// What its value is.
+    pub value: SchemeValue,
+}
+
+/// What a scheme generalizes: the values entering a binding a `let` made,
+/// or the whole check, a unit being one function whose body is the check
+/// and whose environment is empty (programs §1-§2, functions §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SchemeValue {
+    Entering,
+    Unit,
 }
 
 /// A scheme settled: what it generalizes, and what it requires.
@@ -70,15 +81,135 @@ pub(super) struct Settled {
     pub requirements: Box<[Decision]>,
 }
 
-/// A settled scheme copied into a store of its own (typeck::Interface):
-/// its function type, what it generalizes and its requirements, each a
-/// term of that store. Instantiating one copies from that store into the
-/// instantiating check's, the same instantiation as a scheme of the check's
-/// own, whose source store is the check's.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Exported {
-    pub term: Term,
-    pub settled: Settled,
+/// A unit's settled scheme in a store of its own (typeck::Interface): its
+/// function type, what it generalizes and its requirements, each a term of
+/// that store, with the check's schemes and instances the requirements
+/// name. A calling check imports it once and then uses it as a scheme of
+/// its own, by the one instantiation every scheme has.
+#[derive(Debug, Clone)]
+pub(crate) struct Exported {
+    pub(super) scheme: LetScheme,
+    /// The check's schemes and instances, which the requirements name.
+    pub(super) schemes: Vec<LetScheme>,
+    pub(super) instances: Vec<Instance>,
+}
+
+/// A unit's scheme, settled in `cx`, moved into a store of its own with the
+/// schemes and instances its requirements name (typeck::Interface).
+pub(super) fn export(cx: &Ctxt<'_>, scheme: SchemeId) -> (crate::infer::Infer, Exported) {
+    let mut store = crate::infer::Infer::new();
+    let imported = store.import(&cx.infer);
+    let mut moving = Moving { terms: &imported, schemes: 0, instances: 0 };
+    let exported = Exported {
+        scheme: moving.scheme(&cx.out.schemes[scheme.0 as usize]),
+        schemes: cx.out.schemes.iter().map(|scheme| moving.scheme(scheme)).collect(),
+        instances: cx.out.instances.iter().map(|instance| moving.instance(instance)).collect(),
+    };
+    (store, exported)
+}
+
+/// A unit's interface brought into this check, once per unit: its store's
+/// terms imported, its schemes and instances appended after this check's,
+/// and its scheme registered as one settled here. A call of the unit is a
+/// use of that scheme, instantiated as any is.
+pub(super) fn import(cx: &mut Ctxt<'_>, unit: acvus_utils::QualifiedRef) -> SchemeId {
+    if let Some(scheme) = cx.out.imported.get(&unit) {
+        return *scheme;
+    }
+    let interface = cx.interfaces.get(unit).expect("a unit call names a unit with an interface");
+    let imported = cx.infer.import(&interface.store);
+    let mut moving = Moving {
+        terms: &imported,
+        schemes: u32::try_from(cx.out.schemes.len()).expect("u32 schemes"),
+        instances: u32::try_from(cx.out.instances.len()).expect("u32 instances"),
+    };
+    let schemes: Vec<LetScheme> = interface.scheme.schemes.iter().map(|scheme| moving.scheme(scheme)).collect();
+    // Code at no instance of this check's own: its body is the unit's.
+    let instances: Vec<Instance> =
+        interface.scheme.instances.iter().map(|instance| Instance { template: true, ..moving.instance(instance) }).collect();
+    let scheme = moving.scheme(&interface.scheme.scheme);
+    let first = cx.out.schemes.len();
+    cx.out.schemes.extend(schemes);
+    cx.out.instances.extend(instances);
+    let id = SchemeId(u32::try_from(cx.out.schemes.len()).expect("u32 schemes"));
+    cx.out.schemes.push(scheme);
+    cx.out.foreign.extend((first..cx.out.schemes.len()).map(|at| SchemeId(u32::try_from(at).expect("u32 schemes"))));
+    cx.out.imported.insert(unit, id);
+    id
+}
+
+/// Moving a check's schemes, instances and decisions into another store's
+/// terms and another check's tables.
+struct Moving<'m> {
+    terms: &'m crate::infer::Imported,
+    schemes: u32,
+    instances: u32,
+}
+
+impl Moving<'_> {
+    fn scheme(&mut self, scheme: &LetScheme) -> LetScheme {
+        LetScheme {
+            term: self.terms.term(scheme.term),
+            settled: scheme.settled.as_ref().map(|settled| Settled {
+                generalized: self.vars(&settled.generalized),
+                requirements: settled.requirements.iter().map(|decision| decision.map_terms(self)).collect(),
+            }),
+            ..scheme.clone()
+        }
+    }
+
+    fn instance(&mut self, instance: &Instance) -> Instance {
+        Instance {
+            scheme: MapTerms::scheme(self, instance.scheme),
+            within: instance.within.map(|within| MapTerms::instance(self, within)),
+            at: self.at(&instance.at),
+            // What it recorded is at sites of the check it was made in.
+            recorded: Recorded::default(),
+            ..instance.clone()
+        }
+    }
+
+    fn vars(&self, vars: &Generalized) -> Generalized {
+        let terms = self.terms;
+        Generalized {
+            types: vars.types.iter().map(|var| terms.ty_var(*var)).collect(),
+            effects: vars.effects.iter().map(|var| terms.effect_var(*var)).collect(),
+            lengths: vars.lengths.iter().map(|var| terms.length_var(*var)).collect(),
+            identities: vars.identities.iter().map(|var| terms.identity_var(*var)).collect(),
+            marks: vars.marks.iter().map(|var| terms.mark_var(*var)).collect(),
+            values: vars.values.iter().map(|var| terms.values_var(*var)).collect(),
+        }
+    }
+
+    fn at(&self, at: &AtInstance) -> AtInstance {
+        let terms = self.terms;
+        AtInstance {
+            types: at.types.iter().map(|(var, term)| (terms.ty_var(*var), terms.term(*term))).collect(),
+            effects: at.effects.iter().map(|(var, copy)| (terms.effect_var(*var), terms.effect_var(*copy))).collect(),
+            lengths: at.lengths.iter().map(|(var, copy)| (terms.length_var(*var), terms.length_var(*copy))).collect(),
+            identities: at.identities.iter().map(|(var, copy)| (terms.identity_var(*var), terms.identity_var(*copy))).collect(),
+            marks: at.marks.iter().map(|(var, copy)| (terms.mark_var(*var), terms.mark_var(*copy))).collect(),
+            values: at.values.iter().map(|(var, copy)| (terms.values_var(*var), terms.values_var(*copy))).collect(),
+        }
+    }
+}
+
+impl MapTerms for Moving<'_> {
+    fn ty(&mut self, term: Term) -> Term {
+        self.terms.term(term)
+    }
+
+    fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase> {
+        self.terms.effect(effect)
+    }
+
+    fn scheme(&mut self, scheme: SchemeId) -> SchemeId {
+        SchemeId(scheme.0 + self.schemes)
+    }
+
+    fn instance(&mut self, instance: InstanceId) -> InstanceId {
+        InstanceId(instance.0 + self.instances)
+    }
 }
 
 /// The generalized variables, by kind: every kind a type states
@@ -197,11 +328,19 @@ fn instance_of(cx: &Ctxt<'_>, term: Term) -> bool {
 /// finds them), and `generalize_all` settles it.
 pub(super) fn register(cx: &mut Ctxt<'_>, binder: AstId, term: Term) -> SchemeId {
     let id = SchemeId(u32::try_from(cx.out.schemes.len()).expect("register: u32::MAX schemes"));
-    cx.out.schemes.push(LetScheme { binder, term, lambdas: Vec::new(), settled: None, generalizes: false });
+    cx.out.schemes.push(LetScheme { binder, term, lambdas: Vec::new(), settled: None, generalizes: false, value: SchemeValue::Entering });
     id
 }
 
-/// Settles every scheme, innermost first: each binding's lambdas' decisions
+/// The check itself, at `root`, as one scheme of function type `term`:
+/// registered after every binding its walk made, so it settles last.
+pub(super) fn register_unit(cx: &mut Ctxt<'_>, root: AstId, term: Term) -> SchemeId {
+    let id = SchemeId(u32::try_from(cx.out.schemes.len()).expect("register_unit: u32::MAX schemes"));
+    cx.out.schemes.push(LetScheme { binder: root, term, lambdas: Vec::new(), settled: None, generalizes: true, value: SchemeValue::Unit });
+    id
+}
+
+/// Settles every scheme not yet settled, innermost first: each binding's lambdas' decisions
 /// are decided as far as they can be without a default reaching a
 /// generalizable variable (types §5 applies at the use, not here), and the
 /// scheme takes what is left. A binding registers once its value is
@@ -209,7 +348,10 @@ pub(super) fn register(cx: &mut Ctxt<'_>, binder: AstId, term: Term) -> SchemeId
 /// first.
 pub(super) fn generalize_all(cx: &mut Ctxt<'_>) {
     for at in 0..cx.out.schemes.len() {
-        settle(cx, SchemeId(u32::try_from(at).expect("u32 schemes")));
+        // A scheme another check settled arrives settled (`import`).
+        if cx.out.schemes[at].settled.is_none() {
+            settle(cx, SchemeId(u32::try_from(at).expect("u32 schemes")));
+        }
     }
 }
 
@@ -226,7 +368,10 @@ fn nested_in(walks: &FxHashMap<AstId, Walk>, roots: &FxHashSet<AstId>, owner: Op
 }
 
 fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
-    let LetScheme { binder, term, .. } = cx.out.schemes[id.0 as usize].clone();
+    let LetScheme { binder, term, value, .. } = cx.out.schemes[id.0 as usize].clone();
+    if value == SchemeValue::Unit {
+        return settle_unit(cx, id, term);
+    }
     let mut lambdas = Vec::new();
     let local = sources(cx, term, &mut FxHashSet::default(), &mut lambdas);
     cx.out.schemes[id.0 as usize].lambdas = lambdas.clone();
@@ -307,6 +452,36 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
         values: sorted(reached.values.iter().copied().filter(|var| own.made(|marks| marks.values, var.0) && !held.values.contains(var)), |var| var.0),
     };
 
+    let requirements = split_requirements(cx, owned, &generalized);
+    cx.out.schemes[id.0 as usize].settled = Some(Settled { generalized, requirements });
+}
+
+/// A unit's scheme settled: its value is the whole check, so every decision
+/// and every variable is its own, and nothing outside holds any, its
+/// environment being empty. The rest is a binding's settling.
+fn settle_unit(cx: &mut Ctxt<'_>, id: SchemeId, term: Term) {
+    cx.out.settling = true;
+    while fire_owned_round(cx, &|_, _| true, Reading::Closed) {}
+    cx.out.settling = false;
+    let owned = cx.decisions.take_owned(&|_| true);
+    let types: Vec<Term> = owned.iter().flat_map(|(decision, _)| decision.terms()).chain([term]).collect();
+    let effects: Vec<_> = owned.iter().flat_map(|(decision, _)| decision.effects()).collect();
+    let reached = cx.infer.reached(types, effects);
+    let generalized = Generalized {
+        types: sorted(reached.types.iter().copied().filter(|var| cx.infer.is_unbound(*var)), |var| var.0),
+        effects: sorted(reached.effects.iter().copied(), |var| var.0),
+        lengths: sorted(reached.lengths.iter().copied().filter(|var| cx.infer.is_open_length(*var)), |var| var.0),
+        identities: sorted(reached.identities.iter().copied().filter(|var| cx.infer.is_open_identity(*var)), |var| var.0),
+        marks: sorted(reached.marks.iter().copied().filter(|var| cx.infer.is_open_mark(*var)), |var| var.0),
+        values: sorted(reached.values.iter().copied(), |var| var.0),
+    };
+    let requirements = split_requirements(cx, owned, &generalized);
+    cx.out.schemes[id.0 as usize].settled = Some(Settled { generalized, requirements });
+}
+
+/// Each of `owned` that reads a variable of `generalized` is a requirement,
+/// made at each use; the others go back to the check.
+fn split_requirements(cx: &mut Ctxt<'_>, owned: Vec<(Decision, Option<AstId>)>, generalized: &Generalized) -> Box<[Decision]> {
     let mut requirements = Vec::new();
     for (decision, owner) in owned {
         let reads = cx.infer.reached(decision.terms(), decision.effects());
@@ -321,7 +496,7 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
             false => cx.decisions.restore(decision, owner),
         }
     }
-    cx.out.schemes[id.0 as usize].settled = Some(Settled { generalized, requirements: requirements.into() });
+    requirements.into()
 }
 
 fn sorted<T>(vars: impl Iterator<Item = T>, key: impl Fn(&T) -> u32) -> Box<[T]> {
@@ -342,14 +517,15 @@ pub(super) fn instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: AstId, 
 
 /// `Decision::Instantiate` fired; `Err` while its scheme is not settled.
 pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: AstId, span: Span, result: Term) -> Result<(), ()> {
-    let LetScheme { term, settled, .. } = cx.out.schemes[scheme.0 as usize].clone();
+    let LetScheme { term, settled, value, .. } = cx.out.schemes[scheme.0 as usize].clone();
     let Some(Settled { generalized, requirements }) = settled else {
         return Err(());
     };
     let (at, flows) = cx.infer.instance_at(&generalized);
     copied_flows(cx, &flows);
     let within = cx.out.firing_in;
-    let template = cx.out.settling && within.is_none();
+    // A unit's code is compiled at its own instantiation, never here.
+    let template = (cx.out.settling && within.is_none()) || value == SchemeValue::Unit;
     let instance = new_instance(cx, Instance { scheme, use_site, span, within, at: at.clone(), recorded: Recorded::default(), template });
     let mut memo = FxHashMap::default();
     let copied = cx.infer.copy_at(term, &at, &mut memo);

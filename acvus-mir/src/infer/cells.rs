@@ -61,6 +61,21 @@ impl<T: VarTerm> End<T> {
     }
 }
 
+/// How far `Cells::import` moved one store's variables and flows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct Shift {
+    pub vars: u32,
+    pub flows: u32,
+}
+
+/// `term` with its variable, where it is one, moved by `by`.
+pub(super) fn shifted<T: VarTerm>(term: &T, by: u32) -> T {
+    match term.read() {
+        Read::Known(value) => T::of_value(value.clone()),
+        Read::Var(var) => T::of_var(T::var_of_index(u32::try_from(T::index(var)).expect("u32 variables") + by)),
+    }
+}
+
 /// Two known values that differ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Unequal;
@@ -107,6 +122,26 @@ impl<T: VarTerm> Cells<T> {
             rose: Vec::new(),
             next_flow: 0,
         }
+    }
+
+    /// Every variable of `from` appended after this store's, each moved by
+    /// the returned count, with its term, whether it is fixed, its flows
+    /// and whether it rose; each flow numbered after this store's.
+    pub(super) fn import(&mut self, from: &Cells<T>) -> Shift {
+        let shift = Shift {
+            vars: u32::try_from(self.cells.len()).expect("Cells::import: u32::MAX variables"),
+            flows: self.next_flow,
+        };
+        self.cells.extend(from.cells.iter().map(|cell| cell.as_ref().map(|term| shifted(term, shift.vars))));
+        self.fixed.extend(from.fixed.iter().copied());
+        self.flows.extend(
+            from.flows
+                .iter()
+                .map(|flows| flows.iter().map(|(term, flow)| (shifted(term, shift.vars), FlowId(flow.0 + shift.flows))).collect()),
+        );
+        self.rose.extend(from.rose.iter().map(|var| T::var_of_index(u32::try_from(T::index(*var)).expect("u32 variables") + shift.vars)));
+        self.next_flow += from.next_flow;
+        shift
     }
 
     /// # Panics

@@ -91,8 +91,9 @@ pub fn check_script<S: Slot>(
     let site = tail.map_or(script.id, Expr::id);
     let span = tail.map_or(script.span, Expr::span);
     let result = context::check_run_result(&mut cx, site, value, span);
+    let unit = open.then(|| unit_scheme(&mut cx, script.id, result));
     generalize::generalize_all(&mut cx);
-    generalize_run(open);
+    export_unit(&mut cx, unit);
     decision::solve(&mut cx);
     closure::settle_captures(&mut cx);
     writeback::finish(cx, types, result)
@@ -112,11 +113,12 @@ pub fn check_template<S: Slot>(
     let mut cx = Ctxt::new(interner, decls, interfaces, Run::Template);
     let open = enter_inputs(&mut cx, types, inputs);
     stmt::check_stmts(&mut cx, &template.body);
+    let built = cx.node(TyKind::String);
+    let unit = open.then(|| unit_scheme(&mut cx, template.id, built));
     generalize::generalize_all(&mut cx);
-    generalize_run(open);
+    export_unit(&mut cx, unit);
     decision::solve(&mut cx);
     closure::settle_captures(&mut cx);
-    let built = cx.node(TyKind::String);
     writeback::finish(cx, types, built)
 }
 
@@ -150,15 +152,38 @@ fn enter_inputs(cx: &mut Ctxt<'_>, types: &Types<Concrete>, inputs: Inputs<'_>) 
     }
 }
 
-/// The run with its inputs open, generalized into its interface: the run
-/// is a function value whose body is here and whose environment is empty,
-/// registered as a scheme like a `let`-bound one and settled by the same
-/// `generalize_all`, then exported into a store of its own
-/// (`generalize::Exported`, `Interface`).
-fn generalize_run(open: bool) {
-    if open {
-        todo!("the cut: the run is one scheme, settled as a let-bound one and exported")
-    }
+/// The check, its inputs open, as one scheme (`generalize::register_unit`):
+/// a function from its inputs, by the order of their names, to `result`,
+/// with the check's effect, called any number of times and capturing
+/// nothing (programs §1-§2, functions §3).
+fn unit_scheme(cx: &mut Ctxt<'_>, root: acvus_ast::AstId, result: crate::infer::Term) -> (generalize::SchemeId, Box<[Astr]>) {
+    let mut inputs = cx.scope.inputs();
+    inputs.sort_by(|(a, _), (b, _)| cx.interner.resolve(*a).cmp(cx.interner.resolve(*b)));
+    let effect = effect::body_effect(cx);
+    let flows = crate::ty::FlowTerm::Var(cx.infer.fresh_flow());
+    let values = cx.infer.fresh_values();
+    let term = cx.node(TyKind::Fn {
+        params: inputs.iter().map(|(_, term)| *term).collect(),
+        ret: result,
+        effect,
+        flows,
+        calls: crate::ty::CallsTerm::Known(crate::ty::Calls::Many),
+        holds: crate::ty::HoldsTerm::Known(crate::ty::Holds::Nothing),
+        values,
+    });
+    let names = inputs.into_iter().map(|(name, _)| name).collect();
+    (generalize::register_unit(cx, root, term), names)
+}
+
+/// The unit's scheme, once settled, exported into its interface: settled
+/// is final, since every decision still reading what it generalizes is one
+/// of its requirements, so what solving decides after is the check's alone.
+fn export_unit(cx: &mut Ctxt<'_>, unit: Option<(generalize::SchemeId, Box<[Astr]>)>) {
+    let Some((scheme, params)) = unit else {
+        return;
+    };
+    let (store, scheme) = generalize::export(cx, scheme);
+    cx.out.interface = Some(Interface { store, params, scheme });
 }
 
 // A module (programs §3) is to-be: its entry gives its declarations'

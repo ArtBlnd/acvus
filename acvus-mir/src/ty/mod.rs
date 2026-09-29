@@ -281,6 +281,16 @@ impl<V: Phase> Types<V> {
         &self.kinds[ty.index as usize]
     }
 
+    /// Every id of this table, in the order its kinds were interned, so
+    /// that each kind's parts come before it.
+    pub fn ids(&self) -> impl Iterator<Item = TyId<V>> + '_ {
+        (0..self.kinds.len()).map(|index| TyId {
+            table: self.table,
+            index: u32::try_from(index).expect("Types::ids: the table holds u32::MAX shapes"),
+            phase: PhantomData,
+        })
+    }
+
     fn assert_own(&self, ty: TyId<V>) {
         assert_eq!(
             ty.table, self.table,

@@ -48,10 +48,11 @@ fn named_call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[(
     }
 }
 
-/// A call of `unit`, its interface instantiated at the call as an extern
-/// fn's scheme is (programs §1, §2): each argument enters the parameter it
-/// names, the call's effect is the unit's, and each requirement is made
-/// here (extern-fn §6).
+/// A call of `unit`: a use of its scheme, brought into this check once
+/// (`generalize::import`) and instantiated at the call as any scheme's use
+/// is, each requirement made here (functions §2, programs §1-§2); then
+/// called as a function value is, each argument entering the parameter it
+/// names.
 fn unit_call<S: Slot>(
     cx: &mut Ctxt<'_>,
     site: AstId,
@@ -61,30 +62,46 @@ fn unit_call<S: Slot>(
     values: Vec<(AstId, Term)>,
     span: Span,
 ) -> Term {
-    let interfaces = cx.interfaces;
-    let scheme = &interfaces.get(unit).expect("a unit call names a unit with an interface").scheme;
-    let Some(arguments) = argument_order(cx, unit, &scheme.param_names, args, span) else {
+    let params = cx.interfaces.get(unit).expect("a unit call names a unit with an interface").params.clone();
+    let Some(arguments) = argument_order(cx, unit, &params, args, span) else {
         return cx.fresh();
     };
     cx.out.names.insert(name_site, Name::Unit(unit));
-    let instantiated = cx.infer.instantiate_in(interfaces.types(), scheme);
-    let TyKind::Fn { params, ret, effect, .. } = cx.infer.types().kind(cx.infer.shallow(instantiated.ty)).clone() else {
-        panic!("a unit's interface is a function type: the unit is one function (programs)");
-    };
-    assert_eq!(params.len(), arguments.len(), "a unit's interface names each of its parameters once");
+    let scheme = super::generalize::import(cx, unit);
+    let callee = super::generalize::instantiate(cx, scheme, name_site, span);
+    let (form, params, ret, effect) = function_form(cx, params.len());
+    cx.join(callee, form, crate::ty::Reach::Named, span);
     for (param, at) in params.iter().zip(&arguments) {
         let (arg_site, value) = values[*at];
         cx.enter(arg_site, value, *param, crate::ty::Reach::Named, args[*at].1.span());
     }
     note_call_effect(cx, &effect, span);
-    cx.out.callees.insert(site, instantiated.ty);
+    cx.out.callees.insert(site, form);
     cx.out.units.insert(site, UnitCall { unit, arguments: arguments.into() });
-    decision::settle_bounded(cx, instantiated.ty, span);
-    let body = super::effect::body_effect(cx);
-    for required in instantiated.requirements {
-        decision::push_required(cx, site, span, required, &body);
-    }
     ret
+}
+
+/// A function type of `arity` fresh parameters, a fresh result, and fresh
+/// variables for the rest, which a callee is joined with where a value is
+/// called: its parameters, result and effect.
+fn function_form(cx: &mut Ctxt<'_>, arity: usize) -> (Term, Vec<Term>, Term, EffectTerm<crate::ty::Infer>) {
+    let params: Vec<Term> = (0..arity).map(|_| cx.fresh()).collect();
+    let ret = cx.fresh();
+    let effect = EffectTerm::Var(cx.infer.fresh_effect());
+    let flows = FlowTerm::Var(cx.infer.fresh_flow());
+    let calls = CallsTerm::Var(cx.infer.fresh_calls());
+    let holds = HoldsTerm::Var(cx.infer.fresh_holds());
+    let function_values = cx.infer.fresh_values();
+    let form = cx.held(TyKind::Fn {
+        params: params.clone().into(),
+        ret,
+        effect: effect.clone(),
+        flows,
+        calls,
+        holds,
+        values: function_values,
+    });
+    (form, params, ret, effect)
 }
 
 /// Which argument each of `params` takes, by the names written: every
@@ -210,22 +227,7 @@ fn check_args<S: Slot>(cx: &mut Ctxt<'_>, args: &[&Expr<S>]) -> Vec<(AstId, Term
 fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> Term {
     let callee = check_expr(cx, func, Demand::Read);
     let values = check_args(cx, args);
-    let params: Vec<Term> = values.iter().map(|_| cx.fresh()).collect();
-    let ret = cx.fresh();
-    let effect = EffectTerm::Var(cx.infer.fresh_effect());
-    let flows = FlowTerm::Var(cx.infer.fresh_flow());
-    let calls = CallsTerm::Var(cx.infer.fresh_calls());
-    let holds = HoldsTerm::Var(cx.infer.fresh_holds());
-    let function_values = cx.infer.fresh_values();
-    let form = cx.held(TyKind::Fn {
-        params: params.clone().into(),
-        ret,
-        effect: effect.clone(),
-        flows,
-        calls,
-        holds,
-        values: function_values,
-    });
+    let (form, params, ret, effect) = function_form(cx, values.len());
     cx.join(callee, form, crate::ty::Reach::Named, func.span());
     for ((arg, (site, value)), param) in args.iter().zip(values).zip(params) {
         cx.enter(site, value, param, crate::ty::Reach::Named, arg.span());

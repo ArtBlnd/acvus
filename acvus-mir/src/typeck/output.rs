@@ -264,6 +264,12 @@ pub struct AsCast {
 pub(super) struct Output {
     /// Each generalized binding (functions §2), by `SchemeId`.
     pub schemes: Vec<super::generalize::LetScheme>,
+    /// Each unit whose interface this check brought in, by the scheme it is
+    /// here (`generalize::import`).
+    pub imported: FxHashMap<acvus_utils::QualifiedRef, super::generalize::SchemeId>,
+    /// Every scheme an import brought in: another check's, whose values are
+    /// not this check's to make.
+    pub foreign: rustc_hash::FxHashSet<super::generalize::SchemeId>,
     /// Each instance of one, by `InstanceId`.
     pub instances: Vec<super::generalize::Instance>,
     /// The instance whose requirement is firing, where one is: what fires
@@ -315,6 +321,8 @@ pub(super) struct Output {
     /// Each comparison's and each lifted impl's structure node.
     pub structures: FxHashMap<AstId, StructureNode>,
     pub body_effect: Option<EffectTerm<InferPhase>>,
+    /// The unit's interface, where its inputs were open (`generalize::export`).
+    pub interface: Option<super::interface::Interface>,
     pub refusals: Vec<Refusal>,
 }
 
@@ -352,6 +360,9 @@ pub struct Typeck {
     /// every signature the binding has (functions §2).
     pub value_sites: FxHashMap<AstId, AstId>,
     pub body_effect: Effect,
+    /// The unit's interface, where its inputs were open: its scheme, which
+    /// every caller instantiates (programs §1-§2).
+    pub interface: Option<super::interface::Interface>,
     /// The run's result type: the slot every tail and `return` enters, and
     /// for a template the `String` it builds. `None` only where a refusal
     /// left it open.

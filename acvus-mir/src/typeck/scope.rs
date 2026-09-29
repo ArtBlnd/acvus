@@ -259,6 +259,12 @@ impl Scope {
         entered.values().copied()
     }
 
+    /// Every input entered so far with its name: the run's parameters.
+    pub fn inputs(&self) -> Vec<(Astr, Term)> {
+        let (Inputs::Open(entered) | Inputs::Fixed(entered)) = &self.inputs;
+        entered.iter().map(|(name, term)| (*name, *term)).collect()
+    }
+
     /// An open input's term, made at its first read.
     ///
     /// # Panics
