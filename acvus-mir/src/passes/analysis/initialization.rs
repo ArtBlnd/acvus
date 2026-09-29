@@ -30,7 +30,7 @@ use std::collections::BTreeSet;
 use acvus_ast::Span;
 use rustc_hash::FxHashMap;
 
-use crate::ir::cfg::{Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Terminator};
+use crate::ir::cfg::{BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, solve_dense};
@@ -258,7 +258,7 @@ impl DenseAnalysis for Forward<'_> {
         }
     }
 
-    fn transfer_terminator(&self, _: &Terminator, _: &mut Units) {}
+    fn transfer_terminator(&self, _: BlockId, _: &Terminator, _: &mut Units) {}
 
-    fn transfer_edge(&self, _: &Edge<'_>, _: &[ValueId], _: &mut Units) {}
+    fn transfer_edge(&self, _: BlockId, _: &Edge<'_>, _: &[ValueId], _: &mut Units) {}
 }

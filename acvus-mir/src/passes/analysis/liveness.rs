@@ -59,7 +59,7 @@ impl Analysis for Liveness {
         for (id, block) in body.blocks() {
             let end = facts.at(id).clone();
             let mut start = end.clone();
-            Backward.transfer_terminator(block.terminator(), &mut start);
+            Backward.transfer_terminator(id, block.terminator(), &mut start);
             for inst in block.insts().rev() {
                 Backward.transfer(inst, &mut start);
             }
@@ -117,11 +117,11 @@ impl DenseAnalysis for Backward {
         state.0.extend(inst.operands());
     }
 
-    fn transfer_terminator(&self, terminator: &Terminator, state: &mut Live) {
+    fn transfer_terminator(&self, _: BlockId, terminator: &Terminator, state: &mut Live) {
         state.0.extend(terminator.operands());
     }
 
-    fn transfer_edge(&self, edge: &Edge<'_>, target_params: &[ValueId], state: &mut Live) {
+    fn transfer_edge(&self, _: BlockId, edge: &Edge<'_>, target_params: &[ValueId], state: &mut Live) {
         for param in target_params {
             state.0.remove(param);
         }

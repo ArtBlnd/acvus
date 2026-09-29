@@ -23,32 +23,48 @@
 //! by-value parameter's, that the result or an outside storage's content
 //! holds refuses it `LoanOutlivesBody`, naming where the loan was made.
 
-use std::collections::BTreeSet;
-
 use acvus_ast::Span;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::Refusal;
-use crate::ir::cfg::{BlockId, Body, BodyId, Inst, Module, Op, Site};
-use crate::ir::parts::{Path, overlap};
-use crate::ir::{RefTarget, ValueId};
-use crate::passes::analysis::{AnalysisManager, ContentLiveness, Dominators, Liveness, Loan, LoanSet, Loans, Mode, Storage};
-use crate::ty::{Mutability, TyKind, copies};
+use super::{Refusal, RefusalKind};
+use crate::ir::ValueId;
+use crate::ir::cfg::{BlockId, Body, BodyId, Inst, InstId, Module, Site, Terminator};
+use crate::passes::analysis::{
+    Access, AnalysisManager, ContentLiveness, Dominators, Liveness, Loan, LoanSet, Loans, Made, Mode, Reach, Storage,
+};
 
 /// The judgment over `body`, its refusals pushed to `out`.
-pub(super) fn check(module: &Module, body: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
-    for Met { access, loan } in met(module, body, am) {
-        out.push(Refusal { kind: super::RefusalKind::LoanConflict { loan: made_at(&loan) }, span: access });
+pub(super) fn check(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
+    let body = module.body(body_id);
+    let conflicts = met(module, body_id, am).into_iter().map(|Met { access, loan }| Refusal {
+        kind: RefusalKind::LoanConflict { loan: made_at(body, &loan) },
+        span: access,
+    });
+    let outliving = outlived(module, body_id, am).into_iter().map(|Outlived { at, loan }| Refusal {
+        kind: RefusalKind::LoanOutlivesBody { loan: made_at(body, &loan) },
+        span: at,
+    });
+    for refusal in conflicts.chain(outliving) {
+        if !out.contains(&refusal) {
+            out.push(refusal);
+        }
     }
 }
 
-/// Where `loan` was made, which `LoanConflict` names.
-fn made_at(loan: &Loan) -> Span {
-    todo!(
-        "where {loan:?} was made: a Loan names its storage, path and mode, but no site it was made at; a reborrow holds \
-         its source's loans with the path extended and the mode weakened, and a parameter's loans are made at no site \
-         of the body, so the span is not determined by the Loans structure"
-    )
+/// Where `loan` was made, which a refusal names: a site's span, and a
+/// parameter's or capture's binder.
+fn made_at(body: &Body, loan: &Loan) -> Span {
+    match loan.made {
+        Made::At(site) => span_of(body, site),
+        Made::Outside { of } => body.binder_span(of),
+    }
+}
+
+fn span_of(body: &Body, site: Site) -> Span {
+    match site {
+        Site::Inst(inst) => body.inst(inst).span(),
+        Site::Term(block) => body.block(block).terminator_span(),
+    }
 }
 
 /// A live loan an access meets: the access's span, and the loan.
@@ -58,75 +74,30 @@ struct Met {
     loan: Loan,
 }
 
-/// What an access does to its place, which decides the loans it meets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Reach {
-    Read,
-    Write,
-    Move,
-    Lend(Mutability),
+/// A loan on the body's own storage that outlives it: the `Return`'s span,
+/// and the loan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Outlived {
+    at: Span,
+    loan: Loan,
 }
 
-impl Reach {
-    fn meets(self, loan: &Loan) -> bool {
-        match self {
-            Reach::Read | Reach::Lend(Mutability::Shared) => loan.mode == Mode::Exclusive,
-            Reach::Write | Reach::Move | Reach::Lend(Mutability::Mut) => true,
-        }
-    }
-}
-
-/// A place an access reaches: a storage and a path from its root.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Place {
-    storage: Storage,
-    path: Path,
-}
-
-/// An access of a place by an instruction.
-struct Access<'i> {
-    target: &'i RefTarget,
-    path: &'i [crate::ir::PathSeg],
-    reach: Reach,
-}
-
-/// The access `inst` makes, where it makes one.
-///
-/// A `Take` moves what does not copy, except a `&mut`, which each use
-/// reborrows and its place keeps, and a take-out for a call, which moves
-/// whatever it takes (`Op::Take`).
-fn access<'i>(body: &Body, module: &Module, inst: &'i Inst) -> Option<Access<'i>> {
-    let types = module.types();
-    let (target, path, reach) = match inst.op() {
-        Op::Ref { target, path, mutability } => (target, path, Reach::Lend(*mutability)),
-        Op::Assign { target, path, .. } => (target, path, Reach::Write),
-        Op::Take { target, path, taken_out } => {
-            let ty = body.ty_of(inst.result().expect("a take yields a value"));
-            let reborrowed = matches!(types.kind(ty), TyKind::Ref(Mutability::Mut, _));
-            let moves = *taken_out || !(copies(types, ty) || reborrowed);
-            (target, path, if moves { Reach::Move } else { Reach::Read })
-        }
-        _ => return None,
-    };
-    Some(Access { target, path, reach })
-}
-
-/// The places an access of `target` at `path` reaches: by name, the
-/// storage and the path; through a reference, each place a loan at its own
-/// position names, the path extended by `path`.
-fn accessed(loans: &Loans, target: &RefTarget, path: &[crate::ir::PathSeg]) -> BTreeSet<Place> {
-    match target {
-        RefTarget::Var(slot) => BTreeSet::from([Place { storage: Storage::Slot(*slot), path: path.to_vec() }]),
-        RefTarget::Param(param) => BTreeSet::from([Place { storage: Storage::Param(*param), path: path.to_vec() }]),
-        RefTarget::Through(reference) => loans
-            .of(*reference, 0)
+/// Whether `access` meets `loan`, a live loan it is not made through: a
+/// write, a move and an exclusive lend meet every loan whose place overlaps
+/// the accessed one, a read and a shared lend an exclusive one.
+fn meets(access: &Access, loan: &Loan) -> bool {
+    match access.reach {
+        Reach::Read => loan.mode == Mode::Exclusive && access.places.iter().any(|place| place.meets(loan)),
+        Reach::Write | Reach::Move => access.places.iter().any(|place| place.meets(loan)),
+        Reach::Lend => access
+            .made
             .iter()
-            .map(|loan| Place { storage: loan.storage, path: [&loan.path[..], path].concat() })
-            .collect(),
+            .any(|made| (made.mode == Mode::Exclusive || loan.mode == Mode::Exclusive) && made.place().meets(loan)),
     }
 }
 
-/// Every live loan each access of `body` meets, in the body's order.
+/// Every live loan each access of `body` meets, and every two loans made
+/// at one site that meet each other, in the body's order.
 fn met(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> Vec<Met> {
     let loans = am.get::<Loans>(module, body_id);
     let liveness = am.get::<Liveness>(module, body_id);
@@ -134,52 +105,187 @@ fn met(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> Vec<Me
     let reachable = am.get::<Dominators>(module, body_id);
     let body = module.body(body_id);
     let slots: FxHashSet<ValueId> = body.slots().iter().copied().collect();
+    let order = SiteOrder::of(body);
+    let live_loans = |site: Site, values: &FxHashSet<ValueId>, places: &FxHashSet<ValueId>| -> LoanSet {
+        let mut held = LoanSet::new();
+        for value in values.iter().filter(|value| !slots.contains(value)) {
+            let from = loans.holds_from(*value);
+            let not_yet_made = |loan: &Loan| from.is_some_and(|call| loan.made == Made::At(call) && !order.after(site, call));
+            held.extend(loans.all_of(*value).into_iter().filter(|loan| !not_yet_made(loan)));
+        }
+        for (storage, content) in loans.contents_before(site) {
+            let live = match storage {
+                Storage::Slot(place) | Storage::Param(place) => places.contains(place),
+                Storage::Outside { .. } => true,
+            };
+            if live {
+                held.extend(content.iter().flatten().cloned());
+            }
+        }
+        let ancestors = loans.ancestors(&held);
+        held.extend(ancestors);
+        held
+    };
 
     let mut met = Vec::new();
     for (id, block) in body.blocks().filter(|(id, _)| reachable.reachable(*id)) {
         let insts: Vec<&Inst> = block.insts().collect();
-        let live_values = live_before_each(&liveness, id, block.terminator().operands(), &insts);
-        for (inst, live) in insts.iter().zip(&live_values) {
-            let Some(Access { target, path, reach }) = access(body, module, inst) else {
-                continue;
-            };
-            let places = accessed(&loans, target, path);
-            let own = match target {
-                RefTarget::Through(reference) => loans.all_of(*reference),
-                RefTarget::Var(_) | RefTarget::Param(_) => LoanSet::new(),
-            };
-
-            let held_by_values = live.iter().filter(|value| !slots.contains(value)).flat_map(|value| loans.all_of(*value));
+        let terminator = block.terminator();
+        let live_values = live_before_each(&liveness, id, terminator, &insts);
+        for (inst, values) in insts.iter().zip(&live_values) {
             let site = Site::Inst(inst.id());
-            let held_by_contents = contents.live_before(inst.id()).iter().flat_map(|place| {
-                let storage = if slots.contains(place) { Storage::Slot(*place) } else { Storage::Param(*place) };
-                loans.content_before(site, storage).iter().flatten().cloned().collect::<Vec<Loan>>()
-            });
-            let live_loans: BTreeSet<Loan> = held_by_values.chain(held_by_contents).collect();
-
-            for loan in live_loans {
-                let overlaps = places.iter().any(|place| loan.storage == place.storage && overlap(&loan.path, &place.path));
-                if overlaps && reach.meets(&loan) && !own.contains(&loan) {
-                    met.push(Met { access: inst.span(), loan });
-                }
-            }
+            let live = live_loans(site, values, contents.live_before(inst.id()));
+            met_at(&loans, site, inst.span(), &live, &mut met);
         }
+        let site = Site::Term(id);
+        let values = live_before_terminator(&liveness, id, terminator);
+        let live = live_loans(site, &values, contents.live_before_terminator(id));
+        met_at(&loans, site, block.terminator_span(), &live, &mut met);
     }
     met
 }
 
+/// What the accesses of `site`, at `span`, meet among `live`, and each two
+/// of its lends meet of each other's loans, pushed to `met`.
+fn met_at(loans: &Loans, site: Site, span: Span, live: &LoanSet, met: &mut Vec<Met>) {
+    let accesses = loans.accesses(site);
+    for access in accesses {
+        let mut excluded = access.through.clone();
+        excluded.extend(loans.ancestors(&access.through));
+        let meeting: LoanSet = live.iter().filter(|loan| !excluded.contains(*loan) && meets(access, loan)).cloned().collect();
+        for loan in outermost(loans, &meeting) {
+            push_once(met, Met { access: span, loan });
+        }
+    }
+    let lends: Vec<&Access> = accesses.iter().filter(|access| access.reach == Reach::Lend).collect();
+    for (at, first) in lends.iter().enumerate() {
+        for second in &lends[at + 1..] {
+            let one_run = match (first.on_edge, second.on_edge) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            };
+            if !one_run {
+                continue;
+            }
+            for made in &first.made {
+                let meets_made = |other: &Loan| {
+                    (made.mode == Mode::Exclusive || other.mode == Mode::Exclusive)
+                        && made.place().meets(other)
+                        && !related(loans, made, other)
+                };
+                if second.made.iter().any(meets_made) {
+                    push_once(met, Met { access: span, loan: made.clone() });
+                }
+            }
+        }
+    }
+}
+
+/// The loans of `meeting` not made through another of them. An access that
+/// meets a loan meets every live loan it is made through, which holds its
+/// place at no weaker a mode: that is one conflict, named once, at the
+/// outermost loan.
+fn outermost(loans: &Loans, meeting: &LoanSet) -> Vec<Loan> {
+    meeting
+        .iter()
+        .filter(|loan| loans.ancestors(&LoanSet::from([(*loan).clone()])).is_disjoint(meeting))
+        .cloned()
+        .collect()
+}
+
+/// Whether one of the two loans is made through the other.
+fn related(loans: &Loans, a: &Loan, b: &Loan) -> bool {
+    loans.ancestors(&LoanSet::from([a.clone()])).contains(b) || loans.ancestors(&LoanSet::from([b.clone()])).contains(a)
+}
+
+fn push_once(met: &mut Vec<Met>, found: Met) {
+    if !met.contains(&found) {
+        met.push(found);
+    }
+}
+
+/// At every `Return`, each loan on the body's own storage that the result
+/// or an outside storage's content holds.
+fn outlived(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> Vec<Outlived> {
+    let loans = am.get::<Loans>(module, body_id);
+    let reachable = am.get::<Dominators>(module, body_id);
+    let body = module.body(body_id);
+    let mut outlived = Vec::new();
+    for (id, block) in body.blocks().filter(|(id, _)| reachable.reachable(*id)) {
+        let Terminator::Return { value, span, .. } = block.terminator() else {
+            continue;
+        };
+        let mut held = loans.all_of(*value);
+        for (storage, content) in loans.contents_before(Site::Term(id)) {
+            if let Storage::Outside { .. } = storage {
+                held.extend(content.iter().flatten().cloned());
+            }
+        }
+        for loan in held.into_iter().filter(|loan| matches!(loan.storage, Storage::Slot(_) | Storage::Param(_))) {
+            let found = Outlived { at: *span, loan };
+            if !outlived.contains(&found) {
+                outlived.push(found);
+            }
+        }
+    }
+    outlived
+}
+
+/// Where each instruction stands, and which blocks a run reaches after
+/// leaving each block, so that a site is known to follow a call.
+struct SiteOrder {
+    position: FxHashMap<InstId, (BlockId, usize)>,
+    successors: FxHashMap<BlockId, Vec<BlockId>>,
+}
+
+impl SiteOrder {
+    fn of(body: &Body) -> SiteOrder {
+        let mut position = FxHashMap::default();
+        let mut successors = FxHashMap::default();
+        for (id, block) in body.blocks() {
+            position.extend(block.insts().enumerate().map(|(index, inst)| (inst.id(), (id, index))));
+            successors.insert(id, block.terminator().edges().iter().map(|edge| edge.to).collect());
+        }
+        SiteOrder { position, successors }
+    }
+
+    /// Whether some run reaches `site` after `call` has started. Cost:
+    /// O(blocks + edges).
+    fn after(&self, site: Site, call: Site) -> bool {
+        let Site::Inst(call) = call else {
+            panic!("a call is an instruction");
+        };
+        let (block, index) = self.position[&call];
+        let (site_block, later_in_block) = match site {
+            Site::Inst(inst) => {
+                let (site_block, site_index) = self.position[&inst];
+                (site_block, site_index > index)
+            }
+            Site::Term(term) => (term, true),
+        };
+        if site_block == block && later_in_block {
+            return true;
+        }
+        let mut seen: FxHashSet<BlockId> = FxHashSet::default();
+        let mut pending: Vec<BlockId> = self.successors[&block].clone();
+        while let Some(next) = pending.pop() {
+            if !seen.insert(next) {
+                continue;
+            }
+            if next == site_block {
+                return true;
+            }
+            pending.extend(self.successors[&next].iter().copied());
+        }
+        false
+    }
+}
+
 /// The values live just before each of `insts`, `block`'s instructions: from
-/// what `Liveness` has live after its terminator, which reads `terminator`,
-/// each instruction back to front ends what it defines and reads its
-/// operands.
-fn live_before_each(
-    liveness: &Liveness,
-    block: BlockId,
-    terminator: impl IntoIterator<Item = ValueId>,
-    insts: &[&Inst],
-) -> Vec<FxHashSet<ValueId>> {
-    let mut live: FxHashSet<ValueId> = liveness.live_at_end(block).clone();
-    live.extend(terminator);
+/// what is live just before its terminator, each instruction back to front
+/// ends what it defines and reads its operands.
+fn live_before_each(liveness: &Liveness, block: BlockId, terminator: &Terminator, insts: &[&Inst]) -> Vec<FxHashSet<ValueId>> {
+    let mut live = live_before_terminator(liveness, block, terminator);
     let mut before = vec![FxHashSet::default(); insts.len()];
     for (at, inst) in insts.iter().enumerate().rev() {
         if let Some(result) = inst.result() {
@@ -192,6 +298,14 @@ fn live_before_each(
         before[at] = live.clone();
     }
     before
+}
+
+/// The values live just before `block`'s terminator: those live after it,
+/// and those it reads.
+fn live_before_terminator(liveness: &Liveness, block: BlockId, terminator: &Terminator) -> FxHashSet<ValueId> {
+    let mut live = liveness.live_at_end(block).clone();
+    live.extend(terminator.operands());
+    live
 }
 
 #[cfg(test)]

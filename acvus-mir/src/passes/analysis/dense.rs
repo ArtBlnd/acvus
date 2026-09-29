@@ -36,12 +36,13 @@ pub trait DenseAnalysis {
 
     fn entry(&self, body: &Body) -> Self::State;
     fn transfer(&self, inst: &Inst, state: &mut Self::State);
-    fn transfer_terminator(&self, terminator: &Terminator, state: &mut Self::State);
-    /// A state flowing along `edge`, whose target's parameters are
-    /// `target_params`: forward from the source's end to the target's start,
-    /// backward from the target's start to the source's end. The edge
+    /// `terminator` ends `block`.
+    fn transfer_terminator(&self, block: BlockId, terminator: &Terminator, state: &mut Self::State);
+    /// A state flowing along `edge` out of `from`, whose target's parameters
+    /// are `target_params`: forward from the source's end to the target's
+    /// start, backward from the target's start to the source's end. The edge
     /// defines the target's parameters and uses its arguments.
-    fn transfer_edge(&self, edge: &Edge<'_>, target_params: &[ValueId], state: &mut Self::State);
+    fn transfer_edge(&self, from: BlockId, edge: &Edge<'_>, target_params: &[ValueId], state: &mut Self::State);
 }
 
 pub struct DenseFacts<S>
@@ -109,15 +110,15 @@ where
                 for inst in record.insts() {
                     analysis.transfer(inst, &mut state);
                 }
-                analysis.transfer_terminator(record.terminator(), &mut state);
+                analysis.transfer_terminator(block, record.terminator(), &mut state);
                 for edge in record.terminator().edges() {
                     let mut along = state.clone();
-                    analysis.transfer_edge(&edge, body.block(edge.to).params(), &mut along);
+                    analysis.transfer_edge(block, &edge, body.block(edge.to).params(), &mut along);
                     flows.push((edge.to, along));
                 }
             }
             Direction::Backward => {
-                analysis.transfer_terminator(record.terminator(), &mut state);
+                analysis.transfer_terminator(block, record.terminator(), &mut state);
                 for inst in record.insts().rev() {
                     analysis.transfer(inst, &mut state);
                 }
@@ -125,7 +126,7 @@ where
                     let edges = body.block(*pred).terminator().edges();
                     for edge in edges.iter().filter(|edge| edge.to == block) {
                         let mut along = state.clone();
-                        analysis.transfer_edge(edge, record.params(), &mut along);
+                        analysis.transfer_edge(*pred, edge, record.params(), &mut along);
                         flows.push((*pred, along));
                     }
                 }

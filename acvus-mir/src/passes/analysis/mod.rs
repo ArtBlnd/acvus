@@ -25,7 +25,7 @@ pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
 pub use dominators::{Dominators, Point};
 pub use escapes::Escapes;
 pub use liveness::Liveness;
-pub use loans::{ElementAt, Loan, LoanSet, Loans, Mode, Storage, TouchedPlace};
+pub use loans::{Access, ElementAt, Loan, LoanSet, Loans, Made, Mode, Place, Reach, Storage, TouchedPlace};
 pub use loop_tree::{LoopId, LoopTree};
 pub use post_dominators::PostDominators;
 pub use manager::{Analysis, AnalysisManager};

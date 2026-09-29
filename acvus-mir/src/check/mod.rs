@@ -68,7 +68,7 @@ pub fn check(module: &Module, am: &mut AnalysisManager<'_>) -> Vec<Refusal> {
     for body in module.body_ids() {
         initck::check(module, body, am, &mut refusals);
         moveck::check(module, body, am, &mut refusals);
-        // borrowck: called once `LoanConflict` can name where its loan was made.
+        borrowck::check(module, body, am, &mut refusals);
         matchck::check(module, body, am, &mut refusals);
     }
     refusals

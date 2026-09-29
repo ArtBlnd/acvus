@@ -249,7 +249,7 @@ impl Analysis for ContentLiveness {
         let loans = am.get::<Loans>(module, body);
         let body = module.body(body);
         let units = units_of(body, module.types());
-        let backward = Backward::new(body, &loans, &units);
+        let backward = Backward::new(&loans, &units);
         let facts = solve_dense(&backward, body);
         let mut position = FxHashMap::default();
         for (id, block) in body.blocks() {
@@ -262,7 +262,7 @@ impl Analysis for ContentLiveness {
         for (id, block) in body.blocks() {
             let end = facts.at(id).clone();
             let mut state = end.clone();
-            backward.transfer_terminator(block.terminator(), &mut state);
+            backward.transfer_terminator(id, block.terminator(), &mut state);
             let mut points = vec![state.clone()];
             for inst in block.insts().rev() {
                 backward.transfer(inst, &mut state);
@@ -360,21 +360,14 @@ impl Widen for Live {
     }
 }
 
-/// The engine hands a transfer the instruction or terminator alone; an
-/// instruction names its own site, and a terminator's site, which `Loans`
-/// keys its reads by, is found by the record's address in the body, which
-/// the engine borrows unchanged for the whole solve.
 struct Backward<'f> {
     loans: &'f Loans,
     units: &'f FxHashMap<ValueId, Vec<Path>>,
-    term_sites: FxHashMap<*const Terminator, Site>,
 }
 
 impl<'f> Backward<'f> {
-    /// Cost: O(the body's blocks).
-    fn new(body: &'f Body, loans: &'f Loans, units: &'f FxHashMap<ValueId, Vec<Path>>) -> Self {
-        let term_sites = body.blocks().map(|(block, record)| (std::ptr::from_ref(record.terminator()), Site::Term(block))).collect();
-        Backward { loans, units, term_sites }
+    fn new(loans: &'f Loans, units: &'f FxHashMap<ValueId, Vec<Path>>) -> Self {
+        Backward { loans, units }
     }
 
     /// What `site` reads: the places `Loans` names, and of each, the units
@@ -428,12 +421,11 @@ impl DenseAnalysis for Backward<'_> {
         self.gen_reads(Site::Inst(inst.id()), by_name, state);
     }
 
-    fn transfer_terminator(&self, terminator: &Terminator, state: &mut Live) {
-        let site = self.term_sites.get(&std::ptr::from_ref(terminator)).expect("the terminator transferred is one of the body's");
-        self.gen_reads(*site, None, state);
+    fn transfer_terminator(&self, block: BlockId, _: &Terminator, state: &mut Live) {
+        self.gen_reads(Site::Term(block), None, state);
     }
 
-    fn transfer_edge(&self, _: &Edge<'_>, _: &[ValueId], _: &mut Live) {}
+    fn transfer_edge(&self, _: BlockId, _: &Edge<'_>, _: &[ValueId], _: &mut Live) {}
 }
 
 /// Each unit's presence; a unit not in the map is unreached.
@@ -529,7 +521,7 @@ impl DenseAnalysis for Forward<'_> {
         }
     }
 
-    fn transfer_terminator(&self, _: &Terminator, _: &mut PresenceOf) {}
+    fn transfer_terminator(&self, _: BlockId, _: &Terminator, _: &mut PresenceOf) {}
 
-    fn transfer_edge(&self, _: &Edge<'_>, _: &[ValueId], _: &mut PresenceOf) {}
+    fn transfer_edge(&self, _: BlockId, _: &Edge<'_>, _: &[ValueId], _: &mut PresenceOf) {}
 }

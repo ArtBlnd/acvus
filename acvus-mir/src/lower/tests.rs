@@ -942,8 +942,8 @@ fn a_lambda_pushing_to_a_captured_vec_holds_it_mut_in_its_slot_and_its_closure()
             _ => None,
         })
         .unwrap_or_else(|| panic!("`v` is captured by `&mut`: {}", shown(body)));
-    let on_v = Loan { storage: Storage::Slot(v), path: Vec::new(), mode: Mode::Exclusive };
-    assert!(loans.of(closure, 0).contains(&on_v), "the closure holds `v` exclusively: {:?}", loans.of(closure, 0));
+    let on_v = |loan: &Loan| loan.storage == Storage::Slot(v) && loan.path.is_empty() && loan.mode == Mode::Exclusive;
+    assert!(loans.of(closure, 0).iter().any(on_v), "the closure holds `v` exclusively: {:?}", loans.of(closure, 0));
     let callee = insts
         .iter()
         .find_map(|inst| match inst.op() {
@@ -952,7 +952,7 @@ fn a_lambda_pushing_to_a_captured_vec_holds_it_mut_in_its_slot_and_its_closure()
         })
         .unwrap_or_else(|| panic!("`f(1)` calls a function value: {}", shown(body)));
     assert_eq!(body.ty_of(callee), body.ty_of(closure), "the callee read out of `f` has the closure's type");
-    assert!(loans.of(callee, 0).contains(&on_v), "the callee holds `v` exclusively: {:?}", loans.of(callee, 0));
+    assert!(loans.of(callee, 0).iter().any(on_v), "the callee holds `v` exclusively: {:?}", loans.of(callee, 0));
 }
 
 /// ownership §5, gap 7: a `&mut` part of a held scrutinee does not copy,

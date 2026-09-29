@@ -76,7 +76,7 @@ pub enum Definition {
 
 /// Where a use stands: an instruction, by its identity, or a block's
 /// terminator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Site {
     Inst(InstId),
     Term(BlockId),
