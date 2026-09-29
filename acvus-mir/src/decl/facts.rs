@@ -149,8 +149,7 @@ pub enum Subject {
 }
 
 /// `#[extern_fn(reaches(p, ..))]` (RFC-0082 rule 7): what a call reaches
-/// of the storages its reference arguments lend, which `analysis::loop_deps`
-/// reads (RFC-0089 rule 4).
+/// of the storages its reference arguments lend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Reaches {
     /// No declaration: a call reaches all each reference argument lends it.

@@ -1,5 +1,6 @@
 //! Invariants an editor keeps, one checker each. They run after every edit
-//! in debug and test builds; `validate` reuses them after each transform.
+//! in debug and test builds; `passes::pipeline` reuses them after each
+//! transform.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 

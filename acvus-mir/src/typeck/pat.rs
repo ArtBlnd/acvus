@@ -1,6 +1,6 @@
 //! Patterns (patterns §1): a pattern naming a variant grows the enum where
 //! transparent, and is refused where it is not (patterns §2); a `!`
-//! scrutinee reaches no arm (patterns §4). Exhaustiveness is validate's.
+//! scrutinee reaches no arm (patterns §4). Exhaustiveness is check's.
 //!
 //! A pattern's names are bound when it is checked, each to a fresh term. How
 //! it destructures its scrutinee depends on the scrutinee's head: through a

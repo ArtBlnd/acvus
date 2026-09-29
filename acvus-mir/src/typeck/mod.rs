@@ -2,7 +2,7 @@
 //! refusals). The checker walks a body once, states what each form demands
 //! in B's words, and leaves to decisions what waits for a closed type.
 //! typeck decides only what a type decides; exhaustiveness, initialization,
-//! moves and borrows are validate's, and drops are drop insertion's.
+//! moves and borrows are check's, and drops are drop insertion's.
 //!
 //! Invariants of the structure:
 //! - S1. `Ctxt` holds four things (infer, scope, decisions, output); no rule

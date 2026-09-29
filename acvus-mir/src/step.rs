@@ -1,7 +1,6 @@
 //! The per-element step a stream adaptor or consumer states (RFC-0099
-//! rule 1). `#[extern_fn(step(..))]` writes it, `optimize::fusion` reads
-//! it through the impl a call names, and `acvus-ext`'s differential
-//! harness samples the promise that the handler and the step agree.
+//! rule 1). `#[extern_fn(step(..))]` writes it, and `acvus-ext`'s
+//! differential harness samples the promise that the handler and the step agree.
 //!
 //! A parameter is numbered as the declaration's acvus parameters are, which
 //! is the order of a call's arguments.

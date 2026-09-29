@@ -88,10 +88,8 @@ pub enum Op {
     /// `impl` is the `core::as_slice` / `core::as_slice_mut` the
     /// container's own evidence settled on.
     ///
-    /// It is not a `FunctionCall` because the kind itself states what the
-    /// hoist must know: a pure, infallible borrow projection, so
-    /// `code_motion` lifts a shared one out of every loop that does not
-    /// write the container, which it may never do for a call.
+    /// It is not a `FunctionCall` because the kind itself states that it
+    /// is a pure, infallible borrow projection.
     AsSlice {
         container: ValueId,
         mutability: Mutability,
@@ -195,9 +193,9 @@ pub enum Op {
     /// is the one every reader already holds, and a second copy of it here
     /// could disagree with it.
     ///
-    /// `CastKind` above is not reused because it is not this: it names a
-    /// pure ExternFn performing a declared coercion between user-defined
-    /// types (RFC-0023 rule 8), which is a call, not a width.
+    /// A declared coercion between user-defined types (RFC-0023 rule 8)
+    /// is not this: the lowering issues it as a call of the pure ExternFn
+    /// performing it, which is a call, not a width.
     Cast {
         src: ValueId,
         to: CastTy,

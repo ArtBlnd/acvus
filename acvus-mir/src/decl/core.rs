@@ -1,7 +1,7 @@
 //! `core`, declared inside the compiler (operators §2): the names of its
 //! generic functions, the lang items the language's syntax lowers to, and
 //! the tags of the primitive `Option` and `Result` (types §2). One place
-//! for every reader: typeck, laws, fusion.
+//! for every reader: typeck, decl and the passes.
 //!
 //! The compiler builds each lang item's generic function from the table of
 //! operators §2 (`Core::generic_functions`). A declaration set gives only
