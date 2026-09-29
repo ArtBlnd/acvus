@@ -531,14 +531,21 @@ pub(super) fn lower_match<S: Slot>(
             let keyed: Vec<(SwitchKey, BlockId, usize)> =
                 plan.keyed.iter().map(|(key, at)| (*key, cx.builder.new_block(&[]), *at)).collect();
             let default = plan.default.map(|at| (cx.builder.new_block(&[]), at));
+            // No catch-all: a value no key names goes to the block where no
+            // arm answers, which matchck judges (patterns §3).
+            let unmatched = default.is_none().then(|| cx.builder.new_block(&[]));
             let tag = tag_source(cx, &matched, span);
             let terminator = Terminator::Switch {
                 tag,
                 arms: keyed.iter().map(|(key, block, _)| (*key, *block, Vec::new())).collect(),
-                default: default.map(|(block, _)| (block, Vec::new())),
+                default: default.map(|(block, _)| block).or(unmatched).map(|block| (block, Vec::new())),
                 join,
             };
             cx.builder.terminate(terminator, span);
+            if let Some(unmatched) = unmatched {
+                cx.builder.switch_to(unmatched);
+                cx.builder.terminate(Terminator::NoArmMatched { span }, span);
+            }
             let entered = keyed.iter().map(|(_, block, at)| (*block, *at));
             for (block, at) in entered.chain(default) {
                 cx.builder.switch_to(block);

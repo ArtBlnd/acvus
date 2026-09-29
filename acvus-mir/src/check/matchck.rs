@@ -1,18 +1,18 @@
-//! matchck (patterns §3): the block lower marks where no arm of a `match`
-//! answers (`Terminator::NoArmMatched`) is reached by no run. Within the one
-//! body, the variants a scrutinee may hold are known where every value
-//! reaching it was made in the body (`TagValues`); a value from outside it,
-//! a parameter, a capture, a call's result, a context or an input, holds
-//! any variant its type has. An `Option`, a `Result` and an enum a
-//! declaration writes have their variants by their type (types §2, patterns
-//! §2), so every one of them is seen; a program's enum from outside the body
-//! is not, and its `match` needs `_`.
+//! matchck (patterns §3): no run reaches the block where no arm of a
+//! `match` answers. Lower sends every such place, of a `match` with no
+//! catch-all arm, to one block ending in `Terminator::NoArmMatched`: an arm
+//! tested after another, and a `Switch` whose keys leave a value, by its
+//! `default`. The check reads `MatchFacts` and refuses `NotExhaustive`, at
+//! the terminator's span, where an edge into such a block can run.
+//!
+//! It is sound whatever the facts know, since a fact only over-approximates;
+//! what it proves grows with the domains `MatchFacts` runs.
 
 use super::Refusal;
-use crate::ir::cfg::{Body, BodyId};
+use crate::ir::cfg::{BodyId, Module};
 use crate::passes::analysis::AnalysisManager;
 
 /// The judgment over `body`, its refusals pushed to `out`.
-pub(super) fn check(body: BodyId, module_body: &Body, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
-    todo!("matchck over the analyses its module doc names")
+pub(super) fn check(module: &Module, body: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
+    todo!("each NoArmMatched block of the body with an executable incoming edge under MatchFacts")
 }

@@ -9,6 +9,7 @@ pub mod tags;
 pub use affine::{Affine, AffineDomain, Combination, Limit, Symbol, bounds_on};
 pub use constant::{Constant, ConstantDomain};
 pub use interval::{Bound, Interval, IntervalDomain};
+pub use tags::{Tags, TagsDomain};
 
 use std::cmp::Ordering;
 
