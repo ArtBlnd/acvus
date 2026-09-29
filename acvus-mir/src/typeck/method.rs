@@ -154,7 +154,7 @@ fn name_root(cx: &Ctxt<'_>, name: Astr, of: CaptureOf, crossed: Vec<AstId>, term
 /// The adjustment fired on the receiver's head, then the call's reach. It
 /// waits where a `&mut` receiver lends an index still undecided.
 pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading) -> Result<(), Adjust> {
-    let adjustment = adjustment(cx, &adjust, receiver.head);
+    let adjustment = adjustment(cx, &adjust, receiver);
     if adjustment == Adjustment::Ref(Mutability::Mut) {
         let indexes = adjust.place.iter().flat_map(|place| &place.indexes);
         let waiting = indexes.clone().any(|index| decision::index_pending(cx, index.callee_site))
@@ -182,7 +182,8 @@ pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, r
 /// The first of as written, `&` and `&mut` whose receiver some candidate's
 /// first parameter matches, by the reach rule at that one position; as
 /// written where none does, which the reach then refuses.
-fn adjustment(cx: &Ctxt<'_>, adjust: &Adjust, head: Head) -> Adjustment {
+fn adjustment(cx: &Ctxt<'_>, adjust: &Adjust, receiver: Closed) -> Adjustment {
+    let head = receiver.head;
     let Offers { concrete, generic } = decision::offers(cx, &adjust.callee);
     let arity = adjust.args.len() + 1;
     let candidates: Vec<Offer> = concrete
@@ -194,7 +195,7 @@ fn adjustment(cx: &Ctxt<'_>, adjust: &Adjust, head: Head) -> Adjustment {
         .iter()
         .map(|offer| vec![decision::param_head_at(cx.decls.types(), decision::params_of(cx.decls.types(), offer.ty), &[0])])
         .collect();
-    if let Some(lifted) = super::structure::lifted_receiver(cx, &adjust.callee, arity, head) {
+    if let Some(lifted) = super::structure::lifted_receiver(cx, &adjust.callee, arity, receiver) {
         rows.push(vec![Some(lifted)]);
     }
     let rows: Vec<Candidate<'_>> = rows.iter().map(|row| Candidate { params: row }).collect();

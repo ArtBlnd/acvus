@@ -163,6 +163,18 @@ pub enum StructureTree {
     Parts(Box<[(PartKey, StructureTree)]>),
     /// The impl reached, and its function type as instantiated there.
     Reached { chosen: Chosen, callee: Ty },
+    /// The language's own answer, where no impl is reached.
+    Own(Own),
+}
+
+/// What the language itself answers at a node of a lifted call, where it
+/// defines the answer and no impl does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Own {
+    /// A `clone` of a value that copies is its copy (ownership §2).
+    Copy,
+    /// `Option`'s `default` is `None` (operators §2).
+    OptionNone,
 }
 
 /// A structure-tree node while checking: its parts' nodes, or a reach at
@@ -171,6 +183,7 @@ pub enum StructureTree {
 pub(super) enum StructureNode {
     Parts(Box<[(PartKey, AstId)]>),
     Reached,
+    Own(Own),
 }
 
 /// How a value is coerced to its slot (types §3, §7): a concrete value by

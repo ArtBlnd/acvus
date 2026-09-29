@@ -31,6 +31,7 @@ use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
+use crate::ty::structural::structure;
 use crate::ty::{
     CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
 };
@@ -352,13 +353,28 @@ fn read_head(decision: &Decision) -> Option<Term> {
 /// its cast tree, which no later decision can change (types §6); pending
 /// otherwise.
 pub(super) fn decide(cx: &mut Ctxt<'_>, decision: Decision) {
+    // A value entering a slot still unbound waits for every other value
+    // entering it (`meeting_waits`), and the walk has not pushed them all
+    // yet: it is decided with the others once solving starts.
+    if let Decision::Enter { slot, .. } = &decision
+        && matches!(cx.infer.types().kind(cx.infer.shallow(*slot)), TyKind::Var(_))
+    {
+        cx.decisions.push(decision);
+        return;
+    }
     let top = read_head(&decision).is_some_and(|term| {
         cx.infer
             .closed(cx.decls.casts(), &NothingOpen, term)
             .is_some_and(|closed| cx.decls.casts().step_up(closed.head).is_none())
     });
     match top {
-        true => fire(cx, decision, Reading::Closed).expect("a decision whose head is at the top of its tree fires"),
+        // A value entering a slot may still wait for the others meeting
+        // there (`meeting_waits`), though its own head is closed.
+        true => {
+            if let Err(waiting) = fire(cx, decision, Reading::Closed) {
+                cx.decisions.push(waiting);
+            }
+        }
         false => cx.decisions.push(decision),
     }
 }
@@ -615,8 +631,36 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
 /// and every other value is coerced to it; so the slot is bound only once
 /// every value entering it is closed, by such a value first. The outcome
 /// does not depend on which value was checked first.
+///
+/// Under `Reading::CycleBroken` a value still open is not waited for: no
+/// other decision will close it, and waiting would leave the slot unbound.
+/// Nor is one that can never be a transparent structured type.
 fn meeting_waits(cx: &Ctxt<'_>, value: Term, slot: Term, reading: Reading) -> bool {
-    todo!("the pending `Enter`s into `slot`'s variable: wait while one's value is open, or while `value` is not written elsewhere and another's is")
+    let slot = cx.infer.shallow(slot);
+    if !matches!(cx.infer.types().kind(slot), TyKind::Var(_)) {
+        return false;
+    }
+    let written_elsewhere = |closed: &Closed| {
+        structure(cx.infer.types(), closed.term).is_some_and(|structure| structure.label() == Label::Elsewhere)
+    };
+    if closed_for(cx, value, reading).is_some_and(|closed| written_elsewhere(&closed)) {
+        return false;
+    }
+    let others = cx.decisions.pending.iter().filter_map(|decision| match decision {
+        Decision::Enter { value: other, slot: into, .. } if cx.infer.shallow(*into) == slot => Some(*other),
+        _ => None,
+    });
+    let mut waits = false;
+    for other in others {
+        match closed_for(cx, other, reading) {
+            Some(closed) => waits |= written_elsewhere(&closed),
+            // An open value that can never be a structure brings no type
+            // written elsewhere: waiting for it would only keep a literal
+            // from being decided by the slot (types §5).
+            None => waits |= reading == Reading::Closed && cx.infer.may_be_structured(other),
+        }
+    }
+    waits
 }
 
 fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: Term, body: EffectTerm<InferPhase>) {
@@ -803,12 +847,22 @@ fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<()
     let complete = positions.iter().all(|position| position.chain.is_some());
     let chains: Vec<Vec<Head>> = positions.iter().map_while(|position| position.chain.clone()).collect();
 
+    // The language's own answer comes before any impl (ownership §2,
+    // operators §2). A requirement asks for a declared function to pass,
+    // which an own answer is not, so there a concrete impl comes first.
+    let required = matches!(decision.callee, Callee::Required(_));
+    if !required && let Some(own) = super::structure::own_at(cx, &decision, reading) {
+        return super::structure::reach_own(cx, decision, own);
+    }
     let chosen = match choose(cx, &offers, &positions, &chains) {
         Ok(chosen) => chosen,
         // Where no concrete impl answers, a transparent structured type's
         // lifted impl does, before the generic impl (types §1).
+        Err(NoReach::None) if required && let Some(own) = super::structure::own_at(cx, &decision, reading) => {
+            return super::structure::reach_own(cx, decision, own);
+        }
         Err(NoReach::None) if let Some(lift) = super::structure::lift_at(cx, &decision, reading) => {
-            return super::structure::reach_lifted(cx, decision, lift);
+            return super::structure::reach_lifted(cx, decision, lift, reading);
         }
         Err(NoReach::None) if reading == Reading::Closed && super::structure::lift_waits(cx, &decision) => {
             return Err(decision);
@@ -929,7 +983,7 @@ pub(super) fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
         }
         Callee::Required(required) | Callee::Part(required) => {
             let law = required.law;
-            let states = move |facts: &crate::decl::DeclaredFacts| law.is_none_or(|law| law.stated_by(&facts.laws));
+            let states = move |facts: &crate::decl::DeclaredFacts| law.is_none_or(|law| law.stated_by(facts));
             if cx.decls.scheme(required.generic_function).is_some() {
                 offer_of(required.generic_function, &states);
             }

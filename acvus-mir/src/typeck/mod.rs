@@ -49,8 +49,8 @@ use acvus_ast::{Expr, Script, Slot, Template};
 use crate::decl::Declarations;
 use crate::ty::{Concrete, TyKind, Types};
 
-pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, StructureTree, TryExit, Typeck};
-pub use refusal::{Exceeding, Refusal, RefusalKind};
+pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, Own, StructureTree, TryExit, Typeck};
+pub use refusal::{Exceeding, Refusal, RefusalKind, Unimplemented};
 
 use ctxt::Ctxt;
 use scope::Run;

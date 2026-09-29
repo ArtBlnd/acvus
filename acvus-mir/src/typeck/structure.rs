@@ -11,20 +11,20 @@ use acvus_utils::QualifiedRef;
 
 use super::ctxt::Ctxt;
 use super::decision::{Callee, Decision, Reach, Reading, closed_for, core_name, push_required, settle_bounded};
-use super::output::{Chosen, CoercionNode, Impl, StructureNode};
-use super::refusal;
+use super::output::{Chosen, CoercionNode, Impl, Own, StructureNode};
+use super::refusal::{self, RefusalKind, Unimplemented};
 use crate::decl::{Base, Head, Lift, LiftShape, NamedLaw, Taking};
-use crate::infer::{Coerced, Instantiated, RequiredAt, Term};
-use crate::ty::structural::{PartKey, structure};
-use crate::ty::{Effect, EffectTerm, Infer as InferPhase, TyKind};
+use crate::infer::{Closed, Coerced, Instantiated, RequiredAt, Term};
+use crate::ty::structural::{PartKey, Structure, structure};
+use crate::ty::{Effect, EffectTerm, Infer as InferPhase, TyKind, copies_in};
 
 /// A structured value coerced at `site` into `slot` (types §3): its node
 /// records the shape and a node per part it keeps, and each part enters
 /// the slot's part at that node, in the body whose effect is `body`.
 pub(super) fn fire_coerced(cx: &mut Ctxt<'_>, site: AstId, span: Span, slot: Term, coerced: Coerced, body: EffectTerm<InferPhase>) {
-    let Coerced { shape, parts } = coerced;
+    let Coerced { shape, through, parts } = coerced;
     let sites: Vec<(PartKey, AstId)> = parts.iter().map(|part| (part.key, AstId::alloc())).collect();
-    cx.out.coercions.insert(site, CoercionNode { shape, slot, parts: sites.clone().into() });
+    cx.out.coercions.insert(site, CoercionNode { shape, through, slot, parts: sites.clone().into() });
     for (part, (_, part_site)) in parts.iter().zip(sites) {
         cx.enter_in(body.clone(), part_site, part.value, part.slot, span);
     }
@@ -45,8 +45,56 @@ pub(super) struct LiftAt {
 pub(super) fn lift_at(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> Option<LiftAt> {
     let CalleeLift { function, lift } = lift_of_callee(cx, &decision.callee, decision.args.len())?;
     let at = closed_for(cx, variable_position(cx, decision, lift.shape(), reading)?, reading)?;
-    structure(cx.infer.types(), at.term)?;
-    Some(LiftAt { function, lift: lift.clone(), structured: at.term })
+    let structured = structure(cx.infer.types(), at.term)?;
+    lifts_at(lift, &structured).then(|| LiftAt { function, lift: lift.clone(), structured: at.term })
+}
+
+/// Whether `lift` gives an impl at a structure of `structured`'s kind. An
+/// enum, `Option` and `Result` hold one variant, so a rebuilt one's
+/// variant must be its one argument's (types §1); and they have no order,
+/// so no total order combines at one (operators §4).
+fn lifts_at(lift: &Lift, structured: &Structure<'_, InferPhase>) -> bool {
+    let sum = matches!(structured, Structure::Enum(..) | Structure::Option(..) | Structure::Result { .. });
+    match lift {
+        Lift::Rebuild(shape) => !sum || shape.params.len() == 1,
+        Lift::Combine { law: NamedLaw::TotalOrder, .. } => !sum,
+        Lift::Combine { law: NamedLaw::Equivalence, .. } => true,
+    }
+}
+
+/// The language's own answer, where it defines one for `decision`'s
+/// generic function at its closed type (ownership §2, operators §2): a
+/// `clone` of a value that copies is its copy, and `Option`'s `default` is
+/// `None`. It answers before any impl.
+pub(super) struct OwnAt {
+    pub function: QualifiedRef,
+    pub own: Own,
+    pub at: Term,
+}
+
+pub(super) fn own_at(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> Option<OwnAt> {
+    let CalleeLift { function, lift } = lift_of_callee(cx, &decision.callee, decision.args.len())?;
+    let core = cx.decls.core();
+    let at = closed_for(cx, variable_position(cx, decision, lift.shape(), reading)?, reading)?.term;
+    let own = if function == core.clone && copies_in(&cx.infer, at) == Some(true) {
+        Own::Copy
+    } else if function == core.default && matches!(cx.infer.types().kind(at), TyKind::Option(..)) {
+        Own::OptionNone
+    } else {
+        return None;
+    };
+    Some(OwnAt { function, own, at })
+}
+
+/// `decision` answered by the language's own answer `at`: the call is
+/// reached as a lifted one, and its node records the answer.
+pub(super) fn reach_own(cx: &mut Ctxt<'_>, decision: Reach, at: OwnAt) -> Result<(), Reach> {
+    let OwnAt { function, own, at } = at;
+    let shape = cx.decls.lift(function).expect("an own answer is of a function with a lift").shape().clone();
+    if let Some(Structural { node, .. }) = reach_structural(cx, decision, function, &shape, at) {
+        cx.out.structures.insert(node, StructureNode::Own(own));
+    }
+    Ok(())
 }
 
 /// Whether `decision` waits for the argument at its callee's lift's type
@@ -63,17 +111,24 @@ pub(super) fn lift_waits(cx: &Ctxt<'_>, decision: &Reach) -> bool {
     cx.closed(taking).is_none()
 }
 
-/// The head a method's receiver takes where `callee`'s lift answers a call
-/// of `arity` arguments whose receiver's head is `receiver`: the lift's
-/// first parameter at the receiver's transparent structured type, which
-/// the receiver adjustment reads as any candidate's (types §6).
-pub(super) fn lifted_receiver(cx: &Ctxt<'_>, callee: &Callee, arity: usize, receiver: Head) -> Option<Head> {
-    let CalleeLift { lift, .. } = lift_of_callee(cx, callee, arity)?;
-    let (Head::Base(base) | Head::Ref(_, base)) = receiver;
+/// The head a method's receiver takes where `callee`'s lift or the
+/// language's own answer answers a call of `arity` arguments whose
+/// receiver is `receiver`: the lift's first parameter at the receiver's
+/// transparent structured type, or at a type whose value copies where the
+/// callee is `clone` (ownership §2), which the receiver adjustment reads
+/// as any candidate's (types §6).
+pub(super) fn lifted_receiver(cx: &Ctxt<'_>, callee: &Callee, arity: usize, receiver: Closed) -> Option<Head> {
+    let CalleeLift { function, lift } = lift_of_callee(cx, callee, arity)?;
+    let (Head::Base(base) | Head::Ref(_, base)) = receiver.head;
+    let value = match receiver.head {
+        Head::Base(_) => receiver.term,
+        Head::Ref(..) => cx.referent(receiver.term),
+    };
     let structured = matches!(base, Base::Tuple(_) | Base::Array | Base::Option | Base::Result | Base::Object | Base::Enum(_));
+    let copied = function == cx.decls.core().clone && copies_in(&cx.infer, value) == Some(true);
     match lift.shape().params.first() {
-        Some(Taking::Value) if structured => Some(Head::Base(base)),
-        Some(&Taking::Ref(mutability)) if structured => Some(Head::Ref(mutability, base)),
+        Some(Taking::Value) if structured || copied => Some(Head::Base(base)),
+        Some(&Taking::Ref(mutability)) if structured || copied => Some(Head::Ref(mutability, base)),
         Some(_) | None => None,
     }
 }
@@ -138,63 +193,77 @@ fn variable_position(cx: &Ctxt<'_>, decision: &Reach, shape: &LiftShape, reading
 /// reach at a node of its own, stating the lift's law where it combines,
 /// recorded as a `StructureNode` at the call's site. The lifted impl's
 /// effect is its parts' impls' joined.
-pub(super) fn reach_lifted(cx: &mut Ctxt<'_>, decision: Reach, at: LiftAt) -> Result<(), Reach> {
-    let Reach { site, span, callee, args, result, effect } = decision;
+///
+/// Each part's type is read to decide whether it copies (ownership §2)
+/// and what its pattern is, so the reach waits until every part is closed
+/// (types §6), unless a cycle is being broken.
+pub(super) fn reach_lifted(cx: &mut Ctxt<'_>, decision: Reach, at: LiftAt, reading: Reading) -> Result<(), Reach> {
+    let span = decision.span;
     let LiftAt { function, lift, structured } = at;
-    let Some(Instantiated { ty, requirements }) = at_type(cx, function, lift.shape(), structured, span) else {
+    let parts = structure(cx.infer.types(), structured)
+        .expect("a lift answers only at a transparent structured type")
+        .parts();
+    if reading == Reading::Closed && parts.iter().any(|part| cx.closed(part.ty).is_none()) {
+        return Err(decision);
+    }
+    let Some(Structural { node, effect }) = reach_structural(cx, decision, function, lift.shape(), structured) else {
         return Ok(());
     };
-    let TyKind::Fn { params, ret, effect: lifted_effect, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
+    let law = match &lift {
+        Lift::Rebuild(_) => None,
+        Lift::Combine { law, .. } => Some(*law),
+    };
+    let nodes: Vec<(PartKey, AstId)> = parts.iter().map(|part| (part.key, AstId::alloc())).collect();
+    cx.out.structures.insert(node, StructureNode::Parts(nodes.clone().into()));
+    for (part, (_, part_node)) in parts.into_iter().zip(nodes) {
+        let reach = PartReach { node: part_node, span, function, shape: lift.shape(), law, part: part.ty, effect: &effect };
+        reach_part(cx, reach);
+    }
+    Ok(())
+}
+
+/// A call answered at `Impl::Structural`: the node its structure is
+/// recorded at, and the effect its parts' impls join.
+struct Structural {
+    node: AstId,
+    effect: EffectTerm<InferPhase>,
+}
+
+/// `decision` reached at `Impl::Structural` of `function` at `at`: its
+/// arguments enter the parameters, or, for a part, the pattern joins, and
+/// the call's effect is the answer's. A requirement answered so is
+/// refused as unimplemented: no declared function stands for it.
+fn reach_structural(cx: &mut Ctxt<'_>, decision: Reach, function: QualifiedRef, shape: &LiftShape, at: Term) -> Option<Structural> {
+    let Reach { site, span, callee, args, result, effect } = decision;
+    if let Callee::Required(_) = callee {
+        let feature = Unimplemented::LiftedImplAsRequirement;
+        refusal::push(cx, RefusalKind::Unimplemented { feature }, span);
+        return None;
+    }
+    let Instantiated { ty, requirements } = at_type(cx, function, shape, at, span)?;
+    let TyKind::Fn { params, ret, effect: own_effect, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
         panic!("an instantiated signature is a function type (NotAFunction)");
     };
-    let lifted_effect = super::effect::join_into(cx, &lifted_effect, &EffectTerm::Known(Effect::pure()), span);
-    let chosen = Chosen { declaration: function, r#impl: Some(Impl::Structural), required: Box::new([]) };
-    let node = match &callee {
-        Callee::Required(required) => {
-            cx.join(required.pattern, ty, span);
-            let parent = cx.out.reached.get_mut(&site).expect("a requirement is reached after the call that states it");
-            let mut all = parent.required.to_vec();
-            all.push(chosen);
-            parent.required = all.into();
-            AstId::alloc()
-        }
-        Callee::Part(part) => {
-            cx.join(part.pattern, ty, span);
-            super::effect::join_into(cx, &effect, &lifted_effect, span);
-            cx.out.reached.insert(site, chosen);
-            cx.out.callees.insert(site, ty);
-            site
-        }
+    let own_effect = super::effect::join_into(cx, &own_effect, &EffectTerm::Known(Effect::pure()), span);
+    match &callee {
+        Callee::Part(part) => cx.join(part.pattern, ty, span),
+        Callee::Required(_) => unreachable!("a requirement is refused above"),
         Callee::Name(_) | Callee::Declaration(_) | Callee::Method(_) | Callee::Core(_) => {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
                 cx.enter_in(effect.clone(), *arg_site, *arg, *param, span);
             }
             cx.eq(result, ret, span);
-            super::effect::join_into(cx, &effect, &lifted_effect, span);
-            cx.out.reached.insert(site, chosen);
-            cx.out.callees.insert(site, ty);
-            site
         }
-    };
+    }
+    super::effect::join_into(cx, &effect, &own_effect, span);
+    let chosen = Chosen { declaration: function, r#impl: Some(Impl::Structural), required: Box::new([]) };
+    cx.out.reached.insert(site, chosen);
+    cx.out.callees.insert(site, ty);
     settle_bounded(cx, ty, span);
     for required in requirements {
         push_required(cx, site, span, required, &effect);
     }
-
-    let law = match &lift {
-        Lift::Rebuild(_) => None,
-        Lift::Combine { law, .. } => Some(*law),
-    };
-    let parts = structure(cx.infer.types(), structured)
-        .expect("a lift answers only at a transparent structured type")
-        .parts();
-    let nodes: Vec<(PartKey, AstId)> = parts.iter().map(|part| (part.key, AstId::alloc())).collect();
-    cx.out.structures.insert(node, StructureNode::Parts(nodes.clone().into()));
-    for (part, (_, part_node)) in parts.into_iter().zip(nodes) {
-        let reach = PartReach { node: part_node, span, function, shape: lift.shape(), law, part: part.ty, effect: &lifted_effect };
-        reach_part(cx, reach);
-    }
-    Ok(())
+    Some(Structural { node: site, effect: own_effect })
 }
 
 /// One part's reach of a lifted impl: `function` at the part's type, at
@@ -211,14 +280,20 @@ struct PartReach<'l> {
 
 fn reach_part(cx: &mut Ctxt<'_>, reach: PartReach<'_>) {
     let PartReach { node, span, function, shape, law, part, effect } = reach;
+    if function == cx.decls.core().clone && copies_in(&cx.infer, part) == Some(true) {
+        cx.out.structures.insert(node, StructureNode::Own(Own::Copy));
+        return;
+    }
     let Some(Instantiated { ty: pattern, .. }) = at_type(cx, function, shape, part, span) else {
         return;
     };
-    let TyKind::Fn { params, .. } = cx.infer.types().kind(cx.infer.shallow(pattern)).clone() else {
+    let TyKind::Fn { params, ret, .. } = cx.infer.types().kind(cx.infer.shallow(pattern)).clone() else {
         panic!("an instantiated signature is a function type (NotAFunction)");
     };
     let args = params.iter().map(|param| (node, *param)).collect();
-    let result = cx.fresh();
+    // The part's answer is the pattern's: where no parameter takes the
+    // part, as `default`'s, the result is where its type is read.
+    let result = ret;
     let required = RequiredAt { generic_function: function, pattern, law };
     cx.decisions.push(Decision::Reach { site: node, span, callee: Callee::Part(required), args, result, effect: effect.clone() });
 }

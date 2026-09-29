@@ -83,6 +83,22 @@ pub enum RefusalKind {
     Undecided,
     /// A bounded variable no use answered (types §5).
     BoundUnanswered,
+    /// `<`, `>`, `<=` or `>=` on an enum, an `Option` or a `Result`, which
+    /// have equality but no order (operators §4).
+    Unordered,
+    // Unstable: a form the language admits and this compiler does not
+    // build yet. No rule refuses it; each is removed once it is built.
+    Unimplemented { feature: Unimplemented },
+}
+
+/// A form the language admits that this compiler does not build yet. It is
+/// not a rule of the language: a program refused so is a valid one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unimplemented {
+    /// A requirement answered by an impl a structure has by its lift, or by
+    /// the language's own answer (types §1, ownership §2, operators §2):
+    /// there is no declared function to pass for it.
+    LiftedImplAsRequirement,
 }
 
 /// What a lambda needs of its function type, and what the slot it was made

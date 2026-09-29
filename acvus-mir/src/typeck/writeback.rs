@@ -308,7 +308,7 @@ fn structured(
     }
     let to = freeze(cx, types, memo, node.slot)?;
     let changes = node.shape != ShapeCoercion::Kept || parts.iter().any(|(_, part)| part.is_some());
-    Some(changes.then(|| Coercion::Structured { shape: node.shape.clone(), to, parts: parts.into() }))
+    Some(changes.then(|| Coercion::Structured { shape: node.shape.clone(), through: node.through, to, parts: parts.into() }))
 }
 
 /// Every coercion, each at its site with its steps in order: a declared
@@ -472,7 +472,7 @@ impl Trees<'_> {
             .values()
             .flat_map(|node| match node {
                 StructureNode::Parts(parts) => parts.iter().map(|(_, part)| *part).collect(),
-                StructureNode::Reached => Vec::new(),
+                StructureNode::Reached | StructureNode::Own(_) => Vec::new(),
             })
             .collect();
         self.nodes.keys().copied().filter(|node| !children.contains(node)).collect()
@@ -492,6 +492,7 @@ impl Trees<'_> {
                     .collect();
                 Some(StructureTree::Parts(parts?.into()))
             }
+            StructureNode::Own(own) => Some(StructureTree::Own(*own)),
             StructureNode::Reached => {
                 let chosen = cx.out.reached.remove(&node);
                 let callee = cx.out.callees.remove(&node);
