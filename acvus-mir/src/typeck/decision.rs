@@ -641,7 +641,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             let Some(closed) = closed_for(cx, adjust.receiver, reading, depth) else {
                 return Err(Decision::Adjust(adjust));
             };
-            super::method::fire_adjust(cx, *adjust, closed, reading).map_err(|adjust| Decision::Adjust(Box::new(adjust)))
+            super::method::fire_adjust(cx, *adjust, closed, reading, depth).map_err(|adjust| Decision::Adjust(Box::new(adjust)))
         }
         Decision::BlockEnd { span, last, block } => {
             let Some(closed) = closed_for(cx, last, reading, depth) else {
@@ -673,7 +673,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 result,
                 effect,
             };
-            fire_reach(cx, decision, reading).map_err(Reach::into_decision)
+            fire_reach(cx, decision, reading, depth).map_err(Reach::into_decision)
         }
     }
 }
@@ -851,13 +851,13 @@ struct Position {
     chain: Option<Vec<Head>>,
 }
 
-fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<(), Reach> {
+fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading, depth: Depth) -> Result<(), Reach> {
     let Offers { concrete, generic } = offers(cx, &decision.callee);
     let arity = decision.args.len();
     let fits_arity = |offer: &&Offer| params_of(cx.decls.types(), offer.ty).len() == arity;
     let offers: Vec<Offer> = concrete.iter().filter(fits_arity).copied().collect();
     let generic: Vec<Offer> = generic.iter().filter(fits_arity).copied().collect();
-    let positions = positions(cx, &decision.args, reading);
+    let positions = positions(cx, &decision.args, reading, depth);
     let complete = positions.iter().all(|position| position.chain.is_some());
     let chains: Vec<Vec<Head>> = positions.iter().map_while(|position| position.chain.clone()).collect();
 
@@ -1028,12 +1028,13 @@ pub(super) fn params_of(types: &Types<Poly>, ty: TyId<Poly>) -> &[TyId<Poly>] {
     }
 }
 
-/// The arguments' positions front to back, stopping after the first that
-/// is not closed: a later one is not read before it (types §6).
-fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading) -> Vec<Position> {
+/// The arguments' positions front to back, each read at `depth`, stopping
+/// after the first that is not closed: a later one is not read before it
+/// (types §6).
+fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading, depth: Depth) -> Vec<Position> {
     let mut out = Vec::new();
     for (at, (_, arg)) in args.iter().enumerate() {
-        if !position(cx, *arg, vec![at], reading, &mut out) {
+        if !position(cx, *arg, vec![at], reading, depth, &mut out) {
             break;
         }
     }
@@ -1042,8 +1043,8 @@ fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading) -> Vec<Pos
 
 /// Pushes `term`'s position and, for a tuple, its parts'; whether every
 /// one was closed.
-fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: &mut Vec<Position>) -> bool {
-    let Some(closed) = closed_for(cx, term, reading, Depth::Head) else {
+fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, depth: Depth, out: &mut Vec<Position>) -> bool {
+    let Some(closed) = closed_for(cx, term, reading, depth) else {
         out.push(Position { path, chain: None });
         return false;
     };
@@ -1057,7 +1058,7 @@ fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: 
     for (at, item) in items.clone().iter().enumerate() {
         let mut part = path.clone();
         part.push(at);
-        if !position(cx, *item, part, reading, out) {
+        if !position(cx, *item, part, reading, depth, out) {
             return false;
         }
     }

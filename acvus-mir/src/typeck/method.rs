@@ -16,7 +16,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::call::reach_in;
 use super::ctxt::Ctxt;
-use super::decision::{self, Callee, CoreSig, Decision, Offer, Offers, Reading};
+use super::decision::{self, Callee, CoreSig, Decision, Depth, Offer, Offers, Reading};
 use super::expr::{check_expr, check_receiver};
 use super::output::{Adjustment, CaptureOf, CaptureUse, WholeUse};
 use super::place::Demand;
@@ -154,17 +154,18 @@ fn name_root(cx: &Ctxt<'_>, name: Astr, of: CaptureOf, crossed: Vec<AstId>, term
 }
 
 /// The adjustment fired on the receiver's head, then the call's reach. It
-/// waits where a `&mut` receiver lends an index still undecided.
-pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading) -> Result<(), Adjust> {
+/// waits where a `&mut` receiver lends an index still undecided, reading
+/// each index container at `depth`, the adjustment's own.
+pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading, depth: Depth) -> Result<(), Adjust> {
     if adjust.callee == Callee::Core(CoreSig::Clone) {
-        fire_clone_adjust(cx, adjust, receiver, reading);
+        fire_clone_adjust(cx, adjust, receiver, reading, depth);
         return Ok(());
     }
     let adjustment = adjustment(cx, &adjust, receiver.head);
     if adjustment == Adjustment::Ref(Mutability::Mut) {
         let indexes = adjust.place.iter().flat_map(|place| &place.indexes);
         let waiting = indexes.clone().any(|index| decision::index_pending(cx, index.callee_site))
-            || indexes.clone().any(|index| decision::closed_for(cx, index.container, reading, decision::Depth::Head).is_none());
+            || indexes.clone().any(|index| decision::closed_for(cx, index.container, reading, depth).is_none());
         if waiting {
             return Err(adjust);
         }
@@ -176,7 +177,7 @@ pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, r
         Adjustment::Ref(mutability) => cx.lend(term, mutability, span),
     };
     if let Some(place) = place {
-        lends(cx, &place, adjustment, term, &body, reading, span);
+        lends(cx, &place, adjustment, term, &body, reading, depth, span);
     }
     let mut all = vec![(receiver_site, lent)];
     all.extend(args);
@@ -187,12 +188,12 @@ pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, r
 
 /// `.clone()`'s adjustment, then the clone of what the adjusted receiver
 /// lends, decided at the callee site; the call's result is of that type.
-fn fire_clone_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading) {
+fn fire_clone_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading, depth: Depth) {
     let adjustment = super::clone::receiver_adjustment(receiver.head);
     let Adjust { callee_site, span, receiver: term, result, body, place, .. } = adjust;
     cx.out.adjustments.insert(callee_site, adjustment);
     if let Some(place) = place {
-        lends(cx, &place, adjustment, term, &body, reading, span);
+        lends(cx, &place, adjustment, term, &body, reading, depth, span);
     }
     let cloned = super::clone::cloned_type(cx, receiver.head, term);
     cx.eq(result, cloned, span);
@@ -262,6 +263,7 @@ fn lends(
     term: Term,
     body: &EffectTerm<InferPhase>,
     reading: Reading,
+    depth: Depth,
     span: Span,
 ) {
     match adjustment {
@@ -288,7 +290,7 @@ fn lends(
                 }
             }
             for index in &place.indexes {
-                let container = decision::closed_for(cx, index.container, reading, decision::Depth::Head)
+                let container = decision::closed_for(cx, index.container, reading, depth)
                     .expect("a `&mut` receiver's adjustment waits for every index container on its way");
                 match container.head {
                     Head::Ref(Mutability::Shared, Base::Array | Base::Slice) => {
