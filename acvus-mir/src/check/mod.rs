@@ -9,9 +9,9 @@
 //! - `moveck`: a value that does not copy is not used after a move out of
 //!   it, whole or in part (ownership §2, §6), over `Initialization`.
 //! - `borrowck`: while a loan lives, its storage is reached only as its
-//!   mutability allows, a path of references held by its first and exclusive
-//!   only where every reference on it is (ownership §5), over `Loans` and
-//!   `Liveness`.
+//!   mode allows, a reborrow a loan of its own within the loan it is made
+//!   through, and nothing that outlives the body holds a loan on its own
+//!   storage (ownership §5), over `Loans` and `Liveness`.
 //! - `matchck`: the block lower marks where no arm of a `match` answers is
 //!   reached by no run (patterns §3), over `MatchFacts`, within the one body.
 //!
@@ -52,6 +52,10 @@ pub enum RefusalKind {
     /// A storage reached while a loan on it forbids it (ownership §5): the
     /// span is the reach, and `loan` where the loan was made.
     LoanConflict { loan: Span },
+    /// A loan on the body's own storage that its result or a storage
+    /// outside it holds when it returns (ownership §5): `loan` where the
+    /// loan was made.
+    LoanOutlivesBody { loan: Span },
     /// A `match` some value reaches with no arm answering (patterns §3):
     /// where its scrutinee's variants are not all seen, it needs `_`.
     NotExhaustive,

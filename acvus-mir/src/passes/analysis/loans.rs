@@ -20,26 +20,52 @@
 //! parameter's and capture's type, distinct from every other since its
 //! callers were checked.
 //!
-//! How loans are made and move, each by the IR form that does it:
-//! 1. Lend, `Ref` of a place by name: one loan on that place, the storage and
-//!    the path, at the reference's mode.
-//! 2. Reborrow, `Ref` through `r`: no loan is made. The result holds `r`'s
-//!    loans at the target's position, their paths extended by the `Ref`'s
-//!    path, each at the weaker of its mode and the `Ref`'s: what a path of
-//!    references reaches is held by the first reference on it, and is
-//!    exclusive only where every reference on it is (ownership §5).
+//! A loan is made at one site, on one place, at one mode: two loans are one
+//! only where one site made them on one place. A loan made through another
+//! is within it, and lives no longer than it (ownership §5). A loan's path
+//! is exact, or, where a call's result borrows from an argument, some part
+//! under it the flows do not tell (extern-fn §4). A loan a reference holds
+//! is at a part of its target: the whole for a plain reference, part `i`
+//! for the reference `Gather` builds of its parts' references.
+//!
+//! How loans are made and move:
+//! 1. Lend, `Ref` by name of a place whose type is not a reference: one loan
+//!    made there on that place, exact, at the reference's mode.
+//! 2. Reborrow: a `Ref` through `r`; a `Ref` by name of a place whose type
+//!    is a reference, which reborrows its target (types §4); and a use the
+//!    takings (`ir::cfg::takings`) take `Read` of a `&mut` at a by-value
+//!    position, which reborrows it implicitly. For each loan `l` of `r`'s
+//!    own, one loan made there on `l`'s place extended by the path, exact
+//!    where `l` is, at the weaker of `l`'s mode and the reborrow's, within
+//!    `l`. The result holds these as its own.
 //! 3. Move between a value and a storage: a `Take` gives its value what the
 //!    content held at the positions its path reaches; an `Assign` gives the
-//!    content at its path's positions what the value holds.
-//! 4. A part: reading a part of a value, a field, an element or a payload,
-//!    gives what that part's positions hold.
-//! 5. Gather: `Intrinsic::Gather`, what `as_ref` and `as_mut` build, and a
-//!    coercion through a reference hold at each part's positions what that
-//!    part's reference holds; no loan is made.
-//! 6. A call: its result and its written arguments take loans only as its
-//!    function type's flows state (extern-fn §4). A call with a declared
-//!    access touches only the places that access states, in their modes.
+//!    content at its path's positions what the value holds. A move leaves
+//!    the content as it was: whether it is read again is `ContentLiveness`'
+//!    and `check::moveck`'s.
+//! 4. A part, both ways: reading a part gives what its positions hold, and
+//!    building a value of parts (`MakeTuple`, `MakeObject`, `MakeVariant`,
+//!    `ArrayPush`, `FieldSet`) puts each part's at its place. A closure's
+//!    positions are its captures'; `Specialize` holds its closure's. All
+//!    elements of a sequence are one part, which an index, a slice, a
+//!    `For` and `ArrayMap` reach (ownership §5).
+//! 5. Gather: the reference built holds each part reference's own loans at
+//!    that part; no loan is made.
+//! 6. A call: an argument's lend or reborrow is made where the call starts
+//!    (ownership §5, effects §6), so a value that is only one call's argument
+//!    holds its loans from the call on. The result and the written
+//!    arguments take loans only as the function type's flows state; one the
+//!    result takes from an argument is made at the call, within that
+//!    argument's loan, not exact. A call with a declared access touches
+//!    only the places that access states, in their modes.
 //! 7. A join: a block's parameter holds what any argument into it holds.
+//!
+//! Each site's accesses are recorded as `accesses`: what the takings read,
+//! write and move (`Moved`, `PartMoved`), and each loan made there, a lend
+//! at its mode. An access through a reference reaches, for each of its
+//! loans at a part the access's path meets, that loan's place extended by
+//! the rest of the path, or everything under it where the loan is not
+//! exact.
 //!
 //! passes-analyses.md.
 

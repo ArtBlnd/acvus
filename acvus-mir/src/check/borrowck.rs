@@ -1,17 +1,27 @@
 //! borrowck (ownership §5): while a loan lives, its place is reached only
-//! as the loan allows. It reads `Loans` for what each holder holds,
-//! `Liveness` and `ContentLiveness` for which holders are live.
+//! as the loan allows, and nothing that outlives the body holds a loan on
+//! its own storage. It reads `Loans` for what each holder holds and each
+//! site's accesses, `Liveness` and `ContentLiveness` for which holders are
+//! live.
 //!
-//! At every access of a place, by name (`RefTarget::Var`, `Param`) or
-//! through a reference `r` (`RefTarget::Through`), a read, a write, a move or
-//! a lend, every live loan whose place overlaps the accessed one is held
-//! against it:
-//! - a write, a move and a `&mut` lend meet every such loan;
-//! - a read and a `&` lend meet an exclusive one;
-//! - an access through `r` does not meet the loans `r` itself holds, which
-//!   it is made through.
-//! A loan the access meets refuses it `LoanConflict`, at the access's span,
-//! naming where the loan was made.
+//! A loan lives while a holder of it, or of a loan within it, is live. The
+//! content of an outside storage is live throughout the body: its holder is
+//! the caller. A value that is only one call's argument holds its loans
+//! from that call on.
+//!
+//! At every access `Loans` records, every live loan whose place overlaps the
+//! accessed one is held against it, save the loans the reference the access
+//! is made through holds, and those they are within:
+//! - a write, a move and an exclusive lend meet every such loan;
+//! - a read and a shared lend meet an exclusive one.
+//! Loans made at one site meet each other where their places overlap and
+//! one is exclusive. A loan an access meets refuses it `LoanConflict`, at the
+//! access's span, naming where the loan was made, a parameter's or capture's
+//! at its binder.
+//!
+//! At every `Return`, a loan on the body's own storage, a slot or a
+//! by-value parameter's, that the result or an outside storage's content
+//! holds refuses it `LoanOutlivesBody`, naming where the loan was made.
 
 use std::collections::BTreeSet;
 
