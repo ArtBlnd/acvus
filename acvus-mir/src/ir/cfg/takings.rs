@@ -64,7 +64,7 @@ pub struct Named {
 /// How a by-value position takes a value of `ty`: an argument, an edge's
 /// argument, a returned value, a value stored or built into another.
 pub fn by_value(types: &Types<Concrete>, ty: Ty) -> Taken {
-    match is_mut_ref(types, ty) {
+    match copies(types, ty) || is_mut_ref(types, ty) {
         true => Taken::Read,
         false => Taken::Moved,
     }
