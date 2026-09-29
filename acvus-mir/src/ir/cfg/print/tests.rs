@@ -2,16 +2,19 @@
 //! written out from the module doc's rules.
 
 use acvus_ast::{Literal, Span};
-use acvus_utils::{Astr, Interner, QualifiedRef};
+use acvus_utils::{Astr, Interner, LocalIdOps, QualifiedRef};
 
-use super::{Annotate, View, body, module};
+use super::{Annotate, Names, View, body, module};
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::{BlockId, BodyId, Module, Op, Terminator};
 use crate::ir::{BinOp, Callee, PathSeg, RefTarget, ValOrigin};
 use crate::passes::analysis::{
     Analysis, AnalysisManager, InitAnnotations, Initialization, LiveAnnotations, Liveness, LoanAnnotations, Loans,
 };
-use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, ObjectTy, Ty, TyKind, TypeArg, Types};
+use crate::ty::{
+    Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectArg, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
+    IdentityTerm, IntTy, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, TypeArg, Types,
+};
 
 struct Fixture {
     module: Module,
@@ -245,7 +248,7 @@ fn live_annotations_state_the_values_live_at_each_block_start() {
     let mut f = fixture();
     let id = f.build(false);
     let liveness = f.facts::<Liveness>(id);
-    let live = LiveAnnotations::new(f.module.body(id), &liveness);
+    let live = LiveAnnotations::new(&liveness);
     let expected = "\
 body0 entry=b0
 # live: {p0, slot0, t0}
@@ -339,13 +342,13 @@ b3(v10: i64):
 fn annotations_at_one_point_print_sorted_by_key() {
     struct Says(&'static str);
     impl Annotate for Says {
-        fn block(&self, _: BlockId) -> Vec<(&'static str, String)> {
+        fn block(&self, _: &Names<'_>, _: BlockId) -> Vec<(&'static str, String)> {
             vec![(self.0, "1".to_string())]
         }
-        fn before(&self, _: crate::ir::cfg::InstId) -> Vec<(&'static str, String)> {
+        fn before(&self, _: &Names<'_>, _: crate::ir::cfg::InstId) -> Vec<(&'static str, String)> {
             Vec::new()
         }
-        fn edge(&self, _: BlockId, _: BlockId) -> Vec<(&'static str, String)> {
+        fn edge(&self, _: &Names<'_>, _: BlockId, _: BlockId) -> Vec<(&'static str, String)> {
             Vec::new()
         }
     }
@@ -354,4 +357,110 @@ fn annotations_at_one_point_print_sorted_by_key() {
     let (later, earlier) = (Says("b"), Says("a"));
     let text = body(&f.module, id, &f.names, View::CFG, &[&later, &earlier]);
     assert!(text.starts_with("body0 entry=b0\n# a: 1\n# b: 1\nb0():\n"), "{text}");
+}
+
+/// With `canonical` on, an annotation names values and blocks as the print
+/// does: the body built with a value made and removed prints the same text
+/// as the plain one, annotations included.
+#[test]
+fn annotations_name_values_and_blocks_as_a_canonical_print_does() {
+    let expected = "\
+body0 entry=b0
+# live: {p0, slot0, t0}
+b0():
+  v0: i64 = Const 1
+  Assign slot0.a, v0
+  Assign slot0.b, v0
+  v1: i64 = Take slot0.a
+  # loans: v2=[slot0.b mut @41..47]
+  v2: &mut i64 = Ref(mut) slot0.b
+  v3: i64 = Call f()
+  v4: bool = Lt v1, p0
+  Diamond v4 ? b2(v1) : b1()
+# live: {p0, t1}
+b1():
+  Jump b3(p0)
+# live: {t1, v5}
+b2(v5: i64):
+  Jump b3(v5)
+# live: {t1, v6}
+b3(v6: i64):
+  Return v6
+";
+    let canonical = View { canonical: true, ..View::CFG };
+    for extra in [false, true] {
+        let mut f = fixture();
+        let id = f.build(extra);
+        let liveness = f.facts::<Liveness>(id);
+        let loans = f.facts::<Loans>(id);
+        let live = LiveAnnotations::new(&liveness);
+        let loan_annotations = LoanAnnotations::new(f.module.body(id), &f.names, &loans);
+        assert_eq!(body(&f.module, id, &f.names, canonical, &[&live, &loan_annotations]), expected, "extra: {extra}");
+    }
+}
+
+/// A function type's effect, flows, calls and holds, and a declared type's
+/// effect and identity arguments, print in a bracket where they differ from
+/// their defaults (types §5), and not at all where they equal them.
+#[test]
+fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
+    let names = Interner::new();
+    let mut types = Types::<Concrete>::new();
+    let int = types.intern(TyKind::Int(IntTy::I64));
+    let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    let (c, d) = (QualifiedRef::root(names.intern("c")), QualifiedRef::root(names.intern("d")));
+    let mut function = |params: &[Ty], ret: Ty, effect: Effect, flows: Flows, calls: Calls, holds: Holds| {
+        types.intern(TyKind::Fn {
+            params: params.into(),
+            ret,
+            effect: EffectTerm::Known(effect),
+            flows: FlowTerm::Known(flows),
+            calls,
+            holds,
+            values: (),
+        })
+    };
+    let defaults = function(&[int], int, Effect::opaque(), Flows::Every, Calls::Many, Holds::Nothing);
+    let pure_once = function(&[int], int, Effect::pure(), Flows::Every, Calls::Once, Holds::Nothing);
+    let reading = Effect::new(Reissue::Idempotent, true, Contexts::from([c]), Contexts::new(), SplitCost::WithCost(Cost::stated(3)));
+    let flows = Flows::of([
+        Flow { to: FlowEnd::Result, from: FlowEnd::Captures, alignment: Alignment::Any },
+        Flow { to: FlowEnd::Result, from: FlowEnd::Param(0), alignment: Alignment::Aligned },
+    ]);
+    let everything = function(&[ref_int], ref_int, reading, flows, Calls::Many, Holds::Mut);
+    let writing = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::from([d]), SplitCost::Unavailable);
+    let no_flows = function(&[], int, writing, Flows::none(), Calls::Many, Holds::Shared);
+    let vec = |types: &mut Types<Concrete>, effect_args: Box<[EffectArg<Concrete>]>, identity_args: Box<[IdentityTerm<Concrete>]>| {
+        types.intern(TyKind::UserDefined {
+            id: QualifiedRef::root(names.intern("Vec")),
+            type_args: Box::new([TypeArg::Specialized(int)]),
+            effect_args,
+            identity_args,
+        })
+    };
+    let plain_vec = vec(&mut types, Box::new([EffectArg::Uniform(EffectTerm::Known(Effect::opaque()))]), Box::new([]));
+    let marked_vec = vec(
+        &mut types,
+        Box::new([
+            EffectArg::Uniform(EffectTerm::Known(Effect::pure())),
+            EffectArg::Specialized(EffectTerm::Known(Effect::opaque())),
+            EffectArg::Uniform(EffectTerm::Known(pure_reading(c))),
+        ]),
+        Box::new([IdentityTerm::Known(IdentityId::from_raw(3))]),
+    );
+
+    let shown = |ty| crate::ty::print::ty(&types, &names, ty);
+    assert_eq!(shown(defaults), "fn(i64) -> i64");
+    assert_eq!(shown(pure_once), "fn(i64) -> i64 [pure, calls=once]");
+    assert_eq!(
+        shown(everything),
+        "fn(&i64) -> &i64 [idempotent, commutative, reads=[@c], split=3, flows=[p0->ret, cap->ret:any], holds=mut]"
+    );
+    assert_eq!(shown(no_flows), "fn() -> i64 [writes=[@d], flows=[], holds=shared]");
+    assert_eq!(shown(plain_vec), "Vec<#i64>");
+    assert_eq!(shown(marked_vec), "Vec<#i64> [e0=pure, e1=#opaque, e2=(pure, reads=[@c]), id0=3]");
+}
+
+fn pure_reading(context: QualifiedRef) -> Effect {
+    Effect::new(Reissue::Pure, true, Contexts::from([context]), Contexts::new(), SplitCost::Unavailable)
 }

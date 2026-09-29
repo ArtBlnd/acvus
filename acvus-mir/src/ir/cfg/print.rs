@@ -18,8 +18,9 @@
 //!
 //! Annotations are what an analysis says at a point, given by `Annotate`
 //! and printed on `#` lines above the instruction, the block or the edge
-//! they are at, each `key: value`, keys in order. The printer knows no
-//! analysis.
+//! they are at, each `key: value`, keys in order. An annotation writes each
+//! value and block through the print's `Names`, so it names them as the
+//! print does, canonical or not. The printer knows no analysis.
 //!
 //! Notation only: an instruction prints as its operation's name and its
 //! operands, a place as its root and path (`slot0.a`, `*v3.b`, `v4[v5]`), a
@@ -56,21 +57,22 @@ impl View {
 }
 
 /// What an analysis says at points of one body, as `key: value` pairs in
-/// notation. A point it says nothing of gives none.
+/// notation, each value and block written through `names`. A point it says
+/// nothing of gives none.
 pub trait Annotate {
     /// At a block's start.
-    fn block(&self, block: BlockId) -> Vec<(&'static str, String)>;
+    fn block(&self, names: &Names<'_>, block: BlockId) -> Vec<(&'static str, String)>;
     /// Just before an instruction.
-    fn before(&self, inst: InstId) -> Vec<(&'static str, String)>;
+    fn before(&self, names: &Names<'_>, inst: InstId) -> Vec<(&'static str, String)>;
     /// On an edge, from the block whose terminator takes it.
-    fn edge(&self, from: BlockId, to: BlockId) -> Vec<(&'static str, String)>;
+    fn edge(&self, names: &Names<'_>, from: BlockId, to: BlockId) -> Vec<(&'static str, String)>;
 }
 
 /// `body` of `module` as `view` shows it, with each of `annotations`.
 pub fn body(module: &Module, id: BodyId, names: &Interner, view: View, annotations: &[&dyn Annotate]) -> String {
     let body = module.body(id);
-    let numbering = Numbering::of(body, view.canonical);
-    let printer = Printer { module, body, names, view, numbering: &numbering, annotations };
+    let ids = Names { body, numbering: Numbering::of(body, view.canonical) };
+    let printer = Printer { module, body, names, view, ids: &ids, annotations };
     let mut out = String::new();
     printer.body(id, &mut out);
     out
@@ -84,12 +86,6 @@ pub fn module(module: &Module, names: &Interner, view: View) -> String {
         .map(|id| body(module, id, names, view, &[]))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// `value` of `body` by its own id, as a print with `canonical` off writes
-/// it: `p0`, `c0`, `slot0`, a token `t3`, any other value `v3`.
-pub(crate) fn value(body: &Body, value: ValueId) -> String {
-    Numbering::Own.value(body, value)
 }
 
 /// A path under a place, `.a.0`.
@@ -106,6 +102,53 @@ pub(crate) fn path(names: &Interner, path: &[PathSeg]) -> String {
 /// `@start..end`.
 pub(crate) fn span(span: Span) -> String {
     format!("@{}..{}", span.start, span.end)
+}
+
+/// The names one print gives the values and blocks of its body: a value by
+/// its role, `p0`, `c0`, `slot0`, a token `t3`, any other value `v3`, and a
+/// block `b2`, each numbered as the print's `canonical` says.
+pub struct Names<'b> {
+    body: &'b Body,
+    numbering: Numbering,
+}
+
+impl Names<'_> {
+    pub fn value(&self, value: ValueId) -> String {
+        self.numbering.value(self.body, value)
+    }
+
+    pub fn block(&self, block: BlockId) -> String {
+        self.numbering.block(block)
+    }
+
+    /// Sorts `values` in the order their names print: parameters,
+    /// captures, slots, tokens, then every other value, each kind by its
+    /// number.
+    pub fn sort_values(&self, values: &mut [ValueId]) {
+        values.sort_by_key(|value| self.numbering.value_key(self.body, *value));
+    }
+
+    fn values(&self, values: &[ValueId]) -> String {
+        self.numbering.values(self.body, values)
+    }
+
+    fn place(&self, names: &Interner, target: &RefTarget, at: &[PathSeg]) -> String {
+        self.numbering.place(self.body, names, target, at)
+    }
+
+    fn blocks(&self) -> Vec<BlockId> {
+        self.numbering.blocks(self.body)
+    }
+}
+
+/// Where a value's name sorts among others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ValueKey {
+    Param(usize),
+    Capture(usize),
+    Slot(usize),
+    Token(usize),
+    Value(usize),
 }
 
 /// How values and blocks are numbered in one print.
@@ -168,19 +211,28 @@ impl Numbering {
     }
 
     fn value(&self, body: &Body, value: ValueId) -> String {
+        match self.value_key(body, value) {
+            ValueKey::Param(index) => format!("p{index}"),
+            ValueKey::Capture(index) => format!("c{index}"),
+            ValueKey::Slot(index) => format!("slot{index}"),
+            ValueKey::Token(number) => format!("t{number}"),
+            ValueKey::Value(number) => format!("v{number}"),
+        }
+    }
+
+    fn value_key(&self, body: &Body, value: ValueId) -> ValueKey {
         match body.definition(value) {
-            Definition::Param(index) => format!("p{index}"),
-            Definition::Capture(index) => format!("c{index}"),
-            Definition::Slot(index) => format!("slot{index}"),
+            Definition::Param(index) => ValueKey::Param(index),
+            Definition::Capture(index) => ValueKey::Capture(index),
+            Definition::Slot(index) => ValueKey::Slot(index),
             Definition::OrderParam | Definition::BlockParam(..) | Definition::Inst(_) => {
-                let prefix = if body.is_token(value) { 't' } else { 'v' };
                 let number = match self {
                     Numbering::Own => value.to_raw(),
                     Numbering::Canonical { value_numbers, .. } => *value_numbers
                         .get(&value)
                         .unwrap_or_else(|| panic!("{value:?} is defined in the body printed")),
                 };
-                format!("{prefix}{number}")
+                if body.is_token(value) { ValueKey::Token(number) } else { ValueKey::Value(number) }
             }
         }
     }
@@ -231,7 +283,7 @@ struct Printer<'p> {
     body: &'p Body,
     names: &'p Interner,
     view: View,
-    numbering: &'p Numbering,
+    ids: &'p Names<'p>,
     annotations: &'p [&'p dyn Annotate],
 }
 
@@ -252,7 +304,7 @@ impl Printer<'_> {
                 line(out, 0, &text);
             }
         }
-        for block in self.numbering.blocks(self.body) {
+        for block in self.ids.blocks() {
             self.block(block, out);
         }
     }
@@ -288,11 +340,11 @@ impl Printer<'_> {
 
     fn block(&self, id: BlockId, out: &mut String) {
         let block = self.body.block(id);
-        self.annotate(out, 0, |annotation| annotation.block(id));
+        self.annotate(out, 0, |annotation| annotation.block(self.ids, id));
         let params: Vec<String> = block.params().iter().map(|param| self.definition(*param, self.origin_of(*param))).collect();
         line(out, 0, &format!("{}({}):", self.block_name(id), params.join(", ")));
         for inst in block.insts() {
-            self.annotate(out, 1, |annotation| annotation.before(inst.id()));
+            self.annotate(out, 1, |annotation| annotation.before(self.ids, inst.id()));
             line(out, 1, &self.inst(inst));
         }
         self.edge_annotations(id, block, out);
@@ -313,7 +365,7 @@ impl Printer<'_> {
         for to in targets {
             let prefix = format!("-> {} ", self.block_name(to));
             let mut pairs: Vec<(&'static str, String)> =
-                self.annotations.iter().flat_map(|annotation| annotation.edge(from, to)).collect();
+                self.annotations.iter().flat_map(|annotation| annotation.edge(self.ids, from, to)).collect();
             pairs.sort_by(|a, b| a.0.cmp(b.0));
             for (key, value) in pairs {
                 line(out, 1, &format!("# {prefix}{key}: {value}"));
@@ -601,19 +653,19 @@ impl Printer<'_> {
     }
 
     fn value(&self, value: ValueId) -> String {
-        self.numbering.value(self.body, value)
+        self.ids.value(value)
     }
 
     fn values(&self, values: &[ValueId]) -> String {
-        self.numbering.values(self.body, values)
+        self.ids.values(values)
     }
 
     fn place(&self, target: &RefTarget, at: &[PathSeg]) -> String {
-        self.numbering.place(self.body, self.names, target, at)
+        self.ids.place(self.names, target, at)
     }
 
     fn block_name(&self, block: BlockId) -> String {
-        self.numbering.block(block)
+        self.ids.block(block)
     }
 
     fn ty(&self, ty: Ty) -> String {
