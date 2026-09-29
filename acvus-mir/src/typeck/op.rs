@@ -7,13 +7,14 @@ use acvus_ast::{AstId, BinOp, Expr, Slot, Span, UnaryOp};
 use super::call::{reach_call, reach_in};
 use super::ctxt::Ctxt;
 use super::decision::{Callee, CoreSig, Decision, Domain};
-use super::output::Comparing;
+use super::output::PartNode;
 use super::expr::check_expr;
 use super::place::{self, Demand};
 use super::refusal::{self, RefusalKind};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, ObjectTy, TyKind};
+use crate::ty::structural::structure;
+use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, TyKind};
 
 /// `==` and the orderings compare part by part where the operands' type is
 /// structural, and through `core::eq` or `core::cmp` otherwise
@@ -125,23 +126,23 @@ pub(super) fn fire_compare(
     operand: Closed,
     body: &EffectTerm<InferPhase>,
 ) {
-    let parts: Option<Vec<Term>> = match cx.infer.types().kind(operand.term) {
-        TyKind::Tuple(items) => Some(items.to_vec()),
-        TyKind::Array(element, _) | TyKind::Option(element) => Some(vec![*element]),
-        TyKind::Result(ok, err) => Some(vec![*ok, *err]),
-        TyKind::Object(ObjectTy::Structural(fields, _)) => Some(fields.iter().map(|(_, field)| *field).collect()),
-        TyKind::Ref(_, target) => Some(vec![target.ty()]),
-        TyKind::Never => Some(Vec::new()),
-        _ => None,
+    let types = cx.infer.types();
+    let parts: Option<Vec<Term>> = match structure(types, operand.term) {
+        Some(structure) => Some(structure.parts().to_vec()),
+        None => match types.kind(operand.term) {
+            TyKind::Ref(_, target) => Some(vec![target.ty()]),
+            TyKind::Never => Some(Vec::new()),
+            _ => None,
+        },
     };
     let Some(parts) = parts else {
-        cx.out.comparisons.insert(node, Comparing::Reached);
+        cx.out.comparisons.insert(node, PartNode::Reached);
         let lent = cx.lend(operand.term, Mutability::Shared, span);
         reach_in(cx, body, node, Callee::Core(sig), vec![(node, lent), (node, lent)], span);
         return;
     };
     let nodes: Vec<AstId> = parts.iter().map(|_| AstId::alloc()).collect();
-    cx.out.comparisons.insert(node, Comparing::Parts(nodes.clone().into()));
+    cx.out.comparisons.insert(node, PartNode::Parts(nodes.clone().into()));
     for (part, part_node) in parts.into_iter().zip(nodes) {
         let compare = Decision::Compare {
             node: part_node,

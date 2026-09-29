@@ -17,6 +17,7 @@
 
 mod call;
 mod cast;
+mod clone;
 mod closure;
 mod context;
 mod control;
@@ -44,7 +45,7 @@ use acvus_ast::{Expr, Script, Slot, Template};
 use crate::decl::Declarations;
 use crate::ty::{Concrete, TyKind, Types};
 
-pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Comparison, Conversion, Impl, Iteration, Name, TryExit, Typeck};
+pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Conversion, Impl, Iteration, Name, PartTree, TryExit, Typeck};
 pub use refusal::{Exceeding, Refusal, RefusalKind};
 
 use ctxt::Ctxt;

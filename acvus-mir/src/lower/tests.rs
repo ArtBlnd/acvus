@@ -1015,3 +1015,171 @@ fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
     }
     assert!(!lowered.entry_ops().iter().any(|op| matches!(op, Op::Drop { src } if *src == slot)), "the pair is never dropped whole: {}", shown(body));
 }
+
+// -- D87: part trees; arrays in one loop; no structural instruction ---------
+
+/// `clone(&String) -> String`, pure.
+fn clones_strings(fx: &mut Fixture) {
+    let string = fx.ty(TyKind::String);
+    let shared = fx.reference(Mutability::Shared, string);
+    let clones = fx.function(&[shared], string, Effect::pure());
+    let clone = fx.raw.core.clone;
+    fx.lang_item(clone, &[clones]);
+}
+
+fn no_structural_instruction(lowered: &Lowered) {
+    for body in lowered.module.body_ids() {
+        let structural = count(&lowered.ops(body), |op| matches!(op, Op::StructuralEq { .. } | Op::StructuralClone { .. }));
+        assert_eq!(structural, 0, "D87: {}", shown(lowered.module.body(body)));
+    }
+}
+
+fn fors(lowered: &Lowered) -> Vec<(&ForSource, crate::ir::cfg::BlockId, crate::ir::cfg::BlockId)> {
+    lowered
+        .entry_terminators()
+        .into_iter()
+        .filter_map(|terminator| match terminator {
+            Terminator::For { source, stages, exit, .. } => Some((source, stages.body(), *exit)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// operators §4, D87: `==` on arrays is one `For` over the indices, not
+/// one comparison per element; the loop leaves for its exit at the first
+/// element that is not equal, with that answer, which the exit takes.
+#[test]
+fn array_equality_is_one_for_that_exits_at_the_first_difference() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let int = fx.int();
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
+    fx.input("a", array);
+    fx.input("b", array);
+    let lowered = fx.script("$a == $b");
+    let body = lowered.entry();
+    let [(source, _, exit)] = fors(&lowered)[..] else { panic!("one For: {}", shown(body)) };
+    assert!(matches!(source, ForSource::Range { .. }), "{}", shown(body));
+    let [answer] = body.block(exit).params() else { panic!("the exit takes the answer: {}", shown(body)) };
+    assert_eq!(lowered.kind_of(body, *answer), &TyKind::Bool);
+    let exits_early = lowered.entry_terminators().into_iter().any(|terminator| {
+        matches!(terminator, Terminator::JumpIf { else_to, else_args, .. } if *else_to == exit && else_args.len() == 1)
+    });
+    assert!(exits_early, "{}", shown(body));
+    let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
+    assert_eq!(calls_of(&lowered, eq), 1, "one element comparison, in the loop: {}", shown(body));
+    no_structural_instruction(&lowered);
+}
+
+/// operators §2, §4, D87: an ordering on arrays is one `For` that leaves
+/// at the first `cmp` that is not `0`, and the answer is compared with `0`
+/// after it.
+#[test]
+fn array_ordering_is_one_for_that_exits_at_the_first_nonzero_cmp() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let int = fx.int();
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(4)));
+    fx.input("a", array);
+    fx.input("b", array);
+    let lowered = fx.script("$a < $b");
+    let body = lowered.entry();
+    let [(_, _, exit)] = fors(&lowered)[..] else { panic!("one For: {}", shown(body)) };
+    let [answer] = body.block(exit).params() else { panic!("the exit takes the answer: {}", shown(body)) };
+    assert_eq!(lowered.kind_of(body, *answer), &TyKind::Int(IntTy::I64));
+    let cmp = QualifiedRef::qualified(lowered.name("core"), lowered.name("cmp"));
+    assert_eq!(calls_of(&lowered, cmp), 1, "{}", shown(body));
+    let lt = count(&lowered.entry_ops(), |op| matches!(op, Op::BinOp { op: crate::ir::BinOp::Lt, left, .. } if left == answer));
+    assert_eq!(lt, 1, "{}", shown(body));
+}
+
+/// ownership §1-2, D87: `.clone()` of a tuple of a `String` and an `i64`
+/// builds a new tuple: the `String` through its `core::clone` impl, the
+/// `i64` copied out of the receiver.
+#[test]
+fn a_tuple_clone_is_built_part_by_part() {
+    let mut fx = Fixture::new();
+    clones_strings(&mut fx);
+    let string = fx.ty(TyKind::String);
+    let int = fx.int();
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, int])));
+    fx.input("t", pair);
+    let lowered = fx.script("$t.clone()");
+    let body = lowered.entry();
+    let clone = QualifiedRef::qualified(lowered.name("core"), lowered.name("clone"));
+    assert_eq!(calls_of(&lowered, clone), 1, "{}", shown(body));
+    let copied_int = count(&lowered.entry_ops(), |op| {
+        matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if path.is_empty())
+    });
+    assert_eq!(copied_int, 1, "{}", shown(body));
+    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::MakeTuple { elements } if elements.len() == 2)), 1, "{}", shown(body));
+    no_structural_instruction(&lowered);
+}
+
+/// ownership §1, D87: an array whose element copies is copied whole by
+/// `.clone()`: no loop and no call.
+#[test]
+fn an_array_that_copies_is_copied_by_clone() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
+    fx.input("a", array);
+    let lowered = fx.script("$a.clone()");
+    let body = lowered.entry();
+    assert!(fors(&lowered).is_empty(), "{}", shown(body));
+    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { .. })), 0, "{}", shown(body));
+    no_structural_instruction(&lowered);
+}
+
+/// D87: no comparison or clone of a structural type lowers to a structural
+/// instruction; `Option` and `Result` clones test the tag and rebuild the
+/// variant.
+#[test]
+fn no_structural_instruction_is_lowered() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    clones_strings(&mut fx);
+    let string = fx.ty(TyKind::String);
+    let int = fx.int();
+    let option = fx.ty(TyKind::Option(string));
+    let result = fx.ty(TyKind::Result(string, int));
+    let a = fx.name("a");
+    let object = fx.ty(TyKind::Object(crate::ty::ObjectTy::Structural(Box::new([(a, int)]), ())));
+    fx.input("o", option);
+    fx.input("r", result);
+    fx.input("x", object);
+    let lowered = fx.script("let p = $o.clone(); let q = $r.clone(); let e = $x == $x; let y = $x.clone(); e");
+    let ops = lowered.entry_ops();
+    assert_eq!(count(&ops, |op| matches!(op, Op::MakeVariant { .. })), 4, "{}", shown(lowered.entry()));
+    no_structural_instruction(&lowered);
+}
+
+/// D87: an array comparison's loop and a tuple clone go through the
+/// required steps and the full pipeline, every body keeping the editor's
+/// invariants.
+#[test]
+fn part_trees_survive_the_required_steps_and_the_pipeline() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    clones_strings(&mut fx);
+    let string = fx.ty(TyKind::String);
+    let int = fx.int();
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, int])));
+    fx.input("a", array);
+    fx.input("b", array);
+    fx.input("t", pair);
+    let script: Script = acvus_ast::parse_script(&fx.names, "let c = $t.clone(); $a < $b").expect("parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut types = Types::new();
+    let typeck = check_script(&decls, &mut types, &script);
+    assert!(typeck.refusals.is_empty(), "refused: {:?}", typeck.refusals);
+    let mut module = lower_script(&decls, &typeck, types, &script);
+    let mut am = crate::passes::analysis::AnalysisManager::new(&decls);
+    super::required::clone_strings(&mut module, &mut am);
+    super::required::remove_dead_context_ops(&mut module, &mut am);
+    super::required::insert_drops(&mut module, &mut am);
+    crate::passes::pipeline::optimize(&mut module, &mut am, crate::passes::pipeline::Level::Full);
+    let lowered = Lowered::checked(module, fx.names);
+    no_structural_instruction(&lowered);
+}

@@ -147,22 +147,35 @@ pub struct Closure {
     pub calls: Calls,
 }
 
-/// How `==` or an ordering compares its operands' type (operators §4):
-/// part by part, each part as it compares, or through the `core::eq` or
-/// `core::cmp` impl reached.
+/// How `==`, an ordering or `.clone()` treats its operand's type, node by
+/// node: part by part for a structural type in `ty::structural`'s order, an
+/// array by its one element part (operators §4, ownership §1-2); through
+/// the `core::eq`, `core::cmp` or `core::clone` impl reached; or, for a
+/// clone, copied where the node's type copies.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Comparison {
-    Parts(Box<[Comparison]>),
+pub enum PartTree {
+    Parts(Box<[PartTree]>),
     /// The impl reached, and its function type as instantiated there.
     Reached { chosen: Chosen, callee: Ty },
+    /// A clone of a node whose type copies (ownership §1).
+    Copied,
 }
 
-/// A comparison node while checking: its parts' nodes, or a reach at the
-/// node itself, recorded in `reached` once it fires.
+/// A part-tree node while checking: its parts' nodes, a reach at the node
+/// itself, recorded in `reached` once it fires, or a copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Comparing {
+pub(super) enum PartNode {
     Parts(Box<[AstId]>),
     Reached,
+    Copied,
+}
+
+/// A clone's node while checking, and its type: a structural node whose
+/// type turns out to copy is copied whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CloneNode {
+    pub node: PartNode,
+    pub ty: Term,
 }
 
 /// A value that entered a slot and was folded there (types §3); its
@@ -213,7 +226,8 @@ pub(super) struct Output {
     pub whole_uses: Vec<WholeUse>,
     /// Each method call's receiver adjustment, at the call's callee site.
     pub adjustments: FxHashMap<AstId, Adjustment>,
-    pub comparisons: FxHashMap<AstId, Comparing>,
+    pub comparisons: FxHashMap<AstId, PartNode>,
+    pub clones: FxHashMap<AstId, CloneNode>,
     pub body_effect: Option<EffectTerm<InferPhase>>,
     pub refusals: Vec<Refusal>,
 }
@@ -235,7 +249,9 @@ pub struct Typeck {
     /// Each method call's receiver adjustment, at the call's callee site,
     /// where `reached` has the call (types §6).
     pub adjustments: FxHashMap<AstId, Adjustment>,
-    pub comparisons: FxHashMap<AstId, Comparison>,
+    /// Each comparison's tree, at the operator's site, and each
+    /// `.clone()`'s, at its callee site.
+    pub part_trees: FxHashMap<AstId, PartTree>,
     pub body_effect: Effect,
     /// The run's result type: the slot every tail and `return` enters, and
     /// for a template the `String` it builds. `None` only where a refusal

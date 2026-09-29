@@ -1283,18 +1283,92 @@ fn a_tuple_compares_part_by_part() {
     let (checked, script) = fx.script("(1, true) == (2, false)");
     checked.admitted();
     let site = script.tail.as_ref().unwrap().id();
-    let super::Comparison::Parts(parts) = &checked.typeck.comparisons[&site] else {
+    let super::PartTree::Parts(parts) = &checked.typeck.part_trees[&site] else {
         panic!("a tuple compares its parts");
     };
     let reached: Vec<Option<Impl>> = parts
         .iter()
         .map(|part| match part {
-            super::Comparison::Reached { chosen, .. } => chosen.r#impl,
-            super::Comparison::Parts(_) => panic!("an integer and a bool reach an impl"),
+            super::PartTree::Reached { chosen, .. } => chosen.r#impl,
+            super::PartTree::Parts(_) | super::PartTree::Copied => panic!("an integer and a bool reach an impl"),
         })
         .collect();
     assert_eq!(reached, vec![Some(Impl::Concrete(0)), Some(Impl::Concrete(1))]);
     assert!(!checked.typeck.reached.contains_key(&site));
+}
+
+/// operators §2, §4, §7, ownership §1-2: `==`, `<` and `.clone()` on a
+/// tuple of a `String` and an `i64` each record a part tree at their site,
+/// the parts in the tuple's order. The comparisons reach `core::eq` and
+/// `core::cmp` at each part; the clone reaches `core::clone` at the
+/// `String` and copies the `i64`, and is of the tuple's type.
+#[test]
+fn a_tuple_records_a_part_tree_for_equality_ordering_and_clone() {
+    let mut fx = Fixture::new();
+    let (eq, cmp, clone) = (fx.raw.core.eq, fx.raw.core.cmp, fx.raw.core.clone);
+    let bool_ty = fx.ty(TyKind::Bool);
+    let (string, i64_ty) = (fx.ty(TyKind::String), fx.int(IntTy::I64));
+    let mut eqs = Vec::new();
+    let mut cmps = Vec::new();
+    for part in [string, i64_ty] {
+        let shared = fx.reference(Mutability::Shared, part);
+        eqs.push(fx.pure(&[shared, shared], bool_ty));
+        cmps.push(fx.pure(&[shared, shared], i64_ty));
+    }
+    fx.lang_item(eq, &eqs);
+    fx.lang_item(cmp, &cmps);
+    let shared_string = fx.reference(Mutability::Shared, string);
+    let clones_string = fx.pure(&[shared_string], string);
+    fx.lang_item(clone, &[clones_string]);
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, i64_ty])));
+    fx.input("t", pair);
+    let (checked, script) = fx.script("let e = $t == $t; let o = $t < $t; $t.clone()");
+    checked.admitted();
+    let site_of = |at: usize| match &script.stmts[at] {
+        Stmt::LetBind { expr, .. } => expr.id(),
+        other => panic!("a `let`, not {other:?}"),
+    };
+    let reached = |tree: &super::PartTree| match tree {
+        super::PartTree::Reached { chosen, .. } => Some((chosen.declaration, chosen.r#impl)),
+        super::PartTree::Parts(_) | super::PartTree::Copied => None,
+    };
+    for (site, item) in [(site_of(0), eq), (site_of(1), cmp)] {
+        let super::PartTree::Parts(parts) = &checked.typeck.part_trees[&site] else {
+            panic!("a tuple compares part by part");
+        };
+        let impls: Vec<_> = parts.iter().map(reached).collect();
+        assert_eq!(impls, vec![Some((item, Some(Impl::Concrete(0)))), Some((item, Some(Impl::Concrete(1))))]);
+    }
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a method call");
+    };
+    let super::PartTree::Parts(parts) = &checked.typeck.part_trees[callee_id] else {
+        panic!("a tuple of a `String` clones part by part");
+    };
+    let [string_part, int_part] = &parts[..] else { panic!("a pair has two parts") };
+    let super::PartTree::Reached { chosen, .. } = string_part else {
+        panic!("a `String` is cloned through `core::clone`");
+    };
+    assert_eq!((chosen.declaration, chosen.r#impl), (clone, Some(Impl::Concrete(0))));
+    assert_eq!(int_part, &super::PartTree::Copied);
+    assert!(!checked.typeck.reached.contains_key(callee_id));
+    let TyKind::Tuple(items) = checked.kind(tail(&checked, &script)) else {
+        panic!("a tuple's clone is the tuple");
+    };
+    assert_eq!(checked.kind(items[0]), &TyKind::String);
+}
+
+/// ownership §1: a clone of a tuple whose every part copies is a copy of
+/// the whole, and needs no `core::clone` impl.
+#[test]
+fn a_tuple_that_copies_is_copied_by_clone() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("(1, true).clone()");
+    checked.admitted();
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a method call");
+    };
+    assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
 }
 
 // Forms decided by their operand's head (types §6)
@@ -1747,11 +1821,11 @@ fn a_comparison_part_names_its_callee_type() {
     let (checked, script) = fx.script("(1, 2) == (3, 4)");
     checked.admitted();
     let site = script.tail.as_ref().unwrap().id();
-    let super::Comparison::Parts(parts) = &checked.typeck.comparisons[&site] else {
+    let super::PartTree::Parts(parts) = &checked.typeck.part_trees[&site] else {
         panic!("a tuple compares its parts");
     };
     for part in parts.iter() {
-        let super::Comparison::Reached { callee, .. } = part else {
+        let super::PartTree::Reached { callee, .. } = part else {
             panic!("an integer reaches an impl");
         };
         let TyKind::Fn { params, ret, .. } = checked.kind(*callee) else {

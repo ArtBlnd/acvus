@@ -1,5 +1,6 @@
 //! `recv.f(args)`: a call reaching by the same rule, the receiver first
-//! (types §6). `.unwrap()` is core's lang item (operators §2).
+//! (types §6). `.unwrap()` and `.clone()` are core's lang items
+//! (operators §2); `.clone()` is `clone.rs`'s.
 //!
 //! The receiver is adjusted as Rust's method probe adjusts it (D85): once
 //! its head is known, it is taken as written, then as `&`, then as `&mut`
@@ -38,10 +39,14 @@ pub(super) fn check_method_call<S: Slot>(
 ) -> Term {
     let term = check_receiver(cx, receiver);
     let place = receiver_place(cx, receiver);
-    let args = args.iter().map(|arg| (arg.id(), check_expr(cx, arg, Demand::Read))).collect();
-    let callee = match name == cx.decls.core().unwrap.name {
-        true => Callee::Core(CoreSig::Unwrap),
-        false => Callee::Method(name),
+    let args: Vec<(AstId, Term)> = args.iter().map(|arg| (arg.id(), check_expr(cx, arg, Demand::Read))).collect();
+    let core = cx.decls.core();
+    let callee = if name == core.unwrap.name {
+        Callee::Core(CoreSig::Unwrap)
+    } else if name == core.clone.name && args.is_empty() {
+        Callee::Core(CoreSig::Clone)
+    } else {
+        Callee::Method(name)
     };
     let result = cx.fresh();
     let body = super::effect::body_effect(cx);
@@ -151,6 +156,10 @@ fn name_root(cx: &Ctxt<'_>, name: Astr, of: CaptureOf, crossed: Vec<AstId>, term
 /// The adjustment fired on the receiver's head, then the call's reach. It
 /// waits where a `&mut` receiver lends an index still undecided.
 pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading) -> Result<(), Adjust> {
+    if adjust.callee == Callee::Core(CoreSig::Clone) {
+        fire_clone_adjust(cx, adjust, receiver, reading);
+        return Ok(());
+    }
     let adjustment = adjustment(cx, &adjust, receiver.head);
     if adjustment == Adjustment::Ref(Mutability::Mut) {
         let indexes = adjust.place.iter().flat_map(|place| &place.indexes);
@@ -174,6 +183,20 @@ pub(super) fn fire_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, r
     let reached = reach_in(cx, &body, callee_site, callee, all, span);
     cx.eq(result, reached, span);
     Ok(())
+}
+
+/// `.clone()`'s adjustment, then the clone of what the adjusted receiver
+/// lends, decided at the callee site; the call's result is of that type.
+fn fire_clone_adjust(cx: &mut Ctxt<'_>, adjust: Adjust, receiver: Closed, reading: Reading) {
+    let adjustment = super::clone::receiver_adjustment(receiver.head);
+    let Adjust { callee_site, span, receiver: term, result, body, place, .. } = adjust;
+    cx.out.adjustments.insert(callee_site, adjustment);
+    if let Some(place) = place {
+        lends(cx, &place, adjustment, term, &body, reading, span);
+    }
+    let cloned = super::clone::cloned_type(cx, receiver.head, term);
+    cx.eq(result, cloned, span);
+    super::clone::decide(cx, callee_site, span, cloned, body);
 }
 
 /// The first of as written, `&` and `&mut` whose receiver some candidate's

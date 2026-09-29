@@ -172,6 +172,16 @@ pub(super) enum Decision {
         operand: Term,
         body: EffectTerm<InferPhase>,
     },
+    /// `.clone()`'s node `node` of type `operand`: part by part for a
+    /// structural type, copied where the type copies, through
+    /// `core::clone` otherwise (ownership §1-2, operators §7). `body` is
+    /// the effect of the body the clone is in.
+    Clone {
+        node: AstId,
+        span: Span,
+        operand: Term,
+        body: EffectTerm<InferPhase>,
+    },
 }
 
 impl Decision {
@@ -190,6 +200,7 @@ impl Decision {
             Decision::Adjust(adjust) => vec![adjust.result],
             Decision::Destructure { shape, .. } => shape.bindings(),
             Decision::Compare { .. }
+            | Decision::Clone { .. }
             | Decision::Operand { .. }
             | Decision::Cast { .. }
             | Decision::Settle { .. }
@@ -217,7 +228,9 @@ impl Decision {
                 terms.push(*scrutinee);
                 terms
             }
-            Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => vec![*operand],
+            Decision::Compare { operand, .. } | Decision::Clone { operand, .. } | Decision::Operand { operand, .. } => {
+                vec![*operand]
+            }
             Decision::Settle { term, .. }
             | Decision::HoldsNoLoans { term, .. } => vec![*term],
         }
@@ -329,7 +342,9 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Index { container, .. } => Some(*container),
         Decision::Deref { reference, .. } => Some(*reference),
         Decision::Destructure { scrutinee, .. } => Some(*scrutinee),
-        Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => Some(*operand),
+        Decision::Compare { operand, .. } | Decision::Clone { operand, .. } | Decision::Operand { operand, .. } => {
+            Some(*operand)
+        }
         Decision::BlockEnd { last, .. } => Some(*last),
         Decision::Adjust(adjust) => Some(adjust.receiver),
         Decision::Iterate { head, .. } => Some(*head),
@@ -558,6 +573,13 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             super::op::fire_compare(cx, node, span, sig, closed, &body);
+            Ok(())
+        }
+        Decision::Clone { node, span, operand, body } => {
+            let Some(closed) = closed_for(cx, operand, reading) else {
+                return Err(Decision::Clone { node, span, operand, body });
+            };
+            super::clone::fire_clone(cx, node, span, closed, &body);
             Ok(())
         }
         Decision::Adjust(adjust) => {
@@ -1431,6 +1453,7 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::Index { span, .. }
         | Decision::Deref { span, .. }
         | Decision::Compare { span, .. }
+        | Decision::Clone { span, .. }
         | Decision::Operand { span, .. }
         | Decision::BlockEnd { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
         Decision::Adjust(adjust) => refusal::push(cx, RefusalKind::Undecided, adjust.span),

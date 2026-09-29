@@ -16,6 +16,7 @@ mod context;
 mod control;
 mod ctxt;
 mod expr;
+mod part_tree;
 mod pat;
 mod place;
 mod stmt;
