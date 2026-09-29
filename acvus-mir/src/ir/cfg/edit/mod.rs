@@ -28,8 +28,6 @@ pub use scopes::{
     ClonesReads, DropFacts,
 };
 
-use std::collections::BTreeSet;
-
 use acvus_ast::Span;
 
 use rustc_hash::FxHashSet;
@@ -128,6 +126,23 @@ where
     /// Every instruction the current cursor has yielded. Cost: O(1) per
     /// yield, and O(instructions yielded) held.
     yielded: FxHashSet<InstId>,
+    /// The body's predecessors and structural labels, kept from their first
+    /// use until an edit changes the CFG's shape.
+    shape: Option<ShapeIndex>,
+}
+
+/// What the CFG's shape alone decides, for the legality checks that read it
+/// block by block.
+struct ShapeIndex {
+    predecessors: rustc_hash::FxHashMap<BlockId, smallvec::SmallVec<[BlockId; 2]>>,
+    structural: Vec<bool>,
+}
+
+impl ShapeIndex {
+    /// Cost: O(blocks + edges + stages).
+    fn of(body: &Body) -> ShapeIndex {
+        ShapeIndex { predecessors: body.predecessors(), structural: body.structural_blocks() }
+    }
 }
 
 /// Where a cursor stands: the next instruction it yields is at `next` of
@@ -206,7 +221,15 @@ where
     /// `body` is not a body of `module`.
     pub fn new(module: &'m mut Module, body: BodyId, needs: &'m mut S::Needs<'m>) -> Self {
         module.assert_body(body);
-        Editor { module, body, needs, changes: Changes::default(), walk: Walk::start(), yielded: FxHashSet::default() }
+        Editor {
+            module,
+            body,
+            needs,
+            changes: Changes::default(),
+            walk: Walk::start(),
+            yielded: FxHashSet::default(),
+            shape: None,
+        }
     }
 
     /// A cursor over the body's instructions in block order; it stays valid
@@ -263,6 +286,13 @@ where
         self.module.body(self.body)
     }
 
+    /// The shape index of the body as it stands, made on first use after
+    /// the last edit of the CFG's shape.
+    fn shape(&mut self) -> &ShapeIndex {
+        let body = self.module.body(self.body);
+        self.shape.get_or_insert_with(|| ShapeIndex::of(body))
+    }
+
     /// # Panics
     /// `inst` names no instruction of the body.
     fn inst(&self, inst: InstRef) -> &Inst {
@@ -299,6 +329,9 @@ where
     fn after_edit(&mut self, changes: Changes) {
         #[cfg(debug_assertions)]
         self.check_edit(&changes);
+        if changes.touched(super::Aspect::CfgShape) {
+            self.shape = None;
+        }
         self.needs.refresh(self.module, self.body, &changes);
         for aspect in changes.aspects() {
             self.changes.record(aspect);
@@ -515,7 +548,7 @@ where
 /// the terminators it reaches, closed over the blocks that define what a
 /// kept block reads.
 fn kept_blocks(body: &Body) -> Vec<bool> {
-    let mut keep = vec![false; body.blocks().count()];
+    let mut keep = vec![false; body.block_count()];
     keep[body.entry().index()] = true;
     let mut pending = vec![body.entry()];
     while let Some(block) = pending.pop() {
@@ -678,32 +711,137 @@ fn site_position(site: Site) -> Position {
 /// new one for a move down it, and both ways between blocks; it may pass the
 /// old place, and it meets the new place only at its end. Around a loop the
 /// way takes in every instruction of the loop, which is what a move into or
-/// out of the loop passes. Cost: O(the body's instructions and edges).
+/// out of the loop passes.
+///
+/// The walks run block by block, each block's reached points being at most
+/// two runs of indices, so the cost is O(blocks + edges) for the walks and
+/// O(the instructions passed over) for the answer, in block order.
 fn crossed_insts(body: &Body, from: InstRef, to: BlockId, to_index: usize) -> Vec<InstRef> {
-    let points = Points::of(body);
-    let new_place = points.id(to, to_index);
+    let new_place = BlockPoint { block: to, index: to_index };
+    let old_place = BlockPoint { block: from.block, index: from.index };
+    let after_old = BlockPoint { block: from.block, index: from.index + 1 };
     let same_block = from.block == to;
-    let mut crossed = BTreeSet::new();
-    let mut collect = |forward: &[bool], backward: &[bool]| {
-        for (block, insts) in body.blocks().map(|(id, block)| (id, block.insts().len())) {
-            for index in (0..insts).filter(|index| (block, *index) != (from.block, from.index)) {
-                if forward[points.id(block, index)] && backward[points.id(block, index + 1)] {
-                    crossed.insert((block, index));
+    let mut ways: Vec<(RunsReached, RunsReached)> = Vec::new();
+    if !same_block || to_index <= from.index {
+        ways.push((
+            RunsReached::walk(body, new_place, None, Direction::Forward),
+            RunsReached::walk(body, old_place, Some(new_place), Direction::Backward),
+        ));
+    }
+    if !same_block || to_index > from.index + 1 {
+        ways.push((
+            RunsReached::walk(body, after_old, Some(new_place), Direction::Forward),
+            RunsReached::walk(body, new_place, None, Direction::Backward),
+        ));
+    }
+    let mut crossed = Vec::new();
+    for (block, record) in body.blocks() {
+        let mut passed: Vec<Run> = Vec::new();
+        for (forward, backward) in &ways {
+            for ahead in forward.runs(block) {
+                for behind in backward.runs(block) {
+                    // An instruction at `index` is passed when the point before it
+                    // is reached forward and the point after it backward.
+                    let lo = ahead.lo.max(behind.lo.saturating_sub(1));
+                    let hi = ahead.hi.min(behind.hi.saturating_sub(1)).min(record.insts().len().saturating_sub(1));
+                    if behind.hi >= 1 && !record.insts().is_empty() && lo <= hi {
+                        passed.push(Run { lo, hi });
+                    }
                 }
             }
         }
-    };
-    if !same_block || to_index <= from.index {
-        let forward = points.reach(body, new_place, None, Direction::Forward);
-        let backward = points.reach(body, points.id(from.block, from.index), Some(new_place), Direction::Backward);
-        collect(&forward, &backward);
+        let mut indices: Vec<usize> = passed.iter().flat_map(|run| run.lo..=run.hi).collect();
+        indices.sort_unstable();
+        indices.dedup();
+        let is_moved = |index: &usize| block == from.block && *index == from.index;
+        crossed.extend(indices.into_iter().filter(|index| !is_moved(index)).map(|index| InstRef { block, index }));
     }
-    if !same_block || to_index > from.index + 1 {
-        let forward = points.reach(body, points.id(from.block, from.index + 1), Some(new_place), Direction::Forward);
-        let backward = points.reach(body, new_place, None, Direction::Backward);
-        collect(&forward, &backward);
+    crossed
+}
+
+/// A point of a block: before its instruction `index`, or its end where
+/// `index` is the block's length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockPoint {
+    block: BlockId,
+    index: usize,
+}
+
+/// The points `lo..=hi` of one block.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    lo: usize,
+    hi: usize,
+}
+
+/// The points one walk reached, as runs per block: a walk that starts in a
+/// block reaches one run of it from its start, and one that enters a block
+/// from an edge reaches one run of it from that end, so a block holds at most
+/// two.
+struct RunsReached {
+    runs: Vec<smallvec::SmallVec<[Run; 2]>>,
+}
+
+impl RunsReached {
+    fn runs(&self, block: BlockId) -> &[Run] {
+        &self.runs[block.index()]
     }
-    crossed.into_iter().map(|(block, index)| InstRef { block, index }).collect()
+
+    /// The points reachable from `start` in `direction` without stepping
+    /// onto `avoided`; `start` itself is reached. Cost: O(blocks + edges).
+    fn walk(body: &Body, start: BlockPoint, avoided: Option<BlockPoint>, direction: Direction) -> RunsReached {
+        let count = body.block_count();
+        let mut runs: Vec<smallvec::SmallVec<[Run; 2]>> = vec![smallvec::SmallVec::new(); count];
+        let mut entered = vec![false; count];
+        let preds = match direction {
+            Direction::Forward => None,
+            Direction::Backward => Some(body.predecessors()),
+        };
+        let len = |block: BlockId| body.block(block).insts().len();
+        let avoided_in = |block: BlockId| avoided.filter(|point| point.block == block).map(|point| point.index);
+        let mut pending: Vec<BlockId> = Vec::new();
+        // The run from `start` until the block's far end, or until just
+        // short of the avoided point where it lies ahead in the block.
+        let (run, leaves) = match direction {
+            Direction::Forward => match avoided_in(start.block).filter(|at| *at > start.index) {
+                Some(at) => (Run { lo: start.index, hi: at - 1 }, false),
+                None => (Run { lo: start.index, hi: len(start.block) }, true),
+            },
+            Direction::Backward => match avoided_in(start.block).filter(|at| *at < start.index) {
+                Some(at) => (Run { lo: at + 1, hi: start.index }, false),
+                None => (Run { lo: 0, hi: start.index }, true),
+            },
+        };
+        runs[start.block.index()].push(run);
+        if leaves {
+            pending.push(start.block);
+        }
+        while let Some(block) = pending.pop() {
+            let next: smallvec::SmallVec<[BlockId; 2]> = match &preds {
+                None => body.block(block).terminator().edges().iter().map(|edge| edge.to).collect(),
+                Some(preds) => preds[&block].iter().copied().collect(),
+            };
+            for into in next {
+                if entered[into.index()] {
+                    continue;
+                }
+                entered[into.index()] = true;
+                let (run, leaves) = match (direction, avoided_in(into)) {
+                    (Direction::Forward, Some(0)) => continue,
+                    (Direction::Forward, Some(at)) => (Run { lo: 0, hi: at - 1 }, false),
+                    (Direction::Forward, None) => (Run { lo: 0, hi: len(into) }, true),
+                    (Direction::Backward, Some(at)) if at == len(into) => continue,
+                    (Direction::Backward, Some(at)) => (Run { lo: at + 1, hi: len(into) }, false),
+                    (Direction::Backward, None) => (Run { lo: 0, hi: len(into) }, true),
+                };
+                runs[into.index()].push(run);
+                if leaves {
+                    pending.push(into);
+                }
+            }
+        }
+        RunsReached { runs }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -999,14 +1137,14 @@ where
     /// and where another block or the body's start enters it, or its
     /// predecessor ends otherwise than in that jump.
     pub fn merge_into_predecessor(&mut self, block: BlockId) -> Result<(), CannotMerge> {
-        let body = self.body_ref();
-        if body.is_structural(block) {
+        let shape = self.shape();
+        if shape.structural[block.index()] {
             return Err(CannotMerge::Structural);
         }
-        let preds = body.predecessors();
-        let [pred] = preds[&block][..] else {
+        let [pred] = shape.predecessors[&block][..] else {
             return Err(CannotMerge::NotStraight);
         };
+        let body = self.body_ref();
         let jumps = matches!(body.block(pred).terminator(), Terminator::Jump { .. });
         if !jumps || pred == block || block == body.entry() {
             return Err(CannotMerge::NotStraight);

@@ -7,8 +7,18 @@
 //! A cycle whose entry dominates none of its blocks, an irreducible one, has
 //! no back edge and so is no loop here.
 //!
-//! Cost: O(headers · (blocks + edges)) for the loops' blocks, one backward
-//! walk per header, and O(loops · log loops + Σ loop sizes) for the nesting.
+//! The loops are found innermost first, headers taken deepest in the
+//! dominator tree first, each by a backward walk from its latches in which a
+//! loop found already stands as its header (Havlak, "Nesting of Reducible
+//! and Irreducible Loops", 1997, over natural loops): a block of an inner
+//! loop other than its header has all its predecessors inside that loop, so
+//! the walk only needs the header's. A union-find keeps, for each block, the
+//! header of the outermost loop found so far that holds it, so every block's
+//! predecessors are walked once over the whole tree.
+//!
+//! Cost: O((blocks + edges) · α) for the loops and their nesting, O(blocks)
+//! for the tree's depth-first intervals, which answer `contains` in O(1),
+//! and O(Σ loop sizes) for the blocks each loop lists.
 //!
 //! passes-analyses.md.
 
@@ -29,12 +39,19 @@ pub struct LoopTree {
 
 struct NaturalLoop {
     header: BlockId,
-    /// The loop's blocks, the header first.
+    /// The loop's blocks, the header first and the rest in block order.
     blocks: Vec<BlockId>,
-    /// Membership by block index.
-    contains: Vec<bool>,
     parent: Option<LoopId>,
     preheader: Option<BlockId>,
+    /// The loop's place in a depth-first walk of the loop tree: it holds
+    /// exactly the loops whose interval its own holds.
+    interval: TreeInterval,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TreeInterval {
+    pre: usize,
+    post: usize,
 }
 
 impl LoopTree {
@@ -53,9 +70,16 @@ impl LoopTree {
         &self.loops[of.0].blocks
     }
 
-    /// Cost: O(1).
+    /// Whether `block` is a block of `of`: its innermost loop is `of` or
+    /// nests in it. Cost: O(1).
     pub fn contains(&self, of: LoopId, block: BlockId) -> bool {
-        self.loops[of.0].contains[block.index()]
+        self.innermost[block.index()].is_some_and(|inner| self.nests_in(inner, of))
+    }
+
+    /// Whether `inner` is `outer` or nests in it.
+    fn nests_in(&self, inner: LoopId, outer: LoopId) -> bool {
+        let (inner, outer) = (self.loops[inner.0].interval, self.loops[outer.0].interval);
+        outer.pre <= inner.pre && inner.post <= outer.post
     }
 
     /// The innermost loop `of` nests in. Cost: O(1).
@@ -114,64 +138,175 @@ impl Analysis for LoopTree {
         let dominators = am.get::<Dominators>(module, body);
         let graph = Graph::of(module.body(body));
         let count = graph.blocks.len();
+        let reached = |node: usize| dominators.reachable(graph.blocks[node]);
 
         let mut loops: Vec<NaturalLoop> = Vec::new();
+        let mut latches: Vec<Vec<usize>> = Vec::new();
         for header in graph.blocks.iter().copied().filter(|block| dominators.reachable(*block)) {
-            let latches: Vec<usize> = graph.predecessors[header.index()]
+            let into: Vec<usize> = graph.predecessors[header.index()]
                 .iter()
                 .copied()
-                .filter(|pred| dominators.reachable(graph.blocks[*pred]))
-                .filter(|pred| dominators.dominates(header, graph.blocks[*pred]))
+                .filter(|pred| reached(*pred) && dominators.dominates(header, graph.blocks[*pred]))
                 .collect();
-            if latches.is_empty() {
+            if into.is_empty() {
                 continue;
             }
-            let contains = loop_blocks(&graph, &dominators, header.index(), latches);
-            let blocks: Vec<BlockId> = std::iter::once(header)
-                .chain(graph.blocks.iter().copied().filter(|block| *block != header && contains[block.index()]))
-                .collect();
-            let preheader = preheader(&graph, header.index(), &contains);
-            loops.push(NaturalLoop { header, blocks, contains, parent: None, preheader });
+            loops.push(NaturalLoop {
+                header,
+                blocks: vec![header],
+                parent: None,
+                preheader: None,
+                interval: TreeInterval::default(),
+            });
+            latches.push(into);
         }
 
-        let mut by_size: Vec<usize> = (0..loops.len()).collect();
-        by_size.sort_by_key(|at| std::cmp::Reverse(loops[*at].blocks.len()));
+        let depth = dominator_depths(&graph, &dominators);
+        let mut deepest_first: Vec<usize> = (0..loops.len()).collect();
+        deepest_first.sort_by_key(|at| std::cmp::Reverse(depth[loops[*at].header.index()]));
+
         let mut innermost: Vec<Option<LoopId>> = vec![None; count];
-        for at in by_size {
-            loops[at].parent = innermost[loops[at].header.index()];
-            for block in &loops[at].blocks {
-                innermost[block.index()] = Some(LoopId(at));
+        let mut outermost_header = UnionFind::new(count);
+        let mut walked_by: Vec<Option<usize>> = vec![None; count];
+        for at in deepest_first {
+            let header = loops[at].header.index();
+            innermost[header] = Some(LoopId(at));
+            let mut pending: Vec<usize> = latches[at].iter().map(|latch| outermost_header.find(*latch)).collect();
+            while let Some(block) = pending.pop() {
+                if block == header || walked_by[block] == Some(at) {
+                    continue;
+                }
+                walked_by[block] = Some(at);
+                match innermost[block] {
+                    None => innermost[block] = Some(LoopId(at)),
+                    Some(inner) => loops[inner.0].parent = Some(LoopId(at)),
+                }
+                outermost_header.join_into(block, header);
+                for pred in graph.predecessors[block].iter().copied().filter(|pred| reached(*pred)) {
+                    let stands_for = outermost_header.find(pred);
+                    if stands_for != header && walked_by[stands_for] != Some(at) {
+                        pending.push(stands_for);
+                    }
+                }
             }
         }
-        LoopTree { loops, innermost, graph }
+
+        number_intervals(&mut loops);
+        for block in 0..count {
+            let mut enclosing = innermost[block];
+            while let Some(of) = enclosing {
+                if loops[of.0].header.index() != block {
+                    loops[of.0].blocks.push(graph.blocks[block]);
+                }
+                enclosing = loops[of.0].parent;
+            }
+        }
+        let mut tree = LoopTree { loops, innermost, graph };
+        for at in 0..tree.loops.len() {
+            tree.loops[at].preheader = preheader(&tree, LoopId(at));
+        }
+        tree
     }
 }
 
-/// The blocks of the loop at `header`: the header, and every block the entry
-/// reaches that reaches a latch without passing the header. Cost: O(blocks +
-/// edges).
-fn loop_blocks(graph: &Graph, dominators: &Dominators, header: usize, latches: Vec<usize>) -> Vec<bool> {
-    let mut contains = vec![false; graph.blocks.len()];
-    contains[header] = true;
-    let mut pending = latches;
-    while let Some(block) = pending.pop() {
-        if contains[block] {
-            continue;
+/// Each block's depth in the dominator tree, the entry's being zero; a block
+/// the entry does not reach has none that matters and is given zero. Cost:
+/// O(blocks).
+fn dominator_depths(graph: &Graph, dominators: &Dominators) -> Vec<usize> {
+    let mut depth: Vec<Option<usize>> = vec![None; graph.blocks.len()];
+    for block in 0..graph.blocks.len() {
+        let mut unknown: Vec<usize> = Vec::new();
+        let mut at = block;
+        let known = loop {
+            if let Some(known) = depth[at] {
+                break known;
+            }
+            match dominators.idom(graph.blocks[at]) {
+                Some(parent) => {
+                    unknown.push(at);
+                    at = parent.index();
+                }
+                None => {
+                    depth[at] = Some(0);
+                    break 0;
+                }
+            }
+        };
+        for (above, node) in unknown.into_iter().rev().enumerate() {
+            depth[node] = Some(known + above + 1);
         }
-        contains[block] = true;
-        let reached_preds = graph.predecessors[block]
-            .iter()
-            .copied()
-            .filter(|pred| dominators.reachable(graph.blocks[*pred]));
-        pending.extend(reached_preds);
     }
-    contains
+    depth.into_iter().map(|depth| depth.expect("every block's depth is filled")).collect()
+}
+
+/// Numbers each loop's interval by a depth-first walk of the loop tree.
+/// Cost: O(loops).
+fn number_intervals(loops: &mut [NaturalLoop]) {
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); loops.len()];
+    let mut roots: Vec<usize> = Vec::new();
+    for (at, natural) in loops.iter().enumerate() {
+        match natural.parent {
+            Some(parent) => children[parent.0].push(at),
+            None => roots.push(at),
+        }
+    }
+    let mut next = 0;
+    for root in roots {
+        let mut path: Vec<(usize, usize)> = vec![(root, 0)];
+        loops[root].interval.pre = next;
+        next += 1;
+        while let Some((node, child)) = path.last_mut() {
+            let Some(visit) = children[*node].get(*child).copied() else {
+                loops[*node].interval.post = next;
+                next += 1;
+                path.pop();
+                continue;
+            };
+            *child += 1;
+            loops[visit].interval.pre = next;
+            next += 1;
+            path.push((visit, 0));
+        }
+    }
+}
+
+/// Blocks joined into sets, each set named by the header it was last joined
+/// into (Tarjan's union-find, with path compression).
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(count: usize) -> UnionFind {
+        UnionFind { parent: (0..count).collect() }
+    }
+
+    fn find(&mut self, node: usize) -> usize {
+        let mut root = node;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        let mut at = node;
+        while self.parent[at] != root {
+            let next = self.parent[at];
+            self.parent[at] = root;
+            at = next;
+        }
+        root
+    }
+
+    /// Joins the set named `node` into the set named `header`.
+    fn join_into(&mut self, node: usize, header: usize) {
+        self.parent[node] = header;
+    }
 }
 
 /// The header's one predecessor outside the loop, where it has no other
 /// successor. Cost: O(the header's predecessors).
-fn preheader(graph: &Graph, header: usize, contains: &[bool]) -> Option<BlockId> {
-    let mut outside = graph.predecessors[header].iter().copied().filter(|pred| !contains[*pred]);
+fn preheader(tree: &LoopTree, of: LoopId) -> Option<BlockId> {
+    let graph = &tree.graph;
+    let header = tree.loops[of.0].header.index();
+    let mut outside = graph.predecessors[header].iter().copied().filter(|pred| !tree.contains(of, graph.blocks[*pred]));
     let (Some(only), None) = (outside.next(), outside.next()) else {
         return None;
     };

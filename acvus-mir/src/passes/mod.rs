@@ -13,3 +13,5 @@ pub mod domain;
 pub mod edit_facts;
 pub mod optimize;
 pub mod pipeline;
+#[cfg(test)]
+mod perf_tests;

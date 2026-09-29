@@ -323,6 +323,20 @@ pub struct Edge<'t> {
 }
 
 impl Terminator {
+    /// Every block this terminator names as a structural label: a
+    /// `Diamond`'s or a `Switch`'s join, or a loop's stage or exit (D45,
+    /// D57).
+    fn for_each_structural_label(&self, mut on_label: impl FnMut(BlockId)) {
+        match self {
+            Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => on_label(*join),
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+                on_label(*exit);
+                stages.entries().for_each(&mut on_label);
+            }
+            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => {}
+        }
+    }
+
     /// Every edge, in the terminator's own order; a `Diamond`'s or a
     /// `Switch`'s join and a loop's later stages are not edges. Cost: O(its edges).
     pub fn edges(&self) -> SmallVec<[Edge<'_>; 2]> {
@@ -619,6 +633,10 @@ impl Body {
     pub fn blocks(&self) -> impl Iterator<Item = (BlockId, &Block)> {
         self.blocks.iter().enumerate().map(|(i, b)| (BlockId::of_index(i), b))
     }
+    /// How many blocks the body has. Cost: O(1).
+    pub(crate) fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
     /// # Panics
     /// `value` is not a value of this body: every value has a recorded type.
     pub fn ty_of(&self, value: ValueId) -> Ty {
@@ -742,13 +760,21 @@ impl Body {
     /// label: a `Diamond`'s or a `Switch`'s join, or a loop's stage or exit
     /// (D45, D57). Cost: O(blocks + stages).
     pub fn is_structural(&self, block: BlockId) -> bool {
-        self.blocks().any(|(_, from)| match from.terminator() {
-            Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => *join == block,
-            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
-                *exit == block || stages.entries().any(|stage| stage == block)
-            }
-            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge => false,
-        })
+        let mut named = false;
+        for (_, from) in self.blocks() {
+            from.terminator().for_each_structural_label(|label| named |= label == block);
+        }
+        named
+    }
+
+    /// Whether each block, by index, is a structural label as
+    /// `is_structural` tells. Cost: O(blocks + stages).
+    pub(crate) fn structural_blocks(&self) -> Vec<bool> {
+        let mut structural = vec![false; self.blocks.len()];
+        for (_, from) in self.blocks() {
+            from.terminator().for_each_structural_label(|label| structural[label.index()] = true);
+        }
+        structural
     }
 
     /// The loop headers: the targets of the back edges of a depth-first walk

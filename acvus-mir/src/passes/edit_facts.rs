@@ -6,6 +6,7 @@
 //! A `Position::End(block)` is the point after every instruction of the
 //! block and before its terminator.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
@@ -30,6 +31,9 @@ pub struct EditFacts<'a, 'd> {
     dominators: Rc<Dominators>,
     post_dominators: Rc<PostDominators>,
     loop_tree: Rc<LoopTree>,
+    /// `loop_tree.loop_between` by its two blocks, as asked so far of the
+    /// loop tree held now.
+    loop_between: RefCell<FxHashMap<(BlockId, BlockId), bool>>,
     loans: Rc<Loans>,
     escapes: Rc<Escapes>,
     content: Rc<ContentLiveness>,
@@ -66,6 +70,7 @@ impl<'a, 'd> EditFacts<'a, 'd> {
             dominators: am.get::<Dominators>(module, body),
             post_dominators: am.get::<PostDominators>(module, body),
             loop_tree: am.get::<LoopTree>(module, body),
+            loop_between: RefCell::new(FxHashMap::default()),
             escapes: am.get::<Escapes>(module, body),
             content: am.get::<ContentLiveness>(module, body),
             defined: definitions(of),
@@ -75,6 +80,10 @@ impl<'a, 'd> EditFacts<'a, 'd> {
             loans,
             am,
         }
+    }
+
+    fn loop_between(&self, from: BlockId, to: BlockId) -> bool {
+        *self.loop_between.borrow_mut().entry((from, to)).or_insert_with(|| self.loop_tree.loop_between(from, to))
     }
 
     fn defined(&self, value: ValueId) -> Defined {
@@ -92,7 +101,11 @@ impl Facts for EditFacts<'_, '_> {
         self.am.invalidate(body, changes);
         self.dominators = self.am.get::<Dominators>(module, body);
         self.post_dominators = self.am.get::<PostDominators>(module, body);
-        self.loop_tree = self.am.get::<LoopTree>(module, body);
+        let loop_tree = self.am.get::<LoopTree>(module, body);
+        if !Rc::ptr_eq(&loop_tree, &self.loop_tree) {
+            self.loop_tree = loop_tree;
+            self.loop_between.get_mut().clear();
+        }
         self.loans = self.am.get::<Loans>(module, body);
         self.escapes = self.am.get::<Escapes>(module, body);
         self.content = self.am.get::<ContentLiveness>(module, body);
@@ -125,14 +138,15 @@ impl DominanceFacts for EditFacts<'_, '_> {
         self.dominators.point_dominates(point(at), read)
     }
 
-    /// Cost: O(blocks + edges), for the loops between the two.
+    /// Cost: O(1) for a pair of blocks asked before under the same loop
+    /// tree, and otherwise O(blocks + edges), for the loops between the two.
     fn control_equivalent(&self, a: Position, b: Position) -> bool {
         let (a, b) = (point(a), point(b));
         let (dominators, post_dominators) = (&self.dominators, &self.post_dominators);
         let in_order = |earlier: Point, later: Point| {
             dominators.point_dominates(earlier, later)
                 && post_dominators.point_post_dominates(later, earlier)
-                && !self.loop_tree.loop_between(earlier.block(), later.block())
+                && !self.loop_between(earlier.block(), later.block())
         };
         in_order(a, b) || in_order(b, a)
     }

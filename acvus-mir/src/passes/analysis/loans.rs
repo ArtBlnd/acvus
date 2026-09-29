@@ -24,7 +24,9 @@
 //! body's storages. So the engine runs O(h · (blocks + edges)) block
 //! transfers, h being the number of positions times the number of loans; a
 //! transfer costs O(its instructions' operands · positions · loans). The
-//! widening is the join.
+//! widening is the join. A block's state holds only the values whose type
+//! has a position, so its clones and joins cost those values' positions and
+//! the storages', not the body's values.
 //!
 //! passes-analyses.md.
 
@@ -185,6 +187,11 @@ impl Analysis for Loans {
                 let kept = loans.values.entry(value).or_insert_with(|| empty(positions.len()));
                 join_positions(kept, &positions);
             }
+            for value in forward.defined_in(block) {
+                if forward.holds_no_loan(value) {
+                    loans.values.entry(value).or_default();
+                }
+            }
         }
         for Held { value, positions } in forward.defined_before_entry() {
             loans.values.entry(value).or_insert(positions);
@@ -193,7 +200,10 @@ impl Analysis for Loans {
     }
 }
 
-/// Every storage's content and every defined value's positions.
+/// Every storage's content, and the positions of every defined value whose
+/// type has any. A value of a type with no position holds no loan wherever
+/// it stands, so the state does not carry it: it would add an entry to every
+/// block's state, and every clone and join of one, and say nothing.
 #[derive(Debug, Clone, PartialEq)]
 struct State {
     storages: BTreeMap<Storage, Vec<LoanSet>>,
@@ -333,7 +343,23 @@ impl Forward<'_> {
         position_kinds(self.types, self.decls, ty)
     }
 
+    /// Whether `value`'s type has no position, so that it holds no loan.
+    fn holds_no_loan(&self, value: ValueId) -> bool {
+        self.width(self.body.ty_of(value)) == 0
+    }
+
+    /// The values `block` defines: its parameters, and each instruction's
+    /// result and the token it yields.
+    fn defined_in<'b>(&self, block: &'b Block) -> impl Iterator<Item = ValueId> + 'b {
+        let defined_by_insts =
+            block.insts().iter().flat_map(|inst| inst.result().into_iter().chain(inst.order().and_then(|order| order.yielded())));
+        block.params().iter().copied().chain(defined_by_insts)
+    }
+
     fn value(&self, state: &State, value: ValueId) -> Vec<LoanSet> {
+        if self.holds_no_loan(value) {
+            return Vec::new();
+        }
         state
             .values
             .get(&value)
@@ -389,10 +415,7 @@ impl Forward<'_> {
 
     /// Values no run defines hold no loan.
     fn unreached(&self, id: BlockId, block: &Block, loans: &mut Loans) {
-        let defined = block.params().iter().copied().chain(block.insts().iter().flat_map(|inst| {
-            inst.result().into_iter().chain(inst.order().and_then(|order| order.yielded()))
-        }));
-        for value in defined {
+        for value in self.defined_in(block) {
             loans.values.insert(value, empty(self.width(self.body.ty_of(value))));
         }
         for index in 0..block.insts().len() {
@@ -590,6 +613,9 @@ impl Forward<'_> {
     }
 
     fn define(&self, state: &mut State, value: ValueId, positions: Vec<LoanSet>) {
+        if self.holds_no_loan(value) {
+            return;
+        }
         match state.values.get_mut(&value) {
             Some(kept) => {
                 join_positions(kept, &positions);
@@ -1030,7 +1056,9 @@ impl DenseAnalysis for Forward<'_> {
                     state.storages.insert(Storage::Outside { of: value, position }, content);
                 }
             }
-            state.values.insert(value, positions);
+            if !self.holds_no_loan(value) {
+                state.values.insert(value, positions);
+            }
         }
         state
     }

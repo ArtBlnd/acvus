@@ -29,7 +29,7 @@ where
         loop {
             let walk = self.editor.walk;
             let body = self.editor.body_ref();
-            if walk.block.index() >= body.blocks().count() {
+            if walk.block.index() >= body.block_count() {
                 return None;
             }
             if let Some(inst) = body.block(walk.block).insts().get(walk.next) {
