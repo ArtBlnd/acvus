@@ -67,11 +67,14 @@
 //! 7. A join: a block's parameter holds what any argument into it holds.
 //!
 //! Each site's accesses are recorded as `accesses`: what the takings read,
-//! write and move (`Moved`, `PartMoved`), and each loan made there, a lend
-//! at its mode. An access through a reference reaches, for each of its
-//! loans at a part the access's path meets, that loan's place extended by
-//! the rest of the path, or everything under it where the loan is not
-//! exact.
+//! write and move (`Moved`, `PartMoved`), a `Take` through a reference
+//! moving out of the places it lends as one by name does, and each loan
+//! made there, a lend at its mode. An access through a reference reaches,
+//! for each of its loans at a part the access's path meets, that loan's
+//! place extended by the rest of the path, or everything under it where
+//! the loan is not exact. A place is one place (`is_one`) where it is
+//! exact and names no sequence's element: an index path, normalized to
+//! the one element part, names every element.
 //!
 //! passes-analyses.md.
 
@@ -79,7 +82,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::decl::declared::{Access as DeclaredAccess, Element, Touch};
 use crate::decl::{Declarations, segments};
@@ -93,7 +96,7 @@ use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
     Alignment, Concrete, FlowEnd, Flows, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types,
-    position_kinds, positions,
+    lent_types, position_kinds, positions,
 };
 
 /// A storage a loan names.
@@ -149,11 +152,14 @@ pub enum Made {
 /// The loans one position may hold.
 pub type LoanSet = BTreeSet<Loan>;
 
-/// A place an access reaches: a storage and a path from its root.
+/// A place an access reaches: a storage and a path from its root, and
+/// whether it is that place exactly or some part under it the flows do not
+/// tell.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Place {
     pub storage: Storage,
     pub path: Path,
+    pub exact: bool,
 }
 
 impl Place {
@@ -248,6 +254,9 @@ pub struct Loans {
     accesses: FxHashMap<Site, Vec<Access>>,
     within: BTreeMap<Loan, LoanSet>,
     holds_from: FxHashMap<ValueId, Site>,
+    /// Every place an access reaches whose path steps into a sequence's
+    /// elements.
+    elements: FxHashSet<Place>,
 }
 
 /// The storages one site reads and writes, and the places within them.
@@ -376,6 +385,26 @@ impl Loans {
         self.accesses.get(&site).map_or(&[], Vec::as_slice)
     }
 
+    /// The one place an access of `reach` that `site` makes through a
+    /// reference reaches, where it reaches one place (`is_one`) and no
+    /// other. Cost: O(the site's accesses).
+    pub fn through_one(&self, site: Site, reach: Reach) -> Option<&Place> {
+        self.accesses(site).iter().filter(|access| access.reach == reach && !access.through.is_empty()).find_map(|access| {
+            let mut places = access.places.iter();
+            match (places.next(), places.next()) {
+                (Some(place), None) if self.is_one(place) => Some(place),
+                _ => None,
+            }
+        })
+    }
+
+    /// Whether `place`, which an access of the body reaches, is one place:
+    /// exact, and naming no sequence's element, which stands for every
+    /// element (ownership §4, §5). Cost: O(1).
+    pub fn is_one(&self, place: &Place) -> bool {
+        place.exact && !self.elements.contains(place)
+    }
+
     /// Every loan some loan of `loans` is made through, directly or through
     /// another. Cost: O(the loans reached · log loans).
     pub fn ancestors(&self, loans: &LoanSet) -> LoanSet {
@@ -421,6 +450,7 @@ impl Analysis for Loans {
             accesses: FxHashMap::default(),
             within: BTreeMap::new(),
             holds_from: forward.sole_call.clone(),
+            elements: FxHashSet::default(),
         };
         let mut record = Record::default();
         for (id, block) in body.blocks() {
@@ -456,6 +486,14 @@ impl Analysis for Loans {
         for Held { value, positions } in forward.defined_before_entry() {
             loans.values.entry(value).or_insert(positions);
         }
+        loans.elements = record
+            .accesses
+            .values()
+            .flatten()
+            .flat_map(|access| &access.places)
+            .filter(|place| forward.names_an_element(place))
+            .cloned()
+            .collect();
         loans.accesses = record.accesses;
         loans.within = record.within;
         loans
@@ -649,13 +687,13 @@ impl Located {
     }
 
     fn place(&self) -> Place {
-        Place { storage: self.storage, path: self.path.clone() }
+        Place { storage: self.storage, path: self.path.clone(), exact: self.exact }
     }
 }
 
 impl Loan {
     pub fn place(&self) -> Place {
-        Place { storage: self.storage, path: self.path.clone() }
+        Place { storage: self.storage, path: self.path.clone(), exact: self.exact }
     }
 
     /// Where an access of `path` in its reference's target reaches through
@@ -1039,6 +1077,25 @@ impl Forward<'_> {
         }
     }
 
+    /// Whether `place`'s path steps into a sequence's elements, all of which
+    /// are its one part. What a function value's or a lifetime's position
+    /// lends has no type and no part.
+    fn names_an_element(&self, place: &Place) -> bool {
+        let root = match place.storage {
+            Storage::Slot(value) | Storage::Param(value) => Some(self.body.ty_of(value)),
+            Storage::Outside { of, position } => lent_types(self.types, self.decls, self.body.ty_of(of))[position],
+        };
+        let mut at: Vec<Ty> = root.into_iter().collect();
+        for seg in &place.path {
+            let sequence = |ty: &Ty| matches!(self.types.kind(*ty), TyKind::Array(..) | TyKind::Slice(_));
+            if matches!(seg, PathSeg::Index(_)) && at.iter().any(sequence) {
+                return true;
+            }
+            at = at.iter().flat_map(|ty| self.part_types(*ty, seg)).collect();
+        }
+        false
+    }
+
     /// `path` in the target of `reference`, canonical.
     fn canonical_through(&self, reference: ValueId, path: &[PathSeg]) -> Path {
         self.canonical(self.lent(self.body.ty_of(reference)), path)
@@ -1300,17 +1357,12 @@ impl Forward<'_> {
             Op::Ref { .. } => self.lend(state, inst, record),
             Op::Take { target, path, .. } => {
                 let place = self.place(state, target, path);
-                match target {
-                    RefTarget::Through(reference) => record.through(site, Reach::Read, &place, self.own(state, *reference)),
-                    RefTarget::Var(_) | RefTarget::Param(_) => {
-                        let taken = inst_takings(self.body, self.types, inst)[0].taken;
-                        let reach = match taken {
-                            Taken::Read => Reach::Read,
-                            Taken::Moved | Taken::PartMoved => Reach::Move,
-                        };
-                        record.through(site, reach, &place, LoanSet::new());
-                    }
-                }
+                let operand = inst_takings(self.body, self.types, inst)[0];
+                let reach = match operand.lent.unwrap_or(operand.taken) {
+                    Taken::Read => Reach::Read,
+                    Taken::Moved | Taken::PartMoved => Reach::Move,
+                };
+                record.through(site, reach, &place, self.through(state, target));
                 let mut positions = self.read(state, &place, self.width(ty()), Some(ty()));
                 if let RefTarget::Through(reference) = target
                     && let TyKind::Ref(mutability, _) = self.types.kind(ty())

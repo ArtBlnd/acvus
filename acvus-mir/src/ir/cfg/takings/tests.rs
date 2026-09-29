@@ -1,4 +1,5 @@
-//! Takings of a `Take` by name, each test citing the ledger rule it checks.
+//! Takings of a `Take`, by name and through a reference, each test citing
+//! the ledger rule it checks.
 
 use acvus_ast::{Literal, Span};
 use acvus_utils::Interner;
@@ -64,7 +65,7 @@ fn a_mut_ref_slot_taken_twice_is_read_both_times() {
     builder.terminate(Terminator::Return { value: zero, order: None, span: Span::ZERO }, Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
-    let read = Operand { value: r, taken: Taken::Read, names_place: true };
+    let read = Operand { value: r, taken: Taken::Read, names_place: true, lent: None };
     let takings = take_takings(&f.module, id);
     assert_eq!(takings, [[read], [read]]);
 }
@@ -96,8 +97,33 @@ fn an_object_holding_a_mut_ref_is_moved_whole_and_its_mut_ref_field_is_read() {
     builder.terminate(Terminator::Return { value: zero, order: None, span: Span::ZERO }, Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
-    let field = Operand { value: o, taken: Taken::Read, names_place: true };
-    let whole = Operand { value: o, taken: Taken::Moved, names_place: true };
+    let field = Operand { value: o, taken: Taken::Read, names_place: true, lent: None };
+    let whole = Operand { value: o, taken: Taken::Moved, names_place: true, lent: None };
     let takings = take_takings(&f.module, id);
     assert_eq!(takings, [[field], [whole]]);
+}
+
+/// `s = "a"; r = &mut s; *r`: what the take reaches through `r` does not
+/// copy and is not a `&mut`, so it is moved out of the place `r` lends
+/// (ownership §2, §4); `r` itself is read.
+#[test]
+fn a_take_through_a_reference_moves_what_it_lends_and_reads_the_reference() {
+    let mut f = fixture();
+    let mut builder = f.module.build_body(false, f.int);
+    let s = builder.slot(f.string, Span::ZERO);
+    let text = builder.push(Op::Const { value: Literal::String("a".to_string()) }, f.string, Span::ZERO);
+    builder.push_unit(assign(s, text), Span::ZERO);
+    let r = builder.push(
+        Op::Ref { target: RefTarget::Var(s), path: Vec::new(), mutability: Mutability::Mut },
+        f.string_mut,
+        Span::ZERO,
+    );
+    builder.push(Op::Take { target: RefTarget::Through(r), path: Vec::new(), taken_out: false }, f.string, Span::ZERO);
+    let zero = builder.push(Op::Const { value: Literal::Int(0) }, f.int, Span::ZERO);
+    builder.terminate(Terminator::Return { value: zero, order: None, span: Span::ZERO }, Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    let through = Operand { value: r, taken: Taken::Read, names_place: false, lent: Some(Taken::Moved) };
+    let takings = take_takings(&f.module, id);
+    assert_eq!(takings, [[through]]);
 }

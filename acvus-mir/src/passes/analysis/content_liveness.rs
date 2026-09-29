@@ -13,14 +13,16 @@
 //!
 //! The same answer is kept per part (ownership §6), for each place whose
 //! type does not copy: its units (`ir::parts`), cut where the body moves a
-//! part that does not copy out of it or stores one into part of it. A unit
+//! part that does not copy out of it, by name or through a reference to it
+//! alone (`Loans::through_one`), or stores one into part of it. A unit
 //! is read where a `Take` of an overlapping path by name reads it, and
 //! wherever `Loans` says the place is read otherwise, since a read through
 //! a reference does not locate its part; a store by name into a path
 //! covering the unit kills it. Beside it, forward, each unit's presence:
-//! a store by name into a path covering it fills it, and a `Take` by name
-//! that moves a covering path empties it. A slot starts empty and a
-//! by-value parameter's storage full.
+//! a store by name into a path covering it fills it, and a `Take` that
+//! moves a covering path out of it, by name or through a reference to it
+//! alone, empties it. A slot starts empty and a by-value parameter's
+//! storage full.
 //!
 //! Cost: `Loans`', and then a block's state only grows, at most once per
 //! place or unit, and each growth re-runs the transfer of the block, so
@@ -38,7 +40,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Storage, solve_dense};
+use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Reach, Storage, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{Concrete, Types, copies};
 
@@ -248,7 +250,7 @@ impl Analysis for ContentLiveness {
     fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> ContentLiveness {
         let loans = am.get::<Loans>(module, body);
         let body = module.body(body);
-        let units = units_of(body, module.types());
+        let units = units_of(body, module.types(), &loans);
         let backward = Backward::new(&loans, &units);
         let facts = solve_dense(&backward, body);
         let mut position = FxHashMap::default();
@@ -275,7 +277,7 @@ impl Analysis for ContentLiveness {
             at_end.insert(id, end.places);
             parts_at_end.insert(id, end.parts);
         }
-        let forward = Forward { units: &units, types: module.types(), body };
+        let forward = Forward { units: &units, types: module.types(), body, loans: &loans };
         let presence = solve_dense(&forward, body);
         let mut presence_before = FxHashMap::default();
         for (id, block) in body.blocks() {
@@ -293,7 +295,7 @@ impl Analysis for ContentLiveness {
 
 /// The places whose type does not copy, each with its units: a slot, or a
 /// parameter the body names as a storage.
-fn units_of(body: &Body, types: &Types<Concrete>) -> FxHashMap<ValueId, Vec<Path>> {
+fn units_of(body: &Body, types: &Types<Concrete>, loans: &Loans) -> FxHashMap<ValueId, Vec<Path>> {
     let mut cuts: FxHashMap<ValueId, Vec<Path>> = FxHashMap::default();
     for slot in body.slots() {
         if !copies(types, body.ty_of(*slot)) {
@@ -311,6 +313,12 @@ fn units_of(body: &Body, types: &Types<Concrete>) -> FxHashMap<ValueId, Vec<Path
                     (*place, parts::owned_region(path), !copies(types, body.ty_of(*value)))
                 }
                 Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => (*place, path.as_slice(), false),
+                Op::Take { target: RefTarget::Through(_), .. } => {
+                    let Some((place, path)) = moved_through(loans, inst) else {
+                        continue;
+                    };
+                    (place, path, true)
+                }
                 _ => continue,
             };
             let cut = moves && !path.is_empty();
@@ -469,11 +477,23 @@ impl Widen for PresenceOf {
 
 /// Forward over the units: a slot's start empty and a parameter's full; a
 /// store by name fills what it covers, and a `Take` by name of a path that
-/// does not copy empties what it covers.
+/// does not copy, or one that moves through a reference to one place,
+/// empties what it covers.
 struct Forward<'f> {
     units: &'f FxHashMap<ValueId, Vec<Path>>,
     types: &'f Types<Concrete>,
     body: &'f Body,
+    loans: &'f Loans,
+}
+
+/// The slot or parameter, and the region in it, that a `Take` through a
+/// reference moves out of, where it reaches that place alone.
+fn moved_through<'l>(loans: &'l Loans, inst: &Inst) -> Option<(ValueId, &'l [PathSeg])> {
+    let place = loans.through_one(Site::Inst(inst.id()), Reach::Move)?;
+    match place.storage {
+        Storage::Slot(value) | Storage::Param(value) => Some((value, parts::owned_region(&place.path))),
+        Storage::Outside { .. } => None,
+    }
 }
 
 impl Forward<'_> {
@@ -516,6 +536,11 @@ impl DenseAnalysis for Forward<'_> {
                     && !copies(self.types, self.body.ty_of(inst.result().expect("a Take yields a value"))) =>
             {
                 self.set(*place, parts::owned_region(path), Presence::Absent, state);
+            }
+            Op::Take { target: RefTarget::Through(_), .. } => {
+                if let Some((place, region)) = moved_through(self.loans, inst) {
+                    self.set(place, region, Presence::Absent, state);
+                }
             }
             _ => {}
         }

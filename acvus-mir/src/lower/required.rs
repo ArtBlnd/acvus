@@ -31,7 +31,7 @@ use crate::ir::cfg::takings::{Named, Taken, by_value, inst_takings, terminator_t
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{Callee, PathSeg, RefTarget, ValueId};
-use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Storage};
+use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Reach, Storage};
 use crate::passes::edit_facts::EditFacts;
 use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
 
@@ -101,7 +101,8 @@ pub fn remove_dead_context_ops(module: &mut Module, am: &mut AnalysisManager<'_>
 ///   with the span of the edge's source terminator, where it ends.
 /// - A slot's content, or a by-value parameter's storage content: the
 ///   same, by `ContentLiveness`, through `drop_content`; a store that no read
-///   follows ends the content it stores.
+///   follows ends the content it stores. A `Take` through a reference to
+///   the place alone moves out of it as one by name does.
 /// - A context's slot: its content is the page's until the body overwrites
 ///   it; the old content of an overwrite is the body's and is dropped just
 ///   before the store, and the body never drops the content at its end
@@ -744,7 +745,8 @@ impl PlanFacts<'_> {
             for place in ended {
                 let takes_all = inst_takings(body, self.types, inst)
                     .iter()
-                    .any(|operand| operand.value == place && operand.names_place && operand.taken == Taken::Moved);
+                    .any(|operand| operand.value == place && operand.names_place && operand.taken == Taken::Moved)
+                    || self.moved_through(inst).is_some_and(|(moved, region)| moved == place && region.is_empty());
                 if !takes_all {
                     let drop = PlannedDrop { ended: Ended::Content(place), span: inst.span() };
                     plan.after.entry(site).or_default().push(drop);
@@ -929,6 +931,17 @@ impl PlanFacts<'_> {
 
     /// Whether the body drops `place`'s content whole where its liveness
     /// ends: it owns the content, and no part of it is cut.
+    /// The slot or parameter, and the region in it, that a `Take` through a
+    /// reference moves out of, where the takings move what it lends and it
+    /// reaches that place alone (`Loans::through_one`).
+    fn moved_through(&self, inst: &Inst) -> Option<(ValueId, &[PathSeg])> {
+        if !matches!(inst.op(), Op::Take { target: RefTarget::Through(_), .. }) {
+            return None;
+        }
+        let place = self.loans.through_one(Site::Inst(inst.id()), Reach::Move)?;
+        storage_place(place.storage).map(|value| (value, parts::owned_region(&place.path)))
+    }
+
     fn ends_whole(&self, cuts: &Cuts, place: ValueId) -> bool {
         self.liveness_ends_content(place) && !cuts.places.contains_key(&place)
     }
@@ -1212,7 +1225,10 @@ impl PlanFacts<'_> {
                     Op::Assign { .. } if covers(parts::owned_region(path), unit) => Some(PlaceEvent::Stored),
                     _ => None,
                 },
-                _ => self.loans.reads(site).iter().any(|storage| storage_place(*storage) == Some(place)).then_some(PlaceEvent::Read),
+                _ => match self.moved_through(inst) {
+                    Some((moved, region)) if moved == place && covers(region, unit) => Some(PlaceEvent::Moved),
+                    _ => self.loans.reads(site).iter().any(|storage| storage_place(*storage) == Some(place)).then_some(PlaceEvent::Read),
+                },
             };
             let Some(event) = event else {
                 continue;

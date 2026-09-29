@@ -23,9 +23,11 @@
 //!   (ownership §4: it is whole whenever the body returns).
 //! - A `Take` or an `Assign` through a reference reaches the places `Loans`
 //!   records for its site (`Loans::accesses`, a `Move` or a `Write`). Where
-//!   it reaches one place, the move or the write is of that place's units
-//!   there, as by name. Where it reaches several, nothing is recorded:
-//!   `check::moveck` refuses such a move.
+//!   it reaches one place (`Loans::is_one`: exact, naming no sequence's
+//!   element), the move or the write is of that place's units there, as by
+//!   name. Where it reaches several, or one that is not one place, nothing
+//!   is recorded: `check::moveck` refuses such a move, and such a write
+//!   writes no whole unit.
 //! - A join unions what each path may leave.
 //!
 //! Cost: a unit's fact only grows, and it holds a flag and the spans of the
@@ -186,7 +188,7 @@ impl Holder {
 
 /// Every slot, every parameter the body names as a storage, and every
 /// storage outside the body; each with its units, cut at every region a
-/// path by name or through a reference reaches in it.
+/// path by name, or through a reference to one place, reaches in it.
 fn units_of(body: &Body, types: &Types<Concrete>, decls: &Declarations, loans: &Loans) -> FxHashMap<Storage, Vec<Path>> {
     let mut holders: FxHashMap<Storage, Holder> =
         body.slots().iter().map(|slot| (Storage::Slot(*slot), Holder::typed(body.ty_of(*slot)))).collect();
@@ -209,7 +211,8 @@ fn units_of(body: &Body, types: &Types<Concrete>, decls: &Declarations, loans: &
             if !is_through(inst.op()) {
                 continue;
             }
-            for place in loans.accesses(Site::Inst(inst.id())).iter().flat_map(|access| &access.places) {
+            let reached = loans.accesses(Site::Inst(inst.id())).iter().flat_map(|access| &access.places);
+            for place in reached.filter(|place| loans.is_one(place)) {
                 let holder = holders.entry(place.storage).or_insert_with(|| match place.storage {
                     Storage::Slot(value) | Storage::Param(value) => Holder::typed(body.ty_of(value)),
                     Storage::Outside { .. } => panic!("{:?} is an outside storage of a parameter or a capture", place.storage),
@@ -288,20 +291,16 @@ impl Forward<'_> {
         }
     }
 
-    /// A `Take` or an `Assign` through a reference: each move and each write
+    /// A `Take` or an `Assign` through a reference: the move or the write
     /// `Loans` records at it that reaches one place, of that place's region.
     fn transfer_through(&self, inst: &Inst, state: &mut Units) {
-        for access in self.loans.accesses(Site::Inst(inst.id())) {
-            let fact = match access.reach {
-                Reach::Write => Written::default(),
-                Reach::Move => Written { moved: BTreeSet::from([inst.span()]), ..Written::default() },
-                Reach::Read | Reach::Lend => continue,
-            };
-            let mut places = access.places.iter();
-            let (Some(place), None) = (places.next(), places.next()) else {
-                continue;
-            };
-            self.set(place.storage, parts::owned_region(&place.path), &fact, state);
+        let site = Site::Inst(inst.id());
+        if let Some(place) = self.loans.through_one(site, Reach::Move) {
+            let moved = Written { moved: BTreeSet::from([inst.span()]), ..Written::default() };
+            self.set(place.storage, parts::owned_region(&place.path), &moved, state);
+        }
+        if let Some(place) = self.loans.through_one(site, Reach::Write) {
+            self.set(place.storage, parts::owned_region(&place.path), &Written::default(), state);
         }
     }
 }

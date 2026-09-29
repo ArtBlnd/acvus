@@ -16,6 +16,10 @@
 //! - Any other value at a by-value position is moved (ownership §2). A
 //!   `String` is too: `lower::required::clone_strings` has already given
 //!   every use but its last a clone (ownership §3).
+//! - A place reached through a reference is taken as a place by name is:
+//!   what a `Take` of it takes is moved out of the place the reference
+//!   lends, whole or in part, unless it copies or is a `&mut` (ownership
+//!   §2, §4). The reference itself is read.
 //!
 //! A `Take`'s `taken_out` is not read: lower makes no take-out.
 
@@ -45,12 +49,15 @@ pub enum Taken {
 
 /// One operand of an instruction and how it is taken. `names_place` marks
 /// an operand that names a storage, as a `Take`'s or an `Assign`'s target
-/// does, rather than passing a value.
+/// does, rather than passing a value. `lent` is, for the reference a
+/// `Take`, a `Ref` or an `Assign` reaches its place through, how that place
+/// is taken; `None` for every other operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Operand {
     pub value: ValueId,
     pub taken: Taken,
     pub names_place: bool,
+    pub lent: Option<Taken>,
 }
 
 /// A value a terminator names apart from its edges' arguments, and how it
@@ -75,13 +82,13 @@ fn is_mut_ref(types: &Types<Concrete>, ty: Ty) -> bool {
 }
 
 /// Every operand of `inst` but the order token, in the order
-/// `Inst::operands` gives them, with how each is taken. A `Take` of a place
-/// by name reads where what it takes copies or is a `&mut`. Cost: O(its
-/// operands).
+/// `Inst::operands` gives them, with how each is taken. A `Take` of a
+/// place, by name or through a reference, reads where what it takes copies
+/// or is a `&mut`. Cost: O(its operands).
 pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<[Operand; 4]> {
     let ty = |value: ValueId| body.ty_of(value);
     let copying = |value: ValueId| copies(types, ty(value));
-    let taken = |value: ValueId, taken: Taken| Operand { value, taken, names_place: false };
+    let taken = |value: ValueId, taken: Taken| Operand { value, taken, names_place: false, lent: None };
     let passed = |value: ValueId| taken(value, by_value(types, ty(value)));
     let read = |value: ValueId| taken(value, Taken::Read);
     let result_copies = || inst.result().is_some_and(copying);
@@ -90,8 +97,8 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         false => taken(src, Taken::PartMoved),
     };
     let place = |target: &RefTarget, taken: Taken| match target {
-        RefTarget::Var(named) | RefTarget::Param(named) => Operand { value: *named, taken, names_place: true },
-        RefTarget::Through(reference) => read(*reference),
+        RefTarget::Var(named) | RefTarget::Param(named) => Operand { value: *named, taken, names_place: true, lent: None },
+        RefTarget::Through(reference) => Operand { lent: Some(taken), ..read(*reference) },
     };
     let callee = |callee: &Callee| match callee {
         Callee::Indirect(function) => match types.kind(ty(*function)) {
@@ -116,10 +123,7 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         Op::Ref { target, .. } => operands.push(place(target, Taken::Read)),
         Op::Take { target, path, .. } => {
             let what_it_takes = inst.result().expect("a `Take` yields what it takes");
-            let holder_keeps = match target {
-                RefTarget::Var(_) | RefTarget::Param(_) => copying(what_it_takes) || is_mut_ref(types, ty(what_it_takes)),
-                RefTarget::Through(_) => true,
-            };
+            let holder_keeps = copying(what_it_takes) || is_mut_ref(types, ty(what_it_takes));
             let taking = if holder_keeps {
                 Taken::Read
             } else if parts::owned_region(path).is_empty() {

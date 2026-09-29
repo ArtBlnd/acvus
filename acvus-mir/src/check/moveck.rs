@@ -12,7 +12,9 @@
 //! move. A move through a reference is refused `MoveThroughShared` where a
 //! loan of the reference it is made through is shared (ownership §5, what a
 //! shared reference lends is never taken from), and `MoveThroughSeveral`
-//! where it reaches more than one place (ownership §4).
+//! where it reaches more than one place, or a place that is not one place
+//! (`Loans::is_one`: not exact, or naming a sequence's element, which
+//! stands for every element) (ownership §4).
 
 use std::collections::BTreeSet;
 
@@ -51,7 +53,7 @@ pub(super) fn check(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'
 }
 
 /// Each move `site` makes through a reference whose loans include a shared
-/// one, and each that reaches several places.
+/// one, and each that reaches several places or one that is not one place.
 fn moves_through(loans: &Loans, site: Site, span: Span, out: &mut Vec<Refusal>) {
     for access in loans.accesses(site) {
         if access.reach != Reach::Move || access.through.is_empty() {
@@ -60,7 +62,7 @@ fn moves_through(loans: &Loans, site: Site, span: Span, out: &mut Vec<Refusal>) 
         if access.through.iter().any(|loan| loan.mode == Mode::Shared) {
             out.push(Refusal { kind: RefusalKind::MoveThroughShared, span });
         }
-        if access.places.len() > 1 {
+        if access.places.len() > 1 || !access.places.iter().all(|place| loans.is_one(place)) {
             out.push(Refusal { kind: RefusalKind::MoveThroughSeveral, span });
         }
     }
