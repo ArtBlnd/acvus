@@ -9,10 +9,6 @@
 //! once that head is known (types §6). A pattern relates to its scrutinee by
 //! `join`: a transparent scrutinee grows by what the pattern names, and an
 //! opaque one must already have it.
-//!
-//! A name binds a read of a part of the scrutinee (D108 rule 1): past the
-//! references the match passed, a reference part is a reborrow capped by
-//! the path's mutability, and any other part is lent at it.
 
 use acvus_ast::{AstId, ObjectPatternField, Pattern, RefKind, Slot, Span, TuplePatternElem};
 use acvus_utils::{Astr, QualifiedRef};
@@ -20,7 +16,6 @@ use acvus_utils::{Astr, QualifiedRef};
 use super::ctxt::Ctxt;
 use super::decision::Decision;
 use super::output::Name;
-use super::place::{BindingMode, Through};
 use super::refusal::{self, RefusalKind};
 use super::scope::Binding;
 use crate::decl::{Base, Head};
@@ -83,7 +78,7 @@ impl Shape {
 /// Binds `pattern`'s names against a scrutinee of term `scrutinee`.
 pub(super) fn check_pattern<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>, scrutinee: Term) {
     let shape = shape(cx, pattern);
-    destructure(cx, shape, scrutinee, Vec::new());
+    destructure(cx, shape, scrutinee, None);
 }
 
 fn shape<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>) -> Shape {
@@ -159,18 +154,18 @@ fn field_shape<S: Slot>(cx: &mut Ctxt<'_>, field: &ObjectPatternField<S>) -> (As
     (field.key, shape(cx, &field.pattern))
 }
 
-/// `shape` against `scrutinee`, past the references in `through` the
-/// match has passed. A name or `_` takes the value as it is; any other
-/// shape waits for the scrutinee's head.
-fn destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, through: Vec<Through>) {
+/// `shape` against `scrutinee`, its names lent by `lent` where the match
+/// passed through a reference. A name or `_` takes the value as it is; any
+/// other shape waits for the scrutinee's head.
+fn destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, lent: Option<Mutability>) {
     match shape.form {
-        Form::Bind { .. } | Form::Context { .. } | Form::Ignore => apply(cx, shape, scrutinee, None, through),
+        Form::Bind { .. } | Form::Context { .. } | Form::Ignore => apply(cx, shape, scrutinee, None, lent),
         _ => super::decision::decide(
             cx,
             Decision::Destructure {
                 shape: Box::new(shape),
                 scrutinee,
-                through,
+                lent,
             },
         ),
     }
@@ -181,12 +176,15 @@ fn destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, through: Vec<Th
 /// (patterns §4); otherwise by the shape. `head` is `None` where the
 /// pattern's use decides an open scrutinee at a stall: it is then the
 /// shape, never a reference.
-pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, head: Option<Head>, mut through: Vec<Through>) {
+pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, head: Option<Head>, lent: Option<Mutability>) {
     match head {
-        Some(Head::Ref(..)) => {
+        Some(Head::Ref(mutability, _)) => {
+            let through = match lent {
+                Some(Mutability::Shared) => Mutability::Shared,
+                Some(Mutability::Mut) | None => mutability,
+            };
             let target = cx.referent(scrutinee);
-            through.push(Through::Object(scrutinee));
-            destructure(cx, shape, target, through);
+            destructure(cx, shape, target, Some(through));
         }
         Some(Head::Base(Base::Never)) => {
             record_matched(cx, &shape, scrutinee);
@@ -195,21 +193,21 @@ pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term,
                 cx.eq(term, never, shape.span);
             }
         }
-        Some(Head::Base(_)) | None => apply(cx, shape, scrutinee, head, through),
+        Some(Head::Base(_)) | None => apply(cx, shape, scrutinee, head, lent),
     }
 }
 
 /// `shape` applied to `scrutinee`, whose head is `known` where it is known.
-fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, through: Vec<Through>) {
+fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, lent: Option<Mutability>) {
     record_matched(cx, &shape, scrutinee);
     let Shape { site, span, form } = shape;
     match form {
-        Form::Bind { term } => bind(cx, span, term, scrutinee, through),
+        Form::Bind { term } => {
+            let value = bound_value(cx, scrutinee, lent, span);
+            cx.eq(term, value, span);
+        }
         Form::Context { context, body } => {
-            let value = match lent(cx, &through) {
-                Some(mutability) => cx.lend(scrutinee, mutability, span),
-                None => scrutinee,
-            };
+            let value = bound_value(cx, scrutinee, lent, span);
             cx.enter_in(body, site, value, context, span);
         }
         Form::Ignore => {}
@@ -229,17 +227,17 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
             let listed = cx.held(listed);
             cx.join(scrutinee, listed, span);
             for part in head.into_iter().chain(tail) {
-                destructure(cx, part, element, through.clone());
+                destructure(cx, part, element, lent);
             }
         }
-        Form::Object { fields } => object(cx, fields, scrutinee, through, span),
+        Form::Object { fields } => object(cx, fields, scrutinee, lent, span),
         Form::Tuple { parts } => {
             let terms: Vec<Term> = parts.iter().map(|_| cx.fresh()).collect();
             let tuple = cx.held(TyKind::Tuple(terms.clone().into()));
             cx.join(scrutinee, tuple, span);
             for (part, term) in parts.into_iter().zip(terms) {
                 if let Some(part) = part {
-                    destructure(cx, part, term, through.clone());
+                    destructure(cx, part, term, lent);
                 }
             }
         }
@@ -247,7 +245,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
             enum_name,
             tag,
             payload,
-        } => variant(cx, enum_name, tag, payload.map(|payload| *payload), scrutinee, through, span),
+        } => variant(cx, enum_name, tag, payload.map(|payload| *payload), scrutinee, lent, span),
     }
 }
 
@@ -260,39 +258,19 @@ fn record_matched(cx: &mut Ctxt<'_>, shape: &Shape, scrutinee: Term) {
     }
 }
 
-/// A name `term` bound to `part`, a read of it (D108 rule 1). Past no
-/// reference the path is the scrutinee's own `&mut` place, where a read of
-/// any part is the part itself; past one it is the one part-read decision,
-/// binding by reference (patterns §1).
-fn bind(cx: &mut Ctxt<'_>, span: Span, term: Term, part: Term, through: Vec<Through>) {
-    if through.is_empty() {
-        cx.eq(term, part, span);
-        return;
+/// What a name binds: the part itself, or where the match passed through
+/// a reference, a reference to it.
+fn bound_value(cx: &mut Ctxt<'_>, part: Term, lent: Option<Mutability>, span: Span) -> Term {
+    match lent {
+        Some(mutability) => cx.lend(part, mutability, span),
+        None => part,
     }
-    let read = Decision::PartRead {
-        span,
-        part,
-        through: through.into(),
-        mode: BindingMode::Ref,
-        result: term,
-    };
-    super::decision::decide(cx, read);
-}
-
-/// The mutability a match lends at past the references in `through`, where
-/// it passed any; each is closed, since the match passed it.
-fn lent(cx: &Ctxt<'_>, through: &[Through]) -> Option<Mutability> {
-    if through.is_empty() {
-        return None;
-    }
-    let path = super::decision::path_through(cx, through, super::decision::Reading::CycleBroken, super::decision::Depth::Head);
-    Some(path.expect("a reference a match passed is closed"))
 }
 
 /// `{ f: p, .. }`: a declared struct must have each field; any other
 /// object grows by them where transparent (types §1-2). The scrutinee's
 /// head is known here, so whether it is declared is read off it.
-fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, through: Vec<Through>, span: Span) {
+fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, lent: Option<Mutability>, span: Span) {
     let declared = match cx.infer.types().kind(cx.infer.shallow(scrutinee)) {
         TyKind::Object(ObjectTy::Declared(_, declared)) => Some(declared.clone()),
         _ => None,
@@ -300,7 +278,7 @@ fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, throug
     if let Some(declared) = declared {
         for (key, part) in fields {
             match declared.iter().find(|(name, _)| *name == key) {
-                Some((_, term)) => destructure(cx, part, *term, through.clone()),
+                Some((_, term)) => destructure(cx, part, *term, lent),
                 None => refusal::push(cx, RefusalKind::GrowsOpaque, part.span),
             }
         }
@@ -312,7 +290,7 @@ fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, throug
     let object = cx.held(TyKind::Object(ObjectTy::Structural(sorted.into(), Label::Transparent)));
     cx.join(scrutinee, object, span);
     for ((_, part), (_, term)) in fields.into_iter().zip(terms) {
-        destructure(cx, part, term, through.clone());
+        destructure(cx, part, term, lent);
     }
 }
 
@@ -325,7 +303,7 @@ fn variant(
     tag: Astr,
     payload: Option<Shape>,
     scrutinee: Term,
-    through: Vec<Through>,
+    lent: Option<Mutability>,
     span: Span,
 ) {
     let tags = cx.decls.core().tags;
@@ -355,7 +333,7 @@ fn variant(
     let variant = cx.held(kind);
     cx.join(scrutinee, variant, span);
     match (payload, part) {
-        (Some(payload), Some(part)) => destructure(cx, payload, part, through),
+        (Some(payload), Some(part)) => destructure(cx, payload, part, lent),
         (None, None) => {}
         (Some(_), None) | (None, Some(_)) => refusal::push(cx, RefusalKind::VariantArity { tag }, span),
     }

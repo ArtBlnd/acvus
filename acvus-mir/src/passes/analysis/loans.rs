@@ -47,7 +47,7 @@ use crate::ir::{Callee, ForSource, IndexMode, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types, copies, part_read,
+    Alignment, Concrete, FlowEnd, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types, copies,
     position_kinds, positions,
 };
 
@@ -619,31 +619,9 @@ impl Forward<'_> {
     /// The parts of `reached` of type `ty`.
     fn parts_of(&self, reached: &Reached, ty: Ty) -> Vec<Range<usize>> {
         let ranges: Vec<Range<usize>> =
-            reached.parts.iter().filter(|part| self.reads_as(part.ty, ty)).map(|part| part.range.clone()).collect();
+            reached.parts.iter().filter(|part| part.ty == ty).map(|part| part.range.clone()).collect();
         assert!(!ranges.is_empty(), "a place's path reaches its type, {:?}", self.types.kind(ty));
         ranges
-    }
-
-    /// Whether a part of type `part` is read as `ty`: itself, or, where it
-    /// is a reference, a reborrow of it through some path (`part_read`).
-    fn reads_as(&self, part: Ty, ty: Ty) -> bool {
-        [Mutability::Mut, Mutability::Shared]
-            .into_iter()
-            .any(|path| match part_read(self.types, part, path) {
-                None => part == ty,
-                Some(reborrow) => self.types.kind(ty) == &reborrow,
-            })
-    }
-
-    /// The positions a part read yields, from those of the part it reads:
-    /// a reference part is reborrowed at the result's mutability, so its
-    /// own loans are of that mode (`part_read`).
-    fn as_part_read(&self, mut positions: Vec<LoanSet>, result: Ty) -> Vec<LoanSet> {
-        if let TyKind::Ref(made, _) = self.types.kind(result) {
-            let reborrowed = mode(*made);
-            positions[0] = positions[0].iter().map(|loan| Loan { storage: loan.storage, mode: reborrowed }).collect();
-        }
-        positions
     }
 
     fn place<'p>(&self, state: &State, target: &RefTarget, path: &'p [PathSeg]) -> Place<'p> {
@@ -824,12 +802,13 @@ impl Forward<'_> {
             Op::Take { target, path, .. } => {
                 let place = self.place(state, target, path);
                 let taken = self.read(state, &place, ty());
-                let moved = !copies(self.types, ty()) && !matches!(self.types.kind(ty()), TyKind::Ref(..));
-                if moved && let Some(Replaced { storage, range }) = self.strong(state, &place, ty()) {
+                if !copies(self.types, ty())
+                    && let Some(Replaced { storage, range }) = self.strong(state, &place, ty())
+                {
                     let content = state.storages.get_mut(&storage).expect("a taken storage is present");
                     content[range].iter_mut().for_each(LoanSet::clear);
                 }
-                self.as_part_read(taken, ty())
+                taken
             }
             Op::Assign { target, path, value, .. } => {
                 let place = self.place(state, target, path);
@@ -847,9 +826,7 @@ impl Forward<'_> {
                 };
                 self.reborrow(state, *slice, held)
             }
-            Op::Index { slice, mode: IndexMode::Copy, .. } => {
-                self.as_part_read(self.reborrow(state, *slice, Mode::Shared)[1..].to_vec(), ty())
-            }
+            Op::Index { slice, mode: IndexMode::Copy, .. } => self.reborrow(state, *slice, Mode::Shared)[1..].to_vec(),
             Op::IndexSet { slice, value, .. } => {
                 let storages = self.named(state, *slice);
                 let written = self.value(state, *value);
@@ -858,12 +835,12 @@ impl Forward<'_> {
             }
             Op::FieldGet { object, field, rest } => {
                 let path: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
-                self.as_part_read(self.project(state, *object, &path, ty()), ty())
+                self.project(state, *object, &path, ty())
             }
-            Op::ObjectGet { object, key } => self.as_part_read(self.project(state, *object, &[PathSeg::Field(*key)], ty()), ty()),
-            Op::TupleIndex { tuple, index } => self.as_part_read(self.project(state, *tuple, &[PathSeg::Index(*index)], ty()), ty()),
-            Op::ArrayIndex { array, .. } => self.as_part_read(self.project(state, *array, &[PathSeg::Index(0)], ty()), ty()),
-            Op::UnwrapVariant { src } => self.as_part_read(self.project(state, *src, &[PathSeg::Payload], ty()), ty()),
+            Op::ObjectGet { object, key } => self.project(state, *object, &[PathSeg::Field(*key)], ty()),
+            Op::TupleIndex { tuple, index } => self.project(state, *tuple, &[PathSeg::Index(*index)], ty()),
+            Op::ArrayIndex { array, .. } => self.project(state, *array, &[PathSeg::Index(0)], ty()),
+            Op::UnwrapVariant { src } => self.project(state, *src, &[PathSeg::Payload], ty()),
             Op::FieldSet { object, field, rest, value } => {
                 let path: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
                 let mut positions = self.value(state, *object);

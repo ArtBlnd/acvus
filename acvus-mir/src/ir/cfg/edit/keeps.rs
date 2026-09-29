@@ -7,7 +7,7 @@ use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
 use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, IndexMode, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
-use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types, part_read};
+use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
 /// A breach of an invariant: a compiler defect, never a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,14 +239,7 @@ impl TypeCheck<'_> {
                 let places = self.place(target, path)?;
                 found(places.contains(&lent), || format!("{result:?} lends another type than the place holds"))
             }
-            Op::Take { target, path, .. } => {
-                let through = self.path_mutability(target)?;
-                let result = Self::result(inst)?;
-                let parts = self.place(target, path)?;
-                found(parts.iter().any(|part| self.reads_part(result, *part, through)), || {
-                    format!("{result:?} is {:?}, a read of none of the place's types {parts:?}", self.kind(self.ty(result)))
-                })
-            }
+            Op::Take { target, path, .. } => self.one_of(Self::result(inst)?, &self.place(target, path)?, "the place"),
             Op::Assign { target, path, value, .. } => self.one_of(*value, &self.place(target, path)?, "the place"),
             Op::AsSlice { container, mutability, .. } => {
                 self.is(*container, |kind| matches!(kind, TyKind::Ref(..)), "a reference")?;
@@ -279,7 +272,7 @@ impl TypeCheck<'_> {
                 let (held, element) = self.slice(*slice)?;
                 let result = Self::result(inst)?;
                 match mode {
-                    IndexMode::Copy => self.read_part(result, element, held, "the element"),
+                    IndexMode::Copy => self.same(result, element, "the element"),
                     IndexMode::Ref => self.is(
                         result,
                         |kind| matches!(kind, TyKind::Ref(made, lent) if *made == held && lent.ty() == element),
@@ -295,7 +288,7 @@ impl TypeCheck<'_> {
             }
             Op::FieldGet { object, field, rest } => {
                 let at = self.field_path(self.ty(*object), *field, rest)?;
-                self.read_part(Self::result(inst)?, at, Mutability::Mut, "the field")
+                self.same(Self::result(inst)?, at, "the field")
             }
             Op::FieldSet { object, field, rest, value } => {
                 let object_ty = self.ty(*object);
@@ -418,18 +411,18 @@ impl TypeCheck<'_> {
             }
             Op::TupleIndex { tuple, index } => match self.kind(self.ty(*tuple)) {
                 TyKind::Tuple(elements) => match elements.get(*index) {
-                    Some(element) => self.read_part(Self::result(inst)?, *element, Mutability::Mut, "the element"),
+                    Some(element) => self.same(Self::result(inst)?, *element, "the element"),
                     None => Err(format!("{tuple:?} has no element {index}")),
                 },
                 other => Err(format!("{tuple:?} is {other:?}, not a tuple")),
             },
             Op::ArrayIndex { array, .. } => match self.kind(self.ty(*array)) {
-                TyKind::Array(element, _) => self.read_part(Self::result(inst)?, *element, Mutability::Mut, "the element"),
+                TyKind::Array(element, _) => self.same(Self::result(inst)?, *element, "the element"),
                 other => Err(format!("{array:?} is {other:?}, not an array")),
             },
             Op::ObjectGet { object, key } => {
                 let at = self.field_path(self.ty(*object), *key, &[])?;
-                self.read_part(Self::result(inst)?, at, Mutability::Mut, "the field")
+                self.same(Self::result(inst)?, at, "the field")
             }
             Op::TestLiteral { .. } | Op::TestObjectKey { .. } | Op::TestVariant { .. } => {
                 self.is_bool(Self::result(inst)?)
@@ -457,11 +450,8 @@ impl TypeCheck<'_> {
                 }
             }
             Op::UnwrapVariant { src } => {
-                let result = Self::result(inst)?;
                 let payloads = self.payloads(self.ty(*src))?;
-                found(payloads.iter().any(|payload| self.reads_part(result, *payload, Mutability::Mut)), || {
-                    format!("{result:?} is a read of no payload of the variant type {payloads:?}")
-                })
+                self.one_of(Self::result(inst)?, &payloads, "a payload of the variant type")
             }
             Op::Fetch { .. } => self.outlives_the_run(Self::result(inst)?),
             Op::Commit { value, .. } => self.outlives_the_run(*value),
@@ -521,33 +511,6 @@ impl TypeCheck<'_> {
             TyKind::Result(ok, err) => Ok(vec![*ok, *err]),
             TyKind::Enum { variants, .. } => Ok(variants.iter().filter_map(|(_, payload)| *payload).collect()),
             other => Err(format!("{other:?} is not a variant type")),
-        }
-    }
-
-    /// Whether `value` is what a part read of `part` through a path of
-    /// mutability `path` yields (`ty::part_read`).
-    fn reads_part(&self, value: ValueId, part: Ty, path: Mutability) -> bool {
-        match part_read(self.types, part, path) {
-            None => self.ty(value) == part,
-            Some(reborrow) => self.kind(self.ty(value)) == &reborrow,
-        }
-    }
-
-    fn read_part(&self, value: ValueId, part: Ty, path: Mutability, what: &str) -> Found {
-        found(self.reads_part(value, part, path), || {
-            format!("{value:?} is {:?}, not a read of {what}, {:?}", self.kind(self.ty(value)), self.kind(part))
-        })
-    }
-
-    /// The mutability of the path a `Take` reads through: a variable's or a
-    /// parameter's own storage is `&mut`, a reference's storage its own.
-    fn path_mutability(&self, target: &RefTarget) -> Result<Mutability, String> {
-        match target {
-            RefTarget::Var(_) | RefTarget::Param(_) => Ok(Mutability::Mut),
-            RefTarget::Through(reference) => match self.kind(self.ty(*reference)) {
-                TyKind::Ref(mutability, _) => Ok(*mutability),
-                other => Err(format!("{reference:?} is {other:?}, not a reference")),
-            },
         }
     }
 

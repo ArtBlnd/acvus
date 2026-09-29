@@ -29,10 +29,8 @@ use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
-use super::place::{BindingMode, Through};
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
-use crate::ty::structural::structure;
 use crate::ty::{
     CastTy, EffectTerm, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
 };
@@ -137,17 +135,6 @@ pub(super) enum Decision {
     /// struct must have the field, and any other object grows by it where
     /// transparent (types §1-2).
     Field { span: Span, object: Term, field: Astr, part: Term },
-    /// A read of `part`, reached through every container in `through`:
-    /// `result` is what `ty::part_read` makes of it at the path's
-    /// mutability, the least any container caps it at (D108 rule 1), and a
-    /// part that is no reference as `mode` binds it.
-    PartRead {
-        span: Span,
-        part: Term,
-        through: Box<[Through]>,
-        mode: BindingMode,
-        result: Term,
-    },
     /// `container[i]`: the language's own for an array or a slice, and
     /// `as_slice(_mut)` at `callee_site` otherwise (operators §3).
     /// `body` is the effect of the body the index is in.
@@ -162,10 +149,9 @@ pub(super) enum Decision {
     /// `*reference`: its target; a store through it needs a `&mut`
     /// (operators §6).
     Deref { span: Span, reference: Term, target: Term, store: bool },
-    /// A pattern against its scrutinee, past the references in `through`
-    /// the match has passed, as Rust's default binding modes do
-    /// (patterns §1).
-    Destructure { shape: Box<Shape>, scrutinee: Term, through: Vec<Through> },
+    /// A pattern against its scrutinee, through a reference as Rust's
+    /// default binding modes do (patterns §1).
+    Destructure { shape: Box<Shape>, scrutinee: Term, lent: Option<Mutability> },
     /// A method call's receiver adjustment (types §6), once the receiver's
     /// head is known; the call's reach follows it.
     Adjust(Box<super::method::Adjust>),
@@ -198,27 +184,7 @@ pub(super) enum Decision {
     },
 }
 
-/// How much of its type a decision reads. types §6: a decision reads what
-/// it reads only once nothing can change it, so it waits in `closed_for`
-/// until all of that is closed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Depth {
-    /// The head alone.
-    Head,
-    /// The head and every structural part, recursively.
-    Whole,
-}
-
 impl Decision {
-    /// How much of its type this decision reads. A clone asks whether its
-    /// type copies, which is a fact of the whole type (ownership §1).
-    fn depth(&self) -> Depth {
-        match self {
-            Decision::Clone { .. } => Depth::Whole,
-            _ => Depth::Head,
-        }
-    }
-
     /// The terms this decision may still bind or enter into.
     fn outputs(&self) -> impl Iterator<Item = Term> {
         let outputs: Vec<Term> = match self {
@@ -228,7 +194,6 @@ impl Decision {
             Decision::Enter { slot, .. } => vec![*slot],
             Decision::Lend { result, .. } => vec![*result],
             Decision::Field { part, .. } => vec![*part],
-            Decision::PartRead { result, .. } => vec![*result],
             Decision::Index { element, .. } => vec![*element],
             Decision::Deref { target, .. } => vec![*target],
             Decision::BlockEnd { block, .. } => vec![*block],
@@ -254,9 +219,6 @@ impl Decision {
             Decision::Cast { source, .. } => vec![*source],
             Decision::Lend { value, result, .. } => vec![*value, *result],
             Decision::Field { object, part, .. } => vec![*object, *part],
-            Decision::PartRead { part, through, result, .. } => {
-                through.iter().map(|container| container.term()).chain([*part, *result]).collect()
-            }
             Decision::Index { container, element, .. } => vec![*container, *element],
             Decision::Deref { reference, target, .. } => vec![*reference, *target],
             Decision::BlockEnd { last, block, .. } => vec![*last, *block],
@@ -389,7 +351,6 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Try { operand, .. } => Some(*operand),
         Decision::Cast { source, .. } => Some(*source),
         Decision::Reach { .. }
-        | Decision::PartRead { .. }
         | Decision::Settle { .. }
         | Decision::HoldsNoLoans { .. } => None,
     }
@@ -399,13 +360,10 @@ fn read_head(decision: &Decision) -> Option<Term> {
 /// its cast tree, which no later decision can change (types §6); pending
 /// otherwise.
 pub(super) fn decide(cx: &mut Ctxt<'_>, decision: Decision) {
-    let depth = decision.depth();
     let top = read_head(&decision).is_some_and(|term| {
-        within(cx, term, depth).into_iter().all(|term| {
-            cx.infer
-                .closed(cx.decls.casts(), &NothingOpen, term)
-                .is_some_and(|closed| cx.decls.casts().step_up(closed.head).is_none())
-        })
+        cx.infer
+            .closed(cx.decls.casts(), &NothingOpen, term)
+            .is_some_and(|closed| cx.decls.casts().step_up(closed.head).is_none())
     });
     match top {
         true => fire(cx, decision, Reading::Closed).expect("a decision whose head is at the top of its tree fires"),
@@ -430,46 +388,15 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
     fired
 }
 
-/// The terms `depth` reads of `term`: `term` itself, and for `Whole` every
-/// structural part of it, recursively, as far as its heads are known.
-fn within(cx: &Ctxt<'_>, term: Term, depth: Depth) -> Vec<Term> {
-    let mut read = vec![term];
-    if depth == Depth::Head {
-        return read;
-    }
-    let mut seen = FxHashSet::default();
-    let mut stack = vec![term];
-    while let Some(at) = stack.pop() {
-        let at = cx.infer.shallow(at);
-        if !seen.insert(at) {
-            continue;
-        }
-        let Some(structure) = structure(cx.infer.types(), at) else {
-            continue;
-        };
-        for part in structure.parts() {
-            read.push(part);
-            stack.push(part);
-        }
-    }
-    read
-}
-
-/// `term`'s head where every term `depth` reads of it is closed as
-/// `reading` reads a head: `Head` reads the head alone, `Whole` every type
-/// within it too, each by the same reading.
-pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading, depth: Depth) -> Option<Closed> {
-    let closed_head = |term| match reading {
+pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<Closed> {
+    match reading {
         Reading::Closed => cx.closed(term),
         Reading::CycleBroken => cx.infer.closed(cx.decls.casts(), &NothingOpen, term),
-    };
-    let head = closed_head(term)?;
-    within(cx, term, depth).into_iter().all(|inner| closed_head(inner).is_some()).then_some(head)
+    }
 }
 
 /// Fires `decision` if its inputs are closed; hands it back otherwise.
 fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), Decision> {
-    let depth = decision.depth();
     match decision {
         Decision::Enter {
             site,
@@ -478,7 +405,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             slot,
             body,
         } => {
-            let Some(closed) = closed_for(cx, value, reading, depth) else {
+            let Some(closed) = closed_for(cx, value, reading) else {
                 return Err(Decision::Enter {
                     site,
                     span,
@@ -498,7 +425,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             item,
             body,
         } => {
-            let Some(closed) = closed_for(cx, head, reading, depth) else {
+            let Some(closed) = closed_for(cx, head, reading) else {
                 return Err(Decision::Iterate {
                     site,
                     callee_site,
@@ -518,7 +445,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             value,
             exit,
         } => {
-            let Some(closed) = closed_for(cx, operand, reading, depth) else {
+            let Some(closed) = closed_for(cx, operand, reading) else {
                 return Err(Decision::Try {
                     site,
                     span,
@@ -531,7 +458,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             Ok(())
         }
         Decision::Cast { site, span, source, to } => {
-            let Some(closed) = closed_for(cx, source, reading, depth) else {
+            let Some(closed) = closed_for(cx, source, reading) else {
                 return Err(Decision::Cast { site, span, source, to });
             };
             fire_cast(cx, site, span, closed, to);
@@ -556,7 +483,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             mutability,
             result,
         } => {
-            let Some(closed) = closed_for(cx, value, reading, depth) else {
+            let Some(closed) = closed_for(cx, value, reading) else {
                 return Err(Decision::Lend {
                     span,
                     value,
@@ -573,7 +500,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             field,
             part,
         } => {
-            let Some(closed) = closed_for(cx, object, reading, depth) else {
+            let Some(closed) = closed_for(cx, object, reading) else {
                 return Err(Decision::Field {
                     span,
                     object,
@@ -584,26 +511,6 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             super::place::fire_field(cx, span, object, Some(closed.head), field, part);
             Ok(())
         }
-        Decision::PartRead {
-            span,
-            part,
-            through,
-            mode,
-            result,
-        } => {
-            let path = path_through(cx, &through, reading, depth);
-            let (Some(path), Some(_)) = (path, closed_for(cx, part, reading, depth)) else {
-                return Err(Decision::PartRead {
-                    span,
-                    part,
-                    through,
-                    mode,
-                    result,
-                });
-            };
-            super::place::fire_part_read(cx, span, part, path, mode, result);
-            Ok(())
-        }
         Decision::Index {
             callee_site,
             span,
@@ -612,7 +519,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             element,
             body,
         } => {
-            let Some(closed) = closed_for(cx, container, reading, depth) else {
+            let Some(closed) = closed_for(cx, container, reading) else {
                 return Err(Decision::Index {
                     callee_site,
                     span,
@@ -631,7 +538,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             target,
             store,
         } => {
-            let Some(closed) = closed_for(cx, reference, reading, depth) else {
+            let Some(closed) = closed_for(cx, reference, reading) else {
                 return Err(Decision::Deref {
                     span,
                     reference,
@@ -642,11 +549,11 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             super::place::fire_deref(cx, span, closed, target, store);
             Ok(())
         }
-        Decision::Destructure { shape, scrutinee, through } => {
-            let Some(closed) = closed_for(cx, scrutinee, reading, depth) else {
-                return Err(Decision::Destructure { shape, scrutinee, through });
+        Decision::Destructure { shape, scrutinee, lent } => {
+            let Some(closed) = closed_for(cx, scrutinee, reading) else {
+                return Err(Decision::Destructure { shape, scrutinee, lent });
             };
-            super::pat::fire_destructure(cx, *shape, scrutinee, Some(closed.head), through);
+            super::pat::fire_destructure(cx, *shape, scrutinee, Some(closed.head), lent);
             Ok(())
         }
         Decision::Compare {
@@ -656,7 +563,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             operand,
             body,
         } => {
-            let Some(closed) = closed_for(cx, operand, reading, depth) else {
+            let Some(closed) = closed_for(cx, operand, reading) else {
                 return Err(Decision::Compare {
                     node,
                     span,
@@ -669,27 +576,27 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             Ok(())
         }
         Decision::Clone { node, span, operand, body } => {
-            let Some(closed) = closed_for(cx, operand, reading, depth) else {
+            let Some(closed) = closed_for(cx, operand, reading) else {
                 return Err(Decision::Clone { node, span, operand, body });
             };
             super::clone::fire_clone(cx, node, span, closed, &body);
             Ok(())
         }
         Decision::Adjust(adjust) => {
-            let Some(closed) = closed_for(cx, adjust.receiver, reading, depth) else {
+            let Some(closed) = closed_for(cx, adjust.receiver, reading) else {
                 return Err(Decision::Adjust(adjust));
             };
-            super::method::fire_adjust(cx, *adjust, closed, reading, depth).map_err(|adjust| Decision::Adjust(Box::new(adjust)))
+            super::method::fire_adjust(cx, *adjust, closed, reading).map_err(|adjust| Decision::Adjust(Box::new(adjust)))
         }
         Decision::BlockEnd { span, last, block } => {
-            let Some(closed) = closed_for(cx, last, reading, depth) else {
+            let Some(closed) = closed_for(cx, last, reading) else {
                 return Err(Decision::BlockEnd { span, last, block });
             };
             super::stmt::fire_block_end(cx, span, closed, block);
             Ok(())
         }
         Decision::Operand { span, operand, domain } => {
-            let Some(closed) = closed_for(cx, operand, reading, depth) else {
+            let Some(closed) = closed_for(cx, operand, reading) else {
                 return Err(Decision::Operand { span, operand, domain });
             };
             super::op::fire_operand(cx, span, closed, domain);
@@ -711,19 +618,9 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 result,
                 effect,
             };
-            fire_reach(cx, decision, reading, depth).map_err(Reach::into_decision)
+            fire_reach(cx, decision, reading).map_err(Reach::into_decision)
         }
     }
-}
-
-/// The mutability of a path past every container in `through`, where each
-/// is closed as `reading` reads it: the least any container caps it at
-/// (D108 rule 1).
-pub(super) fn path_through(cx: &Ctxt<'_>, through: &[Through], reading: Reading, depth: Depth) -> Option<Mutability> {
-    through.iter().try_fold(Mutability::Mut, |path, container| {
-        let closed = closed_for(cx, container.term(), reading, depth)?;
-        Some(container.caps(path, closed.head))
-    })
 }
 
 fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: Term, body: EffectTerm<InferPhase>) {
@@ -899,13 +796,13 @@ struct Position {
     chain: Option<Vec<Head>>,
 }
 
-fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading, depth: Depth) -> Result<(), Reach> {
+fn fire_reach(cx: &mut Ctxt<'_>, decision: Reach, reading: Reading) -> Result<(), Reach> {
     let Offers { concrete, generic } = offers(cx, &decision.callee);
     let arity = decision.args.len();
     let fits_arity = |offer: &&Offer| params_of(cx.decls.types(), offer.ty).len() == arity;
     let offers: Vec<Offer> = concrete.iter().filter(fits_arity).copied().collect();
     let generic: Vec<Offer> = generic.iter().filter(fits_arity).copied().collect();
-    let positions = positions(cx, &decision.args, reading, depth);
+    let positions = positions(cx, &decision.args, reading);
     let complete = positions.iter().all(|position| position.chain.is_some());
     let chains: Vec<Vec<Head>> = positions.iter().map_while(|position| position.chain.clone()).collect();
 
@@ -1076,13 +973,12 @@ pub(super) fn params_of(types: &Types<Poly>, ty: TyId<Poly>) -> &[TyId<Poly>] {
     }
 }
 
-/// The arguments' positions front to back, each read at `depth`, stopping
-/// after the first that is not closed: a later one is not read before it
-/// (types §6).
-fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading, depth: Depth) -> Vec<Position> {
+/// The arguments' positions front to back, stopping after the first that
+/// is not closed: a later one is not read before it (types §6).
+fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading) -> Vec<Position> {
     let mut out = Vec::new();
     for (at, (_, arg)) in args.iter().enumerate() {
-        if !position(cx, *arg, vec![at], reading, depth, &mut out) {
+        if !position(cx, *arg, vec![at], reading, &mut out) {
             break;
         }
     }
@@ -1091,8 +987,8 @@ fn positions(cx: &Ctxt<'_>, args: &[(AstId, Term)], reading: Reading, depth: Dep
 
 /// Pushes `term`'s position and, for a tuple, its parts'; whether every
 /// one was closed.
-fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, depth: Depth, out: &mut Vec<Position>) -> bool {
-    let Some(closed) = closed_for(cx, term, reading, depth) else {
+fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: &mut Vec<Position>) -> bool {
+    let Some(closed) = closed_for(cx, term, reading) else {
         out.push(Position { path, chain: None });
         return false;
     };
@@ -1106,7 +1002,7 @@ fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, depth
     for (at, item) in items.clone().iter().enumerate() {
         let mut part = path.clone();
         part.push(at);
-        if !position(cx, *item, part, reading, depth, out) {
+        if !position(cx, *item, part, reading, out) {
             return false;
         }
     }
@@ -1430,15 +1326,13 @@ fn unbound_vars(cx: &Ctxt<'_>, terms: impl IntoIterator<Item = Term>) -> FxHashS
 /// - A value entering a closed slot takes the slot's type.
 /// - A value lent where the reference is already closed is that
 ///   reference's target.
-/// - An open part whose read is already closed is read as a part that is
-///   no reference: an open part is never one.
 /// - A field read of an open object makes it an object with that field,
 ///   and a pattern destructuring an open scrutinee makes it the pattern's
 ///   shape. A reference is never made of an open term: only a value's own
 ///   type makes one (types §4).
 ///
-/// NOTE: the last three extend Q7's rule, which names only the slot, to
-/// the part read, the field and the pattern that decide their operand. Without
+/// NOTE: the last two extend Q7's rule, which names only the slot, to
+/// the field and the pattern that decide their operand's shape. Without
 /// them the ownership §4 example (`let a; a.x = 0;`) would leave `a` open
 /// and default it to `!`.
 fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
@@ -1451,9 +1345,6 @@ fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
                 open(cx, *value) && !open(cx, *slot)
             }
             Decision::Field { object, .. } => open(cx, *object),
-            Decision::PartRead { part, through, result, .. } => {
-                open(cx, *part) && !open(cx, *result) && path_through(cx, through, Reading::CycleBroken, Depth::Head).is_some()
-            }
             Decision::Destructure { scrutinee, .. } => open(cx, *scrutinee),
             _ => false,
         };
@@ -1475,19 +1366,8 @@ fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
                 field,
                 part,
             } => super::place::fire_field(cx, span, object, None, field, part),
-            Decision::PartRead {
-                span,
-                part,
-                through,
-                mode,
-                result,
-            } => {
-                let path = path_through(cx, &through, Reading::CycleBroken, Depth::Head)
-                    .expect("uses_decide takes a part read only where its path is closed");
-                super::place::fire_part_read(cx, span, part, path, mode, result)
-            }
-            Decision::Destructure { shape, scrutinee, through } => {
-                super::pat::fire_destructure(cx, *shape, scrutinee, None, through)
+            Decision::Destructure { shape, scrutinee, lent } => {
+                super::pat::fire_destructure(cx, *shape, scrutinee, None, lent)
             }
             other => panic!("uses_decide: only the forms matched above are taken, not {other:?}"),
         }
@@ -1571,7 +1451,6 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::Cast { span, .. }
         | Decision::Lend { span, .. }
         | Decision::Field { span, .. }
-        | Decision::PartRead { span, .. }
         | Decision::Index { span, .. }
         | Decision::Deref { span, .. }
         | Decision::Compare { span, .. }

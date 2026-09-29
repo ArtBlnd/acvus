@@ -20,7 +20,7 @@ use super::context;
 use super::control::diamond;
 use super::ctxt::{Home, Lcx};
 use super::expr::lower_expr;
-use super::place::{Operand, Place, assign, lend, read, read_part};
+use super::place::{Operand, Place, assign, lend, read};
 use super::stmt::lower_body;
 use crate::ir::cfg::{BlockId, Op, Terminator};
 use crate::ir::{BinOp, IndexBound, IndexMode, Overflow, PathSeg, RefTarget, SwitchKey, ValueId, known_len};
@@ -80,23 +80,25 @@ impl Matched {
 }
 
 /// `matched` past a reference, where it is one: a pattern that is not a
-/// name destructures what the reference names (patterns §1). A reference
-/// under another is read as a part read (D108 rule 1), so a shared
+/// name destructures what the reference names (patterns §1). A shared
 /// reference on the way keeps every name below it shared.
 fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Matched {
     let TyKind::Ref(held, target) = cx.kind(matched.ty()) else {
         return matched.clone();
     };
     let (held, target) = (*held, target.ty());
-    let reference = match matched {
-        Matched::Value { value, .. } => *value,
-        Matched::Held { place, slot_ty } => held_reference(cx, place, *slot_ty, held, span),
-        Matched::Place { place, .. } => read_part(cx, place.clone(), span),
+    let (reference, lent) = match matched {
+        Matched::Value { value, .. } => (*value, held),
+        Matched::Held { place, slot_ty } => (held_reference(cx, place, *slot_ty, held, span), held),
+        Matched::Place { place, lent } => {
+            let reference = read(cx, Operand::Place(place.clone()), span);
+            let lent = match (lent, held) {
+                (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+                _ => Mutability::Shared,
+            };
+            (reference, lent)
+        }
     };
-    let TyKind::Ref(lent, _) = cx.kind(cx.value_ty(reference)) else {
-        panic!("a reference read is a reference")
-    };
-    let lent = *lent;
     Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty: target }, lent }
 }
 

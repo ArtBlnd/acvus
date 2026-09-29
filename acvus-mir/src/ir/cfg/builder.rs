@@ -18,7 +18,7 @@ use super::body::{BlockData, BlockId, Body, BodyId, Def, Inst, InstList, Module,
 use super::order::At;
 use super::op::Op;
 use crate::ir::{OrderEdge, ValueId, fn_effect};
-use crate::ty::{Concrete, Mutability, Reissue, Ty, TyKind, Types};
+use crate::ty::{Concrete, Reissue, Ty, TyKind, Types};
 
 /// Open state left at `seal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,15 +151,6 @@ impl<'m> Builder<'m> {
             );
         }
         self.module.types.intern(kind)
-    }
-
-    /// The type a part read of `part` through a path of mutability `path`
-    /// yields (`ty::part_read`).
-    pub fn part_read_ty(&mut self, part: Ty, path: Mutability) -> Ty {
-        match crate::ty::part_read(&self.module.types, part, path) {
-            Some(reborrow) => self.intern(reborrow),
-            None => part,
-        }
     }
 
     /// The module's one type table, for reading. Cost: O(1).

@@ -232,27 +232,13 @@ fn string_literal(cx: &mut Ctxt<'_>) -> Term {
     cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)))
 }
 
-/// `value` read and entering `slot`, a part of the constructor literal it
-/// is written in (types §3): constructors stay invariant, so subtyping
-/// applies where the value enters the part, never to the constructor.
-pub(super) fn enter_part<S: Slot>(cx: &mut Ctxt<'_>, value: &Expr<S>, slot: Term) {
-    let term = check_expr(cx, value, Demand::Read);
-    cx.enter(value.id(), term, slot, value.span());
-}
-
-/// A fresh part of a constructor literal, which `value` enters.
-pub(super) fn part_of<S: Slot>(cx: &mut Ctxt<'_>, value: &Expr<S>) -> Term {
-    let slot = cx.fresh();
-    enter_part(cx, value, slot);
-    slot
-}
-
 /// `[a, b]`: every element enters the one element slot (types §3). A `..`
 /// is a pattern's, never a value's.
 fn check_list<S: Slot>(cx: &mut Ctxt<'_>, head: &[Expr<S>], rest: bool, tail: &[Expr<S>], span: Span) -> Term {
     let element = cx.fresh();
     for item in head.iter().chain(tail) {
-        enter_part(cx, item, element);
+        let term = check_expr(cx, item, Demand::Read);
+        cx.enter(item.id(), term, element, item.span());
     }
     if rest {
         refusal::push(cx, RefusalKind::PatternInValue, span);
@@ -261,19 +247,18 @@ fn check_list<S: Slot>(cx: &mut Ctxt<'_>, head: &[Expr<S>], rest: bool, tail: &[
     cx.held(TyKind::Array(element, len))
 }
 
-/// `{ a: e, .. }`: a transparent object the program writes (types §1),
-/// each field a part its value enters.
+/// `{ a: e, .. }`: a transparent object the program writes (types §1).
 fn check_object<S: Slot>(cx: &mut Ctxt<'_>, fields: &[ObjectExprField<S>]) -> Term {
     let mut typed: Vec<(Astr, Term)> = fields
         .iter()
-        .map(|field| (field.key, part_of(cx, &field.value)))
+        .map(|field| (field.key, check_expr(cx, &field.value, Demand::Read)))
         .collect();
     typed.sort_by_key(|(name, _)| *name);
     cx.held(TyKind::Object(ObjectTy::Structural(typed.into(), Label::Transparent)))
 }
 
-/// `(a, b)`: a tuple each element enters a part of, and `()` is the
-/// unit. `_` is a pattern's.
+/// `(a, b)`: a tuple of its parts' own types, and `()` is the unit. `_`
+/// is a pattern's.
 fn check_tuple<S: Slot>(cx: &mut Ctxt<'_>, elements: &[TupleElem<S>]) -> Term {
     if elements.is_empty() {
         return cx.unit();
@@ -281,7 +266,7 @@ fn check_tuple<S: Slot>(cx: &mut Ctxt<'_>, elements: &[TupleElem<S>]) -> Term {
     let mut parts = Vec::with_capacity(elements.len());
     for element in elements {
         match element {
-            TupleElem::Expr(expr) => parts.push(part_of(cx, expr)),
+            TupleElem::Expr(expr) => parts.push(check_expr(cx, expr, Demand::Read)),
             TupleElem::Wildcard(at) => {
                 refusal::push(cx, RefusalKind::PatternInValue, *at);
                 parts.push(cx.fresh());

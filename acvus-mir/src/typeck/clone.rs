@@ -1,8 +1,8 @@
 //! `.clone()` (ownership §2, operators §7): the lang item `core::clone`,
-//! which takes its receiver by `&` (operators §2). A structural type other
-//! than an array is cloned part by part, a type that copies is copied
-//! (ownership §1), and any other type is cloned through its `core::clone`
-//! impl. Each node of the tree is decided once its type's head is known.
+//! which takes its receiver by `&` (operators §2). A structural type is
+//! cloned part by part, a type that copies is copied (ownership §1), and
+//! any other type is cloned through its `core::clone` impl. Each node of
+//! the tree is decided once its type's head is known.
 
 use acvus_ast::{AstId, Span};
 
@@ -12,8 +12,8 @@ use super::decision::{Callee, CoreSig, Decision};
 use super::output::{Adjustment, CloneNode, PartNode};
 use crate::decl::Head;
 use crate::infer::{Closed, Term};
-use crate::ty::structural::{Structure, structure};
-use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, copies_alone};
+use crate::ty::structural::structure;
+use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, TyKind, copies_alone};
 
 /// The receiver's adjustment by Rust's method probe (D85) against
 /// `core::clone`'s receiver `&T`: a shared reference is taken as written,
@@ -34,28 +34,24 @@ pub(super) fn cloned_type(cx: &Ctxt<'_>, head: Head, receiver: Term) -> Term {
     }
 }
 
-/// The clone of a value of type `operand`, decided at `node` by the
-/// fixpoint, as an adjustment is.
+/// The clone of a value of type `operand`, decided at `node`.
 pub(super) fn decide(cx: &mut Ctxt<'_>, node: AstId, span: Span, operand: Term, body: EffectTerm<InferPhase>) {
-    cx.decisions.push(Decision::Clone { node, span, operand, body });
+    super::decision::decide(cx, Decision::Clone { node, span, operand, body });
 }
 
-/// A clone fired at `node` on its type, closed all the way down: a type
-/// that copies is copied (ownership §1); a tuple, an object, an `Option` or
-/// a `Result` clones its parts, each a node of its own decided by the same
-/// rule; any other type, an extern type or an array, reaches `core::clone`
-/// at `node` on a shared reference to it, and the impl's result is of the
-/// type cloned (operators §7). An array is never taken apart for a clone
-/// (P13). No declaration carries an array type (extern-fn §1), so the
-/// reach refuses an array that does not copy, wherever it sits.
+/// A clone fired at `node` on its type: a structural type clones its parts,
+/// each a node of its own, and `!` has none; a primitive or a shared
+/// reference copies (ownership §1); any other type reaches `core::clone` at
+/// `node` on a shared reference to it, and the impl's result is of the type
+/// cloned.
 pub(super) fn fire_clone(cx: &mut Ctxt<'_>, node: AstId, span: Span, operand: Closed, body: &EffectTerm<InferPhase>) {
-    if copies(cx, operand.term) {
-        cx.out.clones.insert(node, CloneNode { node: PartNode::Copied, ty: operand.term });
-        return;
-    }
-    let parts: Option<Vec<Term>> = match structure(cx.infer.types(), operand.term) {
-        Some(Structure::Array { .. }) | None => None,
+    let types = cx.infer.types();
+    let parts: Option<Vec<Term>> = match structure(types, operand.term) {
         Some(structure) => Some(structure.parts().to_vec()),
+        None => match types.kind(operand.term) {
+            TyKind::Never => Some(Vec::new()),
+            _ => None,
+        },
     };
     if let Some(parts) = parts {
         let nodes: Vec<AstId> = parts.iter().map(|_| AstId::alloc()).collect();
@@ -66,19 +62,12 @@ pub(super) fn fire_clone(cx: &mut Ctxt<'_>, node: AstId, span: Span, operand: Cl
         }
         return;
     }
+    if copies_alone(types.kind(operand.term)) {
+        cx.out.clones.insert(node, CloneNode { node: PartNode::Copied, ty: operand.term });
+        return;
+    }
     cx.out.clones.insert(node, CloneNode { node: PartNode::Reached, ty: operand.term });
     let lent = cx.lend(operand.term, Mutability::Shared, span);
     let cloned = reach_in(cx, body, node, Callee::Core(CoreSig::Clone), vec![(node, lent)], span);
     cx.eq(cloned, operand.term, span);
-}
-
-/// Whether a value of `term`'s type, closed all the way down, copies
-/// (ownership §1).
-fn copies(cx: &Ctxt<'_>, term: Term) -> bool {
-    let types = cx.infer.types();
-    let term = cx.infer.shallow(term);
-    match structure(types, term) {
-        Some(structure) => structure.parts().iter().all(|part| copies(cx, *part)),
-        None => copies_alone(types.kind(term)),
-    }
 }

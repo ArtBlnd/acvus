@@ -203,9 +203,6 @@ pub struct AsCast {
 #[derive(Default)]
 pub(super) struct Output {
     pub types: FxHashMap<AstId, Term>,
-    /// Each field access's and index's part, at its site; `types` has what
-    /// a read of it gives (D108 rule 1).
-    pub parts: FxHashMap<AstId, Term>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,
     /// Each reached call's function type as its declaration was
@@ -238,9 +235,6 @@ pub(super) struct Output {
 /// What typeck hands on: every decision at concrete types.
 pub struct Typeck {
     pub types: FxHashMap<AstId, Ty>,
-    /// Each field access's and index's part, at its site; `types` has what
-    /// a read of it gives (D108 rule 1).
-    pub parts: FxHashMap<AstId, Ty>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,
     /// Each reached call's function type at its site, the site `reached`

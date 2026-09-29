@@ -93,19 +93,6 @@ impl<'a, 'm> Lcx<'a, 'm> {
             .unwrap_or_else(|| panic!("typeck types every site of an admitted program, and not {site:?}"))
     }
 
-    /// The part typeck recorded at the field access or index `site`; `ty`
-    /// has what a read of it gives (D108 rule 1).
-    ///
-    /// # Panics
-    /// `site` is no field access or index of an admitted program.
-    pub fn part_ty(&self, site: AstId) -> Ty {
-        *self
-            .typeck
-            .parts
-            .get(&site)
-            .unwrap_or_else(|| panic!("typeck records the part of every field access and index, and not {site:?}"))
-    }
-
     pub fn kind(&self, ty: Ty) -> &TyKind<crate::ty::Concrete> {
         self.builder.types().kind(ty)
     }

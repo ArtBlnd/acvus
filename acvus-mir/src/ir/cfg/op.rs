@@ -61,10 +61,9 @@ pub enum Op {
         mutability: Mutability,
     },
     /// Move the value out of a storage into the result; a primitive is copied
-    /// and the storage keeps it. A read of a variable. It is a part read
-    /// (`ty::part_read`) through the target: a variable's or parameter's own
-    /// storage is a `&mut` path, and a reference's storage a path of the
-    /// reference's mutability.
+    /// and the storage keeps it. A read of a variable.
+    /// A `Take` of a `&mut` is a reborrow, not a move (ownership §5): a `&mut`
+    /// does not copy, and each use reborrows it, so the storage keeps it.
     Take {
         target: RefTarget,
         path: Vec<PathSeg>,
@@ -113,8 +112,7 @@ pub enum Op {
         src: ValueId,
     },
     /// Element `index` of `slice`. The index is `u64`; the one check is
-    /// `index < len`, made unless `bound` is `Proven`. A `Copy` is a part
-    /// read (`ty::part_read`) through a path of the slice's mutability.
+    /// `index < len`, made unless `bound` is `Proven`.
     Index {
         slice: ValueId,
         index: ValueId,
@@ -146,8 +144,6 @@ pub enum Op {
     },
     // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
-    /// It is a part read (`ty::part_read`) through the value, a `&mut` path, as
-    /// are `TupleIndex`, `ArrayIndex`, `ObjectGet` and `UnwrapVariant`.
     FieldGet {
         object: ValueId,
         field: Astr,

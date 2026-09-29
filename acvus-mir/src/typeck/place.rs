@@ -17,7 +17,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::{capturing_binding, note_captures};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, TyKind, TypeArg, part_read};
+use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, TyKind, TypeArg};
 
 /// What an expression is read for, passed down and never held: `a[i]`
 /// reaches `as_slice` or `as_slice_mut` by it (operators §3).
@@ -46,112 +46,11 @@ impl Demand {
     }
 }
 
-/// A container a part is reached through, which caps the mutability of
-/// the path a read of the part takes (D108 rule 1).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Through {
-    /// A field's object or a dereferenced reference: a reference caps the
-    /// path at its own mutability, as Rust auto-derefs.
-    Object(Term),
-    /// An index's container. A reference to an array or a slice caps the
-    /// path at its own mutability, and an array caps nothing, since their
-    /// view is the language's own (extern-fn §1). Any other container is
-    /// reached through `as_slice`, which a read reaches shared
-    /// (operators §3), so it caps the path at `&`.
-    Index(Term),
-}
-
-impl Through {
-    pub fn term(self) -> Term {
-        match self {
-            Through::Object(term) | Through::Index(term) => term,
-        }
-    }
-
-    /// `path` past this container, of head `head`.
-    pub fn caps(self, path: Mutability, head: Head) -> Mutability {
-        match (self, head) {
-            (Through::Object(_), Head::Ref(own, _)) => path.least(own),
-            (Through::Object(_), Head::Base(_)) => path,
-            (Through::Index(_), Head::Ref(own, Base::Array | Base::Slice)) => path.least(own),
-            (Through::Index(_), Head::Base(Base::Array | Base::Never)) => path,
-            (Through::Index(_), Head::Ref(..) | Head::Base(_)) => Mutability::Shared,
-        }
-    }
-}
-
-/// Every container `place`'s part is reached through: `place` itself,
-/// and each container on the way to it that a field access, an index or a
-/// deref names.
-fn containers<S: Slot>(cx: &Ctxt<'_>, place: &Expr<S>, last: Through) -> Box<[Through]> {
-    let mut through = vec![last];
-    let mut at = place;
-    loop {
-        let (inner, container) = match at {
-            Expr::Paren { inner, .. } => (inner, None),
-            Expr::FieldAccess { object, .. } => (object, Some(Through::Object(cx.out.types[&object.id()]))),
-            Expr::Index { object, .. } => (object, Some(Through::Index(cx.out.types[&object.id()]))),
-            Expr::UnaryOp {
-                op: acvus_ast::UnaryOp::Deref,
-                operand,
-                ..
-            } => (operand, Some(Through::Object(cx.out.types[&operand.id()]))),
-            _ => return through.into(),
-        };
-        through.extend(container);
-        at = inner;
-    }
-}
-
-/// A read of `part`, at `site`, reached through `through`: a term of its
-/// own, which the part read sets (D108 rule 1). Any other demand is of the
-/// part itself.
-fn read_part(cx: &mut Ctxt<'_>, site: AstId, part: Term, demand: Demand, through: Box<[Through]>, span: Span) -> Term {
-    cx.out.parts.insert(site, part);
-    if demand != Demand::Read {
-        return part;
-    }
-    let result = cx.fresh();
-    super::decision::decide(
-        cx,
-        Decision::PartRead {
-            span,
-            part,
-            through,
-            mode: BindingMode::Move,
-            result,
-        },
-    );
-    result
-}
-
-/// How a read binds a part that is no reference (patterns §1): as itself,
-/// or, past a reference in Rust's default binding modes, as a reference
-/// to it at the path's mutability.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum BindingMode {
-    Move,
-    Ref,
-}
-
-/// A part read fired at the path's mutability `path`: a reference part as
-/// `ty::part_read` reads it, a reborrow, and any other as `mode` binds it.
-pub(super) fn fire_part_read(cx: &mut Ctxt<'_>, span: Span, part: Term, path: Mutability, mode: BindingMode, result: Term) {
-    let read = match (part_read(cx.infer.types(), cx.infer.shallow(part), path), mode) {
-        (Some(reborrow), _) => cx.node(reborrow),
-        (None, BindingMode::Move) => part,
-        (None, BindingMode::Ref) => cx.node(TyKind::Ref(path, TypeArg::Uniform(part))),
-    };
-    cx.eq(result, read, span);
-}
-
 /// `a.f`: a transparent object grows to have `f`; an opaque one must
-/// (types §1-2). A read of it is a part read.
-pub(super) fn check_field<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, object: &Expr<S>, field: Astr, demand: Demand, span: Span) -> Term {
-    let object_term = check_expr(cx, object, demand.of_container());
-    let part = field_of(cx, object_term, field, span);
-    let through = containers(cx, object, Through::Object(object_term));
-    read_part(cx, site, part, demand, through, span)
+/// (types §1-2).
+pub(super) fn check_field<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, object: &Expr<S>, field: Astr, demand: Demand, span: Span) -> Term {
+    let object = check_expr(cx, object, demand.of_container());
+    field_of(cx, object, field, span)
 }
 
 /// Field `field` of a value of term `object`: a decision on its head.
@@ -213,11 +112,10 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, object: Term, head: Opti
 /// `a[i]`: its container's `as_slice` or `as_slice_mut` by `demand`,
 /// reached at `callee_site` (operators §3). An array or a slice is the
 /// language's own, since no declaration carries an array (extern-fn §1).
-/// `i` enters a `u64`, as Rust's `usize` (operators §3). A read of it is
-/// a part read.
+/// `i` enters a `u64`, as Rust's `usize` (operators §3).
 pub(super) fn check_index<S: Slot>(
     cx: &mut Ctxt<'_>,
-    site: AstId,
+    _site: AstId,
     callee_site: AstId,
     object: &Expr<S>,
     index: &Expr<S>,
@@ -228,9 +126,7 @@ pub(super) fn check_index<S: Slot>(
     let at = check_expr(cx, index, Demand::Read);
     let usize_ty = cx.node(TyKind::Int(IntTy::U64));
     cx.enter(index.id(), at, usize_ty, index.span());
-    let part = element(cx, callee_site, container, demand.mutability(), span);
-    let through = containers(cx, object, Through::Index(container));
-    read_part(cx, site, part, demand, through, span)
+    element(cx, callee_site, container, demand.mutability(), span)
 }
 
 fn element(cx: &mut Ctxt<'_>, callee_site: AstId, container: Term, mutability: Mutability, span: Span) -> Term {

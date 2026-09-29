@@ -25,7 +25,7 @@ pub use arg::{EffectArg, IdentityId, IdentityTerm, LenTerm, TypeArg};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
 pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Source};
 pub use facts::{LifetimesOf, PositionKind, copies, copies_alone, for_each_position, position_kinds, positions};
-pub use kind::{Calls, CallsTerm, Holds, HoldsTerm, Mutability, ObjectTy, TyKind, part_read};
+pub use kind::{Calls, CallsTerm, Holds, HoldsTerm, Mutability, ObjectTy, TyKind};
 pub use num::{CastTy, IntTy, WordTy};
 
 /// Which variables a type of a phase may hold.

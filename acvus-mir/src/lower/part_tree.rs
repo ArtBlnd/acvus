@@ -1,15 +1,13 @@
 //! Equality, ordering and clone by the part tree typeck recorded
 //! (operators §4, ownership §1-2, D87). A tuple, an object, an `Option` and
 //! a `Result` are expanded part by part in `ty::structural`'s order. An
-//! array compared is one `For` over its elements, never unrolled, that
-//! leaves at the first element whose answer settles the whole; an array
-//! is never taken apart for a clone. A leaf is a call of the impl reached,
-//! or, in a clone, a copy.
+//! array is one `For` over its elements, never unrolled: a comparison
+//! leaves it at the first element whose answer settles the whole. A leaf
+//! is a call of the impl reached, or, in a clone, a copy.
 //!
 //! A node's operand is a shared reference to its value, or, where the node
-//! is itself a reference, a shared reborrow of it, read as any reference
-//! part is (`ty::part_read`), since a reference's target is never a
-//! reference (types §4).
+//! is itself a reference, that reference, since a reference's target is
+//! never a reference (types §4).
 
 use acvus_ast::{AstId, BinOp, Expr, Literal, Slot, Span};
 use acvus_utils::Astr;
@@ -96,16 +94,12 @@ fn only(trees: &[PartTree]) -> &PartTree {
     tree
 }
 
-/// The operand of `part` of the node whose operand is `base`, a shared
-/// reference.
+/// The operand of `part` of the node whose operand is `base`.
 fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span) -> ValueId {
     let target = RefTarget::Through(base);
     let path = vec![part.seg];
     match cx.kind(part.ty) {
-        TyKind::Ref(..) => {
-            let read = cx.builder.part_read_ty(part.ty, Mutability::Shared);
-            cx.builder.push(Op::Take { target, path, taken_out: false }, read, span)
-        }
+        TyKind::Ref(..) => cx.builder.push(Op::Take { target, path, taken_out: false }, part.ty, span),
         _ => {
             let ty = cx.ref_ty(Mutability::Shared, part.ty);
             cx.builder.push(Op::Ref { target, path, mutability: Mutability::Shared }, ty, span)
@@ -113,11 +107,10 @@ fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span)
     }
 }
 
-/// The operand of element `at` of the shared slice `elements` of
-/// `element`s.
+/// The operand of element `at` of the slice `elements` of `element`s.
 fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element: Ty, span: Span) -> ValueId {
     let (mode, ty) = match cx.kind(element) {
-        TyKind::Ref(..) => (IndexMode::Copy, cx.builder.part_read_ty(element, Mutability::Shared)),
+        TyKind::Ref(..) => (IndexMode::Copy, element),
         _ => (IndexMode::Ref, cx.ref_ty(Mutability::Shared, element)),
     };
     cx.builder.push(Op::Index { slice: elements, index: at, mode, bound: IndexBound::Checked }, ty, span)
@@ -418,10 +411,23 @@ fn cloned(cx: &mut Lcx<'_, '_>, tree: &PartTree, ty: Ty, src: ValueId, span: Spa
                 |cx| variant(cx, tags.err, Some(err), ty, src, span),
             )
         }
-        Shape::Never => panic!("typeck copies `!` (ownership §1)"),
-        Shape::Array(_) => panic!("typeck copies an array that copies and reaches `core::clone` for any other"),
+        Shape::Array(_) => array_cloned(),
+        Shape::Never => cx.unreached_value(ty, span),
         Shape::Ref(_) => panic!("typeck copies a shared reference and reaches `core::clone` for any other"),
     }
+}
+
+/// PARKED(D87): an array whose element does not copy is cloned by one `For`
+/// that builds the new array element by element, but the IR has no way to
+/// carry an array under construction through a loop: `ArrayPush` changes
+/// the array's type at each element, and `IndexSet` drops the element it
+/// overwrites, so neither can fill a new array in place. Until the IR gains
+/// that form, lowering stops here with the question.
+fn array_cloned() -> ValueId {
+    panic!(
+        "PARKED(D87): an array whose element does not copy is cloned by one For building the new array, \
+         and the IR has no operation that fills an array under construction inside a loop"
+    )
 }
 
 /// A value of type `ty` that copies, read out of the node's operand `src`.

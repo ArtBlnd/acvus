@@ -4,7 +4,7 @@ use super::arg::{EffectArg, IdentityTerm, LenTerm, TypeArg};
 use super::effect::EffectTerm;
 use super::flow::FlowTerm;
 use super::num::IntTy;
-use super::{CallsVarId, HoldsVarId, Phase, TyId, Types};
+use super::{CallsVarId, HoldsVarId, Phase, TyId};
 
 /// One shape of a type. Its parts are ids of the same table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -135,32 +135,6 @@ impl Mutability {
     pub fn reaches(self, wanted: Mutability) -> bool {
         self == wanted || wanted == Mutability::Shared
     }
-
-    /// The lesser of the two: a `&` either way makes a path shared.
-    pub fn least(self, other: Mutability) -> Mutability {
-        match (self, other) {
-            (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
-            _ => Mutability::Shared,
-        }
-    }
-}
-
-/// Reading a part of type `part` through a path of mutability `path`: a
-/// slice element, a tuple field, an object field or a variant payload.
-/// A part that is a reference is read as a reborrow of it, since a `&mut`
-/// does not copy and a reference's target is never a reference
-/// (ownership §5, types §4). Through a shared path the reborrow is shared;
-/// through a `&mut` path it keeps the part's own mutability, and the
-/// storage keeps the part. `None`: `part` is no reference, and is read as
-/// itself.
-pub fn part_read<V>(types: &Types<V>, part: TyId<V>, path: Mutability) -> Option<TyKind<V>>
-where
-    V: Phase,
-{
-    let TyKind::Ref(own, target) = types.kind(part) else {
-        return None;
-    };
-    Some(TyKind::Ref(own.least(path), target.clone()))
 }
 
 impl<V: Phase> TyKind<V> {
