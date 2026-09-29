@@ -1,0 +1,7 @@
+---
+source: acvus-mir-test/tests/harness.rs
+assertion_line: 35
+expression: case.refused()
+---
+m::a: Cycle [m::a, m::b]
+m::b: Cycle [m::a, m::b]

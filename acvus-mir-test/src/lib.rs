@@ -231,19 +231,17 @@ impl Case {
 }
 
 /// A refusal in the graph's terms: a unit by the name the program writes;
-/// a checker's refusal as its kind and span.
+/// a checker's refusal by its printer, at its span.
 fn shown(names: &Interner, refusal: &Refusal) -> String {
     match refusal {
         Refusal::Cycle { through } => format!("Cycle [{}]", through.iter().map(|unit| written(names, *unit)).collect::<Vec<_>>().join(", ")),
         Refusal::EntryDoesNotFit { entry } => format!("EntryDoesNotFit {}", written(names, *entry)),
-        Refusal::Typeck(refusal) => format!("{:?} @{}..{}", refusal.kind, refusal.span.start, refusal.span.end),
-        Refusal::Check(refusal) => format!("{:?} @{}..{}", refusal.kind, refusal.span.start, refusal.span.end),
+        Refusal::Typeck(refusal) => format!("{} @{}..{}", refusal.kind.written(names), refusal.span.start, refusal.span.end),
+        Refusal::Check(refusal) => format!("{} @{}..{}", refusal.kind.written(), refusal.span.start, refusal.span.end),
     }
 }
 
 /// A qualified name as the program writes it.
 fn written(names: &Interner, name: QualifiedRef) -> String {
-    let mut segments: Vec<String> = names.path(name.namespace).into_iter().map(|segment| names.resolve(segment).to_owned()).collect();
-    segments.push(names.resolve(name.name).to_owned());
-    segments.join("::")
+    acvus_mir::ty::print::qualified(names, name)
 }

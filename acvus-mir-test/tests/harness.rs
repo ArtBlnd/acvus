@@ -47,3 +47,13 @@ fn a_case_admitted_twice_prints_the_same() {
     };
     assert_eq!(build(), build());
 }
+
+/// A negative test: the refusal printed in the program's names.
+#[test]
+fn a_typeck_refusal_prints_in_the_programs_names() {
+    let mut case = Case::new();
+    let int = case.ty(TyKind::Int(IntTy::I64));
+    let main = case.script(&["app"], "main", "nowhere($n)");
+    case.entry(main, &[("n", int)], None);
+    insta::assert_snapshot!(case.refused());
+}

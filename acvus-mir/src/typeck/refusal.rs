@@ -134,6 +134,66 @@ pub enum Exceeding {
     Effect { needs: Effect, slot: Effect },
 }
 
+impl RefusalKind {
+    /// The refusal in notation (no prose): its kind, and each name it
+    /// holds as the program writes it. A mismatch's types are terms of the
+    /// check, gone once it is done, so it is written by its shape alone.
+    pub fn written(&self, names: &acvus_utils::Interner) -> String {
+        let name = |astr: &Astr| names.resolve(*astr).to_string();
+        let path = |unit: &QualifiedRef| crate::ty::print::qualified(names, *unit);
+        match self {
+            RefusalKind::InputAssigned { input } => format!("InputAssigned ${}", name(input)),
+            RefusalKind::UnnamedVariant { tag } => format!("UnnamedVariant {}", name(tag)),
+            RefusalKind::UnknownName { name: unknown } => format!("UnknownName {}", name(unknown)),
+            RefusalKind::UnknownContext { context } => format!("UnknownContext @{}", path(context)),
+            RefusalKind::UnitCalledByPosition { unit } => format!("UnitCalledByPosition {}", path(unit)),
+            RefusalKind::UnknownArgument { unit, name: argument } => format!("UnknownArgument {}({}:)", path(unit), name(argument)),
+            RefusalKind::DuplicateArgument { unit, name: argument } => format!("DuplicateArgument {}({}:)", path(unit), name(argument)),
+            RefusalKind::MissingArgument { unit, name: argument } => format!("MissingArgument {}({}:)", path(unit), name(argument)),
+            RefusalKind::VariantArity { tag } => format!("VariantArity {}", name(tag)),
+            RefusalKind::UnknownCastTarget { name: target } => format!("UnknownCastTarget {}", name(target)),
+            RefusalKind::Mismatch(mismatch) => format!("Mismatch {}", mismatch.shape()),
+            RefusalKind::ClosureExceedsSlot(exceeding) => format!("ClosureExceedsSlot {exceeding:?}"),
+            RefusalKind::CastNotAdmitted { from, to } => match from {
+                Some(from) => format!("CastNotAdmitted {from:?} as {to:?}"),
+                None => format!("CastNotAdmitted as {to:?}"),
+            },
+            RefusalKind::NotOneOfFunctionValues { value } => match value {
+                crate::ty::FnValue::Lambda(_) => "NotOneOfFunctionValues lambda".to_string(),
+                crate::ty::FnValue::Declaration(declaration) => format!("NotOneOfFunctionValues {}", path(declaration)),
+            },
+            RefusalKind::NoDeclaration { name: missing } => format!("NoDeclaration {}", name(missing)),
+            RefusalKind::SeveralDeclarations { name: several, left } => {
+                format!("SeveralDeclarations {} [{}]", name(several), left.iter().map(path).collect::<Vec<_>>().join(", "))
+            }
+            RefusalKind::NeverKnown { open } => format!("NeverKnown {}", name(open)),
+            RefusalKind::LendsNoParts { name: lent } => format!("LendsNoParts {}", name(lent)),
+            RefusalKind::MutLendThroughShared { name: lent } => format!("MutLendThroughShared {}", name(lent)),
+            RefusalKind::Unimplemented { feature } => format!("Unimplemented {feature:?}"),
+            RefusalKind::LambdaRecursion
+            | RefusalKind::NamedArgumentsToNonUnit
+            | RefusalKind::HoldsLoans
+            | RefusalKind::StoreThroughShared
+            | RefusalKind::LendMutThroughShared
+            | RefusalKind::FnDeclInScript
+            | RefusalKind::ReturnInTemplate
+            | RefusalKind::PatternInValue
+            | RefusalKind::NoConversion
+            | RefusalKind::NotIterable
+            | RefusalKind::NotTryable
+            | RefusalKind::NotAReference
+            | RefusalKind::NotBoolOrInteger
+            | RefusalKind::NotBool
+            | RefusalKind::NotInteger
+            | RefusalKind::OutsideLoop
+            | RefusalKind::GrowsOpaque
+            | RefusalKind::Undecided
+            | RefusalKind::BoundUnanswered
+            | RefusalKind::Unordered => format!("{self:?}"),
+        }
+    }
+}
+
 /// The one way a refusal is made (S4).
 pub(super) fn push(cx: &mut Ctxt<'_>, kind: RefusalKind, span: Span) {
     cx.out.refusals.push(Refusal { kind, span });

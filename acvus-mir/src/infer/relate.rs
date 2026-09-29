@@ -63,6 +63,26 @@ pub enum Mismatch {
     Values { a: Option<FnValues>, b: Option<FnValues> },
 }
 
+impl Mismatch {
+    /// Which relation failed, without its terms, which are the check's.
+    pub fn shape(&self) -> &'static str {
+        match self {
+            Mismatch::Heads { .. } => "Heads",
+            Mismatch::Occurs { .. } => "Occurs",
+            Mismatch::OpaqueLacksField { .. } => "OpaqueLacksField",
+            Mismatch::OpaqueLacksVariant { .. } => "OpaqueLacksVariant",
+            Mismatch::TwoEnums { .. } => "TwoEnums",
+            Mismatch::Bound { .. } => "Bound",
+            Mismatch::Conversions { .. } => "Conversions",
+            Mismatch::ReferenceToReference { .. } => "ReferenceToReference",
+            Mismatch::Mark { .. } => "Mark",
+            Mismatch::Effects { .. } => "Effects",
+            Mismatch::NotOneOf { .. } => "NotOneOf",
+            Mismatch::Values { .. } => "Values",
+        }
+    }
+}
+
 /// What an `enter` did (types §1, §3, §7).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entered {

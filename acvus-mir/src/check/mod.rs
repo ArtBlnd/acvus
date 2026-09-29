@@ -74,6 +74,24 @@ pub enum RefusalKind {
     NotExhaustive,
 }
 
+impl RefusalKind {
+    /// The refusal in notation (no prose): its kind and the spans it names,
+    /// `@start..end`.
+    pub fn written(&self) -> String {
+        let at = |span: &Span| format!("@{}..{}", span.start, span.end);
+        let all = |spans: &[Span]| format!("[{}]", spans.iter().map(at).collect::<Vec<_>>().join(", "));
+        match self {
+            RefusalKind::NotWritten => "NotWritten".to_string(),
+            RefusalKind::UsedAfterMove { moved } => format!("UsedAfterMove moved {}", at(moved)),
+            RefusalKind::LoanConflict { trace } => {
+                format!("LoanConflict earlier {} later {} uses {}", all(&trace.earlier), all(&trace.later), all(&trace.uses))
+            }
+            RefusalKind::LoanOutlivesBody { loan } => format!("LoanOutlivesBody loan {}", at(loan)),
+            RefusalKind::NotExhaustive => "NotExhaustive".to_string(),
+        }
+    }
+}
+
 /// Every judgment over every body of `module`, in the order the module doc
 /// lists; every refusal each makes.
 pub fn check(module: &Module, am: &mut AnalysisManager<'_>) -> Vec<Refusal> {
