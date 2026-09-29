@@ -14,6 +14,9 @@ use crate::ty::{Mutability, Poly, TyId, TyKind, TypeArg, Types};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Update(Update),
+    /// A call's update of `place` is the inverse of `other`'s update of the
+    /// same place: one after the other leaves the place as it was.
+    InverseOf { place: Place, other: QualifiedRef },
     /// The declaration, of type `fn(&T, &T) -> int`, is a total order on
     /// `T`: the sign of its answer compares its two arguments, and equal
     /// values are one value. It yields the combines that keep the least
@@ -23,16 +26,13 @@ pub enum Action {
 
 /// A call's update of `place` is the action of `combine`, a declared
 /// `fn(s: &mut S, part: S)`: associative, with `identity`, a declared
-/// `fn() -> S`, where one is stated, and commutative where stated. Where
-/// `inverse_of` is stated, that function's update of the same place and
-/// this one, one after the other, leave the place as it was.
+/// `fn() -> S`, where one is stated, and commutative where stated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Update {
     pub place: Place,
     pub combine: QualifiedRef,
     pub identity: Option<QualifiedRef>,
     pub commutative: bool,
-    pub inverse_of: Option<QualifiedRef>,
 }
 
 /// Refuses each action that is not well formed at `stated`'s signature.
@@ -47,6 +47,7 @@ pub(super) fn refuse_ill_formed(
     for action in actions {
         match action {
             Action::Update(update) => refuse_ill_formed_update(stated, update, functions, types, refused),
+            Action::InverseOf { place, other } => refuse_ill_formed_inverse(stated, place, *other, functions, types, refused),
             Action::TotalOrder if !stated.is_total_order_shape(types) => {
                 refused.push(Refused::TotalOrderDoesNotFit { declared });
             }
@@ -88,15 +89,28 @@ fn refuse_ill_formed_update(
             refused.push(Refused::IdentityDoesNotFit { declared, identity });
         }
     }
-    if let Some(inverse) = update.inverse_of {
-        let updates_the_place = functions.get(&inverse).is_some_and(|scheme| {
-            super::stated_facts(scheme).any(|facts| {
-                facts.action.iter().any(|action| matches!(action, Action::Update(other) if other.place == update.place))
-            })
-        });
-        if !updates_the_place {
-            refused.push(Refused::InverseNotAnUpdateAtThePlace { declared, inverse });
-        }
+}
+
+/// An inverse is of an update: `other` states an update of the same place
+/// by a combine.
+fn refuse_ill_formed_inverse(
+    stated: &Stated<'_>,
+    place: &Place,
+    other: QualifiedRef,
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    types: &Types<Poly>,
+    refused: &mut Vec<Refused>,
+) {
+    if !stated.place_well_formed(types, place, true, refused) {
+        return;
+    }
+    let updates_the_place = functions.get(&other).is_some_and(|scheme| {
+        super::stated_facts(scheme).any(|facts| {
+            facts.action.iter().any(|action| matches!(action, Action::Update(update) if update.place == *place))
+        })
+    });
+    if !updates_the_place {
+        refused.push(Refused::InverseNotAnUpdateAtThePlace { declared: stated.declared, inverse: other });
     }
 }
 

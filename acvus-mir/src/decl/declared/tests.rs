@@ -126,7 +126,7 @@ fn whole(param: usize) -> Place {
 }
 
 fn update(place: Place, combine: QualifiedRef) -> Update {
-    Update { place, combine, identity: None, commutative: false, inverse_of: None }
+    Update { place, combine, identity: None, commutative: false }
 }
 
 fn actions(actions: Vec<Action>) -> DeclaredFacts {
@@ -148,7 +148,7 @@ fn own(f: QualifiedRef) -> Declared {
 
 /// One form of each kind, well formed: a store into a map's entry and a
 /// read of a slice's element, an update by an associative combine with its
-/// identity and inverse, a total order, a map of a stream, a relation over
+/// identity, an inverse of it, a total order, a map of a stream, a relation over
 /// integers and lengths, and an `eq` impl declared an equivalence.
 #[test]
 fn well_formed_facts_of_every_kind_verify() {
@@ -184,8 +184,8 @@ fn well_formed_facts_of_every_kind_verify() {
     let zero = f.declare("zero", &[], int, DeclaredFacts::default());
     let increment = Update { identity: Some(zero), commutative: true, ..update(whole(0), add_into) };
     let add = f.declare("add", &[mut_int, int], unit, actions(vec![Action::Update(increment)]));
-    let decrement = Update { inverse_of: Some(add), ..update(whole(0), add_into) };
-    f.declare("sub", &[mut_int, int], unit, actions(vec![Action::Update(decrement)]));
+    let decrement = Action::InverseOf { place: whole(0), other: add };
+    f.declare("sub", &[mut_int, int], unit, actions(vec![decrement]));
     f.declare("compare", &[shared_int, shared_int], int, actions(vec![Action::TotalOrder]));
 
     let through = f.function(&[int], int);
@@ -316,12 +316,41 @@ fn an_inverse_of_a_function_that_updates_no_such_place_is_refused() {
     let unit = f.ty(TyKind::Unit);
     let mut_int = f.reference(Mutability::Mut, int);
     let add_into = f.declare("add_into", &[mut_int, int], unit, DeclaredFacts::default());
-    let inverse = Update { inverse_of: Some(add_into), ..update(whole(0), add_into) };
-    let g = f.declare("g", &[mut_int, int], unit, actions(vec![Action::Update(inverse)]));
+    let inverse = Action::InverseOf { place: whole(0), other: add_into };
+    let g = f.declare("g", &[mut_int, int], unit, actions(vec![inverse]));
     assert_eq!(
         f.refusals(),
         vec![Refused::InverseNotAnUpdateAtThePlace { declared: own(g), inverse: add_into }]
     );
+}
+
+/// extern-fn §3: an update may be declared the inverse of another at the
+/// same place, with no combine of its own. `pop` is declared the inverse
+/// of `push`, whose update of the stack is the action of `append`.
+#[test]
+fn an_inverse_needs_no_combine_of_its_own() {
+    let mut f = Fixture::new();
+    let unit = f.ty(TyKind::Unit);
+    let stack = f.ty(TyKind::String);
+    let mut_stack = f.reference(Mutability::Mut, stack);
+    let append = f.declare("append", &[mut_stack, stack], unit, DeclaredFacts::default());
+    let push = f.declare("push", &[mut_stack, stack], unit, actions(vec![Action::Update(update(whole(0), append))]));
+    f.declare("pop", &[mut_stack], stack, actions(vec![Action::InverseOf { place: whole(0), other: push }]));
+    assert_eq!(f.refusals(), Vec::new());
+}
+
+/// An inverse updates its place, so the place is lent mutably.
+#[test]
+fn an_inverse_through_a_shared_reference_is_refused() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let unit = f.ty(TyKind::Unit);
+    let mut_int = f.reference(Mutability::Mut, int);
+    let shared_int = f.reference(Mutability::Shared, int);
+    let add_into = f.declare("add_into", &[mut_int, int], unit, DeclaredFacts::default());
+    let add = f.declare("add", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), add_into))]));
+    let g = f.declare("g", &[shared_int], unit, actions(vec![Action::InverseOf { place: whole(0), other: add }]));
+    assert_eq!(f.refusals(), vec![Refused::PlaceNotLentMutably { declared: own(g), param: 0 }]);
 }
 
 #[test]
