@@ -36,7 +36,7 @@ use crate::ty::{
 };
 
 /// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
-/// `!`, `^`, `&`, `|`, `<<` and `>>` are the language's own operations, not
+/// `!`, `^`, `&`, `<<` and `>>` are the language's own operations, not
 /// calls (operators §2): `op` types them without a reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum CoreSig {
@@ -60,7 +60,7 @@ pub(super) enum CoreSig {
 pub(super) enum Domain {
     /// `!`.
     Bool,
-    /// `&`, `|`, `<<`, `>>`.
+    /// `&`, `<<`, `>>`.
     Integer,
     /// `^`.
     BoolOrInteger,

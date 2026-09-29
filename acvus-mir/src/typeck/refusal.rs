@@ -59,7 +59,7 @@ pub enum RefusalKind {
     NotBoolOrInteger,
     /// `!` on a value that is no `bool` (operators §2).
     NotBool,
-    /// `&`, `|`, `<<` or `>>` on a value that is no integer (operators §2).
+    /// `&`, `<<` or `>>` on a value that is no integer (operators §2).
     NotInteger,
     /// `as` from a type Rust does not cast to `to` (operators §5); `from`
     /// is `None` where the source is no number, `bool` or `char`.

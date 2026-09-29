@@ -1,5 +1,5 @@
 //! Operators: each a call of its lang item through `call`
-//! (operators §2); `&&`, `||`, `!`, `^`, `&`, `|`, `<<` and `>>` are the
+//! (operators §2); `&&`, `||`, `!`, `^`, `&`, `<<` and `>>` are the
 //! language's own (operators §2).
 
 use acvus_ast::{AstId, BinOp, Expr, Slot, Span, UnaryOp};
@@ -33,7 +33,7 @@ pub(super) fn check_binary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<
         | BinOp::Gt
         | BinOp::Lte
         | BinOp::Gte => Demand::Lend(Mutability::Shared),
-        BinOp::And | BinOp::Or | BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => Demand::Read,
+        BinOp::And | BinOp::Or | BinOp::Xor | BinOp::BitAnd | BinOp::Shl | BinOp::Shr => Demand::Read,
     };
     let lhs = check_expr(cx, left, demand);
     let rhs = check_expr(cx, right, demand);
@@ -59,7 +59,7 @@ pub(super) fn check_binary<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, left: &Expr<
             operand(cx, lhs, Domain::BoolOrInteger, span);
             lhs
         }
-        BinOp::BitAnd | BinOp::BitOr => {
+        BinOp::BitAnd => {
             cx.eq(lhs, rhs, span);
             operand(cx, lhs, Domain::Integer, span);
             lhs

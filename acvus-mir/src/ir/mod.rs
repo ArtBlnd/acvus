@@ -41,6 +41,9 @@ pub enum Overflow {
 
 /// A binary operation of the MIR: the source's operators, and `Min` and
 /// `Max`, which no source expression lowers to and only a pass writes.
+/// `BitOr` is written by no source either, since bitwise or has no
+/// operator (operators §2); it stays because the interpreter consumes it
+/// and the ledger may give it an operator later.
 ///
 /// It is its own enum, and not `acvus_ast::BinOp`, so that the parser
 /// cannot write `Min` or `Max`: the parser's type has no such variant, and
@@ -125,7 +128,6 @@ impl From<acvus_ast::BinOp> for BinOp {
             acvus_ast::BinOp::Or => BinOp::Or,
             acvus_ast::BinOp::Xor => BinOp::Xor,
             acvus_ast::BinOp::BitAnd => BinOp::BitAnd,
-            acvus_ast::BinOp::BitOr => BinOp::BitOr,
             acvus_ast::BinOp::Shl => BinOp::Shl(Overflow::Trap),
             acvus_ast::BinOp::Shr => BinOp::Shr(Overflow::Trap),
             acvus_ast::BinOp::Mod => BinOp::Mod,

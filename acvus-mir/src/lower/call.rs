@@ -173,7 +173,7 @@ pub(super) fn lower_binary<S: Slot>(
 ) -> ValueId {
     match op {
         BinOp::And | BinOp::Or => lower_short_circuit(cx, site, op, left, right, span),
-        BinOp::Xor | BinOp::BitAnd | BinOp::BitOr | BinOp::Shl | BinOp::Shr => {
+        BinOp::Xor | BinOp::BitAnd | BinOp::Shl | BinOp::Shr => {
             let lhs = lower_expr(cx, left);
             let rhs = lower_expr(cx, right);
             let ty = cx.ty(site);

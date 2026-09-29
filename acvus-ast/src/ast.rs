@@ -817,7 +817,6 @@ pub enum BinOp {
     Or,
     Xor,
     BitAnd,
-    BitOr,
     Shl,
     Shr,
     Mod,
