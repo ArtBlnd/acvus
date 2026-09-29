@@ -3244,3 +3244,27 @@ fn a_generalized_lambda_stores_through_a_reference_as_written_directly() {
     let (checked, _) = fx.script("let set = |v| -> { let o = { x: v, }; o.y = 2; o }; let a = set(1); a.y");
     checked.admitted();
 }
+
+/// ownership §5, operators §6: a place reached through a shared reference
+/// is neither stored into nor lent `&mut`, a reference part past it
+/// included.
+#[test]
+fn a_place_past_a_shared_reference_is_not_written_or_lent_mut() {
+    for (source, refused) in [
+        ("let o = { x: 1, }; let r = &o; r.x = 2; 0", RefusalKind::StoreThroughShared),
+        ("let o = { x: 1, }; let r = &o; let m = &mut r.x; *m = 2; 0", RefusalKind::LendMutThroughShared),
+        ("let v = 1; let o = { b: &mut v, }; let r = &o; let m = &mut r.b; *m = 2; 0", RefusalKind::LendMutThroughShared),
+    ] {
+        let fx = Fixture::new();
+        let (checked, _) = fx.script(source);
+        assert!(checked.refusals().contains(&&refused), "{source}: {:?}", checked.refusals());
+    }
+    for source in [
+        "let o = { x: 1, }; let r = &mut o; r.x = 2; let m = &mut r.x; *m = 3; 0",
+        "let o = { x: 1, }; let r = &o; let s = &r.x; *s",
+    ] {
+        let fx = Fixture::new();
+        let (checked, _) = fx.script(source);
+        checked.admitted();
+    }
+}

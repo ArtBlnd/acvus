@@ -26,8 +26,12 @@ pub enum RefusalKind {
     UnknownContext { context: QualifiedRef },
     /// A context's or a run's value whose type holds a loan (ownership §5).
     HoldsLoans,
-    /// `*r = v` through a shared reference (operators §6).
+    /// A store into a place reached through a shared reference, `*r = v` or
+    /// a part's (operators §6, ownership §5).
     StoreThroughShared,
+    /// A `&mut` of a place reached through a shared reference, exclusive
+    /// only where every reference on its path is (ownership §5).
+    LendMutThroughShared,
     /// `fn` in a script, which has none (programs §2).
     FnDeclInScript,
     /// A `return` or a `?` that would leave a template itself: a template's

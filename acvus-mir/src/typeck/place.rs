@@ -241,6 +241,9 @@ pub(super) fn fire_index(
 /// (ownership §5); any other value bound is lent, and read is itself. One
 /// whose use decides it at a stall (`value` `None`) is no reference.
 pub(super) fn fire_lend(cx: &mut Ctxt<'_>, span: Span, value: Option<Closed>, lent: Lent, result: Term, target: Term) {
+    if lent == Lent::Borrow(Mutability::Mut) && cx.out.through.get(&target) == Some(&Mutability::Shared) {
+        refusal::push(cx, RefusalKind::LendMutThroughShared, span);
+    }
     let held = match value.map(|closed| closed.head) {
         Some(Head::Ref(held, _)) => Some(held),
         Some(Head::Base(_)) | None => None,

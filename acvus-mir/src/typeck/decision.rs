@@ -692,6 +692,11 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             let reach = reach_of(cx, slot, reach);
+            // A value entering a place reached through a shared reference is
+            // stored through it (operators §6, ownership §5).
+            if cx.out.through.get(&slot) == Some(&Mutability::Shared) {
+                refusal::push(cx, RefusalKind::StoreThroughShared, span);
+            }
             fire_enter(cx, site, span, (value, closed), (slot, reach), body);
             Ok(())
         }
