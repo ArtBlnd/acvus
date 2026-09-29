@@ -51,6 +51,13 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         .collect();
     let structure_trees = structure_trees(&mut cx, types, &mut memo);
     let instances = instances(&mut cx, types, &mut memo);
+    let generalized = cx
+        .out
+        .schemes
+        .iter()
+        .filter(|scheme| scheme.generalizes)
+        .map(|scheme| (scheme.binder, scheme.lambdas.clone().into()))
+        .collect();
     let result = freeze(&mut cx, types, &mut memo, result);
     let callees = std::mem::take(&mut cx.out.callees)
         .into_iter()
@@ -76,6 +83,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         adjustments: std::mem::take(&mut cx.out.adjustments),
         structure_trees,
         instances,
+        generalized,
         body_effect,
         result,
         refusals: std::mem::take(&mut cx.out.refusals),
@@ -512,8 +520,15 @@ impl Trees<'_> {
 fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<InstanceId, InstanceDecided> {
     let mut out = FxHashMap::default();
     for at in 0..cx.out.instances.len() {
+        if cx.out.instances[at].template {
+            continue;
+        }
         let id = InstanceId(u32::try_from(at).expect("u32 instances"));
-        let (sites, at_instance_vars) = super::generalize::instance_sites(cx, id);
+        let (mut sites, at_instance_vars) = super::generalize::instance_sites(cx, id);
+        // The binding's own type at the instance: the signature its code is
+        // made at (functions §2).
+        let binder = cx.out.schemes[cx.out.instances[at].scheme.0 as usize].binder;
+        sites.push(binder);
         let mut copies = FxHashMap::default();
         let at_instance: Vec<(AstId, Term)> = sites
             .into_iter()
@@ -548,6 +563,7 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
                 .filter_map(|(site, callee)| Some((site, freeze(cx, types, memo, callee)?)))
                 .collect();
             InstanceDecided {
+                binder: Some(binder),
                 use_site: Some(use_site),
                 within,
                 types: site_types,

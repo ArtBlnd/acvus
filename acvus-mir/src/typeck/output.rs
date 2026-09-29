@@ -264,6 +264,8 @@ pub(super) struct Output {
     pub walks: FxHashMap<AstId, super::generalize::Walk>,
     /// Each site recorded while an owner's walk ran, with that owner.
     pub site_owners: FxHashMap<AstId, AstId>,
+    /// Whether a generalized binding's local fixpoint is running.
+    pub settling: bool,
     pub types: FxHashMap<AstId, Term>,
     pub names: FxHashMap<AstId, Name>,
     pub reached: FxHashMap<AstId, Chosen>,

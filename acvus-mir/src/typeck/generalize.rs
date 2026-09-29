@@ -53,6 +53,9 @@ pub(super) struct LetScheme {
     pub lambdas: Vec<AstId>,
     /// `None` until `generalize_all` settles it.
     pub settled: Option<Settled>,
+    /// Whether every value entering it had its body here, so that it is
+    /// generalized; known once settled.
+    pub generalizes: bool,
 }
 
 /// A scheme settled: what it generalizes, and what it requires.
@@ -87,6 +90,10 @@ pub(super) struct Instance {
     /// What its requirements recorded at the lambda bodies' sites while
     /// they fired, swapped in for `Output`'s own tables (`in_instance`).
     pub recorded: Recorded,
+    /// Made while settling another binding, inside its value: that
+    /// binding's scheme carries it, and each of that binding's instances
+    /// makes it anew `within` itself. It is code at no instance of its own.
+    pub template: bool,
 }
 
 /// The `Output` tables a decision records into at the sites it decides:
@@ -179,7 +186,7 @@ fn instance_of(cx: &Ctxt<'_>, term: Term) -> bool {
 /// finds them), and `generalize_all` settles it.
 pub(super) fn register(cx: &mut Ctxt<'_>, binder: AstId, term: Term) -> SchemeId {
     let id = SchemeId(u32::try_from(cx.out.schemes.len()).expect("register: u32::MAX schemes"));
-    cx.out.schemes.push(LetScheme { binder, term, lambdas: Vec::new(), settled: None });
+    cx.out.schemes.push(LetScheme { binder, term, lambdas: Vec::new(), settled: None, generalizes: false });
     id
 }
 
@@ -212,6 +219,7 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     let mut lambdas = Vec::new();
     let local = sources(cx, term, &mut FxHashSet::default(), &mut lambdas);
     cx.out.schemes[id.0 as usize].lambdas = lambdas.clone();
+    cx.out.schemes[id.0 as usize].generalizes = local;
     if !local {
         // An assignment gave the binding a value whose body is elsewhere:
         // it is not generalized, and each use is its one term.
@@ -229,7 +237,9 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     // broken, since a use of the binding may still decide what they read
     // (types §5).
     let start = cx.infer.var_marks();
+    cx.out.settling = true;
     while fire_owned_round(cx, &own_decision, Reading::Closed) {}
+    cx.out.settling = false;
     let end = cx.infer.var_marks();
 
     let mut spans: Vec<(VarMarks, VarMarks)> = roots.iter().filter_map(|root| walks.get(root)).flat_map(|walk| walk.vars.clone()).collect();
@@ -313,7 +323,8 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
     let (at, flows) = cx.infer.instance_at(&generalized);
     copied_flows(cx, &flows);
     let within = cx.out.firing_in;
-    let instance = new_instance(cx, Instance { scheme, use_site, span, within, at: at.clone(), recorded: Recorded::default() });
+    let template = cx.out.settling && within.is_none();
+    let instance = new_instance(cx, Instance { scheme, use_site, span, within, at: at.clone(), recorded: Recorded::default(), template });
     let mut memo = FxHashMap::default();
     let copied = cx.infer.copy_at(term, &at, &mut memo);
     cx.eq(result, copied, span);
@@ -335,7 +346,7 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
                             identities: of.at.identities.iter().map(|(var, copy)| (*var, at.identities.get(copy).copied().unwrap_or(*copy))).collect(),
                             marks: of.at.marks.iter().map(|(var, copy)| (*var, at.marks.get(copy).copied().unwrap_or(*copy))).collect(),
                         };
-                        let child = new_instance(cx, Instance { within: Some(instance), at: child_at, recorded: Recorded::default(), ..of });
+                        let child = new_instance(cx, Instance { within: Some(instance), at: child_at, recorded: Recorded::default(), template, ..of });
                         children.insert(*inner, child);
                         child
                     }

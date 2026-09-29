@@ -1412,7 +1412,9 @@ fn poly_base(kind: &TyKind<Poly>) -> Option<Base> {
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!("a declared reference's target is never a reference (ReferenceToReference)"),
-        TyKind::Order | TyKind::Handle(_) => panic!("no declaration writes the order token or a started call (InternalType)"),
+        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => {
+            panic!("no declaration writes the order token, a started call or a closure's signatures (InternalType)")
+        }
     })
 }
 
