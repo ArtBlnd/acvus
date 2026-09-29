@@ -5,7 +5,7 @@
 
 use super::facts::NamedLaw;
 use super::scheme::Scheme;
-use crate::ty::{Mutability, Poly, Types};
+use crate::ty::{Mutability, Poly, TyId, TyKind, Types};
 
 /// A generic function's impl at a transparent structured type, where one
 /// follows from the impls at its parts.
@@ -51,5 +51,30 @@ pub enum Taking {
 /// is `T` (`Lift::Rebuild`), or its result is the answer the combination
 /// of a law its impls may state combines (`Lift::Combine`).
 pub(super) fn lift_of(types: &Types<Poly>, scheme: &Scheme) -> Option<Lift> {
-    todo!("the signature read against the rule of types §1")
+    const VAR: u32 = 0;
+    if scheme.bounds.len() != 1 || scheme.requires.iter().any(|required| required.law.is_some()) {
+        return None;
+    }
+    let TyKind::Fn { params, ret, .. } = types.kind(scheme.ty) else {
+        return None;
+    };
+    let params: Box<[Taking]> = params.iter().map(|param| taking(types, *param, VAR)).collect::<Option<_>>()?;
+    let shape = LiftShape { var: VAR, params };
+    match types.kind(*ret) {
+        TyKind::Var(var) if *var == VAR => Some(Lift::Rebuild(shape)),
+        TyKind::Bool if *shape.params == [Taking::Ref(Mutability::Shared); 2] => {
+            Some(Lift::Combine { shape, law: NamedLaw::Equivalence })
+        }
+        _ => None,
+    }
+}
+
+/// How `param` takes the type variable `var`, where it takes it.
+fn taking(types: &Types<Poly>, param: TyId<Poly>, var: u32) -> Option<Taking> {
+    let is_var = |ty: TyId<Poly>| matches!(types.kind(ty), TyKind::Var(at) if *at == var);
+    match types.kind(param) {
+        _ if is_var(param) => Some(Taking::Value),
+        TyKind::Ref(mutability, target) if is_var(target.ty()) => Some(Taking::Ref(*mutability)),
+        _ => None,
+    }
 }
