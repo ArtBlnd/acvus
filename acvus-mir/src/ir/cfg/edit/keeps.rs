@@ -862,17 +862,21 @@ fn order_chain_whole(body: &Body, _: &Types<Concrete>) -> Found {
             flows.contains(&Flow::Returned) || (flows.is_empty() && !returning.contains(&defined_in[token]))
         })
         .collect();
-    let mut grew = true;
-    while grew {
-        grew = false;
-        for token in &tokens {
-            let carried_on = flows_of(token).iter().any(|flow| match flow {
-                Flow::Yields(next) | Flow::Merged(next) | Flow::Passed(next) => whole.contains(next),
-                Flow::Returned => true,
-            });
-            if !whole.contains(token) && carried_on {
-                whole.insert(*token);
-                grew = true;
+    // A token is whole where a flow of it reaches a whole token: the least
+    // such set is what the seeds reach backward along the flows, one walk.
+    let mut flows_into: FxHashMap<ValueId, Vec<ValueId>> = FxHashMap::default();
+    for token in &tokens {
+        for flow in flows_of(token) {
+            if let Flow::Yields(next) | Flow::Merged(next) | Flow::Passed(next) = flow {
+                flows_into.entry(*next).or_default().push(*token);
+            }
+        }
+    }
+    let mut pending: Vec<ValueId> = whole.iter().copied().collect();
+    while let Some(token) = pending.pop() {
+        for from in flows_into.get(&token).into_iter().flatten() {
+            if whole.insert(*from) {
+                pending.push(*from);
             }
         }
     }

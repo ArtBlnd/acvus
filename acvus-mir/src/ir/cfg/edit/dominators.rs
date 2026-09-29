@@ -1,7 +1,8 @@
 //! Dominators of a body's blocks (Cooper, Harvey and Kennedy, "A Simple,
 //! Fast Dominance Algorithm", 2001), and the definition points they order.
 //! A block no edge from the entry reaches is dominated by every block: no
-//! run reaches it.
+//! run reaches it. A query is O(1): each block's interval in a depth-first
+//! walk of the tree holds exactly the intervals of the blocks it dominates.
 
 use rustc_hash::FxHashMap;
 
@@ -15,6 +16,9 @@ pub(super) struct Dominators {
     idom: Vec<Option<BlockId>>,
     /// Each reachable block's position in reverse postorder.
     order: Vec<Option<usize>>,
+    /// Each reachable block's preorder and postorder number in a
+    /// depth-first walk of the dominator tree.
+    interval: Vec<Option<(usize, usize)>>,
 }
 
 /// Where a value is defined.
@@ -57,7 +61,8 @@ impl Dominators {
                 }
             }
         }
-        Dominators { idom, order }
+        let interval = tree_intervals(body.entry(), &idom);
+        Dominators { idom, order, interval }
     }
 
     pub(super) fn reachable(&self, block: BlockId) -> bool {
@@ -69,20 +74,10 @@ impl Dominators {
         if !self.reachable(below) {
             return true;
         }
-        if !self.reachable(above) {
+        let (Some(above), Some(below)) = (self.interval[above.index()], self.interval[below.index()]) else {
             return false;
-        }
-        let mut at = below;
-        loop {
-            if at == above {
-                return true;
-            }
-            let parent = self.idom[at.index()].expect("a reachable block has an immediate dominator");
-            if parent == at {
-                return false;
-            }
-            at = parent;
-        }
+        };
+        above.0 <= below.0 && below.1 <= above.1
     }
 
     /// Whether a value defined at `def` is defined wherever `site` reads it.
@@ -156,4 +151,32 @@ fn intersect(idom: &[Option<BlockId>], order: &[Option<usize>], mut a: BlockId, 
         }
     }
     a
+}
+
+/// Each reachable block's preorder and postorder number in a depth-first
+/// walk of the tree `idom` makes, the entry its root. Cost: O(blocks).
+fn tree_intervals(entry: BlockId, idom: &[Option<BlockId>]) -> Vec<Option<(usize, usize)>> {
+    let mut children: Vec<Vec<BlockId>> = vec![Vec::new(); idom.len()];
+    for (block, parent) in idom.iter().enumerate() {
+        if let Some(parent) = parent.filter(|parent| parent.index() != block) {
+            children[parent.index()].push(BlockId::of_index(block));
+        }
+    }
+    let mut interval = vec![None; idom.len()];
+    let mut pre = vec![0; idom.len()];
+    let (mut next_pre, mut next_post) = (1, 0);
+    let mut path: Vec<(BlockId, usize)> = vec![(entry, 0)];
+    while let Some((block, next)) = path.last_mut() {
+        let Some(child) = children[block.index()].get(*next).copied() else {
+            interval[block.index()] = Some((pre[block.index()], next_post));
+            next_post += 1;
+            path.pop();
+            continue;
+        };
+        *next += 1;
+        pre[child.index()] = next_pre;
+        next_pre += 1;
+        path.push((child, 0));
+    }
+    interval
 }

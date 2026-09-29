@@ -182,7 +182,9 @@ fn ssa(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
 
 /// Times `measure` over each shape and size, printing one line per run.
 fn scale(name: &str, prepare: fn(&mut Module, BodyId, &mut AnalysisManager<'_>), measure: fn(&mut Module, BodyId, &mut AnalysisManager<'_>)) {
-    for shape in SHAPES {
+    // `PERF_SHAPE` names one shape to run alone, for a profiler.
+    let only = std::env::var("PERF_SHAPE").ok();
+    for shape in SHAPES.into_iter().filter(|shape| only.as_deref().is_none_or(|only| only == format!("{shape:?}"))) {
         let mut previous: Option<Duration> = None;
         let mut growth_seen = 10.0_f64;
         for size in SIZES {
