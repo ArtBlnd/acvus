@@ -65,12 +65,12 @@ pub(super) fn operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>, mutability:
         }
         Expr::ContextRef { id, name, span } => context_operand(cx, *name, cx.ty(*id), *span),
         Expr::FieldAccess { id, object, field, span } => {
-            let ty = cx.ty(*id);
+            let ty = cx.part_ty(*id);
             let object = operand(cx, object, mutability);
             field_of(cx, object, *field, ty, *span)
         }
         Expr::Index { id, callee_id, object, index, span } => {
-            let element = cx.ty(*id);
+            let element = cx.part_ty(*id);
             let reference = element_ref(cx, object, *callee_id, index, mutability, element, *span);
             Operand::Place(Place { target: RefTarget::Through(reference), path: Vec::new(), ty: element })
         }
@@ -122,7 +122,7 @@ fn context_operand(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Sp
 fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty: Ty, span: Span) -> Operand {
     match object {
         Operand::Place(place) if is_ref(cx, place.ty) => {
-            let reference = read(cx, Operand::Place(place), span);
+            let reference = read_part(cx, place, span);
             Operand::Place(Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(field)], ty })
         }
         Operand::Place(place) => Operand::Place(place.with(PathSeg::Field(field), ty)),
@@ -150,6 +150,45 @@ pub(super) fn read(cx: &mut Lcx<'_, '_>, operand: Operand, span: Span) -> ValueI
     }
 }
 
+/// The value of `operand` as typeck recorded a read of it, `ty`: a
+/// place's is taken at that type (D108 rule 1).
+pub(super) fn read_as(cx: &mut Lcx<'_, '_>, operand: Operand, ty: Ty, span: Span) -> ValueId {
+    match operand {
+        Operand::Place(place) => read(cx, Operand::Place(Place { ty, ..place }), span),
+        Operand::Value(value) => value,
+    }
+}
+
+/// What a read of type `ty` lends the containers on its way for: `&mut`
+/// where it is a `&mut` reborrow, which only a `&mut` path gives, and `&`
+/// otherwise (D108 rule 1).
+pub(super) fn read_view(cx: &Lcx<'_, '_>, ty: Ty) -> Mutability {
+    match cx.kind(ty) {
+        TyKind::Ref(Mutability::Mut, _) => Mutability::Mut,
+        _ => Mutability::Shared,
+    }
+}
+
+/// `place` read where typeck recorded no read of it, as a reference on
+/// the way to a part or one reborrowed: taken as `ir::cfg::part_read`
+/// reads it through the storage `place` is in.
+fn read_part(cx: &mut Lcx<'_, '_>, place: Place, span: Span) -> ValueId {
+    let ty = cx.builder.part_read_ty(place.ty, storage_mutability(cx, place.target));
+    read(cx, Operand::Place(Place { ty, ..place }), span)
+}
+
+/// The mutability of the path into `target`: a variable's or a
+/// parameter's own storage is `&mut`, and a reference's is its own.
+fn storage_mutability(cx: &Lcx<'_, '_>, target: RefTarget) -> Mutability {
+    match target {
+        RefTarget::Var(_) | RefTarget::Param(_) => Mutability::Mut,
+        RefTarget::Through(reference) => match cx.kind(cx.value_ty(reference)) {
+            TyKind::Ref(mutability, _) => *mutability,
+            other => panic!("a storage is reached through a reference, not {other:?}"),
+        },
+    }
+}
+
 /// A `mutability` reference to `operand`: a place is lent where it stands,
 /// a reference is reborrowed, and any other value is put in a slot of its
 /// own and lent there.
@@ -158,9 +197,15 @@ pub(super) fn lend(cx: &mut Lcx<'_, '_>, operand: Operand, mutability: Mutabilit
         Operand::Place(place) => place.ty,
         Operand::Value(value) => cx.value_ty(*value),
     };
-    if let TyKind::Ref(made, target) = cx.kind(held) {
+    if let TyKind::Ref(..) = cx.kind(held) {
+        let reference = match operand {
+            Operand::Place(place) => read_part(cx, place, span),
+            Operand::Value(value) => value,
+        };
+        let TyKind::Ref(made, target) = cx.kind(cx.value_ty(reference)) else {
+            panic!("a reference read is a reference")
+        };
         let (made, target) = (*made, target.ty());
-        let reference = read(cx, operand, span);
         return reborrow(cx, reference, made, target, mutability, span);
     }
     let place = match operand {
@@ -211,8 +256,9 @@ pub(super) fn lower_borrow<S: Slot>(cx: &mut Lcx<'_, '_>, mutable: bool, place: 
     lend(cx, operand, mutability, span)
 }
 
-/// `a[i]` read: a word element is copied out, any other is taken through a
-/// reference to it.
+/// `a[i]` read, at the type typeck recorded, through a view its read
+/// decides (`read_view`): a word element is copied out, any other is taken
+/// through a reference to it.
 pub(super) fn lower_index<S: Slot>(
     cx: &mut Lcx<'_, '_>,
     site: AstId,
@@ -221,16 +267,18 @@ pub(super) fn lower_index<S: Slot>(
     index: &Expr<S>,
     span: Span,
 ) -> ValueId {
-    let element = cx.ty(site);
+    let element = cx.part_ty(site);
+    let ty = cx.ty(site);
+    let view = read_view(cx, ty);
     if !is_word(cx.builder.types(), element) {
-        let reference = element_ref(cx, object, callee_site, index, Mutability::Shared, element, span);
+        let reference = element_ref(cx, object, callee_site, index, view, element, span);
         let place = Place { target: RefTarget::Through(reference), path: Vec::new(), ty: element };
-        return read(cx, Operand::Place(place), span);
+        return read_as(cx, Operand::Place(place), ty, span);
     }
-    let slice = slice_of(cx, object, callee_site, Mutability::Shared, element, span);
+    let slice = slice_of(cx, object, callee_site, view, element, span);
     let at = lower_expr(cx, index);
     let op = Op::Index { slice, index: at, mode: IndexMode::Copy, bound: IndexBound::Checked };
-    cx.builder.push(op, element, span)
+    cx.builder.push(op, ty, span)
 }
 
 /// A reference to element `index` of `object`, lent for `mutability` where
@@ -405,7 +453,7 @@ fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> StoreTarg
         }
         AstPlace::Field { object, field, span, .. } => match store_target(cx, object) {
             StoreTarget::Place(object) if is_ref(cx, object.ty) => {
-                let reference = read(cx, Operand::Place(object), *span);
+                let reference = read_part(cx, object, *span);
                 StoreTarget::Place(Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(*field)], ty })
             }
             StoreTarget::Place(object) => StoreTarget::Place(object.with(PathSeg::Field(*field), ty)),

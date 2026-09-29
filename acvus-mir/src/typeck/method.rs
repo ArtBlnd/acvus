@@ -129,7 +129,7 @@ fn receiver_place<S: Slot>(cx: &mut Ctxt<'_>, receiver: &Expr<S>) -> Option<Rece
                 callee_site: *callee_id,
                 span: *span,
                 container: cx.out.types[&object.id()],
-                element: cx.out.types[id],
+                element: cx.out.parts[id],
             });
             Some(place)
         }

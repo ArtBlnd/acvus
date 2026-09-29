@@ -29,6 +29,7 @@ use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
+use super::place::Through;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::structural::structure;
@@ -136,6 +137,10 @@ pub(super) enum Decision {
     /// struct must have the field, and any other object grows by it where
     /// transparent (types §1-2).
     Field { span: Span, object: Term, field: Astr, part: Term },
+    /// A read of `part`, reached through every container in `through`:
+    /// `result` is what `ir::cfg::part_read` makes of it at the path's
+    /// mutability, the least any container caps it at (D108 rule 1).
+    PartRead { span: Span, part: Term, through: Box<[Through]>, result: Term },
     /// `container[i]`: the language's own for an array or a slice, and
     /// `as_slice(_mut)` at `callee_site` otherwise (operators §3).
     /// `body` is the effect of the body the index is in.
@@ -215,6 +220,7 @@ impl Decision {
             Decision::Enter { slot, .. } => vec![*slot],
             Decision::Lend { result, .. } => vec![*result],
             Decision::Field { part, .. } => vec![*part],
+            Decision::PartRead { result, .. } => vec![*result],
             Decision::Index { element, .. } => vec![*element],
             Decision::Deref { target, .. } => vec![*target],
             Decision::BlockEnd { block, .. } => vec![*block],
@@ -240,6 +246,9 @@ impl Decision {
             Decision::Cast { source, .. } => vec![*source],
             Decision::Lend { value, result, .. } => vec![*value, *result],
             Decision::Field { object, part, .. } => vec![*object, *part],
+            Decision::PartRead { part, through, result, .. } => {
+                through.iter().map(|container| container.term()).chain([*part, *result]).collect()
+            }
             Decision::Index { container, element, .. } => vec![*container, *element],
             Decision::Deref { reference, target, .. } => vec![*reference, *target],
             Decision::BlockEnd { last, block, .. } => vec![*last, *block],
@@ -372,6 +381,7 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Try { operand, .. } => Some(*operand),
         Decision::Cast { source, .. } => Some(*source),
         Decision::Reach { .. }
+        | Decision::PartRead { .. }
         | Decision::Settle { .. }
         | Decision::HoldsNoLoans { .. } => None,
     }
@@ -564,6 +574,27 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 });
             };
             super::place::fire_field(cx, span, object, Some(closed.head), field, part);
+            Ok(())
+        }
+        Decision::PartRead {
+            span,
+            part,
+            through,
+            result,
+        } => {
+            let path = through.iter().try_fold(Mutability::Mut, |path, container| {
+                let closed = closed_for(cx, container.term(), reading, depth)?;
+                Some(container.caps(path, closed.head))
+            });
+            let (Some(path), Some(_)) = (path, closed_for(cx, part, reading, depth)) else {
+                return Err(Decision::PartRead {
+                    span,
+                    part,
+                    through,
+                    result,
+                });
+            };
+            super::place::fire_part_read(cx, span, part, path, result);
             Ok(())
         }
         Decision::Index {
@@ -1382,13 +1413,15 @@ fn unbound_vars(cx: &Ctxt<'_>, terms: impl IntoIterator<Item = Term>) -> FxHashS
 /// - A value entering a closed slot takes the slot's type.
 /// - A value lent where the reference is already closed is that
 ///   reference's target.
+/// - An open part whose read is already closed is what the read is: an
+///   open part is never a reference.
 /// - A field read of an open object makes it an object with that field,
 ///   and a pattern destructuring an open scrutinee makes it the pattern's
 ///   shape. A reference is never made of an open term: only a value's own
 ///   type makes one (types §4).
 ///
-/// NOTE: the last two extend Q7's rule, which names only the slot, to
-/// the field and the pattern that decide their operand's shape. Without
+/// NOTE: the last three extend Q7's rule, which names only the slot, to
+/// the part read, the field and the pattern that decide their operand. Without
 /// them the ownership §4 example (`let a; a.x = 0;`) would leave `a` open
 /// and default it to `!`.
 fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
@@ -1401,6 +1434,7 @@ fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
                 open(cx, *value) && !open(cx, *slot)
             }
             Decision::Field { object, .. } => open(cx, *object),
+            Decision::PartRead { part, result, .. } => open(cx, *part) && !open(cx, *result),
             Decision::Destructure { scrutinee, .. } => open(cx, *scrutinee),
             _ => false,
         };
@@ -1422,6 +1456,7 @@ fn uses_decide(cx: &mut Ctxt<'_>) -> bool {
                 field,
                 part,
             } => super::place::fire_field(cx, span, object, None, field, part),
+            Decision::PartRead { span, part, result, .. } => cx.eq(result, part, span),
             Decision::Destructure { shape, scrutinee, lent } => {
                 super::pat::fire_destructure(cx, *shape, scrutinee, None, lent)
             }
@@ -1507,6 +1542,7 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::Cast { span, .. }
         | Decision::Lend { span, .. }
         | Decision::Field { span, .. }
+        | Decision::PartRead { span, .. }
         | Decision::Index { span, .. }
         | Decision::Deref { span, .. }
         | Decision::Compare { span, .. }

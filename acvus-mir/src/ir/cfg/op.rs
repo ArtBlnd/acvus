@@ -10,7 +10,7 @@ use crate::ir::{
     BinOp, Callee, Checked, ExternImpl, IndexBound, IndexMode, Overflow, PathSeg, RefTarget,
     UnaryOp, ValueId,
 };
-use crate::ty::{CastTy, Concrete, Mutability, Ty, TyKind, Types, copies};
+use crate::ty::{CastTy, Concrete, Mutability, Phase, Ty, TyId, TyKind, Types, copies};
 
 /// Reading a part of type `part` through a path of mutability `path`: a
 /// slice element, a tuple field, an object field or a variant payload.
@@ -20,15 +20,14 @@ use crate::ty::{CastTy, Concrete, Mutability, Ty, TyKind, Types, copies};
 /// through a `&mut` path it keeps the part's own mutability, and the
 /// storage keeps the part. `None`: `part` is no reference, and is read as
 /// itself.
-pub fn part_read(types: &Types<Concrete>, part: Ty, path: Mutability) -> Option<TyKind<Concrete>> {
+pub fn part_read<V>(types: &Types<V>, part: TyId<V>, path: Mutability) -> Option<TyKind<V>>
+where
+    V: Phase,
+{
     let TyKind::Ref(own, target) = types.kind(part) else {
         return None;
     };
-    let mutability = match (own, path) {
-        (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
-        _ => Mutability::Shared,
-    };
-    Some(TyKind::Ref(mutability, target.clone()))
+    Some(TyKind::Ref(own.least(path), target.clone()))
 }
 
 #[derive(Debug, Clone)]

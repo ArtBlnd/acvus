@@ -1123,6 +1123,76 @@ fn a_tuple_with_a_mut_part_compares_it_by_shared_reborrow() {
     assert_eq!(reads, 2, "one part read on each side");
 }
 
+/// `source` lowered, each body held to `TypesAgree` among the rest, with
+/// `$s` a reference of `slice` to a slice of `&mut i64` where given; the
+/// kinds of the reference values the entry's reads `read` picks yield.
+fn part_reads(source: &str, slice: Option<Mutability>, read: impl Fn(&Op) -> bool) -> Vec<TyKind<Concrete>> {
+    let mut fx = Fixture::new();
+    if let Some(held) = slice {
+        let int = fx.int();
+        let element = fx.reference(Mutability::Mut, int);
+        let slice_ty = fx.ty(TyKind::Slice(element));
+        let lent = fx.reference(held, slice_ty);
+        fx.input("s", lent);
+    }
+    let lowered = fx.script(source);
+    let body = lowered.entry();
+    body.blocks()
+        .flat_map(|(_, block)| block.insts())
+        .filter(|inst| read(inst.op()))
+        .filter_map(|inst| inst.result())
+        .map(|result| lowered.kind_of(body, result).clone())
+        .filter(|kind| matches!(kind, TyKind::Ref(..)))
+        .collect()
+}
+
+fn is_reference(kind: &TyKind<Concrete>, mutability: Mutability) -> bool {
+    matches!(kind, TyKind::Ref(made, _) if *made == mutability)
+}
+
+/// D108 rule 1: a `&mut` element read through a shared slice is copied
+/// out as a shared reborrow.
+#[test]
+fn an_index_of_a_shared_slice_of_mut_references_lowers_to_a_shared_read() {
+    let reads = part_reads("let x = $s[0]; *x", Some(Mutability::Shared), |op| matches!(op, Op::Index { .. }));
+    assert!(matches!(&reads[..], [read] if is_reference(read, Mutability::Shared)), "{reads:?}");
+}
+
+/// D108 rule 1: through a `&mut` slice the element is read as a `&mut`.
+#[test]
+fn an_index_of_a_mut_slice_of_mut_references_lowers_to_a_mut_read() {
+    let reads = part_reads("let x = $s[0]; *x", Some(Mutability::Mut), |op| matches!(op, Op::Index { .. }));
+    assert!(matches!(&reads[..], [read] if is_reference(read, Mutability::Mut)), "{reads:?}");
+}
+
+/// D108 rule 1: a `&mut` field past a `&` is read as a shared reborrow.
+#[test]
+fn a_mut_field_past_a_shared_reference_lowers_to_a_shared_read() {
+    let source = "let v = 1; let o = { a: { b: &mut v, }, }; let r = &o; let x = r.a.b; *x";
+    let reads = part_reads(source, None, |op| matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if path.len() == 2));
+    assert!(matches!(&reads[..], [read] if is_reference(read, Mutability::Shared)), "{reads:?}");
+}
+
+/// D108 rule 1: a `&mut` reached past a `&` and dereferenced on the way is
+/// read shared, and so is the `&mut` field past it.
+#[test]
+fn a_mut_reference_on_the_way_past_a_shared_one_lowers_to_shared_reads() {
+    let source = "let v = 1; let w = { b: &mut v, }; let o = { a: &mut w, }; let r = &o; let x = r.a.b; *x";
+    let reads = part_reads(source, None, |op| matches!(op, Op::Take { target: RefTarget::Through(_), path, .. } if !path.is_empty()));
+    assert!(matches!(&reads[..], [on_the_way, read] if [on_the_way, read].iter().all(|kind| is_reference(kind, Mutability::Shared))), "{reads:?}");
+}
+
+/// D108 rule 1: a store into a `&mut` field through a `&mut` writes the
+/// field at its own type.
+#[test]
+fn a_store_into_a_mut_field_through_a_mut_reference_lowers() {
+    let source = "let v = 1; let w = 2; let o = { f: &mut v, }; let r = &mut o; r.f = &mut w; *o.f";
+    let fx = Fixture::new();
+    let lowered = fx.script(source);
+    let stores = count(&lowered.entry_ops(), |op| matches!(op, Op::Assign { target: RefTarget::Through(_), path, .. } if path == &[PathSeg::Field(lowered.name("f"))]));
+    assert_eq!(stores, 1, "{}", shown(lowered.entry()));
+}
+
 /// operators §2, §4, D87: an ordering on arrays is one `For` that leaves
 /// at the first `cmp` that is not `0`, and the answer is compared with `0`
 /// after it.

@@ -37,6 +37,10 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
             frozen.insert(site, ty);
         }
     }
+    let parts = std::mem::take(&mut cx.out.parts)
+        .into_iter()
+        .filter_map(|(site, part)| Some((site, freeze(&mut cx, types, &mut memo, part)?)))
+        .collect();
     let tries = std::mem::take(&mut cx.out.tries)
         .into_iter()
         .filter_map(|(site, exit)| {
@@ -62,6 +66,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
 
     Typeck {
         types: frozen,
+        parts,
         names: std::mem::take(&mut cx.out.names),
         reached: std::mem::take(&mut cx.out.reached),
         callees,

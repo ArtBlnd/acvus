@@ -135,6 +135,14 @@ impl Mutability {
     pub fn reaches(self, wanted: Mutability) -> bool {
         self == wanted || wanted == Mutability::Shared
     }
+
+    /// The lesser of the two: a `&` either way makes a path shared.
+    pub fn least(self, other: Mutability) -> Mutability {
+        match (self, other) {
+            (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
+            _ => Mutability::Shared,
+        }
+    }
 }
 
 impl<V: Phase> TyKind<V> {

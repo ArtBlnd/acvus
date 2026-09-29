@@ -429,6 +429,64 @@ fn a_written_objects_field_is_read() {
     assert_eq!(checked.kind(tail(&checked, &script)), &TyKind::Bool);
 }
 
+/// The kind of the `let` binding `x`'s type: what a part read gave it.
+fn read_of_x(source: &str, slice: Option<Mutability>) -> (Checked, Ty) {
+    let mut fx = Fixture::new();
+    if let Some(held) = slice {
+        let int = fx.int(IntTy::I64);
+        let element = fx.reference(Mutability::Mut, int);
+        let slice_ty = fx.ty(TyKind::Slice(element));
+        let lent = fx.reference(held, slice_ty);
+        fx.input("s", lent);
+    }
+    let names = fx.names.clone();
+    let (checked, script) = fx.script(source);
+    checked.admitted();
+    let x = binding(&checked, &script, &names, "x");
+    (checked, x)
+}
+
+fn is_ref_to_i64(checked: &Checked, ty: Ty, mutability: Mutability) -> bool {
+    matches!(checked.kind(ty), TyKind::Ref(made, target) if *made == mutability && is_int(checked, target.ty(), IntTy::I64))
+}
+
+/// D108 rule 1: a `&mut` element read through a shared slice is a shared
+/// reborrow.
+#[test]
+fn an_index_of_a_shared_slice_of_mut_references_reads_shared() {
+    let (checked, x) = read_of_x("let x = $s[0]; *x", Some(Mutability::Shared));
+    assert!(is_ref_to_i64(&checked, x, Mutability::Shared), "{:?}", checked.kind(x));
+}
+
+/// D108 rule 1: through a `&mut` slice the element keeps its own
+/// mutability.
+#[test]
+fn an_index_of_a_mut_slice_of_mut_references_reads_mut() {
+    let (checked, x) = read_of_x("let x = $s[0]; *x", Some(Mutability::Mut));
+    assert!(is_ref_to_i64(&checked, x, Mutability::Mut), "{:?}", checked.kind(x));
+}
+
+/// D108 rule 1: the path's mutability is the least along it, so a `&`
+/// anywhere before a `&mut` field makes its read shared.
+#[test]
+fn a_mut_field_read_past_a_shared_reference_reads_shared() {
+    let source = "let v = 1; let o = { a: { b: &mut v, }, }; let r = &o; let x = r.a.b; *x";
+    let (checked, x) = read_of_x(source, None);
+    assert!(is_ref_to_i64(&checked, x, Mutability::Shared), "{:?}", checked.kind(x));
+}
+
+/// D108 rule 1: a store target is the part itself, not a read of it.
+#[test]
+fn a_store_into_a_mut_field_through_a_mut_reference_keeps_its_type() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("let v = 1; let w = 2; let o = { f: &mut v, }; let r = &mut o; r.f = &mut w; *o.f");
+    checked.admitted();
+    let Some(Stmt::Store { place, .. }) = script.stmts.iter().find(|stmt| matches!(stmt, Stmt::Store { .. })) else {
+        panic!("the script stores");
+    };
+    assert!(is_ref_to_i64(&checked, checked.typeck.types[&place.id()], Mutability::Mut));
+}
+
 /// ownership §4, types §2: a store into a field of a binding declared
 /// without a value joins that field into its object type.
 #[test]
