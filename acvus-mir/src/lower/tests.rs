@@ -1001,13 +1001,12 @@ fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
     });
     assert_eq!(reborrowed, 3, "the test and each arm's bind read the `&mut` part through a `&mut` to the slot: {}", shown(body));
 
-    for (arm, block) in body.blocks().filter(|(_, block)| block.insts().iter().any(|inst| matches!(inst.op(), Op::Const { value: acvus_ast::Literal::Int(5 | 3) }))) {
-        let ops: Vec<&Op> = block.insts().iter().map(|inst| inst.op()).collect();
+    for (arm, block) in body.blocks().filter(|(_, block)| block.insts().any(|inst| matches!(inst.op(), Op::Const { value: acvus_ast::Literal::Int(5 | 3) }))) {
+        let ops: Vec<&Op> = block.insts().map(|inst| inst.op()).collect();
         assert_eq!(takes(&ops, &[]), 0, "arm {arm:?} never takes the pair whole: {}", shown(body));
         assert_eq!(takes(&ops, &[PathSeg::Index(1)]), 1, "arm {arm:?} takes the string once, for `t`: {}", shown(body));
         let ended: Vec<_> = block
             .insts()
-            .iter()
             .filter(|inst| matches!(inst.op(), Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Index(0)]))
             .filter_map(|inst| inst.result())
             .collect();
