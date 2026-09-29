@@ -1410,6 +1410,51 @@ fn a_clone_of_an_array_that_does_not_copy_reaches_core_clone_and_is_refused() {
     }
 }
 
+/// operators §7: a tuple clones part by part, and its `String` part reaches
+/// `core::clone`, which no impl answers here.
+#[test]
+fn a_tuple_clone_with_a_part_no_impl_clones_is_refused_at_the_part() {
+    let mut fx = Fixture::new();
+    let clone = fx.raw.core.clone;
+    let (string, i64_ty) = (fx.ty(TyKind::String), fx.int(IntTy::I64));
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, i64_ty])));
+    fx.input("t", pair);
+    let (checked, _) = fx.script("$t.clone()");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoDeclaration { name: clone.name }]);
+}
+
+/// ownership §1: `!` copies, so a clone of a `!` value copies it and
+/// reaches no `core::clone`.
+#[test]
+fn a_clone_of_a_never_value_copies_it() {
+    let mut fx = Fixture::new();
+    let never = fx.ty(TyKind::Never);
+    fx.input("n", never);
+    let (checked, script) = fx.script("$n.clone()");
+    checked.admitted();
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a method call");
+    };
+    assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
+}
+
+/// ownership §1, types §5: `[]` is `[!; 0]`, whose element settles to `!`
+/// only by the default, so its clone waits for it, then copies.
+#[test]
+fn a_clone_of_the_empty_array_waits_then_copies() {
+    let fx = Fixture::new();
+    let (checked, script) = fx.script("[].clone()");
+    checked.admitted();
+    let Some(Expr::MethodCall { callee_id, .. }) = script.tail.as_deref() else {
+        panic!("the tail is a method call");
+    };
+    assert_eq!(checked.typeck.part_trees[callee_id], super::PartTree::Copied);
+    let TyKind::Array(element, _) = checked.kind(tail(&checked, &script)) else {
+        panic!("an array's clone is the array");
+    };
+    assert_eq!(checked.kind(*element), &TyKind::Never);
+}
+
 /// ownership §1: a `[i64; 2]`'s `.clone()` copies it, with no impl.
 #[test]
 fn a_clone_of_an_array_that_copies_copies_it() {

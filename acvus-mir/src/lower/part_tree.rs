@@ -418,7 +418,7 @@ fn cloned(cx: &mut Lcx<'_, '_>, tree: &PartTree, ty: Ty, src: ValueId, span: Spa
                 |cx| variant(cx, tags.err, Some(err), ty, src, span),
             )
         }
-        Shape::Never => cx.unreached_value(ty, span),
+        Shape::Never => panic!("typeck copies `!` (ownership §1)"),
         Shape::Array(_) => panic!("typeck copies an array that copies and reaches `core::clone` for any other"),
         Shape::Ref(_) => panic!("typeck copies a shared reference and reaches `core::clone` for any other"),
     }

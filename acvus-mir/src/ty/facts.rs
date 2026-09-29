@@ -27,15 +27,21 @@ fn copies_level(types: &Types<Concrete>, ty: Ty) -> bool {
     copies_alone(types.kind(ty))
 }
 
-/// Whether a value of a type that is not structural copies: a primitive or
-/// a shared reference (ownership §1).
+/// Whether a value of a type that is not structural copies: `!`, a
+/// primitive or a shared reference (ownership §1).
 pub fn copies_alone<V>(kind: &TyKind<V>) -> bool
 where
     V: Phase,
 {
     matches!(
         kind,
-        TyKind::Int(_) | TyKind::Float | TyKind::Bool | TyKind::Char | TyKind::Unit | TyKind::Ref(Mutability::Shared, _)
+        TyKind::Never
+            | TyKind::Int(_)
+            | TyKind::Float
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::Unit
+            | TyKind::Ref(Mutability::Shared, _)
     )
 }
 
