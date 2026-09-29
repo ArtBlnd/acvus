@@ -3,15 +3,29 @@
 //! Positions are read in order, an argument's and then a tuple's parts in
 //! order: at each one, stepping up from its exact type along the cast tree,
 //! the candidates that match at the first step where any match are kept.
-//! Exactly one must be left. Cost: positions × tree height × candidates.
+//! Where more than one is left after them, the head the call's result is
+//! taken at decides last, matched exactly. Exactly one must be left. Cost:
+//! (positions × tree height + 1) × candidates.
 
 use crate::decl::Head;
 
-/// A candidate's parameter head at each position, in the order positions
-/// are read. `None` where the declared type is a type variable, which
-/// matches at the exact step.
+/// What a candidate's parameter, or its result, matches at one position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Match {
+    /// A type variable: any head, at the exact step.
+    Any,
+    /// One head.
+    Head(Head),
+    /// A lifted impl's type variable (types §1): the head of any
+    /// transparent structured type, at the exact step.
+    Structured,
+}
+
+/// A candidate: what its parameter matches at each position, in the order
+/// positions are read, and what its result matches.
 pub(super) struct Candidate<'c> {
-    pub params: &'c [Option<Head>],
+    pub params: &'c [Match],
+    pub result: Match,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,26 +35,11 @@ pub(super) enum NoReach {
 }
 
 /// The index of the one candidate reached by `positions`: at each, the
-/// heads up the cast tree from its exact type, the exact one first.
-pub(super) fn reach(candidates: &[Candidate<'_>], positions: &[Vec<Head>]) -> Result<usize, NoReach> {
-    let mut left: Vec<usize> = (0..candidates.len()).collect();
-    for (at, chain) in positions.iter().enumerate() {
-        let matching = |step: &Head| -> Vec<usize> {
-            left.iter()
-                .copied()
-                .filter(|candidate| candidates[*candidate].params[at].is_none_or(|param| param == *step))
-                .collect()
-        };
-        let Some(kept) = chain.iter().map(matching).find(|kept| !kept.is_empty()) else {
-            return Err(NoReach::None);
-        };
-        left = kept;
-    }
-    match left[..] {
-        [one] => Ok(one),
-        [] => Err(NoReach::None),
-        _ => Err(NoReach::Several(left)),
-    }
+/// heads up the cast tree from its exact type, the exact one first; then,
+/// where more than one is left, by `result`, the head the call's result is
+/// taken at, where it is known.
+pub(super) fn reach(candidates: &[Candidate<'_>], positions: &[Vec<Head>], result: Option<Head>) -> Result<usize, NoReach> {
+    todo!("the positions as before, each `Match` at a step; then `result`, exactly, where more than one is left")
 }
 
 #[cfg(test)]

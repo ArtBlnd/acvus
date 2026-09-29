@@ -20,10 +20,12 @@ pub enum Intrinsic {
     /// the parts of one value, each of one mutability: the reference to
     /// that value it is (ownership §5). Its loans are the part references'.
     Gather,
-    /// `[array, f]`, an array of `n` elements, or a reference to one, and a
-    /// function value: the array of `n` elements, each `f` of the element at
-    /// its index, in order. The elements are coerced or lifted one by one
-    /// without unrolling the array (types §1, §3).
+    /// `[a_1, …, a_k, f]`, `k` arrays of one length `n`, or references to
+    /// them, and a function value of `k` parameters: the array of `n`
+    /// elements, each `f` of the `k` elements at its index, in order. Where
+    /// `k` is `0`, `n` is the length the result's type states. The elements
+    /// are coerced or lifted one by one without unrolling the array
+    /// (types §1, §3).
     ArrayMap,
 }
 
