@@ -1016,7 +1016,7 @@ fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
     assert!(!lowered.entry_ops().iter().any(|op| matches!(op, Op::Drop { src } if *src == slot)), "the pair is never dropped whole: {}", shown(body));
 }
 
-// -- D87: part trees; arrays in one loop; no structural instruction ---------
+// -- D87: part trees; arrays in one loop -----------------------------------
 
 /// `clone(&String) -> String`, pure.
 fn clones_strings(fx: &mut Fixture) {
@@ -1025,13 +1025,6 @@ fn clones_strings(fx: &mut Fixture) {
     let clones = fx.function(&[shared], string, Effect::pure());
     let clone = fx.raw.core.clone;
     fx.lang_item(clone, &[clones]);
-}
-
-fn no_structural_instruction(lowered: &Lowered) {
-    for body in lowered.module.body_ids() {
-        let structural = count(&lowered.ops(body), |op| matches!(op, Op::StructuralEq { .. } | Op::StructuralClone { .. }));
-        assert_eq!(structural, 0, "D87: {}", shown(lowered.module.body(body)));
-    }
 }
 
 fn fors(lowered: &Lowered) -> Vec<(&ForSource, crate::ir::cfg::BlockId, crate::ir::cfg::BlockId)> {
@@ -1068,7 +1061,6 @@ fn array_equality_is_one_for_that_exits_at_the_first_difference() {
     assert!(exits_early, "{}", shown(body));
     let eq = QualifiedRef::qualified(lowered.name("core"), lowered.name("eq"));
     assert_eq!(calls_of(&lowered, eq), 1, "one element comparison, in the loop: {}", shown(body));
-    no_structural_instruction(&lowered);
 }
 
 /// operators §2, §4, D87: an ordering on arrays is one `For` that leaves
@@ -1113,7 +1105,6 @@ fn a_tuple_clone_is_built_part_by_part() {
     });
     assert_eq!(copied_int, 1, "{}", shown(body));
     assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::MakeTuple { elements } if elements.len() == 2)), 1, "{}", shown(body));
-    no_structural_instruction(&lowered);
 }
 
 /// ownership §1, D87: an array whose element copies is copied whole by
@@ -1128,14 +1119,12 @@ fn an_array_that_copies_is_copied_by_clone() {
     let body = lowered.entry();
     assert!(fors(&lowered).is_empty(), "{}", shown(body));
     assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { .. })), 0, "{}", shown(body));
-    no_structural_instruction(&lowered);
 }
 
-/// D87: no comparison or clone of a structural type lowers to a structural
-/// instruction; `Option` and `Result` clones test the tag and rebuild the
-/// variant.
+/// D87: `Option` and `Result` clones test the tag and rebuild the
+/// variant, and an object compares and clones part by part.
 #[test]
-fn no_structural_instruction_is_lowered() {
+fn structural_types_compare_and_clone_part_by_part() {
     let mut fx = Fixture::new();
     fx.comparisons();
     clones_strings(&mut fx);
@@ -1151,7 +1140,6 @@ fn no_structural_instruction_is_lowered() {
     let lowered = fx.script("let p = $o.clone(); let q = $r.clone(); let e = $x == $x; let y = $x.clone(); e");
     let ops = lowered.entry_ops();
     assert_eq!(count(&ops, |op| matches!(op, Op::MakeVariant { .. })), 4, "{}", shown(lowered.entry()));
-    no_structural_instruction(&lowered);
 }
 
 /// D87: an array comparison's loop and a tuple clone go through the
@@ -1180,6 +1168,5 @@ fn part_trees_survive_the_required_steps_and_the_pipeline() {
     super::required::remove_dead_context_ops(&mut module, &mut am);
     super::required::insert_drops(&mut module, &mut am);
     crate::passes::pipeline::optimize(&mut module, &mut am, crate::passes::pipeline::Level::Full);
-    let lowered = Lowered::checked(module, fx.names);
-    no_structural_instruction(&lowered);
+    Lowered::checked(module, fx.names);
 }

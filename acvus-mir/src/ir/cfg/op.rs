@@ -7,7 +7,7 @@ use acvus_utils::{Astr, QualifiedRef};
 
 use super::BodyId;
 use crate::ir::{
-    BinOp, Callee, Checked, Chosen, ExternImpl, IndexBound, IndexMode, Overflow, PathSeg, RefTarget,
+    BinOp, Callee, Checked, ExternImpl, IndexBound, IndexMode, Overflow, PathSeg, RefTarget,
     UnaryOp, ValueId,
 };
 use crate::ty::{CastTy, Concrete, Mutability, Ty, Types, copies};
@@ -49,20 +49,6 @@ pub enum Op {
     /// A new `String` with the bytes of the one `src` names.
     StringClone {
         src: ValueId,
-    },
-    /// RFC-0020. `leaves` is in `structural::structural_leaves` order over
-    /// the type `a` lends, the order `acvus_interpreter::prepare` reads it in.
-    StructuralEq {
-        a: ValueId,
-        b: ValueId,
-        leaves: Vec<Chosen>,
-    },
-    /// RFC-0020. `leaves` is in `structural::structural_leaves` order over
-    /// the type `src` lends, the order `acvus_interpreter::prepare` reads it
-    /// in.
-    StructuralClone {
-        src: ValueId,
-        leaves: Vec<Chosen>,
     },
 
     // -- Storage (RFC-0018) -----------------------------------------
@@ -361,12 +347,11 @@ macro_rules! walk_operands {
                 $on(target);
                 $on(part);
             }
-            Op::StringEq { a, b } | Op::StructuralEq { a, b, .. } => {
+            Op::StringEq { a, b } => {
                 $on(a);
                 $on(b);
             }
             Op::StringClone { src }
-            | Op::StructuralClone { src, .. }
             | Op::Cast { src, .. }
             | Op::TakeEffect { src }
             | Op::TestLiteral { src, .. }
@@ -480,8 +465,6 @@ impl Op {
             | Op::StringConcat { .. }
             | Op::StringEq { .. }
             | Op::StringClone { .. }
-            | Op::StructuralEq { .. }
-            | Op::StructuralClone { .. }
             | Op::Ref { .. }
             | Op::Take { .. }
             | Op::AsSlice { .. }
@@ -555,8 +538,6 @@ impl Op {
             | Op::StringAppend { .. }
             | Op::StringEq { .. }
             | Op::StringClone { .. }
-            | Op::StructuralEq { .. }
-            | Op::StructuralClone { .. }
             | Op::Ref { .. }
             | Op::Take { .. }
             | Op::Assign { .. }

@@ -777,7 +777,6 @@ impl Forward<'_> {
             | Op::StringConcat { .. }
             | Op::StringEq { .. }
             | Op::StringClone { .. }
-            | Op::StructuralEq { .. }
             | Op::Fetch { .. }
             | Op::BinOp { .. }
             | Op::UnaryOp { .. }
@@ -834,7 +833,6 @@ impl Forward<'_> {
                 self.write_elements(state, &storages, &written);
                 return None;
             }
-            Op::StructuralClone { src, .. } => self.reborrow(state, *src, Mode::Shared)[1..].to_vec(),
             Op::FieldGet { object, field, rest } => {
                 let path: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
                 self.project(state, *object, &path, ty())
@@ -1108,11 +1106,11 @@ impl Forward<'_> {
                 touched.writes = self.named(state, *target);
                 touched.reads = named_if_reference(*part);
             }
-            Op::StringEq { a, b } | Op::StructuralEq { a, b, .. } => {
+            Op::StringEq { a, b } => {
                 touched.reads = named_if_reference(*a);
                 touched.reads.extend(named_if_reference(*b));
             }
-            Op::StringClone { src } | Op::StructuralClone { src, .. } => touched.reads = named_if_reference(*src),
+            Op::StringClone { src } => touched.reads = named_if_reference(*src),
             Op::FunctionCall { callee, args, .. } | Op::Spawn { callee, args, .. } => {
                 for value in args.iter().chain(indirect(callee)) {
                     let held = self.deepened(state, *value);

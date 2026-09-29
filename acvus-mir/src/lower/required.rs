@@ -191,8 +191,8 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
         | Op::Undef => {}
         Op::StringConcat { parts } => operands.extend(parts.iter().map(|part| passed(*part))),
         Op::StringAppend { target, part } => operands.extend([read(*target), passed(*part)]),
-        Op::StringEq { a, b } | Op::StructuralEq { a, b, .. } => operands.extend([read(*a), read(*b)]),
-        Op::StringClone { src } | Op::StructuralClone { src, .. } => operands.push(read(*src)),
+        Op::StringEq { a, b } => operands.extend([read(*a), read(*b)]),
+        Op::StringClone { src } => operands.push(read(*src)),
         Op::Ref { target, .. } => operands.push(place(target, Taken::Read)),
         Op::Take { target, path, .. } => {
             let whole = match target {

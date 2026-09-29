@@ -229,19 +229,6 @@ impl TypeCheck<'_> {
                     "String or &String",
                 )
             }
-            Op::StructuralEq { a, b, .. } => {
-                self.is_bool(Self::result(inst)?)?;
-                let lent = |value: ValueId| match self.kind(self.ty(value)) {
-                    TyKind::Ref(_, lent) => Ok(lent.ty()),
-                    other => Err(format!("{value:?} is {other:?}, not a reference")),
-                };
-                let (a_lent, b_lent) = (lent(*a)?, lent(*b)?);
-                found(a_lent == b_lent, || format!("{a:?} and {b:?} lend different types"))
-            }
-            Op::StructuralClone { src, .. } => match self.kind(self.ty(*src)) {
-                TyKind::Ref(_, lent) => self.same(Self::result(inst)?, lent.ty(), "the lent type"),
-                other => Err(format!("{src:?} is {other:?}, not a reference")),
-            },
             Op::Ref { target, path, mutability } => {
                 let result = Self::result(inst)?;
                 let TyKind::Ref(made, lent) = self.kind(self.ty(result)) else {

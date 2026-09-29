@@ -201,8 +201,6 @@ enum Shape {
     StringConcat,
     StringEq,
     StringClone,
-    StructuralEq(Vec<Chosen>),
-    StructuralClone(Vec<Chosen>),
     AsSlice { mutability: Mutability, id: QualifiedRef, r#impl: usize },
     ArrayView(Mutability),
     SliceLen,
@@ -301,8 +299,6 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         Op::StringConcat { .. } => Shape::StringConcat,
         Op::StringEq { .. } => Shape::StringEq,
         Op::StringClone { .. } => Shape::StringClone,
-        Op::StructuralEq { leaves, .. } => Shape::StructuralEq(leaves.clone()),
-        Op::StructuralClone { leaves, .. } => Shape::StructuralClone(leaves.clone()),
         Op::AsSlice { mutability, r#impl, .. } => {
             Shape::AsSlice { mutability: *mutability, id: r#impl.id, r#impl: r#impl.r#impl }
         }
