@@ -8,7 +8,9 @@
 //! - S1. `Ctxt` holds four things (infer, scope, decisions, output); no rule
 //!   adds state beside them.
 //! - S2. Anything decided later is a `Decision`; no rule keeps a list to
-//!   drain after solving.
+//!   drain after solving, but for the uses of captured names, which the
+//!   capture walk reads once the fixpoint ends, as Rust's upvar analysis
+//!   follows its type check (D85, `closure::settle_captures`).
 //! - S3. A decision reads only closed terms (types §6).
 //! - S4. A refusal is made only through `refusal`.
 //! - S5. Every pass states its cost; the fixpoint fires each decision once.
@@ -42,7 +44,7 @@ use acvus_ast::{Expr, Script, Slot, Template};
 use crate::decl::Declarations;
 use crate::ty::{Concrete, TyKind, Types};
 
-pub use output::{AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Comparison, Conversion, Impl, Iteration, Name, TryExit, Typeck};
+pub use output::{Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Comparison, Conversion, Impl, Iteration, Name, TryExit, Typeck};
 pub use refusal::{Refusal, RefusalKind};
 
 use ctxt::Ctxt;
@@ -57,6 +59,7 @@ pub fn check_script<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>, 
     let span = tail.map_or(script.span, Expr::span);
     let result = context::check_run_result(&mut cx, site, value, span);
     decision::solve(&mut cx);
+    closure::settle_captures(&mut cx);
     writeback::finish(cx, types, result)
 }
 
@@ -66,6 +69,7 @@ pub fn check_template<S: Slot>(decls: &Declarations, types: &mut Types<Concrete>
     let mut cx = Ctxt::new(decls, Run::Template);
     stmt::check_stmts(&mut cx, &template.body);
     decision::solve(&mut cx);
+    closure::settle_captures(&mut cx);
     let built = cx.node(TyKind::String);
     writeback::finish(cx, types, built)
 }

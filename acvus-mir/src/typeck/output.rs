@@ -97,6 +97,36 @@ pub struct Captured {
     pub capture: Capture,
 }
 
+/// How a method call's receiver is taken (types §6): as written, or lent
+/// `&` or `&mut` where only that reaches a declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adjustment {
+    AsWritten,
+    Ref(Mutability),
+}
+
+/// A name read inside the lambdas `crossed`, innermost first, each of which
+/// captures it; `mutability` is how the read uses it. The capture's mode is
+/// set from every such use once the types are solved (functions §2).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CaptureUse {
+    pub name: Astr,
+    pub of: CaptureOf,
+    pub crossed: Box<[AstId]>,
+    pub mutability: Mutability,
+    /// The captured value's term, whose loans a capture by move holds.
+    pub term: Term,
+}
+
+/// A value of term `term` read whole out of what the `move` lambdas
+/// `lambdas` captured: where its type does not copy, each of them moves it
+/// out and is called once (functions §3).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct WholeUse {
+    pub lambdas: Box<[AstId]>,
+    pub term: Term,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
     pub captures: Box<[Captured]>,
@@ -160,6 +190,13 @@ pub(super) struct Output {
     pub entered: Vec<Entered>,
     pub casts: FxHashMap<AstId, AsCast>,
     pub closures: FxHashMap<AstId, Closure>,
+    /// Each lambda, in the order its body's check ended, with whether it is
+    /// written `move` and its body's span.
+    pub lambdas: Vec<(AstId, bool, Span)>,
+    pub capture_uses: Vec<CaptureUse>,
+    pub whole_uses: Vec<WholeUse>,
+    /// Each method call's receiver adjustment, at the call's callee site.
+    pub adjustments: FxHashMap<AstId, Adjustment>,
     pub comparisons: FxHashMap<AstId, Comparing>,
     pub body_effect: Option<EffectTerm<InferPhase>>,
     pub refusals: Vec<Refusal>,
@@ -179,6 +216,9 @@ pub struct Typeck {
     pub conversions: FxHashMap<AstId, Box<[Conversion<Ty>]>>,
     pub casts: FxHashMap<AstId, AsCast>,
     pub closures: FxHashMap<AstId, Closure>,
+    /// Each method call's receiver adjustment, at the call's callee site,
+    /// where `reached` has the call (types §6).
+    pub adjustments: FxHashMap<AstId, Adjustment>,
     pub comparisons: FxHashMap<AstId, Comparison>,
     pub body_effect: Effect,
     /// The run's result type: the slot every tail and `return` enters, and

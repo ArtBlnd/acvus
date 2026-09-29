@@ -24,6 +24,14 @@ pub(super) fn check_expr<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, demand: Dem
     term
 }
 
+/// A method call's receiver: as `check_expr` reads it, but not yet a whole
+/// use, since its adjustment decides whether it is one (types §6).
+pub(super) fn check_receiver<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>) -> Term {
+    let term = acvus_utils::grow(|| check_form(cx, expr, Demand::Read));
+    cx.record(expr.id(), term);
+    term
+}
+
 /// A name read for more than a shared read: each lambda that captures it
 /// captures it as `demand` asks (functions §2). An input is found in no
 /// frame; it crosses every lambda around it.

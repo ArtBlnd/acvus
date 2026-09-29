@@ -70,6 +70,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         conversions,
         casts: std::mem::take(&mut cx.out.casts),
         closures,
+        adjustments: std::mem::take(&mut cx.out.adjustments),
         comparisons,
         body_effect,
         result,

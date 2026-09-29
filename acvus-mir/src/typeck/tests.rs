@@ -1,10 +1,10 @@
 //! Each test states the rule its expected result comes from. Programs are
 //! parsed with `acvus-ast`; declarations go through `verify`.
 
-use acvus_ast::{ElseBranch, Expr, Script, Stmt, Template};
+use acvus_ast::{AstId, ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
-use super::{Capture, CaptureOf, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
+use super::{Adjustment, Capture, CaptureOf, Captured, Impl, Iteration, RefusalKind, TryExit, Typeck, check_script, check_template};
 use crate::decl::{CastRule, Core, Declarations, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
@@ -1510,27 +1510,138 @@ fn the_runs_result_type_is_recorded() {
     assert_eq!(checked.kind(checked.typeck.result.expect("a template's result is known")), &TyKind::String);
 }
 
-/// functions §2, types §4: a `&mut` captured by shared reference is read
-/// through that reference, as a shared reborrow; used as `&mut`, it is
-/// captured and read as `&mut`.
+/// D85: a captured name is typed as its binding inside the lambda, and
+/// captured by how the lambda uses it: a `&mut` read only is captured `&`,
+/// and one written through is captured `&mut`.
 #[test]
-fn a_mut_reference_captured_shared_is_read_shared() {
-    let fx = Fixture::new();
-    let names = fx.names.clone();
-    let (checked, script) = fx.script("let x = 1; let r = &mut x; let f = |z| -> r; let g = f(0); 1");
-    checked.admitted();
-    let TyKind::Ref(mutability, _) = checked.kind(binding(&checked, &script, &names, "g")) else {
-        panic!("a reference is read");
+fn a_mut_binding_used_read_only_in_a_lambda_is_captured_shared() {
+    let capture_of = |source: &str| {
+        let fx = Fixture::new();
+        let (checked, script) = fx.script(source);
+        checked.admitted();
+        let Stmt::LetBind { expr, .. } = &script.stmts[2] else {
+            panic!("not a let");
+        };
+        let closure = &checked.typeck.closures[&expr.id()];
+        let [captured] = &closure.captures[..] else {
+            panic!("one capture: {:?}", closure.captures);
+        };
+        (captured.capture, checked, script)
     };
-    assert_eq!(*mutability, Mutability::Shared);
-    let fx = Fixture::new();
-    let names = fx.names.clone();
-    let (checked, script) = fx.script("let x = 1; let r = &mut x; let f = |z| -> { *r = 2; r }; let g = f(0); 1");
-    checked.admitted();
-    let TyKind::Ref(mutability, _) = checked.kind(binding(&checked, &script, &names, "g")) else {
-        panic!("a reference is read");
+    let (capture, checked, script) = capture_of("let x = 1; let r = &mut x; let f = |z| -> *r; f(0)");
+    assert_eq!(capture, Capture::Ref(Mutability::Shared));
+    let Stmt::LetBind { expr, .. } = &script.stmts[2] else {
+        panic!("not a let");
     };
-    assert_eq!(*mutability, Mutability::Mut);
+    let Expr::Lambda { body, .. } = expr else {
+        panic!("not a lambda");
+    };
+    let Expr::UnaryOp { operand, .. } = &**body else {
+        panic!("not a deref");
+    };
+    assert!(
+        matches!(checked.kind(checked.typeck.types[&operand.id()]), TyKind::Ref(Mutability::Mut, _)),
+        "the name inside is typed as its binding"
+    );
+    let (capture, _, _) = capture_of("let x = 1; let r = &mut x; let f = |z| -> { *r = 2; z }; f(0)");
+    assert_eq!(capture, Capture::Ref(Mutability::Mut));
+}
+
+// Method receivers (types §6, D85)
+
+/// An extern `Vec<T>` with both views, `len(&Vec<T>) -> i64`,
+/// `push(&mut Vec<T>, T)` and `m(&mut String)`.
+fn vec_with_methods(fx: &mut Fixture) -> (QualifiedRef, QualifiedRef, QualifiedRef, QualifiedRef) {
+    let (vec_id, at_vec) = fx.vec_and_its_view();
+    let as_slice = fx.raw.core.as_slice;
+    fx.lang_item(as_slice, &[at_vec]);
+    let e = fx.var(0);
+    let vec_e = fx.vec_of(vec_id, e);
+    let mut_vec_e = fx.reference(Mutability::Mut, vec_e);
+    let slice_e = fx.ty(TyKind::Slice(e));
+    let mut_slice_e = fx.reference(Mutability::Mut, slice_e);
+    let at_vec_mut = fx.pure(&[mut_vec_e], mut_slice_e);
+    let as_slice_mut = fx.raw.core.as_slice_mut;
+    fx.lang_item(as_slice_mut, &[at_vec_mut]);
+    let shared_vec_e = fx.reference(Mutability::Shared, vec_e);
+    let i64_ty = fx.int(IntTy::I64);
+    let unit = fx.ty(TyKind::Unit);
+    let len_ty = fx.pure(&[shared_vec_e], i64_ty);
+    let len = fx.declare("len", len_ty, &[TyVarBound::Any]);
+    let push_ty = fx.pure(&[mut_vec_e, e], unit);
+    let push = fx.declare("push", push_ty, &[TyVarBound::Any]);
+    let string = fx.ty(TyKind::String);
+    let mut_string = fx.reference(Mutability::Mut, string);
+    let m_ty = fx.pure(&[mut_string], unit);
+    let m = fx.declare("m", m_ty, &[]);
+    (vec_id, len, push, m)
+}
+
+fn method_site(expr: &Expr) -> AstId {
+    match expr {
+        Expr::MethodCall { callee_id, .. } => *callee_id,
+        other => panic!("not a method call: {other:?}"),
+    }
+}
+
+/// types §6: `v.len()` reaches `len(&Vec)` through `&`, and `v.push(x)` on
+/// a writable binding reaches `push(&mut Vec, T)` through `&mut`.
+#[test]
+fn a_receiver_is_lent_as_its_method_takes_it() {
+    let mut fx = Fixture::new();
+    let (vec_id, len, push, _) = vec_with_methods(&mut fx);
+    let i64_ty = fx.int(IntTy::I64);
+    let vec_i64 = fx.vec_of(vec_id, i64_ty);
+    fx.context("v", vec_i64);
+    let (checked, script) = fx.script("let v = @v; v.push(1); v.len()");
+    checked.admitted();
+    let Stmt::Expr(pushed) = &script.stmts[1] else {
+        panic!("not an expression");
+    };
+    let pushed = method_site(pushed);
+    assert_eq!(checked.typeck.reached[&pushed].declaration, push);
+    assert_eq!(checked.typeck.adjustments[&pushed], Adjustment::Ref(Mutability::Mut));
+    let measured = method_site(script.tail.as_deref().unwrap());
+    assert_eq!(checked.typeck.reached[&measured].declaration, len);
+    assert_eq!(checked.typeck.adjustments[&measured], Adjustment::Ref(Mutability::Shared));
+}
+
+/// types §6, D85: an input is no writable place, so its receiver is never
+/// lent `&mut`, and `push` reaches nothing.
+#[test]
+fn an_input_receiver_is_never_lent_mut() {
+    let mut fx = Fixture::new();
+    let (vec_id, _, _, _) = vec_with_methods(&mut fx);
+    let i64_ty = fx.int(IntTy::I64);
+    let vec_i64 = fx.vec_of(vec_id, i64_ty);
+    fx.input("v", vec_i64);
+    let (checked, script) = fx.script("$v.push(1)");
+    let site = method_site(script.tail.as_deref().unwrap());
+    assert_ne!(checked.typeck.adjustments[&site], Adjustment::Ref(Mutability::Mut));
+    assert!(matches!(checked.refusals()[..], [RefusalKind::NoDeclaration { .. }]), "{:?}", checked.refusals());
+}
+
+/// operators §3, D85: `v[i].m()` where `m` takes `&mut` reaches the
+/// element through `as_slice_mut`, as Rust's `Index` becomes `IndexMut`.
+#[test]
+fn a_mut_receiver_indexes_through_as_slice_mut() {
+    let mut fx = Fixture::new();
+    let (vec_id, _, _, m) = vec_with_methods(&mut fx);
+    let as_slice_mut = fx.raw.core.as_slice_mut;
+    let string = fx.ty(TyKind::String);
+    let vec_string = fx.vec_of(vec_id, string);
+    fx.context("v", vec_string);
+    let (checked, script) = fx.script("let v = @v; v[0].m()");
+    checked.admitted();
+    let Some(Expr::MethodCall { callee_id, receiver, .. }) = script.tail.as_deref() else {
+        panic!("not a method call");
+    };
+    assert_eq!(checked.typeck.reached[callee_id].declaration, m);
+    assert_eq!(checked.typeck.adjustments[callee_id], Adjustment::Ref(Mutability::Mut));
+    let Expr::Index { callee_id: index, .. } = &**receiver else {
+        panic!("not an index");
+    };
+    assert_eq!(checked.typeck.reached[index].declaration, as_slice_mut);
 }
 
 /// programs §1: a template's text is appended as written, and only a

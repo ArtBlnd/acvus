@@ -5,8 +5,7 @@ use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
 use super::ctxt::Ctxt;
-use super::decision::Decision;
-use super::output::{Capture, CaptureOf, Captured, Name};
+use super::output::{CaptureOf, CaptureUse, Name};
 use super::place::Demand;
 use super::refusal::{self, RefusalKind};
 use crate::infer::Term;
@@ -242,7 +241,7 @@ pub(super) fn check_ident(
     {
         cx.out.names.insert(site, Name::Binding(found.binding.binder));
         note_captures(cx, capturing_binding(name.name, &found), Demand::Read, span);
-        return seen_through_captures(cx, &found, span);
+        return found.binding.term;
     }
     let declarations: Box<[QualifiedRef]> = match name.namespace {
         Some(_) => cx.decls.scheme(name).map(|_| name).into_iter().collect(),
@@ -265,24 +264,6 @@ pub(super) fn check_ident(
             cx.fresh()
         }
     }
-}
-
-/// A binding read inside lambdas that captured it: its term as the
-/// lambdas see it, which a decision settles once their captures are all
-/// known (functions §2, types §4).
-fn seen_through_captures(cx: &mut Ctxt<'_>, found: &Found, span: Span) -> Term {
-    if found.crossed.is_empty() {
-        return found.binding.term;
-    }
-    let seen = cx.fresh();
-    cx.decisions.push(Decision::ThroughCaptures {
-        span,
-        binder: found.binding.binder,
-        lambdas: found.crossed.clone().into(),
-        value: found.binding.term,
-        seen,
-    });
-    seen
 }
 
 /// `$name`: the value the host passes, at its declared type (programs §4).
@@ -322,58 +303,16 @@ pub(super) struct Capturing<'a> {
     pub term: Term,
 }
 
-pub(super) fn note_captures(cx: &mut Ctxt<'_>, capturing: Capturing<'_>, demand: Demand, span: Span) {
+pub(super) fn note_captures(cx: &mut Ctxt<'_>, capturing: Capturing<'_>, demand: Demand, _span: Span) {
     let Capturing { name, of, crossed, term } = capturing;
-    let wanted = match demand {
+    if crossed.is_empty() {
+        return;
+    }
+    let mutability = match demand {
         Demand::Read | Demand::Lend(Mutability::Shared) => Mutability::Shared,
         Demand::Write | Demand::Lend(Mutability::Mut) => Mutability::Mut,
     };
-    for lambda in crossed {
-        let by_move = cx.scope.captures_by_move(*lambda);
-        let mut captures = cx
-            .out
-            .closures
-            .get(lambda)
-            .expect("a lambda records its closure before its body is checked")
-            .captures
-            .to_vec();
-        match captures.iter_mut().find(|captured| captured.binder == of) {
-            Some(Captured {
-                capture: Capture::Ref(mutability),
-                ..
-            }) => {
-                if wanted == Mutability::Mut {
-                    *mutability = Mutability::Mut;
-                }
-            }
-            Some(Captured {
-                capture: Capture::Move, ..
-            }) => {}
-            None if by_move => {
-                captures.push(Captured {
-                    name,
-                    binder: of,
-                    capture: Capture::Move,
-                });
-                cx.decisions.push(Decision::MovedCapture {
-                    lambda: *lambda,
-                    span,
-                    term,
-                });
-            }
-            None => captures.push(Captured {
-                name,
-                binder: of,
-                capture: Capture::Ref(wanted),
-            }),
-        }
-        let closure = cx
-            .out
-            .closures
-            .get_mut(lambda)
-            .expect("a lambda records its closure before its body is checked");
-        closure.captures = captures.into();
-    }
+    cx.out.capture_uses.push(CaptureUse { name, of, crossed: crossed.into(), mutability, term });
 }
 
 /// `found`'s binding as a capture.

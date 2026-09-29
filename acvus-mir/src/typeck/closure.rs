@@ -9,19 +9,24 @@
 //! lambda is called once; every other lambda many times (functions §3).
 //! A body holding its captures by reference moves none of them out: a move
 //! out of a borrow is the move check's to refuse.
+//!
+//! How each name is captured is set once the types are solved, as Rust's
+//! upvar analysis does (D85): the walk records each use of a captured name,
+//! and `settle_captures` reads them after the fixpoint, when every receiver
+//! adjustment that lends a name is known. Inside the lambda, a captured
+//! name has its binding's own type.
 
 use acvus_ast::{AstId, Binder, Expr, RefKind, Slot, Span};
 use acvus_utils::Astr;
 use rustc_hash::FxHashSet;
 
 use super::ctxt::Ctxt;
-use super::decision::Decision;
 use super::expr::check_expr;
-use super::output::{Capture, CaptureOf, Closure};
+use super::output::{Capture, Captured, Closure, WholeUse};
 use super::place::Demand;
 use super::refusal::{self, RefusalKind};
 use super::scope::Binding;
-use crate::infer::{Closed, Term};
+use crate::infer::Term;
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, LifetimesOf, Mutability, ObjectTy, TyKind};
 
 /// The lambda's parameters start as fresh variables, constrained by their
@@ -62,33 +67,125 @@ pub(super) fn check_lambda<S: Slot>(
         .scope
         .pop_lambda()
         .unwrap_or_else(|| EffectTerm::Known(Effect::pure()));
-    let closure = &cx.out.closures[&site];
-    let holds = holds(closure);
-    let calls = closure.calls;
+    cx.out.lambdas.push((site, captures_by_move, body.span()));
+    let holds = walked_holds(cx, site, captures_by_move);
     let flows = FlowTerm::Var(cx.infer.fresh_flow());
     cx.held(TyKind::Fn {
         params: param_terms.into(),
         ret: result,
         effect,
         flows,
-        calls,
+        calls: Calls::Many,
         holds,
     })
 }
 
-/// The strongest loan the captures by reference hold (ownership §5). A
-/// capture by move holds what its value's type holds, which
-/// `Decision::MovedCapture` joins in once that type is solved.
-fn holds(closure: &Closure) -> Holds {
-    closure
-        .captures
+/// What a lambda's captures by reference hold, as far as its body's walk
+/// knows: `&mut` where a use writes a captured name or lends it `&mut`,
+/// `&` otherwise (ownership §5). The lambda's type carries this from the
+/// start, since a slot it enters takes a copy of that type (D14); what the
+/// capture walk learns later, a receiver lent `&mut` or a captured value's
+/// own loans, joins in then.
+fn walked_holds(cx: &Ctxt<'_>, lambda: AstId, by_move: bool) -> Holds {
+    if by_move {
+        return Holds::Nothing;
+    }
+    cx.out
+        .capture_uses
         .iter()
-        .map(|captured| match captured.capture {
-            Capture::Ref(Mutability::Shared) => Holds::Shared,
-            Capture::Ref(Mutability::Mut) => Holds::Mut,
-            Capture::Move => Holds::Nothing,
+        .filter(|used| used.crossed.contains(&lambda))
+        .map(|used| match used.mutability {
+            Mutability::Shared => Holds::Shared,
+            Mutability::Mut => Holds::Mut,
         })
         .fold(Holds::Nothing, Holds::join)
+}
+
+/// Each lambda's captures, from every use of a name it captured, once the
+/// types are solved (functions §2-3, ownership §5): by move in a lambda
+/// written `move`, and otherwise by `&mut` where some use writes the name
+/// or lends it `&mut`, and by `&` else. What the captures hold, and whether
+/// the lambda moves a captured value out and is called once, join its
+/// function type. Lambdas are settled in the order their checks ended, so
+/// an inner lambda's holds are settled before an outer `move` lambda reads
+/// them off a value it captured.
+///
+/// Cost: O(lambdas · uses) and a walk of each captured value's type.
+pub(super) fn settle_captures(cx: &mut Ctxt<'_>) {
+    let lambdas = cx.out.lambdas.clone();
+    for (lambda, by_move, span) in lambdas {
+        let mut captures: Vec<Captured> = Vec::new();
+        let mut moved_terms: Vec<Term> = Vec::new();
+        for used in cx.out.capture_uses.iter().filter(|used| used.crossed.contains(&lambda)) {
+            match captures.iter_mut().find(|captured| captured.binder == used.of) {
+                Some(Captured { capture: Capture::Ref(mutability), .. }) => {
+                    if used.mutability == Mutability::Mut {
+                        *mutability = Mutability::Mut;
+                    }
+                }
+                Some(Captured { capture: Capture::Move, .. }) => {}
+                None => {
+                    let capture = match by_move {
+                        true => Capture::Move,
+                        false => Capture::Ref(used.mutability),
+                    };
+                    if by_move {
+                        moved_terms.push(used.term);
+                    }
+                    captures.push(Captured { name: used.name, binder: used.of, capture });
+                }
+            }
+        }
+        let wholes: Vec<Term> = cx
+            .out
+            .whole_uses
+            .iter()
+            .filter(|whole| whole.lambdas.contains(&lambda))
+            .map(|whole| whole.term)
+            .collect();
+        if !unbound_vars_in(cx, moved_terms.iter().chain(&wholes).copied()) {
+            let mut holds = captures
+                .iter()
+                .map(|captured| match captured.capture {
+                    Capture::Ref(Mutability::Shared) => Holds::Shared,
+                    Capture::Ref(Mutability::Mut) => Holds::Mut,
+                    Capture::Move => Holds::Nothing,
+                })
+                .fold(Holds::Nothing, Holds::join);
+            for term in &moved_terms {
+                holds = holds.join(strongest_loan(cx, *term));
+            }
+            let calls = match wholes.iter().any(|term| !copies(cx, *term)) {
+                true => Calls::Once,
+                false => Calls::Many,
+            };
+            relax(cx, lambda, calls, holds, span);
+        }
+        cx.out
+            .closures
+            .get_mut(&lambda)
+            .expect("a lambda records its closure when it is checked")
+            .captures = captures.into();
+    }
+}
+
+/// Whether any of `terms` holds a type variable still open, which only a
+/// refusal leaves after solving.
+fn unbound_vars_in(cx: &Ctxt<'_>, terms: impl Iterator<Item = Term>) -> bool {
+    let mut stack: Vec<Term> = terms.collect();
+    let mut seen = FxHashSet::default();
+    while let Some(at) = stack.pop() {
+        let at = cx.infer.shallow(at);
+        if !seen.insert(at) {
+            continue;
+        }
+        let kind = cx.infer.types().kind(at);
+        if matches!(kind, TyKind::Var(_)) {
+            return true;
+        }
+        kind.for_each_child(|child| stack.push(child));
+    }
+    false
 }
 
 /// A value of `expr` read whole, where `expr` is a place rooted at a name
@@ -103,11 +200,9 @@ pub(super) fn note_whole_use<S: Slot>(cx: &mut Ctxt<'_>, expr: &Expr<S>, term: T
         Some(Root::Input) => cx.scope.lambdas(),
         None => return,
     };
-    for lambda in crossed {
-        if cx.scope.captures_by_move(lambda) {
-            let span = expr.span();
-            cx.decisions.push(Decision::MovesOut { lambda, span, term });
-        }
+    let lambdas: Box<[AstId]> = crossed.into_iter().filter(|lambda| cx.scope.captures_by_move(*lambda)).collect();
+    if !lambdas.is_empty() {
+        cx.out.whole_uses.push(WholeUse { lambdas, term });
     }
 }
 
@@ -131,39 +226,6 @@ fn place_root<S: Slot>(expr: &Expr<S>) -> Option<Root> {
         Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => place_root(object),
         Expr::Paren { inner, .. } => place_root(inner),
         _ => None,
-    }
-}
-
-/// A binding read inside `lambdas` fired on its value's head: a `&mut`
-/// that some lambda captured by shared reference is seen as a shared
-/// reborrow of its target (functions §2, types §4); otherwise the read
-/// sees the value itself.
-pub(super) fn fire_through_captures(
-    cx: &mut Ctxt<'_>,
-    span: Span,
-    binder: AstId,
-    lambdas: &[AstId],
-    value: Term,
-    closed: Closed,
-    seen: Term,
-) {
-    let of = CaptureOf::Binding(binder);
-    let shared = lambdas.iter().any(|lambda| {
-        cx.out.closures[lambda]
-            .captures
-            .iter()
-            .any(|captured| captured.binder == of && captured.capture == Capture::Ref(Mutability::Shared))
-    });
-    let TyKind::Ref(Mutability::Mut, target) = cx.infer.types().kind(closed.term).clone() else {
-        cx.eq(seen, value, span);
-        return;
-    };
-    match shared {
-        true => {
-            let reborrow = cx.node(TyKind::Ref(Mutability::Shared, target));
-            cx.eq(seen, reborrow, span);
-        }
-        false => cx.eq(seen, value, span),
     }
 }
 
@@ -276,8 +338,9 @@ pub(super) fn relax(cx: &mut Ctxt<'_>, lambda: AstId, calls: Calls, holds: Holds
 /// A lambda stored into the binding it captures would call itself: only a
 /// `fn` may recurse (functions §4).
 pub(super) fn refuse_recursion(cx: &mut Ctxt<'_>, value: Term, name: Astr, span: Span) {
-    let recursive = cx.out.closures.iter().any(|(lambda, closure)| {
-        cx.out.types.get(lambda) == Some(&value) && closure.captures.iter().any(|captured| captured.name == name)
+    let recursive = cx.out.lambdas.iter().any(|(lambda, _, _)| {
+        cx.out.types.get(lambda) == Some(&value)
+            && cx.out.capture_uses.iter().any(|used| used.name == name && used.crossed.contains(lambda))
     });
     if recursive {
         refusal::push(cx, RefusalKind::LambdaRecursion, span);

@@ -32,7 +32,7 @@ use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme, TyVarBound};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::{
-    Calls, CastTy, EffectTerm, Holds, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
+    CastTy, EffectTerm, Infer as InferPhase, IntTy, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
 };
 
 /// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
@@ -128,14 +128,6 @@ pub(super) enum Decision {
     /// A value that outlives the run, whose type has no positions
     /// (ownership §5), read once no variable is left in it.
     HoldsNoLoans { span: Span, term: Term },
-    /// A name a `move` lambda captured: the lambda's function value holds
-    /// the strongest loan the captured value's type holds (ownership §5),
-    /// read once no variable is left in it.
-    MovedCapture { lambda: AstId, span: Span, term: Term },
-    /// A value a `move` lambda's body uses whole, out of what it captured:
-    /// where its type does not copy, the body moves it out, and the lambda
-    /// is called once (functions §3).
-    MovesOut { lambda: AstId, span: Span, term: Term },
     /// `&value` or `&mut value`: a reborrow where `value` is a reference,
     /// since a reference's target is never one (types §4).
     Lend { span: Span, value: Term, mutability: Mutability, result: Term },
@@ -160,19 +152,9 @@ pub(super) enum Decision {
     /// A pattern against its scrutinee, through a reference as Rust's
     /// default binding modes do (patterns §1).
     Destructure { shape: Box<Shape>, scrutinee: Term, lent: Option<Mutability> },
-    /// A binding of term `value` read inside `lambdas`, which captured it:
-    /// `seen` is how the read sees it. A `&mut` captured by shared
-    /// reference is seen through that reference, a shared reborrow, since
-    /// a reference never targets a reference (functions §2, types §4); any
-    /// other capture sees the value itself. It waits until the lambdas'
-    /// captures are all known, which is after the walk.
-    ThroughCaptures {
-        span: Span,
-        binder: AstId,
-        lambdas: Box<[AstId]>,
-        value: Term,
-        seen: Term,
-    },
+    /// A method call's receiver adjustment (types §6), once the receiver's
+    /// head is known; the call's reach follows it.
+    Adjust(Box<super::method::Adjust>),
     /// A block with no tail whose last statement is the expression of
     /// term `last`: `block` is `!` where `last` is, and `()` otherwise
     /// (control-flow).
@@ -205,15 +187,13 @@ impl Decision {
             Decision::Index { element, .. } => vec![*element],
             Decision::Deref { target, .. } => vec![*target],
             Decision::BlockEnd { block, .. } => vec![*block],
-            Decision::ThroughCaptures { seen, .. } => vec![*seen],
+            Decision::Adjust(adjust) => vec![adjust.result],
             Decision::Destructure { shape, .. } => shape.bindings(),
             Decision::Compare { .. }
             | Decision::Operand { .. }
             | Decision::Cast { .. }
             | Decision::Settle { .. }
-            | Decision::HoldsNoLoans { .. }
-            | Decision::MovedCapture { .. }
-            | Decision::MovesOut { .. } => Vec::new(),
+            | Decision::HoldsNoLoans { .. } => Vec::new(),
         };
         outputs.into_iter()
     }
@@ -231,7 +211,7 @@ impl Decision {
             Decision::Index { container, element, .. } => vec![*container, *element],
             Decision::Deref { reference, target, .. } => vec![*reference, *target],
             Decision::BlockEnd { last, block, .. } => vec![*last, *block],
-            Decision::ThroughCaptures { value, seen, .. } => vec![*value, *seen],
+            Decision::Adjust(adjust) => adjust.terms(),
             Decision::Destructure { shape, scrutinee, .. } => {
                 let mut terms = shape.bindings();
                 terms.push(*scrutinee);
@@ -239,9 +219,7 @@ impl Decision {
             }
             Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => vec![*operand],
             Decision::Settle { term, .. }
-            | Decision::HoldsNoLoans { term, .. }
-            | Decision::MovedCapture { term, .. }
-            | Decision::MovesOut { term, .. } => vec![*term],
+            | Decision::HoldsNoLoans { term, .. } => vec![*term],
         }
     }
 }
@@ -293,7 +271,7 @@ impl OpenSources for NothingOpen {
 
 /// Whether a firing waits for a term or goes ahead on what is fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Reading {
+pub(super) enum Reading {
     Closed,
     CycleBroken,
 }
@@ -328,6 +306,14 @@ fn default_effects_marks_and_flows(cx: &mut Ctxt<'_>) -> bool {
     effects_and_marks || flows
 }
 
+/// Whether an index at `callee_site` is still to be decided.
+pub(super) fn index_pending(cx: &Ctxt<'_>, callee_site: AstId) -> bool {
+    cx.decisions
+        .pending
+        .iter()
+        .any(|decision| matches!(decision, Decision::Index { callee_site: at, .. } if *at == callee_site))
+}
+
 /// The one term whose head a decision reads before it fires, where it has
 /// exactly one.
 fn read_head(decision: &Decision) -> Option<Term> {
@@ -339,15 +325,13 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Destructure { scrutinee, .. } => Some(*scrutinee),
         Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => Some(*operand),
         Decision::BlockEnd { last, .. } => Some(*last),
-        Decision::ThroughCaptures { value, .. } => Some(*value),
+        Decision::Adjust(adjust) => Some(adjust.receiver),
         Decision::Iterate { head, .. } => Some(*head),
         Decision::Try { operand, .. } => Some(*operand),
         Decision::Cast { source, .. } => Some(*source),
         Decision::Reach { .. }
         | Decision::Settle { .. }
-        | Decision::HoldsNoLoans { .. }
-        | Decision::MovedCapture { .. }
-        | Decision::MovesOut { .. } => None,
+        | Decision::HoldsNoLoans { .. } => None,
     }
 }
 
@@ -383,7 +367,7 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
     fired
 }
 
-fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<Closed> {
+pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<Closed> {
     match reading {
         Reading::Closed => cx.closed(term),
         Reading::CycleBroken => cx.infer.closed(cx.decls.casts(), &NothingOpen, term),
@@ -470,14 +454,6 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             if super::context::holds_positions(cx, term) {
                 refusal::push(cx, RefusalKind::HoldsLoans, span);
             }
-            Ok(())
-        }
-        Decision::MovedCapture { lambda, span, term } => {
-            if !unbound_vars(cx, [term]).is_empty() {
-                return Err(Decision::MovedCapture { lambda, span, term });
-            }
-            let holds = super::closure::strongest_loan(cx, term);
-            super::closure::relax(cx, lambda, Calls::Many, holds, span);
             Ok(())
         }
         Decision::Lend {
@@ -578,24 +554,11 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             super::op::fire_compare(cx, node, span, sig, closed, &body);
             Ok(())
         }
-        Decision::ThroughCaptures {
-            span,
-            binder,
-            lambdas,
-            value,
-            seen,
-        } => {
-            let Some(closed) = closed_for(cx, value, reading) else {
-                return Err(Decision::ThroughCaptures {
-                    span,
-                    binder,
-                    lambdas,
-                    value,
-                    seen,
-                });
+        Decision::Adjust(adjust) => {
+            let Some(closed) = closed_for(cx, adjust.receiver, reading) else {
+                return Err(Decision::Adjust(adjust));
             };
-            super::closure::fire_through_captures(cx, span, binder, &lambdas, value, closed, seen);
-            Ok(())
+            super::method::fire_adjust(cx, *adjust, closed, reading).map_err(|adjust| Decision::Adjust(Box::new(adjust)))
         }
         Decision::BlockEnd { span, last, block } => {
             let Some(closed) = closed_for(cx, last, reading) else {
@@ -609,15 +572,6 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 return Err(Decision::Operand { span, operand, domain });
             };
             super::op::fire_operand(cx, span, closed, domain);
-            Ok(())
-        }
-        Decision::MovesOut { lambda, span, term } => {
-            if !unbound_vars(cx, [term]).is_empty() {
-                return Err(Decision::MovesOut { lambda, span, term });
-            }
-            if !super::closure::copies(cx, term) {
-                super::closure::relax(cx, lambda, Calls::Once, Holds::Nothing, span);
-            }
             Ok(())
         }
         Decision::Reach {
@@ -800,10 +754,10 @@ impl Reach {
 /// One candidate of a reach: a declaration without impls, or one impl of a
 /// generic function.
 #[derive(Debug, Clone, Copy)]
-struct Offer {
+pub(super) struct Offer {
     declaration: QualifiedRef,
     r#impl: Option<Impl>,
-    ty: TyId<Poly>,
+    pub ty: TyId<Poly>,
 }
 
 /// One position of a call's arguments read front to back: an argument, or
@@ -885,12 +839,12 @@ fn choose(cx: &Ctxt<'_>, offers: &[Offer], positions: &[Position], chains: &[Vec
 /// A type variable parameter matches at the exact step, so the generic
 /// impl would tie with every exact concrete one; the concrete impls come
 /// first (D62).
-struct Offers {
-    concrete: Vec<Offer>,
-    generic: Vec<Offer>,
+pub(super) struct Offers {
+    pub concrete: Vec<Offer>,
+    pub generic: Vec<Offer>,
 }
 
-fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
+pub(super) fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
     let mut concrete = Vec::new();
     let mut generic = Vec::new();
     let mut offer_of = |declaration: QualifiedRef, keep: &dyn Fn(&crate::decl::DeclaredFacts) -> bool| {
@@ -972,7 +926,7 @@ fn core_name(cx: &Ctxt<'_>, sig: CoreSig) -> QualifiedRef {
 }
 
 /// The name a refusal of a reach names: what the program wrote.
-fn callee_name(cx: &Ctxt<'_>, callee: &Callee) -> Astr {
+pub(super) fn callee_name(cx: &Ctxt<'_>, callee: &Callee) -> Astr {
     match callee {
         Callee::Name(name) | Callee::Method(name) => *name,
         Callee::Declaration(declaration) => declaration.name,
@@ -984,7 +938,7 @@ fn callee_name(cx: &Ctxt<'_>, callee: &Callee) -> Astr {
 /// # Panics
 /// `ty` is not a function type: verify refuses a signature or impl that is
 /// not one (`NotAFunction`).
-fn params_of(types: &Types<Poly>, ty: TyId<Poly>) -> &[TyId<Poly>] {
+pub(super) fn params_of(types: &Types<Poly>, ty: TyId<Poly>) -> &[TyId<Poly>] {
     match types.kind(ty) {
         TyKind::Fn { params, .. } => params,
         _ => panic!("a verified signature is a function type (NotAFunction)"),
@@ -1028,7 +982,7 @@ fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: 
 }
 
 /// `head` and every head up the cast tree from it (types §3).
-fn chain_up(cx: &Ctxt<'_>, head: Head) -> Vec<Head> {
+pub(super) fn chain_up(cx: &Ctxt<'_>, head: Head) -> Vec<Head> {
     let mut chain = vec![head];
     let mut at = head;
     while let Some(step) = cx.decls.casts().step_up(at) {
@@ -1042,7 +996,7 @@ fn chain_up(cx: &Ctxt<'_>, head: Head) -> Vec<Head> {
 /// A declared parameter's head at `path`, `None` where any head matches:
 /// a type variable, a reference to one, or a part below a head that is not
 /// a tuple, which its own position already decided.
-fn param_head_at(types: &Types<Poly>, params: &[TyId<Poly>], path: &[usize]) -> Option<Head> {
+pub(super) fn param_head_at(types: &Types<Poly>, params: &[TyId<Poly>], path: &[usize]) -> Option<Head> {
     let (first, parts) = path.split_first().expect("a position names its argument");
     let mut at = params[*first];
     for part in parts {
@@ -1457,7 +1411,7 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
     match decision {
         Decision::Settle { span, .. } => refusal::push(cx, RefusalKind::BoundUnanswered, span),
         // Its type holds a variable some other refusal left open.
-        Decision::HoldsNoLoans { .. } | Decision::MovedCapture { .. } | Decision::MovesOut { .. } => {}
+        Decision::HoldsNoLoans { .. } => {}
         Decision::Reach { span, callee, .. } => {
             let open = callee_name(cx, &callee);
             refusal::push(cx, RefusalKind::NeverKnown { open }, span);
@@ -1472,8 +1426,8 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         | Decision::Deref { span, .. }
         | Decision::Compare { span, .. }
         | Decision::Operand { span, .. }
-        | Decision::BlockEnd { span, .. }
-        | Decision::ThroughCaptures { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
+        | Decision::BlockEnd { span, .. } => refusal::push(cx, RefusalKind::Undecided, span),
+        Decision::Adjust(adjust) => refusal::push(cx, RefusalKind::Undecided, adjust.span),
         Decision::Destructure { shape, .. } => refusal::push(cx, RefusalKind::Undecided, shape.span()),
     }
 }

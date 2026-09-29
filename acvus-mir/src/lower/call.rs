@@ -21,7 +21,7 @@ use super::place::{lend, operand};
 use crate::ir::cfg::Op;
 use crate::ir::{Callee, PathSeg, RefTarget, UnaryOp, ValueId, fn_effect, known_len};
 use crate::ty::{IntTy, Mutability, Reissue, Ty, TyKind};
-use crate::typeck::Comparison;
+use crate::typeck::{Adjustment, Comparison};
 
 /// `value`, written at `site`, coerced by each step typeck recorded there.
 pub(super) fn convert(cx: &mut Lcx<'_, '_>, site: AstId, value: ValueId, span: Span) -> ValueId {
@@ -132,8 +132,8 @@ fn variant_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, tag: acvus_utils::As
 }
 
 /// `receiver.name(args)`, reached at `callee_site`: the receiver is the
-/// first argument as it stands. `.unwrap()` is the language's own
-/// (operators §2).
+/// first argument, as written or lent as typeck adjusted it (types §6).
+/// `.unwrap()` is the language's own (operators §2).
 pub(super) fn lower_method<S: Slot>(
     cx: &mut Lcx<'_, '_>,
     site: AstId,
@@ -142,17 +142,30 @@ pub(super) fn lower_method<S: Slot>(
     args: &[Expr<S>],
     span: Span,
 ) -> ValueId {
-    let mut all: Vec<&Expr<S>> = vec![receiver];
-    all.extend(args.iter());
+    let adjustment = *cx
+        .typeck
+        .adjustments
+        .get(&callee_site)
+        .unwrap_or_else(|| panic!("typeck records the receiver adjustment of every reached method call, and not {callee_site:?}"));
+    let taken = match adjustment {
+        Adjustment::AsWritten => lower_expr(cx, receiver),
+        Adjustment::Ref(mutability) => {
+            let place = operand(cx, receiver, mutability);
+            lend(cx, place, mutability, receiver.span())
+        }
+    };
+    let taken = convert(cx, receiver.id(), taken, receiver.span());
+    let rest: Vec<&Expr<S>> = args.iter().collect();
+    let mut all = vec![taken];
+    all.extend(arguments(cx, &rest));
     if cx.reached(callee_site).declaration == cx.decls.core().unwrap {
-        let [wrapped] = &arguments(cx, &all)[..] else {
+        let [wrapped] = &all[..] else {
             panic!("`unwrap` takes its receiver alone (operators §2)")
         };
         let ty = cx.ty(site);
         return cx.builder.push(Op::UnwrapVariant { src: *wrapped }, ty, span);
     }
-    let args = arguments(cx, &all);
-    call_reached(cx, callee_site, args, span)
+    call_reached(cx, callee_site, all, span)
 }
 
 /// A shared reference to an operand, coerced at the operand's site: what a

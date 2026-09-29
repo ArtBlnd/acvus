@@ -42,12 +42,14 @@ pub(super) enum Operand {
 }
 
 /// The place a binding lives in, holding a `ty`.
+/// A slot holds its content at the slot's own type: a `&mut` binding a
+/// lambda captured by `&` holds a shared reborrow of it there, though the
+/// lambda's uses are typed as the binding (D85).
 pub(super) fn binding_place(cx: &Lcx<'_, '_>, binder: AstId, ty: Ty) -> Place {
-    let target = match cx.home(binder) {
-        Home::Slot(slot) => RefTarget::Var(slot),
-        Home::Through(reference) => RefTarget::Through(reference),
-    };
-    Place { target, path: Vec::new(), ty }
+    match cx.home(binder) {
+        Home::Slot(slot) => Place { target: RefTarget::Var(slot), path: Vec::new(), ty: cx.value_ty(slot) },
+        Home::Through(reference) => Place { target: RefTarget::Through(reference), path: Vec::new(), ty },
+    }
 }
 
 /// `expr` as a place where it names one; `mutability` is what an index in
