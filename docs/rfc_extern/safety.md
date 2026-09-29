@@ -4,6 +4,8 @@
 
 The crossing traits are sealed. The boundary and the derive implement them; an author implements none. The extern side's `unsafe` is the boundary's layout casts, each under a witness, and the structural signed implementations; the entry is safe.
 
+The boundary is one set of modules in the extern crate, and it is the only place `unsafe` is written: every other module of every crate forbids it. Each fact the boundary's `unsafe` relies on is established at exactly one place in it, and everything else consumes it through a type; changing the assumption there changes, or breaks at compile time, every dependent.
+
 ## 2. What the author signs
 
 A fact about a type's own structure that no stable Rust bound states is signed at the defining type, and the derive emits it after reading the definition. There are four kinds:

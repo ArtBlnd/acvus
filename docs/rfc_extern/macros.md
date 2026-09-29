@@ -10,7 +10,8 @@ The attribute reads the function's Rust signature and its arguments and emits th
 - A result is a value; a sequence is returned as a `Vec<T>`. A result that borrows borrows only what was lent in place (crossing §4).
 - A closure parameter is a callback, callable any number of times. A callback is called synchronously or awaited (crossing §3).
 - An `async fn` is an extern that suspends. An extern declared heavy runs off the script's thread where the interpreter places it (interpreter: tasks).
-- Declared facts are written in the attribute (declared facts).
+- Declared facts are written in the attribute (declared facts). A declared fact about a place (compiler: extern fn §3, access and action) is written on the parameter whose storage it speaks of; a relation and a source are written on the function.
+- A closure parameter's function type may hold any loan, so a callback may be any function value the program makes. An author who keeps a callback past the call declares it holding none (limitations §3).
 
 The glue it emits contains no `unsafe`.
 

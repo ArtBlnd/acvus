@@ -28,7 +28,7 @@ The runtime's value crosses to the extern side as the extern side's own owning h
 
 Every typed read states its caller's obligation over the checker's typing of the read path, never over how the value was made: this value, reached through this runtime's own operations along a path the checker typed `T`, is taken at `T`. The extern side discharges it from the checker. A runtime that checks its reads turns a breach into a panic; a runtime that trusts them trusts its own reads.
 
-The extern side reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, and every later typed read of that part goes back to the runtime.
+The extern side reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, and every later typed read of that part goes back to the runtime. A layout witness is made only where the layout identity it proves is signed, at the type (safety §2, L), and nowhere else.
 
 The entry is safe. The axiom enters only where a runtime trusts its own typed reads: such a runtime owes that each value is live at the type the checker settled for the site (safety §3). A runtime that checks its reads owes nothing, so a safe runtime needs no `unsafe` of its own.
 
