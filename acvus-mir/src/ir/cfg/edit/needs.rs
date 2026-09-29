@@ -4,7 +4,7 @@
 
 use super::{InstRef, Position};
 use crate::ir::cfg::{BodyId, Changes, Module, Site};
-use crate::ir::ValueId;
+use crate::ir::{PathSeg, ValueId};
 
 pub trait Facts {
     fn refresh(&mut self, module: &Module, body: BodyId, changes: &Changes);
@@ -63,6 +63,9 @@ pub trait ContentFacts: Facts {
     /// own storage, may be read from `at` on, before a whole store replaces
     /// it or the body ends.
     fn content_read_after(&self, place: ValueId, at: Position) -> bool;
+    /// Whether any part of `place`'s content overlapping `path` may be read
+    /// from `at` on, before a store replaces that part or the body ends.
+    fn part_read_after(&self, place: ValueId, path: &[PathSeg], at: Position) -> bool;
 }
 
 pub trait DischargeFacts: Facts {

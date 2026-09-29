@@ -37,7 +37,8 @@ use rustc_hash::FxHashSet;
 use super::body::{Def, InstId};
 use super::core::{InstShift, structural_fields};
 use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
-use crate::ir::{Callee, IndexBound, RefTarget, SwitchKey, ValueId, fn_effect};
+use crate::ir::parts;
+use crate::ir::{Callee, IndexBound, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
 use crate::ty::{Concrete, Mutability, Reissue, SplitCost, Ty, TyKind, TypeArg, Types};
 
 /// An instruction of the body being edited.
@@ -848,6 +849,14 @@ pub enum CannotDrop {
     ContentReadAfter,
 }
 
+/// Whose part `drop_part` ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartOf {
+    /// A slot or a by-value parameter's own storage.
+    Place(ValueId),
+    Value(ValueId),
+}
+
 /// Why a read cannot become a clone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CannotCloneRead {
@@ -1258,6 +1267,117 @@ where
         });
         self.shifted([InstShift::Inserted { block, index }, InstShift::Inserted { block, index: index + 1 }]);
         Ok(())
+    }
+
+    /// S3, for a part (ownership §6): the part of `of` at `path` is taken
+    /// out at `at` and dropped there. A place's part is a `Take` of it. A
+    /// value's is the extraction that names it: a `FieldGet` for a path of
+    /// fields, and a `TupleIndex` or an `ArrayIndex` for one index. Refused
+    /// as `ContentReadAfter` where the place's part may be read from `at`
+    /// on, and as `UsedAfter` at the first use of the value that touches the
+    /// part and that a path from `at` reaches, found as `insert_drop` finds
+    /// a use.
+    ///
+    /// # Panics
+    /// A place that is neither a slot nor a parameter; a value not defined
+    /// at `at`, or its path neither all fields nor one index; `path` naming
+    /// no part of its holder; or `at` naming no position of the body.
+    pub fn drop_part(&mut self, of: PartOf, path: &[PathSeg], at: Position, span: Span) -> Result<(), CannotDrop> {
+        let (block, index) = self.place(at);
+        let taken = match of {
+            PartOf::Place(place) => {
+                let target = match self.body_ref().def_of(place) {
+                    Def::Slot { .. } => RefTarget::Var(place),
+                    Def::Param(_) => RefTarget::Param(place),
+                    def => panic!("{place:?} is defined at {def:?}, and only a slot or a parameter has its own storage"),
+                };
+                if self.needs.part_read_after(place, path, at) {
+                    return Err(CannotDrop::ContentReadAfter);
+                }
+                (place, Op::Take { target, path: path.to_vec(), taken_out: false })
+            }
+            PartOf::Value(value) => {
+                assert!(self.needs.dominates(value, at), "a drop of part of {value:?} stands where {value:?} is defined");
+                if let Some(site) = self.first_touch_after(value, path, block, index) {
+                    return Err(CannotDrop::UsedAfter(site));
+                }
+                (value, extraction(self.module.types(), self.body_ref().ty_of(value), value, path))
+            }
+        };
+        let (holder, op) = taken;
+        let ty = parts::part_ty(self.module.types(), self.body_ref().ty_of(holder), path);
+        self.edit(|rewriter| {
+            let part = rewriter.insert(block, index, op, ty, span);
+            rewriter.insert_drop(block, index + 1, part, span);
+        });
+        self.shifted([InstShift::Inserted { block, index }, InstShift::Inserted { block, index: index + 1 }]);
+        Ok(())
+    }
+
+    /// The first use of `value`, in block order, that touches its part at
+    /// `path` and that a path from `index` of `block` reaches without
+    /// passing `value`'s definition again.
+    fn first_touch_after(&self, value: ValueId, path: &[PathSeg], block: BlockId, index: usize) -> Option<Site> {
+        let body = self.body_ref();
+        let points = Points::of(body);
+        let redefined = match body.def_of(value) {
+            Def::Inst(defined, at) => Some(points.id(defined, at + 1)),
+            Def::BlockParam(defined, _) => Some(points.id(defined, 0)),
+            Def::Param(_) | Def::Capture(_) | Def::OrderParam | Def::Slot { .. } | Def::UnplacedParam(_) => None,
+        };
+        let reached = points.reach(body, points.id(block, index), redefined, Direction::Forward);
+        let follows = |site: Site| match site {
+            Site::Inst(block, index) => reached[points.id(block, index)],
+            Site::Term(block) => reached[points.id(block, body.block(block).insts().len())],
+        };
+        let touches = |site: Site| match site {
+            Site::Inst(block, index) => touches_part(body.block(block).insts()[index].op(), value, path),
+            Site::Term(_) => true,
+        };
+        let mut uses: Vec<Site> = body.users(value).collect();
+        uses.sort_by_key(|site| site_order(*site));
+        uses.into_iter().find(|site| follows(*site) && touches(*site))
+    }
+}
+
+/// Whether `op`, a use of `value`, touches its part at `path`: an
+/// extraction of an overlapping part, a `FieldSet` of a part that does not
+/// hold it, and any other use, which uses the value whole.
+fn touches_part(op: &Op, value: ValueId, path: &[PathSeg]) -> bool {
+    match op {
+        Op::FieldGet { object, field, rest } if *object == value => {
+            let named: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
+            parts::overlap(&named, path)
+        }
+        Op::ObjectGet { object, key } if *object == value => parts::overlap(&[PathSeg::Field(*key)], path),
+        Op::TupleIndex { tuple: whole, index } | Op::ArrayIndex { array: whole, index } if *whole == value => {
+            parts::overlap(&[PathSeg::Index(*index)], path)
+        }
+        Op::FieldSet { object, field, rest, .. } if *object == value => {
+            let replaced: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
+            !parts::covers(&replaced, path)
+        }
+        _ => true,
+    }
+}
+
+/// The extraction of `value`'s part at `path`, of a value of type `ty`.
+///
+/// # Panics
+/// `path` is neither all fields nor one index of a tuple or an array.
+fn extraction(types: &Types<Concrete>, ty: Ty, value: ValueId, path: &[PathSeg]) -> Op {
+    let fields: Option<Vec<acvus_utils::Astr>> = path
+        .iter()
+        .map(|seg| match seg {
+            PathSeg::Field(name) => Some(*name),
+            PathSeg::Index(_) | PathSeg::Payload => None,
+        })
+        .collect();
+    match (fields.as_deref(), path, types.kind(ty)) {
+        (Some([field, rest @ ..]), _, _) => Op::FieldGet { object: value, field: *field, rest: rest.to_vec() },
+        (_, [PathSeg::Index(index)], TyKind::Tuple(_)) => Op::TupleIndex { tuple: value, index: *index },
+        (_, [PathSeg::Index(index)], TyKind::Array(..)) => Op::ArrayIndex { array: value, index: *index },
+        (_, path, kind) => panic!("a value's part is named by fields or by one index of a tuple or an array, not {path:?} of {kind:?}"),
     }
 }
 

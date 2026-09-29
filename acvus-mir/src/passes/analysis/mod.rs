@@ -16,7 +16,7 @@ mod values;
 #[cfg(test)]
 mod tests;
 
-pub use content_liveness::ContentLiveness;
+pub use content_liveness::{ContentLiveness, Presence};
 pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
 pub use dominators::{Dominators, Point};
 pub use escapes::Escapes;

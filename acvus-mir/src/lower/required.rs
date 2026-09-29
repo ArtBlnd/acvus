@@ -24,15 +24,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::cfg::edit::{
-    CannotDischarge, CannotRemoveParam, Cfg, Clones, Discharge, Drops, Editor, InstRef, NoFacts, Position, Remove,
-    Value,
+    CannotDischarge, CannotRemoveParam, Cfg, Clones, Discharge, Drops, Editor, InstRef, NoFacts, PartOf, Position,
+    Remove, Value,
 };
-use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, Module, Op, Site, Terminator};
+use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, ValueId};
-use crate::passes::analysis::{
-    AnalysisManager, ContentLiveness, DenseAnalysis, Direction, Liveness, Loans, Storage, solve_dense,
-};
-use crate::passes::domain::{JoinSemiLattice, Widen};
+use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Storage};
 use crate::passes::edit_facts::EditFacts;
 use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
 
@@ -89,21 +87,31 @@ pub fn remove_dead_context_ops(module: &mut Module, am: &mut AnalysisManager<'_>
 ///   it; the old content of an overwrite is the body's and is dropped just
 ///   before the store, and the body never drops the content at its end
 ///   (context §3, D71).
+/// - A value or a place's content some part of which that does not copy is
+///   moved out, or stored into: the part moved is ended by its holder, each
+///   other unit (`ir::parts`) ends where its own liveness ends, dropped
+///   through `drop_part`, and the whole is never dropped (ownership §6). A
+///   place's unit is dropped only where it is present; where it is present
+///   on some paths only, its liveness there is a read `Loans` could not
+///   locate, which no path that moved it reaches, so it is dropped on each
+///   edge into the join where it is present.
 ///
 /// A capture is the closure's, an order token ends in no drop, and a
-/// parameter the body names as a storage is a place, not a value.
+/// parameter the body names as a storage is a place, not a value. A
+/// variant's payload moved out moves all the variant owns, since its tag
+/// copies and it has one payload, so an unwrap moves the variant whole.
 ///
-/// Cost per body: `Liveness`', `ContentLiveness`', a forward pass over the
-/// context slots, O(values · blocks) for the plan, one `split_edge` per edge
-/// that ends something, and one `insert_drop` or `drop_content` per drop,
-/// each a refresh of `EditFacts`.
+/// Cost per body: `Liveness`', `ContentLiveness`', O(values · blocks) for
+/// the plan, O(units · (blocks + edges)) for each cut value's units'
+/// liveness, one `split_edge` per edge that ends something, and one
+/// `insert_drop`, `drop_content` or `drop_part` per drop, each a refresh of
+/// `EditFacts`.
 ///
 /// # Panics
-/// A part that does not copy moves out of a whole that does not copy
-/// (PARKED P10); a parameter is dead where the body or its block starts,
-/// where no edge of its own carries the drop; a context slot holds its
-/// content on some paths only at an overwrite; a parameter is both a value
-/// and a storage. Each message states the question.
+/// A parameter is dead where the body or its block starts, where no edge of
+/// its own carries the drop; a context slot's part is read or taken on some
+/// paths only before an overwrite; a parameter is both a value and a
+/// storage. Each message states the question.
 pub fn insert_drops(module: &mut Module, am: &mut AnalysisManager<'_>) {
     for body in module.body_ids() {
         insert_drops_in(module, body, am);
@@ -120,22 +128,9 @@ enum Taken {
     /// The value is read, and its holder keeps it.
     Read,
     /// A part that does not copy leaves a whole that does not copy, or a
-    /// part is replaced in one: where the rest ends is `parked_part_moved`'s.
+    /// part is replaced in one: the whole is cut, and each of its units is
+    /// ended apart (ownership §6).
     PartMoved,
-}
-
-/// PARKED(P10): the ledger does not say how the rest of a value that does
-/// not copy ends once a part of it that does not copy has moved out, or
-/// where a part a `FieldSet` or a store into part of a place replaces ends.
-/// Until it does, drop insertion stops here with the question.
-///
-/// # Panics
-/// Always.
-fn parked_part_moved(site: Site, whole: ValueId) -> ! {
-    panic!(
-        "PARKED(P10): {site:?} moves a part that does not copy out of {whole:?}, which does not copy, or replaces \
-         such a part in it; how the rest of {whole:?} ends is not settled"
-    )
 }
 
 /// One operand of an instruction and how it is taken. `names_place` marks
@@ -220,8 +215,11 @@ fn inst_operands(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<
         Op::FieldGet { object: src, .. }
         | Op::ObjectGet { object: src, .. }
         | Op::TupleIndex { tuple: src, .. }
-        | Op::ArrayIndex { array: src, .. }
-        | Op::UnwrapVariant { src } => operands.push(extracted(*src)),
+        | Op::ArrayIndex { array: src, .. } => operands.push(extracted(*src)),
+        Op::UnwrapVariant { src } => operands.push(match copying(*src) || result_copies() {
+            true => read(*src),
+            false => taken(*src, Taken::Moved),
+        }),
         Op::FieldSet { object, value, .. } => {
             let object = if copying(*object) { read(*object) } else { taken(*object, Taken::PartMoved) };
             operands.extend([object, passed(*value)]);
@@ -550,15 +548,17 @@ fn is_load_of(body: &Body, loaded: Option<InstRef>, slot: ValueId) -> bool {
 
 // -- insert_drops ------------------------------------------------------------
 
-/// What a drop ends: a value, or the content of a place.
-#[derive(Debug, Clone, Copy)]
+/// What a drop ends: a value, the content of a place, or one unit of
+/// either.
+#[derive(Debug, Clone)]
 enum Ended {
     Value(ValueId),
     Content(ValueId),
+    Part { of: PartOf, unit: Path },
 }
 
 /// A drop the plan places, with the span it stands at.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PlannedDrop {
     ended: Ended,
     span: Span,
@@ -566,10 +566,10 @@ struct PlannedDrop {
 
 impl PlannedDrop {
     /// How many instructions the drop puts in.
-    fn width(self) -> usize {
+    fn width(&self) -> usize {
         match self.ended {
             Ended::Value(_) => 1,
-            Ended::Content(_) => 2,
+            Ended::Content(_) | Ended::Part { .. } => 2,
         }
     }
 }
@@ -700,9 +700,10 @@ fn remove_dead_block_params(module: &mut Module, body: BodyId, am: &mut Analysis
 
 fn drop_all(editor: &mut Editor<'_, Drops>, drops: impl Iterator<Item = PlannedDrop>, at: Position) {
     for PlannedDrop { ended, span } in drops {
-        let placed = match ended {
-            Ended::Value(value) => editor.insert_drop(value, at, span),
-            Ended::Content(place) => editor.drop_content(place, at, span),
+        let placed = match &ended {
+            Ended::Value(value) => editor.insert_drop(*value, at, span),
+            Ended::Content(place) => editor.drop_content(*place, at, span),
+            Ended::Part { of, unit } => editor.drop_part(*of, unit, at, span),
         };
         placed.unwrap_or_else(|refused| panic!("the plan drops {ended:?} at {at:?}, where it is still read: {refused:?}"));
     }
@@ -719,26 +720,32 @@ struct PlanFacts<'f> {
 
 impl PlanFacts<'_> {
     /// Cost: O(the body's operands · the uses of each), O((values +
-    /// places) · edges) for the edges, and the context slots' forward pass.
+    /// places + units) · edges) for the edges, and each cut value's units'
+    /// liveness.
     fn plan(&self) -> DropPlan {
         let body = self.body;
         let storages = self.storage_params();
+        let cuts = self.cuts(&storages);
         let mut plan = DropPlan::default();
-        for (block, record) in body.blocks() {
-            for (index, inst) in record.insts().iter().enumerate() {
-                for operand in inst_operands(body, self.types, inst) {
-                    if operand.taken == Taken::PartMoved && !copies(self.types, body.ty_of(operand.value)) {
-                        parked_part_moved(Site::Inst(block, index), operand.value);
-                    }
+        let mut walked: FxHashSet<WalkedEdge> = FxHashSet::default();
+        for (block, _) in body.blocks() {
+            self.values_in_block(&storages, &cuts, block, &mut plan);
+            self.places_in_block(&cuts, block, &mut plan);
+            self.edges_of(&storages, &cuts, block, &mut plan);
+            for (value, units) in &cuts.values {
+                for unit in units {
+                    self.value_unit_in_block(*value, unit, block, &mut plan);
+                    self.value_unit_on_edges(*value, unit, block, &mut plan);
+                }
+            }
+            for (place, units) in &cuts.places {
+                for unit in units {
+                    self.place_unit_in_block(*place, unit, block, &mut plan, &mut walked);
+                    self.place_unit_on_edges(*place, unit, block, &mut plan, &mut walked);
                 }
             }
         }
-        for (block, _) in body.blocks() {
-            self.values_in_block(&storages, block, &mut plan);
-            self.places_in_block(block, &mut plan);
-            self.edges_of(&storages, block, &mut plan);
-        }
-        self.context_overwrites(&mut plan);
+        self.context_overwrites(&mut plan, &mut walked);
         plan
     }
 
@@ -801,7 +808,7 @@ impl PlanFacts<'_> {
     /// The drops of values whose liveness ends inside `block`: those it
     /// defines or reads that are neither live after it nor named by its
     /// terminator.
-    fn values_in_block(&self, storages: &FxHashSet<ValueId>, block: BlockId, plan: &mut DropPlan) {
+    fn values_in_block(&self, storages: &FxHashSet<ValueId>, cuts: &Cuts, block: BlockId, plan: &mut DropPlan) {
         let (body, record) = (self.body, self.body.block(block));
         let mut candidates: BTreeSet<ValueId> = record.params().iter().copied().collect();
         if block == body.entry() {
@@ -814,6 +821,7 @@ impl PlanFacts<'_> {
         let named_by_terminator = record.terminator().operands();
         for value in candidates {
             if !self.holds(storages, value)
+                || cuts.values.contains_key(&value)
                 || self.liveness.live_at_end(block).contains(&value)
                 || named_by_terminator.contains(&value)
             {
@@ -892,14 +900,14 @@ impl PlanFacts<'_> {
     /// The drops of place contents whose liveness ends inside `block`: after
     /// each site that reads the content or stores it where the content is
     /// not read after it, unless that site takes the whole content out.
-    fn places_in_block(&self, block: BlockId, plan: &mut DropPlan) {
+    fn places_in_block(&self, cuts: &Cuts, block: BlockId, plan: &mut DropPlan) {
         let (body, record) = (self.body, self.body.block(block));
         for (index, inst) in record.insts().iter().enumerate() {
             let site = Site::Inst(block, index);
             let ended: BTreeSet<ValueId> = self
                 .content_events(site, inst)
                 .into_iter()
-                .filter(|place| self.liveness_ends_content(*place) && !self.content.live_after(site).contains(place))
+                .filter(|place| self.ends_whole(cuts, *place) && !self.content.live_after(site).contains(place))
                 .collect();
             for place in ended {
                 let takes_all = inst_operands(body, self.types, inst)
@@ -913,7 +921,7 @@ impl PlanFacts<'_> {
         }
         if block == body.entry() {
             for (_, param) in body.params() {
-                if self.liveness_ends_content(*param) && !self.content.live_at_start(block).contains(param) {
+                if self.ends_whole(cuts, *param) && !self.content.live_at_start(block).contains(param) {
                     let drop = PlannedDrop { ended: Ended::Content(*param), span: body.binder_span(*param) };
                     plan.at_start.entry(block).or_default().push(drop);
                 }
@@ -924,20 +932,20 @@ impl PlanFacts<'_> {
     /// The values and place contents live out of `block` and not into one
     /// of its successors, which end on that edge, where control leaves the
     /// block: they take the span of its terminator.
-    fn edges_of(&self, storages: &FxHashSet<ValueId>, block: BlockId, plan: &mut DropPlan) {
+    fn edges_of(&self, storages: &FxHashSet<ValueId>, cuts: &Cuts, block: BlockId, plan: &mut DropPlan) {
         let (body, record) = (self.body, self.body.block(block));
         let terminator = record.terminator();
         let span = record.terminator_span();
         let named = terminator_operands(body, self.types, terminator);
         let mut values: BTreeSet<ValueId> = self.liveness.live_at_end(block).iter().copied().collect();
         values.extend(named.iter().filter(|named| named.taken == Taken::Read).map(|named| named.value));
-        values.retain(|value| self.holds(storages, *value));
+        values.retain(|value| self.holds(storages, *value) && !cuts.values.contains_key(value));
         for named in named.iter().filter(|named| named.taken == Taken::Moved) {
             values.remove(&named.value);
         }
         let mut places: BTreeSet<ValueId> = self.content.live_at_end(block).iter().copied().collect();
         places.extend(self.loans.reads(Site::Term(block)).iter().filter_map(|storage| storage_place(*storage)));
-        places.retain(|place| self.liveness_ends_content(*place));
+        places.retain(|place| self.ends_whole(cuts, *place));
         for edge in terminator.edges() {
             let moved_on_edge = |value: &ValueId| {
                 edge.args.iter().any(|arg| arg == value && by_value(self.types, body.ty_of(*arg)) == Taken::Moved)
@@ -957,95 +965,108 @@ impl PlanFacts<'_> {
         }
     }
 
-    /// Before each store that overwrites a context's slot whole, other than
-    /// the store of its load, the content it replaces is the body's where
-    /// the slot holds one there, and is dropped (context §3, D71). Where the
-    /// slot holds it on some paths only, nothing reads it between the join
-    /// and the store, so its liveness ended on the edges into the join: it
-    /// is dropped on each such edge where it is present (ownership §6, D74).
-    fn context_overwrites(&self, plan: &mut DropPlan) {
+    /// Before each store that overwrites a context's slot, whole or in
+    /// part, other than the store of its load, each unit it replaces is the
+    /// body's where the slot holds it there, and is dropped (context §3,
+    /// D71). Where the slot holds it on some paths only, nothing reads it
+    /// between the join and the store, so its liveness ended on the edges
+    /// into the join: it is dropped on each such edge where it is present
+    /// (ownership §6, D74).
+    fn context_overwrites(&self, plan: &mut DropPlan, walked: &mut FxHashSet<WalkedEdge>) {
         let body = self.body;
-        let contexts: Vec<ValueId> = body
-            .slots()
-            .iter()
-            .copied()
-            .filter(|slot| body.context_of_slot(*slot).is_some() && !copies(self.types, body.ty_of(*slot)))
-            .collect();
-        if contexts.is_empty() {
-            return;
-        }
-        let presence = ContextPresence { body, types: self.types, contexts: &contexts };
-        let facts = solve_dense(&presence, body);
         for (block, record) in body.blocks() {
-            let mut state = facts.at(block).clone();
             for (index, inst) in record.insts().iter().enumerate() {
-                if let Some(slot) = presence.overwritten(inst) {
-                    match state.of(slot) {
-                        Held::Present => {
-                            let drop = PlannedDrop { ended: Ended::Content(slot), span: inst.span() };
+                let Some((slot, path)) = self.context_overwritten(inst) else {
+                    continue;
+                };
+                let units = self.content.units(slot).expect("a context slot that does not copy has units");
+                for unit in units.iter().filter(|unit| covers(path, unit) && !self.part_copies(slot, unit)) {
+                    match self.content.presence_before(block, index, slot, unit) {
+                        Presence::Present => {
+                            let drop = PlannedDrop { ended: self.place_part(slot, unit), span: inst.span() };
                             plan.before.entry(Site::Inst(block, index)).or_default().push(drop);
                         }
-                        Held::Absent | Held::Unreached => {}
-                        Held::Maybe => self.drop_on_edges_where_present(&presence, &facts, slot, block, index, plan),
+                        Presence::Absent | Presence::Unreached => {}
+                        Presence::Maybe => {
+                            assert!(
+                                self.untouched(slot, unit, block, index),
+                                "the context slot {slot:?}'s part {unit:?} is read or taken on some paths only before \
+                                 {block:?}[{index}] overwrites it; check refuses a read of content moved out on some \
+                                 path, and insert_drops runs after check"
+                            );
+                            self.drop_where_present(slot, unit, block, true, plan, walked);
+                        }
                     }
                 }
-                presence.transfer(inst, &mut state);
             }
         }
     }
 
-    /// The slot holds its content on some paths only where `block`'s
-    /// instruction at `index` overwrites it: the content is dropped on each
-    /// edge into the join where the slot holds it, walking back through
-    /// blocks that neither read nor store it.
-    ///
-    /// # Panics
-    /// The content is read between the join and the overwrite. `check`
-    /// refuses a read of content moved out on some path (init, move), and
-    /// this step runs after `check`, so such a body is a defect.
-    fn drop_on_edges_where_present(
+    /// The context slot `inst` stores into by name, whole or in part, and
+    /// the path, other than by storing its own load.
+    fn context_overwritten<'i>(&self, inst: &'i Inst) -> Option<(ValueId, &'i [PathSeg])> {
+        let Op::Assign { target: RefTarget::Var(slot), path, value, .. } = inst.op() else {
+            return None;
+        };
+        let body = self.body;
+        let is_context = body.context_of_slot(*slot).is_some() && !copies(self.types, body.ty_of(*slot));
+        let stores_its_load = match body.definition(*value) {
+            Definition::Inst(block, index) => matches!(
+                body.block(block).insts()[index].op(),
+                Op::Fetch { context } if Some(*context) == body.context_of_slot(*slot)
+            ),
+            _ => false,
+        };
+        (is_context && !(path.is_empty() && stores_its_load)).then_some((*slot, path.as_slice()))
+    }
+
+    /// Whether nothing in `block` before `upto` reads, takes, lends or
+    /// stores `unit` of `place`.
+    fn untouched(&self, place: ValueId, unit: &[PathSeg], block: BlockId, upto: usize) -> bool {
+        self.body.block(block).insts()[..upto].iter().enumerate().all(|(at, inst)| {
+            let site = Site::Inst(block, at);
+            match place_of(inst.op()) {
+                Some((RefTarget::Var(named) | RefTarget::Param(named), path)) if *named == place => !overlap(path, unit),
+                _ => !self.loans.reads(site).iter().any(|storage| storage_place(*storage) == Some(place)),
+            }
+        })
+    }
+
+    /// `unit` of `place` is present on some paths only where `block`
+    /// starts: it is dropped on each edge into the join where it is
+    /// present, walking back through blocks where it is present on some
+    /// paths only. `assert_untouched` asserts, for a context's slot, that
+    /// nothing touches it on the way. An edge already given this unit's
+    /// drop is not given it again.
+    fn drop_where_present(
         &self,
-        presence: &ContextPresence<'_>,
-        facts: &crate::passes::analysis::DenseFacts<HeldBySlot>,
-        slot: ValueId,
+        place: ValueId,
+        unit: &[PathSeg],
         block: BlockId,
-        index: usize,
+        assert_untouched: bool,
         plan: &mut DropPlan,
+        walked: &mut FxHashSet<WalkedEdge>,
     ) {
         let body = self.body;
         let preds = body.predecessors();
-        let untouched = |block: BlockId, upto: usize| {
-            body.block(block).insts()[..upto].iter().enumerate().all(|(at, inst)| {
-                let site = Site::Inst(block, at);
-                let reads = self.loans.reads(site).contains(&Storage::Slot(slot));
-                let stores = matches!(place_of(inst.op()), Some((RefTarget::Var(named), _)) if *named == slot);
-                !reads && !stores
-            })
-        };
-        assert!(
-            untouched(block, index) && facts.at(block).of(slot) == Held::Maybe,
-            "the context slot {slot:?} is read or taken on some paths only before {block:?}[{index}] overwrites it;              check refuses a read of content moved out on some path, and insert_drops runs after check"
-        );
         let mut visited: FxHashSet<BlockId> = FxHashSet::from_iter([block]);
         let mut pending = vec![block];
         while let Some(join) = pending.pop() {
             for pred in &preds[&join] {
-                let mut at_end = facts.at(*pred).clone();
-                for inst in body.block(*pred).insts() {
-                    presence.transfer(inst, &mut at_end);
-                }
-                match at_end.of(slot) {
-                    Held::Present => {
-                        let drop = PlannedDrop { ended: Ended::Content(slot), span: body.block(*pred).terminator_span() };
-                        plan.on_edges.push(EdgeDrops { from: *pred, to: join, drops: vec![drop] });
+                match self.content.presence_at_end(*pred, place, unit) {
+                    Presence::Present => {
+                        if walked.insert((*pred, join, place, unit.to_vec())) {
+                            let drop = PlannedDrop { ended: self.place_part(place, unit), span: body.block(*pred).terminator_span() };
+                            plan.on_edges.push(EdgeDrops { from: *pred, to: join, drops: vec![drop] });
+                        }
                     }
-                    Held::Absent | Held::Unreached => {}
-                    Held::Maybe => {
+                    Presence::Absent | Presence::Unreached => {}
+                    Presence::Maybe => {
                         let len = body.block(*pred).insts().len();
                         assert!(
-                            untouched(*pred, len),
-                            "the context slot {slot:?} is read or taken on some paths only in {pred:?}, before an \
-                             overwrite; check refuses such a read, and insert_drops runs after check"
+                            !assert_untouched || self.untouched(place, unit, *pred, len),
+                            "the context slot {place:?}'s part {unit:?} is read or taken on some paths only in \
+                             {pred:?}, before an overwrite; check refuses such a read, and insert_drops runs after check"
                         );
                         if visited.insert(*pred) {
                             pending.push(*pred);
@@ -1055,6 +1076,375 @@ impl PlanFacts<'_> {
             }
         }
     }
+
+    /// What ends `unit` of `place`: its whole content where the unit is the
+    /// whole, and the part otherwise.
+    fn place_part(&self, place: ValueId, unit: &[PathSeg]) -> Ended {
+        match unit.is_empty() {
+            true => Ended::Content(place),
+            false => Ended::Part { of: PartOf::Place(place), unit: unit.to_vec() },
+        }
+    }
+
+    fn part_copies(&self, holder: ValueId, unit: &[PathSeg]) -> bool {
+        copies(self.types, parts::part_ty(self.types, self.body.ty_of(holder), unit))
+    }
+
+    /// Whether the body drops `place`'s content whole where its liveness
+    /// ends: it owns the content, and no part of it is cut.
+    fn ends_whole(&self, cuts: &Cuts, place: ValueId) -> bool {
+        self.liveness_ends_content(place) && !cuts.places.contains_key(&place)
+    }
+}
+
+// -- Parts of a cut holder (ownership §6) ------------------------------------
+
+/// An edge a walk back from a join gave a unit's drop: its source, its
+/// target, the place, and the unit.
+type WalkedEdge = (BlockId, BlockId, ValueId, Path);
+
+/// The holders a body cuts, each with its units that do not copy: a value,
+/// with where each unit is live, and a place the body owns.
+struct Cuts {
+    values: FxHashMap<ValueId, Vec<ValueUnit>>,
+    places: FxHashMap<ValueId, Vec<Path>>,
+}
+
+/// One unit of a cut value and the blocks it is live at the start and at
+/// the end of: SSA liveness over the uses that touch it, an edge's argument
+/// live at its source's end.
+struct ValueUnit {
+    path: Path,
+    at_start: FxHashSet<BlockId>,
+    at_end: FxHashSet<BlockId>,
+}
+
+/// How an instruction or a terminator uses one unit of a cut value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnitUse {
+    Read,
+    Moved,
+}
+
+/// The path of the part an extraction of `value` names, where `op` is one.
+fn extracted_path(op: &Op, value: ValueId) -> Option<Path> {
+    let fields = |field: &acvus_utils::Astr, rest: &[acvus_utils::Astr]| {
+        std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect()
+    };
+    match op {
+        Op::FieldGet { object, field, rest } if *object == value => Some(fields(field, rest)),
+        Op::ObjectGet { object, key } if *object == value => Some(vec![PathSeg::Field(*key)]),
+        Op::TupleIndex { tuple: whole, index } | Op::ArrayIndex { array: whole, index } if *whole == value => {
+            Some(vec![PathSeg::Index(*index)])
+        }
+        _ => None,
+    }
+}
+
+/// The path of the part a `FieldSet` of `value` replaces, where `op` is one.
+fn replaced_path(op: &Op, value: ValueId) -> Option<Path> {
+    match op {
+        Op::FieldSet { object, field, rest, .. } if *object == value => {
+            Some(std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect())
+        }
+        _ => None,
+    }
+}
+
+impl PlanFacts<'_> {
+    /// Every holder the body cuts. A value is cut where an operand takes
+    /// it as `PartMoved`: an extraction moves a part out of it, or a
+    /// `FieldSet` replaces one. A place the body owns is cut where
+    /// `ContentLiveness` finds more than its one whole unit.
+    fn cuts(&self, storages: &FxHashSet<ValueId>) -> Cuts {
+        let body = self.body;
+        let mut value_cuts: FxHashMap<ValueId, Vec<Path>> = FxHashMap::default();
+        for (_, record) in body.blocks() {
+            for inst in record.insts() {
+                for operand in inst_operands(body, self.types, inst) {
+                    if operand.taken != Taken::PartMoved || operand.names_place || !self.holds(storages, operand.value) {
+                        continue;
+                    }
+                    let path = extracted_path(inst.op(), operand.value)
+                        .or_else(|| replaced_path(inst.op(), operand.value))
+                        .unwrap_or_else(|| panic!("a value is taken as a part only by an extraction or a FieldSet, not {:?}", inst.op()));
+                    let cuts = value_cuts.entry(operand.value).or_default();
+                    if !cuts.contains(&path) {
+                        cuts.push(path);
+                    }
+                }
+            }
+        }
+        let preds = body.predecessors();
+        let values = value_cuts
+            .into_iter()
+            .map(|(value, cuts)| {
+                let units = parts::units(self.types, body.ty_of(value), &cuts)
+                    .into_iter()
+                    .filter(|unit| !self.part_copies(value, unit))
+                    .map(|unit| self.value_unit(&preds, value, unit))
+                    .collect();
+                (value, units)
+            })
+            .collect();
+        let places = body
+            .slots()
+            .iter()
+            .chain(body.params().iter().map(|(_, param)| param))
+            .filter(|place| self.liveness_ends_content(**place))
+            .filter_map(|place| {
+                let units = self.content.units(*place)?;
+                let cut = !matches!(units, [whole] if whole.is_empty());
+                cut.then(|| (*place, units.iter().filter(|unit| !self.part_copies(*place, unit)).cloned().collect()))
+            })
+            .collect();
+        Cuts { values, places }
+    }
+
+    /// `path` of `value` and where it is live. Cost: O(blocks + edges).
+    fn value_unit(&self, preds: &FxHashMap<BlockId, SmallVec<[BlockId; 2]>>, value: ValueId, path: Path) -> ValueUnit {
+        let body = self.body;
+        let defined = self.defining_block(value);
+        let mut unit = ValueUnit { path, at_start: FxHashSet::default(), at_end: FxHashSet::default() };
+        let mut pending: Vec<BlockId> = Vec::new();
+        for site in body.users(value) {
+            let block = match site {
+                Site::Inst(block, index) => {
+                    if self.unit_use(&body.block(block).insts()[index], value, &unit.path).is_none() {
+                        continue;
+                    }
+                    block
+                }
+                Site::Term(block) => {
+                    if body.block(block).terminator().edges().iter().any(|edge| edge.args.contains(&value)) {
+                        unit.at_end.insert(block);
+                    }
+                    block
+                }
+            };
+            if block != defined && unit.at_start.insert(block) {
+                pending.push(block);
+            }
+        }
+        while let Some(block) = pending.pop() {
+            for pred in &preds[&block] {
+                unit.at_end.insert(*pred);
+                if *pred != defined && unit.at_start.insert(*pred) {
+                    pending.push(*pred);
+                }
+            }
+        }
+        unit
+    }
+
+    /// The block whose start or instructions define `value`.
+    ///
+    /// # Panics
+    /// `value` is not one the body holds: a capture, a slot or the order
+    /// parameter.
+    fn defining_block(&self, value: ValueId) -> BlockId {
+        match self.body.definition(value) {
+            Definition::Inst(block, _) | Definition::BlockParam(block, _) => block,
+            Definition::Param(_) => self.body.entry(),
+            definition => panic!("{value:?}, defined at {definition:?}, is not a value the body holds"),
+        }
+    }
+
+    /// How `inst` uses `unit` of the cut value `value`, if at all. An
+    /// extraction reads an overlapping unit where what it takes copies, and
+    /// otherwise moves the units under it; a `FieldSet` moves every unit
+    /// but those under the part it replaces; any other use uses the value
+    /// whole.
+    ///
+    /// # Panics
+    /// An extraction that moves a part overlaps `unit` without covering it:
+    /// units refine every cut.
+    fn unit_use(&self, inst: &Inst, value: ValueId, unit: &[PathSeg]) -> Option<UnitUse> {
+        if let Some(path) = extracted_path(inst.op(), value) {
+            let result_copies = inst.result().is_some_and(|result| copies(self.types, self.body.ty_of(result)));
+            return match (result_copies, overlap(&path, unit), covers(&path, unit)) {
+                (_, false, _) => None,
+                (true, true, _) => Some(UnitUse::Read),
+                (false, true, true) => Some(UnitUse::Moved),
+                (false, true, false) => panic!("{path:?} of {value:?} moves out part of the unit {unit:?}; units refine every cut"),
+            };
+        }
+        if let Some(path) = replaced_path(inst.op(), value) {
+            return (!covers(&path, unit)).then_some(UnitUse::Moved);
+        }
+        let takings: SmallVec<[Taken; 2]> = inst_operands(self.body, self.types, inst)
+            .into_iter()
+            .filter(|operand| operand.value == value)
+            .map(|operand| operand.taken)
+            .collect();
+        match takings.is_empty() {
+            true => None,
+            false if takings.contains(&Taken::Moved) => Some(UnitUse::Moved),
+            false => Some(UnitUse::Read),
+        }
+    }
+
+    /// The drop of `unit` of `value` where its liveness ends inside
+    /// `block`: after the last instruction that touches it, unless that
+    /// moves it; where nothing in the block touches it, after its
+    /// definition, or at the block's start for a parameter.
+    fn value_unit_in_block(&self, value: ValueId, unit: &ValueUnit, block: BlockId, plan: &mut DropPlan) {
+        let (body, record) = (self.body, self.body.block(block));
+        let defined_here = self.defining_block(value) == block;
+        if !(defined_here || unit.at_start.contains(&block))
+            || unit.at_end.contains(&block)
+            || record.terminator().operands().contains(&value)
+        {
+            return;
+        }
+        let ended = Ended::Part { of: PartOf::Value(value), unit: unit.path.clone() };
+        let last = record
+            .insts()
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, inst)| self.unit_use(inst, value, &unit.path).map(|used| (index, used)));
+        match last {
+            Some((_, UnitUse::Moved)) => {}
+            Some((index, UnitUse::Read)) => {
+                let span = record.insts()[index].span();
+                plan.after.entry(Site::Inst(block, index)).or_default().push(PlannedDrop { ended, span });
+            }
+            None => match body.definition(value) {
+                Definition::Inst(at, index) => {
+                    let span = body.block(at).insts()[index].span();
+                    plan.after.entry(Site::Inst(at, index)).or_default().push(PlannedDrop { ended, span });
+                }
+                Definition::Param(_) => {
+                    let drop = PlannedDrop { ended, span: body.binder_span(value) };
+                    plan.at_start.entry(block).or_default().push(drop);
+                }
+                Definition::BlockParam(..) => {
+                    let drop = PlannedDrop { ended, span: record.terminator_span() };
+                    plan.at_start.entry(block).or_default().push(drop);
+                }
+                definition => panic!("{value:?}, defined at {definition:?}, is not a value the body holds"),
+            },
+        }
+    }
+
+    /// The drops of `unit` of `value` on the edges out of `block` it is
+    /// live out of, or read by the terminator, and not live into, unless
+    /// the edge passes the value on or the terminator moves it.
+    fn value_unit_on_edges(&self, value: ValueId, unit: &ValueUnit, block: BlockId, plan: &mut DropPlan) {
+        let (body, record) = (self.body, self.body.block(block));
+        let terminator = record.terminator();
+        let named: SmallVec<[Named; 2]> =
+            terminator_operands(body, self.types, terminator).into_iter().filter(|named| named.value == value).collect();
+        if named.iter().any(|named| named.taken == Taken::Moved) {
+            return;
+        }
+        let read_by_terminator = !named.is_empty();
+        if !(unit.at_end.contains(&block) || read_by_terminator) {
+            return;
+        }
+        let span = record.terminator_span();
+        for edge in terminator.edges() {
+            let passed = edge.args.iter().any(|arg| *arg == value && by_value(self.types, body.ty_of(*arg)) == Taken::Moved);
+            if passed || unit.at_start.contains(&edge.to) {
+                continue;
+            }
+            let drop = PlannedDrop { ended: Ended::Part { of: PartOf::Value(value), unit: unit.path.clone() }, span };
+            plan.on_edges.push(EdgeDrops { from: block, to: edge.to, drops: vec![drop] });
+        }
+    }
+
+    /// The drop of `unit` of the cut place `place` after each site in
+    /// `block` that reads or stores it where it is not read after, unless
+    /// that site moves it out: where it is present, or on the edges into the
+    /// join where it is present on some paths only. A by-value parameter's
+    /// unit not read from the entry's start is dropped there.
+    fn place_unit_in_block(
+        &self,
+        place: ValueId,
+        unit: &[PathSeg],
+        block: BlockId,
+        plan: &mut DropPlan,
+        walked: &mut FxHashSet<WalkedEdge>,
+    ) {
+        let (body, record) = (self.body, self.body.block(block));
+        let ended = || Ended::Part { of: PartOf::Place(place), unit: unit.to_vec() };
+        for (index, inst) in record.insts().iter().enumerate() {
+            let site = Site::Inst(block, index);
+            let event = match place_of(inst.op()) {
+                Some((RefTarget::Var(named) | RefTarget::Param(named), path)) if *named == place => match inst.op() {
+                    Op::Take { .. } if covers(path, unit) => Some(PlaceEvent::Moved),
+                    Op::Take { .. } if overlap(path, unit) => Some(PlaceEvent::Read),
+                    Op::Assign { .. } if covers(path, unit) => Some(PlaceEvent::Stored),
+                    _ => None,
+                },
+                _ => self.loans.reads(site).iter().any(|storage| storage_place(*storage) == Some(place)).then_some(PlaceEvent::Read),
+            };
+            let Some(event) = event else {
+                continue;
+            };
+            if self.content.part_live_after(site, place, unit) {
+                continue;
+            }
+            let presence = match event {
+                PlaceEvent::Moved => continue,
+                PlaceEvent::Stored => Presence::Present,
+                PlaceEvent::Read => self.content.presence_before(block, index, place, unit),
+            };
+            match presence {
+                Presence::Present => plan.after.entry(site).or_default().push(PlannedDrop { ended: ended(), span: inst.span() }),
+                Presence::Absent | Presence::Unreached => {}
+                Presence::Maybe => self.drop_where_present(place, unit, block, false, plan, walked),
+            }
+        }
+        let is_param = matches!(body.definition(place), Definition::Param(_));
+        if is_param && block == body.entry() && !self.content.part_live_at_start(block, place, unit) {
+            let drop = PlannedDrop { ended: ended(), span: body.binder_span(place) };
+            plan.at_start.entry(block).or_default().push(drop);
+        }
+    }
+
+    /// The drops of `unit` of the cut place `place` on the edges out of
+    /// `block` it is live out of, or read by the terminator, and not live
+    /// into: where it is present at the block's end, or on the edges into
+    /// the join where it is present on some paths only.
+    fn place_unit_on_edges(
+        &self,
+        place: ValueId,
+        unit: &[PathSeg],
+        block: BlockId,
+        plan: &mut DropPlan,
+        walked: &mut FxHashSet<WalkedEdge>,
+    ) {
+        let record = self.body.block(block);
+        let read_by_terminator =
+            self.loans.reads(Site::Term(block)).iter().any(|storage| storage_place(*storage) == Some(place));
+        if !(self.content.part_live_at_end(block, place, unit) || read_by_terminator) {
+            return;
+        }
+        let span = record.terminator_span();
+        for edge in record.terminator().edges() {
+            if self.content.part_live_at_start(edge.to, place, unit) {
+                continue;
+            }
+            match self.content.presence_at_end(block, place, unit) {
+                Presence::Present => {
+                    let drop = PlannedDrop { ended: Ended::Part { of: PartOf::Place(place), unit: unit.to_vec() }, span };
+                    plan.on_edges.push(EdgeDrops { from: block, to: edge.to, drops: vec![drop] });
+                }
+                Presence::Absent | Presence::Unreached => {}
+                Presence::Maybe => self.drop_where_present(place, unit, block, false, plan, walked),
+            }
+        }
+    }
+}
+
+/// What a site does to one unit of a cut place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaceEvent {
+    Read,
+    Stored,
+    Moved,
 }
 
 fn storage_place(storage: Storage) -> Option<ValueId> {
@@ -1071,119 +1461,4 @@ fn place_of(op: &Op) -> Option<(&RefTarget, &[PathSeg])> {
         }
         _ => None,
     }
-}
-
-// -- Whether a context's slot holds content ----------------------------------
-
-/// Whether a context's slot holds a content at a point, over the paths
-/// that reach it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Held {
-    Unreached,
-    Absent,
-    Present,
-    Maybe,
-}
-
-impl Held {
-    fn join(self, other: Held) -> Held {
-        match (self, other) {
-            (Held::Unreached, other) | (other, Held::Unreached) => other,
-            (a, b) if a == b => a,
-            _ => Held::Maybe,
-        }
-    }
-}
-
-/// Each context slot's `Held`, by slot; a slot not in the map is unreached.
-#[derive(Debug, Clone, PartialEq, Default)]
-struct HeldBySlot(FxHashMap<ValueId, Held>);
-
-impl HeldBySlot {
-    fn of(&self, slot: ValueId) -> Held {
-        self.0.get(&slot).copied().unwrap_or(Held::Unreached)
-    }
-}
-
-impl JoinSemiLattice for HeldBySlot {
-    fn bottom() -> Self {
-        HeldBySlot::default()
-    }
-
-    fn join(&mut self, other: &Self) -> bool {
-        let mut rose = false;
-        for (slot, held) in &other.0 {
-            let joined = self.of(*slot).join(*held);
-            if joined != self.of(*slot) {
-                self.0.insert(*slot, joined);
-                rose = true;
-            }
-        }
-        rose
-    }
-
-    fn le(&self, other: &Self) -> bool {
-        self.0.iter().all(|(slot, held)| other.of(*slot).join(*held) == other.of(*slot))
-    }
-}
-
-/// Finite: four states per slot.
-impl Widen for HeldBySlot {
-    fn widen(&mut self, next: &Self) -> bool {
-        self.join(next)
-    }
-}
-
-/// Forward over the context slots: empty where the body starts; a whole
-/// store fills one; a `Take` of all of it that does not copy empties it.
-struct ContextPresence<'f> {
-    body: &'f Body,
-    types: &'f Types<Concrete>,
-    contexts: &'f [ValueId],
-}
-
-impl ContextPresence<'_> {
-    /// The context slot `inst` overwrites whole, other than by storing its
-    /// own load.
-    fn overwritten(&self, inst: &Inst) -> Option<ValueId> {
-        let Op::Assign { target: RefTarget::Var(slot), path, value, .. } = inst.op() else {
-            return None;
-        };
-        let stores_its_load = match self.body.definition(*value) {
-            Definition::Inst(block, index) => matches!(
-                self.body.block(block).insts()[index].op(),
-                Op::Fetch { context } if Some(*context) == self.body.context_of_slot(*slot)
-            ),
-            _ => false,
-        };
-        (path.is_empty() && self.contexts.contains(slot) && !stores_its_load).then_some(*slot)
-    }
-}
-
-impl DenseAnalysis for ContextPresence<'_> {
-    type State = HeldBySlot;
-
-    const DIRECTION: Direction = Direction::Forward;
-
-    fn entry(&self, _: &Body) -> HeldBySlot {
-        HeldBySlot(self.contexts.iter().map(|slot| (*slot, Held::Absent)).collect())
-    }
-
-    fn transfer(&self, inst: &Inst, state: &mut HeldBySlot) {
-        match inst.op() {
-            Op::Assign { target: RefTarget::Var(slot), path, .. } if path.is_empty() && self.contexts.contains(slot) => {
-                state.0.insert(*slot, Held::Present);
-            }
-            Op::Take { target: RefTarget::Var(slot), path, .. }
-                if path.is_empty() && self.contexts.contains(slot) && !copies(self.types, self.body.ty_of(*slot)) =>
-            {
-                state.0.insert(*slot, Held::Absent);
-            }
-            _ => {}
-        }
-    }
-
-    fn transfer_terminator(&self, _: &Terminator, _: &mut HeldBySlot) {}
-
-    fn transfer_edge(&self, _: &Edge<'_>, _: &[ValueId], _: &mut HeldBySlot) {}
 }

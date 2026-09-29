@@ -324,6 +324,10 @@ impl ContentFacts for TestFacts {
     fn content_read_after(&self, place: ValueId, _: Position) -> bool {
         self.content_read.contains(&place)
     }
+
+    fn part_read_after(&self, place: ValueId, _: &[crate::ir::PathSeg], _: Position) -> bool {
+        self.content_read.contains(&place)
+    }
 }
 
 impl DischargeFacts for TestFacts {

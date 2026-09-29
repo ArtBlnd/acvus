@@ -4,6 +4,7 @@ use acvus_utils::{Astr, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub mod cfg;
+pub(crate) mod parts;
 
 use acvus_utils::QualifiedRef;
 use crate::ty::{CastTy, Concrete, Flows, IntTy, Mutability, Ty, Types};

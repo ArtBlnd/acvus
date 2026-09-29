@@ -164,6 +164,15 @@ impl ContentFacts for EditFacts<'_, '_> {
         };
         live.contains(&place)
     }
+
+    /// Read from the content liveness the last refresh kept. Cost: O(the
+    /// place's units).
+    fn part_read_after(&self, place: ValueId, path: &[PathSeg], at: Position) -> bool {
+        match at {
+            Position::Before(inst) => self.content.part_live_before(inst.block(), inst.index(), place, path),
+            Position::End(block) => self.content.part_live_before_terminator(block, place, path),
+        }
+    }
 }
 
 impl OrderFacts for EditFacts<'_, '_> {

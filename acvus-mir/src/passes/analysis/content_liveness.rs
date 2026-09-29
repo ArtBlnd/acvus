@@ -11,26 +11,73 @@
 //! `Liveness` answers for values; this answers for what a place holds, which
 //! a place's own `ValueId` does not follow, since every access names it.
 //!
+//! The same answer is kept per part (ownership §6), for each place whose
+//! type does not copy: its units (`ir::parts`), cut where the body moves a
+//! part that does not copy out of it or stores one into part of it. A unit
+//! is read where a `Take` of an overlapping path by name reads it, and
+//! wherever `Loans` says the place is read otherwise, since a read through
+//! a reference does not locate its part; a store by name into a path
+//! covering the unit kills it. Beside it, forward, each unit's presence:
+//! a store by name into a path covering it fills it, and a `Take` by name
+//! that moves a covering path empties it. A slot starts empty and a
+//! by-value parameter's storage full.
+//!
 //! Cost: `Loans`', and then a block's state only grows, at most once per
-//! place, and each growth re-runs the transfer of the block, so O(places ·
-//! (blocks + edges) · the largest block's sites · the storages a site
-//! reads). The per-point sets take O(points · places) space. The height is
-//! the body's places; the widening is the join.
+//! place or unit, and each growth re-runs the transfer of the block, so
+//! O((places + units) · (blocks + edges) · the largest block's sites · the
+//! storages a site reads) for liveness and O(units · (blocks + edges) · the
+//! largest block's sites) for presence, a unit's presence rising at most
+//! three times. Finding the units is O(instructions) cuts and
+//! `ir::parts::units` per place. The per-point sets take O(points ·
+//! (places + units)) space. The widening is the join.
 //!
 //! passes-analyses.md.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, Module, Op, Site, Terminator};
-use crate::ir::{RefTarget, ValueId};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::parts::{self, Path, covers, overlap};
+use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Storage, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
+use crate::ty::{Concrete, Types, copies};
 
 pub struct ContentLiveness {
     /// Per block, the places live before each instruction, and last the
     /// places live before its terminator.
     before: FxHashMap<BlockId, Vec<FxHashSet<ValueId>>>,
     at_end: FxHashMap<BlockId, FxHashSet<ValueId>>,
+    units: FxHashMap<ValueId, Vec<Path>>,
+    /// Per block, the units live before each instruction and before its
+    /// terminator, and after it.
+    parts_before: FxHashMap<BlockId, Vec<FxHashSet<UnitId>>>,
+    parts_at_end: FxHashMap<BlockId, FxHashSet<UnitId>>,
+    /// Per block, each unit's presence before each instruction and before
+    /// its terminator.
+    presence_before: FxHashMap<BlockId, Vec<PresenceOf>>,
+}
+
+/// A unit of a place: the place, and the unit's index among its units.
+type UnitId = (ValueId, usize);
+
+/// Whether a unit of a place holds its content at a point, over the paths
+/// that reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    Unreached,
+    Absent,
+    Present,
+    Maybe,
+}
+
+impl Presence {
+    fn join(self, other: Presence) -> Presence {
+        match (self, other) {
+            (Presence::Unreached, other) | (other, Presence::Unreached) => other,
+            (a, b) if a == b => a,
+            _ => Presence::Maybe,
+        }
+    }
 }
 
 impl ContentLiveness {
@@ -87,6 +134,90 @@ impl ContentLiveness {
     fn points(&self, block: BlockId) -> &[FxHashSet<ValueId>] {
         self.before.get(&block).expect("content liveness covers every block of its body")
     }
+
+    /// The units of `place`, a slot or a by-value parameter's own storage
+    /// whose type does not copy, in the order the body cuts them; `[[]]`
+    /// where nothing cuts it. `None` for any other value. Cost: O(1).
+    pub fn units(&self, place: ValueId) -> Option<&[Path]> {
+        self.units.get(&place).map(Vec::as_slice)
+    }
+
+    /// Whether a unit of `place` overlapping `path` may be read from just
+    /// before the instruction at `index` of `block`, or before its
+    /// terminator where `index` is the block's length, before a store
+    /// replaces it or the body ends. Cost: O(units of `place`).
+    ///
+    /// # Panics
+    /// `place` has no units, `block` is not a block of the body, or `index`
+    /// is past its length.
+    pub fn part_live_before(&self, block: BlockId, index: usize, place: ValueId, path: &[PathSeg]) -> bool {
+        let points = self.parts_before.get(&block).expect("content liveness covers every block of its body");
+        let live = points.get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"));
+        self.overlapping(place, path).any(|unit| live.contains(&unit))
+    }
+
+    /// As `part_live_before`, from just after the instruction or terminator
+    /// at `site`. Cost: O(units of `place`).
+    pub fn part_live_after(&self, site: Site, place: ValueId, path: &[PathSeg]) -> bool {
+        match site {
+            Site::Inst(block, index) => self.part_live_before(block, index + 1, place, path),
+            Site::Term(block) => self.part_live_at_end(block, place, path),
+        }
+    }
+
+    /// As `part_live_before`, from just before `block`'s terminator. Cost:
+    /// O(units of `place`).
+    pub fn part_live_before_terminator(&self, block: BlockId, place: ValueId, path: &[PathSeg]) -> bool {
+        let points = self.parts_before.get(&block).expect("content liveness covers every block of its body");
+        let live = points.last().expect("a block's points end before its terminator");
+        self.overlapping(place, path).any(|unit| live.contains(&unit))
+    }
+
+    /// As `part_live_before`, from `block`'s start. Cost: O(units of `place`).
+    pub fn part_live_at_start(&self, block: BlockId, place: ValueId, path: &[PathSeg]) -> bool {
+        self.part_live_before(block, 0, place, path)
+    }
+
+    /// As `part_live_before`, after `block`'s terminator, on its way into a
+    /// successor. Cost: O(units of `place`).
+    pub fn part_live_at_end(&self, block: BlockId, place: ValueId, path: &[PathSeg]) -> bool {
+        let live = self.parts_at_end.get(&block).expect("content liveness covers every block of its body");
+        self.overlapping(place, path).any(|unit| live.contains(&unit))
+    }
+
+    /// The presence of the unit `unit` of `place` just before the
+    /// instruction at `index` of `block`, or before its terminator where
+    /// `index` is the block's length. Cost: O(units of `place`).
+    ///
+    /// # Panics
+    /// `unit` is not one of `place`'s units, or the position is not one of
+    /// the body's.
+    pub fn presence_before(&self, block: BlockId, index: usize, place: ValueId, unit: &[PathSeg]) -> Presence {
+        let points = self.presence_before.get(&block).expect("content presence covers every block of its body");
+        let state = points.get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"));
+        state.of((place, self.unit_index(place, unit)))
+    }
+
+    /// The presence of `unit` of `place` after `block`'s terminator, which
+    /// changes no presence. Cost: O(units of `place`).
+    pub fn presence_at_end(&self, block: BlockId, place: ValueId, unit: &[PathSeg]) -> Presence {
+        let points = self.presence_before.get(&block).expect("content presence covers every block of its body");
+        let state = points.last().expect("a block's points end before its terminator");
+        state.of((place, self.unit_index(place, unit)))
+    }
+
+    fn unit_index(&self, place: ValueId, unit: &[PathSeg]) -> usize {
+        let units = self.units.get(&place).unwrap_or_else(|| panic!("{place:?} has no units"));
+        units
+            .iter()
+            .position(|known| known.as_slice() == unit)
+            .unwrap_or_else(|| panic!("{unit:?} is not one of {place:?}'s units {units:?}"))
+    }
+
+    fn overlapping<'a>(&'a self, place: ValueId, path: &'a [PathSeg]) -> impl Iterator<Item = UnitId> + 'a {
+        let units = self.units.get(&place).unwrap_or_else(|| panic!("{place:?} has no units"));
+        units.iter().enumerate().filter(move |(_, unit)| overlap(unit, path)).map(move |(index, _)| (place, index))
+    }
 }
 
 impl Analysis for ContentLiveness {
@@ -98,44 +229,103 @@ impl Analysis for ContentLiveness {
     fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> ContentLiveness {
         let loans = am.get::<Loans>(module, body);
         let body = module.body(body);
-        let backward = Backward::new(body, &loans);
+        let units = units_of(body, module.types());
+        let backward = Backward::new(body, &loans, &units);
         let facts = solve_dense(&backward, body);
         let mut before = FxHashMap::default();
         let mut at_end = FxHashMap::default();
+        let mut parts_before = FxHashMap::default();
+        let mut parts_at_end = FxHashMap::default();
         for (id, block) in body.blocks() {
             let end = facts.at(id).clone();
             let mut state = end.clone();
             backward.transfer_terminator(block.terminator(), &mut state);
-            let mut points = vec![state.0.clone()];
+            let mut points = vec![state.clone()];
             for inst in block.insts().iter().rev() {
                 backward.transfer(inst, &mut state);
-                points.push(state.0.clone());
+                points.push(state.clone());
             }
             points.reverse();
-            before.insert(id, points);
-            at_end.insert(id, end.0);
+            let (places, parts): (Vec<_>, Vec<_>) = points.into_iter().map(|live| (live.places, live.parts)).unzip();
+            before.insert(id, places);
+            parts_before.insert(id, parts);
+            at_end.insert(id, end.places);
+            parts_at_end.insert(id, end.parts);
         }
-        ContentLiveness { before, at_end }
+        let forward = Forward { units: &units, types: module.types(), body };
+        let presence = solve_dense(&forward, body);
+        let mut presence_before = FxHashMap::default();
+        for (id, block) in body.blocks() {
+            let mut state = presence.at(id).clone();
+            let mut points = vec![state.clone()];
+            for inst in block.insts() {
+                forward.transfer(inst, &mut state);
+                points.push(state.clone());
+            }
+            presence_before.insert(id, points);
+        }
+        ContentLiveness { before, at_end, units, parts_before, parts_at_end, presence_before }
     }
 }
 
-/// A set of places; finite over a body, so its widening is its join.
+/// The places whose type does not copy, each with its units: a slot, or a
+/// parameter the body names as a storage.
+fn units_of(body: &Body, types: &Types<Concrete>) -> FxHashMap<ValueId, Vec<Path>> {
+    let mut cuts: FxHashMap<ValueId, Vec<Path>> = FxHashMap::default();
+    for slot in body.slots() {
+        if !copies(types, body.ty_of(*slot)) {
+            cuts.entry(*slot).or_default();
+        }
+    }
+    for (_, block) in body.blocks() {
+        for inst in block.insts() {
+            let (place, path, cut) = match inst.op() {
+                Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
+                    (*place, path, !path.is_empty() && !copies(types, parts::part_ty(types, body.ty_of(*place), path)))
+                }
+                Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, value, .. } => {
+                    (*place, path, !path.is_empty() && !copies(types, body.ty_of(*value)))
+                }
+                Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => (*place, path, false),
+                _ => continue,
+            };
+            if copies(types, body.ty_of(place)) {
+                continue;
+            }
+            let place_cuts = cuts.entry(place).or_default();
+            if cut && !place_cuts.contains(path) {
+                place_cuts.push(path.clone());
+            }
+        }
+    }
+    cuts.into_iter()
+        .filter(|(place, _)| matches!(body.definition(*place), Definition::Slot(_) | Definition::Param(_)))
+        .map(|(place, cuts)| (place, parts::units(types, body.ty_of(place), &cuts)))
+        .collect()
+}
+
+/// A set of places and a set of units; finite over a body, so its
+/// widening is its join.
 #[derive(Debug, Clone, PartialEq)]
-struct Live(FxHashSet<ValueId>);
+struct Live {
+    places: FxHashSet<ValueId>,
+    parts: FxHashSet<UnitId>,
+}
 
 impl JoinSemiLattice for Live {
     fn bottom() -> Self {
-        Live(FxHashSet::default())
+        Live { places: FxHashSet::default(), parts: FxHashSet::default() }
     }
 
     fn join(&mut self, other: &Self) -> bool {
-        let before = self.0.len();
-        self.0.extend(other.0.iter().copied());
-        self.0.len() != before
+        let before = (self.places.len(), self.parts.len());
+        self.places.extend(other.places.iter().copied());
+        self.parts.extend(other.parts.iter().copied());
+        (self.places.len(), self.parts.len()) != before
     }
 
     fn le(&self, other: &Self) -> bool {
-        self.0.is_subset(&other.0)
+        self.places.is_subset(&other.places) && self.parts.is_subset(&other.parts)
     }
 }
 
@@ -150,13 +340,14 @@ impl Widen for Live {
 /// body, which the engine borrows unchanged for the whole solve.
 struct Backward<'f> {
     loans: &'f Loans,
+    units: &'f FxHashMap<ValueId, Vec<Path>>,
     inst_sites: FxHashMap<*const Inst, Site>,
     term_sites: FxHashMap<*const Terminator, Site>,
 }
 
 impl<'f> Backward<'f> {
     /// Cost: O(the body's instructions).
-    fn new(body: &'f Body, loans: &'f Loans) -> Self {
+    fn new(body: &'f Body, loans: &'f Loans, units: &'f FxHashMap<ValueId, Vec<Path>>) -> Self {
         let mut inst_sites = FxHashMap::default();
         let mut term_sites = FxHashMap::default();
         for (block, record) in body.blocks() {
@@ -165,15 +356,28 @@ impl<'f> Backward<'f> {
             }
             term_sites.insert(std::ptr::from_ref(record.terminator()), Site::Term(block));
         }
-        Backward { loans, inst_sites, term_sites }
+        Backward { loans, units, inst_sites, term_sites }
     }
 
-    fn gen_reads(&self, site: Site, state: &mut Live) {
+    /// What `site` reads: the places `Loans` names, and of each, the units
+    /// overlapping the path a `Take` names it by, or all of them.
+    fn gen_reads(&self, site: Site, by_name: Option<(ValueId, &[PathSeg])>, state: &mut Live) {
         let read_places = self.loans.reads(site).iter().filter_map(|storage| match storage {
             Storage::Slot(place) | Storage::Param(place) => Some(*place),
             Storage::Outside { .. } => None,
         });
-        state.0.extend(read_places);
+        for place in read_places {
+            state.places.insert(place);
+            let Some(units) = self.units.get(&place) else {
+                continue;
+            };
+            let read: &[PathSeg] = match by_name {
+                Some((named, path)) if named == place => path,
+                _ => &[],
+            };
+            let touched = units.iter().enumerate().filter(|(_, unit)| overlap(unit, read));
+            state.parts.extend(touched.map(|(index, _)| (place, index)));
+        }
     }
 }
 
@@ -187,19 +391,128 @@ impl DenseAnalysis for Backward<'_> {
     }
 
     fn transfer(&self, inst: &Inst, state: &mut Live) {
-        if let Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } = inst.op()
-            && path.is_empty()
-        {
-            state.0.remove(place);
+        if let Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } = inst.op() {
+            if path.is_empty() {
+                state.places.remove(place);
+            }
+            if let Some(units) = self.units.get(place) {
+                for (index, unit) in units.iter().enumerate() {
+                    if covers(path, unit) {
+                        state.parts.remove(&(*place, index));
+                    }
+                }
+            }
         }
+        let by_name = match inst.op() {
+            Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => Some((*place, path.as_slice())),
+            _ => None,
+        };
         let site = self.inst_sites.get(&std::ptr::from_ref(inst)).expect("the instruction transferred is one of the body's");
-        self.gen_reads(*site, state);
+        self.gen_reads(*site, by_name, state);
     }
 
     fn transfer_terminator(&self, terminator: &Terminator, state: &mut Live) {
         let site = self.term_sites.get(&std::ptr::from_ref(terminator)).expect("the terminator transferred is one of the body's");
-        self.gen_reads(*site, state);
+        self.gen_reads(*site, None, state);
     }
 
     fn transfer_edge(&self, _: &Edge<'_>, _: &[ValueId], _: &mut Live) {}
+}
+
+/// Each unit's presence; a unit not in the map is unreached.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct PresenceOf(FxHashMap<UnitId, Presence>);
+
+impl PresenceOf {
+    fn of(&self, unit: UnitId) -> Presence {
+        self.0.get(&unit).copied().unwrap_or(Presence::Unreached)
+    }
+}
+
+impl JoinSemiLattice for PresenceOf {
+    fn bottom() -> Self {
+        PresenceOf::default()
+    }
+
+    fn join(&mut self, other: &Self) -> bool {
+        let mut rose = false;
+        for (unit, presence) in &other.0 {
+            let joined = self.of(*unit).join(*presence);
+            if joined != self.of(*unit) {
+                self.0.insert(*unit, joined);
+                rose = true;
+            }
+        }
+        rose
+    }
+
+    fn le(&self, other: &Self) -> bool {
+        self.0.iter().all(|(unit, presence)| other.of(*unit).join(*presence) == other.of(*unit))
+    }
+}
+
+/// Finite: four states per unit.
+impl Widen for PresenceOf {
+    fn widen(&mut self, next: &Self) -> bool {
+        self.join(next)
+    }
+}
+
+/// Forward over the units: a slot's start empty and a parameter's full; a
+/// store by name fills what it covers, and a `Take` by name of a path that
+/// does not copy empties what it covers.
+struct Forward<'f> {
+    units: &'f FxHashMap<ValueId, Vec<Path>>,
+    types: &'f Types<Concrete>,
+    body: &'f Body,
+}
+
+impl Forward<'_> {
+    fn set(&self, place: ValueId, path: &[PathSeg], to: Presence, state: &mut PresenceOf) {
+        let Some(units) = self.units.get(&place) else {
+            return;
+        };
+        for (index, unit) in units.iter().enumerate() {
+            if covers(path, unit) {
+                state.0.insert((place, index), to);
+            }
+        }
+    }
+}
+
+impl DenseAnalysis for Forward<'_> {
+    type State = PresenceOf;
+
+    const DIRECTION: Direction = Direction::Forward;
+
+    fn entry(&self, body: &Body) -> PresenceOf {
+        let mut state = PresenceOf::default();
+        for (place, units) in self.units {
+            let start = match body.definition(*place) {
+                Definition::Param(_) => Presence::Present,
+                _ => Presence::Absent,
+            };
+            state.0.extend((0..units.len()).map(|index| ((*place, index), start)));
+        }
+        state
+    }
+
+    fn transfer(&self, inst: &Inst, state: &mut PresenceOf) {
+        match inst.op() {
+            Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
+                self.set(*place, path, Presence::Present, state);
+            }
+            Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
+                if self.units.contains_key(place)
+                    && !copies(self.types, parts::part_ty(self.types, self.body.ty_of(*place), path)) =>
+            {
+                self.set(*place, path, Presence::Absent, state);
+            }
+            _ => {}
+        }
+    }
+
+    fn transfer_terminator(&self, _: &Terminator, _: &mut PresenceOf) {}
+
+    fn transfer_edge(&self, _: &Edge<'_>, _: &[ValueId], _: &mut PresenceOf) {}
 }

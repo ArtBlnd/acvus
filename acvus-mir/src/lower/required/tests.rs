@@ -797,3 +797,149 @@ fn a_parameter_named_both_as_a_storage_and_as_a_value_is_refused() {
 
     run(&mut f, insert_drops);
 }
+
+// -- insert_drops: partial moves (ownership §6) --------------------------------
+
+/// A structural object of two `String` fields `a` and `b`, and a pure
+/// function of one `&String` to an `i64`.
+fn two_strings(interner: &Interner, t: Tys, builder: &mut Builder<'_>) -> (Ty, Ty, acvus_utils::Astr, acvus_utils::Astr) {
+    let (a, b) = (interner.intern("a"), interner.intern("b"));
+    let mut fields = vec![(a, t.string), (b, t.string)];
+    fields.sort_by_key(|(name, _)| *name);
+    let record = builder.intern(TyKind::Object(crate::ty::ObjectTy::Structural(fields.into_boxed_slice(), ())));
+    let reads_string = builder.intern(TyKind::Fn {
+        params: Box::new([t.string_ref]),
+        ret: t.int,
+        effect: EffectTerm::Known(Effect::pure()),
+        flows: FlowTerm::Known(Flows::none()),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+    });
+    (record, reads_string, a, b)
+}
+
+fn part_take(slot: ValueId, field: acvus_utils::Astr) -> Op {
+    Op::Take { target: RefTarget::Var(slot), path: vec![PathSeg::Field(field)], taken_out: false }
+}
+
+/// `s = { a, b }; f(s.a); g(&s.b)`: `s.a` moves out, and its holder, the
+/// callee, ends it. `s.b` is last read through the reference `g` takes, so
+/// it is taken out of `s` and dropped just after that call, with its span;
+/// `s` is never dropped whole, and the part moved out is not dropped again.
+#[test]
+fn a_record_with_one_string_field_moved_drops_the_other_at_its_last_read() {
+    let mut f = fixture();
+    let t = f.t;
+    let mut builder = f.module.build_body(false, t.int);
+    let (record, reads_string, a, b) = two_strings(&f.interner, t, &mut builder);
+    let entry = builder.current_block();
+    let slot = builder.slot(record, at(1));
+    let first = text(t, &mut builder, at(1));
+    let second = text(t, &mut builder, at(1));
+    let object = builder.push(Op::MakeObject { fields: vec![(a, first), (b, second)] }, record, at(1));
+    builder.push_unit(assign(slot, object), at(1));
+    let moved = builder.push(part_take(slot, a), t.string, at(2));
+    builder.push(t.call(t.takes_string, vec![moved]), t.int, at(2));
+    let lent = builder.push(
+        Op::Ref { target: RefTarget::Var(slot), path: vec![PathSeg::Field(b)], mutability: Mutability::Shared },
+        t.string_ref,
+        at(3),
+    );
+    let read = builder.push(t.call(reads_string, vec![lent]), t.int, at(4));
+    builder.terminate(ret(read), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let ops = f.ops(id, entry);
+    let [.., last_call, taken, dropped] = &ops[..] else {
+        panic!("the remaining part is taken out and dropped after its last read: {ops:?}")
+    };
+    assert_eq!(arguments(last_call), [lent]);
+    assert!(
+        matches!(taken, Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Field(b)]),
+        "{taken:?} takes out `s.b`"
+    );
+    let insts = f.module.body(id).block(entry).insts();
+    let part = insts[ops.len() - 2].result().expect("a Take yields a value");
+    assert!(is_drop_of(dropped, part));
+    assert_eq!(insts[ops.len() - 1].span(), at(4), "the drop takes its last read's span");
+    assert_eq!(drops(&ops), 1, "`s.a` moved to the callee and `s` is never dropped whole");
+}
+
+/// `t = (x, y); f(t.0)`: `t.0` moves to the callee; `t.1` is never read,
+/// so its liveness ends at `t`'s definition, where it is taken out of `t`
+/// and dropped. `t` itself is never dropped.
+#[test]
+fn a_tuple_with_one_part_moved_drops_the_other_where_its_liveness_ends() {
+    let mut f = fixture();
+    let t = f.t;
+    let mut builder = f.module.build_body(false, t.int);
+    let pair = builder.intern(TyKind::Tuple(Box::new([t.string, t.string])));
+    let entry = builder.current_block();
+    let first = text(t, &mut builder, at(1));
+    let second = text(t, &mut builder, at(1));
+    let tuple = builder.push(Op::MakeTuple { elements: vec![first, second] }, pair, at(2));
+    let moved = builder.push(Op::TupleIndex { tuple, index: 0 }, t.string, at(3));
+    let x = builder.push(t.call(t.takes_string, vec![moved]), t.int, at(3));
+    builder.terminate(ret(x), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let ops = f.ops(id, entry);
+    let [_, _, made, taken, dropped, first_part, call] = &ops[..] else {
+        panic!("the unread part is taken out and dropped where the tuple is made: {ops:?}")
+    };
+    assert!(matches!(made, Op::MakeTuple { .. }));
+    assert!(matches!(taken, Op::TupleIndex { tuple: whole, index: 1 } if *whole == tuple));
+    let part = f.module.body(id).block(entry).insts()[3].result().expect("an extraction yields a value");
+    assert!(is_drop_of(dropped, part));
+    assert_eq!(f.module.body(id).block(entry).insts()[4].span(), at(2), "the drop takes the definition's span");
+    assert!(matches!(first_part, Op::TupleIndex { index: 0, .. }));
+    assert_eq!(arguments(call), [moved]);
+    assert_eq!(drops(&ops), 1, "`t.0` moved to the callee and `t` is never dropped whole");
+}
+
+/// `s = { a, b }; s.a = z; f(s.a); g(&s.b)`: the store into `s.a` replaces
+/// the first `a`, which nothing reads, so it ends at the store that made
+/// it; the second `a` moves to `f`, and `b` ends after its last read.
+#[test]
+fn a_part_replaced_before_any_read_is_dropped_where_it_was_stored() {
+    let mut f = fixture();
+    let t = f.t;
+    let mut builder = f.module.build_body(false, t.int);
+    let (record, reads_string, a, b) = two_strings(&f.interner, t, &mut builder);
+    let entry = builder.current_block();
+    let slot = builder.slot(record, at(1));
+    let first = text(t, &mut builder, at(1));
+    let second = text(t, &mut builder, at(1));
+    let object = builder.push(Op::MakeObject { fields: vec![(a, first), (b, second)] }, record, at(1));
+    builder.push_unit(assign(slot, object), at(1));
+    let replacing = text(t, &mut builder, at(2));
+    let into_a = Op::Assign { target: RefTarget::Var(slot), path: vec![PathSeg::Field(a)], value: replacing, restores: false };
+    builder.push_unit(into_a, at(2));
+    let moved = builder.push(part_take(slot, a), t.string, at(3));
+    builder.push(t.call(t.takes_string, vec![moved]), t.int, at(3));
+    let lent = builder.push(
+        Op::Ref { target: RefTarget::Var(slot), path: vec![PathSeg::Field(b)], mutability: Mutability::Shared },
+        t.string_ref,
+        at(4),
+    );
+    let read = builder.push(t.call(reads_string, vec![lent]), t.int, at(4));
+    builder.terminate(ret(read), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let ops = f.ops(id, entry);
+    let takes_part = |op: &Op, field| {
+        matches!(op, Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Field(field)])
+    };
+    assert!(matches!(ops[3], Op::Assign { .. }), "the whole store: {ops:?}");
+    assert!(takes_part(&ops[4], a) && matches!(ops[5], Op::Drop { .. }), "the first `a` ends at its store: {ops:?}");
+    assert!(matches!(&ops[7], Op::Assign { path, .. } if *path == [PathSeg::Field(a)]), "then `s.a` is replaced: {ops:?}");
+    let n = ops.len();
+    assert!(takes_part(&ops[n - 2], b) && matches!(ops[n - 1], Op::Drop { .. }), "`b` ends after its last read: {ops:?}");
+    assert_eq!(drops(&ops), 2);
+}
