@@ -25,7 +25,7 @@ The lang items are Rust's, but for two:
 
 ## 3. Slices
 
-`a[i]` reaches an element through its container's `core::as_slice`, or `core::as_slice_mut` where the place is written or lent mutably. A `for` over `&v` or `&mut v` reaches its elements through the same impl. Any type that gives these impls is indexed and iterated as a slice.
+`a[i]` reaches an element through its container's `core::as_slice`, or `core::as_slice_mut` where the place is written or lent mutably. A `for` over `&v` or `&mut v` reaches its elements through the same impl. Any type that gives these impls is indexed and iterated as a slice. An index is a `u64`, as Rust's `usize`.
 
 ## 4. Equality and ordering
 
