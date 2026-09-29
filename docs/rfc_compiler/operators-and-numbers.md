@@ -21,7 +21,7 @@ The lang items are Rust's, but for two:
 - `as_slice<C, T>(&C) -> &[T]`, `as_slice_mut<C, T>(&mut C) -> &mut [T]`, `as_str<S>(&S) -> &str`: the views.
 - `unwrap<W, T>(W) -> T`, at `Option<T>` and `Result<T, E>`. Its meaning is the language's, since both types are primitive: `Some(x)` and `Ok(x)` give `x`, and `None` and `Err(_)` trap.
 
-`&&`, `||` and `!` on `bool`, `^` on `bool` and the integers, and `&`, `|`, `<<` and `>>` on the integers are the language's own operations, as Rust defines them, with overflow as §1 states. They are not calls.
+`&&`, `||` and `!` on `bool`, `^` on `bool` and the integers, and `&`, `<<` and `>>` on the integers are the language's own operations, as Rust defines them, with overflow as §1 states. They are not calls. `|` is the pipe (`x | f` is `f(x)`); bitwise or has no operator.
 
 ## 3. Slices
 
