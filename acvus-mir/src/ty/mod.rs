@@ -280,11 +280,6 @@ impl<V: Phase> Types<V> {
         &self.kinds[ty.index as usize]
     }
 
-    /// Every shape the table holds, in the order they were interned.
-    pub fn kinds(&self) -> impl Iterator<Item = &TyKind<V>> {
-        self.kinds.iter()
-    }
-
     fn assert_own(&self, ty: TyId<V>) {
         assert_eq!(
             ty.table, self.table,

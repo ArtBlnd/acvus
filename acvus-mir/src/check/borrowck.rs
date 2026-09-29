@@ -7,10 +7,10 @@
 //! `as_mut`, a coercion through a reference). Over `Loans` and `Liveness`.
 
 use super::Refusal;
-use crate::ir::cfg::{BodyId, Module};
+use crate::ir::cfg::{Body, BodyId};
 use crate::passes::analysis::AnalysisManager;
 
 /// The judgment over `body`, its refusals pushed to `out`.
-pub(super) fn check(body: BodyId, module: &Module, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
+pub(super) fn check(body: BodyId, module_body: &Body, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
     todo!("borrowck over the analyses its module doc names")
 }

@@ -325,7 +325,7 @@ pub struct ExternCast {
 /// local variables have different ValueIds even if they share the same name.
 /// Names are stored in DebugInfo for human readability.
 /// One step of a path under a storage (RFC-0024).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathSeg {
     Field(Astr),
     Index(usize),
