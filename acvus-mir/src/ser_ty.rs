@@ -288,6 +288,10 @@ pub enum SerTy {
     Tuple {
         elems: Vec<SerTy>,
     },
+    /// A closure with code at each signature, over one environment.
+    Closures {
+        signatures: Vec<SerTy>,
+    },
     Fn {
         params: Vec<SerTy>,
         ret: Box<SerTy>,
@@ -431,6 +435,7 @@ fn to_ser_level(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> SerTy {
                 .map(|(k, v)| (interner.resolve(*k).to_string(), v.map(part)))
                 .collect(),
         },
+        TyKind::Closures(signatures) => SerTy::Closures { signatures: signatures.iter().map(|signature| to_ser(types, *signature, interner)).collect() },
         TyKind::Handle(..) => todo!("Handle serialization not yet implemented"),
         TyKind::Ref(..) | TyKind::Slice(..) | TyKind::Str => {
             todo!("Ref serialization not yet implemented")
@@ -477,6 +482,9 @@ impl SerTy {
                 })
             }
             SerTy::Tuple { elems } => TyKind::Tuple(elems.iter().map(|e| e.to_ty(types, interner)).collect(), ()),
+            SerTy::Closures { signatures } => {
+                TyKind::Closures(signatures.iter().map(|signature| signature.to_ty(types, interner)).collect())
+            }
             SerTy::Fn {
                 params,
                 ret,

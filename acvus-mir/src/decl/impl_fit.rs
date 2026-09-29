@@ -126,6 +126,7 @@ impl Choice<'_> {
                 | TyKind::Unit
                 | TyKind::Never
                 | TyKind::Order
+                | TyKind::Closures(_)
                 | TyKind::Str,
                 other,
             ) => types.kind(generic) == other,

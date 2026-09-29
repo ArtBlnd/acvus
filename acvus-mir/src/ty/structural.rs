@@ -78,6 +78,7 @@ where
         | TyKind::Str
         | TyKind::Object(ObjectTy::Declared(..))
         | TyKind::Fn { .. }
+        | TyKind::Closures(_)
         | TyKind::UserDefined { .. }
         | TyKind::Ref(..)
         | TyKind::Var(_) => None,

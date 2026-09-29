@@ -285,6 +285,9 @@ impl Bindings {
             TyKind::Order => TyKind::Order,
             TyKind::Str => TyKind::Str,
             TyKind::Handle(inner) => TyKind::Handle(self.apply(poly, *inner, types, built)?),
+            TyKind::Closures(signatures) => TyKind::Closures(
+                signatures.iter().map(|signature| self.apply(poly, *signature, types, built)).collect::<Option<_>>()?,
+            ),
             TyKind::Slice(inner) => TyKind::Slice(self.apply(poly, *inner, types, built)?),
             TyKind::Option(inner, _) => TyKind::Option(self.apply(poly, *inner, types, built)?, ()),
             TyKind::Array(inner, len, _) => {

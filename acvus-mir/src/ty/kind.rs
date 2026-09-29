@@ -177,6 +177,7 @@ impl<V: Phase> TyKind<V> {
                 type_args.iter().for_each(|arg| on_child(arg.ty()));
             }
             TyKind::Ref(_, target) => on_child(target.ty()),
+            TyKind::Closures(signatures) => signatures.iter().copied().for_each(on_child),
         }
     }
 }

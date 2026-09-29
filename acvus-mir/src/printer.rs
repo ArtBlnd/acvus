@@ -1990,6 +1990,16 @@ impl TyDisplay<'_> {
             }
             TyKind::Array(inner, len, _) => write!(f, "Array<{}, {}>", self.nested(*inner), known_len(len)),
             TyKind::Handle(inner) => write!(f, "Handle<{}>", self.nested(*inner)),
+            TyKind::Closures(signatures) => {
+                write!(f, "Closures<")?;
+                for (at, signature) in signatures.iter().enumerate() {
+                    if at > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", self.nested(*signature))?;
+                }
+                write!(f, ">")
+            }
             TyKind::Option(inner, _) => write!(f, "Option<{}>", self.nested(*inner)),
             TyKind::Result(ok, err, _) => write!(f, "Result<{}, {}>", self.nested(*ok), self.nested(*err)),
             // Identity arguments are not printed. An identity is a source,

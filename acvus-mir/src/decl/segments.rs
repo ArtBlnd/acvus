@@ -55,7 +55,7 @@ fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>,
         | TyKind::Never
         | TyKind::Str => {}
         TyKind::Fn { .. } => out.push(Segment::FunctionValue),
-        TyKind::Order | TyKind::Handle(_) => panic!("a declared type holds no Handle and no Order"),
+        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => panic!("a declared type holds no Handle, Order or Closures"),
         TyKind::Var(var) => out.push(Segment::TypeVar(*var)),
         TyKind::Ref(_, target) => {
             out.push(Segment::Reference);

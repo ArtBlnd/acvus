@@ -70,6 +70,7 @@ impl Infer {
             TyKind::Order => TyKind::Order,
             TyKind::Str => TyKind::Str,
             TyKind::Handle(result) => TyKind::Handle(freeze(*result)?),
+            TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| freeze(*signature)).collect::<Result<_, _>>()?),
             TyKind::Array(element, len, _) => TyKind::Array(
                 freeze(*element)?,
                 LenTerm::Known(self.settled(&self.len_vars, len)?),

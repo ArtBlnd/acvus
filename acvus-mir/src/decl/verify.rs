@@ -709,7 +709,7 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
             "a reference's target is never a reference (types §4): a rule with such an end is refused as \
              ReferenceToReference and left out of the tree"
         ),
-        TyKind::Var(_) | TyKind::Never | TyKind::Order | TyKind::Handle(_) => return None,
+        TyKind::Var(_) | TyKind::Never | TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => return None,
     })
 }
 
@@ -1239,7 +1239,7 @@ fn push_written(types: &Types<Poly>, lifetimes: &dyn LifetimesOf, ty: TyId<Poly>
         | TyKind::Unit
         | TyKind::Never
         | TyKind::Str => {}
-        TyKind::Order | TyKind::Handle(_) => panic!("a declared type holds no Handle and no Order"),
+        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => panic!("a declared type holds no Handle, Order or Closures"),
         TyKind::Fn { holds, .. } => out.push(under_mut || *holds == Holds::Mut),
         TyKind::Var(_) => out.push(under_mut),
         TyKind::Ref(mutability, target) => {
@@ -2672,6 +2672,24 @@ mod tests {
             refusals(fixture),
             vec![Refused::InternalType {
                 written: Written::Function(f)
+            }]
+        );
+    }
+
+    /// functions §2: a closure of signatures is lower's alone, so a
+    /// context's type holding one is refused.
+    #[test]
+    fn a_context_holding_a_closure_of_signatures_is_refused() {
+        let mut fixture = Fixture::new();
+        let context = fixture.name("m", "closures");
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let signature = fixture.function(&[int], int);
+        let closures = fixture.ty(TyKind::Closures(Box::new([signature])));
+        fixture.raw.contexts.push((context, ContextDecl { ty: closures, volatile: false }));
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::InternalType {
+                written: Written::Context(context)
             }]
         );
     }

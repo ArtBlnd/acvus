@@ -146,6 +146,18 @@ fn for_each_position_level(
             for_each_position(types, lifetimes, target.ty(), on_position);
         }
         TyKind::Fn { holds, .. } => on_position(PositionKind::Captures(*holds)),
+        // One environment, whichever signature it is called at: what its
+        // captures hold, as a function value's (functions §2).
+        TyKind::Closures(signatures) => {
+            let holds = signatures
+                .iter()
+                .filter_map(|signature| match types.kind(*signature) {
+                    TyKind::Fn { holds, .. } => Some(*holds),
+                    _ => None,
+                })
+                .fold(Holds::Nothing, Holds::join);
+            on_position(PositionKind::Captures(holds));
+        }
         TyKind::Handle(result) => {
             on_position(PositionKind::InFlight);
             for_each_position(types, lifetimes, *result, on_position);

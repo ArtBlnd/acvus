@@ -132,6 +132,7 @@ impl Infer {
             TyKind::Order => TyKind::Order,
             TyKind::Str => TyKind::Str,
             TyKind::Handle(result) => TyKind::Handle(self.instantiate_ty(at, *result)),
+            TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| self.instantiate_ty(at, *signature)).collect()),
             TyKind::Array(element, len, _) => {
                 let element = self.instantiate_ty(at, *element);
                 let len = match len {

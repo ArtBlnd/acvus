@@ -223,7 +223,7 @@ enum Shape {
     TestObjectKey(Astr),
     ArrayIndex(usize),
     ObjectGet(Astr),
-    MakeClosure(BodyId),
+    MakeClosure(Vec<BodyId>),
     MakeVariant { tag: Astr, has_payload: bool },
     TestVariant(Astr),
     UnwrapVariant,
@@ -348,7 +348,10 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         Op::TestObjectKey { key, .. } => Shape::TestObjectKey(*key),
         Op::ArrayIndex { index, .. } => Shape::ArrayIndex(*index),
         Op::ObjectGet { key, .. } => Shape::ObjectGet(*key),
-        Op::MakeClosure { body, .. } => Shape::MakeClosure(*body),
+        Op::MakeClosure { bodies, .. } => Shape::MakeClosure(bodies.clone()),
+        // A specialized closure is its closure at fewer signatures; left to
+        // the closure's own number.
+        Op::Specialize { .. } => return None,
         Op::MakeVariant { tag, payload } => Shape::MakeVariant { tag: *tag, has_payload: payload.is_some() },
         Op::TestVariant { tag, .. } => Shape::TestVariant(*tag),
         Op::UnwrapVariant { .. } => Shape::UnwrapVariant,
@@ -392,6 +395,7 @@ fn commutes(op: BinOp, operand: &TyKind<Concrete>) -> bool {
         | TyKind::Never
         | TyKind::Order
         | TyKind::Handle(_)
+        | TyKind::Closures(_)
         | TyKind::Array(..)
         | TyKind::Slice(_)
         | TyKind::Str

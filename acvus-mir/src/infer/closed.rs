@@ -113,7 +113,7 @@ fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
              Infer::intern refuses to build one, and a variable a reference targets is never bound \
              to one (Mismatch::ReferenceToReference)"
         ),
-        TyKind::Order | TyKind::Handle(_) => panic!(
+        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => panic!(
             "only the compiler's IR writes the order token and a started call (effects §3, §6); \
              verify refuses a declared one (InternalType)"
         ),

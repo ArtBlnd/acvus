@@ -142,6 +142,7 @@ impl<'s> Import<'s> {
             | TyKind::Order
             | TyKind::Str) => kind,
             TyKind::Handle(inner) => TyKind::Handle(self.ty(inner, to)),
+            TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| self.ty(*signature, to)).collect()),
             TyKind::Array(inner, len, _) => TyKind::Array(self.ty(inner, to), len, ()),
             TyKind::Slice(inner) => TyKind::Slice(self.ty(inner, to)),
             TyKind::Option(inner, _) => TyKind::Option(self.ty(inner, to), ()),

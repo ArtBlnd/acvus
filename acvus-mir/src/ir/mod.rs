@@ -1370,6 +1370,7 @@ pub fn is_scalar(kind: &crate::ty::TyKind<Concrete>) -> bool {
         | TyKind::Slice(_)
         | TyKind::Str
         | TyKind::Handle(_)
+        | TyKind::Closures(_)
         | TyKind::Ref(..) => false,
         TyKind::Var(var) => match *var {},
     }
