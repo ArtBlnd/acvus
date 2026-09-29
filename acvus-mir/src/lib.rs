@@ -524,6 +524,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         // Storing a function to context must fail.
         assert!(compile_script(&i, "@f = @f; @f", &[("f", fn_ty)]).is_err());
@@ -541,6 +542,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let list_fn_ty = types.intern(TyKind::Array(fn_ty, LenTerm::Known(3), ()));
         assert!(compile_script(&i, "@x = @x; @x", &[("x", list_fn_ty)]).is_err());
@@ -558,6 +560,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let name = i.intern("name");
         let callback = i.intern("callback");

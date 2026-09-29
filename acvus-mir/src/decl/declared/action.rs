@@ -137,6 +137,6 @@ fn fits(types: &mut Types<Poly>, general: TyId<Poly>, params: &[TyId<Poly>], ret
     let TyKind::Fn { effect, flows, calls, holds, .. } = types.kind(general).clone() else {
         return false;
     };
-    let specific = types.intern(TyKind::Fn { params: params.into(), ret, effect, flows, calls, holds });
+    let specific = types.intern(TyKind::Fn { params: params.into(), ret, effect, flows, calls, holds, values: () });
     is_impl_of(types, general, specific)
 }

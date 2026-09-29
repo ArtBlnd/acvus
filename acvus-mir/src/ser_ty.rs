@@ -381,6 +381,7 @@ fn to_ser_level(types: &Types<Concrete>, ty: Ty, interner: &Interner) -> SerTy {
             flows,
             calls,
             holds,
+            values: (),
         } => SerTy::Fn {
             params: params
                 .iter()
@@ -509,6 +510,7 @@ impl SerTy {
                     SerHolds::Shared => Holds::Shared,
                     SerHolds::Mut => Holds::Mut,
                 },
+                values: (),
             },
             SerTy::UserDefined {
                 id,
@@ -572,6 +574,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
 
         let round_tripped = to_ser(&types, fn_ty, &i).to_ty(&mut types, &i);

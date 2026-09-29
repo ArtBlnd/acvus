@@ -16,17 +16,18 @@ use super::refusal::{self, RefusalKind, Unimplemented};
 use crate::decl::{Base, Head, Lift, LiftShape, NamedLaw, Taking};
 use crate::infer::{Closed, Coerced, Instantiated, RequiredAt, Term};
 use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Flows, Holds, HoldsTerm, Infer as InferPhase, Label, Mutability, ObjectTy, TyKind, TypeArg, copies_in};
+use crate::ty::{Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, Infer as InferPhase, Label, Mutability, ObjectTy, TyKind, TypeArg, copies_in};
 
-/// A structured value coerced at `site` into `slot` (types §3): its node
-/// records the shape and a node per part it keeps, and each part enters
-/// the slot's part at that node, in the body whose effect is `body`.
-pub(super) fn fire_coerced(cx: &mut Ctxt<'_>, site: AstId, span: Span, slot: Term, coerced: Coerced, body: EffectTerm<InferPhase>) {
+/// A structured value coerced at `site` into `slot`, reached by `reach`
+/// (types §3): its node records the shape and a node per part it keeps,
+/// and each part enters the slot's part, reached as the slot was, at that
+/// node, in the body whose effect is `body`.
+pub(super) fn fire_coerced(cx: &mut Ctxt<'_>, site: AstId, span: Span, (slot, reach): (Term, crate::ty::Reach), coerced: Coerced, body: EffectTerm<InferPhase>) {
     let Coerced { shape, through, parts } = coerced;
     let sites: Vec<(PartKey, AstId)> = parts.iter().map(|part| (part.key, AstId::alloc())).collect();
     cx.out.coercions.insert(site, CoercionNode { shape, through, slot, parts: sites.clone().into() });
     for (part, (_, part_site)) in parts.iter().zip(sites) {
-        cx.enter_in(body.clone(), part_site, part.value, part.slot, span);
+        cx.enter_in(body.clone(), part_site, part.value, part.slot, reach, span);
     }
 }
 
@@ -241,6 +242,7 @@ pub(super) fn reach_lend(cx: &mut Ctxt<'_>, decision: Reach, function: Qualified
     };
     let made = cx.node(kind);
     cx.eq(result, made, span);
+    let values = cx.infer.fresh_values_of(FnValues::Any);
     let callee = cx.node(TyKind::Fn {
         params: args.iter().map(|(_, arg)| *arg).collect(),
         ret: made,
@@ -248,6 +250,7 @@ pub(super) fn reach_lend(cx: &mut Ctxt<'_>, decision: Reach, function: Qualified
         flows: FlowTerm::Known(Flows::Every),
         calls: CallsTerm::Known(Calls::Many),
         holds: HoldsTerm::Known(Holds::Nothing),
+        values,
     });
     cx.out.reached.insert(site, Chosen { declaration: function, r#impl: Some(Impl::Structural), required: Box::new([]) });
     cx.out.callees.insert(site, callee);
@@ -367,11 +370,11 @@ fn reach_structural(cx: &mut Ctxt<'_>, decision: Reach, function: QualifiedRef, 
     };
     let own_effect = super::effect::join_into(cx, &own_effect, &EffectTerm::Known(Effect::pure()), span);
     match &callee {
-        Callee::Part(part) => cx.join(part.pattern, ty, span),
+        Callee::Part(part) => cx.join(part.pattern, ty, crate::ty::Reach::Named, span),
         Callee::Required(_) => unreachable!("a requirement is refused above"),
         Callee::Name(_) | Callee::Declaration(_) | Callee::Method(_) | Callee::Core(_) => {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
-                cx.enter_in(effect.clone(), *arg_site, *arg, *param, span);
+                cx.enter_in(effect.clone(), *arg_site, *arg, *param, crate::ty::Reach::Named, span);
             }
             cx.eq(result, ret, span);
         }

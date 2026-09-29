@@ -6,7 +6,7 @@ use crate::decl::{
 };
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, IdentityId,
-    IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reissue, SplitCost, TyKind, TypeArg, Types,
+    IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reach, Reissue, SplitCost, TyKind, TypeArg, Types,
 };
 
 struct Fixture {
@@ -63,6 +63,7 @@ impl Fixture {
         holds: HoldsTerm,
     ) -> Term {
         let ret = self.kind(TyKind::Unit);
+        let values = self.infer.fresh_values();
         self.kind(TyKind::Fn {
             params: Box::new([]),
             ret,
@@ -70,6 +71,7 @@ impl Fixture {
             flows: FlowTerm::Known(flows),
             calls,
             holds,
+            values,
         })
     }
 
@@ -232,7 +234,7 @@ fn a_shape_made_one_with_an_opaque_one_becomes_opaque() {
     let wider = fx.held(wider);
     let y = fx.name("y");
     assert_eq!(
-        fx.infer.join(program, wider),
+        fx.infer.join(program, wider, Reach::Named),
         Err(Mismatch::OpaqueLacksField { object: opaque, field: y })
     );
 }
@@ -248,7 +250,7 @@ fn two_variables_made_one_stay_one_as_either_grows() {
     fx.infer.eq(a, b).unwrap();
     let y = fx.object(&[("y", int)], Label::Here);
     let c = fx.held(y);
-    fx.infer.join(a, c).unwrap();
+    fx.infer.join(a, c, Reach::Named).unwrap();
     assert_eq!(fx.fields_of(b), (vec![fx.name("x"), fx.name("y")], Label::Here));
 }
 
@@ -355,7 +357,7 @@ fn objects_join_at_the_union_of_their_fields() {
     let x = fx.object(&[("x", int)], Label::Here);
     let y = fx.object(&[("y", int)], Label::Here);
     let (a, b) = (fx.held(x), fx.held(y));
-    fx.infer.join(a, b).unwrap();
+    fx.infer.join(a, b, Reach::Named).unwrap();
     let union = (vec![fx.name("x"), fx.name("y")], Label::Here);
     assert_eq!(fx.fields_of(a), union);
     assert_eq!(fx.fields_of(b), union);
@@ -373,7 +375,7 @@ fn an_opaque_side_never_grows() {
     let (a, b) = (fx.held(wide), fx.held(narrow));
     let y = fx.name("y");
     assert_eq!(
-        fx.infer.join(a, b),
+        fx.infer.join(a, b, Reach::Named),
         Err(Mismatch::OpaqueLacksField { object: narrow, field: y })
     );
 }
@@ -387,7 +389,7 @@ fn a_transparent_side_grows_to_an_opaque_one() {
     let narrow = fx.object(&[("x", int)], Label::Here);
     let wide = fx.object(&[("x", int), ("y", int)], Label::Elsewhere);
     let (a, b) = (fx.held(narrow), fx.held(wide));
-    fx.infer.join(a, b).unwrap();
+    fx.infer.join(a, b, Reach::Named).unwrap();
     assert_eq!(fx.infer.shallow(a), wide);
 }
 
@@ -401,13 +403,13 @@ fn join_relates_a_constructors_arguments_by_eq() {
     let y = fx.object(&[("y", int)], Label::Here);
     let (some_x, some_y) = (fx.kind(TyKind::Option(x, Label::Here)), fx.kind(TyKind::Option(y, Label::Here)));
     let (a, b) = (fx.held(some_x), fx.held(some_y));
-    assert_eq!(fx.infer.join(a, b), Err(Mismatch::Heads { a: x, b: y }));
+    assert_eq!(fx.infer.join(a, b, Reach::Named), Err(Mismatch::Heads { a: x, b: y }));
 
     let (inner_x, inner_y) = (fx.held(x), fx.held(y));
     let (some_x, some_y) = (fx.kind(TyKind::Option(inner_x, Label::Here)), fx.kind(TyKind::Option(inner_y, Label::Here)));
-    fx.infer.join(inner_x, inner_y).unwrap();
+    fx.infer.join(inner_x, inner_y, Reach::Named).unwrap();
     let (a, b) = (fx.held(some_x), fx.held(some_y));
-    fx.infer.join(a, b).unwrap();
+    fx.infer.join(a, b, Reach::Named).unwrap();
     assert_eq!(fx.fields_of(inner_y), (vec![fx.name("x"), fx.name("y")], Label::Here));
 }
 
@@ -421,7 +423,7 @@ fn a_shared_fields_types_are_related_by_eq() {
     let y = fx.object(&[("y", int)], Label::Here);
     let (px, py) = (fx.object(&[("p", x)], Label::Here), fx.object(&[("p", y)], Label::Here));
     let (a, b) = (fx.held(px), fx.held(py));
-    assert_eq!(fx.infer.join(a, b), Err(Mismatch::Heads { a: x, b: y }));
+    assert_eq!(fx.infer.join(a, b, Reach::Named), Err(Mismatch::Heads { a: x, b: y }));
 }
 
 /// types §2: two enums of one name join at the union of their variants.
@@ -432,7 +434,7 @@ fn enums_of_one_name_join_at_the_union_of_their_variants() {
     let b = fx.r#enum("E", &["B"], Label::Here);
     let union = fx.r#enum("E", &["A", "B"], Label::Here);
     let (a, b) = (fx.held(a), fx.held(b));
-    fx.infer.join(a, b).unwrap();
+    fx.infer.join(a, b, Reach::Named).unwrap();
     assert_eq!(fx.infer.shallow(a), union);
     assert_eq!(fx.infer.shallow(b), union);
 }
@@ -445,7 +447,7 @@ fn enums_of_two_names_do_not_join() {
     let b = fx.r#enum("F", &["A"], Label::Here);
     let (a, b) = (fx.held(a), fx.held(b));
     let (e, f) = (QualifiedRef::root(fx.name("E")), QualifiedRef::root(fx.name("F")));
-    assert_eq!(fx.infer.join(a, b), Err(Mismatch::TwoEnums { a: e, b: f }));
+    assert_eq!(fx.infer.join(a, b, Reach::Named), Err(Mismatch::TwoEnums { a: e, b: f }));
 }
 
 /// types §1, §2: a closed enum never grows by a variant it lacks.
@@ -457,7 +459,7 @@ fn a_closed_enum_does_not_grow_by_a_variant() {
     let (a, b) = (fx.held(open), fx.held(closed));
     let tag = fx.name("B");
     assert_eq!(
-        fx.infer.join(a, b),
+        fx.infer.join(a, b, Reach::Named),
         Err(Mismatch::OpaqueLacksVariant { r#enum: closed, tag })
     );
 }
@@ -488,7 +490,7 @@ fn function_types_join_effects_flows_calls_holds_and_split() {
         Holds::Shared,
     );
     let (a, b) = (fx.held(f), fx.held(g));
-    fx.infer.join(a, b).unwrap();
+    fx.infer.join(a, b, Reach::Named).unwrap();
     let (types, frozen) = fx.freeze(a);
     let TyKind::Fn {
         effect: EffectTerm::Known(joined),
@@ -515,7 +517,7 @@ fn function_types_join_effects_flows_calls_holds_and_split() {
         Holds::Nothing,
     );
     let c = fx.held(h);
-    fx.infer.join(a, c).unwrap();
+    fx.infer.join(a, c, Reach::Named).unwrap();
     let (types, frozen) = fx.freeze(c);
     let TyKind::Fn {
         effect: EffectTerm::Known(joined),
@@ -643,7 +645,7 @@ fn join_joins_holds_and_calls_and_a_variable_keeps_learning() {
     let lambda = fx.function_of(pure(), Flows::none(), CallsTerm::Var(calls), HoldsTerm::Var(holds));
     let slot = fx.function(pure(), Flows::none(), Calls::Many, Holds::Shared);
     let (a, b) = (fx.held(lambda), fx.held(slot));
-    fx.infer.join(b, a).unwrap();
+    fx.infer.join(b, a, Reach::Named).unwrap();
     assert_eq!(fx.infer.holds(HoldsTerm::Var(holds)), Some(Holds::Shared));
     assert_eq!(fx.infer.calls(CallsTerm::Var(calls)), Some(Calls::Many));
     fx.infer.join_holds(holds, Holds::Nothing).expect("joined, not fixed");
@@ -657,7 +659,7 @@ fn join_joins_holds_and_calls_and_a_variable_keeps_learning() {
     }
     let mutable = fx.function(pure(), Flows::none(), Calls::Many, Holds::Mut);
     let mutable = fx.held(mutable);
-    fx.infer.join(a, mutable).unwrap();
+    fx.infer.join(a, mutable, Reach::Named).unwrap();
     assert_eq!(fx.infer.holds(HoldsTerm::Var(holds)), Some(Holds::Mut));
 }
 
@@ -810,6 +812,7 @@ fn pure_fn(types: &mut Types<Poly>, params: Vec<crate::ty::TyId<Poly>>, ret: cra
         flows: FlowTerm::Known(Flows::Every),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     })
 }
 
@@ -993,9 +996,9 @@ fn never_joins_to_the_other_side_and_equals_only_itself() {
     let mut fx = Fixture::new();
     let (never, int) = (fx.kind(TyKind::Never), fx.int(IntTy::I64));
     let (a, b) = (fx.held(never), fx.held(int));
-    fx.infer.join(a, b).unwrap();
+    fx.infer.join(a, b, Reach::Named).unwrap();
     assert_eq!(fx.infer.shallow(a), int);
-    assert_eq!(fx.infer.join(never, b), Ok(()));
+    assert_eq!(fx.infer.join(never, b, Reach::Named), Ok(()));
     assert_eq!(fx.infer.eq(never, int), Err(Mismatch::Heads { a: never, b: int }));
     assert_eq!(fx.infer.eq(never, never), Ok(()));
 }
@@ -1098,7 +1101,7 @@ impl Fixture {
 
     fn enter(&mut self, decls: &Declarations, value: Term, slot: Term) -> Result<Entered, Mismatch> {
         let value = self.closed_of(decls, value);
-        self.infer.enter(decls, value, slot)
+        self.infer.enter(decls, value, slot, Reach::Named)
     }
 }
 
@@ -1116,7 +1119,7 @@ fn an_unbound_slot_takes_the_values_type_as_its_own() {
     assert_eq!(fx.infer.shallow(slot), x);
     let y = fx.object(&[("y", int)], Label::Here);
     let more = fx.held(y);
-    fx.infer.join(slot, more).unwrap();
+    fx.infer.join(slot, more, Reach::Named).unwrap();
     assert_eq!(fx.fields_of(value), (vec![fx.name("x")], Label::Here));
 }
 

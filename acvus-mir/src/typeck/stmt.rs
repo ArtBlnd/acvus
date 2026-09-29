@@ -82,7 +82,7 @@ pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
             let (value, term) = super::generalize::walk(cx, binder.id, |cx| {
                 let value = check_expr(cx, expr, Demand::Read);
                 let term = cx.fresh();
-                cx.enter(expr.id(), value, term, expr.span());
+                cx.enter(expr.id(), value, term, crate::ty::Reach::Named, expr.span());
                 (value, term)
             });
             cx.record(binder.id, term);

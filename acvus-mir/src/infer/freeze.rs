@@ -27,6 +27,7 @@ pub enum Unsettled {
     Flow(crate::ty::FlowVarId),
     Holds(crate::ty::HoldsVarId),
     Calls(crate::ty::CallsVarId),
+    Values(crate::ty::ValuesVarId),
 }
 
 impl Infer {
@@ -109,6 +110,7 @@ impl Infer {
                 flows,
                 calls,
                 holds,
+                values: _,
             } => TyKind::Fn {
                 params: params
                     .iter()
@@ -119,6 +121,7 @@ impl Infer {
                 flows: FlowTerm::Known(self.settled(&self.flow_vars, flows)?),
                 calls: self.settled(&self.calls_vars, calls)?,
                 holds: self.settled(&self.holds_vars, holds)?,
+                values: (),
             },
             TyKind::UserDefined {
                 id,

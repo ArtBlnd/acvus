@@ -73,18 +73,21 @@ impl<'d> Ctxt<'d> {
         }
     }
 
+    /// `a`, reached by `reach`, joined with `b`, the use's own form
+    /// (types §1-2).
     pub fn join(&mut self, a: Term, b: Term, reach: crate::ty::Reach, span: Span) {
-        if let Err(mismatch) = self.infer.join(a, b) {
+        if let Err(mismatch) = self.infer.join(a, b, reach) {
             refusal::mismatch(self, mismatch, span);
         }
     }
 
-    /// `value` enters `slot` once `value` is closed (types §3, §7), in the
-    /// body being checked. A value already closed at the top of its cast
-    /// tree can never change, so it enters at once.
+    /// `value` enters `slot`, reached by `reach`, once `value` is closed
+    /// (types §1, §3, §7), in the body being checked. A value already
+    /// closed at the top of its cast tree can never change, so it enters at
+    /// once.
     pub fn enter(&mut self, site: AstId, value: Term, slot: Term, reach: crate::ty::Reach, span: Span) {
         let body = super::effect::body_effect(self);
-        self.enter_in(body, site, value, slot, span);
+        self.enter_in(body, site, value, slot, reach, span);
     }
 
     /// `value` enters `slot` in the body whose effect is `body`, which the
@@ -97,6 +100,7 @@ impl<'d> Ctxt<'d> {
             value,
             slot,
             body,
+            reach,
         };
         super::decision::decide(self, enter);
     }

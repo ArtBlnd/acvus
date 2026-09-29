@@ -20,12 +20,12 @@ mod tests;
 use crate::ty::{
     Calls, CallsTerm, Effect, CallsVarId, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Holds, HoldsTerm, HoldsVarId,
     IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, ReprVarId, TyId, TyKind, TyVarId,
-    Types,
+    Types, FnValues, ValuesVarId,
 };
 
 use rustc_hash::FxHashSet;
 
-use cells::{Cells, End as CellEnd, FlowRefused, MarkTerm};
+use cells::{Cells, End as CellEnd, FlowRefused, MarkTerm, ValuesTerm};
 
 pub use cells::{Exceeds, FlowId};
 pub use closed::{Closed, OpenSources};
@@ -76,6 +76,7 @@ pub struct Infer {
     flow_vars: Cells<FlowTerm<InferPhase>>,
     holds_vars: Cells<HoldsTerm>,
     calls_vars: Cells<CallsTerm>,
+    values_vars: Cells<ValuesTerm>,
     /// Each flow of effects refused since typeck last took them.
     effects_refused: Vec<EffectRefused>,
 }
@@ -110,6 +111,7 @@ impl Infer {
             flow_vars: Cells::new(),
             holds_vars: Cells::new(),
             calls_vars: Cells::new(),
+            values_vars: Cells::new(),
             effects_refused: Vec::new(),
         }
     }
@@ -176,6 +178,43 @@ impl Infer {
 
     pub fn fresh_calls(&mut self) -> CallsVarId {
         self.calls_vars.fresh("Infer::fresh_calls: u32::MAX variables")
+    }
+
+    /// A variable for which function values a function type may be (types
+    /// §2), unbound: what a use's own form of a function type asks.
+    pub fn fresh_values(&mut self) -> ValuesVarId {
+        self.values_vars.fresh("Infer::fresh_values: u32::MAX variables")
+    }
+
+    /// A variable for which function values a function type may be, at
+    /// `values` (types §1-2): a type the program writes, `Of` its own
+    /// values, grows where it is transparent; `Any`, a type a declaration
+    /// or the host writes, never grows.
+    pub fn fresh_values_of(&mut self, values: FnValues) -> ValuesVarId {
+        let var = self.fresh_values();
+        let at = ValuesTerm::Var(var);
+        match values {
+            FnValues::Any => {
+                self.values_vars
+                    .unify(&at, &ValuesTerm::Known(FnValues::Any))
+                    .expect("a fresh variable is unbound");
+            }
+            FnValues::Of(_) => {
+                self.values_vars
+                    .join(&at, &ValuesTerm::Known(values), FnValues::join)
+                    .expect("a fresh variable is not fixed");
+            }
+        }
+        var
+    }
+
+    /// Which function values `values` is known to be so far; `None` while
+    /// nothing has decided it.
+    pub fn values(&self, values: ValuesVarId) -> Option<FnValues> {
+        match self.values_vars.end(&ValuesTerm::Var(values)) {
+            CellEnd::Known(known) | CellEnd::Var { value: Some(known), .. } => Some(known),
+            CellEnd::Var { value: None, .. } => None,
+        }
     }
 
     /// What `holds` is known to be so far; `None` while nothing has

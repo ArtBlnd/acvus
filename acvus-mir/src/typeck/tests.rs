@@ -95,6 +95,7 @@ impl Fixture {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     }
 
@@ -2067,6 +2068,7 @@ fn a_view_steps_requirements_are_reached() {
         flows: FlowTerm::Known(Flows::Every),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     });
     let view = ImplSig {
         ty: at_vec,
@@ -2587,6 +2589,7 @@ fn a_requirement_a_lift_would_answer_is_refused_as_unimplemented() {
         flows: FlowTerm::Known(Flows::Every),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     });
     let view = ImplSig {
         ty: at_vec,

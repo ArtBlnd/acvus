@@ -72,6 +72,9 @@ pub enum RefusalKind {
     OutsideLoop,
     // C: growth into what may not grow.
     GrowsOpaque,
+    /// A function value entering a function type that may not grow to be
+    /// it, since the type is reached through a reference (types §1-2).
+    NotOneOfFunctionValues { value: crate::ty::FnValue },
     // Decisions.
     NoDeclaration { name: Astr },
     SeveralDeclarations { name: Astr, left: Box<[QualifiedRef]> },
@@ -148,6 +151,7 @@ pub(super) fn mismatch(cx: &mut Ctxt<'_>, mismatch: Mismatch, span: Span) {
     }
     let kind = match mismatch {
         Mismatch::OpaqueLacksField { .. } | Mismatch::OpaqueLacksVariant { .. } => RefusalKind::GrowsOpaque,
+        Mismatch::NotOneOf { value, .. } => RefusalKind::NotOneOfFunctionValues { value },
         Mismatch::Conversions { candidates } if candidates.is_empty() => RefusalKind::NoConversion,
         other => RefusalKind::Mismatch(other),
     };

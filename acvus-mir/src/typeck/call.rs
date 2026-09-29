@@ -15,7 +15,7 @@ use super::place::Demand;
 use super::refusal::{self, RefusalKind};
 use super::variant::check_variant;
 use crate::infer::Term;
-use crate::ty::{CallsTerm, EffectTerm, FlowTerm, HoldsTerm, TyKind};
+use crate::ty::{CallsTerm, EffectTerm, FlowTerm, FnValue, FnValues, HoldsTerm, TyKind};
 
 /// `f(args)`.
 pub(super) fn check_call<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, func: &Expr<S>, args: &[Expr<S>], span: Span) -> Term {
@@ -89,6 +89,7 @@ fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> 
     let flows = FlowTerm::Var(cx.infer.fresh_flow());
     let calls = CallsTerm::Var(cx.infer.fresh_calls());
     let holds = HoldsTerm::Var(cx.infer.fresh_holds());
+    let function_values = cx.infer.fresh_values();
     let form = cx.held(TyKind::Fn {
         params: params.clone().into(),
         ret,
@@ -96,10 +97,11 @@ fn value_call<S: Slot>(cx: &mut Ctxt<'_>, func: &Expr<S>, args: &[&Expr<S>]) -> 
         flows,
         calls,
         holds,
+        values: function_values,
     });
-    cx.join(callee, form, func.span());
+    cx.join(callee, form, crate::ty::Reach::Named, func.span());
     for ((arg, (site, value)), param) in args.iter().zip(values).zip(params) {
-        cx.enter(site, value, param, arg.span());
+        cx.enter(site, value, param, crate::ty::Reach::Named, arg.span());
     }
     note_call_effect(cx, &effect, func.span());
     ret
@@ -170,6 +172,7 @@ pub(super) fn declaration_value(cx: &mut Ctxt<'_>, site: AstId, declaration: Qua
         }
     };
     let instantiated = cx.infer.instantiate(cx.decls, scheme);
+    let value = as_value(cx, instantiated.ty, declaration);
     cx.out.names.insert(site, Name::Declaration(declaration));
     cx.out.reached.insert(
         site,
@@ -184,5 +187,15 @@ pub(super) fn declaration_value(cx: &mut Ctxt<'_>, site: AstId, declaration: Qua
     for required in instantiated.requirements {
         decision::push_required(cx, site, span, required, &body);
     }
-    instantiated.ty
+    value
+}
+
+/// A declaration's function type `ty` as the one function value it is:
+/// the declaration, by its name (types §2).
+fn as_value(cx: &mut Ctxt<'_>, ty: Term, declaration: QualifiedRef) -> Term {
+    let TyKind::Fn { params, ret, effect, flows, calls, holds, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
+        panic!("an instantiated signature is a function type (NotAFunction)");
+    };
+    let values = cx.infer.fresh_values_of(FnValues::Of([FnValue::Declaration(declaration)].into()));
+    cx.node(TyKind::Fn { params, ret, effect, flows, calls, holds, values })
 }

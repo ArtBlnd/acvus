@@ -291,6 +291,7 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
         lengths: sorted(reached.lengths.iter().copied().filter(|var| cx.infer.is_open_length(*var) && own.made(|marks| marks.lengths, var.0) && !held.lengths.contains(var)), |var| var.0),
         identities: sorted(reached.identities.iter().copied().filter(|var| cx.infer.is_open_identity(*var) && own.made(|marks| marks.identities, var.0) && !held.identities.contains(var)), |var| var.0),
         marks: sorted(reached.marks.iter().copied().filter(|var| cx.infer.is_open_mark(*var) && own.made(|marks| marks.marks, var.0) && !held.marks.contains(var)), |var| var.0),
+        values: sorted(reached.values.iter().copied().filter(|var| own.made(|marks| marks.values, var.0) && !held.values.contains(var)), |var| var.0),
     };
 
     let mut requirements = Vec::new();
@@ -300,7 +301,8 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
             || reads.effects.iter().any(|var| generalized.effects.contains(var))
             || reads.lengths.iter().any(|var| generalized.lengths.contains(var))
             || reads.identities.iter().any(|var| generalized.identities.contains(var))
-            || reads.marks.iter().any(|var| generalized.marks.contains(var));
+            || reads.marks.iter().any(|var| generalized.marks.contains(var))
+            || reads.values.iter().any(|var| generalized.values.contains(var));
         match generalizes {
             true => requirements.push(decision),
             false => cx.decisions.restore(decision, owner),
@@ -356,6 +358,7 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
                             lengths: of.at.lengths.iter().map(|(var, copy)| (*var, at.lengths.get(copy).copied().unwrap_or(*copy))).collect(),
                             identities: of.at.identities.iter().map(|(var, copy)| (*var, at.identities.get(copy).copied().unwrap_or(*copy))).collect(),
                             marks: of.at.marks.iter().map(|(var, copy)| (*var, at.marks.get(copy).copied().unwrap_or(*copy))).collect(),
+                            values: of.at.values.iter().map(|(var, copy)| (*var, at.values.get(copy).copied().unwrap_or(*copy))).collect(),
                         };
                         let child = new_instance(cx, Instance { within: Some(instance), at: child_at, recorded: Recorded::default(), template, ..of });
                         children.insert(*inner, child);

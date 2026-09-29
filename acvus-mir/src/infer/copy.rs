@@ -1,17 +1,18 @@
 //! A term's variables, read and copied: what generalizing a binding's type
 //! and instantiating it at a use need (functions §2). Every kind a type
-//! states is generalized: types, lengths, identities, `#` marks, and
-//! effects with the flows among them. What a function value's captures
+//! states is generalized: types, lengths, identities, `#` marks, effects
+//! with the flows among them, and which function values a function type
+//! may be. What a function value's captures
 //! hold, how often it may be called and its flows are decided where it is
 //! written, and are not copied.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::cells::{Cells, End as CellEnd, MarkTerm, VarTerm};
+use super::cells::{Cells, End as CellEnd, MarkTerm, ValuesTerm, VarTerm};
 use super::{FlowId, Infer, Term, VarState};
 use crate::ty::{
     EffectArg, EffectTerm, EffectVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy,
-    ReprVarId, TyKind, TyVarId, TypeArg,
+    ReprVarId, TyKind, TyVarId, TypeArg, ValuesVarId,
 };
 
 /// How many variables of each kind were made so far: one made later has an
@@ -23,6 +24,7 @@ pub struct VarMarks {
     pub lengths: u32,
     pub identities: u32,
     pub marks: u32,
+    pub values: u32,
 }
 
 /// The variables of every kind some terms reach: each type variable on the
@@ -35,6 +37,7 @@ pub struct Reached {
     pub lengths: FxHashSet<LenVarId>,
     pub identities: FxHashSet<IdentityVarId>,
     pub marks: FxHashSet<ReprVarId>,
+    pub values: FxHashSet<ValuesVarId>,
 }
 
 /// Generalized variables of every kind, each by position.
@@ -45,6 +48,7 @@ pub struct VarsOf {
     pub lengths: Box<[LenVarId]>,
     pub identities: Box<[IdentityVarId]>,
     pub marks: Box<[ReprVarId]>,
+    pub values: Box<[ValuesVarId]>,
 }
 
 /// Each generalized variable's term at one instance.
@@ -55,6 +59,7 @@ pub struct AtInstance {
     pub lengths: FxHashMap<LenVarId, LenVarId>,
     pub identities: FxHashMap<IdentityVarId, IdentityVarId>,
     pub marks: FxHashMap<ReprVarId, ReprVarId>,
+    pub values: FxHashMap<ValuesVarId, ValuesVarId>,
 }
 
 /// An effect flow copied at an instance: the flow it copies, and the copy.
@@ -72,6 +77,7 @@ impl Infer {
             lengths: self.len_vars.count(),
             identities: self.identity_vars.count(),
             marks: self.repr_vars.count(),
+            values: self.values_vars.count(),
         }
     }
 
@@ -120,7 +126,10 @@ impl Infer {
                     }
                 }
                 TyKind::Array(_, len, _) => reach_cell(&self.len_vars, len, &mut reached.lengths),
-                TyKind::Fn { effect, .. } => reach_cell(&self.effect_vars, effect, &mut reached.effects),
+                TyKind::Fn { effect, values, .. } => {
+                    reach_cell(&self.effect_vars, effect, &mut reached.effects);
+                    reach_cell(&self.values_vars, &ValuesTerm::Var(*values), &mut reached.values);
+                }
                 TyKind::UserDefined { type_args, effect_args, identity_args, .. } => {
                     for arg in effect_args.iter() {
                         let (EffectArg::Uniform(effect) | EffectArg::Specialized(effect)) = arg;
@@ -145,9 +154,11 @@ impl Infer {
 
     /// Fresh variables of every kind for `vars` at a new instance: a type
     /// variable of the same bound (types §5), an open length, identity or
-    /// mark, and an effect in the same state, with every flow out of or
-    /// into one of the effects copied onto its copy, so that an instance's
-    /// effect rises only by its own flows (effects §1).
+    /// mark, an effect in the same state, with every flow out of or into
+    /// one of the effects copied onto its copy, so that an instance's
+    /// effect rises only by its own flows (effects §1), and the function
+    /// values a function type may be as they are, which a use then grows as
+    /// its own and not the binding's (types §1-2).
     pub fn instance_at(&mut self, vars: &VarsOf) -> (AtInstance, Vec<CopiedFlow>) {
         let mut at = AtInstance::default();
         for var in vars.types.iter() {
@@ -169,6 +180,8 @@ impl Infer {
             let fresh = self.fresh_repr();
             at.marks.insert(*var, fresh);
         }
+        let copies = self.values_vars.duplicate(&vars.values, "Infer::instance_at: u32::MAX values variables");
+        at.values.extend(vars.values.iter().copied().zip(copies));
         let copies = self.effect_vars.duplicate(&vars.effects, "Infer::instance_at: u32::MAX effect variables");
         at.effects.extend(vars.effects.iter().copied().zip(copies));
         let generalized: FxHashSet<EffectVarId> = vars.effects.iter().copied().collect();
@@ -202,6 +215,14 @@ impl Infer {
         match self.identity_vars.end(identity) {
             CellEnd::Var { var, .. } if at.identities.contains_key(&var) => IdentityTerm::Var(at.identities[&var]),
             _ => *identity,
+        }
+    }
+
+    /// `values` at an instance: a generalized variable its copy.
+    pub fn copy_values(&self, values: ValuesVarId, at: &AtInstance) -> ValuesVarId {
+        match self.values_vars.end(&ValuesTerm::Var(values)) {
+            CellEnd::Var { var, .. } if at.values.contains_key(&var) => at.values[&var],
+            _ => values,
         }
     }
 
@@ -276,13 +297,14 @@ impl Infer {
                 variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| self.copy_at(payload, at, memo)))).collect(),
                 label: *label,
             },
-            TyKind::Fn { params, ret, effect, flows, calls, holds } => TyKind::Fn {
+            TyKind::Fn { params, ret, effect, flows, calls, holds, values } => TyKind::Fn {
                 params: params.iter().map(|param| self.copy_at(*param, at, memo)).collect(),
                 ret: self.copy_at(*ret, at, memo),
                 effect: self.copy_effect(effect, at),
                 flows: flows.clone(),
                 calls: *calls,
                 holds: *holds,
+                values: self.copy_values(*values, at),
             },
             TyKind::UserDefined { id, type_args, effect_args, identity_args } => TyKind::UserDefined {
                 id: *id,

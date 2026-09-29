@@ -475,6 +475,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         (qref, ty)
     }
@@ -564,6 +565,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let b = v(9);
         let mut cfg = make_cfg(
@@ -705,6 +707,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         (qref, ty)
     }

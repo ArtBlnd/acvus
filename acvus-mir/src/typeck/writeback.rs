@@ -139,6 +139,7 @@ fn set_flows(cx: &mut Ctxt<'_>, flows: FlowTerm<InferPhase>, to: Flows) {
 /// term through which B relates an effect or a flow variable.
 fn probe(cx: &mut Ctxt<'_>, effect: EffectTerm<InferPhase>, flows: FlowTerm<InferPhase>) -> Term {
     let ret = cx.unit();
+    let values = cx.infer.fresh_values();
     cx.node(TyKind::Fn {
         params: Box::new([]),
         ret,
@@ -146,6 +147,7 @@ fn probe(cx: &mut Ctxt<'_>, effect: EffectTerm<InferPhase>, flows: FlowTerm<Infe
         flows,
         calls: CallsTerm::Known(Calls::Many),
         holds: HoldsTerm::Known(Holds::Nothing),
+        values,
     })
 }
 
@@ -435,7 +437,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                     facts: DeclaredFacts::default(),
                 };
                 let above = cx.infer.instantiate(cx.decls, &scheme).ty;
-                if let Err(mismatch) = cx.infer.enter(cx.decls, at, above) {
+                if let Err(mismatch) = cx.infer.enter(cx.decls, at, above, crate::ty::Reach::Named) {
                     panic!("a step the tree admits takes its value up: {mismatch:?}");
                 }
                 above

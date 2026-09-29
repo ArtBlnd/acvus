@@ -604,6 +604,7 @@ mod tests {
                 flows: FlowTerm::Known(Flows::none()),
                 calls: Calls::Many,
                 holds: Holds::Nothing,
+                values: (),
             })
         };
         let opaque_effect = |commutes: bool, split: SplitCost| {
@@ -1252,6 +1253,7 @@ mod tests {
                 flows: FlowTerm::Known(Flows::Every),
                 calls: Calls::Many,
                 holds: Holds::Nothing,
+                values: (),
             });
             let access = touches.map(|touches| Access::Touches(touches.into())).into_iter().collect();
             let facts = DeclaredFacts { access, ..DeclaredFacts::default() };
@@ -1333,6 +1335,7 @@ mod tests {
                 flows: FlowTerm::Known(Flows::Every),
                 calls: Calls::Many,
                 holds: Holds::Nothing,
+                values: (),
             })
         };
         let put_ty = callee_ty(&[mut_map, int, int], unit);

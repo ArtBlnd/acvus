@@ -38,6 +38,7 @@ fn fixture() -> Fixture {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     };
     let opaque = |split| Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), split);
@@ -989,6 +990,7 @@ fn a_nested_body_is_built_while_the_enclosing_one_is_open() {
         flows: FlowTerm::Known(Flows::none()),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     });
     let mut outer = build(&mut f.module, false, int);
     let a = outer.param(na, int, acvus_ast::Span::ZERO);

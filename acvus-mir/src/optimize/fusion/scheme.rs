@@ -334,6 +334,7 @@ impl Bindings {
                 flows,
                 calls,
                 holds,
+                values: (),
             } => TyKind::Fn {
                 params: params
                     .iter()
@@ -347,6 +348,7 @@ impl Bindings {
                 },
                 calls: *calls,
                 holds: *holds,
+                values: (),
             },
             TyKind::UserDefined {
                 id,

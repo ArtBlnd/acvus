@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use super::{Bound, Infer, Term};
 use crate::decl::{Declarations, NamedLaw, Scheme, TyVarBound};
 use crate::ty::{
-    CallsTerm, EffectArg, EffectTerm, HoldsTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
+    CallsTerm, EffectArg, FnValues, EffectTerm, HoldsTerm, EffectVarId, FlowTerm, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm,
     LenVarId, ObjectTy, Poly, ReprVarId, TyId, TyKind, TypeArg, Types,
 };
 
@@ -67,8 +67,9 @@ impl<'a> AtUse<'a> {
 
 impl Infer {
     /// `scheme` at fresh variables, each with its declared bound. Every
-    /// structural node it builds is `Label::Elsewhere`; a type parameter's
-    /// place takes the program's term as it is (types §1).
+    /// structural node it builds is `Label::Elsewhere`, and every function
+    /// type it builds may be `Any` function value; a type parameter's place
+    /// takes the program's term as it is (types §1-2).
     pub fn instantiate(&mut self, decls: &Declarations, scheme: &Scheme) -> Instantiated {
         let mut at = AtUse::new(decls.types(), Placeholders::Declared);
         let vars: Vec<Term> = scheme.bounds.iter().map(|declared| self.fresh(bound_of(declared))).collect();
@@ -88,7 +89,8 @@ impl Infer {
 
     /// A declared type that is not a function's, such as a context's or an
     /// input's, at this use: every structural node it builds is
-    /// `Label::Elsewhere` (types §1).
+    /// `Label::Elsewhere`, and every function type it builds may be `Any`
+    /// function value (types §1-2).
     ///
     /// # Panics
     /// `ty` holds a type variable: `verify` refuses a context or an input
@@ -176,6 +178,7 @@ impl Infer {
                 flows,
                 calls,
                 holds,
+                values: (),
             } => TyKind::Fn {
                 params: params
                     .iter()
@@ -186,6 +189,7 @@ impl Infer {
                 flows: FlowTerm::Known(flows.get().clone()),
                 calls: CallsTerm::Known(*calls),
                 holds: HoldsTerm::Known(*holds),
+                values: self.fresh_values_of(FnValues::Any),
             },
             TyKind::UserDefined {
                 id,

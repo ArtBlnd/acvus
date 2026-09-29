@@ -53,6 +53,7 @@ fn fixture() -> Fixture {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     };
     let takes_string = function(&[string]);
@@ -814,6 +815,7 @@ fn two_strings(interner: &Interner, t: Tys, builder: &mut Builder<'_>) -> (Ty, T
         flows: FlowTerm::Known(Flows::none()),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     });
     (record, reads_string, a, b)
 }

@@ -30,6 +30,7 @@ pub(super) fn is_impl_of(types: &Types<Poly>, generic: TyId<Poly>, r#impl: TyId<
                 effect: generic_effect,
                 calls: generic_calls,
                 holds: generic_holds,
+                values: (),
                 flows: _,
             },
             TyKind::Fn {
@@ -38,6 +39,7 @@ pub(super) fn is_impl_of(types: &Types<Poly>, generic: TyId<Poly>, r#impl: TyId<
                 effect,
                 calls,
                 holds,
+                values: (),
                 flows: _,
             },
         ) => {
@@ -181,6 +183,7 @@ impl Choice<'_> {
                     flows: a_flows,
                     calls: a_calls,
                     holds: a_holds,
+                    values: (),
                 },
                 TyKind::Fn {
                     params: b_params,
@@ -189,6 +192,7 @@ impl Choice<'_> {
                     flows: b_flows,
                     calls: b_calls,
                     holds: b_holds,
+                    values: (),
                 },
             ) => {
                 a_flows == b_flows

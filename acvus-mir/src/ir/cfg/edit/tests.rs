@@ -59,6 +59,7 @@ fn fixture() -> Fixture {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     };
     let split = SplitCost::WithCost(Cost::stated(1));
@@ -1969,6 +1970,7 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
         flows: FlowTerm::Known(Flows::none()),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     });
     let first = f.call(f.opaque);
     let callee = Callee::Direct(QualifiedRef::root(f.name("k")));
@@ -2136,6 +2138,7 @@ fn closure_ty(f: &mut Fixture, params: &[Ty], effect: CallEffect) -> Ty {
         flows: FlowTerm::Known(Flows::none()),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     })
 }
 

@@ -250,6 +250,7 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
         flows: FlowTerm::Known(Flows::Every),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     });
     let result_ty = cx.builder.intern(TyKind::Array(mapped, LenTerm::Known(len), ()));
     let (decls, anyorder) = (cx.decls, cx.anyorder);

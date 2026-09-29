@@ -335,6 +335,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     }
 

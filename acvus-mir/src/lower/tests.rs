@@ -66,6 +66,7 @@ impl Fixture {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     }
 

@@ -1,12 +1,14 @@
 //! The variables whose value is a term of their own kind: an effect, a
 //! length, an identity, a mark, a set of flows, what a function value's
-//! captures hold, and how often it may be called. Each is unbound, known, or
+//! captures hold, how often it may be called, and which function values a
+//! function type may be. Each is unbound, known, or
 //! made one with another variable of its kind, so that two variables made
 //! one stay one whatever either learns later.
 
 use crate::ty::{
     Calls, CallsTerm, CallsVarId, Effect, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Flows, Holds, HoldsTerm,
-    HoldsVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, LenTerm, LenVarId, ReprVarId,
+    HoldsVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, LenTerm, LenVarId, ReprVarId, FnValues,
+    ValuesVarId,
 };
 
 use super::{Mark, Unsettled};
@@ -34,6 +36,14 @@ pub(super) enum Read<'a, T: VarTerm> {
 pub(super) enum MarkTerm {
     Known(Mark),
     Var(ReprVarId),
+}
+
+/// Which function values a function type may be, as a term (types §2):
+/// known, or its variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ValuesTerm {
+    Known(FnValues),
+    Var(ValuesVarId),
 }
 
 /// Where a term's chain of variables ends.
@@ -589,6 +599,33 @@ impl VarTerm for CallsTerm {
         match self {
             CallsTerm::Known(value) => Read::Known(value),
             CallsTerm::Var(var) => Read::Var(*var),
+        }
+    }
+}
+
+impl VarTerm for ValuesTerm {
+    type Var = ValuesVarId;
+    type Value = FnValues;
+
+    fn var_of_index(index: u32) -> ValuesVarId {
+        ValuesVarId(index)
+    }
+    fn index(var: ValuesVarId) -> usize {
+        var.0 as usize
+    }
+    fn unsettled(var: ValuesVarId) -> Unsettled {
+        Unsettled::Values(var)
+    }
+    fn of_var(var: ValuesVarId) -> Self {
+        ValuesTerm::Var(var)
+    }
+    fn of_value(value: FnValues) -> Self {
+        ValuesTerm::Known(value)
+    }
+    fn read(&self) -> Read<'_, Self> {
+        match self {
+            ValuesTerm::Known(value) => Read::Known(value),
+            ValuesTerm::Var(var) => Read::Var(*var),
         }
     }
 }

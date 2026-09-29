@@ -141,7 +141,7 @@ pub(super) enum Decision {
     /// `object.field`, through a reference as Rust auto-derefs; a declared
     /// struct must have the field, and any other object grows by it where
     /// transparent (types §1-2).
-    Field { span: Span, object: Term, field: Astr, part: Term },
+    Field { span: Span, object: Term, field: Astr, part: Term, reach: crate::ty::Reach },
     /// `container[i]`: the language's own for an array or a slice, and
     /// `as_slice(_mut)` at `callee_site` otherwise (operators §3).
     /// `body` is the effect of the body the index is in.
@@ -281,12 +281,14 @@ impl Decision {
                 Decision::Iterate { site, callee_site, span, head: f.ty(head), item: f.ty(item), body: f.effect(&body) }
             }
             Decision::Try { site, span, operand, value, exit } => Decision::Try { site, span, operand: f.ty(operand), value: f.ty(value), exit: f.ty(exit) },
-            Decision::Enter { site, span, value, slot, body } => Decision::Enter { site, span, value: f.ty(value), slot: f.ty(slot), body: f.effect(&body) },
+            Decision::Enter { site, span, value, slot, body, reach } => {
+                Decision::Enter { site, span, value: f.ty(value), slot: f.ty(slot), body: f.effect(&body), reach }
+            }
             Decision::Cast { site, span, source, to } => Decision::Cast { site, span, source: f.ty(source), to },
             Decision::Settle { span, term } => Decision::Settle { span, term: f.ty(term) },
             Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span, term: f.ty(term) },
             Decision::Lend { span, value, mutability, result } => Decision::Lend { span, value: f.ty(value), mutability, result: f.ty(result) },
-            Decision::Field { span, object, field, part } => Decision::Field { span, object: f.ty(object), field, part: f.ty(part) },
+            Decision::Field { span, object, field, part, reach } => Decision::Field { span, object: f.ty(object), field, part: f.ty(part), reach },
             Decision::Index { callee_site, span, container, mutability, element, body } => {
                 Decision::Index { callee_site, span, container: f.ty(container), mutability, element: f.ty(element), body: f.effect(&body) }
             }
@@ -590,6 +592,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             value,
             slot,
             body,
+            reach,
         } => {
             let closed = closed_for(cx, value, reading).filter(|_| !meeting_waits(cx, value, slot, reading));
             let Some(closed) = closed else {
@@ -599,9 +602,10 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                     value,
                     slot,
                     body,
+                    reach,
                 });
             };
-            fire_enter(cx, site, span, closed, slot, body);
+            fire_enter(cx, site, span, closed, (slot, reach), body);
             Ok(())
         }
         Decision::Iterate {
@@ -686,6 +690,7 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             object,
             field,
             part,
+            reach,
         } => {
             let Some(closed) = closed_for(cx, object, reading) else {
                 return Err(Decision::Field {
@@ -693,9 +698,10 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                     object,
                     field,
                     part,
+                    reach,
                 });
             };
-            super::place::fire_field(cx, span, object, Some(closed.head), field, part);
+            super::place::fire_field(cx, span, (object, reach), Some(closed.head), field, part);
             Ok(())
         }
         Decision::Index {
@@ -846,8 +852,8 @@ fn meeting_waits(cx: &Ctxt<'_>, value: Term, slot: Term, reading: Reading) -> bo
     waits
 }
 
-fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: Term, body: EffectTerm<InferPhase>) {
-    match cx.infer.enter(cx.decls, value, slot) {
+fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, (slot, reach): (Term, crate::ty::Reach), body: EffectTerm<InferPhase>) {
+    match cx.infer.enter(cx.decls, value, slot, reach) {
         Ok(Entered::Folded) => cx.out.entered.push(super::output::Entered {
             site,
             span,
@@ -867,7 +873,7 @@ fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, value: Closed, slot: T
             let via_ty = reach_step(cx, step, value.term, slot);
             cx.out.conversions.insert(site, Converted { node, via_ty, to: slot });
         }
-        Ok(Entered::Coerced(coerced)) => super::structure::fire_coerced(cx, site, span, slot, coerced, body),
+        Ok(Entered::Coerced(coerced)) => super::structure::fire_coerced(cx, site, span, (slot, reach), coerced, body),
         Err(mismatch) => refusal::mismatch(cx, mismatch, span),
     }
 }
@@ -1451,7 +1457,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
     };
     match &callee {
         Callee::Required(required) => {
-            cx.join(required.pattern, ty, span);
+            cx.join(required.pattern, ty, crate::ty::Reach::Named, span);
             let parent = cx
                 .out
                 .reached
@@ -1462,7 +1468,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             parent.required = all.into();
         }
         Callee::Part(part) => {
-            cx.join(part.pattern, ty, span);
+            cx.join(part.pattern, ty, crate::ty::Reach::Named, span);
             super::effect::join_into(cx, &effect, &declared_effect, span);
             cx.out.structures.insert(site, super::output::StructureNode::Reached);
             cx.out.reached.insert(site, chosen);
@@ -1470,7 +1476,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
         }
         _ => {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
-                cx.enter_in(effect.clone(), *arg_site, *arg, *param, span);
+                cx.enter_in(effect.clone(), *arg_site, *arg, *param, crate::ty::Reach::Named, span);
             }
             cx.eq(result, ret, span);
             super::effect::join_into(cx, &effect, &declared_effect, span);
@@ -1730,7 +1736,7 @@ fn decide_by_use(cx: &mut Ctxt<'_>, decision: Decision) {
     match decision {
         Decision::Enter { value, slot, span, .. } => cx.eq(value, slot, span),
         Decision::Lend { span, value, mutability, result } => super::place::fire_lend(cx, span, None, mutability, result, value),
-        Decision::Field { span, object, field, part } => super::place::fire_field(cx, span, object, None, field, part),
+        Decision::Field { span, object, field, part, reach } => super::place::fire_field(cx, span, (object, reach), None, field, part),
         Decision::Destructure { shape, scrutinee, lent } => super::pat::fire_destructure(cx, *shape, scrutinee, None, lent),
         other => panic!("uses_decide: only the forms `decided_by_use` admits are taken, not {other:?}"),
     }

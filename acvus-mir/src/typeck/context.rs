@@ -87,7 +87,7 @@ pub(super) fn refuse_held_loans(cx: &mut Ctxt<'_>, context: Term, span: Span) {
 /// slot is returned.
 pub(super) fn check_run_result(cx: &mut Ctxt<'_>, site: AstId, tail: Term, span: Span) -> Term {
     let result = super::control::body_result(cx);
-    cx.enter(site, tail, result, span);
+    cx.enter(site, tail, result, crate::ty::Reach::Named, span);
     cx.decisions.push(Decision::HoldsNoLoans { span, term: result });
     result
 }

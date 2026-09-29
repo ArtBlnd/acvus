@@ -152,6 +152,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let mut cfg = make_cfg(
             &mut types,
@@ -200,6 +201,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let mut cfg = make_cfg(
             &mut types,
@@ -268,6 +270,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
 
         let mut cfg = make_cfg(
@@ -299,6 +302,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     }
 
@@ -402,6 +406,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let mut cfg = make_cfg(
             &mut types,

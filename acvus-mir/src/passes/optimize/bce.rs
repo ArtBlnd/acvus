@@ -111,6 +111,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let relations = vec![Relation {
             left: Term::Atom(Atom::Len(Subject::Result)),
@@ -162,6 +163,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let array = types.intern(TyKind::Array(int, LenTerm::Known(4), ()));
         let array_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));

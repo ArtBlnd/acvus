@@ -70,6 +70,7 @@ impl Fixture {
                 flows: FlowTerm::Known(Flows::none()),
                 calls: Calls::Many,
                 holds: Holds::Nothing,
+                values: (),
             })
         };
         let pure_effect = Effect::new(Reissue::Pure, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable);

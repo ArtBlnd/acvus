@@ -1289,6 +1289,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         assert_eq!(is_move_only(&types, ty), true);
     }

@@ -20,7 +20,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::Binding;
 use crate::decl::{Base, Head};
 use crate::infer::Term;
-use crate::ty::{EffectTerm, Infer as InferPhase, Label, LenTerm, Mutability, ObjectTy, TyKind};
+use crate::ty::{EffectTerm, Infer as InferPhase, Label, LenTerm, Mutability, ObjectTy, Reach, TyKind};
 
 /// A checked pattern, waiting for its scrutinee's head.
 #[derive(Debug, Clone, PartialEq)]
@@ -246,6 +246,7 @@ pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term,
 fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, lent: Option<Mutability>) {
     record_matched(cx, &shape, scrutinee);
     let Shape { site, span, form } = shape;
+    let reach = reached(lent);
     match form {
         Form::Bind { term } => {
             let value = bound_value(cx, scrutinee, lent, span);
@@ -253,10 +254,10 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
         }
         Form::Context { context, body } => {
             let value = bound_value(cx, scrutinee, lent, span);
-            cx.enter_in(body, site, value, context, span);
+            cx.enter_in(body, site, value, context, Reach::Named, span);
         }
         Form::Ignore => {}
-        Form::Literal { literal } => cx.join(scrutinee, literal, span),
+        Form::Literal { literal } => cx.join(scrutinee, literal, reach, span),
         Form::List { head, rest, tail } => {
             let element = cx.fresh();
             let listed = match known {
@@ -270,7 +271,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
                 }
             };
             let listed = cx.held(listed);
-            cx.join(scrutinee, listed, span);
+            cx.join(scrutinee, listed, reach, span);
             for part in head.into_iter().chain(tail) {
                 destructure(cx, part, element, lent);
             }
@@ -279,7 +280,7 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
         Form::Tuple { parts } => {
             let terms: Vec<Term> = parts.iter().map(|_| cx.fresh()).collect();
             let tuple = cx.held(TyKind::Tuple(terms.clone().into(), Label::Here));
-            cx.join(scrutinee, tuple, span);
+            cx.join(scrutinee, tuple, reach, span);
             for (part, term) in parts.into_iter().zip(terms) {
                 if let Some(part) = part {
                     destructure(cx, part, term, lent);
@@ -291,6 +292,15 @@ fn apply(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, known: Option<Head>, 
             tag,
             payload,
         } => variant(cx, enum_name, tag, payload.map(|payload| *payload), scrutinee, lent, span),
+    }
+}
+
+/// How a pattern reaches its scrutinee (types §1): through a reference
+/// where the match passed through one, by name otherwise.
+fn reached(lent: Option<Mutability>) -> Reach {
+    match lent {
+        Some(_) => Reach::Through,
+        None => Reach::Named,
     }
 }
 
@@ -333,7 +343,7 @@ fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, scrutinee: Term, lent: 
     let mut sorted = terms.clone();
     sorted.sort_by_key(|(name, _)| *name);
     let object = cx.held(TyKind::Object(ObjectTy::Structural(sorted.into(), Label::Here)));
-    cx.join(scrutinee, object, span);
+    cx.join(scrutinee, object, reached(lent), span);
     for ((_, part), (_, term)) in fields.into_iter().zip(terms) {
         destructure(cx, part, term, lent);
     }
@@ -376,7 +386,7 @@ fn variant(
         }
     };
     let variant = cx.held(kind);
-    cx.join(scrutinee, variant, span);
+    cx.join(scrutinee, variant, reached(lent), span);
     match (payload, part) {
         (Some(payload), Some(part)) => destructure(cx, payload, part, lent),
         (None, None) => {}

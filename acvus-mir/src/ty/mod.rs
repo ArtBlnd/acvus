@@ -173,6 +173,17 @@ pub enum FnValues {
     Of(std::collections::BTreeSet<FnValue>),
 }
 
+impl FnValues {
+    /// The function values either side may be (types §2): `Any` where
+    /// either is.
+    pub fn join(&self, other: &FnValues) -> FnValues {
+        match (self, other) {
+            (FnValues::Any, _) | (_, FnValues::Any) => FnValues::Any,
+            (FnValues::Of(a), FnValues::Of(b)) => FnValues::Of(a.union(b).copied().collect()),
+        }
+    }
+}
+
 static NEXT_TABLE: AtomicU32 = AtomicU32::new(1);
 
 /// One shape in one `Types` table. It carries its table so that an id is

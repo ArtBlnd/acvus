@@ -845,6 +845,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let relations = vec![
             Relation { left: Term::Const(0), comparison: Comparison::Le, right: Term::Atom(Atom::Result) },
@@ -874,6 +875,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let mut module = Module::new(types);
         let mut builder = module.build_body(false, int);
@@ -912,6 +914,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let plus_one = Term::Add(Box::new(Term::Atom(Atom::Arg(0))), Box::new(Term::Const(1)));
         let relations = vec![Relation { left: Term::Atom(Atom::Result), comparison: Comparison::Eq, right: plus_one }];
@@ -939,6 +942,7 @@ mod tests {
             flows: FlowTerm::Known(Flows::none()),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         let mut module = Module::new(types);
         let mut builder = module.build_body(false, int);

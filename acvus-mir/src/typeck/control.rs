@@ -144,7 +144,7 @@ pub(super) fn check_try<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, inner: &Expr<S>
         exit,
     });
     if let Some(result) = leaves_to(cx, span) {
-        cx.enter(site, exit, result, span);
+        cx.enter(site, exit, result, crate::ty::Reach::Named, span);
     }
     value
 }
@@ -153,7 +153,7 @@ pub(super) fn check_try<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, inner: &Expr<S>
 pub(super) fn check_return<S: Slot>(cx: &mut Ctxt<'_>, value: &Expr<S>, span: Span) -> Term {
     let term = check_expr(cx, value, Demand::Read);
     if let Some(result) = leaves_to(cx, span) {
-        cx.enter(value.id(), term, result, span);
+        cx.enter(value.id(), term, result, crate::ty::Reach::Named, span);
     }
     cx.never()
 }
@@ -202,7 +202,7 @@ fn branch<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, result: Term, body: &[Stmt<S>
 /// its tail's site, or at the construct's where it has none.
 fn enter_branch<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, term: Term, tail: Option<&Expr<S>>, result: Term, span: Span) {
     let at = tail.map_or(site, Expr::id);
-    cx.enter(at, term, result, span);
+    cx.enter(at, term, result, crate::ty::Reach::Named, span);
 }
 
 /// The `else`: without one, the missing branch is `()` (control-flow),
@@ -211,11 +211,11 @@ fn check_else<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, result: Term, else_branch
     match else_branch {
         None => {
             let unit = cx.unit();
-            cx.enter(site, unit, result, head);
+            cx.enter(site, unit, result, crate::ty::Reach::Named, head);
         }
         Some(ElseBranch::ElseIf(expr)) => {
             let term = check_expr(cx, expr, Demand::Read);
-            cx.enter(expr.id(), term, result, expr.span());
+            cx.enter(expr.id(), term, result, crate::ty::Reach::Named, expr.span());
         }
         Some(ElseBranch::Else { body, tail, span }) => {
             cx.scope.push();

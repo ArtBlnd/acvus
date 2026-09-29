@@ -174,6 +174,7 @@ impl<'s> Import<'s> {
                 flows,
                 calls,
                 holds,
+                values: (),
             } => TyKind::Fn {
                 params: params
                     .iter()
@@ -184,6 +185,7 @@ impl<'s> Import<'s> {
                 flows,
                 calls,
                 holds,
+                values: (),
             },
             TyKind::UserDefined {
                 id,

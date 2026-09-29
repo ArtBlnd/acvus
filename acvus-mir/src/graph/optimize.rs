@@ -489,6 +489,7 @@ fn strip_arguments(
             flows,
             calls,
             holds,
+            values: (),
         } = types.kind(*callee_ty).clone()
         else {
             panic!("a call to {callee:?} is typed by its function type, not {callee_ty:?}")
@@ -505,6 +506,7 @@ fn strip_arguments(
             flows,
             calls,
             holds,
+            values: (),
         });
         stripped = true;
     }

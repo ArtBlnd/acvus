@@ -344,5 +344,5 @@ pub(super) fn check_assign(cx: &mut Ctxt<'_>, site: AstId, name: Astr, value: Te
     cx.out.names.insert(site, Name::Binding(found.binding.binder));
     note_captures(cx, capturing_binding(name, &found), Demand::Write, span);
     super::closure::refuse_recursion(cx, value, name, span);
-    cx.enter(site, value, found.binding.term, span);
+    cx.enter(site, value, found.binding.term, crate::ty::Reach::Named, span);
 }

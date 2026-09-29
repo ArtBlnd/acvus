@@ -2134,6 +2134,7 @@ mod tests {
             flows: FlowTerm::Known(crate::ty::Flows::Every),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         });
         main_types.insert(closure, closure_ty);
         let mut module = make_module(

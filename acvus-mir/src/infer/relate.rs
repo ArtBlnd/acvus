@@ -11,13 +11,13 @@ use std::cmp::Ordering;
 
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::cells::{End as CellEnd, Exceeds, MarkTerm, Unequal};
+use super::cells::{End as CellEnd, Exceeds, MarkTerm, Unequal, ValuesTerm};
 use super::{End, Infer, Mark, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{Reach, is_transparent};
+use crate::ty::{FnValue, FnValues, Reach, ValuesVarId, is_transparent};
 use crate::ty::{
     Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mutability, ObjectTy,
     TyKind, TyVarId, TypeArg,
@@ -55,6 +55,12 @@ pub enum Mismatch {
         a_is: Effect,
         b_is: Effect,
     },
+    /// A function value one side may be that the other, which may not grow
+    /// to it, may not: `value` is not one of `of` (types §1-2).
+    NotOneOf { value: FnValue, of: FnValues },
+    /// Two function types `eq` made one whose function values differ, each
+    /// as known so far (types §2).
+    Values { a: Option<FnValues>, b: Option<FnValues> },
 }
 
 /// What an `enter` did (types §1, §3, §7).
@@ -106,10 +112,31 @@ pub struct CoercedPart {
     pub slot: Term,
 }
 
+/// How two terms are related: made one, or joined with `a` reached by the
+/// reach it carries and `b`, the value or the use's own form, by name
+/// (types §1-2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Relation {
     Eq,
-    Join,
+    Join(Reach),
+}
+
+/// Which side of a relation a member lacks on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    A,
+    B,
+}
+
+impl Relation {
+    /// How `side` was reached, `None` under `eq`, where no side grows.
+    fn reach_of(self, side: Side) -> Option<Reach> {
+        match (self, side) {
+            (Relation::Eq, _) => None,
+            (Relation::Join(reach), Side::A) => Some(reach),
+            (Relation::Join(_), Side::B) => Some(Reach::Named),
+        }
+    }
 }
 
 /// A member of two sorted member lists: on both sides, or on one.
@@ -201,17 +228,19 @@ impl Infer {
         related
     }
 
-    /// The join of two terms (types §2): a transparent side grows by union
-    /// toward the other; an opaque side never grows; afterwards the two are
-    /// `eq`. Function types join their effects, flows, calls and split.
+    /// The join of two terms (types §2): a side grows by union toward the
+    /// other only where it is transparent (types §1), `a` reached by
+    /// `reach` and `b`, the use's own form, by name; afterwards the two are
+    /// `eq`. Function types join their effects, flows, calls, split and
+    /// function values.
     pub fn join(&mut self, a: Term, b: Term, reach: Reach) -> Result<(), Mismatch> {
-        let joined = self.join_terms(a, b);
+        let joined = self.join_terms(a, b, reach);
         self.propagate_effects();
         joined
     }
 
-    fn join_terms(&mut self, a: Term, b: Term) -> Result<(), Mismatch> {
-        let joined = self.relate(a, b, Relation::Join)?;
+    fn join_terms(&mut self, a: Term, b: Term, reach: Reach) -> Result<(), Mismatch> {
+        let joined = self.relate(a, b, Relation::Join(reach))?;
         for side in [a, b] {
             if let End::Node { holder: None, node } = self.end(side)
                 && !matches!(self.types.kind(node), TyKind::Never)
@@ -228,13 +257,16 @@ impl Infer {
     /// conversion from its head to the slot's.
     /// The value is closed: a decision fires only on closed terms (types §6),
     /// and the caller checked with `closed`.
+    /// The slot's type grows to hold the value where it is transparent at
+    /// `reach`, how the slot was reached, and the value is coerced to it
+    /// otherwise (types §1).
     pub fn enter(&mut self, decls: &Declarations, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
-        let entered = self.enter_slot(decls, value, slot);
+        let entered = self.enter_slot(decls, value, slot, reach);
         self.propagate_effects();
         entered
     }
 
-    fn enter_slot(&mut self, decls: &Declarations, value: Closed, slot: Term) -> Result<Entered, Mismatch> {
+    fn enter_slot(&mut self, decls: &Declarations, value: Closed, slot: Term, reach: Reach) -> Result<Entered, Mismatch> {
         let (holder, slot_node) = match self.end(slot) {
             End::Unbound(var, _) => {
                 self.bind(var, None, value.term)?;
@@ -242,8 +274,8 @@ impl Infer {
             }
             End::Node { holder, node } => (holder, node),
         };
-        let written_elsewhere = structure(&self.types, slot_node).is_some_and(|slot| slot.label() == Label::Elsewhere);
-        if written_elsewhere && structure(&self.types, value.term).is_some() {
+        let opaque = structure(&self.types, slot_node).is_some_and(|slot| !is_transparent(slot.label(), reach));
+        if opaque && structure(&self.types, value.term).is_some() {
             return self.coerce_structure(value.term, slot_node).map(Entered::Coerced);
         }
         if let Some((value_target, slot_target, through)) = self.through_reference(value.term, slot_node) {
@@ -259,7 +291,7 @@ impl Infer {
             Some(slot_head) if value.head == never || slot_head == never => None,
             Some(slot_head) => match self.nearest_common_ancestor(decls, value, slot_node, slot_head) {
                 Some(target) => Some((slot_head, target)),
-                None => return self.convert(decls, value, slot_head, holder, slot_node),
+                None => return self.convert(decls, value, (slot_head, reach), holder, slot_node),
             },
         };
         let (value_at, slot_at) = match target {
@@ -269,7 +301,7 @@ impl Infer {
                 self.climb(decls, slot_node, slot_head, target)?,
             ),
         };
-        self.settle_slot(holder, slot_node, slot_at, value_at, mismatch)?;
+        self.settle_slot(holder, slot_node, slot_at, value_at, reach, mismatch)?;
         Ok(Entered::Folded)
     }
 
@@ -428,7 +460,7 @@ impl Infer {
         &mut self,
         decls: &Declarations,
         value: Closed,
-        slot_head: Head,
+        (slot_head, reach): (Head, Reach),
         holder: Option<(TyVarId, Term)>,
         slot_node: Term,
     ) -> Result<Entered, Mismatch> {
@@ -449,21 +481,23 @@ impl Infer {
             a: value.term,
             b: slot_node,
         };
-        self.settle_slot(holder, slot_node, slot_node, pattern_to, mismatch)?;
+        self.settle_slot(holder, slot_node, slot_node, pattern_to, reach, mismatch)?;
         Ok(Entered::Converted(conversion.clone()))
     }
 
-    /// The slot takes the join of `slot_at` and `value_at`: its variable is
-    /// rebound to it, or a slot no variable holds must already be it.
+    /// The slot takes the join of `slot_at`, reached by `reach`, and
+    /// `value_at`: its variable is rebound to it, or a slot no variable
+    /// holds must already be it.
     fn settle_slot(
         &mut self,
         holder: Option<(TyVarId, Term)>,
         slot_node: Term,
         slot_at: Term,
         value_at: Term,
+        reach: Reach,
         mismatch: Mismatch,
     ) -> Result<(), Mismatch> {
-        let made = self.relate(slot_at, value_at, Relation::Join)?;
+        let made = self.relate(slot_at, value_at, Relation::Join(reach))?;
         match holder {
             Some((var, _)) => self.rebind(var, made),
             None => self.relate(slot_node, made, Relation::Eq).map(drop).map_err(|failed| match failed {
@@ -562,8 +596,8 @@ impl Infer {
             }
             (End::Node { holder: holder_a, node: a }, End::Node { holder: holder_b, node: b }) => {
                 let made = match (how, self.types.kind(a), self.types.kind(b)) {
-                    (Relation::Join, TyKind::Never, _) => b,
-                    (Relation::Join, _, TyKind::Never) => a,
+                    (Relation::Join(_), TyKind::Never, _) => b,
+                    (Relation::Join(_), _, TyKind::Never) => a,
                     _ => self.relate_nodes(a, b, how)?,
                 };
                 self.settle(holder_a, holder_b, made)
@@ -759,6 +793,7 @@ impl Infer {
                     flows: flows_a,
                     calls: calls_a,
                     holds: holds_a,
+                    values: values_a,
                 },
                 TyKind::Fn {
                     params: params_b,
@@ -767,6 +802,7 @@ impl Infer {
                     flows: flows_b,
                     calls: calls_b,
                     holds: holds_b,
+                    values: values_b,
                 },
             ) => {
                 if params_a.len() != params_b.len() {
@@ -787,7 +823,7 @@ impl Infer {
                         self.calls_vars.unify(&calls_a, &calls_b).map_err(|Unequal| heads.clone())?,
                         self.holds_vars.unify(&holds_a, &holds_b).map_err(|Unequal| heads)?,
                     ),
-                    Relation::Join => (
+                    Relation::Join(_) => (
                         self.effect_vars
                             .join(&effect_a, &effect_b, Effect::join)
                             .map_err(|_| self.effects_mismatch(&effect_a, &effect_b))?,
@@ -796,6 +832,7 @@ impl Infer {
                         self.holds_vars.join(&holds_a, &holds_b, |a, b| a.join(*b)).map_err(|_| heads)?,
                     ),
                 };
+                let values = self.relate_values(how, values_a, values_b)?;
                 TyKind::Fn {
                     params,
                     ret,
@@ -803,6 +840,7 @@ impl Infer {
                     flows,
                     calls,
                     holds,
+                    values,
                 }
             }
             (
@@ -895,14 +933,14 @@ impl Infer {
                     let field = match member {
                         Member::Both(name, x, y) => (name, self.relate(x, y, Relation::Eq)?),
                         Member::OnlyA(name, x) => {
-                            Self::may_grow(how, (a, b), (b, label_b), |object| Mismatch::OpaqueLacksField {
+                            Self::may_grow(how.reach_of(Side::B), (a, b), (b, label_b), |object| Mismatch::OpaqueLacksField {
                                 object,
                                 field: name,
                             })?;
                             (name, x)
                         }
                         Member::OnlyB(name, y) => {
-                            Self::may_grow(how, (a, b), (a, label_a), |object| Mismatch::OpaqueLacksField {
+                            Self::may_grow(how.reach_of(Side::A), (a, b), (a, label_a), |object| Mismatch::OpaqueLacksField {
                                 object,
                                 field: name,
                             })?;
@@ -933,16 +971,83 @@ impl Infer {
         }
     }
 
-    /// Whether `lacking`, labelled `label`, may grow by a member the other
-    /// side has: only under `join`, and only where transparent (types §2).
-    /// Under `eq` the two are one shape or not one head.
+    /// Whether `lacking`, labelled `label` and reached by `reach`, may grow
+    /// by a member the other side has: only under `join`, where `reach` is
+    /// `Some`, and only where transparent (types §1-2). Under `eq` the two
+    /// are one shape or not one head.
     fn may_grow(
-        how: Relation,
+        reach: Option<Reach>,
         (a, b): (Term, Term),
         (lacking, label): (Term, Label),
         opaque_lacks: impl FnOnce(Term) -> Mismatch,
     ) -> Result<(), Mismatch> {
-        todo!("under `eq` no side grows; under `join` at `reach`, `lacking` grows only where `is_transparent(label, reach)`, and otherwise `opaque_lacks`; `Relation::Join` carries the reach")
+        match reach {
+            None => Err(Mismatch::Heads { a, b }),
+            Some(reach) if is_transparent(label, reach) => Ok(()),
+            Some(_) => Err(opaque_lacks(lacking)),
+        }
+    }
+
+    /// Which function values two function types related by `how` are made
+    /// (types §1-2). A side of `Any`, which a declaration or the host
+    /// wrote, takes the other as a value entering it, coerced and its own
+    /// values forgotten. Otherwise, under `eq` the two are one; under
+    /// `join` they are made one at the union of their values, which a side
+    /// may grow to only where it is transparent. The values a function
+    /// type states are the program's own, written where each value is, so
+    /// only how the side was reached decides.
+    fn relate_values(&mut self, how: Relation, a: ValuesVarId, b: ValuesVarId) -> Result<ValuesVarId, Mismatch> {
+        let (term_a, term_b) = (ValuesTerm::Var(a), ValuesTerm::Var(b));
+        let (values_a, values_b) = (self.values(a), self.values(b));
+        match (&values_a, &values_b) {
+            (Some(FnValues::Any), _) => return Ok(a),
+            (_, Some(FnValues::Any)) => return Ok(b),
+            _ => {}
+        }
+        let (Some(reach_a), Some(reach_b)) = (how.reach_of(Side::A), how.reach_of(Side::B)) else {
+            let one = self
+                .values_vars
+                .unify(&term_a, &term_b)
+                .map_err(|Unequal| Mismatch::Values { a: values_a, b: values_b })?;
+            return Ok(Self::values_var(one));
+        };
+        let joined = match (&values_a, &values_b) {
+            (Some(x), Some(y)) => Some(x.join(y)),
+            (Some(one), None) | (None, Some(one)) => Some(one.clone()),
+            (None, None) => None,
+        };
+        if let Some(FnValues::Of(joined)) = &joined {
+            for (values, reach) in [(&values_a, reach_a), (&values_b, reach_b)] {
+                let Some(FnValues::Of(own)) = values else {
+                    continue;
+                };
+                if let Some(value) = joined.difference(own).next()
+                    && !is_transparent(Label::Here, reach)
+                {
+                    return Err(Mismatch::NotOneOf {
+                        value: *value,
+                        of: FnValues::Of(own.clone()),
+                    });
+                }
+            }
+        }
+        let one = self
+            .values_vars
+            .join(&term_a, &term_b, FnValues::join)
+            .expect("relate_values: a fixed side that would grow was refused above");
+        Ok(Self::values_var(one))
+    }
+
+    /// The variable a values term made of variables is.
+    ///
+    /// # Panics
+    /// `term` is known: `relate_values` relates variables, which stay
+    /// variables.
+    fn values_var(term: ValuesTerm) -> ValuesVarId {
+        match term {
+            ValuesTerm::Var(var) => var,
+            ValuesTerm::Known(values) => panic!("values_var: two variables related are a variable, not {values:?}"),
+        }
     }
 
     fn relate_variants(
@@ -961,11 +1066,11 @@ impl Infer {
                     return Err(Mismatch::Heads { a, b });
                 }
                 Member::OnlyA(tag, x) => {
-                    Self::may_grow(how, (a, b), (b, label_b), |r#enum| Mismatch::OpaqueLacksVariant { r#enum, tag })?;
+                    Self::may_grow(how.reach_of(Side::B), (a, b), (b, label_b), |r#enum| Mismatch::OpaqueLacksVariant { r#enum, tag })?;
                     (tag, x)
                 }
                 Member::OnlyB(tag, y) => {
-                    Self::may_grow(how, (a, b), (a, label_a), |r#enum| Mismatch::OpaqueLacksVariant { r#enum, tag })?;
+                    Self::may_grow(how.reach_of(Side::A), (a, b), (a, label_a), |r#enum| Mismatch::OpaqueLacksVariant { r#enum, tag })?;
                     (tag, y)
                 }
             };

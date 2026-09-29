@@ -238,7 +238,7 @@ fn check_list<S: Slot>(cx: &mut Ctxt<'_>, head: &[Expr<S>], rest: bool, tail: &[
     let element = cx.fresh();
     for item in head.iter().chain(tail) {
         let term = check_expr(cx, item, Demand::Read);
-        cx.enter(item.id(), term, element, item.span());
+        cx.enter(item.id(), term, element, crate::ty::Reach::Named, item.span());
     }
     if rest {
         refusal::push(cx, RefusalKind::PatternInValue, span);

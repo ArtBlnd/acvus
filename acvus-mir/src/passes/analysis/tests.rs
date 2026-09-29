@@ -45,6 +45,7 @@ fn fixture() -> Fixture {
         flows: FlowTerm::Known(Flows::none()),
         calls: Calls::Many,
         holds: Holds::Nothing,
+        values: (),
     });
     Fixture {
         module: Module::new(types),
@@ -1469,6 +1470,7 @@ fn loan_fixture() -> LoanFixture {
             flows: FlowTerm::Known(flows),
             calls: Calls::Many,
             holds: Holds::Nothing,
+            values: (),
         })
     };
     let through = Flows::of([Flow { to: FlowEnd::Result, from: FlowEnd::Param(0), alignment: Alignment::Aligned }]);

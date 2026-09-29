@@ -28,7 +28,7 @@ use super::refusal::{self, Exceeding, RefusalKind};
 use super::scope::Binding;
 use crate::infer::{Exceeds, Term};
 use crate::ty::{
-    copies_in, Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Holds, HoldsTerm, HoldsVarId, LifetimesOf, Mutability, TyKind,
+    copies_in, Calls, CallsTerm, Effect, EffectTerm, FlowTerm, FnValue, FnValues, Holds, HoldsTerm, HoldsVarId, LifetimesOf, Mutability, TyKind,
 };
 
 /// The lambda's parameters start as fresh variables, constrained by their
@@ -67,7 +67,7 @@ pub(super) fn check_lambda<S: Slot>(
             param_terms.push(term);
         }
         let value = check_expr(cx, body, Demand::Read);
-        cx.enter(body.id(), value, result, body.span());
+        cx.enter(body.id(), value, result, crate::ty::Reach::Named, body.span());
         (result, param_terms)
     });
     // A body that calls nothing has no effect to order (effects §1).
@@ -86,6 +86,7 @@ pub(super) fn check_lambda<S: Slot>(
         effect: effect.clone(),
     });
     let flows = FlowTerm::Var(cx.infer.fresh_flow());
+    let values = cx.infer.fresh_values_of(FnValues::Of([FnValue::Lambda(site)].into()));
     cx.held(TyKind::Fn {
         params: param_terms.into(),
         ret: result,
@@ -93,6 +94,7 @@ pub(super) fn check_lambda<S: Slot>(
         flows,
         calls: CallsTerm::Var(calls),
         holds: HoldsTerm::Var(holds),
+        values,
     })
 }
 
