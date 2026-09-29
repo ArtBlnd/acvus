@@ -22,4 +22,4 @@ A body loads each context it names when it is entered. Before a call whose effec
 
 A context may be declared volatile. A volatile context is never promoted and is held in no slot: each read of it is one load, and each write one commit. They are effects and are ordered as effects are (effects §2): nothing merges or removes them, and against them only an effect, or what depends on their values, keeps its order. Pure work passes them freely.
 
-A value stored into a context outlives the run, so its type has no positions (ownership §5). It may carry an identity.
+A value stored into a context outlives the run, so its type has no positions (ownership §5). It may carry an identity, which is fresh, one per context: each context is storage of its own, apart from every other, so its identity meets no other (types §3).
