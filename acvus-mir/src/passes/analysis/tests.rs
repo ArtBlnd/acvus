@@ -15,7 +15,7 @@ use crate::ir::cfg::Site;
 use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 use crate::ty::{
-    Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability,
+    Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability,
     Reissue, SplitCost, Ty, TyKind, TypeArg, Types,
 };
 
@@ -1450,6 +1450,10 @@ struct LoanFixture {
     /// `(&i64, &i64)` and `(i64, i64)`.
     pair_of_refs: Ty,
     pair_of_ints: Ty,
+    /// `[i64; 2]`, `&[i64; 2]` and `[&i64; 2]`.
+    array_of_ints: Ty,
+    ref_array: Ty,
+    array_of_refs: Ty,
     /// `&(&i64, &i64)` and `&mut (&i64, &i64)`.
     ref_pair: Ty,
     mut_pair: Ty,
@@ -1470,6 +1474,9 @@ fn loan_fixture() -> LoanFixture {
     let option_ref = types.intern(TyKind::Option(ref_int, ()));
     let pair_of_refs = types.intern(TyKind::Tuple(Box::new([ref_int, ref_int]), ()));
     let pair_of_ints = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
+    let array_of_ints = types.intern(TyKind::Array(int, LenTerm::Known(2), ()));
+    let ref_array = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array_of_ints)));
+    let array_of_refs = types.intern(TyKind::Array(ref_int, LenTerm::Known(2), ()));
     let ref_pair = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(pair_of_refs)));
     let mut_pair = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(pair_of_refs)));
     let mut function = |params: &[Ty], ret: Ty, flows: Flows| {
@@ -1497,6 +1504,9 @@ fn loan_fixture() -> LoanFixture {
         option_ref,
         pair_of_refs,
         pair_of_ints,
+        array_of_ints,
+        ref_array,
+        array_of_refs,
         ref_pair,
         mut_pair,
         passes_through,
@@ -1776,9 +1786,9 @@ fn a_ref_of_a_part_by_name_lends_that_part() {
 fn a_ref_of_a_reference_part_by_name_reborrows_its_target() {
     let mut f = loan_fixture();
     let ref_int = f.ref_int;
-    let (id, [shared, p, a]) = with_pair_of_refs(&mut f, |builder, [p, a, _]| {
+    let (id, [shared, a]) = with_pair_of_refs(&mut f, |builder, [p, a, _]| {
         let at = Op::Ref { target: RefTarget::Var(p), path: vec![PathSeg::Index(0)], mutability: Mutability::Shared };
-        [builder.push(at, ref_int, Span::ZERO), p, a]
+        [builder.push(at, ref_int, Span::ZERO), a]
     });
 
     let loans = f.facts::<Loans>(id);
@@ -1788,13 +1798,6 @@ fn a_ref_of_a_reference_part_by_name_reborrows_its_target() {
     let reborrowed = loan(Storage::Slot(a), Mode::Shared, site(7));
     assert_eq!(loans_of(&loans, shared, 0), [reborrowed.clone()]);
     assert_eq!(loans.ancestors(&LoanSet::from([reborrowed.clone()])), LoanSet::from([on_a.clone()]));
-    let read = Access {
-        reach: Reach::Read,
-        places: BTreeSet::from([Place { storage: Storage::Slot(p), path: vec![PathSeg::Index(0)] }]),
-        through: LoanSet::new(),
-        made: LoanSet::new(),
-        on_edge: None,
-    };
     let lend = Access {
         reach: Reach::Lend,
         places: BTreeSet::from([reborrowed.place()]),
@@ -1802,7 +1805,7 @@ fn a_ref_of_a_reference_part_by_name_reborrows_its_target() {
         made: LoanSet::from([reborrowed]),
         on_edge: None,
     };
-    assert_eq!(loans.accesses(site(7)), [read, lend]);
+    assert_eq!(loans.accesses(site(7)), [lend], "a `Ref` reaches its place by its lend alone");
 }
 
 /// Reborrow: a `Ref` through `m` makes a loan of its own for each of `m`'s,
@@ -1832,6 +1835,57 @@ fn a_reborrow_makes_a_loan_within_its_sources_on_their_places_extended_at_the_we
     assert_eq!(loans_of(&loans, shared, 0), [on_shared.clone()]);
     assert_eq!(loans_of(&loans, through_shared, 0), [on_through_shared.clone()]);
     assert_eq!(loans.ancestors(&LoanSet::from([on_through_shared])), LoanSet::from([on_shared, on_m]));
+}
+
+/// A `Take` through `m` of a part whose type is a reference uses the
+/// reference stored there: a reborrow made at the `Take`, within the stored
+/// `&a` and within `m`'s loan, the first reference on the path (ownership
+/// §5).
+#[test]
+fn a_reference_part_taken_through_a_reference_is_held_within_both() {
+    let mut f = loan_fixture();
+    let (ref_int, ref_pair) = (f.ref_int, f.ref_pair);
+    let (id, [taken, p, a]) = with_pair_of_refs(&mut f, |builder, [p, a, _]| {
+        let m = builder.push(reference(p, Mutability::Shared), ref_pair, Span::ZERO);
+        let take = Op::Take { target: RefTarget::Through(m), path: vec![PathSeg::Index(0)], taken_out: false };
+        [builder.push(take, ref_int, Span::ZERO), p, a]
+    });
+
+    let loans = f.facts::<Loans>(id);
+    let entry = f.module.body(id).entry();
+    let site = |index| site_at(&f.module, id, entry, index);
+    let (on_a, on_p) = (loan(Storage::Slot(a), Mode::Shared, site(3)), loan(Storage::Slot(p), Mode::Shared, site(7)));
+    let reborrowed = loan(Storage::Slot(a), Mode::Shared, site(8));
+    assert_eq!(loans_of(&loans, taken, 0), [reborrowed.clone()]);
+    assert_eq!(loans.ancestors(&LoanSet::from([reborrowed])), LoanSet::from([on_a, on_p]));
+}
+
+/// `r = &arr; m = ArrayMap(r, g)` with `g: fn(&i64) -> &i64` passing its
+/// argument through: `g` is applied once to the one element part, lent
+/// there within `r`'s loan, and the result's element takes that loan,
+/// made at the `ArrayMap`, on some part under the element (ownership §5).
+#[test]
+fn array_map_applies_its_functions_flows_once_to_the_element_part() {
+    let mut f = loan_fixture();
+    let (int, ref_array, array_of_refs, array_of_ints, passes_through) = (f.int, f.ref_array, f.array_of_refs, f.array_of_ints, f.passes_through);
+    let ng = f.interner.intern("g");
+    let mut builder = f.module.build_body(false, int);
+    let g = builder.param(ng, passes_through, acvus_ast::Span::ZERO);
+    let arr = builder.slot(array_of_ints, Span::ZERO);
+    let entry = builder.current_block();
+    let r = builder.push(reference(arr, Mutability::Shared), ref_array, Span::ZERO);
+    let mapped = builder.push(Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args: vec![r, g] }, array_of_refs, Span::ZERO);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero), acvus_ast::Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    let site = |index| site_at(&f.module, id, entry, index);
+    let on_arr = loan(Storage::Slot(arr), Mode::Shared, site(0));
+    let element = loan_at(Storage::Slot(arr), vec![PathSeg::Index(0)], Mode::Shared, site(1));
+    let taken = Loan { exact: false, ..element.clone() };
+    assert_eq!(loans_of(&loans, mapped, 0), [taken.clone()]);
+    assert_eq!(loans.ancestors(&LoanSet::from([taken])), LoanSet::from([element, on_arr]));
 }
 
 /// Move: an `Assign` gives the content at its path's positions what the

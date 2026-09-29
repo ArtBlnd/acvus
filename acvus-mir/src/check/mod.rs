@@ -49,9 +49,12 @@ pub enum RefusalKind {
     /// A use of a value, or of a part of it, after it moved (ownership §2):
     /// `moved` where the move was.
     UsedAfterMove { moved: Span },
-    /// A storage reached while a loan on it forbids it (ownership §5): the
-    /// span is the reach, and `loan` where the loan was made.
-    LoanConflict { loan: Span },
+    /// Two loans that exclude each other while both live, or a place reached
+    /// by name while a loan forbids it (ownership §5), one refusal each
+    /// (refusals): the span is where the later loan was made, or the reach
+    /// by name; `first` where the earlier loan was made; `later_uses` every
+    /// other access that met the two while both lived.
+    LoanConflict { first: Span, later_uses: Vec<Span> },
     /// A loan on the body's own storage that its result or a storage
     /// outside it holds when it returns (ownership §5): `loan` where the
     /// loan was made.

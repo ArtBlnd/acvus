@@ -37,7 +37,11 @@
 //!    position, which reborrows it implicitly. For each loan `l` of `r`'s
 //!    own, one loan made there on `l`'s place extended by the path, exact
 //!    where `l` is, at the weaker of `l`'s mode and the reborrow's, within
-//!    `l`. The result holds these as its own.
+//!    `l`. The result holds these as its own. A `Take` through `r` of a
+//!    part whose type is a reference uses the reference stored there: for
+//!    each of its loans, one made there within it and within the loans of
+//!    `r` that reach the part, what a path of references reaches being held
+//!    by its first, exclusive only where all of them are.
 //! 3. Move between a value and a storage: a `Take` gives its value what the
 //!    content held at the positions its path reaches; an `Assign` gives the
 //!    content at its path's positions what the value holds. A move leaves
@@ -48,7 +52,9 @@
 //!    `ArrayPush`, `FieldSet`) puts each part's at its place. A closure's
 //!    positions are its captures'; `Specialize` holds its closure's. All
 //!    elements of a sequence are one part, which an index, a slice, a
-//!    `For` and `ArrayMap` reach (ownership §5).
+//!    `For` and `ArrayMap` reach (ownership §5): every index of a place in
+//!    a sequence names it, so any two overlap. `ArrayMap` applies its
+//!    function's flows once, to that part of each array, as a call.
 //! 5. Gather: the reference built holds each part reference's own loans at
 //!    that part; no loan is made.
 //! 6. A call: an argument's lend or reborrow is made where the call starts
@@ -86,7 +92,7 @@ use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Directio
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types,
+    Alignment, Concrete, FlowEnd, Flows, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types,
     position_kinds, positions,
 };
 
@@ -593,12 +599,6 @@ struct Held {
     positions: Vec<LoanSet>,
 }
 
-/// What a call writes through one of its arguments or its callee value.
-struct Written {
-    into: ValueId,
-    region: LoanSet,
-}
-
 /// A part of a type: where its positions lie among the whole's, and its
 /// type.
 struct Part {
@@ -677,10 +677,9 @@ impl Loan {
     }
 
     /// This loan, held by a part reference `Gather` puts at `part` of the
-    /// reference it builds. An element of a sequence is the one part of it
-    /// (ownership §5).
-    fn at_part(&self, part: Option<PathSeg>) -> Loan {
-        let at = part.into_iter().chain(self.at.iter().copied()).collect();
+    /// reference it builds.
+    fn at_part(&self, part: PathSeg) -> Loan {
+        let at = std::iter::once(part).chain(self.at.iter().copied()).collect();
         Loan { at, ..self.clone() }
     }
 
@@ -693,14 +692,17 @@ impl Loan {
     }
 }
 
-/// The step from a structure to its part `key`: a sequence's elements are
-/// its one part, which no step names apart.
-fn part_seg(key: PartKey) -> Option<PathSeg> {
+/// The step from a sequence to its elements, all of which are its one part
+/// (ownership §5): every index of a sequence names it.
+const ELEMENT: PathSeg = PathSeg::Index(0);
+
+/// The step from a structure to its part `key`.
+fn part_seg(key: PartKey) -> PathSeg {
     match key {
-        PartKey::Index(index) => Some(PathSeg::Index(index)),
-        PartKey::Field(field) => Some(PathSeg::Field(field)),
-        PartKey::Variant(_) | PartKey::Some | PartKey::Ok | PartKey::Err => Some(PathSeg::Payload),
-        PartKey::Element => None,
+        PartKey::Index(index) => PathSeg::Index(index),
+        PartKey::Field(field) => PathSeg::Field(field),
+        PartKey::Variant(_) | PartKey::Some | PartKey::Ok | PartKey::Err => PathSeg::Payload,
+        PartKey::Element => ELEMENT,
     }
 }
 
@@ -982,14 +984,53 @@ impl Forward<'_> {
     /// path; through a reference, the place each loan it holds reaches.
     fn place(&self, state: &State, target: &RefTarget, path: &[PathSeg]) -> Vec<Located> {
         match target {
-            RefTarget::Var(slot) => vec![Located::by_name(Storage::Slot(*slot), path)],
-            RefTarget::Param(param) => vec![Located::by_name(Storage::Param(*param), path)],
+            RefTarget::Var(slot) => vec![Located::by_name(Storage::Slot(*slot), &self.canonical(self.body.ty_of(*slot), path))],
+            RefTarget::Param(param) => vec![Located::by_name(Storage::Param(*param), &self.canonical(self.body.ty_of(*param), path))],
             RefTarget::Through(reference) => self.place_through(state, *reference, path),
         }
     }
 
     fn place_through(&self, state: &State, reference: ValueId, path: &[PathSeg]) -> Vec<Located> {
-        through_loans(&self.own(state, reference), path)
+        through_loans(&self.own(state, reference), &self.canonical_through(reference, path))
+    }
+
+    /// `path` in a value of `ty`, every step into a sequence's elements
+    /// written `ELEMENT`, so that a place names a sequence's one element
+    /// part whatever index reached it. A step past a part whose type the
+    /// path does not tell, the payload of one of several variants, stays as
+    /// it is.
+    fn canonical(&self, ty: Ty, path: &[PathSeg]) -> Path {
+        let mut at = vec![ty];
+        let mut canonical = Vec::with_capacity(path.len());
+        for seg in path {
+            let sequence = !at.is_empty() && at.iter().all(|ty| matches!(self.types.kind(*ty), TyKind::Array(..) | TyKind::Slice(_)));
+            canonical.push(match (seg, sequence) {
+                (PathSeg::Index(_), true) => ELEMENT,
+                _ => *seg,
+            });
+            at = at.iter().flat_map(|ty| self.part_types(*ty, seg)).collect();
+        }
+        canonical
+    }
+
+    /// The types `seg` may step to from a value of `ty`.
+    fn part_types(&self, ty: Ty, seg: &PathSeg) -> Vec<Ty> {
+        match (seg, self.types.kind(ty)) {
+            (PathSeg::Field(field), TyKind::Object(object)) => {
+                object.fields().iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty).collect()
+            }
+            (PathSeg::Index(index), TyKind::Tuple(items, _)) => items.get(*index).copied().into_iter().collect(),
+            (PathSeg::Index(_), TyKind::Array(element, _, _) | TyKind::Slice(element)) => vec![*element],
+            (PathSeg::Payload, TyKind::Option(payload, _)) => vec![*payload],
+            (PathSeg::Payload, TyKind::Result(ok, err, _)) => vec![*ok, *err],
+            (PathSeg::Payload, TyKind::Enum { variants, .. }) => variants.iter().filter_map(|(_, payload)| *payload).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `path` in the target of `reference`, canonical.
+    fn canonical_through(&self, reference: ValueId, path: &[PathSeg]) -> Path {
+        self.canonical(self.lent(self.body.ty_of(reference)), path)
     }
 
     /// The loans of the reference `target` is made through; none by name.
@@ -1119,6 +1160,27 @@ impl Forward<'_> {
         own
     }
 
+    /// A use of a reference `stored` in a place a path of references reaches,
+    /// the first of which holds `first`: a reborrow of it made at `made`, of
+    /// mode `mode`, each loan within the stored one and within `first`, and
+    /// exclusive only where all of them are (ownership §5); a lend there.
+    fn reborrow_stored(&self, stored: &LoanSet, first: &LoanSet, mode: Mode, made: Site, record: &mut Record) -> LoanSet {
+        let mode = first.iter().map(|loan| loan.mode).fold(mode, Mode::min);
+        let mut own = LoanSet::new();
+        for loan in stored {
+            let reborrowed = loan.reborrowed(&[], mode, made).expect("a reborrow of the whole meets every part");
+            record.made_within(&reborrowed, loan);
+            for outer in first {
+                record.made_within(&reborrowed, outer);
+            }
+            own.insert(reborrowed);
+        }
+        let mut through = stored.clone();
+        through.extend(first.iter().cloned());
+        record.lend(made, None, own.clone(), through);
+        own
+    }
+
     /// A reborrow of the whole of what `reference` lends, of mode `mode`,
     /// made at `made`, a lend there: its own loans, and what its target
     /// holds.
@@ -1238,7 +1300,15 @@ impl Forward<'_> {
                         record.through(site, reach, &place, LoanSet::new());
                     }
                 }
-                self.read(state, &place, self.width(ty()), Some(ty()))
+                let mut positions = self.read(state, &place, self.width(ty()), Some(ty()));
+                if let RefTarget::Through(reference) = target
+                    && let TyKind::Ref(mutability, _) = self.types.kind(ty())
+                {
+                    let path = self.canonical_through(*reference, path);
+                    let first: LoanSet = self.own(state, *reference).into_iter().filter(|loan| loan.resolve(&path).is_some()).collect();
+                    positions[0] = self.reborrow_stored(&positions[0], &first, mode(*mutability), site, record);
+                }
+                positions
             }
             Op::Assign { target, path, value, .. } => {
                 let place = self.place(state, target, path);
@@ -1300,20 +1370,9 @@ impl Forward<'_> {
                 let held = self.passed(state, *structure, site, None, record);
                 self.gather(self.body.ty_of(*structure), &held, ty())
             }
-            // Conservative: which of `ArrayMap`'s arguments' loans lands at
-            // which position of its result is what `f` makes of its
-            // arrays' elements, which is not stated, so every position of
-            // the result holds every loan of every argument, deepened
-            // through the references it holds.
-            Op::Intrinsic { args, .. } => {
-                let held: LoanSet = args
-                    .iter()
-                    .flat_map(|arg| {
-                        let passed = self.passed(state, *arg, site, None, record);
-                        fold(&self.deepened(state, self.body.ty_of(*arg), passed))
-                    })
-                    .collect();
-                vec![held; self.width(ty())]
+            Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => self.array_map(state, args, site, record),
+            Op::Intrinsic { intrinsic: Intrinsic::StringClone, .. } => {
+                panic!("`StringClone` is no `Op::Intrinsic`: `Intrinsic` states no arguments for it")
             }
             Op::MakeObject { fields } => {
                 let TyKind::Object(object) = self.types.kind(ty()) else {
@@ -1381,18 +1440,19 @@ impl Forward<'_> {
     /// The reference a `Ref` yields, its loans made where `made_at` says
     /// (ownership §5): through a reference, or by name of a place whose type
     /// is a reference, a reborrow; by name of any other place, a lend of it.
-    /// A place named is read where the `Ref` stands (`ir::cfg::takings`).
+    /// Its lend is the one access it makes: it reaches its place by lending
+    /// it, and reads no content.
     fn lend(&self, state: &State, inst: &Inst, record: &mut Record) -> Vec<LoanSet> {
         let Op::Ref { target, path, mutability } = inst.op() else {
             panic!("a lend is a `Ref`, not {:?}", inst.op());
         };
-        let (site, made, mode) = (Site::Inst(inst.id()), self.made_at(inst), mode(*mutability));
+        let (made, mode) = (self.made_at(inst), mode(*mutability));
         let lent = self.lent(self.body.ty_of(inst.result().expect("a `Ref` yields a reference")));
         let lent_width = self.width(lent);
         let (storage, storage_ty) = match target {
             RefTarget::Through(reference) => {
                 let source = self.own(state, *reference);
-                let own = self.reborrow_loans(&source, path, mode, made, record);
+                let own = self.reborrow_loans(&source, &self.canonical_through(*reference, path), mode, made, record);
                 record.lend(made, None, own.clone(), source);
                 let place = self.place_through(state, *reference, path);
                 let mut positions = vec![own];
@@ -1402,8 +1462,8 @@ impl Forward<'_> {
             RefTarget::Var(slot) => (Storage::Slot(*slot), self.body.ty_of(*slot)),
             RefTarget::Param(param) => (Storage::Param(*param), self.body.ty_of(*param)),
         };
+        let path = &self.canonical(storage_ty, path);
         let place = [Located::by_name(storage, path)];
-        record.through(site, Reach::Read, &place, LoanSet::new());
         let named = self.reach_value(storage_ty, path);
         let reference = named.parts.iter().find(|part| matches!(self.types.kind(part.ty), TyKind::Ref(..)));
         match reference {
@@ -1512,40 +1572,118 @@ impl Forward<'_> {
             panic!("a call's callee type is a function type")
         };
         let flows = flows.get();
-        let arity = args.len();
         let captured: Vec<LoanSet> = indirect(callee)
             .map(|function| fold(&self.deepened(state, self.body.ty_of(*function), self.value(state, *function))))
             .collect();
-        let input = |from: FlowEnd| -> Vec<LoanSet> {
-            match from {
-                FlowEnd::Param(index) => passed.get(index).expect("a flow names a parameter the call passes").clone(),
-                FlowEnd::Captures => captured.clone(),
-                FlowEnd::Result => panic!("a call's result is an output only"),
+        let result = self.flowed_result(flows, params, *ret, passed, &captured);
+        let result = self.taken_by_result(result, *ret, site, record);
+        let callee_value = indirect(callee).next().copied();
+        for (to, region) in self.flowed_writes(flows, self.access(callee), passed, &captured, callee_value.is_some()) {
+            let into = match to {
+                FlowEnd::Param(index) => args[index],
+                FlowEnd::Captures => callee_value.expect("only a callee value captures"),
+                FlowEnd::Result => panic!("the result is not written into"),
+            };
+            self.write_into(state, into, &region);
+        }
+        result
+    }
+
+    /// `ArrayMap`'s result: `f` applied through its flows once to the one
+    /// element part of each array (ownership §5), what it writes written
+    /// through each element and into its captures, and each loan the result
+    /// takes made here.
+    fn array_map(&self, state: &mut State, args: &[ValueId], site: Site, record: &mut Record) -> Vec<LoanSet> {
+        let [arrays @ .., function] = args else { panic!("`ArrayMap` takes `[a_1, …, a_k, f]`") };
+        let function_ty = self.body.ty_of(*function);
+        let TyKind::Fn { params, ret, flows, .. } = self.types.kind(function_ty) else {
+            panic!("`ArrayMap`'s `f` is a function value")
+        };
+        let flows = flows.get();
+        let elements: Vec<Vec<LoanSet>> =
+            arrays.iter().zip(params.iter()).map(|(array, param)| self.element(state, *array, *param, site, record)).collect();
+        let passed: Vec<Vec<LoanSet>> =
+            elements.iter().zip(params.iter()).map(|(element, param)| self.deepened(state, *param, element.clone())).collect();
+        let captured = vec![fold(&self.deepened(state, function_ty, self.value(state, *function)))];
+        let result = self.flowed_result(flows, params, *ret, &passed, &captured);
+        let result = self.taken_by_result(result, *ret, site, record);
+        for (to, region) in self.flowed_writes(flows, None, &passed, &captured, true) {
+            match to {
+                FlowEnd::Param(index) => {
+                    self.write_through(state, params[index], &elements[index], &region);
+                }
+                FlowEnd::Captures => self.write_into(state, *function, &region),
+                FlowEnd::Result => panic!("the result is not written into"),
+            }
+        }
+        result
+    }
+
+    /// What `ArrayMap` passes `f` of `array`'s one element part, as a value
+    /// of `param`: an array's element as it holds it; through a reference,
+    /// the element lent at the reference's mutability, or where the element
+    /// is itself a reference, that reference reborrowed (`Intrinsic`,
+    /// ownership §5).
+    fn element(&self, state: &State, array: ValueId, param: Ty, site: Site, record: &mut Record) -> Vec<LoanSet> {
+        let passed = self.passed(state, array, site, None, record);
+        let TyKind::Ref(mutability, lent) = self.types.kind(self.body.ty_of(array)) else {
+            return passed;
+        };
+        let element_ty = match self.types.kind(lent.ty()) {
+            TyKind::Array(element, _, _) | TyKind::Slice(element) => *element,
+            other => panic!("`ArrayMap` maps arrays or references to them, not {other:?}"),
+        };
+        let first = passed[0].clone();
+        let place = through_loans(&first, &[ELEMENT]);
+        let element = match self.types.kind(element_ty) {
+            TyKind::Ref(..) => {
+                let mut stored = self.read(state, &place, self.width(element_ty), Some(element_ty));
+                stored[0] = self.reborrow_stored(&stored[0], &first, mode(*mutability), site, record);
+                stored
+            }
+            _ => {
+                let own = self.reborrow_loans(&first, &[ELEMENT], mode(*mutability), site, record);
+                record.lend(site, None, own.clone(), first);
+                std::iter::once(own).chain(self.read(state, &place, self.width(element_ty), Some(element_ty))).collect()
             }
         };
+        assert_eq!(element.len(), self.width(param), "`f` takes the element as `ArrayMap` passes it");
+        element
+    }
 
-        let mut result = empty(self.width(*ret));
-        for Source { from, alignment } in flows.into_end(FlowEnd::Result, arity) {
-            let taken = input(from);
+    /// What a callee's result of type `ret` takes by `flows` from its
+    /// arguments, `passed` as parameters of `params`, and its captures.
+    fn flowed_result(&self, flows: &Flows, params: &[Ty], ret: Ty, passed: &[Vec<LoanSet>], captured: &[LoanSet]) -> Vec<LoanSet> {
+        let mut result = empty(self.width(ret));
+        for Source { from, alignment } in flows.into_end(FlowEnd::Result, passed.len()) {
+            let taken = flowed_input(from, passed, captured);
             match &alignment {
                 Alignment::Aligned => {
                     join_positions(&mut result, &taken);
                 }
-                Alignment::Any => {
-                    let all = fold(&taken);
-                    result.iter_mut().for_each(|position| position.extend(all.iter().cloned()));
-                }
+                Alignment::Any => spread(&mut result, &fold(&taken)),
                 Alignment::Labelled(labelled) => {
                     let FlowEnd::Param(index) = from else {
                         panic!("a Labelled flow's input is a parameter of the extern it is read off")
                     };
-                    self.join_labelled(&mut result, labelled, params[index], *ret, from, &taken);
+                    self.join_labelled(&mut result, labelled, params[index], ret, from, &taken);
                 }
             }
         }
-        let result = self.taken_by_result(result, *ret, site, record);
+        result
+    }
 
-        let access = self.access(callee);
+    /// What a callee writes by `flows` through each argument and into its
+    /// captures, where it has any, as `access` allows where one is declared.
+    fn flowed_writes(
+        &self,
+        flows: &Flows,
+        access: Option<&[Touch]>,
+        passed: &[Vec<LoanSet>],
+        captured: &[LoanSet],
+        captures: bool,
+    ) -> Vec<(FlowEnd, LoanSet)> {
+        let arity = passed.len();
         let written_by_access = |to: &FlowEnd| match (access, to) {
             (None, _) => true,
             (Some(touches), FlowEnd::Param(index)) => {
@@ -1553,27 +1691,18 @@ impl Forward<'_> {
             }
             (Some(_), FlowEnd::Captures | FlowEnd::Result) => false,
         };
-        let outputs = (0..arity).map(FlowEnd::Param).chain(indirect(callee).map(|_| FlowEnd::Captures));
-        let written: Vec<Written> = outputs
+        let outputs = (0..arity).map(FlowEnd::Param).chain(captures.then_some(FlowEnd::Captures));
+        outputs
             .filter(written_by_access)
             .filter_map(|to| {
                 let sources = flows.into_end(to, arity);
                 if sources.is_empty() {
                     return None;
                 }
-                let region: LoanSet = sources.into_iter().flat_map(|Source { from, .. }| fold(&input(from))).collect();
-                let into = match to {
-                    FlowEnd::Param(index) => args[index],
-                    FlowEnd::Captures => *indirect(callee).next().expect("only a callee value captures"),
-                    FlowEnd::Result => panic!("the result is not written into"),
-                };
-                Some(Written { into, region })
+                let region = sources.into_iter().flat_map(|Source { from, .. }| fold(&flowed_input(from, passed, captured))).collect();
+                Some((to, region))
             })
-            .collect();
-        for Written { into, region } in written {
-            self.write_into(state, into, &region);
-        }
-        result
+            .collect()
     }
 
     /// The loans a call's result of type `ty` takes, `taken` at each
@@ -1603,13 +1732,20 @@ impl Forward<'_> {
         result
     }
 
-    /// `region` written through every `&mut` position of `value` into the
-    /// places its loans name, and into those its mutable captures name, and
-    /// joined into the pointee positions of its `&mut` positions.
+    /// `region` written through `value` as `write_through` writes it, and
+    /// `value` holding it at the pointee positions of its `&mut` positions.
     fn write_into(&self, state: &mut State, value: ValueId, region: &LoanSet) {
-        let ty = self.body.ty_of(value);
-        let held = self.deepened(state, ty, self.value(state, value));
-        let mut own = self.value(state, value);
+        let own = self.write_through(state, self.body.ty_of(value), &self.value(state, value), region);
+        self.define(state, value, own);
+    }
+
+    /// `region` written through every `&mut` position of a value of `ty`
+    /// holding `positions` into the places its loans name, and into those
+    /// its mutable captures name; `positions` with `region` joined into the
+    /// pointee positions of its `&mut` positions.
+    fn write_through(&self, state: &mut State, ty: Ty, positions: &[LoanSet], region: &LoanSet) -> Vec<LoanSet> {
+        let held = self.deepened(state, ty, positions.to_vec());
+        let mut own = positions.to_vec();
         for (at, kind) in self.kinds(ty).into_iter().enumerate() {
             let pointee = match kind {
                 PositionKind::Ref(Mutability::Mut, width) => Some(width),
@@ -1626,7 +1762,7 @@ impl Forward<'_> {
                 own[at + 1..at + 1 + width].iter_mut().for_each(|position| position.extend(region.iter().cloned()));
             }
         }
-        self.define(state, value, own);
+        own
     }
 
     /// Each output segment joins exactly the input segments a `Labelled`
@@ -1827,6 +1963,16 @@ impl Forward<'_> {
 fn through_loans(loans: &LoanSet, path: &[PathSeg]) -> Vec<Located> {
     let located: BTreeSet<Located> = loans.iter().filter_map(|loan| loan.resolve(path)).collect();
     located.into_iter().collect()
+}
+
+/// What the input end `from` of a callee's flows holds: an argument
+/// `passed`, or its captures.
+fn flowed_input(from: FlowEnd, passed: &[Vec<LoanSet>], captured: &[LoanSet]) -> Vec<LoanSet> {
+    match from {
+        FlowEnd::Param(index) => passed.get(index).expect("a flow names a parameter the call passes").clone(),
+        FlowEnd::Captures => captured.to_vec(),
+        FlowEnd::Result => panic!("a call's result is an output only"),
+    }
 }
 
 fn indirect(callee: &Callee) -> impl Iterator<Item = &ValueId> {
