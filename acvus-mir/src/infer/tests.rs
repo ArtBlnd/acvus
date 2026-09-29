@@ -1003,6 +1003,30 @@ fn never_joins_to_the_other_side_and_equals_only_itself() {
     assert_eq!(fx.infer.eq(never, never), Ok(()));
 }
 
+/// types §4-6: a variable joined with `!` is left unbound, on either side,
+/// so a later use fixes it as an earlier one would have: the outcome does
+/// not depend on the order.
+#[test]
+fn never_joined_with_a_variable_leaves_it_to_its_other_uses() {
+    let mut fx = Fixture::new();
+    let (never, int) = (fx.kind(TyKind::Never), fx.int(IntTy::I64));
+    for never_first in [true, false] {
+        let var = fx.infer.fresh(Bound::Any);
+        let (a, b) = match never_first {
+            true => (never, var),
+            false => (var, never),
+        };
+        fx.infer.join(a, b, Reach::Named).unwrap();
+        assert!(matches!(fx.infer.types().kind(fx.infer.shallow(var)), TyKind::Var(_)), "left unbound");
+        fx.infer.eq(var, int).unwrap();
+        assert_eq!(fx.infer.shallow(var), int);
+    }
+    let var = fx.infer.fresh(Bound::Any);
+    fx.infer.eq(var, int).unwrap();
+    fx.infer.join(var, never, Reach::Named).unwrap();
+    assert_eq!(fx.infer.shallow(var), int, "the use first, then `!`, the same");
+}
+
 /// types §4, §6: `!` has a head, and no step leaves it, so it is closed.
 #[test]
 fn never_is_closed() {

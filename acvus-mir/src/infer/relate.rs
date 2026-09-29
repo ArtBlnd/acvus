@@ -595,6 +595,14 @@ impl Infer {
                 }
                 Ok(w_term)
             }
+            // `!` is the bottom type (types §4): joined with a variable it
+            // decides nothing, and the variable is left to what else it
+            // meets or to its default (types §5), whichever came first.
+            (End::Unbound(_, term), End::Node { node, .. }) | (End::Node { node, .. }, End::Unbound(_, term))
+                if matches!(how, Relation::Join(_)) && matches!(self.types.kind(node), TyKind::Never) =>
+            {
+                Ok(term)
+            }
             (End::Unbound(var, _), End::Node { holder, node }) | (End::Node { holder, node }, End::Unbound(var, _)) => {
                 self.bind(var, holder, node)
             }

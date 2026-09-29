@@ -3209,3 +3209,21 @@ fn a_path_by_name_grows_the_bindings_type() {
         checked.admitted();
     }
 }
+
+/// types §4-6: a `return` in one branch decides nothing of the `if`'s
+/// type, in either order, so a later use fixes it.
+#[test]
+fn a_branch_that_returns_leaves_the_if_to_its_other_branch_in_either_order() {
+    for source in [
+        "let x; let y = if $c { return 1u8 } else { x }; x = 2u8; y",
+        "let x; let y = if $c { x } else { return 1u8 }; x = 2u8; y",
+    ] {
+        let mut fx = Fixture::new();
+        let bool_ty = fx.ty(TyKind::Bool);
+        fx.input("c", bool_ty);
+        let names = fx.names.clone();
+        let (checked, script) = fx.script(source);
+        checked.admitted();
+        assert!(is_int(&checked, binding(&checked, &script, &names, "y"), IntTy::U8), "{source}");
+    }
+}
