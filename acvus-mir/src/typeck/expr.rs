@@ -218,10 +218,7 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
     }
 }
 
-/// A string literal's type.
-///
-/// PARKED(P7): the ledger does not state it. Provisionally it is Rust's
-/// `&str`; this function is the one place that decides it.
+/// A string literal is a `&str`, as in Rust (operators §1).
 fn string_literal(cx: &mut Ctxt<'_>) -> Term {
     let str_ty = cx.node(TyKind::Str);
     cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)))

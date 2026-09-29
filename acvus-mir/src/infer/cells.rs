@@ -103,6 +103,28 @@ impl<T: VarTerm> Cells<T> {
         any
     }
 
+    /// Every variable still unbound, but those `kept` names, takes `value`;
+    /// whether any did. A kept variable is one some other rule decides.
+    pub(super) fn default_unbound_but(&mut self, value: &T::Value, kept: &[T::Var]) -> bool {
+        let mut any = false;
+        for (index, cell) in self.cells.iter_mut().enumerate() {
+            if cell.is_none() && !kept.iter().any(|var| T::index(*var) == index) {
+                *cell = Some(T::of_value(value.clone()));
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// The unbound variable `term`'s chain ends at, `None` where it ends at
+    /// a known value.
+    pub(super) fn unbound_end(&self, term: &T) -> Option<T::Var> {
+        match self.end(term) {
+            End::Var { var, value: None } => Some(var),
+            End::Known(_) | End::Var { value: Some(_), .. } => None,
+        }
+    }
+
     /// Makes `a` and `b` one (types §4): an unbound variable is bound, two
     /// variables are linked, two known values must be equal.
     pub(super) fn unify(&mut self, a: &T, b: &T) -> Result<T, Unequal> {

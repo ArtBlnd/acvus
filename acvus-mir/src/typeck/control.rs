@@ -158,13 +158,10 @@ pub(super) fn check_return<S: Slot>(cx: &mut Ctxt<'_>, value: &Expr<S>, span: Sp
 }
 
 /// The slot a `return` or a `?` at `span` leaves the innermost body
-/// through: a lambda's result, or the run's.
-///
-/// PARKED(P12): the ledger does not say what leaving a template's run
-/// means, since a template's result is the text it builds (programs §1).
-/// Provisionally a `return` or a `?` outside every lambda of a template is
-/// refused, the conservative choice, and this function is the one place
-/// that decides it.
+/// through: a lambda's result, or the run's. Outside every lambda of a
+/// template it is refused, since a template's result is the `String` it
+/// builds and what either leaves with is not that `String`; inside a
+/// lambda, either leaves the lambda only (programs §1).
 fn leaves_to(cx: &mut Ctxt<'_>, span: Span) -> Option<Term> {
     if cx.scope.body_result().is_none() && cx.scope.run() == Run::Template {
         refusal::push(cx, RefusalKind::ReturnInTemplate, span);

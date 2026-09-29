@@ -462,11 +462,8 @@ CompExpr<Lead>: Nested<Expr<S>> = {
 };
 
 // The bitwise operators bind as Rust's do: `^` looser than `&`, `&` looser
-// than the shifts, and the shifts looser than `+` and `-`.
-//
-// PARKED(P11): operators §2 gives the integers a bitwise `|`, but `|` is
-// written as the pipe here, so bitwise-or has no syntax until the user
-// settles which the token means. typeck still types `BinOp::BitOr`.
+// than the shifts, and the shifts looser than `+` and `-`. `|` is the pipe,
+// and bitwise or has no operator (operators §2).
 BitXorExpr<Lead>: Nested<Expr<S>> = {
     <l:@L> <left:BitXorExpr<Lead>> "^" <right:BitAndExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Xor, right, Span::new(l, r)),
     BitAndExpr<Lead>,

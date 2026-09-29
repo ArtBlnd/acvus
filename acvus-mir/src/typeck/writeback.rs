@@ -77,41 +77,38 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
     }
 }
 
-/// `term` frozen, each open flow set first. `None` only where a refusal
-/// already left a variable open; with no refusal that is the checker's
-/// defect.
+/// `term` frozen. `None` only where a refusal already left a variable
+/// open; with no refusal that is the checker's defect.
 ///
 /// # Panics
-/// A variable other than a flow set is open and no refusal was made:
-/// solving binds every type variable and, at its last stall, every effect
-/// and mark (types §5), and every length and identity is fixed by the term
-/// that made it.
+/// A variable is open and no refusal was made: solving binds every type
+/// variable and, at its last stall, every effect, mark and flow set no
+/// lambda claims (types §5); each lambda's claim sets its own; and every
+/// length and identity is fixed by the term that made it.
 fn freeze(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo, term: Term) -> Option<Ty> {
-    loop {
-        match cx.infer.freeze(types, memo, term) {
-            Ok(ty) => return Some(ty),
-            Err(Unsettled::Flow(var)) => set_flows(cx, FlowTerm::Var(var), unclaimed_flows()),
-            Err(open) => {
-                assert!(
-                    !cx.out.refusals.is_empty(),
-                    "{open:?} is open after solving, and no refusal explains it"
-                );
-                return None;
-            }
+    match cx.infer.freeze(types, memo, term) {
+        Ok(ty) => Some(ty),
+        Err(open) => {
+            assert!(
+                !cx.out.refusals.is_empty(),
+                "{open:?} is open after solving, and no refusal explains it"
+            );
+            None
         }
     }
 }
 
-/// The flows of a function value nothing ever gave, such as a parameter
-/// of a lambda never called: no lambda claimed them and no declaration
-/// states them.
-///
-/// PARKED(P9): types §5 states no default for flows. Provisionally every
-/// output takes from every input, what a declaration stating nothing gets
-/// (extern-fn §4), which is sound; this function is the one place that
-/// decides it.
-fn unclaimed_flows() -> Flows {
-    Flows::Every
+/// Each lambda's flow set, which its claim decides and no default does.
+pub(super) fn lambda_flows(cx: &Ctxt<'_>) -> Vec<FlowTerm<InferPhase>> {
+    cx.out
+        .closures
+        .keys()
+        .filter_map(|lambda| cx.out.types.get(lambda))
+        .filter_map(|term| match cx.infer.types().kind(cx.infer.shallow(*term)) {
+            TyKind::Fn { flows, .. } => Some(flows.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `flows` set to `to`.

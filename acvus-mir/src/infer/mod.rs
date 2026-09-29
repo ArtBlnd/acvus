@@ -188,6 +188,15 @@ impl Infer {
         effects || marks
     }
 
+    /// types §5: a function type's flows nothing decides state every flow,
+    /// as a declaration's default does (extern-fn §4). Every flow set still
+    /// open takes it, but those `claimed`, which a lambda's claim decides
+    /// (ownership §5); whether any did. Solving calls this only at a stall.
+    pub(crate) fn default_unclaimed_flows(&mut self, claimed: &[FlowTerm<InferPhase>]) -> bool {
+        let kept: Vec<FlowVarId> = claimed.iter().filter_map(|flows| self.flow_vars.unbound_end(flows)).collect();
+        self.flow_vars.default_unbound_but(&crate::ty::Flows::Every, &kept)
+    }
+
     /// The unbound variables, with their bounds: what defaults read at a
     /// stall (types §5).
     pub fn unbound(&self) -> impl Iterator<Item = (TyVarId, &Bound)> {

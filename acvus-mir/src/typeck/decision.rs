@@ -7,8 +7,9 @@
 //! where it can be (`uses_decide`); every integer literal
 //! no use decided takes its default width; every type variable no pending
 //! decision reads is `!`; then every type variable at all is `!`; then
-//! every effect nothing constrains is opaque and every open `#` is not
-//! specialized (types §5); then a
+//! every effect nothing constrains is opaque, every open `#` is not
+//! specialized, and every flow set no lambda claims states every flow
+//! (types §5); then a
 //! decision closed only up to a cycle through decisions fires on what the
 //! sources outside the cycle fixed (typeck-structure section 4). What is
 //! still open after that is refused, naming the construct left open.
@@ -305,7 +306,7 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
             || default_literals(cx)
             || default_unconstrained(cx, true)
             || default_unconstrained(cx, false)
-            || cx.infer.default_effects_and_marks()
+            || default_effects_marks_and_flows(cx)
             || fire_round(cx, Reading::CycleBroken)
         {
             continue;
@@ -315,6 +316,16 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
     for decision in std::mem::take(&mut cx.decisions.pending) {
         refuse_left_open(cx, decision);
     }
+}
+
+/// The stall step of types §5 for what is not a type: effects, marks and
+/// flow sets; whether any took its default. A lambda's flow set is its
+/// claim's (`writeback::claim_flows`), made once its type is solved.
+fn default_effects_marks_and_flows(cx: &mut Ctxt<'_>) -> bool {
+    let effects_and_marks = cx.infer.default_effects_and_marks();
+    let claimed = super::writeback::lambda_flows(cx);
+    let flows = cx.infer.default_unclaimed_flows(&claimed);
+    effects_and_marks || flows
 }
 
 /// The one term whose head a decision reads before it fires, where it has

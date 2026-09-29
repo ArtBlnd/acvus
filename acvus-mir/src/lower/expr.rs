@@ -114,7 +114,7 @@ fn lower_ident<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span:
     }
 }
 
-/// A literal at its recorded type. A string literal is a `&str` (P7); a
+/// A literal at its recorded type. A string literal is a `&str` (operators §1); a
 /// byte string a reference to the array of its bytes.
 pub(super) fn lower_literal(cx: &mut Lcx<'_, '_>, site: AstId, literal: &Literal, span: Span) -> ValueId {
     let ty = cx.ty(site);

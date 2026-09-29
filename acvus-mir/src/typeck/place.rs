@@ -112,8 +112,7 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, object: Term, head: Opti
 /// `a[i]`: its container's `as_slice` or `as_slice_mut` by `demand`,
 /// reached at `callee_site` (operators §3). An array or a slice is the
 /// language's own, since no declaration carries an array (extern-fn §1).
-/// `i` enters a `u64`: Rust indexes by `usize`, which is 64 bits wide
-/// here (D67).
+/// `i` enters a `u64`, as Rust's `usize` (operators §3).
 pub(super) fn check_index<S: Slot>(
     cx: &mut Ctxt<'_>,
     _site: AstId,

@@ -1294,7 +1294,7 @@ fn a_binder_through_a_reference_has_the_bindings_type() {
     assert!(is_int(&checked, target.ty(), IntTy::U8));
 }
 
-/// operators §3, D67: an index is a `u64`, as Rust's `usize` at 64 bits.
+/// operators §3: an index is a `u64`, as Rust's `usize`.
 /// An unsuffixed index takes it; an index of another width, which no cast
 /// takes up to `u64`, has no conversion into it (types §3, §7).
 #[test]
@@ -1544,12 +1544,59 @@ fn a_templates_text_reaches_no_display() {
     assert_eq!(checked.typeck.reached.len(), 1);
 }
 
-/// PARKED(P12): what leaving a template's run means is not stated, so a
-/// `return` there is refused; one inside a lambda leaves the lambda.
+/// programs §1: a `return` that would leave a template itself is refused,
+/// since what it leaves with is not the `String` the template builds; one
+/// inside a lambda leaves the lambda.
 #[test]
 fn a_return_in_a_template_is_refused() {
     let (checked, _) = Fixture::new().template("% return 1\n");
     assert_eq!(checked.refusals(), vec![&RefusalKind::ReturnInTemplate]);
     let (checked, _) = Fixture::new().template("% let f = |x| -> return x\n");
     checked.admitted();
+}
+
+/// programs §1: a `?` that would leave a template itself is refused as a
+/// `return` is.
+#[test]
+fn a_try_leaving_a_template_is_refused() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let option = fx.ty(TyKind::Option(i64_ty));
+    fx.context("o", option);
+    let (checked, _) = fx.template("% let x = @o?\n");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::ReturnInTemplate]);
+}
+
+/// types §5: a function type's flows nothing decides state every flow. The
+/// default is taken at a stall, with effects and marks, so the solved terms
+/// hold it before anything is frozen; a lambda's own flow set is its claim's
+/// and is still open there.
+#[test]
+fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
+    let fx = Fixture::new();
+    let script = acvus_ast::parse_script(&fx.names, "let f = |g| -> g(1); 1").expect("the test's source parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut cx = super::ctxt::Ctxt::new(&decls, super::scope::Run::Script);
+    super::stmt::check_body(&mut cx, &script.stmts, script.tail.as_deref());
+    super::decision::solve(&mut cx);
+    assert!(cx.out.refusals.is_empty(), "refused: {:?}", cx.out.refusals);
+
+    let lambda = *cx.out.closures.keys().next().expect("the script writes one lambda");
+    let freeze = |cx: &mut super::ctxt::Ctxt<'_>, term| {
+        let mut types = Types::new();
+        let frozen = cx.infer.freeze(&mut types, &mut crate::infer::FreezeMemo::default(), term);
+        frozen.map(|ty| types.kind(ty).clone())
+    };
+    let lambda_term = cx.out.types[&lambda];
+    assert!(matches!(freeze(&mut cx, lambda_term), Err(crate::infer::Unsettled::Flow(_))));
+    let values: Vec<_> = cx.out.types.iter().filter(|(site, _)| **site != lambda).map(|(_, term)| *term).collect();
+    let called = values
+        .into_iter()
+        .filter_map(|term| match freeze(&mut cx, term) {
+            Ok(TyKind::Fn { flows, .. }) => Some(flows),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!called.is_empty(), "`g` is a function value");
+    assert!(called.iter().all(|flows| *flows == FlowTerm::Known(Flows::Every)), "{called:?}");
 }
