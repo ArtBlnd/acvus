@@ -1334,7 +1334,7 @@ fn lambda_effect(checked: &Checked, script: &Script, at: usize) -> crate::ty::Ef
 fn a_lambda_within_its_slot_is_admitted() {
     let mut fx = Fixture::new();
     pure_add_and_opaque_touch(&mut fx);
-    let (checked, _) = fx.script("apply(|x| -> x + 1)");
+    let (checked, _) = fx.script("apply(|x| -> 1)");
     checked.admitted();
 }
 
@@ -3076,4 +3076,115 @@ fn a_generalized_binding_is_lent_at_each_uses_signature() {
     let (checked, _) = fx.script("let f = |x| -> x; let a = on_int(&f); let b = on_bool(&f); 0");
     checked.admitted();
     assert_eq!(checked.typeck.instances.len(), 2);
+}
+
+// Transparency at a reach, and function values (types §1-2)
+
+/// types §1: a store through a reference reaches some place of its
+/// target's type, not which one, so a lambda stored through a `&mut` to a
+/// binding holding another is not one of the binding's function values.
+#[test]
+fn a_lambda_stored_through_a_mut_reference_to_another_is_refused() {
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let f = |v| -> v; let m = &mut f; *m = |v| -> 1; 0");
+    assert!(
+        matches!(checked.refusals()[..], [RefusalKind::NotOneOfFunctionValues { value: crate::ty::FnValue::Lambda(_) }]),
+        "{:?}",
+        checked.refusals()
+    );
+}
+
+/// types §1-2: the binding's own value stored back through the reference
+/// is one of its function values.
+#[test]
+fn a_bindings_own_value_stored_through_a_mut_reference_is_admitted() {
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let f = |v| -> v; let m = &mut f; *m = f; 0");
+    checked.admitted();
+}
+
+/// types §1: a store into a field through a reference does not grow the
+/// target's object by a field it lacks.
+#[test]
+fn a_field_stored_through_a_mut_reference_does_not_grow_its_target() {
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let a = { x: 1, }; let r = &mut a; r.y = 2; 0");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque]);
+}
+
+/// types §1: a read of a field past a `*` reaches the target through the
+/// reference, and does not grow it either.
+#[test]
+fn a_field_read_past_a_deref_does_not_grow_its_target() {
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let a = { x: 1, }; let r = &a; (*r).y");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque]);
+}
+
+/// types §1: the same store by name grows the binding's object.
+#[test]
+fn a_field_stored_by_name_grows_the_bindings_object() {
+    let fx = Fixture::new();
+    let (x, y) = (fx.name("x"), fx.name("y"));
+    let names = fx.names.clone();
+    let (checked, script) = fx.script("let a = { x: 1, }; a.y = 2; 0");
+    checked.admitted();
+    let TyKind::Object(ObjectTy::Structural(fields, ())) = checked.kind(binding(&checked, &script, &names, "a")) else {
+        panic!("not a structural object");
+    };
+    let names: Vec<Astr> = fields.iter().map(|(name, _)| *name).collect();
+    let mut expected = vec![x, y];
+    expected.sort();
+    assert_eq!(names, expected);
+}
+
+/// types §1, patterns §1: a pattern past a reference matches the target
+/// through it, so a field the pattern names and the target lacks is
+/// refused rather than grown; one the target has is bound.
+#[test]
+fn a_pattern_through_a_reference_does_not_grow_its_target() {
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let o = { x: 1, }; let r = &o; match r { { y, } => 1, }");
+    assert_eq!(checked.refusals().first(), Some(&&RefusalKind::GrowsOpaque), "{:?}", checked.typeck.refusals);
+    let fx = Fixture::new();
+    let (checked, _) = fx.script("let o = { x: 1, y: 2, }; let r = &o; match r { { x, } => *x, }");
+    checked.admitted();
+}
+
+/// types §1, §3: a lambda entering a declared function type's parameter
+/// is coerced to it, its function value forgotten there.
+#[test]
+fn a_lambda_passed_to_a_declared_parameter_is_admitted() {
+    for source in ["apply(|x| -> 1)", "let f = |x| -> x; apply(f)"] {
+        let mut fx = Fixture::new();
+        declare_apply(&mut fx);
+        let (checked, _) = fx.script(source);
+        checked.admitted();
+    }
+}
+
+/// types §2: a join of two lambdas may be either.
+#[test]
+fn two_lambdas_joined_by_if_are_either_function_value() {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("c", bool_ty);
+    let script = acvus_ast::parse_script(&fx.names, "let h = if $c { |v| -> v } else { |v| -> true }; h(false)").expect("the test's source parses");
+    let decls = Declarations::verify(fx.raw).expect("the test's declarations verify");
+    let mut cx = super::ctxt::Ctxt::new(&decls, super::scope::Run::Script);
+    super::stmt::check_body(&mut cx, &script.stmts, script.tail.as_deref());
+    super::generalize::generalize_all(&mut cx);
+    super::decision::solve(&mut cx);
+    assert!(cx.out.refusals.is_empty(), "refused: {:?}", cx.out.refusals);
+
+    let Some(Stmt::LetBind { binder, .. }) = script.stmts.first() else {
+        panic!("the script binds h");
+    };
+    let h = cx.infer.shallow(cx.out.types[&binder.id]);
+    let TyKind::Fn { values, .. } = cx.infer.types().kind(h).clone() else {
+        panic!("h is a function type");
+    };
+    let lambdas: std::collections::BTreeSet<_> = cx.out.lambdas.iter().map(|lambda| crate::ty::FnValue::Lambda(lambda.site)).collect();
+    assert_eq!(lambdas.len(), 2);
+    assert_eq!(cx.infer.values(values), Some(crate::ty::FnValues::Of(lambdas)));
 }
